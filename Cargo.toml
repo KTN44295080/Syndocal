@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/audio",
+    "crates/protocol",
+    "crates/gdtf",
+    "crates/io",
+    "crates/engine",
+    "crates/video",
+    "crates/visualizer",
+    "app/src-tauri",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://example.invalid/kdmx"
+
+[workspace.dependencies]
+audio = { path = "crates/audio" }
+crossbeam-queue = "0.3"
+gdtf = { path = "crates/gdtf" }
+image = { version = "=0.24.9", default-features = false, features = ["jpeg", "png"] }
+io = { path = "crates/io" }
+midir = "0.11"
+protocol = { path = "crates/protocol" }
+rfd = "0.17"
+roxmltree = "0.20"
+rosc = "0.11"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serialport = "4.7"
+tauri = "=2.5.1"
+tauri-build = "=2.2.0"
+thiserror = "1"
+tungstenite = "=0.24.0"
+video = { path = "crates/video" }
+visualizer = { path = "crates/visualizer" }
+zip = { version = "=2.4.2", default-features = false, features = ["deflate"] }
