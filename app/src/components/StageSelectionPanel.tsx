@@ -1,0 +1,656 @@
+import { For, Show } from "solid-js";
+import type { VideoOutputAspectMode, VideoOutputMapping, VideoOutputSummary } from "../types";
+import type { ControlCategory, ControlMode } from "../uiModes";
+import { ProjectorMapPreview } from "./ProjectorMapEditor";
+import {
+  mappingNumber,
+  mappingReadout,
+  outputAspectRatio,
+  resetVideoOutputCornerOffsets,
+  resetVideoOutputLensKeystone,
+  resetVideoOutputStagePosition,
+  resetVideoOutputWarp,
+  videoOutputAspectModes,
+  videoOutputAspectPresets,
+} from "../videoOutputMapping";
+
+type GroupBulkMode = "add" | "remove" | "set";
+
+interface MappingFixtureTypeRow {
+  key: string;
+  label: string;
+  manufacturer: string;
+  mode: string;
+  visualKind: string;
+  count: number;
+}
+
+interface MappingTransformSummary {
+  count: number;
+  label: string;
+  mode: string;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+}
+
+interface MappingTransformFlagState {
+  count: number;
+  highlightedCount: number;
+  soloedCount: number;
+  parkedCount: number;
+  anyHighlighted: boolean;
+  anySoloed: boolean;
+  anyParked: boolean;
+  allHighlighted: boolean;
+  allSoloed: boolean;
+  allParked: boolean;
+}
+
+interface GlobalFlagState {
+  anyHighlighted: boolean;
+  anySoloed: boolean;
+  anyParked: boolean;
+  highlightedCount: number;
+  soloedCount: number;
+  parkedCount: number;
+}
+
+interface ControlCoverageRow {
+  attribute: string;
+  targetCount: number;
+}
+
+interface SelectedGroupControlCoverage {
+  complete: boolean;
+  rows: ControlCoverageRow[];
+  fixtureCount: number;
+  more: number | null;
+}
+
+interface MappingVideoOutputRow {
+  output: VideoOutputSummary;
+  stageLabel: string;
+  stateLabel: string;
+  compositionLabel: string;
+}
+
+type FixtureFlag = "highlight" | "solo" | "park";
+
+interface StageSelectionPanelProps {
+  selectedMappingFixtures: () => { length: number };
+  mappingFilteredFixtures: () => { length: number };
+  mappingFixtureSearch: () => string;
+  setMappingFixtureSearch: (value: string) => void;
+  clearMappingSearchKeepPicked: () => void;
+  pickVisibleMappingFixtures: () => void;
+  selectedMappingFixtureIds: () => number[];
+  globalFlagState: () => GlobalFlagState;
+  mappingTransformSummary: () => MappingTransformSummary | null;
+  selectedGroupVisibleControlCoverage: () => SelectedGroupControlCoverage | null;
+  setMappingTransformValue: (field: "x" | "y" | "z" | "yaw", value: number) => Promise<void>;
+  openPatchForCurrentTarget: () => void;
+  openControlForCurrentTarget: (category?: ControlCategory, mode?: ControlMode) => void;
+  selectedFixtureGroupFilter: () => string | null;
+  snapMappingTransformTargets: () => Promise<void>;
+  stageSnapEnabled: () => boolean;
+  stageYawSnapEnabled: () => boolean;
+  mappingTransformFlagState: () => MappingTransformFlagState;
+  setMappingTargetFlag: (flag: FixtureFlag, value: boolean) => Promise<void>;
+  clearFixtureFlags: (flag: FixtureFlag) => Promise<void>;
+  mappingControlQuickCategories: () => ControlCategory[];
+  controlCategory: () => ControlCategory;
+  controlCategoryLabel: (category: ControlCategory) => string;
+  invertVisibleMappingFixtureSelection: () => void;
+  clearMappingFixtureSelection: () => void;
+  bulkGroupText: () => string;
+  setBulkGroupText: (value: string) => void;
+  bulkGroupMode: () => GroupBulkMode;
+  setBulkGroupMode: (value: GroupBulkMode) => void;
+  applyBulkGroupsToMappingSelection: () => Promise<void>;
+  mappingOperationFixtureCount: () => number;
+  filteredFixtures: () => { length: number };
+  selectedFixtureTypeFilter: () => string | null;
+  selectFixtureTypeFilter: (key: string | null) => void;
+  fixtureTypeRows: () => MappingFixtureTypeRow[];
+  fixtureTypePickedCounts: () => Map<string, number>;
+  mappingVideoOutputRows: () => MappingVideoOutputRow[];
+  selectedVideoOutputId: () => number | null;
+  setSelectedVideoOutputId: (id: number) => void;
+  selectedMappingVideoOutput: () => VideoOutputSummary | null;
+  patchVideoOutputMapping: (output: VideoOutputSummary, patch: Partial<VideoOutputMapping>) => void;
+  setVideoOutputEnabled: (id: number, value: boolean) => Promise<void>;
+  setVideoOutputBlackout: (id: number, value: boolean) => Promise<void>;
+  openVideoOutputWindow: (id: number, flag: boolean) => Promise<void>;
+}
+
+export const StageSelectionPanel = (props: StageSelectionPanelProps) => (
+  <aside class="mappingSelectionPanel">
+    <div class="mappingSelectionHeader">
+      <strong>Selections</strong>
+      <span>
+        {props.selectedMappingFixtures().length > 0
+          ? `${props.selectedMappingFixtures().length} picked / ${props.mappingFilteredFixtures().length}`
+          : `${props.mappingFilteredFixtures().length} fixture(s)`}
+      </span>
+    </div>
+    <div class="mappingSearchPanel">
+      <label>
+        Search
+        <input
+          type="search"
+          value={props.mappingFixtureSearch()}
+          onInput={(event) => props.setMappingFixtureSearch(event.currentTarget.value)}
+          placeholder="label, U1 A24, group"
+        />
+      </label>
+      <button
+        onClick={props.clearMappingSearchKeepPicked}
+        disabled={props.mappingFixtureSearch().trim().length === 0}
+      >
+        Clear
+      </button>
+      <div class="mappingSearchActions" aria-label="Search result selection">
+        <button onClick={props.pickVisibleMappingFixtures} disabled={props.mappingFilteredFixtures().length === 0}>
+          Pick Results
+          <span>{props.mappingFilteredFixtures().length}</span>
+        </button>
+        <button
+          onClick={props.clearMappingSearchKeepPicked}
+          disabled={props.mappingFixtureSearch().trim().length === 0}
+        >
+          Keep Picked
+          <span>{props.selectedMappingFixtureIds().length}</span>
+        </button>
+      </div>
+      <div class="mappingSearchQuickFilters" aria-label="Fixture flag quick filters">
+        <button
+          class={props.mappingFixtureSearch().trim().toLowerCase() === "highlight" ? "active" : ""}
+          onClick={() => props.setMappingFixtureSearch("highlight")}
+          disabled={!props.globalFlagState().anyHighlighted}
+        >
+          Hi {props.globalFlagState().highlightedCount}
+        </button>
+        <button
+          class={props.mappingFixtureSearch().trim().toLowerCase() === "solo" ? "active" : ""}
+          onClick={() => props.setMappingFixtureSearch("solo")}
+          disabled={!props.globalFlagState().anySoloed}
+        >
+          Solo {props.globalFlagState().soloedCount}
+        </button>
+        <button
+          class={props.mappingFixtureSearch().trim().toLowerCase() === "park" ? "active" : ""}
+          onClick={() => props.setMappingFixtureSearch("park")}
+          disabled={!props.globalFlagState().anyParked}
+        >
+          Park {props.globalFlagState().parkedCount}
+        </button>
+      </div>
+    </div>
+    <Show when={props.mappingTransformSummary()}>
+      {(transform) => (
+        <div class="mappingTransformInspector">
+          <div class="mappingTransformTitle">
+            <strong>{transform().label}</strong>
+            <span>{transform().mode}</span>
+          </div>
+          <Show when={props.selectedGroupVisibleControlCoverage()}>
+            {(coverage) => (
+              <div class={coverage().complete ? "mappingCoverage ok" : "mappingCoverage warn"}>
+                <strong>{coverage().complete ? "Control coverage" : "Mixed controls"}</strong>
+                <span>
+                  <For each={coverage().rows}>
+                    {(row, index) => (
+                      <>
+                        {index() > 0 ? " / " : ""}
+                        {row.attribute} {row.targetCount}/{coverage().fixtureCount}
+                      </>
+                    )}
+                  </For>
+                  {coverage().more ? ` / +${coverage().more}` : ""}
+                </span>
+              </div>
+            )}
+          </Show>
+          <div class="mappingTransformGrid">
+            <label>
+              {transform().count > 1 ? "Center X" : "X"}
+              <input
+                type="number"
+                step="0.1"
+                value={transform().x}
+                onChange={(event) => void props.setMappingTransformValue("x", Number(event.currentTarget.value))}
+              />
+            </label>
+            <label>
+              {transform().count > 1 ? "Center Z" : "Z"}
+              <input
+                type="number"
+                step="0.1"
+                value={transform().z}
+                onChange={(event) => void props.setMappingTransformValue("z", Number(event.currentTarget.value))}
+              />
+            </label>
+            <label>
+              {transform().count > 1 ? "Center Y" : "Y"}
+              <input
+                type="number"
+                step="0.1"
+                value={transform().y}
+                onChange={(event) => void props.setMappingTransformValue("y", Number(event.currentTarget.value))}
+              />
+            </label>
+            <label>
+              Yaw
+              <input
+                type="number"
+                min="-180"
+                max="180"
+                step="1"
+                value={transform().yaw}
+                onChange={(event) => void props.setMappingTransformValue("yaw", Number(event.currentTarget.value))}
+              />
+            </label>
+          </div>
+          <div class="mappingTransformActions">
+            <button
+              onClick={() => props.openPatchForCurrentTarget()}
+              disabled={transform().count !== 1}
+              title={transform().count !== 1 ? "Pick one fixture before opening Patch" : "Open Patch setup for this fixture"}
+            >
+              Patch
+            </button>
+            <button
+              onClick={() => props.openControlForCurrentTarget()}
+              disabled={transform().count > 1 && !props.selectedFixtureGroupFilter()}
+              title={
+                transform().count > 1 && !props.selectedFixtureGroupFilter()
+                  ? "Pick a fixture or select a group before opening Control"
+                  : "Open Control Edit for this target"
+              }
+            >
+              Control
+            </button>
+            <button
+              onClick={() => props.openControlForCurrentTarget(undefined, "live")}
+              disabled={transform().count > 1 && !props.selectedFixtureGroupFilter()}
+              title={
+                transform().count > 1 && !props.selectedFixtureGroupFilter()
+                  ? "Pick a fixture or select a group before opening Live Control"
+                  : "Open Live Control for this target"
+              }
+            >
+              Live
+            </button>
+            <button
+              onClick={() => props.openControlForCurrentTarget("position")}
+              disabled={transform().count > 1 && !props.selectedFixtureGroupFilter()}
+            >
+              Position
+            </button>
+            <button
+              onClick={() => void props.snapMappingTransformTargets()}
+              disabled={transform().count === 0 || (!props.stageSnapEnabled() && !props.stageYawSnapEnabled())}
+              title={
+                !props.stageSnapEnabled() && !props.stageYawSnapEnabled()
+                  ? "Enable Grid Snap or Yaw Snap before applying snap"
+                  : "Apply current snap settings to this map target"
+              }
+            >
+              Snap
+            </button>
+          </div>
+          <div class="mappingFlagActions" aria-label="2D map fixture flags">
+            <button
+              class={props.mappingTransformFlagState().anyHighlighted ? "active" : ""}
+              onClick={() => void props.setMappingTargetFlag("highlight", !props.mappingTransformFlagState().allHighlighted)}
+              disabled={props.mappingTransformFlagState().count === 0}
+            >
+              {props.mappingTransformFlagState().allHighlighted ? "Clear Hi" : "Highlight"}
+            </button>
+            <button
+              class={props.mappingTransformFlagState().anySoloed ? "active" : ""}
+              onClick={() => void props.setMappingTargetFlag("solo", !props.mappingTransformFlagState().allSoloed)}
+              disabled={props.mappingTransformFlagState().count === 0}
+            >
+              {props.mappingTransformFlagState().allSoloed ? "Clear Solo" : "Solo"}
+            </button>
+            <button
+              class={props.mappingTransformFlagState().anyParked ? "active" : ""}
+              onClick={() => void props.setMappingTargetFlag("park", !props.mappingTransformFlagState().allParked)}
+              disabled={props.mappingTransformFlagState().count === 0}
+            >
+              {props.mappingTransformFlagState().allParked ? "Clear Park" : "Park"}
+            </button>
+          </div>
+          <div class="mappingFlagStatus">
+            <span>
+              Target H {props.mappingTransformFlagState().highlightedCount}/{props.mappingTransformFlagState().count}
+              {" / "}S {props.mappingTransformFlagState().soloedCount}/{props.mappingTransformFlagState().count}
+              {" / "}P {props.mappingTransformFlagState().parkedCount}/{props.mappingTransformFlagState().count}
+            </span>
+            <div class="mappingFlagClearActions" aria-label="Clear fixture flags globally">
+              <button disabled={!props.globalFlagState().anyHighlighted} onClick={() => void props.clearFixtureFlags("highlight")}>
+                Clear H {props.globalFlagState().highlightedCount}
+              </button>
+              <button disabled={!props.globalFlagState().anySoloed} onClick={() => void props.clearFixtureFlags("solo")}>
+                Clear S {props.globalFlagState().soloedCount}
+              </button>
+              <button disabled={!props.globalFlagState().anyParked} onClick={() => void props.clearFixtureFlags("park")}>
+                Clear P {props.globalFlagState().parkedCount}
+              </button>
+            </div>
+          </div>
+          <Show when={props.mappingControlQuickCategories().length > 0}>
+            <div class="mappingControlShortcuts" aria-label="Open Control category">
+              <For each={props.mappingControlQuickCategories()}>
+                {(category) => (
+                  <button
+                    class={props.controlCategory() === category ? "active" : ""}
+                    onClick={() => props.openControlForCurrentTarget(category)}
+                    disabled={transform().count > 1 && !props.selectedFixtureGroupFilter()}
+                  >
+                    {props.controlCategoryLabel(category)}
+                  </button>
+                )}
+              </For>
+            </div>
+          </Show>
+        </div>
+      )}
+    </Show>
+    <div class="mappingSelectionAssign">
+      <div class="mappingSelectionQuickActions">
+        <button onClick={props.pickVisibleMappingFixtures} disabled={props.mappingFilteredFixtures().length === 0}>
+          Pick Visible
+        </button>
+        <button onClick={props.invertVisibleMappingFixtureSelection} disabled={props.mappingFilteredFixtures().length === 0}>
+          Invert
+        </button>
+        <button onClick={props.clearMappingFixtureSelection} disabled={props.selectedMappingFixtures().length === 0}>
+          Clear Picked
+        </button>
+      </div>
+      <label>
+        Group
+        <input
+          value={props.bulkGroupText()}
+          onInput={(event) => props.setBulkGroupText(event.currentTarget.value)}
+          placeholder="front, bars"
+        />
+      </label>
+      <div>
+        <select
+          value={props.bulkGroupMode()}
+          onInput={(event) => props.setBulkGroupMode(event.currentTarget.value as GroupBulkMode)}
+        >
+          <option value="add">Add</option>
+          <option value="remove">Remove</option>
+          <option value="set">Set</option>
+        </select>
+        <button
+          class="primary"
+          onClick={() => void props.applyBulkGroupsToMappingSelection()}
+          disabled={props.mappingOperationFixtureCount() === 0}
+        >
+          Apply
+        </button>
+      </div>
+    </div>
+    <button
+      class={!props.selectedFixtureTypeFilter() ? "mappingTypeButton active" : "mappingTypeButton"}
+      onClick={() => props.selectFixtureTypeFilter(null)}
+    >
+      <span class="mappingTypeGlyph kind-all" aria-hidden="true" />
+      <span class="mappingTypeCopy">
+        <strong>All Types</strong>
+        <small>{props.selectedFixtureGroupFilter() ?? "All groups"}</small>
+      </span>
+      <span class="mappingTypeCount">
+        <b>{props.filteredFixtures().length}</b>
+        <Show when={props.selectedMappingFixtures().length > 0}>
+          <small>{props.selectedMappingFixtures().length} picked</small>
+        </Show>
+      </span>
+    </button>
+    <For each={props.fixtureTypeRows()}>
+      {(row) => (
+        <button
+          class={props.selectedFixtureTypeFilter() === row.key ? "mappingTypeButton active" : "mappingTypeButton"}
+          title={`${row.manufacturer} / ${row.label} / ${row.mode}`}
+          onClick={() => props.selectFixtureTypeFilter(row.key)}
+        >
+          <span class={`mappingTypeGlyph kind-${row.visualKind}`} aria-hidden="true" />
+          <span class="mappingTypeCopy">
+            <strong>{row.label}</strong>
+            <small>{row.manufacturer}</small>
+            <small>{row.mode}</small>
+          </span>
+          <span class="mappingTypeCount">
+            <b>{row.count}</b>
+            <Show when={props.fixtureTypePickedCounts().get(row.key)}>
+              {(count) => <small>{count()} picked</small>}
+            </Show>
+          </span>
+        </button>
+      )}
+    </For>
+    <Show when={props.fixtureTypeRows().length === 0}>
+      <p class="empty">No fixture types.</p>
+    </Show>
+    <div class="mappingSelectionHeader secondary">
+      <strong>Projectors</strong>
+      <span>{props.mappingVideoOutputRows().length} output(s)</span>
+    </div>
+    <For each={props.mappingVideoOutputRows()}>
+      {(row) => (
+        <button
+          class={props.selectedVideoOutputId() === row.output.id ? "active projector" : "projector"}
+          title={`${row.output.label} / ${row.stageLabel} / ${row.compositionLabel}`}
+          onClick={() => props.setSelectedVideoOutputId(row.output.id)}
+        >
+          <strong>{row.output.label}</strong>
+          <span>{row.stateLabel}</span>
+          <small>{row.compositionLabel}</small>
+          <small>Stage {row.stageLabel}</small>
+        </button>
+      )}
+    </For>
+    <Show when={props.mappingVideoOutputRows().length === 0}>
+      <p class="empty">No projectors.</p>
+    </Show>
+    <Show when={props.selectedMappingVideoOutput()}>
+      {(output) => (
+        <div class="mappingProjectorControls">
+          <div class="mappingProjectorPreview">
+            <ProjectorMapPreview
+              mapping={output().mapping}
+              outputId={output().id}
+              class="projectorMapSurface outputMappingMiniSurface"
+            />
+            <div>
+              <strong>{output().label}</strong>
+              <span>{mappingReadout(output().mapping)}</span>
+            </div>
+          </div>
+          <div class="mappingProjectorActionRow">
+            <button onClick={() => void props.setVideoOutputEnabled(output().id, !output().enabled)}>
+              {output().enabled ? "Disable" : "Enable"}
+            </button>
+            <button onClick={() => void props.setVideoOutputBlackout(output().id, !output().blackout)}>
+              {output().blackout ? "Clear BO" : "Blackout"}
+            </button>
+            <button onClick={() => void props.openVideoOutputWindow(output().id, true)}>
+              Test
+            </button>
+          </div>
+          <div class="mappingProjectorFieldGrid">
+            <label>
+              X
+              <input
+                type="number"
+                step="0.1"
+                value={mappingNumber(output().mapping, "stage_x", 0)}
+                onChange={(event) => props.patchVideoOutputMapping(output(), { stage_x: Number(event.currentTarget.value) })}
+              />
+            </label>
+            <label>
+              Z
+              <input
+                type="number"
+                step="0.1"
+                value={mappingNumber(output().mapping, "stage_z", 0)}
+                onChange={(event) => props.patchVideoOutputMapping(output(), { stage_z: Number(event.currentTarget.value) })}
+              />
+            </label>
+            <label>
+              Y
+              <input
+                type="number"
+                step="0.1"
+                value={mappingNumber(output().mapping, "stage_y", 0)}
+                onChange={(event) => props.patchVideoOutputMapping(output(), { stage_y: Number(event.currentTarget.value) })}
+              />
+            </label>
+            <label>
+              W
+              <input
+                type="number"
+                min="0.01"
+                max="8"
+                step="0.05"
+                value={mappingNumber(output().mapping, "scale_x", 1)}
+                onChange={(event) => props.patchVideoOutputMapping(output(), { scale_x: Number(event.currentTarget.value) })}
+              />
+            </label>
+            <label>
+              H
+              <input
+                type="number"
+                min="0.01"
+                max="8"
+                step="0.05"
+                value={mappingNumber(output().mapping, "scale_y", 1)}
+                onChange={(event) => props.patchVideoOutputMapping(output(), { scale_y: Number(event.currentTarget.value) })}
+              />
+            </label>
+            <label>
+              Rot
+              <input
+                type="number"
+                min="-180"
+                max="180"
+                step="1"
+                value={mappingNumber(output().mapping, "rotation_deg", 0)}
+                onChange={(event) => props.patchVideoOutputMapping(output(), { rotation_deg: Number(event.currentTarget.value) })}
+              />
+            </label>
+            <button onClick={() => props.patchVideoOutputMapping(output(), resetVideoOutputStagePosition(output().mapping))}>
+              Reset Stage
+            </button>
+          </div>
+          <div class="mappingProjectorWarpGrid">
+            <label>
+              Mode
+              <select
+                value={output().mapping.aspect_mode}
+                onInput={(event) =>
+                  props.patchVideoOutputMapping(output(), {
+                    aspect_mode: event.currentTarget.value as VideoOutputAspectMode,
+                  })
+                }
+              >
+                <For each={videoOutputAspectModes}>{(mode) => <option value={mode}>{mode}</option>}</For>
+              </select>
+            </label>
+            <label>
+              Ratio
+              <input
+                type="number"
+                min="0.1"
+                max="10"
+                step="0.01"
+                value={mappingNumber(output().mapping, "aspect_ratio", 1)}
+                onChange={(event) => props.patchVideoOutputMapping(output(), { aspect_ratio: Number(event.currentTarget.value) })}
+              />
+            </label>
+            <label>
+              Lens
+              <input
+                type="number"
+                min="-1"
+                max="1"
+                step="0.01"
+                value={mappingNumber(output().mapping, "lens_distortion", 0)}
+                onChange={(event) => props.patchVideoOutputMapping(output(), { lens_distortion: Number(event.currentTarget.value) })}
+              />
+            </label>
+            <label>
+              Key H
+              <input
+                type="number"
+                min="-1"
+                max="1"
+                step="0.01"
+                value={mappingNumber(output().mapping, "keystone_x", 0)}
+                onChange={(event) => props.patchVideoOutputMapping(output(), { keystone_x: Number(event.currentTarget.value) })}
+              />
+            </label>
+            <label>
+              Key V
+              <input
+                type="number"
+                min="-1"
+                max="1"
+                step="0.01"
+                value={mappingNumber(output().mapping, "keystone_y", 0)}
+                onChange={(event) => props.patchVideoOutputMapping(output(), { keystone_y: Number(event.currentTarget.value) })}
+              />
+            </label>
+            <label>
+              Preset
+              <select
+                value=""
+                onInput={(event) => {
+                  const preset = videoOutputAspectPresets.find((candidate) => candidate.label === event.currentTarget.value);
+                  if (preset) {
+                    props.patchVideoOutputMapping(output(), {
+                      aspect_ratio: preset.ratio,
+                      aspect_mode: "Fit",
+                    });
+                  }
+                  event.currentTarget.value = "";
+                }}
+              >
+                <option value="">Select</option>
+                <For each={videoOutputAspectPresets}>
+                  {(preset) => <option value={preset.label}>{preset.label}</option>}
+                </For>
+              </select>
+            </label>
+            <button
+              onClick={() =>
+                props.patchVideoOutputMapping(output(), {
+                  aspect_ratio: outputAspectRatio(output().width, output().height),
+                  aspect_mode: "Fit",
+                })
+              }
+            >
+              Output Ratio
+            </button>
+            <button onClick={() => props.patchVideoOutputMapping(output(), resetVideoOutputWarp(output().mapping))}>
+              Clear Warp
+            </button>
+            <button onClick={() => props.patchVideoOutputMapping(output(), resetVideoOutputLensKeystone(output().mapping))}>
+              Clear Lens/Key
+            </button>
+            <button onClick={() => props.patchVideoOutputMapping(output(), resetVideoOutputCornerOffsets(output().mapping))}>
+              Reset Corners
+            </button>
+          </div>
+        </div>
+      )}
+    </Show>
+  </aside>
+);

@@ -8,6 +8,7 @@ pub type AutomationId = u64;
 pub type VideoLayerId = u64;
 pub type CompositionId = u64;
 pub type VideoOutputId = u64;
+pub type NodeGraphId = u64;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct Vec3 {
@@ -53,6 +54,8 @@ pub enum AttributeResolution {
 pub struct ChannelFunctionSummary {
     pub name: String,
     pub attribute: String,
+    #[serde(default)]
+    pub parent_function: Option<String>,
     pub dmx_from: u16,
     pub dmx_to: u16,
     #[serde(default)]
@@ -65,6 +68,8 @@ pub struct ChannelFunctionSummary {
     pub wheel_slot_name: Option<String>,
     #[serde(default)]
     pub wheel_slot_color: Option<String>,
+    #[serde(default)]
+    pub wheel_slot_media: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -85,6 +90,22 @@ pub struct GeometrySummary {
     pub kind: String,
     pub parent: Option<String>,
     pub matrix: [f32; 16],
+    #[serde(default)]
+    pub model_name: Option<String>,
+    #[serde(default)]
+    pub model_file: Option<String>,
+    #[serde(default)]
+    pub model_primitive: Option<String>,
+    #[serde(default)]
+    pub model_dimensions: Option<Vec3>,
+    #[serde(default)]
+    pub beam_type: Option<String>,
+    #[serde(default)]
+    pub beam_angle_deg: Option<f32>,
+    #[serde(default)]
+    pub field_angle_deg: Option<f32>,
+    #[serde(default)]
+    pub beam_radius: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -188,6 +209,8 @@ pub struct AttributeValueSummary {
 pub struct PatchedFixtureSummary {
     pub id: FixtureId,
     pub label: String,
+    #[serde(default)]
+    pub profile_source_path: String,
     pub profile_name: String,
     pub manufacturer: String,
     pub mode_name: String,
@@ -196,6 +219,8 @@ pub struct PatchedFixtureSummary {
     pub group_ids: Vec<String>,
     pub position: Vec3,
     pub rotation: Rotation3,
+    #[serde(default)]
+    pub geometries: Vec<GeometrySummary>,
     pub controls: Vec<AttributeControl>,
     pub attribute_values: Vec<AttributeValueSummary>,
     #[serde(default)]
@@ -210,6 +235,8 @@ pub struct FixturePreset {
     pub version: u32,
     pub manufacturer: String,
     pub profile_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_source_path: Option<String>,
     pub mode_name: String,
     pub values: Vec<AttributeValueSummary>,
 }
@@ -218,6 +245,8 @@ pub struct FixturePreset {
 pub struct ProjectFile {
     pub version: u32,
     pub app: String,
+    #[serde(default)]
+    pub custom_profiles: Vec<FixtureProfileSummary>,
     pub snapshot: EngineSnapshot,
 }
 
@@ -234,6 +263,26 @@ pub enum VideoSourceKind {
     Spout,
     Syphon,
     StillImage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VideoBackendState {
+    Available,
+    Missing,
+    NotBuilt,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoBackendStatus {
+    pub id: String,
+    pub label: String,
+    pub state: VideoBackendState,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoRuntimeStatus {
+    pub backends: Vec<VideoBackendStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -377,6 +426,15 @@ fn default_fx_key_green() -> f32 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VideoCuePointSummary {
+    pub position_ms: u64,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VideoLayerState {
     #[serde(default = "default_video_layer_enabled")]
     pub enabled: bool,
@@ -390,6 +448,9 @@ pub struct VideoLayerState {
     pub loop_start_ms: u64,
     pub loop_end_ms: u64,
     pub bpm_sync: VideoBpmSync,
+    #[serde(default)]
+    pub cue_points: Vec<VideoCuePointSummary>,
+    #[serde(default)]
     pub cue_points_ms: Vec<u64>,
     pub transform: Transform2D,
     #[serde(default)]
@@ -411,6 +472,7 @@ impl Default for VideoLayerState {
             loop_start_ms: 0,
             loop_end_ms: 0,
             bpm_sync: VideoBpmSync::default(),
+            cue_points: Vec::new(),
             cue_points_ms: Vec::new(),
             transform: Transform2D::default(),
             color: VideoColorAdjust::default(),
@@ -469,6 +531,12 @@ impl Default for VideoOutputAspectMode {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct VideoOutputMapping {
+    #[serde(default)]
+    pub stage_x: f32,
+    #[serde(default)]
+    pub stage_y: f32,
+    #[serde(default)]
+    pub stage_z: f32,
     pub offset_x: f32,
     pub offset_y: f32,
     pub scale_x: f32,
@@ -494,6 +562,9 @@ pub struct VideoOutputMapping {
 impl Default for VideoOutputMapping {
     fn default() -> Self {
         Self {
+            stage_x: 0.0,
+            stage_y: 0.0,
+            stage_z: 0.0,
             offset_x: 0.0,
             offset_y: 0.0,
             scale_x: 1.0,
@@ -588,6 +659,14 @@ pub struct CueSummary {
     pub video_targets: Vec<VideoLayerTarget>,
     #[serde(default)]
     pub video_output_targets: Vec<VideoOutputTarget>,
+    #[serde(default)]
+    pub node_graph_targets: Vec<CueNodeGraphTarget>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CueNodeGraphTarget {
+    pub graph_id: NodeGraphId,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -735,6 +814,113 @@ pub struct VideoEffectTarget {
     pub param: VideoParam,
     pub low: f32,
     pub high: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<Vec3>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct EffectClockSync {
+    pub beats: f32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum NodeGraphNodeKind {
+    Lfo,
+    PositionWave,
+    Transform,
+    Output,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum NodeGraphTransformOp {
+    Scale,
+    Offset,
+    Clamp,
+    Invert,
+    Abs,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NodeGraphLfoNode {
+    pub shape: LfoShape,
+    pub period_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_sync: Option<EffectClockSync>,
+    pub phase: f32,
+    pub amplitude: f32,
+    pub bias: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NodeGraphPositionWaveNode {
+    pub shape: LfoShape,
+    pub origin: Vec3,
+    pub direction: Vec3,
+    pub speed: f32,
+    pub wavelength: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_sync: Option<EffectClockSync>,
+    pub phase: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NodeGraphTransformNode {
+    pub op: NodeGraphTransformOp,
+    pub amount: f32,
+    pub min: f32,
+    pub max: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NodeGraphOutputNode {
+    pub fixture_ids: Vec<FixtureId>,
+    pub target_group_ids: Vec<String>,
+    pub attribute: String,
+    pub video_targets: Vec<VideoEffectTarget>,
+    pub low: u16,
+    pub high: u16,
+    pub blend_mode: EffectBlendMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NodeGraphNodeSummary {
+    pub id: u64,
+    pub label: String,
+    pub kind: NodeGraphNodeKind,
+    pub x: f32,
+    pub y: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lfo: Option<NodeGraphLfoNode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position_wave: Option<NodeGraphPositionWaveNode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform: Option<NodeGraphTransformNode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<NodeGraphOutputNode>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NodeGraphEdgeSummary {
+    pub from_node: u64,
+    pub from_port: String,
+    pub to_node: u64,
+    pub to_port: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NodeGraphSummary {
+    pub id: NodeGraphId,
+    pub label: String,
+    pub enabled: bool,
+    pub nodes: Vec<NodeGraphNodeSummary>,
+    pub edges: Vec<NodeGraphEdgeSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NodeGraphPresetFile {
+    pub version: u32,
+    pub app: String,
+    pub graph: NodeGraphSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -746,6 +932,8 @@ pub struct LfoEffectRequest {
     pub video_targets: Vec<VideoEffectTarget>,
     pub shape: LfoShape,
     pub period_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_sync: Option<EffectClockSync>,
     pub low: u16,
     pub high: u16,
     pub phase: f32,
@@ -764,6 +952,8 @@ pub struct PositionWaveEffectRequest {
     pub direction: Vec3,
     pub speed: f32,
     pub wavelength: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_sync: Option<EffectClockSync>,
     pub low: u16,
     pub high: u16,
     pub phase: f32,
@@ -787,6 +977,8 @@ pub struct EffectSummary {
     pub video_targets: Vec<VideoEffectTarget>,
     pub shape: LfoShape,
     pub period_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_sync: Option<EffectClockSync>,
     pub low: u16,
     pub high: u16,
     pub phase: f32,
@@ -846,6 +1038,22 @@ impl Default for DmxOutputConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DmxOutputRouteTelemetry {
+    #[serde(default)]
+    pub index: usize,
+    #[serde(default)]
+    pub universe: u16,
+    #[serde(default)]
+    pub attempted: bool,
+    #[serde(default)]
+    pub success: bool,
+    #[serde(default)]
+    pub bytes: usize,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SerialPortSummary {
     pub name: String,
@@ -870,28 +1078,47 @@ impl Default for OscInputConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum OscControlAction {
     FixtureAttribute,
+    FixtureHighlight,
+    FixtureSolo,
+    FixturePark,
+    GroupHighlight,
+    GroupSolo,
+    GroupPark,
     TriggerCue,
     TriggerNextCue,
     TriggerPreviousCue,
+    EffectEnabled,
+    NodeGraphEnabled,
     VideoParam,
     VideoCuePointAdd,
     VideoCuePointRemove,
     VideoCuePointJump,
+    VideoCuePointPrevious,
+    VideoCuePointNext,
     VideoLayerEnabled,
     VideoLayerSolo,
     VideoPlay,
     VideoLoop,
+    VideoLayerFade,
     VideoOutputEnabled,
     VideoOutputOpacity,
     VideoOutputFade,
+    VideoOutputMappingField,
+    VideoOutputMappingPreset,
     VideoOutputBlackout,
     TimelinePlay,
     TimelineSeek,
+    TimelineBeatPrevious,
+    TimelineBeatNext,
+    SetBpm,
+    TapBpm,
     LightingMaster,
     GroupSubmaster,
     CueFadePause,
     Blackout,
+    AllBlackout,
     VideoBlackout,
+    ClearFixtureFlags,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -925,6 +1152,10 @@ pub struct LearnedOscControl {
 pub struct EngineTelemetry {
     pub frame_counter: u64,
     pub queue_depth: usize,
+    #[serde(default)]
+    pub queue_depth_abs_max: usize,
+    #[serde(default)]
+    pub queue_push_failure_count: u64,
     pub last_tick_interval_us: u64,
     #[serde(default)]
     pub tick_jitter_last_us: i64,
@@ -933,7 +1164,51 @@ pub struct EngineTelemetry {
     #[serde(default)]
     pub tick_jitter_stddev_us: f32,
     #[serde(default)]
+    pub tick_jitter_p95_us: u64,
+    #[serde(default)]
+    pub tick_jitter_p99_us: u64,
+    #[serde(default)]
     pub tick_jitter_samples: u64,
+    #[serde(default)]
+    pub last_command_queue_latency_us: u64,
+    #[serde(default)]
+    pub command_queue_latency_abs_max_us: u64,
+    #[serde(default)]
+    pub command_queue_latency_p95_us: u64,
+    #[serde(default)]
+    pub command_queue_latency_p99_us: u64,
+    #[serde(default)]
+    pub command_queue_latency_samples: u64,
+    #[serde(default)]
+    pub last_command_drain_count: usize,
+    #[serde(default)]
+    pub command_drain_abs_max: usize,
+    #[serde(default)]
+    pub command_drain_limit_hit_count: u64,
+    #[serde(default)]
+    pub last_command_to_dmx_tick_latency_us: u64,
+    #[serde(default)]
+    pub command_to_dmx_tick_latency_abs_max_us: u64,
+    #[serde(default)]
+    pub command_to_dmx_tick_latency_p95_us: u64,
+    #[serde(default)]
+    pub command_to_dmx_tick_latency_p99_us: u64,
+    #[serde(default)]
+    pub command_to_dmx_tick_latency_samples: u64,
+    #[serde(default)]
+    pub last_dmx_send_interval_us: u64,
+    #[serde(default)]
+    pub dmx_send_interval_min_us: u64,
+    #[serde(default)]
+    pub dmx_send_interval_max_us: u64,
+    #[serde(default)]
+    pub dmx_send_interval_samples: u64,
+    #[serde(default)]
+    pub low_latency_dmx_tick_request_count: u64,
+    #[serde(default)]
+    pub low_latency_dmx_tick_advance_count: u64,
+    #[serde(default)]
+    pub low_latency_dmx_tick_defer_count: u64,
     pub last_packet_bytes: usize,
     #[serde(default)]
     pub last_dmx_output_count: usize,
@@ -945,6 +1220,8 @@ pub struct EngineTelemetry {
     pub total_dmx_send_success_count: u64,
     #[serde(default)]
     pub total_dmx_send_failure_count: u64,
+    #[serde(default)]
+    pub last_dmx_route_results: Vec<DmxOutputRouteTelemetry>,
     pub last_error: Option<String>,
 }
 
@@ -953,17 +1230,42 @@ impl Default for EngineTelemetry {
         Self {
             frame_counter: 0,
             queue_depth: 0,
+            queue_depth_abs_max: 0,
+            queue_push_failure_count: 0,
             last_tick_interval_us: 0,
             tick_jitter_last_us: 0,
             tick_jitter_abs_max_us: 0,
             tick_jitter_stddev_us: 0.0,
+            tick_jitter_p95_us: 0,
+            tick_jitter_p99_us: 0,
             tick_jitter_samples: 0,
+            last_command_queue_latency_us: 0,
+            command_queue_latency_abs_max_us: 0,
+            command_queue_latency_p95_us: 0,
+            command_queue_latency_p99_us: 0,
+            command_queue_latency_samples: 0,
+            last_command_drain_count: 0,
+            command_drain_abs_max: 0,
+            command_drain_limit_hit_count: 0,
+            last_command_to_dmx_tick_latency_us: 0,
+            command_to_dmx_tick_latency_abs_max_us: 0,
+            command_to_dmx_tick_latency_p95_us: 0,
+            command_to_dmx_tick_latency_p99_us: 0,
+            command_to_dmx_tick_latency_samples: 0,
+            last_dmx_send_interval_us: 0,
+            dmx_send_interval_min_us: 0,
+            dmx_send_interval_max_us: 0,
+            dmx_send_interval_samples: 0,
+            low_latency_dmx_tick_request_count: 0,
+            low_latency_dmx_tick_advance_count: 0,
+            low_latency_dmx_tick_defer_count: 0,
             last_packet_bytes: 0,
             last_dmx_output_count: 0,
             last_dmx_send_success_count: 0,
             last_dmx_send_failure_count: 0,
             total_dmx_send_success_count: 0,
             total_dmx_send_failure_count: 0,
+            last_dmx_route_results: Vec::new(),
             last_error: None,
         }
     }
@@ -992,28 +1294,47 @@ pub enum MidiControlMessage {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MidiControlAction {
     FixtureAttribute,
+    FixtureHighlight,
+    FixtureSolo,
+    FixturePark,
+    GroupHighlight,
+    GroupSolo,
+    GroupPark,
     TriggerCue,
     TriggerNextCue,
     TriggerPreviousCue,
+    EffectEnabled,
+    NodeGraphEnabled,
     VideoParam,
     VideoCuePointAdd,
     VideoCuePointRemove,
     VideoCuePointJump,
+    VideoCuePointPrevious,
+    VideoCuePointNext,
     VideoLayerEnabled,
     VideoLayerSolo,
     VideoPlay,
     VideoLoop,
+    VideoLayerFade,
     VideoOutputEnabled,
     VideoOutputOpacity,
     VideoOutputFade,
+    VideoOutputMappingField,
+    VideoOutputMappingPreset,
     VideoOutputBlackout,
     TimelinePlay,
     TimelineSeek,
+    TimelineBeatPrevious,
+    TimelineBeatNext,
+    SetBpm,
+    TapBpm,
     LightingMaster,
     GroupSubmaster,
     CueFadePause,
     Blackout,
+    AllBlackout,
     VideoBlackout,
+    ClearFixtureFlags,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1051,6 +1372,9 @@ pub enum ClockSource {
     Manual,
     Tap,
     MidiClock,
+    MidiTimecode,
+    Ltc,
+    AbletonLink,
 }
 
 impl Default for ClockSource {
@@ -1096,6 +1420,40 @@ pub struct DmxUniversePreview {
     pub values: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct StageMapConfig {
+    pub locked: bool,
+    pub min_x: f32,
+    pub max_x: f32,
+    pub min_z: f32,
+    pub max_z: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StageMapPresetSummary {
+    pub label: String,
+    pub config: StageMapConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StageMapPresetFile {
+    pub version: u32,
+    pub app: String,
+    pub preset: StageMapPresetSummary,
+}
+
+impl Default for StageMapConfig {
+    fn default() -> Self {
+        Self {
+            locked: false,
+            min_x: -10.0,
+            max_x: 10.0,
+            min_z: -10.0,
+            max_z: 10.0,
+        }
+    }
+}
+
 impl Default for ClockSnapshot {
     fn default() -> Self {
         Self {
@@ -1117,12 +1475,18 @@ pub struct EngineSnapshot {
     pub timeline: TimelineSnapshot,
     pub video: VideoSnapshot,
     pub effects: Vec<EffectSummary>,
+    #[serde(default)]
+    pub node_graphs: Vec<NodeGraphSummary>,
     pub output: DmxOutputConfig,
     pub dmx_outputs: Vec<DmxOutputConfig>,
     pub lighting_master: f32,
     pub submasters: Vec<SubmasterSummary>,
     pub blackout: bool,
     pub clock: ClockSnapshot,
+    #[serde(default)]
+    pub stage_map: StageMapConfig,
+    #[serde(default)]
+    pub stage_map_presets: Vec<StageMapPresetSummary>,
     pub dmx_preview: Vec<u8>,
     #[serde(default)]
     pub dmx_previews: Vec<DmxUniversePreview>,
@@ -1139,12 +1503,15 @@ impl Default for EngineSnapshot {
             timeline: TimelineSnapshot::default(),
             video: VideoSnapshot::default(),
             effects: Vec::new(),
+            node_graphs: Vec::new(),
             output: DmxOutputConfig::default(),
             dmx_outputs: vec![DmxOutputConfig::default()],
             lighting_master: 1.0,
             submasters: Vec::new(),
             blackout: false,
             clock: ClockSnapshot::default(),
+            stage_map: StageMapConfig::default(),
+            stage_map_presets: Vec::new(),
             dmx_preview: vec![0; 512],
             dmx_previews: vec![DmxUniversePreview {
                 universe: 0,

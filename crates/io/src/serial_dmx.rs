@@ -189,6 +189,24 @@ mod tests {
     }
 
     #[test]
+    fn enttec_usb_pro_packet_preserves_all_slots_after_start_code() {
+        let mut frame = [0u8; 512];
+        frame[0] = 1;
+        frame[1] = 2;
+        frame[510] = 254;
+        frame[511] = 255;
+
+        let packet = build_enttec_usb_pro_dmx_packet(&frame);
+
+        assert_eq!(
+            u16::from_le_bytes([packet[2], packet[3]]) as usize,
+            ENTTEC_PRO_DMX_PAYLOAD_LEN
+        );
+        assert_eq!(packet[4], ENTTEC_PRO_DMX_START_CODE);
+        assert_eq!(&packet[5..517], frame);
+    }
+
+    #[test]
     fn builds_enttec_open_dmx_payload() {
         let mut frame = [0u8; 512];
         frame[0] = 255;
@@ -203,6 +221,20 @@ mod tests {
     }
 
     #[test]
+    fn enttec_open_dmx_payload_preserves_slot_order_after_start_code() {
+        let mut frame = [0u8; 512];
+        frame[0] = 1;
+        frame[1] = 2;
+        frame[510] = 254;
+        frame[511] = 255;
+
+        let payload = build_enttec_open_dmx_payload(&frame);
+
+        assert_eq!(payload[0], ENTTEC_OPEN_DMX_START_CODE);
+        assert_eq!(&payload[1..], frame);
+    }
+
+    #[test]
     fn writes_enttec_usb_pro_packet_to_writer() {
         let mut frame = [0u8; 512];
         frame[10] = 123;
@@ -212,5 +244,17 @@ mod tests {
 
         assert_eq!(written, ENTTEC_PRO_SEND_PACKET_LEN);
         assert_eq!(writer, build_enttec_usb_pro_dmx_packet(&frame));
+    }
+
+    #[test]
+    fn serial_senders_reject_blank_port_paths_before_opening() {
+        assert!(matches!(
+            EnttecUsbProSender::new(" ", 57_600),
+            Err(SerialDmxError::MissingPort)
+        ));
+        assert!(matches!(
+            EnttecOpenDmxSender::new(""),
+            Err(SerialDmxError::MissingPort)
+        ));
     }
 }

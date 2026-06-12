@@ -6,9 +6,10 @@ use std::{
 };
 
 use protocol::{
-    CompositionId, CompositionSummary, Transform2D, VideoBlendMode, VideoColorAdjust,
-    VideoFxAdjust, VideoLayerId, VideoLayerState, VideoLayerSummary, VideoMediaMetadata,
-    VideoOutputAspectMode, VideoOutputId, VideoOutputKind, VideoOutputMapping, VideoOutputSummary,
+    ClockSnapshot, CompositionId, CompositionSummary, Transform2D, VideoBackendState,
+    VideoBackendStatus, VideoBlendMode, VideoColorAdjust, VideoCuePointSummary, VideoFxAdjust,
+    VideoLayerId, VideoLayerState, VideoLayerSummary, VideoMediaMetadata, VideoOutputAspectMode,
+    VideoOutputId, VideoOutputKind, VideoOutputMapping, VideoOutputSummary, VideoRuntimeStatus,
     VideoSnapshot, VideoSourceKind, VideoSourceSummary,
 };
 use serde::{Deserialize, Serialize};
@@ -308,6 +309,7 @@ pub struct DecoderBackedFrameProvider<D = NullVideoDecoder> {
     placeholder_when_missing: bool,
     prefetch_count: usize,
     prefetch_interval_ms: u64,
+    bpm: Option<f32>,
 }
 
 pub struct VideoPreviewRenderer<P = PreviewFrameProvider> {
@@ -625,7 +627,7 @@ impl FfmpegCliFrameDecoder {
     }
 
     pub fn from_env() -> Self {
-        Self::new(std::env::var_os("KDMX_FFMPEG").unwrap_or_else(|| "ffmpeg".into()))
+        Self::new(std::env::var_os("RAYARD_FFMPEG").unwrap_or_else(|| "ffmpeg".into()))
     }
 
     pub fn binary(&self) -> &Path {
@@ -641,6 +643,213 @@ pub fn probe_video_file_metadata(
     path: impl AsRef<Path>,
 ) -> Result<VideoProbeSummary, VideoProbeError> {
     probe_video_file_metadata_with_binary(path, ffprobe_binary_from_env())
+}
+
+pub fn video_runtime_status() -> VideoRuntimeStatus {
+    video_runtime_status_with_binaries(
+        FfmpegCliFrameDecoder::from_env().binary().to_path_buf(),
+        ffprobe_binary_from_env(),
+    )
+}
+
+pub fn video_runtime_status_with_binaries(
+    ffmpeg_binary: impl AsRef<Path>,
+    ffprobe_binary: impl AsRef<Path>,
+) -> VideoRuntimeStatus {
+    VideoRuntimeStatus {
+        backends: vec![
+            VideoBackendStatus {
+                id: "still_image".to_string(),
+                label: "Still image decode".to_string(),
+                state: VideoBackendState::Available,
+                detail: "PNG/JPEG decode is built in".to_string(),
+            },
+            command_backend_status("ffmpeg", "FFmpeg frame decode", ffmpeg_binary.as_ref()),
+            command_backend_status("ffprobe", "FFprobe metadata", ffprobe_binary.as_ref()),
+            ffmpeg_decoder_backend_status(
+                "hap_ffmpeg",
+                "HAP FFmpeg decode",
+                ffmpeg_binary.as_ref(),
+                "hap",
+            ),
+            VideoBackendStatus {
+                id: "hap_gpu".to_string(),
+                label: "HAP GPU decode".to_string(),
+                state: VideoBackendState::NotBuilt,
+                detail:
+                    "HAP GPU/DXT texture decode path is not linked in this build; FFmpeg preview may still work"
+                        .to_string(),
+            },
+            external_backend_status("ndi", "NDI input/output", "NDI SDK"),
+            platform_external_backend_status(
+                "spout",
+                "Spout input/output",
+                "Spout",
+                PlatformSupport::WindowsOnly,
+            ),
+            platform_external_backend_status(
+                "syphon",
+                "Syphon input/output",
+                "Syphon",
+                PlatformSupport::MacosOnly,
+            ),
+        ],
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlatformSupport {
+    WindowsOnly,
+    MacosOnly,
+}
+
+fn external_backend_status(id: &str, label: &str, sdk_name: &str) -> VideoBackendStatus {
+    VideoBackendStatus {
+        id: id.to_string(),
+        label: label.to_string(),
+        state: VideoBackendState::NotBuilt,
+        detail: format!("{sdk_name} backend is not linked in this build"),
+    }
+}
+
+fn platform_external_backend_status(
+    id: &str,
+    label: &str,
+    sdk_name: &str,
+    support: PlatformSupport,
+) -> VideoBackendStatus {
+    if platform_backend_is_supported(support) {
+        return external_backend_status(id, label, sdk_name);
+    }
+    let platform = match support {
+        PlatformSupport::WindowsOnly => "Windows-only",
+        PlatformSupport::MacosOnly => "macOS-only",
+    };
+    VideoBackendStatus {
+        id: id.to_string(),
+        label: label.to_string(),
+        state: VideoBackendState::NotBuilt,
+        detail: format!("{sdk_name} is {platform} and is not available on this platform"),
+    }
+}
+
+fn platform_backend_is_supported(support: PlatformSupport) -> bool {
+    match support {
+        PlatformSupport::WindowsOnly => cfg!(target_os = "windows"),
+        PlatformSupport::MacosOnly => cfg!(target_os = "macos"),
+    }
+}
+
+fn command_backend_status(id: &str, label: &str, binary: &Path) -> VideoBackendStatus {
+    match Command::new(binary).arg("-version").output() {
+        Ok(output) if output.status.success() => VideoBackendStatus {
+            id: id.to_string(),
+            label: label.to_string(),
+            state: VideoBackendState::Available,
+            detail: command_version_detail(binary, &output.stdout),
+        },
+        Ok(output) => VideoBackendStatus {
+            id: id.to_string(),
+            label: label.to_string(),
+            state: VideoBackendState::Missing,
+            detail: format!(
+                "'{} -version' exited with {}",
+                binary.display(),
+                output.status
+            ),
+        },
+        Err(error) => VideoBackendStatus {
+            id: id.to_string(),
+            label: label.to_string(),
+            state: VideoBackendState::Missing,
+            detail: format!("'{}' is not available: {error}", binary.display()),
+        },
+    }
+}
+
+fn ffmpeg_decoder_backend_status(
+    id: &str,
+    label: &str,
+    binary: &Path,
+    decoder_name: &str,
+) -> VideoBackendStatus {
+    match Command::new(binary).arg("-decoders").output() {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if ffmpeg_decoders_list_contains(&stdout, decoder_name) {
+                VideoBackendStatus {
+                    id: id.to_string(),
+                    label: label.to_string(),
+                    state: VideoBackendState::Available,
+                    detail: format!(
+                        "{}: FFmpeg decoder '{decoder_name}' is available",
+                        binary.display()
+                    ),
+                }
+            } else {
+                VideoBackendStatus {
+                    id: id.to_string(),
+                    label: label.to_string(),
+                    state: VideoBackendState::Missing,
+                    detail: format!(
+                        "{}: FFmpeg decoder '{decoder_name}' was not listed by -decoders",
+                        binary.display()
+                    ),
+                }
+            }
+        }
+        Ok(output) => VideoBackendStatus {
+            id: id.to_string(),
+            label: label.to_string(),
+            state: VideoBackendState::Missing,
+            detail: format!(
+                "'{} -decoders' exited with {}",
+                binary.display(),
+                output.status
+            ),
+        },
+        Err(error) => VideoBackendStatus {
+            id: id.to_string(),
+            label: label.to_string(),
+            state: VideoBackendState::Missing,
+            detail: format!("'{}' is not available: {error}", binary.display()),
+        },
+    }
+}
+
+fn ffmpeg_decoders_list_contains(decoders_output: &str, decoder_name: &str) -> bool {
+    decoders_output.lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with("V")
+            && trimmed
+                .split_whitespace()
+                .nth(1)
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(decoder_name))
+    })
+}
+
+fn command_version_detail(binary: &Path, stdout: &[u8]) -> String {
+    let first_line = String::from_utf8_lossy(stdout)
+        .lines()
+        .next()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| "version command succeeded".to_string());
+    format!("{}: {first_line}", binary.display())
+}
+
+pub fn infer_video_codec_from_path(path: impl AsRef<Path>) -> Option<String> {
+    let extension = path
+        .as_ref()
+        .extension()?
+        .to_string_lossy()
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "hap" => Some("hap".to_string()),
+        "hapq" => Some("hap-q".to_string()),
+        _ => None,
+    }
 }
 
 pub fn probe_video_file_metadata_with_binary(
@@ -679,10 +888,10 @@ pub fn probe_video_file_metadata_with_binary(
 }
 
 fn ffprobe_binary_from_env() -> PathBuf {
-    if let Some(binary) = std::env::var_os("KDMX_FFPROBE") {
+    if let Some(binary) = std::env::var_os("RAYARD_FFPROBE") {
         return binary.into();
     }
-    if let Some(ffmpeg) = std::env::var_os("KDMX_FFMPEG") {
+    if let Some(ffmpeg) = std::env::var_os("RAYARD_FFMPEG") {
         let path = PathBuf::from(ffmpeg);
         let file_name = path
             .file_name()
@@ -872,6 +1081,7 @@ impl<D> DecoderBackedFrameProvider<D> {
             placeholder_when_missing: true,
             prefetch_count: 0,
             prefetch_interval_ms: 33,
+            bpm: None,
         }
     }
 
@@ -884,6 +1094,19 @@ impl<D> DecoderBackedFrameProvider<D> {
         self.prefetch_count = count;
         self.prefetch_interval_ms = interval_ms.max(1);
         self
+    }
+
+    pub fn with_bpm(mut self, bpm: Option<f32>) -> Self {
+        self.set_bpm(bpm);
+        self
+    }
+
+    pub fn set_bpm(&mut self, bpm: Option<f32>) {
+        self.bpm = bpm.filter(|bpm| bpm.is_finite() && *bpm > 0.0);
+    }
+
+    pub fn bpm(&self) -> Option<f32> {
+        self.bpm
     }
 
     pub fn prefetch_count(&self) -> usize {
@@ -935,11 +1158,19 @@ impl<D: VideoFrameDecoder> VideoFrameProvider for DecoderBackedFrameProvider<D> 
         }
 
         let state = sanitize_layer_state(layer.state.clone());
+        let source_duration_ms = layer
+            .source
+            .metadata
+            .and_then(|metadata| metadata.duration_ms);
         let mut frames = Vec::with_capacity(self.prefetch_count.saturating_add(1));
         for offset in 0..=self.prefetch_count {
-            let position_ms = state
-                .position_ms
-                .saturating_add(self.prefetch_interval_ms.saturating_mul(offset as u64));
+            let position_ms = prefetch_position_ms(
+                state.clone(),
+                offset,
+                self.prefetch_interval_ms,
+                self.bpm,
+                source_duration_ms,
+            );
             frames.push(self.decode_or_placeholder_for_layer(
                 layer,
                 width,
@@ -1050,10 +1281,15 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             return Err(VideoPreviewError::InvalidSize);
         }
 
-        self.prepare_frames(snapshot, width, height)?;
         let plan = build_composition_plans(snapshot).into_iter().next().ok_or(
             VideoPreviewError::Runtime(VideoRuntimeError::MissingComposition),
         )?;
+        let layer_ids = plan
+            .layers
+            .iter()
+            .map(|layer| layer.layer_id)
+            .collect::<Vec<_>>();
+        self.prepare_frames(snapshot, &layer_ids, width, height)?;
         self.runtime
             .compose_plan(&plan, width, height)
             .map_err(VideoPreviewError::Runtime)
@@ -1091,7 +1327,19 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoFrame, VideoPreviewError> {
-        self.prepare_frames(snapshot, width, height)?;
+        if plan.output_blackout || plan.output_opacity <= f32::EPSILON {
+            return Ok(video_output_black_frame(width, height));
+        }
+        let layer_ids = plan
+            .composition
+            .layers
+            .iter()
+            .map(|layer| layer.layer_id)
+            .collect::<Vec<_>>();
+        if layer_ids.is_empty() {
+            return Ok(video_output_black_frame(width, height));
+        }
+        self.prepare_frames(snapshot, &layer_ids, width, height)?;
         let frame = self
             .runtime
             .compose_plan(&plan.composition, width, height)
@@ -1102,6 +1350,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
     fn prepare_frames(
         &mut self,
         snapshot: &VideoSnapshot,
+        requested_layer_ids: &[VideoLayerId],
         width: u32,
         height: u32,
     ) -> Result<(), VideoPreviewError> {
@@ -1114,6 +1363,9 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         self.runtime.sync_layers(&layer_ids);
 
         for layer in &snapshot.layers {
+            if !requested_layer_ids.contains(&layer.id) {
+                continue;
+            }
             let frames = self
                 .frame_provider
                 .frames_for_layer(layer, width, height)
@@ -1209,6 +1461,18 @@ impl StillImageSignature {
             len: metadata.as_ref().map(|metadata| metadata.len()),
             modified: metadata.and_then(|metadata| metadata.modified().ok()),
         }
+    }
+}
+
+fn video_output_black_frame(width: u32, height: u32) -> VideoFrame {
+    VideoFrame {
+        layer_id: 0,
+        width,
+        height,
+        pts_ms: 0,
+        duration_ms: 0,
+        format: VideoPixelFormat::Rgba8,
+        data: [0, 0, 0, 255].repeat(width as usize * height as usize),
     }
 }
 
@@ -1323,6 +1587,44 @@ pub fn load_still_image_frame(
         format: VideoPixelFormat::Rgba8,
         data: image.into_raw(),
     })
+}
+
+pub fn probe_still_image_metadata(
+    path: impl AsRef<Path>,
+) -> Result<VideoMediaMetadata, StillImageError> {
+    let (width, height) = image::image_dimensions(path)
+        .map_err(|error| StillImageError::Decode(error.to_string()))?;
+    if width == 0 || height == 0 {
+        return Err(StillImageError::EmptyImage);
+    }
+    Ok(VideoMediaMetadata {
+        duration_ms: None,
+        width: Some(width),
+        height: Some(height),
+        frame_rate: None,
+    })
+}
+
+fn prefetch_position_ms(
+    mut state: VideoLayerState,
+    offset: usize,
+    interval_ms: u64,
+    bpm: Option<f32>,
+    source_duration_ms: Option<u64>,
+) -> u64 {
+    if offset == 0 {
+        return sanitize_layer_state(state).position_ms;
+    }
+    state = sanitize_layer_state(state);
+    clamp_layer_state_to_source_duration(&mut state, source_duration_ms);
+    state.playing = true;
+    advance_sanitized_layer_state(
+        state,
+        Duration::from_millis(interval_ms.saturating_mul(offset as u64)),
+        bpm,
+        source_duration_ms,
+    )
+    .position_ms
 }
 
 pub fn resize_rgba8_nearest(
@@ -2211,9 +2513,58 @@ pub fn sanitize_layer_state(mut state: VideoLayerState) -> VideoLayerState {
     if state.loop_enabled && state.loop_end_ms <= state.loop_start_ms {
         state.loop_end_ms = state.loop_start_ms.saturating_add(1);
     }
-    state.cue_points_ms.sort_unstable();
-    state.cue_points_ms.dedup();
+    state.cue_points = sanitize_video_cue_points(state.cue_points, &state.cue_points_ms);
+    state.cue_points_ms = state
+        .cue_points
+        .iter()
+        .map(|cue_point| cue_point.position_ms)
+        .collect();
     state
+}
+
+pub fn sanitize_video_cue_points(
+    cue_points: Vec<VideoCuePointSummary>,
+    legacy_positions: &[u64],
+) -> Vec<VideoCuePointSummary> {
+    let mut cue_points = cue_points
+        .into_iter()
+        .map(|cue_point| VideoCuePointSummary {
+            position_ms: cue_point.position_ms,
+            label: cue_point.label.trim().to_string(),
+            color: sanitize_cue_point_color(cue_point.color),
+        })
+        .collect::<Vec<_>>();
+    for position_ms in legacy_positions {
+        if !cue_points
+            .iter()
+            .any(|cue_point| cue_point.position_ms == *position_ms)
+        {
+            cue_points.push(VideoCuePointSummary {
+                position_ms: *position_ms,
+                label: String::new(),
+                color: None,
+            });
+        }
+    }
+    cue_points.sort_by_key(|cue_point| cue_point.position_ms);
+    cue_points.dedup_by_key(|cue_point| cue_point.position_ms);
+    for (index, cue_point) in cue_points.iter_mut().enumerate() {
+        if cue_point.label.is_empty() {
+            cue_point.label = format!("Cue {}", index + 1);
+        }
+    }
+    cue_points
+}
+
+fn sanitize_cue_point_color(color: Option<String>) -> Option<String> {
+    let color = color?;
+    let color = color.trim();
+    let hex = color.strip_prefix('#').unwrap_or(color);
+    if hex.len() == 6 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Some(format!("#{hex}"))
+    } else {
+        None
+    }
 }
 
 pub fn sanitize_color_adjust(mut color: VideoColorAdjust) -> VideoColorAdjust {
@@ -2256,6 +2607,35 @@ pub fn advance_layer_state_with_bpm_and_duration(
     source_duration_ms: Option<u64>,
 ) -> VideoLayerState {
     let mut state = sanitize_layer_state(state);
+    clamp_layer_state_to_source_duration(&mut state, source_duration_ms);
+    advance_sanitized_layer_state(state, delta, bpm, source_duration_ms)
+}
+
+pub fn advance_layer_state_with_clock_and_duration(
+    state: VideoLayerState,
+    delta: Duration,
+    clock: Option<&ClockSnapshot>,
+    source_duration_ms: Option<u64>,
+) -> VideoLayerState {
+    let mut state = sanitize_layer_state(state);
+    clamp_layer_state_to_source_duration(&mut state, source_duration_ms);
+    if let Some(clock) = clock {
+        if should_lock_layer_to_bpm_clock(&state, clock) {
+            return sync_layer_state_to_bpm_clock(state, clock);
+        }
+    }
+    advance_sanitized_layer_state(
+        state,
+        delta,
+        clock.map(|clock| clock.bpm),
+        source_duration_ms,
+    )
+}
+
+fn clamp_layer_state_to_source_duration(
+    state: &mut VideoLayerState,
+    source_duration_ms: Option<u64>,
+) {
     let source_duration_ms = source_duration_ms.filter(|duration| *duration > 0);
     if let Some(duration) = source_duration_ms {
         state.position_ms = state.position_ms.min(duration);
@@ -2267,6 +2647,15 @@ pub fn advance_layer_state_with_bpm_and_duration(
             }
         }
     }
+}
+
+fn advance_sanitized_layer_state(
+    mut state: VideoLayerState,
+    delta: Duration,
+    bpm: Option<f32>,
+    source_duration_ms: Option<u64>,
+) -> VideoLayerState {
+    let source_duration_ms = source_duration_ms.filter(|duration| *duration > 0);
     let speed = effective_speed(&state, bpm);
     if !state.playing || speed.abs() <= f32::EPSILON || delta.is_zero() {
         return state;
@@ -2298,6 +2687,44 @@ pub fn advance_layer_state_with_bpm_and_duration(
             state.position_ms = next_position as u64;
         }
     }
+    state
+}
+
+fn should_lock_layer_to_bpm_clock(state: &VideoLayerState, clock: &ClockSnapshot) -> bool {
+    state.playing
+        && state.bpm_sync.enabled
+        && clock.bpm.is_finite()
+        && clock.bpm > 0.0
+        && state.loop_enabled
+        && state.loop_end_ms > state.loop_start_ms
+        && state.bpm_sync.loop_bars.is_finite()
+        && state.bpm_sync.loop_bars > 0.0
+        && state.bpm_sync.ratio.is_finite()
+        && state.bpm_sync.ratio > 0.0
+}
+
+fn sync_layer_state_to_bpm_clock(
+    mut state: VideoLayerState,
+    clock: &ClockSnapshot,
+) -> VideoLayerState {
+    let loop_length_ms = state.loop_end_ms - state.loop_start_ms;
+    if loop_length_ms == 0 {
+        return state;
+    }
+    let cycle_beats = f64::from(state.bpm_sync.loop_bars.max(0.25)) * 4.0
+        / f64::from(state.bpm_sync.ratio.max(0.25));
+    if cycle_beats <= f64::EPSILON {
+        return state;
+    }
+    let beat_position = clock.beat_counter as f64 + f64::from(clock.beat_phase.rem_euclid(1.0));
+    let mut cycle_phase = (beat_position / cycle_beats).rem_euclid(1.0);
+    if state.speed < 0.0 {
+        cycle_phase = (1.0 - cycle_phase).rem_euclid(1.0);
+    }
+    let loop_offset = (cycle_phase * loop_length_ms as f64).round() as u64;
+    state.position_ms = state
+        .loop_start_ms
+        .saturating_add(loop_offset.min(loop_length_ms.saturating_sub(1)));
     state
 }
 
@@ -2342,6 +2769,9 @@ mod tests {
         CompositionSummary, Transform2D, VideoBlendMode, VideoLayerSummary, VideoOutputKind,
         VideoOutputSummary, VideoSourceKind, VideoSourceSummary,
     };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static FAKE_FFMPEG_BINARY_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     fn frame(layer_id: VideoLayerId, pts_ms: u64) -> VideoFrame {
         VideoFrame {
@@ -2476,20 +2906,25 @@ mod tests {
 
     fn fake_ffmpeg_binary() -> PathBuf {
         let extension = if cfg!(windows) { "cmd" } else { "sh" };
+        let serial = FAKE_FFMPEG_BINARY_COUNTER.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
-            "kdmx-fake-ffmpeg-{}.{extension}",
-            std::process::id()
+            "rayard-fake-ffmpeg-{}-{serial}.{extension}",
+            std::process::id(),
         ));
         #[cfg(windows)]
         std::fs::write(
             &path,
-            b"@echo off\r\n<nul set /p dummy=ABCD\r\nexit /b 0\r\n",
+            b"@echo off\r\nif \"%1\"==\"-version\" (\r\n  <nul set /p dummy=ffmpeg fake ABCD\r\n  exit /b 0\r\n)\r\nif \"%1\"==\"-decoders\" (\r\n  echo  V..... hap                  Vidvox Hap decoder\r\n  exit /b 0\r\n)\r\n<nul set /p dummy=ABCD\r\nexit /b 0\r\n",
         )
         .unwrap();
         #[cfg(not(windows))]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::write(&path, b"#!/bin/sh\nprintf ABCD\n").unwrap();
+            std::fs::write(
+                &path,
+                b"#!/bin/sh\nif [ \"$1\" = \"-version\" ]; then printf 'ffmpeg fake ABCD'; exit 0; fi\nif [ \"$1\" = \"-decoders\" ]; then printf ' V..... hap                  Vidvox Hap decoder\\n'; exit 0; fi\nprintf ABCD\n",
+            )
+            .unwrap();
             let mut permissions = std::fs::metadata(&path).unwrap().permissions();
             permissions.set_mode(0o755);
             std::fs::set_permissions(&path, permissions).unwrap();
@@ -2514,6 +2949,11 @@ mod tests {
                 ratio: 10.0,
                 loop_bars: f32::NAN,
             },
+            cue_points: vec![VideoCuePointSummary {
+                position_ms: 250,
+                label: "  Drop  ".to_string(),
+                color: Some("ff3366".to_string()),
+            }],
             cue_points_ms: vec![500, 100, 500],
             transform: Transform2D {
                 scale_x: 0.0,
@@ -2565,7 +3005,16 @@ mod tests {
         assert_eq!(state.fx.key_green, 1.0);
         assert_eq!(state.fx.key_blue, 1.0);
         assert_eq!(state.fx.key_threshold, 1.0);
-        assert_eq!(state.cue_points_ms, vec![100, 500]);
+        assert_eq!(state.cue_points_ms, vec![100, 250, 500]);
+        assert_eq!(
+            state
+                .cue_points
+                .iter()
+                .map(|cue_point| cue_point.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Cue 1", "Drop", "Cue 3"]
+        );
+        assert_eq!(state.cue_points[1].color.as_deref(), Some("#ff3366"));
     }
 
     #[test]
@@ -2679,6 +3128,35 @@ mod tests {
     }
 
     #[test]
+    fn bpm_sync_can_lock_position_to_shared_clock_phase() {
+        let state = VideoLayerState {
+            playing: true,
+            speed: 1.0,
+            loop_enabled: true,
+            loop_start_ms: 1_000,
+            loop_end_ms: 5_000,
+            bpm_sync: protocol::VideoBpmSync {
+                enabled: true,
+                ratio: 1.0,
+                loop_bars: 1.0,
+            },
+            ..VideoLayerState::default()
+        };
+        let clock = ClockSnapshot {
+            bpm: 120.0,
+            beat_phase: 0.0,
+            beat_counter: 1,
+            tap_count: 0,
+            source: protocol::ClockSource::AbletonLink,
+        };
+
+        let advanced =
+            advance_layer_state_with_clock_and_duration(state, Duration::ZERO, Some(&clock), None);
+
+        assert_eq!(advanced.position_ms, 2_000);
+    }
+
+    #[test]
     fn frame_queue_keeps_sorted_frames_and_drops_oldest_slot_when_full() {
         let mut queue = FrameQueue::new(7, 3);
 
@@ -2755,7 +3233,7 @@ mod tests {
     #[test]
     fn video_preview_renderer_uses_still_image_pixels() {
         let path = std::env::temp_dir().join(format!(
-            "kdmx-preview-still-{}-{}.png",
+            "rayard-preview-still-{}-{}.png",
             std::process::id(),
             1
         ));
@@ -3086,6 +3564,184 @@ mod tests {
     }
 
     #[test]
+    fn decoder_backed_provider_prefetch_respects_reverse_loop_direction() {
+        #[derive(Default)]
+        struct TestDecoder {
+            requests: Vec<VideoFrameRequest>,
+        }
+
+        impl VideoFrameDecoder for TestDecoder {
+            fn retain_layers(&mut self, _layer_ids: &[VideoLayerId]) {}
+
+            fn decode_frame(
+                &mut self,
+                request: &VideoFrameRequest,
+            ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+                self.requests.push(request.clone());
+                Ok(Some(VideoFrame {
+                    layer_id: request.layer_id,
+                    width: request.width,
+                    height: request.height,
+                    pts_ms: request.position_ms,
+                    duration_ms: 16,
+                    format: VideoPixelFormat::Rgba8,
+                    data: [request.position_ms as u8, 0, 0, 255]
+                        .repeat(request.width as usize * request.height as usize),
+                }))
+            }
+        }
+
+        let snapshot = VideoSnapshot {
+            layers: vec![VideoLayerSummary {
+                id: 13,
+                label: "Reverse Loop Clip".to_string(),
+                source: VideoSourceSummary {
+                    kind: VideoSourceKind::File,
+                    path: Some("clip.mp4".to_string()),
+                    name: None,
+                    codec: Some("H264".to_string()),
+                    metadata: Some(VideoMediaMetadata {
+                        duration_ms: Some(1_000),
+                        width: Some(1920),
+                        height: Some(1080),
+                        frame_rate: Some(60.0),
+                    }),
+                },
+                blend_mode: VideoBlendMode::Normal,
+                state: VideoLayerState {
+                    position_ms: 110,
+                    speed: -1.0,
+                    loop_enabled: true,
+                    loop_start_ms: 100,
+                    loop_end_ms: 200,
+                    ..VideoLayerState::default()
+                },
+            }],
+            compositions: Vec::new(),
+            outputs: Vec::new(),
+            mapping_presets: Vec::new(),
+            master_opacity: 1.0,
+            blackout: false,
+        };
+        let provider = DecoderBackedFrameProvider::new(TestDecoder::default()).with_prefetch(3, 40);
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig {
+                frame_queue_capacity: 4,
+                preview_width: 1,
+                preview_height: 1,
+            },
+            provider,
+        );
+        let output = renderer.render(&snapshot, 1, 1).unwrap();
+        let provider = renderer.frame_provider();
+
+        assert_eq!(renderer.queue_len(13), 4);
+        assert_eq!(output.pts_ms, 110);
+        assert_eq!(
+            provider
+                .decoder()
+                .requests
+                .iter()
+                .map(|request| request.position_ms)
+                .collect::<Vec<_>>(),
+            vec![110, 170, 130, 190]
+        );
+    }
+
+    #[test]
+    fn decoder_backed_provider_prefetch_uses_bpm_sync_when_manual_speed_is_zero() {
+        #[derive(Default)]
+        struct TestDecoder {
+            requests: Vec<VideoFrameRequest>,
+        }
+
+        impl VideoFrameDecoder for TestDecoder {
+            fn retain_layers(&mut self, _layer_ids: &[VideoLayerId]) {}
+
+            fn decode_frame(
+                &mut self,
+                request: &VideoFrameRequest,
+            ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+                self.requests.push(request.clone());
+                Ok(Some(VideoFrame {
+                    layer_id: request.layer_id,
+                    width: request.width,
+                    height: request.height,
+                    pts_ms: request.position_ms,
+                    duration_ms: 16,
+                    format: VideoPixelFormat::Rgba8,
+                    data: [request.position_ms as u8, 0, 0, 255]
+                        .repeat(request.width as usize * request.height as usize),
+                }))
+            }
+        }
+
+        let snapshot = VideoSnapshot {
+            layers: vec![VideoLayerSummary {
+                id: 14,
+                label: "BPM Loop Clip".to_string(),
+                source: VideoSourceSummary {
+                    kind: VideoSourceKind::File,
+                    path: Some("clip.mp4".to_string()),
+                    name: None,
+                    codec: Some("H264".to_string()),
+                    metadata: Some(VideoMediaMetadata {
+                        duration_ms: Some(4_000),
+                        width: Some(1920),
+                        height: Some(1080),
+                        frame_rate: Some(60.0),
+                    }),
+                },
+                blend_mode: VideoBlendMode::Normal,
+                state: VideoLayerState {
+                    position_ms: 0,
+                    speed: 0.0,
+                    loop_enabled: true,
+                    loop_start_ms: 0,
+                    loop_end_ms: 2_000,
+                    bpm_sync: protocol::VideoBpmSync {
+                        enabled: true,
+                        ratio: 1.0,
+                        loop_bars: 1.0,
+                    },
+                    ..VideoLayerState::default()
+                },
+            }],
+            compositions: Vec::new(),
+            outputs: Vec::new(),
+            mapping_presets: Vec::new(),
+            master_opacity: 1.0,
+            blackout: false,
+        };
+        let provider = DecoderBackedFrameProvider::new(TestDecoder::default())
+            .with_prefetch(2, 100)
+            .with_bpm(Some(120.0));
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig {
+                frame_queue_capacity: 4,
+                preview_width: 1,
+                preview_height: 1,
+            },
+            provider,
+        );
+        let output = renderer.render(&snapshot, 1, 1).unwrap();
+        let provider = renderer.frame_provider();
+
+        assert_eq!(renderer.queue_len(14), 3);
+        assert_eq!(output.pts_ms, 0);
+        assert_eq!(provider.bpm(), Some(120.0));
+        assert_eq!(
+            provider
+                .decoder()
+                .requests
+                .iter()
+                .map(|request| request.position_ms)
+                .collect::<Vec<_>>(),
+            vec![0, 100, 200]
+        );
+    }
+
+    #[test]
     fn decoder_backed_provider_can_surface_decoder_errors() {
         #[derive(Default)]
         struct ErrorDecoder;
@@ -3209,6 +3865,141 @@ mod tests {
     }
 
     #[test]
+    fn video_runtime_status_reports_cli_and_external_backend_availability() {
+        let binary = fake_ffmpeg_binary();
+
+        let status = video_runtime_status_with_binaries(&binary, &binary);
+
+        let ffmpeg = status
+            .backends
+            .iter()
+            .find(|backend| backend.id == "ffmpeg")
+            .unwrap();
+        assert_eq!(ffmpeg.state, VideoBackendState::Available);
+        assert!(ffmpeg.detail.contains("ABCD"));
+        let ffprobe = status
+            .backends
+            .iter()
+            .find(|backend| backend.id == "ffprobe")
+            .unwrap();
+        assert_eq!(ffprobe.state, VideoBackendState::Available);
+        let hap_ffmpeg = status
+            .backends
+            .iter()
+            .find(|backend| backend.id == "hap_ffmpeg")
+            .unwrap();
+        assert_eq!(hap_ffmpeg.state, VideoBackendState::Available);
+        assert!(hap_ffmpeg.detail.contains("decoder 'hap' is available"));
+        let hap_gpu = status
+            .backends
+            .iter()
+            .find(|backend| backend.id == "hap_gpu")
+            .unwrap();
+        assert_eq!(hap_gpu.state, VideoBackendState::NotBuilt);
+        assert!(hap_gpu.detail.contains("HAP GPU/DXT"));
+        let ndi = status
+            .backends
+            .iter()
+            .find(|backend| backend.id == "ndi")
+            .unwrap();
+        assert_eq!(ndi.state, VideoBackendState::NotBuilt);
+        assert!(ndi.detail.contains("NDI SDK backend is not linked"));
+
+        let spout = status
+            .backends
+            .iter()
+            .find(|backend| backend.id == "spout")
+            .unwrap();
+        assert_eq!(spout.state, VideoBackendState::NotBuilt);
+        if cfg!(target_os = "windows") {
+            assert!(spout.detail.contains("not linked"));
+        } else {
+            assert!(spout.detail.contains("Windows-only"));
+        }
+
+        let syphon = status
+            .backends
+            .iter()
+            .find(|backend| backend.id == "syphon")
+            .unwrap();
+        assert_eq!(syphon.state, VideoBackendState::NotBuilt);
+        if cfg!(target_os = "macos") {
+            assert!(syphon.detail.contains("not linked"));
+        } else {
+            assert!(syphon.detail.contains("macOS-only"));
+        }
+    }
+
+    #[test]
+    fn video_codec_can_be_inferred_from_hap_file_extensions() {
+        assert_eq!(
+            infer_video_codec_from_path("C:/media/loop.hap").as_deref(),
+            Some("hap")
+        );
+        assert_eq!(
+            infer_video_codec_from_path("C:/media/loop.HAPQ").as_deref(),
+            Some("hap-q")
+        );
+        assert_eq!(infer_video_codec_from_path("C:/media/loop.mov"), None);
+    }
+
+    #[test]
+    fn ffmpeg_decoder_list_detects_hap_decoder() {
+        assert!(ffmpeg_decoders_list_contains(
+            " V..... h264                 H.264\n V..... hap                  Vidvox Hap decoder\n",
+            "hap",
+        ));
+        assert!(ffmpeg_decoders_list_contains(
+            " V..... HAP                  Vidvox Hap decoder\n",
+            "hap",
+        ));
+        assert!(!ffmpeg_decoders_list_contains(
+            " A..... hap                  not a video decoder\n V..... h264                 H.264\n",
+            "hap",
+        ));
+        assert!(!ffmpeg_decoders_list_contains(
+            " V..... hapqa                different decoder\n",
+            "hap",
+        ));
+    }
+
+    #[test]
+    fn video_runtime_status_reports_missing_cli_tools() {
+        let missing =
+            std::env::temp_dir().join(format!("rayard-missing-ffmpeg-{}", std::process::id()));
+
+        let status = video_runtime_status_with_binaries(&missing, &missing);
+
+        assert_eq!(
+            status
+                .backends
+                .iter()
+                .find(|backend| backend.id == "ffmpeg")
+                .unwrap()
+                .state,
+            VideoBackendState::Missing
+        );
+        assert_eq!(
+            status
+                .backends
+                .iter()
+                .find(|backend| backend.id == "ffprobe")
+                .unwrap()
+                .state,
+            VideoBackendState::Missing
+        );
+        assert_eq!(
+            status
+                .backends
+                .iter()
+                .find(|backend| backend.id == "hap_ffmpeg")
+                .unwrap()
+                .state,
+            VideoBackendState::Missing
+        );
+    }
+
+    #[test]
     fn debug_solid_frame_is_stable_per_layer_and_timestamp() {
         let first = debug_solid_frame_for_layer(3, 160, 2, 1);
         let second = debug_solid_frame_for_layer(3, 160, 2, 1);
@@ -3221,8 +4012,11 @@ mod tests {
 
     #[test]
     fn still_image_loader_reads_png_as_rgba_frame() {
-        let path =
-            std::env::temp_dir().join(format!("kdmx-still-image-{}-{}.png", std::process::id(), 1));
+        let path = std::env::temp_dir().join(format!(
+            "rayard-still-image-{}-{}.png",
+            std::process::id(),
+            1
+        ));
         let mut image = image::RgbaImage::new(2, 1);
         image.put_pixel(0, 0, image::Rgba([10, 20, 30, 255]));
         image.put_pixel(1, 0, image::Rgba([40, 50, 60, 128]));
@@ -3240,9 +4034,31 @@ mod tests {
     }
 
     #[test]
+    fn still_image_metadata_probe_reads_dimensions_without_duration() {
+        let path = std::env::temp_dir().join(format!(
+            "rayard-still-probe-{}-{}.png",
+            std::process::id(),
+            1
+        ));
+        let image = image::RgbaImage::from_pixel(3, 2, image::Rgba([12, 34, 56, 255]));
+        image.save(&path).unwrap();
+
+        let metadata = probe_still_image_metadata(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(metadata.width, Some(3));
+        assert_eq!(metadata.height, Some(2));
+        assert_eq!(metadata.duration_ms, None);
+        assert_eq!(metadata.frame_rate, None);
+    }
+
+    #[test]
     fn still_image_cache_reuses_frames_and_invalidates_when_file_changes() {
-        let path =
-            std::env::temp_dir().join(format!("kdmx-still-cache-{}-{}.png", std::process::id(), 1));
+        let path = std::env::temp_dir().join(format!(
+            "rayard-still-cache-{}-{}.png",
+            std::process::id(),
+            1
+        ));
         let mut red = image::RgbaImage::new(1, 1);
         red.put_pixel(0, 0, image::Rgba([200, 0, 0, 255]));
         red.save(&path).unwrap();
@@ -3269,9 +4085,9 @@ mod tests {
     #[test]
     fn still_image_cache_can_retain_active_layers() {
         let path_a =
-            std::env::temp_dir().join(format!("kdmx-still-cache-{}-a.png", std::process::id()));
+            std::env::temp_dir().join(format!("rayard-still-cache-{}-a.png", std::process::id()));
         let path_b =
-            std::env::temp_dir().join(format!("kdmx-still-cache-{}-b.png", std::process::id()));
+            std::env::temp_dir().join(format!("rayard-still-cache-{}-b.png", std::process::id()));
         let image = image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 255]));
         image.save(&path_a).unwrap();
         image.save(&path_b).unwrap();
@@ -3741,6 +4557,98 @@ mod tests {
         assert_eq!(frame.width, 2);
         assert_eq!(frame.height, 1);
         assert_eq!(frame.data, vec![100, 0, 0, 128, 100, 0, 0, 128]);
+    }
+
+    #[test]
+    fn output_preview_renderer_requests_only_routed_layers_and_skips_blackout_decode() {
+        #[derive(Default)]
+        struct TestFrameProvider {
+            retained: Vec<Vec<VideoLayerId>>,
+            requested: Vec<VideoLayerId>,
+        }
+
+        impl VideoFrameProvider for TestFrameProvider {
+            fn retain_layers(&mut self, layer_ids: &[VideoLayerId]) {
+                self.retained.push(layer_ids.to_vec());
+            }
+
+            fn frame_for_layer(
+                &mut self,
+                layer: &VideoLayerSummary,
+                width: u32,
+                height: u32,
+            ) -> Result<VideoFrame, VideoFrameProviderError> {
+                self.requested.push(layer.id);
+                Ok(VideoFrame {
+                    layer_id: layer.id,
+                    width,
+                    height,
+                    pts_ms: layer.state.position_ms,
+                    duration_ms: 16,
+                    format: VideoPixelFormat::Rgba8,
+                    data: [layer.id as u8, 0, 0, 255].repeat(width as usize * height as usize),
+                })
+            }
+        }
+
+        let layer = |id| VideoLayerSummary {
+            id,
+            label: format!("Layer {id}"),
+            source: VideoSourceSummary {
+                kind: VideoSourceKind::File,
+                path: Some(format!("layer-{id}.mp4")),
+                name: None,
+                codec: None,
+                metadata: None,
+            },
+            blend_mode: VideoBlendMode::Normal,
+            state: VideoLayerState::default(),
+        };
+        let mut snapshot = VideoSnapshot {
+            layers: vec![layer(1), layer(2)],
+            compositions: vec![CompositionSummary {
+                id: 8,
+                label: "Screen".to_string(),
+                layer_ids: vec![2],
+                output_ids: vec![9],
+            }],
+            outputs: vec![VideoOutputSummary {
+                id: 9,
+                label: "Projector".to_string(),
+                kind: VideoOutputKind::Display,
+                enabled: true,
+                composition_id: 8,
+                fullscreen: false,
+                monitor_id: None,
+                width: 2,
+                height: 1,
+                endpoint_name: None,
+                opacity: 1.0,
+                blackout: false,
+                mapping: Default::default(),
+            }],
+            mapping_presets: Vec::new(),
+            master_opacity: 1.0,
+            blackout: false,
+        };
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig {
+                frame_queue_capacity: 2,
+                preview_width: 2,
+                preview_height: 1,
+            },
+            TestFrameProvider::default(),
+        );
+
+        let frame = renderer.render_output(&snapshot, 9).unwrap();
+        assert_eq!(frame.data, vec![2, 0, 0, 255, 2, 0, 0, 255]);
+        assert_eq!(renderer.frame_provider().retained, vec![vec![1, 2]]);
+        assert_eq!(renderer.frame_provider().requested, vec![2]);
+
+        snapshot.outputs[0].blackout = true;
+        let frame = renderer.render_output(&snapshot, 9).unwrap();
+        assert_eq!(frame.data, vec![0, 0, 0, 255, 0, 0, 0, 255]);
+        assert_eq!(renderer.frame_provider().requested, vec![2]);
     }
 
     #[test]

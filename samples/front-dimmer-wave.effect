@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "effect_type": "PositionWave",
+  "enabled": true,
+  "lfo": null,
+  "position_wave": {
+    "label": "Front Dimmer Wave",
+    "fixture_ids": [],
+    "target_group_ids": ["Front"],
+    "attribute": "Dimmer",
+    "video_targets": [],
+    "shape": "Triangle",
+    "origin": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.0
+    },
+    "direction": {
+      "x": 1.0,
+      "y": 0.0,
+      "z": 0.0
+    },
+    "speed": 1.0,
+    "wavelength": 4.0,
+    "clock_sync": {
+      "beats": 4.0
+    },
+    "low": 0,
+    "high": 65535,
+    "phase": 0.0,
+    "blend_mode": "Add"
+  }
+}

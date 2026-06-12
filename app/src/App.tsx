@@ -1,5 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { CueCapturePreviewPanel } from "./components/CueCapturePreviewPanel";
+import { DmxOutputConfigPanel } from "./components/DmxOutputConfigPanel";
+import { DmxRawMonitor } from "./components/DmxRawMonitor";
+import { DmxRoutesPanel } from "./components/DmxRoutesPanel";
+import { DmxTestFramePanel } from "./components/DmxTestFramePanel";
+import { EngineTelemetryPanel } from "./components/EngineTelemetryPanel";
+import { TimelineOverview, type TimelineOverviewEvent } from "./components/TimelineOverview";
 import type {
   AttributeControl,
   AttributeResolution,
@@ -8,8 +16,10 @@ import type {
   CustomFixtureProfileRequest,
   CueSummary,
   DmxOutputConfig,
+  DmxTestFrameResult,
   EffectBlendMode,
   EffectKind,
+  EngineTelemetryReport,
   EngineSnapshot,
   FixtureLimits,
   FixtureProfileSummary,
@@ -26,31 +36,55 @@ import type {
   OscInputConfig,
   PatchFixtureRequest,
   PatchedFixtureSummary,
+  Phase1SmokeReport,
+  ProjectLoadResult,
   RemoteControlConfig,
   SerialPortSummary,
+  StageMapConfig,
   TimelineCueEventSummary,
   TimelineAutomationSummary,
   TimelineTrackKind,
   TimelineVideoAutomationSummary,
   VideoBlendMode,
   VideoFrame,
+  VideoEffectTarget,
   VideoLayerState,
   VideoOutputAspectMode,
   VideoOutputKind,
   VideoOutputMapping,
   VideoOutputSummary,
   VideoParam,
+  VideoPreviewDiagnostics,
   VideoSourceKind,
-  VisualizerScene,
 } from "./types";
 
 type TimelineSnapMode = "Off" | "Beat" | "Bar" | "Grid";
 type WorkspaceTab = "setup" | "control" | "touch";
 type SetupSubTab = "library" | "profiles" | "patch" | "mapping" | "output";
 type FixtureLayoutMode = "line" | "grid" | "circle";
+type MappingAxis = "x" | "z";
 type VideoOutputPreviewMode = "output" | "test";
 type DmxPatchViewMode = "grid" | "list";
 type ControlCategory = "dimmer" | "color" | "position" | "gobo" | "beam" | "focus" | "other" | "fader";
+type MappingBulkGroupMode = "add" | "remove" | "set";
+type MappingFixtureFlag = "highlight" | "solo" | "park";
+type MappingStageTool = "select" | "place" | "rotate" | "pan";
+type WaveStageDragMode = "origin" | "direction" | "videoTarget";
+type CueCaptureScopeMode = "all" | "lighting" | "selectedFixture" | "selectedGroup" | "video";
+
+interface EffectTargetOverride {
+  fixture_ids: number[];
+  target_group_ids: string[];
+  attribute: string;
+  video_targets: VideoEffectTarget[];
+}
+
+type CueCaptureScopeRequest =
+  | { kind: "all" }
+  | { kind: "lightingOnly" }
+  | { kind: "selectedFixture"; fixtureId: number }
+  | { kind: "selectedGroup"; groupId: string }
+  | { kind: "videoOnly" };
 
 const defaultOutput: DmxOutputConfig = {
   enabled: true,
@@ -94,6 +128,9 @@ const defaultFxAdjust = {
 };
 
 const defaultVideoOutputMapping: VideoOutputMapping = {
+  stage_x: 0,
+  stage_y: 0,
+  stage_z: 0,
   offset_x: 0,
   offset_y: 0,
   scale_x: 1,
@@ -119,11 +156,12 @@ const stagePadding = 10;
 const cuePadSize = 10;
 const enttecUsbProBaudRate = 57_600;
 const enttecOpenDmxBaudRate = 250_000;
+const mappingSnapPresets = [0.25, 0.5, 1, 2];
 const setupSubTabs: { id: SetupSubTab; label: string; description: string }[] = [
   { id: "library", label: "Library", description: "GDTF import and share lookup" },
   { id: "profiles", label: "Profiles", description: "Fixture profile authoring" },
   { id: "patch", label: "Patch", description: "DMX addressing and fixture assignment" },
-  { id: "mapping", label: "Mapping", description: "2D/3D fixture and projector mapping" },
+  { id: "mapping", label: "Mapping", description: "2D fixture and projector mapping" },
   { id: "output", label: "Output", description: "DMX and video output setup" },
 ];
 const controlCategories: { id: ControlCategory; label: string }[] = [
@@ -156,8 +194,8 @@ const panTiltNudgeSteps = [
   { label: "Medium", value: 2048 },
   { label: "Coarse", value: 8192 },
 ];
-const positionFavoritesStorageKey = "kdmx.positionFavorites.v1";
-const colorFavoritesStorageKey = "kdmx.colorFavorites.v1";
+const positionFavoritesStorageKey = "rayard.positionFavorites.v1";
+const colorFavoritesStorageKey = "rayard.colorFavorites.v1";
 const defaultFixtureLimits: FixtureLimits = {
   dimmer_min: 0,
   dimmer_max: 65535,
@@ -188,6 +226,21 @@ const controlCueHotkeyIndex = (code: string) => {
   }
   const digit = Number(digitMatch[2]);
   return digit === 0 ? 9 : digit - 1;
+};
+
+const mappingStageToolFromHotkey = (code: string): MappingStageTool | null => {
+  switch (code) {
+    case "KeyS":
+      return "select";
+    case "KeyP":
+      return "place";
+    case "KeyR":
+      return "rotate";
+    case "KeyH":
+      return "pan";
+    default:
+      return null;
+  }
 };
 
 const controlCategoryForAttribute = (attribute: string): Exclude<ControlCategory, "fader"> => {
@@ -355,34 +408,116 @@ const outputProtocolLabel = (protocol: DmxOutputConfig["protocol"]) => {
   }
 };
 
+type MappingFixtureVisualKind = "point" | "moving" | "bar" | "panel" | "laser" | "par";
+
 interface VisualizerFixture {
+  id: number;
+  label: string;
+  dmxLabel: string;
+  groupLabel: string;
+  typeKey: string;
+  visualKind: MappingFixtureVisualKind;
+  x: number;
+  z: number;
+  width: number;
+  height: number;
+  yaw: number;
+  beamPoints: string;
+  intensity: number;
+  color: string;
+  inGroupFilter: boolean;
+  highlighted: boolean;
+  soloed: boolean;
+  parked: boolean;
+}
+
+interface VisualizerVideoSurface2d {
   id: number;
   label: string;
   x: number;
   z: number;
-  beamPoints: string;
-  intensity: number;
-  color: string;
+  width: number;
+  height: number;
+  rotationDeg: number;
+  opacity: number;
+  active: boolean;
 }
 
-interface VisualizerFixture3d {
-  id: number;
+interface MappingFixtureTypeRow {
+  key: string;
   label: string;
-  x: number;
-  y: number;
-  groundY: number;
-  intensity: number;
-  color: string;
+  manufacturer: string;
+  mode: string;
+  visualKind: MappingFixtureVisualKind;
+  count: number;
 }
 
-interface VisualizerBeam3d {
-  fixtureId: number;
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-  intensity: number;
-  color: string;
+type MappingDragState =
+  | {
+      kind: "fixture";
+      pointerId: number;
+      fixtureIds: number[];
+      startWorld: { x: number; z: number };
+      currentWorld: { x: number; z: number };
+      startPositions: Record<number, PatchFixtureRequest["position"]>;
+    }
+  | {
+      kind: "videoOutput";
+      pointerId: number;
+      outputId: number;
+      startWorld: { x: number; z: number };
+      currentWorld: { x: number; z: number };
+      startMapping: VideoOutputMapping;
+    }
+  | {
+      kind: "videoOutputRotate";
+      pointerId: number;
+      outputId: number;
+      startWorld: { x: number; z: number };
+      currentWorld: { x: number; z: number };
+      centerWorld: { x: number; z: number };
+      startAngleDeg: number;
+      startMapping: VideoOutputMapping;
+    }
+  | {
+      kind: "videoOutputScale";
+      pointerId: number;
+      outputId: number;
+      startWorld: { x: number; z: number };
+      currentWorld: { x: number; z: number };
+      centerWorld: { x: number; z: number };
+      startDistance: number;
+      startMapping: VideoOutputMapping;
+    };
+
+interface MappingMarqueeState {
+  pointerId: number;
+  start: { x: number; z: number };
+  current: { x: number; z: number };
+  additive: boolean;
+}
+
+interface MappingViewportPanDragState {
+  pointerId: number;
+  startClientX: number;
+  startClientY: number;
+  startCenterX: number;
+  startCenterZ: number;
+  viewBoxSize: number;
+  rectWidth: number;
+  rectHeight: number;
+}
+
+interface MappingSnapLine {
+  axis: "x" | "z";
+  svg: number;
+}
+
+interface MappingSvgBounds {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
 }
 
 interface StageWorldBounds {
@@ -391,6 +526,43 @@ interface StageWorldBounds {
   minZ: number;
   maxZ: number;
 }
+
+const fixtureVisualKind = (fixture: PatchedFixtureSummary): MappingFixtureVisualKind => {
+  const text = `${fixture.manufacturer} ${fixture.profile_name} ${fixture.mode_name} ${fixture.label}`.toLowerCase();
+  const attributes = fixture.controls.map((control) => control.attribute.toLowerCase()).join(" ");
+  if (/(laser)/.test(text)) {
+    return "laser";
+  }
+  if (/(matrix|panel|pixel)/.test(text)) {
+    return "panel";
+  }
+  if (/(bar|strip|batten|tube|linear)/.test(text)) {
+    return "bar";
+  }
+  if (/(pan|tilt)/.test(attributes)) {
+    return "moving";
+  }
+  if (/(par|wash|rgb|rgba|rgbw|led)/.test(text) || /(red|green|blue|amber|white|uv)/.test(attributes)) {
+    return "par";
+  }
+  return "point";
+};
+
+const fixtureTypeKey = (fixture: PatchedFixtureSummary) =>
+  `${fixture.manufacturer}::${fixture.profile_name}::${fixture.mode_name}`;
+
+const fixtureTypeLabel = (fixture: PatchedFixtureSummary) => `${fixture.profile_name} / ${fixture.mode_name}`;
+
+const mappingTypeGlyphClass = (kind: MappingFixtureVisualKind) => `mappingTypeGlyph kind-${kind}`;
+
+const surfaceWorldHalfSize = (output: VideoOutputSummary) => {
+  const aspect = output.height > 0 ? output.width / output.height : 1;
+  const baseHeight = 4.5 * clampRange(output.mapping.scale_y, 0.25, 3);
+  return {
+    width: baseHeight * Math.max(0.35, aspect) * clampRange(output.mapping.scale_x, 0.25, 3),
+    height: baseHeight,
+  };
+};
 
 interface ColorControlSet {
   red: string;
@@ -439,6 +611,11 @@ interface DmxPatchSegment {
   end: number;
   left: number;
   width: number;
+}
+
+interface DmxAddressRange {
+  start: number;
+  end: number;
 }
 
 interface DmxUniverseMap {
@@ -571,24 +748,12 @@ const timelineVideoAutomationDraftFromSummary = (
   };
 };
 
-const emptyVisualizerScene = (): VisualizerScene => ({
-  fixtures: [],
-  beams: [],
-  bounds: {
-    min: { x: 0, y: 0, z: 0 },
-    max: { x: 0, y: 0, z: 0 },
-  },
-});
-
 const findControlAttribute = (fixture: PatchedFixtureSummary, names: string[]) => {
   const normalizedNames = names.map((name) => name.toLowerCase());
   return fixture.controls.find((control) => normalizedNames.includes(control.attribute.toLowerCase()))?.attribute;
 };
 
 const valueToHexByte = (value: number) => (value >> 8).toString(16).padStart(2, "0");
-
-const visualizerColor = (color: [number, number, number]) =>
-  `rgb(${Math.round(clamp01(color[0]) * 255)}, ${Math.round(clamp01(color[1]) * 255)}, ${Math.round(clamp01(color[2]) * 255)})`;
 
 const outputAspectRatio = (width: number, height: number) => {
   if (!Number.isFinite(width) || !Number.isFinite(height) || height <= 0) {
@@ -780,6 +945,40 @@ const readFixtureAttribute = (
   }
   return undefined;
 };
+
+const projectComparableSnapshot = (snapshot: EngineSnapshot) => {
+  const comparable = JSON.parse(JSON.stringify(snapshot)) as EngineSnapshot;
+  comparable.active_cue_id = null;
+  comparable.active_fade = null;
+  comparable.timeline = {
+    ...comparable.timeline,
+    playing: false,
+    position_ms: 0,
+  };
+  comparable.video = {
+    ...comparable.video,
+    layers: comparable.video.layers.map((layer) => ({
+      ...layer,
+      state: {
+        ...layer.state,
+        playing: false,
+        position_ms: 0,
+      },
+    })),
+  };
+  comparable.clock = {
+    ...comparable.clock,
+    beat_phase: 0,
+    beat_counter: 0,
+    tap_count: 0,
+  };
+  comparable.dmx_preview = [];
+  comparable.dmx_previews = [];
+  comparable.telemetry = {} as EngineSnapshot["telemetry"];
+  return comparable;
+};
+
+const projectSnapshotSignature = (snapshot: EngineSnapshot) => JSON.stringify(projectComparableSnapshot(snapshot));
 
 const hsvToRgb = (hue: number, saturation: number, value: number) => {
   const h = ((hue % 360) + 360) % 360;
@@ -1327,11 +1526,14 @@ export default function App() {
   const setupPanelRefs: Partial<Record<SetupSubTab, HTMLElement>> = {};
   const [gdtfPath, setGdtfPath] = createSignal("");
   const [gdtfShareUrl, setGdtfShareUrl] = createSignal("");
+  const [currentProjectPath, setCurrentProjectPath] = createSignal<string | null>(null);
+  const [projectDirty, setProjectDirty] = createSignal(false);
+  const [cleanProjectSignature, setCleanProjectSignature] = createSignal<string | null>(null);
   const [workspaceTab, setWorkspaceTab] = createSignal<WorkspaceTab>("setup");
   const [setupSubTab, setSetupSubTab] = createSignal<SetupSubTab>("patch");
   const [profile, setProfile] = createSignal<FixtureProfileSummary | null>(null);
   const [selectedMode, setSelectedMode] = createSignal("");
-  const [customManufacturer, setCustomManufacturer] = createSignal("KDMX");
+  const [customManufacturer, setCustomManufacturer] = createSignal("Rayard");
   const [customProfileName, setCustomProfileName] = createSignal("Custom Fixture");
   const [customModeName, setCustomModeName] = createSignal("Default");
   const [customAttributes, setCustomAttributes] = createSignal("Dimmer@1:8, Pan@2:16, Tilt@4:16, ColorRed@6:8, ColorGreen@7:8, ColorBlue@8:8");
@@ -1360,6 +1562,23 @@ export default function App() {
   const [selectedFixtureLimitsDraft, setSelectedFixtureLimitsDraft] = createSignal<FixtureLimits>(defaultFixtureLimits);
   const [movementLimitDrag, setMovementLimitDrag] = createSignal<MovementLimitDragState | null>(null);
   const [selectedFixtureId, setSelectedFixtureId] = createSignal<number | null>(null);
+  const [selectedMappingFixtureIds, setSelectedMappingFixtureIds] = createSignal<number[]>([]);
+  const [mappingSelectionGroupText, setMappingSelectionGroupText] = createSignal("");
+  const [mappingStageTool, setMappingStageTool] = createSignal<MappingStageTool>("select");
+  const [mappingViewportZoom, setMappingViewportZoom] = createSignal(1);
+  const [mappingViewportCenterX, setMappingViewportCenterX] = createSignal(stageViewBoxSize / 2);
+  const [mappingViewportCenterZ, setMappingViewportCenterZ] = createSignal(stageViewBoxSize / 2);
+  const [mappingSnapEnabled, setMappingSnapEnabled] = createSignal(false);
+  const [mappingSnapSize, setMappingSnapSize] = createSignal(0.5);
+  const [mappingFixtureSearch, setMappingFixtureSearch] = createSignal("");
+  const [selectedFixtureTypeFilter, setSelectedFixtureTypeFilter] = createSignal<string | null>(null);
+  const [selectedVideoOutputId, setSelectedVideoOutputId] = createSignal<number | null>(null);
+  const [mappingShowLabels, setMappingShowLabels] = createSignal(true);
+  const [mappingShowBeams, setMappingShowBeams] = createSignal(true);
+  const [mappingShowProjectors, setMappingShowProjectors] = createSignal(true);
+  const [mappingDrag, setMappingDrag] = createSignal<MappingDragState | null>(null);
+  const [mappingMarquee, setMappingMarquee] = createSignal<MappingMarqueeState | null>(null);
+  const [mappingViewportPanDrag, setMappingViewportPanDrag] = createSignal<MappingViewportPanDragState | null>(null);
   const [patchGridUniverse, setPatchGridUniverse] = createSignal(0);
   const [dmxPatchViewMode, setDmxPatchViewMode] = createSignal<DmxPatchViewMode>("grid");
   const [controlCategory, setControlCategory] = createSignal<ControlCategory>("position");
@@ -1414,6 +1633,7 @@ export default function App() {
   const [remoteRunning, setRemoteRunning] = createSignal(false);
   const [cueLabel, setCueLabel] = createSignal("Cue 1");
   const [cueFadeMs, setCueFadeMs] = createSignal(1000);
+  const [cueCaptureScope, setCueCaptureScope] = createSignal<CueCaptureScopeMode>("all");
   const [cueMetadataDrafts, setCueMetadataDrafts] = createSignal<Record<number, CueMetadataDraft>>({});
   const [cuePadBank, setCuePadBank] = createSignal(0);
   const [cuePadFollowActive, setCuePadFollowActive] = createSignal(true);
@@ -1434,6 +1654,7 @@ export default function App() {
   const [videoPath, setVideoPath] = createSignal("");
   const [videoPreviewInfo, setVideoPreviewInfo] = createSignal("No preview");
   const [videoPreviewUrl, setVideoPreviewUrl] = createSignal("");
+  const [videoPreviewDiagnostics, setVideoPreviewDiagnostics] = createSignal<VideoPreviewDiagnostics | null>(null);
   const [videoOutputPreviewInfo, setVideoOutputPreviewInfo] = createSignal("No output preview");
   const [videoOutputPreviewUrl, setVideoOutputPreviewUrl] = createSignal("");
   const [videoOutputPreviewId, setVideoOutputPreviewId] = createSignal<number | null>(null);
@@ -1449,6 +1670,8 @@ export default function App() {
   const [videoOutputFadeMs, setVideoOutputFadeMs] = createSignal(1000);
   const [videoOutputMappingPresetLabel, setVideoOutputMappingPresetLabel] = createSignal("Projector preset");
   const [selectedVideoOutputMappingPresetLabel, setSelectedVideoOutputMappingPresetLabel] = createSignal("");
+  const [stageMapPresetLabel, setStageMapPresetLabel] = createSignal("Stage map preset");
+  const [selectedStageMapPresetLabel, setSelectedStageMapPresetLabel] = createSignal("");
   const [videoCompositionLabel, setVideoCompositionLabel] = createSignal("Composition 1");
   const [videoCompositionLayerIds, setVideoCompositionLayerIds] = createSignal<number[]>([]);
   const [videoAutomationLayerId, setVideoAutomationLayerId] = createSignal<number | null>(null);
@@ -1470,6 +1693,9 @@ export default function App() {
   const [effectVideoParam, setEffectVideoParam] = createSignal<VideoParam>("Opacity");
   const [effectVideoLow, setEffectVideoLow] = createSignal(0);
   const [effectVideoHigh, setEffectVideoHigh] = createSignal(1);
+  const [effectVideoPositionX, setEffectVideoPositionX] = createSignal(0);
+  const [effectVideoPositionY, setEffectVideoPositionY] = createSignal(0);
+  const [effectVideoPositionZ, setEffectVideoPositionZ] = createSignal(0);
   const [effectPeriod, setEffectPeriod] = createSignal(1000);
   const [effectLow, setEffectLow] = createSignal(0);
   const [effectHigh, setEffectHigh] = createSignal(65535);
@@ -1482,6 +1708,7 @@ export default function App() {
   const [waveDirectionX, setWaveDirectionX] = createSignal(1);
   const [waveDirectionY, setWaveDirectionY] = createSignal(0);
   const [waveDirectionZ, setWaveDirectionZ] = createSignal(0);
+  const [waveStageDrag, setWaveStageDrag] = createSignal<WaveStageDragMode | null>(null);
   const [waveSpeed, setWaveSpeed] = createSignal(1);
   const [waveWavelength, setWaveWavelength] = createSignal(2);
   const [snapshot, setSnapshot] = createSignal<EngineSnapshot>({
@@ -1507,6 +1734,7 @@ export default function App() {
       blackout: false,
     },
     effects: [],
+    node_graphs: [],
     output: defaultOutput,
     dmx_outputs: [defaultOutput],
     lighting_master: 1,
@@ -1519,27 +1747,64 @@ export default function App() {
       tap_count: 0,
       source: "Manual",
     },
+    stage_map: {
+      locked: false,
+      min_x: -10,
+      max_x: 10,
+      min_z: -10,
+      max_z: 10,
+    },
+    stage_map_presets: [],
     dmx_preview: Array.from({ length: 512 }, () => 0),
     dmx_previews: [{ universe: 0, values: Array.from({ length: 512 }, () => 0) }],
     telemetry: {
       frame_counter: 0,
       queue_depth: 0,
+      queue_depth_abs_max: 0,
+      queue_push_failure_count: 0,
       last_tick_interval_us: 0,
       tick_jitter_last_us: 0,
       tick_jitter_abs_max_us: 0,
       tick_jitter_stddev_us: 0,
+      tick_jitter_p95_us: 0,
+      tick_jitter_p99_us: 0,
       tick_jitter_samples: 0,
+      last_command_queue_latency_us: 0,
+      command_queue_latency_abs_max_us: 0,
+      command_queue_latency_p95_us: 0,
+      command_queue_latency_p99_us: 0,
+      command_queue_latency_samples: 0,
+      last_command_drain_count: 0,
+      command_drain_abs_max: 0,
+      command_drain_limit_hit_count: 0,
+      last_command_to_dmx_tick_latency_us: 0,
+      command_to_dmx_tick_latency_abs_max_us: 0,
+      command_to_dmx_tick_latency_p95_us: 0,
+      command_to_dmx_tick_latency_p99_us: 0,
+      command_to_dmx_tick_latency_samples: 0,
+      last_dmx_send_interval_us: 0,
+      dmx_send_interval_min_us: 0,
+      dmx_send_interval_max_us: 0,
+      dmx_send_interval_samples: 0,
+      low_latency_dmx_tick_request_count: 0,
+      low_latency_dmx_tick_advance_count: 0,
+      low_latency_dmx_tick_defer_count: 0,
       last_packet_bytes: 0,
       last_dmx_output_count: 0,
       last_dmx_send_success_count: 0,
       last_dmx_send_failure_count: 0,
       total_dmx_send_success_count: 0,
       total_dmx_send_failure_count: 0,
+      last_dmx_route_results: [],
+      last_error: null,
     },
   });
   const [output, setOutput] = createSignal<DmxOutputConfig>(defaultOutput);
   const [dmxOutputRoutes, setDmxOutputRoutes] = createSignal<DmxOutputConfig[]>([defaultOutput]);
-  const [visualizerScene, setVisualizerScene] = createSignal<VisualizerScene>(emptyVisualizerScene());
+  const [engineTelemetryReport, setEngineTelemetryReport] = createSignal<EngineTelemetryReport | null>(null);
+  const [dmxTestChannel, setDmxTestChannel] = createSignal(1);
+  const [dmxTestWidth, setDmxTestWidth] = createSignal(1);
+  const [dmxTestValue, setDmxTestValue] = createSignal(255);
   const audioAnalysis = createMemo<AudioAnalysisSummary | null>(() => snapshot().timeline.audio ?? null);
   const [message, setMessage] = createSignal("Ready");
 
@@ -1611,6 +1876,83 @@ export default function App() {
       return snapshot().fixtures;
     }
     return snapshot().fixtures.filter((fixture) => fixture.group_ids.includes(groupId));
+  });
+  const fixtureTypeRows = createMemo<MappingFixtureTypeRow[]>(() => {
+    const rows = new Map<string, MappingFixtureTypeRow>();
+    for (const fixture of filteredFixtures()) {
+      const key = fixtureTypeKey(fixture);
+      const current = rows.get(key);
+      if (current) {
+        current.count += 1;
+      } else {
+        rows.set(key, {
+          key,
+          label: fixtureTypeLabel(fixture),
+          manufacturer: fixture.manufacturer,
+          mode: fixture.mode_name,
+          visualKind: fixtureVisualKind(fixture),
+          count: 1,
+        });
+      }
+    }
+    return [...rows.values()].sort((left, right) => left.label.localeCompare(right.label));
+  });
+  const fixtureMatchesMappingSearch = (fixture: PatchedFixtureSummary, search: string) => {
+    if (!search) {
+      return true;
+    }
+    const statusText = [
+      fixture.highlighted ? "highlight" : "",
+      fixture.soloed ? "solo" : "",
+      fixture.parked ? "park" : "",
+    ].filter(Boolean).join(" ");
+    const haystack = [
+      fixture.label,
+      fixture.manufacturer,
+      fixture.profile_name,
+      fixture.mode_name,
+      `u${fixture.universe}`,
+      `a${fixture.address}`,
+      `u${fixture.universe} a${fixture.address}`,
+      fixture.group_ids.join(" "),
+      statusText,
+    ].join(" ").toLowerCase();
+    return haystack.includes(search);
+  };
+  const mappingFilteredFixtures = createMemo(() => {
+    const typeKey = selectedFixtureTypeFilter();
+    const search = mappingFixtureSearch().trim().toLowerCase();
+    return filteredFixtures().filter((fixture) => {
+      if (typeKey && fixtureTypeKey(fixture) !== typeKey) {
+        return false;
+      }
+      return fixtureMatchesMappingSearch(fixture, search);
+    });
+  });
+  const selectedMappingFixtureIdSet = createMemo(() => new Set(selectedMappingFixtureIds()));
+  const selectedMappingFixtures = createMemo(() => {
+    const selectedIds = selectedMappingFixtureIdSet();
+    return snapshot().fixtures.filter((fixture) => selectedIds.has(fixture.id));
+  });
+  const selectedMappingFlagState = createMemo(() => {
+    const fixtures = selectedMappingFixtures();
+    const count = fixtures.length;
+    return {
+      count,
+      anyHighlighted: fixtures.some((fixture) => fixture.highlighted),
+      allHighlighted: count > 0 && fixtures.every((fixture) => fixture.highlighted),
+      anySoloed: fixtures.some((fixture) => fixture.soloed),
+      allSoloed: count > 0 && fixtures.every((fixture) => fixture.soloed),
+      anyParked: fixtures.some((fixture) => fixture.parked),
+      allParked: count > 0 && fixtures.every((fixture) => fixture.parked),
+    };
+  });
+  const selectedMappingFixture = createMemo(() => {
+    const selectedId = selectedFixtureId();
+    if (selectedId === null || !selectedMappingFixtureIdSet().has(selectedId)) {
+      return null;
+    }
+    return snapshot().fixtures.find((fixture) => fixture.id === selectedId) ?? null;
   });
   const selectedGroupFixtures = createMemo(() => {
     if (!selectedFixtureGroupFilter()) {
@@ -1704,22 +2046,6 @@ export default function App() {
     return "";
   });
   const patchAddressInvalid = createMemo(() => selectedFootprint() === 0 || endAddress() > 512 || Boolean(patchAddressConflictText()));
-  const patchPlannedRanges = createMemo(() =>
-    universe() === activePatchGridUniverse()
-      ? patchAddressRanges().filter((candidate): candidate is { index: number; start: number; range: [number, number] } =>
-          Boolean(candidate.range),
-        )
-      : [],
-  );
-  const plannedAddressSummary = createMemo(() => {
-    const ranges = patchPlannedRanges();
-    if (ranges.length === 0) {
-      return "No pending patch in this universe";
-    }
-    const first = ranges[0].range;
-    const last = ranges[ranges.length - 1].range;
-    return ranges.length === 1 ? `Pending A${first[0]}-${first[1]}` : `Pending A${first[0]}-${last[1]} (${ranges.length} fixtures)`;
-  });
   const canPatchAtAddress = (startAddress: number, targetUniverse: number) => {
     if (selectedFootprint() <= 0 || startAddress < 1) {
       return false;
@@ -1873,6 +2199,23 @@ export default function App() {
     );
   });
 
+  const patchPlannedRanges = createMemo(() =>
+    universe() === activePatchGridUniverse()
+      ? patchAddressRanges().filter((candidate): candidate is { index: number; start: number; range: [number, number] } =>
+          Boolean(candidate.range),
+        )
+      : [],
+  );
+  const plannedAddressSummary = createMemo(() => {
+    const ranges = patchPlannedRanges();
+    if (ranges.length === 0) {
+      return "No pending patch in this universe";
+    }
+    const first = ranges[0].range;
+    const last = ranges[ranges.length - 1].range;
+    return ranges.length === 1 ? `Pending A${first[0]}-${first[1]}` : `Pending A${first[0]}-${last[1]} (${ranges.length} fixtures)`;
+  });
+
   const dmxAddressCells = createMemo<DmxAddressCell[]>(() => {
     const map = activePatchGridMap();
     const selectedId = selectedFixtureId();
@@ -1958,6 +2301,15 @@ export default function App() {
       Number.parseInt(color.slice(3, 5), 16),
       Number.parseInt(color.slice(5, 7), 16),
     );
+  });
+  const selectedColorHex = createMemo(() => normalizeHexColor(selectedColorControls()?.value) ?? "#000000");
+  const selectedColorChannelValues = createMemo(() => {
+    const color = selectedColorHex();
+    return {
+      red: Number.parseInt(color.slice(1, 3), 16) * 257,
+      green: Number.parseInt(color.slice(3, 5), 16) * 257,
+      blue: Number.parseInt(color.slice(5, 7), 16) * 257,
+    };
   });
   const controlCategoryCounts = createMemo(() => {
     const counts = new Map<ControlCategory, number>();
@@ -2135,6 +2487,40 @@ export default function App() {
       };
     }),
   );
+  const timelineOverviewDurationMs = createMemo(() =>
+    Math.max(1, snapshot().timeline.duration_ms, ...snapshot().timeline.events.map((event) => event.time_ms + 1000)),
+  );
+  const timelineOverviewPlayheadX = createMemo(() =>
+    clampRange((snapshot().timeline.position_ms / timelineOverviewDurationMs()) * 100, 0, 100),
+  );
+  const timelineOverviewEvents = createMemo<TimelineOverviewEvent[]>(() =>
+    timelineEventRows().map((event) => ({
+      id: event.id,
+      cue_id: event.cue_id,
+      cue_label: event.cue_label,
+      track: event.track,
+      time_ms: event.time_ms,
+      x: clampRange((event.time_ms / timelineOverviewDurationMs()) * 100, 0, 100),
+      y: event.track === "Lighting" ? 14 : 31,
+      active: snapshot().active_cue_id === event.cue_id,
+    })),
+  );
+  const cueTimelinePlacementsForCue = (cueId: number) =>
+    timelineEventRows()
+      .filter((event) => event.cue_id === cueId)
+      .sort((left, right) => left.time_ms - right.time_ms || left.id - right.id);
+  const timelinePlacementNudgeMs = createMemo(() => {
+    switch (timelineSnapMode()) {
+      case "Beat":
+        return Math.max(1, beatIntervalMs());
+      case "Bar":
+        return Math.max(1, beatIntervalMs() * 4);
+      case "Grid":
+        return Math.max(1, timelineGridMs());
+      default:
+        return 1000;
+    }
+  });
   const fixtureAttributeOptions = (fixtureId: number) =>
     snapshot().fixtures.find((fixture) => fixture.id === fixtureId)?.controls.map((control) => control.attribute) ?? [];
   const timelineAutomationRows = createMemo(() =>
@@ -2210,10 +2596,64 @@ export default function App() {
     }
     return layers[0]?.id ?? null;
   });
+  const videoPreviewDiagnosticsText = createMemo(() => {
+    const diagnostics = videoPreviewDiagnostics();
+    if (!diagnostics) {
+      return "No preview diagnostics";
+    }
+    const queuedFrames = diagnostics.layer_queues.reduce((total, row) => total + row.queue_len, 0);
+    const activeQueues = diagnostics.layer_queues.filter((row) => row.queue_len > 0).length;
+    return `queues ${activeQueues}/${diagnostics.queue_count}, frames ${queuedFrames}, still ${diagnostics.still_image_cache_len}, decode ${diagnostics.decoder_cache_len}, prefetch ${diagnostics.prefetch_count}x${diagnostics.prefetch_interval_ms}ms`;
+  });
+  const projectFileLabel = createMemo(() => {
+    const path = currentProjectPath();
+    const label = (() => {
+      if (!path) {
+        return "Untitled.ry";
+      }
+      const normalizedPath = path.replaceAll("\\", "/");
+      return normalizedPath.split("/").pop() || path;
+    })();
+    return projectDirty() ? `${label} *` : label;
+  });
   const customProfilePreview = createMemo(() => customProfilePreviewFromText(customAttributes()));
   const hasCueSources = createMemo(
     () => snapshot().fixtures.length > 0 || snapshot().video.layers.length > 0 || snapshot().video.outputs.length > 0,
   );
+  const cueCaptureScopeError = createMemo(() => {
+    switch (cueCaptureScope()) {
+      case "all":
+        return hasCueSources() ? "" : "Patch fixtures or add video layers/outputs first.";
+      case "lighting":
+        return snapshot().fixtures.length > 0 ? "" : "Patch fixtures before storing a lighting cue.";
+      case "selectedFixture":
+        return selectedFixture() ? "" : "Select a fixture before storing a selected-fixture cue.";
+      case "selectedGroup":
+        return selectedFixtureGroupFilter() ? "" : "Select a group before storing a group cue.";
+      case "video":
+        return snapshot().video.layers.length > 0 || snapshot().video.outputs.length > 0
+          ? ""
+          : "Add video layers or outputs before storing a video cue.";
+    }
+  });
+  const cueCaptureScopeRequest = (): CueCaptureScopeRequest | null => {
+    switch (cueCaptureScope()) {
+      case "all":
+        return { kind: "all" };
+      case "lighting":
+        return { kind: "lightingOnly" };
+      case "selectedFixture": {
+        const fixture = selectedFixture();
+        return fixture ? { kind: "selectedFixture", fixtureId: fixture.id } : null;
+      }
+      case "selectedGroup": {
+        const groupId = selectedFixtureGroupFilter();
+        return groupId ? { kind: "selectedGroup", groupId } : null;
+      }
+      case "video":
+        return { kind: "videoOnly" };
+    }
+  };
   const timelineVideoAutomationRows = createMemo(() =>
     snapshot().timeline.video_automations.map((automation) => {
       const layer = snapshot().video.layers.find((candidate) => candidate.id === automation.layer_id);
@@ -2258,17 +2698,34 @@ export default function App() {
   const enabledVideoOutputCount = createMemo(() => snapshot().video.outputs.filter((output) => output.enabled).length);
   const activeEffectCount = createMemo(() => snapshot().effects.filter((effect) => effect.enabled).length);
   const touchLayoutClass = createMemo(() =>
-    workspaceTab() === "setup" ? "layoutSetup" : workspaceTab() === "touch" ? "layoutTouch" : "layoutControl",
+    workspaceTab() === "setup"
+      ? `layoutSetup setupMode-${setupSubTab()}`
+      : workspaceTab() === "touch"
+        ? "layoutTouch"
+        : "layoutControl",
   );
   const remoteUrl = createMemo(() => {
     const host = remoteBindIp().trim();
     const displayHost = host === "" || host === "0.0.0.0" ? "localhost" : host;
     return `http://${displayHost}:${remotePort()}/remote`;
   });
-  const stageWorldBounds = createMemo<StageWorldBounds>(() => {
+  const autoStageWorldBounds = createMemo<StageWorldBounds>(() => {
     const fixtures = snapshot().fixtures;
-    const halfX = Math.max(10, ...fixtures.map((fixture) => Math.abs(fixture.position.x))) * 1.1;
-    const halfZ = Math.max(10, ...fixtures.map((fixture) => Math.abs(fixture.position.z))) * 1.1;
+    const outputPoints = snapshot().video.outputs.flatMap((output) => {
+      const size = surfaceWorldHalfSize(output);
+      const x = output.mapping.stage_x;
+      const z = output.mapping.stage_z;
+      return [
+        { x: x - size.width, z: z - size.height },
+        { x: x + size.width, z: z + size.height },
+      ];
+    });
+    const points = [
+      ...fixtures.map((fixture) => ({ x: fixture.position.x, z: fixture.position.z })),
+      ...outputPoints,
+    ];
+    const halfX = Math.max(10, ...points.map((point) => Math.abs(point.x))) * 1.1;
+    const halfZ = Math.max(10, ...points.map((point) => Math.abs(point.z))) * 1.1;
     return {
       minX: -halfX,
       maxX: halfX,
@@ -2276,9 +2733,289 @@ export default function App() {
       maxZ: halfZ,
     };
   });
+  const stageWorldBounds = createMemo<StageWorldBounds>(() => {
+    const stageMap = snapshot().stage_map;
+    if (
+      stageMap.locked &&
+      Number.isFinite(stageMap.min_x) &&
+      Number.isFinite(stageMap.max_x) &&
+      Number.isFinite(stageMap.min_z) &&
+      Number.isFinite(stageMap.max_z) &&
+      stageMap.max_x > stageMap.min_x &&
+      stageMap.max_z > stageMap.min_z
+    ) {
+      return {
+        minX: stageMap.min_x,
+        maxX: stageMap.max_x,
+        minZ: stageMap.min_z,
+        maxZ: stageMap.max_z,
+      };
+    }
+    return autoStageWorldBounds();
+  });
   const stageOrigin2d = createMemo(() => stageWorldToSvgPoint(0, 0, stageWorldBounds()));
+  const cueCapturePreview = createMemo(() => {
+    const current = snapshot();
+    const scope = cueCaptureScope();
+    const currentValues = faderValues();
+    const bounds = stageWorldBounds();
+    const selectedGroupId = selectedFixtureGroupFilter();
+    const fixtures = (() => {
+      if (scope === "video") {
+        return [];
+      }
+      if (scope === "selectedFixture") {
+        const fixture = selectedFixture();
+        return fixture ? [fixture] : [];
+      }
+      if (scope === "selectedGroup") {
+        return selectedGroupId
+          ? current.fixtures.filter((fixture) => fixture.group_ids.includes(selectedGroupId))
+          : [];
+      }
+      return current.fixtures;
+    })();
+    const includeVideo = scope === "all" || scope === "video";
+    const layers = includeVideo ? current.video.layers : [];
+    const outputs = includeVideo ? current.video.outputs : [];
+    const nodeGraphs = includeVideo ? current.node_graphs : [];
+    const scopeLabel =
+      scope === "all"
+        ? "Lighting + Video"
+        : scope === "lighting"
+          ? "Lighting Only"
+          : scope === "selectedFixture"
+            ? "Selected Fixture"
+            : scope === "selectedGroup"
+              ? "Selected Group"
+              : "Video Only";
+    const scopeDetail =
+      scope === "selectedFixture"
+        ? selectedFixture()?.label ?? "No fixture selected"
+        : scope === "selectedGroup"
+          ? selectedGroupId ?? "No group selected"
+          : scopeLabel;
+    const previewFixtures = fixtures.map((fixture) => {
+      const point = stageWorldToSvgPoint(fixture.position.x, fixture.position.z, bounds);
+      const dimmer = readFixtureAttribute(fixture, currentValues, ["Dimmer", "Intensity"]) ?? 0;
+      const red = readFixtureAttribute(fixture, currentValues, ["ColorRed", "Red"]);
+      const green = readFixtureAttribute(fixture, currentValues, ["ColorGreen", "Green"]);
+      const blue = readFixtureAttribute(fixture, currentValues, ["ColorBlue", "Blue"]);
+      const color =
+        red !== undefined || green !== undefined || blue !== undefined
+          ? `#${valueToHexByte(clampDmxValue(red ?? 0))}${valueToHexByte(clampDmxValue(green ?? 0))}${valueToHexByte(clampDmxValue(blue ?? 0))}`
+          : "#58a7f6";
+      return {
+        id: fixture.id,
+        label: fixture.label,
+        dmxLabel: `U${fixture.universe} A${fixture.address}`,
+        groupLabel: fixture.group_ids.length > 0 ? fixture.group_ids.join(", ") : "No group",
+        x: point.x,
+        z: point.z,
+        color,
+        intensity: dmxValueToPercent(dimmer),
+        attributes: fixture.attribute_values.length,
+      };
+    });
+    const videoRows = [
+      ...layers.map((layer) => ({
+        label: layer.label,
+        meta: `Layer / ${layer.blend_mode} / ${Math.round(layer.state.opacity * 100)}%`,
+      })),
+      ...outputs.map((output) => ({
+        label: output.label,
+        meta: `Output / ${output.kind} / ${Math.round(output.opacity * 100)}%`,
+      })),
+      ...nodeGraphs.map((graph) => ({
+        label: graph.label,
+        meta: graph.enabled ? "Node graph enabled" : "Node graph disabled",
+      })),
+    ];
+    return {
+      scopeLabel,
+      scopeDetail,
+      fixtures: previewFixtures,
+      videoRows,
+      layerCount: layers.length,
+      outputCount: outputs.length,
+      nodeGraphCount: nodeGraphs.length,
+      fixtureAttributeCount: fixtures.reduce((total, fixture) => total + fixture.attribute_values.length, 0),
+    };
+  });
+  const normalizedMappingViewportZoom = createMemo(() => clampRange(mappingViewportZoom(), 1, 4));
+  const mappingViewportSize = createMemo(() => stageViewBoxSize / normalizedMappingViewportZoom());
+  const mappingViewportBox = createMemo(() => {
+    const size = mappingViewportSize();
+    return {
+      x: clampRange(mappingViewportCenterX() - size / 2, 0, stageViewBoxSize - size),
+      z: clampRange(mappingViewportCenterZ() - size / 2, 0, stageViewBoxSize - size),
+      size,
+    };
+  });
+  const mappingStageViewBox = createMemo(() => {
+    const box = mappingViewportBox();
+    return `${box.x} ${box.z} ${box.size} ${box.size}`;
+  });
+  const mappingViewportZoomLabel = createMemo(() => `${Math.round(normalizedMappingViewportZoom() * 100)}%`);
+  const setMappingViewport = (zoom: number, centerX = mappingViewportCenterX(), centerZ = mappingViewportCenterZ()) => {
+    const nextZoom = clampRange(zoom, 1, 4);
+    const nextSize = stageViewBoxSize / nextZoom;
+    setMappingViewportZoom(nextZoom);
+    setMappingViewportCenterX(clampRange(centerX, nextSize / 2, stageViewBoxSize - nextSize / 2));
+    setMappingViewportCenterZ(clampRange(centerZ, nextSize / 2, stageViewBoxSize - nextSize / 2));
+  };
+  const zoomMappingViewport = (direction: -1 | 1) => {
+    const nextZoom = direction > 0 ? normalizedMappingViewportZoom() * 1.25 : normalizedMappingViewportZoom() / 1.25;
+    setMappingViewport(Number(nextZoom.toFixed(3)));
+  };
+  const zoomMappingViewportAtPoint = (direction: -1 | 1, point: { x: number; z: number }) => {
+    const currentBox = mappingViewportBox();
+    const nextZoom = clampRange(
+      Number((direction > 0 ? normalizedMappingViewportZoom() * 1.18 : normalizedMappingViewportZoom() / 1.18).toFixed(3)),
+      1,
+      4,
+    );
+    const nextSize = stageViewBoxSize / nextZoom;
+    const anchorX = clampRange((point.x - currentBox.x) / currentBox.size, 0, 1);
+    const anchorZ = clampRange((point.z - currentBox.z) / currentBox.size, 0, 1);
+    setMappingViewport(nextZoom, point.x + (0.5 - anchorX) * nextSize, point.z + (0.5 - anchorZ) * nextSize);
+  };
+  const resetMappingViewport = () => {
+    setMappingViewport(1, stageViewBoxSize / 2, stageViewBoxSize / 2);
+    setMessage("Reset 2D mapping viewport.");
+  };
+  const normalizedMappingSnapSize = createMemo(() => {
+    const size = Math.abs(mappingSnapSize());
+    return Number.isFinite(size) ? clampRange(size, 0.05, 20) : 0.5;
+  });
+  const snapStageCoordinate = (value: number) => {
+    const nextValue = mappingSnapEnabled()
+      ? Math.round(value / normalizedMappingSnapSize()) * normalizedMappingSnapSize()
+      : value;
+    return Number(nextValue.toFixed(2));
+  };
+  const snapStagePoint = (point: { x: number; z: number }) => ({
+    x: snapStageCoordinate(point.x),
+    z: snapStageCoordinate(point.z),
+  });
+  const snapStagePosition = (position: PatchFixtureRequest["position"]) => ({
+    ...position,
+    x: snapStageCoordinate(position.x),
+    z: snapStageCoordinate(position.z),
+  });
+  const mappingSnapLines = createMemo<MappingSnapLine[]>(() => {
+    if (!mappingSnapEnabled()) {
+      return [];
+    }
+    const step = normalizedMappingSnapSize();
+    const bounds = stageWorldBounds();
+    const firstX = Math.ceil(bounds.minX / step) * step;
+    const lastX = Math.floor(bounds.maxX / step) * step;
+    const firstZ = Math.ceil(bounds.minZ / step) * step;
+    const lastZ = Math.floor(bounds.maxZ / step) * step;
+    const xCount = Math.max(0, Math.floor((lastX - firstX) / step) + 1);
+    const zCount = Math.max(0, Math.floor((lastZ - firstZ) / step) + 1);
+    if (xCount + zCount > 180) {
+      return [];
+    }
+    const lines: MappingSnapLine[] = [];
+    for (let index = 0; index < xCount; index += 1) {
+      const x = firstX + index * step;
+      lines.push({ axis: "x", svg: stageWorldToSvgPoint(x, 0, bounds).x });
+    }
+    for (let index = 0; index < zCount; index += 1) {
+      const z = firstZ + index * step;
+      lines.push({ axis: "z", svg: stageWorldToSvgPoint(0, z, bounds).z });
+    }
+    return lines;
+  });
+  const mappingMarqueeBox = createMemo(() => {
+    const marquee = mappingMarquee();
+    if (!marquee) {
+      return null;
+    }
+    return {
+      x: Math.min(marquee.start.x, marquee.current.x),
+      z: Math.min(marquee.start.z, marquee.current.z),
+      width: Math.abs(marquee.current.x - marquee.start.x),
+      height: Math.abs(marquee.current.z - marquee.start.z),
+    };
+  });
+  const dragWorldDelta = (drag: MappingDragState) => ({
+    x: drag.currentWorld.x - drag.startWorld.x,
+    z: drag.currentWorld.z - drag.startWorld.z,
+  });
+  const mappingOutputHandleAngleDeg = (center: { x: number; z: number }, point: { x: number; z: number }) =>
+    (Math.atan2(point.z - center.z, point.x - center.x) * 180) / Math.PI;
+  const mappingOutputHandleDistance = (center: { x: number; z: number }, point: { x: number; z: number }) => {
+    const dx = point.x - center.x;
+    const dz = point.z - center.z;
+    return Math.sqrt(dx * dx + dz * dz);
+  };
+  const mappingVideoOutputPreviewMapping = (drag: MappingDragState, output: VideoOutputSummary): VideoOutputMapping => {
+    if (drag.kind === "videoOutput") {
+      const delta = dragWorldDelta(drag);
+      const point = snapStagePoint({
+        x: drag.startMapping.stage_x + delta.x,
+        z: drag.startMapping.stage_z + delta.z,
+      });
+      return {
+        ...drag.startMapping,
+        stage_x: point.x,
+        stage_z: point.z,
+      };
+    }
+    if (drag.kind === "videoOutputRotate") {
+      const currentAngle = mappingOutputHandleAngleDeg(drag.centerWorld, drag.currentWorld);
+      return {
+        ...drag.startMapping,
+        rotation_deg: Number((drag.startMapping.rotation_deg + currentAngle - drag.startAngleDeg).toFixed(1)),
+      };
+    }
+    if (drag.kind === "videoOutputScale") {
+      const currentDistance = mappingOutputHandleDistance(drag.centerWorld, drag.currentWorld);
+      const ratio = currentDistance / Math.max(0.001, drag.startDistance);
+      return {
+        ...drag.startMapping,
+        scale_x: Number(clampRange(drag.startMapping.scale_x * ratio, 0.25, 3).toFixed(3)),
+        scale_y: Number(clampRange(drag.startMapping.scale_y * ratio, 0.25, 3).toFixed(3)),
+      };
+    }
+    return output.mapping;
+  };
+  const mappingFixturePosition = (fixture: PatchedFixtureSummary) => {
+    const drag = mappingDrag();
+    if (drag?.kind !== "fixture" || !drag.fixtureIds.includes(fixture.id)) {
+      return fixture.position;
+    }
+    const startPosition = drag.startPositions[fixture.id];
+    if (!startPosition) {
+      return fixture.position;
+    }
+    const delta = dragWorldDelta(drag);
+    return snapStagePosition({
+      ...startPosition,
+      x: startPosition.x + delta.x,
+      z: startPosition.z + delta.z,
+    });
+  };
+  const mappingVideoOutputMapping = (output: VideoOutputSummary): VideoOutputMapping => {
+    const drag = mappingDrag();
+    if (!drag || drag.kind === "fixture" || drag.outputId !== output.id) {
+      return output.mapping;
+    }
+    return mappingVideoOutputPreviewMapping(drag, output);
+  };
+  const isDraggingMappingFixture = (fixtureId: number) => {
+    const drag = mappingDrag();
+    return drag?.kind === "fixture" && drag.fixtureIds.includes(fixtureId);
+  };
+  const isDraggingMappingVideoOutput = (outputId: number) => {
+    const drag = mappingDrag();
+    return Boolean(drag && drag.kind !== "fixture" && drag.outputId === outputId);
+  };
   const visualizerFixtures = createMemo<VisualizerFixture[]>(() => {
-    const fixtures = snapshot().fixtures;
+    const fixtures = mappingFilteredFixtures();
     if (fixtures.length === 0) {
       return [];
     }
@@ -2287,7 +3024,8 @@ export default function App() {
     const currentValues = faderValues();
 
     return fixtures.map((fixture) => {
-      const point = stageWorldToSvgPoint(fixture.position.x, fixture.position.z, bounds);
+      const position = mappingFixturePosition(fixture);
+      const point = stageWorldToSvgPoint(position.x, position.z, bounds);
       const dimmer = readFixtureAttribute(fixture, currentValues, ["Dimmer", "Intensity"]) ?? 0;
       const pan = readFixtureAttribute(fixture, currentValues, ["Pan"]);
       const red = readFixtureAttribute(fixture, currentValues, ["ColorRed", "Red"]);
@@ -2299,84 +3037,253 @@ export default function App() {
           : "rgb(88, 167, 246)";
       const intensity = clamp01(dimmer / 65_535);
       const panDegrees = pan === undefined ? 0 : ((pan - 32_768) / 65_535) * 540;
+      const visualKind = fixtureVisualKind(fixture);
+      const size =
+        visualKind === "bar"
+          ? { width: 5.8, height: 1.4 }
+          : visualKind === "panel"
+            ? { width: 4.8, height: 3.2 }
+            : visualKind === "laser"
+              ? { width: 3.4, height: 3.4 }
+              : { width: 3.2, height: 3.2 };
       return {
         id: fixture.id,
         label: fixture.label,
+        dmxLabel: `U${fixture.universe} A${fixture.address}`,
+        groupLabel: fixture.group_ids.length > 0 ? fixture.group_ids.join(", ") : "No group",
+        typeKey: fixtureTypeKey(fixture),
+        visualKind,
         x: point.x,
         z: point.z,
+        width: size.width,
+        height: size.height,
+        yaw: fixture.rotation.yaw,
         beamPoints: beamPoints(point.x, point.z, fixture.rotation.yaw + panDegrees, intensity),
         intensity,
         color,
+        inGroupFilter: selectedFixtureGroupFilter() ? fixture.group_ids.includes(selectedFixtureGroupFilter()!) : true,
+        highlighted: fixture.highlighted,
+        soloed: fixture.soloed,
+        parked: fixture.parked,
       };
     });
   });
 
-  const visualizerFixtures3d = createMemo<VisualizerFixture3d[]>(() => {
-    const scene = visualizerScene();
-    const fixtures = scene.fixtures;
-    if (fixtures.length === 0) {
-      return [];
+  const visualizerVideoSurfaces2d = createMemo<VisualizerVideoSurface2d[]>(() => {
+    const bounds = stageWorldBounds();
+    return snapshot().video.outputs.map((output) => {
+      const mapping = mappingVideoOutputMapping(output);
+      const center = stageWorldToSvgPoint(mapping.stage_x, mapping.stage_z, bounds);
+      const size = surfaceWorldHalfSize(output);
+      const xEdge = stageWorldToSvgPoint(mapping.stage_x + size.width, mapping.stage_z, bounds);
+      const zEdge = stageWorldToSvgPoint(mapping.stage_x, mapping.stage_z + size.height, bounds);
+      return {
+        id: output.id,
+        label: output.label,
+        x: center.x,
+        z: center.z,
+        width: Math.max(3, Math.abs(xEdge.x - center.x) * 2),
+        height: Math.max(2, Math.abs(zEdge.z - center.z) * 2),
+        rotationDeg: mapping.rotation_deg,
+        opacity: clampRange(output.opacity, 0, 1),
+        active: output.enabled && !output.blackout,
+      };
+    });
+  });
+  const waveOriginSvgPoint = createMemo(() => stageWorldToSvgPoint(waveOriginX(), waveOriginZ(), stageWorldBounds()));
+  const waveDirectionLength = createMemo(() => {
+    const x = waveDirectionX();
+    const y = waveDirectionY();
+    const z = waveDirectionZ();
+    return Math.sqrt(x * x + y * y + z * z);
+  });
+  const waveDirectionIsRadial = createMemo(() => waveDirectionLength() <= Number.EPSILON);
+  const waveDirectionSvgPoint = createMemo(() => {
+    const bounds = stageWorldBounds();
+    const length = waveDirectionLength();
+    if (length <= Number.EPSILON) {
+      return waveOriginSvgPoint();
     }
-
-    const minX = scene.bounds.min.x;
-    const maxX = scene.bounds.max.x;
-    const minY = scene.bounds.min.y;
-    const maxY = scene.bounds.max.y;
-    const minZ = scene.bounds.min.z;
-    const maxZ = scene.bounds.max.z;
-    const rangeX = maxX - minX;
-    const rangeY = maxY - minY;
-    const rangeZ = maxZ - minZ;
-
-    return fixtures
-      .map((fixture) => {
-        const nx = rangeX <= Number.EPSILON ? 0.5 : (fixture.position.x - minX) / rangeX;
-        const ny = rangeY <= Number.EPSILON ? 0.5 : (fixture.position.y - minY) / rangeY;
-        const nz = rangeZ <= Number.EPSILON ? 0.5 : (fixture.position.z - minZ) / rangeZ;
-        const x = stageViewBoxSize / 2 + (nx - nz) * 34;
-        const groundY = 70 + (nx + nz) * 14;
-        const y = groundY - ny * 42;
-        return {
-          id: fixture.id,
-          label: fixture.label,
-          x,
-          y,
-          groundY,
-          intensity: clamp01(fixture.intensity),
-          color: visualizerColor(fixture.color),
-        };
-      })
-      .sort((a, b) => a.groundY - b.groundY);
+    const scale = Math.min(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ) * 0.18;
+    return stageWorldToSvgPoint(
+      waveOriginX() + (waveDirectionX() / length) * scale,
+      waveOriginZ() + (waveDirectionZ() / length) * scale,
+      bounds,
+    );
+  });
+  const waveRadialRadius = createMemo(() => {
+    const bounds = stageWorldBounds();
+    const edge = stageWorldToSvgPoint(waveOriginX() + Math.min(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ) * 0.16, waveOriginZ(), bounds);
+    return Math.max(4, Math.abs(edge.x - waveOriginSvgPoint().x));
+  });
+  const waveTargetFixtureIds = createMemo(() => {
+    const mode = effectTargetMode();
+    if (mode === "fixture") {
+      const fixture = selectedFixture();
+      return new Set(fixture ? [fixture.id] : []);
+    }
+    if (mode === "group") {
+      const groups = parseGroupIds(effectTargetGroups());
+      return new Set(
+        snapshot()
+          .fixtures.filter((fixture) => groups.some((groupId) => fixture.group_ids.includes(groupId)))
+          .map((fixture) => fixture.id),
+      );
+    }
+    return new Set<number>();
   });
 
-  const visualizerBeams3d = createMemo<VisualizerBeam3d[]>(() => {
-    const scene = visualizerScene();
-    return scene.beams
-      .map((beam) => {
-        const fixture = visualizerFixtures3d().find((candidate) => candidate.id === beam.fixture_id);
-        if (!fixture) {
-          return null;
-        }
-        const x2 = fixture.x + beam.direction.x * 12 - beam.direction.z * 12;
-        const y2 = fixture.y - beam.direction.y * 28 + beam.direction.z * 8 + beam.direction.x * 8;
-        return {
-          fixtureId: beam.fixture_id,
-          x1: fixture.x,
-          y1: fixture.y,
-          x2,
-          y2,
-          intensity: clamp01(beam.intensity),
-          color: visualizerColor(beam.color),
-        };
-      })
-      .filter((beam): beam is VisualizerBeam3d => beam !== null);
+  const selectedMappingVideoOutput = createMemo(() => {
+    const outputId = selectedVideoOutputId();
+    if (outputId === null) {
+      return snapshot().video.outputs[0] ?? null;
+    }
+    return snapshot().video.outputs.find((output) => output.id === outputId) ?? snapshot().video.outputs[0] ?? null;
   });
+  const fixtureSvgBounds = (fixture: VisualizerFixture): MappingSvgBounds => {
+    const halfWidth = Math.max(2.4, fixture.width / 2 + 1.6);
+    const halfHeight = Math.max(2.4, fixture.height / 2 + 1.6);
+    return {
+      minX: fixture.x - halfWidth,
+      maxX: fixture.x + halfWidth,
+      minZ: fixture.z - halfHeight,
+      maxZ: fixture.z + halfHeight,
+    };
+  };
+  const videoSurfaceSvgBounds = (surface: VisualizerVideoSurface2d): MappingSvgBounds => {
+    const angle = (surface.rotationDeg * Math.PI) / 180;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const corners = [
+      { x: -surface.width / 2, z: -surface.height / 2 },
+      { x: surface.width / 2, z: -surface.height / 2 },
+      { x: surface.width / 2, z: surface.height / 2 },
+      { x: -surface.width / 2, z: surface.height / 2 },
+    ].map((corner) => ({
+      x: surface.x + corner.x * cos - corner.z * sin,
+      z: surface.z + corner.x * sin + corner.z * cos,
+    }));
+    return {
+      minX: Math.min(...corners.map((corner) => corner.x)) - 2,
+      maxX: Math.max(...corners.map((corner) => corner.x)) + 2,
+      minZ: Math.min(...corners.map((corner) => corner.z)) - 2,
+      maxZ: Math.max(...corners.map((corner) => corner.z)) + 2,
+    };
+  };
+  const mergeSvgBounds = (bounds: MappingSvgBounds[]) => {
+    if (bounds.length === 0) {
+      return null;
+    }
+    return {
+      minX: Math.min(...bounds.map((bound) => bound.minX)),
+      maxX: Math.max(...bounds.map((bound) => bound.maxX)),
+      minZ: Math.min(...bounds.map((bound) => bound.minZ)),
+      maxZ: Math.max(...bounds.map((bound) => bound.maxZ)),
+    };
+  };
+  const fitMappingViewportToSvgBounds = (bounds: MappingSvgBounds | null, label: string) => {
+    if (!bounds) {
+      setMessage(`Nothing to fit for ${label}.`);
+      return;
+    }
+    const width = Math.max(1, bounds.maxX - bounds.minX);
+    const height = Math.max(1, bounds.maxZ - bounds.minZ);
+    const size = clampRange(Math.max(width, height) * 1.28, stageViewBoxSize / 4, stageViewBoxSize);
+    const zoom = stageViewBoxSize / size;
+    setMappingViewport(zoom, (bounds.minX + bounds.maxX) / 2, (bounds.minZ + bounds.maxZ) / 2);
+    setMessage(`Fit 2D mapping viewport to ${label}.`);
+  };
+  const fitMappingViewportToVisible = () => {
+    const fixtureBounds = visualizerFixtures().map(fixtureSvgBounds);
+    const surfaceBounds = visualizerVideoSurfaces2d().map(videoSurfaceSvgBounds);
+    fitMappingViewportToSvgBounds(mergeSvgBounds([...fixtureBounds, ...surfaceBounds]), "visible stage items");
+  };
+  const fitMappingViewportToSelection = () => {
+    const selectedIds = selectedMappingFixtureIdSet();
+    const fixtureBounds = visualizerFixtures()
+      .filter((fixture) => selectedIds.has(fixture.id))
+      .map(fixtureSvgBounds);
+    const surfaceBounds = selectedVideoOutputId() === null
+      ? []
+      : visualizerVideoSurfaces2d()
+          .filter((surface) => surface.id === selectedVideoOutputId())
+          .map(videoSurfaceSvgBounds);
+    fitMappingViewportToSvgBounds(mergeSvgBounds([...fixtureBounds, ...surfaceBounds]), "selection");
+  };
+  const canFitMappingViewportToVisible = createMemo(
+    () => visualizerFixtures().length > 0 || visualizerVideoSurfaces2d().length > 0,
+  );
+  const canFitMappingViewportToSelection = createMemo(
+    () => selectedMappingFixtures().length > 0 || selectedVideoOutputId() !== null,
+  );
+  const effectVideoTargetPosition = () => ({
+    x: effectVideoPositionX(),
+    y: effectVideoPositionY(),
+    z: effectVideoPositionZ(),
+  });
+  const effectVideoTargetSvgPoint = createMemo(() =>
+    stageWorldToSvgPoint(effectVideoPositionX(), effectVideoPositionZ(), stageWorldBounds()),
+  );
+  const setEffectVideoPosition = (position: { x: number; y: number; z: number }, nextMessage?: string) => {
+    setEffectVideoPositionX(Number(position.x.toFixed(2)));
+    setEffectVideoPositionY(Number(position.y.toFixed(2)));
+    setEffectVideoPositionZ(Number(position.z.toFixed(2)));
+    if (nextMessage) {
+      setMessage(nextMessage);
+    }
+  };
+  const setEffectVideoPositionFromStagePoint = (point: { x: number; z: number }) => {
+    setEffectVideoPosition({ x: point.x, y: effectVideoPositionY(), z: point.z });
+  };
+  const setEffectVideoPositionFromVideoOutput = (output: VideoOutputSummary, nextMessage?: string) => {
+    const mapping = mappingVideoOutputMapping(output);
+    setSelectedVideoOutputId(output.id);
+    setEffectVideoPosition(
+      {
+        x: mapping.stage_x,
+        y: 0,
+        z: mapping.stage_z,
+      },
+      nextMessage ?? `Video effect target uses ${output.label} stage position.`,
+    );
+  };
+  const setEffectVideoPositionFromSelectedOutput = () => {
+    const output = selectedMappingVideoOutput();
+    if (!output) {
+      setMessage("Add or select a video output before using its stage position.");
+      return;
+    }
+    setEffectVideoPositionFromVideoOutput(output);
+  };
+  const setEffectVideoPositionFromWaveOrigin = () => {
+    setEffectVideoPosition(
+      {
+        x: waveOriginX(),
+        y: waveOriginY(),
+        z: waveOriginZ(),
+      },
+      "Video effect target uses the current wave origin.",
+    );
+  };
+  const setEffectVideoPositionFromStageCenter = () => {
+    const bounds = stageWorldBounds();
+    setEffectVideoPosition(
+      {
+        x: (bounds.minX + bounds.maxX) / 2,
+        y: 0,
+        z: (bounds.minZ + bounds.maxZ) / 2,
+      },
+      "Video effect target uses stage center.",
+    );
+  };
 
   const parseGroupIds = (value: string) =>
     value
       .split(",")
       .map((group) => group.trim())
       .filter((group) => group.length > 0);
+
+  const uniqueGroupIds = (groupIds: string[]) => [...new Set(groupIds)];
 
   const registerSetupPanel = (tabs: SetupSubTab[]) => (element: HTMLElement) => {
     for (const tab of tabs) {
@@ -2403,13 +3310,67 @@ export default function App() {
   const setupPanelClass = (baseClass: string, tabs: SetupSubTab[]) =>
     `${baseClass} ${tabs.includes(setupSubTab()) ? "setupPanelFocus" : ""}`;
 
-  const selectFixture = (fixture: PatchedFixtureSummary) => {
+  const activateFixture = (fixture: PatchedFixtureSummary) => {
     setSelectedFixtureId(fixture.id);
     setSelectedFixtureLabelDraft(fixture.label);
     setSelectedFixtureUniverseDraft(fixture.universe);
     setSelectedFixtureAddressDraft(fixture.address);
     setSelectedFixtureGroupText(fixture.group_ids.join(", "));
     setSelectedFixtureLimitsDraft(fixture.limits ?? defaultFixtureLimits);
+  };
+
+  const selectFixture = (fixture: PatchedFixtureSummary) => {
+    activateFixture(fixture);
+    setSelectedMappingFixtureIds([fixture.id]);
+  };
+
+  const isAdditiveMappingSelectionEvent = (event: Pick<MouseEvent, "ctrlKey" | "metaKey" | "shiftKey">) =>
+    event.ctrlKey || event.metaKey || event.shiftKey;
+
+  const selectMappingFixture = (
+    fixture: PatchedFixtureSummary,
+    event?: Pick<MouseEvent, "ctrlKey" | "metaKey" | "shiftKey">,
+  ) => {
+    if (!event || !isAdditiveMappingSelectionEvent(event)) {
+      selectFixture(fixture);
+      return;
+    }
+
+    const currentIds = selectedMappingFixtureIds();
+    if (currentIds.includes(fixture.id)) {
+      if (currentIds.length === 1) {
+        activateFixture(fixture);
+        setSelectedMappingFixtureIds([fixture.id]);
+        return;
+      }
+      const nextIds = currentIds.filter((id) => id !== fixture.id);
+      const nextActiveFixture =
+        selectedFixtureId() === fixture.id
+          ? snapshot().fixtures.find((candidate) => candidate.id === nextIds[0])
+          : fixture;
+      if (nextActiveFixture) {
+        activateFixture(nextActiveFixture);
+      }
+      setSelectedMappingFixtureIds(nextIds);
+      return;
+    }
+
+    activateFixture(fixture);
+    setSelectedMappingFixtureIds([...currentIds, fixture.id]);
+  };
+
+  const pickVisibleMappingFixtures = () => {
+    const fixtures = mappingFilteredFixtures();
+    if (fixtures.length === 0) {
+      setSelectedMappingFixtureIds([]);
+      return;
+    }
+    activateFixture(fixtures[0]);
+    setSelectedMappingFixtureIds(fixtures.map((fixture) => fixture.id));
+  };
+
+  const clearMappingFixtureSelection = () => {
+    setSelectedMappingFixtureIds([]);
   };
 
   const handleDmxAddressCellClick = (cell: DmxAddressCell) => {
@@ -2595,49 +3556,107 @@ export default function App() {
     }));
   };
 
+  const markProjectClean = (nextSnapshot = snapshot()) => {
+    setCleanProjectSignature(projectSnapshotSignature(nextSnapshot));
+    setProjectDirty(false);
+  };
+
+  const applyEngineSnapshot = (next: EngineSnapshot) => {
+    setSnapshot(next);
+    const signature = projectSnapshotSignature(next);
+    const cleanSignature = cleanProjectSignature();
+    if (cleanSignature === null) {
+      setCleanProjectSignature(signature);
+      setProjectDirty(false);
+    } else {
+      setProjectDirty(signature !== cleanSignature);
+    }
+    setOutput(next.output);
+    setDmxOutputRoutes(next.dmx_outputs.length > 0 ? next.dmx_outputs : [next.output]);
+    setFaderValues((current) => ({ ...current, ...snapshotFaderValues(next) }));
+    syncVideoOutputConfigDrafts(next.video.outputs);
+    syncCueMetadataDrafts(next.cues);
+    syncTimelineEventDrafts(next.timeline.events);
+    syncTimelineAutomationDrafts(next.timeline.automations);
+    syncTimelineVideoAutomationDrafts(next.timeline.video_automations);
+    const groupId = selectedFixtureGroupFilter();
+    if (groupId && !next.fixtures.some((fixture) => fixture.group_ids.includes(groupId))) {
+      setSelectedFixtureGroupFilter(null);
+    }
+    const selectedId = selectedFixtureId();
+    const selectedExists = selectedId !== null && next.fixtures.some((fixture) => fixture.id === selectedId);
+    const liveFixtureIds = new Set(next.fixtures.map((fixture) => fixture.id));
+    const nextMappingSelection = selectedMappingFixtureIds().filter((id) => liveFixtureIds.has(id));
+    if (!selectedExists && next.fixtures.length > 0) {
+      selectFixture(next.fixtures[0]);
+    } else if (!selectedExists) {
+      setSelectedFixtureId(null);
+      setSelectedMappingFixtureIds([]);
+      setSelectedFixtureLabelDraft("");
+      setSelectedFixtureUniverseDraft(0);
+      setSelectedFixtureAddressDraft(1);
+      setSelectedFixtureGroupText("");
+    } else if (nextMappingSelection.length !== selectedMappingFixtureIds().length) {
+      setSelectedMappingFixtureIds(nextMappingSelection.length > 0 ? nextMappingSelection : [selectedId]);
+    }
+  };
+
   const refreshSnapshot = async () => {
     try {
-      const [next, nextVisualizerScene] = await Promise.all([
-        invoke<EngineSnapshot>("get_snapshot"),
-        invoke<VisualizerScene>("get_visualizer_scene"),
-      ]);
-      setSnapshot(next);
-      setVisualizerScene(nextVisualizerScene);
-      setOutput(next.output);
-      setDmxOutputRoutes(next.dmx_outputs.length > 0 ? next.dmx_outputs : [next.output]);
-      setFaderValues((current) => ({ ...current, ...snapshotFaderValues(next) }));
-      syncVideoOutputConfigDrafts(next.video.outputs);
-      syncCueMetadataDrafts(next.cues);
-      syncTimelineEventDrafts(next.timeline.events);
-      syncTimelineAutomationDrafts(next.timeline.automations);
-      syncTimelineVideoAutomationDrafts(next.timeline.video_automations);
-      const groupId = selectedFixtureGroupFilter();
-      if (groupId && !next.fixtures.some((fixture) => fixture.group_ids.includes(groupId))) {
-        setSelectedFixtureGroupFilter(null);
-      }
-      const selectedId = selectedFixtureId();
-      const selectedExists = selectedId !== null && next.fixtures.some((fixture) => fixture.id === selectedId);
-      if (!selectedExists && next.fixtures.length > 0) {
-        selectFixture(next.fixtures[0]);
-      } else if (!selectedExists) {
-        setSelectedFixtureId(null);
-        setSelectedFixtureLabelDraft("");
-        setSelectedFixtureUniverseDraft(0);
-        setSelectedFixtureAddressDraft(1);
-        setSelectedFixtureGroupText("");
-      }
+      const next = await invoke<EngineSnapshot>("get_snapshot");
+      applyEngineSnapshot(next);
+      return next;
+    } catch (error) {
+      setMessage(String(error));
+      return null;
+    }
+  };
+
+  const refreshEngineTelemetryReport = async () => {
+    try {
+      setEngineTelemetryReport(await invoke<EngineTelemetryReport>("get_engine_telemetry_report"));
     } catch (error) {
       setMessage(String(error));
     }
   };
 
   const timer = window.setInterval(refreshSnapshot, 250);
-  onCleanup(() => window.clearInterval(timer));
+  const telemetryReportTimer = window.setInterval(refreshEngineTelemetryReport, 1000);
+  onCleanup(() => {
+    window.clearInterval(timer);
+    window.clearInterval(telemetryReportTimer);
+  });
   createEffect(() => {
     void refreshSnapshot();
+    void refreshEngineTelemetryReport();
     void refreshMidiInputs();
     void refreshMidiOutputs();
     void refreshSerialPorts();
+  });
+  createEffect(() => {
+    void loadStartupProject();
+    void loadQueuedOpenProjects();
+    let disposed = false;
+    let unlistenOpenProject: (() => void) | null = null;
+    void listen<string[]>("rayard://open-project", (event) => {
+      const paths = Array.isArray(event.payload) ? event.payload : [];
+      const path = paths[paths.length - 1];
+      if (path) {
+        void loadProjectPath(path);
+      }
+    })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+        } else {
+          unlistenOpenProject = unlisten;
+        }
+      })
+      .catch((error) => setMessage(String(error)));
+    onCleanup(() => {
+      disposed = true;
+      unlistenOpenProject?.();
+    });
   });
   createEffect(() => {
     const attribute = selectedEffectAttribute();
@@ -2665,6 +3684,25 @@ export default function App() {
     const activeBank = Math.floor(index / cuePadSize);
     if (cuePadBank() !== activeBank) {
       setCuePadBank(activeBank);
+    }
+  });
+  createEffect(() => {
+    const typeKey = selectedFixtureTypeFilter();
+    if (typeKey && !fixtureTypeRows().some((row) => row.key === typeKey)) {
+      setSelectedFixtureTypeFilter(null);
+    }
+  });
+  createEffect(() => {
+    const outputs = snapshot().video.outputs;
+    const outputId = selectedVideoOutputId();
+    if (outputs.length === 0) {
+      if (outputId !== null) {
+        setSelectedVideoOutputId(null);
+      }
+      return;
+    }
+    if (outputId === null || !outputs.some((output) => output.id === outputId)) {
+      setSelectedVideoOutputId(outputs[0].id);
     }
   });
 
@@ -2808,6 +3846,207 @@ export default function App() {
       setPatchYaw(fixture.rotation.yaw);
       setPatchRoll(fixture.rotation.roll);
       setMessage(`Using ${fixture.label}'s profile for patching`);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const duplicateFixture = async (fixture: PatchedFixtureSummary) => {
+    try {
+      const imported = await invoke<FixtureProfileSummary>("use_fixture_profile", { fixtureId: fixture.id });
+      const footprint = Math.max(1, fixtureFootprint(fixture));
+      const address = fixture.address + footprint;
+      if (address > 512) {
+        setMessage(`Cannot duplicate ${fixture.label}: next address ${address} exceeds universe 512.`);
+        return;
+      }
+      const request: PatchFixtureRequest = {
+        profile_path: imported.source_path,
+        mode_name: fixture.mode_name,
+        label: `${fixture.label} Copy`,
+        universe: fixture.universe,
+        address,
+        group_ids: fixture.group_ids,
+        position: {
+          x: Number((fixture.position.x + 1).toFixed(2)),
+          y: Number(fixture.position.y.toFixed(2)),
+          z: Number(fixture.position.z.toFixed(2)),
+        },
+        rotation: fixture.rotation,
+      };
+      const fixtureIds = await invoke<number[]>("patch_fixtures", { requests: [request] });
+      const fixtureId = fixtureIds[0];
+      if (fixtureId === undefined) {
+        setMessage("Fixture duplicate did not return a fixture id.");
+        return;
+      }
+      await invoke("set_fixture_limits", { fixtureId, limits: fixture.limits });
+      setSelectedFixtureId(fixtureId);
+      setSelectedMappingFixtureIds([fixtureId]);
+      setSelectedFixtureLabelDraft(request.label);
+      setSelectedFixtureUniverseDraft(request.universe);
+      setSelectedFixtureAddressDraft(request.address);
+      setSelectedFixtureGroupText(request.group_ids.join(", "));
+      setSelectedFixtureLimitsDraft(fixture.limits);
+      setMessage(`Duplicated ${fixture.label} as ${request.label} at U${request.universe} A${request.address}.`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const buildOccupiedDmxRanges = () => {
+    const ranges = new Map<number, DmxAddressRange[]>();
+    for (const fixture of snapshot().fixtures) {
+      const range = addressRange(fixture.address, fixtureFootprint(fixture));
+      if (!range) {
+        continue;
+      }
+      const universeRanges = ranges.get(fixture.universe) ?? [];
+      universeRanges.push({ start: range[0], end: Math.min(512, range[1]) });
+      ranges.set(fixture.universe, universeRanges);
+    }
+    return ranges;
+  };
+
+  const dmxAddressIsFree = (
+    ranges: Map<number, DmxAddressRange[]>,
+    universe: number,
+    start: number,
+    footprint: number,
+  ) => {
+    const end = start + footprint - 1;
+    if (start < 1 || end > 512) {
+      return false;
+    }
+    return !(ranges.get(universe) ?? []).some((range) => rangesOverlap([start, end], [range.start, range.end]));
+  };
+
+  const reserveDmxAddressRange = (
+    ranges: Map<number, DmxAddressRange[]>,
+    universe: number,
+    start: number,
+    footprint: number,
+  ) => {
+    const universeRanges = ranges.get(universe) ?? [];
+    universeRanges.push({ start, end: start + footprint - 1 });
+    ranges.set(universe, universeRanges);
+  };
+
+  const findFreeDmxAddress = (
+    ranges: Map<number, DmxAddressRange[]>,
+    universe: number,
+    footprint: number,
+    preferredStart: number,
+  ) => {
+    const maxStart = 512 - footprint + 1;
+    if (maxStart < 1) {
+      return null;
+    }
+    const startHint = clampRange(Math.floor(preferredStart), 1, maxStart);
+    for (let candidate = startHint; candidate <= maxStart; candidate += 1) {
+      if (dmxAddressIsFree(ranges, universe, candidate, footprint)) {
+        return candidate;
+      }
+    }
+    for (let candidate = 1; candidate < startHint; candidate += 1) {
+      if (dmxAddressIsFree(ranges, universe, candidate, footprint)) {
+        return candidate;
+      }
+    }
+    return null;
+  };
+
+  const duplicateSelectedMappingFixtures = async () => {
+    const fixtures = [...selectedMappingFixtures()].sort((left, right) =>
+      left.universe === right.universe ? left.address - right.address : left.universe - right.universe,
+    );
+    if (fixtures.length === 0) {
+      setMessage("Select fixtures on the mapping stage first.");
+      return;
+    }
+
+    const occupiedRanges = buildOccupiedDmxRanges();
+    const nextAddressByUniverse = new Map<number, number>();
+    for (const [universeId, ranges] of occupiedRanges) {
+      const maxEnd = Math.max(0, ...ranges.map((range) => range.end));
+      nextAddressByUniverse.set(universeId, maxEnd + 1);
+    }
+    const offset = mappingSnapEnabled() ? normalizedMappingSnapSize() : 1;
+    const sourceFixtures: PatchedFixtureSummary[] = [];
+    const requests: PatchFixtureRequest[] = [];
+
+    try {
+      for (const fixture of fixtures) {
+        const imported = await invoke<FixtureProfileSummary>("use_fixture_profile", { fixtureId: fixture.id });
+        const footprint = Math.max(1, fixtureFootprint(fixture));
+        const preferredAddress = Math.max(
+          fixture.address + footprint,
+          nextAddressByUniverse.get(fixture.universe) ?? 1,
+        );
+        const nextAddress = findFreeDmxAddress(occupiedRanges, fixture.universe, footprint, preferredAddress);
+        if (nextAddress === null) {
+          setMessage(`Cannot duplicate ${fixture.label}: no ${footprint}ch gap remains in universe ${fixture.universe}.`);
+          return;
+        }
+        reserveDmxAddressRange(occupiedRanges, fixture.universe, nextAddress, footprint);
+        nextAddressByUniverse.set(fixture.universe, nextAddress + footprint);
+        sourceFixtures.push(fixture);
+        requests.push({
+          profile_path: imported.source_path,
+          mode_name: fixture.mode_name,
+          label: `${fixture.label} Copy`,
+          universe: fixture.universe,
+          address: nextAddress,
+          group_ids: [...fixture.group_ids],
+          position: snapStagePosition({
+            x: fixture.position.x + offset,
+            y: fixture.position.y,
+            z: fixture.position.z + offset,
+          }),
+          rotation: { ...fixture.rotation },
+        });
+      }
+
+      const fixtureIds = await invoke<number[]>("patch_fixtures", { requests });
+      if (fixtureIds.length !== requests.length) {
+        setMessage(`Fixture duplicate returned ${fixtureIds.length}/${requests.length} fixture id(s).`);
+        await refreshSnapshot();
+        return;
+      }
+
+      const nextFaderValues: Record<string, number> = {};
+      for (const [index, fixtureId] of fixtureIds.entries()) {
+        const source = sourceFixtures[index];
+        await invoke("set_fixture_limits", { fixtureId, limits: source.limits });
+        for (const value of source.attribute_values) {
+          await invoke("set_attribute", {
+            fixtureId,
+            attribute: value.attribute,
+            value: value.value,
+          });
+          nextFaderValues[`${fixtureId}:${value.attribute}`] = value.value;
+        }
+      }
+
+      setFaderValues((current) => ({ ...current, ...nextFaderValues }));
+      setSelectedMappingFixtureIds(fixtureIds);
+      const firstRequest = requests[0];
+      const firstId = fixtureIds[0];
+      if (firstRequest && firstId !== undefined) {
+        setSelectedFixtureId(firstId);
+        setSelectedFixtureLabelDraft(firstRequest.label);
+        setSelectedFixtureUniverseDraft(firstRequest.universe);
+        setSelectedFixtureAddressDraft(firstRequest.address);
+        setSelectedFixtureGroupText(firstRequest.group_ids.join(", "));
+        setSelectedFixtureLimitsDraft(sourceFixtures[0]?.limits ?? defaultFixtureLimits);
+      }
+      setMessage(
+        fixtures.length === 1
+          ? `Duplicated ${fixtures[0].label} as ${firstRequest?.label ?? "copy"}.`
+          : `Duplicated ${fixtures.length} selected fixtures.`,
+      );
+      await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
     }
@@ -2965,6 +4204,31 @@ export default function App() {
     }
   };
 
+  const stageSvgPointFromClient = (clientX: number, clientY: number, targetSvg: SVGSVGElement) => {
+    const rect = targetSvg.getBoundingClientRect();
+    const viewBox = mappingViewportBox();
+    return {
+      x: clampRange(viewBox.x + ((clientX - rect.left) / rect.width) * viewBox.size, 0, stageViewBoxSize),
+      z: clampRange(viewBox.z + ((clientY - rect.top) / rect.height) * viewBox.size, 0, stageViewBoxSize),
+    };
+  };
+
+  const stageWorldPointFromPointer = (event: PointerEvent, svg?: SVGSVGElement) => {
+    const point = stageSvgPointFromPointer(event, svg);
+    return svgPointToStageWorld(point.x, point.z, stageWorldBounds());
+  };
+
+  const stageSvgPointFromPointer = (event: PointerEvent, svg?: SVGSVGElement) => {
+    const targetSvg = svg ?? (event.currentTarget as SVGSVGElement);
+    return stageSvgPointFromClient(event.clientX, event.clientY, targetSvg);
+  };
+
+  const handleMappingStageWheel = (event: WheelEvent & { currentTarget: SVGSVGElement }) => {
+    event.preventDefault();
+    const point = stageSvgPointFromClient(event.clientX, event.clientY, event.currentTarget);
+    zoomMappingViewportAtPoint(event.deltaY < 0 ? 1 : -1, point);
+  };
+
   const placeSelectedFixtureFromStage = async (
     event: PointerEvent & { currentTarget: SVGSVGElement },
   ) => {
@@ -2972,24 +4236,348 @@ export default function App() {
     if (!fixture) {
       return;
     }
-    const rect = event.currentTarget.getBoundingClientRect();
-    const point = svgPointToStageWorld(
-      ((event.clientX - rect.left) / rect.width) * stageViewBoxSize,
-      ((event.clientY - rect.top) / rect.height) * stageViewBoxSize,
-      stageWorldBounds(),
-    );
+    const point = snapStagePoint(stageWorldPointFromPointer(event));
     await setFixtureTransform(fixture, {
       position: {
         ...fixture.position,
-        x: Number(point.x.toFixed(2)),
-        z: Number(point.z.toFixed(2)),
+        x: point.x,
+        z: point.z,
       },
     });
   };
 
-  const layoutFixturePositions = async (mode: FixtureLayoutMode) => {
-    const fixtures = filteredFixtures();
+  const rotateSelectedFixtureFromStage = async (
+    event: PointerEvent & { currentTarget: SVGSVGElement },
+  ) => {
+    const fixture = selectedFixture();
+    if (!fixture) {
+      return;
+    }
+    const point = stageWorldPointFromPointer(event);
+    const dx = point.x - fixture.position.x;
+    const dz = point.z - fixture.position.z;
+    if (Math.abs(dx) < 0.001 && Math.abs(dz) < 0.001) {
+      return;
+    }
+    const yaw = Math.round(((Math.atan2(dz, dx) * 180) / Math.PI + 90 + 360) % 360);
+    await setFixtureTransform(fixture, {
+      rotation: {
+        ...fixture.rotation,
+        yaw,
+      },
+    });
+  };
+
+  const beginMappingFixtureDrag = (event: PointerEvent, fixtureId: number) => {
+    if (event.button !== 0 || mappingStageTool() !== "select") {
+      return;
+    }
+    const fixture = snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
+    const svg = (event.currentTarget as SVGElement).ownerSVGElement;
+    if (!fixture || !svg) {
+      return;
+    }
+    if (isAdditiveMappingSelectionEvent(event)) {
+      selectMappingFixture(fixture, event);
+      return;
+    }
+    const selectedIds = selectedMappingFixtureIdSet();
+    const fixtureIds = selectedIds.has(fixtureId) ? selectedMappingFixtureIds() : [fixtureId];
+    if (!selectedIds.has(fixtureId)) {
+      selectFixture(fixture);
+    } else {
+      activateFixture(fixture);
+    }
+    const startPositions = Object.fromEntries(
+      snapshot()
+        .fixtures
+        .filter((candidate) => fixtureIds.includes(candidate.id))
+        .map((candidate) => [candidate.id, candidate.position]),
+    ) as Record<number, PatchFixtureRequest["position"]>;
+    const point = stageWorldPointFromPointer(event, svg);
+    svg.setPointerCapture(event.pointerId);
+    setMappingDrag({
+      kind: "fixture",
+      pointerId: event.pointerId,
+      fixtureIds,
+      startWorld: point,
+      currentWorld: point,
+      startPositions,
+    });
+  };
+
+  const beginMappingVideoOutputDrag = (event: PointerEvent, outputId: number) => {
+    if (event.button !== 0 || mappingStageTool() !== "select") {
+      return;
+    }
+    const output = snapshot().video.outputs.find((candidate) => candidate.id === outputId);
+    const svg = (event.currentTarget as SVGElement).ownerSVGElement;
+    if (!output || !svg) {
+      return;
+    }
+    const point = stageWorldPointFromPointer(event, svg);
+    svg.setPointerCapture(event.pointerId);
+    setMappingDrag({
+      kind: "videoOutput",
+      pointerId: event.pointerId,
+      outputId,
+      startWorld: point,
+      currentWorld: point,
+      startMapping: output.mapping,
+    });
+  };
+
+  const beginMappingVideoOutputRotate = (event: PointerEvent, outputId: number) => {
+    if (event.button !== 0 || mappingStageTool() !== "select") {
+      return;
+    }
+    const output = snapshot().video.outputs.find((candidate) => candidate.id === outputId);
+    const svg = (event.currentTarget as SVGElement).ownerSVGElement;
+    if (!output || !svg) {
+      return;
+    }
+    const point = stageWorldPointFromPointer(event, svg);
+    const centerWorld = {
+      x: output.mapping.stage_x,
+      z: output.mapping.stage_z,
+    };
+    svg.setPointerCapture(event.pointerId);
+    setMappingDrag({
+      kind: "videoOutputRotate",
+      pointerId: event.pointerId,
+      outputId,
+      startWorld: point,
+      currentWorld: point,
+      centerWorld,
+      startAngleDeg: mappingOutputHandleAngleDeg(centerWorld, point),
+      startMapping: output.mapping,
+    });
+  };
+
+  const beginMappingVideoOutputScale = (event: PointerEvent, outputId: number) => {
+    if (event.button !== 0 || mappingStageTool() !== "select") {
+      return;
+    }
+    const output = snapshot().video.outputs.find((candidate) => candidate.id === outputId);
+    const svg = (event.currentTarget as SVGElement).ownerSVGElement;
+    if (!output || !svg) {
+      return;
+    }
+    const point = stageWorldPointFromPointer(event, svg);
+    const centerWorld = {
+      x: output.mapping.stage_x,
+      z: output.mapping.stage_z,
+    };
+    svg.setPointerCapture(event.pointerId);
+    setMappingDrag({
+      kind: "videoOutputScale",
+      pointerId: event.pointerId,
+      outputId,
+      startWorld: point,
+      currentWorld: point,
+      centerWorld,
+      startDistance: mappingOutputHandleDistance(centerWorld, point),
+      startMapping: output.mapping,
+    });
+  };
+
+  const beginMappingViewportPan = (event: PointerEvent & { currentTarget: SVGSVGElement }) => {
+    if (event.button !== 0 || mappingStageTool() !== "pan") {
+      return;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    const box = mappingViewportBox();
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setMappingViewportPanDrag({
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startCenterX: box.x + box.size / 2,
+      startCenterZ: box.z + box.size / 2,
+      viewBoxSize: box.size,
+      rectWidth: Math.max(1, rect.width),
+      rectHeight: Math.max(1, rect.height),
+    });
+  };
+
+  const updateMappingViewportPan = (event: PointerEvent & { currentTarget: SVGSVGElement }) => {
+    const drag = mappingViewportPanDrag();
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return false;
+    }
+    const deltaX = ((event.clientX - drag.startClientX) / drag.rectWidth) * drag.viewBoxSize;
+    const deltaZ = ((event.clientY - drag.startClientY) / drag.rectHeight) * drag.viewBoxSize;
+    setMappingViewport(normalizedMappingViewportZoom(), drag.startCenterX - deltaX, drag.startCenterZ - deltaZ);
+    return true;
+  };
+
+  const finishMappingViewportPan = (event: PointerEvent & { currentTarget: SVGSVGElement }) => {
+    const drag = mappingViewportPanDrag();
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return false;
+    }
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setMappingViewportPanDrag(null);
+    return true;
+  };
+
+  const beginMappingMarquee = (event: PointerEvent & { currentTarget: SVGSVGElement }) => {
+    if (event.button !== 0 || mappingStageTool() !== "select") {
+      return;
+    }
+    const point = stageSvgPointFromPointer(event);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setMappingMarquee({
+      pointerId: event.pointerId,
+      start: point,
+      current: point,
+      additive: isAdditiveMappingSelectionEvent(event),
+    });
+  };
+
+  const handleMappingStagePointerDown = async (
+    event: PointerEvent & { currentTarget: SVGSVGElement },
+  ) => {
+    if (event.button !== 0) {
+      return;
+    }
+    if (mappingStageTool() === "place") {
+      await placeSelectedFixtureFromStage(event);
+    } else if (mappingStageTool() === "rotate") {
+      await rotateSelectedFixtureFromStage(event);
+    } else if (mappingStageTool() === "pan") {
+      beginMappingViewportPan(event);
+    } else {
+      beginMappingMarquee(event);
+    }
+  };
+
+  const handleMappingStagePointerMove = (event: PointerEvent & { currentTarget: SVGSVGElement }) => {
+    if (updateMappingViewportPan(event)) {
+      return;
+    }
+
+    const drag = mappingDrag();
+    if (drag && drag.pointerId === event.pointerId) {
+      setMappingDrag({
+        ...drag,
+        currentWorld: stageWorldPointFromPointer(event),
+      });
+      return;
+    }
+
+    const marquee = mappingMarquee();
+    if (!marquee || marquee.pointerId !== event.pointerId) {
+      return;
+    }
+    setMappingMarquee({
+      ...marquee,
+      current: stageSvgPointFromPointer(event),
+    });
+  };
+
+  const finishMappingStageDrag = async (event: PointerEvent & { currentTarget: SVGSVGElement }) => {
+    if (finishMappingViewportPan(event)) {
+      return;
+    }
+
+    const drag = mappingDrag();
+    if (drag && drag.pointerId === event.pointerId) {
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      const delta = dragWorldDelta(drag);
+      setMappingDrag(null);
+      if (Math.abs(delta.x) < 0.01 && Math.abs(delta.z) < 0.01) {
+        return;
+      }
+
+      if (drag.kind === "fixture") {
+        const movedFixtures = snapshot().fixtures.filter((candidate) => drag.fixtureIds.includes(candidate.id));
+        if (movedFixtures.length === 0) {
+          return;
+        }
+        await Promise.all(
+          movedFixtures.map((fixture) => {
+            const startPosition = drag.startPositions[fixture.id] ?? fixture.position;
+            const nextPosition = snapStagePosition({
+              ...startPosition,
+              x: startPosition.x + delta.x,
+              z: startPosition.z + delta.z,
+            });
+            return setFixtureTransform(fixture, { position: nextPosition }, false);
+          }),
+        );
+        await refreshSnapshot();
+        setMessage(
+          movedFixtures.length === 1
+            ? `Moved ${movedFixtures[0].label}`
+            : `Moved ${movedFixtures.length} selected fixtures`,
+        );
+        return;
+      }
+
+      const output = snapshot().video.outputs.find((candidate) => candidate.id === drag.outputId);
+      if (!output) {
+        return;
+      }
+      const nextMapping = mappingVideoOutputPreviewMapping(drag, output);
+      await setVideoOutputMapping(output.id, nextMapping);
+      if (drag.kind === "videoOutput") {
+        setMessage(`Moved ${output.label} to X ${nextMapping.stage_x}, Z ${nextMapping.stage_z}`);
+      } else if (drag.kind === "videoOutputRotate") {
+        setMessage(`Rotated ${output.label} to ${nextMapping.rotation_deg} deg`);
+      } else {
+        setMessage(`Scaled ${output.label} to ${nextMapping.scale_x.toFixed(2)} x ${nextMapping.scale_y.toFixed(2)}`);
+      }
+      return;
+    }
+
+    const marquee = mappingMarquee();
+    if (!marquee || marquee.pointerId !== event.pointerId) {
+      return;
+    }
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    const box = {
+      x: Math.min(marquee.start.x, marquee.current.x),
+      z: Math.min(marquee.start.z, marquee.current.z),
+      width: Math.abs(marquee.current.x - marquee.start.x),
+      height: Math.abs(marquee.current.z - marquee.start.z),
+    };
+    setMappingMarquee(null);
+    if (box.width < 0.8 && box.height < 0.8) {
+      if (!marquee.additive) {
+        clearMappingFixtureSelection();
+      }
+      return;
+    }
+    const pickedIds = visualizerFixtures()
+      .filter((fixture) =>
+        fixture.x >= box.x &&
+        fixture.x <= box.x + box.width &&
+        fixture.z >= box.z &&
+        fixture.z <= box.z + box.height,
+      )
+      .map((fixture) => fixture.id);
+    const nextIds = marquee.additive ? [...new Set([...selectedMappingFixtureIds(), ...pickedIds])] : pickedIds;
+    setSelectedMappingFixtureIds(nextIds);
+    const active = snapshot().fixtures.find((fixture) => fixture.id === nextIds[0]);
+    if (active) {
+      activateFixture(active);
+    } else if (!marquee.additive) {
+      setSelectedFixtureId(null);
+    }
+    setMessage(`Selected ${nextIds.length} fixture${nextIds.length === 1 ? "" : "s"}`);
+  };
+
+  const layoutFixtures = async (fixtures: PatchedFixtureSummary[], mode: FixtureLayoutMode, scopeLabel: string) => {
     if (fixtures.length === 0) {
+      setMessage(`No fixtures to arrange for ${scopeLabel}.`);
       return;
     }
     const count = fixtures.length;
@@ -3018,22 +4606,318 @@ export default function App() {
         return setFixtureTransform(
           fixture,
           {
-            position: {
+            position: snapStagePosition({
               ...fixture.position,
-              x: Number(x.toFixed(2)),
-              z: Number(z.toFixed(2)),
-            },
+              x,
+              z,
+            }),
           },
           false,
         );
       }),
     );
     setMessage(
-      `Applied ${mode} layout to ${count} fixture${count === 1 ? "" : "s"}${
-        selectedFixtureGroupFilter() ? ` in ${selectedFixtureGroupFilter()}` : ""
-      }.`,
+      `Applied ${mode} layout to ${count} fixture${count === 1 ? "" : "s"} ${scopeLabel}.`,
     );
     await refreshSnapshot();
+  };
+
+  const layoutFixturePositions = async (mode: FixtureLayoutMode) => {
+    await layoutFixtures(
+      filteredFixtures(),
+      mode,
+      selectedFixtureGroupFilter() ? `in ${selectedFixtureGroupFilter()}` : "in patch",
+    );
+  };
+
+  const layoutSelectedMappingFixtures = async (mode: FixtureLayoutMode) => {
+    await layoutFixtures(selectedMappingFixtures(), mode, "in selection");
+  };
+
+  const alignSelectedMappingFixtures = async (axis: MappingAxis) => {
+    const fixtures = selectedMappingFixtures();
+    if (fixtures.length < 2) {
+      setMessage("Select at least two fixtures to align.");
+      return;
+    }
+    const active = selectedFixture();
+    const anchor = active && fixtures.some((fixture) => fixture.id === active.id) ? active : fixtures[0];
+    const targetValue = anchor.position[axis];
+    try {
+      await Promise.all(
+        fixtures.map((fixture) =>
+          setFixtureTransform(
+            fixture,
+            {
+              position: snapStagePosition({
+                ...fixture.position,
+                [axis]: targetValue,
+              }),
+            },
+            false,
+          ),
+        ),
+      );
+      await refreshSnapshot();
+      setMessage(`Aligned ${fixtures.length} selected fixture(s) on ${axis.toUpperCase()} ${targetValue.toFixed(2)}.`);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const distributeSelectedMappingFixtures = async (axis: MappingAxis) => {
+    const fixtures = [...selectedMappingFixtures()].sort((left, right) => left.position[axis] - right.position[axis]);
+    if (fixtures.length < 3) {
+      setMessage("Select at least three fixtures to distribute.");
+      return;
+    }
+    const first = fixtures[0].position[axis];
+    const last = fixtures[fixtures.length - 1].position[axis];
+    if (Math.abs(last - first) < 0.001) {
+      setMessage(`Selected fixtures need different ${axis.toUpperCase()} positions before distributing.`);
+      return;
+    }
+    const step = (last - first) / (fixtures.length - 1);
+    try {
+      await Promise.all(
+        fixtures.map((fixture, index) =>
+          setFixtureTransform(
+            fixture,
+            {
+              position: snapStagePosition({
+                ...fixture.position,
+                [axis]: first + step * index,
+              }),
+            },
+            false,
+          ),
+        ),
+      );
+      await refreshSnapshot();
+      setMessage(`Distributed ${fixtures.length} selected fixture(s) along ${axis.toUpperCase()}.`);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const nudgeSelectedMappingFixtures = async (deltaX: number, deltaZ: number) => {
+    const fixtures = selectedMappingFixtures();
+    if (fixtures.length === 0) {
+      setMessage("Select fixtures on the mapping stage first.");
+      return;
+    }
+    try {
+      await Promise.all(
+        fixtures.map((fixture) =>
+          setFixtureTransform(
+            fixture,
+            {
+              position: snapStagePosition({
+                ...fixture.position,
+                x: fixture.position.x + deltaX,
+                z: fixture.position.z + deltaZ,
+              }),
+            },
+            false,
+          ),
+        ),
+      );
+      await refreshSnapshot();
+      setMessage(`Nudged ${fixtures.length} selected fixture(s).`);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const setStageMapConfig = async (updates: Partial<StageMapConfig>, successMessage = "Updated 2D stage map.") => {
+    const nextConfig = {
+      ...snapshot().stage_map,
+      ...updates,
+    };
+    try {
+      await invoke("set_stage_map_config", { config: nextConfig });
+      setMessage(successMessage);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const lockStageMapToCurrentBounds = async () => {
+    const bounds = autoStageWorldBounds();
+    await setStageMapConfig(
+      {
+        locked: true,
+        min_x: Number(bounds.minX.toFixed(2)),
+        max_x: Number(bounds.maxX.toFixed(2)),
+        min_z: Number(bounds.minZ.toFixed(2)),
+        max_z: Number(bounds.maxZ.toFixed(2)),
+      },
+      "Locked 2D stage map to current bounds.",
+    );
+  };
+
+  const saveStageMapPreset = async () => {
+    try {
+      const label = await invoke<string>("save_stage_map_preset", {
+        label: stageMapPresetLabel(),
+        config: snapshot().stage_map,
+      });
+      setStageMapPresetLabel(label);
+      setSelectedStageMapPresetLabel(label);
+      setMessage(`Saved stage map preset ${label}.`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const applyStageMapPreset = async (label: string) => {
+    try {
+      await invoke("apply_stage_map_preset", { label });
+      setSelectedStageMapPresetLabel(label);
+      setMessage(`Applied stage map preset ${label}.`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const removeStageMapPreset = async (label: string) => {
+    try {
+      await invoke("remove_stage_map_preset", { label });
+      if (selectedStageMapPresetLabel() === label) {
+        setSelectedStageMapPresetLabel("");
+      }
+      setMessage(`Removed stage map preset ${label}.`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const exportStageMapPreset = async () => {
+    try {
+      const path = await invoke<string | null>("save_stage_map_preset_file", {
+        label: stageMapPresetLabel(),
+        config: snapshot().stage_map,
+      });
+      setMessage(path ? `Exported stage map preset ${path}` : "Stage map preset export canceled.");
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const importStageMapPreset = async () => {
+    try {
+      const label = await invoke<string | null>("load_stage_map_preset_file");
+      if (label === null) {
+        setMessage("Stage map preset import canceled.");
+        return;
+      }
+      setStageMapPresetLabel(label);
+      setSelectedStageMapPresetLabel(label);
+      setMessage(`Imported stage map preset ${label}.`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const applyMappingSelectionGroups = async (mode: MappingBulkGroupMode) => {
+    const fixtures = selectedMappingFixtures();
+    if (fixtures.length === 0) {
+      setMessage("Select fixtures on the mapping stage first.");
+      return;
+    }
+    const groupIds = uniqueGroupIds(parseGroupIds(mappingSelectionGroupText()));
+    if (groupIds.length === 0) {
+      setMessage("Enter one or more group IDs.");
+      return;
+    }
+    const groupIdSet = new Set(groupIds);
+    try {
+      for (const fixture of fixtures) {
+        const nextGroupIds =
+          mode === "set"
+            ? groupIds
+            : mode === "add"
+              ? uniqueGroupIds([...fixture.group_ids, ...groupIds])
+              : fixture.group_ids.filter((groupId) => !groupIdSet.has(groupId));
+        await invoke("set_fixture_groups", {
+          fixtureId: fixture.id,
+          groupIds: nextGroupIds,
+        });
+      }
+      setMappingSelectionGroupText(groupIds.join(", "));
+      const actionLabel = mode === "set" ? "Set" : mode === "add" ? "Added" : "Removed";
+      setMessage(`${actionLabel} groups for ${fixtures.length} selected fixture(s).`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const setMappingSelectionFlag = async (flag: MappingFixtureFlag, enabled: boolean) => {
+    const fixtures = selectedMappingFixtures();
+    if (fixtures.length === 0) {
+      setMessage("Select fixtures on the mapping stage first.");
+      return;
+    }
+    const command =
+      flag === "highlight"
+        ? "set_fixture_highlight"
+        : flag === "solo"
+          ? "set_fixture_solo"
+          : "set_fixture_park";
+    try {
+      for (const fixture of fixtures) {
+        await invoke(command, { fixtureId: fixture.id, enabled });
+      }
+      const label = flag === "highlight" ? "Highlight" : flag === "solo" ? "Solo" : "Park";
+      setMessage(`${enabled ? "Set" : "Cleared"} ${label} for ${fixtures.length} selected fixture(s).`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const removeSelectedMappingFixtures = async () => {
+    const fixtures = selectedMappingFixtures();
+    if (fixtures.length === 0) {
+      setMessage("Select fixtures on the mapping stage first.");
+      return;
+    }
+    const removeLabel = fixtures.length === 1 ? fixtures[0].label : `${fixtures.length} selected fixtures`;
+    if (!window.confirm(`Remove ${removeLabel}?`)) {
+      return;
+    }
+    const removedIds = new Set(fixtures.map((fixture) => fixture.id));
+    try {
+      for (const fixture of fixtures) {
+        await invoke("remove_fixture", { fixtureId: fixture.id });
+      }
+      setFaderValues((current) => {
+        const next = { ...current };
+        for (const key of Object.keys(next)) {
+          const fixtureId = Number(key.split(":")[0]);
+          if (removedIds.has(fixtureId)) {
+            delete next[key];
+          }
+        }
+        return next;
+      });
+      setSelectedMappingFixtureIds([]);
+      setSelectedFixtureId(null);
+      setSelectedFixtureLabelDraft("");
+      setSelectedFixtureUniverseDraft(0);
+      setSelectedFixtureAddressDraft(1);
+      setSelectedFixtureGroupText("");
+      setMessage(`Removed ${removeLabel}.`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
   };
 
   const setFixturePatch = async (fixture: PatchedFixtureSummary) => {
@@ -3153,24 +5037,149 @@ export default function App() {
     }
   };
 
+  const newProject = async () => {
+    try {
+      await invoke("new_project");
+      setCurrentProjectPath(null);
+      setWorkspaceTab("setup");
+      setSetupSubTab("patch");
+      setMessage("Created new untitled project.");
+      const next = await refreshSnapshot();
+      if (next) {
+        markProjectClean(next);
+      }
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
   const saveProject = async () => {
     try {
       const path = await invoke<string | null>("save_project");
+      if (path) {
+        setCurrentProjectPath(path);
+        const next = await refreshSnapshot();
+        if (next) {
+          markProjectClean(next);
+        }
+      }
       setMessage(path ? `Saved project ${path}` : "Project save canceled.");
     } catch (error) {
       setMessage(String(error));
     }
   };
 
+  const saveProjectAs = async () => {
+    try {
+      const path = await invoke<string | null>("save_project_as");
+      if (path) {
+        setCurrentProjectPath(path);
+        const next = await refreshSnapshot();
+        if (next) {
+          markProjectClean(next);
+        }
+      }
+      setMessage(path ? `Saved project ${path}` : "Project save canceled.");
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const loadedProjectMessage = (result: ProjectLoadResult) => {
+    const profileLabel = result.profiles.length === 1 ? "1 embedded profile" : `${result.profiles.length} embedded profiles`;
+    return `Loaded project ${result.path} (${profileLabel})`;
+  };
+
+  const applyLoadedProjectResult = async (result: ProjectLoadResult, currentPath: string | null) => {
+    setCurrentProjectPath(currentPath);
+    setMessage(loadedProjectMessage(result));
+    const next = await refreshSnapshot();
+    if (next) {
+      markProjectClean(next);
+    }
+  };
+
   const loadProject = async () => {
     try {
-      const path = await invoke<string | null>("load_project");
-      if (!path) {
+      const result = await invoke<ProjectLoadResult | null>("load_project");
+      if (!result) {
         setMessage("Project load canceled.");
         return;
       }
-      setMessage(`Loaded project ${path}`);
-      await refreshSnapshot();
+      await applyLoadedProjectResult(result, result.path);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const loadProjectPath = async (path: string) => {
+    try {
+      const result = await invoke<ProjectLoadResult>("load_project_path", { path });
+      await applyLoadedProjectResult(result, result.path);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const loadStartupProject = async () => {
+    try {
+      const result = await invoke<ProjectLoadResult | null>("load_startup_project");
+      if (result) {
+        await applyLoadedProjectResult(result, result.path);
+      }
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const loadQueuedOpenProjects = async () => {
+    try {
+      const paths = await invoke<string[]>("take_open_project_paths");
+      const path = paths.at(-1);
+      if (path) {
+        await loadProjectPath(path);
+      }
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const loadPhase1SampleProject = async () => {
+    try {
+      const result = await invoke<ProjectLoadResult>("load_phase1_sample_project");
+      setCurrentProjectPath(null);
+      setWorkspaceTab("setup");
+      setSetupSubTab("patch");
+      setMessage(loadedProjectMessage(result));
+      const next = await refreshSnapshot();
+      if (next) {
+        markProjectClean(next);
+      }
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const runPhase1Smoke = async () => {
+    try {
+      const report = await invoke<Phase1SmokeReport>("run_phase1_smoke");
+      setCurrentProjectPath(null);
+      setWorkspaceTab("control");
+      setRawDmxUniverse(0);
+      setDmxTestChannel(1);
+      setDmxTestWidth(8);
+      setDmxTestValue(255);
+      const afterSmoke = await refreshSnapshot();
+      if (afterSmoke) {
+        markProjectClean(afterSmoke);
+      }
+      const values = report.first_8.map((value) => value.toString(16).padStart(2, "0").toUpperCase()).join(" ");
+      const expected = report.expected_first_8.map((value) => value.toString(16).padStart(2, "0").toUpperCase()).join(" ");
+      setMessage(
+        report.passed
+          ? `Smoke passed: ${report.path}, ${report.cue_label}, U0 A1-A8 ${values}.`
+          : `Smoke failed: active cue ${report.active_cue_id ?? "none"}, got ${values}, expected ${expected}.`,
+      );
     } catch (error) {
       setMessage(String(error));
     }
@@ -3363,6 +5372,15 @@ export default function App() {
     );
   };
 
+  const setColorChannelValue = (channel: "red" | "green" | "blue", value: number) => {
+    const current = selectedColorChannelValues();
+    const next = {
+      ...current,
+      [channel]: clampDmxValue(value),
+    };
+    void setFixtureColor(`#${valueToHexByte(next.red)}${valueToHexByte(next.green)}${valueToHexByte(next.blue)}`);
+  };
+
   const setColorFromPointer = (event: PointerEvent) => {
     const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect();
     const x = clamp01((event.clientX - bounds.left) / bounds.width);
@@ -3526,6 +5544,27 @@ export default function App() {
     }
   };
 
+  const resetEngineTelemetry = async () => {
+    try {
+      await invoke("reset_engine_telemetry");
+      setMessage("Reset engine telemetry.");
+      await refreshSnapshot();
+      await refreshEngineTelemetryReport();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const saveEngineTelemetryReport = async () => {
+    try {
+      const path = await invoke<string | null>("save_engine_telemetry_report");
+      setMessage(path ? `Saved telemetry report ${path}` : "Telemetry report save canceled.");
+      await refreshEngineTelemetryReport();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
   const faderValue = (fixtureId: number, attribute: string, defaultValue: number) => {
     const localValue = faderValues()[`${fixtureId}:${attribute}`];
     if (localValue !== undefined) {
@@ -3547,6 +5586,42 @@ export default function App() {
         );
       }
       await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const sendDmxTestFrame = async () => {
+    try {
+      const result = await invoke<DmxTestFrameResult>("send_dmx_test_frame", {
+        request: {
+          config: output(),
+          channel: dmxTestChannel(),
+          width: dmxTestWidth(),
+          value: dmxTestValue(),
+        },
+      });
+      setMessage(
+        `Sent ${outputProtocolLabel(result.protocol)} test U${result.universe} CH${result.channel} +${result.width} @ ${result.value} (${result.bytes} bytes)`,
+      );
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const sendDmxRoutesTestFrame = async () => {
+    const routes = [output(), ...dmxOutputRoutes().slice(1)];
+    try {
+      const results = await invoke<DmxTestFrameResult[]>("send_dmx_routes_test_frame", {
+        request: {
+          configs: routes,
+          channel: dmxTestChannel(),
+          width: dmxTestWidth(),
+          value: dmxTestValue(),
+        },
+      });
+      const bytes = results.reduce((sum, result) => sum + result.bytes, 0);
+      setMessage(`Sent test frame to ${results.length} DMX route(s) (${bytes} bytes).`);
     } catch (error) {
       setMessage(String(error));
     }
@@ -4281,10 +6356,21 @@ export default function App() {
   };
 
   const createCue = async () => {
+    const scopeError = cueCaptureScopeError();
+    if (scopeError) {
+      setMessage(scopeError);
+      return;
+    }
+    const captureScope = cueCaptureScopeRequest();
+    if (!captureScope) {
+      setMessage("Select a valid cue capture scope.");
+      return;
+    }
     try {
       const cueId = await invoke<number>("create_cue_from_current", {
         label: cueLabel(),
         fadeMs: cueFadeMs(),
+        captureScope,
       });
       setCueLabel(`Cue ${snapshot().cues.length + 2}`);
       setMessage(`Created cue ${cueId}`);
@@ -4306,8 +6392,18 @@ export default function App() {
 
   const updateCue = async (cueId: number, label: string, fadeMs: number) => {
     const normalizedFadeMs = Math.max(0, Math.round(Number.isFinite(fadeMs) ? fadeMs : cueFadeMs()));
+    const scopeError = cueCaptureScopeError();
+    if (scopeError) {
+      setMessage(scopeError);
+      return;
+    }
+    const captureScope = cueCaptureScopeRequest();
+    if (!captureScope) {
+      setMessage("Select a valid cue capture scope.");
+      return;
+    }
     try {
-      await invoke("update_cue_from_current", { cueId, label, fadeMs: normalizedFadeMs });
+      await invoke("update_cue_from_current", { cueId, label, fadeMs: normalizedFadeMs, captureScope });
       setMessage(`Updated cue ${cueId}`);
       await refreshSnapshot();
     } catch (error) {
@@ -4411,25 +6507,36 @@ export default function App() {
     setMessage(`Snapped timeline inputs to ${timelineSnapMode().toLowerCase()}.`);
   };
 
-  const addTimelineCueEvent = async () => {
-    const cueId = selectedTimelineCueId();
+  const addTimelineCueEventAt = async (cueId: number | null, timeMs: number, track: TimelineTrackKind, nextDraftTime = true) => {
     if (cueId === null) {
       setMessage("Create a cue before adding timeline events.");
       return;
     }
-    const timeMs = snapTimeMs(timelineEventTimeMs());
+    const snappedTimeMs = snapTimeMs(timeMs);
     try {
       const eventId = await invoke<number>("add_timeline_cue_event", {
         cueId,
-        timeMs,
-        track: timelineTrack(),
+        timeMs: snappedTimeMs,
+        track,
       });
-      setTimelineEventTimeMs(snapTimeMs(timeMs + 1000));
-      setMessage(`Added timeline event ${eventId}`);
+      if (nextDraftTime) {
+        setTimelineEventTimeMs(snapTimeMs(snappedTimeMs + 1000));
+      } else {
+        setTimelineEventTimeMs(snappedTimeMs);
+      }
+      setMessage(`Added timeline event ${eventId} at ${snappedTimeMs} ms`);
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
     }
+  };
+
+  const addTimelineCueEvent = async () => {
+    await addTimelineCueEventAt(selectedTimelineCueId(), timelineEventTimeMs(), timelineTrack());
+  };
+
+  const addTimelineCueEventAtPlayhead = async () => {
+    await addTimelineCueEventAt(selectedTimelineCueId(), snapshot().timeline.position_ms, timelineTrack(), false);
   };
 
   const setTimelineCueEvent = async (event: TimelineCueEventSummary) => {
@@ -4452,6 +6559,59 @@ export default function App() {
         },
       }));
       setMessage(`Saved timeline event ${event.id}`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const moveTimelineCueEvent = async (event: TimelineCueEventSummary, deltaMs: number) => {
+    const timeMs = snapTimeMs(Math.max(0, event.time_ms + deltaMs));
+    try {
+      await invoke("set_timeline_cue_event", {
+        eventId: event.id,
+        cueId: event.cue_id,
+        timeMs,
+        track: event.track,
+      });
+      setTimelineEventDrafts((current) => ({
+        ...current,
+        [event.id]: {
+          cue_id: event.cue_id,
+          time_ms: timeMs,
+          track: event.track,
+        },
+      }));
+      setMessage(`Moved timeline event ${event.id} to ${timeMs} ms`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const moveTimelineCueEventToRatio = async (eventId: number, ratio: number) => {
+    const event = timelineEventRows().find((candidate) => candidate.id === eventId);
+    if (!event) {
+      setMessage(`Timeline event ${eventId} was not found.`);
+      return;
+    }
+    const timeMs = snapTimeMs(Math.round(clampRange(ratio, 0, 1) * timelineOverviewDurationMs()));
+    try {
+      await invoke("set_timeline_cue_event", {
+        eventId: event.id,
+        cueId: event.cue_id,
+        timeMs,
+        track: event.track,
+      });
+      setTimelineEventDrafts((current) => ({
+        ...current,
+        [event.id]: {
+          cue_id: event.cue_id,
+          time_ms: timeMs,
+          track: event.track,
+        },
+      }));
+      setMessage(`Moved ${event.cue_label} to ${timeMs} ms`);
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
@@ -4659,6 +6819,10 @@ export default function App() {
     }
   };
 
+  const seekTimelineFromOverviewRatio = (ratio: number) => {
+    void seekTimeline(snapTimeMs(Math.round(ratio * timelineOverviewDurationMs())));
+  };
+
   const addVideoLayer = async () => {
     try {
       const sourceKind = videoSourceKind();
@@ -4737,8 +6901,21 @@ export default function App() {
       setVideoPreviewUrl(videoFrameToDataUrl(frame));
       setVideoPreviewInfo(`${frame.width}x${frame.height} ${frame.format} / pts ${frame.pts_ms}ms / ${frame.data.length} bytes`);
       setMessage("Rendered CPU video preview.");
+      await refreshVideoPreviewDiagnostics(true);
     } catch (error) {
       setVideoPreviewUrl("");
+      setMessage(String(error));
+    }
+  };
+
+  const refreshVideoPreviewDiagnostics = async (silent = false) => {
+    try {
+      const diagnostics = await invoke<VideoPreviewDiagnostics>("get_video_preview_diagnostics");
+      setVideoPreviewDiagnostics(diagnostics);
+      if (!silent) {
+        setMessage("Updated video preview diagnostics.");
+      }
+    } catch (error) {
       setMessage(String(error));
     }
   };
@@ -4760,6 +6937,9 @@ export default function App() {
       setVideoPreviewUrl(previewUrl);
       setVideoPreviewInfo(`${label} ${outputId}: ${info}`);
       setMessage(`Rendered ${testPattern ? "test pattern" : "output"} ${outputId} preview.`);
+      if (!testPattern) {
+        await refreshVideoPreviewDiagnostics(true);
+      }
     } catch (error) {
       setVideoOutputPreviewUrl("");
       setVideoOutputPreviewId(outputId);
@@ -5121,6 +7301,96 @@ export default function App() {
     }
   };
 
+  const setWaveOriginFromStageCenter = () => {
+    const bounds = stageWorldBounds();
+    setWaveOriginX(Number(((bounds.minX + bounds.maxX) / 2).toFixed(2)));
+    setWaveOriginY(0);
+    setWaveOriginZ(Number(((bounds.minZ + bounds.maxZ) / 2).toFixed(2)));
+  };
+
+  const setWaveOriginFromSelectedFixture = () => {
+    const fixture = selectedFixture();
+    if (!fixture) {
+      setMessage("Select a fixture before using it as the wave origin.");
+      return;
+    }
+    setWaveOriginX(Number(fixture.position.x.toFixed(2)));
+    setWaveOriginY(Number(fixture.position.y.toFixed(2)));
+    setWaveOriginZ(Number(fixture.position.z.toFixed(2)));
+  };
+
+  const setWaveDirectionPreset = (x: number, y: number, z: number) => {
+    setWaveDirectionX(x);
+    setWaveDirectionY(y);
+    setWaveDirectionZ(z);
+  };
+
+  const waveStageWorldFromPointer = (event: PointerEvent & { currentTarget: SVGElement }) => {
+    const svg = event.currentTarget instanceof SVGSVGElement ? event.currentTarget : event.currentTarget.ownerSVGElement;
+    if (!svg) {
+      return null;
+    }
+    const rect = svg.getBoundingClientRect();
+    const svgX = clampRange(((event.clientX - rect.left) / rect.width) * stageViewBoxSize, 0, stageViewBoxSize);
+    const svgZ = clampRange(((event.clientY - rect.top) / rect.height) * stageViewBoxSize, 0, stageViewBoxSize);
+    return svgPointToStageWorld(svgX, svgZ, stageWorldBounds());
+  };
+
+  const setWaveOriginFromStagePoint = (point: { x: number; z: number }) => {
+    setWaveOriginX(Number(point.x.toFixed(2)));
+    setWaveOriginY(0);
+    setWaveOriginZ(Number(point.z.toFixed(2)));
+  };
+
+  const setWaveDirectionFromStagePoint = (point: { x: number; z: number }) => {
+    const dx = point.x - waveOriginX();
+    const dz = point.z - waveOriginZ();
+    const length = Math.sqrt(dx * dx + dz * dz);
+    if (length <= 0.001) {
+      setWaveDirectionPreset(0, 0, 0);
+      return;
+    }
+    setWaveDirectionPreset(Number((dx / length).toFixed(3)), 0, Number((dz / length).toFixed(3)));
+  };
+
+  const updateWaveStageFromPointer = (event: PointerEvent & { currentTarget: SVGElement }, mode: WaveStageDragMode) => {
+    const point = waveStageWorldFromPointer(event);
+    if (!point) {
+      return;
+    }
+    if (mode === "origin") {
+      setWaveOriginFromStagePoint(point);
+    } else if (mode === "direction") {
+      setWaveDirectionFromStagePoint(point);
+    } else {
+      setEffectVideoPositionFromStagePoint(point);
+    }
+  };
+
+  const startWaveStageDrag = (event: PointerEvent & { currentTarget: SVGElement }, mode: WaveStageDragMode) => {
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setWaveStageDrag(mode);
+    updateWaveStageFromPointer(event, mode);
+  };
+
+  const moveWaveStageDrag = (event: PointerEvent & { currentTarget: SVGElement }) => {
+    const mode = waveStageDrag();
+    if (!mode) {
+      return;
+    }
+    event.preventDefault();
+    updateWaveStageFromPointer(event, mode);
+  };
+
+  const endWaveStageDrag = (event: PointerEvent & { currentTarget: SVGElement }) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setWaveStageDrag(null);
+  };
+
   const setProjectorCornerFromPointer = (
     event: PointerEvent & { currentTarget: SVGCircleElement },
     output: VideoOutputSummary,
@@ -5151,6 +7421,22 @@ export default function App() {
     }
   };
 
+  const buildEffectVideoTargets = (includePosition: boolean): VideoEffectTarget[] => {
+    const videoLayerId = selectedEffectVideoLayerId();
+    if (effectTargetMode() !== "video" || videoLayerId === null) {
+      return [];
+    }
+    return [
+      {
+        layer_ids: [videoLayerId],
+        param: effectVideoParam(),
+        low: effectVideoLow(),
+        high: effectVideoHigh(),
+        position: includePosition ? effectVideoTargetPosition() : null,
+      },
+    ];
+  };
+
   const addEffect = async () => {
     const fixture = selectedFixture();
     const attribute = selectedEffectAttribute();
@@ -5173,17 +7459,7 @@ export default function App() {
     const lightAttribute = attribute ?? "";
 
     try {
-      const videoTargets =
-        isVideoTarget && videoLayerId !== null
-          ? [
-              {
-                layer_ids: [videoLayerId],
-                param: effectVideoParam(),
-                low: effectVideoLow(),
-                high: effectVideoHigh(),
-              },
-            ]
-          : [];
+      const videoTargets = buildEffectVideoTargets(effectType() === "PositionWave");
       const requestBase = {
         label: `${isVideoTarget ? effectVideoParam() : lightAttribute} ${effectType()}`,
         fixture_ids: targetMode === "fixture" && fixture ? [fixture.id] : [],
@@ -5239,6 +7515,43 @@ export default function App() {
     }
   };
 
+  const effectTargetOverrideError = () => {
+    const targetMode = effectTargetMode();
+    const fixture = selectedFixture();
+    const attribute = selectedEffectAttribute();
+    if (targetMode === "fixture" && (!fixture || !attribute)) {
+      return "Select a fixture and attribute first.";
+    }
+    if (targetMode === "group") {
+      if (parseGroupIds(effectTargetGroups()).length === 0) {
+        return "Enter at least one target group.";
+      }
+      if (!attribute) {
+        return "Select a fixture profile attribute before targeting a group.";
+      }
+    }
+    if (targetMode === "video" && selectedEffectVideoLayerId() === null) {
+      return "Add a video layer before loading a video effect preset.";
+    }
+    return "";
+  };
+
+  const effectTargetOverrideFromForm = (): EffectTargetOverride | null => {
+    if (effectTargetOverrideError()) {
+      return null;
+    }
+    const targetMode = effectTargetMode();
+    const fixture = selectedFixture();
+    const attribute = selectedEffectAttribute();
+    const videoTargets = buildEffectVideoTargets(true);
+    return {
+      fixture_ids: targetMode === "fixture" && fixture ? [fixture.id] : [],
+      target_group_ids: targetMode === "group" ? parseGroupIds(effectTargetGroups()) : [],
+      attribute: targetMode === "video" ? "" : attribute,
+      video_targets: videoTargets,
+    };
+  };
+
   const loadEffectPreset = async () => {
     try {
       const effectId = await invoke<number | null>("load_effect_preset");
@@ -5247,6 +7560,61 @@ export default function App() {
         return;
       }
       setMessage(`Loaded effect preset as effect ${effectId}`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const loadEffectPresetForCurrentTarget = async () => {
+    const targetOverride = effectTargetOverrideFromForm();
+    if (!targetOverride) {
+      setMessage(effectTargetOverrideError());
+      return;
+    }
+    try {
+      const effectId = await invoke<number | null>("load_effect_preset_for_target", { targetOverride });
+      if (effectId === null) {
+        setMessage("Effect preset load canceled.");
+        return;
+      }
+      setMessage(`Loaded effect preset as effect ${effectId} for current target`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const setEffectVideoTargetsFromSelectedOutput = async (effectId: number, targets: VideoEffectTarget[]) => {
+    const output = selectedMappingVideoOutput();
+    if (!output) {
+      setMessage("Add or select a video output before updating video target positions.");
+      return;
+    }
+    const layerIds = [...new Set(targets.flatMap((target) => target.layer_ids))];
+    if (layerIds.length === 0) {
+      setMessage(`Effect ${effectId} has no video target layers.`);
+      return;
+    }
+    const mapping = mappingVideoOutputMapping(output);
+    const position = {
+      x: mapping.stage_x,
+      y: 0,
+      z: mapping.stage_z,
+    };
+    try {
+      await Promise.all(
+        layerIds.map((layerId) =>
+          invoke("set_effect_video_target_position", {
+            effectId,
+            layerId,
+            position,
+          }),
+        ),
+      );
+      setEffectVideoPosition(position);
+      setSelectedVideoOutputId(output.id);
+      setMessage(`Updated effect ${effectId} video target position from ${output.label}.`);
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
@@ -5275,13 +7643,69 @@ export default function App() {
 
   const handleControlKeyDown = (event: KeyboardEvent) => {
     if (
-      workspaceTab() !== "control" ||
       event.repeat ||
       event.altKey ||
-      event.ctrlKey ||
-      event.metaKey ||
       isEditableShortcutTarget(event.target)
     ) {
+      return;
+    }
+
+    if (workspaceTab() === "setup" && setupSubTab() === "mapping") {
+      if ((event.ctrlKey || event.metaKey) && event.code === "KeyD") {
+        event.preventDefault();
+        void duplicateSelectedMappingFixtures();
+        return;
+      }
+      if (event.ctrlKey || event.metaKey) {
+        return;
+      }
+      const nextTool = mappingStageToolFromHotkey(event.code);
+      if (nextTool) {
+        event.preventDefault();
+        setMappingStageTool(nextTool);
+        setMessage(`2D mapping tool: ${nextTool.toUpperCase()}.`);
+        return;
+      }
+      const nudgeAmount = normalizedMappingSnapSize() * (event.shiftKey ? 5 : 1);
+      if (event.code === "ArrowLeft") {
+        event.preventDefault();
+        void nudgeSelectedMappingFixtures(-nudgeAmount, 0);
+        return;
+      }
+      if (event.code === "ArrowRight") {
+        event.preventDefault();
+        void nudgeSelectedMappingFixtures(nudgeAmount, 0);
+        return;
+      }
+      if (event.code === "ArrowUp") {
+        event.preventDefault();
+        void nudgeSelectedMappingFixtures(0, -nudgeAmount);
+        return;
+      }
+      if (event.code === "ArrowDown") {
+        event.preventDefault();
+        void nudgeSelectedMappingFixtures(0, nudgeAmount);
+        return;
+      }
+      if (event.code === "Delete" || event.code === "Backspace") {
+        event.preventDefault();
+        void removeSelectedMappingFixtures();
+        return;
+      }
+      if (event.code === "Escape") {
+        event.preventDefault();
+        setMappingStageTool("select");
+        setMappingDrag(null);
+        setMappingMarquee(null);
+        setMappingViewportPanDrag(null);
+        return;
+      }
+    }
+
+    if (workspaceTab() !== "control") {
+      return;
+    }
+    if (event.ctrlKey || event.metaKey) {
       return;
     }
 
@@ -5358,12 +7782,18 @@ export default function App() {
     <main class="app">
       <header class="topbar">
         <div>
-          <h1>KDMX</h1>
+          <h1>Rayard</h1>
           <p>Unified lighting and video control: GDTF patch, cues, timeline, effects, DMX output.</p>
         </div>
         <div class="status">
-          <span class={snapshot().blackout ? "pill danger" : "pill ok"}>
-            {snapshot().blackout ? "Blackout" : "Live"}
+          <span class={snapshot().blackout || snapshot().video.blackout ? "pill danger" : "pill ok"}>
+            {snapshot().blackout && snapshot().video.blackout
+              ? "All BO"
+              : snapshot().blackout
+                ? "DMX BO"
+                : snapshot().video.blackout
+                  ? "Video BO"
+                  : "Live"}
           </span>
           <span class="metric">{snapshot().clock.bpm.toFixed(1)} BPM</span>
           <span class="metric">{Math.round(snapshot().telemetry.last_tick_interval_us / 1000)} ms tick</span>
@@ -5372,8 +7802,18 @@ export default function App() {
           <span class="metric">
             {snapshot().telemetry.last_dmx_send_success_count}/{snapshot().telemetry.last_dmx_output_count} outputs
           </span>
-          <button onClick={saveProject}>Save Project</button>
-          <button onClick={loadProject}>Load Project</button>
+          <span
+            class={projectDirty() ? "metric projectFile dirty" : "metric projectFile"}
+            title={currentProjectPath() ?? "Unsaved project"}
+          >
+            {projectFileLabel()}
+          </span>
+          <button onClick={newProject}>New</button>
+          <button onClick={saveProject}>Save</button>
+          <button onClick={saveProjectAs}>Save As</button>
+          <button onClick={loadProject}>Load</button>
+          <button onClick={loadPhase1SampleProject}>Load Sample</button>
+          <button onClick={runPhase1Smoke}>Run Smoke</button>
         </div>
       </header>
 
@@ -5489,6 +7929,127 @@ export default function App() {
             >
               {snapshot().video.blackout ? "Clear Video BO" : "Video BO"}
             </button>
+          </div>
+          <div class="liveStagePanel">
+            <div class="liveStageHeader">
+              <h3>Live Stage</h3>
+              <span>{visualizerFixtures().length} fixture(s) / {snapshot().video.outputs.length} projector(s)</span>
+            </div>
+            <svg class="visualizerStage liveStage" viewBox={`0 0 ${stageViewBoxSize} ${stageViewBoxSize}`}>
+              <defs>
+                <pattern id="live-stage-grid" width="10" height="10" patternUnits="userSpaceOnUse">
+                  <path d="M 10 0 L 0 0 0 10" />
+                </pattern>
+              </defs>
+              <rect class="stageFloor" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
+              <rect class="stageGrid" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
+              <line class="stageAxis2d" x1={stageOrigin2d().x} y1="0" x2={stageOrigin2d().x} y2={stageViewBoxSize} />
+              <line class="stageAxis2d" x1="0" y1={stageOrigin2d().z} x2={stageViewBoxSize} y2={stageOrigin2d().z} />
+              <For each={visualizerVideoSurfaces2d()}>
+                {(surface) => (
+                  <g
+                    class={[
+                      "stageVideoSurface2d",
+                      selectedVideoOutputId() === surface.id ? "selected" : "",
+                      surface.active ? "" : "inactive",
+                    ].filter(Boolean).join(" ")}
+                    transform={`translate(${surface.x} ${surface.z}) rotate(${surface.rotationDeg})`}
+                    opacity={Math.max(0.22, surface.opacity)}
+                    onPointerDown={(event) => {
+                      event.stopPropagation();
+                      setSelectedVideoOutputId(surface.id);
+                    }}
+                  >
+                    <rect
+                      class="stageVideoSurfaceShape"
+                      x={-surface.width / 2}
+                      y={-surface.height / 2}
+                      width={surface.width}
+                      height={surface.height}
+                    />
+                    <line x1={-surface.width / 2} y1="0" x2={surface.width / 2} y2="0" />
+                    <line x1="0" y1={-surface.height / 2} x2="0" y2={surface.height / 2} />
+                    <text x={-surface.width / 2 + 1.2} y={-surface.height / 2 - 1.6}>
+                      {surface.label}
+                    </text>
+                  </g>
+                )}
+              </For>
+              <For each={visualizerFixtures()}>
+                {(fixture) => (
+                  <polygon
+                    class="stageBeam"
+                    points={fixture.beamPoints}
+                    fill={fixture.color}
+                    opacity={Math.max(0.08, fixture.intensity * 0.55)}
+                  />
+                )}
+              </For>
+              <For each={visualizerFixtures()}>
+                {(fixture) => {
+                  const className = () => [
+                    "stageFixture",
+                    "stageFixtureBlock",
+                    `kind-${fixture.visualKind}`,
+                    selectedFixtureId() === fixture.id ? "selected picked" : "",
+                    selectedFixtureGroupFilter() && fixture.inGroupFilter ? "groupMatch" : "",
+                    selectedFixtureTypeFilter() && fixture.typeKey === selectedFixtureTypeFilter() ? "typeMatch" : "",
+                    fixture.highlighted ? "highlighted" : "",
+                    fixture.soloed ? "soloed" : "",
+                    fixture.parked ? "parked" : "",
+                  ].filter(Boolean).join(" ");
+                  return (
+                    <g
+                      class={className()}
+                      transform={`translate(${fixture.x} ${fixture.z}) rotate(${fixture.yaw})`}
+                      onPointerDown={(event) => {
+                        event.stopPropagation();
+                        const patchedFixture = snapshot().fixtures.find((candidate) => candidate.id === fixture.id);
+                        if (patchedFixture) {
+                          activateFixture(patchedFixture);
+                        }
+                      }}
+                    >
+                      <Show
+                        when={fixture.visualKind === "bar" || fixture.visualKind === "panel"}
+                        fallback={
+                          <Show
+                            when={fixture.visualKind === "laser"}
+                            fallback={
+                              <circle
+                                class="stageFixtureShape"
+                                cx="0"
+                                cy="0"
+                                r={Math.max(fixture.width, fixture.height) / 2 + fixture.intensity * 1.5}
+                                fill={fixture.color}
+                              />
+                            }
+                          >
+                            <polygon
+                              class="stageFixtureShape"
+                              points={`0,${-fixture.height / 2} ${fixture.width / 2},${fixture.height / 2} ${-fixture.width / 2},${fixture.height / 2}`}
+                              fill={fixture.color}
+                            />
+                          </Show>
+                        }
+                      >
+                        <rect
+                          class="stageFixtureShape"
+                          x={-fixture.width / 2}
+                          y={-fixture.height / 2}
+                          width={fixture.width}
+                          height={fixture.height}
+                          fill={fixture.color}
+                        />
+                      </Show>
+                      <line class="stageFixtureCenterLine" x1="0" y1="0" x2="0" y2="-7" />
+                      <circle class="stageFixtureLaserMark" cx="0" cy="-7" r="0.9" />
+                      <title>{`${fixture.label} / ${fixture.dmxLabel} / ${fixture.groupLabel}`}</title>
+                    </g>
+                  );
+                }}
+              </For>
+            </svg>
           </div>
           <div class="liveCuePadHeader">
             <h3>Cue Pads</h3>
@@ -6592,6 +9153,9 @@ export default function App() {
                 <button onClick={() => void useFixtureProfileForPatch(fixture())}>
                   Use Profile for Patch
                 </button>
+                <button onClick={() => void duplicateFixture(fixture())}>
+                  Duplicate Fixture
+                </button>
                 <label>
                   Label
                   <input
@@ -6763,7 +9327,7 @@ export default function App() {
                   </div>
                 </div>
                 <div class="transformEditor">
-                  <strong>2D/3D Mapping</strong>
+                  <strong>2D Mapping</strong>
                   <div class="triple">
                     <label>
                       X
@@ -6855,109 +9419,1004 @@ export default function App() {
               </div>
             )}
           </Show>
-          <div class="visualizer">
+          <div class="mappingVisualizer visualizer">
             <div class="panelHeader">
-              <h2>2D View</h2>
-              <span>Top X/Z</span>
+              <h2>2D Mapping</h2>
+              <span>{mappingFilteredFixtures().length} fixture(s) / {snapshot().video.outputs.length} projector(s)</span>
             </div>
-            <svg
-              class="visualizerStage editableStage"
-              viewBox={`0 0 ${stageViewBoxSize} ${stageViewBoxSize}`}
-              role="img"
-              onPointerDown={(event) => void placeSelectedFixtureFromStage(event)}
-            >
-              <defs>
-                <pattern id="stage-grid" width="10" height="10" patternUnits="userSpaceOnUse">
-                  <path d="M 10 0 L 0 0 0 10" />
-                </pattern>
-              </defs>
-              <rect class="stageFloor" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
-              <rect class="stageGrid" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
-              <line class="stageAxis2d" x1={stageOrigin2d().x} y1="0" x2={stageOrigin2d().x} y2={stageViewBoxSize} />
-              <line class="stageAxis2d" x1="0" y1={stageOrigin2d().z} x2={stageViewBoxSize} y2={stageOrigin2d().z} />
-              <For each={visualizerFixtures()}>
-                {(fixture) => (
-                  <>
-                    <polygon
-                      class="stageBeam"
-                      points={fixture.beamPoints}
-                      fill={fixture.color}
-                      opacity={Math.max(0.08, fixture.intensity * 0.55)}
+            <div class="mappingGroupStrip">
+              <span>Groups</span>
+              <button
+                class={!selectedFixtureGroupFilter() ? "active" : ""}
+                onClick={() => selectFixtureGroupFilter(null)}
+              >
+                All
+                <small>{snapshot().fixtures.length}</small>
+              </button>
+              <For each={fixtureGroupRows()}>
+                {(group) => (
+                  <button
+                    class={selectedFixtureGroupFilter() === group.groupId ? "active" : ""}
+                    onClick={() => selectFixtureGroupFilter(group.groupId)}
+                  >
+                    {group.groupId}
+                    <small>{group.count}</small>
+                  </button>
+                )}
+              </For>
+            </div>
+            <div class="mappingTypeStrip">
+              <span>Types</span>
+              <button
+                class={!selectedFixtureTypeFilter() ? "active" : ""}
+                onClick={() => setSelectedFixtureTypeFilter(null)}
+              >
+                <span class="mappingTypeGlyph kind-all" />
+                All
+                <small>{filteredFixtures().length}</small>
+              </button>
+              <For each={fixtureTypeRows()}>
+                {(row) => (
+                  <button
+                    class={selectedFixtureTypeFilter() === row.key ? "active" : ""}
+                    onClick={() => setSelectedFixtureTypeFilter(row.key)}
+                    title={`${row.manufacturer} ${row.label}`}
+                  >
+                    <span class={mappingTypeGlyphClass(row.visualKind)} />
+                    {row.label}
+                    <small>{row.count}</small>
+                  </button>
+                )}
+              </For>
+            </div>
+            <div class="mappingStageShell">
+              <div class="mappingToolRail" aria-label="2D mapping tools">
+                <button
+                  class={mappingStageTool() === "select" ? "active" : ""}
+                  onClick={() => setMappingStageTool("select")}
+                  title="Select fixture or projector (S)"
+                >
+                  S
+                </button>
+                <button
+                  class={mappingStageTool() === "place" ? "active" : ""}
+                  onClick={() => setMappingStageTool("place")}
+                  title="Place selected fixture (P)"
+                >
+                  P
+                </button>
+                <button
+                  class={mappingStageTool() === "rotate" ? "active" : ""}
+                  onClick={() => setMappingStageTool("rotate")}
+                  title="Set selected fixture yaw (R)"
+                >
+                  R
+                </button>
+                <button
+                  class={mappingStageTool() === "pan" ? "active" : ""}
+                  onClick={() => setMappingStageTool("pan")}
+                  title="Pan stage view (H)"
+                >
+                  H
+                </button>
+                <div class="mappingToolDivider" />
+                <button
+                  class={mappingShowLabels() ? "active" : ""}
+                  onClick={() => setMappingShowLabels((value) => !value)}
+                  title="Toggle labels"
+                >
+                  L
+                </button>
+                <button
+                  class={mappingShowBeams() ? "active" : ""}
+                  onClick={() => setMappingShowBeams((value) => !value)}
+                  title="Toggle beams"
+                >
+                  B
+                </button>
+                <button
+                  class={mappingShowProjectors() ? "active" : ""}
+                  onClick={() => setMappingShowProjectors((value) => !value)}
+                  title="Toggle projector surfaces"
+                >
+                  V
+                </button>
+              </div>
+              <div class="mappingStageViewport">
+                <div class="mappingViewportControls">
+                  <span>Tool</span>
+                  <strong>{mappingStageTool().toUpperCase()}</strong>
+                  <span>Fixtures</span>
+                  <strong>{mappingFilteredFixtures().length}</strong>
+                  <span>Outputs</span>
+                  <strong>{snapshot().video.outputs.length}</strong>
+                </div>
+                <div class="mappingViewControls" aria-label="2D mapping viewport">
+                  <span>View</span>
+                  <button onClick={fitMappingViewportToVisible} disabled={!canFitMappingViewportToVisible()}>
+                    Fit All
+                  </button>
+                  <button onClick={fitMappingViewportToSelection} disabled={!canFitMappingViewportToSelection()}>
+                    Fit Sel
+                  </button>
+                  <button onClick={() => zoomMappingViewport(-1)} disabled={normalizedMappingViewportZoom() <= 1.001}>
+                    Zoom -
+                  </button>
+                  <strong>{mappingViewportZoomLabel()}</strong>
+                  <button onClick={() => zoomMappingViewport(1)} disabled={normalizedMappingViewportZoom() >= 3.999}>
+                    Zoom +
+                  </button>
+                  <button onClick={resetMappingViewport} disabled={normalizedMappingViewportZoom() <= 1.001}>
+                    Reset
+                  </button>
+                </div>
+                <div class="mappingStageSnapControls">
+                  <button
+                    class={!mappingSnapEnabled() ? "active" : ""}
+                    onClick={() => setMappingSnapEnabled(false)}
+                  >
+                    Snap Off
+                  </button>
+                  <For each={mappingSnapPresets}>
+                    {(preset) => (
+                      <button
+                        class={mappingSnapEnabled() && Math.abs(normalizedMappingSnapSize() - preset) < 0.001 ? "active" : ""}
+                        onClick={() => {
+                          setMappingSnapSize(preset);
+                          setMappingSnapEnabled(true);
+                        }}
+                      >
+                        {preset}m
+                      </button>
+                    )}
+                  </For>
+                  <label>
+                    Grid
+                    <input
+                      type="number"
+                      min="0.05"
+                      max="20"
+                      step="0.05"
+                      value={normalizedMappingSnapSize()}
+                      onChange={(event) => {
+                        setMappingSnapSize(Number(event.currentTarget.value));
+                        setMappingSnapEnabled(true);
+                      }}
                     />
-                    <circle
-                      class={fixture.id === selectedFixtureId() ? "stageFixture selected" : "stageFixture"}
-                      cx={fixture.x}
-                      cy={fixture.z}
-                      r={2.8 + fixture.intensity * 2.2}
-                      fill={fixture.color}
-                      onPointerDown={(event) => {
-                        event.stopPropagation();
-                        const patchedFixture = snapshot().fixtures.find((candidate) => candidate.id === fixture.id);
-                        if (patchedFixture) {
-                          selectFixture(patchedFixture);
-                        }
-                      }}
+                  </label>
+                </div>
+                <div class="mappingLayerToggles">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={mappingShowLabels()}
+                      onChange={(event) => setMappingShowLabels(event.currentTarget.checked)}
+                    />
+                    Labels
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={mappingShowBeams()}
+                      onChange={(event) => setMappingShowBeams(event.currentTarget.checked)}
+                    />
+                    Beams
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={mappingShowProjectors()}
+                      onChange={(event) => setMappingShowProjectors(event.currentTarget.checked)}
+                    />
+                    Projectors
+                  </label>
+                </div>
+                <div class="mappingStageBoundsPanel">
+                  <div class="mappingStageBoundsStatus">
+                    <strong>Stage Bounds</strong>
+                    <span>
+                      {snapshot().stage_map.locked ? "Locked" : "Auto fit"} / X {stageWorldBounds().minX.toFixed(1)} to{" "}
+                      {stageWorldBounds().maxX.toFixed(1)} / Z {stageWorldBounds().minZ.toFixed(1)} to{" "}
+                      {stageWorldBounds().maxZ.toFixed(1)}
+                    </span>
+                  </div>
+                  <div class="mappingStageBoundsActions">
+                    <button
+                      class={snapshot().stage_map.locked ? "active" : ""}
+                      onClick={() => void lockStageMapToCurrentBounds()}
                     >
-                      <title>{fixture.label}</title>
-                    </circle>
-                    <text class="stageLabel" x={fixture.x + 4} y={fixture.z - 4}>
-                      {fixture.label}
-                    </text>
-                  </>
-                )}
-              </For>
-            </svg>
-          </div>
-          <div class="visualizer">
-            <div class="panelHeader">
-              <h2>3D View</h2>
-              <span>Iso X/Y/Z</span>
+                      Fit Current
+                    </button>
+                    <button
+                      class={!snapshot().stage_map.locked ? "active" : ""}
+                      onClick={() => void setStageMapConfig({ locked: false }, "Unlocked 2D stage map auto-fit.")}
+                    >
+                      Auto Fit
+                    </button>
+                  </div>
+                  <div class="mappingStageBoundsGrid">
+                    <label>
+                      Min X
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={snapshot().stage_map.min_x}
+                        onChange={(event) =>
+                          void setStageMapConfig({ locked: true, min_x: Number(event.currentTarget.value) })
+                        }
+                      />
+                    </label>
+                    <label>
+                      Max X
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={snapshot().stage_map.max_x}
+                        onChange={(event) =>
+                          void setStageMapConfig({ locked: true, max_x: Number(event.currentTarget.value) })
+                        }
+                      />
+                    </label>
+                    <label>
+                      Min Z
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={snapshot().stage_map.min_z}
+                        onChange={(event) =>
+                          void setStageMapConfig({ locked: true, min_z: Number(event.currentTarget.value) })
+                        }
+                      />
+                    </label>
+                    <label>
+                      Max Z
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={snapshot().stage_map.max_z}
+                        onChange={(event) =>
+                          void setStageMapConfig({ locked: true, max_z: Number(event.currentTarget.value) })
+                        }
+                      />
+                    </label>
+                  </div>
+                  <div class="mappingStagePresetPanel">
+                    <label>
+                      Preset
+                      <input
+                        type="text"
+                        value={stageMapPresetLabel()}
+                        onInput={(event) => setStageMapPresetLabel(event.currentTarget.value)}
+                      />
+                    </label>
+                    <label>
+                      Stored
+                      <select
+                        value={selectedStageMapPresetLabel()}
+                        disabled={snapshot().stage_map_presets.length === 0}
+                        onInput={(event) => setSelectedStageMapPresetLabel(event.currentTarget.value)}
+                      >
+                        <option value="">Select preset</option>
+                        <For each={snapshot().stage_map_presets}>
+                          {(preset) => <option value={preset.label}>{preset.label}</option>}
+                        </For>
+                      </select>
+                    </label>
+                    <div class="mappingStagePresetActions">
+                      <button onClick={() => void saveStageMapPreset()}>
+                        Save
+                      </button>
+                      <button onClick={() => void exportStageMapPreset()}>
+                        Export
+                      </button>
+                      <button onClick={() => void importStageMapPreset()}>
+                        Import
+                      </button>
+                      <button
+                        disabled={!selectedStageMapPresetLabel()}
+                        onClick={() => void applyStageMapPreset(selectedStageMapPresetLabel())}
+                      >
+                        Apply
+                      </button>
+                      <button
+                        disabled={!selectedStageMapPresetLabel()}
+                        onClick={() => void removeStageMapPreset(selectedStageMapPresetLabel())}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <svg
+                  class={[
+                    "visualizerStage",
+                    "editableStage",
+                    mappingDrag() || mappingViewportPanDrag() ? "dragging" : "",
+                    mappingStageTool() === "place"
+                      ? "placeMode"
+                      : mappingStageTool() === "rotate"
+                        ? "rotateMode"
+                        : mappingStageTool() === "pan"
+                          ? "panMode"
+                          : "selectMode",
+                  ].filter(Boolean).join(" ")}
+                  viewBox={mappingStageViewBox()}
+                  role="img"
+                  aria-label="2D fixture and projector mapping stage"
+                  onPointerDown={(event) => void handleMappingStagePointerDown(event)}
+                  onPointerMove={handleMappingStagePointerMove}
+                  onPointerUp={(event) => void finishMappingStageDrag(event)}
+                  onPointerCancel={(event) => void finishMappingStageDrag(event)}
+                  onWheel={handleMappingStageWheel}
+                >
+                  <defs>
+                    <pattern id="stage-grid" width="10" height="10" patternUnits="userSpaceOnUse">
+                      <path d="M 10 0 L 0 0 0 10" />
+                    </pattern>
+                  </defs>
+                  <rect class="stageFloor" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
+                  <rect class="stageGrid" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
+                  <line class="stageAxis2d" x1={stageOrigin2d().x} y1="0" x2={stageOrigin2d().x} y2={stageViewBoxSize} />
+                  <line class="stageAxis2d" x1="0" y1={stageOrigin2d().z} x2={stageViewBoxSize} y2={stageOrigin2d().z} />
+                  <Show when={mappingSnapEnabled()}>
+                    <g>
+                      <For each={mappingSnapLines()}>
+                        {(line) => (
+                          <line
+                            class={`stageSnapLine ${line.axis}`}
+                            x1={line.axis === "x" ? line.svg : 0}
+                            y1={line.axis === "z" ? line.svg : 0}
+                            x2={line.axis === "x" ? line.svg : stageViewBoxSize}
+                            y2={line.axis === "z" ? line.svg : stageViewBoxSize}
+                          />
+                        )}
+                      </For>
+                    </g>
+                  </Show>
+                  <Show when={mappingMarqueeBox()}>
+                    {(box) => (
+                      <rect
+                        class="mappingMarquee"
+                        x={box().x}
+                        y={box().z}
+                        width={box().width}
+                        height={box().height}
+                      />
+                    )}
+                  </Show>
+                  <Show when={mappingShowProjectors()}>
+                    <For each={visualizerVideoSurfaces2d()}>
+                      {(surface) => (
+                        <g
+                          class={[
+                            "stageVideoSurface2d",
+                            selectedVideoOutputId() === surface.id ? "selected" : "",
+                            isDraggingMappingVideoOutput(surface.id) ? "dragging" : "",
+                            surface.active ? "" : "inactive",
+                          ].filter(Boolean).join(" ")}
+                          transform={`translate(${surface.x} ${surface.z}) rotate(${surface.rotationDeg})`}
+                          opacity={Math.max(0.22, surface.opacity)}
+                          onPointerDown={(event) => {
+                            if (mappingStageTool() === "pan") {
+                              return;
+                            }
+                            event.stopPropagation();
+                            setSelectedVideoOutputId(surface.id);
+                            beginMappingVideoOutputDrag(event, surface.id);
+                          }}
+                        >
+                          <rect
+                            class="stageVideoSurfaceShape"
+                            x={-surface.width / 2}
+                            y={-surface.height / 2}
+                            width={surface.width}
+                            height={surface.height}
+                          />
+                          <line x1={-surface.width / 2} y1="0" x2={surface.width / 2} y2="0" />
+                          <line x1="0" y1={-surface.height / 2} x2="0" y2={surface.height / 2} />
+                          <text x={-surface.width / 2 + 1.2} y={-surface.height / 2 - 1.6}>
+                            {surface.label}
+                          </text>
+                          <Show when={selectedVideoOutputId() === surface.id}>
+                            <line
+                              class="stageVideoSurfaceHandleLine"
+                              x1="0"
+                              y1={-surface.height / 2}
+                              x2="0"
+                              y2={-surface.height / 2 - 5}
+                            />
+                            <circle
+                              class="stageVideoSurfaceRotateHandle"
+                              cx="0"
+                              cy={-surface.height / 2 - 5}
+                              r="1.8"
+                              onPointerDown={(event) => {
+                                if (mappingStageTool() === "pan") {
+                                  return;
+                                }
+                                event.preventDefault();
+                                event.stopPropagation();
+                                setSelectedVideoOutputId(surface.id);
+                                beginMappingVideoOutputRotate(event, surface.id);
+                              }}
+                            />
+                            <circle
+                              class="stageVideoSurfaceScaleHandle"
+                              cx={surface.width / 2 + 2.4}
+                              cy={surface.height / 2 + 2.4}
+                              r="1.8"
+                              onPointerDown={(event) => {
+                                if (mappingStageTool() === "pan") {
+                                  return;
+                                }
+                                event.preventDefault();
+                                event.stopPropagation();
+                                setSelectedVideoOutputId(surface.id);
+                                beginMappingVideoOutputScale(event, surface.id);
+                              }}
+                            />
+                          </Show>
+                        </g>
+                      )}
+                    </For>
+                  </Show>
+                  <Show when={mappingShowBeams()}>
+                    <For each={visualizerFixtures()}>
+                      {(fixture) => (
+                        <polygon
+                          class="stageBeam"
+                          points={fixture.beamPoints}
+                          fill={fixture.color}
+                          opacity={Math.max(0.08, fixture.intensity * 0.55)}
+                        />
+                      )}
+                    </For>
+                  </Show>
+                  <For each={visualizerFixtures()}>
+                    {(fixture) => {
+                      const selected = () => selectedMappingFixtureIdSet().has(fixture.id);
+                      const className = () => [
+                        "stageFixture",
+                        "stageFixtureBlock",
+                        `kind-${fixture.visualKind}`,
+                        selected() ? "selected picked" : "",
+                        isDraggingMappingFixture(fixture.id) ? "dragging" : "",
+                        selectedFixtureGroupFilter() && fixture.inGroupFilter ? "groupMatch" : "",
+                        selectedFixtureTypeFilter() && fixture.typeKey === selectedFixtureTypeFilter() ? "typeMatch" : "",
+                        fixture.highlighted ? "highlighted" : "",
+                        fixture.soloed ? "soloed" : "",
+                        fixture.parked ? "parked" : "",
+                      ].filter(Boolean).join(" ");
+                      return (
+                        <>
+                          <g
+                            class={className()}
+                            transform={`translate(${fixture.x} ${fixture.z}) rotate(${fixture.yaw})`}
+                            onPointerDown={(event) => {
+                              if (mappingStageTool() === "pan") {
+                                return;
+                              }
+                              event.stopPropagation();
+                              const patchedFixture = snapshot().fixtures.find((candidate) => candidate.id === fixture.id);
+                              if (patchedFixture && mappingStageTool() === "rotate") {
+                                selectMappingFixture(patchedFixture, event);
+                              }
+                              beginMappingFixtureDrag(event, fixture.id);
+                            }}
+                          >
+                            <Show
+                              when={fixture.visualKind === "bar" || fixture.visualKind === "panel"}
+                              fallback={
+                                <Show
+                                  when={fixture.visualKind === "laser"}
+                                  fallback={
+                                    <circle
+                                      class="stageFixtureShape"
+                                      cx="0"
+                                      cy="0"
+                                      r={Math.max(fixture.width, fixture.height) / 2 + fixture.intensity * 1.5}
+                                      fill={fixture.color}
+                                    />
+                                  }
+                                >
+                                  <polygon
+                                    class="stageFixtureShape"
+                                    points={`0,${-fixture.height / 2} ${fixture.width / 2},${fixture.height / 2} ${-fixture.width / 2},${fixture.height / 2}`}
+                                    fill={fixture.color}
+                                  />
+                                </Show>
+                              }
+                            >
+                              <rect
+                                class="stageFixtureShape"
+                                x={-fixture.width / 2}
+                                y={-fixture.height / 2}
+                                width={fixture.width}
+                                height={fixture.height}
+                                fill={fixture.color}
+                              />
+                            </Show>
+                            <line class="stageFixtureCenterLine" x1="0" y1="0" x2="0" y2="-7" />
+                            <circle class="stageFixtureLaserMark" cx="0" cy="-7" r="0.9" />
+                            <title>{`${fixture.label} / ${fixture.dmxLabel} / ${fixture.groupLabel}`}</title>
+                          </g>
+                          <Show when={mappingShowLabels()}>
+                            <text class="stageLabel" x={fixture.x + 3.5} y={fixture.z - 3.5}>
+                              {fixture.label}
+                            </text>
+                          </Show>
+                        </>
+                      );
+                    }}
+                  </For>
+                </svg>
+              </div>
+              <aside class="mappingSelectionPanel">
+                <div class="mappingSelectionHeader">
+                  <strong>Selections</strong>
+                  <span>
+                    {selectedMappingFixtures().length > 0
+                      ? `${selectedMappingFixtures().length} picked / ${mappingFilteredFixtures().length}`
+                      : `${mappingFilteredFixtures().length} fixture(s)`}
+                  </span>
+                </div>
+                <div class="mappingSearchPanel">
+                  <label>
+                    Search
+                    <input
+                      type="search"
+                      value={mappingFixtureSearch()}
+                      onInput={(event) => setMappingFixtureSearch(event.currentTarget.value)}
+                      placeholder="label, U1 A24, group"
+                    />
+                  </label>
+                  <button onClick={() => setMappingFixtureSearch("")} disabled={mappingFixtureSearch().trim().length === 0}>
+                    Clear
+                  </button>
+                  <div class="mappingSearchActions">
+                    <button onClick={pickVisibleMappingFixtures} disabled={mappingFilteredFixtures().length === 0}>
+                      Pick Visible
+                      <span>{mappingFilteredFixtures().length}</span>
+                    </button>
+                    <button
+                      onClick={() => void duplicateSelectedMappingFixtures()}
+                      disabled={selectedMappingFixtures().length === 0}
+                    >
+                      Duplicate
+                      <span>{selectedMappingFixtures().length}</span>
+                    </button>
+                    <button
+                      onClick={() => void removeSelectedMappingFixtures()}
+                      disabled={selectedMappingFixtures().length === 0}
+                    >
+                      Remove
+                      <span>{selectedMappingFixtures().length}</span>
+                    </button>
+                    <button onClick={clearMappingFixtureSelection} disabled={selectedMappingFixtures().length === 0}>
+                      Clear Pick
+                      <span>{selectedMappingFixtures().length}</span>
+                    </button>
+                  </div>
+                </div>
+                <div class="mappingSelectionAssign">
+                  <label>
+                    Selected Groups
+                    <input
+                      type="text"
+                      value={mappingSelectionGroupText()}
+                      onInput={(event) => setMappingSelectionGroupText(event.currentTarget.value)}
+                      placeholder="front, movers, floor"
+                    />
+                  </label>
+                  <div class="mappingSelectionQuickActions">
+                    <button
+                      onClick={() => void applyMappingSelectionGroups("add")}
+                      disabled={selectedMappingFixtures().length === 0 || parseGroupIds(mappingSelectionGroupText()).length === 0}
+                    >
+                      Add
+                    </button>
+                    <button
+                      onClick={() => void applyMappingSelectionGroups("remove")}
+                      disabled={selectedMappingFixtures().length === 0 || parseGroupIds(mappingSelectionGroupText()).length === 0}
+                    >
+                      Remove
+                    </button>
+                    <button
+                      onClick={() => void applyMappingSelectionGroups("set")}
+                      disabled={selectedMappingFixtures().length === 0 || parseGroupIds(mappingSelectionGroupText()).length === 0}
+                    >
+                      Set
+                    </button>
+                  </div>
+                </div>
+                <div class="mappingTransformInspector">
+                  <div class="mappingTransformTitle">
+                    <strong>Selection Flags</strong>
+                    <span>
+                      {selectedMappingFlagState().count > 0
+                        ? `${selectedMappingFlagState().count} fixture(s) picked`
+                        : "Pick fixtures on the map or list."}
+                    </span>
+                  </div>
+                  <div class="mappingFlagActions">
+                    <button
+                      class={selectedMappingFlagState().allHighlighted ? "active" : ""}
+                      onClick={() => void setMappingSelectionFlag("highlight", !selectedMappingFlagState().allHighlighted)}
+                      disabled={selectedMappingFlagState().count === 0}
+                    >
+                      {selectedMappingFlagState().allHighlighted ? "Clear High" : "Highlight"}
+                    </button>
+                    <button
+                      class={selectedMappingFlagState().allSoloed ? "active" : ""}
+                      onClick={() => void setMappingSelectionFlag("solo", !selectedMappingFlagState().allSoloed)}
+                      disabled={selectedMappingFlagState().count === 0}
+                    >
+                      {selectedMappingFlagState().allSoloed ? "Clear Solo" : "Solo"}
+                    </button>
+                    <button
+                      class={selectedMappingFlagState().allParked ? "active" : ""}
+                      onClick={() => void setMappingSelectionFlag("park", !selectedMappingFlagState().allParked)}
+                      disabled={selectedMappingFlagState().count === 0}
+                    >
+                      {selectedMappingFlagState().allParked ? "Clear Park" : "Park"}
+                    </button>
+                  </div>
+                  <div class="mappingNudgePanel">
+                    <span>Nudge {normalizedMappingSnapSize()}m</span>
+                    <div class="mappingNudgeGrid">
+                      <button
+                        onClick={() => void nudgeSelectedMappingFixtures(0, -normalizedMappingSnapSize())}
+                        disabled={selectedMappingFlagState().count === 0}
+                      >
+                        Up
+                      </button>
+                      <button
+                        onClick={() => void nudgeSelectedMappingFixtures(-normalizedMappingSnapSize(), 0)}
+                        disabled={selectedMappingFlagState().count === 0}
+                      >
+                        Left
+                      </button>
+                      <button
+                        onClick={() => void nudgeSelectedMappingFixtures(normalizedMappingSnapSize(), 0)}
+                        disabled={selectedMappingFlagState().count === 0}
+                      >
+                        Right
+                      </button>
+                      <button
+                        onClick={() => void nudgeSelectedMappingFixtures(0, normalizedMappingSnapSize())}
+                        disabled={selectedMappingFlagState().count === 0}
+                      >
+                        Down
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <Show when={selectedMappingFixtures().length > 1}>
+                  <div class="mappingTransformInspector">
+                    <div class="mappingTransformTitle">
+                      <strong>{selectedMappingFixtures().length} fixtures selected</strong>
+                      <span>Drag any selected fixture to move the group.</span>
+                    </div>
+                    <div class="mappingTransformActions">
+                      <button onClick={() => void layoutSelectedMappingFixtures("line")}>Line</button>
+                      <button onClick={() => void layoutSelectedMappingFixtures("grid")}>Grid</button>
+                      <button onClick={() => void layoutSelectedMappingFixtures("circle")}>Circle</button>
+                      <button onClick={() => void alignSelectedMappingFixtures("x")}>Align X</button>
+                      <button onClick={() => void alignSelectedMappingFixtures("z")}>Align Z</button>
+                      <button
+                        onClick={() => void distributeSelectedMappingFixtures("x")}
+                        disabled={selectedMappingFixtures().length < 3}
+                      >
+                        Distribute X
+                      </button>
+                      <button
+                        onClick={() => void distributeSelectedMappingFixtures("z")}
+                        disabled={selectedMappingFixtures().length < 3}
+                      >
+                        Distribute Z
+                      </button>
+                      <button onClick={() => void duplicateSelectedMappingFixtures()}>Duplicate</button>
+                      <button onClick={() => void removeSelectedMappingFixtures()}>Remove</button>
+                      <button onClick={() => setWorkspaceTab("control")}>Control Active</button>
+                      <button onClick={clearMappingFixtureSelection}>Clear</button>
+                    </div>
+                  </div>
+                </Show>
+                <Show
+                  when={selectedMappingFixture()}
+                  fallback={
+                    <div class="mappingTransformInspector">
+                      <div class="mappingTransformTitle">
+                        <strong>No fixture selected</strong>
+                        <span>Select a fixture on the map or patch list.</span>
+                      </div>
+                    </div>
+                  }
+                >
+                  {(fixture) => (
+                    <div class="mappingTransformInspector">
+                      <div class="mappingTransformTitle">
+                        <strong>{fixture().label}</strong>
+                        <span>{fixture().manufacturer} {fixture().profile_name} / U{fixture().universe} A{fixture().address}</span>
+                      </div>
+                      <div class="mappingTransformGrid">
+                        <label>
+                          X
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={fixture().position.x}
+                            onChange={(event) =>
+                              void setFixtureTransform(fixture(), {
+                                position: { ...fixture().position, x: Number(event.currentTarget.value) },
+                              })
+                            }
+                          />
+                        </label>
+                        <label>
+                          Z
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={fixture().position.z}
+                            onChange={(event) =>
+                              void setFixtureTransform(fixture(), {
+                                position: { ...fixture().position, z: Number(event.currentTarget.value) },
+                              })
+                            }
+                          />
+                        </label>
+                        <label>
+                          Y
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={fixture().position.y}
+                            onChange={(event) =>
+                              void setFixtureTransform(fixture(), {
+                                position: { ...fixture().position, y: Number(event.currentTarget.value) },
+                              })
+                            }
+                          />
+                        </label>
+                        <label>
+                          Yaw
+                          <input
+                            type="number"
+                            step="1"
+                            value={fixture().rotation.yaw}
+                            onChange={(event) =>
+                              void setFixtureTransform(fixture(), {
+                                rotation: { ...fixture().rotation, yaw: Number(event.currentTarget.value) },
+                              })
+                            }
+                          />
+                        </label>
+                      </div>
+                      <div class="mappingFlagActions">
+                        <button
+                          class={fixture().highlighted ? "active" : ""}
+                          onClick={() => void setFixtureHighlight(fixture().id, !fixture().highlighted)}
+                        >
+                          Highlight
+                        </button>
+                        <button
+                          class={fixture().soloed ? "active" : ""}
+                          onClick={() => void setFixtureSolo(fixture().id, !fixture().soloed)}
+                        >
+                          Solo
+                        </button>
+                        <button
+                          class={fixture().parked ? "active" : ""}
+                          onClick={() => void setFixturePark(fixture().id, !fixture().parked)}
+                        >
+                          Park
+                        </button>
+                      </div>
+                      <div class="mappingControlShortcuts">
+                        <button onClick={() => setWorkspaceTab("control")}>Control</button>
+                        <button onClick={() => selectSetupMode("patch")}>Patch</button>
+                        <button onClick={() => void duplicateSelectedMappingFixtures()}>Duplicate</button>
+                        <button onClick={() => void removeSelectedMappingFixtures()}>Remove</button>
+                      </div>
+                    </div>
+                  )}
+                </Show>
+                <div class="mappingSelectionHeader secondary">
+                  <strong>Fixtures</strong>
+                  <span>{mappingFilteredFixtures().length}</span>
+                </div>
+                <For each={mappingFilteredFixtures()}>
+                  {(fixture) => (
+                    <button
+                      class={selectedMappingFixtureIdSet().has(fixture.id) ? "active" : ""}
+                      onClick={(event) => selectMappingFixture(fixture, event)}
+                    >
+                      <strong>{fixture.label}</strong>
+                      <span>U{fixture.universe} A{fixture.address}</span>
+                      <small>{fixture.manufacturer} {fixture.profile_name} / {fixture.group_ids.join(", ") || "No group"}</small>
+                    </button>
+                  )}
+                </For>
+                <Show when={mappingFilteredFixtures().length === 0}>
+                  <div class="mappingTransformInspector">
+                    <div class="mappingTransformTitle">
+                      <strong>No fixtures</strong>
+                      <span>Patch fixtures or adjust filters.</span>
+                    </div>
+                  </div>
+                </Show>
+                <div class="mappingSelectionHeader secondary">
+                  <strong>Projectors</strong>
+                  <span>{snapshot().video.outputs.length}</span>
+                </div>
+                <For each={snapshot().video.outputs}>
+                  {(output) => (
+                    <button
+                      class={`projector ${selectedVideoOutputId() === output.id ? "active" : ""}`}
+                      onClick={() => setSelectedVideoOutputId(output.id)}
+                    >
+                      <strong>{output.label}</strong>
+                      <span>{output.width}x{output.height}</span>
+                      <small>{output.kind} / {output.enabled ? "Enabled" : "Disabled"} / {output.blackout ? "Blackout" : "Live"}</small>
+                    </button>
+                  )}
+                </For>
+                <Show when={selectedMappingVideoOutput()}>
+                  {(output) => (
+                    <div class="mappingProjectorControls">
+                      <div class="mappingProjectorPreview">
+                        <div class="outputMappingMiniSurface">
+                          <svg viewBox="0 0 100 100" role="img" aria-label={`${output().label} mapping preview`}>
+                            <polygon class="projectorMapBase" points={projectorMapBasePoints(output().mapping).join(" ")} />
+                            <polygon class="projectorMapWarp" points={projectorMapPoints(output().mapping).join(" ")} />
+                          </svg>
+                        </div>
+                        <div>
+                          <strong>{output().label}</strong>
+                          <span>{output().mapping.aspect_mode} / {output().mapping.aspect_ratio.toFixed(2)} / lens {output().mapping.lens_distortion.toFixed(2)}</span>
+                        </div>
+                      </div>
+                      <div class="mappingProjectorActionRow">
+                        <button onClick={() => void setVideoOutputEnabled(output().id, !output().enabled)}>
+                          {output().enabled ? "Disable" : "Enable"}
+                        </button>
+                        <button onClick={() => void setVideoOutputBlackout(output().id, !output().blackout)}>
+                          {output().blackout ? "Clear BO" : "Blackout"}
+                        </button>
+                        <button onClick={() => void openVideoOutputWindow(output().id, true)}>Pattern</button>
+                      </div>
+                      <div class="mappingProjectorFieldGrid">
+                        <label>
+                          X
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={output().mapping.stage_x}
+                            onChange={(event) =>
+                              void setVideoOutputMapping(output().id, {
+                                ...output().mapping,
+                                stage_x: Number(event.currentTarget.value),
+                              })
+                            }
+                          />
+                        </label>
+                        <label>
+                          Z
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={output().mapping.stage_z}
+                            onChange={(event) =>
+                              void setVideoOutputMapping(output().id, {
+                                ...output().mapping,
+                                stage_z: Number(event.currentTarget.value),
+                              })
+                            }
+                          />
+                        </label>
+                        <label>
+                          Y
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={output().mapping.stage_y}
+                            onChange={(event) =>
+                              void setVideoOutputMapping(output().id, {
+                                ...output().mapping,
+                                stage_y: Number(event.currentTarget.value),
+                              })
+                            }
+                          />
+                        </label>
+                        <label>
+                          Rot
+                          <input
+                            type="number"
+                            step="1"
+                            value={output().mapping.rotation_deg}
+                            onChange={(event) =>
+                              void setVideoOutputMapping(output().id, {
+                                ...output().mapping,
+                                rotation_deg: Number(event.currentTarget.value),
+                              })
+                            }
+                          />
+                        </label>
+                      </div>
+                      <div class="mappingProjectorWarpGrid">
+                        <label>
+                          Aspect
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0.1"
+                            value={output().mapping.aspect_ratio}
+                            onChange={(event) =>
+                              void setVideoOutputMapping(output().id, {
+                                ...output().mapping,
+                                aspect_ratio: Number(event.currentTarget.value),
+                              })
+                            }
+                          />
+                        </label>
+                        <label>
+                          Mode
+                          <select
+                            value={output().mapping.aspect_mode}
+                            onChange={(event) =>
+                              void setVideoOutputMapping(output().id, {
+                                ...output().mapping,
+                                aspect_mode: event.currentTarget.value as VideoOutputAspectMode,
+                              })
+                            }
+                          >
+                            <For each={videoOutputAspectModes}>
+                              {(mode) => <option value={mode}>{mode}</option>}
+                            </For>
+                          </select>
+                        </label>
+                        <label>
+                          Lens
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="-1"
+                            max="1"
+                            value={output().mapping.lens_distortion}
+                            onChange={(event) =>
+                              void setVideoOutputMapping(output().id, {
+                                ...output().mapping,
+                                lens_distortion: Number(event.currentTarget.value),
+                              })
+                            }
+                          />
+                        </label>
+                        <label>
+                          Keystone X
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="-1"
+                            max="1"
+                            value={output().mapping.keystone_x}
+                            onChange={(event) =>
+                              void setVideoOutputMapping(output().id, {
+                                ...output().mapping,
+                                keystone_x: Number(event.currentTarget.value),
+                              })
+                            }
+                          />
+                        </label>
+                        <button onClick={() => void setVideoOutputMapping(output().id, defaultVideoOutputMapping)}>
+                          Reset Mapping
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </Show>
+              </aside>
             </div>
-            <svg class="visualizerStage" viewBox={`0 0 ${stageViewBoxSize} ${stageViewBoxSize}`} role="img">
-              <polygon class="stagePlane" points="50,28 86,50 50,72 14,50" />
-              <line class="stageAxis" x1="50" y1="50" x2="86" y2="50" />
-              <line class="stageAxis" x1="50" y1="50" x2="50" y2="18" />
-              <line class="stageAxis" x1="50" y1="50" x2="14" y2="50" />
-              <For each={visualizerBeams3d()}>
-                {(beam) => (
-                  <line
-                    class="stageBeam3d"
-                    x1={beam.x1}
-                    y1={beam.y1}
-                    x2={beam.x2}
-                    y2={beam.y2}
-                    stroke={beam.color}
-                    opacity={Math.max(0.08, beam.intensity * 0.5)}
-                  />
-                )}
-              </For>
-              <For each={visualizerFixtures3d()}>
-                {(fixture) => (
-                  <>
-                    <line class="stageHeight" x1={fixture.x} y1={fixture.groundY} x2={fixture.x} y2={fixture.y} />
-                    <circle class="stageGround" cx={fixture.x} cy={fixture.groundY} r="1.7" />
-                    <circle
-                      class={fixture.id === selectedFixtureId() ? "stageFixture3d selected" : "stageFixture3d"}
-                      cx={fixture.x}
-                      cy={fixture.y}
-                      r={2.8 + fixture.intensity * 2.2}
-                      fill={fixture.color}
-                      onPointerDown={() => {
-                        const patchedFixture = snapshot().fixtures.find((candidate) => candidate.id === fixture.id);
-                        if (patchedFixture) {
-                          selectFixture(patchedFixture);
-                        }
-                      }}
-                    >
-                      <title>{fixture.label}</title>
-                    </circle>
-                    <text class="stageLabel" x={fixture.x + 4} y={fixture.y - 4}>
-                      {fixture.label}
-                    </text>
-                  </>
-                )}
-              </For>
-            </svg>
           </div>
         </section>
 
@@ -7762,7 +11221,11 @@ export default function App() {
             <button onClick={renderDebugVideoPreview} disabled={snapshot().video.layers.length === 0}>
               CPU Preview
             </button>
+            <button onClick={() => void refreshVideoPreviewDiagnostics()}>
+              Preview Status
+            </button>
             <span>{videoPreviewInfo()}</span>
+            <small>{videoPreviewDiagnosticsText()}</small>
           </div>
           <div class="videoMasterControls">
             <label>
@@ -8821,6 +12284,7 @@ export default function App() {
                 <div class="buttonRow">
                   <button onClick={savePreset}>Save Preset</button>
                   <button onClick={loadPreset}>Load Preset</button>
+                  <button onClick={() => void duplicateFixture(fixture())}>Duplicate</button>
                   <button onClick={() => void removeFixture(fixture().id)}>Remove Fixture</button>
                 </div>
                 <div class="buttonRow">
@@ -9063,7 +12527,12 @@ export default function App() {
                     <For each={positionFavorites()}>
                       {(favorite) => (
                         <button
-                          class="positionFavorite"
+                          class={
+                            favorite.pan === clampDmxValue(positionControls().panValue) &&
+                            favorite.tilt === clampDmxValue(positionControls().tiltValue)
+                              ? "positionFavorite active"
+                              : "positionFavorite"
+                          }
                           title={`${favorite.label}: Pan ${formatShortDmxPercent(favorite.pan)} / Tilt ${formatShortDmxPercent(favorite.tilt)}. Shift-click removes.`}
                           onClick={(event) => {
                             if (event.shiftKey) {
@@ -9090,29 +12559,55 @@ export default function App() {
                     </For>
                   </div>
                 </div>
-                <div
-                  class="panTiltPad"
-                  role="slider"
-                  aria-label="Pan tilt pad"
-                  aria-valuetext={`Pan ${positionControls().panValue}, Tilt ${positionControls().tiltValue}`}
-                  onPointerDown={(event) => {
-                    event.currentTarget.setPointerCapture(event.pointerId);
-                    void setPanTiltFromPointer(event);
-                  }}
-                  onPointerMove={(event) => {
-                    if (event.buttons === 1) {
+                <div class="positionPadRow">
+                  <div
+                    class="panTiltPad"
+                    role="slider"
+                    aria-label="Pan tilt pad"
+                    aria-valuetext={`Pan ${positionControls().panValue}, Tilt ${positionControls().tiltValue}`}
+                    onPointerDown={(event) => {
+                      event.currentTarget.setPointerCapture(event.pointerId);
                       void setPanTiltFromPointer(event);
-                    }
-                  }}
-                  onPointerUp={(event) => event.currentTarget.releasePointerCapture(event.pointerId)}
-                >
-                  <b class="panTiltLimitWindow" style={selectedFixtureLimitOverlayStyle()} />
-                  <i
-                    style={{
-                      left: `${(positionControls().panValue / 65535) * 100}%`,
-                      top: `${100 - (positionControls().tiltValue / 65535) * 100}%`,
                     }}
-                  />
+                    onPointerMove={(event) => {
+                      if (event.buttons === 1) {
+                        void setPanTiltFromPointer(event);
+                      }
+                    }}
+                    onPointerUp={(event) => event.currentTarget.releasePointerCapture(event.pointerId)}
+                  >
+                    <b class="panTiltLimitWindow" style={selectedFixtureLimitOverlayStyle()} />
+                    <i
+                      style={{
+                        left: `${(positionControls().panValue / 65535) * 100}%`,
+                        top: `${100 - (positionControls().tiltValue / 65535) * 100}%`,
+                      }}
+                    />
+                  </div>
+                  <div class="axisSliderRack">
+                    <label class="axisSlider">
+                      <span>Pan</span>
+                      <input
+                        type="range"
+                        min={normalizeLimitRange(selectedFixtureLimits().pan_min, selectedFixtureLimits().pan_max).min}
+                        max={normalizeLimitRange(selectedFixtureLimits().pan_min, selectedFixtureLimits().pan_max).max}
+                        value={positionControls().panValue}
+                        onInput={(event) => void setPanTiltValues(Number(event.currentTarget.value), positionControls().tiltValue)}
+                      />
+                      <small>{formatShortDmxPercent(positionControls().panValue)}</small>
+                    </label>
+                    <label class="axisSlider">
+                      <span>Tilt</span>
+                      <input
+                        type="range"
+                        min={normalizeLimitRange(selectedFixtureLimits().tilt_min, selectedFixtureLimits().tilt_max).min}
+                        max={normalizeLimitRange(selectedFixtureLimits().tilt_min, selectedFixtureLimits().tilt_max).max}
+                        value={positionControls().tiltValue}
+                        onInput={(event) => void setPanTiltValues(positionControls().panValue, Number(event.currentTarget.value))}
+                      />
+                      <small>{formatShortDmxPercent(positionControls().tiltValue)}</small>
+                    </label>
+                  </div>
                 </div>
               </div>
             )}
@@ -9154,14 +12649,51 @@ export default function App() {
                       }}
                     />
                   </div>
-                  <label>
-                    Color
-                    <input
-                      type="color"
-                      value={colorControls().value}
-                      onInput={(event) => void setFixtureColor(event.currentTarget.value)}
-                    />
-                  </label>
+                  <div class="colorPickerSide">
+                    <label>
+                      Color
+                      <input
+                        type="color"
+                        value={colorControls().value}
+                        onInput={(event) => void setFixtureColor(event.currentTarget.value)}
+                      />
+                    </label>
+                    <div class="rgbChannelRack">
+                      <label class="rgbChannelSlider red">
+                        <span>Red</span>
+                        <input
+                          type="range"
+                          min="0"
+                          max="65535"
+                          value={selectedColorChannelValues().red}
+                          onInput={(event) => setColorChannelValue("red", Number(event.currentTarget.value))}
+                        />
+                        <small>{formatShortDmxPercent(selectedColorChannelValues().red)}</small>
+                      </label>
+                      <label class="rgbChannelSlider green">
+                        <span>Green</span>
+                        <input
+                          type="range"
+                          min="0"
+                          max="65535"
+                          value={selectedColorChannelValues().green}
+                          onInput={(event) => setColorChannelValue("green", Number(event.currentTarget.value))}
+                        />
+                        <small>{formatShortDmxPercent(selectedColorChannelValues().green)}</small>
+                      </label>
+                      <label class="rgbChannelSlider blue">
+                        <span>Blue</span>
+                        <input
+                          type="range"
+                          min="0"
+                          max="65535"
+                          value={selectedColorChannelValues().blue}
+                          onInput={(event) => setColorChannelValue("blue", Number(event.currentTarget.value))}
+                        />
+                        <small>{formatShortDmxPercent(selectedColorChannelValues().blue)}</small>
+                      </label>
+                    </div>
+                  </div>
                 </div>
                 <div class="visualNumberGrid hsvDirectGrid">
                   <label>
@@ -9209,7 +12741,7 @@ export default function App() {
                       <For each={defaultColorPalette}>
                         {(color) => (
                           <button
-                            class="colorSwatch"
+                            class={normalizeHexColor(color) === selectedColorHex() ? "colorSwatch active" : "colorSwatch"}
                             style={{ "background-color": color }}
                             title={color}
                             onClick={() => void setFixtureColor(color)}
@@ -9231,7 +12763,7 @@ export default function App() {
                       <For each={colorFavorites()}>
                         {(color) => (
                           <button
-                            class="colorSwatch favorite"
+                            class={normalizeHexColor(color) === selectedColorHex() ? "colorSwatch favorite active" : "colorSwatch favorite"}
                             style={{ "background-color": color }}
                             title={`${color} / Shift-click removes`}
                             onClick={(event) => {
@@ -9382,10 +12914,34 @@ export default function App() {
                   onInput={(event) => setCueFadeMs(Number(event.currentTarget.value))}
                 />
               </label>
-              <button class="primary" onClick={createCue} disabled={!hasCueSources()}>
+              <label>
+                Scope
+                <select
+                  value={cueCaptureScope()}
+                  onInput={(event) => setCueCaptureScope(event.currentTarget.value as CueCaptureScopeMode)}
+                >
+                  <option value="all">Lighting + Video</option>
+                  <option value="lighting">Lighting Only</option>
+                  <option value="selectedFixture">Selected Fixture</option>
+                  <option value="selectedGroup">Selected Group</option>
+                  <option value="video">Video Only</option>
+                </select>
+              </label>
+              <Show when={cueCaptureScopeError()}>
+                {(error) => <span class="cueScopeHint invalid">{error()}</span>}
+              </Show>
+              <button class="primary" onClick={createCue} disabled={!hasCueSources() || Boolean(cueCaptureScopeError())}>
                 Store Cue
               </button>
             </div>
+            <CueCapturePreviewPanel
+              preview={cueCapturePreview()}
+              invalid={Boolean(cueCaptureScopeError())}
+              stageViewBoxSize={stageViewBoxSize}
+              stageOrigin={stageOrigin2d()}
+              selectedFixtureId={selectedFixtureId()}
+              onSelectFixture={setSelectedFixtureId}
+            />
             <div class="buttonRow">
               <button onClick={triggerPreviousCue} disabled={snapshot().cues.length === 0}>
                 Back
@@ -9448,12 +13004,63 @@ export default function App() {
                         <button onClick={() => void duplicateCue(cue)}>
                           Copy
                         </button>
-                        <button onClick={() => updateCue(cue.id, draft().label, draft().fade_ms)} disabled={!hasCueSources()}>
+                        <button
+                          onClick={() => updateCue(cue.id, draft().label, draft().fade_ms)}
+                          disabled={!hasCueSources() || Boolean(cueCaptureScopeError())}
+                        >
                           Update
                         </button>
                         <button onClick={() => triggerCue(cue.id)}>GO</button>
+                        <button
+                          onClick={() => void addTimelineCueEventAt(cue.id, snapshot().timeline.position_ms, timelineTrack(), false)}
+                        >
+                          At Playhead
+                        </button>
                         <button onClick={() => removeCue(cue.id)}>Remove</button>
                       </div>
+                      <Show when={cueTimelinePlacementsForCue(cue.id).length > 0}>
+                        <div class="cueTimelinePlacements">
+                          <For each={cueTimelinePlacementsForCue(cue.id)}>
+                            {(placement) => (
+                              <span
+                                class={[
+                                  "cueTimelinePlacementChip",
+                                  placement.track === "Lighting" ? "lighting" : "video",
+                                  placement.time_ms < snapshot().timeline.position_ms ? "past" : "",
+                                ].filter(Boolean).join(" ")}
+                              >
+                                <button
+                                  class="cueTimelinePlacementMain"
+                                  title={`Seek to ${placement.time_ms} ms / ${placement.track}`}
+                                  onClick={() => void seekTimeline(placement.time_ms)}
+                                >
+                                  <b>{placement.track === "Lighting" ? "L" : "V"}</b>
+                                  <small>{placement.time_ms} ms</small>
+                                </button>
+                                <button
+                                  class="cueTimelinePlacementMove"
+                                  title={`Nudge ${timelinePlacementNudgeMs()} ms. Shift-click nudges left.`}
+                                  onClick={(event) =>
+                                    void moveTimelineCueEvent(
+                                      placement,
+                                      event.shiftKey ? -timelinePlacementNudgeMs() : timelinePlacementNudgeMs(),
+                                    )
+                                  }
+                                >
+                                  &gt;
+                                </button>
+                                <button
+                                  class="cueTimelinePlacementRemove"
+                                  title="Remove timeline placement"
+                                  onClick={() => removeTimelineEvent(placement.id)}
+                                >
+                                  x
+                                </button>
+                              </span>
+                            )}
+                          </For>
+                        </div>
+                      </Show>
                     </div>
                   );
                 }}
@@ -9482,6 +13089,13 @@ export default function App() {
               max={Math.max(snapshot().timeline.duration_ms, 1)}
               value={snapshot().timeline.position_ms}
               onInput={(event) => void seekTimeline(Number(event.currentTarget.value))}
+            />
+            <TimelineOverview
+              events={timelineOverviewEvents()}
+              playheadX={timelineOverviewPlayheadX()}
+              onSeekRatio={seekTimelineFromOverviewRatio}
+              onSeekTime={(timeMs) => void seekTimeline(timeMs)}
+              onMoveEventRatio={(eventId, ratio) => void moveTimelineCueEventToRatio(eventId, ratio)}
             />
             <div class="audioAnalysisPanel">
               <div class="panelHeader">
@@ -9578,6 +13192,9 @@ export default function App() {
               </label>
               <button class="primary" onClick={addTimelineCueEvent} disabled={snapshot().cues.length === 0}>
                 Add Event
+              </button>
+              <button onClick={addTimelineCueEventAtPlayhead} disabled={snapshot().cues.length === 0}>
+                At Playhead
               </button>
             </div>
             <div class="timelineList">
@@ -9838,6 +13455,9 @@ export default function App() {
               <div class="panelHeaderActions">
                 <span>{snapshot().effects.length}</span>
                 <button onClick={loadEffectPreset}>Load</button>
+                <button onClick={loadEffectPresetForCurrentTarget} disabled={Boolean(effectTargetOverrideError())}>
+                  Load Target
+                </button>
               </div>
             </div>
             <div class="effectForm">
@@ -9968,6 +13588,55 @@ export default function App() {
                       />
                     </label>
                   </div>
+                  <Show when={effectType() === "PositionWave"}>
+                    <div class="videoTargetPositionPanel">
+                      <div class="waveStageHeader">
+                        <div>
+                          <strong>Video Position</strong>
+                          <span>
+                            X {effectVideoPositionX().toFixed(1)}, Y {effectVideoPositionY().toFixed(1)}, Z{" "}
+                            {effectVideoPositionZ().toFixed(1)}
+                          </span>
+                        </div>
+                      </div>
+                      <div class="buttonRow">
+                        <button onClick={setEffectVideoPositionFromSelectedOutput} disabled={snapshot().video.outputs.length === 0}>
+                          Output Surface
+                        </button>
+                        <button onClick={setEffectVideoPositionFromWaveOrigin}>Wave Origin</button>
+                        <button onClick={setEffectVideoPositionFromStageCenter}>Stage Center</button>
+                      </div>
+                      <div class="triple">
+                        <label>
+                          X
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={effectVideoPositionX()}
+                            onInput={(event) => setEffectVideoPositionX(Number(event.currentTarget.value))}
+                          />
+                        </label>
+                        <label>
+                          Y
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={effectVideoPositionY()}
+                            onInput={(event) => setEffectVideoPositionY(Number(event.currentTarget.value))}
+                          />
+                        </label>
+                        <label>
+                          Z
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={effectVideoPositionZ()}
+                            onInput={(event) => setEffectVideoPositionZ(Number(event.currentTarget.value))}
+                          />
+                        </label>
+                      </div>
+                    </div>
+                  </Show>
                 </div>
               </Show>
               <div class="split">
@@ -9997,6 +13666,149 @@ export default function App() {
               </Show>
               <Show when={effectType() === "PositionWave"}>
                 <div class="waveControls">
+                  <div class="waveStagePicker">
+                    <div class="waveStageHeader">
+                      <div>
+                        <strong>Stage Wave</strong>
+                        <span>
+                          O {waveOriginX().toFixed(1)}, {waveOriginY().toFixed(1)}, {waveOriginZ().toFixed(1)} / D{" "}
+                          {waveDirectionX().toFixed(1)}, {waveDirectionY().toFixed(1)}, {waveDirectionZ().toFixed(1)}
+                        </span>
+                      </div>
+                    </div>
+                    <div class="buttonRow">
+                      <button onClick={setWaveOriginFromStageCenter}>Stage Center</button>
+                      <button onClick={setWaveOriginFromSelectedFixture} disabled={!selectedFixture()}>
+                        Selected Fixture
+                      </button>
+                      <button onClick={() => setWaveDirectionPreset(1, 0, 0)}>X</button>
+                      <button onClick={() => setWaveDirectionPreset(0, 0, 1)}>Z</button>
+                      <button onClick={() => setWaveDirectionPreset(0, 0, 0)}>Radial</button>
+                    </div>
+                    <svg
+                      class="waveStageMap"
+                      viewBox={`0 0 ${stageViewBoxSize} ${stageViewBoxSize}`}
+                      onPointerDown={(event) =>
+                        startWaveStageDrag(event, event.altKey ? "videoTarget" : event.shiftKey ? "direction" : "origin")
+                      }
+                      onPointerMove={moveWaveStageDrag}
+                      onPointerUp={endWaveStageDrag}
+                      onPointerCancel={endWaveStageDrag}
+                    >
+                      <defs>
+                        <pattern id="wave-stage-grid" width="5" height="5" patternUnits="userSpaceOnUse">
+                          <path d="M 5 0 L 0 0 0 5" />
+                        </pattern>
+                      </defs>
+                      <rect class="stageFloor" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
+                      <rect class="stageGrid" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
+                      <line class="waveGuideLine" x1={stageOrigin2d().x} y1="0" x2={stageOrigin2d().x} y2={stageViewBoxSize} />
+                      <line class="waveGuideLine" x1="0" y1={stageOrigin2d().z} x2={stageViewBoxSize} y2={stageOrigin2d().z} />
+                      <For each={visualizerVideoSurfaces2d()}>
+                        {(surface) => (
+                          <g
+                            class={[
+                              "waveVideoSurface",
+                              selectedVideoOutputId() === surface.id ? "selected" : "",
+                              surface.active ? "" : "inactive",
+                              effectTargetMode() === "video" ? "" : "inert",
+                            ]
+                              .filter(Boolean)
+                              .join(" ")}
+                            transform={`translate(${surface.x} ${surface.z}) rotate(${surface.rotationDeg})`}
+                            onPointerDown={(event) => {
+                              if (effectTargetMode() !== "video") {
+                                return;
+                              }
+                              const output = snapshot().video.outputs.find((candidate) => candidate.id === surface.id);
+                              if (!output) {
+                                return;
+                              }
+                              event.preventDefault();
+                              event.stopPropagation();
+                              setEffectVideoPositionFromVideoOutput(output);
+                            }}
+                          >
+                            <rect x={-surface.width / 2} y={-surface.height / 2} width={surface.width} height={surface.height} />
+                            <line x1={-surface.width / 2} y1="0" x2={surface.width / 2} y2="0" />
+                            <line x1="0" y1={-surface.height / 2} x2="0" y2={surface.height / 2} />
+                          </g>
+                        )}
+                      </For>
+                      <For each={visualizerFixtures()}>
+                        {(fixture) => (
+                          <circle
+                            class={[
+                              "waveStageFixture",
+                              waveTargetFixtureIds().has(fixture.id) ? "target" : "muted",
+                              selectedFixtureId() === fixture.id ? "selected" : "",
+                            ]
+                              .filter(Boolean)
+                              .join(" ")}
+                            cx={fixture.x}
+                            cy={fixture.z}
+                            r={waveTargetFixtureIds().has(fixture.id) ? 1.8 : 1.35}
+                            fill={fixture.color}
+                          />
+                        )}
+                      </For>
+                      <Show when={waveDirectionIsRadial()}>
+                        <circle class="waveGuideRing" cx={waveOriginSvgPoint().x} cy={waveOriginSvgPoint().z} r={waveRadialRadius()} />
+                      </Show>
+                      <Show when={!waveDirectionIsRadial()}>
+                        <line
+                          class="waveDirectionLine"
+                          x1={waveOriginSvgPoint().x}
+                          y1={waveOriginSvgPoint().z}
+                          x2={waveDirectionSvgPoint().x}
+                          y2={waveDirectionSvgPoint().z}
+                        />
+                      </Show>
+                      <Show when={effectTargetMode() === "video"}>
+                        <line
+                          class="waveVideoTargetLine"
+                          x1={waveOriginSvgPoint().x}
+                          y1={waveOriginSvgPoint().z}
+                          x2={effectVideoTargetSvgPoint().x}
+                          y2={effectVideoTargetSvgPoint().z}
+                        />
+                      </Show>
+                      <circle
+                        class={waveStageDrag() === "origin" ? "waveOriginHandle dragging" : "waveOriginHandle"}
+                        cx={waveOriginSvgPoint().x}
+                        cy={waveOriginSvgPoint().z}
+                        r="2.1"
+                      />
+                      <Show when={!waveDirectionIsRadial()}>
+                        <circle
+                          class={waveStageDrag() === "direction" ? "waveDirectionHandle dragging" : "waveDirectionHandle"}
+                          cx={waveDirectionSvgPoint().x}
+                          cy={waveDirectionSvgPoint().z}
+                          r="2"
+                          onPointerDown={(event) => startWaveStageDrag(event, "direction")}
+                          onPointerMove={moveWaveStageDrag}
+                          onPointerUp={endWaveStageDrag}
+                          onPointerCancel={endWaveStageDrag}
+                        />
+                      </Show>
+                      <Show when={effectTargetMode() === "video"}>
+                        <circle
+                          class={waveStageDrag() === "videoTarget" ? "waveVideoTargetHandle dragging" : "waveVideoTargetHandle"}
+                          cx={effectVideoTargetSvgPoint().x}
+                          cy={effectVideoTargetSvgPoint().z}
+                          r="2.1"
+                          onPointerDown={(event) => startWaveStageDrag(event, "videoTarget")}
+                          onPointerMove={moveWaveStageDrag}
+                          onPointerUp={endWaveStageDrag}
+                          onPointerCancel={endWaveStageDrag}
+                        />
+                      </Show>
+                    </svg>
+                    <div class="waveStageReadout">
+                      <span>X {stageWorldBounds().minX.toFixed(1)} to {stageWorldBounds().maxX.toFixed(1)}</span>
+                      <span>Z {stageWorldBounds().minZ.toFixed(1)} to {stageWorldBounds().maxZ.toFixed(1)}</span>
+                    </div>
+                  </div>
                   <div class="triple">
                     <label>
                       Origin X
@@ -10115,6 +13927,11 @@ export default function App() {
                     <button onClick={() => void setEffectEnabled(effect.id, !effect.enabled)}>
                       {effect.enabled ? "Disable" : "Enable"}
                     </button>
+                    <Show when={effect.effect_type === "PositionWave" && effect.video_targets.length > 0}>
+                      <button onClick={() => void setEffectVideoTargetsFromSelectedOutput(effect.id, effect.video_targets)}>
+                        Use Output Pos
+                      </button>
+                    </Show>
                     <button onClick={() => saveEffectPreset(effect.id)}>Save</button>
                     <button onClick={() => removeEffect(effect.id)}>Remove</button>
                   </div>
@@ -10122,32 +13939,13 @@ export default function App() {
               </For>
             </div>
           </div>
-          <div class="rawMonitor">
-            <div class="panelHeader">
-              <h2>DMX Raw</h2>
-              <div class="panelHeaderActions">
-                <select
-                  value={activeDmxPreviewUniverse()}
-                  onInput={(event) => setRawDmxUniverse(Number(event.currentTarget.value))}
-                >
-                  <For each={dmxPreviewOptions()}>
-                    {(preview) => <option value={preview.universe}>U{preview.universe}</option>}
-                  </For>
-                </select>
-                <span>{nonZeroDmxCount()} active</span>
-              </div>
-            </div>
-            <div class="rawGrid">
-              <For each={dmxCells()}>
-                {(cell) => (
-                  <div class={cell.value > 0 ? "rawCell active" : "rawCell"}>
-                    <span>{cell.channel}</span>
-                    <strong>{cell.value}</strong>
-                  </div>
-                )}
-              </For>
-            </div>
-          </div>
+          <DmxRawMonitor
+            previews={dmxPreviewOptions()}
+            activeUniverse={activeDmxPreviewUniverse()}
+            activeCount={nonZeroDmxCount()}
+            cells={dmxCells()}
+            onUniverseChange={setRawDmxUniverse}
+          />
         </section>
 
         <aside
@@ -10155,122 +13953,33 @@ export default function App() {
           ref={registerSetupPanel(["output"])}
           tabIndex={-1}
         >
-          <h2>Output</h2>
-          <label class="checkbox">
-            <input
-              type="checkbox"
-              checked={output().enabled}
-              onChange={(event) => setOutput({ ...output(), enabled: event.currentTarget.checked })}
-            />
-            DMX output enabled
-          </label>
-          <label>
-            Protocol
-            <select
-              value={output().protocol}
-              onInput={(event) => setOutputProtocol(event.currentTarget.value as DmxOutputConfig["protocol"])}
-            >
-              <option value="ArtNet">Art-Net</option>
-              <option value="Sacn">sACN / E1.31</option>
-              <option value="EnttecUsbPro">Enttec USB PRO</option>
-              <option value="EnttecOpenDmx">Enttec Open DMX</option>
-            </select>
-          </label>
-          <Show when={!isSerialDmxProtocol(output().protocol)}>
-            <label>
-              Target IP
-              <input
-                value={output().target_ip}
-                onInput={(event) => setOutput({ ...output(), target_ip: event.currentTarget.value })}
-              />
-            </label>
-            <div class="split">
-              <label>
-                Port
-                <input
-                  type="number"
-                  value={output().port}
-                  onInput={(event) => setOutput({ ...output(), port: Number(event.currentTarget.value) })}
-                />
-              </label>
-              <label>
-                Universe
-                <input
-                  type="number"
-                  min={output().protocol === "Sacn" ? "1" : "0"}
-                  value={output().universe}
-                  onInput={(event) => setOutput({ ...output(), universe: Number(event.currentTarget.value) })}
-                />
-              </label>
-            </div>
-          </Show>
-          <Show when={isSerialDmxProtocol(output().protocol)}>
-            <div class="serialOutput">
-              <div class="buttonRow">
-                <button onClick={refreshSerialPorts}>Scan Serial</button>
-                <button onClick={() => setOutput({ ...output(), serial_port: "" })}>Clear Port</button>
-              </div>
-              <label>
-                Serial port
-                <select
-                  value={output().serial_port}
-                  onInput={(event) => setOutput({ ...output(), serial_port: event.currentTarget.value })}
-                >
-                  <For each={serialPorts()}>
-                    {(port) => (
-                      <option value={port.name}>
-                        {port.name} / {port.port_type}
-                      </option>
-                    )}
-                  </For>
-                </select>
-              </label>
-              <label>
-                Manual port
-                <input
-                  value={output().serial_port}
-                  placeholder="COM3 or /dev/ttyUSB0"
-                  onInput={(event) => setOutput({ ...output(), serial_port: event.currentTarget.value })}
-                />
-              </label>
-              <label>
-                Baud rate
-                <input
-                  type="number"
-                  min="1"
-                  disabled={output().protocol === "EnttecOpenDmx"}
-                  value={output().serial_baud_rate}
-                  onInput={(event) => setOutput({ ...output(), serial_baud_rate: Number(event.currentTarget.value) })}
-                />
-              </label>
-            </div>
-          </Show>
-          <button class="primary" onClick={applyOutput}>
-            Apply Output
-          </button>
-          <div class="dmxRoutes">
-            <div class="panelHeader">
-              <h3>DMX Routes</h3>
-              <span>{dmxOutputRoutes().length}</span>
-            </div>
-            <div class="buttonRow">
-              <button onClick={addCurrentDmxRoute}>Add Current</button>
-              <button onClick={applyCurrentDmxRoutes}>Apply Routes</button>
-            </div>
-            <div class="timelineList">
-              <For each={dmxOutputRoutes()}>
-                {(route, index) => (
-                  <div class="timelineItem">
-                    <strong>{dmxRouteLabel(route)}</strong>
-                    <span>{route.enabled ? "Enabled" : "Disabled"}</span>
-                    <button onClick={() => void removeDmxRoute(index())} disabled={dmxOutputRoutes().length <= 1}>
-                      Remove
-                    </button>
-                  </div>
-                )}
-              </For>
-            </div>
-          </div>
+          <DmxOutputConfigPanel
+            output={output()}
+            serialPorts={serialPorts()}
+            isSerialProtocol={isSerialDmxProtocol}
+            onOutputChange={(nextOutput) => setOutput(nextOutput)}
+            onProtocolChange={setOutputProtocol}
+            onRefreshSerialPorts={refreshSerialPorts}
+            onApply={applyOutput}
+          />
+          <DmxTestFramePanel
+            protocolLabel={outputProtocolLabel(output().protocol)}
+            channel={dmxTestChannel()}
+            width={dmxTestWidth()}
+            value={dmxTestValue()}
+            onChannelChange={setDmxTestChannel}
+            onWidthChange={setDmxTestWidth}
+            onValueChange={setDmxTestValue}
+            onSendTest={sendDmxTestFrame}
+            onSendRoutes={sendDmxRoutesTestFrame}
+          />
+          <DmxRoutesPanel
+            routes={dmxOutputRoutes()}
+            routeLabel={dmxRouteLabel}
+            onAddCurrent={addCurrentDmxRoute}
+            onApplyRoutes={applyCurrentDmxRoutes}
+            onRemoveRoute={removeDmxRoute}
+          />
           <label>
             Lighting Master
             <input
@@ -10800,18 +14509,12 @@ export default function App() {
               </div>
             </div>
           </div>
-          <div class="telemetry">
-            <span>Frame {snapshot().telemetry.frame_counter}</span>
-            <span>Queue {snapshot().telemetry.queue_depth}</span>
-            <span>Jitter last {snapshot().telemetry.tick_jitter_last_us}us</span>
-            <span>Jitter max {snapshot().telemetry.tick_jitter_abs_max_us}us</span>
-            <span>Jitter sd {Math.round(snapshot().telemetry.tick_jitter_stddev_us)}us</span>
-            <span>DMX out {snapshot().telemetry.last_dmx_send_success_count}/{snapshot().telemetry.last_dmx_output_count}</span>
-            <span>DMX fail {snapshot().telemetry.total_dmx_send_failure_count}</span>
-            <Show when={snapshot().telemetry.last_error}>
-              {(error) => <strong>{error()}</strong>}
-            </Show>
-          </div>
+          <EngineTelemetryPanel
+            telemetry={snapshot().telemetry}
+            budget={engineTelemetryReport()?.budget ?? null}
+            onReset={resetEngineTelemetry}
+            onSaveReport={saveEngineTelemetryReport}
+          />
         </aside>
       </section>
 

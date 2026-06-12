@@ -1,0 +1,417 @@
+{
+  "version": 1,
+  "app": "Rayard",
+  "custom_profiles": [
+    {
+      "source_path": "memory://custom/Rayard-Phase_1_Mini_Spot",
+      "manufacturer": "Rayard",
+      "name": "Phase 1 Mini Spot",
+      "short_name": "P1 Spot",
+      "fixture_type_id": null,
+      "dmx_modes": [
+        {
+          "name": "8ch",
+          "controls": [
+            {
+              "attribute": "Dimmer",
+              "channel_name": "Dimmer",
+              "geometry": null,
+              "offsets": [1],
+              "resolution": "EightBit",
+              "default_value": 0,
+              "functions": []
+            },
+            {
+              "attribute": "ColorRed",
+              "channel_name": "ColorRed",
+              "geometry": null,
+              "offsets": [2],
+              "resolution": "EightBit",
+              "default_value": 0,
+              "functions": []
+            },
+            {
+              "attribute": "ColorGreen",
+              "channel_name": "ColorGreen",
+              "geometry": null,
+              "offsets": [3],
+              "resolution": "EightBit",
+              "default_value": 0,
+              "functions": []
+            },
+            {
+              "attribute": "ColorBlue",
+              "channel_name": "ColorBlue",
+              "geometry": null,
+              "offsets": [4],
+              "resolution": "EightBit",
+              "default_value": 0,
+              "functions": []
+            },
+            {
+              "attribute": "Pan",
+              "channel_name": "Pan",
+              "geometry": null,
+              "offsets": [5, 6],
+              "resolution": "SixteenBit",
+              "default_value": 32768,
+              "functions": []
+            },
+            {
+              "attribute": "Tilt",
+              "channel_name": "Tilt",
+              "geometry": null,
+              "offsets": [7, 8],
+              "resolution": "SixteenBit",
+              "default_value": 32768,
+              "functions": []
+            }
+          ]
+        }
+      ],
+      "geometries": [],
+      "warnings": []
+    }
+  ],
+  "snapshot": {
+    "fixtures": [
+      {
+        "id": 1,
+        "label": "Mini Spot 1",
+        "profile_source_path": "memory://custom/Rayard-Phase_1_Mini_Spot",
+        "profile_name": "Phase 1 Mini Spot",
+        "manufacturer": "Rayard",
+        "mode_name": "8ch",
+        "universe": 0,
+        "address": 1,
+        "group_ids": ["Front"],
+        "position": {
+          "x": -2.0,
+          "y": 3.0,
+          "z": 0.0
+        },
+        "rotation": {
+          "pitch": 0.0,
+          "yaw": 0.0,
+          "roll": 0.0
+        },
+        "geometries": [],
+        "controls": [
+          {
+            "attribute": "Dimmer",
+            "channel_name": "Dimmer",
+            "geometry": null,
+            "offsets": [1],
+            "resolution": "EightBit",
+            "default_value": 0,
+            "functions": []
+          },
+          {
+            "attribute": "ColorRed",
+            "channel_name": "ColorRed",
+            "geometry": null,
+            "offsets": [2],
+            "resolution": "EightBit",
+            "default_value": 0,
+            "functions": []
+          },
+          {
+            "attribute": "ColorGreen",
+            "channel_name": "ColorGreen",
+            "geometry": null,
+            "offsets": [3],
+            "resolution": "EightBit",
+            "default_value": 0,
+            "functions": []
+          },
+          {
+            "attribute": "ColorBlue",
+            "channel_name": "ColorBlue",
+            "geometry": null,
+            "offsets": [4],
+            "resolution": "EightBit",
+            "default_value": 0,
+            "functions": []
+          },
+          {
+            "attribute": "Pan",
+            "channel_name": "Pan",
+            "geometry": null,
+            "offsets": [5, 6],
+            "resolution": "SixteenBit",
+            "default_value": 32768,
+            "functions": []
+          },
+          {
+            "attribute": "Tilt",
+            "channel_name": "Tilt",
+            "geometry": null,
+            "offsets": [7, 8],
+            "resolution": "SixteenBit",
+            "default_value": 32768,
+            "functions": []
+          }
+        ],
+        "attribute_values": [
+          {
+            "attribute": "Dimmer",
+            "value": 0
+          },
+          {
+            "attribute": "ColorRed",
+            "value": 0
+          },
+          {
+            "attribute": "ColorGreen",
+            "value": 0
+          },
+          {
+            "attribute": "ColorBlue",
+            "value": 0
+          },
+          {
+            "attribute": "Pan",
+            "value": 32768
+          },
+          {
+            "attribute": "Tilt",
+            "value": 32768
+          }
+        ],
+        "limits": {
+          "dimmer_min": 0,
+          "dimmer_max": 65535,
+          "pan_min": 0,
+          "pan_max": 65535,
+          "tilt_min": 0,
+          "tilt_max": 65535,
+          "invert_pan": false,
+          "invert_tilt": false,
+          "swap_pan_tilt": false
+        },
+        "highlighted": false,
+        "soloed": false,
+        "parked": false
+      }
+    ],
+    "cues": [
+      {
+        "id": 1,
+        "label": "White Hit",
+        "fade_ms": 100,
+        "targets": [
+          {
+            "fixture_id": 1,
+            "values": [
+              {
+                "attribute": "Dimmer",
+                "value": 65535
+              },
+              {
+                "attribute": "ColorRed",
+                "value": 65535
+              },
+              {
+                "attribute": "ColorGreen",
+                "value": 65535
+              },
+              {
+                "attribute": "ColorBlue",
+                "value": 65535
+              }
+            ]
+          }
+        ],
+        "video_targets": [],
+        "video_output_targets": [
+          {
+            "output_id": 1,
+            "enabled": true,
+            "opacity": 1.0,
+            "blackout": false
+          }
+        ],
+        "node_graph_targets": []
+      }
+    ],
+    "active_cue_id": null,
+    "active_fade": null,
+    "timeline": {
+      "events": [],
+      "automations": [],
+      "video_automations": [],
+      "audio": null,
+      "playing": false,
+      "position_ms": 0,
+      "duration_ms": 0
+    },
+    "video": {
+      "layers": [],
+      "compositions": [
+        {
+          "id": 1,
+          "label": "Main",
+          "layer_ids": [],
+          "output_ids": [1]
+        }
+      ],
+      "outputs": [
+        {
+          "id": 1,
+          "label": "Front Projector",
+          "kind": "Display",
+          "enabled": true,
+          "composition_id": 1,
+          "fullscreen": false,
+          "monitor_id": 0,
+          "width": 1920,
+          "height": 1080,
+          "endpoint_name": null,
+          "opacity": 1.0,
+          "blackout": false,
+          "mapping": {
+            "stage_x": 0.0,
+            "stage_y": 0.0,
+            "stage_z": 4.0,
+            "offset_x": 0.0,
+            "offset_y": 0.0,
+            "scale_x": 1.0,
+            "scale_y": 1.0,
+            "rotation_deg": 0.0,
+            "aspect_ratio": 1.7777778,
+            "aspect_mode": "Fit",
+            "lens_distortion": 0.0,
+            "keystone_x": 0.08,
+            "keystone_y": -0.04,
+            "corner_top_left_x": -0.04,
+            "corner_top_left_y": 0.02,
+            "corner_top_right_x": 0.03,
+            "corner_top_right_y": 0.01,
+            "corner_bottom_right_x": 0.02,
+            "corner_bottom_right_y": -0.03,
+            "corner_bottom_left_x": -0.03,
+            "corner_bottom_left_y": -0.02
+          }
+        }
+      ],
+      "mapping_presets": [
+        {
+          "label": "16:9 Front Fit",
+          "mapping": {
+            "stage_x": 0.0,
+            "stage_y": 0.0,
+            "stage_z": 4.0,
+            "offset_x": 0.0,
+            "offset_y": 0.0,
+            "scale_x": 1.0,
+            "scale_y": 1.0,
+            "rotation_deg": 0.0,
+            "aspect_ratio": 1.7777778,
+            "aspect_mode": "Fit",
+            "lens_distortion": 0.0,
+            "keystone_x": 0.08,
+            "keystone_y": -0.04,
+            "corner_top_left_x": -0.04,
+            "corner_top_left_y": 0.02,
+            "corner_top_right_x": 0.03,
+            "corner_top_right_y": 0.01,
+            "corner_bottom_right_x": 0.02,
+            "corner_bottom_right_y": -0.03,
+            "corner_bottom_left_x": -0.03,
+            "corner_bottom_left_y": -0.02
+          }
+        }
+      ],
+      "master_opacity": 1.0,
+      "blackout": false
+    },
+    "effects": [],
+    "node_graphs": [],
+    "output": {
+      "enabled": true,
+      "protocol": "ArtNet",
+      "target_ip": "127.0.0.1",
+      "port": 6454,
+      "universe": 0,
+      "serial_port": "",
+      "serial_baud_rate": 57600
+    },
+    "dmx_outputs": [
+      {
+        "enabled": true,
+        "protocol": "ArtNet",
+        "target_ip": "127.0.0.1",
+        "port": 6454,
+        "universe": 0,
+        "serial_port": "",
+        "serial_baud_rate": 57600
+      }
+    ],
+    "lighting_master": 1.0,
+    "submasters": [
+      {
+        "group_id": "Front",
+        "label": "Front",
+        "level": 1.0
+      }
+    ],
+    "blackout": false,
+    "clock": {
+      "bpm": 120.0,
+      "beat_phase": 0.0,
+      "beat_counter": 0,
+      "tap_count": 0,
+      "source": "Manual"
+    },
+    "stage_map": {
+      "locked": false,
+      "min_x": -6.0,
+      "max_x": 6.0,
+      "min_z": -4.0,
+      "max_z": 6.0
+    },
+    "dmx_preview": [],
+    "dmx_previews": [],
+    "telemetry": {
+      "frame_counter": 0,
+      "queue_depth": 0,
+      "queue_depth_abs_max": 0,
+      "queue_push_failure_count": 0,
+      "last_tick_interval_us": 0,
+      "tick_jitter_last_us": 0,
+      "tick_jitter_abs_max_us": 0,
+      "tick_jitter_stddev_us": 0.0,
+      "tick_jitter_p95_us": 0,
+      "tick_jitter_p99_us": 0,
+      "tick_jitter_samples": 0,
+      "last_command_queue_latency_us": 0,
+      "command_queue_latency_abs_max_us": 0,
+      "command_queue_latency_p95_us": 0,
+      "command_queue_latency_p99_us": 0,
+      "command_queue_latency_samples": 0,
+      "last_command_drain_count": 0,
+      "command_drain_abs_max": 0,
+      "command_drain_limit_hit_count": 0,
+      "last_command_to_dmx_tick_latency_us": 0,
+      "command_to_dmx_tick_latency_abs_max_us": 0,
+      "command_to_dmx_tick_latency_p95_us": 0,
+      "command_to_dmx_tick_latency_p99_us": 0,
+      "command_to_dmx_tick_latency_samples": 0,
+      "last_dmx_send_interval_us": 0,
+      "dmx_send_interval_min_us": 0,
+      "dmx_send_interval_max_us": 0,
+      "dmx_send_interval_samples": 0,
+      "low_latency_dmx_tick_request_count": 0,
+      "low_latency_dmx_tick_advance_count": 0,
+      "low_latency_dmx_tick_defer_count": 0,
+      "last_packet_bytes": 0,
+      "last_dmx_output_count": 0,
+      "last_dmx_send_success_count": 0,
+      "last_dmx_send_failure_count": 0,
+      "total_dmx_send_success_count": 0,
+      "total_dmx_send_failure_count": 0,
+      "last_dmx_route_results": [],
+      "last_error": null
+    }
+  }
+}

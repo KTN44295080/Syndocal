@@ -9,6 +9,7 @@ use thiserror::Error;
 pub const ARTNET_PORT: u16 = 6454;
 pub const ART_DMX_HEADER_LEN: usize = 18;
 const ART_DMX_PACKET_LEN: usize = 18 + 512;
+const ARTNET_PROTOCOL_VERSION: u16 = 14;
 
 #[derive(Debug, Error)]
 pub enum ArtNetError {
@@ -101,7 +102,15 @@ pub fn parse_art_dmx_packet(packet: &[u8]) -> Option<ArtDmxPacket<'_>> {
         return None;
     }
 
+    let protocol_version = u16::from_be_bytes([packet[10], packet[11]]);
+    if protocol_version < ARTNET_PROTOCOL_VERSION {
+        return None;
+    }
+
     let length = u16::from_be_bytes([packet[16], packet[17]]) as usize;
+    if !(2..=512).contains(&length) || length % 2 != 0 {
+        return None;
+    }
     let end = ART_DMX_HEADER_LEN.checked_add(length)?;
     if packet.len() < end {
         return None;
@@ -160,6 +169,33 @@ mod tests {
         assert_eq!(parsed.universe, 42);
         assert_eq!(parsed.data.len(), 512);
         assert_eq!(parsed.data[4], 123);
+    }
+
+    #[test]
+    fn rejects_invalid_art_dmx_packet_versions_and_lengths() {
+        let frame = [0u8; 512];
+        let mut packet = build_art_dmx_packet(1, &frame);
+
+        packet[10] = 0x00;
+        packet[11] = 0x0d;
+        assert!(parse_art_dmx_packet(&packet).is_none());
+
+        packet = build_art_dmx_packet(1, &frame);
+        packet[16] = 0x00;
+        packet[17] = 0x01;
+        assert!(parse_art_dmx_packet(&packet).is_none());
+
+        packet = build_art_dmx_packet(1, &frame);
+        packet[16] = 0x00;
+        packet[17] = 0x03;
+        assert!(parse_art_dmx_packet(&packet).is_none());
+
+        packet = build_art_dmx_packet(1, &frame);
+        packet[16] = 0x02;
+        packet[17] = 0x02;
+        let mut oversized_packet = packet.to_vec();
+        oversized_packet.extend_from_slice(&[0, 0]);
+        assert!(parse_art_dmx_packet(&oversized_packet).is_none());
     }
 
     #[test]

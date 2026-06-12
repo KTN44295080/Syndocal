@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "request": {
+    "manufacturer": "Rayard",
+    "name": "Phase 1 Mini Spot",
+    "mode_name": "8ch",
+    "attributes": [
+      "Dimmer@1:8",
+      "ColorRed@2:8",
+      "ColorGreen@3:8",
+      "ColorBlue@4:8",
+      "Pan@5:16",
+      "Tilt@7:16"
+    ]
+  }
+}

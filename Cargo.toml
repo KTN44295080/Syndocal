@@ -14,7 +14,8 @@ members = [
 [workspace.package]
 edition = "2021"
 license = "MIT"
-repository = "https://example.invalid/kdmx"
+authors = ["Seraf() KTN"]
+repository = "https://example.invalid/rayard"
 
 [workspace.dependencies]
 audio = { path = "crates/audio" }

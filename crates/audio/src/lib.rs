@@ -1,9 +1,14 @@
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use protocol::{AudioAnalysisSummary, AudioWaveformPoint};
 use thiserror::Error;
 
 const DEFAULT_WAVEFORM_POINTS: usize = 512;
+const DEFAULT_FFMPEG_SAMPLE_RATE: u32 = 44_100;
 const ONSET_WINDOW_MS: u64 = 50;
 const MIN_BPM: f32 = 60.0;
 const MAX_BPM: f32 = 200.0;
@@ -22,6 +27,12 @@ pub enum AudioError {
     UnsupportedFormat(u16),
     #[error("unsupported WAV bit depth {0}")]
     UnsupportedBitDepth(u16),
+    #[error("failed to run ffmpeg: {0}")]
+    FfmpegIo(String),
+    #[error("ffmpeg failed to decode audio: {0}")]
+    FfmpegDecode(String),
+    #[error("ffmpeg returned malformed f32 PCM audio")]
+    InvalidDecodedAudio,
     #[error("invalid WAV file: {0}")]
     Invalid(&'static str),
 }
@@ -39,6 +50,33 @@ pub fn analyze_wav_file(path: impl AsRef<Path>) -> Result<AudioAnalysisSummary, 
     analyze_wav_file_with_points(path, DEFAULT_WAVEFORM_POINTS)
 }
 
+pub fn analyze_audio_file(path: impl AsRef<Path>) -> Result<AudioAnalysisSummary, AudioError> {
+    analyze_audio_file_with_points(path, DEFAULT_WAVEFORM_POINTS)
+}
+
+pub fn analyze_audio_file_with_points(
+    path: impl AsRef<Path>,
+    max_points: usize,
+) -> Result<AudioAnalysisSummary, AudioError> {
+    let path = path.as_ref();
+    if path.extension().is_some() && !is_wav_path(path) {
+        return analyze_audio_file_with_ffmpeg_binary(path, max_points, ffmpeg_binary_from_env());
+    }
+    match analyze_wav_file_with_points(path, max_points) {
+        Ok(analysis) => Ok(analysis),
+        Err(wav_error) if should_try_ffmpeg_after_wav_error(path, &wav_error) => {
+            let ffmpeg_result =
+                analyze_audio_file_with_ffmpeg_binary(path, max_points, ffmpeg_binary_from_env());
+            if is_wav_path(path) {
+                ffmpeg_result.or(Err(wav_error))
+            } else {
+                ffmpeg_result
+            }
+        }
+        Err(wav_error) => Err(wav_error),
+    }
+}
+
 pub fn analyze_wav_file_with_points(
     path: impl AsRef<Path>,
     max_points: usize,
@@ -50,19 +88,124 @@ pub fn analyze_wav_file_with_points(
     let samples = decode_mono_samples(data, format)?;
     let frame_count = samples.len();
     let duration_ms = frames_to_ms(frame_count, format.sample_rate);
-    let waveform = build_waveform(&samples, format.sample_rate, max_points.max(1));
-    let beats = detect_beats(&samples, format.sample_rate);
+    Ok(analyze_mono_samples(
+        path,
+        format.sample_rate,
+        format.channels,
+        duration_ms,
+        samples,
+        max_points,
+    ))
+}
+
+pub fn analyze_audio_file_with_ffmpeg_binary(
+    path: impl AsRef<Path>,
+    max_points: usize,
+    binary: impl AsRef<Path>,
+) -> Result<AudioAnalysisSummary, AudioError> {
+    let path = path.as_ref();
+    let sample_rate = DEFAULT_FFMPEG_SAMPLE_RATE;
+    let output = Command::new(binary.as_ref())
+        .args(["-hide_banner", "-loglevel", "error", "-i"])
+        .arg(path)
+        .args([
+            "-f",
+            "f32le",
+            "-ac",
+            "1",
+            "-ar",
+            &sample_rate.to_string(),
+            "pipe:1",
+        ])
+        .output()
+        .map_err(|error| AudioError::FfmpegIo(error.to_string()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(AudioError::FfmpegDecode(if stderr.is_empty() {
+            format!("process exited with {}", output.status)
+        } else {
+            stderr
+        }));
+    }
+    let samples = decode_f32le_mono_samples(&output.stdout)?;
+    let duration_ms = frames_to_ms(samples.len(), sample_rate);
+    Ok(analyze_mono_samples(
+        path,
+        sample_rate,
+        1,
+        duration_ms,
+        samples,
+        max_points,
+    ))
+}
+
+fn analyze_mono_samples(
+    path: &Path,
+    sample_rate: u32,
+    channels: u16,
+    duration_ms: u64,
+    samples: Vec<f32>,
+    max_points: usize,
+) -> AudioAnalysisSummary {
+    let waveform = build_waveform(&samples, sample_rate, max_points.max(1));
+    let beats = detect_beats(&samples, sample_rate);
     let estimated_bpm = estimate_bpm(&beats);
 
-    Ok(AudioAnalysisSummary {
+    AudioAnalysisSummary {
         path: path.to_string_lossy().to_string(),
-        sample_rate: format.sample_rate,
-        channels: format.channels,
+        sample_rate,
+        channels,
         duration_ms,
         estimated_bpm,
         waveform,
         beats,
-    })
+    }
+}
+
+fn decode_f32le_mono_samples(bytes: &[u8]) -> Result<Vec<f32>, AudioError> {
+    if bytes.len() % 4 != 0 {
+        return Err(AudioError::InvalidDecodedAudio);
+    }
+    Ok(bytes
+        .chunks_exact(4)
+        .map(|chunk| {
+            let value = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            if value.is_finite() {
+                value.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            }
+        })
+        .collect())
+}
+
+fn should_try_ffmpeg_after_wav_error(path: &Path, error: &AudioError) -> bool {
+    match error {
+        AudioError::Read(_) | AudioError::MissingFormat | AudioError::MissingData => false,
+        AudioError::Invalid(_) if is_wav_path(path) => false,
+        AudioError::NotWave
+        | AudioError::UnsupportedFormat(_)
+        | AudioError::UnsupportedBitDepth(_)
+        | AudioError::Invalid(_) => true,
+        AudioError::FfmpegIo(_) | AudioError::FfmpegDecode(_) | AudioError::InvalidDecodedAudio => {
+            false
+        }
+    }
+}
+
+fn is_wav_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| {
+            extension.eq_ignore_ascii_case("wav") || extension.eq_ignore_ascii_case("wave")
+        })
+        .unwrap_or(false)
+}
+
+fn ffmpeg_binary_from_env() -> PathBuf {
+    std::env::var_os("RAYARD_FFMPEG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "ffmpeg".into())
 }
 
 fn parse_wav(bytes: &[u8]) -> Result<(WavFormat, &[u8]), AudioError> {
@@ -319,6 +462,28 @@ mod tests {
         assert!(matches!(parse_wav(b"nope"), Err(AudioError::NotWave)));
     }
 
+    #[test]
+    fn decodes_ffmpeg_f32le_output_for_audio_analysis() {
+        let binary = fake_ffmpeg_binary();
+        let analysis =
+            analyze_audio_file_with_ffmpeg_binary("ignored-by-fake-ffmpeg.mp3", 8, &binary)
+                .unwrap();
+        let _ = std::fs::remove_file(&binary);
+
+        assert_eq!(analysis.sample_rate, DEFAULT_FFMPEG_SAMPLE_RATE);
+        assert_eq!(analysis.channels, 1);
+        assert_eq!(analysis.waveform.len(), 2);
+        assert!(analysis.waveform.iter().all(|point| point.peak <= 1.0));
+    }
+
+    #[test]
+    fn rejects_misaligned_ffmpeg_pcm_output() {
+        assert!(matches!(
+            decode_f32le_mono_samples(b"abc"),
+            Err(AudioError::InvalidDecodedAudio)
+        ));
+    }
+
     fn test_wav_with_clicks(bpm: f32, duration_ms: u64, beats: usize) -> Vec<u8> {
         let sample_rate = 8_000u32;
         let frames = (u64::from(sample_rate) * duration_ms / 1_000) as usize;
@@ -359,5 +524,28 @@ mod tests {
         wav.extend_from_slice(&(data.len() as u32).to_le_bytes());
         wav.extend_from_slice(data);
         wav
+    }
+
+    fn fake_ffmpeg_binary() -> PathBuf {
+        let extension = if cfg!(windows) { "cmd" } else { "sh" };
+        let path = std::env::temp_dir().join(format!(
+            "rayard-fake-audio-ffmpeg-{}.{extension}",
+            std::process::id()
+        ));
+        #[cfg(windows)]
+        std::fs::write(
+            &path,
+            b"@echo off\r\n<nul set /p dummy=ABCDABCD\r\nexit /b 0\r\n",
+        )
+        .unwrap();
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::write(&path, b"#!/bin/sh\nprintf ABCDABCD\n").unwrap();
+            let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&path, permissions).unwrap();
+        }
+        path
     }
 }
