@@ -18,11 +18,14 @@ The worktree is expected to be dirty. Do not revert broad changes just because t
 
 Current handoff checkpoint, 2026-06-14:
 
-- Progress estimate: about 98.5%. This is a strong prototype/handoff checkpoint, not final product completion.
+- Handoff checkpoint: 100%. This is a strong prototype handoff point, not final product completion.
+- Product completion is not 100% yet: native wgpu video output, in-process FFmpeg/HAP workers, hardware-timed Open DMX refinement, and real NDI/Spout/Syphon bindings remain future work.
 - Full workspace tests passed: `cargo test --workspace`.
 - Frontend production build passed: `pnpm --dir app build`.
 - Tauri debug build passed: `pnpm --dir app tauri build --debug`.
+- Tauri release build passed: `pnpm --dir app tauri build`.
 - Debug executable was produced at `target/debug/rayard.exe`.
+- Release executable was produced at `target/release/rayard.exe`.
 - Current diff is intentionally broad: roughly 20 modified tracked files plus new `app/src/components/VideoOutputWindow.tsx` and `app/src/videoFrameCanvas.ts`.
 
 `app/src/App.tsx` was previously reverted after a bad PowerShell overwrite. The exact 24,429-line dirty version could not be recovered from editor history, but the current file has been rebuilt to a working recovery point: Rayard branding is restored, Setup/Control/Touch still render, Setup Mapping has a broad 2D map workspace, and `pnpm --dir app build` passes. Treat this as the handoff baseline rather than trying to resurrect the lost dirty file with git checkout/reset.
@@ -93,7 +96,7 @@ pnpm --dir app tauri build
 - The app topbar has `Load Sample`, backed by the embedded `samples/phase1-mini-show.ry`, for quick Phase 1 manual smoke checks without a file dialog.
 - The app topbar also has `Run Smoke`: it loads the embedded mini show, triggers the first cue, switches to Control, selects DMX Raw U0, and reports non-zero values in A1-A8.
 - The Output panel telemetry section now exposes Reset, Save Report, and live budget status. It is backed by `reset_engine_telemetry`, `save_engine_telemetry_report`, and `get_engine_telemetry_report`.
-- Latest major checkpoint in this handoff, 2026-06-14: `cargo test --workspace`, `pnpm --dir app build`, and `pnpm --dir app tauri build --debug` passed on Windows.
+- Latest major checkpoint in this handoff, 2026-06-14: `cargo test --workspace`, `pnpm --dir app build`, `pnpm --dir app tauri build --debug`, and `pnpm --dir app tauri build` passed on Windows.
 - Position Wave effect editing has quick presets for origin from stage center or selected fixture, X/Z/radial direction buttons, and a mini stage map for setting origin/direction against current 2D fixture and projector positions. Radial uses the engine's zero-direction distance fallback.
 - Control now includes a minimal Node Graph builder that reuses the current LFO/Position Wave source and selected lighting/video target, with enable/disable/remove and `.nodegraph` preset save/load commands.
 - The video CPU reference compositor accepts RGBA, BGRA, DXT1, and DXT5 frames; `cargo test -p video` passes after the DXT/BGRA path was added.
