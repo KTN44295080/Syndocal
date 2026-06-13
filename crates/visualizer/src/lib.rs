@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use protocol::{
-    AttributeControl, EngineSnapshot, FixtureId, GeometrySummary, PatchedFixtureSummary, Vec3,
-    VideoOutputId, VideoOutputKind, VideoOutputSummary,
+    AttributeControl, EngineSnapshot, FixtureId, GeometrySummary, PatchedFixtureSummary,
+    StageObjectId, StageObjectKind, StageObjectSummary, Vec3, VideoOutputId, VideoOutputKind,
+    VideoOutputSummary,
 };
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +35,7 @@ pub struct VisualizerScene {
     pub fixture_models: Vec<FixtureModelNode>,
     pub beams: Vec<BeamNode>,
     pub video_surfaces: Vec<VideoSurfaceNode>,
+    pub stage_objects: Vec<StageObjectNode>,
     pub bounds: StageBounds,
 }
 
@@ -308,6 +310,18 @@ pub struct VideoSurfaceNode {
     pub blackout: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StageObjectNode {
+    pub id: StageObjectId,
+    pub label: String,
+    pub kind: StageObjectKind,
+    pub position: Vec3,
+    pub width: f32,
+    pub depth: f32,
+    pub rotation_deg: f32,
+    pub color: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct StageBounds {
     pub min: Vec3,
@@ -367,11 +381,17 @@ pub fn build_visualizer_scene(
         .iter()
         .map(video_surface_node_from_summary)
         .collect::<Vec<_>>();
+    let stage_objects = snapshot
+        .stage_objects
+        .iter()
+        .map(stage_object_node_from_summary)
+        .collect::<Vec<_>>();
     let bounds = stage_bounds(
         snapshot.fixtures.as_slice(),
         fixture_geometries.as_slice(),
         fixture_models.as_slice(),
         video_surfaces.as_slice(),
+        stage_objects.as_slice(),
     );
 
     VisualizerScene {
@@ -380,6 +400,7 @@ pub fn build_visualizer_scene(
         fixture_models,
         beams,
         video_surfaces,
+        stage_objects,
         bounds,
     }
 }
@@ -723,6 +744,27 @@ fn video_surface_node_from_summary(output: &VideoOutputSummary) -> VideoSurfaceN
         opacity: finite_or(output.opacity, 1.0).clamp(0.0, 1.0),
         enabled: output.enabled,
         blackout: output.blackout,
+    }
+}
+
+fn stage_object_node_from_summary(object: &StageObjectSummary) -> StageObjectNode {
+    StageObjectNode {
+        id: object.id,
+        label: object.label.clone(),
+        kind: object.kind,
+        position: Vec3 {
+            x: finite_or(object.x, 0.0),
+            y: 0.0,
+            z: finite_or(object.z, 0.0),
+        },
+        width: finite_or(object.width, 0.0).abs().max(0.01),
+        depth: finite_or(object.depth, 0.0).abs().max(0.01),
+        rotation_deg: finite_or(object.rotation_deg, 0.0),
+        color: object
+            .color
+            .as_ref()
+            .map(|color| color.trim().to_string())
+            .filter(|color| !color.is_empty()),
     }
 }
 
@@ -2651,6 +2693,7 @@ fn stage_bounds(
     fixture_geometries: &[FixtureGeometryNode],
     fixture_models: &[FixtureModelNode],
     video_surfaces: &[VideoSurfaceNode],
+    stage_objects: &[StageObjectNode],
 ) -> StageBounds {
     let model_bounds = fixture_models.iter().flat_map(|model| {
         let radius = model.bounding_radius.max(0.0);
@@ -2667,12 +2710,14 @@ fn stage_bounds(
             },
         ]
     });
+    let object_bounds = stage_objects.iter().flat_map(stage_object_bounds_points);
     let mut positions = fixtures
         .iter()
         .map(|fixture| fixture.position)
         .chain(fixture_geometries.iter().map(|geometry| geometry.position))
         .chain(model_bounds)
-        .chain(video_surfaces.iter().map(|surface| surface.position));
+        .chain(video_surfaces.iter().map(|surface| surface.position))
+        .chain(object_bounds);
     let Some(first) = positions.next() else {
         return StageBounds {
             min: Vec3::default(),
@@ -2699,6 +2744,24 @@ fn stage_bounds(
     )
 }
 
+fn stage_object_bounds_points(object: &StageObjectNode) -> [Vec3; 4] {
+    let half_width = object.width.max(0.0) / 2.0;
+    let half_depth = object.depth.max(0.0) / 2.0;
+    let radians = object.rotation_deg.to_radians();
+    let (sin, cos) = radians.sin_cos();
+    [
+        (-half_width, -half_depth),
+        (half_width, -half_depth),
+        (half_width, half_depth),
+        (-half_width, half_depth),
+    ]
+    .map(|(local_x, local_z)| Vec3 {
+        x: object.position.x + local_x * cos - local_z * sin,
+        y: object.position.y,
+        z: object.position.z + local_x * sin + local_z * cos,
+    })
+}
+
 fn finite_or(value: f32, fallback: f32) -> f32 {
     if value.is_finite() {
         value
@@ -2712,8 +2775,9 @@ mod tests {
     use super::*;
     use protocol::{
         AttributeControl, AttributeResolution, AttributeValueSummary, DmxUniversePreview,
-        EngineSnapshot, GeometrySummary, Rotation3, VideoOutputAspectMode, VideoOutputKind,
-        VideoOutputMapping, VideoOutputSummary, VideoSnapshot,
+        EngineSnapshot, GeometrySummary, Rotation3, StageObjectKind, StageObjectSummary,
+        VideoOutputAspectMode, VideoOutputKind, VideoOutputMapping, VideoOutputSummary,
+        VideoSnapshot,
     };
 
     #[test]
@@ -2880,6 +2944,58 @@ mod tests {
                 x: 3.0,
                 y: 2.0,
                 z: -4.0
+            }
+        );
+    }
+
+    #[test]
+    fn includes_stage_reference_objects_in_stage_scene() {
+        let snapshot = EngineSnapshot {
+            stage_objects: vec![StageObjectSummary {
+                id: 3,
+                label: "Front Truss".to_string(),
+                kind: StageObjectKind::Truss,
+                x: -2.0,
+                z: 5.0,
+                width: 4.0,
+                depth: 1.0,
+                rotation_deg: 0.0,
+                color: Some("#f2c14e".to_string()),
+            }],
+            ..EngineSnapshot::default()
+        };
+
+        let scene = build_visualizer_scene(&snapshot, VisualizerConfig::default());
+
+        assert!(scene.fixtures.is_empty());
+        assert_eq!(scene.stage_objects.len(), 1);
+        let object = &scene.stage_objects[0];
+        assert_eq!(object.id, 3);
+        assert_eq!(object.label, "Front Truss");
+        assert_eq!(object.kind, StageObjectKind::Truss);
+        assert_eq!(
+            object.position,
+            Vec3 {
+                x: -2.0,
+                y: 0.0,
+                z: 5.0
+            }
+        );
+        assert_eq!(object.color.as_deref(), Some("#f2c14e"));
+        assert_eq!(
+            scene.bounds.min,
+            Vec3 {
+                x: -4.0,
+                y: 0.0,
+                z: 4.5
+            }
+        );
+        assert_eq!(
+            scene.bounds.max,
+            Vec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 5.5
             }
         );
     }

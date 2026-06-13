@@ -131,21 +131,40 @@ pub fn load_model_file(
 
 fn normalized_wheel_media_path(media_name: &str) -> Option<String> {
     let name = media_name.trim().replace('\\', "/");
-    if name.is_empty()
-        || name.contains('/')
-        || name.contains(':')
-        || name == "."
-        || name == ".."
-        || name.starts_with('.')
-    {
+    if name.is_empty() || name.contains(':') || name.starts_with('/') {
         return None;
     }
-    let file_name = if name.to_ascii_lowercase().ends_with(".png") {
-        name
+    let mut segments = name.split('/').collect::<Vec<_>>();
+    if segments.iter().any(|segment| {
+        segment.is_empty() || *segment == "." || *segment == ".." || segment.starts_with('.')
+    }) {
+        return None;
+    }
+    if segments
+        .first()
+        .is_some_and(|segment| segment.eq_ignore_ascii_case("wheels"))
+    {
+        segments.remove(0);
+    }
+    if segments.is_empty() {
+        return None;
+    }
+    let lower = name.to_ascii_lowercase();
+    let last_segment = segments.pop()?;
+    let file_name = if matches!(
+        lower.rsplit_once('.').map(|(_, extension)| extension),
+        Some("png" | "jpg" | "jpeg" | "webp" | "svg")
+    ) {
+        last_segment.to_string()
     } else {
-        format!("{name}.png")
+        format!("{last_segment}.png")
     };
-    Some(format!("wheels/{file_name}"))
+    let mut normalized = PathBuf::from("wheels");
+    for segment in segments {
+        normalized.push(segment);
+    }
+    normalized.push(file_name);
+    Some(normalized.to_string_lossy().replace('\\', "/"))
 }
 
 fn normalized_model_file_paths(model_file: &str) -> Vec<String> {
@@ -194,6 +213,7 @@ pub fn parse_description_xml(
     let geometries = parse_geometries(&fixture, &models, &mut warnings);
     let wheel_slots = parse_wheel_slots(&fixture);
     let dmx_modes = parse_dmx_modes(&fixture, &wheel_slots, &mut warnings);
+    warn_geometry_reference_issues(&geometries, &dmx_modes, &mut warnings);
 
     if dmx_modes.is_empty() {
         warnings.push("No DMXMode nodes were found".to_string());
@@ -354,6 +374,95 @@ fn parse_geometry_node(
     }
 }
 
+fn warn_geometry_reference_issues(
+    geometries: &[GeometrySummary],
+    dmx_modes: &[DmxModeSummary],
+    warnings: &mut Vec<String>,
+) {
+    let mut geometry_names = HashMap::<&str, usize>::new();
+    let mut parent_by_name = HashMap::<&str, &str>::new();
+
+    for geometry in geometries {
+        let name = geometry.name.trim();
+        if name.is_empty() {
+            warnings.push("A geometry node has an empty name".to_string());
+            continue;
+        }
+        *geometry_names.entry(name).or_insert(0) += 1;
+        if let Some(parent) = geometry
+            .parent
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            parent_by_name.insert(name, parent);
+        }
+    }
+
+    for (name, count) in &geometry_names {
+        if *count > 1 {
+            warnings.push(format!(
+                "Geometry '{name}' is defined {count} times; DMX geometry references may be ambiguous"
+            ));
+        }
+    }
+
+    for geometry in geometries {
+        let name = geometry.name.trim();
+        let Some(parent) = geometry
+            .parent
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        if parent == name {
+            warnings.push(format!("Geometry '{name}' references itself as parent"));
+        } else if !geometry_names.contains_key(parent) {
+            warnings.push(format!(
+                "Geometry '{name}' references missing parent geometry '{parent}'"
+            ));
+        }
+    }
+
+    for geometry in geometries {
+        let name = geometry.name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        let mut seen = Vec::<&str>::new();
+        let mut current = name;
+        while let Some(parent) = parent_by_name.get(current).copied() {
+            if seen.contains(&current) {
+                warnings.push(format!("Geometry '{name}' contains a parent cycle"));
+                break;
+            }
+            seen.push(current);
+            current = parent;
+        }
+    }
+
+    for mode in dmx_modes {
+        for control in &mode.controls {
+            let Some(geometry_name) = control
+                .geometry
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            if !geometry_names.contains_key(geometry_name) {
+                warnings.push(format!(
+                    "DMXMode '{}' channel '{}' references missing geometry '{}'",
+                    mode.name, control.channel_name, geometry_name
+                ));
+            }
+        }
+    }
+}
+
 fn parse_wheel_slots(fixture: &Node<'_, '_>) -> HashMap<String, WheelSlotInfo> {
     let mut slots = HashMap::new();
     for wheel in fixture
@@ -375,20 +484,40 @@ fn parse_wheel_slots(fixture: &Node<'_, '_>) -> HashMap<String, WheelSlotInfo> {
             };
             let slot_index = (index + 1) as u32;
             let info = WheelSlotInfo {
+                wheel_name: wheel_name.to_string(),
                 name: slot_name.to_string(),
                 color: attr(&slot, "Color").and_then(parse_wheel_slot_color),
-                media: attr(&slot, "MediaFileName").map(str::to_string),
+                media: wheel_slot_media(&slot).map(str::to_string),
             };
-            slots.insert(format!("{wheel_name}.{slot_name}"), info.clone());
-            slots.insert(format!("{wheel_name}.{slot_index}"), info.clone());
-            slots.insert(slot_name.to_string(), info);
+            insert_wheel_slot_alias(&mut slots, format!("{wheel_name}.{slot_name}"), &info);
+            insert_wheel_slot_alias(&mut slots, format!("{wheel_name}.{slot_index}"), &info);
+            insert_wheel_slot_alias(&mut slots, slot_name.to_string(), &info);
         }
     }
     slots
 }
 
+fn wheel_slot_media<'a, 'input>(slot: &Node<'a, 'input>) -> Option<&'a str> {
+    attr(slot, "MediaFileName")
+        .or_else(|| attr(slot, "MediaFile"))
+        .or_else(|| attr(slot, "FileName"))
+        .or_else(|| attr(slot, "File"))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn insert_wheel_slot_alias(
+    slots: &mut HashMap<String, WheelSlotInfo>,
+    key: String,
+    info: &WheelSlotInfo,
+) {
+    slots.insert(key.clone(), info.clone());
+    slots.insert(key.to_ascii_lowercase(), info.clone());
+}
+
 #[derive(Debug, Clone)]
 struct WheelSlotInfo {
+    wheel_name: String,
     name: String,
     color: Option<String>,
     media: Option<String>,
@@ -724,8 +853,10 @@ fn channel_set_wheel_slot<'a>(
     if let Some(reference) = set.wheel_slot.as_deref() {
         return (
             Some(reference.to_string()),
-            wheel_slots.get(reference).or_else(|| {
-                wheel.and_then(|wheel_name| wheel_slots.get(&format!("{wheel_name}.{reference}")))
+            get_wheel_slot(wheel_slots, reference).or_else(|| {
+                wheel.and_then(|wheel_name| {
+                    get_wheel_slot(wheel_slots, &format!("{wheel_name}.{reference}"))
+                })
             }),
         );
     }
@@ -737,9 +868,9 @@ fn channel_set_wheel_slot<'a>(
         return (Some(slot_index.to_string()), None);
     };
     let reference = format!("{wheel_name}.{slot_index}");
-    let slot_info = wheel_slots.get(&reference);
+    let slot_info = get_wheel_slot(wheel_slots, &reference);
     let display_reference = slot_info
-        .map(|slot| format!("{wheel_name}.{}", slot.name))
+        .map(canonical_wheel_slot_reference)
         .unwrap_or_else(|| reference.clone());
     (Some(display_reference), slot_info)
 }
@@ -751,16 +882,14 @@ fn channel_function_wheel_slot<'a>(
     wheel_slot_index: Option<u32>,
 ) -> (Option<String>, Option<&'a WheelSlotInfo>) {
     if let Some(reference) = wheel_slot {
-        let slot_info = wheel_slots.get(reference).or_else(|| {
-            wheel.and_then(|wheel_name| wheel_slots.get(&format!("{wheel_name}.{reference}")))
+        let slot_info = get_wheel_slot(wheel_slots, reference).or_else(|| {
+            wheel.and_then(|wheel_name| {
+                get_wheel_slot(wheel_slots, &format!("{wheel_name}.{reference}"))
+            })
         });
-        let display_reference = if reference.contains('.') {
-            reference.to_string()
-        } else {
-            slot_info
-                .and_then(|slot| wheel.map(|wheel_name| format!("{wheel_name}.{}", slot.name)))
-                .unwrap_or_else(|| reference.to_string())
-        };
+        let display_reference = slot_info
+            .map(canonical_wheel_slot_reference)
+            .unwrap_or_else(|| reference.to_string());
         return (Some(display_reference), slot_info);
     }
 
@@ -771,11 +900,24 @@ fn channel_function_wheel_slot<'a>(
         return (Some(slot_index.to_string()), None);
     };
     let reference = format!("{wheel_name}.{slot_index}");
-    let slot_info = wheel_slots.get(&reference);
+    let slot_info = get_wheel_slot(wheel_slots, &reference);
     let display_reference = slot_info
-        .map(|slot| format!("{wheel_name}.{}", slot.name))
+        .map(canonical_wheel_slot_reference)
         .unwrap_or_else(|| reference.clone());
     (Some(display_reference), slot_info)
+}
+
+fn get_wheel_slot<'a>(
+    wheel_slots: &'a HashMap<String, WheelSlotInfo>,
+    reference: &str,
+) -> Option<&'a WheelSlotInfo> {
+    wheel_slots
+        .get(reference)
+        .or_else(|| wheel_slots.get(&reference.to_ascii_lowercase()))
+}
+
+fn canonical_wheel_slot_reference(slot: &WheelSlotInfo) -> String {
+    format!("{}.{}", slot.wheel_name, slot.name)
 }
 
 fn attr<'a, 'input>(node: &Node<'a, 'input>, name: &str) -> Option<&'a str> {
@@ -989,6 +1131,35 @@ mod tests {
         </GDTF>
     "##;
 
+    fn test_geometry(name: &str, kind: &str, parent: Option<&str>) -> GeometrySummary {
+        GeometrySummary {
+            name: name.to_string(),
+            kind: kind.to_string(),
+            parent: parent.map(str::to_string),
+            matrix: identity_matrix(),
+            model_name: None,
+            model_file: None,
+            model_primitive: None,
+            model_dimensions: None,
+            beam_type: None,
+            beam_angle_deg: None,
+            field_angle_deg: None,
+            beam_radius: None,
+        }
+    }
+
+    fn test_control(channel_name: &str, geometry: Option<&str>) -> AttributeControl {
+        AttributeControl {
+            attribute: channel_name.to_string(),
+            channel_name: channel_name.to_string(),
+            geometry: geometry.map(str::to_string),
+            offsets: vec![1],
+            resolution: AttributeResolution::EightBit,
+            default_value: 0,
+            functions: Vec::new(),
+        }
+    }
+
     #[test]
     fn parses_modes_channels_and_geometry() {
         let profile = parse_description_xml("fixture.gdtf", SAMPLE_XML).unwrap();
@@ -1147,13 +1318,102 @@ mod tests {
     }
 
     #[test]
+    fn warns_about_unresolved_and_ambiguous_geometry_references() {
+        let xml = r#"
+            <GDTF>
+              <FixtureType Name="Broken Geometry" Manufacturer="Rayard">
+                <Geometries>
+                  <Geometry Name="Base">
+                    <Axis Name="Head" />
+                  </Geometry>
+                  <Geometry Name="Base" />
+                  <Geometry Name="LoopA">
+                    <Geometry Name="LoopB">
+                      <Geometry Name="LoopA" />
+                    </Geometry>
+                  </Geometry>
+                </Geometries>
+                <DMXModes>
+                  <DMXMode Name="Standard">
+                    <DMXChannels>
+                      <DMXChannel Name="Dimmer" Geometry="MissingLens" Offset="1">
+                        <LogicalChannel Attribute="Dimmer">
+                          <ChannelFunction Attribute="Dimmer" DMXFrom="0/1" />
+                        </LogicalChannel>
+                      </DMXChannel>
+                    </DMXChannels>
+                  </DMXMode>
+                </DMXModes>
+              </FixtureType>
+            </GDTF>
+        "#;
+
+        let profile = parse_description_xml("broken-geometry.gdtf", xml).unwrap();
+
+        assert!(profile
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Geometry 'Base' is defined 2 times")));
+        assert!(profile
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Geometry 'LoopA' is defined 2 times")));
+        assert!(profile
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("contains a parent cycle")));
+        assert!(profile.warnings.iter().any(|warning| {
+            warning.contains(
+                "DMXMode 'Standard' channel 'Dimmer' references missing geometry 'MissingLens'",
+            )
+        }));
+    }
+
+    #[test]
+    fn geometry_reference_warning_helper_catches_corrupt_parent_links() {
+        let geometries = vec![
+            test_geometry("Base", "Geometry", None),
+            test_geometry("Base", "Geometry", None),
+            test_geometry("Head", "Axis", Some("MissingParent")),
+            test_geometry("Self", "Axis", Some("Self")),
+            test_geometry("CycleA", "Axis", Some("CycleB")),
+            test_geometry("CycleB", "Axis", Some("CycleA")),
+        ];
+        let modes = vec![DmxModeSummary {
+            name: "Standard".to_string(),
+            controls: vec![test_control("Pan", Some("MissingGeometry"))],
+        }];
+        let mut warnings = Vec::new();
+
+        warn_geometry_reference_issues(&geometries, &modes, &mut warnings);
+
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("Geometry 'Base' is defined 2 times")));
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("missing parent geometry 'MissingParent'")));
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("Geometry 'Self' references itself as parent")));
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("contains a parent cycle")));
+        assert!(warnings.iter().any(|warning| {
+            warning.contains(
+                "DMXMode 'Standard' channel 'Pan' references missing geometry 'MissingGeometry'",
+            )
+        }));
+    }
+
+    #[test]
     fn channel_function_wheel_slot_index_resolves_slot_metadata() {
         let xml = r##"
             <GDTF>
               <FixtureType Name="Color Wheel" Manufacturer="Rayard">
                 <Wheels>
                   <Wheel Name="ColorWheel">
-                    <WheelSlot Name="Red" Color="#ff0000" MediaFileName="red_filter" />
+                    <WheelSlot Name="Red" Color="#ff0000" FileName="red_filter" />
                     <WheelSlot Name="Blue" Color="#0000ff" MediaFileName="blue_filter.png" />
                   </Wheel>
                 </Wheels>
@@ -1162,8 +1422,9 @@ mod tests {
                     <DMXChannels>
                       <DMXChannel Name="Color" Offset="1">
                         <LogicalChannel Attribute="Color1">
-                          <ChannelFunction Name="Red Slot" Attribute="Color1" DMXFrom="10/1" Wheel="ColorWheel" WheelSlotIndex="1" />
+                          <ChannelFunction Name="Red Slot" Attribute="Color1" DMXFrom="10/1" Wheel="colorwheel" WheelSlotIndex="1" />
                           <ChannelFunction Name="Blue Slot" Attribute="Color1" DMXFrom="20/1" WheelName="ColorWheel" WheelSlotIndex="2" />
+                          <ChannelFunction Name="Blue Direct" Attribute="Color1" DMXFrom="30/1" WheelSlot="COLORWHEEL.BLUE" />
                         </LogicalChannel>
                       </DMXChannel>
                     </DMXChannels>
@@ -1188,6 +1449,13 @@ mod tests {
         assert_eq!(functions[1].wheel_slot_color, Some("#0000ff".to_string()));
         assert_eq!(
             functions[1].wheel_slot_media,
+            Some("blue_filter.png".to_string())
+        );
+        assert_eq!(functions[2].wheel_slot, Some("ColorWheel.Blue".to_string()));
+        assert_eq!(functions[2].wheel_slot_name, Some("Blue".to_string()));
+        assert_eq!(functions[2].wheel_slot_color, Some("#0000ff".to_string()));
+        assert_eq!(
+            functions[2].wheel_slot_media,
             Some("blue_filter.png".to_string())
         );
     }
@@ -1455,6 +1723,18 @@ mod tests {
                 .unwrap();
             archive.write_all(&[0x89, b'P', b'N', b'G']).unwrap();
             archive
+                .start_file("wheels/amber_glass.jpg", SimpleFileOptions::default())
+                .unwrap();
+            archive.write_all(&[0xff, 0xd8, 0xff]).unwrap();
+            archive
+                .start_file("wheels/line_mask.svg", SimpleFileOptions::default())
+                .unwrap();
+            archive.write_all(b"<svg/>").unwrap();
+            archive
+                .start_file("wheels/nested/spots.webp", SimpleFileOptions::default())
+                .unwrap();
+            archive.write_all(b"WEBP").unwrap();
+            archive
                 .start_file("models/lens.glb", SimpleFileOptions::default())
                 .unwrap();
             archive.write_all(&[b'g', b'l', b'T', b'F']).unwrap();
@@ -1464,7 +1744,15 @@ mod tests {
         let profile = load_profile(&path).unwrap();
         let media = load_wheel_media(&path, "breakup_01").unwrap();
         let media_with_extension = load_wheel_media(&path, "breakup_01.png").unwrap();
+        let media_with_wheels_folder = load_wheel_media(&path, "wheels/breakup_01.png").unwrap();
+        let jpeg_media = load_wheel_media(&path, "amber_glass.jpg").unwrap();
+        let svg_media = load_wheel_media(&path, "line_mask.svg").unwrap();
+        let nested_media = load_wheel_media(&path, "nested/spots.webp").unwrap();
+        let nested_media_with_wheels_folder =
+            load_wheel_media(&path, "wheels/nested/spots.webp").unwrap();
         let invalid_media = load_wheel_media(&path, "../breakup_01").unwrap();
+        let invalid_parent_media = load_wheel_media(&path, "wheels/../breakup_01").unwrap();
+        let invalid_model_media = load_wheel_media(&path, "models/lens.glb").unwrap();
         let model = load_model_file(&path, "models/lens.glb").unwrap();
         let model_without_folder = load_model_file(&path, "lens.glb").unwrap();
         let invalid_relative_model = load_model_file(&path, "../lens.glb").unwrap();
@@ -1476,7 +1764,14 @@ mod tests {
         assert_eq!(profile.dmx_modes[0].controls[0].offsets, vec![1]);
         assert_eq!(media, Some(vec![0x89, b'P', b'N', b'G']));
         assert_eq!(media_with_extension, Some(vec![0x89, b'P', b'N', b'G']));
+        assert_eq!(media_with_wheels_folder, Some(vec![0x89, b'P', b'N', b'G']));
+        assert_eq!(jpeg_media, Some(vec![0xff, 0xd8, 0xff]));
+        assert_eq!(svg_media, Some(b"<svg/>".to_vec()));
+        assert_eq!(nested_media, Some(b"WEBP".to_vec()));
+        assert_eq!(nested_media_with_wheels_folder, Some(b"WEBP".to_vec()));
         assert_eq!(invalid_media, None);
+        assert_eq!(invalid_parent_media, None);
+        assert_eq!(invalid_model_media, None);
         assert_eq!(model, Some(vec![b'g', b'l', b'T', b'F']));
         assert_eq!(model_without_folder, Some(vec![b'g', b'l', b'T', b'F']));
         assert_eq!(invalid_relative_model, None);

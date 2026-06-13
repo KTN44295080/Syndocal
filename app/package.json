@@ -2,7 +2,7 @@
   "name": "rayard",
   "private": true,
   "version": "0.1.0",
-  "author": "Seraf() KTN",
+  "author": "Seraf()のKTN",
   "type": "module",
   "scripts": {
     "dev": "vite",

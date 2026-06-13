@@ -1,13 +1,39 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { listen as tauriListen } from "@tauri-apps/api/event";
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { CategoryQuickPanel } from "./components/CategoryQuickPanel";
+import { ChannelFunctionPanel } from "./components/ChannelFunctionPanel";
+import { ColorControlPanel } from "./components/ColorControlPanel";
 import { CueCapturePreviewPanel } from "./components/CueCapturePreviewPanel";
+import { DimmerControlPanel } from "./components/DimmerControlPanel";
 import { DmxOutputConfigPanel } from "./components/DmxOutputConfigPanel";
 import { DmxRawMonitor } from "./components/DmxRawMonitor";
 import { DmxRoutesPanel } from "./components/DmxRoutesPanel";
 import { DmxTestFramePanel } from "./components/DmxTestFramePanel";
 import { EngineTelemetryPanel } from "./components/EngineTelemetryPanel";
+import { OpticsControlPanel, type OpticsControlEntry } from "./components/OpticsControlPanel";
+import { PositionControlPanel } from "./components/PositionControlPanel";
+import { ProjectorMapEditor, ProjectorMapPreview } from "./components/ProjectorMapEditor";
+import { readVideoOutputTestPattern, readVideoOutputWindowId, VideoOutputWindow } from "./components/VideoOutputWindow";
 import { TimelineOverview, type TimelineOverviewEvent } from "./components/TimelineOverview";
+import {
+  ColorWheelSlotPanel,
+  GoboWheelSlotPanel,
+  type ColorWheelFunctionEntry,
+  type GoboSlotPattern,
+  type GoboWheelFunctionEntry,
+} from "./components/WheelSlotPanel";
+import {
+  customProfileAttributeDraftChannelLabel,
+  customProfileAttributeDraftsFromText,
+  customProfileAttributeTemplates,
+  customProfileAttributeTextFromDrafts,
+  customProfilePreviewFromText,
+  customAttributeGeometryName,
+  profileGeometryRows,
+  unresolvedGeometryReferences,
+  type CustomProfileAttributeDraft,
+} from "./customFixtureProfile";
 import type {
   AttributeControl,
   AttributeResolution,
@@ -21,8 +47,14 @@ import type {
   EffectKind,
   EngineTelemetryReport,
   EngineSnapshot,
+  ExternalVideoIoPlans,
+  ExternalVideoTransportDriverEvent,
+  ExternalVideoTransportStatus,
+  ExternalVideoTransportSyncResponse,
+  ExternalVideoTransportSyncReport,
   FixtureLimits,
   FixtureProfileSummary,
+  GeometrySummary,
   LearnedMidiControl,
   LearnedOscControl,
   LfoShape,
@@ -31,6 +63,8 @@ import type {
   MidiControlMessage,
   MidiInputSummary,
   MidiOutputSummary,
+  NodeGraphSummary,
+  NodeGraphTransformOp,
   OscControlAction,
   OscControlMapping,
   OscInputConfig,
@@ -41,6 +75,9 @@ import type {
   RemoteControlConfig,
   SerialPortSummary,
   StageMapConfig,
+  StageMapPresetSummary,
+  StageObjectKind,
+  StageObjectSummary,
   TimelineCueEventSummary,
   TimelineAutomationSummary,
   TimelineTrackKind,
@@ -52,23 +89,74 @@ import type {
   VideoOutputAspectMode,
   VideoOutputKind,
   VideoOutputMapping,
+  VideoOutputRenderPlan,
   VideoOutputSummary,
+  VideoOutputWindowCloseSummary,
+  VideoOutputWindowStatus,
+  VideoOutputWindowSyncSummary,
   VideoParam,
   VideoPreviewDiagnostics,
+  VideoRuntimeStatus,
   VideoSourceKind,
+  VisualizerRenderPayload,
 } from "./types";
+import { videoFrameToDataUrl } from "./videoFrameCanvas";
+
+const tauriBackendUnavailableMessage = "Rayard desktop backend is not connected in this browser preview.";
+
+const isTauriRuntime = () =>
+  typeof window !== "undefined" && Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
+
+const invoke = <T,>(command: string, args?: Record<string, unknown>) => {
+  if (!isTauriRuntime()) {
+    return Promise.reject(new Error(tauriBackendUnavailableMessage));
+  }
+  return tauriInvoke<T>(command, args);
+};
+
+const listen = <T,>(event: string, handler: (event: { payload: T }) => void) => {
+  if (!isTauriRuntime()) {
+    return Promise.reject(new Error(tauriBackendUnavailableMessage));
+  }
+  return tauriListen<T>(event, handler);
+};
+
+const profileLoadMessage = (prefix: string, profile: FixtureProfileSummary) => {
+  const warningSuffix =
+    profile.warnings.length > 0
+      ? ` (${profile.warnings.length} warning${profile.warnings.length === 1 ? "" : "s"})`
+      : "";
+  return `${prefix} ${profile.manufacturer} ${profile.name}${warningSuffix}`;
+};
 
 type TimelineSnapMode = "Off" | "Beat" | "Bar" | "Grid";
 type WorkspaceTab = "setup" | "control" | "touch";
 type SetupSubTab = "library" | "profiles" | "patch" | "mapping" | "output";
 type FixtureLayoutMode = "line" | "grid" | "circle";
 type MappingAxis = "x" | "z";
+type MappingVideoOutputCornerKey = "topLeft" | "topRight" | "bottomRight" | "bottomLeft";
+type MappingStageObjectResizeMode = "width" | "depth" | "both";
+type NumericVideoOutputMappingField = Exclude<keyof VideoOutputMapping, "aspect_mode">;
 type VideoOutputPreviewMode = "output" | "test";
 type DmxPatchViewMode = "grid" | "list";
 type ControlCategory = "dimmer" | "color" | "position" | "gobo" | "beam" | "focus" | "other" | "fader";
 type MappingBulkGroupMode = "add" | "remove" | "set";
 type MappingFixtureFlag = "highlight" | "solo" | "park";
+type FixtureFlagClearKind = MappingFixtureFlag | "all";
 type MappingStageTool = "select" | "place" | "rotate" | "pan";
+const mappingStageTools: MappingStageTool[] = ["select", "place", "rotate", "pan"];
+const stageObjectKinds: StageObjectKind[] = ["Stage", "Truss", "Screen", "Riser", "Mask"];
+const stageObjectDefaultColor = (kind: StageObjectKind) =>
+  kind === "Screen"
+    ? "#4cb7ff"
+    : kind === "Truss"
+      ? "#f2c14e"
+      : kind === "Riser"
+        ? "#9b8cff"
+        : kind === "Mask"
+          ? "#727a84"
+          : "#5dd64c";
+const stageObjectClass = (object: { kind: StageObjectKind }) => `stageObject kind-${object.kind.toLowerCase()}`;
 type WaveStageDragMode = "origin" | "direction" | "videoTarget";
 type CueCaptureScopeMode = "all" | "lighting" | "selectedFixture" | "selectedGroup" | "video";
 
@@ -85,6 +173,81 @@ type CueCaptureScopeRequest =
   | { kind: "selectedFixture"; fixtureId: number }
   | { kind: "selectedGroup"; groupId: string }
   | { kind: "videoOnly" };
+
+const fixtureFlagClearKinds: FixtureFlagClearKind[] = ["all", "highlight", "solo", "park"];
+const fixtureFlagMappingActions = ["FixtureHighlight", "FixtureSolo", "FixturePark"] as const;
+const groupFlagMappingActions = ["GroupHighlight", "GroupSolo", "GroupPark"] as const;
+const videoLayerMappingActions = [
+  "VideoParam",
+  "VideoCuePointAdd",
+  "VideoCuePointRemove",
+  "VideoCuePointJump",
+  "VideoCuePointPrevious",
+  "VideoCuePointNext",
+  "VideoLayerEnabled",
+  "VideoLayerSolo",
+  "VideoPlay",
+  "VideoLoop",
+  "VideoLayerFade",
+] as const;
+const videoOutputMappingActions = [
+  "VideoOutputEnabled",
+  "VideoOutputOpacity",
+  "VideoOutputFade",
+  "VideoOutputMappingField",
+  "VideoOutputMappingPreset",
+  "VideoOutputBlackout",
+] as const;
+
+const videoOutputMappingFieldOptions = [
+  { value: "stage_x", label: "Stage X", low: -10, high: 10 },
+  { value: "stage_y", label: "Stage Y", low: -10, high: 10 },
+  { value: "stage_z", label: "Stage Z", low: -10, high: 10 },
+  { value: "offset_x", label: "Offset X", low: -1, high: 1 },
+  { value: "offset_y", label: "Offset Y", low: -1, high: 1 },
+  { value: "scale_x", label: "Scale X", low: 0.1, high: 2 },
+  { value: "scale_y", label: "Scale Y", low: 0.1, high: 2 },
+  { value: "rotation_deg", label: "Rotation", low: -180, high: 180 },
+  { value: "aspect_ratio", label: "Aspect Ratio", low: 0.5, high: 3 },
+  { value: "lens_distortion", label: "Lens Distortion", low: -1, high: 1 },
+  { value: "keystone_x", label: "Keystone X", low: -1, high: 1 },
+  { value: "keystone_y", label: "Keystone Y", low: -1, high: 1 },
+  { value: "corner_top_left_x", label: "Top Left X", low: -1, high: 1 },
+  { value: "corner_top_left_y", label: "Top Left Y", low: -1, high: 1 },
+  { value: "corner_top_right_x", label: "Top Right X", low: -1, high: 1 },
+  { value: "corner_top_right_y", label: "Top Right Y", low: -1, high: 1 },
+  { value: "corner_bottom_right_x", label: "Bottom Right X", low: -1, high: 1 },
+  { value: "corner_bottom_right_y", label: "Bottom Right Y", low: -1, high: 1 },
+  { value: "corner_bottom_left_x", label: "Bottom Left X", low: -1, high: 1 },
+  { value: "corner_bottom_left_y", label: "Bottom Left Y", low: -1, high: 1 },
+] as const satisfies readonly {
+  value: NumericVideoOutputMappingField;
+  label: string;
+  low: number;
+  high: number;
+}[];
+
+const isFixtureFlagMappingAction = (action: MidiControlAction | OscControlAction) =>
+  (fixtureFlagMappingActions as readonly string[]).includes(action);
+
+const isGroupFlagMappingAction = (action: MidiControlAction | OscControlAction) =>
+  (groupFlagMappingActions as readonly string[]).includes(action);
+
+const isVideoLayerMappingAction = (action: MidiControlAction | OscControlAction) =>
+  (videoLayerMappingActions as readonly string[]).includes(action);
+
+const isVideoOutputMappingAction = (action: MidiControlAction | OscControlAction) =>
+  (videoOutputMappingActions as readonly string[]).includes(action);
+
+const normalizeFixtureFlagClearKind = (value: string | null | undefined): FixtureFlagClearKind => {
+  const normalized = (value ?? "").trim().toLowerCase();
+  return fixtureFlagClearKinds.includes(normalized as FixtureFlagClearKind)
+    ? (normalized as FixtureFlagClearKind)
+    : "all";
+};
+
+const videoOutputMappingFieldOption = (field: string | null | undefined) =>
+  videoOutputMappingFieldOptions.find((option) => option.value === field) ?? videoOutputMappingFieldOptions[10];
 
 const defaultOutput: DmxOutputConfig = {
   enabled: true,
@@ -151,6 +314,49 @@ const defaultVideoOutputMapping: VideoOutputMapping = {
   corner_bottom_left_y: 0,
 };
 
+const mappingVideoOutputCorners = [
+  {
+    key: "topLeft",
+    label: "TL",
+    baseX: -1,
+    baseZ: -1,
+    xField: "corner_top_left_x",
+    zField: "corner_top_left_y",
+  },
+  {
+    key: "topRight",
+    label: "TR",
+    baseX: 1,
+    baseZ: -1,
+    xField: "corner_top_right_x",
+    zField: "corner_top_right_y",
+  },
+  {
+    key: "bottomRight",
+    label: "BR",
+    baseX: 1,
+    baseZ: 1,
+    xField: "corner_bottom_right_x",
+    zField: "corner_bottom_right_y",
+  },
+  {
+    key: "bottomLeft",
+    label: "BL",
+    baseX: -1,
+    baseZ: 1,
+    xField: "corner_bottom_left_x",
+    zField: "corner_bottom_left_y",
+  },
+] as const satisfies readonly {
+  key: MappingVideoOutputCornerKey;
+  label: string;
+  baseX: -1 | 1;
+  baseZ: -1 | 1;
+  xField: NumericVideoOutputMappingField;
+  zField: NumericVideoOutputMappingField;
+}[];
+const mappingVideoOutputCornerGain = 0.28;
+
 const stageViewBoxSize = 100;
 const stagePadding = 10;
 const cuePadSize = 10;
@@ -188,14 +394,35 @@ const defaultColorPalette = [
   "#ff4fa3",
   "#b5ff2f",
 ];
+const colorQuickLooks = [
+  { label: "White", color: "#ffffff" },
+  { label: "Red", color: "#ff0000" },
+  { label: "Green", color: "#00ff00" },
+  { label: "Blue", color: "#0000ff" },
+  { label: "Amber", color: "#ff7a00" },
+  { label: "Cyan", color: "#00ffff" },
+];
 const panTiltNudgeSteps = [
   { label: "Fine", value: 256 },
   { label: "Small", value: 1024 },
   { label: "Medium", value: 2048 },
   { label: "Coarse", value: 8192 },
 ];
+const panTiltTargetPoints = [
+  { label: "TL", pan: 0.2, tilt: 0.8 },
+  { label: "TC", pan: 0.5, tilt: 0.8 },
+  { label: "TR", pan: 0.8, tilt: 0.8 },
+  { label: "L", pan: 0.2, tilt: 0.5 },
+  { label: "C", pan: 0.5, tilt: 0.5 },
+  { label: "R", pan: 0.8, tilt: 0.5 },
+  { label: "BL", pan: 0.2, tilt: 0.2 },
+  { label: "BC", pan: 0.5, tilt: 0.2 },
+  { label: "BR", pan: 0.8, tilt: 0.2 },
+];
 const positionFavoritesStorageKey = "rayard.positionFavorites.v1";
 const colorFavoritesStorageKey = "rayard.colorFavorites.v1";
+const mappingViewPresetStorageKey = "rayard.mappingViewPresets.v1";
+const defaultCustomAttributesText = "Dimmer@1:8, Pan@2:16, Tilt@4:16, ColorRed@6:8, ColorGreen@7:8, ColorBlue@8:8";
 const defaultFixtureLimits: FixtureLimits = {
   dimmer_min: 0,
   dimmer_max: 65535,
@@ -270,131 +497,6 @@ const controlCategoryForAttribute = (attribute: string): Exclude<ControlCategory
   return "other";
 };
 
-const normalizeCustomResolutionText = (value: string) => value.toLowerCase().replace(/[-_\s]/g, "");
-
-const parseCustomAttributeStartOffset = (attribute: string, rawStart: string) => {
-  const startOffset = Number(rawStart);
-  if (!Number.isInteger(startOffset) || startOffset < 1 || startOffset > 512) {
-    return {
-      startOffset: null,
-      error: `Invalid start channel '${rawStart}' for ${attribute || "attribute"}`,
-    };
-  }
-  return { startOffset, error: null };
-};
-
-const parseCustomAttributePreviewSpec = (value: string) => {
-  const trimmed = value.trim();
-  let attribute = trimmed;
-  let rawResolution = "";
-  let startOffset: number | null = null;
-  let startError: string | null = null;
-
-  const channelSeparatorIndex = trimmed.lastIndexOf("@");
-  if (channelSeparatorIndex >= 0) {
-    attribute = trimmed.slice(0, channelSeparatorIndex).trim();
-    const channelAndResolution = trimmed.slice(channelSeparatorIndex + 1).trim();
-    const resolutionSeparatorIndex = channelAndResolution.indexOf(":");
-    if (resolutionSeparatorIndex >= 0) {
-      const parsedStart = parseCustomAttributeStartOffset(
-        attribute,
-        channelAndResolution.slice(0, resolutionSeparatorIndex).trim(),
-      );
-      startOffset = parsedStart.startOffset;
-      startError = parsedStart.error;
-      rawResolution = channelAndResolution.slice(resolutionSeparatorIndex + 1).trim();
-    } else if (channelAndResolution.length > 0 && /^\d+$/.test(channelAndResolution)) {
-      const parsedStart = parseCustomAttributeStartOffset(attribute, channelAndResolution);
-      startOffset = parsedStart.startOffset;
-      startError = parsedStart.error;
-    } else {
-      rawResolution = channelAndResolution;
-    }
-  } else {
-    const resolutionSeparatorIndex = trimmed.lastIndexOf(":");
-    if (resolutionSeparatorIndex >= 0) {
-      attribute = trimmed.slice(0, resolutionSeparatorIndex).trim();
-      rawResolution = trimmed.slice(resolutionSeparatorIndex + 1).trim();
-    }
-  }
-
-  const normalizedResolution = normalizeCustomResolutionText(rawResolution);
-  const resolution: AttributeResolution =
-    normalizedResolution === "" || normalizedResolution === "8" || normalizedResolution === "8bit"
-      ? "EightBit"
-      : normalizedResolution === "16" || normalizedResolution === "16bit"
-        ? "SixteenBit"
-        : "EightBit";
-  const error =
-    attribute.length === 0
-      ? "Attribute name is required"
-      : startError
-        ? startError
-        : normalizedResolution !== "" &&
-            normalizedResolution !== "8" &&
-            normalizedResolution !== "8bit" &&
-            normalizedResolution !== "16" &&
-            normalizedResolution !== "16bit"
-          ? `Invalid resolution '${rawResolution}' for ${attribute}`
-          : null;
-  return { attribute, resolution, startOffset, error };
-};
-
-const customProfilePreviewFromText = (value: string): CustomProfilePreview => {
-  const controls: CustomProfileAttributePreview[] = [];
-  const errors: string[] = [];
-  const seen = new Set<string>();
-  const occupied = new Set<number>();
-  let nextOffset = 1;
-  let footprint = 0;
-
-  for (const rawAttribute of value.split(",")) {
-    const trimmed = rawAttribute.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const spec = parseCustomAttributePreviewSpec(trimmed);
-    if (spec.error) {
-      errors.push(spec.error);
-      continue;
-    }
-    const key = spec.attribute.toLowerCase();
-    if (seen.has(key)) {
-      errors.push(`Duplicate attribute '${spec.attribute}'`);
-      continue;
-    }
-    seen.add(key);
-    const width = spec.resolution === "SixteenBit" ? 2 : 1;
-    const startOffset = spec.startOffset ?? nextOffset;
-    const offsets = Array.from({ length: width }, (_, index) => startOffset + index);
-    const outOfRange = offsets.find((offset) => offset < 1 || offset > 512);
-    if (outOfRange !== undefined) {
-      errors.push(`Attribute '${spec.attribute}' exceeds 512 DMX channels`);
-      continue;
-    }
-    const overlap = offsets.find((offset) => occupied.has(offset));
-    if (overlap !== undefined) {
-      errors.push(`Attribute '${spec.attribute}' overlaps DMX channel ${overlap}`);
-      continue;
-    }
-    offsets.forEach((offset) => occupied.add(offset));
-    footprint = Math.max(footprint, ...offsets);
-    controls.push({
-      attribute: spec.attribute,
-      resolution: spec.resolution,
-      startOffset: spec.startOffset,
-      offsets,
-    });
-    nextOffset = Math.max(nextOffset, startOffset + width);
-  }
-
-  if (footprint > 512) {
-    errors.push(`Footprint ${footprint} exceeds 512 DMX channels`);
-  }
-
-  return { controls, footprint, errors };
-};
-
 const outputProtocolLabel = (protocol: DmxOutputConfig["protocol"]) => {
   switch (protocol) {
     case "ArtNet":
@@ -422,6 +524,8 @@ interface VisualizerFixture {
   width: number;
   height: number;
   yaw: number;
+  yawHandleX: number;
+  yawHandleZ: number;
   beamPoints: string;
   intensity: number;
   color: string;
@@ -443,6 +547,36 @@ interface VisualizerVideoSurface2d {
   active: boolean;
 }
 
+interface VisualizerStageObject2d {
+  id: number;
+  label: string;
+  kind: StageObjectKind;
+  x: number;
+  z: number;
+  width: number;
+  depth: number;
+  rotationDeg: number;
+  color: string;
+  selected: boolean;
+}
+
+interface MappingGeometryNode2d {
+  key: string;
+  fixtureId: number;
+  fixtureLabel: string;
+  name: string;
+  kind: string;
+  x: number;
+  z: number;
+  radius: number;
+  footprintWidth: number;
+  footprintHeight: number;
+  mappedChannelCount: number;
+  className: string;
+  inGroupFilter: boolean;
+  selected: boolean;
+}
+
 interface MappingFixtureTypeRow {
   key: string;
   label: string;
@@ -460,6 +594,14 @@ type MappingDragState =
       startWorld: { x: number; z: number };
       currentWorld: { x: number; z: number };
       startPositions: Record<number, PatchFixtureRequest["position"]>;
+    }
+  | {
+      kind: "fixtureYaw";
+      pointerId: number;
+      fixtureId: number;
+      startWorld: { x: number; z: number };
+      currentWorld: { x: number; z: number };
+      centerWorld: { x: number; z: number };
     }
   | {
       kind: "videoOutput";
@@ -488,6 +630,42 @@ type MappingDragState =
       centerWorld: { x: number; z: number };
       startDistance: number;
       startMapping: VideoOutputMapping;
+    }
+  | {
+      kind: "videoOutputCorner";
+      pointerId: number;
+      outputId: number;
+      corner: MappingVideoOutputCornerKey;
+      startWorld: { x: number; z: number };
+      currentWorld: { x: number; z: number };
+      startMapping: VideoOutputMapping;
+    }
+  | {
+      kind: "stageObject";
+      pointerId: number;
+      objectId: number;
+      startWorld: { x: number; z: number };
+      currentWorld: { x: number; z: number };
+      startObject: StageObjectSummary;
+    }
+  | {
+      kind: "stageObjectRotate";
+      pointerId: number;
+      objectId: number;
+      startWorld: { x: number; z: number };
+      currentWorld: { x: number; z: number };
+      centerWorld: { x: number; z: number };
+      startAngleDeg: number;
+      startObject: StageObjectSummary;
+    }
+  | {
+      kind: "stageObjectResize";
+      pointerId: number;
+      objectId: number;
+      resizeMode: MappingStageObjectResizeMode;
+      startWorld: { x: number; z: number };
+      currentWorld: { x: number; z: number };
+      startObject: StageObjectSummary;
     };
 
 interface MappingMarqueeState {
@@ -511,6 +689,23 @@ interface MappingViewportPanDragState {
 interface MappingSnapLine {
   axis: "x" | "z";
   svg: number;
+}
+
+interface MappingViewPreset {
+  id: string;
+  label: string;
+  viewportZoom: number;
+  viewportCenterX: number;
+  viewportCenterZ: number;
+  snapEnabled: boolean;
+  snapSize: number;
+  showLabels: boolean;
+  showBeams: boolean;
+  showGeometry: boolean;
+  showProjectors: boolean;
+  showStageObjects: boolean;
+  showLevels: boolean;
+  stageTool: MappingStageTool;
 }
 
 interface MappingSvgBounds {
@@ -548,6 +743,15 @@ const fixtureVisualKind = (fixture: PatchedFixtureSummary): MappingFixtureVisual
   return "point";
 };
 
+const mappingFixtureStageSize = (visualKind: MappingFixtureVisualKind) =>
+  visualKind === "bar"
+    ? { width: 5.8, height: 1.4 }
+    : visualKind === "panel"
+      ? { width: 4.8, height: 3.2 }
+      : visualKind === "laser"
+        ? { width: 3.4, height: 3.4 }
+        : { width: 3.2, height: 3.2 };
+
 const fixtureTypeKey = (fixture: PatchedFixtureSummary) =>
   `${fixture.manufacturer}::${fixture.profile_name}::${fixture.mode_name}`;
 
@@ -555,19 +759,35 @@ const fixtureTypeLabel = (fixture: PatchedFixtureSummary) => `${fixture.profile_
 
 const mappingTypeGlyphClass = (kind: MappingFixtureVisualKind) => `mappingTypeGlyph kind-${kind}`;
 
-const surfaceWorldHalfSize = (output: VideoOutputSummary) => {
-  const aspect = output.height > 0 ? output.width / output.height : 1;
-  const baseHeight = 4.5 * clampRange(output.mapping.scale_y, 0.25, 3);
+const surfaceWorldHalfSize = (output: VideoOutputSummary, mapping = output.mapping) => {
+  const outputAspect = output.height > 0 ? output.width / output.height : 1;
+  const mappedAspect = clampRange(finiteOr(mapping.aspect_ratio, outputAspect), 0.35, 4);
+  const aspect = mapping.aspect_mode === "Stretch" ? outputAspect : mappedAspect;
+  const baseHeight = 4.5 * clampRange(mapping.scale_y, 0.25, 3);
   return {
-    width: baseHeight * Math.max(0.35, aspect) * clampRange(output.mapping.scale_x, 0.25, 3),
+    width: baseHeight * Math.max(0.35, aspect) * clampRange(mapping.scale_x, 0.25, 3),
     height: baseHeight,
   };
 };
+
+type ColorExtraChannelKey = "white" | "amber" | "uv";
+
+interface ColorExtraControl {
+  key: ColorExtraChannelKey;
+  label: string;
+  shortLabel: string;
+  attribute: string;
+  value: number;
+}
 
 interface ColorControlSet {
   red: string;
   green: string;
   blue: string;
+  redValue: number;
+  greenValue: number;
+  blueValue: number;
+  extras: ColorExtraControl[];
   value: string;
 }
 
@@ -596,6 +816,27 @@ interface DimmerControlSet {
   value: number;
 }
 
+interface TouchDimmerQuickEntry {
+  fixtureId: number;
+  label: string;
+  attribute: string;
+  value: number;
+  outValue: number;
+  halfValue: number;
+  fullValue: number;
+}
+
+interface TouchDimmerQuickTarget {
+  kind: "fixture" | "group";
+  label: string;
+  entries: TouchDimmerQuickEntry[];
+}
+
+interface TouchDimmerRestoreState {
+  label: string;
+  entries: Pick<TouchDimmerQuickEntry, "fixtureId" | "attribute" | "value">[];
+}
+
 interface MovementLimitPoint {
   pan: number;
   tilt: number;
@@ -616,6 +857,13 @@ interface DmxPatchSegment {
 interface DmxAddressRange {
   start: number;
   end: number;
+}
+
+type WheelMediaBytes = number[] | Uint8Array | ArrayBuffer;
+
+interface WheelMediaPayload {
+  bytes: WheelMediaBytes;
+  mime_type: string;
 }
 
 interface DmxUniverseMap {
@@ -677,24 +925,14 @@ interface TimelineVideoAutomationDraft {
   interpolation: AutomationInterpolation;
 }
 
-interface CustomProfileAttributePreview {
-  attribute: string;
-  resolution: AttributeResolution;
-  startOffset: number | null;
-  offsets: number[];
-}
-
-interface CustomProfilePreview {
-  controls: CustomProfileAttributePreview[];
-  footprint: number;
-  errors: string[];
-}
-
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
 const colorCandidates = {
   red: ["ColorRed", "Red"],
   green: ["ColorGreen", "Green"],
   blue: ["ColorBlue", "Blue"],
+  white: ["ColorWhite", "White", "WarmWhite", "ColdWhite", "CoolWhite"],
+  amber: ["ColorAmber", "Amber"],
+  uv: ["ColorUv", "ColorUV", "Uv", "UV", "Ultraviolet"],
 };
 
 const videoOutputConfigDraftFromSummary = (output: VideoOutputSummary): VideoOutputConfigDraft => ({
@@ -764,9 +1002,6 @@ const outputAspectRatio = (width: number, height: number) => {
 
 const videoOutputAspectModes: VideoOutputAspectMode[] = ["Stretch", "Fit", "Fill"];
 
-const projectorMapViewBoxSize = 100;
-const projectorCornerGain = 18;
-
 const finiteOr = (value: number, fallback: number) => (Number.isFinite(value) ? value : fallback);
 const clampRange = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const clampDmxValue = (value: number) => Math.round(clampRange(Number.isFinite(value) ? value : 0, 0, 65_535));
@@ -774,6 +1009,192 @@ const formatDmxPercent = (value: number) => `${Math.round((clampDmxValue(value) 
 const dmxValueToPercent = (value: number) => Math.round((clampDmxValue(value) / 65_535) * 1000) / 10;
 const percentToDmxValue = (value: number) => clampDmxValue((clampRange(value, 0, 100) / 100) * 65_535);
 const formatShortDmxPercent = (value: number) => `${Math.round(dmxValueToPercent(value))}%`;
+const geometryIdentityMatrix = [
+  1, 0, 0, 0,
+  0, 1, 0, 0,
+  0, 0, 1, 0,
+  0, 0, 0, 1,
+];
+const normalizedGeometryMatrix = (geometry: GeometrySummary) =>
+  geometry.matrix.length === 16
+    ? geometry.matrix.map((value, index) => finiteOr(value, geometryIdentityMatrix[index]))
+    : [...geometryIdentityMatrix];
+const multiplyGeometryMatrix = (left: readonly number[], right: readonly number[]) => {
+  const result = Array.from({ length: 16 }, () => 0);
+  for (let row = 0; row < 4; row += 1) {
+    for (let column = 0; column < 4; column += 1) {
+      result[row * 4 + column] = [0, 1, 2, 3].reduce(
+        (sum, index) => sum + left[row * 4 + index] * right[index * 4 + column],
+        0,
+      );
+    }
+  }
+  return result;
+};
+const cumulativeGeometryMatrix = (geometry: GeometrySummary, geometryByName: Map<string, GeometrySummary>) => {
+  const lineage: number[][] = [];
+  const seen = new Set<string>();
+  let current: GeometrySummary | undefined = geometry;
+  while (current && !seen.has(current.name) && lineage.length < 32) {
+    seen.add(current.name);
+    lineage.push(normalizedGeometryMatrix(current));
+    const parentName: string | undefined = typeof current.parent === "string" ? current.parent.trim() : undefined;
+    current = parentName ? geometryByName.get(parentName) : undefined;
+  }
+  return lineage.reverse().reduce(
+    (accumulated, matrix) => multiplyGeometryMatrix(accumulated, matrix),
+    [...geometryIdentityMatrix],
+  );
+};
+const geometryMatrixTranslation = (matrix: readonly number[]) => ({
+  x: finiteOr(matrix[3] ?? 0, 0),
+  y: finiteOr(matrix[7] ?? 0, 0),
+  z: finiteOr(matrix[11] ?? 0, 0),
+});
+const rotateStageOffsetYaw = (offset: { x: number; z: number }, yawDeg: number) => {
+  const angle = (yawDeg * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  return {
+    x: offset.x * cos - offset.z * sin,
+    z: offset.x * sin + offset.z * cos,
+  };
+};
+const mappingGeometryClass = (geometry: GeometrySummary, mappedChannelCount: number, inGroupFilter: boolean, selected: boolean) => {
+  const text = `${geometry.kind} ${geometry.model_primitive ?? ""} ${geometry.model_file ?? ""} ${geometry.beam_type ?? ""}`.toLowerCase();
+  const baseClass = text.includes("beam") ? "beam" : text.includes("axis") ? "axis" : "body";
+  const primitive = geometry.model_primitive?.toLowerCase();
+  const meshClass =
+    geometry.model_file && geometry.model_file.trim().length > 0
+      ? "mesh-mesh"
+      : primitive === "cylinder" || primitive === "sphere" || primitive === "plane"
+        ? `mesh-${primitive}`
+        : "";
+  return [
+    "stageGeometryNode",
+    baseClass,
+    meshClass,
+    mappedChannelCount > 0 ? "mapped" : "",
+    selected ? "selected" : "",
+    inGroupFilter ? "" : "muted",
+  ].filter(Boolean).join(" ");
+};
+const normalizeMappingStageTool = (value: unknown): MappingStageTool =>
+  typeof value === "string" && mappingStageTools.includes(value as MappingStageTool)
+    ? (value as MappingStageTool)
+    : "select";
+const defaultMappingViewPresets = (): MappingViewPreset[] => [
+  {
+    id: "overview",
+    label: "Overview",
+    viewportZoom: 1,
+    viewportCenterX: stageViewBoxSize / 2,
+    viewportCenterZ: stageViewBoxSize / 2,
+    snapEnabled: false,
+    snapSize: 0.5,
+    showLabels: true,
+    showBeams: true,
+    showGeometry: false,
+    showProjectors: true,
+    showStageObjects: true,
+    showLevels: false,
+    stageTool: "select",
+  },
+  {
+    id: "fixture-focus",
+    label: "Fixture Focus",
+    viewportZoom: 1.8,
+    viewportCenterX: stageViewBoxSize / 2,
+    viewportCenterZ: stageViewBoxSize / 2,
+    snapEnabled: true,
+    snapSize: 0.5,
+    showLabels: true,
+    showBeams: true,
+    showGeometry: true,
+    showProjectors: false,
+    showStageObjects: true,
+    showLevels: true,
+    stageTool: "select",
+  },
+  {
+    id: "projection",
+    label: "Projection",
+    viewportZoom: 1.4,
+    viewportCenterX: stageViewBoxSize / 2,
+    viewportCenterZ: stageViewBoxSize / 2,
+    snapEnabled: false,
+    snapSize: 1,
+    showLabels: false,
+    showBeams: false,
+    showGeometry: false,
+    showProjectors: true,
+    showStageObjects: true,
+    showLevels: false,
+    stageTool: "select",
+  },
+];
+const mappingViewPresetFromUnknown = (candidate: unknown): MappingViewPreset | null => {
+  if (!candidate || typeof candidate !== "object") {
+    return null;
+  }
+  const source = candidate as Partial<MappingViewPreset>;
+  const label = typeof source.label === "string" ? source.label.trim().slice(0, 28) : "";
+  if (!label) {
+    return null;
+  }
+  const idSource = typeof source.id === "string" ? source.id.trim() : "";
+  return {
+    id: idSource || `view-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+    label,
+    viewportZoom: clampRange(finiteOr(Number(source.viewportZoom), 1), 1, 4),
+    viewportCenterX: clampRange(finiteOr(Number(source.viewportCenterX), stageViewBoxSize / 2), 0, stageViewBoxSize),
+    viewportCenterZ: clampRange(finiteOr(Number(source.viewportCenterZ), stageViewBoxSize / 2), 0, stageViewBoxSize),
+    snapEnabled: Boolean(source.snapEnabled),
+    snapSize: clampRange(Math.abs(finiteOr(Number(source.snapSize), 0.5)), 0.05, 20),
+    showLabels: source.showLabels !== false,
+    showBeams: source.showBeams !== false,
+    showGeometry: Boolean(source.showGeometry),
+    showProjectors: source.showProjectors !== false,
+    showStageObjects: source.showStageObjects !== false,
+    showLevels: Boolean(source.showLevels),
+    stageTool: normalizeMappingStageTool(source.stageTool),
+  };
+};
+const loadMappingViewPresets = () => {
+  const defaultPresets = defaultMappingViewPresets();
+  const defaultIds = new Set(defaultPresets.map((preset) => preset.id));
+  if (typeof window === "undefined") {
+    return defaultPresets;
+  }
+  try {
+    const raw = window.localStorage.getItem(mappingViewPresetStorageKey);
+    if (!raw) {
+      return defaultPresets;
+    }
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return defaultPresets;
+    }
+    const customPresets = parsed
+      .map(mappingViewPresetFromUnknown)
+      .filter((preset): preset is MappingViewPreset => Boolean(preset))
+      .filter((preset) => !defaultIds.has(preset.id))
+      .slice(0, 18);
+    return [...defaultPresets, ...customPresets].slice(0, 18);
+  } catch {
+    return defaultPresets;
+  }
+};
+const saveMappingViewPresets = (presets: MappingViewPreset[]) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.setItem(mappingViewPresetStorageKey, JSON.stringify(presets.slice(0, 18)));
+  } catch {
+    // Local storage can be unavailable in hardened WebViews; view presets still work in memory.
+  }
+};
 const normalizeLimitRange = (min: number, max: number) => {
   const a = clampDmxValue(min);
   const b = clampDmxValue(max);
@@ -811,88 +1232,6 @@ const sourcePanTiltValues = (fixture: PatchedFixtureSummary, panValue: number, t
     ? { pan: tiltSource, tilt: panSource }
     : { pan: panSource, tilt: tiltSource };
 };
-const roundedMappingValue = (value: number) => Number(clampRange(value, -1, 1).toFixed(3));
-
-const projectorCorners = [
-  {
-    key: "topLeft",
-    label: "TL",
-    baseX: -1,
-    baseY: -1,
-    xField: "corner_top_left_x",
-    yField: "corner_top_left_y",
-  },
-  {
-    key: "topRight",
-    label: "TR",
-    baseX: 1,
-    baseY: -1,
-    xField: "corner_top_right_x",
-    yField: "corner_top_right_y",
-  },
-  {
-    key: "bottomRight",
-    label: "BR",
-    baseX: 1,
-    baseY: 1,
-    xField: "corner_bottom_right_x",
-    yField: "corner_bottom_right_y",
-  },
-  {
-    key: "bottomLeft",
-    label: "BL",
-    baseX: -1,
-    baseY: 1,
-    xField: "corner_bottom_left_x",
-    yField: "corner_bottom_left_y",
-  },
-] as const;
-
-type ProjectorCorner = (typeof projectorCorners)[number];
-
-const projectorMapBasePoint = (mapping: VideoOutputMapping, corner: ProjectorCorner) => {
-  const aspect = clampRange(finiteOr(mapping.aspect_ratio, 1), 0.25, 4);
-  const aspectScaleX = aspect >= 1 ? 1 : aspect;
-  const aspectScaleY = aspect >= 1 ? 1 / Math.min(aspect, 2.8) : 1;
-  const scaleX = clampRange(finiteOr(mapping.scale_x, 1), 0.25, 2.5);
-  const scaleY = clampRange(finiteOr(mapping.scale_y, 1), 0.25, 2.5);
-  const radius = 30;
-  const localX =
-    corner.baseX * radius * aspectScaleX * scaleX +
-    clampRange(finiteOr(mapping.offset_x, 0), -1, 1) * 20 +
-    clampRange(finiteOr(mapping.keystone_x, 0), -1, 1) * corner.baseY * 12;
-  const localY =
-    corner.baseY * radius * aspectScaleY * scaleY +
-    clampRange(finiteOr(mapping.offset_y, 0), -1, 1) * 20 +
-    clampRange(finiteOr(mapping.keystone_y, 0), -1, 1) * corner.baseX * 12;
-  const rotation = finiteOr(mapping.rotation_deg, 0) * (Math.PI / 180);
-  const sin = Math.sin(rotation);
-  const cos = Math.cos(rotation);
-  return {
-    x: projectorMapViewBoxSize / 2 + localX * cos - localY * sin,
-    y: projectorMapViewBoxSize / 2 + localX * sin + localY * cos,
-  };
-};
-
-const projectorMapPoint = (mapping: VideoOutputMapping, corner: ProjectorCorner) => {
-  const base = projectorMapBasePoint(mapping, corner);
-  return {
-    x: base.x + clampRange(finiteOr(mapping[corner.xField], 0), -1, 1) * projectorCornerGain,
-    y: base.y + clampRange(finiteOr(mapping[corner.yField], 0), -1, 1) * projectorCornerGain,
-  };
-};
-
-const projectorMapPoints = (mapping: VideoOutputMapping) =>
-  projectorCorners.map((corner) => {
-    const point = projectorMapPoint(mapping, corner);
-    return `${point.x},${point.y}`;
-  });
-
-const projectorMapBasePoints = (mapping: VideoOutputMapping) =>
-  projectorCorners.map((corner) => {
-    const point = projectorMapBasePoint(mapping, corner);
-    return `${point.x},${point.y}`;
-  });
 
 const bulkPatchLabel = (baseLabel: string, index: number, count: number) => {
   if (count === 1) {
@@ -1193,6 +1532,186 @@ const channelFunctionDetail = (fn: NonNullable<AttributeControl["functions"]>[nu
   return fn.attribute;
 };
 
+const wheelSlotMediaPath = (media: string | null | undefined) =>
+  media?.split(/[\\/]/).filter(Boolean).pop() ?? null;
+
+const wheelMediaCacheKey = (profileSourcePath: string, media: string) => `${profileSourcePath}\n${media}`;
+
+const canLoadWheelMedia = (profileSourcePath: string) =>
+  Boolean(profileSourcePath.trim()) &&
+  !profileSourcePath.startsWith("memory://") &&
+  !profileSourcePath.startsWith("snapshot://");
+
+const wheelMediaPayloadToObjectUrl = (payload: WheelMediaPayload) => {
+  const bytes = payload.bytes;
+  const data =
+    bytes instanceof ArrayBuffer
+      ? new Uint8Array(bytes)
+      : bytes instanceof Uint8Array
+        ? bytes
+        : new Uint8Array(bytes);
+  const copy = new ArrayBuffer(data.byteLength);
+  new Uint8Array(copy).set(data);
+  const mimeType = payload.mime_type.trim() || "image/png";
+  const blob = new Blob([copy], { type: mimeType });
+  return URL.createObjectURL(blob);
+};
+
+const svgExportComputedStyleProperties = [
+  "color",
+  "display",
+  "fill",
+  "fill-opacity",
+  "filter",
+  "font-family",
+  "font-size",
+  "font-style",
+  "font-weight",
+  "letter-spacing",
+  "line-height",
+  "mix-blend-mode",
+  "opacity",
+  "paint-order",
+  "stroke",
+  "stroke-dasharray",
+  "stroke-linecap",
+  "stroke-linejoin",
+  "stroke-miterlimit",
+  "stroke-opacity",
+  "stroke-width",
+  "text-anchor",
+  "visibility",
+  "white-space",
+] as const;
+
+const standaloneSvgExportSelectorsToRemove = [
+  ".stageCursorGuide",
+  ".mappingMarquee",
+  ".stagePlacePreview",
+  ".stageObjectHandleLine",
+  ".stageObjectRotateHandle",
+  ".stageObjectResizeHandle",
+  ".stageVideoSurfaceHandleLine",
+  ".stageVideoSurfaceRotateHandle",
+  ".stageVideoSurfaceScaleHandle",
+  ".stageVideoSurfaceCornerHandle",
+  ".stageYawHandle",
+].join(",");
+
+const inlineComputedSvgStyles = (source: Element, target: Element) => {
+  const computed = window.getComputedStyle(source);
+  const style = svgExportComputedStyleProperties
+    .map((property) => {
+      const value = computed.getPropertyValue(property);
+      return value ? `${property}:${value}` : "";
+    })
+    .filter(Boolean)
+    .join(";");
+  if (style) {
+    target.setAttribute("style", style);
+  }
+
+  const sourceChildren = Array.from(source.children);
+  const targetChildren = Array.from(target.children);
+  sourceChildren.forEach((sourceChild, index) => {
+    const targetChild = targetChildren[index];
+    if (targetChild) {
+      inlineComputedSvgStyles(sourceChild, targetChild);
+    }
+  });
+};
+
+const downloadTextFile = (fileName: string, text: string, mimeType: string) => {
+  const blob = new Blob([text], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.style.display = "none";
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+};
+
+const safeExportFileNamePart = (value: string) => {
+  const safe = value
+    .trim()
+    .replace(/[<>:"/\\|?*\x00-\x1f]+/g, "-")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return safe || "stage-map";
+};
+
+const isColorWheelFunction = (
+  control: AttributeControl,
+  fn: NonNullable<AttributeControl["functions"]>[number],
+) => {
+  if (normalizeHexColor(fn.wheel_slot_color)) {
+    return true;
+  }
+  const text = normalizedFunctionText(control, fn);
+  return /\b(open|clear|white|red|green|blue|cyan|magenta|yellow|amber|orange|uv|cto|ctb|color|colour|slot)\b/.test(text);
+};
+
+const isGoboWheelFunction = (
+  control: AttributeControl,
+  fn: NonNullable<AttributeControl["functions"]>[number],
+) => {
+  const text = normalizedFunctionText(control, fn);
+  return Boolean(fn.wheel_slot) || /\b(open|clear|empty|gobo|slot|pattern|breakup|dot|dots|bars|stripe|ring|beam|rotate|rotation|spin|shake)\b/.test(text);
+};
+
+const goboPatternForFunction = (
+  control: AttributeControl,
+  fn: NonNullable<AttributeControl["functions"]>[number],
+): GoboSlotPattern => {
+  const text = normalizedFunctionText(control, fn);
+  if (/\b(open|clear|empty|none|white)\b/.test(text)) {
+    return "open";
+  }
+  if (/\b(spin|rotate|rotation|shake)\b/.test(text)) {
+    return "spin";
+  }
+  if (/\b(ring|circle|donut)\b/.test(text)) {
+    return "ring";
+  }
+  if (/\b(dot|dots|spot)\b/.test(text)) {
+    return "dots";
+  }
+  if (/\b(bar|bars|stripe|stripes|line|lines)\b/.test(text)) {
+    return "bars";
+  }
+  return "breakup";
+};
+
+const opticsRoleForControl = (control: AttributeControl, category: ControlCategory) => {
+  const text = `${control.attribute} ${control.channel_name}`.toLowerCase().replace(/[^a-z0-9]+/g, " ");
+  if (/\b(shutter|shutterstrobe)\b/.test(text)) {
+    return "Shutter";
+  }
+  if (/\b(strobe)\b/.test(text)) {
+    return "Strobe";
+  }
+  if (/\b(iris)\b/.test(text)) {
+    return "Iris";
+  }
+  if (/\b(zoom|beam|wash|spot)\b/.test(text)) {
+    return "Zoom";
+  }
+  if (/\b(frost|diffusion|diffuse|soft)\b/.test(text)) {
+    return "Frost";
+  }
+  if (/\b(prism|facet)\b/.test(text)) {
+    return "Prism";
+  }
+  if (/\b(focus|focal)\b/.test(text)) {
+    return "Focus";
+  }
+  return category === "focus" ? "Focus" : "Beam";
+};
+
 const quickLookValueForControl = (
   category: ControlCategory,
   lookId: string,
@@ -1339,40 +1858,6 @@ const savePositionFavorites = (favorites: PositionFavorite[]) => {
   }
 };
 
-const videoFrameToDataUrl = (frame: VideoFrame) => {
-  if (frame.format !== "Rgba8") {
-    throw new Error(`Unsupported preview format ${frame.format}`);
-  }
-  const expectedLength = frame.width * frame.height * 4;
-  if (frame.width <= 0 || frame.height <= 0 || frame.data.length !== expectedLength) {
-    throw new Error("Invalid preview frame size");
-  }
-  const canvas = document.createElement("canvas");
-  canvas.width = frame.width;
-  canvas.height = frame.height;
-  const context = canvas.getContext("2d");
-  if (!context) {
-    throw new Error("Canvas 2D context is unavailable");
-  }
-  context.putImageData(
-    new ImageData(new Uint8ClampedArray(frame.data), frame.width, frame.height),
-    0,
-    0,
-  );
-  return canvas.toDataURL("image/png");
-};
-
-const readVideoOutputWindowId = () => {
-  const raw = new URLSearchParams(window.location.search).get("videoOutputId");
-  if (!raw) {
-    return null;
-  }
-  const outputId = Number(raw);
-  return Number.isInteger(outputId) && outputId > 0 ? outputId : null;
-};
-
-const readVideoOutputTestPattern = () => new URLSearchParams(window.location.search).get("testPattern") === "1";
-
 const videoSourceInputLabel = (kind: VideoSourceKind) => {
   switch (kind) {
     case "File":
@@ -1403,6 +1888,21 @@ const videoSourceInputPlaceholder = (kind: VideoSourceKind) => {
 };
 
 const videoSourceCanBrowseFile = (kind: VideoSourceKind) => kind === "File" || kind === "StillImage";
+
+const videoSourceKindLabel = (kind: VideoSourceKind) => {
+  switch (kind) {
+    case "File":
+      return "File";
+    case "StillImage":
+      return "Still";
+    case "Ndi":
+      return "NDI";
+    case "Spout":
+      return "Spout";
+    case "Syphon":
+      return "Syphon";
+  }
+};
 
 const mediaLabelFromPath = (path: string) => {
   const fileName = path.split(/[\\/]/).pop()?.trim() || path.trim();
@@ -1441,68 +1941,6 @@ const videoSourceMetadataLabel = (source: { codec?: string | null; metadata?: { 
   return parts.join(" / ");
 };
 
-const videoOutputWindowRenderSize = () => {
-  const dpr = Math.min(Math.max(window.devicePixelRatio || 1, 1), 2);
-  let width = Math.max(1, Math.floor(window.innerWidth * dpr));
-  let height = Math.max(1, Math.floor(window.innerHeight * dpr));
-  const maxPixels = 1280 * 720;
-  if (width * height > maxPixels) {
-    const scale = Math.sqrt(maxPixels / (width * height));
-    width = Math.max(1, Math.floor(width * scale));
-    height = Math.max(1, Math.floor(height * scale));
-  }
-  return { width, height };
-};
-
-function VideoOutputWindow(props: { outputId: number; testPattern: boolean }) {
-  const [previewUrl, setPreviewUrl] = createSignal("");
-  const [status, setStatus] = createSignal("Waiting for output frame");
-
-  createEffect(() => {
-    document.body.classList.add("outputBody");
-    let cancelled = false;
-    let timeoutId = 0;
-
-    const renderFrame = async () => {
-      const { width, height } = videoOutputWindowRenderSize();
-      try {
-        const frame = await invoke<VideoFrame>(props.testPattern ? "get_debug_video_output_test_pattern" : "get_debug_video_output_preview", {
-          outputId: props.outputId,
-          width,
-          height,
-        });
-        if (!cancelled) {
-          setPreviewUrl(videoFrameToDataUrl(frame));
-          setStatus(`${props.testPattern ? "Test pattern" : "Output"} ${props.outputId} / ${frame.width}x${frame.height} / pts ${frame.pts_ms}ms`);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setStatus(String(error));
-        }
-      } finally {
-        if (!cancelled) {
-          timeoutId = window.setTimeout(renderFrame, 33);
-        }
-      }
-    };
-
-    void renderFrame();
-    onCleanup(() => {
-      cancelled = true;
-      window.clearTimeout(timeoutId);
-      document.body.classList.remove("outputBody");
-    });
-  });
-
-  return (
-    <main class="videoOutputWindow">
-      <Show when={previewUrl()} fallback={<div class="videoOutputStatus">{status()}</div>}>
-        {(url) => <img class="videoOutputFrame" src={url()} alt={`Video output ${props.outputId}`} />}
-      </Show>
-    </main>
-  );
-}
-
 const beamPoints = (x: number, z: number, yawDegrees: number, intensity: number) => {
   const yaw = (yawDegrees * Math.PI) / 180;
   const angle = -Math.PI / 2 + yaw;
@@ -1536,7 +1974,11 @@ export default function App() {
   const [customManufacturer, setCustomManufacturer] = createSignal("Rayard");
   const [customProfileName, setCustomProfileName] = createSignal("Custom Fixture");
   const [customModeName, setCustomModeName] = createSignal("Default");
-  const [customAttributes, setCustomAttributes] = createSignal("Dimmer@1:8, Pan@2:16, Tilt@4:16, ColorRed@6:8, ColorGreen@7:8, ColorBlue@8:8");
+  const [customAttributes, setCustomAttributes] = createSignal(defaultCustomAttributesText);
+  const [customAttributeDrafts, setCustomAttributeDrafts] = createSignal<CustomProfileAttributeDraft[]>(
+    customProfileAttributeDraftsFromText(defaultCustomAttributesText),
+  );
+  const [selectedCustomAttributeIndex, setSelectedCustomAttributeIndex] = createSignal<number | null>(null);
   const [label, setLabel] = createSignal("Fixture 1");
   const [address, setAddress] = createSignal(1);
   const [universe, setUniverse] = createSignal(0);
@@ -1571,11 +2013,22 @@ export default function App() {
   const [mappingSnapEnabled, setMappingSnapEnabled] = createSignal(false);
   const [mappingSnapSize, setMappingSnapSize] = createSignal(0.5);
   const [mappingFixtureSearch, setMappingFixtureSearch] = createSignal("");
+  const [mappingStageCursorWorld, setMappingStageCursorWorld] = createSignal<{ x: number; z: number } | null>(null);
   const [selectedFixtureTypeFilter, setSelectedFixtureTypeFilter] = createSignal<string | null>(null);
   const [selectedVideoOutputId, setSelectedVideoOutputId] = createSignal<number | null>(null);
   const [mappingShowLabels, setMappingShowLabels] = createSignal(true);
   const [mappingShowBeams, setMappingShowBeams] = createSignal(true);
   const [mappingShowProjectors, setMappingShowProjectors] = createSignal(true);
+  const [mappingShowLevels, setMappingShowLevels] = createSignal(false);
+  const [mappingShowGeometry, setMappingShowGeometry] = createSignal(false);
+  const [mappingShowStageObjects, setMappingShowStageObjects] = createSignal(true);
+  const [selectedStageObjectId, setSelectedStageObjectId] = createSignal<number | null>(null);
+  const [stageObjectLabel, setStageObjectLabel] = createSignal("Stage reference");
+  const [stageObjectKind, setStageObjectKind] = createSignal<StageObjectKind>("Stage");
+  const [stageObjectWidth, setStageObjectWidth] = createSignal(8);
+  const [stageObjectDepth, setStageObjectDepth] = createSignal(4);
+  const [stageObjectRotation, setStageObjectRotation] = createSignal(0);
+  const [stageObjectColor, setStageObjectColor] = createSignal(stageObjectDefaultColor("Stage"));
   const [mappingDrag, setMappingDrag] = createSignal<MappingDragState | null>(null);
   const [mappingMarquee, setMappingMarquee] = createSignal<MappingMarqueeState | null>(null);
   const [mappingViewportPanDrag, setMappingViewportPanDrag] = createSignal<MappingViewportPanDragState | null>(null);
@@ -1583,8 +2036,13 @@ export default function App() {
   const [dmxPatchViewMode, setDmxPatchViewMode] = createSignal<DmxPatchViewMode>("grid");
   const [controlCategory, setControlCategory] = createSignal<ControlCategory>("position");
   const [panTiltNudgeAmount, setPanTiltNudgeAmount] = createSignal(2048);
+  const [positionFavoriteLabel, setPositionFavoriteLabel] = createSignal("");
   const [positionFavorites, setPositionFavorites] = createSignal<PositionFavorite[]>(loadPositionFavorites());
+  const [colorAutoWhite, setColorAutoWhite] = createSignal(false);
   const [colorFavorites, setColorFavorites] = createSignal<string[]>(loadColorFavorites());
+  const [wheelMediaUrls, setWheelMediaUrls] = createSignal<Record<string, string>>({});
+  const [wheelMediaLoading, setWheelMediaLoading] = createSignal<Record<string, true>>({});
+  const [wheelMediaMissing, setWheelMediaMissing] = createSignal<Record<string, true>>({});
   const [faderValues, setFaderValues] = createSignal<Record<string, number>>({});
   const [rawDmxUniverse, setRawDmxUniverse] = createSignal(0);
   const [bpmDraft, setBpmDraft] = createSignal("120");
@@ -1604,8 +2062,12 @@ export default function App() {
   const [midiMapAttribute, setMidiMapAttribute] = createSignal("Dimmer");
   const [midiMapGroupId, setMidiMapGroupId] = createSignal("front");
   const [midiMapCueId, setMidiMapCueId] = createSignal<number | null>(null);
+  const [midiMapEffectId, setMidiMapEffectId] = createSignal<number | null>(null);
+  const [midiMapNodeGraphId, setMidiMapNodeGraphId] = createSignal<number | null>(null);
   const [midiMapLayerId, setMidiMapLayerId] = createSignal<number | null>(null);
   const [midiMapVideoOutputId, setMidiMapVideoOutputId] = createSignal<number | null>(null);
+  const [midiMapVideoOutputMappingField, setMidiMapVideoOutputMappingField] = createSignal("keystone_x");
+  const [midiMapVideoOutputMappingPresetLabel, setMidiMapVideoOutputMappingPresetLabel] = createSignal("");
   const [midiMapVideoParam, setMidiMapVideoParam] = createSignal<VideoParam>("Opacity");
   const [midiMapCuePointIndex, setMidiMapCuePointIndex] = createSignal(0);
   const [midiMapDurationMs, setMidiMapDurationMs] = createSignal(1000);
@@ -1621,8 +2083,12 @@ export default function App() {
   const [oscMapAttribute, setOscMapAttribute] = createSignal("Dimmer");
   const [oscMapGroupId, setOscMapGroupId] = createSignal("front");
   const [oscMapCueId, setOscMapCueId] = createSignal<number | null>(null);
+  const [oscMapEffectId, setOscMapEffectId] = createSignal<number | null>(null);
+  const [oscMapNodeGraphId, setOscMapNodeGraphId] = createSignal<number | null>(null);
   const [oscMapLayerId, setOscMapLayerId] = createSignal<number | null>(null);
   const [oscMapVideoOutputId, setOscMapVideoOutputId] = createSignal<number | null>(null);
+  const [oscMapVideoOutputMappingField, setOscMapVideoOutputMappingField] = createSignal("keystone_x");
+  const [oscMapVideoOutputMappingPresetLabel, setOscMapVideoOutputMappingPresetLabel] = createSignal("");
   const [oscMapVideoParam, setOscMapVideoParam] = createSignal<VideoParam>("Opacity");
   const [oscMapCuePointIndex, setOscMapCuePointIndex] = createSignal(0);
   const [oscMapDurationMs, setOscMapDurationMs] = createSignal(1000);
@@ -1655,6 +2121,16 @@ export default function App() {
   const [videoPreviewInfo, setVideoPreviewInfo] = createSignal("No preview");
   const [videoPreviewUrl, setVideoPreviewUrl] = createSignal("");
   const [videoPreviewDiagnostics, setVideoPreviewDiagnostics] = createSignal<VideoPreviewDiagnostics | null>(null);
+  const [videoOutputRenderPlans, setVideoOutputRenderPlans] = createSignal<VideoOutputRenderPlan[] | null>(null);
+  const [videoOutputWindowStatuses, setVideoOutputWindowStatuses] = createSignal<VideoOutputWindowStatus[] | null>(null);
+  const [videoRuntimeStatus, setVideoRuntimeStatus] = createSignal<VideoRuntimeStatus | null>(null);
+  const [externalVideoIoPlans, setExternalVideoIoPlans] = createSignal<ExternalVideoIoPlans | null>(null);
+  const [externalVideoTransportStatus, setExternalVideoTransportStatus] =
+    createSignal<ExternalVideoTransportStatus | null>(null);
+  const [externalVideoTransportReport, setExternalVideoTransportReport] =
+    createSignal<ExternalVideoTransportSyncReport | null>(null);
+  const [externalVideoTransportEvents, setExternalVideoTransportEvents] =
+    createSignal<ExternalVideoTransportDriverEvent[]>([]);
   const [videoOutputPreviewInfo, setVideoOutputPreviewInfo] = createSignal("No output preview");
   const [videoOutputPreviewUrl, setVideoOutputPreviewUrl] = createSignal("");
   const [videoOutputPreviewId, setVideoOutputPreviewId] = createSignal<number | null>(null);
@@ -1672,6 +2148,10 @@ export default function App() {
   const [selectedVideoOutputMappingPresetLabel, setSelectedVideoOutputMappingPresetLabel] = createSignal("");
   const [stageMapPresetLabel, setStageMapPresetLabel] = createSignal("Stage map preset");
   const [selectedStageMapPresetLabel, setSelectedStageMapPresetLabel] = createSignal("");
+  const [mappingViewPresetLabel, setMappingViewPresetLabel] = createSignal("Current view");
+  const [selectedMappingViewPresetId, setSelectedMappingViewPresetId] = createSignal("overview");
+  const [mappingViewPresets, setMappingViewPresets] = createSignal<MappingViewPreset[]>(loadMappingViewPresets());
+  let mappingStageSvgElement: SVGSVGElement | undefined;
   const [videoCompositionLabel, setVideoCompositionLabel] = createSignal("Composition 1");
   const [videoCompositionLayerIds, setVideoCompositionLayerIds] = createSignal<number[]>([]);
   const [videoAutomationLayerId, setVideoAutomationLayerId] = createSignal<number | null>(null);
@@ -1702,6 +2182,11 @@ export default function App() {
   const [effectPhase, setEffectPhase] = createSignal(0);
   const [effectBlendMode, setEffectBlendMode] = createSignal<EffectBlendMode>("Override");
   const [effectAttribute, setEffectAttribute] = createSignal("");
+  const [nodeGraphLabel, setNodeGraphLabel] = createSignal("Graph 1");
+  const [nodeGraphTransformOp, setNodeGraphTransformOp] = createSignal<NodeGraphTransformOp>("Scale");
+  const [nodeGraphTransformAmount, setNodeGraphTransformAmount] = createSignal(1);
+  const [nodeGraphTransformMin, setNodeGraphTransformMin] = createSignal(0);
+  const [nodeGraphTransformMax, setNodeGraphTransformMax] = createSignal(1);
   const [waveOriginX, setWaveOriginX] = createSignal(0);
   const [waveOriginY, setWaveOriginY] = createSignal(0);
   const [waveOriginZ, setWaveOriginZ] = createSignal(0);
@@ -1755,6 +2240,7 @@ export default function App() {
       max_z: 10,
     },
     stage_map_presets: [],
+    stage_objects: [],
     dmx_preview: Array.from({ length: 512 }, () => 0),
     dmx_previews: [{ universe: 0, values: Array.from({ length: 512 }, () => 0) }],
     telemetry: {
@@ -1807,6 +2293,7 @@ export default function App() {
   const [dmxTestValue, setDmxTestValue] = createSignal(255);
   const audioAnalysis = createMemo<AudioAnalysisSummary | null>(() => snapshot().timeline.audio ?? null);
   const [message, setMessage] = createSignal("Ready");
+  const [touchDimmerRestore, setTouchDimmerRestore] = createSignal<TouchDimmerRestoreState | null>(null);
 
   createEffect(() => {
     savePositionFavorites(positionFavorites());
@@ -1954,6 +2441,14 @@ export default function App() {
     }
     return snapshot().fixtures.find((fixture) => fixture.id === selectedId) ?? null;
   });
+  const selectedMappingGeometryRows = createMemo(() => {
+    const fixture = selectedMappingFixture();
+    return fixture ? profileGeometryRows(fixture.geometries, fixture.controls) : [];
+  });
+  const selectedMappingUnresolvedGeometryReferences = createMemo(() => {
+    const fixture = selectedMappingFixture();
+    return fixture ? unresolvedGeometryReferences(fixture.geometries, fixture.controls) : [];
+  });
   const selectedGroupFixtures = createMemo(() => {
     if (!selectedFixtureGroupFilter()) {
       return [];
@@ -1967,6 +2462,16 @@ export default function App() {
       anyHighlighted: fixtures.some((fixture) => fixture.highlighted),
       anySoloed: fixtures.some((fixture) => fixture.soloed),
       anyParked: fixtures.some((fixture) => fixture.parked),
+    };
+  });
+  const globalFixtureFlagState = createMemo(() => {
+    const fixtures = snapshot().fixtures;
+    return {
+      count: fixtures.length,
+      anyHighlighted: fixtures.some((fixture) => fixture.highlighted),
+      anySoloed: fixtures.some((fixture) => fixture.soloed),
+      anyParked: fixtures.some((fixture) => fixture.parked),
+      anyFlagged: fixtures.some((fixture) => fixture.highlighted || fixture.soloed || fixture.parked),
     };
   });
   const selectedGroupSubmaster = createMemo(() => {
@@ -1992,6 +2497,40 @@ export default function App() {
     }
     return Math.max(0, ...mode.controls.flatMap((control) => control.offsets));
   });
+  const selectedModeDmxCells = createMemo(() =>
+    (selectedModeSummary()?.controls ?? [])
+      .flatMap((control) =>
+        control.offsets.map((offset, index) => ({
+          channel: offset,
+          control,
+          category: controlCategoryForAttribute(control.attribute),
+          bitLabel: control.resolution === "SixteenBit" ? (index === 0 ? "MSB" : "LSB") : "8-bit",
+        })),
+      )
+      .sort((first, second) => first.channel - second.channel),
+  );
+  const selectedModeFunctionEntries = createMemo(() =>
+    (selectedModeSummary()?.controls ?? [])
+      .flatMap((control) =>
+        sortedChannelFunctions(control).map((fn) => ({
+          control,
+          fn,
+          category: controlCategoryForAttribute(control.attribute),
+        })),
+      )
+      .sort(
+        (first, second) =>
+          (first.control.offsets[0] ?? 0) - (second.control.offsets[0] ?? 0) ||
+          first.fn.dmx_from - second.fn.dmx_from,
+      ),
+  );
+  const visibleSelectedModeFunctionEntries = createMemo(() => selectedModeFunctionEntries().slice(0, 12));
+  const selectedModeGeometryRows = createMemo(() =>
+    profileGeometryRows(profile()?.geometries ?? [], selectedModeSummary()?.controls ?? []),
+  );
+  const selectedModeUnresolvedGeometryReferences = createMemo(() =>
+    unresolvedGeometryReferences(profile()?.geometries ?? [], selectedModeSummary()?.controls ?? []),
+  );
 
   const fixtureFootprint = (fixture: PatchedFixtureSummary) =>
     Math.max(0, ...fixture.controls.flatMap((control) => control.offsets));
@@ -2251,6 +2790,55 @@ export default function App() {
       value: dimmerValueWithinLimits(fixture, readFixtureAttribute(fixture, faderValues(), [attribute]) ?? 0),
     };
   });
+  const touchDimmerEntryForFixture = (
+    fixture: PatchedFixtureSummary,
+    currentValues: Record<string, number>,
+  ): TouchDimmerQuickEntry | undefined => {
+    const attribute = findControlAttribute(fixture, ["Dimmer", "Intensity", "MasterIntensity"]);
+    if (!attribute) {
+      return undefined;
+    }
+    const outValue = dimmerValueWithinLimits(fixture, 0);
+    const fullValue = dimmerValueWithinLimits(fixture, 65_535);
+    return {
+      fixtureId: fixture.id,
+      label: fixture.label,
+      attribute,
+      value: dimmerValueWithinLimits(fixture, readFixtureAttribute(fixture, currentValues, [attribute]) ?? 0),
+      outValue,
+      halfValue: clampDmxValue((outValue + fullValue) / 2),
+      fullValue,
+    };
+  };
+  const selectedTouchDimmerTarget = createMemo<TouchDimmerQuickTarget | undefined>(() => {
+    const groupId = selectedFixtureGroupFilter();
+    const currentValues = faderValues();
+    if (groupId) {
+      const entries = filteredFixtures()
+        .map((fixture) => touchDimmerEntryForFixture(fixture, currentValues))
+        .filter((entry): entry is TouchDimmerQuickEntry => Boolean(entry));
+      return entries.length > 0
+        ? {
+            kind: "group",
+            label: `Group ${groupId}`,
+            entries,
+          }
+        : undefined;
+    }
+    const fixture = selectedFixture();
+    if (!fixture) {
+      return undefined;
+    }
+    const entry = touchDimmerEntryForFixture(fixture, currentValues);
+    return entry
+      ? {
+          kind: "fixture",
+          label: fixture.label,
+          entries: [entry],
+        }
+      : undefined;
+  });
+  const touchDimmerQuickActive = createMemo(() => Boolean(touchDimmerRestore()));
   const selectedPositionControls = createMemo<PositionControlSet | undefined>(() => {
     const fixture = selectedFixture();
     if (!fixture) {
@@ -2287,10 +2875,46 @@ export default function App() {
     const redValue = readFixtureAttribute(fixture, currentValues, [red]) ?? 0;
     const greenValue = readFixtureAttribute(fixture, currentValues, [green]) ?? 0;
     const blueValue = readFixtureAttribute(fixture, currentValues, [blue]) ?? 0;
+    const extras = [
+      {
+        key: "white" as const,
+        label: "White",
+        shortLabel: "W",
+        attribute: findControlAttribute(fixture, colorCandidates.white),
+      },
+      {
+        key: "amber" as const,
+        label: "Amber",
+        shortLabel: "A",
+        attribute: findControlAttribute(fixture, colorCandidates.amber),
+      },
+      {
+        key: "uv" as const,
+        label: "UV",
+        shortLabel: "UV",
+        attribute: findControlAttribute(fixture, colorCandidates.uv),
+      },
+    ]
+      .filter(
+        (extra): extra is {
+          key: ColorExtraChannelKey;
+          label: string;
+          shortLabel: string;
+          attribute: string;
+        } => Boolean(extra.attribute),
+      )
+      .map((extra) => ({
+        ...extra,
+        value: readFixtureAttribute(fixture, currentValues, [extra.attribute]) ?? 0,
+      }));
     return {
       red,
       green,
       blue,
+      redValue,
+      greenValue,
+      blueValue,
+      extras,
       value: `#${valueToHexByte(redValue)}${valueToHexByte(greenValue)}${valueToHexByte(blueValue)}`,
     };
   });
@@ -2304,6 +2928,14 @@ export default function App() {
   });
   const selectedColorHex = createMemo(() => normalizeHexColor(selectedColorControls()?.value) ?? "#000000");
   const selectedColorChannelValues = createMemo(() => {
+    const controls = selectedColorControls();
+    if (controls) {
+      return {
+        red: controls.redValue,
+        green: controls.greenValue,
+        blue: controls.blueValue,
+      };
+    }
     const color = selectedColorHex();
     return {
       red: Number.parseInt(color.slice(1, 3), 16) * 257,
@@ -2373,6 +3005,304 @@ export default function App() {
       }))
       .filter((entry) => entry.functions.length > 0),
   );
+  const controlTargetLabel = createMemo(() =>
+    selectedFixtureGroupFilter()
+      ? `Group ${selectedFixtureGroupFilter()}`
+      : selectedFixture()?.label ?? "No fixture selected",
+  );
+  const activeControlCategoryLabel = createMemo(() =>
+    controlCategories.find((category) => category.id === activeControlCategory())?.label ?? activeControlCategory(),
+  );
+  const dimmerSliderRange = createMemo(() =>
+    normalizeLimitRange(selectedFixtureLimits().dimmer_min, selectedFixtureLimits().dimmer_max),
+  );
+  const colorPreviewForSaturation = (saturation: number) => {
+    const hsv = selectedColorHsv();
+    const { red, green, blue } = hsvToRgb(hsv.hue, clamp01(saturation), Math.max(0.05, hsv.value));
+    return rgbToHex(red, green, blue);
+  };
+  const colorSaturationRamp = createMemo(() =>
+    `linear-gradient(to right, ${colorPreviewForSaturation(0)}, ${colorPreviewForSaturation(0.35)}, ${colorPreviewForSaturation(1)})`,
+  );
+  const currentControlValue = (control: AttributeControl) => {
+    const fixture = selectedFixture();
+    return fixture ? faderValue(fixture.id, control.attribute, control.default_value) : control.default_value;
+  };
+  const channelFunctionContainsValue = (
+    fn: NonNullable<AttributeControl["functions"]>[number],
+    value: number,
+  ) => {
+    const from = clampDmxValue(fn.dmx_from);
+    const to = clampDmxValue(fn.dmx_to);
+    return clampDmxValue(value) >= Math.min(from, to) && clampDmxValue(value) <= Math.max(from, to);
+  };
+  const channelFunctionBandStyle = (
+    control: AttributeControl,
+    fn: NonNullable<AttributeControl["functions"]>[number],
+  ) => {
+    const from = clampDmxValue(fn.dmx_from);
+    const to = clampDmxValue(fn.dmx_to);
+    const left = (Math.min(from, to) / 65_535) * 100;
+    const width = Math.max(1, ((Math.abs(to - from) + 1) / 65_535) * 100);
+    const swatch = normalizeHexColor(fn.wheel_slot_color);
+    const normalized = normalizedFunctionText(control, fn);
+    const background =
+      swatch ??
+      (/\b(open|clear|white)\b/.test(normalized)
+        ? "rgba(245, 245, 245, 0.68)"
+        : /\b(red)\b/.test(normalized)
+          ? "rgba(255, 62, 62, 0.64)"
+          : /\b(green)\b/.test(normalized)
+            ? "rgba(69, 223, 64, 0.64)"
+            : /\b(blue)\b/.test(normalized)
+              ? "rgba(79, 119, 255, 0.64)"
+              : "rgba(242, 193, 78, 0.42)");
+    return {
+      left: `${left}%`,
+      width: `${width}%`,
+      "background-color": background,
+    };
+  };
+  const channelFunctionSwatchColor = (
+    control: AttributeControl,
+    fn: NonNullable<AttributeControl["functions"]>[number],
+  ) => {
+    const swatch = normalizeHexColor(fn.wheel_slot_color);
+    if (swatch) {
+      return swatch;
+    }
+    const normalized = normalizedFunctionText(control, fn);
+    if (/\b(red)\b/.test(normalized)) {
+      return "#ff3030";
+    }
+    if (/\b(green)\b/.test(normalized)) {
+      return "#20e240";
+    }
+    if (/\b(blue)\b/.test(normalized)) {
+      return "#3358ff";
+    }
+    if (/\b(amber|orange)\b/.test(normalized)) {
+      return "#ff8a00";
+    }
+    if (/\b(cyan)\b/.test(normalized)) {
+      return "#00d8ff";
+    }
+    if (/\b(magenta|pink)\b/.test(normalized)) {
+      return "#ff2bd6";
+    }
+    if (/\b(white|open|clear)\b/.test(normalized)) {
+      return "#ffffff";
+    }
+    return null;
+  };
+  const colorWheelEntries = createMemo<ColorWheelFunctionEntry[]>(() => {
+    if (activeControlCategory() !== "color") {
+      return [];
+    }
+    return visibleFunctionControls().flatMap((entry) =>
+      entry.functions
+        .filter((fn) => isColorWheelFunction(entry.control, fn))
+        .map((fn) => {
+          const currentValue = currentControlValue(entry.control);
+          return {
+            control: entry.control,
+            fn,
+            color: channelFunctionSwatchColor(entry.control, fn) ?? "#e7edf3",
+            label: fn.wheel_slot_name || channelFunctionLabel(fn),
+            currentValue,
+            active: channelFunctionContainsValue(fn, currentValue),
+          };
+        }),
+    );
+  });
+  const goboWheelEntries = createMemo<GoboWheelFunctionEntry[]>(() => {
+    if (activeControlCategory() !== "gobo") {
+      return [];
+    }
+    return visibleFunctionControls().flatMap((entry) =>
+      entry.functions
+        .filter((fn) => isGoboWheelFunction(entry.control, fn))
+        .map((fn) => {
+          const currentValue = currentControlValue(entry.control);
+          return {
+            control: entry.control,
+            fn,
+            label: fn.wheel_slot_name || channelFunctionLabel(fn),
+            currentValue,
+            active: channelFunctionContainsValue(fn, currentValue),
+            pattern: goboPatternForFunction(entry.control, fn),
+          };
+        }),
+    );
+  });
+  const opticsEntries = createMemo<OpticsControlEntry[]>(() => {
+    const category = activeControlCategory();
+    if (category !== "beam" && category !== "focus") {
+      return [];
+    }
+    return visibleControls().map((control) => {
+      const value = currentControlValue(control);
+      const functions = sortedChannelFunctions(control);
+      return {
+        control,
+        value,
+        role: opticsRoleForControl(control, category),
+        activeFunction: functions.find((fn) => channelFunctionContainsValue(fn, value)),
+      };
+    });
+  });
+  const showColorWheelPanel = createMemo(() => activeControlCategory() === "color" && colorWheelEntries().length > 0);
+  const showGoboWheelPanel = createMemo(() => activeControlCategory() === "gobo" && goboWheelEntries().length > 0);
+  const showOpticsPanel = createMemo(() =>
+    (activeControlCategory() === "beam" || activeControlCategory() === "focus") && opticsEntries().length > 0,
+  );
+  const wheelMediaUrlForCurrentFixture = (media: string | null | undefined) => {
+    const fixture = selectedFixture();
+    if (!fixture || !media || !canLoadWheelMedia(fixture.profile_source_path)) {
+      return null;
+    }
+    return wheelMediaUrls()[wheelMediaCacheKey(fixture.profile_source_path, media)] ?? null;
+  };
+  const visibleWheelMediaRequests = createMemo(() => {
+    const fixture = selectedFixture();
+    if (!fixture || !canLoadWheelMedia(fixture.profile_source_path)) {
+      return [];
+    }
+    const mediaNames = new Set<string>();
+    for (const entry of [...colorWheelEntries(), ...goboWheelEntries()]) {
+      const media = entry.fn.wheel_slot_media?.trim();
+      if (media) {
+        mediaNames.add(media);
+      }
+    }
+    return [...mediaNames].map((media) => ({
+      key: wheelMediaCacheKey(fixture.profile_source_path, media),
+      path: fixture.profile_source_path,
+      media,
+    }));
+  });
+  createEffect(() => {
+    const urls = wheelMediaUrls();
+    const loading = wheelMediaLoading();
+    const missing = wheelMediaMissing();
+    for (const request of visibleWheelMediaRequests()) {
+      if (urls[request.key] || loading[request.key] || missing[request.key]) {
+        continue;
+      }
+      setWheelMediaLoading((current) => ({ ...current, [request.key]: true }));
+      void (async () => {
+        try {
+          const payload = await invoke<WheelMediaPayload | null>("load_gdtf_wheel_media", {
+            path: request.path,
+            media: request.media,
+          });
+          const bytes = payload?.bytes;
+          const byteLength = bytes instanceof ArrayBuffer ? bytes.byteLength : bytes?.length ?? 0;
+          if (!payload || !bytes || byteLength === 0) {
+            setWheelMediaMissing((current) => ({ ...current, [request.key]: true }));
+            return;
+          }
+          const objectUrl = wheelMediaPayloadToObjectUrl(payload);
+          setWheelMediaUrls((current) => ({ ...current, [request.key]: objectUrl }));
+        } catch {
+          setWheelMediaMissing((current) => ({ ...current, [request.key]: true }));
+        } finally {
+          setWheelMediaLoading((current) => {
+            const next = { ...current };
+            delete next[request.key];
+            return next;
+          });
+        }
+      })();
+    }
+  });
+  onCleanup(() => {
+    for (const objectUrl of Object.values(wheelMediaUrls())) {
+      URL.revokeObjectURL(objectUrl);
+    }
+  });
+  const opticsPanelTitle = createMemo(() => (activeControlCategory() === "focus" ? "Focus / Optics" : "Beam / Optics"));
+  const opticsPreviewClass = (role: string) => {
+    const normalized = role.toLowerCase();
+    if (normalized.includes("iris")) {
+      return "iris";
+    }
+    if (normalized.includes("focus")) {
+      return "focus";
+    }
+    if (normalized.includes("frost")) {
+      return "frost";
+    }
+    if (normalized.includes("strobe")) {
+      return "strobe";
+    }
+    if (normalized.includes("prism")) {
+      return "prism";
+    }
+    return "beam";
+  };
+  const opticsPreviewStyle = (entry: OpticsControlEntry) => {
+    const ratio = clamp01(entry.value / 65_535);
+    const role = entry.role.toLowerCase();
+    const isIris = role.includes("iris");
+    const isFocus = role.includes("focus");
+    const isFrost = role.includes("frost");
+    const isPrism = role.includes("prism");
+    const isStrobe = role.includes("strobe");
+    const size = isIris
+      ? 18 + ratio * 78
+      : isFocus
+        ? 70
+        : isFrost
+          ? 72 + ratio * 18
+          : 36 + ratio * 72;
+    const blur = isFocus || isFrost ? 1 + ratio * 10 : 0.4 + (1 - ratio) * 2.2;
+    return {
+      "--optics-level": `${Math.round(ratio * 100)}%`,
+      "--optics-size": `${Math.round(size)}px`,
+      "--optics-blur": `${Number(blur.toFixed(2))}px`,
+      "--optics-opacity": `${isStrobe ? 0.45 + ratio * 0.55 : 0.72 + ratio * 0.24}`,
+      "--optics-ring-size": `${Math.round(42 + ratio * 88)}px`,
+      "--optics-prism-opacity": `${isPrism ? 0.35 + ratio * 0.65 : 0}`,
+      "--optics-prism-rotation": `${Math.round(ratio * 360)}deg`,
+    };
+  };
+  const opticsPresetButtons = (entry: OpticsControlEntry) => {
+    const role = entry.role.toLowerCase();
+    if (role.includes("shutter") || role.includes("strobe")) {
+      return [
+        { label: "Off", value: 0 },
+        { label: "Open", value: 65_535 },
+        { label: "Pulse", value: 49_152 },
+      ];
+    }
+    if (role.includes("iris")) {
+      return [
+        { label: "Small", value: 8192 },
+        { label: "Mid", value: 32_768 },
+        { label: "Open", value: 65_535 },
+      ];
+    }
+    if (role.includes("focus")) {
+      return [
+        { label: "Near", value: 0 },
+        { label: "Mid", value: 32_768 },
+        { label: "Far", value: 65_535 },
+      ];
+    }
+    if (role.includes("frost") || role.includes("prism")) {
+      return [
+        { label: "Off", value: 0 },
+        { label: "Mid", value: 32_768 },
+        { label: "On", value: 65_535 },
+      ];
+    }
+    return [
+      { label: "Tight", value: 8192 },
+      { label: "Mid", value: 32_768 },
+      { label: "Wide", value: 65_535 },
+    ];
+  };
   const selectedEffectAttribute = createMemo(() => {
     const controls = activeControls();
     const current = effectAttribute();
@@ -2548,6 +3478,22 @@ export default function App() {
     }
     return cues[0]?.id ?? null;
   });
+  const selectedMidiEffectId = createMemo(() => {
+    const current = midiMapEffectId();
+    const effects = snapshot().effects;
+    if (current !== null && effects.some((effect) => effect.id === current)) {
+      return current;
+    }
+    return effects[0]?.id ?? null;
+  });
+  const selectedMidiNodeGraphId = createMemo(() => {
+    const current = midiMapNodeGraphId();
+    const nodeGraphs = snapshot().node_graphs;
+    if (current !== null && nodeGraphs.some((graph) => graph.id === current)) {
+      return current;
+    }
+    return nodeGraphs[0]?.id ?? null;
+  });
   const selectedMidiLayerId = createMemo(() => {
     const current = midiMapLayerId();
     const layers = snapshot().video.layers;
@@ -2564,6 +3510,17 @@ export default function App() {
     }
     return outputs[0]?.id ?? null;
   });
+  const selectedMidiVideoOutputMappingField = createMemo(
+    () => videoOutputMappingFieldOption(midiMapVideoOutputMappingField()).value,
+  );
+  const selectedMidiVideoOutputMappingPresetLabel = createMemo(() => {
+    const current = midiMapVideoOutputMappingPresetLabel().trim();
+    const presets = snapshot().video.mapping_presets;
+    if (current && presets.some((preset) => preset.label === current)) {
+      return current;
+    }
+    return presets[0]?.label ?? current;
+  });
   const selectedOscCueId = createMemo(() => {
     const current = oscMapCueId();
     const cues = snapshot().cues;
@@ -2571,6 +3528,22 @@ export default function App() {
       return current;
     }
     return cues[0]?.id ?? null;
+  });
+  const selectedOscEffectId = createMemo(() => {
+    const current = oscMapEffectId();
+    const effects = snapshot().effects;
+    if (current !== null && effects.some((effect) => effect.id === current)) {
+      return current;
+    }
+    return effects[0]?.id ?? null;
+  });
+  const selectedOscNodeGraphId = createMemo(() => {
+    const current = oscMapNodeGraphId();
+    const nodeGraphs = snapshot().node_graphs;
+    if (current !== null && nodeGraphs.some((graph) => graph.id === current)) {
+      return current;
+    }
+    return nodeGraphs[0]?.id ?? null;
   });
   const selectedOscLayerId = createMemo(() => {
     const current = oscMapLayerId();
@@ -2588,6 +3561,43 @@ export default function App() {
     }
     return outputs[0]?.id ?? null;
   });
+  const selectedOscVideoOutputMappingField = createMemo(
+    () => videoOutputMappingFieldOption(oscMapVideoOutputMappingField()).value,
+  );
+  const selectedOscVideoOutputMappingPresetLabel = createMemo(() => {
+    const current = oscMapVideoOutputMappingPresetLabel().trim();
+    const presets = snapshot().video.mapping_presets;
+    if (current && presets.some((preset) => preset.label === current)) {
+      return current;
+    }
+    return presets[0]?.label ?? current;
+  });
+  const midiClearFixtureFlagKind = createMemo(() => normalizeFixtureFlagClearKind(midiMapAttribute()));
+  const oscClearFixtureFlagKind = createMemo(() => normalizeFixtureFlagClearKind(oscMapAttribute()));
+  const setMidiVideoOutputMappingFieldTarget = (field: string) => {
+    const option = videoOutputMappingFieldOption(field);
+    setMidiMapVideoOutputMappingField(option.value);
+    setMidiMapLow(option.low);
+    setMidiMapHigh(option.high);
+  };
+  const setOscVideoOutputMappingFieldTarget = (field: string) => {
+    const option = videoOutputMappingFieldOption(field);
+    setOscMapVideoOutputMappingField(option.value);
+    setOscMapLow(option.low);
+    setOscMapHigh(option.high);
+  };
+  const setMidiControlMappingAction = (action: MidiControlAction) => {
+    setMidiMapAction(action);
+    if (action === "VideoOutputMappingField") {
+      setMidiVideoOutputMappingFieldTarget(selectedMidiVideoOutputMappingField());
+    }
+  };
+  const setOscControlMappingAction = (action: OscControlAction) => {
+    setOscMapAction(action);
+    if (action === "VideoOutputMappingField") {
+      setOscVideoOutputMappingFieldTarget(selectedOscVideoOutputMappingField());
+    }
+  };
   const selectedEffectVideoLayerId = createMemo(() => {
     const current = effectVideoLayerId();
     const layers = snapshot().video.layers;
@@ -2603,8 +3613,306 @@ export default function App() {
     }
     const queuedFrames = diagnostics.layer_queues.reduce((total, row) => total + row.queue_len, 0);
     const activeQueues = diagnostics.layer_queues.filter((row) => row.queue_len > 0).length;
-    return `queues ${activeQueues}/${diagnostics.queue_count}, frames ${queuedFrames}, still ${diagnostics.still_image_cache_len}, decode ${diagnostics.decoder_cache_len}, prefetch ${diagnostics.prefetch_count}x${diagnostics.prefetch_interval_ms}ms`;
+    const readyQueues = diagnostics.layer_queues.filter((row) => row.ready).length;
+    const bpm = diagnostics.bpm && Number.isFinite(diagnostics.bpm) ? `, bpm ${diagnostics.bpm.toFixed(1)}` : "";
+    return `queues ${activeQueues}/${diagnostics.queue_count}, ready ${readyQueues}/${diagnostics.layer_queues.length}, frames ${queuedFrames}, cap ${diagnostics.frame_queue_capacity}, still ${diagnostics.still_image_cache_len}, decode ${diagnostics.decoder_cache_len}, prefetch ${diagnostics.prefetch_count}x${diagnostics.prefetch_interval_ms}ms${bpm}`;
   });
+  const videoPreviewLayerDiagnostics = createMemo(() => videoPreviewDiagnostics()?.layer_queues ?? []);
+  const videoPreviewPrefetchPlanLabel = (row: VideoPreviewDiagnostics["layer_queues"][number]) => {
+    const positions = row.expected_positions_ms.slice(0, 4).map((position) => formatVideoTime(position));
+    const suffix = row.expected_positions_ms.length > positions.length ? "..." : "";
+    const plan = [...positions, suffix].filter(Boolean).join(" -> ");
+    return plan ? `plan ${plan}` : "plan none";
+  };
+  const videoPreviewLayerDiagnosticLabel = (row: VideoPreviewDiagnostics["layer_queues"][number]) =>
+    `${videoSourceKindLabel(row.source_kind)} / ${row.playing ? "playing" : "paused"} / ${row.effective_speed.toFixed(2)}x / ${formatVideoTime(row.position_ms, row.source_duration_ms)} / queue ${row.queue_len}/${row.expected_queue_len} / ${videoPreviewPrefetchPlanLabel(row)}`;
+  const videoPreviewLayerDiagnosticClass = (row: VideoPreviewDiagnostics["layer_queues"][number]) =>
+    row.ready ? "previewDiagnosticRow ready" : row.queue_len > 0 ? "previewDiagnosticRow warming" : "previewDiagnosticRow missing";
+  const videoPreviewOutputDecodePlans = createMemo(() => videoPreviewDiagnostics()?.output_decode_previews ?? []);
+  const videoPreviewOutputDecodePlanLabel = (row: VideoPreviewDiagnostics["output_decode_previews"][number]) => {
+    if (row.error) {
+      return `decode plan error / ${row.error}`;
+    }
+    const report = row.report;
+    if (!report) {
+      return "decode plan unavailable";
+    }
+    return `layers ${report.layers_considered}, requests ${report.requests_attempted}, current/lookahead ${report.inserted + report.duplicate + report.reprioritized}, rejected ${report.rejected_full}, pending ${report.pending}`;
+  };
+  const videoPreviewOutputDecodePlanClass = (row: VideoPreviewDiagnostics["output_decode_previews"][number]) => {
+    if (row.error) {
+      return "previewDiagnosticRow missing";
+    }
+    if (row.blackout || !row.enabled || (row.report?.requests_attempted ?? 0) === 0) {
+      return "previewDiagnosticRow warming";
+    }
+    return row.report?.rejected_full ? "previewDiagnosticRow missing" : "previewDiagnosticRow ready";
+  };
+  const videoOutputRenderPlanSummary = createMemo(() => {
+    const plans = videoOutputRenderPlans();
+    if (!plans) {
+      return "Not checked";
+    }
+    const activeOutputs = plans.filter((plan) => plan.enabled && !plan.output_blackout).length;
+    const blackoutOutputs = plans.filter((plan) => plan.output_blackout).length;
+    const activeLayers = plans.reduce((total, plan) => total + plan.composition.layers.length, 0);
+    return `${plans.length} output(s), ${activeOutputs} active, ${activeLayers} render layer(s), ${blackoutOutputs} blackout`;
+  });
+  const videoOutputMappingDiagnosticLabel = (mapping: VideoOutputMapping) => {
+    const cornerWarp =
+      Math.abs(mapping.corner_top_left_x) +
+      Math.abs(mapping.corner_top_left_y) +
+      Math.abs(mapping.corner_top_right_x) +
+      Math.abs(mapping.corner_top_right_y) +
+      Math.abs(mapping.corner_bottom_right_x) +
+      Math.abs(mapping.corner_bottom_right_y) +
+      Math.abs(mapping.corner_bottom_left_x) +
+      Math.abs(mapping.corner_bottom_left_y);
+    const warpParts = [
+      mapping.aspect_mode !== "Stretch" ? mapping.aspect_mode : null,
+      Math.abs(mapping.lens_distortion) > 0.001 ? `lens ${mapping.lens_distortion.toFixed(2)}` : null,
+      Math.abs(mapping.keystone_x) > 0.001 || Math.abs(mapping.keystone_y) > 0.001
+        ? `key ${mapping.keystone_x.toFixed(2)},${mapping.keystone_y.toFixed(2)}`
+        : null,
+      cornerWarp > 0.001 ? "corner warp" : null,
+    ].filter((part): part is string => Boolean(part));
+    return warpParts.length > 0 ? warpParts.join(" / ") : "flat mapping";
+  };
+  const videoOutputRenderPlanRows = createMemo(() =>
+    (videoOutputRenderPlans() ?? []).map((plan) => {
+      const layerCount = plan.composition.layers.length;
+      const stateLabel = !plan.enabled
+        ? "Disabled"
+        : plan.output_blackout
+          ? "Blackout"
+          : layerCount > 0
+            ? "Live"
+            : "Empty";
+      const stateClass = !plan.enabled
+        ? "disabled"
+        : plan.output_blackout
+          ? "blackout"
+          : layerCount > 0
+            ? "live"
+            : "empty";
+      const endpoint = plan.kind === "Display" ? `Monitor ${plan.monitor_id ?? 0}` : plan.endpoint_name ?? plan.label;
+      const layerLabels = plan.composition.layers.map((layer) => `${layer.label} ${Math.round(layer.opacity * 100)}%`);
+      return {
+        id: plan.output_id,
+        label: plan.label,
+        endpoint,
+        stateLabel,
+        stateClass,
+        detail: `${plan.kind} / ${plan.width}x${plan.height} / ${plan.composition.label} / ${layerCount} layer(s) / ${Math.round(
+          plan.output_opacity * 100,
+        )}% / ${videoOutputMappingDiagnosticLabel(plan.mapping)}${layerLabels.length > 0 ? ` / ${layerLabels.join(", ")}` : ""}`,
+      };
+    }),
+  );
+  const videoOutputRenderPlanForOutput = (outputId: number) =>
+    videoOutputRenderPlans()?.find((plan) => plan.output_id === outputId) ?? null;
+  const videoOutputRenderPlanState = (output: VideoOutputSummary) => {
+    const plan = videoOutputRenderPlanForOutput(output.id);
+    const layerCount = plan?.composition.layers.length ?? 0;
+    const stateLabel = plan
+      ? !plan.enabled
+        ? "Disabled"
+        : plan.output_blackout
+          ? "Blackout"
+          : layerCount > 0
+            ? "Live"
+            : "Empty"
+      : "Plan not checked";
+    const stateClass = plan
+      ? !plan.enabled
+        ? "disabled"
+        : plan.output_blackout
+          ? "blackout"
+          : layerCount > 0
+            ? "live"
+            : "empty"
+      : "unchecked";
+    const layerLabels = plan?.composition.layers.map((layer) => `${layer.label} ${Math.round(layer.opacity * 100)}%`) ?? [];
+    const detail = plan
+      ? `${plan.composition.label} / ${layerCount} layer(s) / ${Math.round(plan.output_opacity * 100)}% / ${videoOutputMappingDiagnosticLabel(
+          plan.mapping,
+        )}${layerLabels.length > 0 ? ` / ${layerLabels.join(", ")}` : ""}`
+      : "Run Check Plans to inspect the routed composition.";
+    return { plan, layerCount, stateLabel, stateClass, detail };
+  };
+  const videoOutputWindowStatusForOutput = (outputId: number) =>
+    videoOutputWindowStatuses()?.find((status) => status.output_id === outputId) ?? null;
+  const videoOutputWindowSummary = createMemo(() => {
+    const statuses = videoOutputWindowStatuses();
+    if (!statuses) {
+      return "Windows not checked";
+    }
+    const liveOpen = statuses.filter((status) => status.live_open).length;
+    const patternOpen = statuses.filter((status) => status.test_pattern_open).length;
+    return `${liveOpen} live, ${patternOpen} pattern open / ${statuses.length} display output(s)`;
+  });
+  const videoOutputWindowState = (outputId: number) => {
+    const status = videoOutputWindowStatusForOutput(outputId);
+    if (!status) {
+      return {
+        stateLabel: "Window not checked",
+        stateClass: "unchecked",
+        detail: "Run Check Windows to inspect Live/Test output windows.",
+      };
+    }
+    const openCount = Number(status.live_open) + Number(status.test_pattern_open);
+    const stateLabel =
+      openCount === 2
+        ? "Live + Pattern open"
+        : status.live_open
+          ? "Live window open"
+          : status.test_pattern_open
+            ? "Pattern window open"
+            : "Window closed";
+    return {
+      stateLabel,
+      stateClass: openCount > 0 ? "open" : "closed",
+      detail: `Live ${status.live_open ? "open" : "closed"} / Pattern ${
+        status.test_pattern_open ? "open" : "closed"
+      }`,
+    };
+  };
+  const videoRuntimeBackendCounts = createMemo(() => {
+    const backends = videoRuntimeStatus()?.backends ?? [];
+    return {
+      available: backends.filter((backend) => backend.state === "Available").length,
+      missing: backends.filter((backend) => backend.state === "Missing").length,
+      notBuilt: backends.filter((backend) => backend.state === "NotBuilt").length,
+      total: backends.length,
+    };
+  });
+  const videoRuntimeBackendSummary = createMemo(() => {
+    const counts = videoRuntimeBackendCounts();
+    if (counts.total === 0) {
+      return "Not checked";
+    }
+    return `${counts.available}/${counts.total} available, ${counts.missing} missing, ${counts.notBuilt} not built`;
+  });
+  const videoRuntimeBackendClass = (state: VideoRuntimeStatus["backends"][number]["state"]) =>
+    `videoBackendPill state-${state.toLowerCase()}`;
+  const externalVideoIoPlanSummary = createMemo(() => {
+    const plans = externalVideoIoPlans();
+    if (!plans) {
+      return "Not checked";
+    }
+    const liveInputs = plans.inputs.filter((plan) => plan.live).length;
+    const liveOutputs = plans.outputs.filter((plan) => plan.live).length;
+    const blockedRoutes = [...plans.inputs, ...plans.outputs].filter((plan) => !plan.ready).length;
+    const blocked = blockedRoutes > 0 ? `, ${blockedRoutes} blocked` : "";
+    return `${plans.inputs.length} in (${liveInputs} live), ${plans.outputs.length} out (${liveOutputs} live)${blocked}`;
+  });
+  const externalVideoTransportSummary = createMemo(() => {
+    const report = externalVideoTransportReport();
+    if (!report) {
+      const status = externalVideoTransportStatus();
+      return status ? `active ${status.active_count}, not synced` : "Routes not synced";
+    }
+    const failed = report.start_failed.length + report.stop_failed.length;
+    const failedText = failed > 0 ? `, failed ${failed}` : "";
+    return `active ${report.active_count}, +${report.started.length}, =${report.kept.length}, -${report.stopped.length}, blocked ${report.blocked.length}, idle ${report.idle.length}${failedText}`;
+  });
+  const externalVideoIoPlanRows = createMemo(() => {
+    const plans = externalVideoIoPlans();
+    if (!plans) {
+      return [];
+    }
+    return [
+      ...plans.inputs.map((plan) => ({
+        id: `in-${plan.layer_id}`,
+        direction: "IN",
+        backend: plan.backend_id.toUpperCase(),
+        label: plan.label,
+        endpoint: plan.endpoint_name,
+        detail: `${videoSourceKindLabel(plan.kind)} / Layer ${plan.layer_id} / ${
+          plan.issue ?? plan.backend_detail ?? (plan.ready ? "Ready" : "Unavailable")
+        }`,
+        stateLabel: plan.live ? "Live" : plan.ready ? (plan.enabled ? "Ready" : "Disabled") : "Blocked",
+        stateClass: plan.live ? "enabled" : plan.ready ? "available" : "blocked",
+      })),
+      ...plans.outputs.map((plan) => ({
+        id: `out-${plan.output_id}`,
+        direction: "OUT",
+        backend: plan.backend_id.toUpperCase(),
+        label: plan.label,
+        endpoint: plan.endpoint_name,
+        detail: `${plan.kind} / ${plan.width}x${plan.height} / Comp ${plan.composition_id} / ${Math.round(
+          plan.opacity * 100,
+        )}%${plan.blackout ? " / Blackout" : ""} / ${
+          plan.issue ?? plan.backend_detail ?? (plan.ready ? "Ready" : "Unavailable")
+        }`,
+        stateLabel: plan.live ? "Live" : plan.ready ? (plan.enabled ? "Ready" : "Disabled") : "Blocked",
+        stateClass: plan.live ? "enabled" : plan.ready ? "available" : "blocked",
+      })),
+    ];
+  });
+  const externalVideoTransportActiveRows = createMemo(() => {
+    const report = externalVideoTransportReport();
+    const status = externalVideoTransportStatus();
+    if (report || !status) {
+      return [];
+    }
+    return status.active_routes.map((route) => ({
+      id: `active-${route.direction}-${route.route_id}-${route.backend_id}-${route.endpoint_name}`,
+      direction: route.direction === "Input" ? "IN" : "OUT",
+      backend: route.backend_id.toUpperCase(),
+      label: route.label,
+      endpoint: route.endpoint_name,
+      stateLabel: "Active",
+      stateClass: "kept",
+      detail: `${route.direction} ${route.route_id} / active transport route`,
+    }));
+  });
+  const externalVideoTransportRows = createMemo(() => {
+    const report = externalVideoTransportReport();
+    if (!report) {
+      return [];
+    }
+    const rowForRoute = (
+      stateLabel: string,
+      stateClass: string,
+      route: ExternalVideoTransportSyncReport["started"][number],
+      issue?: string,
+    ) => ({
+      id: `${stateClass}-${route.direction}-${route.route_id}-${route.backend_id}-${route.endpoint_name}`,
+      direction: route.direction === "Input" ? "IN" : "OUT",
+      backend: route.backend_id.toUpperCase(),
+      label: route.label,
+      endpoint: route.endpoint_name,
+      stateLabel,
+      stateClass,
+      detail: `${route.direction} ${route.route_id} / ${issue ?? stateLabel}`,
+    });
+    return [
+      ...report.started.map((route) => rowForRoute("Started", "started", route)),
+      ...report.kept.map((route) => rowForRoute("Kept", "kept", route)),
+      ...report.stopped.map((route) => rowForRoute("Stopped", "stopped", route)),
+      ...report.idle.map((route) => rowForRoute("Idle", "idle", route)),
+      ...report.blocked.map((blocked) => rowForRoute("Blocked", "blocked", blocked.route, blocked.issue)),
+      ...report.start_failed.map((failed) => rowForRoute("Start Failed", "failed", failed.route, failed.issue)),
+      ...report.stop_failed.map((failed) => rowForRoute("Stop Failed", "failed", failed.route, failed.issue)),
+    ];
+  });
+  const externalVideoTransportEventRows = createMemo(() =>
+    externalVideoTransportEvents().slice(-6).map((event) => ({
+      id: `${event.sequence}-${event.action}-${event.route.direction}-${event.route.route_id}`,
+      direction: event.route.direction === "Input" ? "IN" : "OUT",
+      backend: event.route.backend_id.toUpperCase(),
+      label: event.route.label,
+      endpoint: event.route.endpoint_name,
+      stateLabel: event.action,
+      stateClass: event.action === "Start" ? "driver-start" : "driver-stop",
+      detail: event.message,
+    })),
+  );
+  const externalVideoIoPlanClass = (stateClass: string) =>
+    `videoBackendPill videoIoPlanPill state-${stateClass}`;
+  const externalVideoTransportClass = (stateClass: string) =>
+    `videoBackendPill videoTransportPill state-${stateClass}`;
   const projectFileLabel = createMemo(() => {
     const path = currentProjectPath();
     const label = (() => {
@@ -2617,6 +3925,124 @@ export default function App() {
     return projectDirty() ? `${label} *` : label;
   });
   const customProfilePreview = createMemo(() => customProfilePreviewFromText(customAttributes()));
+  const selectedCustomAttributeIndexValue = createMemo(() => {
+    const index = selectedCustomAttributeIndex();
+    return index !== null && index >= 0 && index < customAttributeDrafts().length ? index : null;
+  });
+  const customProfileDraftAnalysis = createMemo(() => {
+    const occupied = new Map<number, number>();
+    const rowErrors = new Map<number, string[]>();
+    const conflictChannels = new Set<number>();
+    const rowConflicts = new Set<number>();
+    const seenAttributes = new Map<string, number>();
+    const controls: Array<{
+      attribute: string;
+      resolution: AttributeResolution;
+      offsets: number[];
+      geometry: "Body" | "Head" | "Beam";
+      rowIndex: number;
+    }> = [];
+    let nextOffset = 1;
+    let footprint = 0;
+
+    const addRowError = (rowIndex: number, error: string) => {
+      rowErrors.set(rowIndex, [...(rowErrors.get(rowIndex) ?? []), error]);
+      rowConflicts.add(rowIndex);
+    };
+
+    customAttributeDrafts().forEach((draft, rowIndex) => {
+      const attribute = draft.attribute.trim();
+      if (!attribute) {
+        addRowError(rowIndex, "Attribute name is required");
+        return;
+      }
+
+      const attributeKey = attribute.toLowerCase();
+      const duplicateRow = seenAttributes.get(attributeKey);
+      if (duplicateRow !== undefined) {
+        addRowError(rowIndex, `Duplicate of row ${duplicateRow + 1}`);
+        rowConflicts.add(duplicateRow);
+        return;
+      }
+      seenAttributes.set(attributeKey, rowIndex);
+
+      const width = draft.resolution === "SixteenBit" ? 2 : 1;
+      const trimmedStart = draft.startOffset.trim();
+      const startOffset = trimmedStart.length === 0 ? nextOffset : Number(trimmedStart);
+      if (!Number.isInteger(startOffset) || startOffset < 1 || startOffset > 512) {
+        addRowError(rowIndex, `Invalid start channel '${trimmedStart || "auto"}'`);
+        return;
+      }
+
+      const offsets = Array.from({ length: width }, (_, index) => startOffset + index);
+      if (offsets.some((offset) => offset < 1 || offset > 512)) {
+        addRowError(rowIndex, "Exceeds 512 DMX channels");
+        return;
+      }
+
+      const overlappingOffsets = offsets.filter((offset) => occupied.has(offset));
+      if (overlappingOffsets.length > 0) {
+        addRowError(rowIndex, `Overlaps CH ${overlappingOffsets.join("/")}`);
+        for (const offset of overlappingOffsets) {
+          conflictChannels.add(offset);
+          const existingRow = occupied.get(offset);
+          if (existingRow !== undefined) {
+            rowConflicts.add(existingRow);
+          }
+        }
+        return;
+      }
+
+      for (const offset of offsets) {
+        occupied.set(offset, rowIndex);
+      }
+      footprint = Math.max(footprint, ...offsets);
+      nextOffset = Math.max(nextOffset, startOffset + width);
+      controls.push({
+        attribute,
+        resolution: draft.resolution,
+        offsets,
+        geometry: customAttributeGeometryName(attribute),
+        rowIndex,
+      });
+    });
+
+    return {
+      controls,
+      footprint,
+      rowErrors,
+      conflictChannels,
+      rowConflicts,
+    };
+  });
+  const customProfileDraftRowErrors = (index: number) => customProfileDraftAnalysis().rowErrors.get(index) ?? [];
+  const customProfileDraftRowStatusText = (index: number) => {
+    const errors = customProfileDraftRowErrors(index);
+    if (errors.length > 0) {
+      return errors.join("; ");
+    }
+    if (customProfileDraftAnalysis().rowConflicts.has(index)) {
+      return "Conflict";
+    }
+    return customProfileAttributeDraftChannelLabel(customAttributeDrafts(), index);
+  };
+  const customProfileDmxCells = createMemo(() => {
+    const analysis = customProfileDraftAnalysis();
+    const selectedIndex = selectedCustomAttributeIndexValue();
+    const cellCount = Math.min(512, Math.max(32, customProfilePreview().footprint, analysis.footprint));
+    return Array.from({ length: cellCount }, (_, index) => {
+      const channel = index + 1;
+      const control = analysis.controls.find((candidate) => candidate.offsets.includes(channel)) ?? null;
+      const controlIndex = control?.rowIndex ?? -1;
+      return {
+        channel,
+        control,
+        controlIndex,
+        selected: selectedIndex !== null && controlIndex === selectedIndex,
+        conflict: analysis.conflictChannels.has(channel),
+      };
+    });
+  });
   const hasCueSources = createMemo(
     () => snapshot().fixtures.length > 0 || snapshot().video.layers.length > 0 || snapshot().video.outputs.length > 0,
   );
@@ -2720,9 +4146,18 @@ export default function App() {
         { x: x + size.width, z: z + size.height },
       ];
     });
+    const stageObjectPoints = snapshot().stage_objects.flatMap((object) => {
+      const halfWidth = Math.max(0.05, object.width / 2);
+      const halfDepth = Math.max(0.05, object.depth / 2);
+      return [
+        { x: object.x - halfWidth, z: object.z - halfDepth },
+        { x: object.x + halfWidth, z: object.z + halfDepth },
+      ];
+    });
     const points = [
       ...fixtures.map((fixture) => ({ x: fixture.position.x, z: fixture.position.z })),
       ...outputPoints,
+      ...stageObjectPoints,
     ];
     const halfX = Math.max(10, ...points.map((point) => Math.abs(point.x))) * 1.1;
     const halfZ = Math.max(10, ...points.map((point) => Math.abs(point.z))) * 1.1;
@@ -2856,6 +4291,38 @@ export default function App() {
     const box = mappingViewportBox();
     return `${box.x} ${box.z} ${box.size} ${box.size}`;
   });
+  const mappingStageCursorSvgPoint = createMemo(() => {
+    const point = mappingStageCursorWorld();
+    return point ? stageWorldToSvgPoint(point.x, point.z, stageWorldBounds()) : null;
+  });
+  const mappingStageCursorLabel = createMemo(() => {
+    const point = mappingStageCursorWorld();
+    if (!point) {
+      return "No stage cursor";
+    }
+    return `X ${point.x.toFixed(2)} / Z ${point.z.toFixed(2)}`;
+  });
+  const mappingPlacePreview = createMemo(() => {
+    const fixture = selectedFixture();
+    const point = mappingStageCursorSvgPoint();
+    if (!fixture || !point || mappingStageTool() !== "place") {
+      return null;
+    }
+    const visualKind = fixtureVisualKind(fixture);
+    const size = mappingFixtureStageSize(visualKind);
+    return {
+      label: fixture.label,
+      dmxLabel: `U${fixture.universe} A${fixture.address}`,
+      groupLabel: fixture.group_ids.length > 0 ? fixture.group_ids.join(", ") : "No group",
+      visualKind,
+      x: point.x,
+      z: point.z,
+      width: size.width,
+      height: size.height,
+      yaw: fixture.rotation.yaw,
+      color: "rgba(255, 221, 116, 0.78)",
+    };
+  });
   const mappingViewportZoomLabel = createMemo(() => `${Math.round(normalizedMappingViewportZoom() * 100)}%`);
   const setMappingViewport = (zoom: number, centerX = mappingViewportCenterX(), centerZ = mappingViewportCenterZ()) => {
     const nextZoom = clampRange(zoom, 1, 4);
@@ -2888,6 +4355,136 @@ export default function App() {
     const size = Math.abs(mappingSnapSize());
     return Number.isFinite(size) ? clampRange(size, 0.05, 20) : 0.5;
   });
+  const mappingViewPresetFromCurrent = (label: string, existingId?: string): MappingViewPreset => ({
+    id: existingId ?? `view-${Date.now().toString(36)}`,
+    label,
+    viewportZoom: Number(normalizedMappingViewportZoom().toFixed(3)),
+    viewportCenterX: Number(mappingViewportCenterX().toFixed(3)),
+    viewportCenterZ: Number(mappingViewportCenterZ().toFixed(3)),
+    snapEnabled: mappingSnapEnabled(),
+    snapSize: Number(normalizedMappingSnapSize().toFixed(3)),
+    showLabels: mappingShowLabels(),
+    showBeams: mappingShowBeams(),
+    showGeometry: mappingShowGeometry(),
+    showProjectors: mappingShowProjectors(),
+    showStageObjects: mappingShowStageObjects(),
+    showLevels: mappingShowLevels(),
+    stageTool: mappingStageTool(),
+  });
+  const saveMappingViewPreset = () => {
+    const label = mappingViewPresetLabel().trim();
+    if (!label) {
+      setMessage("Mapping view preset label is required.");
+      return;
+    }
+    const existing = mappingViewPresets().find((preset) => preset.label.toLowerCase() === label.toLowerCase());
+    const preset = mappingViewPresetFromCurrent(label.slice(0, 28), existing?.id);
+    const nextPresets = [
+      ...mappingViewPresets().filter((candidate) => candidate.id !== preset.id),
+      preset,
+    ].slice(-18);
+    setMappingViewPresets(nextPresets);
+    saveMappingViewPresets(nextPresets);
+    setSelectedMappingViewPresetId(preset.id);
+    setMappingViewPresetLabel(preset.label);
+    setMessage(`Saved mapping view preset ${preset.label} (${mappingViewPresetObjectLabel(preset)}).`);
+  };
+  const applyMappingViewPreset = (id: string) => {
+    const preset = mappingViewPresets().find((candidate) => candidate.id === id);
+    if (!preset) {
+      setMessage("Select a mapping view preset first.");
+      return;
+    }
+    setMappingViewport(preset.viewportZoom, preset.viewportCenterX, preset.viewportCenterZ);
+    setMappingSnapEnabled(preset.snapEnabled);
+    setMappingSnapSize(preset.snapSize);
+    setMappingShowLabels(preset.showLabels);
+    setMappingShowBeams(preset.showBeams);
+    setMappingShowGeometry(preset.showGeometry);
+    setMappingShowProjectors(preset.showProjectors);
+    setMappingShowStageObjects(preset.showStageObjects);
+    setMappingShowLevels(preset.showLevels);
+    setMappingStageTool(preset.stageTool);
+    setSelectedMappingViewPresetId(preset.id);
+    setMappingViewPresetLabel(preset.label);
+    setMessage(`Applied mapping view preset ${preset.label} (${mappingViewPresetObjectLabel(preset)}).`);
+  };
+  const removeMappingViewPreset = (id: string) => {
+    const preset = mappingViewPresets().find((candidate) => candidate.id === id);
+    if (!preset) {
+      return;
+    }
+    const nextPresets = mappingViewPresets().filter((candidate) => candidate.id !== id);
+    setMappingViewPresets(nextPresets);
+    saveMappingViewPresets(nextPresets);
+    if (selectedMappingViewPresetId() === id) {
+      setSelectedMappingViewPresetId(nextPresets[0]?.id ?? "");
+    }
+    setMessage(`Removed mapping view preset ${preset.label}.`);
+  };
+  const mappingViewPresetIdFromButtonEvent = (event: MouseEvent & { currentTarget: HTMLButtonElement }) => {
+    const select = event.currentTarget.closest(".mappingViewPresetPanel")?.querySelector("select");
+    return select instanceof HTMLSelectElement && select.value ? select.value : selectedMappingViewPresetId();
+  };
+  const exportMappingStageSvg = () => {
+    if (!mappingStageSvgElement) {
+      setMessage("2D mapping stage is not ready for SVG export.");
+      return;
+    }
+
+    const clone = mappingStageSvgElement.cloneNode(true) as SVGSVGElement;
+    inlineComputedSvgStyles(mappingStageSvgElement, clone);
+    clone.querySelectorAll(standaloneSvgExportSelectorsToRemove).forEach((element) => element.remove());
+    clone.classList.remove("dragging", "placeMode", "rotateMode", "panMode", "selectMode");
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    clone.setAttribute("width", "1600");
+    clone.setAttribute("height", "1600");
+    clone.setAttribute("data-rayard-export", "stage-plot-v1");
+    clone.setAttribute("data-rayard-project", projectFileLabel().replace(/\s+\*$/, ""));
+    clone.setAttribute("data-rayard-view", mappingStageViewBox());
+
+    const namespace = "http://www.w3.org/2000/svg";
+    const title = document.createElementNS(namespace, "title");
+    title.textContent = `Rayard 2D Stage Plot - ${projectFileLabel().replace(/\s+\*$/, "")}`;
+    const description = document.createElementNS(namespace, "desc");
+    description.textContent = [
+      `Exported ${new Date().toISOString()}`,
+      `${mappingFilteredFixtures().length} fixture(s)`,
+      `${snapshot().video.outputs.length} projector surface(s)`,
+      `${snapshot().stage_objects.length} stage object(s)`,
+      `viewBox ${mappingStageViewBox()}`,
+    ].join(" / ");
+    clone.insertBefore(description, clone.firstChild);
+    clone.insertBefore(title, clone.firstChild);
+
+    const serializer = new XMLSerializer();
+    const svgText = `<?xml version="1.0" encoding="UTF-8"?>\n${serializer.serializeToString(clone)}\n`;
+    const fileName = `${safeExportFileNamePart(projectFileLabel().replace(/\s+\*$/, ""))}-2d-stage.svg`;
+    downloadTextFile(fileName, svgText, "image/svg+xml;charset=utf-8");
+    setMessage(`Exported 2D stage SVG ${fileName}.`);
+  };
+  const exportVisualizerRenderPayload = async () => {
+    try {
+      const payload = await invoke<VisualizerRenderPayload>("get_visualizer_render_payload", { config: null });
+      const projectLabel = projectFileLabel().replace(/\s+\*$/, "");
+      const envelope = {
+        version: 1,
+        software: "Rayard",
+        kind: "visualizer-render-payload",
+        project: projectLabel,
+        exported_at: new Date().toISOString(),
+        payload,
+      };
+      const jsonText = `${JSON.stringify(envelope, null, 2)}\n`;
+      const fileName = `${safeExportFileNamePart(projectLabel)}-visualizer-scene.json`;
+      downloadTextFile(fileName, jsonText, "application/json;charset=utf-8");
+      setMessage(
+        `Exported visualizer scene JSON ${fileName} (${payload.scene.fixtures.length} fixture(s), ${payload.scene.video_surfaces.length} projector(s)).`,
+      );
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
   const snapStageCoordinate = (value: number) => {
     const nextValue = mappingSnapEnabled()
       ? Math.round(value / normalizedMappingSnapSize()) * normalizedMappingSnapSize()
@@ -2898,6 +4495,12 @@ export default function App() {
     x: snapStageCoordinate(point.x),
     z: snapStageCoordinate(point.z),
   });
+  const snapStageLength = (value: number) => {
+    const nextValue = mappingSnapEnabled()
+      ? Math.round(value / normalizedMappingSnapSize()) * normalizedMappingSnapSize()
+      : value;
+    return Number(clampRange(nextValue, 0.05, 1_000).toFixed(2));
+  };
   const snapStagePosition = (position: PatchFixtureRequest["position"]) => ({
     ...position,
     x: snapStageCoordinate(position.x),
@@ -2952,7 +4555,86 @@ export default function App() {
     const dz = point.z - center.z;
     return Math.sqrt(dx * dx + dz * dz);
   };
-  const mappingVideoOutputPreviewMapping = (drag: MappingDragState, output: VideoOutputSummary): VideoOutputMapping => {
+  const mappingVideoSurfaceCornerLocals = (surface: VisualizerVideoSurface2d, mapping: VideoOutputMapping) =>
+    mappingVideoOutputCorners.map((corner) => ({
+      key: corner.key,
+      label: corner.label,
+      x:
+        corner.baseX * (surface.width / 2) +
+        clampRange(mapping[corner.xField], -1, 1) * surface.width * mappingVideoOutputCornerGain,
+      z:
+        corner.baseZ * (surface.height / 2) +
+        clampRange(mapping[corner.zField], -1, 1) * surface.height * mappingVideoOutputCornerGain,
+    }));
+  const mappingVideoSurfaceCornerPointList = (surface: VisualizerVideoSurface2d, mapping: VideoOutputMapping) =>
+    mappingVideoSurfaceCornerLocals(surface, mapping)
+      .map((corner) => `${corner.x},${corner.z}`)
+      .join(" ");
+  const mappingWorldToVideoOutputLocal = (point: { x: number; z: number }, mapping: VideoOutputMapping) => {
+    const dx = point.x - mapping.stage_x;
+    const dz = point.z - mapping.stage_z;
+    const rotation = (-mapping.rotation_deg * Math.PI) / 180;
+    const cos = Math.cos(rotation);
+    const sin = Math.sin(rotation);
+    return {
+      x: dx * cos - dz * sin,
+      z: dx * sin + dz * cos,
+    };
+  };
+  const mappingWorldToStageObjectLocal = (point: { x: number; z: number }, object: StageObjectSummary) => {
+    const dx = point.x - object.x;
+    const dz = point.z - object.z;
+    const rotation = (-object.rotation_deg * Math.PI) / 180;
+    const cos = Math.cos(rotation);
+    const sin = Math.sin(rotation);
+    return {
+      x: dx * cos - dz * sin,
+      z: dx * sin + dz * cos,
+    };
+  };
+  const mappingVideoOutputCornerPreviewMapping = (
+    drag: Extract<MappingDragState, { kind: "videoOutputCorner" }>,
+    output: VideoOutputSummary,
+  ): VideoOutputMapping => {
+    const corner = mappingVideoOutputCorners.find((candidate) => candidate.key === drag.corner);
+    if (!corner) {
+      return drag.startMapping;
+    }
+    const size = surfaceWorldHalfSize(output, drag.startMapping);
+    const local = mappingWorldToVideoOutputLocal(drag.currentWorld, drag.startMapping);
+    const fullWidth = Math.max(0.001, size.width * 2);
+    const fullHeight = Math.max(0.001, size.height * 2);
+    const nextX = Number(
+      clampRange(
+        (local.x - corner.baseX * size.width) / (fullWidth * mappingVideoOutputCornerGain),
+        -1,
+        1,
+      ).toFixed(3),
+    );
+    const nextZ = Number(
+      clampRange(
+        (local.z - corner.baseZ * size.height) / (fullHeight * mappingVideoOutputCornerGain),
+        -1,
+        1,
+      ).toFixed(3),
+    );
+    return {
+      ...drag.startMapping,
+      [corner.xField]: nextX,
+      [corner.zField]: nextZ,
+    };
+  };
+  const isMappingVideoOutputDrag = (
+    drag: MappingDragState,
+  ): drag is Extract<MappingDragState, { outputId: number }> =>
+    drag.kind === "videoOutput" ||
+    drag.kind === "videoOutputRotate" ||
+    drag.kind === "videoOutputScale" ||
+    drag.kind === "videoOutputCorner";
+  const mappingVideoOutputPreviewMapping = (
+    drag: Extract<MappingDragState, { outputId: number }>,
+    output: VideoOutputSummary,
+  ): VideoOutputMapping => {
     if (drag.kind === "videoOutput") {
       const delta = dragWorldDelta(drag);
       const point = snapStagePoint({
@@ -2981,6 +4663,9 @@ export default function App() {
         scale_y: Number(clampRange(drag.startMapping.scale_y * ratio, 0.25, 3).toFixed(3)),
       };
     }
+    if (drag.kind === "videoOutputCorner") {
+      return mappingVideoOutputCornerPreviewMapping(drag, output);
+    }
     return output.mapping;
   };
   const mappingFixturePosition = (fixture: PatchedFixtureSummary) => {
@@ -2999,21 +4684,145 @@ export default function App() {
       z: startPosition.z + delta.z,
     });
   };
+  const mappingFixtureYawFromPoint = (center: { x: number; z: number }, point: { x: number; z: number }) => {
+    const dx = point.x - center.x;
+    const dz = point.z - center.z;
+    if (Math.abs(dx) < 0.001 && Math.abs(dz) < 0.001) {
+      return null;
+    }
+    return Number((((Math.atan2(dz, dx) * 180) / Math.PI + 90 + 360) % 360).toFixed(1));
+  };
+  const mappingFixtureYaw = (fixture: PatchedFixtureSummary) => {
+    const drag = mappingDrag();
+    if (drag?.kind !== "fixtureYaw" || drag.fixtureId !== fixture.id) {
+      return fixture.rotation.yaw;
+    }
+    return mappingFixtureYawFromPoint(drag.centerWorld, drag.currentWorld) ?? fixture.rotation.yaw;
+  };
+  const mappingFixtureYawHandle = (point: { x: number; z: number }, yaw: number) => {
+    const angle = ((yaw - 90) * Math.PI) / 180;
+    const distance = 7;
+    return {
+      x: point.x + Math.cos(angle) * distance,
+      z: point.z + Math.sin(angle) * distance,
+    };
+  };
   const mappingVideoOutputMapping = (output: VideoOutputSummary): VideoOutputMapping => {
     const drag = mappingDrag();
-    if (!drag || drag.kind === "fixture" || drag.outputId !== output.id) {
+    if (!drag || !isMappingVideoOutputDrag(drag) || drag.outputId !== output.id) {
       return output.mapping;
     }
     return mappingVideoOutputPreviewMapping(drag, output);
   };
+  const mappingStageObjectPreview = (object: StageObjectSummary): StageObjectSummary => {
+    const drag = mappingDrag();
+    if (!drag || !isMappingStageObjectDrag(drag) || drag.objectId !== object.id) {
+      return object;
+    }
+    if (drag.kind === "stageObjectRotate") {
+      const currentAngle = mappingOutputHandleAngleDeg(drag.centerWorld, drag.currentWorld);
+      return {
+        ...drag.startObject,
+        rotation_deg: Number((drag.startObject.rotation_deg + currentAngle - drag.startAngleDeg).toFixed(1)),
+      };
+    }
+    if (drag.kind === "stageObjectResize") {
+      const local = mappingWorldToStageObjectLocal(drag.currentWorld, drag.startObject);
+      return {
+        ...drag.startObject,
+        width: drag.resizeMode === "depth" ? drag.startObject.width : snapStageLength(Math.abs(local.x) * 2),
+        depth: drag.resizeMode === "width" ? drag.startObject.depth : snapStageLength(Math.abs(local.z) * 2),
+      };
+    }
+    const delta = dragWorldDelta(drag);
+    const point = snapStagePoint({
+      x: drag.startObject.x + delta.x,
+      z: drag.startObject.z + delta.z,
+    });
+    return {
+      ...drag.startObject,
+      x: point.x,
+      z: point.z,
+    };
+  };
+  const isMappingStageObjectDrag = (
+    drag: MappingDragState,
+  ): drag is Extract<MappingDragState, { objectId: number }> =>
+    drag.kind === "stageObject" || drag.kind === "stageObjectRotate" || drag.kind === "stageObjectResize";
   const isDraggingMappingFixture = (fixtureId: number) => {
     const drag = mappingDrag();
     return drag?.kind === "fixture" && drag.fixtureIds.includes(fixtureId);
   };
   const isDraggingMappingVideoOutput = (outputId: number) => {
     const drag = mappingDrag();
-    return Boolean(drag && drag.kind !== "fixture" && drag.outputId === outputId);
+    return Boolean(drag && isMappingVideoOutputDrag(drag) && drag.outputId === outputId);
   };
+  const isDraggingMappingStageObject = (objectId: number) => {
+    const drag = mappingDrag();
+    return Boolean(drag && isMappingStageObjectDrag(drag) && drag.objectId === objectId);
+  };
+  const mappingGeometryNodes2d = createMemo<MappingGeometryNode2d[]>(() => {
+    if (!mappingShowGeometry()) {
+      return [];
+    }
+    const fixtures = mappingFilteredFixtures();
+    if (fixtures.length === 0) {
+      return [];
+    }
+
+    const bounds = stageWorldBounds();
+    const rangeX = Math.max(Number.EPSILON, bounds.maxX - bounds.minX);
+    const rangeZ = Math.max(Number.EPSILON, bounds.maxZ - bounds.minZ);
+    const scaleX = (stageViewBoxSize - stagePadding * 2) / rangeX;
+    const scaleZ = (stageViewBoxSize - stagePadding * 2) / rangeZ;
+    const selectedIds = selectedMappingFixtureIdSet();
+    const selectedGroupId = selectedFixtureGroupFilter();
+    const dimensionOrZero = (value: number | null | undefined) => (value !== null && value !== undefined && Number.isFinite(value) ? Math.abs(value) : 0);
+
+    return fixtures.flatMap((fixture) => {
+      const fixturePosition = mappingFixturePosition(fixture);
+      const fixtureYaw = mappingFixtureYaw(fixture);
+      const inGroupFilter = selectedGroupId ? fixture.group_ids.includes(selectedGroupId) : true;
+      const selected = selectedIds.has(fixture.id) || selectedFixtureId() === fixture.id;
+      const geometryByName = new Map(fixture.geometries.map((geometry) => [geometry.name, geometry]));
+      const mappedChannelCounts = new Map<string, number>();
+      for (const control of fixture.controls) {
+        const geometryName = control.geometry?.trim();
+        if (geometryName) {
+          mappedChannelCounts.set(geometryName, (mappedChannelCounts.get(geometryName) ?? 0) + 1);
+        }
+      }
+
+      return fixture.geometries.map((geometry) => {
+        const local = geometryMatrixTranslation(cumulativeGeometryMatrix(geometry, geometryByName));
+        const rotated = rotateStageOffsetYaw({ x: local.x, z: local.z }, fixtureYaw);
+        const point = stageWorldToSvgPoint(fixturePosition.x + rotated.x, fixturePosition.z + rotated.z, bounds);
+        const beamDiameter = dimensionOrZero(geometry.beam_radius) * 2;
+        const widthWorld = Math.max(dimensionOrZero(geometry.model_dimensions?.x), beamDiameter, 0.28);
+        const heightWorld = Math.max(dimensionOrZero(geometry.model_dimensions?.z), beamDiameter, 0.28);
+        const footprintWidth = clampRange(widthWorld * scaleX, 1.7, 8);
+        const footprintHeight = clampRange(heightWorld * scaleZ, 1.7, 8);
+        const mappedChannelCount = mappedChannelCounts.get(geometry.name) ?? 0;
+        const radius = clampRange((footprintWidth + footprintHeight) / 5, 1.05, 2.2);
+        return {
+          key: `${fixture.id}:${geometry.name}`,
+          fixtureId: fixture.id,
+          fixtureLabel: fixture.label,
+          name: geometry.name,
+          kind: geometry.kind,
+          x: point.x,
+          z: point.z,
+          radius,
+          footprintWidth,
+          footprintHeight,
+          mappedChannelCount,
+          className: mappingGeometryClass(geometry, mappedChannelCount, inGroupFilter, selected),
+          inGroupFilter,
+          selected,
+        };
+      });
+    });
+  });
   const visualizerFixtures = createMemo<VisualizerFixture[]>(() => {
     const fixtures = mappingFilteredFixtures();
     if (fixtures.length === 0) {
@@ -3037,15 +4846,10 @@ export default function App() {
           : "rgb(88, 167, 246)";
       const intensity = clamp01(dimmer / 65_535);
       const panDegrees = pan === undefined ? 0 : ((pan - 32_768) / 65_535) * 540;
+      const yaw = mappingFixtureYaw(fixture);
+      const yawHandle = mappingFixtureYawHandle(point, yaw);
       const visualKind = fixtureVisualKind(fixture);
-      const size =
-        visualKind === "bar"
-          ? { width: 5.8, height: 1.4 }
-          : visualKind === "panel"
-            ? { width: 4.8, height: 3.2 }
-            : visualKind === "laser"
-              ? { width: 3.4, height: 3.4 }
-              : { width: 3.2, height: 3.2 };
+      const size = mappingFixtureStageSize(visualKind);
       return {
         id: fixture.id,
         label: fixture.label,
@@ -3057,8 +4861,10 @@ export default function App() {
         z: point.z,
         width: size.width,
         height: size.height,
-        yaw: fixture.rotation.yaw,
-        beamPoints: beamPoints(point.x, point.z, fixture.rotation.yaw + panDegrees, intensity),
+        yaw,
+        yawHandleX: yawHandle.x,
+        yawHandleZ: yawHandle.z,
+        beamPoints: beamPoints(point.x, point.z, yaw + panDegrees, intensity),
         intensity,
         color,
         inGroupFilter: selectedFixtureGroupFilter() ? fixture.group_ids.includes(selectedFixtureGroupFilter()!) : true,
@@ -3074,7 +4880,7 @@ export default function App() {
     return snapshot().video.outputs.map((output) => {
       const mapping = mappingVideoOutputMapping(output);
       const center = stageWorldToSvgPoint(mapping.stage_x, mapping.stage_z, bounds);
-      const size = surfaceWorldHalfSize(output);
+      const size = surfaceWorldHalfSize(output, mapping);
       const xEdge = stageWorldToSvgPoint(mapping.stage_x + size.width, mapping.stage_z, bounds);
       const zEdge = stageWorldToSvgPoint(mapping.stage_x, mapping.stage_z + size.height, bounds);
       return {
@@ -3087,6 +4893,27 @@ export default function App() {
         rotationDeg: mapping.rotation_deg,
         opacity: clampRange(output.opacity, 0, 1),
         active: output.enabled && !output.blackout,
+      };
+    });
+  });
+  const visualizerStageObjects2d = createMemo<VisualizerStageObject2d[]>(() => {
+    const bounds = stageWorldBounds();
+    return snapshot().stage_objects.map((object) => {
+      const preview = mappingStageObjectPreview(object);
+      const center = stageWorldToSvgPoint(preview.x, preview.z, bounds);
+      const xEdge = stageWorldToSvgPoint(preview.x + preview.width / 2, preview.z, bounds);
+      const zEdge = stageWorldToSvgPoint(preview.x, preview.z + preview.depth / 2, bounds);
+      return {
+        id: preview.id,
+        label: preview.label,
+        kind: preview.kind,
+        x: center.x,
+        z: center.z,
+        width: Math.max(1, Math.abs(xEdge.x - center.x) * 2),
+        depth: Math.max(1, Math.abs(zEdge.z - center.z) * 2),
+        rotationDeg: preview.rotation_deg,
+        color: preview.color ?? stageObjectDefaultColor(preview.kind),
+        selected: selectedStageObjectId() === preview.id,
       };
     });
   });
@@ -3140,6 +4967,14 @@ export default function App() {
     }
     return snapshot().video.outputs.find((output) => output.id === outputId) ?? snapshot().video.outputs[0] ?? null;
   });
+  const selectedTouchVideoOutput = createMemo(() => {
+    const outputId = selectedVideoOutputId();
+    return outputId === null ? null : snapshot().video.outputs.find((output) => output.id === outputId) ?? null;
+  });
+  const selectedStageObject = createMemo(() => {
+    const objectId = selectedStageObjectId();
+    return objectId === null ? null : snapshot().stage_objects.find((object) => object.id === objectId) ?? null;
+  });
   const fixtureSvgBounds = (fixture: VisualizerFixture): MappingSvgBounds => {
     const halfWidth = Math.max(2.4, fixture.width / 2 + 1.6);
     const halfHeight = Math.max(2.4, fixture.height / 2 + 1.6);
@@ -3154,14 +4989,39 @@ export default function App() {
     const angle = (surface.rotationDeg * Math.PI) / 180;
     const cos = Math.cos(angle);
     const sin = Math.sin(angle);
-    const corners = [
-      { x: -surface.width / 2, z: -surface.height / 2 },
-      { x: surface.width / 2, z: -surface.height / 2 },
-      { x: surface.width / 2, z: surface.height / 2 },
-      { x: -surface.width / 2, z: surface.height / 2 },
-    ].map((corner) => ({
+    const output = snapshot().video.outputs.find((candidate) => candidate.id === surface.id);
+    const mapping = output ? mappingVideoOutputMapping(output) : defaultVideoOutputMapping;
+    const localCorners = output
+      ? mappingVideoSurfaceCornerLocals(surface, mapping).map((corner) => ({ x: corner.x, z: corner.z }))
+      : [
+          { x: -surface.width / 2, z: -surface.height / 2 },
+          { x: surface.width / 2, z: -surface.height / 2 },
+          { x: surface.width / 2, z: surface.height / 2 },
+          { x: -surface.width / 2, z: surface.height / 2 },
+        ];
+    const corners = localCorners.map((corner) => ({
       x: surface.x + corner.x * cos - corner.z * sin,
       z: surface.z + corner.x * sin + corner.z * cos,
+    }));
+    return {
+      minX: Math.min(...corners.map((corner) => corner.x)) - 2,
+      maxX: Math.max(...corners.map((corner) => corner.x)) + 2,
+      minZ: Math.min(...corners.map((corner) => corner.z)) - 2,
+      maxZ: Math.max(...corners.map((corner) => corner.z)) + 2,
+    };
+  };
+  const stageObjectSvgBounds = (object: VisualizerStageObject2d): MappingSvgBounds => {
+    const angle = (object.rotationDeg * Math.PI) / 180;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const corners = [
+      { x: -object.width / 2, z: -object.depth / 2 },
+      { x: object.width / 2, z: -object.depth / 2 },
+      { x: object.width / 2, z: object.depth / 2 },
+      { x: -object.width / 2, z: object.depth / 2 },
+    ].map((corner) => ({
+      x: object.x + corner.x * cos - corner.z * sin,
+      z: object.z + corner.x * sin + corner.z * cos,
     }));
     return {
       minX: Math.min(...corners.map((corner) => corner.x)) - 2,
@@ -3196,7 +5056,8 @@ export default function App() {
   const fitMappingViewportToVisible = () => {
     const fixtureBounds = visualizerFixtures().map(fixtureSvgBounds);
     const surfaceBounds = visualizerVideoSurfaces2d().map(videoSurfaceSvgBounds);
-    fitMappingViewportToSvgBounds(mergeSvgBounds([...fixtureBounds, ...surfaceBounds]), "visible stage items");
+    const objectBounds = visualizerStageObjects2d().map(stageObjectSvgBounds);
+    fitMappingViewportToSvgBounds(mergeSvgBounds([...fixtureBounds, ...surfaceBounds, ...objectBounds]), "visible stage items");
   };
   const fitMappingViewportToSelection = () => {
     const selectedIds = selectedMappingFixtureIdSet();
@@ -3208,13 +5069,19 @@ export default function App() {
       : visualizerVideoSurfaces2d()
           .filter((surface) => surface.id === selectedVideoOutputId())
           .map(videoSurfaceSvgBounds);
-    fitMappingViewportToSvgBounds(mergeSvgBounds([...fixtureBounds, ...surfaceBounds]), "selection");
+    const objectBounds =
+      selectedStageObjectId() === null
+        ? []
+        : visualizerStageObjects2d()
+            .filter((object) => object.id === selectedStageObjectId())
+            .map(stageObjectSvgBounds);
+    fitMappingViewportToSvgBounds(mergeSvgBounds([...fixtureBounds, ...surfaceBounds, ...objectBounds]), "selection");
   };
   const canFitMappingViewportToVisible = createMemo(
-    () => visualizerFixtures().length > 0 || visualizerVideoSurfaces2d().length > 0,
+    () => visualizerFixtures().length > 0 || visualizerVideoSurfaces2d().length > 0 || visualizerStageObjects2d().length > 0,
   );
   const canFitMappingViewportToSelection = createMemo(
-    () => selectedMappingFixtures().length > 0 || selectedVideoOutputId() !== null,
+    () => selectedMappingFixtures().length > 0 || selectedVideoOutputId() !== null || selectedStageObjectId() !== null,
   );
   const effectVideoTargetPosition = () => ({
     x: effectVideoPositionX(),
@@ -3274,6 +5141,21 @@ export default function App() {
         z: (bounds.minZ + bounds.maxZ) / 2,
       },
       "Video effect target uses stage center.",
+    );
+  };
+  const setEffectVideoPositionFromSelectedStageObject = () => {
+    const object = selectedStageObject();
+    if (!object) {
+      setMessage("Select a stage object before using it as the video target position.");
+      return;
+    }
+    setEffectVideoPosition(
+      {
+        x: object.x,
+        y: 0,
+        z: object.z,
+      },
+      `Video effect target uses ${object.label}.`,
     );
   };
 
@@ -3620,13 +5502,21 @@ export default function App() {
     }
   };
 
-  const timer = window.setInterval(refreshSnapshot, 250);
-  const telemetryReportTimer = window.setInterval(refreshEngineTelemetryReport, 1000);
+  const timer = isTauriRuntime() ? window.setInterval(refreshSnapshot, 250) : null;
+  const telemetryReportTimer = isTauriRuntime() ? window.setInterval(refreshEngineTelemetryReport, 1000) : null;
   onCleanup(() => {
-    window.clearInterval(timer);
-    window.clearInterval(telemetryReportTimer);
+    if (timer !== null) {
+      window.clearInterval(timer);
+    }
+    if (telemetryReportTimer !== null) {
+      window.clearInterval(telemetryReportTimer);
+    }
   });
   createEffect(() => {
+    if (!isTauriRuntime()) {
+      setMessage(tauriBackendUnavailableMessage);
+      return;
+    }
     void refreshSnapshot();
     void refreshEngineTelemetryReport();
     void refreshMidiInputs();
@@ -3634,6 +5524,9 @@ export default function App() {
     void refreshSerialPorts();
   });
   createEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
     void loadStartupProject();
     void loadQueuedOpenProjects();
     let disposed = false;
@@ -3722,7 +5615,7 @@ export default function App() {
     const imported = await invoke<FixtureProfileSummary>("import_gdtf", { path });
     setProfile(imported);
     setSelectedMode(imported.dmx_modes[0]?.name ?? "");
-    setMessage(`${loadedMessage} ${imported.manufacturer} ${imported.name}`);
+    setMessage(profileLoadMessage(loadedMessage, imported));
   };
 
   const importGdtf = async () => {
@@ -3769,6 +5662,71 @@ export default function App() {
     }
   };
 
+  const setCustomAttributesText = (value: string) => {
+    setCustomAttributes(value);
+    setCustomAttributeDrafts(customProfileAttributeDraftsFromText(value));
+    setSelectedCustomAttributeIndex(null);
+  };
+
+  const commitCustomAttributeDrafts = (drafts: CustomProfileAttributeDraft[], selectedIndex?: number | null) => {
+    setCustomAttributeDrafts(drafts);
+    setCustomAttributes(customProfileAttributeTextFromDrafts(drafts));
+    setSelectedCustomAttributeIndex(
+      selectedIndex !== undefined
+        ? selectedIndex
+        : selectedCustomAttributeIndexValue() !== null && selectedCustomAttributeIndexValue()! < drafts.length
+          ? selectedCustomAttributeIndexValue()
+          : drafts.length > 0
+            ? drafts.length - 1
+            : null,
+    );
+  };
+
+  const updateCustomAttributeDraft = (index: number, updates: Partial<CustomProfileAttributeDraft>) => {
+    const drafts = customAttributeDrafts();
+    if (index < 0 || index >= drafts.length) {
+      return;
+    }
+    commitCustomAttributeDrafts(
+      drafts.map((draft, draftIndex) => (draftIndex === index ? { ...draft, ...updates } : draft)),
+      index,
+    );
+  };
+
+  const addCustomAttributeDraft = () => {
+    const drafts = customAttributeDrafts();
+    commitCustomAttributeDrafts(
+      [...drafts, { attribute: `Attribute${drafts.length + 1}`, resolution: "EightBit", startOffset: "" }],
+      drafts.length,
+    );
+  };
+
+  const appendCustomAttributeTemplate = (rows: CustomProfileAttributeDraft[]) => {
+    const drafts = customAttributeDrafts();
+    const nextRows = rows.map((row) => ({ ...row }));
+    commitCustomAttributeDrafts([...drafts, ...nextRows], drafts.length);
+  };
+
+  const removeCustomAttributeDraft = (index: number) => {
+    const drafts = customAttributeDrafts();
+    if (index < 0 || index >= drafts.length) {
+      return;
+    }
+    const next = drafts.filter((_, draftIndex) => draftIndex !== index);
+    commitCustomAttributeDrafts(next, next.length === 0 ? null : Math.min(index, next.length - 1));
+  };
+
+  const moveCustomAttributeDraft = (index: number, delta: -1 | 1) => {
+    const drafts = [...customAttributeDrafts()];
+    const nextIndex = index + delta;
+    if (index < 0 || nextIndex < 0 || index >= drafts.length || nextIndex >= drafts.length) {
+      return;
+    }
+    const [draft] = drafts.splice(index, 1);
+    drafts.splice(nextIndex, 0, draft);
+    commitCustomAttributeDrafts(drafts, nextIndex);
+  };
+
   const customProfileRequest = (): CustomFixtureProfileRequest => ({
     manufacturer: customManufacturer(),
     name: customProfileName(),
@@ -3786,7 +5744,7 @@ export default function App() {
       setProfile(created);
       setGdtfPath(created.source_path);
       setSelectedMode(created.dmx_modes[0]?.name ?? "");
-      setMessage(`Created custom profile ${created.manufacturer} ${created.name}`);
+      setMessage(profileLoadMessage("Created custom profile", created));
     } catch (error) {
       setMessage(String(error));
     }
@@ -3815,12 +5773,12 @@ export default function App() {
       setCustomManufacturer(created.manufacturer);
       setCustomProfileName(created.name);
       setCustomModeName(created.dmx_modes[0]?.name ?? "Default");
-      setCustomAttributes(
+      setCustomAttributesText(
         created.dmx_modes[0]?.controls
           .map((control) => `${control.attribute}@${control.offsets[0] ?? 1}:${control.resolution === "SixteenBit" ? "16" : "8"}`)
           .join(", ") ?? "",
       );
-      setMessage(`Loaded custom profile ${created.manufacturer} ${created.name}`);
+      setMessage(profileLoadMessage("Loaded custom profile", created));
     } catch (error) {
       setMessage(String(error));
     }
@@ -4288,6 +6246,7 @@ export default function App() {
     } else {
       activateFixture(fixture);
     }
+    setSelectedStageObjectId(null);
     const startPositions = Object.fromEntries(
       snapshot()
         .fixtures
@@ -4306,6 +6265,34 @@ export default function App() {
     });
   };
 
+  const beginMappingFixtureYawDrag = (event: PointerEvent, fixtureId: number) => {
+    if (event.button !== 0 || mappingStageTool() === "pan" || mappingStageTool() === "place") {
+      return;
+    }
+    const fixture = snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
+    const svg = (event.currentTarget as SVGElement).ownerSVGElement;
+    if (!fixture || !svg) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    selectFixture(fixture);
+    activateFixture(fixture);
+    const point = stageWorldPointFromPointer(event, svg);
+    svg.setPointerCapture(event.pointerId);
+    setMappingDrag({
+      kind: "fixtureYaw",
+      pointerId: event.pointerId,
+      fixtureId,
+      startWorld: point,
+      currentWorld: point,
+      centerWorld: {
+        x: fixture.position.x,
+        z: fixture.position.z,
+      },
+    });
+  };
+
   const beginMappingVideoOutputDrag = (event: PointerEvent, outputId: number) => {
     if (event.button !== 0 || mappingStageTool() !== "select") {
       return;
@@ -4317,6 +6304,7 @@ export default function App() {
     }
     const point = stageWorldPointFromPointer(event, svg);
     svg.setPointerCapture(event.pointerId);
+    setSelectedStageObjectId(null);
     setMappingDrag({
       kind: "videoOutput",
       pointerId: event.pointerId,
@@ -4378,6 +6366,121 @@ export default function App() {
       centerWorld,
       startDistance: mappingOutputHandleDistance(centerWorld, point),
       startMapping: output.mapping,
+    });
+  };
+
+  const beginMappingVideoOutputCornerDrag = (
+    event: PointerEvent,
+    outputId: number,
+    corner: MappingVideoOutputCornerKey,
+  ) => {
+    if (event.button !== 0 || mappingStageTool() !== "select") {
+      return;
+    }
+    const output = snapshot().video.outputs.find((candidate) => candidate.id === outputId);
+    const svg = (event.currentTarget as SVGElement).ownerSVGElement;
+    if (!output || !svg) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    setSelectedVideoOutputId(outputId);
+    const point = stageWorldPointFromPointer(event, svg);
+    svg.setPointerCapture(event.pointerId);
+    setMappingDrag({
+      kind: "videoOutputCorner",
+      pointerId: event.pointerId,
+      outputId,
+      corner,
+      startWorld: point,
+      currentWorld: point,
+      startMapping: output.mapping,
+    });
+  };
+
+  const beginMappingStageObjectDrag = (event: PointerEvent, objectId: number) => {
+    if (event.button !== 0 || mappingStageTool() !== "select") {
+      return;
+    }
+    const object = snapshot().stage_objects.find((candidate) => candidate.id === objectId);
+    const svg = (event.currentTarget as SVGElement).ownerSVGElement;
+    if (!object || !svg) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    clearMappingFixtureSelection();
+    setSelectedVideoOutputId(null);
+    setSelectedStageObjectId(objectId);
+    const point = stageWorldPointFromPointer(event, svg);
+    svg.setPointerCapture(event.pointerId);
+    setMappingDrag({
+      kind: "stageObject",
+      pointerId: event.pointerId,
+      objectId,
+      startWorld: point,
+      currentWorld: point,
+      startObject: object,
+    });
+  };
+
+  const beginMappingStageObjectRotate = (event: PointerEvent, objectId: number) => {
+    if (event.button !== 0 || mappingStageTool() !== "select") {
+      return;
+    }
+    const object = snapshot().stage_objects.find((candidate) => candidate.id === objectId);
+    const svg = (event.currentTarget as SVGElement).ownerSVGElement;
+    if (!object || !svg) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    clearMappingFixtureSelection();
+    setSelectedVideoOutputId(null);
+    setSelectedStageObjectId(objectId);
+    const point = stageWorldPointFromPointer(event, svg);
+    const centerWorld = { x: object.x, z: object.z };
+    svg.setPointerCapture(event.pointerId);
+    setMappingDrag({
+      kind: "stageObjectRotate",
+      pointerId: event.pointerId,
+      objectId,
+      startWorld: point,
+      currentWorld: point,
+      centerWorld,
+      startAngleDeg: mappingOutputHandleAngleDeg(centerWorld, point),
+      startObject: object,
+    });
+  };
+
+  const beginMappingStageObjectResize = (
+    event: PointerEvent,
+    objectId: number,
+    resizeMode: MappingStageObjectResizeMode,
+  ) => {
+    if (event.button !== 0 || mappingStageTool() !== "select") {
+      return;
+    }
+    const object = snapshot().stage_objects.find((candidate) => candidate.id === objectId);
+    const svg = (event.currentTarget as SVGElement).ownerSVGElement;
+    if (!object || !svg) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    clearMappingFixtureSelection();
+    setSelectedVideoOutputId(null);
+    setSelectedStageObjectId(objectId);
+    const point = stageWorldPointFromPointer(event, svg);
+    svg.setPointerCapture(event.pointerId);
+    setMappingDrag({
+      kind: "stageObjectResize",
+      pointerId: event.pointerId,
+      objectId,
+      resizeMode,
+      startWorld: point,
+      currentWorld: point,
+      startObject: object,
     });
   };
 
@@ -4456,6 +6559,9 @@ export default function App() {
   };
 
   const handleMappingStagePointerMove = (event: PointerEvent & { currentTarget: SVGSVGElement }) => {
+    const cursorWorld = stageWorldPointFromPointer(event);
+    setMappingStageCursorWorld(mappingStageTool() === "place" ? snapStagePoint(cursorWorld) : cursorWorld);
+
     if (updateMappingViewportPan(event)) {
       return;
     }
@@ -4464,7 +6570,7 @@ export default function App() {
     if (drag && drag.pointerId === event.pointerId) {
       setMappingDrag({
         ...drag,
-        currentWorld: stageWorldPointFromPointer(event),
+        currentWorld: cursorWorld,
       });
       return;
     }
@@ -4489,13 +6595,33 @@ export default function App() {
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
+      if (drag.kind === "fixtureYaw") {
+        setMappingDrag(null);
+        const fixture = snapshot().fixtures.find((candidate) => candidate.id === drag.fixtureId);
+        if (!fixture) {
+          return;
+        }
+        const yaw = mappingFixtureYawFromPoint(drag.centerWorld, drag.currentWorld);
+        if (yaw === null) {
+          return;
+        }
+        await setFixtureTransform(fixture, {
+          rotation: {
+            ...fixture.rotation,
+            yaw,
+          },
+        });
+        setMessage(`Set ${fixture.label} yaw to ${yaw} deg.`);
+        return;
+      }
       const delta = dragWorldDelta(drag);
-      setMappingDrag(null);
       if (Math.abs(delta.x) < 0.01 && Math.abs(delta.z) < 0.01) {
+        setMappingDrag(null);
         return;
       }
 
       if (drag.kind === "fixture") {
+        setMappingDrag(null);
         const movedFixtures = snapshot().fixtures.filter((candidate) => drag.fixtureIds.includes(candidate.id));
         if (movedFixtures.length === 0) {
           return;
@@ -4520,6 +6646,32 @@ export default function App() {
         return;
       }
 
+      if (isMappingStageObjectDrag(drag)) {
+        const object = snapshot().stage_objects.find((candidate) => candidate.id === drag.objectId);
+        if (!object) {
+          setMappingDrag(null);
+          return;
+        }
+        const nextObject = mappingStageObjectPreview(object);
+        setMappingDrag(null);
+        await setStageObject(object, {
+          x: nextObject.x,
+          z: nextObject.z,
+          width: nextObject.width,
+          depth: nextObject.depth,
+          rotation_deg: nextObject.rotation_deg,
+        });
+        if (drag.kind === "stageObjectRotate") {
+          setMessage(`Rotated ${object.label} to ${nextObject.rotation_deg} deg.`);
+        } else if (drag.kind === "stageObjectResize") {
+          setMessage(`Resized ${object.label} to ${nextObject.width} x ${nextObject.depth}.`);
+        } else {
+          setMessage(`Moved ${object.label} to X ${nextObject.x}, Z ${nextObject.z}.`);
+        }
+        return;
+      }
+
+      setMappingDrag(null);
       const output = snapshot().video.outputs.find((candidate) => candidate.id === drag.outputId);
       if (!output) {
         return;
@@ -4530,6 +6682,9 @@ export default function App() {
         setMessage(`Moved ${output.label} to X ${nextMapping.stage_x}, Z ${nextMapping.stage_z}`);
       } else if (drag.kind === "videoOutputRotate") {
         setMessage(`Rotated ${output.label} to ${nextMapping.rotation_deg} deg`);
+      } else if (drag.kind === "videoOutputCorner") {
+        const corner = mappingVideoOutputCorners.find((candidate) => candidate.key === drag.corner);
+        setMessage(`Adjusted ${corner?.label ?? "corner"} warp for ${output.label}.`);
       } else {
         setMessage(`Scaled ${output.label} to ${nextMapping.scale_x.toFixed(2)} x ${nextMapping.scale_y.toFixed(2)}`);
       }
@@ -4634,6 +6789,106 @@ export default function App() {
     await layoutFixtures(selectedMappingFixtures(), mode, "in selection");
   };
 
+  const stageObjectLocalToWorld = (object: StageObjectSummary, localX: number, localZ: number) => {
+    const angle = (object.rotation_deg * Math.PI) / 180;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    return {
+      x: object.x + localX * cos - localZ * sin,
+      z: object.z + localX * sin + localZ * cos,
+    };
+  };
+
+  const layoutSelectedFixturesOnStageObject = async (mode: Exclude<FixtureLayoutMode, "circle">) => {
+    const fixtures = selectedMappingFixtures();
+    const object = selectedStageObject();
+    if (fixtures.length === 0) {
+      setMessage("Select fixtures before arranging them on a stage object.");
+      return;
+    }
+    if (!object) {
+      setMessage("Select a stage object before using it as a layout reference.");
+      return;
+    }
+
+    const count = fixtures.length;
+    const columns = mode === "line" ? count : Math.ceil(Math.sqrt(count));
+    const rows = mode === "line" ? 1 : Math.ceil(count / columns);
+    const usableWidth = Math.max(0.05, object.width * 0.86);
+    const usableDepth = Math.max(0.05, object.depth * 0.78);
+
+    try {
+      await Promise.all(
+        fixtures.map((fixture, index) => {
+          const column = mode === "line" ? index : index % columns;
+          const row = mode === "line" ? 0 : Math.floor(index / columns);
+          const localX = columns <= 1 ? 0 : -usableWidth / 2 + (usableWidth * column) / (columns - 1);
+          const localZ = rows <= 1 ? 0 : -usableDepth / 2 + (usableDepth * row) / (rows - 1);
+          const point = stageObjectLocalToWorld(object, localX, localZ);
+          return setFixtureTransform(
+            fixture,
+            {
+              position: snapStagePosition({
+                ...fixture.position,
+                x: point.x,
+                z: point.z,
+              }),
+              rotation: {
+                ...fixture.rotation,
+                yaw: Number(object.rotation_deg.toFixed(1)),
+              },
+            },
+            false,
+          );
+        }),
+      );
+      await refreshSnapshot();
+      setMessage(`Arranged ${count} fixture${count === 1 ? "" : "s"} on ${object.label}.`);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const fixturesInsideStageObject = (object: StageObjectSummary) => {
+    const halfWidth = Math.max(0.025, object.width / 2);
+    const halfDepth = Math.max(0.025, object.depth / 2);
+    return snapshot().fixtures.filter((fixture) => {
+      const local = mappingWorldToStageObjectLocal(
+        { x: fixture.position.x, z: fixture.position.z },
+        object,
+      );
+      return Math.abs(local.x) <= halfWidth && Math.abs(local.z) <= halfDepth;
+    });
+  };
+
+  const pickFixturesInsideSelectedStageObject = (mode: "replace" | "add") => {
+    const object = selectedStageObject();
+    if (!object) {
+      setMessage("Select a stage object before picking fixtures inside it.");
+      return;
+    }
+    const pickedIds = fixturesInsideStageObject(object).map((fixture) => fixture.id);
+    if (pickedIds.length === 0) {
+      if (mode === "replace") {
+        setSelectedMappingFixtureIds([]);
+      }
+      setMessage(`No fixtures inside ${object.label}.`);
+      return;
+    }
+    const nextIds =
+      mode === "add"
+        ? [...new Set([...selectedMappingFixtureIds(), ...pickedIds])]
+        : pickedIds;
+    setSelectedMappingFixtureIds(nextIds);
+    const active = snapshot().fixtures.find((fixture) => fixture.id === pickedIds[0]);
+    if (active) {
+      activateFixture(active);
+    }
+    setMessage(
+      `${mode === "add" ? "Added" : "Selected"} ${pickedIds.length} fixture${pickedIds.length === 1 ? "" : "s"} inside ${object.label}.`,
+    );
+  };
+
   const alignSelectedMappingFixtures = async (axis: MappingAxis) => {
     const fixtures = selectedMappingFixtures();
     if (fixtures.length < 2) {
@@ -4729,6 +6984,146 @@ export default function App() {
     }
   };
 
+  const normalizeFixtureYaw = (yaw: number) => Number((((yaw % 360) + 360) % 360).toFixed(1));
+
+  const selectedMappingFixtureCenter = (fixtures: PatchedFixtureSummary[]) => {
+    const minX = Math.min(...fixtures.map((fixture) => fixture.position.x));
+    const maxX = Math.max(...fixtures.map((fixture) => fixture.position.x));
+    const minZ = Math.min(...fixtures.map((fixture) => fixture.position.z));
+    const maxZ = Math.max(...fixtures.map((fixture) => fixture.position.z));
+    return {
+      x: (minX + maxX) / 2,
+      z: (minZ + maxZ) / 2,
+    };
+  };
+
+  const mirrorSelectedMappingFixtures = async (axis: MappingAxis) => {
+    const fixtures = selectedMappingFixtures();
+    if (fixtures.length < 2) {
+      setMessage("Select at least two fixtures to mirror.");
+      return;
+    }
+    const center = selectedMappingFixtureCenter(fixtures);
+    try {
+      await Promise.all(
+        fixtures.map((fixture) => {
+          const nextPosition =
+            axis === "x"
+              ? { ...fixture.position, x: center.x * 2 - fixture.position.x }
+              : { ...fixture.position, z: center.z * 2 - fixture.position.z };
+          const nextYaw =
+            axis === "x"
+              ? normalizeFixtureYaw(360 - fixture.rotation.yaw)
+              : normalizeFixtureYaw(180 - fixture.rotation.yaw);
+          return setFixtureTransform(
+            fixture,
+            {
+              position: snapStagePosition(nextPosition),
+              rotation: {
+                ...fixture.rotation,
+                yaw: nextYaw,
+              },
+            },
+            false,
+          );
+        }),
+      );
+      await refreshSnapshot();
+      setMessage(`Mirrored ${fixtures.length} selected fixture(s) across ${axis.toUpperCase()}.`);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const rotateSelectedMappingFixtures = async (degrees: number) => {
+    const fixtures = selectedMappingFixtures();
+    if (fixtures.length < 2) {
+      setMessage("Select at least two fixtures to rotate.");
+      return;
+    }
+    const center = selectedMappingFixtureCenter(fixtures);
+    const radians = (degrees * Math.PI) / 180;
+    const cos = Math.cos(radians);
+    const sin = Math.sin(radians);
+    try {
+      await Promise.all(
+        fixtures.map((fixture) => {
+          const localX = fixture.position.x - center.x;
+          const localZ = fixture.position.z - center.z;
+          const nextPosition = {
+            ...fixture.position,
+            x: center.x + localX * cos - localZ * sin,
+            z: center.z + localX * sin + localZ * cos,
+          };
+          return setFixtureTransform(
+            fixture,
+            {
+              position: snapStagePosition(nextPosition),
+              rotation: {
+                ...fixture.rotation,
+                yaw: normalizeFixtureYaw(fixture.rotation.yaw + degrees),
+              },
+            },
+            false,
+          );
+        }),
+      );
+      await refreshSnapshot();
+      setMessage(`Rotated ${fixtures.length} selected fixture(s) by ${degrees} deg.`);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const addStageObjectAtCenter = async () => {
+    const kind = stageObjectKind();
+    try {
+      const objectId = await invoke<number>("add_stage_object", {
+        label: stageObjectLabel(),
+        kind,
+        x: Number(((stageWorldBounds().minX + stageWorldBounds().maxX) / 2).toFixed(2)),
+        z: Number(((stageWorldBounds().minZ + stageWorldBounds().maxZ) / 2).toFixed(2)),
+        width: stageObjectWidth(),
+        depth: stageObjectDepth(),
+        rotationDeg: stageObjectRotation(),
+        color: stageObjectColor() || stageObjectDefaultColor(kind),
+      });
+      setSelectedStageObjectId(objectId);
+      setMappingShowStageObjects(true);
+      await refreshSnapshot();
+      setMessage(`Added stage object ${stageObjectLabel()}.`);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const setStageObject = async (object: StageObjectSummary, updates: Partial<StageObjectSummary>) => {
+    try {
+      await invoke("set_stage_object", {
+        object: {
+          ...object,
+          ...updates,
+        },
+      });
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const removeStageObject = async (objectId: number) => {
+    try {
+      await invoke("remove_stage_object", { objectId });
+      if (selectedStageObjectId() === objectId) {
+        setSelectedStageObjectId(null);
+      }
+      await refreshSnapshot();
+      setMessage(`Removed stage object ${objectId}.`);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
   const setStageMapConfig = async (updates: Partial<StageMapConfig>, successMessage = "Updated 2D stage map.") => {
     const nextConfig = {
       ...snapshot().stage_map,
@@ -4757,15 +7152,26 @@ export default function App() {
     );
   };
 
+  const stageMapPresetObjectCountLabel = (preset: StageMapPresetSummary) => {
+    const count = preset.stage_objects?.length;
+    if (count === undefined) {
+      return "bounds only";
+    }
+    return `${count} object${count === 1 ? "" : "s"}`;
+  };
+  const mappingViewPresetObjectLabel = (preset: MappingViewPreset) =>
+    preset.showStageObjects ? "objects shown" : "objects hidden";
+
   const saveStageMapPreset = async () => {
     try {
+      const stageObjectCount = snapshot().stage_objects.length;
       const label = await invoke<string>("save_stage_map_preset", {
         label: stageMapPresetLabel(),
         config: snapshot().stage_map,
       });
       setStageMapPresetLabel(label);
       setSelectedStageMapPresetLabel(label);
-      setMessage(`Saved stage map preset ${label}.`);
+      setMessage(`Saved stage map preset ${label} with ${stageObjectCount} stage object${stageObjectCount === 1 ? "" : "s"}.`);
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
@@ -4774,9 +7180,11 @@ export default function App() {
 
   const applyStageMapPreset = async (label: string) => {
     try {
+      const preset = snapshot().stage_map_presets.find((candidate) => candidate.label === label);
+      const stageObjectLabel = preset ? stageMapPresetObjectCountLabel(preset) : "selected layout";
       await invoke("apply_stage_map_preset", { label });
       setSelectedStageMapPresetLabel(label);
-      setMessage(`Applied stage map preset ${label}.`);
+      setMessage(`Applied stage map preset ${label} (${stageObjectLabel}).`);
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
@@ -4798,11 +7206,16 @@ export default function App() {
 
   const exportStageMapPreset = async () => {
     try {
+      const stageObjectCount = snapshot().stage_objects.length;
       const path = await invoke<string | null>("save_stage_map_preset_file", {
         label: stageMapPresetLabel(),
         config: snapshot().stage_map,
       });
-      setMessage(path ? `Exported stage map preset ${path}` : "Stage map preset export canceled.");
+      setMessage(
+        path
+          ? `Exported stage map preset ${path} with ${stageObjectCount} stage object${stageObjectCount === 1 ? "" : "s"}.`
+          : "Stage map preset export canceled.",
+      );
     } catch (error) {
       setMessage(String(error));
     }
@@ -5037,6 +7450,36 @@ export default function App() {
     }
   };
 
+  const resetSelectedDimmerLimits = () => {
+    setSelectedFixtureLimitsDraft((limits) => ({
+      ...limits,
+      dimmer_min: defaultFixtureLimits.dimmer_min,
+      dimmer_max: defaultFixtureLimits.dimmer_max,
+    }));
+  };
+
+  const resetSelectedMovementLimits = () => {
+    setSelectedFixtureLimitsDraft((limits) => ({
+      ...limits,
+      pan_min: defaultFixtureLimits.pan_min,
+      pan_max: defaultFixtureLimits.pan_max,
+      tilt_min: defaultFixtureLimits.tilt_min,
+      tilt_max: defaultFixtureLimits.tilt_max,
+      invert_pan: defaultFixtureLimits.invert_pan,
+      invert_tilt: defaultFixtureLimits.invert_tilt,
+      swap_pan_tilt: defaultFixtureLimits.swap_pan_tilt,
+    }));
+  };
+
+  const applySelectedFixtureLimits = () => {
+    const fixture = selectedFixture();
+    if (!fixture) {
+      setMessage("Select a fixture before applying limits.");
+      return;
+    }
+    void setFixtureLimits(fixture);
+  };
+
   const newProject = async () => {
     try {
       await invoke("new_project");
@@ -5219,6 +7662,10 @@ export default function App() {
       { attribute: controls.green, value: green },
       { attribute: controls.blue, value: blue },
     ];
+    const whiteChannel = controls.extras.find((extra) => extra.key === "white");
+    if (colorAutoWhite() && whiteChannel) {
+      updates.push({ attribute: whiteChannel.attribute, value: Math.min(red, green, blue) });
+    }
     const groupId = selectedFixtureGroupFilter();
     const fixtureIds = groupId
       ? snapshot()
@@ -5330,15 +7777,67 @@ export default function App() {
     void setPanTiltValues(controls.panValue + deltaPan, controls.tiltValue + deltaTilt);
   };
 
+  const setPanTiltTargetPoint = (panRatio: number, tiltRatio: number) => {
+    const limits = selectedFixtureLimits();
+    const panRange = normalizeLimitRange(limits.pan_min, limits.pan_max);
+    const tiltRange = normalizeLimitRange(limits.tilt_min, limits.tilt_max);
+    void setPanTiltValues(
+      panRange.min + (panRange.max - panRange.min) * clamp01(panRatio),
+      tiltRange.min + (tiltRange.max - tiltRange.min) * clamp01(tiltRatio),
+    );
+  };
+
+  const mirrorPanTiltAxis = (axis: "pan" | "tilt" | "both") => {
+    const controls = selectedPositionControls();
+    if (!controls) {
+      return;
+    }
+    const limits = selectedFixtureLimits();
+    const panRange = normalizeLimitRange(limits.pan_min, limits.pan_max);
+    const tiltRange = normalizeLimitRange(limits.tilt_min, limits.tilt_max);
+    const panValue = axis === "pan" || axis === "both" ? panRange.min + panRange.max - controls.panValue : controls.panValue;
+    const tiltValue = axis === "tilt" || axis === "both" ? tiltRange.min + tiltRange.max - controls.tiltValue : controls.tiltValue;
+    void setPanTiltValues(panValue, tiltValue);
+  };
+
+  const handlePanTiltPadKeyDown = (event: KeyboardEvent) => {
+    const step = event.shiftKey ? panTiltNudgeAmount() * 4 : event.altKey ? Math.max(1, Math.round(panTiltNudgeAmount() / 4)) : panTiltNudgeAmount();
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      nudgePanTilt(-step, 0);
+      return;
+    }
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      nudgePanTilt(step, 0);
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      nudgePanTilt(0, step);
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      nudgePanTilt(0, -step);
+      return;
+    }
+    if (event.key === "Home" || event.key === "c" || event.key === "C") {
+      event.preventDefault();
+      centerPanTilt();
+    }
+  };
+
   const addCurrentPositionFavorite = () => {
     const controls = selectedPositionControls();
     if (!controls) {
       setMessage("Selected fixture has no Pan/Tilt controls.");
       return;
     }
+    const label = positionFavoriteLabel().trim() || `P${positionFavorites().length + 1}`;
     const favorite = {
       id: `position-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
-      label: `P${positionFavorites().length + 1}`,
+      label,
       pan: clampDmxValue(controls.panValue),
       tilt: clampDmxValue(controls.tiltValue),
     };
@@ -5346,6 +7845,7 @@ export default function App() {
       favorite,
       ...current.filter((candidate) => candidate.pan !== favorite.pan || candidate.tilt !== favorite.tilt),
     ].slice(0, 24));
+    setPositionFavoriteLabel("");
     setMessage(`Stored position ${favorite.label} (${formatShortDmxPercent(favorite.pan)} / ${formatShortDmxPercent(favorite.tilt)})`);
   };
 
@@ -5379,6 +7879,22 @@ export default function App() {
       [channel]: clampDmxValue(value),
     };
     void setFixtureColor(`#${valueToHexByte(next.red)}${valueToHexByte(next.green)}${valueToHexByte(next.blue)}`);
+  };
+
+  const setColorExtraChannelValue = (extra: ColorExtraControl, value: number) => {
+    const fixture = selectedFixture();
+    if (!fixture) {
+      setMessage("Select a fixture before setting an extra color channel.");
+      return;
+    }
+    const nextValue = clampDmxValue(value);
+    const groupId = selectedFixtureGroupFilter();
+    if (groupId) {
+      void setGroupAttribute(groupId, extra.attribute, nextValue);
+    } else {
+      void setAttribute(fixture.id, extra.attribute, nextValue);
+    }
+    setMessage(`Set ${groupId ? `group ${groupId}` : fixture.label} ${extra.label} ${formatShortDmxPercent(nextValue)}`);
   };
 
   const setColorFromPointer = (event: PointerEvent) => {
@@ -5419,6 +7935,120 @@ export default function App() {
       void setGroupAttribute(groupId, control.attribute, nextValue);
     } else {
       void setAttribute(fixture.id, control.attribute, nextValue);
+    }
+  };
+
+  const applyTouchDimmerEntries = (
+    entries: TouchDimmerQuickEntry[],
+    valueForEntry: (entry: TouchDimmerQuickEntry) => number,
+  ) => {
+    for (const entry of entries) {
+      void setAttribute(entry.fixtureId, entry.attribute, valueForEntry(entry));
+    }
+  };
+
+  const setTouchDimmerQuickLevel = (level: "out" | "half" | "full") => {
+    const target = selectedTouchDimmerTarget();
+    if (!target) {
+      setMessage("Selected fixture or group has no dimmer control.");
+      return;
+    }
+    const label =
+      level === "out" ? "Out" : level === "half" ? "Half" : "Full";
+    applyTouchDimmerEntries(target.entries, (entry) =>
+      level === "out" ? entry.outValue : level === "half" ? entry.halfValue : entry.fullValue,
+    );
+    setMessage(`${label} ${target.label} dimmer (${target.entries.length} fixture${target.entries.length === 1 ? "" : "s"})`);
+  };
+
+  const startTouchDimmerFlash = () => {
+    if (touchDimmerRestore()) {
+      return;
+    }
+    const target = selectedTouchDimmerTarget();
+    if (!target) {
+      setMessage("Selected fixture or group has no dimmer control.");
+      return;
+    }
+    setTouchDimmerRestore({
+      label: target.label,
+      entries: target.entries.map((entry) => ({
+        fixtureId: entry.fixtureId,
+        attribute: entry.attribute,
+        value: entry.value,
+      })),
+    });
+    applyTouchDimmerEntries(target.entries, (entry) => entry.fullValue);
+    setMessage(`Flash ${target.label} dimmer`);
+  };
+
+  const endTouchDimmerFlash = () => {
+    const restore = touchDimmerRestore();
+    if (!restore) {
+      return;
+    }
+    setTouchDimmerRestore(null);
+    for (const entry of restore.entries) {
+      void setAttribute(entry.fixtureId, entry.attribute, entry.value);
+    }
+    setMessage(`Restored ${restore.label} dimmer`);
+  };
+
+  const handleTouchDimmerFlashKeyDown = (event: KeyboardEvent) => {
+    if (event.key === " " || event.key === "Enter") {
+      event.preventDefault();
+      startTouchDimmerFlash();
+    }
+  };
+
+  const handleTouchDimmerFlashKeyUp = (event: KeyboardEvent) => {
+    if (event.key === " " || event.key === "Enter") {
+      event.preventDefault();
+      endTouchDimmerFlash();
+    }
+  };
+
+  const setControlAttributeValue = (control: AttributeControl, value: number) => {
+    const fixture = selectedFixture();
+    if (!fixture) {
+      setMessage("Select a fixture before setting a control value.");
+      return;
+    }
+    const nextValue = clampDmxValue(value);
+    const groupId = selectedFixtureGroupFilter();
+    if (groupId) {
+      void setGroupAttribute(groupId, control.attribute, nextValue);
+    } else {
+      void setAttribute(fixture.id, control.attribute, nextValue);
+    }
+  };
+
+  const setOpticsValueFromPointer = (event: PointerEvent, control: AttributeControl) => {
+    const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const ratio = clamp01((event.clientX - bounds.left) / Math.max(1, bounds.width));
+    setControlAttributeValue(control, ratio * 65_535);
+  };
+
+  const setOpticsValueFromKey = (event: KeyboardEvent, control: AttributeControl, value: number) => {
+    const step = event.shiftKey ? 4096 : event.altKey ? 64 : 1024;
+    if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
+      event.preventDefault();
+      setControlAttributeValue(control, value - step);
+      return;
+    }
+    if (event.key === "ArrowRight" || event.key === "ArrowUp") {
+      event.preventDefault();
+      setControlAttributeValue(control, value + step);
+      return;
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      setControlAttributeValue(control, 0);
+      return;
+    }
+    if (event.key === "End") {
+      event.preventDefault();
+      setControlAttributeValue(control, 65_535);
     }
   };
 
@@ -5538,6 +8168,16 @@ export default function App() {
   const setGroupPark = async (groupId: string, enabled: boolean) => {
     try {
       await invoke("set_group_park", { groupId, enabled });
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const clearFixtureFlags = async (kind: FixtureFlagClearKind) => {
+    try {
+      await invoke("clear_fixture_flags", { kind });
+      setMessage(kind === "all" ? "Cleared all fixture flags." : `Cleared fixture ${kind}.`);
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
@@ -5696,6 +8336,16 @@ export default function App() {
     }
   };
 
+  const setAllBlackout = async (enabled: boolean) => {
+    try {
+      await invoke("set_all_blackout", { enabled });
+      setMessage(enabled ? "All blackout enabled." : "All blackout cleared.");
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
   const setLightingMaster = async (master: number) => {
     try {
       await invoke("set_lighting_master", { master });
@@ -5848,43 +8498,47 @@ export default function App() {
     const action = midiMapAction();
     const fixture = selectedFixture();
     const cueId = selectedMidiCueId();
+    const effectId = selectedMidiEffectId();
+    const nodeGraphId = selectedMidiNodeGraphId();
     const layerId = selectedMidiLayerId();
     const outputId = selectedMidiVideoOutputId();
+    const outputMappingField = selectedMidiVideoOutputMappingField();
+    const outputMappingPresetLabel = selectedMidiVideoOutputMappingPresetLabel();
     const attribute = midiMapAttribute() || selectedEffectAttribute();
     if (action === "FixtureAttribute" && (!fixture || !attribute)) {
       setMessage("Select a fixture and MIDI attribute target first.");
+      return;
+    }
+    if (isFixtureFlagMappingAction(action) && !fixture) {
+      setMessage("Select a fixture before mapping MIDI to a fixture flag.");
       return;
     }
     if (action === "TriggerCue" && cueId === null) {
       setMessage("Create a cue before mapping MIDI to cues.");
       return;
     }
-    if (action === "GroupSubmaster" && !midiMapGroupId().trim()) {
-      setMessage("Enter a group ID before mapping MIDI to a submaster.");
+    if (action === "EffectEnabled" && effectId === null) {
+      setMessage("Add an effect before mapping MIDI to effect enable.");
       return;
     }
-    if (
-      (action === "VideoParam" ||
-        action === "VideoCuePointAdd" ||
-        action === "VideoCuePointRemove" ||
-        action === "VideoCuePointJump" ||
-        action === "VideoLayerEnabled" ||
-        action === "VideoLayerSolo" ||
-        action === "VideoPlay" ||
-        action === "VideoLoop") &&
-      layerId === null
-    ) {
+    if (action === "NodeGraphEnabled" && nodeGraphId === null) {
+      setMessage("Add a node graph before mapping MIDI to node graph enable.");
+      return;
+    }
+    if ((action === "GroupSubmaster" || isGroupFlagMappingAction(action)) && !midiMapGroupId().trim()) {
+      setMessage("Enter a group ID before mapping MIDI to a group.");
+      return;
+    }
+    if (isVideoLayerMappingAction(action) && layerId === null) {
       setMessage("Add a video layer before mapping MIDI to video.");
       return;
     }
-    if (
-      (action === "VideoOutputEnabled" ||
-        action === "VideoOutputOpacity" ||
-        action === "VideoOutputFade" ||
-        action === "VideoOutputBlackout") &&
-      outputId === null
-    ) {
+    if (isVideoOutputMappingAction(action) && outputId === null) {
       setMessage("Add a video output before mapping MIDI to video output.");
+      return;
+    }
+    if (action === "VideoOutputMappingPreset" && !outputMappingPresetLabel) {
+      setMessage("Save a projector mapping preset before mapping MIDI to a preset.");
       return;
     }
 
@@ -5893,32 +8547,41 @@ export default function App() {
       message: midiMapMessage(),
       number: Math.max(0, Math.min(127, Math.round(midiMapNumber()))),
       action,
-      fixture_id: action === "FixtureAttribute" ? fixture?.id ?? null : null,
-      attribute: action === "FixtureAttribute" ? attribute : null,
-      group_id: action === "GroupSubmaster" ? midiMapGroupId().trim() : null,
-      cue_id: action === "TriggerCue" ? cueId : null,
+      fixture_id: action === "FixtureAttribute" || isFixtureFlagMappingAction(action) ? fixture?.id ?? null : null,
+      attribute:
+        action === "FixtureAttribute"
+          ? attribute
+          : action === "ClearFixtureFlags"
+            ? midiClearFixtureFlagKind()
+            : action === "VideoOutputMappingField"
+              ? outputMappingField
+              : action === "VideoOutputMappingPreset"
+                ? outputMappingPresetLabel
+            : null,
+      group_id: action === "GroupSubmaster" || isGroupFlagMappingAction(action) ? midiMapGroupId().trim() : null,
+      cue_id: action === "TriggerCue" ? cueId : action === "EffectEnabled" ? effectId : action === "NodeGraphEnabled" ? nodeGraphId : null,
       layer_id:
         action === "VideoParam" ||
         action === "VideoCuePointAdd" ||
         action === "VideoCuePointRemove" ||
         action === "VideoCuePointJump" ||
+        action === "VideoCuePointPrevious" ||
+        action === "VideoCuePointNext" ||
         action === "VideoLayerEnabled" ||
         action === "VideoLayerSolo" ||
         action === "VideoPlay" ||
-        action === "VideoLoop"
+        action === "VideoLoop" ||
+        action === "VideoLayerFade"
           ? layerId
           : null,
-      output_id:
-        action === "VideoOutputEnabled" ||
-        action === "VideoOutputOpacity" ||
-        action === "VideoOutputFade" ||
-        action === "VideoOutputBlackout"
-          ? outputId
-          : null,
+      output_id: isVideoOutputMappingAction(action) ? outputId : null,
       video_param: action === "VideoParam" ? midiMapVideoParam() : null,
       cue_point_index: action === "VideoCuePointJump" ? Math.max(0, Math.round(midiMapCuePointIndex())) : null,
       duration_ms:
-        action === "VideoOutputFade" || action === "VideoCuePointAdd" || action === "VideoCuePointRemove"
+        action === "VideoOutputFade" ||
+        action === "VideoLayerFade" ||
+        action === "VideoCuePointAdd" ||
+        action === "VideoCuePointRemove"
           ? Math.max(0, Math.round(midiMapDurationMs()))
           : null,
       low: midiMapLow(),
@@ -5936,12 +8599,28 @@ export default function App() {
     switch (mapping.action) {
       case "FixtureAttribute":
         return `Fixture ${mapping.fixture_id} ${mapping.attribute}`;
+      case "FixtureHighlight":
+        return `Fixture ${mapping.fixture_id} highlight`;
+      case "FixtureSolo":
+        return `Fixture ${mapping.fixture_id} solo`;
+      case "FixturePark":
+        return `Fixture ${mapping.fixture_id} park`;
+      case "GroupHighlight":
+        return `Group ${mapping.group_id} highlight`;
+      case "GroupSolo":
+        return `Group ${mapping.group_id} solo`;
+      case "GroupPark":
+        return `Group ${mapping.group_id} park`;
       case "TriggerCue":
         return `Cue ${mapping.cue_id}`;
       case "TriggerNextCue":
         return "Cue next";
       case "TriggerPreviousCue":
         return "Cue previous";
+      case "EffectEnabled":
+        return `Effect ${mapping.cue_id} enabled`;
+      case "NodeGraphEnabled":
+        return `Node graph ${mapping.cue_id} enabled`;
       case "VideoParam":
         return `Layer ${mapping.layer_id} ${mapping.video_param}`;
       case "VideoCuePointAdd":
@@ -5952,6 +8631,10 @@ export default function App() {
         return `Layer ${mapping.layer_id} remove cue ${mapping.duration_ms ?? 0}ms`;
       case "VideoCuePointJump":
         return `Layer ${mapping.layer_id} cue ${mapping.cue_point_index ?? 0}`;
+      case "VideoCuePointPrevious":
+        return `Layer ${mapping.layer_id} previous cue`;
+      case "VideoCuePointNext":
+        return `Layer ${mapping.layer_id} next cue`;
       case "VideoLayerEnabled":
         return `Layer ${mapping.layer_id} enabled`;
       case "VideoLayerSolo":
@@ -5960,18 +8643,32 @@ export default function App() {
         return `Layer ${mapping.layer_id} play`;
       case "VideoLoop":
         return `Layer ${mapping.layer_id} loop ${mapping.low}-${mapping.high}ms`;
+      case "VideoLayerFade":
+        return `Layer ${mapping.layer_id} fade ${mapping.duration_ms ?? 1000}ms`;
       case "VideoOutputEnabled":
         return `Output ${mapping.output_id} enabled`;
       case "VideoOutputOpacity":
         return `Output ${mapping.output_id} opacity`;
       case "VideoOutputFade":
         return `Output ${mapping.output_id} fade ${mapping.duration_ms ?? 1000}ms`;
+      case "VideoOutputMappingField":
+        return `Output ${mapping.output_id} map ${mapping.attribute}`;
+      case "VideoOutputMappingPreset":
+        return `Output ${mapping.output_id} preset ${mapping.attribute}`;
       case "VideoOutputBlackout":
         return `Output ${mapping.output_id} blackout`;
       case "TimelinePlay":
         return "Timeline play";
       case "TimelineSeek":
         return "Timeline seek";
+      case "TimelineBeatPrevious":
+        return "Timeline previous beat";
+      case "TimelineBeatNext":
+        return "Timeline next beat";
+      case "SetBpm":
+        return `Set BPM ${mapping.low}-${mapping.high}`;
+      case "TapBpm":
+        return "Tap BPM";
       case "LightingMaster":
         return "Lighting master";
       case "GroupSubmaster":
@@ -5980,8 +8677,12 @@ export default function App() {
         return "Cue fade pause";
       case "Blackout":
         return "Lighting blackout";
+      case "AllBlackout":
+        return "All blackout";
       case "VideoBlackout":
         return "Video blackout";
+      case "ClearFixtureFlags":
+        return `Clear fixture ${normalizeFixtureFlagClearKind(mapping.attribute)}`;
     }
   };
 
@@ -6118,8 +8819,12 @@ export default function App() {
     const action = oscMapAction();
     const fixture = selectedFixture();
     const cueId = selectedOscCueId();
+    const effectId = selectedOscEffectId();
+    const nodeGraphId = selectedOscNodeGraphId();
     const layerId = selectedOscLayerId();
     const outputId = selectedOscVideoOutputId();
+    const outputMappingField = selectedOscVideoOutputMappingField();
+    const outputMappingPresetLabel = selectedOscVideoOutputMappingPresetLabel();
     const attribute = oscMapAttribute() || selectedEffectAttribute();
     if (!oscMapAddress().trim()) {
       setMessage("Enter an OSC address.");
@@ -6129,67 +8834,76 @@ export default function App() {
       setMessage("Select a fixture and OSC attribute target first.");
       return;
     }
+    if (isFixtureFlagMappingAction(action) && !fixture) {
+      setMessage("Select a fixture before mapping OSC to a fixture flag.");
+      return;
+    }
     if (action === "TriggerCue" && cueId === null) {
       setMessage("Create a cue before mapping OSC to cues.");
       return;
     }
-    if (action === "GroupSubmaster" && !oscMapGroupId().trim()) {
-      setMessage("Enter a group ID before mapping OSC to a submaster.");
+    if (action === "EffectEnabled" && effectId === null) {
+      setMessage("Add an effect before mapping OSC to effect enable.");
       return;
     }
-    if (
-      (action === "VideoParam" ||
-        action === "VideoCuePointAdd" ||
-        action === "VideoCuePointRemove" ||
-        action === "VideoCuePointJump" ||
-        action === "VideoLayerEnabled" ||
-        action === "VideoLayerSolo" ||
-        action === "VideoPlay" ||
-        action === "VideoLoop") &&
-      layerId === null
-    ) {
+    if (action === "NodeGraphEnabled" && nodeGraphId === null) {
+      setMessage("Add a node graph before mapping OSC to node graph enable.");
+      return;
+    }
+    if ((action === "GroupSubmaster" || isGroupFlagMappingAction(action)) && !oscMapGroupId().trim()) {
+      setMessage("Enter a group ID before mapping OSC to a group.");
+      return;
+    }
+    if (isVideoLayerMappingAction(action) && layerId === null) {
       setMessage("Add a video layer before mapping OSC to video.");
       return;
     }
-    if (
-      (action === "VideoOutputEnabled" ||
-        action === "VideoOutputOpacity" ||
-        action === "VideoOutputFade" ||
-        action === "VideoOutputBlackout") &&
-      outputId === null
-    ) {
+    if (isVideoOutputMappingAction(action) && outputId === null) {
       setMessage("Add a video output before mapping OSC to video output.");
+      return;
+    }
+    if (action === "VideoOutputMappingPreset" && !outputMappingPresetLabel) {
+      setMessage("Save a projector mapping preset before mapping OSC to a preset.");
       return;
     }
     const mapping: OscControlMapping = {
       address: oscMapAddress().startsWith("/") ? oscMapAddress() : `/${oscMapAddress()}`,
       action,
-      fixture_id: action === "FixtureAttribute" ? fixture?.id ?? null : null,
-      attribute: action === "FixtureAttribute" ? attribute : null,
-      group_id: action === "GroupSubmaster" ? oscMapGroupId().trim() : null,
-      cue_id: action === "TriggerCue" ? cueId : null,
+      fixture_id: action === "FixtureAttribute" || isFixtureFlagMappingAction(action) ? fixture?.id ?? null : null,
+      attribute:
+        action === "FixtureAttribute"
+          ? attribute
+          : action === "ClearFixtureFlags"
+            ? oscClearFixtureFlagKind()
+            : action === "VideoOutputMappingField"
+              ? outputMappingField
+              : action === "VideoOutputMappingPreset"
+                ? outputMappingPresetLabel
+            : null,
+      group_id: action === "GroupSubmaster" || isGroupFlagMappingAction(action) ? oscMapGroupId().trim() : null,
+      cue_id: action === "TriggerCue" ? cueId : action === "EffectEnabled" ? effectId : action === "NodeGraphEnabled" ? nodeGraphId : null,
       layer_id:
         action === "VideoParam" ||
         action === "VideoCuePointAdd" ||
         action === "VideoCuePointRemove" ||
         action === "VideoCuePointJump" ||
+        action === "VideoCuePointPrevious" ||
+        action === "VideoCuePointNext" ||
         action === "VideoLayerEnabled" ||
         action === "VideoLayerSolo" ||
         action === "VideoPlay" ||
-        action === "VideoLoop"
+        action === "VideoLoop" ||
+        action === "VideoLayerFade"
           ? layerId
           : null,
-      output_id:
-        action === "VideoOutputEnabled" ||
-        action === "VideoOutputOpacity" ||
-        action === "VideoOutputFade" ||
-        action === "VideoOutputBlackout"
-          ? outputId
-          : null,
+      output_id: isVideoOutputMappingAction(action) ? outputId : null,
       video_param: action === "VideoParam" ? oscMapVideoParam() : null,
       cue_point_index: action === "VideoCuePointJump" ? Math.max(0, Math.round(oscMapCuePointIndex())) : null,
       duration_ms:
-        action === "VideoOutputFade" || action === "VideoCuePointAdd" || action === "VideoCuePointRemove"
+        action === "VideoOutputFade" ||
+        action === "VideoLayerFade" ||
+        action === "VideoCuePointAdd" ||
+        action === "VideoCuePointRemove"
           ? Math.max(0, Math.round(oscMapDurationMs()))
           : null,
       low: oscMapLow(),
@@ -6207,12 +8921,28 @@ export default function App() {
     switch (mapping.action) {
       case "FixtureAttribute":
         return `Fixture ${mapping.fixture_id} ${mapping.attribute}`;
+      case "FixtureHighlight":
+        return `Fixture ${mapping.fixture_id} highlight`;
+      case "FixtureSolo":
+        return `Fixture ${mapping.fixture_id} solo`;
+      case "FixturePark":
+        return `Fixture ${mapping.fixture_id} park`;
+      case "GroupHighlight":
+        return `Group ${mapping.group_id} highlight`;
+      case "GroupSolo":
+        return `Group ${mapping.group_id} solo`;
+      case "GroupPark":
+        return `Group ${mapping.group_id} park`;
       case "TriggerCue":
         return `Cue ${mapping.cue_id}`;
       case "TriggerNextCue":
         return "Cue next";
       case "TriggerPreviousCue":
         return "Cue previous";
+      case "EffectEnabled":
+        return `Effect ${mapping.cue_id} enabled`;
+      case "NodeGraphEnabled":
+        return `Node graph ${mapping.cue_id} enabled`;
       case "VideoParam":
         return `Layer ${mapping.layer_id} ${mapping.video_param}`;
       case "VideoCuePointAdd":
@@ -6223,6 +8953,10 @@ export default function App() {
         return `Layer ${mapping.layer_id} remove cue ${mapping.duration_ms ?? 0}ms`;
       case "VideoCuePointJump":
         return `Layer ${mapping.layer_id} cue ${mapping.cue_point_index ?? 0}`;
+      case "VideoCuePointPrevious":
+        return `Layer ${mapping.layer_id} previous cue`;
+      case "VideoCuePointNext":
+        return `Layer ${mapping.layer_id} next cue`;
       case "VideoLayerEnabled":
         return `Layer ${mapping.layer_id} enabled`;
       case "VideoLayerSolo":
@@ -6231,18 +8965,32 @@ export default function App() {
         return `Layer ${mapping.layer_id} play`;
       case "VideoLoop":
         return `Layer ${mapping.layer_id} loop ${mapping.low}-${mapping.high}ms`;
+      case "VideoLayerFade":
+        return `Layer ${mapping.layer_id} fade ${mapping.duration_ms ?? 1000}ms`;
       case "VideoOutputEnabled":
         return `Output ${mapping.output_id} enabled`;
       case "VideoOutputOpacity":
         return `Output ${mapping.output_id} opacity`;
       case "VideoOutputFade":
         return `Output ${mapping.output_id} fade ${mapping.duration_ms ?? 1000}ms`;
+      case "VideoOutputMappingField":
+        return `Output ${mapping.output_id} map ${mapping.attribute}`;
+      case "VideoOutputMappingPreset":
+        return `Output ${mapping.output_id} preset ${mapping.attribute}`;
       case "VideoOutputBlackout":
         return `Output ${mapping.output_id} blackout`;
       case "TimelinePlay":
         return "Timeline play";
       case "TimelineSeek":
         return "Timeline seek";
+      case "TimelineBeatPrevious":
+        return "Timeline previous beat";
+      case "TimelineBeatNext":
+        return "Timeline next beat";
+      case "SetBpm":
+        return `Set BPM ${mapping.low}-${mapping.high}`;
+      case "TapBpm":
+        return "Tap BPM";
       case "LightingMaster":
         return "Lighting master";
       case "GroupSubmaster":
@@ -6251,8 +8999,12 @@ export default function App() {
         return "Cue fade pause";
       case "Blackout":
         return "Lighting blackout";
+      case "AllBlackout":
+        return "All blackout";
       case "VideoBlackout":
         return "Video blackout";
+      case "ClearFixtureFlags":
+        return `Clear fixture ${normalizeFixtureFlagClearKind(mapping.attribute)}`;
     }
   };
 
@@ -6895,6 +9647,16 @@ export default function App() {
     }
   };
 
+  const refreshVideoLayerMetadata = async (layerId: number) => {
+    try {
+      const result = await invoke<string>("refresh_video_layer_metadata", { layerId });
+      setMessage(result);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
   const renderDebugVideoPreview = async () => {
     try {
       const frame = await invoke<VideoFrame>("get_debug_video_preview", { width: 64, height: 36 });
@@ -6920,6 +9682,142 @@ export default function App() {
     }
   };
 
+  const refreshVideoOutputRenderPlans = async (silent = false) => {
+    try {
+      const plans = await invoke<VideoOutputRenderPlan[]>("get_video_output_render_plans");
+      setVideoOutputRenderPlans(plans);
+      if (!silent) {
+        const activeLayers = plans.reduce((total, plan) => total + plan.composition.layers.length, 0);
+        setMessage(`Video output render plans: ${plans.length} output(s), ${activeLayers} render layer(s).`);
+      }
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const refreshVideoOutputWindowStatuses = async (silent = false) => {
+    try {
+      const statuses = await invoke<VideoOutputWindowStatus[]>("get_video_output_window_statuses");
+      setVideoOutputWindowStatuses(statuses);
+      if (!silent) {
+        const liveOpen = statuses.filter((status) => status.live_open).length;
+        const patternOpen = statuses.filter((status) => status.test_pattern_open).length;
+        setMessage(`Video output windows: ${liveOpen} live, ${patternOpen} pattern open.`);
+      }
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const refreshSnapshotAndVideoOutputRenderPlans = async () => {
+    await Promise.all([
+      refreshSnapshot(),
+      refreshVideoOutputRenderPlans(true),
+      refreshVideoOutputWindowStatuses(true),
+    ]);
+  };
+
+  const syncOpenVideoOutputWindows = async () => {
+    try {
+      const summary = await invoke<VideoOutputWindowSyncSummary>("sync_open_video_output_windows");
+      await Promise.all([refreshVideoOutputRenderPlans(true), refreshVideoOutputWindowStatuses(true)]);
+      setMessage(
+        `Synced ${summary.synced_live} live and ${summary.synced_test_pattern} pattern output window(s); ${summary.skipped_closed} closed slot(s) skipped.`,
+      );
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const closeOpenVideoOutputWindows = async () => {
+    try {
+      const summary = await invoke<VideoOutputWindowCloseSummary>("close_open_video_output_windows");
+      await refreshVideoOutputWindowStatuses(true);
+      setMessage(
+        `Closed ${summary.closed_live} live and ${summary.closed_test_pattern} pattern output window(s); ${summary.skipped_closed} closed slot(s) skipped.`,
+      );
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const openAllVideoOutputWindows = async (testPattern = false) => {
+    const displayOutputs = snapshot().video.outputs.filter((output) => output.kind === "Display");
+    if (displayOutputs.length === 0) {
+      setMessage("No Display video outputs to open.");
+      return;
+    }
+    let opened = 0;
+    let failed = 0;
+    for (const output of displayOutputs) {
+      try {
+        await invoke("open_video_output_window", { outputId: output.id, testPattern });
+        opened += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    await Promise.all([refreshVideoOutputRenderPlans(true), refreshVideoOutputWindowStatuses(true)]);
+    setMessage(
+      `Opened ${opened}/${displayOutputs.length} ${testPattern ? "pattern" : "live"} output window(s)${
+        failed > 0 ? `; ${failed} failed` : ""
+      }.`,
+    );
+  };
+
+  const refreshVideoRuntimeStatus = async () => {
+    try {
+      const status = await invoke<VideoRuntimeStatus>("get_video_runtime_status");
+      setVideoRuntimeStatus(status);
+      const available = status.backends.filter((backend) => backend.state === "Available").length;
+      setMessage(`Video backends: ${available}/${status.backends.length} available.`);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const refreshExternalVideoIoPlans = async () => {
+    try {
+      const [plans, status, transportStatus] = await Promise.all([
+        invoke<ExternalVideoIoPlans>("get_external_video_io_plans"),
+        invoke<VideoRuntimeStatus>("get_video_runtime_status"),
+        invoke<ExternalVideoTransportStatus>("get_external_video_transport_status"),
+      ]);
+      setExternalVideoIoPlans(plans);
+      setVideoRuntimeStatus(status);
+      setExternalVideoTransportStatus(transportStatus);
+      const available = status.backends.filter((backend) => backend.state === "Available").length;
+      setMessage(
+        `External video I/O: ${plans.inputs.length} input(s), ${plans.outputs.length} output(s), ${transportStatus.active_count} active route(s), ${available}/${status.backends.length} backend(s) available.`,
+      );
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const syncExternalVideoTransports = async () => {
+    try {
+      const [plans, status, sync] = await Promise.all([
+        invoke<ExternalVideoIoPlans>("get_external_video_io_plans"),
+        invoke<VideoRuntimeStatus>("get_video_runtime_status"),
+        invoke<ExternalVideoTransportSyncResponse>("sync_external_video_transports"),
+      ]);
+      const transportStatus = await invoke<ExternalVideoTransportStatus>("get_external_video_transport_status");
+      const report = sync.report;
+      setExternalVideoIoPlans(plans);
+      setVideoRuntimeStatus(status);
+      setExternalVideoTransportStatus(transportStatus);
+      setExternalVideoTransportReport(report);
+      setExternalVideoTransportEvents(sync.events);
+      const failedRoutes = report.start_failed.length + report.stop_failed.length;
+      setMessage(
+        `External video routes: ${report.active_count} active, ${report.started.length} started, ${report.stopped.length} stopped, ${report.blocked.length} blocked, ${failedRoutes} failed, ${sync.events.length} driver event(s).`,
+      );
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
   const renderDebugVideoOutputPreview = async (outputId: number, testPattern = false) => {
     try {
       const frame = await invoke<VideoFrame>(testPattern ? "get_debug_video_output_test_pattern" : "get_debug_video_output_preview", {
@@ -6938,7 +9836,7 @@ export default function App() {
       setVideoPreviewInfo(`${label} ${outputId}: ${info}`);
       setMessage(`Rendered ${testPattern ? "test pattern" : "output"} ${outputId} preview.`);
       if (!testPattern) {
-        await refreshVideoPreviewDiagnostics(true);
+        await Promise.all([refreshVideoPreviewDiagnostics(true), refreshVideoOutputRenderPlans(true)]);
       }
     } catch (error) {
       setVideoOutputPreviewUrl("");
@@ -7128,7 +10026,7 @@ export default function App() {
       });
       setVideoOutputLabel(`Projector ${snapshot().video.outputs.length + 2}`);
       setMessage(`Added video output ${outputId}`);
-      await refreshSnapshot();
+      await refreshSnapshotAndVideoOutputRenderPlans();
     } catch (error) {
       setMessage(String(error));
     }
@@ -7138,7 +10036,7 @@ export default function App() {
     try {
       await invoke("remove_video_output", { outputId });
       setMessage(`Removed video output ${outputId}`);
-      await refreshSnapshot();
+      await refreshSnapshotAndVideoOutputRenderPlans();
     } catch (error) {
       setMessage(String(error));
     }
@@ -7172,7 +10070,7 @@ export default function App() {
         },
       }));
       setMessage(`Updated video output ${output.id}`);
-      await refreshSnapshot();
+      await refreshSnapshotAndVideoOutputRenderPlans();
     } catch (error) {
       setMessage(String(error));
     }
@@ -7181,7 +10079,7 @@ export default function App() {
   const setVideoOutputEnabled = async (outputId: number, enabled: boolean) => {
     try {
       await invoke("set_video_output_enabled", { outputId, enabled });
-      await refreshSnapshot();
+      await refreshSnapshotAndVideoOutputRenderPlans();
     } catch (error) {
       setMessage(String(error));
     }
@@ -7190,7 +10088,7 @@ export default function App() {
   const setVideoOutputRouting = async (outputId: number, compositionId: number) => {
     try {
       await invoke("set_video_output_routing", { outputId, compositionId });
-      await refreshSnapshot();
+      await refreshSnapshotAndVideoOutputRenderPlans();
     } catch (error) {
       setMessage(String(error));
     }
@@ -7199,7 +10097,7 @@ export default function App() {
   const setVideoOutputOpacity = async (outputId: number, opacity: number) => {
     try {
       await invoke("set_video_output_opacity", { outputId, opacity });
-      await refreshSnapshot();
+      await refreshSnapshotAndVideoOutputRenderPlans();
     } catch (error) {
       setMessage(String(error));
     }
@@ -7212,7 +10110,7 @@ export default function App() {
         opacity,
         durationMs: Math.max(0, Math.round(videoOutputFadeMs())),
       });
-      await refreshSnapshot();
+      await refreshSnapshotAndVideoOutputRenderPlans();
     } catch (error) {
       setMessage(String(error));
     }
@@ -7221,7 +10119,7 @@ export default function App() {
   const setVideoOutputBlackout = async (outputId: number, blackout: boolean) => {
     try {
       await invoke("set_video_output_blackout", { outputId, blackout });
-      await refreshSnapshot();
+      await refreshSnapshotAndVideoOutputRenderPlans();
     } catch (error) {
       setMessage(String(error));
     }
@@ -7231,9 +10129,55 @@ export default function App() {
     try {
       await invoke("set_video_output_mapping", { outputId, mapping });
       await refreshSnapshot();
+      return true;
     } catch (error) {
       setMessage(String(error));
+      return false;
     }
+  };
+
+  const fitVideoOutputToStageObject = async (output: VideoOutputSummary, object: StageObjectSummary) => {
+    const outputAspect = outputAspectRatio(output.width, output.height);
+    const objectAspect =
+      object.depth > 0.5 ? clampRange(object.width / object.depth, 0.25, 4) : outputAspect;
+    const targetAspect = Number(objectAspect.toFixed(4));
+    const targetDepth =
+      object.kind === "Screen" && object.depth <= 0.5
+        ? object.width / Math.max(0.25, targetAspect)
+        : object.depth;
+    const scaleY = clampRange(targetDepth / 4.5, 0.25, 3);
+    const scaleX = clampRange(object.width / Math.max(0.001, 4.5 * scaleY * targetAspect), 0.25, 3);
+    const updated = await setVideoOutputMapping(output.id, {
+      ...output.mapping,
+      stage_x: Number(object.x.toFixed(2)),
+      stage_z: Number(object.z.toFixed(2)),
+      rotation_deg: Number(object.rotation_deg.toFixed(1)),
+      offset_x: 0,
+      offset_y: 0,
+      scale_x: Number(scaleX.toFixed(3)),
+      scale_y: Number(scaleY.toFixed(3)),
+      aspect_ratio: targetAspect,
+      aspect_mode: "Fit",
+      lens_distortion: 0,
+      keystone_x: 0,
+      keystone_y: 0,
+      corner_top_left_x: 0,
+      corner_top_left_y: 0,
+      corner_top_right_x: 0,
+      corner_top_right_y: 0,
+      corner_bottom_right_x: 0,
+      corner_bottom_right_y: 0,
+      corner_bottom_left_x: 0,
+      corner_bottom_left_y: 0,
+    });
+    if (!updated) {
+      return;
+    }
+    setSelectedVideoOutputId(output.id);
+    setSelectedStageObjectId(object.id);
+    setMappingShowProjectors(true);
+    setMappingShowStageObjects(true);
+    setMessage(`Fit ${output.label} to ${object.label}.`);
   };
 
   const saveVideoOutputMappingPreset = async (mapping: VideoOutputMapping) => {
@@ -7319,6 +10263,18 @@ export default function App() {
     setWaveOriginZ(Number(fixture.position.z.toFixed(2)));
   };
 
+  const setWaveOriginFromSelectedStageObject = () => {
+    const object = selectedStageObject();
+    if (!object) {
+      setMessage("Select a stage object before using it as the wave origin.");
+      return;
+    }
+    setWaveOriginX(Number(object.x.toFixed(2)));
+    setWaveOriginY(0);
+    setWaveOriginZ(Number(object.z.toFixed(2)));
+    setMessage(`Wave origin uses ${object.label}.`);
+  };
+
   const setWaveDirectionPreset = (x: number, y: number, z: number) => {
     setWaveDirectionX(x);
     setWaveDirectionY(y);
@@ -7391,31 +10347,31 @@ export default function App() {
     setWaveStageDrag(null);
   };
 
-  const setProjectorCornerFromPointer = (
-    event: PointerEvent & { currentTarget: SVGCircleElement },
-    output: VideoOutputSummary,
-    corner: ProjectorCorner,
-  ) => {
-    event.preventDefault();
-    const svg = event.currentTarget.ownerSVGElement;
-    if (!svg) {
-      return;
-    }
-    const rect = svg.getBoundingClientRect();
-    const pointerX = ((event.clientX - rect.left) / rect.width) * projectorMapViewBoxSize;
-    const pointerY = ((event.clientY - rect.top) / rect.height) * projectorMapViewBoxSize;
-    const base = projectorMapBasePoint(output.mapping, corner);
-    void setVideoOutputMapping(output.id, {
-      ...output.mapping,
-      [corner.xField]: roundedMappingValue((pointerX - base.x) / projectorCornerGain),
-      [corner.yField]: roundedMappingValue((pointerY - base.y) / projectorCornerGain),
-    });
-  };
-
   const openVideoOutputWindow = async (outputId: number, testPattern = false) => {
     try {
       await invoke("open_video_output_window", { outputId, testPattern });
+      await Promise.all([refreshVideoOutputRenderPlans(true), refreshVideoOutputWindowStatuses(true)]);
       setMessage(`Opened video output ${outputId} ${testPattern ? "test pattern" : "window"}.`);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const syncVideoOutputWindow = async (outputId: number, testPattern = false) => {
+    try {
+      await invoke("sync_video_output_window", { outputId, testPattern });
+      await Promise.all([refreshVideoOutputRenderPlans(true), refreshVideoOutputWindowStatuses(true)]);
+      setMessage(`Synced video output ${outputId} ${testPattern ? "test pattern" : "window"}.`);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const closeVideoOutputWindow = async (outputId: number, testPattern = false) => {
+    try {
+      await invoke("close_video_output_window", { outputId, testPattern });
+      await refreshVideoOutputWindowStatuses(true);
+      setMessage(`Closed video output ${outputId} ${testPattern ? "test pattern" : "window"}.`);
     } catch (error) {
       setMessage(String(error));
     }
@@ -7550,6 +10506,192 @@ export default function App() {
       attribute: targetMode === "video" ? "" : attribute,
       video_targets: videoTargets,
     };
+  };
+
+  const nodeGraphTargetLabel = (graph: NodeGraphSummary) => {
+    const outputs = graph.nodes
+      .filter((node) => node.kind === "Output" && node.output)
+      .map((node) => node.output!)
+      .flatMap((output) => [
+        output.fixture_ids.length > 0 ? `${output.fixture_ids.length} fixture(s)` : "",
+        output.target_group_ids.length > 0 ? `groups ${output.target_group_ids.join(",")}` : "",
+        output.video_targets.length > 0
+          ? `video ${output.video_targets.flatMap((target) => target.layer_ids).length} layer target(s)`
+          : "",
+        output.attribute ? output.attribute : "",
+      ])
+      .filter(Boolean);
+    return outputs.length > 0 ? outputs.join(" / ") : "no target";
+  };
+
+  const nodeGraphSourceLabel = () => (effectType() === "PositionWave" ? "Position Wave" : "LFO");
+
+  const nodeGraphTransformLabel = () => {
+    const op = nodeGraphTransformOp();
+    if (op === "Invert" || op === "Abs") {
+      return op;
+    }
+    if (op === "Clamp") {
+      return `${op} ${nodeGraphTransformMin()}-${nodeGraphTransformMax()}`;
+    }
+    return `${op} ${nodeGraphTransformAmount()}`;
+  };
+
+  const buildNodeGraphFromForm = (): NodeGraphSummary | null => {
+    const target = effectTargetOverrideFromForm();
+    if (!target) {
+      return null;
+    }
+    const lightLow = Math.max(0, Math.min(65_535, Math.round(effectLow())));
+    const lightHigh = Math.max(0, Math.min(65_535, Math.round(effectHigh())));
+    const label =
+      nodeGraphLabel().trim() ||
+      `${effectTargetMode() === "video" ? effectVideoParam() : selectedEffectAttribute()} ${nodeGraphSourceLabel()}`;
+    const sourceNode =
+      effectType() === "PositionWave"
+        ? {
+            id: 1,
+            label: "Wave",
+            kind: "PositionWave" as const,
+            x: 18,
+            y: 26,
+            lfo: null,
+            position_wave: {
+              shape: effectShape(),
+              origin: { x: waveOriginX(), y: waveOriginY(), z: waveOriginZ() },
+              direction: { x: waveDirectionX(), y: waveDirectionY(), z: waveDirectionZ() },
+              speed: waveSpeed(),
+              wavelength: waveWavelength(),
+              clock_sync: null,
+              phase: effectPhase(),
+            },
+            transform: null,
+            output: null,
+          }
+        : {
+            id: 1,
+            label: "LFO",
+            kind: "Lfo" as const,
+            x: 18,
+            y: 26,
+            lfo: {
+              shape: effectShape(),
+              period_ms: Math.max(10, Math.round(effectPeriod())),
+              clock_sync: null,
+              phase: effectPhase(),
+              amplitude: 1,
+              bias: 0,
+            },
+            position_wave: null,
+            transform: null,
+            output: null,
+          };
+    return {
+      id: 0,
+      label,
+      enabled: true,
+      nodes: [
+        sourceNode,
+        {
+          id: 2,
+          label: nodeGraphTransformOp(),
+          kind: "Transform",
+          x: 50,
+          y: 26,
+          lfo: null,
+          position_wave: null,
+          transform: {
+            op: nodeGraphTransformOp(),
+            amount: nodeGraphTransformAmount(),
+            min: nodeGraphTransformMin(),
+            max: nodeGraphTransformMax(),
+          },
+          output: null,
+        },
+        {
+          id: 3,
+          label: "Output",
+          kind: "Output",
+          x: 82,
+          y: 26,
+          lfo: null,
+          position_wave: null,
+          transform: null,
+          output: {
+            fixture_ids: target.fixture_ids,
+            target_group_ids: target.target_group_ids,
+            attribute: target.attribute,
+            video_targets: target.video_targets,
+            low: lightLow,
+            high: lightHigh,
+            blend_mode: effectBlendMode(),
+          },
+        },
+      ],
+      edges: [
+        { from_node: 1, from_port: "value", to_node: 2, to_port: "input" },
+        { from_node: 2, from_port: "value", to_node: 3, to_port: "input" },
+      ],
+    };
+  };
+
+  const saveNodeGraphFromForm = async () => {
+    const graph = buildNodeGraphFromForm();
+    if (!graph) {
+      setMessage(effectTargetOverrideError() || "Select a valid node graph target.");
+      return;
+    }
+    try {
+      const graphId = await invoke<number>("save_node_graph", { graph });
+      setNodeGraphLabel(`Graph ${snapshot().node_graphs.length + 2}`);
+      setMessage(`Saved node graph ${graphId}.`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const setNodeGraphEnabled = async (graphId: number, enabled: boolean) => {
+    try {
+      await invoke("set_node_graph_enabled", { graphId, enabled });
+      setMessage(`${enabled ? "Enabled" : "Disabled"} node graph ${graphId}`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const removeNodeGraph = async (graphId: number) => {
+    try {
+      await invoke("remove_node_graph", { graphId });
+      setMessage(`Removed node graph ${graphId}`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const saveNodeGraphPreset = async (graphId: number) => {
+    try {
+      const path = await invoke<string | null>("save_node_graph_preset_file", { graphId });
+      setMessage(path ? `Saved node graph preset ${path}` : "Node graph preset save canceled.");
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const loadNodeGraphPreset = async () => {
+    try {
+      const graphId = await invoke<number | null>("load_node_graph_preset_file");
+      if (graphId === null) {
+        setMessage("Node graph preset load canceled.");
+        return;
+      }
+      setMessage(`Loaded node graph preset as graph ${graphId}`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
   };
 
   const loadEffectPreset = async () => {
@@ -7761,7 +10903,11 @@ export default function App() {
     }
     if (event.code === "KeyB") {
       event.preventDefault();
-      void setBlackout(!snapshot().blackout);
+      if (event.shiftKey) {
+        void setAllBlackout(!(snapshot().blackout && snapshot().video.blackout));
+      } else {
+        void setBlackout(!snapshot().blackout);
+      }
       return;
     }
     if (event.code === "KeyV") {
@@ -7929,11 +11075,30 @@ export default function App() {
             >
               {snapshot().video.blackout ? "Clear Video BO" : "Video BO"}
             </button>
+            <button
+              class={snapshot().blackout && snapshot().video.blackout ? "primary" : ""}
+              onClick={() => void setAllBlackout(true)}
+              disabled={snapshot().blackout && snapshot().video.blackout}
+            >
+              All BO
+            </button>
+            <button
+              onClick={() => void setAllBlackout(false)}
+              disabled={!snapshot().blackout && !snapshot().video.blackout}
+            >
+              All Clear
+            </button>
+            <button disabled={!globalFixtureFlagState().anyFlagged} onClick={() => void clearFixtureFlags("all")}>
+              Clear Flags
+            </button>
           </div>
           <div class="liveStagePanel">
             <div class="liveStageHeader">
               <h3>Live Stage</h3>
-              <span>{visualizerFixtures().length} fixture(s) / {snapshot().video.outputs.length} projector(s)</span>
+              <span>
+                {visualizerFixtures().length} fixture(s) / {snapshot().video.outputs.length} projector(s) /{" "}
+                {visualizerStageObjects2d().length} ref(s)
+              </span>
             </div>
             <svg class="visualizerStage liveStage" viewBox={`0 0 ${stageViewBoxSize} ${stageViewBoxSize}`}>
               <defs>
@@ -7945,6 +11110,27 @@ export default function App() {
               <rect class="stageGrid" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
               <line class="stageAxis2d" x1={stageOrigin2d().x} y1="0" x2={stageOrigin2d().x} y2={stageViewBoxSize} />
               <line class="stageAxis2d" x1="0" y1={stageOrigin2d().z} x2={stageViewBoxSize} y2={stageOrigin2d().z} />
+              <For each={visualizerStageObjects2d()}>
+                {(object) => (
+                  <g
+                    class={`${stageObjectClass(object)} liveStageObject`}
+                    transform={`translate(${object.x} ${object.z}) rotate(${object.rotationDeg})`}
+                  >
+                    <rect
+                      x={-object.width / 2}
+                      y={-object.depth / 2}
+                      width={object.width}
+                      height={object.depth}
+                      fill={object.color}
+                    />
+                    <line x1={-object.width / 2} y1="0" x2={object.width / 2} y2="0" />
+                    <line x1="0" y1={-object.depth / 2} x2="0" y2={object.depth / 2} />
+                    <text x={-object.width / 2 + 1} y={-object.depth / 2 - 1}>
+                      {object.label}
+                    </text>
+                  </g>
+                )}
+              </For>
               <For each={visualizerVideoSurfaces2d()}>
                 {(surface) => (
                   <g
@@ -8050,6 +11236,72 @@ export default function App() {
                 }}
               </For>
             </svg>
+            <div class="liveStageSelectionBar">
+              <Show
+                when={selectedFixture()}
+                fallback={
+                  <div class="liveStageSelectionItem empty">
+                    <strong>No fixture selected</strong>
+                    <span>Click a fixture on the stage.</span>
+                  </div>
+                }
+              >
+                {(fixture) => (
+                  <div class="liveStageSelectionItem">
+                    <div>
+                      <strong>{fixture().label}</strong>
+                      <span>U{fixture().universe} A{fixture().address} / {fixture().group_ids.join(", ") || fixture().mode_name}</span>
+                    </div>
+                    <button
+                      class={fixture().highlighted ? "active" : ""}
+                      onClick={() => void setFixtureHighlight(fixture().id, !fixture().highlighted)}
+                    >
+                      HL
+                    </button>
+                    <button
+                      class={fixture().soloed ? "active" : ""}
+                      onClick={() => void setFixtureSolo(fixture().id, !fixture().soloed)}
+                    >
+                      Solo
+                    </button>
+                    <button
+                      class={fixture().parked ? "active" : ""}
+                      onClick={() => void setFixturePark(fixture().id, !fixture().parked)}
+                    >
+                      Park
+                    </button>
+                  </div>
+                )}
+              </Show>
+              <Show when={selectedTouchVideoOutput()}>
+                {(output) => (
+                  <div class="liveStageSelectionItem projector">
+                    <div>
+                      <strong>{output().label}</strong>
+                      <span>
+                        {output().width}x{output().height} / {output().enabled ? "Enabled" : "Disabled"} /{" "}
+                        {output().blackout ? "Blackout" : `${Math.round(output().opacity * 100)}%`}
+                      </span>
+                    </div>
+                    <button
+                      class={output().blackout ? "active" : ""}
+                      onClick={() => void setVideoOutputBlackout(output().id, !output().blackout)}
+                    >
+                      BO
+                    </button>
+                    <button onClick={() => void fadeVideoOutputOpacity(output().id, 0)}>
+                      Out
+                    </button>
+                    <button onClick={() => void fadeVideoOutputOpacity(output().id, 1)}>
+                      In
+                    </button>
+                    <button onClick={() => void openVideoOutputWindow(output().id, true)}>
+                      Pattern
+                    </button>
+                  </div>
+                )}
+              </Show>
+            </div>
           </div>
           <div class="liveCuePadHeader">
             <h3>Cue Pads</h3>
@@ -8273,6 +11525,260 @@ export default function App() {
             >
               {snapshot().video.blackout ? "Clear Video BO" : "Video BO"}
             </button>
+            <button
+              class={snapshot().blackout && snapshot().video.blackout ? "primary" : ""}
+              onClick={() => void setAllBlackout(true)}
+              disabled={snapshot().blackout && snapshot().video.blackout}
+            >
+              All BO
+            </button>
+            <button
+              onClick={() => void setAllBlackout(false)}
+              disabled={!snapshot().blackout && !snapshot().video.blackout}
+            >
+              All Clear
+            </button>
+          </div>
+        </section>
+        <section class="panel touchPanel touchStagePanel">
+          <div class="panelHeader">
+            <h2>Touch Stage</h2>
+            <span>
+              {visualizerFixtures().length} fixture(s) / {snapshot().video.outputs.length} projector(s) /{" "}
+              {visualizerStageObjects2d().length} ref(s)
+            </span>
+          </div>
+          <svg class="visualizerStage touchStage" viewBox={`0 0 ${stageViewBoxSize} ${stageViewBoxSize}`}>
+            <defs>
+              <pattern id="touch-stage-grid" width="10" height="10" patternUnits="userSpaceOnUse">
+                <path d="M 10 0 L 0 0 0 10" />
+              </pattern>
+            </defs>
+            <rect class="stageFloor" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
+            <rect class="stageGrid" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
+            <line class="stageAxis2d" x1={stageOrigin2d().x} y1="0" x2={stageOrigin2d().x} y2={stageViewBoxSize} />
+            <line class="stageAxis2d" x1="0" y1={stageOrigin2d().z} x2={stageViewBoxSize} y2={stageOrigin2d().z} />
+            <For each={visualizerStageObjects2d()}>
+              {(object) => (
+                <g
+                  class={`${stageObjectClass(object)} touchStageObject`}
+                  transform={`translate(${object.x} ${object.z}) rotate(${object.rotationDeg})`}
+                >
+                  <rect
+                    x={-object.width / 2}
+                    y={-object.depth / 2}
+                    width={object.width}
+                    height={object.depth}
+                    fill={object.color}
+                  />
+                  <line x1={-object.width / 2} y1="0" x2={object.width / 2} y2="0" />
+                  <line x1="0" y1={-object.depth / 2} x2="0" y2={object.depth / 2} />
+                  <text x={-object.width / 2 + 1} y={-object.depth / 2 - 1}>
+                    {object.label}
+                  </text>
+                </g>
+              )}
+            </For>
+            <For each={visualizerVideoSurfaces2d()}>
+              {(surface) => (
+                <g
+                  class={[
+                    "stageVideoSurface2d",
+                    selectedVideoOutputId() === surface.id ? "selected" : "",
+                    surface.active ? "" : "inactive",
+                  ].filter(Boolean).join(" ")}
+                  transform={`translate(${surface.x} ${surface.z}) rotate(${surface.rotationDeg})`}
+                  opacity={Math.max(0.2, surface.opacity)}
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                    setSelectedVideoOutputId(surface.id);
+                  }}
+                >
+                  <rect
+                    class="stageVideoSurfaceShape"
+                    x={-surface.width / 2}
+                    y={-surface.height / 2}
+                    width={surface.width}
+                    height={surface.height}
+                  />
+                  <line x1={-surface.width / 2} y1="0" x2={surface.width / 2} y2="0" />
+                  <line x1="0" y1={-surface.height / 2} x2="0" y2={surface.height / 2} />
+                  <text x={-surface.width / 2 + 1.2} y={-surface.height / 2 - 1.6}>
+                    {surface.label}
+                  </text>
+                </g>
+              )}
+            </For>
+            <For each={visualizerFixtures()}>
+              {(fixture) => (
+                <polygon
+                  class="stageBeam"
+                  points={fixture.beamPoints}
+                  fill={fixture.color}
+                  opacity={Math.max(0.06, fixture.intensity * 0.48)}
+                />
+              )}
+            </For>
+            <For each={visualizerFixtures()}>
+              {(fixture) => {
+                const className = () => [
+                  "stageFixture",
+                  "stageFixtureBlock",
+                  `kind-${fixture.visualKind}`,
+                  selectedFixtureId() === fixture.id ? "selected picked" : "",
+                  selectedFixtureGroupFilter() && fixture.inGroupFilter ? "groupMatch" : "",
+                  fixture.highlighted ? "highlighted" : "",
+                  fixture.soloed ? "soloed" : "",
+                  fixture.parked ? "parked" : "",
+                ].filter(Boolean).join(" ");
+                return (
+                  <g
+                    class={className()}
+                    transform={`translate(${fixture.x} ${fixture.z}) rotate(${fixture.yaw})`}
+                    onPointerDown={(event) => {
+                      event.stopPropagation();
+                      const patchedFixture = snapshot().fixtures.find((candidate) => candidate.id === fixture.id);
+                      if (patchedFixture) {
+                        selectFixture(patchedFixture);
+                      }
+                    }}
+                  >
+                    <Show
+                      when={fixture.visualKind === "bar" || fixture.visualKind === "panel"}
+                      fallback={
+                        <Show
+                          when={fixture.visualKind === "laser"}
+                          fallback={
+                            <circle
+                              class="stageFixtureShape"
+                              cx="0"
+                              cy="0"
+                              r={Math.max(fixture.width, fixture.height) / 2 + fixture.intensity * 1.2}
+                              fill={fixture.color}
+                            />
+                          }
+                        >
+                          <polygon
+                            class="stageFixtureShape"
+                            points={`0,${-fixture.height / 2} ${fixture.width / 2},${fixture.height / 2} ${-fixture.width / 2},${fixture.height / 2}`}
+                            fill={fixture.color}
+                          />
+                        </Show>
+                      }
+                    >
+                      <rect
+                        class="stageFixtureShape"
+                        x={-fixture.width / 2}
+                        y={-fixture.height / 2}
+                        width={fixture.width}
+                        height={fixture.height}
+                        fill={fixture.color}
+                      />
+                    </Show>
+                    <line class="stageFixtureCenterLine" x1="0" y1="0" x2="0" y2="-7" />
+                    <circle class="stageFixtureLaserMark" cx="0" cy="-7" r="0.9" />
+                    <title>{`${fixture.label} / ${fixture.dmxLabel} / ${fixture.groupLabel}`}</title>
+                  </g>
+                );
+              }}
+            </For>
+          </svg>
+          <div class="touchStageSelectionBar">
+            <Show
+              when={selectedFixture()}
+              fallback={
+                <div class="touchStageSelectionItem empty">
+                  <strong>No fixture</strong>
+                  <span>Tap a fixture on the stage.</span>
+                </div>
+              }
+            >
+              {(fixture) => (
+                <div class="touchStageSelectionItem">
+                  <div>
+                    <strong>{fixture().label}</strong>
+                    <span>U{fixture().universe} A{fixture().address} / {fixture().group_ids.join(", ") || fixture().mode_name}</span>
+                  </div>
+                  <button
+                    class={touchDimmerQuickActive() ? "momentary active" : "momentary"}
+                    disabled={!selectedTouchDimmerTarget()}
+                    onPointerDown={startTouchDimmerFlash}
+                    onPointerUp={endTouchDimmerFlash}
+                    onPointerCancel={endTouchDimmerFlash}
+                    onPointerLeave={endTouchDimmerFlash}
+                    onBlur={endTouchDimmerFlash}
+                    onKeyDown={handleTouchDimmerFlashKeyDown}
+                    onKeyUp={handleTouchDimmerFlashKeyUp}
+                  >
+                    Flash
+                  </button>
+                  <button
+                    class={fixture().highlighted ? "active" : ""}
+                    onClick={() => void setFixtureHighlight(fixture().id, !fixture().highlighted)}
+                  >
+                    HL
+                  </button>
+                  <button
+                    class={fixture().soloed ? "active" : ""}
+                    onClick={() => void setFixtureSolo(fixture().id, !fixture().soloed)}
+                  >
+                    Solo
+                  </button>
+                  <button
+                    class={fixture().parked ? "active" : ""}
+                    onClick={() => void setFixturePark(fixture().id, !fixture().parked)}
+                  >
+                    Park
+                  </button>
+                </div>
+              )}
+            </Show>
+            <Show when={selectedTouchVideoOutput()}>
+              {(output) => (
+                <div class="touchStageSelectionItem projector">
+                  <div>
+                    <strong>{output().label}</strong>
+                    <span>
+                      {output().width}x{output().height} / {output().enabled ? "Enabled" : "Disabled"} /{" "}
+                      {output().blackout ? "Blackout" : `${Math.round(output().opacity * 100)}%`}
+                    </span>
+                  </div>
+                  <button
+                    class={output().blackout ? "active" : ""}
+                    onClick={() => void setVideoOutputBlackout(output().id, !output().blackout)}
+                  >
+                    BO
+                  </button>
+                  <button onClick={() => void fadeVideoOutputOpacity(output().id, 0)}>
+                    Out
+                  </button>
+                  <button onClick={() => void fadeVideoOutputOpacity(output().id, 1)}>
+                    In
+                  </button>
+                  <button onClick={() => void openVideoOutputWindow(output().id, true)}>
+                    Pattern
+                  </button>
+                </div>
+              )}
+            </Show>
+          </div>
+          <div class="touchStageLegend">
+            <button
+              class={!selectedFixtureGroupFilter() ? "active" : ""}
+              onClick={() => selectFixtureGroupFilter(null)}
+            >
+              All
+            </button>
+            <For each={fixtureGroupRows().slice(0, 6)}>
+              {(group) => (
+                <button
+                  class={selectedFixtureGroupFilter() === group.groupId ? "active" : ""}
+                  onClick={() => selectFixtureGroupFilter(group.groupId)}
+                >
+                  {group.groupId}
+                </button>
+              )}
+            </For>
           </div>
         </section>
         <section class="panel touchPanel touchFixturePanel">
@@ -8334,6 +11840,9 @@ export default function App() {
                         <button onClick={() => void setFixturePark(fixture().id, !fixture().parked)}>
                           {fixture().parked ? "Clear Park" : "Park"}
                         </button>
+                        <button disabled={!globalFixtureFlagState().anyFlagged} onClick={() => void clearFixtureFlags("all")}>
+                          Clear Flags
+                        </button>
                       </>
                     }
                   >
@@ -8357,26 +11866,70 @@ export default function App() {
                         >
                           {selectedGroupFlagState().anyParked ? "Clear Group Park" : "Group Park"}
                         </button>
+                        <button disabled={!globalFixtureFlagState().anyFlagged} onClick={() => void clearFixtureFlags("all")}>
+                          Clear Flags
+                        </button>
                       </>
                     )}
                   </Show>
                 </div>
-                <Show when={selectedDimmerControl()}>
+                <nav class="touchAttributeCategoryRail" aria-label="Touch attribute category">
+                  <For each={controlCategoryRows()}>
+                    {(category) => (
+                      <button
+                        class={activeControlCategory() === category.id ? "active" : ""}
+                        disabled={!category.hasVisual && category.count === 0}
+                        onClick={() => setControlCategory(category.id)}
+                        aria-pressed={activeControlCategory() === category.id}
+                      >
+                        <span>{category.label}</span>
+                        <small>{category.count}</small>
+                      </button>
+                    )}
+                  </For>
+                </nav>
+                <Show when={showDimmerPanel() ? selectedDimmerControl() : undefined}>
                   {(dimmer) => (
-                    <label class="touchSlider">
-                      Dimmer
-                      <input
-                        type="range"
-                        min={normalizeLimitRange(selectedFixtureLimits().dimmer_min, selectedFixtureLimits().dimmer_max).min}
-                        max={normalizeLimitRange(selectedFixtureLimits().dimmer_min, selectedFixtureLimits().dimmer_max).max}
-                        value={dimmer().value}
-                        onInput={(event) => setDimmerValue(Number(event.currentTarget.value))}
-                      />
-                      <strong>{formatDmxPercent(dimmer().value)}</strong>
-                    </label>
+                    <>
+                      <label class="touchSlider">
+                        Dimmer
+                        <input
+                          type="range"
+                          min={normalizeLimitRange(selectedFixtureLimits().dimmer_min, selectedFixtureLimits().dimmer_max).min}
+                          max={normalizeLimitRange(selectedFixtureLimits().dimmer_min, selectedFixtureLimits().dimmer_max).max}
+                          value={dimmer().value}
+                          onInput={(event) => setDimmerValue(Number(event.currentTarget.value))}
+                        />
+                        <strong>{formatDmxPercent(dimmer().value)}</strong>
+                      </label>
+                      <div class="touchDimmerQuickRow">
+                        <button onClick={() => setTouchDimmerQuickLevel("out")} disabled={!selectedTouchDimmerTarget()}>
+                          Out
+                        </button>
+                        <button onClick={() => setTouchDimmerQuickLevel("half")} disabled={!selectedTouchDimmerTarget()}>
+                          Half
+                        </button>
+                        <button class="primary" onClick={() => setTouchDimmerQuickLevel("full")} disabled={!selectedTouchDimmerTarget()}>
+                          Full
+                        </button>
+                        <button
+                          class={touchDimmerQuickActive() ? "momentary active" : "momentary"}
+                          disabled={!selectedTouchDimmerTarget()}
+                          onPointerDown={startTouchDimmerFlash}
+                          onPointerUp={endTouchDimmerFlash}
+                          onPointerCancel={endTouchDimmerFlash}
+                          onPointerLeave={endTouchDimmerFlash}
+                          onBlur={endTouchDimmerFlash}
+                          onKeyDown={handleTouchDimmerFlashKeyDown}
+                          onKeyUp={handleTouchDimmerFlashKeyUp}
+                        >
+                          Flash
+                        </button>
+                      </div>
+                    </>
                   )}
                 </Show>
-                <Show when={selectedPositionControls()}>
+                <Show when={showPositionPad() ? selectedPositionControls() : undefined}>
                   {(positionControls) => (
                     <div
                       class="panTiltPad touchPanTiltPad"
@@ -8404,7 +11957,7 @@ export default function App() {
                     </div>
                   )}
                 </Show>
-                <Show when={selectedColorControls()}>
+                <Show when={showColorPad() ? selectedColorControls() : undefined}>
                   <div class="touchColorGrid">
                     <For each={defaultColorPalette.slice(0, 8)}>
                       {(color) => (
@@ -8418,6 +11971,31 @@ export default function App() {
                       )}
                     </For>
                   </div>
+                </Show>
+                <Show when={!showDimmerPanel() && !showPositionPad() && !showColorPad() && visibleControls().length > 0}>
+                  <div class="touchGenericAttributeGrid">
+                    <For each={visibleControls()}>
+                      {(control) => (
+                        <label class="touchGenericAttributeRow">
+                          <span>
+                            <strong>{control.channel_name || control.attribute}</strong>
+                            <small>{control.attribute}</small>
+                          </span>
+                          <input
+                            type="range"
+                            min="0"
+                            max="65535"
+                            value={currentControlValue(control)}
+                            onInput={(event) => setControlAttributeValue(control, Number(event.currentTarget.value))}
+                          />
+                          <output>{formatShortDmxPercent(currentControlValue(control))}</output>
+                        </label>
+                      )}
+                    </For>
+                  </div>
+                </Show>
+                <Show when={selectedFixture() && visibleControls().length === 0}>
+                  <p class="empty">No {activeControlCategoryLabel().toLowerCase()} controls.</p>
                 </Show>
               </div>
             )}
@@ -8724,10 +12302,145 @@ export default function App() {
               Attributes
               <input
                 value={customAttributes()}
-                onInput={(event) => setCustomAttributes(event.currentTarget.value)}
+                onInput={(event) => setCustomAttributesText(event.currentTarget.value)}
                 placeholder="Dimmer@1:8, Pan@2:16, Tilt@4:16, ColorRed@6:8"
               />
             </label>
+            <div class="customProfileEditor">
+              <div class="customProfileTemplateGrid" aria-label="Custom profile attribute templates">
+                <For each={customProfileAttributeTemplates}>
+                  {(template) => (
+                    <button type="button" onClick={() => appendCustomAttributeTemplate(template.rows)}>
+                      {template.label}
+                    </button>
+                  )}
+                </For>
+              </div>
+              <div class="customProfileAttributeRows">
+                <For each={customAttributeDrafts()}>
+                  {(draft, index) => (
+                    <div
+                      class={[
+                        "customProfileAttributeRow",
+                        selectedCustomAttributeIndexValue() === index() ? "selected" : "",
+                        customProfileDraftAnalysis().rowConflicts.has(index()) ? "conflict" : "",
+                      ].join(" ")}
+                      onClick={() => setSelectedCustomAttributeIndex(index())}
+                    >
+                      <label>
+                        Attribute
+                        <input
+                          value={draft.attribute}
+                          onInput={(event) => updateCustomAttributeDraft(index(), { attribute: event.currentTarget.value })}
+                        />
+                      </label>
+                      <label>
+                        Bits
+                        <select
+                          value={draft.resolution}
+                          onInput={(event) =>
+                            updateCustomAttributeDraft(index(), {
+                              resolution: event.currentTarget.value as AttributeResolution,
+                            })
+                          }
+                        >
+                          <option value="EightBit">8-bit</option>
+                          <option value="SixteenBit">16-bit</option>
+                        </select>
+                      </label>
+                      <label>
+                        Start
+                        <input
+                          value={draft.startOffset}
+                          inputMode="numeric"
+                          placeholder="auto"
+                          onInput={(event) => updateCustomAttributeDraft(index(), { startOffset: event.currentTarget.value })}
+                        />
+                      </label>
+                      <span class="customProfileRowFootprint" title={customProfileDraftRowStatusText(index())}>
+                        {customProfileDraftRowStatusText(index())}
+                      </span>
+                      <button
+                        type="button"
+                        class="iconButton"
+                        title={`Remove ${draft.attribute || "attribute"}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          removeCustomAttributeDraft(index());
+                        }}
+                      >
+                        -
+                      </button>
+                    </div>
+                  )}
+                </For>
+              </div>
+              <div class="buttonRow">
+                <button type="button" onClick={addCustomAttributeDraft}>Add Attribute</button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const index = selectedCustomAttributeIndexValue();
+                    if (index !== null) {
+                      moveCustomAttributeDraft(index, -1);
+                    }
+                  }}
+                  disabled={selectedCustomAttributeIndexValue() === null || selectedCustomAttributeIndexValue() === 0}
+                >
+                  Move Up
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const index = selectedCustomAttributeIndexValue();
+                    if (index !== null) {
+                      moveCustomAttributeDraft(index, 1);
+                    }
+                  }}
+                  disabled={
+                    selectedCustomAttributeIndexValue() === null ||
+                    selectedCustomAttributeIndexValue() === customAttributeDrafts().length - 1
+                  }
+                >
+                  Move Down
+                </button>
+                <button type="button" onClick={() => commitCustomAttributeDrafts([], null)} disabled={customAttributeDrafts().length === 0}>
+                  Clear
+                </button>
+              </div>
+              <div class="customProfileDmxMap">
+                <div class="customProfilePreviewHeader">
+                  <strong>DMX Map</strong>
+                  <span>{customProfilePreview().footprint || 0} ch</span>
+                </div>
+                <div class="customProfileDmxGrid" aria-label="Custom profile DMX map">
+                  <For each={customProfileDmxCells()}>
+                    {(cell) => (
+                      <button
+                        type="button"
+                        class={[
+                          "customProfileDmxCell",
+                          cell.control ? "" : "empty",
+                          cell.selected ? "selected" : "",
+                          cell.conflict ? "conflict" : "",
+                        ].join(" ")}
+                        onClick={() => {
+                          if (cell.controlIndex >= 0) {
+                            setSelectedCustomAttributeIndex(cell.controlIndex);
+                          }
+                        }}
+                      >
+                        <small>{cell.channel}</small>
+                        <strong>{cell.control?.attribute ?? ""}</strong>
+                        <span>
+                          {cell.control ? `${cell.control.resolution === "SixteenBit" ? "16" : "8"} / ${cell.control.geometry}` : ""}
+                        </span>
+                      </button>
+                    )}
+                  </For>
+                </div>
+              </div>
+            </div>
             <div class={`customProfilePreview ${customProfilePreview().errors.length > 0 ? "bad" : ""}`}>
               <div class="customProfilePreviewHeader">
                 <strong>DMX Footprint</strong>
@@ -8744,6 +12457,7 @@ export default function App() {
                     <div class="customProfileChannel">
                       <strong>{control.attribute}</strong>
                       <span>{control.resolution === "SixteenBit" ? "16-bit" : "8-bit"}</span>
+                      <em>{control.geometry}</em>
                       <small>CH {control.offsets.join("/")}</small>
                     </div>
                   )}
@@ -8772,6 +12486,12 @@ export default function App() {
               <div class="profile">
                 <strong>{loaded().manufacturer} {loaded().name}</strong>
                 <span>{loaded().dmx_modes.length} mode(s), {loaded().geometries.length} geometry node(s)</span>
+                <Show when={loaded().warnings.length > 0}>
+                  <div class="profileWarningBanner">
+                    <strong>{loaded().warnings.length} warning{loaded().warnings.length === 1 ? "" : "s"}</strong>
+                    <span>Review before patching this profile.</span>
+                  </div>
+                </Show>
                 <label>
                   Mode
                   <select value={selectedMode()} onInput={(event) => setSelectedMode(event.currentTarget.value)}>
@@ -8780,6 +12500,108 @@ export default function App() {
                     </For>
                   </select>
                 </label>
+                <Show when={selectedModeSummary()}>
+                  {(mode) => (
+                    <>
+                      <div class="profileDmxSummary">
+                        <div class="customProfilePreviewHeader">
+                          <strong>Mode DMX Map</strong>
+                          <span>{selectedFootprint()} ch / {mode().controls.length} control(s)</span>
+                        </div>
+                        <Show when={selectedModeDmxCells().length > 0} fallback={<p class="empty">No DMX controls.</p>}>
+                          <div class="profileDmxGrid" aria-label="Selected mode DMX map">
+                            <For each={selectedModeDmxCells()}>
+                              {(cell) => (
+                                <div class={`profileDmxCell ${cell.category}`}>
+                                  <small>CH {cell.channel}</small>
+                                  <strong title={`${cell.control.attribute} / ${cell.control.channel_name}`}>
+                                    {cell.control.attribute}
+                                  </strong>
+                                  <span>{cell.bitLabel}</span>
+                                </div>
+                              )}
+                            </For>
+                          </div>
+                        </Show>
+                      </div>
+                      <Show when={selectedModeFunctionEntries().length > 0}>
+                        <div class="profileFunctionSummary">
+                          <div class="customProfilePreviewHeader">
+                            <strong>Channel Functions</strong>
+                            <span>{selectedModeFunctionEntries().length} range(s)</span>
+                          </div>
+                          <div class="profileFunctionList">
+                            <For each={visibleSelectedModeFunctionEntries()}>
+                              {(entry) => (
+                                <div class="profileFunctionRow">
+                                  <strong title={`${entry.control.attribute} / ${entry.control.channel_name}`}>
+                                    {entry.control.attribute}
+                                  </strong>
+                                  <span>{channelFunctionRangeLabel(entry.fn)}</span>
+                                  <small>
+                                    <b title={channelFunctionLabel(entry.fn)}>{channelFunctionLabel(entry.fn)}</b>
+                                    <b title={channelFunctionDetail(entry.fn)}>{channelFunctionDetail(entry.fn)}</b>
+                                  </small>
+                                </div>
+                              )}
+                            </For>
+                            <Show when={selectedModeFunctionEntries().length - visibleSelectedModeFunctionEntries().length}>
+                              {(remaining) => (
+                                <span class="profileFunctionMore">+ {remaining()} more function(s)</span>
+                              )}
+                            </Show>
+                          </div>
+                        </div>
+                      </Show>
+                      <div class="profileGeometrySummary">
+                        <div class="customProfilePreviewHeader">
+                          <strong>Geometry</strong>
+                          <span>{selectedModeGeometryRows().length} node(s)</span>
+                        </div>
+                        <Show when={selectedModeGeometryRows().length > 0} fallback={<p class="empty">No geometry nodes.</p>}>
+                          <div class="profileGeometryList" aria-label="Selected profile geometry">
+                            <For each={selectedModeGeometryRows()}>
+                              {(row) => (
+                                <div class="profileGeometryRow">
+                                  <strong
+                                    style={{ "padding-left": `${Math.min(row.depth, 8) * 12}px` }}
+                                    title={row.geometry.name}
+                                  >
+                                    {row.geometry.name}
+                                  </strong>
+                                  <span>{row.geometry.kind}</span>
+                                  <small title={row.geometry.parent ?? "root"}>
+                                    {row.geometry.parent ? `parent ${row.geometry.parent}` : "root"}
+                                  </small>
+                                  <small>{row.controlCount} ctrl</small>
+                                  <small class="profileGeometryPosition" title={row.positionLabel}>
+                                    <Show when={row.geometry.model_file || row.geometry.model_name || row.geometry.model_primitive}>
+                                      <b
+                                        class={`profileGeometryAsset ${
+                                          row.geometry.model_file || row.geometry.model_primitive ? "available" : "missing"
+                                        }`}
+                                      >
+                                        {row.geometry.model_file ? "mesh" : row.geometry.model_primitive ? "primitive" : "model"}
+                                      </b>
+                                    </Show>
+                                    <span>{row.positionLabel || "no transform detail"}</span>
+                                  </small>
+                                </div>
+                              )}
+                            </For>
+                          </div>
+                        </Show>
+                        <Show when={selectedModeUnresolvedGeometryReferences().length > 0}>
+                          <ul class="warnings">
+                            <For each={selectedModeUnresolvedGeometryReferences()}>
+                              {(reference) => <li>Unresolved geometry reference: {reference}</li>}
+                            </For>
+                          </ul>
+                        </Show>
+                      </div>
+                    </>
+                  )}
+                </Show>
                 <label>
                   Label
                   <input value={label()} onInput={(event) => setLabel(event.currentTarget.value)} />
@@ -9515,11 +13337,32 @@ export default function App() {
                   B
                 </button>
                 <button
+                  class={mappingShowGeometry() ? "active" : ""}
+                  onClick={() => setMappingShowGeometry((value) => !value)}
+                  title="Toggle GDTF geometry nodes"
+                >
+                  G
+                </button>
+                <button
                   class={mappingShowProjectors() ? "active" : ""}
                   onClick={() => setMappingShowProjectors((value) => !value)}
                   title="Toggle projector surfaces"
                 >
                   V
+                </button>
+                <button
+                  class={mappingShowStageObjects() ? "active" : ""}
+                  onClick={() => setMappingShowStageObjects((value) => !value)}
+                  title="Toggle stage reference objects"
+                >
+                  O
+                </button>
+                <button
+                  class={mappingShowLevels() ? "active" : ""}
+                  onClick={() => setMappingShowLevels((value) => !value)}
+                  title="Toggle fixture level readouts"
+                >
+                  %
                 </button>
               </div>
               <div class="mappingStageViewport">
@@ -9530,6 +13373,13 @@ export default function App() {
                   <strong>{mappingFilteredFixtures().length}</strong>
                   <span>Outputs</span>
                   <strong>{snapshot().video.outputs.length}</strong>
+                  <span>Objects</span>
+                  <strong>{snapshot().stage_objects.length}</strong>
+                </div>
+                <div class={mappingStageCursorWorld() ? "mappingCursorReadout active" : "mappingCursorReadout"}>
+                  {mappingStageCursorWorld()
+                    ? `${mappingStageCursorLabel()} / ${mappingStageTool().toUpperCase()}`
+                    : "Move over the stage"}
                 </div>
                 <div class="mappingViewControls" aria-label="2D mapping viewport">
                   <span>View</span>
@@ -9599,16 +13449,40 @@ export default function App() {
                       type="checkbox"
                       checked={mappingShowBeams()}
                       onChange={(event) => setMappingShowBeams(event.currentTarget.checked)}
+                  />
+                  Beams
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={mappingShowGeometry()}
+                    onChange={(event) => setMappingShowGeometry(event.currentTarget.checked)}
+                  />
+                  Geometry
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={mappingShowProjectors()}
+                      onChange={(event) => setMappingShowProjectors(event.currentTarget.checked)}
                     />
-                    Beams
+                    Projectors
                   </label>
                   <label>
                     <input
                       type="checkbox"
-                      checked={mappingShowProjectors()}
-                      onChange={(event) => setMappingShowProjectors(event.currentTarget.checked)}
+                      checked={mappingShowStageObjects()}
+                      onChange={(event) => setMappingShowStageObjects(event.currentTarget.checked)}
                     />
-                    Projectors
+                    Objects
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={mappingShowLevels()}
+                      onChange={(event) => setMappingShowLevels(event.currentTarget.checked)}
+                    />
+                    Levels
                   </label>
                 </div>
                 <div class="mappingStageBoundsPanel">
@@ -9698,7 +13572,11 @@ export default function App() {
                       >
                         <option value="">Select preset</option>
                         <For each={snapshot().stage_map_presets}>
-                          {(preset) => <option value={preset.label}>{preset.label}</option>}
+                          {(preset) => (
+                            <option value={preset.label}>
+                              {preset.label} ({stageMapPresetObjectCountLabel(preset)})
+                            </option>
+                          )}
                         </For>
                       </select>
                     </label>
@@ -9726,8 +13604,61 @@ export default function App() {
                       </button>
                     </div>
                   </div>
+                  <div class="mappingStagePresetPanel mappingViewPresetPanel">
+                    <label>
+                      View
+                      <input
+                        type="text"
+                        value={mappingViewPresetLabel()}
+                        onInput={(event) => setMappingViewPresetLabel(event.currentTarget.value)}
+                      />
+                    </label>
+                    <label>
+                      Stored View
+                      <select
+                        value={selectedMappingViewPresetId()}
+                        disabled={mappingViewPresets().length === 0}
+                        onChange={(event) => setSelectedMappingViewPresetId(event.currentTarget.value)}
+                      >
+                        <option value="">Select view</option>
+                        <For each={mappingViewPresets()}>
+                          {(preset) => (
+                            <option value={preset.id}>
+                              {preset.label} ({mappingViewPresetObjectLabel(preset)})
+                            </option>
+                          )}
+                        </For>
+                      </select>
+                    </label>
+                    <div class="mappingStagePresetActions viewPresetActions">
+                      <button onClick={saveMappingViewPreset}>
+                        Save View
+                      </button>
+                      <button
+                        disabled={!selectedMappingViewPresetId()}
+                        onClick={(event) => applyMappingViewPreset(mappingViewPresetIdFromButtonEvent(event))}
+                      >
+                        Apply View
+                      </button>
+                      <button
+                        disabled={!selectedMappingViewPresetId()}
+                        onClick={(event) => removeMappingViewPreset(mappingViewPresetIdFromButtonEvent(event))}
+                      >
+                        Delete View
+                      </button>
+                      <button onClick={exportMappingStageSvg}>
+                        Export SVG
+                      </button>
+                      <button onClick={() => void exportVisualizerRenderPayload()}>
+                        Export JSON
+                      </button>
+                    </div>
+                  </div>
                 </div>
                 <svg
+                  ref={(element) => {
+                    mappingStageSvgElement = element;
+                  }}
                   class={[
                     "visualizerStage",
                     "editableStage",
@@ -9747,6 +13678,7 @@ export default function App() {
                   onPointerMove={handleMappingStagePointerMove}
                   onPointerUp={(event) => void finishMappingStageDrag(event)}
                   onPointerCancel={(event) => void finishMappingStageDrag(event)}
+                  onPointerLeave={() => setMappingStageCursorWorld(null)}
                   onWheel={handleMappingStageWheel}
                 >
                   <defs>
@@ -9758,6 +13690,17 @@ export default function App() {
                   <rect class="stageGrid" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
                   <line class="stageAxis2d" x1={stageOrigin2d().x} y1="0" x2={stageOrigin2d().x} y2={stageViewBoxSize} />
                   <line class="stageAxis2d" x1="0" y1={stageOrigin2d().z} x2={stageViewBoxSize} y2={stageOrigin2d().z} />
+                  <Show when={mappingStageCursorSvgPoint()}>
+                    {(cursor) => (
+                      <g class="stageCursorGuide">
+                        <line x1={cursor().x} y1="0" x2={cursor().x} y2={stageViewBoxSize} />
+                        <line x1="0" y1={cursor().z} x2={stageViewBoxSize} y2={cursor().z} />
+                        <circle cx={cursor().x} cy={cursor().z} r="1.6">
+                          <title>{mappingStageCursorLabel()}</title>
+                        </circle>
+                      </g>
+                    )}
+                  </Show>
                   <Show when={mappingSnapEnabled()}>
                     <g>
                       <For each={mappingSnapLines()}>
@@ -9784,40 +13727,134 @@ export default function App() {
                       />
                     )}
                   </Show>
+                  <Show when={mappingShowStageObjects()}>
+                    <g class="stageObjectLayer">
+                      <For each={visualizerStageObjects2d()}>
+                        {(object) => (
+                          <g
+                            class={`${stageObjectClass(object)} ${object.selected ? "selected" : ""} ${isDraggingMappingStageObject(object.id) ? "dragging" : ""}`}
+                            transform={`translate(${object.x} ${object.z}) rotate(${object.rotationDeg})`}
+                            onPointerDown={(event) => beginMappingStageObjectDrag(event, object.id)}
+                          >
+                            <rect
+                              x={-object.width / 2}
+                              y={-object.depth / 2}
+                              width={object.width}
+                              height={object.depth}
+                              fill={object.color}
+                            >
+                              <title>{object.label} / {object.kind}</title>
+                            </rect>
+                            <line x1={-object.width / 2} y1="0" x2={object.width / 2} y2="0" />
+                            <line x1="0" y1={-object.depth / 2} x2="0" y2={object.depth / 2} />
+                            <text x={-object.width / 2 + 1} y={-object.depth / 2 - 1}>
+                              {object.label}
+                            </text>
+                            <Show when={object.selected}>
+                              <line
+                                class="stageObjectHandleLine"
+                                x1="0"
+                                y1={-object.depth / 2}
+                                x2="0"
+                                y2={-object.depth / 2 - 5}
+                              />
+                              <circle
+                                class="stageObjectRotateHandle"
+                                cx="0"
+                                cy={-object.depth / 2 - 5}
+                                r="1.8"
+                                onPointerDown={(event) => beginMappingStageObjectRotate(event, object.id)}
+                              >
+                                <title>Rotate {object.label}</title>
+                              </circle>
+                              <circle
+                                class="stageObjectResizeHandle width"
+                                cx={object.width / 2 + 2.3}
+                                cy="0"
+                                r="1.7"
+                                onPointerDown={(event) => beginMappingStageObjectResize(event, object.id, "width")}
+                              >
+                                <title>Resize width of {object.label}</title>
+                              </circle>
+                              <circle
+                                class="stageObjectResizeHandle depth"
+                                cx="0"
+                                cy={object.depth / 2 + 2.3}
+                                r="1.7"
+                                onPointerDown={(event) => beginMappingStageObjectResize(event, object.id, "depth")}
+                              >
+                                <title>Resize depth of {object.label}</title>
+                              </circle>
+                              <rect
+                                class="stageObjectResizeHandle both"
+                                x={object.width / 2 + 0.9}
+                                y={object.depth / 2 + 0.9}
+                                width="3"
+                                height="3"
+                                onPointerDown={(event) => beginMappingStageObjectResize(event, object.id, "both")}
+                              >
+                                <title>Resize {object.label}</title>
+                              </rect>
+                            </Show>
+                          </g>
+                        )}
+                      </For>
+                    </g>
+                  </Show>
                   <Show when={mappingShowProjectors()}>
                     <For each={visualizerVideoSurfaces2d()}>
-                      {(surface) => (
-                        <g
-                          class={[
-                            "stageVideoSurface2d",
-                            selectedVideoOutputId() === surface.id ? "selected" : "",
-                            isDraggingMappingVideoOutput(surface.id) ? "dragging" : "",
-                            surface.active ? "" : "inactive",
-                          ].filter(Boolean).join(" ")}
-                          transform={`translate(${surface.x} ${surface.z}) rotate(${surface.rotationDeg})`}
-                          opacity={Math.max(0.22, surface.opacity)}
-                          onPointerDown={(event) => {
-                            if (mappingStageTool() === "pan") {
-                              return;
-                            }
-                            event.stopPropagation();
-                            setSelectedVideoOutputId(surface.id);
-                            beginMappingVideoOutputDrag(event, surface.id);
-                          }}
-                        >
-                          <rect
+                      {(surface) => {
+                        const output = () => snapshot().video.outputs.find((candidate) => candidate.id === surface.id);
+                        const surfaceMapping = () => {
+                          const mappedOutput = output();
+                          return mappedOutput ? mappingVideoOutputMapping(mappedOutput) : defaultVideoOutputMapping;
+                        };
+                        const corners = () => mappingVideoSurfaceCornerLocals(surface, surfaceMapping());
+                        return (
+                          <g
+                            class={[
+                              "stageVideoSurface2d",
+                              selectedVideoOutputId() === surface.id ? "selected" : "",
+                              isDraggingMappingVideoOutput(surface.id) ? "dragging" : "",
+                              surface.active ? "" : "inactive",
+                            ].filter(Boolean).join(" ")}
+                            transform={`translate(${surface.x} ${surface.z}) rotate(${surface.rotationDeg})`}
+                            opacity={Math.max(0.22, surface.opacity)}
+                            onPointerDown={(event) => {
+                              if (mappingStageTool() === "pan") {
+                                return;
+                              }
+                              event.stopPropagation();
+                              setSelectedVideoOutputId(surface.id);
+                              beginMappingVideoOutputDrag(event, surface.id);
+                            }}
+                          >
+                          <polygon
                             class="stageVideoSurfaceShape"
-                            x={-surface.width / 2}
-                            y={-surface.height / 2}
-                            width={surface.width}
-                            height={surface.height}
-                          />
+                            points={mappingVideoSurfaceCornerPointList(surface, surfaceMapping())}
+                          >
+                            <title>{surface.label} / projector warp surface</title>
+                          </polygon>
                           <line x1={-surface.width / 2} y1="0" x2={surface.width / 2} y2="0" />
                           <line x1="0" y1={-surface.height / 2} x2="0" y2={surface.height / 2} />
                           <text x={-surface.width / 2 + 1.2} y={-surface.height / 2 - 1.6}>
                             {surface.label}
                           </text>
                           <Show when={selectedVideoOutputId() === surface.id}>
+                            <For each={corners()}>
+                              {(corner) => (
+                                <rect
+                                  class="stageVideoSurfaceCornerHandle"
+                                  x={corner.x - 1.25}
+                                  y={corner.z - 1.25}
+                                  width="2.5"
+                                  height="2.5"
+                                  onPointerDown={(event) => beginMappingVideoOutputCornerDrag(event, surface.id, corner.key)}
+                                >
+                                  <title>{corner.label} corner pin</title>
+                                </rect>
+                              )}
+                            </For>
                             <line
                               class="stageVideoSurfaceHandleLine"
                               x1="0"
@@ -9857,7 +13894,8 @@ export default function App() {
                             />
                           </Show>
                         </g>
-                      )}
+                        );
+                      }}
                     </For>
                   </Show>
                   <Show when={mappingShowBeams()}>
@@ -9869,6 +13907,37 @@ export default function App() {
                           fill={fixture.color}
                           opacity={Math.max(0.08, fixture.intensity * 0.55)}
                         />
+                      )}
+                    </For>
+                  </Show>
+                  <Show when={mappingShowGeometry()}>
+                    <For each={mappingGeometryNodes2d()}>
+                      {(geometry) => (
+                        <g class={geometry.className}>
+                          <ellipse
+                            class="stageGeometryFootprint"
+                            cx={geometry.x}
+                            cy={geometry.z}
+                            rx={geometry.footprintWidth / 2}
+                            ry={geometry.footprintHeight / 2}
+                          >
+                            <title>
+                              {geometry.fixtureLabel} / {geometry.name} / {geometry.kind}
+                              {geometry.mappedChannelCount > 0 ? ` / ${geometry.mappedChannelCount} channel(s)` : ""}
+                            </title>
+                          </ellipse>
+                          <circle cx={geometry.x} cy={geometry.z} r={geometry.radius}>
+                            <title>
+                              {geometry.fixtureLabel} / {geometry.name} / {geometry.kind}
+                              {geometry.mappedChannelCount > 0 ? ` / ${geometry.mappedChannelCount} channel(s)` : ""}
+                            </title>
+                          </circle>
+                          <Show when={mappingShowLabels()}>
+                            <text x={geometry.x + 1.8} y={geometry.z - 1.6}>
+                              {geometry.name}
+                            </text>
+                          </Show>
+                        </g>
                       )}
                     </For>
                   </Show>
@@ -9887,6 +13956,11 @@ export default function App() {
                         fixture.soloed ? "soloed" : "",
                         fixture.parked ? "parked" : "",
                       ].filter(Boolean).join(" ");
+                      const yawDragging = () => {
+                        const drag = mappingDrag();
+                        return drag?.kind === "fixtureYaw" && drag.fixtureId === fixture.id;
+                      };
+                      const showYawHandle = () => selected() || selectedFixtureId() === fixture.id || yawDragging();
                       return (
                         <>
                           <g
@@ -9940,15 +14014,92 @@ export default function App() {
                             <circle class="stageFixtureLaserMark" cx="0" cy="-7" r="0.9" />
                             <title>{`${fixture.label} / ${fixture.dmxLabel} / ${fixture.groupLabel}`}</title>
                           </g>
+                          <Show when={showYawHandle()}>
+                            <line
+                              class={yawDragging() ? "stageYawLine dragging" : "stageYawLine"}
+                              x1={fixture.x}
+                              y1={fixture.z}
+                              x2={fixture.yawHandleX}
+                              y2={fixture.yawHandleZ}
+                            />
+                            <circle
+                              class={yawDragging() ? "stageYawHandle dragging" : "stageYawHandle"}
+                              cx={fixture.yawHandleX}
+                              cy={fixture.yawHandleZ}
+                              r="2.3"
+                              onPointerDown={(event) => beginMappingFixtureYawDrag(event, fixture.id)}
+                            >
+                              <title>{fixture.label} yaw {fixture.yaw} deg</title>
+                            </circle>
+                          </Show>
                           <Show when={mappingShowLabels()}>
                             <text class="stageLabel" x={fixture.x + 3.5} y={fixture.z - 3.5}>
                               {fixture.label}
+                            </text>
+                          </Show>
+                          <Show when={mappingShowLevels()}>
+                            <text class={fixture.inGroupFilter ? "stageLevelLabel" : "stageLevelLabel muted"} x={fixture.x + 3.5} y={fixture.z + 5}>
+                              {Math.round(fixture.intensity * 100)}%
                             </text>
                           </Show>
                         </>
                       );
                     }}
                   </For>
+                  <Show when={mappingPlacePreview()}>
+                    {(preview) => (
+                      <g
+                        class={`stagePlacePreview kind-${preview().visualKind}`}
+                        transform={`translate(${preview().x} ${preview().z}) rotate(${preview().yaw})`}
+                      >
+                        <Show
+                          when={preview().visualKind === "bar" || preview().visualKind === "panel"}
+                          fallback={
+                            <Show
+                              when={preview().visualKind === "laser"}
+                              fallback={
+                                <circle
+                                  r={Math.max(preview().width, preview().height) / 2}
+                                  fill={preview().color}
+                                >
+                                  <title>Place {preview().label} / {preview().dmxLabel} / {preview().groupLabel}</title>
+                                </circle>
+                              }
+                            >
+                              <polygon
+                                class="stagePlacePreviewShape"
+                                points={`0,${-preview().height / 2} ${preview().width / 2},${preview().height / 2} ${-preview().width / 2},${preview().height / 2}`}
+                                fill={preview().color}
+                              >
+                                <title>Place {preview().label} / {preview().dmxLabel} / {preview().groupLabel}</title>
+                              </polygon>
+                            </Show>
+                          }
+                        >
+                          <rect
+                            class="stagePlacePreviewShape"
+                            x={-preview().width / 2}
+                            y={-preview().height / 2}
+                            width={preview().width}
+                            height={preview().height}
+                            fill={preview().color}
+                          >
+                            <title>Place {preview().label} / {preview().dmxLabel} / {preview().groupLabel}</title>
+                          </rect>
+                          <line
+                            class="stagePlacePreviewCenterLine"
+                            x1="0"
+                            y1="0"
+                            x2="0"
+                            y2={-Math.max(5, preview().height / 2 + 2)}
+                          />
+                        </Show>
+                        <text x={preview().width / 2 + 1.6} y={-preview().height / 2 - 1}>
+                          Place {preview().label}
+                        </text>
+                      </g>
+                    )}
+                  </Show>
                 </svg>
               </div>
               <aside class="mappingSelectionPanel">
@@ -10029,6 +14180,204 @@ export default function App() {
                     </button>
                   </div>
                 </div>
+                <div class="mappingStageObjectPanel">
+                  <div class="mappingTransformTitle">
+                    <strong>Stage Objects</strong>
+                    <span>{snapshot().stage_objects.length} reference(s)</span>
+                  </div>
+                  <label>
+                    Label
+                    <input
+                      type="text"
+                      value={stageObjectLabel()}
+                      onInput={(event) => setStageObjectLabel(event.currentTarget.value)}
+                    />
+                  </label>
+                  <div class="mappingProjectorFieldGrid">
+                    <label>
+                      Kind
+                      <select
+                        value={stageObjectKind()}
+                        onChange={(event) => {
+                          const kind = event.currentTarget.value as StageObjectKind;
+                          setStageObjectKind(kind);
+                          setStageObjectColor(stageObjectDefaultColor(kind));
+                        }}
+                      >
+                        <For each={stageObjectKinds}>{(kind) => <option value={kind}>{kind}</option>}</For>
+                      </select>
+                    </label>
+                    <label>
+                      Width
+                      <input
+                        type="number"
+                        min="0.05"
+                        step="0.1"
+                        value={stageObjectWidth()}
+                        onInput={(event) => setStageObjectWidth(Number(event.currentTarget.value))}
+                      />
+                    </label>
+                    <label>
+                      Depth
+                      <input
+                        type="number"
+                        min="0.05"
+                        step="0.1"
+                        value={stageObjectDepth()}
+                        onInput={(event) => setStageObjectDepth(Number(event.currentTarget.value))}
+                      />
+                    </label>
+                    <label>
+                      Rot
+                      <input
+                        type="number"
+                        step="1"
+                        value={stageObjectRotation()}
+                        onInput={(event) => setStageObjectRotation(Number(event.currentTarget.value))}
+                      />
+                    </label>
+                  </div>
+                  <div class="mappingStageObjectColorRow">
+                    <label>
+                      Color
+                      <input
+                        type="color"
+                        value={stageObjectColor()}
+                        onInput={(event) => setStageObjectColor(event.currentTarget.value)}
+                      />
+                    </label>
+                    <button class="primary" onClick={() => void addStageObjectAtCenter()}>
+                      Add Center
+                    </button>
+                  </div>
+                  <For each={snapshot().stage_objects}>
+                    {(object) => (
+                      <button
+                        class={selectedStageObjectId() === object.id ? "stageObjectListItem active" : "stageObjectListItem"}
+                        onClick={() => setSelectedStageObjectId(object.id)}
+                      >
+                        <strong>{object.label}</strong>
+                        <span>{object.kind}</span>
+                        <small>X {object.x.toFixed(1)} / Z {object.z.toFixed(1)}</small>
+                      </button>
+                    )}
+                  </For>
+                </div>
+                <Show when={selectedStageObject()}>
+                  {(object) => (
+                    <div class="mappingStageObjectPanel selectedObject">
+                      <div class="mappingTransformTitle">
+                        <strong>{object().label}</strong>
+                        <span>{object().kind} / {object().width.toFixed(1)}x{object().depth.toFixed(1)}m</span>
+                      </div>
+                      <div class="mappingTransformGrid">
+                        <label>
+                          X
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={object().x}
+                            onChange={(event) => void setStageObject(object(), { x: Number(event.currentTarget.value) })}
+                          />
+                        </label>
+                        <label>
+                          Z
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={object().z}
+                            onChange={(event) => void setStageObject(object(), { z: Number(event.currentTarget.value) })}
+                          />
+                        </label>
+                        <label>
+                          Width
+                          <input
+                            type="number"
+                            min="0.05"
+                            step="0.1"
+                            value={object().width}
+                            onChange={(event) => void setStageObject(object(), { width: Number(event.currentTarget.value) })}
+                          />
+                        </label>
+                        <label>
+                          Depth
+                          <input
+                            type="number"
+                            min="0.05"
+                            step="0.1"
+                            value={object().depth}
+                            onChange={(event) => void setStageObject(object(), { depth: Number(event.currentTarget.value) })}
+                          />
+                        </label>
+                        <label>
+                          Rot
+                          <input
+                            type="number"
+                            step="1"
+                            value={object().rotation_deg}
+                            onChange={(event) => void setStageObject(object(), { rotation_deg: Number(event.currentTarget.value) })}
+                          />
+                        </label>
+                        <label>
+                          Kind
+                          <select
+                            value={object().kind}
+                            onChange={(event) => {
+                              const kind = event.currentTarget.value as StageObjectKind;
+                              void setStageObject(object(), {
+                                kind,
+                                color: object().color ?? stageObjectDefaultColor(kind),
+                              });
+                            }}
+                          >
+                            <For each={stageObjectKinds}>{(kind) => <option value={kind}>{kind}</option>}</For>
+                          </select>
+                        </label>
+                      </div>
+                      <label>
+                        Label
+                        <input
+                          type="text"
+                          value={object().label}
+                          onChange={(event) => void setStageObject(object(), { label: event.currentTarget.value })}
+                        />
+                      </label>
+                      <div class="mappingStageObjectColorRow">
+                        <label>
+                          Color
+                          <input
+                            type="color"
+                            value={object().color ?? stageObjectDefaultColor(object().kind)}
+                            onInput={(event) => void setStageObject(object(), { color: event.currentTarget.value })}
+                          />
+                        </label>
+                        <button onClick={() => void removeStageObject(object().id)}>
+                          Delete Object
+                        </button>
+                      </div>
+                      <div class="mappingTransformActions">
+                        <button onClick={() => pickFixturesInsideSelectedStageObject("replace")}>
+                          Pick Inside
+                        </button>
+                        <button onClick={() => pickFixturesInsideSelectedStageObject("add")}>
+                          Add Inside
+                        </button>
+                        <button
+                          onClick={() => void layoutSelectedFixturesOnStageObject("line")}
+                          disabled={selectedMappingFixtures().length === 0}
+                        >
+                          Line Here
+                        </button>
+                        <button
+                          onClick={() => void layoutSelectedFixturesOnStageObject("grid")}
+                          disabled={selectedMappingFixtures().length === 0}
+                        >
+                          Grid Here
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </Show>
                 <div class="mappingTransformInspector">
                   <div class="mappingTransformTitle">
                     <strong>Selection Flags</strong>
@@ -10101,6 +14450,18 @@ export default function App() {
                       <button onClick={() => void layoutSelectedMappingFixtures("line")}>Line</button>
                       <button onClick={() => void layoutSelectedMappingFixtures("grid")}>Grid</button>
                       <button onClick={() => void layoutSelectedMappingFixtures("circle")}>Circle</button>
+                      <button
+                        onClick={() => void layoutSelectedFixturesOnStageObject("line")}
+                        disabled={!selectedStageObject()}
+                      >
+                        Object Line
+                      </button>
+                      <button
+                        onClick={() => void layoutSelectedFixturesOnStageObject("grid")}
+                        disabled={!selectedStageObject()}
+                      >
+                        Object Grid
+                      </button>
                       <button onClick={() => void alignSelectedMappingFixtures("x")}>Align X</button>
                       <button onClick={() => void alignSelectedMappingFixtures("z")}>Align Z</button>
                       <button
@@ -10115,6 +14476,11 @@ export default function App() {
                       >
                         Distribute Z
                       </button>
+                      <button onClick={() => void mirrorSelectedMappingFixtures("x")}>Mirror X</button>
+                      <button onClick={() => void mirrorSelectedMappingFixtures("z")}>Mirror Z</button>
+                      <button onClick={() => void rotateSelectedMappingFixtures(-15)}>Rot -15</button>
+                      <button onClick={() => void rotateSelectedMappingFixtures(15)}>Rot +15</button>
+                      <button onClick={() => void rotateSelectedMappingFixtures(180)}>Flip 180</button>
                       <button onClick={() => void duplicateSelectedMappingFixtures()}>Duplicate</button>
                       <button onClick={() => void removeSelectedMappingFixtures()}>Remove</button>
                       <button onClick={() => setWorkspaceTab("control")}>Control Active</button>
@@ -10193,6 +14559,38 @@ export default function App() {
                           />
                         </label>
                       </div>
+                      <div class="mappingGeometrySummary">
+                        <div class="mappingTransformTitle">
+                          <strong>GDTF Geometry</strong>
+                          <span>{selectedMappingGeometryRows().length} node(s)</span>
+                        </div>
+                        <Show when={selectedMappingGeometryRows().length > 0} fallback={<p class="empty">No geometry nodes on this fixture.</p>}>
+                          <div class="mappingGeometryList">
+                            <For each={selectedMappingGeometryRows()}>
+                              {(row) => (
+                                <div class="mappingGeometryRow">
+                                  <strong title={row.geometry.name}>{row.geometry.name}</strong>
+                                  <span>{row.geometry.kind}</span>
+                                  <small title={row.positionLabel}>{row.positionLabel}</small>
+                                  <b>{row.controlCount} ctl</b>
+                                  <Show when={row.geometry.model_file || row.geometry.model_name || row.geometry.model_primitive}>
+                                    <em title={row.geometry.model_file ?? row.geometry.model_name ?? row.geometry.model_primitive ?? ""}>
+                                      {row.geometry.model_file ? "mesh" : row.geometry.model_primitive ? row.geometry.model_primitive : "model"}
+                                    </em>
+                                  </Show>
+                                </div>
+                              )}
+                            </For>
+                          </div>
+                        </Show>
+                        <Show when={selectedMappingUnresolvedGeometryReferences().length > 0}>
+                          <ul class="mappingGeometryWarnings">
+                            <For each={selectedMappingUnresolvedGeometryReferences()}>
+                              {(reference) => <li>Missing geometry reference: {reference}</li>}
+                            </For>
+                          </ul>
+                        </Show>
+                      </div>
                       <div class="mappingFlagActions">
                         <button
                           class={fixture().highlighted ? "active" : ""}
@@ -10266,12 +14664,11 @@ export default function App() {
                   {(output) => (
                     <div class="mappingProjectorControls">
                       <div class="mappingProjectorPreview">
-                        <div class="outputMappingMiniSurface">
-                          <svg viewBox="0 0 100 100" role="img" aria-label={`${output().label} mapping preview`}>
-                            <polygon class="projectorMapBase" points={projectorMapBasePoints(output().mapping).join(" ")} />
-                            <polygon class="projectorMapWarp" points={projectorMapPoints(output().mapping).join(" ")} />
-                          </svg>
-                        </div>
+                        <ProjectorMapPreview
+                          mapping={output().mapping}
+                          outputId={output().id}
+                          class="projectorMapSurface outputMappingMiniSurface"
+                        />
                         <div>
                           <strong>{output().label}</strong>
                           <span>{output().mapping.aspect_mode} / {output().mapping.aspect_ratio.toFixed(2)} / lens {output().mapping.lens_distortion.toFixed(2)}</span>
@@ -10284,8 +14681,27 @@ export default function App() {
                         <button onClick={() => void setVideoOutputBlackout(output().id, !output().blackout)}>
                           {output().blackout ? "Clear BO" : "Blackout"}
                         </button>
+                        <button onClick={() => void openVideoOutputWindow(output().id)}>Window</button>
                         <button onClick={() => void openVideoOutputWindow(output().id, true)}>Pattern</button>
+                        <button onClick={() => void syncVideoOutputWindow(output().id)}>Sync</button>
+                        <button
+                          disabled={!selectedStageObject()}
+                          onClick={() => {
+                            const object = selectedStageObject();
+                            if (object) {
+                              void fitVideoOutputToStageObject(output(), object);
+                            }
+                          }}
+                        >
+                          Fit Object
+                        </button>
                       </div>
+                      <ProjectorMapEditor
+                        mapping={output().mapping}
+                        outputId={output().id}
+                        label={output().label}
+                        onPatch={(patch) => void setVideoOutputMapping(output().id, { ...output().mapping, ...patch })}
+                      />
                       <div class="mappingProjectorFieldGrid">
                         <label>
                           X
@@ -10408,9 +14824,91 @@ export default function App() {
                             }
                           />
                         </label>
-                        <button onClick={() => void setVideoOutputMapping(output().id, defaultVideoOutputMapping)}>
-                          Reset Mapping
-                        </button>
+                        <label>
+                          Keystone Y
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="-1"
+                            max="1"
+                            value={output().mapping.keystone_y}
+                            onChange={(event) =>
+                              void setVideoOutputMapping(output().id, {
+                                ...output().mapping,
+                                keystone_y: Number(event.currentTarget.value),
+                              })
+                            }
+                          />
+                        </label>
+                        <div class="mappingProjectorPresetGrid">
+                          <button onClick={() => void setVideoOutputMapping(output().id, defaultVideoOutputMapping)}>
+                            Reset
+                          </button>
+                          <button
+                            onClick={() =>
+                              void setVideoOutputMapping(output().id, {
+                                ...output().mapping,
+                                lens_distortion: 0,
+                                keystone_x: 0,
+                                keystone_y: 0,
+                                corner_top_left_x: 0,
+                                corner_top_left_y: 0,
+                                corner_top_right_x: 0,
+                                corner_top_right_y: 0,
+                                corner_bottom_right_x: 0,
+                                corner_bottom_right_y: 0,
+                                corner_bottom_left_x: 0,
+                                corner_bottom_left_y: 0,
+                              })
+                            }
+                          >
+                            Clear Warp
+                          </button>
+                          <button
+                            onClick={() =>
+                              void setVideoOutputMapping(output().id, {
+                                ...output().mapping,
+                                aspect_ratio: outputAspectRatio(output().width, output().height),
+                                aspect_mode: "Fit",
+                              })
+                            }
+                          >
+                            Output Ratio
+                          </button>
+                          <button
+                            onClick={() =>
+                              void setVideoOutputMapping(output().id, {
+                                ...output().mapping,
+                                aspect_ratio: 16 / 9,
+                                aspect_mode: "Fit",
+                              })
+                            }
+                          >
+                            16:9
+                          </button>
+                          <button
+                            onClick={() =>
+                              void setVideoOutputMapping(output().id, {
+                                ...output().mapping,
+                                aspect_ratio: 4 / 3,
+                                aspect_mode: "Fit",
+                              })
+                            }
+                          >
+                            4:3
+                          </button>
+                          <button
+                            onClick={() =>
+                              void setVideoOutputMapping(output().id, {
+                                ...output().mapping,
+                                aspect_ratio: 1,
+                                aspect_mode: "Fit",
+                              })
+                            }
+                          >
+                            1:1
+                          </button>
+                        </div>
                       </div>
                     </div>
                   )}
@@ -10793,79 +15291,12 @@ export default function App() {
                           1:1
                         </button>
                       </div>
-                      <div class="projectorMapEditor">
-                        <svg
-                          class="projectorMapSurface"
-                          viewBox={`0 0 ${projectorMapViewBoxSize} ${projectorMapViewBoxSize}`}
-                          role="img"
-                        >
-                          <defs>
-                            <pattern
-                              id={`projector-map-grid-${output.id}`}
-                              width="10"
-                              height="10"
-                              patternUnits="userSpaceOnUse"
-                            >
-                              <path d="M 10 0 L 0 0 0 10" />
-                            </pattern>
-                          </defs>
-                          <rect class="projectorMapFloor" x="0" y="0" width="100" height="100" />
-                          <rect
-                            class="projectorMapGrid"
-                            x="0"
-                            y="0"
-                            width="100"
-                            height="100"
-                            fill={`url(#projector-map-grid-${output.id})`}
-                          />
-                          <line class="projectorMapAxis" x1="50" y1="0" x2="50" y2="100" />
-                          <line class="projectorMapAxis" x1="0" y1="50" x2="100" y2="50" />
-                          <polygon class="projectorMapBase" points={projectorMapBasePoints(output.mapping).join(" ")} />
-                          <polygon class="projectorMapWarp" points={projectorMapPoints(output.mapping).join(" ")} />
-                          <For each={projectorCorners}>
-                            {(corner) => {
-                              const basePoint = () => projectorMapBasePoint(output.mapping, corner);
-                              const point = () => projectorMapPoint(output.mapping, corner);
-                              return (
-                                <>
-                                  <line
-                                    class="projectorMapHandleGuide"
-                                    x1={basePoint().x}
-                                    y1={basePoint().y}
-                                    x2={point().x}
-                                    y2={point().y}
-                                  />
-                                  <circle class="projectorMapBasePoint" cx={basePoint().x} cy={basePoint().y} r="1.6" />
-                                  <circle
-                                    class="projectorMapHandle"
-                                    cx={point().x}
-                                    cy={point().y}
-                                    r="4"
-                                    tabIndex={0}
-                                    onPointerDown={(event) => {
-                                      event.currentTarget.setPointerCapture(event.pointerId);
-                                      setProjectorCornerFromPointer(event, output, corner);
-                                    }}
-                                    onPointerMove={(event) => {
-                                      if (event.buttons === 1) {
-                                        setProjectorCornerFromPointer(event, output, corner);
-                                      }
-                                    }}
-                                    onPointerUp={(event) => event.currentTarget.releasePointerCapture(event.pointerId)}
-                                  >
-                                    <title>
-                                      {corner.label} {output.label}
-                                    </title>
-                                  </circle>
-                                  <text class="projectorMapHandleLabel" x={point().x + 5} y={point().y - 5}>
-                                    {corner.label}
-                                  </text>
-                                </>
-                              );
-                            }}
-                          </For>
-                        </svg>
-                      </div>
+                      <ProjectorMapEditor
+                        mapping={output.mapping}
+                        outputId={output.id}
+                        label={output.label}
+                        onPatch={(patch) => void setVideoOutputMapping(output.id, { ...output.mapping, ...patch })}
+                      />
                       <div class="videoOutputPreviewCard">
                         <div class="sectionHeader">
                           <h4>Output Preview</h4>
@@ -11201,6 +15632,12 @@ export default function App() {
                         <button onClick={() => void openVideoOutputWindow(output.id, true)}>
                           Test Pattern
                         </button>
+                        <button onClick={() => void syncVideoOutputWindow(output.id)}>
+                          Sync Window
+                        </button>
+                        <button onClick={() => void syncVideoOutputWindow(output.id, true)}>
+                          Sync Pattern
+                        </button>
                       </Show>
                       <button onClick={() => void removeVideoOutput(output.id)}>Remove</button>
                     </div>
@@ -11226,6 +15663,154 @@ export default function App() {
             </button>
             <span>{videoPreviewInfo()}</span>
             <small>{videoPreviewDiagnosticsText()}</small>
+            <Show when={videoPreviewLayerDiagnostics().length > 0}>
+              <div class="previewDiagnosticList">
+                <For each={videoPreviewLayerDiagnostics()}>
+                  {(row) => (
+                    <div class={videoPreviewLayerDiagnosticClass(row)}>
+                      <strong>{row.ready ? "Ready" : row.queue_len > 0 ? "Warm" : "Wait"}</strong>
+                      <span>{row.label}</span>
+                      <small title={videoPreviewLayerDiagnosticLabel(row)}>
+                        {videoPreviewLayerDiagnosticLabel(row)}
+                      </small>
+                    </div>
+                  )}
+                </For>
+              </div>
+            </Show>
+            <Show when={videoPreviewOutputDecodePlans().length > 0}>
+              <div class="previewDiagnosticList">
+                <For each={videoPreviewOutputDecodePlans()}>
+                  {(row) => (
+                    <div class={videoPreviewOutputDecodePlanClass(row)}>
+                      <strong>{row.error ? "Error" : row.report?.rejected_full ? "Full" : "Plan"}</strong>
+                      <span>{row.label}</span>
+                      <small title={videoPreviewOutputDecodePlanLabel(row)}>
+                        {videoPreviewOutputDecodePlanLabel(row)}
+                      </small>
+                    </div>
+                  )}
+                </For>
+              </div>
+            </Show>
+          </div>
+          <div class="videoBackendStatus videoOutputPlanStatus">
+            <div>
+              <strong>Render Plans</strong>
+              <span>{videoOutputRenderPlanSummary()}</span>
+            </div>
+            <div class="videoBackendGrid videoOutputPlanGrid">
+              <Show when={videoOutputRenderPlans()} fallback={<small>No render plan status</small>}>
+                <Show when={videoOutputRenderPlanRows().length > 0} fallback={<small>No video outputs</small>}>
+                  <For each={videoOutputRenderPlanRows()}>
+                    {(plan) => (
+                      <span class={`videoBackendPill videoOutputPlanPill state-${plan.stateClass}`} title={plan.detail}>
+                        <strong>{plan.stateLabel}</strong>
+                        <small>{plan.label}</small>
+                        <small>{plan.endpoint}</small>
+                      </span>
+                    )}
+                  </For>
+                </Show>
+              </Show>
+            </div>
+            <button onClick={() => void refreshVideoOutputRenderPlans()}>Check Plans</button>
+          </div>
+          <div class="videoBackendStatus">
+            <div>
+              <strong>Backends</strong>
+              <span>{videoRuntimeBackendSummary()}</span>
+            </div>
+            <div class="videoBackendGrid">
+              <Show when={videoRuntimeStatus()} fallback={<small>No backend status</small>}>
+                {(status) => (
+                  <For each={status().backends}>
+                    {(backend) => (
+                      <span class={videoRuntimeBackendClass(backend.state)} title={backend.detail}>
+                        <strong>{backend.label}</strong>
+                        <small>{backend.state}</small>
+                      </span>
+                    )}
+                  </For>
+                )}
+              </Show>
+            </div>
+            <button onClick={() => void refreshVideoRuntimeStatus()}>Check Backends</button>
+          </div>
+          <div class="videoBackendStatus videoIoPlanStatus">
+            <div>
+              <strong>I/O Plans</strong>
+              <span>{externalVideoIoPlanSummary()}</span>
+              <span>{externalVideoTransportSummary()}</span>
+            </div>
+            <div class="videoBackendGrid videoIoPlanGrid">
+              <Show when={externalVideoIoPlans()} fallback={<small>No I/O plan status</small>}>
+                <Show when={externalVideoIoPlanRows().length > 0} fallback={<small>No external routes</small>}>
+                  <For each={externalVideoIoPlanRows()}>
+                    {(plan) => (
+                      <span class={externalVideoIoPlanClass(plan.stateClass)} title={`${plan.detail} / ${plan.endpoint}`}>
+                        <strong>
+                          {plan.direction} {plan.backend}
+                        </strong>
+                        <small>
+                          {plan.stateLabel} / {plan.label}
+                        </small>
+                        <small>{plan.endpoint}</small>
+                      </span>
+                    )}
+                  </For>
+                </Show>
+              </Show>
+              <Show when={externalVideoTransportActiveRows().length > 0}>
+                <For each={externalVideoTransportActiveRows()}>
+                  {(route) => (
+                    <span class={externalVideoTransportClass(route.stateClass)} title={`${route.detail} / ${route.endpoint}`}>
+                      <strong>
+                        {route.stateLabel} {route.direction}
+                      </strong>
+                      <small>
+                        {route.backend} / {route.label}
+                      </small>
+                      <small>{route.endpoint}</small>
+                    </span>
+                  )}
+                </For>
+              </Show>
+              <Show when={externalVideoTransportRows().length > 0}>
+                <For each={externalVideoTransportRows()}>
+                  {(route) => (
+                    <span class={externalVideoTransportClass(route.stateClass)} title={`${route.detail} / ${route.endpoint}`}>
+                      <strong>
+                        {route.stateLabel} {route.direction}
+                      </strong>
+                      <small>
+                        {route.backend} / {route.label}
+                      </small>
+                      <small>{route.endpoint}</small>
+                    </span>
+                  )}
+                </For>
+              </Show>
+              <Show when={externalVideoTransportEventRows().length > 0}>
+                <For each={externalVideoTransportEventRows()}>
+                  {(event) => (
+                    <span class={externalVideoTransportClass(event.stateClass)} title={`${event.detail} / ${event.endpoint}`}>
+                      <strong>
+                        Driver {event.stateLabel}
+                      </strong>
+                      <small>
+                        {event.direction} {event.backend} / {event.label}
+                      </small>
+                      <small>{event.endpoint}</small>
+                    </span>
+                  )}
+                </For>
+              </Show>
+            </div>
+            <div class="videoIoPlanActions">
+              <button onClick={() => void refreshExternalVideoIoPlans()}>Check I/O</button>
+              <button onClick={() => void syncExternalVideoTransports()}>Sync Routes</button>
+            </div>
           </div>
           <div class="videoMasterControls">
             <label>
@@ -11262,13 +15847,26 @@ export default function App() {
                 />
               </label>
             </div>
+            <div class="videoWindowStatusBar">
+              <span>{videoOutputWindowSummary()}</span>
+              <div class="buttonRow">
+                <button onClick={() => void refreshVideoOutputWindowStatuses()}>Check Windows</button>
+                <button onClick={() => void openAllVideoOutputWindows()}>Open All</button>
+                <button onClick={() => void openAllVideoOutputWindows(true)}>Pattern All</button>
+                <button onClick={() => void syncOpenVideoOutputWindows()}>Sync Open</button>
+                <button onClick={() => void closeOpenVideoOutputWindows()}>Close Open</button>
+              </div>
+            </div>
             <Show when={snapshot().video.outputs.length > 0} fallback={<span class="emptyState">No video outputs</span>}>
               <For each={snapshot().video.outputs}>
                 {(output) => {
                   const compositionLabel = () =>
                     snapshot().video.compositions.find((composition) => composition.id === output.composition_id)?.label ??
                     `Composition ${output.composition_id}`;
-                  const outputLive = () => output.enabled && !output.blackout && output.opacity > 0;
+                  const renderPlanState = () => videoOutputRenderPlanState(output);
+                  const outputWindowStatus = () => videoOutputWindowStatusForOutput(output.id);
+                  const windowState = () => videoOutputWindowState(output.id);
+                  const outputLive = () => renderPlanState().stateLabel === "Live" && output.opacity > 0;
                   return (
                     <div class={outputLive() ? "videoOutputControlItem active" : "videoOutputControlItem"}>
                       <div>
@@ -11278,6 +15876,17 @@ export default function App() {
                           {!output.enabled ? " / Disabled" : ""}
                           {output.blackout ? " / Blackout" : ""}
                         </span>
+                        <span class={`outputRenderPlanStatus state-${renderPlanState().stateClass}`}>
+                          {renderPlanState().stateLabel} / {renderPlanState().layerCount} layer
+                          {renderPlanState().layerCount === 1 ? "" : "s"}
+                        </span>
+                        <small title={renderPlanState().detail}>{renderPlanState().detail}</small>
+                        <Show when={output.kind === "Display"}>
+                          <span class={`outputWindowStatus state-${windowState().stateClass}`}>
+                            {windowState().stateLabel}
+                          </span>
+                          <small title={windowState().detail}>{windowState().detail}</small>
+                        </Show>
                         <div class="outputOpacityMeter">
                           <span style={{ width: `${Math.round(output.opacity * 100)}%` }} />
                         </div>
@@ -11296,6 +15905,18 @@ export default function App() {
                           Fade In
                         </button>
                         <button onClick={() => void setVideoOutputOpacity(output.id, 1)}>Full</button>
+                        <Show when={output.kind === "Display"}>
+                          <button onClick={() => void openVideoOutputWindow(output.id)}>Window</button>
+                          <button onClick={() => void openVideoOutputWindow(output.id, true)}>Pattern</button>
+                          <button onClick={() => void syncVideoOutputWindow(output.id)}>Sync</button>
+                          <button onClick={() => void syncVideoOutputWindow(output.id, true)}>Sync Pattern</button>
+                          <Show when={outputWindowStatus()?.live_open}>
+                            <button onClick={() => void closeVideoOutputWindow(output.id)}>Close</button>
+                          </Show>
+                          <Show when={outputWindowStatus()?.test_pattern_open}>
+                            <button onClick={() => void closeVideoOutputWindow(output.id, true)}>Close Pattern</button>
+                          </Show>
+                        </Show>
                       </div>
                     </div>
                   );
@@ -11370,6 +15991,12 @@ export default function App() {
                       Down
                     </button>
                     <button onClick={() => void duplicateVideoLayer(layer)}>Duplicate</button>
+                    <button
+                      onClick={() => void refreshVideoLayerMetadata(layer.id)}
+                      disabled={layer.source.kind !== "File" && layer.source.kind !== "StillImage"}
+                    >
+                      Refresh Metadata
+                    </button>
                   </div>
                   <label>
                     Blend
@@ -12301,6 +16928,9 @@ export default function App() {
                         <button onClick={() => void setFixturePark(fixture().id, !fixture().parked)}>
                           {fixture().parked ? "Clear Park" : "Park"}
                         </button>
+                        <button disabled={!globalFixtureFlagState().anyFlagged} onClick={() => void clearFixtureFlags("all")}>
+                          Clear Flags
+                        </button>
                       </>
                     }
                   >
@@ -12323,6 +16953,9 @@ export default function App() {
                           onClick={() => void setGroupPark(groupId(), !selectedGroupFlagState().anyParked)}
                         >
                           {selectedGroupFlagState().anyParked ? "Clear Group Park" : "Group Park"}
+                        </button>
+                        <button disabled={!globalFixtureFlagState().anyFlagged} onClick={() => void clearFixtureFlags("all")}>
+                          Clear Flags
                         </button>
                       </>
                     )}
@@ -12429,430 +17062,163 @@ export default function App() {
             <div class="attributeEditorBody">
           <Show when={showDimmerPanel() ? selectedDimmerControl() : undefined}>
             {(dimmerControl) => (
-              <div class="visualControlPanel dimmerControlPanel">
-                <div class="visualControlHeader">
-                  <div>
-                    <strong>Dimmer</strong>
-                    <span>{Math.round((dimmerControl().value / 65535) * 1000) / 10}%</span>
-                  </div>
-                  <span>{dimmerControl().attribute}</span>
-                </div>
-                <div class="dimmerQuickRow">
-                  <button onClick={() => setDimmerValue(0)}>Out</button>
-                  <button onClick={() => setDimmerValue(32768)}>Half</button>
-                  <button class="primary" onClick={() => setDimmerValue(65535)}>Full</button>
-                </div>
-                <label class="dimmerVisualSlider">
-                  Level
-                  <input
-                    type="range"
-                    min={normalizeLimitRange(selectedFixtureLimits().dimmer_min, selectedFixtureLimits().dimmer_max).min}
-                    max={normalizeLimitRange(selectedFixtureLimits().dimmer_min, selectedFixtureLimits().dimmer_max).max}
-                    value={dimmerControl().value}
-                    onInput={(event) => setDimmerValue(Number(event.currentTarget.value))}
-                  />
-                  <span>{dimmerControl().value}</span>
-                </label>
-              </div>
+              <DimmerControlPanel
+                control={dimmerControl()}
+                sliderMin={dimmerSliderRange().min}
+                sliderMax={dimmerSliderRange().max}
+                canEditLimits={Boolean(selectedFixture())}
+                limitsDraft={selectedFixtureLimitsDraft()}
+                normalizedLimits={normalizedSelectedFixtureLimitsDraft()}
+                formatDmxPercent={formatDmxPercent}
+                applyLimitsLabel={selectedFixture() ? "Apply to Fixture" : "No Fixture"}
+                onSetValue={setDimmerValue}
+                onUpdateLimit={(field, value) => updateSelectedFixtureLimit(field, value)}
+                onResetLimits={resetSelectedDimmerLimits}
+                onApplyLimits={applySelectedFixtureLimits}
+              />
             )}
           </Show>
           <Show when={showPositionPad() ? selectedPositionControls() : undefined}>
             {(positionControls) => (
-              <div class="visualControlPanel">
-                <div class="visualControlHeader">
-                  <div>
-                    <strong>Position</strong>
-                    <span>
-                      Pan {Math.round((positionControls().panValue / 65535) * 1000) / 10}% / Tilt{" "}
-                      {Math.round((positionControls().tiltValue / 65535) * 1000) / 10}%
-                    </span>
-                  </div>
-                  <span>{positionControls().pan} / {positionControls().tilt}</span>
-                </div>
-                <div class="positionNudgeGrid">
-                  <span />
-                  <button onClick={() => nudgePanTilt(0, panTiltNudgeAmount())}>Tilt +</button>
-                  <span />
-                  <button onClick={() => nudgePanTilt(-panTiltNudgeAmount(), 0)}>Pan -</button>
-                  <button class="primary" onClick={centerPanTilt}>Center</button>
-                  <button onClick={() => nudgePanTilt(panTiltNudgeAmount(), 0)}>Pan +</button>
-                  <span />
-                  <button onClick={() => nudgePanTilt(0, -panTiltNudgeAmount())}>Tilt -</button>
-                  <span />
-                </div>
-                <div class="visualNumberGrid positionDirectGrid">
-                  <label>
-                    Pan %
-                    <input
-                      type="number"
-                      min="0"
-                      max="100"
-                      step="0.1"
-                      value={dmxValueToPercent(positionControls().panValue)}
-                      onInput={(event) => setPanTiltPercent("pan", Number(event.currentTarget.value))}
-                    />
-                  </label>
-                  <label>
-                    Tilt %
-                    <input
-                      type="number"
-                      min="0"
-                      max="100"
-                      step="0.1"
-                      value={dmxValueToPercent(positionControls().tiltValue)}
-                      onInput={(event) => setPanTiltPercent("tilt", Number(event.currentTarget.value))}
-                    />
-                  </label>
-                  <label>
-                    Nudge
-                    <select
-                      value={panTiltNudgeAmount()}
-                      onChange={(event) => setPanTiltNudgeAmount(Number(event.currentTarget.value))}
-                    >
-                      <For each={panTiltNudgeSteps}>
-                        {(step) => <option value={step.value}>{step.label}</option>}
-                      </For>
-                    </select>
-                  </label>
-                </div>
-                <div class="positionFavoritePanel">
-                  <div class="swatchHeader">
-                    <strong>Position Favorites</strong>
-                    <div class="miniButtonRow">
-                      <button onClick={addCurrentPositionFavorite}>+</button>
-                      <button onClick={resetPositionFavorites}>Reset</button>
-                    </div>
-                  </div>
-                  <div class="positionFavoriteGrid">
-                    <For each={positionFavorites()}>
-                      {(favorite) => (
-                        <button
-                          class={
-                            favorite.pan === clampDmxValue(positionControls().panValue) &&
-                            favorite.tilt === clampDmxValue(positionControls().tiltValue)
-                              ? "positionFavorite active"
-                              : "positionFavorite"
-                          }
-                          title={`${favorite.label}: Pan ${formatShortDmxPercent(favorite.pan)} / Tilt ${formatShortDmxPercent(favorite.tilt)}. Shift-click removes.`}
-                          onClick={(event) => {
-                            if (event.shiftKey) {
-                              removePositionFavorite(favorite.id);
-                            } else {
-                              void setPanTiltValues(favorite.pan, favorite.tilt);
-                            }
-                          }}
-                        >
-                          <span class="positionFavoriteMap">
-                            <i
-                              style={{
-                                left: `${(favorite.pan / 65_535) * 100}%`,
-                                top: `${100 - (favorite.tilt / 65_535) * 100}%`,
-                              }}
-                            />
-                          </span>
-                          <strong>{favorite.label}</strong>
-                          <small>
-                            {formatShortDmxPercent(favorite.pan)} / {formatShortDmxPercent(favorite.tilt)}
-                          </small>
-                        </button>
-                      )}
-                    </For>
-                  </div>
-                </div>
-                <div class="positionPadRow">
-                  <div
-                    class="panTiltPad"
-                    role="slider"
-                    aria-label="Pan tilt pad"
-                    aria-valuetext={`Pan ${positionControls().panValue}, Tilt ${positionControls().tiltValue}`}
-                    onPointerDown={(event) => {
-                      event.currentTarget.setPointerCapture(event.pointerId);
-                      void setPanTiltFromPointer(event);
-                    }}
-                    onPointerMove={(event) => {
-                      if (event.buttons === 1) {
-                        void setPanTiltFromPointer(event);
-                      }
-                    }}
-                    onPointerUp={(event) => event.currentTarget.releasePointerCapture(event.pointerId)}
-                  >
-                    <b class="panTiltLimitWindow" style={selectedFixtureLimitOverlayStyle()} />
-                    <i
-                      style={{
-                        left: `${(positionControls().panValue / 65535) * 100}%`,
-                        top: `${100 - (positionControls().tiltValue / 65535) * 100}%`,
-                      }}
-                    />
-                  </div>
-                  <div class="axisSliderRack">
-                    <label class="axisSlider">
-                      <span>Pan</span>
-                      <input
-                        type="range"
-                        min={normalizeLimitRange(selectedFixtureLimits().pan_min, selectedFixtureLimits().pan_max).min}
-                        max={normalizeLimitRange(selectedFixtureLimits().pan_min, selectedFixtureLimits().pan_max).max}
-                        value={positionControls().panValue}
-                        onInput={(event) => void setPanTiltValues(Number(event.currentTarget.value), positionControls().tiltValue)}
-                      />
-                      <small>{formatShortDmxPercent(positionControls().panValue)}</small>
-                    </label>
-                    <label class="axisSlider">
-                      <span>Tilt</span>
-                      <input
-                        type="range"
-                        min={normalizeLimitRange(selectedFixtureLimits().tilt_min, selectedFixtureLimits().tilt_max).min}
-                        max={normalizeLimitRange(selectedFixtureLimits().tilt_min, selectedFixtureLimits().tilt_max).max}
-                        value={positionControls().tiltValue}
-                        onInput={(event) => void setPanTiltValues(positionControls().panValue, Number(event.currentTarget.value))}
-                      />
-                      <small>{formatShortDmxPercent(positionControls().tiltValue)}</small>
-                    </label>
-                  </div>
-                </div>
-              </div>
+              <PositionControlPanel
+                controls={positionControls()}
+                nudgeAmount={panTiltNudgeAmount()}
+                nudgeSteps={panTiltNudgeSteps}
+                targetPoints={panTiltTargetPoints}
+                limitOverlayStyle={selectedFixtureLimitOverlayStyle()}
+                limitWindowStyle={selectedFixtureLimitWindowStyle()}
+                movementLimitDragging={Boolean(movementLimitDrag())}
+                canEditLimits={Boolean(selectedFixture())}
+                limitsDraft={selectedFixtureLimitsDraft()}
+                normalizedLimits={normalizedSelectedFixtureLimitsDraft()}
+                favorites={positionFavorites()}
+                favoriteLabel={positionFavoriteLabel()}
+                formatDmxPercent={formatDmxPercent}
+                formatShortDmxPercent={formatShortDmxPercent}
+                applyLimitsLabel={selectedFixture() ? "Apply to Fixture" : "No Fixture"}
+                dmxValueToPercent={dmxValueToPercent}
+                clampDmxValue={clampDmxValue}
+                onNudge={nudgePanTilt}
+                onCenter={centerPanTilt}
+                onMirrorAxis={mirrorPanTiltAxis}
+                onSetTarget={setPanTiltTargetPoint}
+                onPointerPad={(event) => void setPanTiltFromPointer(event)}
+                onPadKeyDown={handlePanTiltPadKeyDown}
+                onSetValues={(panValue, tiltValue) => void setPanTiltValues(panValue, tiltValue)}
+                onSetPercent={setPanTiltPercent}
+                onSetNudgeAmount={setPanTiltNudgeAmount}
+                onMovementLimitPointerDown={startMovementLimitDrag}
+                onMovementLimitPointerMove={dragMovementLimit}
+                onMovementLimitPointerEnd={endMovementLimitDrag}
+                onUpdateLimit={(field, value) => updateSelectedFixtureLimit(field, value)}
+                onUpdateLimitToggle={(field, value) => updateSelectedFixtureLimit(field, value)}
+                onResetMovementLimits={resetSelectedMovementLimits}
+                onApplyLimits={applySelectedFixtureLimits}
+                onSetFavoriteLabel={setPositionFavoriteLabel}
+                onAddFavorite={addCurrentPositionFavorite}
+                onResetFavorites={resetPositionFavorites}
+                onRemoveFavorite={removePositionFavorite}
+                onApplyFavorite={(pan, tilt) => void setPanTiltValues(pan, tilt)}
+              />
             )}
           </Show>
           <Show when={showColorPad() ? selectedColorControls() : undefined}>
             {(colorControls) => (
-              <div class="visualControlPanel colorControlPanel">
-                <div class="visualControlHeader">
-                  <div>
-                    <strong>Color</strong>
-                    <span>
-                      Hue {Math.round(selectedColorHsv().hue)} deg / Sat{" "}
-                      {Math.round(selectedColorHsv().saturation * 100)}%
-                    </span>
-                  </div>
-                  <span>{colorControls().red} / {colorControls().green} / {colorControls().blue}</span>
-                </div>
-                <div class="colorPickerRow">
-                  <div
-                    class="colorPlane"
-                    role="slider"
-                    aria-label="Hue and brightness pad"
-                    aria-valuetext={colorControls().value}
-                    onPointerDown={(event) => {
-                      event.currentTarget.setPointerCapture(event.pointerId);
-                      setColorFromPointer(event);
-                    }}
-                    onPointerMove={(event) => {
-                      if (event.buttons === 1) {
-                        setColorFromPointer(event);
-                      }
-                    }}
-                    onPointerUp={(event) => event.currentTarget.releasePointerCapture(event.pointerId)}
-                  >
-                    <i
-                      style={{
-                        left: `${(selectedColorHsv().hue / 360) * 100}%`,
-                        top: `${(1 - selectedColorHsv().value) * 100}%`,
-                      }}
-                    />
-                  </div>
-                  <div class="colorPickerSide">
-                    <label>
-                      Color
-                      <input
-                        type="color"
-                        value={colorControls().value}
-                        onInput={(event) => void setFixtureColor(event.currentTarget.value)}
-                      />
-                    </label>
-                    <div class="rgbChannelRack">
-                      <label class="rgbChannelSlider red">
-                        <span>Red</span>
-                        <input
-                          type="range"
-                          min="0"
-                          max="65535"
-                          value={selectedColorChannelValues().red}
-                          onInput={(event) => setColorChannelValue("red", Number(event.currentTarget.value))}
-                        />
-                        <small>{formatShortDmxPercent(selectedColorChannelValues().red)}</small>
-                      </label>
-                      <label class="rgbChannelSlider green">
-                        <span>Green</span>
-                        <input
-                          type="range"
-                          min="0"
-                          max="65535"
-                          value={selectedColorChannelValues().green}
-                          onInput={(event) => setColorChannelValue("green", Number(event.currentTarget.value))}
-                        />
-                        <small>{formatShortDmxPercent(selectedColorChannelValues().green)}</small>
-                      </label>
-                      <label class="rgbChannelSlider blue">
-                        <span>Blue</span>
-                        <input
-                          type="range"
-                          min="0"
-                          max="65535"
-                          value={selectedColorChannelValues().blue}
-                          onInput={(event) => setColorChannelValue("blue", Number(event.currentTarget.value))}
-                        />
-                        <small>{formatShortDmxPercent(selectedColorChannelValues().blue)}</small>
-                      </label>
-                    </div>
-                  </div>
-                </div>
-                <div class="visualNumberGrid hsvDirectGrid">
-                  <label>
-                    Hue
-                    <input
-                      type="number"
-                      min="0"
-                      max="360"
-                      step="1"
-                      value={Math.round(selectedColorHsv().hue)}
-                      onInput={(event) => setColorHsvValue({ hue: Number(event.currentTarget.value) })}
-                    />
-                  </label>
-                  <label>
-                    Sat %
-                    <input
-                      type="number"
-                      min="0"
-                      max="100"
-                      step="1"
-                      value={Math.round(selectedColorHsv().saturation * 100)}
-                      onInput={(event) =>
-                        setColorHsvValue({ saturation: clampRange(Number(event.currentTarget.value), 0, 100) / 100 })
-                      }
-                    />
-                  </label>
-                  <label>
-                    Val %
-                    <input
-                      type="number"
-                      min="0"
-                      max="100"
-                      step="1"
-                      value={Math.round(selectedColorHsv().value * 100)}
-                      onInput={(event) =>
-                        setColorHsvValue({ value: clampRange(Number(event.currentTarget.value), 0, 100) / 100 })
-                      }
-                    />
-                  </label>
-                </div>
-                <div class="colorSwatchPanel">
-                  <div class="swatchSection">
-                    <strong>Palette</strong>
-                    <div class="colorSwatchGrid">
-                      <For each={defaultColorPalette}>
-                        {(color) => (
-                          <button
-                            class={normalizeHexColor(color) === selectedColorHex() ? "colorSwatch active" : "colorSwatch"}
-                            style={{ "background-color": color }}
-                            title={color}
-                            onClick={() => void setFixtureColor(color)}
-                            aria-label={`Set color ${color}`}
-                          />
-                        )}
-                      </For>
-                    </div>
-                  </div>
-                  <div class="swatchSection">
-                    <div class="swatchHeader">
-                      <strong>Favorites</strong>
-                      <div class="miniButtonRow">
-                        <button onClick={addCurrentColorFavorite}>+</button>
-                        <button onClick={resetColorFavorites}>Reset</button>
-                      </div>
-                    </div>
-                    <div class="colorSwatchGrid">
-                      <For each={colorFavorites()}>
-                        {(color) => (
-                          <button
-                            class={normalizeHexColor(color) === selectedColorHex() ? "colorSwatch favorite active" : "colorSwatch favorite"}
-                            style={{ "background-color": color }}
-                            title={`${color} / Shift-click removes`}
-                            onClick={(event) => {
-                              if (event.shiftKey) {
-                                removeColorFavorite(color);
-                              } else {
-                                void setFixtureColor(color);
-                              }
-                            }}
-                            aria-label={`Favorite color ${color}`}
-                          />
-                        )}
-                      </For>
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <ColorControlPanel
+                controls={colorControls()}
+                hsv={selectedColorHsv()}
+                saturationRamp={colorSaturationRamp()}
+                autoWhite={colorAutoWhite()}
+                quickLooks={colorQuickLooks}
+                palette={defaultColorPalette}
+                favorites={colorFavorites()}
+                targetLabel={controlTargetLabel()}
+                formatPercent={formatShortDmxPercent}
+                previewForSaturation={colorPreviewForSaturation}
+                onPointerColor={setColorFromPointer}
+                onSetColor={(color) => void setFixtureColor(color)}
+                onSetAutoWhite={setColorAutoWhite}
+                onSetChannel={setColorChannelValue}
+                onSetExtraChannel={setColorExtraChannelValue}
+                onSetHsv={setColorHsvValue}
+                onAddFavorite={addCurrentColorFavorite}
+                onResetFavorites={resetColorFavorites}
+                onRemoveFavorite={removeColorFavorite}
+              />
             )}
           </Show>
+          <Show when={showColorWheelPanel()}>
+            <ColorWheelSlotPanel
+              targetLabel={controlTargetLabel()}
+              entries={colorWheelEntries()}
+              wheelMediaUrlFor={wheelMediaUrlForCurrentFixture}
+              wheelSlotMediaPath={wheelSlotMediaPath}
+              functionLabel={channelFunctionLabel}
+              functionRangeLabel={channelFunctionRangeLabel}
+              functionDetail={channelFunctionDetail}
+              onSetValue={setControlAttributeValue}
+              onApplyFunction={(control, fn) => void applyChannelFunction(control, fn)}
+            />
+          </Show>
+          <Show when={showGoboWheelPanel()}>
+            <GoboWheelSlotPanel
+              targetLabel={controlTargetLabel()}
+              entries={goboWheelEntries()}
+              wheelMediaUrlFor={wheelMediaUrlForCurrentFixture}
+              wheelSlotMediaPath={wheelSlotMediaPath}
+              functionLabel={channelFunctionLabel}
+              functionRangeLabel={channelFunctionRangeLabel}
+              functionDetail={channelFunctionDetail}
+              onSetValue={setControlAttributeValue}
+              onApplyFunction={(control, fn) => void applyChannelFunction(control, fn)}
+            />
+          </Show>
+          <Show when={showOpticsPanel()}>
+            <OpticsControlPanel
+              title={opticsPanelTitle()}
+              count={opticsEntries().length}
+              targetLabel={controlTargetLabel()}
+              entries={opticsEntries()}
+              formatShortDmxPercent={formatShortDmxPercent}
+              clampDmxValue={clampDmxValue}
+              previewClass={opticsPreviewClass}
+              previewStyle={opticsPreviewStyle}
+              presetButtons={opticsPresetButtons}
+              sortedFunctions={sortedChannelFunctions}
+              functionContainsValue={channelFunctionContainsValue}
+              functionBandStyle={channelFunctionBandStyle}
+              functionLabel={channelFunctionLabel}
+              functionRangeLabel={channelFunctionRangeLabel}
+              functionDetail={channelFunctionDetail}
+              onPointerValue={setOpticsValueFromPointer}
+              onKeyValue={setOpticsValueFromKey}
+              onSetValue={setControlAttributeValue}
+              onApplyFunction={(control, fn) => void applyChannelFunction(control, fn)}
+            />
+          </Show>
           <Show when={showCategoryQuickPanel()}>
-            <div class="visualControlPanel categoryQuickPanel">
-              <div class="visualControlHeader">
-                <div>
-                  <strong>Category Actions</strong>
-                  <span>{visibleControls().length} attribute(s)</span>
-                </div>
-                <span>{activeControlCategory()}</span>
-              </div>
-              <div class="categoryQuickRow">
-                <button onClick={() => void applyVisibleControlValues("zero")}>Zero</button>
-                <button onClick={() => void applyVisibleControlValues("mid")}>Mid</button>
-                <button onClick={() => void applyVisibleControlValues("full")}>Full</button>
-                <button class="primary" onClick={() => void applyVisibleControlValues("default")}>Default</button>
-              </div>
-              <Show when={categoryQuickLooks().length > 0}>
-                <div class="categoryLookGrid">
-                  <For each={categoryQuickLooks()}>
-                    {(look) => (
-                      <button title={look.description} onClick={() => void applyCategoryQuickLook(look)}>
-                        <strong>{look.label}</strong>
-                        <small>{look.description}</small>
-                      </button>
-                    )}
-                  </For>
-                </div>
-              </Show>
-            </div>
+            <CategoryQuickPanel
+              categoryLabel={activeControlCategoryLabel()}
+              attributeCount={visibleControls().length}
+              looks={categoryQuickLooks()}
+              onSetValueMode={(mode) => void applyVisibleControlValues(mode)}
+              onApplyLook={(look) => void applyCategoryQuickLook(look)}
+            />
           </Show>
           <Show when={visibleFunctionControls().length > 0}>
-            <div class="visualControlPanel channelFunctionPanel">
-              <div class="visualControlHeader">
-                <div>
-                  <strong>GDTF Functions</strong>
-                  <span>{visibleFunctionControls().length} attribute(s) with function ranges</span>
-                </div>
-                <span>{activeControlCategory()}</span>
-              </div>
-              <div class="channelFunctionList">
-                <For each={visibleFunctionControls()}>
-                  {(entry) => (
-                    <div class="channelFunctionGroup">
-                      <div class="channelFunctionTitle">
-                        <strong>{entry.control.attribute}</strong>
-                        <small>{entry.control.channel_name}</small>
-                      </div>
-                      <div class="channelFunctionGrid">
-                        <For each={entry.functions}>
-                          {(fn) => (
-                            <button
-                              title={`${channelFunctionLabel(fn)} / ${channelFunctionRangeLabel(fn)} / ${channelFunctionDetail(fn)}`}
-                              onClick={() => void applyChannelFunction(entry.control, fn)}
-                            >
-                              <strong>{channelFunctionLabel(fn)}</strong>
-                              <span>{channelFunctionRangeLabel(fn)}</span>
-                              <small>
-                                <Show when={normalizeHexColor(fn.wheel_slot_color)}>
-                                  {(color) => <i class="channelFunctionSwatch" style={{ "background-color": color() }} />}
-                                </Show>
-                                {channelFunctionDetail(fn)}
-                              </small>
-                            </button>
-                          )}
-                        </For>
-                      </div>
-                    </div>
-                  )}
-                </For>
-              </div>
-            </div>
+            <ChannelFunctionPanel
+              categoryLabel={activeControlCategoryLabel()}
+              entries={visibleFunctionControls()}
+              currentValue={currentControlValue}
+              clampDmxValue={clampDmxValue}
+              functionContainsValue={channelFunctionContainsValue}
+              functionBandStyle={channelFunctionBandStyle}
+              functionLabel={channelFunctionLabel}
+              functionRangeLabel={channelFunctionRangeLabel}
+              functionDetail={channelFunctionDetail}
+              functionSwatchColor={channelFunctionSwatchColor}
+              onApplyFunction={(control, fn) => void applyChannelFunction(control, fn)}
+            />
           </Show>
           <div class="faderGrid">
             <For each={visibleControls()}>
@@ -13605,6 +17971,9 @@ export default function App() {
                         </button>
                         <button onClick={setEffectVideoPositionFromWaveOrigin}>Wave Origin</button>
                         <button onClick={setEffectVideoPositionFromStageCenter}>Stage Center</button>
+                        <button onClick={setEffectVideoPositionFromSelectedStageObject} disabled={!selectedStageObject()}>
+                          Stage Object
+                        </button>
                       </div>
                       <div class="triple">
                         <label>
@@ -13681,6 +18050,9 @@ export default function App() {
                       <button onClick={setWaveOriginFromSelectedFixture} disabled={!selectedFixture()}>
                         Selected Fixture
                       </button>
+                      <button onClick={setWaveOriginFromSelectedStageObject} disabled={!selectedStageObject()}>
+                        Stage Object
+                      </button>
                       <button onClick={() => setWaveDirectionPreset(1, 0, 0)}>X</button>
                       <button onClick={() => setWaveDirectionPreset(0, 0, 1)}>Z</button>
                       <button onClick={() => setWaveDirectionPreset(0, 0, 0)}>Radial</button>
@@ -13702,6 +18074,27 @@ export default function App() {
                       </defs>
                       <rect class="stageFloor" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
                       <rect class="stageGrid" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
+                      <For each={visualizerStageObjects2d()}>
+                        {(object) => (
+                          <g
+                            class={`waveStageObject kind-${object.kind.toLowerCase()}`}
+                            transform={`translate(${object.x} ${object.z}) rotate(${object.rotationDeg})`}
+                          >
+                            <rect
+                              x={-object.width / 2}
+                              y={-object.depth / 2}
+                              width={object.width}
+                              height={object.depth}
+                              fill={object.color}
+                            />
+                            <line x1={-object.width / 2} y1="0" x2={object.width / 2} y2="0" />
+                            <line x1="0" y1={-object.depth / 2} x2="0" y2={object.depth / 2} />
+                            <text x={-object.width / 2 + 1} y={-object.depth / 2 - 1}>
+                              {object.label}
+                            </text>
+                          </g>
+                        )}
+                      </For>
                       <line class="waveGuideLine" x1={stageOrigin2d().x} y1="0" x2={stageOrigin2d().x} y2={stageViewBoxSize} />
                       <line class="waveGuideLine" x1="0" y1={stageOrigin2d().z} x2={stageViewBoxSize} y2={stageOrigin2d().z} />
                       <For each={visualizerVideoSurfaces2d()}>
@@ -13900,6 +18293,136 @@ export default function App() {
                 Add Effect
               </button>
             </div>
+            <div class="nodeGraphPanel">
+              <div class="panelHeader">
+                <h3>Node Graph</h3>
+                <div class="panelHeaderActions">
+                  <span>{snapshot().node_graphs.length}</span>
+                  <button onClick={loadNodeGraphPreset}>Load Graph</button>
+                </div>
+              </div>
+              <div class="split">
+                <label>
+                  Label
+                  <input value={nodeGraphLabel()} onInput={(event) => setNodeGraphLabel(event.currentTarget.value)} />
+                </label>
+                <label>
+                  Transform
+                  <select value={nodeGraphTransformOp()} onInput={(event) => setNodeGraphTransformOp(event.currentTarget.value as NodeGraphTransformOp)}>
+                    <option value="Scale">Scale</option>
+                    <option value="Offset">Offset</option>
+                    <option value="Clamp">Clamp</option>
+                    <option value="Invert">Invert</option>
+                    <option value="Abs">Abs</option>
+                  </select>
+                </label>
+              </div>
+              <div class="triple">
+                <label>
+                  Amount
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={nodeGraphTransformAmount()}
+                    disabled={nodeGraphTransformOp() === "Invert" || nodeGraphTransformOp() === "Abs"}
+                    onInput={(event) => setNodeGraphTransformAmount(Number(event.currentTarget.value))}
+                  />
+                </label>
+                <label>
+                  Min
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={nodeGraphTransformMin()}
+                    disabled={nodeGraphTransformOp() !== "Clamp"}
+                    onInput={(event) => setNodeGraphTransformMin(Number(event.currentTarget.value))}
+                  />
+                </label>
+                <label>
+                  Max
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={nodeGraphTransformMax()}
+                    disabled={nodeGraphTransformOp() !== "Clamp"}
+                    onInput={(event) => setNodeGraphTransformMax(Number(event.currentTarget.value))}
+                  />
+                </label>
+              </div>
+              <svg class="nodeGraphCanvas" viewBox="0 0 100 44" aria-label="Node graph preview">
+                <defs>
+                  <pattern id="node-graph-grid" width="5" height="5" patternUnits="userSpaceOnUse">
+                    <path d="M 5 0 L 0 0 0 5" />
+                  </pattern>
+                  <marker id="node-graph-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="4" markerHeight="4" orient="auto">
+                    <path d="M 0 0 L 8 4 L 0 8 z" />
+                  </marker>
+                </defs>
+                <rect class="nodeGraphCanvasBg" x="0" y="0" width="100" height="44" />
+                <line class="nodeGraphEdge" x1="31" y1="22" x2="39" y2="22" />
+                <line class="nodeGraphEdge" x1="63" y1="22" x2="71" y2="22" />
+                <g class={effectType() === "PositionWave" ? "nodeGraphNode wave" : "nodeGraphNode lfo"} transform="translate(6 10)">
+                  <rect x="0" y="0" width="25" height="24" rx="2" />
+                  <text class="nodeGraphNodeLabel" x="12.5" y="10">{nodeGraphSourceLabel()}</text>
+                  <text class="nodeGraphNodeDetail" x="12.5" y="17">
+                    {effectShape()}
+                  </text>
+                </g>
+                <g class="nodeGraphNode transform" transform="translate(38 10)">
+                  <rect x="0" y="0" width="25" height="24" rx="2" />
+                  <text class="nodeGraphNodeLabel" x="12.5" y="10">Transform</text>
+                  <text class="nodeGraphNodeDetail" x="12.5" y="17">
+                    {nodeGraphTransformLabel()}
+                  </text>
+                </g>
+                <g class="nodeGraphNode output" transform="translate(70 10)">
+                  <rect x="0" y="0" width="25" height="24" rx="2" />
+                  <text class="nodeGraphNodeLabel" x="12.5" y="10">Output</text>
+                  <text class="nodeGraphNodeDetail" x="12.5" y="17">
+                    {effectTargetMode()}
+                  </text>
+                </g>
+              </svg>
+              <div class="buttonRow">
+                <button class="primary" onClick={saveNodeGraphFromForm} disabled={Boolean(effectTargetOverrideError())}>
+                  Save Graph
+                </button>
+                <button onClick={() => {
+                  setNodeGraphTransformOp("Scale");
+                  setNodeGraphTransformAmount(1);
+                  setNodeGraphTransformMin(0);
+                  setNodeGraphTransformMax(1);
+                }}>
+                  Reset Transform
+                </button>
+              </div>
+              <Show when={snapshot().node_graphs.length > 0}>
+                <div class="effectList nodeGraphList">
+                  <For each={snapshot().node_graphs}>
+                    {(graph) => (
+                      <div class={graph.enabled ? "effectItem" : "effectItem editing"}>
+                        <div class="effectItemSummary">
+                          <strong>{graph.label}</strong>
+                          <span>{nodeGraphTargetLabel(graph)}</span>
+                          <div class="nodeGraphMetaRow">
+                            <span class={`nodeGraphMetaChip ${graph.nodes.some((node) => node.kind === "PositionWave") ? "wave" : "lfo"}`}>
+                              {graph.nodes.some((node) => node.kind === "PositionWave") ? "Wave" : "LFO"}
+                            </span>
+                            <span class="nodeGraphMetaChip">{graph.nodes.length} node(s)</span>
+                            <span class="nodeGraphMetaChip target">{graph.edges.length} edge(s)</span>
+                          </div>
+                        </div>
+                        <button onClick={() => void setNodeGraphEnabled(graph.id, !graph.enabled)}>
+                          {graph.enabled ? "Disable" : "Enable"}
+                        </button>
+                        <button onClick={() => void saveNodeGraphPreset(graph.id)}>Save</button>
+                        <button onClick={() => void removeNodeGraph(graph.id)}>Remove</button>
+                      </div>
+                    )}
+                  </For>
+                </div>
+              </Show>
+            </div>
             <div class="effectList">
               <For each={snapshot().effects}>
                 {(effect, index) => (
@@ -14013,8 +18536,10 @@ export default function App() {
             </div>
           </Show>
           <div class="blackout">
-            <button onClick={() => setBlackout(true)}>Blackout</button>
-            <button onClick={() => setBlackout(false)}>Clear</button>
+            <button onClick={() => setBlackout(true)}>DMX BO</button>
+            <button onClick={() => setBlackout(false)}>DMX Clear</button>
+            <button onClick={() => setAllBlackout(true)}>All BO</button>
+            <button onClick={() => setAllBlackout(false)}>All Clear</button>
           </div>
           <div class="clock">
             <h3>Clock</h3>
@@ -14114,30 +18639,49 @@ export default function App() {
                 </label>
                 <label>
                   Action
-                  <select value={midiMapAction()} onInput={(event) => setMidiMapAction(event.currentTarget.value as MidiControlAction)}>
+                  <select value={midiMapAction()} onInput={(event) => setMidiControlMappingAction(event.currentTarget.value as MidiControlAction)}>
                     <option value="FixtureAttribute">Fixture Attribute</option>
+                    <option value="FixtureHighlight">Fixture Highlight</option>
+                    <option value="FixtureSolo">Fixture Solo</option>
+                    <option value="FixturePark">Fixture Park</option>
+                    <option value="GroupHighlight">Group Highlight</option>
+                    <option value="GroupSolo">Group Solo</option>
+                    <option value="GroupPark">Group Park</option>
                     <option value="TriggerCue">Trigger Cue</option>
                     <option value="TriggerNextCue">Cue Next</option>
                     <option value="TriggerPreviousCue">Cue Previous</option>
+                    <option value="EffectEnabled">Effect Enable</option>
+                    <option value="NodeGraphEnabled">Node Graph Enable</option>
                     <option value="VideoParam">Video Param</option>
                     <option value="VideoCuePointAdd">Video Cue Add</option>
                     <option value="VideoCuePointRemove">Video Cue Remove</option>
                     <option value="VideoCuePointJump">Video Cue Jump</option>
+                    <option value="VideoCuePointPrevious">Video Cue Previous</option>
+                    <option value="VideoCuePointNext">Video Cue Next</option>
                     <option value="VideoLayerEnabled">Layer Enable</option>
                     <option value="VideoLayerSolo">Layer Solo</option>
                     <option value="VideoPlay">Video Play</option>
                     <option value="VideoLoop">Video A-B Loop</option>
+                    <option value="VideoLayerFade">Layer Fade</option>
                     <option value="VideoOutputEnabled">Output Enable</option>
                     <option value="VideoOutputOpacity">Output Opacity</option>
                     <option value="VideoOutputFade">Output Fade</option>
+                    <option value="VideoOutputMappingField">Output Mapping Field</option>
+                    <option value="VideoOutputMappingPreset">Output Mapping Preset</option>
                     <option value="VideoOutputBlackout">Output Blackout</option>
                     <option value="TimelinePlay">Timeline Play</option>
                     <option value="TimelineSeek">Timeline Seek</option>
+                    <option value="TimelineBeatPrevious">Beat Previous</option>
+                    <option value="TimelineBeatNext">Beat Next</option>
                     <option value="LightingMaster">Lighting Master</option>
                     <option value="GroupSubmaster">Group Submaster</option>
+                    <option value="SetBpm">Set BPM</option>
+                    <option value="TapBpm">Tap BPM</option>
                     <option value="CueFadePause">Cue Fade Pause</option>
-                    <option value="Blackout">Blackout</option>
+                    <option value="Blackout">DMX Blackout</option>
+                    <option value="AllBlackout">All Blackout</option>
                     <option value="VideoBlackout">Video Blackout</option>
+                    <option value="ClearFixtureFlags">Clear Fixture Flags</option>
                   </select>
                 </label>
               </div>
@@ -14145,6 +18689,16 @@ export default function App() {
                 <label>
                   Attribute
                   <input value={midiMapAttribute()} onInput={(event) => setMidiMapAttribute(event.currentTarget.value)} />
+                </label>
+              </Show>
+              <Show when={midiMapAction() === "ClearFixtureFlags"}>
+                <label>
+                  Clear flags
+                  <select value={midiClearFixtureFlagKind()} onInput={(event) => setMidiMapAttribute(event.currentTarget.value)}>
+                    <For each={fixtureFlagClearKinds}>
+                      {(kind) => <option value={kind}>{kind}</option>}
+                    </For>
+                  </select>
                 </label>
               </Show>
               <Show when={midiMapAction() === "TriggerCue"}>
@@ -14157,23 +18711,34 @@ export default function App() {
                   </select>
                 </label>
               </Show>
-              <Show when={midiMapAction() === "GroupSubmaster"}>
+              <Show when={midiMapAction() === "EffectEnabled"}>
+                <label>
+                  Effect
+                  <select value={selectedMidiEffectId() ?? ""} onInput={(event) => setMidiMapEffectId(Number(event.currentTarget.value))}>
+                    <For each={snapshot().effects}>
+                      {(effect) => <option value={effect.id}>{effect.id}: {effect.label}</option>}
+                    </For>
+                  </select>
+                </label>
+              </Show>
+              <Show when={midiMapAction() === "NodeGraphEnabled"}>
+                <label>
+                  Node Graph
+                  <select value={selectedMidiNodeGraphId() ?? ""} onInput={(event) => setMidiMapNodeGraphId(Number(event.currentTarget.value))}>
+                    <For each={snapshot().node_graphs}>
+                      {(graph) => <option value={graph.id}>{graph.id}: {graph.label}</option>}
+                    </For>
+                  </select>
+                </label>
+              </Show>
+              <Show when={midiMapAction() === "GroupSubmaster" || isGroupFlagMappingAction(midiMapAction())}>
                 <label>
                   Group ID
                   <input value={midiMapGroupId()} onInput={(event) => setMidiMapGroupId(event.currentTarget.value)} />
                 </label>
               </Show>
               <Show
-                when={
-                  midiMapAction() === "VideoParam" ||
-                  midiMapAction() === "VideoCuePointAdd" ||
-                  midiMapAction() === "VideoCuePointRemove" ||
-                  midiMapAction() === "VideoCuePointJump" ||
-                  midiMapAction() === "VideoLayerEnabled" ||
-                  midiMapAction() === "VideoLayerSolo" ||
-                  midiMapAction() === "VideoPlay" ||
-                  midiMapAction() === "VideoLoop"
-                }
+                when={isVideoLayerMappingAction(midiMapAction())}
               >
                 <label>
                   Layer
@@ -14185,12 +18750,7 @@ export default function App() {
                 </label>
               </Show>
               <Show
-                when={
-                  midiMapAction() === "VideoOutputEnabled" ||
-                  midiMapAction() === "VideoOutputOpacity" ||
-                  midiMapAction() === "VideoOutputFade" ||
-                  midiMapAction() === "VideoOutputBlackout"
-                }
+                when={isVideoOutputMappingAction(midiMapAction())}
               >
                 <label>
                   Output
@@ -14200,6 +18760,36 @@ export default function App() {
                   >
                     <For each={snapshot().video.outputs}>
                       {(output) => <option value={output.id}>{output.id}: {output.label}</option>}
+                    </For>
+                  </select>
+                </label>
+              </Show>
+              <Show when={midiMapAction() === "VideoOutputMappingField"}>
+                <label>
+                  Mapping Field
+                  <select
+                    value={selectedMidiVideoOutputMappingField()}
+                    onInput={(event) => setMidiVideoOutputMappingFieldTarget(event.currentTarget.value)}
+                  >
+                    <For each={videoOutputMappingFieldOptions}>
+                      {(field) => <option value={field.value}>{field.label}</option>}
+                    </For>
+                  </select>
+                </label>
+              </Show>
+              <Show when={midiMapAction() === "VideoOutputMappingPreset"}>
+                <label>
+                  Mapping Preset
+                  <select
+                    value={selectedMidiVideoOutputMappingPresetLabel()}
+                    disabled={snapshot().video.mapping_presets.length === 0}
+                    onInput={(event) => setMidiMapVideoOutputMappingPresetLabel(event.currentTarget.value)}
+                  >
+                    <Show when={snapshot().video.mapping_presets.length === 0}>
+                      <option value="">No presets</option>
+                    </Show>
+                    <For each={snapshot().video.mapping_presets}>
+                      {(preset) => <option value={preset.label}>{preset.label}</option>}
                     </For>
                   </select>
                 </label>
@@ -14241,19 +18831,31 @@ export default function App() {
                   <input type="number" min="0" value={midiMapCuePointIndex()} onInput={(event) => setMidiMapCuePointIndex(Number(event.currentTarget.value))} />
                 </label>
               </Show>
-              <Show when={midiMapAction() === "VideoOutputFade" || midiMapAction() === "VideoCuePointAdd" || midiMapAction() === "VideoCuePointRemove"}>
+              <Show when={midiMapAction() === "VideoOutputFade" || midiMapAction() === "VideoLayerFade" || midiMapAction() === "VideoCuePointAdd" || midiMapAction() === "VideoCuePointRemove"}>
                 <label>
-                  {midiMapAction() === "VideoOutputFade" ? "Fade ms" : "Cue point ms"}
+                  {midiMapAction() === "VideoOutputFade" || midiMapAction() === "VideoLayerFade" ? "Fade ms" : "Cue point ms"}
                   <input type="number" min="0" step="10" value={midiMapDurationMs()} onInput={(event) => setMidiMapDurationMs(Number(event.currentTarget.value))} />
                 </label>
               </Show>
               <div class="split">
                 <label>
-                  {midiMapAction() === "VideoLoop" ? "Loop In ms" : "Low"}
+                  {midiMapAction() === "VideoLoop"
+                    ? "Loop In ms"
+                    : midiMapAction() === "SetBpm"
+                      ? "BPM Low"
+                      : midiMapAction() === "VideoOutputMappingField"
+                        ? "Field Low"
+                        : "Low"}
                   <input type="number" value={midiMapLow()} onInput={(event) => setMidiMapLow(Number(event.currentTarget.value))} />
                 </label>
                 <label>
-                  {midiMapAction() === "VideoLoop" ? "Loop Out ms" : "High"}
+                  {midiMapAction() === "VideoLoop"
+                    ? "Loop Out ms"
+                    : midiMapAction() === "SetBpm"
+                      ? "BPM High"
+                      : midiMapAction() === "VideoOutputMappingField"
+                        ? "Field High"
+                        : "High"}
                   <input type="number" value={midiMapHigh()} onInput={(event) => setMidiMapHigh(Number(event.currentTarget.value))} />
                 </label>
               </div>
@@ -14321,30 +18923,49 @@ export default function App() {
               <div class="split">
                 <label>
                   Action
-                  <select value={oscMapAction()} onInput={(event) => setOscMapAction(event.currentTarget.value as OscControlAction)}>
+                  <select value={oscMapAction()} onInput={(event) => setOscControlMappingAction(event.currentTarget.value as OscControlAction)}>
                     <option value="FixtureAttribute">Fixture Attribute</option>
+                    <option value="FixtureHighlight">Fixture Highlight</option>
+                    <option value="FixtureSolo">Fixture Solo</option>
+                    <option value="FixturePark">Fixture Park</option>
+                    <option value="GroupHighlight">Group Highlight</option>
+                    <option value="GroupSolo">Group Solo</option>
+                    <option value="GroupPark">Group Park</option>
                     <option value="TriggerCue">Trigger Cue</option>
                     <option value="TriggerNextCue">Cue Next</option>
                     <option value="TriggerPreviousCue">Cue Previous</option>
+                    <option value="EffectEnabled">Effect Enable</option>
+                    <option value="NodeGraphEnabled">Node Graph Enable</option>
                     <option value="VideoParam">Video Param</option>
                     <option value="VideoCuePointAdd">Video Cue Add</option>
                     <option value="VideoCuePointRemove">Video Cue Remove</option>
                     <option value="VideoCuePointJump">Video Cue Jump</option>
+                    <option value="VideoCuePointPrevious">Video Cue Previous</option>
+                    <option value="VideoCuePointNext">Video Cue Next</option>
                     <option value="VideoLayerEnabled">Layer Enable</option>
                     <option value="VideoLayerSolo">Layer Solo</option>
                     <option value="VideoPlay">Video Play</option>
                     <option value="VideoLoop">Video A-B Loop</option>
+                    <option value="VideoLayerFade">Layer Fade</option>
                     <option value="VideoOutputEnabled">Output Enable</option>
                     <option value="VideoOutputOpacity">Output Opacity</option>
                     <option value="VideoOutputFade">Output Fade</option>
+                    <option value="VideoOutputMappingField">Output Mapping Field</option>
+                    <option value="VideoOutputMappingPreset">Output Mapping Preset</option>
                     <option value="VideoOutputBlackout">Output Blackout</option>
                     <option value="TimelinePlay">Timeline Play</option>
                     <option value="TimelineSeek">Timeline Seek</option>
+                    <option value="TimelineBeatPrevious">Beat Previous</option>
+                    <option value="TimelineBeatNext">Beat Next</option>
                     <option value="LightingMaster">Lighting Master</option>
                     <option value="GroupSubmaster">Group Submaster</option>
+                    <option value="SetBpm">Set BPM</option>
+                    <option value="TapBpm">Tap BPM</option>
                     <option value="CueFadePause">Cue Fade Pause</option>
-                    <option value="Blackout">Blackout</option>
+                    <option value="Blackout">DMX Blackout</option>
+                    <option value="AllBlackout">All Blackout</option>
                     <option value="VideoBlackout">Video Blackout</option>
+                    <option value="ClearFixtureFlags">Clear Fixture Flags</option>
                   </select>
                 </label>
                 <label>
@@ -14352,6 +18973,16 @@ export default function App() {
                   <input value={oscMapAttribute()} onInput={(event) => setOscMapAttribute(event.currentTarget.value)} disabled={oscMapAction() !== "FixtureAttribute"} />
                 </label>
               </div>
+              <Show when={oscMapAction() === "ClearFixtureFlags"}>
+                <label>
+                  Clear flags
+                  <select value={oscClearFixtureFlagKind()} onInput={(event) => setOscMapAttribute(event.currentTarget.value)}>
+                    <For each={fixtureFlagClearKinds}>
+                      {(kind) => <option value={kind}>{kind}</option>}
+                    </For>
+                  </select>
+                </label>
+              </Show>
               <Show when={oscMapAction() === "TriggerCue"}>
                 <label>
                   Cue
@@ -14362,23 +18993,34 @@ export default function App() {
                   </select>
                 </label>
               </Show>
-              <Show when={oscMapAction() === "GroupSubmaster"}>
+              <Show when={oscMapAction() === "EffectEnabled"}>
+                <label>
+                  Effect
+                  <select value={selectedOscEffectId() ?? ""} onInput={(event) => setOscMapEffectId(Number(event.currentTarget.value))}>
+                    <For each={snapshot().effects}>
+                      {(effect) => <option value={effect.id}>{effect.id}: {effect.label}</option>}
+                    </For>
+                  </select>
+                </label>
+              </Show>
+              <Show when={oscMapAction() === "NodeGraphEnabled"}>
+                <label>
+                  Node Graph
+                  <select value={selectedOscNodeGraphId() ?? ""} onInput={(event) => setOscMapNodeGraphId(Number(event.currentTarget.value))}>
+                    <For each={snapshot().node_graphs}>
+                      {(graph) => <option value={graph.id}>{graph.id}: {graph.label}</option>}
+                    </For>
+                  </select>
+                </label>
+              </Show>
+              <Show when={oscMapAction() === "GroupSubmaster" || isGroupFlagMappingAction(oscMapAction())}>
                 <label>
                   Group ID
                   <input value={oscMapGroupId()} onInput={(event) => setOscMapGroupId(event.currentTarget.value)} />
                 </label>
               </Show>
               <Show
-                when={
-                  oscMapAction() === "VideoParam" ||
-                  oscMapAction() === "VideoCuePointAdd" ||
-                  oscMapAction() === "VideoCuePointRemove" ||
-                  oscMapAction() === "VideoCuePointJump" ||
-                  oscMapAction() === "VideoLayerEnabled" ||
-                  oscMapAction() === "VideoLayerSolo" ||
-                  oscMapAction() === "VideoPlay" ||
-                  oscMapAction() === "VideoLoop"
-                }
+                when={isVideoLayerMappingAction(oscMapAction())}
               >
                 <label>
                   Layer
@@ -14390,12 +19032,7 @@ export default function App() {
                 </label>
               </Show>
               <Show
-                when={
-                  oscMapAction() === "VideoOutputEnabled" ||
-                  oscMapAction() === "VideoOutputOpacity" ||
-                  oscMapAction() === "VideoOutputFade" ||
-                  oscMapAction() === "VideoOutputBlackout"
-                }
+                when={isVideoOutputMappingAction(oscMapAction())}
               >
                 <label>
                   Output
@@ -14405,6 +19042,36 @@ export default function App() {
                   >
                     <For each={snapshot().video.outputs}>
                       {(output) => <option value={output.id}>{output.id}: {output.label}</option>}
+                    </For>
+                  </select>
+                </label>
+              </Show>
+              <Show when={oscMapAction() === "VideoOutputMappingField"}>
+                <label>
+                  Mapping Field
+                  <select
+                    value={selectedOscVideoOutputMappingField()}
+                    onInput={(event) => setOscVideoOutputMappingFieldTarget(event.currentTarget.value)}
+                  >
+                    <For each={videoOutputMappingFieldOptions}>
+                      {(field) => <option value={field.value}>{field.label}</option>}
+                    </For>
+                  </select>
+                </label>
+              </Show>
+              <Show when={oscMapAction() === "VideoOutputMappingPreset"}>
+                <label>
+                  Mapping Preset
+                  <select
+                    value={selectedOscVideoOutputMappingPresetLabel()}
+                    disabled={snapshot().video.mapping_presets.length === 0}
+                    onInput={(event) => setOscMapVideoOutputMappingPresetLabel(event.currentTarget.value)}
+                  >
+                    <Show when={snapshot().video.mapping_presets.length === 0}>
+                      <option value="">No presets</option>
+                    </Show>
+                    <For each={snapshot().video.mapping_presets}>
+                      {(preset) => <option value={preset.label}>{preset.label}</option>}
                     </For>
                   </select>
                 </label>
@@ -14446,19 +19113,31 @@ export default function App() {
                   <input type="number" min="0" value={oscMapCuePointIndex()} onInput={(event) => setOscMapCuePointIndex(Number(event.currentTarget.value))} />
                 </label>
               </Show>
-              <Show when={oscMapAction() === "VideoOutputFade" || oscMapAction() === "VideoCuePointAdd" || oscMapAction() === "VideoCuePointRemove"}>
+              <Show when={oscMapAction() === "VideoOutputFade" || oscMapAction() === "VideoLayerFade" || oscMapAction() === "VideoCuePointAdd" || oscMapAction() === "VideoCuePointRemove"}>
                 <label>
-                  {oscMapAction() === "VideoOutputFade" ? "Fade ms" : "Cue point ms"}
+                  {oscMapAction() === "VideoOutputFade" || oscMapAction() === "VideoLayerFade" ? "Fade ms" : "Cue point ms"}
                   <input type="number" min="0" step="10" value={oscMapDurationMs()} onInput={(event) => setOscMapDurationMs(Number(event.currentTarget.value))} />
                 </label>
               </Show>
               <div class="split">
                 <label>
-                  {oscMapAction() === "VideoLoop" ? "Loop In ms" : "Low"}
+                  {oscMapAction() === "VideoLoop"
+                    ? "Loop In ms"
+                    : oscMapAction() === "SetBpm"
+                      ? "BPM Low"
+                      : oscMapAction() === "VideoOutputMappingField"
+                        ? "Field Low"
+                        : "Low"}
                   <input type="number" value={oscMapLow()} onInput={(event) => setOscMapLow(Number(event.currentTarget.value))} />
                 </label>
                 <label>
-                  {oscMapAction() === "VideoLoop" ? "Loop Out ms" : "High"}
+                  {oscMapAction() === "VideoLoop"
+                    ? "Loop Out ms"
+                    : oscMapAction() === "SetBpm"
+                      ? "BPM High"
+                      : oscMapAction() === "VideoOutputMappingField"
+                        ? "Field High"
+                        : "High"}
                   <input type="number" value={oscMapHigh()} onInput={(event) => setOscMapHigh(Number(event.currentTarget.value))} />
                 </label>
               </div>

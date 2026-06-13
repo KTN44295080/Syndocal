@@ -86,6 +86,153 @@ pub struct VideoOutputRenderPlan {
     pub composition: CompositionPlan,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExternalVideoInputPlan {
+    pub layer_id: VideoLayerId,
+    pub label: String,
+    pub kind: VideoSourceKind,
+    pub backend_id: String,
+    pub endpoint_name: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExternalVideoOutputPlan {
+    pub output_id: VideoOutputId,
+    pub label: String,
+    pub kind: VideoOutputKind,
+    pub backend_id: String,
+    pub endpoint_name: String,
+    pub enabled: bool,
+    pub width: u32,
+    pub height: u32,
+    pub opacity: f32,
+    pub blackout: bool,
+    pub composition_id: CompositionId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExternalVideoIoRoutePlans {
+    pub inputs: Vec<ExternalVideoInputRoutePlan>,
+    pub outputs: Vec<ExternalVideoOutputRoutePlan>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExternalVideoInputRoutePlan {
+    pub layer_id: VideoLayerId,
+    pub label: String,
+    pub kind: VideoSourceKind,
+    pub backend_id: String,
+    pub backend_label: Option<String>,
+    pub backend_state: Option<VideoBackendState>,
+    pub backend_detail: Option<String>,
+    pub endpoint_name: String,
+    pub enabled: bool,
+    pub ready: bool,
+    pub live: bool,
+    pub issue: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExternalVideoOutputRoutePlan {
+    pub output_id: VideoOutputId,
+    pub label: String,
+    pub kind: VideoOutputKind,
+    pub backend_id: String,
+    pub backend_label: Option<String>,
+    pub backend_state: Option<VideoBackendState>,
+    pub backend_detail: Option<String>,
+    pub endpoint_name: String,
+    pub enabled: bool,
+    pub width: u32,
+    pub height: u32,
+    pub opacity: f32,
+    pub blackout: bool,
+    pub composition_id: CompositionId,
+    pub ready: bool,
+    pub live: bool,
+    pub issue: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExternalVideoBackendRouteState {
+    label: Option<String>,
+    state: Option<VideoBackendState>,
+    detail: Option<String>,
+    ready: bool,
+    issue: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ExternalVideoTransportDirection {
+    Input,
+    Output,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalVideoTransportRoute {
+    pub direction: ExternalVideoTransportDirection,
+    pub route_id: u64,
+    pub label: String,
+    pub backend_id: String,
+    pub endpoint_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalVideoTransportBlockedRoute {
+    pub route: ExternalVideoTransportRoute,
+    pub issue: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalVideoTransportFailedRoute {
+    pub route: ExternalVideoTransportRoute,
+    pub issue: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalVideoTransportSyncReport {
+    pub started: Vec<ExternalVideoTransportRoute>,
+    pub kept: Vec<ExternalVideoTransportRoute>,
+    pub stopped: Vec<ExternalVideoTransportRoute>,
+    pub blocked: Vec<ExternalVideoTransportBlockedRoute>,
+    pub start_failed: Vec<ExternalVideoTransportFailedRoute>,
+    pub stop_failed: Vec<ExternalVideoTransportFailedRoute>,
+    pub idle: Vec<ExternalVideoTransportRoute>,
+    pub active_count: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalVideoTransportStatus {
+    pub active_routes: Vec<ExternalVideoTransportRoute>,
+    pub active_count: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ExternalVideoTransportRuntime {
+    active_routes: Vec<ExternalVideoTransportRoute>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalVideoTransportDriverError {
+    pub message: String,
+}
+
+pub trait ExternalVideoTransportDriver {
+    fn start_route(
+        &mut self,
+        route: &ExternalVideoTransportRoute,
+    ) -> Result<(), ExternalVideoTransportDriverError>;
+
+    fn stop_route(
+        &mut self,
+        route: &ExternalVideoTransportRoute,
+    ) -> Result<(), ExternalVideoTransportDriverError>;
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct NoopExternalVideoTransportDriver;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CpuCompositeError {
     InvalidOutputSize,
@@ -224,6 +371,89 @@ pub struct VideoFrameRequest {
     pub height: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoDecodePriority {
+    Current,
+    Lookahead,
+    Background,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScheduledVideoDecode {
+    pub request: VideoFrameRequest,
+    pub priority: VideoDecodePriority,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoDecodeSchedulePush {
+    Inserted,
+    Duplicate,
+    Reprioritized,
+    DroppedLowerPriority,
+    RejectedFull,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoDecodeEnqueueReport {
+    pub layers_considered: usize,
+    pub requests_attempted: usize,
+    pub inserted: usize,
+    pub duplicate: usize,
+    pub reprioritized: usize,
+    pub dropped_lower_priority: usize,
+    pub rejected_full: usize,
+    pub pending: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VideoDecodeWarmupReport {
+    pub enqueue: VideoDecodeEnqueueReport,
+    pub decode: VideoDecodeWorkerReport,
+}
+
+#[derive(Debug, Clone)]
+pub struct VideoDecodeScheduler {
+    capacity: usize,
+    sequence: u64,
+    jobs: Vec<ScheduledVideoDecodeJob>,
+}
+
+pub struct VideoDecodeWorker<D = NullVideoDecoder> {
+    scheduler: VideoDecodeScheduler,
+    decoder: D,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VideoDecodeWorkerReport {
+    pub attempted: usize,
+    pub decoded: usize,
+    pub skipped: usize,
+    pub pending: usize,
+    pub errors: Vec<VideoDecodeWorkerError>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoDecodeWorkerStep {
+    Decoded(FrameQueuePush),
+    Skipped,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VideoDecodeWorkerError {
+    pub layer_id: VideoLayerId,
+    pub label: String,
+    pub position_ms: u64,
+    pub priority: VideoDecodePriority,
+    pub error: VideoDecodeError,
+}
+
+#[derive(Debug, Clone)]
+struct ScheduledVideoDecodeJob {
+    request: VideoFrameRequest,
+    priority: VideoDecodePriority,
+    sequence: u64,
+}
+
 impl From<CpuCompositeError> for VideoRuntimeError {
     fn from(error: CpuCompositeError) -> Self {
         Self::Composite(error)
@@ -255,6 +485,436 @@ impl From<VideoFrameProviderError> for VideoPreviewError {
                 error,
             },
         }
+    }
+}
+
+impl VideoDecodePriority {
+    fn rank(self) -> u8 {
+        match self {
+            Self::Current => 0,
+            Self::Lookahead => 1,
+            Self::Background => 2,
+        }
+    }
+}
+
+impl VideoDecodeScheduler {
+    pub fn new(capacity: usize) -> Self {
+        assert!(
+            capacity > 0,
+            "decode scheduler capacity must be greater than zero"
+        );
+        Self {
+            capacity,
+            sequence: 0,
+            jobs: Vec::new(),
+        }
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    pub fn len(&self) -> usize {
+        self.jobs.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.jobs.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.jobs.clear();
+    }
+
+    pub fn retain_layers(&mut self, layer_ids: &[VideoLayerId]) {
+        self.jobs.retain(|job| {
+            layer_ids
+                .iter()
+                .any(|layer_id| *layer_id == job.request.layer_id)
+        });
+    }
+
+    pub fn push(
+        &mut self,
+        request: VideoFrameRequest,
+        priority: VideoDecodePriority,
+    ) -> VideoDecodeSchedulePush {
+        if let Some(index) = self
+            .jobs
+            .iter()
+            .position(|job| video_decode_request_key_matches(&job.request, &request))
+        {
+            if priority.rank() < self.jobs[index].priority.rank() {
+                let sequence = self.next_sequence();
+                self.jobs[index].request = request;
+                self.jobs[index].priority = priority;
+                self.jobs[index].sequence = sequence;
+                return VideoDecodeSchedulePush::Reprioritized;
+            }
+            return VideoDecodeSchedulePush::Duplicate;
+        }
+
+        if self.jobs.len() < self.capacity {
+            self.insert(request, priority);
+            return VideoDecodeSchedulePush::Inserted;
+        }
+
+        let Some(worst_index) = self.worst_job_index() else {
+            return VideoDecodeSchedulePush::RejectedFull;
+        };
+        if priority.rank() < self.jobs[worst_index].priority.rank() {
+            self.jobs.remove(worst_index);
+            self.insert(request, priority);
+            return VideoDecodeSchedulePush::DroppedLowerPriority;
+        }
+        VideoDecodeSchedulePush::RejectedFull
+    }
+
+    pub fn push_layer_preview(
+        &mut self,
+        layer: &VideoLayerSummary,
+        width: u32,
+        height: u32,
+        prefetch_count: usize,
+        prefetch_interval_ms: u64,
+        bpm: Option<f32>,
+    ) -> Vec<VideoDecodeSchedulePush> {
+        preview_decode_requests_for_layer(
+            layer,
+            width,
+            height,
+            prefetch_count,
+            prefetch_interval_ms,
+            bpm,
+        )
+        .into_iter()
+        .enumerate()
+        .map(|(index, request)| {
+            self.push(
+                request,
+                if index == 0 {
+                    VideoDecodePriority::Current
+                } else {
+                    VideoDecodePriority::Lookahead
+                },
+            )
+        })
+        .collect()
+    }
+
+    pub fn push_composition_preview(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        composition_id: Option<CompositionId>,
+        width: u32,
+        height: u32,
+        prefetch_count: usize,
+        prefetch_interval_ms: u64,
+        bpm: Option<f32>,
+    ) -> Result<VideoDecodeEnqueueReport, VideoRuntimeError> {
+        let plan = match composition_id {
+            Some(composition_id) => build_composition_plans(snapshot)
+                .into_iter()
+                .find(|plan| plan.composition_id == composition_id)
+                .ok_or(VideoRuntimeError::MissingComposition)?,
+            None => build_composition_plans(snapshot)
+                .into_iter()
+                .next()
+                .ok_or(VideoRuntimeError::MissingComposition)?,
+        };
+        Ok(self.push_composition_layer_previews(
+            snapshot,
+            plan.layers.iter().map(|layer| layer.layer_id),
+            width,
+            height,
+            prefetch_count,
+            prefetch_interval_ms,
+            bpm,
+        ))
+    }
+
+    pub fn push_output_preview(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        output_id: VideoOutputId,
+        width: u32,
+        height: u32,
+        prefetch_count: usize,
+        prefetch_interval_ms: u64,
+        bpm: Option<f32>,
+    ) -> Result<VideoDecodeEnqueueReport, VideoOutputRenderError> {
+        let plan = build_video_output_render_plan(snapshot, output_id)?;
+        Ok(self.push_composition_layer_previews(
+            snapshot,
+            plan.composition.layers.iter().map(|layer| layer.layer_id),
+            width,
+            height,
+            prefetch_count,
+            prefetch_interval_ms,
+            bpm,
+        ))
+    }
+
+    pub fn pop_next(&mut self) -> Option<ScheduledVideoDecode> {
+        let index = self.best_job_index()?;
+        let job = self.jobs.remove(index);
+        Some(ScheduledVideoDecode {
+            request: job.request,
+            priority: job.priority,
+        })
+    }
+
+    pub fn pending(&self) -> Vec<ScheduledVideoDecode> {
+        let mut jobs = self.jobs.clone();
+        jobs.sort_by_key(|job| (job.priority.rank(), job.sequence));
+        jobs.into_iter()
+            .map(|job| ScheduledVideoDecode {
+                request: job.request,
+                priority: job.priority,
+            })
+            .collect()
+    }
+
+    fn insert(&mut self, request: VideoFrameRequest, priority: VideoDecodePriority) {
+        let sequence = self.next_sequence();
+        self.jobs.push(ScheduledVideoDecodeJob {
+            request,
+            priority,
+            sequence,
+        });
+    }
+
+    fn next_sequence(&mut self) -> u64 {
+        let sequence = self.sequence;
+        self.sequence = self.sequence.saturating_add(1);
+        sequence
+    }
+
+    fn best_job_index(&self) -> Option<usize> {
+        self.jobs
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, job)| (job.priority.rank(), job.sequence))
+            .map(|(index, _)| index)
+    }
+
+    fn worst_job_index(&self) -> Option<usize> {
+        let worst_rank = self.jobs.iter().map(|job| job.priority.rank()).max()?;
+        self.jobs
+            .iter()
+            .enumerate()
+            .filter(|(_, job)| job.priority.rank() == worst_rank)
+            .min_by_key(|(_, job)| job.sequence)
+            .map(|(index, _)| index)
+    }
+
+    fn push_composition_layer_previews(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        layer_ids: impl IntoIterator<Item = VideoLayerId>,
+        width: u32,
+        height: u32,
+        prefetch_count: usize,
+        prefetch_interval_ms: u64,
+        bpm: Option<f32>,
+    ) -> VideoDecodeEnqueueReport {
+        let mut report = VideoDecodeEnqueueReport {
+            pending: self.len(),
+            ..VideoDecodeEnqueueReport::default()
+        };
+        let mut seen_layer_ids = Vec::new();
+        for layer_id in layer_ids {
+            if seen_layer_ids.contains(&layer_id) {
+                continue;
+            }
+            seen_layer_ids.push(layer_id);
+            let Some(layer) = snapshot.layers.iter().find(|layer| layer.id == layer_id) else {
+                continue;
+            };
+            report.layers_considered += 1;
+            for push in self.push_layer_preview(
+                layer,
+                width,
+                height,
+                prefetch_count,
+                prefetch_interval_ms,
+                bpm,
+            ) {
+                report.record(push);
+            }
+        }
+        report.pending = self.len();
+        report
+    }
+}
+
+fn video_decode_request_key_matches(first: &VideoFrameRequest, second: &VideoFrameRequest) -> bool {
+    first.layer_id == second.layer_id
+        && first.source.kind == second.source.kind
+        && first.source.path == second.source.path
+        && first.source.name == second.source.name
+        && first.position_ms == second.position_ms
+        && first.width == second.width
+        && first.height == second.height
+}
+
+impl VideoDecodeEnqueueReport {
+    fn record(&mut self, push: VideoDecodeSchedulePush) {
+        self.requests_attempted += 1;
+        match push {
+            VideoDecodeSchedulePush::Inserted => self.inserted += 1,
+            VideoDecodeSchedulePush::Duplicate => self.duplicate += 1,
+            VideoDecodeSchedulePush::Reprioritized => self.reprioritized += 1,
+            VideoDecodeSchedulePush::DroppedLowerPriority => self.dropped_lower_priority += 1,
+            VideoDecodeSchedulePush::RejectedFull => self.rejected_full += 1,
+        }
+    }
+}
+
+impl<D> VideoDecodeWorker<D> {
+    pub fn new(scheduler_capacity: usize, decoder: D) -> Self {
+        Self {
+            scheduler: VideoDecodeScheduler::new(scheduler_capacity),
+            decoder,
+        }
+    }
+
+    pub fn scheduler(&self) -> &VideoDecodeScheduler {
+        &self.scheduler
+    }
+
+    pub fn scheduler_mut(&mut self) -> &mut VideoDecodeScheduler {
+        &mut self.scheduler
+    }
+
+    pub fn decoder(&self) -> &D {
+        &self.decoder
+    }
+
+    pub fn decoder_mut(&mut self) -> &mut D {
+        &mut self.decoder
+    }
+}
+
+impl<D: VideoFrameDecoder> VideoDecodeWorker<D> {
+    pub fn retain_layers(&mut self, layer_ids: &[VideoLayerId]) {
+        self.scheduler.retain_layers(layer_ids);
+        self.decoder.retain_layers(layer_ids);
+    }
+
+    pub fn enqueue_layer_preview(
+        &mut self,
+        layer: &VideoLayerSummary,
+        width: u32,
+        height: u32,
+        prefetch_count: usize,
+        prefetch_interval_ms: u64,
+        bpm: Option<f32>,
+    ) -> Vec<VideoDecodeSchedulePush> {
+        self.scheduler.push_layer_preview(
+            layer,
+            width,
+            height,
+            prefetch_count,
+            prefetch_interval_ms,
+            bpm,
+        )
+    }
+
+    pub fn enqueue_composition_preview(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        composition_id: Option<CompositionId>,
+        width: u32,
+        height: u32,
+        prefetch_count: usize,
+        prefetch_interval_ms: u64,
+        bpm: Option<f32>,
+    ) -> Result<VideoDecodeEnqueueReport, VideoRuntimeError> {
+        self.scheduler.push_composition_preview(
+            snapshot,
+            composition_id,
+            width,
+            height,
+            prefetch_count,
+            prefetch_interval_ms,
+            bpm,
+        )
+    }
+
+    pub fn enqueue_output_preview(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        output_id: VideoOutputId,
+        width: u32,
+        height: u32,
+        prefetch_count: usize,
+        prefetch_interval_ms: u64,
+        bpm: Option<f32>,
+    ) -> Result<VideoDecodeEnqueueReport, VideoOutputRenderError> {
+        self.scheduler.push_output_preview(
+            snapshot,
+            output_id,
+            width,
+            height,
+            prefetch_count,
+            prefetch_interval_ms,
+            bpm,
+        )
+    }
+
+    pub fn decode_next_into_runtime(
+        &mut self,
+        runtime: &mut VideoRuntime,
+    ) -> Option<Result<VideoDecodeWorkerStep, VideoDecodeWorkerError>> {
+        let scheduled = self.scheduler.pop_next()?;
+        let request = scheduled.request;
+        let priority = scheduled.priority;
+        Some(match self.decoder.decode_frame(&request) {
+            Ok(Some(mut frame)) => {
+                frame.layer_id = request.layer_id;
+                Ok(VideoDecodeWorkerStep::Decoded(runtime.push_frame(frame)))
+            }
+            Ok(None) => Ok(VideoDecodeWorkerStep::Skipped),
+            Err(error) => Err(VideoDecodeWorkerError {
+                layer_id: request.layer_id,
+                label: request.label,
+                position_ms: request.position_ms,
+                priority,
+                error,
+            }),
+        })
+    }
+
+    pub fn decode_budget_into_runtime(
+        &mut self,
+        runtime: &mut VideoRuntime,
+        max_requests: usize,
+    ) -> VideoDecodeWorkerReport {
+        let mut report = VideoDecodeWorkerReport {
+            attempted: 0,
+            decoded: 0,
+            skipped: 0,
+            pending: self.scheduler.len(),
+            errors: Vec::new(),
+        };
+        for _ in 0..max_requests {
+            let Some(result) = self.decode_next_into_runtime(runtime) else {
+                break;
+            };
+            report.attempted += 1;
+            match result {
+                Ok(VideoDecodeWorkerStep::Decoded(_)) => report.decoded += 1,
+                Ok(VideoDecodeWorkerStep::Skipped) => report.skipped += 1,
+                Err(error) => {
+                    report.skipped += 1;
+                    report.errors.push(error);
+                }
+            }
+        }
+        report.pending = self.scheduler.len();
+        report
     }
 }
 
@@ -380,6 +1040,17 @@ impl FrameQueue {
 
     pub fn push(&mut self, mut frame: VideoFrame) -> FrameQueuePush {
         frame.layer_id = self.layer_id;
+        if let Some(index) = (0..self.len)
+            .map(|offset| (self.start + offset) % self.capacity())
+            .find(|index| {
+                self.slots[*index]
+                    .as_ref()
+                    .is_some_and(|existing| existing.pts_ms == frame.pts_ms)
+            })
+        {
+            self.slots[index] = Some(frame);
+            return FrameQueuePush::Inserted;
+        }
         let result = if self.len == self.capacity() {
             let index = self.start;
             self.slots[index] = Some(frame);
@@ -672,6 +1343,13 @@ pub fn video_runtime_status_with_binaries(
                 ffmpeg_binary.as_ref(),
                 "hap",
             ),
+            VideoBackendStatus {
+                id: "dxt_cpu_reference".to_string(),
+                label: "DXT CPU reference".to_string(),
+                state: VideoBackendState::Available,
+                detail: "DXT1/DXT5 compressed frames can be expanded by the CPU reference compositor"
+                    .to_string(),
+            },
             VideoBackendStatus {
                 id: "hap_gpu".to_string(),
                 label: "HAP GPU decode".to_string(),
@@ -1151,26 +1829,14 @@ impl<D: VideoFrameDecoder> VideoFrameProvider for DecoderBackedFrameProvider<D> 
         width: u32,
         height: u32,
     ) -> Result<Vec<VideoFrame>, VideoFrameProviderError> {
-        if matches!(layer.source.kind, VideoSourceKind::StillImage) || self.prefetch_count == 0 {
-            return self
-                .decode_or_placeholder_for_layer(layer, width, height, None)
-                .map(|frame| vec![frame]);
-        }
-
-        let state = sanitize_layer_state(layer.state.clone());
-        let source_duration_ms = layer
-            .source
-            .metadata
-            .and_then(|metadata| metadata.duration_ms);
-        let mut frames = Vec::with_capacity(self.prefetch_count.saturating_add(1));
-        for offset in 0..=self.prefetch_count {
-            let position_ms = prefetch_position_ms(
-                state.clone(),
-                offset,
-                self.prefetch_interval_ms,
-                self.bpm,
-                source_duration_ms,
-            );
+        let positions = preview_prefetch_positions_ms(
+            layer,
+            self.prefetch_count,
+            self.prefetch_interval_ms,
+            self.bpm,
+        );
+        let mut frames = Vec::with_capacity(positions.len());
+        for position_ms in positions {
             frames.push(self.decode_or_placeholder_for_layer(
                 layer,
                 width,
@@ -1260,6 +1926,132 @@ impl VideoPreviewRenderer<PreviewFrameProvider> {
         decoder: D,
     ) -> VideoPreviewRenderer<DecoderBackedFrameProvider<D>> {
         VideoPreviewRenderer::with_frame_provider(config, DecoderBackedFrameProvider::new(decoder))
+    }
+}
+
+impl<D: VideoFrameDecoder> VideoPreviewRenderer<DecoderBackedFrameProvider<D>> {
+    pub fn warm_first_composition_decode_queue(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        width: u32,
+        height: u32,
+        max_requests: usize,
+    ) -> Result<VideoDecodeWarmupReport, VideoPreviewError> {
+        if width == 0 || height == 0 {
+            return Err(VideoPreviewError::InvalidSize);
+        }
+        self.sync_decode_layers(snapshot);
+        let mut scheduler = self.decode_scheduler_for_snapshot(snapshot);
+        let enqueue = scheduler
+            .push_composition_preview(
+                snapshot,
+                None,
+                width,
+                height,
+                self.frame_provider.prefetch_count(),
+                self.frame_provider.prefetch_interval_ms(),
+                self.frame_provider.bpm(),
+            )
+            .map_err(VideoPreviewError::Runtime)?;
+        let decode = self.decode_scheduled_into_runtime(&mut scheduler, max_requests);
+        Ok(VideoDecodeWarmupReport { enqueue, decode })
+    }
+
+    pub fn warm_output_decode_queue(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        output_id: VideoOutputId,
+        width: u32,
+        height: u32,
+        max_requests: usize,
+    ) -> Result<VideoDecodeWarmupReport, VideoPreviewError> {
+        if width == 0 || height == 0 {
+            return Err(VideoPreviewError::InvalidSize);
+        }
+        self.sync_decode_layers(snapshot);
+        let mut scheduler = self.decode_scheduler_for_snapshot(snapshot);
+        let enqueue = scheduler
+            .push_output_preview(
+                snapshot,
+                output_id,
+                width,
+                height,
+                self.frame_provider.prefetch_count(),
+                self.frame_provider.prefetch_interval_ms(),
+                self.frame_provider.bpm(),
+            )
+            .map_err(VideoPreviewError::Output)?;
+        let decode = self.decode_scheduled_into_runtime(&mut scheduler, max_requests);
+        Ok(VideoDecodeWarmupReport { enqueue, decode })
+    }
+
+    fn decode_scheduler_for_snapshot(&self, snapshot: &VideoSnapshot) -> VideoDecodeScheduler {
+        let capacity = snapshot.layers.len().max(1).saturating_mul(
+            self.frame_provider
+                .prefetch_count()
+                .saturating_add(1)
+                .max(1),
+        );
+        VideoDecodeScheduler::new(capacity.max(1))
+    }
+
+    fn sync_decode_layers(&mut self, snapshot: &VideoSnapshot) {
+        let layer_ids = snapshot
+            .layers
+            .iter()
+            .map(|layer| layer.id)
+            .collect::<Vec<_>>();
+        self.frame_provider.retain_layers(&layer_ids);
+        self.runtime.sync_layers(&layer_ids);
+    }
+
+    fn decode_scheduled_into_runtime(
+        &mut self,
+        scheduler: &mut VideoDecodeScheduler,
+        max_requests: usize,
+    ) -> VideoDecodeWorkerReport {
+        let layer_ids = self
+            .runtime
+            .queues
+            .iter()
+            .map(FrameQueue::layer_id)
+            .collect::<Vec<_>>();
+        self.frame_provider.retain_layers(&layer_ids);
+        let mut report = VideoDecodeWorkerReport {
+            attempted: 0,
+            decoded: 0,
+            skipped: 0,
+            pending: scheduler.len(),
+            errors: Vec::new(),
+        };
+        for _ in 0..max_requests {
+            let Some(scheduled) = scheduler.pop_next() else {
+                break;
+            };
+            let request = scheduled.request;
+            let priority = scheduled.priority;
+            report.attempted += 1;
+            match self.frame_provider.decoder_mut().decode_frame(&request) {
+                Ok(Some(mut frame)) => {
+                    frame.layer_id = request.layer_id;
+                    self.runtime.push_frame(frame);
+                    report.decoded += 1;
+                }
+                Ok(None) => report.skipped += 1,
+                Err(error) => {
+                    report.skipped += 1;
+                    report.errors.push(VideoDecodeWorkerError {
+                        layer_id: request.layer_id,
+                        label: request.label,
+                        position_ms: request.position_ms,
+                        priority,
+                        error,
+                    });
+                }
+            }
+        }
+        report.pending = scheduler.len();
+        report
     }
 }
 
@@ -1385,6 +2177,10 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         self.runtime.queue_len(layer_id)
     }
 
+    pub fn config(&self) -> VideoRuntimeConfig {
+        self.runtime.config()
+    }
+
     pub fn frame_provider(&self) -> &P {
         &self.frame_provider
     }
@@ -1495,20 +2291,14 @@ pub fn composite_rgba8(
             .ok_or(CpuCompositeError::MissingFrame {
                 layer_id: layer.layer_id,
             })?;
-        if frame.format != VideoPixelFormat::Rgba8 {
-            return Err(CpuCompositeError::UnsupportedFrameFormat {
-                layer_id: layer.layer_id,
-                format: frame.format,
-            });
-        }
-        if frame.width == 0
-            || frame.height == 0
-            || frame.data.len() != frame.width as usize * frame.height as usize * 4
-        {
-            return Err(CpuCompositeError::FrameSizeMismatch {
-                layer_id: layer.layer_id,
-            });
-        }
+        let normalized_frame;
+        let frame = if frame.format == VideoPixelFormat::Rgba8 {
+            validate_rgba_frame_size(frame)?;
+            frame
+        } else {
+            normalized_frame = convert_frame_to_rgba8(frame)?;
+            &normalized_frame
+        };
         blend_transformed_rgba8(
             &mut output,
             frame,
@@ -1542,6 +2332,261 @@ pub fn composite_rgba8(
         format: VideoPixelFormat::Rgba8,
         data: output,
     })
+}
+
+fn validate_rgba_frame_size(frame: &VideoFrame) -> Result<(), CpuCompositeError> {
+    let Some(expected_len) = rgba_frame_len(frame.width, frame.height) else {
+        return Err(CpuCompositeError::FrameSizeMismatch {
+            layer_id: frame.layer_id,
+        });
+    };
+    if frame.width == 0 || frame.height == 0 || frame.data.len() != expected_len {
+        return Err(CpuCompositeError::FrameSizeMismatch {
+            layer_id: frame.layer_id,
+        });
+    }
+    Ok(())
+}
+
+fn rgba_frame_len(width: u32, height: u32) -> Option<usize> {
+    (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(4)
+}
+
+fn convert_frame_to_rgba8(frame: &VideoFrame) -> Result<VideoFrame, CpuCompositeError> {
+    let data = match frame.format {
+        VideoPixelFormat::Rgba8 => {
+            validate_rgba_frame_size(frame)?;
+            frame.data.clone()
+        }
+        VideoPixelFormat::Bgra8 => convert_bgra8_to_rgba8(frame)?,
+        VideoPixelFormat::Dxt1 => decode_dxt1_rgba8(frame)?,
+        VideoPixelFormat::Dxt5 => decode_dxt5_rgba8(frame)?,
+    };
+    Ok(VideoFrame {
+        layer_id: frame.layer_id,
+        width: frame.width,
+        height: frame.height,
+        pts_ms: frame.pts_ms,
+        duration_ms: frame.duration_ms,
+        format: VideoPixelFormat::Rgba8,
+        data,
+    })
+}
+
+fn convert_bgra8_to_rgba8(frame: &VideoFrame) -> Result<Vec<u8>, CpuCompositeError> {
+    validate_rgba_frame_size(frame)?;
+    let mut data = frame.data.clone();
+    for pixel in data.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+    Ok(data)
+}
+
+fn dxt_block_count(width: u32, height: u32) -> Option<usize> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let blocks_x = ((width as usize).checked_add(3)?) / 4;
+    let blocks_y = ((height as usize).checked_add(3)?) / 4;
+    blocks_x.checked_mul(blocks_y)
+}
+
+fn decode_dxt1_rgba8(frame: &VideoFrame) -> Result<Vec<u8>, CpuCompositeError> {
+    let Some(block_count) = dxt_block_count(frame.width, frame.height) else {
+        return Err(CpuCompositeError::FrameSizeMismatch {
+            layer_id: frame.layer_id,
+        });
+    };
+    let expected_len = block_count
+        .checked_mul(8)
+        .ok_or(CpuCompositeError::FrameSizeMismatch {
+            layer_id: frame.layer_id,
+        })?;
+    if frame.data.len() != expected_len {
+        return Err(CpuCompositeError::FrameSizeMismatch {
+            layer_id: frame.layer_id,
+        });
+    }
+    let Some(output_len) = rgba_frame_len(frame.width, frame.height) else {
+        return Err(CpuCompositeError::FrameSizeMismatch {
+            layer_id: frame.layer_id,
+        });
+    };
+    let mut output = vec![0u8; output_len];
+    let blocks_x = (frame.width as usize + 3) / 4;
+    for (block_index, block) in frame.data.chunks_exact(8).enumerate() {
+        let block_x = block_index % blocks_x;
+        let block_y = block_index / blocks_x;
+        write_dxt_color_block(
+            &mut output,
+            frame.width,
+            frame.height,
+            block_x,
+            block_y,
+            block,
+            true,
+            None,
+        );
+    }
+    Ok(output)
+}
+
+fn decode_dxt5_rgba8(frame: &VideoFrame) -> Result<Vec<u8>, CpuCompositeError> {
+    let Some(block_count) = dxt_block_count(frame.width, frame.height) else {
+        return Err(CpuCompositeError::FrameSizeMismatch {
+            layer_id: frame.layer_id,
+        });
+    };
+    let expected_len = block_count
+        .checked_mul(16)
+        .ok_or(CpuCompositeError::FrameSizeMismatch {
+            layer_id: frame.layer_id,
+        })?;
+    if frame.data.len() != expected_len {
+        return Err(CpuCompositeError::FrameSizeMismatch {
+            layer_id: frame.layer_id,
+        });
+    }
+    let Some(output_len) = rgba_frame_len(frame.width, frame.height) else {
+        return Err(CpuCompositeError::FrameSizeMismatch {
+            layer_id: frame.layer_id,
+        });
+    };
+    let mut output = vec![0u8; output_len];
+    let blocks_x = (frame.width as usize + 3) / 4;
+    for (block_index, block) in frame.data.chunks_exact(16).enumerate() {
+        let block_x = block_index % blocks_x;
+        let block_y = block_index / blocks_x;
+        let alpha_palette = dxt5_alpha_palette(block[0], block[1]);
+        let mut alpha_bits = 0u64;
+        for (index, byte) in block[2..8].iter().enumerate() {
+            alpha_bits |= (*byte as u64) << (index * 8);
+        }
+        write_dxt_color_block(
+            &mut output,
+            frame.width,
+            frame.height,
+            block_x,
+            block_y,
+            &block[8..16],
+            false,
+            Some((alpha_palette, alpha_bits)),
+        );
+    }
+    Ok(output)
+}
+
+fn write_dxt_color_block(
+    output: &mut [u8],
+    width: u32,
+    height: u32,
+    block_x: usize,
+    block_y: usize,
+    color_block: &[u8],
+    dxt1_alpha: bool,
+    alpha_override: Option<([u8; 8], u64)>,
+) {
+    let palette = dxt_color_palette(color_block, dxt1_alpha);
+    let color_indices = u32::from_le_bytes([
+        color_block[4],
+        color_block[5],
+        color_block[6],
+        color_block[7],
+    ]);
+    for local_y in 0..4usize {
+        let y = block_y * 4 + local_y;
+        if y >= height as usize {
+            continue;
+        }
+        for local_x in 0..4usize {
+            let x = block_x * 4 + local_x;
+            if x >= width as usize {
+                continue;
+            }
+            let pixel_index = local_y * 4 + local_x;
+            let palette_index = ((color_indices >> (pixel_index * 2)) & 0x03) as usize;
+            let mut pixel = palette[palette_index];
+            if let Some((alpha_palette, alpha_bits)) = alpha_override {
+                let alpha_index = ((alpha_bits >> (pixel_index * 3)) & 0x07) as usize;
+                pixel[3] = alpha_palette[alpha_index];
+            }
+            let dst_index = (y * width as usize + x) * 4;
+            output[dst_index..dst_index + 4].copy_from_slice(&pixel);
+        }
+    }
+}
+
+fn dxt_color_palette(color_block: &[u8], dxt1_alpha: bool) -> [[u8; 4]; 4] {
+    let color0 = u16::from_le_bytes([color_block[0], color_block[1]]);
+    let color1 = u16::from_le_bytes([color_block[2], color_block[3]]);
+    let c0 = rgb565_to_rgba8(color0, 255);
+    let c1 = rgb565_to_rgba8(color1, 255);
+    if !dxt1_alpha || color0 > color1 {
+        [
+            c0,
+            c1,
+            interpolate_rgba(c0, c1, 2, 1, 3, 255),
+            interpolate_rgba(c0, c1, 1, 2, 3, 255),
+        ]
+    } else {
+        [c0, c1, interpolate_rgba(c0, c1, 1, 1, 2, 255), [0, 0, 0, 0]]
+    }
+}
+
+fn rgb565_to_rgba8(value: u16, alpha: u8) -> [u8; 4] {
+    let red = ((value >> 11) & 0x1f) as u8;
+    let green = ((value >> 5) & 0x3f) as u8;
+    let blue = (value & 0x1f) as u8;
+    [
+        (red << 3) | (red >> 2),
+        (green << 2) | (green >> 4),
+        (blue << 3) | (blue >> 2),
+        alpha,
+    ]
+}
+
+fn interpolate_rgba(
+    a: [u8; 4],
+    b: [u8; 4],
+    a_weight: u16,
+    b_weight: u16,
+    divisor: u16,
+    alpha: u8,
+) -> [u8; 4] {
+    [
+        ((a[0] as u16 * a_weight + b[0] as u16 * b_weight) / divisor) as u8,
+        ((a[1] as u16 * a_weight + b[1] as u16 * b_weight) / divisor) as u8,
+        ((a[2] as u16 * a_weight + b[2] as u16 * b_weight) / divisor) as u8,
+        alpha,
+    ]
+}
+
+fn dxt5_alpha_palette(alpha0: u8, alpha1: u8) -> [u8; 8] {
+    if alpha0 > alpha1 {
+        [
+            alpha0,
+            alpha1,
+            ((6 * alpha0 as u16 + alpha1 as u16) / 7) as u8,
+            ((5 * alpha0 as u16 + 2 * alpha1 as u16) / 7) as u8,
+            ((4 * alpha0 as u16 + 3 * alpha1 as u16) / 7) as u8,
+            ((3 * alpha0 as u16 + 4 * alpha1 as u16) / 7) as u8,
+            ((2 * alpha0 as u16 + 5 * alpha1 as u16) / 7) as u8,
+            ((alpha0 as u16 + 6 * alpha1 as u16) / 7) as u8,
+        ]
+    } else {
+        [
+            alpha0,
+            alpha1,
+            ((4 * alpha0 as u16 + alpha1 as u16) / 5) as u8,
+            ((3 * alpha0 as u16 + 2 * alpha1 as u16) / 5) as u8,
+            ((2 * alpha0 as u16 + 3 * alpha1 as u16) / 5) as u8,
+            ((alpha0 as u16 + 4 * alpha1 as u16) / 5) as u8,
+            0,
+            255,
+        ]
+    }
 }
 
 pub fn debug_solid_frame_for_layer(
@@ -1625,6 +2670,59 @@ fn prefetch_position_ms(
         source_duration_ms,
     )
     .position_ms
+}
+
+pub fn preview_prefetch_positions_ms(
+    layer: &VideoLayerSummary,
+    prefetch_count: usize,
+    prefetch_interval_ms: u64,
+    bpm: Option<f32>,
+) -> Vec<u64> {
+    let state = sanitize_layer_state(layer.state.clone());
+    if matches!(layer.source.kind, VideoSourceKind::StillImage) || prefetch_count == 0 {
+        return vec![state.position_ms];
+    }
+
+    let source_duration_ms = layer
+        .source
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.duration_ms);
+    (0..=prefetch_count)
+        .map(|offset| {
+            prefetch_position_ms(
+                state.clone(),
+                offset,
+                prefetch_interval_ms,
+                bpm,
+                source_duration_ms,
+            )
+        })
+        .collect()
+}
+
+pub fn preview_decode_requests_for_layer(
+    layer: &VideoLayerSummary,
+    width: u32,
+    height: u32,
+    prefetch_count: usize,
+    prefetch_interval_ms: u64,
+    bpm: Option<f32>,
+) -> Vec<VideoFrameRequest> {
+    if width == 0 || height == 0 || matches!(layer.source.kind, VideoSourceKind::StillImage) {
+        return Vec::new();
+    }
+    preview_prefetch_positions_ms(layer, prefetch_count, prefetch_interval_ms, bpm)
+        .into_iter()
+        .map(|position_ms| VideoFrameRequest {
+            layer_id: layer.id,
+            label: layer.label.clone(),
+            source: layer.source.clone(),
+            position_ms,
+            width,
+            height,
+        })
+        .collect()
 }
 
 pub fn resize_rgba8_nearest(
@@ -1768,6 +2866,345 @@ pub fn build_video_output_render_plans(
         .iter()
         .map(|output| build_video_output_render_plan(snapshot, output.id))
         .collect()
+}
+
+pub fn build_external_video_input_plans(snapshot: &VideoSnapshot) -> Vec<ExternalVideoInputPlan> {
+    snapshot
+        .layers
+        .iter()
+        .filter_map(|layer| {
+            let backend_id = external_video_source_backend_id(&layer.source.kind)?;
+            let endpoint_name = layer
+                .source
+                .name
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            (!endpoint_name.is_empty()).then(|| ExternalVideoInputPlan {
+                layer_id: layer.id,
+                label: layer.label.clone(),
+                kind: layer.source.kind.clone(),
+                backend_id: backend_id.to_string(),
+                endpoint_name,
+                enabled: layer.state.enabled,
+            })
+        })
+        .collect()
+}
+
+pub fn build_external_video_output_plans(snapshot: &VideoSnapshot) -> Vec<ExternalVideoOutputPlan> {
+    snapshot
+        .outputs
+        .iter()
+        .filter_map(|output| {
+            let backend_id = external_video_output_backend_id(&output.kind)?;
+            let endpoint_name = output
+                .endpoint_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(&output.label)
+                .to_string();
+            Some(ExternalVideoOutputPlan {
+                output_id: output.id,
+                label: output.label.clone(),
+                kind: output.kind.clone(),
+                backend_id: backend_id.to_string(),
+                endpoint_name,
+                enabled: output.enabled,
+                width: output.width,
+                height: output.height,
+                opacity: output.opacity,
+                blackout: output.blackout,
+                composition_id: output.composition_id,
+            })
+        })
+        .collect()
+}
+
+pub fn build_external_video_io_route_plans(
+    snapshot: &VideoSnapshot,
+    status: &VideoRuntimeStatus,
+) -> ExternalVideoIoRoutePlans {
+    ExternalVideoIoRoutePlans {
+        inputs: build_external_video_input_plans(snapshot)
+            .into_iter()
+            .map(|plan| {
+                let backend = external_video_backend_route_state(status, &plan.backend_id);
+                let ready = backend.ready;
+                ExternalVideoInputRoutePlan {
+                    layer_id: plan.layer_id,
+                    label: plan.label,
+                    kind: plan.kind,
+                    backend_id: plan.backend_id,
+                    backend_label: backend.label,
+                    backend_state: backend.state,
+                    backend_detail: backend.detail,
+                    endpoint_name: plan.endpoint_name,
+                    enabled: plan.enabled,
+                    ready,
+                    live: plan.enabled && ready,
+                    issue: backend.issue,
+                }
+            })
+            .collect(),
+        outputs: build_external_video_output_plans(snapshot)
+            .into_iter()
+            .map(|plan| {
+                let backend = external_video_backend_route_state(status, &plan.backend_id);
+                let ready = backend.ready;
+                ExternalVideoOutputRoutePlan {
+                    output_id: plan.output_id,
+                    label: plan.label,
+                    kind: plan.kind,
+                    backend_id: plan.backend_id,
+                    backend_label: backend.label,
+                    backend_state: backend.state,
+                    backend_detail: backend.detail,
+                    endpoint_name: plan.endpoint_name,
+                    enabled: plan.enabled,
+                    width: plan.width,
+                    height: plan.height,
+                    opacity: plan.opacity,
+                    blackout: plan.blackout,
+                    composition_id: plan.composition_id,
+                    ready,
+                    live: plan.enabled && !plan.blackout && plan.opacity > 0.0 && ready,
+                    issue: backend.issue,
+                }
+            })
+            .collect(),
+    }
+}
+
+fn external_video_backend_route_state(
+    status: &VideoRuntimeStatus,
+    backend_id: &str,
+) -> ExternalVideoBackendRouteState {
+    match status
+        .backends
+        .iter()
+        .find(|backend| backend.id == backend_id)
+    {
+        Some(backend) => {
+            let ready = backend.state == VideoBackendState::Available;
+            ExternalVideoBackendRouteState {
+                label: Some(backend.label.clone()),
+                state: Some(backend.state.clone()),
+                detail: Some(backend.detail.clone()),
+                ready,
+                issue: (!ready).then(|| format!("{}: {}", backend.label, backend.detail)),
+            }
+        }
+        None => ExternalVideoBackendRouteState {
+            label: None,
+            state: None,
+            detail: None,
+            ready: false,
+            issue: Some(format!("Backend status '{backend_id}' is unavailable")),
+        },
+    }
+}
+
+impl ExternalVideoTransportRuntime {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn active_routes(&self) -> &[ExternalVideoTransportRoute] {
+        &self.active_routes
+    }
+
+    pub fn status(&self) -> ExternalVideoTransportStatus {
+        ExternalVideoTransportStatus {
+            active_routes: self.active_routes.clone(),
+            active_count: self.active_routes.len(),
+        }
+    }
+
+    pub fn sync_routes(
+        &mut self,
+        plans: &ExternalVideoIoRoutePlans,
+    ) -> ExternalVideoTransportSyncReport {
+        let mut driver = NoopExternalVideoTransportDriver;
+        self.sync_routes_with_driver(plans, &mut driver)
+    }
+
+    pub fn sync_routes_with_driver<D: ExternalVideoTransportDriver>(
+        &mut self,
+        plans: &ExternalVideoIoRoutePlans,
+        driver: &mut D,
+    ) -> ExternalVideoTransportSyncReport {
+        let mut desired = Vec::new();
+        let mut blocked = Vec::new();
+        let mut idle = Vec::new();
+
+        for input in &plans.inputs {
+            let route = external_video_input_transport_route(input);
+            if input.ready && input.live {
+                push_unique_transport_route(&mut desired, route);
+            } else if !input.ready {
+                blocked.push(ExternalVideoTransportBlockedRoute {
+                    route,
+                    issue: input
+                        .issue
+                        .clone()
+                        .unwrap_or_else(|| "Input route is unavailable".to_string()),
+                });
+            } else {
+                idle.push(route);
+            }
+        }
+
+        for output in &plans.outputs {
+            let route = external_video_output_transport_route(output);
+            if output.ready && output.live {
+                push_unique_transport_route(&mut desired, route);
+            } else if !output.ready {
+                blocked.push(ExternalVideoTransportBlockedRoute {
+                    route,
+                    issue: output
+                        .issue
+                        .clone()
+                        .unwrap_or_else(|| "Output route is unavailable".to_string()),
+                });
+            } else {
+                idle.push(route);
+            }
+        }
+
+        let stopped = self
+            .active_routes
+            .iter()
+            .filter(|route| !desired.contains(route))
+            .cloned()
+            .collect::<Vec<_>>();
+        let kept = desired
+            .iter()
+            .filter(|route| self.active_routes.contains(route))
+            .cloned()
+            .collect::<Vec<_>>();
+        let started = desired
+            .iter()
+            .filter(|route| !self.active_routes.contains(route))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let mut active_routes = kept.clone();
+        let mut started_ok = Vec::new();
+        let mut stopped_ok = Vec::new();
+        let mut start_failed = Vec::new();
+        let mut stop_failed = Vec::new();
+
+        for route in &stopped {
+            match driver.stop_route(route) {
+                Ok(()) => stopped_ok.push(route.clone()),
+                Err(error) => {
+                    push_unique_transport_route(&mut active_routes, route.clone());
+                    stop_failed.push(ExternalVideoTransportFailedRoute {
+                        route: route.clone(),
+                        issue: error.message,
+                    });
+                }
+            }
+        }
+        for route in &started {
+            match driver.start_route(route) {
+                Ok(()) => {
+                    push_unique_transport_route(&mut active_routes, route.clone());
+                    started_ok.push(route.clone());
+                }
+                Err(error) => start_failed.push(ExternalVideoTransportFailedRoute {
+                    route: route.clone(),
+                    issue: error.message,
+                }),
+            }
+        }
+
+        self.active_routes = active_routes;
+        ExternalVideoTransportSyncReport {
+            active_count: self.active_routes.len(),
+            started: started_ok,
+            kept,
+            stopped: stopped_ok,
+            blocked,
+            start_failed,
+            stop_failed,
+            idle,
+        }
+    }
+
+    pub fn clear(&mut self) -> Vec<ExternalVideoTransportRoute> {
+        std::mem::take(&mut self.active_routes)
+    }
+}
+
+impl ExternalVideoTransportDriver for NoopExternalVideoTransportDriver {
+    fn start_route(
+        &mut self,
+        _route: &ExternalVideoTransportRoute,
+    ) -> Result<(), ExternalVideoTransportDriverError> {
+        Ok(())
+    }
+
+    fn stop_route(
+        &mut self,
+        _route: &ExternalVideoTransportRoute,
+    ) -> Result<(), ExternalVideoTransportDriverError> {
+        Ok(())
+    }
+}
+
+fn external_video_input_transport_route(
+    plan: &ExternalVideoInputRoutePlan,
+) -> ExternalVideoTransportRoute {
+    ExternalVideoTransportRoute {
+        direction: ExternalVideoTransportDirection::Input,
+        route_id: plan.layer_id,
+        label: plan.label.clone(),
+        backend_id: plan.backend_id.clone(),
+        endpoint_name: plan.endpoint_name.clone(),
+    }
+}
+
+fn external_video_output_transport_route(
+    plan: &ExternalVideoOutputRoutePlan,
+) -> ExternalVideoTransportRoute {
+    ExternalVideoTransportRoute {
+        direction: ExternalVideoTransportDirection::Output,
+        route_id: plan.output_id,
+        label: plan.label.clone(),
+        backend_id: plan.backend_id.clone(),
+        endpoint_name: plan.endpoint_name.clone(),
+    }
+}
+
+fn push_unique_transport_route(
+    routes: &mut Vec<ExternalVideoTransportRoute>,
+    route: ExternalVideoTransportRoute,
+) {
+    if !routes.contains(&route) {
+        routes.push(route);
+    }
+}
+
+pub fn external_video_source_backend_id(kind: &VideoSourceKind) -> Option<&'static str> {
+    match kind {
+        VideoSourceKind::Ndi => Some("ndi"),
+        VideoSourceKind::Spout => Some("spout"),
+        VideoSourceKind::Syphon => Some("syphon"),
+        VideoSourceKind::File | VideoSourceKind::StillImage => None,
+    }
+}
+
+pub fn external_video_output_backend_id(kind: &VideoOutputKind) -> Option<&'static str> {
+    match kind {
+        VideoOutputKind::NdiSender => Some("ndi"),
+        VideoOutputKind::SpoutSender => Some("spout"),
+        VideoOutputKind::SyphonServer => Some("syphon"),
+        VideoOutputKind::Display => None,
+    }
 }
 
 pub fn build_video_output_render_plan(
@@ -2814,6 +4251,42 @@ mod tests {
         }
     }
 
+    fn bgra_frame(layer_id: VideoLayerId, bgra: [u8; 4]) -> VideoFrame {
+        VideoFrame {
+            layer_id,
+            width: 1,
+            height: 1,
+            pts_ms: layer_id,
+            duration_ms: 16,
+            format: VideoPixelFormat::Bgra8,
+            data: bgra.to_vec(),
+        }
+    }
+
+    fn dxt1_frame(layer_id: VideoLayerId, width: u32, height: u32, data: Vec<u8>) -> VideoFrame {
+        VideoFrame {
+            layer_id,
+            width,
+            height,
+            pts_ms: layer_id,
+            duration_ms: 16,
+            format: VideoPixelFormat::Dxt1,
+            data,
+        }
+    }
+
+    fn dxt5_frame(layer_id: VideoLayerId, width: u32, height: u32, data: Vec<u8>) -> VideoFrame {
+        VideoFrame {
+            layer_id,
+            width,
+            height,
+            pts_ms: layer_id,
+            duration_ms: 16,
+            format: VideoPixelFormat::Dxt5,
+            data,
+        }
+    }
+
     #[test]
     fn ffprobe_json_parses_media_metadata() {
         let summary = parse_ffprobe_metadata_json(
@@ -3173,6 +4646,21 @@ mod tests {
             Some(40)
         );
         assert!(queue.iter().all(|frame| frame.layer_id == 7));
+    }
+
+    #[test]
+    fn frame_queue_replaces_existing_pts_without_growing() {
+        let mut queue = FrameQueue::new(7, 2);
+        let mut first = frame(99, 40);
+        first.data = vec![1; 16];
+        let mut replacement = frame(99, 40);
+        replacement.data = vec![2; 16];
+
+        assert_eq!(queue.push(first), FrameQueuePush::Inserted);
+        assert_eq!(queue.push(replacement), FrameQueuePush::Inserted);
+
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue.nearest(40).unwrap().data, vec![2; 16]);
     }
 
     #[test]
@@ -3742,6 +5230,527 @@ mod tests {
     }
 
     #[test]
+    fn preview_prefetch_positions_report_decoder_plan() {
+        let mut layer = VideoLayerSummary {
+            id: 15,
+            label: "Plan Clip".to_string(),
+            source: VideoSourceSummary {
+                kind: VideoSourceKind::File,
+                path: Some("clip.mp4".to_string()),
+                name: None,
+                codec: Some("H264".to_string()),
+                metadata: Some(VideoMediaMetadata {
+                    duration_ms: Some(1_000),
+                    width: Some(1920),
+                    height: Some(1080),
+                    frame_rate: Some(60.0),
+                }),
+            },
+            blend_mode: VideoBlendMode::Normal,
+            state: VideoLayerState {
+                position_ms: 110,
+                speed: -1.0,
+                loop_enabled: true,
+                loop_start_ms: 100,
+                loop_end_ms: 200,
+                ..VideoLayerState::default()
+            },
+        };
+
+        assert_eq!(
+            preview_prefetch_positions_ms(&layer, 3, 40, None),
+            vec![110, 170, 130, 190]
+        );
+
+        layer.source.kind = VideoSourceKind::StillImage;
+        layer.source.path = Some("still.png".to_string());
+
+        assert_eq!(
+            preview_prefetch_positions_ms(&layer, 3, 40, None),
+            vec![110]
+        );
+    }
+
+    fn decode_request(layer_id: VideoLayerId, position_ms: u64) -> VideoFrameRequest {
+        VideoFrameRequest {
+            layer_id,
+            label: format!("Layer {layer_id}"),
+            source: VideoSourceSummary {
+                kind: VideoSourceKind::File,
+                path: Some(format!("clip-{layer_id}.mp4")),
+                name: None,
+                codec: Some("H264".to_string()),
+                metadata: None,
+            },
+            position_ms,
+            width: 16,
+            height: 9,
+        }
+    }
+
+    #[test]
+    fn decode_scheduler_prioritizes_current_frames_and_deduplicates_requests() {
+        let mut scheduler = VideoDecodeScheduler::new(4);
+        assert_eq!(
+            scheduler.push(decode_request(1, 100), VideoDecodePriority::Lookahead),
+            VideoDecodeSchedulePush::Inserted
+        );
+        assert_eq!(
+            scheduler.push(decode_request(1, 133), VideoDecodePriority::Lookahead),
+            VideoDecodeSchedulePush::Inserted
+        );
+        assert_eq!(
+            scheduler.push(decode_request(1, 100), VideoDecodePriority::Current),
+            VideoDecodeSchedulePush::Reprioritized
+        );
+        assert_eq!(
+            scheduler.push(decode_request(1, 100), VideoDecodePriority::Current),
+            VideoDecodeSchedulePush::Duplicate
+        );
+
+        assert_eq!(scheduler.len(), 2);
+        let first = scheduler.pop_next().unwrap();
+        let second = scheduler.pop_next().unwrap();
+        assert_eq!(first.priority, VideoDecodePriority::Current);
+        assert_eq!(first.request.position_ms, 100);
+        assert_eq!(second.priority, VideoDecodePriority::Lookahead);
+        assert_eq!(second.request.position_ms, 133);
+        assert!(scheduler.is_empty());
+    }
+
+    #[test]
+    fn decode_scheduler_drops_lower_priority_when_capacity_is_full() {
+        let mut scheduler = VideoDecodeScheduler::new(2);
+        assert_eq!(
+            scheduler.push(decode_request(1, 10), VideoDecodePriority::Background),
+            VideoDecodeSchedulePush::Inserted
+        );
+        assert_eq!(
+            scheduler.push(decode_request(1, 20), VideoDecodePriority::Lookahead),
+            VideoDecodeSchedulePush::Inserted
+        );
+        assert_eq!(
+            scheduler.push(decode_request(1, 30), VideoDecodePriority::Current),
+            VideoDecodeSchedulePush::DroppedLowerPriority
+        );
+        assert_eq!(
+            scheduler.push(decode_request(1, 40), VideoDecodePriority::Background),
+            VideoDecodeSchedulePush::RejectedFull
+        );
+
+        let pending = scheduler.pending();
+        assert_eq!(
+            pending
+                .iter()
+                .map(|job| (job.priority, job.request.position_ms))
+                .collect::<Vec<_>>(),
+            vec![
+                (VideoDecodePriority::Current, 30),
+                (VideoDecodePriority::Lookahead, 20)
+            ]
+        );
+    }
+
+    #[test]
+    fn decode_scheduler_can_enqueue_layer_preview_plan_and_retain_layers() {
+        let layer = VideoLayerSummary {
+            id: 21,
+            label: "Scheduled Clip".to_string(),
+            source: VideoSourceSummary {
+                kind: VideoSourceKind::File,
+                path: Some("scheduled.mp4".to_string()),
+                name: None,
+                codec: Some("H264".to_string()),
+                metadata: None,
+            },
+            blend_mode: VideoBlendMode::Normal,
+            state: VideoLayerState {
+                position_ms: 200,
+                playing: true,
+                ..VideoLayerState::default()
+            },
+        };
+        let mut scheduler = VideoDecodeScheduler::new(5);
+
+        let pushes = scheduler.push_layer_preview(&layer, 32, 18, 2, 50, None);
+
+        assert_eq!(
+            pushes,
+            vec![
+                VideoDecodeSchedulePush::Inserted,
+                VideoDecodeSchedulePush::Inserted,
+                VideoDecodeSchedulePush::Inserted
+            ]
+        );
+        assert_eq!(
+            scheduler
+                .pending()
+                .iter()
+                .map(|job| (job.priority, job.request.position_ms, job.request.width))
+                .collect::<Vec<_>>(),
+            vec![
+                (VideoDecodePriority::Current, 200, 32),
+                (VideoDecodePriority::Lookahead, 250, 32),
+                (VideoDecodePriority::Lookahead, 300, 32)
+            ]
+        );
+
+        scheduler.retain_layers(&[99]);
+        assert!(scheduler.is_empty());
+    }
+
+    fn scheduled_file_layer(layer_id: VideoLayerId, position_ms: u64) -> VideoLayerSummary {
+        VideoLayerSummary {
+            id: layer_id,
+            label: format!("Layer {layer_id}"),
+            source: VideoSourceSummary {
+                kind: VideoSourceKind::File,
+                path: Some(format!("clip-{layer_id}.mp4")),
+                name: None,
+                codec: Some("H264".to_string()),
+                metadata: Some(VideoMediaMetadata {
+                    duration_ms: Some(1_000),
+                    width: Some(1920),
+                    height: Some(1080),
+                    frame_rate: Some(60.0),
+                }),
+            },
+            blend_mode: VideoBlendMode::Normal,
+            state: VideoLayerState {
+                position_ms,
+                playing: true,
+                ..VideoLayerState::default()
+            },
+        }
+    }
+
+    fn scheduled_still_layer(layer_id: VideoLayerId) -> VideoLayerSummary {
+        VideoLayerSummary {
+            id: layer_id,
+            label: format!("Still {layer_id}"),
+            source: VideoSourceSummary {
+                kind: VideoSourceKind::StillImage,
+                path: Some(format!("still-{layer_id}.png")),
+                name: None,
+                codec: None,
+                metadata: None,
+            },
+            blend_mode: VideoBlendMode::Normal,
+            state: VideoLayerState::default(),
+        }
+    }
+
+    fn decode_schedule_snapshot(output_blackout: bool) -> VideoSnapshot {
+        VideoSnapshot {
+            layers: vec![
+                scheduled_file_layer(31, 100),
+                scheduled_still_layer(32),
+                VideoLayerSummary {
+                    state: VideoLayerState {
+                        enabled: false,
+                        ..VideoLayerState::default()
+                    },
+                    ..scheduled_file_layer(33, 200)
+                },
+            ],
+            compositions: vec![CompositionSummary {
+                id: 7,
+                label: "Program".to_string(),
+                layer_ids: vec![31, 32, 33],
+                output_ids: vec![9],
+            }],
+            outputs: vec![VideoOutputSummary {
+                id: 9,
+                label: "Projector".to_string(),
+                kind: VideoOutputKind::Display,
+                enabled: true,
+                composition_id: 7,
+                fullscreen: false,
+                monitor_id: Some(0),
+                width: 1280,
+                height: 720,
+                endpoint_name: None,
+                opacity: 1.0,
+                blackout: output_blackout,
+                mapping: VideoOutputMapping::default(),
+            }],
+            mapping_presets: Vec::new(),
+            master_opacity: 1.0,
+            blackout: false,
+        }
+    }
+
+    #[test]
+    fn decode_scheduler_can_enqueue_visible_composition_preview_plan() {
+        let snapshot = decode_schedule_snapshot(false);
+        let mut scheduler = VideoDecodeScheduler::new(8);
+
+        let report = scheduler
+            .push_composition_preview(&snapshot, Some(7), 64, 36, 2, 40, None)
+            .unwrap();
+
+        assert_eq!(
+            report,
+            VideoDecodeEnqueueReport {
+                layers_considered: 2,
+                requests_attempted: 3,
+                inserted: 3,
+                pending: 3,
+                ..VideoDecodeEnqueueReport::default()
+            }
+        );
+        assert_eq!(
+            scheduler
+                .pending()
+                .iter()
+                .map(|job| (
+                    job.priority,
+                    job.request.layer_id,
+                    job.request.position_ms,
+                    job.request.width
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (VideoDecodePriority::Current, 31, 100, 64),
+                (VideoDecodePriority::Lookahead, 31, 140, 64),
+                (VideoDecodePriority::Lookahead, 31, 180, 64),
+            ]
+        );
+
+        let duplicate_report = scheduler
+            .push_composition_preview(&snapshot, Some(7), 64, 36, 2, 40, None)
+            .unwrap();
+        assert_eq!(
+            duplicate_report,
+            VideoDecodeEnqueueReport {
+                layers_considered: 2,
+                requests_attempted: 3,
+                duplicate: 3,
+                pending: 3,
+                ..VideoDecodeEnqueueReport::default()
+            }
+        );
+    }
+
+    #[test]
+    fn decode_worker_can_enqueue_output_preview_and_skip_blacked_outputs() {
+        let snapshot = decode_schedule_snapshot(false);
+        let mut worker = VideoDecodeWorker::new(8, WorkerTestDecoder::default());
+        let mut runtime = VideoRuntime::new(VideoRuntimeConfig {
+            frame_queue_capacity: 4,
+            preview_width: 1,
+            preview_height: 1,
+        });
+
+        let enqueue = worker
+            .enqueue_output_preview(&snapshot, 9, 32, 18, 1, 50, None)
+            .unwrap();
+        assert_eq!(
+            enqueue,
+            VideoDecodeEnqueueReport {
+                layers_considered: 2,
+                requests_attempted: 2,
+                inserted: 2,
+                pending: 2,
+                ..VideoDecodeEnqueueReport::default()
+            }
+        );
+
+        let decode = worker.decode_budget_into_runtime(&mut runtime, 8);
+        assert_eq!(decode.decoded, 2);
+        assert_eq!(runtime.queue_len(31), 2);
+        assert_eq!(
+            worker
+                .decoder()
+                .requests
+                .iter()
+                .map(|request| (request.layer_id, request.position_ms, request.width))
+                .collect::<Vec<_>>(),
+            vec![(31, 100, 32), (31, 150, 32)]
+        );
+
+        let blacked = decode_schedule_snapshot(true);
+        let empty = worker
+            .enqueue_output_preview(&blacked, 9, 32, 18, 1, 50, None)
+            .unwrap();
+        assert_eq!(
+            empty,
+            VideoDecodeEnqueueReport {
+                pending: 0,
+                ..VideoDecodeEnqueueReport::default()
+            }
+        );
+    }
+
+    #[derive(Default)]
+    struct WorkerTestDecoder {
+        retained: Vec<Vec<VideoLayerId>>,
+        requests: Vec<VideoFrameRequest>,
+    }
+
+    impl VideoFrameDecoder for WorkerTestDecoder {
+        fn retain_layers(&mut self, layer_ids: &[VideoLayerId]) {
+            self.retained.push(layer_ids.to_vec());
+        }
+
+        fn decode_frame(
+            &mut self,
+            request: &VideoFrameRequest,
+        ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+            self.requests.push(request.clone());
+            if request.position_ms == 777 {
+                return Ok(None);
+            }
+            if request.position_ms == 999 {
+                return Err(VideoDecodeError::Decode {
+                    layer_id: request.layer_id,
+                    label: request.label.clone(),
+                    message: "decode failed".to_string(),
+                });
+            }
+            Ok(Some(VideoFrame {
+                layer_id: 9_999,
+                width: request.width,
+                height: request.height,
+                pts_ms: request.position_ms,
+                duration_ms: 16,
+                format: VideoPixelFormat::Rgba8,
+                data: [request.position_ms as u8, 0, 0, 255]
+                    .repeat(request.width as usize * request.height as usize),
+            }))
+        }
+    }
+
+    #[test]
+    fn preview_renderer_can_warm_output_decode_queue() {
+        let snapshot = decode_schedule_snapshot(false);
+        let provider =
+            DecoderBackedFrameProvider::new(WorkerTestDecoder::default()).with_prefetch(1, 50);
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig {
+                frame_queue_capacity: 4,
+                preview_width: 32,
+                preview_height: 18,
+            },
+            provider,
+        );
+
+        let warmup = renderer
+            .warm_output_decode_queue(&snapshot, 9, 32, 18, 8)
+            .unwrap();
+
+        assert_eq!(warmup.enqueue.layers_considered, 2);
+        assert_eq!(warmup.enqueue.requests_attempted, 2);
+        assert_eq!(warmup.decode.decoded, 2);
+        assert_eq!(warmup.decode.pending, 0);
+        assert_eq!(renderer.queue_len(31), 2);
+        assert_eq!(
+            renderer
+                .frame_provider()
+                .decoder()
+                .requests
+                .iter()
+                .map(|request| (request.layer_id, request.position_ms, request.width))
+                .collect::<Vec<_>>(),
+            vec![(31, 100, 32), (31, 150, 32)]
+        );
+    }
+
+    #[test]
+    fn decode_worker_decodes_priority_order_into_runtime() {
+        let mut worker = VideoDecodeWorker::new(4, WorkerTestDecoder::default());
+        let mut runtime = VideoRuntime::new(VideoRuntimeConfig {
+            frame_queue_capacity: 4,
+            preview_width: 1,
+            preview_height: 1,
+        });
+        worker
+            .scheduler_mut()
+            .push(decode_request(1, 120), VideoDecodePriority::Lookahead);
+        worker
+            .scheduler_mut()
+            .push(decode_request(1, 40), VideoDecodePriority::Current);
+
+        let first = worker.decode_budget_into_runtime(&mut runtime, 1);
+
+        assert_eq!(first.attempted, 1);
+        assert_eq!(first.decoded, 1);
+        assert_eq!(first.pending, 1);
+        assert_eq!(runtime.queue_len(1), 1);
+        assert_eq!(runtime.queue_len(9_999), 0);
+        assert_eq!(worker.decoder().requests[0].position_ms, 40);
+
+        let second = worker.decode_budget_into_runtime(&mut runtime, 8);
+
+        assert_eq!(second.attempted, 1);
+        assert_eq!(second.decoded, 1);
+        assert_eq!(second.pending, 0);
+        assert_eq!(runtime.queue_len(1), 2);
+        assert_eq!(
+            worker
+                .decoder()
+                .requests
+                .iter()
+                .map(|request| request.position_ms)
+                .collect::<Vec<_>>(),
+            vec![40, 120]
+        );
+    }
+
+    #[test]
+    fn decode_worker_reports_skips_and_errors_without_stopping_budget() {
+        let mut worker = VideoDecodeWorker::new(4, WorkerTestDecoder::default());
+        let mut runtime = VideoRuntime::new(VideoRuntimeConfig {
+            frame_queue_capacity: 4,
+            preview_width: 1,
+            preview_height: 1,
+        });
+        worker
+            .scheduler_mut()
+            .push(decode_request(1, 10), VideoDecodePriority::Current);
+        worker
+            .scheduler_mut()
+            .push(decode_request(1, 777), VideoDecodePriority::Lookahead);
+        worker
+            .scheduler_mut()
+            .push(decode_request(1, 999), VideoDecodePriority::Lookahead);
+
+        let report = worker.decode_budget_into_runtime(&mut runtime, 8);
+
+        assert_eq!(report.attempted, 3);
+        assert_eq!(report.decoded, 1);
+        assert_eq!(report.skipped, 2);
+        assert_eq!(report.pending, 0);
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(report.errors[0].position_ms, 999);
+        assert_eq!(runtime.queue_len(1), 1);
+    }
+
+    #[test]
+    fn decode_worker_retain_layers_prunes_scheduler_and_decoder_cache() {
+        let mut worker = VideoDecodeWorker::new(4, WorkerTestDecoder::default());
+        worker
+            .scheduler_mut()
+            .push(decode_request(1, 10), VideoDecodePriority::Current);
+        worker
+            .scheduler_mut()
+            .push(decode_request(2, 20), VideoDecodePriority::Current);
+
+        worker.retain_layers(&[2]);
+
+        assert_eq!(
+            worker
+                .scheduler()
+                .pending()
+                .iter()
+                .map(|job| job.request.layer_id)
+                .collect::<Vec<_>>(),
+            vec![2]
+        );
+        assert_eq!(worker.decoder().retained, vec![vec![2]]);
+    }
+
+    #[test]
     fn decoder_backed_provider_can_surface_decoder_errors() {
         #[derive(Default)]
         struct ErrorDecoder;
@@ -3890,6 +5899,13 @@ mod tests {
             .unwrap();
         assert_eq!(hap_ffmpeg.state, VideoBackendState::Available);
         assert!(hap_ffmpeg.detail.contains("decoder 'hap' is available"));
+        let dxt_cpu = status
+            .backends
+            .iter()
+            .find(|backend| backend.id == "dxt_cpu_reference")
+            .unwrap();
+        assert_eq!(dxt_cpu.state, VideoBackendState::Available);
+        assert!(dxt_cpu.detail.contains("DXT1/DXT5"));
         let hap_gpu = status
             .backends
             .iter()
@@ -4123,6 +6139,470 @@ mod tests {
         assert_eq!(&resized.data[12..16], &[20, 0, 0, 255]);
         assert_eq!(&resized.data[48..52], &[30, 0, 0, 255]);
         assert_eq!(&resized.data[60..64], &[40, 0, 0, 255]);
+    }
+
+    #[test]
+    fn external_video_io_plans_extract_routable_inputs_and_outputs() {
+        let snapshot = VideoSnapshot {
+            layers: vec![
+                VideoLayerSummary {
+                    id: 1,
+                    label: "File".to_string(),
+                    source: VideoSourceSummary {
+                        kind: VideoSourceKind::File,
+                        path: Some("clip.mp4".to_string()),
+                        name: None,
+                        codec: None,
+                        metadata: None,
+                    },
+                    blend_mode: VideoBlendMode::Normal,
+                    state: VideoLayerState::default(),
+                },
+                VideoLayerSummary {
+                    id: 2,
+                    label: "NDI Camera".to_string(),
+                    source: VideoSourceSummary {
+                        kind: VideoSourceKind::Ndi,
+                        path: None,
+                        name: Some("Camera A".to_string()),
+                        codec: None,
+                        metadata: None,
+                    },
+                    blend_mode: VideoBlendMode::Normal,
+                    state: VideoLayerState {
+                        enabled: true,
+                        ..VideoLayerState::default()
+                    },
+                },
+                VideoLayerSummary {
+                    id: 3,
+                    label: "Unnamed Spout".to_string(),
+                    source: VideoSourceSummary {
+                        kind: VideoSourceKind::Spout,
+                        path: None,
+                        name: Some("  ".to_string()),
+                        codec: None,
+                        metadata: None,
+                    },
+                    blend_mode: VideoBlendMode::Normal,
+                    state: VideoLayerState::default(),
+                },
+            ],
+            compositions: Vec::new(),
+            outputs: vec![
+                VideoOutputSummary {
+                    id: 10,
+                    label: "Display".to_string(),
+                    kind: VideoOutputKind::Display,
+                    enabled: true,
+                    composition_id: 1,
+                    fullscreen: false,
+                    monitor_id: None,
+                    width: 1280,
+                    height: 720,
+                    endpoint_name: None,
+                    opacity: 1.0,
+                    blackout: false,
+                    mapping: VideoOutputMapping::default(),
+                },
+                VideoOutputSummary {
+                    id: 11,
+                    label: "Program NDI".to_string(),
+                    kind: VideoOutputKind::NdiSender,
+                    enabled: true,
+                    composition_id: 1,
+                    fullscreen: false,
+                    monitor_id: None,
+                    width: 1920,
+                    height: 1080,
+                    endpoint_name: Some("Rayard Program".to_string()),
+                    opacity: 0.75,
+                    blackout: false,
+                    mapping: VideoOutputMapping::default(),
+                },
+                VideoOutputSummary {
+                    id: 12,
+                    label: "Syphon Fallback".to_string(),
+                    kind: VideoOutputKind::SyphonServer,
+                    enabled: false,
+                    composition_id: 2,
+                    fullscreen: false,
+                    monitor_id: None,
+                    width: 640,
+                    height: 360,
+                    endpoint_name: Some(" ".to_string()),
+                    opacity: 1.0,
+                    blackout: true,
+                    mapping: VideoOutputMapping::default(),
+                },
+            ],
+            mapping_presets: Vec::new(),
+            master_opacity: 1.0,
+            blackout: false,
+        };
+
+        let inputs = build_external_video_input_plans(&snapshot);
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].layer_id, 2);
+        assert_eq!(inputs[0].backend_id, "ndi");
+        assert_eq!(inputs[0].endpoint_name, "Camera A");
+        assert!(inputs[0].enabled);
+
+        let outputs = build_external_video_output_plans(&snapshot);
+        assert_eq!(
+            outputs
+                .iter()
+                .map(|output| {
+                    (
+                        output.output_id,
+                        output.backend_id.as_str(),
+                        output.endpoint_name.as_str(),
+                        output.enabled,
+                        output.blackout,
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                (11, "ndi", "Rayard Program", true, false),
+                (12, "syphon", "Syphon Fallback", false, true)
+            ]
+        );
+        assert_eq!(
+            external_video_source_backend_id(&VideoSourceKind::File),
+            None
+        );
+        assert_eq!(
+            external_video_output_backend_id(&VideoOutputKind::SpoutSender),
+            Some("spout")
+        );
+    }
+
+    #[test]
+    fn external_video_io_route_plans_include_backend_readiness() {
+        let snapshot = VideoSnapshot {
+            layers: vec![VideoLayerSummary {
+                id: 2,
+                label: "NDI Camera".to_string(),
+                source: VideoSourceSummary {
+                    kind: VideoSourceKind::Ndi,
+                    path: None,
+                    name: Some("Camera A".to_string()),
+                    codec: None,
+                    metadata: None,
+                },
+                blend_mode: VideoBlendMode::Normal,
+                state: VideoLayerState {
+                    enabled: true,
+                    ..VideoLayerState::default()
+                },
+            }],
+            compositions: Vec::new(),
+            outputs: vec![VideoOutputSummary {
+                id: 11,
+                label: "Spout Program".to_string(),
+                kind: VideoOutputKind::SpoutSender,
+                enabled: true,
+                composition_id: 1,
+                fullscreen: false,
+                monitor_id: None,
+                width: 1920,
+                height: 1080,
+                endpoint_name: Some("Rayard Stage".to_string()),
+                opacity: 0.75,
+                blackout: false,
+                mapping: VideoOutputMapping::default(),
+            }],
+            mapping_presets: Vec::new(),
+            master_opacity: 1.0,
+            blackout: false,
+        };
+        let status = VideoRuntimeStatus {
+            backends: vec![
+                VideoBackendStatus {
+                    id: "ndi".to_string(),
+                    label: "NDI input/output".to_string(),
+                    state: VideoBackendState::NotBuilt,
+                    detail: "NDI SDK backend is not linked in this build".to_string(),
+                },
+                VideoBackendStatus {
+                    id: "spout".to_string(),
+                    label: "Spout input/output".to_string(),
+                    state: VideoBackendState::Available,
+                    detail: "Spout backend loaded".to_string(),
+                },
+            ],
+        };
+
+        let plans = build_external_video_io_route_plans(&snapshot, &status);
+
+        assert_eq!(plans.inputs.len(), 1);
+        assert_eq!(plans.outputs.len(), 1);
+        assert_eq!(
+            plans.inputs[0].backend_state,
+            Some(VideoBackendState::NotBuilt)
+        );
+        assert!(!plans.inputs[0].ready);
+        assert!(!plans.inputs[0].live);
+        assert!(plans.inputs[0]
+            .issue
+            .as_deref()
+            .is_some_and(|issue| issue.contains("not linked")));
+
+        assert_eq!(
+            plans.outputs[0].backend_state,
+            Some(VideoBackendState::Available)
+        );
+        assert!(plans.outputs[0].ready);
+        assert!(plans.outputs[0].live);
+        assert_eq!(
+            plans.outputs[0].backend_detail.as_deref(),
+            Some("Spout backend loaded")
+        );
+        assert!(plans.outputs[0].issue.is_none());
+    }
+
+    #[test]
+    fn external_video_transport_runtime_syncs_ready_and_blocked_routes() {
+        #[derive(Default)]
+        struct RecordingTransportDriver {
+            events: Vec<String>,
+        }
+
+        impl ExternalVideoTransportDriver for RecordingTransportDriver {
+            fn start_route(
+                &mut self,
+                route: &ExternalVideoTransportRoute,
+            ) -> Result<(), ExternalVideoTransportDriverError> {
+                self.events.push(format!(
+                    "start:{:?}:{}:{}",
+                    route.direction, route.backend_id, route.endpoint_name
+                ));
+                Ok(())
+            }
+
+            fn stop_route(
+                &mut self,
+                route: &ExternalVideoTransportRoute,
+            ) -> Result<(), ExternalVideoTransportDriverError> {
+                self.events.push(format!(
+                    "stop:{:?}:{}:{}",
+                    route.direction, route.backend_id, route.endpoint_name
+                ));
+                Ok(())
+            }
+        }
+
+        let mut snapshot = VideoSnapshot {
+            layers: vec![VideoLayerSummary {
+                id: 2,
+                label: "NDI Camera".to_string(),
+                source: VideoSourceSummary {
+                    kind: VideoSourceKind::Ndi,
+                    path: None,
+                    name: Some("Camera A".to_string()),
+                    codec: None,
+                    metadata: None,
+                },
+                blend_mode: VideoBlendMode::Normal,
+                state: VideoLayerState {
+                    enabled: true,
+                    ..VideoLayerState::default()
+                },
+            }],
+            compositions: Vec::new(),
+            outputs: vec![VideoOutputSummary {
+                id: 11,
+                label: "Spout Program".to_string(),
+                kind: VideoOutputKind::SpoutSender,
+                enabled: true,
+                composition_id: 1,
+                fullscreen: false,
+                monitor_id: None,
+                width: 1920,
+                height: 1080,
+                endpoint_name: Some("Rayard Stage".to_string()),
+                opacity: 1.0,
+                blackout: false,
+                mapping: VideoOutputMapping::default(),
+            }],
+            mapping_presets: Vec::new(),
+            master_opacity: 1.0,
+            blackout: false,
+        };
+        let status = VideoRuntimeStatus {
+            backends: vec![
+                VideoBackendStatus {
+                    id: "ndi".to_string(),
+                    label: "NDI input/output".to_string(),
+                    state: VideoBackendState::NotBuilt,
+                    detail: "NDI SDK backend is not linked in this build".to_string(),
+                },
+                VideoBackendStatus {
+                    id: "spout".to_string(),
+                    label: "Spout input/output".to_string(),
+                    state: VideoBackendState::Available,
+                    detail: "Spout backend loaded".to_string(),
+                },
+            ],
+        };
+        let mut runtime = ExternalVideoTransportRuntime::new();
+        let mut driver = RecordingTransportDriver::default();
+
+        let plans = build_external_video_io_route_plans(&snapshot, &status);
+        let first = runtime.sync_routes_with_driver(&plans, &mut driver);
+        assert_eq!(first.started.len(), 1);
+        assert_eq!(
+            first.started[0].direction,
+            ExternalVideoTransportDirection::Output
+        );
+        assert_eq!(first.blocked.len(), 1);
+        assert_eq!(
+            first.blocked[0].route.direction,
+            ExternalVideoTransportDirection::Input
+        );
+        assert_eq!(first.active_count, 1);
+        assert_eq!(
+            driver.events,
+            vec!["start:Output:spout:Rayard Stage".to_string()]
+        );
+        let first_status = runtime.status();
+        assert_eq!(first_status.active_count, 1);
+        assert_eq!(first_status.active_routes, first.started);
+
+        let second = runtime.sync_routes_with_driver(&plans, &mut driver);
+        assert!(second.started.is_empty());
+        assert_eq!(second.kept, first.started);
+        assert!(second.stopped.is_empty());
+        assert_eq!(second.active_count, 1);
+        assert_eq!(driver.events.len(), 1);
+
+        snapshot.outputs[0].blackout = true;
+        let blackout_plans = build_external_video_io_route_plans(&snapshot, &status);
+        let third = runtime.sync_routes_with_driver(&blackout_plans, &mut driver);
+        assert!(third.started.is_empty());
+        assert_eq!(third.stopped, first.started);
+        assert_eq!(third.idle.len(), 1);
+        assert_eq!(
+            third.idle[0].direction,
+            ExternalVideoTransportDirection::Output
+        );
+        assert_eq!(third.active_count, 0);
+        assert!(runtime.active_routes().is_empty());
+        assert_eq!(runtime.status(), ExternalVideoTransportStatus::default());
+        assert_eq!(
+            driver.events,
+            vec![
+                "start:Output:spout:Rayard Stage".to_string(),
+                "stop:Output:spout:Rayard Stage".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn external_video_transport_runtime_reports_driver_failures() {
+        struct FailableTransportDriver {
+            fail_start: bool,
+            fail_stop: bool,
+        }
+
+        impl ExternalVideoTransportDriver for FailableTransportDriver {
+            fn start_route(
+                &mut self,
+                route: &ExternalVideoTransportRoute,
+            ) -> Result<(), ExternalVideoTransportDriverError> {
+                if self.fail_start {
+                    Err(ExternalVideoTransportDriverError {
+                        message: format!("cannot start {}", route.endpoint_name),
+                    })
+                } else {
+                    Ok(())
+                }
+            }
+
+            fn stop_route(
+                &mut self,
+                route: &ExternalVideoTransportRoute,
+            ) -> Result<(), ExternalVideoTransportDriverError> {
+                if self.fail_stop {
+                    Err(ExternalVideoTransportDriverError {
+                        message: format!("cannot stop {}", route.endpoint_name),
+                    })
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        let mut snapshot = VideoSnapshot {
+            layers: Vec::new(),
+            compositions: Vec::new(),
+            outputs: vec![VideoOutputSummary {
+                id: 11,
+                label: "Spout Program".to_string(),
+                kind: VideoOutputKind::SpoutSender,
+                enabled: true,
+                composition_id: 1,
+                fullscreen: false,
+                monitor_id: None,
+                width: 1920,
+                height: 1080,
+                endpoint_name: Some("Rayard Stage".to_string()),
+                opacity: 1.0,
+                blackout: false,
+                mapping: VideoOutputMapping::default(),
+            }],
+            mapping_presets: Vec::new(),
+            master_opacity: 1.0,
+            blackout: false,
+        };
+        let status = VideoRuntimeStatus {
+            backends: vec![VideoBackendStatus {
+                id: "spout".to_string(),
+                label: "Spout input/output".to_string(),
+                state: VideoBackendState::Available,
+                detail: "Spout backend loaded".to_string(),
+            }],
+        };
+        let plans = build_external_video_io_route_plans(&snapshot, &status);
+        let mut runtime = ExternalVideoTransportRuntime::new();
+
+        let start_failed = runtime.sync_routes_with_driver(
+            &plans,
+            &mut FailableTransportDriver {
+                fail_start: true,
+                fail_stop: false,
+            },
+        );
+        assert!(start_failed.started.is_empty());
+        assert_eq!(start_failed.start_failed.len(), 1);
+        assert!(start_failed.start_failed[0].issue.contains("cannot start"));
+        assert_eq!(start_failed.active_count, 0);
+        assert!(runtime.active_routes().is_empty());
+
+        let started = runtime.sync_routes_with_driver(
+            &plans,
+            &mut FailableTransportDriver {
+                fail_start: false,
+                fail_stop: false,
+            },
+        );
+        assert_eq!(started.started.len(), 1);
+        assert_eq!(started.active_count, 1);
+
+        snapshot.outputs[0].blackout = true;
+        let blackout_plans = build_external_video_io_route_plans(&snapshot, &status);
+        let stop_failed = runtime.sync_routes_with_driver(
+            &blackout_plans,
+            &mut FailableTransportDriver {
+                fail_start: false,
+                fail_stop: true,
+            },
+        );
+        assert!(stop_failed.stopped.is_empty());
+        assert_eq!(stop_failed.stop_failed.len(), 1);
+        assert!(stop_failed.stop_failed[0].issue.contains("cannot stop"));
+        assert_eq!(stop_failed.active_count, 1);
+        assert_eq!(runtime.active_routes().len(), 1);
     }
 
     #[test]
@@ -4648,6 +7128,14 @@ mod tests {
         snapshot.outputs[0].blackout = true;
         let frame = renderer.render_output(&snapshot, 9).unwrap();
         assert_eq!(frame.data, vec![0, 0, 0, 255, 0, 0, 0, 255]);
+        assert_eq!(renderer.frame_provider().retained, vec![vec![1, 2]]);
+        assert_eq!(renderer.frame_provider().requested, vec![2]);
+
+        snapshot.outputs[0].blackout = false;
+        snapshot.outputs[0].enabled = false;
+        let frame = renderer.render_output(&snapshot, 9).unwrap();
+        assert_eq!(frame.data, vec![0, 0, 0, 255, 0, 0, 0, 255]);
+        assert_eq!(renderer.frame_provider().retained, vec![vec![1, 2]]);
         assert_eq!(renderer.frame_provider().requested, vec![2]);
     }
 
@@ -5133,6 +7621,59 @@ mod tests {
     }
 
     #[test]
+    fn cpu_compositor_accepts_bgra8_frames() {
+        let output = composite_rgba8(
+            &plan(vec![layer_plan(1, VideoBlendMode::Normal, 1.0)]),
+            &[bgra_frame(1, [30, 20, 10, 255])],
+            1,
+            1,
+        )
+        .unwrap();
+
+        assert_eq!(output.data, vec![10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn cpu_compositor_decodes_dxt1_blocks() {
+        let mut block = Vec::new();
+        block.extend_from_slice(&0xf800u16.to_le_bytes());
+        block.extend_from_slice(&0x001fu16.to_le_bytes());
+        block.extend_from_slice(&0u32.to_le_bytes());
+        let output = composite_rgba8(
+            &plan(vec![layer_plan(1, VideoBlendMode::Normal, 1.0)]),
+            &[dxt1_frame(1, 2, 2, block)],
+            2,
+            2,
+        )
+        .unwrap();
+
+        assert_eq!(
+            output.data,
+            vec![255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255]
+        );
+    }
+
+    #[test]
+    fn cpu_compositor_decodes_dxt5_alpha_blocks() {
+        let mut block = Vec::new();
+        block.push(128);
+        block.push(0);
+        block.extend_from_slice(&[0; 6]);
+        block.extend_from_slice(&0xf800u16.to_le_bytes());
+        block.extend_from_slice(&0x001fu16.to_le_bytes());
+        block.extend_from_slice(&0u32.to_le_bytes());
+        let output = composite_rgba8(
+            &plan(vec![layer_plan(1, VideoBlendMode::Normal, 1.0)]),
+            &[dxt5_frame(1, 1, 1, block)],
+            1,
+            1,
+        )
+        .unwrap();
+
+        assert_eq!(output.data, vec![128, 0, 0, 128]);
+    }
+
+    #[test]
     fn cpu_compositor_rejects_missing_or_mismatched_frames() {
         let missing = composite_rgba8(
             &plan(vec![layer_plan(1, VideoBlendMode::Normal, 1.0)]),
@@ -5156,6 +7697,16 @@ mod tests {
         );
         assert_eq!(
             mismatch,
+            Err(CpuCompositeError::FrameSizeMismatch { layer_id: 1 })
+        );
+        let bad_dxt = composite_rgba8(
+            &plan(vec![layer_plan(1, VideoBlendMode::Normal, 1.0)]),
+            &[dxt1_frame(1, 4, 4, vec![0; 7])],
+            1,
+            1,
+        );
+        assert_eq!(
+            bad_dxt,
             Err(CpuCompositeError::FrameSizeMismatch { layer_id: 1 })
         );
     }

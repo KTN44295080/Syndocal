@@ -439,12 +439,24 @@ export interface VisualizerVideoSurfaceNode {
   blackout: boolean;
 }
 
+export interface VisualizerStageObjectNode {
+  id: number;
+  label: string;
+  kind: StageObjectKind;
+  position: Vec3;
+  width: number;
+  depth: number;
+  rotation_deg: number;
+  color?: string | null;
+}
+
 export interface VisualizerScene {
   fixtures: VisualizerFixtureNode[];
   fixture_geometries: VisualizerFixtureGeometryNode[];
   fixture_models: VisualizerFixtureModelNode[];
   beams: VisualizerBeamNode[];
   video_surfaces: VisualizerVideoSurfaceNode[];
+  stage_objects: VisualizerStageObjectNode[];
   bounds: {
     min: Vec3;
     max: Vec3;
@@ -637,17 +649,134 @@ export interface VideoRuntimeStatus {
 export interface VideoPreviewQueueSummary {
   layer_id: number;
   label: string;
+  source_kind: VideoSourceKind;
+  position_ms: number;
+  source_duration_ms?: number | null;
+  playing: boolean;
+  effective_speed: number;
   queue_len: number;
+  expected_queue_len: number;
+  expected_positions_ms: number[];
+  ready: boolean;
+}
+
+export interface VideoDecodeEnqueueReport {
+  layers_considered: number;
+  requests_attempted: number;
+  inserted: number;
+  duplicate: number;
+  reprioritized: number;
+  dropped_lower_priority: number;
+  rejected_full: number;
+  pending: number;
+}
+
+export interface VideoOutputDecodePreviewSummary {
+  output_id: number;
+  label: string;
+  width: number;
+  height: number;
+  enabled: boolean;
+  blackout: boolean;
+  report?: VideoDecodeEnqueueReport | null;
+  error?: string | null;
 }
 
 export interface VideoPreviewDiagnostics {
   queue_count: number;
+  frame_queue_capacity: number;
   still_image_cache_len: number;
   decoder_cache_len: number;
   prefetch_count: number;
   prefetch_interval_ms: number;
   bpm?: number | null;
   layer_queues: VideoPreviewQueueSummary[];
+  output_decode_previews: VideoOutputDecodePreviewSummary[];
+}
+
+export interface ExternalVideoInputPlan {
+  layer_id: number;
+  label: string;
+  kind: VideoSourceKind;
+  backend_id: string;
+  backend_label?: string | null;
+  backend_state?: VideoBackendState | null;
+  backend_detail?: string | null;
+  endpoint_name: string;
+  enabled: boolean;
+  ready: boolean;
+  live: boolean;
+  issue?: string | null;
+}
+
+export interface ExternalVideoOutputPlan {
+  output_id: number;
+  label: string;
+  kind: VideoOutputKind;
+  backend_id: string;
+  backend_label?: string | null;
+  backend_state?: VideoBackendState | null;
+  backend_detail?: string | null;
+  endpoint_name: string;
+  enabled: boolean;
+  width: number;
+  height: number;
+  opacity: number;
+  blackout: boolean;
+  composition_id: number;
+  ready: boolean;
+  live: boolean;
+  issue?: string | null;
+}
+
+export interface ExternalVideoIoPlans {
+  inputs: ExternalVideoInputPlan[];
+  outputs: ExternalVideoOutputPlan[];
+}
+
+export type ExternalVideoTransportDirection = "Input" | "Output";
+
+export interface ExternalVideoTransportRoute {
+  direction: ExternalVideoTransportDirection;
+  route_id: number;
+  label: string;
+  backend_id: string;
+  endpoint_name: string;
+}
+
+export interface ExternalVideoTransportBlockedRoute {
+  route: ExternalVideoTransportRoute;
+  issue: string;
+}
+
+export type ExternalVideoTransportDriverAction = "Start" | "Stop";
+
+export interface ExternalVideoTransportDriverEvent {
+  sequence: number;
+  action: ExternalVideoTransportDriverAction;
+  route: ExternalVideoTransportRoute;
+  message: string;
+}
+
+export interface ExternalVideoTransportSyncReport {
+  started: ExternalVideoTransportRoute[];
+  kept: ExternalVideoTransportRoute[];
+  stopped: ExternalVideoTransportRoute[];
+  blocked: ExternalVideoTransportBlockedRoute[];
+  start_failed: ExternalVideoTransportBlockedRoute[];
+  stop_failed: ExternalVideoTransportBlockedRoute[];
+  idle: ExternalVideoTransportRoute[];
+  active_count: number;
+}
+
+export interface ExternalVideoTransportStatus {
+  active_routes: ExternalVideoTransportRoute[];
+  active_count: number;
+}
+
+export interface ExternalVideoTransportSyncResponse {
+  report: ExternalVideoTransportSyncReport;
+  events: ExternalVideoTransportDriverEvent[];
 }
 
 export interface VideoBpmSync {
@@ -784,6 +913,64 @@ export interface CompositionSummary {
   label: string;
   layer_ids: number[];
   output_ids: number[];
+}
+
+export interface CompositionLayerPlan {
+  layer_id: number;
+  label: string;
+  source: VideoSourceSummary;
+  blend_mode: VideoBlendMode;
+  opacity: number;
+  position_ms: number;
+  transform: Transform2D;
+  color: VideoColorAdjust;
+  fx: VideoFxAdjust;
+}
+
+export interface CompositionPlan {
+  composition_id: number;
+  label: string;
+  output_ids: number[];
+  master_opacity: number;
+  blackout: boolean;
+  layers: CompositionLayerPlan[];
+}
+
+export interface VideoOutputRenderPlan {
+  output_id: number;
+  label: string;
+  kind: VideoOutputKind;
+  enabled: boolean;
+  width: number;
+  height: number;
+  fullscreen: boolean;
+  monitor_id?: number | null;
+  endpoint_name?: string | null;
+  output_opacity: number;
+  output_blackout: boolean;
+  mapping: VideoOutputMapping;
+  composition: CompositionPlan;
+}
+
+export interface VideoOutputWindowStatus {
+  output_id: number;
+  label: string;
+  live_open: boolean;
+  test_pattern_open: boolean;
+  live_window_label: string;
+  test_pattern_window_label: string;
+}
+
+export interface VideoOutputWindowSyncSummary {
+  synced_live: number;
+  synced_test_pattern: number;
+  skipped_closed: number;
+}
+
+export interface VideoOutputWindowCloseSummary {
+  closed_live: number;
+  closed_test_pattern: number;
+  skipped_closed: number;
 }
 
 export interface VideoSnapshot {
@@ -1063,9 +1250,24 @@ export interface StageMapConfig {
   max_z: number;
 }
 
+export type StageObjectKind = "Stage" | "Truss" | "Screen" | "Riser" | "Mask";
+
+export interface StageObjectSummary {
+  id: number;
+  label: string;
+  kind: StageObjectKind;
+  x: number;
+  z: number;
+  width: number;
+  depth: number;
+  rotation_deg: number;
+  color?: string | null;
+}
+
 export interface StageMapPresetSummary {
   label: string;
   config: StageMapConfig;
+  stage_objects?: StageObjectSummary[] | null;
 }
 
 export interface EngineSnapshot {
@@ -1091,6 +1293,7 @@ export interface EngineSnapshot {
   };
   stage_map: StageMapConfig;
   stage_map_presets: StageMapPresetSummary[];
+  stage_objects: StageObjectSummary[];
   dmx_preview: number[];
   dmx_previews: DmxUniversePreview[];
   telemetry: {

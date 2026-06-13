@@ -14,18 +14,20 @@ use io::{
     sacn::SacnSender,
     serial_dmx::{EnttecOpenDmxSender, EnttecUsbProSender},
 };
+#[cfg(test)]
+use protocol::StageObjectKind;
 use protocol::{
-    ActiveFadeSummary, AttributeControl, AttributeResolution, AttributeValueSummary,
-    AudioAnalysisSummary, AutomationId, AutomationInterpolation, AutomationKeyframeSummary,
-    ClockSnapshot, ClockSource, CompositionId, CompositionSummary, CueFixtureTarget, CueId,
-    CueNodeGraphTarget, CueSummary, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol,
-    DmxOutputRouteTelemetry, DmxUniversePreview, EffectBlendMode, EffectId, EffectKind,
-    EffectSummary, EngineSnapshot, EngineTelemetry, FixtureId, FixtureLimits,
+    set_video_output_mapping_field_value, ActiveFadeSummary, AttributeControl, AttributeResolution,
+    AttributeValueSummary, AudioAnalysisSummary, AutomationId, AutomationInterpolation,
+    AutomationKeyframeSummary, ClockSnapshot, ClockSource, CompositionId, CompositionSummary,
+    CueFixtureTarget, CueId, CueNodeGraphTarget, CueSummary, DmxModeSummary, DmxOutputConfig,
+    DmxOutputProtocol, DmxOutputRouteTelemetry, DmxUniversePreview, EffectBlendMode, EffectId,
+    EffectKind, EffectSummary, EngineSnapshot, EngineTelemetry, FixtureId, FixtureLimits,
     FixtureProfileSummary, LfoEffectRequest, LfoShape, NodeGraphId, NodeGraphNodeKind,
     NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PatchFixtureRequest,
     PatchedFixtureSummary, PositionWaveEffectRequest, Rotation3, StageMapConfig,
-    StageMapPresetSummary, SubmasterSummary, TimelineAutomationSummary, TimelineCueEventSummary,
-    TimelineEventId, TimelineSnapshot,
+    StageMapPresetSummary, StageObjectId, StageObjectSummary, SubmasterSummary,
+    TimelineAutomationSummary, TimelineCueEventSummary, TimelineEventId, TimelineSnapshot,
     TimelineTrackKind, TimelineVideoAutomationSummary, Transform2D, Vec3,
     VideoAutomationKeyframeSummary, VideoBlendMode, VideoColorAdjust, VideoCuePointSummary,
     VideoEffectTarget, VideoFxAdjust, VideoLayerId, VideoLayerState, VideoLayerSummary,
@@ -130,6 +132,7 @@ pub enum EngineCommand {
     SaveStageMapPreset {
         label: String,
         config: StageMapConfig,
+        stage_objects: Option<Vec<StageObjectSummary>>,
     },
     ApplyStageMapPreset {
         label: String,
@@ -137,6 +140,8 @@ pub enum EngineCommand {
     RemoveStageMapPreset {
         label: String,
     },
+    UpsertStageObject(StageObjectSummary),
+    RemoveStageObject(StageObjectId),
     SetOutput(DmxOutputConfig),
     SetDmxOutputs(Vec<DmxOutputConfig>),
     Blackout(bool),
@@ -284,6 +289,10 @@ pub enum EngineCommand {
     SetVideoLayerLabel {
         layer_id: VideoLayerId,
         label: String,
+    },
+    SetVideoLayerSource {
+        layer_id: VideoLayerId,
+        source: VideoSourceSummary,
     },
     SetVideoLayerState {
         layer_id: VideoLayerId,
@@ -477,6 +486,7 @@ pub struct EngineHandle {
     next_composition_id: Arc<AtomicU64>,
     next_video_output_id: Arc<AtomicU64>,
     next_node_graph_id: Arc<AtomicU64>,
+    next_stage_object_id: Arc<AtomicU64>,
 }
 
 struct QueuedEngineCommand {
@@ -575,6 +585,7 @@ impl EngineHandle {
         let next_composition_id = Arc::new(AtomicU64::new(2));
         let next_video_output_id = Arc::new(AtomicU64::new(1));
         let next_node_graph_id = Arc::new(AtomicU64::new(1));
+        let next_stage_object_id = Arc::new(AtomicU64::new(1));
 
         let runtime_queue = Arc::clone(&queue);
         let runtime_wake = Arc::clone(&wake);
@@ -603,6 +614,7 @@ impl EngineHandle {
             next_composition_id,
             next_video_output_id,
             next_node_graph_id,
+            next_stage_object_id,
         }
     }
 
@@ -642,7 +654,12 @@ impl EngineHandle {
         self.next_node_graph_id.fetch_add(1, Ordering::Relaxed)
     }
 
+    pub fn allocate_stage_object_id(&self) -> StageObjectId {
+        self.next_stage_object_id.fetch_add(1, Ordering::Relaxed)
+    }
+
     pub fn send(&self, command: EngineCommand) -> Result<(), EngineError> {
+        self.sync_allocator_counters_for_command(&command);
         match self.queue.push(QueuedEngineCommand {
             command,
             queued_at: Instant::now(),
@@ -769,6 +786,59 @@ impl EngineHandle {
                 .node_graphs
                 .iter()
                 .map(|graph| graph.id)
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1),
+        );
+        store_next_id(
+            &self.next_stage_object_id,
+            snapshot
+                .stage_objects
+                .iter()
+                .map(|object| object.id)
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1),
+        );
+    }
+
+    fn sync_allocator_counters_for_command(&self, command: &EngineCommand) {
+        match command {
+            EngineCommand::LoadProjectSnapshot(snapshot) => self.sync_allocator_counters(snapshot),
+            EngineCommand::UpsertStageObject(object) => {
+                self.sync_stage_object_allocator(std::slice::from_ref(object));
+            }
+            EngineCommand::SaveStageMapPreset {
+                stage_objects: Some(stage_objects),
+                ..
+            } => {
+                self.sync_stage_object_allocator(stage_objects);
+            }
+            EngineCommand::ApplyStageMapPreset { label } => {
+                let label = label.trim();
+                if label.is_empty() {
+                    return;
+                }
+                let snapshot = self.snapshot();
+                if let Some(stage_objects) = snapshot
+                    .stage_map_presets
+                    .iter()
+                    .find(|preset| preset.label == label)
+                    .and_then(|preset| preset.stage_objects.as_deref())
+                {
+                    self.sync_stage_object_allocator(stage_objects);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn sync_stage_object_allocator(&self, objects: &[StageObjectSummary]) {
+        store_next_id(
+            &self.next_stage_object_id,
+            objects
+                .iter()
+                .map(|object| object.id)
                 .max()
                 .unwrap_or(0)
                 .saturating_add(1),
@@ -924,6 +994,7 @@ struct EngineRuntime {
     values: HashMap<(FixtureId, String), u16>,
     stage_map: StageMapConfig,
     stage_map_presets: Vec<StageMapPresetSummary>,
+    stage_objects: Vec<StageObjectSummary>,
     active_cue_id: Option<CueId>,
     active_fade: Option<RuntimeFade>,
     output: DmxOutputConfig,
@@ -1048,6 +1119,7 @@ impl EngineRuntime {
             values: HashMap::new(),
             stage_map: StageMapConfig::default(),
             stage_map_presets: Vec::new(),
+            stage_objects: Vec::new(),
             active_cue_id: None,
             active_fade: None,
             output,
@@ -1225,6 +1297,7 @@ impl EngineRuntime {
             .cloned()
             .filter_map(sanitize_stage_map_preset)
             .collect();
+        self.stage_objects = sanitize_stage_objects(snapshot.stage_objects);
         self.blackout = snapshot.blackout;
         self.clock = BpmClock::new(snapshot.clock.bpm, now);
         self.timeline_position_ms = snapshot
@@ -1842,8 +1915,16 @@ impl EngineRuntime {
                 self.stage_map = sanitize_stage_map_config(config);
                 self.last_error = None;
             }
-            EngineCommand::SaveStageMapPreset { label, config } => {
-                let preset = StageMapPresetSummary { label, config };
+            EngineCommand::SaveStageMapPreset {
+                label,
+                config,
+                stage_objects,
+            } => {
+                let preset = StageMapPresetSummary {
+                    label,
+                    config,
+                    stage_objects,
+                };
                 if let Some(preset) = sanitize_stage_map_preset(preset) {
                     self.stage_map_presets
                         .retain(|candidate| candidate.label != preset.label);
@@ -1861,24 +1942,48 @@ impl EngineRuntime {
                     self.last_error = Some("Stage map preset label is required".to_string());
                     return;
                 }
-                let Some(config) = self
+                let Some(preset) = self
                     .stage_map_presets
                     .iter()
                     .find(|preset| preset.label == label)
-                    .map(|preset| preset.config)
+                    .cloned()
                 else {
                     self.last_error = Some(format!("Stage map preset {label} was not found"));
                     return;
                 };
-                self.stage_map = config;
+                self.stage_map = preset.config;
+                if let Some(stage_objects) = preset.stage_objects {
+                    self.stage_objects = sanitize_stage_objects(stage_objects);
+                }
                 self.last_error = None;
             }
             EngineCommand::RemoveStageMapPreset { label } => {
                 let label = label.trim();
                 let before = self.stage_map_presets.len();
-                self.stage_map_presets.retain(|preset| preset.label != label);
+                self.stage_map_presets
+                    .retain(|preset| preset.label != label);
                 if self.stage_map_presets.len() == before {
                     self.last_error = Some(format!("Stage map preset {label} was not found"));
+                } else {
+                    self.last_error = None;
+                }
+            }
+            EngineCommand::UpsertStageObject(object) => {
+                let Some(object) = sanitize_stage_object(object) else {
+                    self.last_error = Some("Stage object is invalid".to_string());
+                    return;
+                };
+                self.stage_objects
+                    .retain(|candidate| candidate.id != object.id);
+                self.stage_objects.push(object);
+                self.stage_objects.sort_by_key(|object| object.id);
+                self.last_error = None;
+            }
+            EngineCommand::RemoveStageObject(object_id) => {
+                let before = self.stage_objects.len();
+                self.stage_objects.retain(|object| object.id != object_id);
+                if self.stage_objects.len() == before {
+                    self.last_error = Some(format!("Stage object {object_id} was not found"));
                 } else {
                     self.last_error = None;
                 }
@@ -2538,6 +2643,18 @@ impl EngineRuntime {
                     .find(|layer| layer.id == layer_id)
                 {
                     layer.label = sanitize_video_layer_label(label, layer_id);
+                    self.last_error = None;
+                } else {
+                    self.last_error = Some(format!("Video layer {layer_id} was not found"));
+                }
+            }
+            EngineCommand::SetVideoLayerSource { layer_id, source } => {
+                if let Some(layer) = self
+                    .video_layers
+                    .iter_mut()
+                    .find(|layer| layer.id == layer_id)
+                {
+                    layer.source = source;
                     self.last_error = None;
                 } else {
                     self.last_error = Some(format!("Video layer {layer_id} was not found"));
@@ -4783,6 +4900,7 @@ impl EngineRuntime {
             clock: self.clock.snapshot(self.last_tick),
             stage_map: self.stage_map,
             stage_map_presets: self.stage_map_presets.clone(),
+            stage_objects: self.stage_objects.clone(),
             dmx_preview: self.last_frame.to_vec(),
             dmx_previews: self.dmx_preview_snapshot(),
             telemetry: EngineTelemetry {
@@ -6671,42 +6789,7 @@ fn set_video_output_mapping_field(
     field: &str,
     value: f32,
 ) -> Result<(), String> {
-    match normalized_mapping_field_name(field).as_str() {
-        "stagex" | "stageposx" | "stagepositionx" | "sx" => mapping.stage_x = value,
-        "stagey" | "stageposy" | "stagepositiony" | "sy" => mapping.stage_y = value,
-        "stagez" | "stageposz" | "stagepositionz" | "sz" => mapping.stage_z = value,
-        "offsetx" | "x" => mapping.offset_x = value,
-        "offsety" | "y" => mapping.offset_y = value,
-        "scalex" | "widthscale" => mapping.scale_x = value,
-        "scaley" | "heightscale" => mapping.scale_y = value,
-        "rotation" | "rotationdeg" | "angle" => mapping.rotation_deg = value,
-        "aspect" | "aspectratio" | "ratio" => mapping.aspect_ratio = value,
-        "lens" | "lensdistortion" | "distortion" => mapping.lens_distortion = value,
-        "keystonex" | "keyx" | "keyh" | "hkeystone" => mapping.keystone_x = value,
-        "keystoney" | "keyy" | "keyv" | "vkeystone" => mapping.keystone_y = value,
-        "cornertopleftx" | "tlx" => mapping.corner_top_left_x = value,
-        "cornertoplefty" | "tly" => mapping.corner_top_left_y = value,
-        "cornertoprightx" | "trx" => mapping.corner_top_right_x = value,
-        "cornertoprighty" | "try" => mapping.corner_top_right_y = value,
-        "cornerbottomrightx" | "brx" => mapping.corner_bottom_right_x = value,
-        "cornerbottomrighty" | "bry" => mapping.corner_bottom_right_y = value,
-        "cornerbottomleftx" | "blx" => mapping.corner_bottom_left_x = value,
-        "cornerbottomlefty" | "bly" => mapping.corner_bottom_left_y = value,
-        normalized => {
-            return Err(format!(
-                "Video output mapping field '{normalized}' was not found"
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn normalized_mapping_field_name(field: &str) -> String {
-    field
-        .chars()
-        .filter(|character| character.is_ascii_alphanumeric())
-        .flat_map(|character| character.to_lowercase())
-        .collect()
+    set_video_output_mapping_field_value(mapping, field, value)
 }
 
 fn sanitize_video_output_mapping_preset(
@@ -7064,7 +7147,59 @@ fn sanitize_stage_map_preset(mut preset: StageMapPresetSummary) -> Option<StageM
         return None;
     }
     preset.config = sanitize_stage_map_config(preset.config);
+    if let Some(stage_objects) = preset.stage_objects.take() {
+        preset.stage_objects = Some(sanitize_stage_objects(stage_objects));
+    }
     Some(preset)
+}
+
+fn sanitize_stage_objects(objects: Vec<StageObjectSummary>) -> Vec<StageObjectSummary> {
+    let mut seen = HashSet::new();
+    let mut sanitized = objects
+        .into_iter()
+        .filter_map(sanitize_stage_object)
+        .filter(|object| seen.insert(object.id))
+        .collect::<Vec<_>>();
+    sanitized.sort_by_key(|object| object.id);
+    sanitized
+}
+
+fn sanitize_stage_object(mut object: StageObjectSummary) -> Option<StageObjectSummary> {
+    object.label = object.label.trim().to_string();
+    if object.id == 0 || object.label.is_empty() {
+        return None;
+    }
+    if [
+        object.x,
+        object.z,
+        object.width,
+        object.depth,
+        object.rotation_deg,
+    ]
+    .iter()
+    .any(|value| !value.is_finite())
+    {
+        return None;
+    }
+    object.x = object.x.clamp(-1_000.0, 1_000.0);
+    object.z = object.z.clamp(-1_000.0, 1_000.0);
+    object.width = object.width.clamp(0.05, 1_000.0);
+    object.depth = object.depth.clamp(0.05, 1_000.0);
+    object.rotation_deg = object.rotation_deg.clamp(-360.0, 360.0);
+    object.color = object
+        .color
+        .and_then(|color| sanitize_stage_object_color(&color));
+    Some(object)
+}
+
+fn sanitize_stage_object_color(color: &str) -> Option<String> {
+    let trimmed = color.trim();
+    let hex = trimmed.strip_prefix('#')?;
+    if hex.len() == 6 && hex.chars().all(|character| character.is_ascii_hexdigit()) {
+        Some(format!("#{hex}"))
+    } else {
+        None
+    }
 }
 
 fn apply_fixture_limits<F>(
@@ -9933,12 +10068,14 @@ mod tests {
             .send(EngineCommand::SaveStageMapPreset {
                 label: "Front Room".to_string(),
                 config: first,
+                stage_objects: None,
             })
             .unwrap();
         engine
             .send(EngineCommand::SaveStageMapPreset {
                 label: "Front Room".to_string(),
                 config: replacement,
+                stage_objects: None,
             })
             .unwrap();
         engine
@@ -9977,6 +10114,166 @@ mod tests {
         }
 
         assert!(snapshot.stage_map_presets.is_empty());
+    }
+
+    #[test]
+    fn stage_map_presets_restore_stage_objects_when_included() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let bounds_only = StageMapConfig {
+            locked: true,
+            min_x: -12.0,
+            max_x: 12.0,
+            min_z: -6.0,
+            max_z: 8.0,
+        };
+        let with_layout = StageMapConfig {
+            locked: true,
+            min_x: -20.0,
+            max_x: 20.0,
+            min_z: -10.0,
+            max_z: 12.0,
+        };
+        let current_object = StageObjectSummary {
+            id: 1,
+            label: "Current Deck".to_string(),
+            kind: StageObjectKind::Stage,
+            x: 0.0,
+            z: 0.0,
+            width: 8.0,
+            depth: 5.0,
+            rotation_deg: 0.0,
+            color: Some("#5dd64c".to_string()),
+        };
+        let preset_object = StageObjectSummary {
+            id: 2,
+            label: "Preset Screen".to_string(),
+            kind: StageObjectKind::Screen,
+            x: 1.0,
+            z: 4.0,
+            width: 6.0,
+            depth: 0.3,
+            rotation_deg: 5.0,
+            color: Some("#4cb7ff".to_string()),
+        };
+
+        engine
+            .send(EngineCommand::UpsertStageObject(current_object.clone()))
+            .unwrap();
+        engine
+            .send(EngineCommand::SaveStageMapPreset {
+                label: "Bounds Only".to_string(),
+                config: bounds_only,
+                stage_objects: None,
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SaveStageMapPreset {
+                label: "Screen Layout".to_string(),
+                config: with_layout,
+                stage_objects: Some(vec![preset_object.clone()]),
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::ApplyStageMapPreset {
+                label: "Bounds Only".to_string(),
+            })
+            .unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if snapshot.stage_map == bounds_only
+                && snapshot.stage_objects == vec![current_object.clone()]
+            {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+        }
+        assert_eq!(snapshot.stage_map, bounds_only);
+        assert_eq!(snapshot.stage_objects, vec![current_object]);
+
+        engine
+            .send(EngineCommand::ApplyStageMapPreset {
+                label: "Screen Layout".to_string(),
+            })
+            .unwrap();
+        for _ in 0..20 {
+            snapshot = engine.snapshot();
+            if snapshot.stage_map == with_layout
+                && snapshot.stage_objects == vec![preset_object.clone()]
+            {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+        }
+
+        assert_eq!(snapshot.stage_map, with_layout);
+        assert_eq!(snapshot.stage_objects, vec![preset_object]);
+        assert!(engine.allocate_stage_object_id() > 2);
+    }
+
+    #[test]
+    fn stage_objects_are_upserted_removed_and_restored_from_projects() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let object_id = engine.allocate_stage_object_id();
+        let object = StageObjectSummary {
+            id: object_id,
+            label: "Front Truss".to_string(),
+            kind: StageObjectKind::Truss,
+            x: 1.5,
+            z: -3.0,
+            width: 12.0,
+            depth: 0.4,
+            rotation_deg: 2.5,
+            color: Some("#55ccff".to_string()),
+        };
+        engine
+            .send(EngineCommand::UpsertStageObject(object.clone()))
+            .unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if snapshot.stage_objects == vec![object.clone()] {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+        }
+        assert_eq!(snapshot.stage_objects, vec![object.clone()]);
+
+        engine
+            .send(EngineCommand::RemoveStageObject(object_id))
+            .unwrap();
+        for _ in 0..20 {
+            snapshot = engine.snapshot();
+            if snapshot.stage_objects.is_empty() {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+        }
+        assert!(snapshot.stage_objects.is_empty());
+
+        engine
+            .load_project_snapshot(EngineSnapshot {
+                stage_objects: vec![object.clone()],
+                ..EngineSnapshot::default()
+            })
+            .unwrap();
+        for _ in 0..20 {
+            snapshot = engine.snapshot();
+            if snapshot.stage_objects == vec![object.clone()] {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+        }
+        assert_eq!(snapshot.stage_objects, vec![object]);
+        assert!(engine.allocate_stage_object_id() > object_id);
     }
 
     #[test]
@@ -12823,6 +13120,7 @@ mod tests {
             next_composition_id: Arc::new(AtomicU64::new(1)),
             next_video_output_id: Arc::new(AtomicU64::new(1)),
             next_node_graph_id: Arc::new(AtomicU64::new(1)),
+            next_stage_object_id: Arc::new(AtomicU64::new(1)),
         };
 
         handle.send(EngineCommand::SetBpm(120.0)).unwrap();
@@ -14211,6 +14509,79 @@ mod tests {
             .find(|composition| composition.id == 2)
             .unwrap();
         assert_eq!(aux.layer_ids, vec![source_layer_id, duplicate_layer_id]);
+    }
+
+    #[test]
+    fn video_layer_source_can_be_updated_without_resetting_state() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let layer_id = engine.allocate_video_layer_id();
+        engine
+            .send(EngineCommand::AddVideoLayer {
+                layer_id,
+                label: "Clip".to_string(),
+                source: VideoSourceSummary {
+                    kind: protocol::VideoSourceKind::File,
+                    path: Some("memory://old.mp4".to_string()),
+                    name: None,
+                    codec: Some("H264".to_string()),
+                    metadata: None,
+                },
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SetVideoLayerState {
+                layer_id,
+                state: VideoLayerState {
+                    opacity: 0.25,
+                    playing: true,
+                    position_ms: 500,
+                    ..VideoLayerState::default()
+                },
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SetVideoLayerSource {
+                layer_id,
+                source: VideoSourceSummary {
+                    kind: protocol::VideoSourceKind::File,
+                    path: Some("memory://new.mov".to_string()),
+                    name: None,
+                    codec: Some("prores".to_string()),
+                    metadata: Some(protocol::VideoMediaMetadata {
+                        duration_ms: Some(2_000),
+                        width: Some(1920),
+                        height: Some(1080),
+                        frame_rate: Some(30.0),
+                    }),
+                },
+            })
+            .unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if snapshot.video.layers.iter().any(|layer| {
+                layer.id == layer_id && layer.source.codec.as_deref() == Some("prores")
+            }) {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+        }
+        let layer = snapshot
+            .video
+            .layers
+            .iter()
+            .find(|layer| layer.id == layer_id)
+            .unwrap();
+        assert_eq!(layer.source.path.as_deref(), Some("memory://new.mov"));
+        assert_eq!(layer.source.codec.as_deref(), Some("prores"));
+        assert_eq!(layer.source.metadata.unwrap().duration_ms, Some(2_000));
+        assert_eq!(layer.state.opacity, 0.25);
+        assert!(layer.state.playing);
+        assert!(layer.state.position_ms >= 500);
     }
 
     #[test]

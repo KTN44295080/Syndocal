@@ -62,7 +62,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
       <header class="topbar">
         <div>
           <h1>Rayard</h1>
-          <p>Unified lighting and video control: GDTF patch, cues, timeline, effects, DMX output. Seraf() KTN.</p>
+          <p>Unified lighting and video control: GDTF patch, cues, timeline, effects, DMX output. Seraf()のKTN.</p>
         </div>
         <div class="status">
           <span class={props.blackout || props.videoBlackout ? "pill danger" : "pill ok"}>{liveLabel()}</span>

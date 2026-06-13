@@ -45,7 +45,13 @@ cargo test -p rayard phase1_smoke_fixture_sample_is_valid
 
 File: `phase1-mini-show.ry`
 
-This is a self-contained Rayard project file using the same mini spot profile. It contains one patched fixture, one cue, one Art-Net route, and one display output with a 16:9 projector mapping preset.
+This is a self-contained Rayard project file using the same mini spot profile. It contains one patched fixture, one cue, one Art-Net route, one display output with a 16:9 projector mapping preset, one 2D stage map preset, and three 2D stage reference objects:
+
+- `Main Deck` (`Stage`)
+- `Front Truss` (`Truss`)
+- `Projection Screen` (`Screen`)
+
+Use the Setup -> Mapping view to confirm that fixtures, the projector surface, the `Mini Venue` stage map preset, and stage reference objects load together. Stage objects can be moved, resized, and rotated directly in the 2D map, saved with stage map presets, and used to fit the selected projector for a quick projection-mapping starting point.
 
 Use it when the project loader itself needs a quick handoff smoke check:
 

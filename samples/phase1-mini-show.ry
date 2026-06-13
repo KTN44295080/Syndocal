@@ -15,7 +15,7 @@
             {
               "attribute": "Dimmer",
               "channel_name": "Dimmer",
-              "geometry": null,
+              "geometry": "Beam",
               "offsets": [1],
               "resolution": "EightBit",
               "default_value": 0,
@@ -24,7 +24,7 @@
             {
               "attribute": "ColorRed",
               "channel_name": "ColorRed",
-              "geometry": null,
+              "geometry": "Beam",
               "offsets": [2],
               "resolution": "EightBit",
               "default_value": 0,
@@ -33,7 +33,7 @@
             {
               "attribute": "ColorGreen",
               "channel_name": "ColorGreen",
-              "geometry": null,
+              "geometry": "Beam",
               "offsets": [3],
               "resolution": "EightBit",
               "default_value": 0,
@@ -42,7 +42,7 @@
             {
               "attribute": "ColorBlue",
               "channel_name": "ColorBlue",
-              "geometry": null,
+              "geometry": "Beam",
               "offsets": [4],
               "resolution": "EightBit",
               "default_value": 0,
@@ -51,7 +51,7 @@
             {
               "attribute": "Pan",
               "channel_name": "Pan",
-              "geometry": null,
+              "geometry": "Head",
               "offsets": [5, 6],
               "resolution": "SixteenBit",
               "default_value": 32768,
@@ -60,7 +60,7 @@
             {
               "attribute": "Tilt",
               "channel_name": "Tilt",
-              "geometry": null,
+              "geometry": "Head",
               "offsets": [7, 8],
               "resolution": "SixteenBit",
               "default_value": 32768,
@@ -69,7 +69,50 @@
           ]
         }
       ],
-      "geometries": [],
+      "geometries": [
+        {
+          "name": "Body",
+          "kind": "Geometry",
+          "parent": null,
+          "matrix": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+          "model_name": "Mini Spot Body",
+          "model_file": null,
+          "model_primitive": "Cylinder",
+          "model_dimensions": { "x": 0.42, "y": 0.32, "z": 0.42 },
+          "beam_type": null,
+          "beam_angle_deg": null,
+          "field_angle_deg": null,
+          "beam_radius": null
+        },
+        {
+          "name": "Head",
+          "kind": "Axis",
+          "parent": "Body",
+          "matrix": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.34, 0.0, 0.0, 1.0, -0.18, 0.0, 0.0, 0.0, 1.0],
+          "model_name": "Mini Spot Head",
+          "model_file": null,
+          "model_primitive": "Sphere",
+          "model_dimensions": { "x": 0.34, "y": 0.28, "z": 0.34 },
+          "beam_type": null,
+          "beam_angle_deg": null,
+          "field_angle_deg": null,
+          "beam_radius": null
+        },
+        {
+          "name": "Beam",
+          "kind": "Beam",
+          "parent": "Head",
+          "matrix": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.1, 0.0, 0.0, 1.0, -0.44, 0.0, 0.0, 0.0, 1.0],
+          "model_name": "Mini Spot Beam",
+          "model_file": null,
+          "model_primitive": "Plane",
+          "model_dimensions": { "x": 0.18, "y": 0.02, "z": 0.58 },
+          "beam_type": "Spot",
+          "beam_angle_deg": 18.0,
+          "field_angle_deg": 28.0,
+          "beam_radius": 0.09
+        }
+      ],
       "warnings": []
     }
   ],
@@ -95,12 +138,55 @@
           "yaw": 0.0,
           "roll": 0.0
         },
-        "geometries": [],
+        "geometries": [
+          {
+            "name": "Body",
+            "kind": "Geometry",
+            "parent": null,
+            "matrix": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            "model_name": "Mini Spot Body",
+            "model_file": null,
+            "model_primitive": "Cylinder",
+            "model_dimensions": { "x": 0.42, "y": 0.32, "z": 0.42 },
+            "beam_type": null,
+            "beam_angle_deg": null,
+            "field_angle_deg": null,
+            "beam_radius": null
+          },
+          {
+            "name": "Head",
+            "kind": "Axis",
+            "parent": "Body",
+            "matrix": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.34, 0.0, 0.0, 1.0, -0.18, 0.0, 0.0, 0.0, 1.0],
+            "model_name": "Mini Spot Head",
+            "model_file": null,
+            "model_primitive": "Sphere",
+            "model_dimensions": { "x": 0.34, "y": 0.28, "z": 0.34 },
+            "beam_type": null,
+            "beam_angle_deg": null,
+            "field_angle_deg": null,
+            "beam_radius": null
+          },
+          {
+            "name": "Beam",
+            "kind": "Beam",
+            "parent": "Head",
+            "matrix": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.1, 0.0, 0.0, 1.0, -0.44, 0.0, 0.0, 0.0, 1.0],
+            "model_name": "Mini Spot Beam",
+            "model_file": null,
+            "model_primitive": "Plane",
+            "model_dimensions": { "x": 0.18, "y": 0.02, "z": 0.58 },
+            "beam_type": "Spot",
+            "beam_angle_deg": 18.0,
+            "field_angle_deg": 28.0,
+            "beam_radius": 0.09
+          }
+        ],
         "controls": [
           {
             "attribute": "Dimmer",
             "channel_name": "Dimmer",
-            "geometry": null,
+            "geometry": "Beam",
             "offsets": [1],
             "resolution": "EightBit",
             "default_value": 0,
@@ -109,7 +195,7 @@
           {
             "attribute": "ColorRed",
             "channel_name": "ColorRed",
-            "geometry": null,
+            "geometry": "Beam",
             "offsets": [2],
             "resolution": "EightBit",
             "default_value": 0,
@@ -118,7 +204,7 @@
           {
             "attribute": "ColorGreen",
             "channel_name": "ColorGreen",
-            "geometry": null,
+            "geometry": "Beam",
             "offsets": [3],
             "resolution": "EightBit",
             "default_value": 0,
@@ -127,7 +213,7 @@
           {
             "attribute": "ColorBlue",
             "channel_name": "ColorBlue",
-            "geometry": null,
+            "geometry": "Beam",
             "offsets": [4],
             "resolution": "EightBit",
             "default_value": 0,
@@ -136,7 +222,7 @@
           {
             "attribute": "Pan",
             "channel_name": "Pan",
-            "geometry": null,
+            "geometry": "Head",
             "offsets": [5, 6],
             "resolution": "SixteenBit",
             "default_value": 32768,
@@ -145,7 +231,7 @@
           {
             "attribute": "Tilt",
             "channel_name": "Tilt",
-            "geometry": null,
+            "geometry": "Head",
             "offsets": [7, 8],
             "resolution": "SixteenBit",
             "default_value": 32768,
@@ -370,6 +456,88 @@
       "min_z": -4.0,
       "max_z": 6.0
     },
+    "stage_map_presets": [
+      {
+        "label": "Mini Venue",
+        "config": {
+          "locked": false,
+          "min_x": -6.0,
+          "max_x": 6.0,
+          "min_z": -4.0,
+          "max_z": 6.0
+        },
+        "stage_objects": [
+          {
+            "id": 1,
+            "label": "Main Deck",
+            "kind": "Stage",
+            "x": 0.0,
+            "z": 1.0,
+            "width": 10.0,
+            "depth": 6.0,
+            "rotation_deg": 0.0,
+            "color": "#5dd64c"
+          },
+          {
+            "id": 2,
+            "label": "Front Truss",
+            "kind": "Truss",
+            "x": 0.0,
+            "z": -2.4,
+            "width": 8.5,
+            "depth": 0.35,
+            "rotation_deg": 0.0,
+            "color": "#f2c14e"
+          },
+          {
+            "id": 3,
+            "label": "Projection Screen",
+            "kind": "Screen",
+            "x": 0.0,
+            "z": 4.0,
+            "width": 5.6,
+            "depth": 0.25,
+            "rotation_deg": 0.0,
+            "color": "#4cb7ff"
+          }
+        ]
+      }
+    ],
+    "stage_objects": [
+      {
+        "id": 1,
+        "label": "Main Deck",
+        "kind": "Stage",
+        "x": 0.0,
+        "z": 1.0,
+        "width": 10.0,
+        "depth": 6.0,
+        "rotation_deg": 0.0,
+        "color": "#5dd64c"
+      },
+      {
+        "id": 2,
+        "label": "Front Truss",
+        "kind": "Truss",
+        "x": 0.0,
+        "z": -2.4,
+        "width": 8.5,
+        "depth": 0.35,
+        "rotation_deg": 0.0,
+        "color": "#f2c14e"
+      },
+      {
+        "id": 3,
+        "label": "Projection Screen",
+        "kind": "Screen",
+        "x": 0.0,
+        "z": 4.0,
+        "width": 5.6,
+        "depth": 0.25,
+        "rotation_deg": 0.0,
+        "color": "#4cb7ff"
+      }
+    ],
     "dmx_preview": [],
     "dmx_previews": [],
     "telemetry": {

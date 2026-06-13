@@ -9,6 +9,7 @@ pub type VideoLayerId = u64;
 pub type CompositionId = u64;
 pub type VideoOutputId = u64;
 pub type NodeGraphId = u64;
+pub type StageObjectId = u64;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct Vec3 {
@@ -585,6 +586,102 @@ impl Default for VideoOutputMapping {
             corner_bottom_left_y: 0.0,
         }
     }
+}
+
+pub fn canonical_video_output_mapping_field(field: &str) -> Option<&'static str> {
+    match normalized_video_output_mapping_field_name(field).as_str() {
+        "stagex" | "stageposx" | "stagepositionx" | "sx" => Some("stage_x"),
+        "stagey" | "stageposy" | "stagepositiony" | "sy" => Some("stage_y"),
+        "stagez" | "stageposz" | "stagepositionz" | "sz" => Some("stage_z"),
+        "offsetx" | "x" => Some("offset_x"),
+        "offsety" | "y" => Some("offset_y"),
+        "scalex" | "widthscale" => Some("scale_x"),
+        "scaley" | "heightscale" => Some("scale_y"),
+        "rotation" | "rotationdeg" | "angle" => Some("rotation_deg"),
+        "aspect" | "aspectratio" | "ratio" => Some("aspect_ratio"),
+        "lens" | "lensdistortion" | "distortion" => Some("lens_distortion"),
+        "keystonex" | "keyx" | "keyh" | "hkeystone" => Some("keystone_x"),
+        "keystoney" | "keyy" | "keyv" | "vkeystone" => Some("keystone_y"),
+        "cornertopleftx" | "tlx" => Some("corner_top_left_x"),
+        "cornertoplefty" | "tly" => Some("corner_top_left_y"),
+        "cornertoprightx" | "trx" => Some("corner_top_right_x"),
+        "cornertoprighty" | "try" => Some("corner_top_right_y"),
+        "cornerbottomrightx" | "brx" => Some("corner_bottom_right_x"),
+        "cornerbottomrighty" | "bry" => Some("corner_bottom_right_y"),
+        "cornerbottomleftx" | "blx" => Some("corner_bottom_left_x"),
+        "cornerbottomlefty" | "bly" => Some("corner_bottom_left_y"),
+        _ => None,
+    }
+}
+
+pub fn video_output_mapping_field_value(mapping: &VideoOutputMapping, field: &str) -> Option<f32> {
+    match canonical_video_output_mapping_field(field)? {
+        "stage_x" => Some(mapping.stage_x),
+        "stage_y" => Some(mapping.stage_y),
+        "stage_z" => Some(mapping.stage_z),
+        "offset_x" => Some(mapping.offset_x),
+        "offset_y" => Some(mapping.offset_y),
+        "scale_x" => Some(mapping.scale_x),
+        "scale_y" => Some(mapping.scale_y),
+        "rotation_deg" => Some(mapping.rotation_deg),
+        "aspect_ratio" => Some(mapping.aspect_ratio),
+        "lens_distortion" => Some(mapping.lens_distortion),
+        "keystone_x" => Some(mapping.keystone_x),
+        "keystone_y" => Some(mapping.keystone_y),
+        "corner_top_left_x" => Some(mapping.corner_top_left_x),
+        "corner_top_left_y" => Some(mapping.corner_top_left_y),
+        "corner_top_right_x" => Some(mapping.corner_top_right_x),
+        "corner_top_right_y" => Some(mapping.corner_top_right_y),
+        "corner_bottom_right_x" => Some(mapping.corner_bottom_right_x),
+        "corner_bottom_right_y" => Some(mapping.corner_bottom_right_y),
+        "corner_bottom_left_x" => Some(mapping.corner_bottom_left_x),
+        "corner_bottom_left_y" => Some(mapping.corner_bottom_left_y),
+        _ => None,
+    }
+}
+
+pub fn set_video_output_mapping_field_value(
+    mapping: &mut VideoOutputMapping,
+    field: &str,
+    value: f32,
+) -> Result<(), String> {
+    match canonical_video_output_mapping_field(field) {
+        Some("stage_x") => mapping.stage_x = value,
+        Some("stage_y") => mapping.stage_y = value,
+        Some("stage_z") => mapping.stage_z = value,
+        Some("offset_x") => mapping.offset_x = value,
+        Some("offset_y") => mapping.offset_y = value,
+        Some("scale_x") => mapping.scale_x = value,
+        Some("scale_y") => mapping.scale_y = value,
+        Some("rotation_deg") => mapping.rotation_deg = value,
+        Some("aspect_ratio") => mapping.aspect_ratio = value,
+        Some("lens_distortion") => mapping.lens_distortion = value,
+        Some("keystone_x") => mapping.keystone_x = value,
+        Some("keystone_y") => mapping.keystone_y = value,
+        Some("corner_top_left_x") => mapping.corner_top_left_x = value,
+        Some("corner_top_left_y") => mapping.corner_top_left_y = value,
+        Some("corner_top_right_x") => mapping.corner_top_right_x = value,
+        Some("corner_top_right_y") => mapping.corner_top_right_y = value,
+        Some("corner_bottom_right_x") => mapping.corner_bottom_right_x = value,
+        Some("corner_bottom_right_y") => mapping.corner_bottom_right_y = value,
+        Some("corner_bottom_left_x") => mapping.corner_bottom_left_x = value,
+        Some("corner_bottom_left_y") => mapping.corner_bottom_left_y = value,
+        _ => {
+            return Err(format!(
+                "Video output mapping field '{}' was not found",
+                normalized_video_output_mapping_field_name(field)
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub fn normalized_video_output_mapping_field_name(field: &str) -> String {
+    field
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(|character| character.to_lowercase())
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1429,10 +1526,35 @@ pub struct StageMapConfig {
     pub max_z: f32,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum StageObjectKind {
+    Stage,
+    Truss,
+    Screen,
+    Riser,
+    Mask,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StageObjectSummary {
+    pub id: StageObjectId,
+    pub label: String,
+    pub kind: StageObjectKind,
+    pub x: f32,
+    pub z: f32,
+    pub width: f32,
+    pub depth: f32,
+    pub rotation_deg: f32,
+    #[serde(default)]
+    pub color: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StageMapPresetSummary {
     pub label: String,
     pub config: StageMapConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_objects: Option<Vec<StageObjectSummary>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1487,6 +1609,8 @@ pub struct EngineSnapshot {
     pub stage_map: StageMapConfig,
     #[serde(default)]
     pub stage_map_presets: Vec<StageMapPresetSummary>,
+    #[serde(default)]
+    pub stage_objects: Vec<StageObjectSummary>,
     pub dmx_preview: Vec<u8>,
     #[serde(default)]
     pub dmx_previews: Vec<DmxUniversePreview>,
@@ -1512,6 +1636,7 @@ impl Default for EngineSnapshot {
             clock: ClockSnapshot::default(),
             stage_map: StageMapConfig::default(),
             stage_map_presets: Vec::new(),
+            stage_objects: Vec::new(),
             dmx_preview: vec![0; 512],
             dmx_previews: vec![DmxUniversePreview {
                 universe: 0,
@@ -1519,5 +1644,40 @@ impl Default for EngineSnapshot {
             }],
             telemetry: EngineTelemetry::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        canonical_video_output_mapping_field, set_video_output_mapping_field_value,
+        video_output_mapping_field_value, VideoOutputMapping,
+    };
+
+    #[test]
+    fn video_output_mapping_fields_are_canonicalized() {
+        assert_eq!(
+            canonical_video_output_mapping_field("  Keystone X  "),
+            Some("keystone_x")
+        );
+        assert_eq!(
+            canonical_video_output_mapping_field("corner_top_left_y"),
+            Some("corner_top_left_y")
+        );
+        assert_eq!(canonical_video_output_mapping_field("unknown"), None);
+    }
+
+    #[test]
+    fn video_output_mapping_field_helpers_read_and_write_values() {
+        let mut mapping = VideoOutputMapping::default();
+        set_video_output_mapping_field_value(&mut mapping, "key y", -0.25).unwrap();
+        set_video_output_mapping_field_value(&mut mapping, "stage_position_x", 3.5).unwrap();
+
+        assert_eq!(
+            video_output_mapping_field_value(&mapping, "keystone_y"),
+            Some(-0.25)
+        );
+        assert_eq!(video_output_mapping_field_value(&mapping, "sx"), Some(3.5));
+        assert!(set_video_output_mapping_field_value(&mut mapping, "not a field", 1.0).is_err());
     }
 }

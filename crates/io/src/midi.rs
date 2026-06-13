@@ -5,9 +5,10 @@ use std::{
 
 use midir::{Ignore, MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
 use protocol::{
-    CueId, EffectId, EngineSnapshot, FixtureId, LearnedMidiControl, MidiControlAction,
-    MidiControlMapping, MidiControlMessage, MidiInputSummary, MidiOutputSummary, NodeGraphId,
-    VideoLayerId, VideoLayerState, VideoOutputId, VideoOutputMapping, VideoParam,
+    video_output_mapping_field_value, CueId, EffectId, EngineSnapshot, FixtureId,
+    LearnedMidiControl, MidiControlAction, MidiControlMapping, MidiControlMessage,
+    MidiInputSummary, MidiOutputSummary, NodeGraphId, VideoLayerId, VideoLayerState, VideoOutputId,
+    VideoParam,
 };
 use thiserror::Error;
 
@@ -753,40 +754,6 @@ fn normalize_feedback_range(
         (fallback_low, fallback_high)
     };
     ((value - low) / (high - low)).clamp(0.0, 1.0)
-}
-
-fn video_output_mapping_field_value(mapping: &VideoOutputMapping, field: &str) -> Option<f32> {
-    match normalized_mapping_field_name(field).as_str() {
-        "stagex" | "stageposx" | "stagepositionx" | "sx" => Some(mapping.stage_x),
-        "stagey" | "stageposy" | "stagepositiony" | "sy" => Some(mapping.stage_y),
-        "stagez" | "stageposz" | "stagepositionz" | "sz" => Some(mapping.stage_z),
-        "offsetx" | "x" => Some(mapping.offset_x),
-        "offsety" | "y" => Some(mapping.offset_y),
-        "scalex" | "widthscale" => Some(mapping.scale_x),
-        "scaley" | "heightscale" => Some(mapping.scale_y),
-        "rotation" | "rotationdeg" | "angle" => Some(mapping.rotation_deg),
-        "aspect" | "aspectratio" | "ratio" => Some(mapping.aspect_ratio),
-        "lens" | "lensdistortion" | "distortion" => Some(mapping.lens_distortion),
-        "keystonex" | "keyx" | "keyh" | "hkeystone" => Some(mapping.keystone_x),
-        "keystoney" | "keyy" | "keyv" | "vkeystone" => Some(mapping.keystone_y),
-        "cornertopleftx" | "tlx" => Some(mapping.corner_top_left_x),
-        "cornertoplefty" | "tly" => Some(mapping.corner_top_left_y),
-        "cornertoprightx" | "trx" => Some(mapping.corner_top_right_x),
-        "cornertoprighty" | "try" => Some(mapping.corner_top_right_y),
-        "cornerbottomrightx" | "brx" => Some(mapping.corner_bottom_right_x),
-        "cornerbottomrighty" | "bry" => Some(mapping.corner_bottom_right_y),
-        "cornerbottomleftx" | "blx" => Some(mapping.corner_bottom_left_x),
-        "cornerbottomlefty" | "bly" => Some(mapping.corner_bottom_left_y),
-        _ => None,
-    }
-}
-
-fn normalized_mapping_field_name(field: &str) -> String {
-    field
-        .chars()
-        .filter(|character| character.is_ascii_alphanumeric())
-        .flat_map(|character| character.to_lowercase())
-        .collect()
 }
 
 fn video_param_value(state: &VideoLayerState, param: &VideoParam) -> f32 {

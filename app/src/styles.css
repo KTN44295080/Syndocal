@@ -15,7 +15,7 @@
 
 body {
   margin: 0;
-  min-width: 1280px;
+  min-width: 0;
   min-height: 100vh;
   background: #111419;
 }
@@ -148,14 +148,71 @@ h3 {
   z-index: 1;
 }
 
+.videoOutputOverlay {
+  align-self: start;
+  justify-self: start;
+  display: grid;
+  grid-template-columns: repeat(6, auto);
+  gap: 4px 8px;
+  max-width: min(520px, calc(100vw - 24px));
+  margin: 12px;
+  border: 1px solid rgba(40, 49, 61, 0.9);
+  border-radius: 6px;
+  background: rgba(8, 11, 15, 0.78);
+  color: #edf3fb;
+  padding: 7px 9px;
+  font-size: 12px;
+  line-height: 1.2;
+  opacity: 1;
+  z-index: 2;
+  pointer-events: none;
+  transition: opacity 140ms ease;
+}
+
+.videoOutputOverlay.hidden {
+  opacity: 0;
+}
+
+.videoOutputOverlay.ok {
+  border-color: rgba(116, 217, 159, 0.7);
+}
+
+.videoOutputOverlay.warn {
+  border-color: rgba(242, 193, 78, 0.75);
+}
+
+.videoOutputOverlay.bad {
+  border-color: rgba(220, 92, 92, 0.78);
+}
+
+.videoOutputOverlay strong,
+.videoOutputOverlay span,
+.videoOutputOverlay small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.videoOutputOverlay small {
+  grid-column: 1 / -1;
+  color: #aab6c6;
+}
+
 .topbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
   min-height: 60px;
   border-bottom: 1px solid #242c36;
   padding-bottom: 12px;
+}
+
+.topbar > div:first-child {
+  flex: 1 1 320px;
+  min-width: 220px;
 }
 
 .topbar p {
@@ -165,10 +222,12 @@ h3 {
 
 .status {
   display: flex;
+  flex: 2 1 720px;
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
+  min-width: 0;
 }
 
 .pill,
@@ -388,13 +447,13 @@ h3 {
 
 .layout {
   display: grid;
-  grid-template-columns: 300px 250px 260px minmax(420px, 1fr) 280px;
+  grid-template-columns: minmax(240px, 300px) minmax(220px, 250px) minmax(220px, 260px) minmax(360px, 1fr) minmax(240px, 280px);
   gap: 12px;
   min-height: 0;
 }
 
 .layoutSetup {
-  grid-template-columns: 300px 320px minmax(520px, 1fr) 300px;
+  grid-template-columns: minmax(240px, 280px) minmax(240px, 300px) minmax(360px, 1fr) minmax(240px, 280px);
 }
 
 .layoutSetup.setupMode-mapping {
@@ -427,7 +486,7 @@ h3 {
 }
 
 .layoutControl {
-  grid-template-columns: minmax(360px, 480px) minmax(680px, 1fr) 300px;
+  grid-template-columns: minmax(320px, 420px) minmax(520px, 1fr) minmax(260px, 300px);
 }
 
 .layoutTouch {
@@ -517,6 +576,141 @@ h3 {
 .touchCuePanel,
 .touchFixturePanel {
   min-height: 620px;
+}
+
+.touchStagePanel {
+  min-height: 420px;
+}
+
+.touchStage {
+  min-height: 300px;
+  max-height: 420px;
+  border-radius: 5px;
+}
+
+.touchStage .stageGrid {
+  fill: url("#touch-stage-grid");
+}
+
+.touchStage .touchStageObject {
+  cursor: default;
+  pointer-events: none;
+}
+
+.touchStage .touchStageObject rect {
+  fill-opacity: 0.15;
+}
+
+.touchStage .touchStageObject text {
+  opacity: 0.8;
+}
+
+.touchStage .stageFixtureBlock,
+.touchStage .stageVideoSurface2d {
+  cursor: pointer;
+}
+
+.touchStageSelectionBar {
+  display: grid;
+  gap: 7px;
+}
+
+.touchStageSelectionItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(4, minmax(54px, auto));
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  border: 1px solid #332d28;
+  border-radius: 5px;
+  background: #171410;
+  padding: 7px;
+}
+
+.touchStageSelectionItem.projector {
+  grid-template-columns: minmax(0, 1fr) repeat(4, minmax(54px, auto));
+  border-color: #224653;
+  background: #101d22;
+}
+
+.touchStageSelectionItem.empty {
+  grid-template-columns: minmax(0, 1fr);
+  border-color: #2d2924;
+  background: #14110f;
+}
+
+.touchStageSelectionItem > div,
+.touchStageSelectionItem strong,
+.touchStageSelectionItem span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.touchStageSelectionItem strong {
+  display: block;
+  color: #f1e8df;
+  font-size: 12px;
+}
+
+.touchStageSelectionItem span {
+  display: block;
+  color: #9f948b;
+  font-size: 11px;
+}
+
+.touchStageSelectionItem.projector span {
+  color: #9acdd9;
+}
+
+.touchStageSelectionItem button {
+  min-height: 34px;
+  border-radius: 4px;
+  padding: 0 10px;
+}
+
+.touchStageSelectionItem button.active {
+  border-color: #77b866;
+  background: #193021;
+  color: #9ef08d;
+}
+
+.touchStageSelectionItem button.momentary {
+  border-color: #665340;
+}
+
+.touchStageSelectionItem button.momentary.active,
+.touchDimmerQuickRow button.momentary.active {
+  border-color: #f0b74b;
+  background: #3b2a13;
+  color: #ffd48a;
+}
+
+.touchStageSelectionItem.projector button.active {
+  border-color: #22d3ee;
+  background: #12313a;
+  color: #baf7ff;
+}
+
+.touchStageLegend {
+  display: flex;
+  gap: 7px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.touchStageLegend button {
+  flex: 0 0 auto;
+  min-height: 34px;
+  border-radius: 999px;
+  padding: 0 12px;
+}
+
+.touchStageLegend button.active {
+  border-color: #5dd64c;
+  background: rgba(93, 214, 76, 0.14);
+  color: #edf3fb;
 }
 
 .touchGoDeck {
@@ -873,6 +1067,17 @@ h3 {
   gap: 10px;
 }
 
+.touchDimmerQuickRow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.touchDimmerQuickRow button {
+  min-height: 42px;
+  border-radius: 5px;
+}
+
 .touchAttributeCategoryRail {
   display: flex;
   gap: 6px;
@@ -939,6 +1144,50 @@ h3 {
 
 .touchAttributeCategoryRail small {
   color: #7d746c;
+  text-align: right;
+}
+
+.touchGenericAttributeGrid {
+  display: grid;
+  gap: 8px;
+}
+
+.touchGenericAttributeRow {
+  display: grid;
+  grid-template-columns: minmax(104px, 0.9fr) minmax(120px, 1.7fr) minmax(54px, auto);
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  border: 1px solid #2e2925;
+  border-radius: 6px;
+  background: #171411;
+  padding: 8px;
+}
+
+.touchGenericAttributeRow span,
+.touchGenericAttributeRow strong,
+.touchGenericAttributeRow small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.touchGenericAttributeRow strong {
+  display: block;
+  color: #f0e6db;
+  font-size: 12px;
+}
+
+.touchGenericAttributeRow small {
+  display: block;
+  color: #91857c;
+  font-size: 11px;
+}
+
+.touchGenericAttributeRow output {
+  color: #d8cec3;
+  font-variant-numeric: tabular-nums;
   text-align: right;
 }
 
@@ -1312,6 +1561,7 @@ h3 {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-width: 0;
   min-height: 0;
   border: 1px solid #242c36;
   border-radius: 8px;
@@ -1432,7 +1682,7 @@ h3 {
 
 .liveTransportGrid {
   display: grid;
-  grid-template-columns: 88px minmax(120px, 1.2fr) repeat(4, minmax(116px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
   gap: 8px;
 }
 
@@ -1480,6 +1730,89 @@ h3 {
 
 .liveStage .stageGrid {
   fill: url("#live-stage-grid");
+}
+
+.liveStage .liveStageObject {
+  cursor: default;
+  pointer-events: none;
+}
+
+.liveStage .liveStageObject rect {
+  fill-opacity: 0.14;
+}
+
+.liveStage .liveStageObject text {
+  opacity: 0.78;
+}
+
+.liveStageSelectionBar {
+  display: grid;
+  gap: 6px;
+}
+
+.liveStageSelectionItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(3, minmax(52px, auto));
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  border: 1px solid #28313d;
+  border-radius: 4px;
+  background: #0f151d;
+  padding: 6px;
+}
+
+.liveStageSelectionItem.projector {
+  grid-template-columns: minmax(0, 1fr) repeat(4, minmax(52px, auto));
+  border-color: #224653;
+  background: #0e1a1f;
+}
+
+.liveStageSelectionItem.empty {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.liveStageSelectionItem > div,
+.liveStageSelectionItem strong,
+.liveStageSelectionItem span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.liveStageSelectionItem strong {
+  display: block;
+  color: #edf3fb;
+  font-size: 12px;
+}
+
+.liveStageSelectionItem span {
+  display: block;
+  color: #9aa8ba;
+  font-size: 11px;
+}
+
+.liveStageSelectionItem.projector span {
+  color: #9acdd9;
+}
+
+.liveStageSelectionItem button {
+  min-height: 28px;
+  border-radius: 4px;
+  padding: 0 8px;
+}
+
+.liveStageSelectionItem button.active {
+  border-color: #77b866;
+  background: #193021;
+  color: #9ef08d;
+}
+
+.liveStageSelectionItem.projector button.active {
+  border-color: #22d3ee;
+  background: #12313a;
+  color: #baf7ff;
 }
 
 .liveCuePadHeader {
@@ -1597,8 +1930,16 @@ h3 {
 
 .buttonRow {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+.buttonRow button {
+  min-width: 0;
+  padding: 0 8px;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .patchActionRow {
@@ -2134,6 +2475,17 @@ h3 {
     0 0 0 1px rgba(95, 157, 220, 0.14);
 }
 
+.customProfileAttributeRow.conflict {
+  background: #25171b;
+  box-shadow: inset 0 0 0 1px rgba(204, 93, 93, 0.76);
+}
+
+.customProfileAttributeRow.selected.conflict {
+  box-shadow:
+    inset 0 0 0 1px #e07777,
+    0 0 0 1px rgba(224, 119, 119, 0.18);
+}
+
 .customProfileAttributeRow label {
   display: grid;
   gap: 4px;
@@ -2217,7 +2569,7 @@ h3 {
 
 .customProfileChannel {
   display: grid;
-  grid-template-columns: minmax(90px, 1fr) 48px 64px;
+  grid-template-columns: minmax(90px, 1fr) 48px 48px 64px;
   align-items: center;
   gap: 8px;
   min-height: 28px;
@@ -2228,10 +2580,23 @@ h3 {
 
 .customProfileChannel strong,
 .customProfileChannel span,
+.customProfileChannel em,
 .customProfileChannel small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.customProfileChannel em {
+  border: 1px solid #2e3e50;
+  border-radius: 4px;
+  background: #0d141c;
+  color: #9ed7ff;
+  padding: 1px 5px;
+  font-size: 0.68rem;
+  font-style: normal;
+  font-weight: 700;
+  text-align: center;
 }
 
 .profileFunctionSummary {
@@ -2441,6 +2806,29 @@ h3 {
   margin: 0;
   padding-left: 18px;
   color: #ffd27d;
+}
+
+.profileWarningBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid #6d5527;
+  border-radius: 4px;
+  background: #251d10;
+  color: #ffd27d;
+  padding: 7px 8px;
+}
+
+.profileWarningBanner strong {
+  color: #ffe2a3;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+}
+
+.profileWarningBanner span {
+  color: #c9a96a;
+  font-size: 0.76rem;
 }
 
 .footprint {
@@ -3074,10 +3462,11 @@ h3 {
 
 .mappingStageShell {
   display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) minmax(150px, 220px);
+  grid-template-columns: 38px minmax(560px, 1fr) minmax(170px, 220px);
   min-height: 420px;
   border: 1px solid #3b3530;
   background: #181512;
+  overflow-x: auto;
 }
 
 .mappingToolRail {
@@ -3396,6 +3785,15 @@ h3 {
   color: #cfc7be;
   padding: 0 7px;
   font-size: 12px;
+}
+
+.mappingViewPresetPanel {
+  border-top: 1px solid #332d28;
+  padding-top: 6px;
+}
+
+.mappingStagePresetActions.viewPresetActions {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 .mappingLabelMode {
@@ -3787,6 +4185,81 @@ h3 {
   min-height: 26px;
 }
 
+.mappingGeometrySummary {
+  display: grid;
+  gap: 7px;
+  border: 1px solid #332d28;
+  border-radius: 4px;
+  background: #1d1915;
+  padding: 7px;
+}
+
+.mappingGeometryList {
+  display: grid;
+  gap: 5px;
+  max-height: 150px;
+  overflow: auto;
+}
+
+.mappingGeometryRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 6px;
+  min-width: 0;
+  border: 1px solid #332d28;
+  border-radius: 4px;
+  background: #14110f;
+  padding: 5px 6px;
+}
+
+.mappingGeometryRow strong,
+.mappingGeometryRow span,
+.mappingGeometryRow small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mappingGeometryRow strong {
+  color: #f1e8df;
+  font-size: 11px;
+}
+
+.mappingGeometryRow span {
+  color: #ffdd74;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.mappingGeometryRow small {
+  grid-column: 1 / -1;
+  color: #9f948b;
+  font-size: 10px;
+}
+
+.mappingGeometryRow b,
+.mappingGeometryRow em {
+  justify-self: start;
+  border: 1px solid #4a433d;
+  border-radius: 3px;
+  background: #211d19;
+  color: #cfc7be;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.mappingGeometryWarnings {
+  margin: 0;
+  padding-left: 16px;
+  color: #f2c14e;
+  font-size: 10px;
+}
+
 .mappingTransformActions {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -4103,6 +4576,41 @@ h3 {
   text-align: center;
 }
 
+.mappingStageObjectPanel {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #28313d;
+  border-radius: 4px;
+  background: #101720;
+  padding: 8px;
+}
+
+.mappingStageObjectPanel.selectedObject {
+  border-color: #5f9ddc;
+  background: #101b27;
+}
+
+.mappingStageObjectColorRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.mappingStageObjectColorRow input[type="color"] {
+  width: 100%;
+  min-width: 42px;
+  padding: 1px;
+}
+
+.stageObjectListItem {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.stageObjectListItem small {
+  grid-column: 1 / -1;
+}
+
 .mappingSelectionPanel button.active {
   background: #10100e;
   color: #ffffff;
@@ -4162,7 +4670,7 @@ h3 {
 
 .mappingProjectorActionRow {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(70px, 1fr));
   gap: 6px;
 }
 
@@ -4222,6 +4730,13 @@ h3 {
 .mappingProjectorWarpGrid select {
   width: 100%;
   min-height: 26px;
+}
+
+.mappingProjectorPresetGrid {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
 }
 
 .mappingSelectionPanel .mappingProjectorWarpGrid button {
@@ -4497,6 +5012,106 @@ h3 {
   stroke-linecap: round;
   stroke-width: 3;
   mix-blend-mode: screen;
+}
+
+.stageObject {
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.stageObject.dragging {
+  cursor: grabbing;
+}
+
+.stageObject rect {
+  fill-opacity: 0.22;
+  stroke: currentColor;
+  stroke-width: 0.75;
+  stroke-dasharray: 2 1.2;
+  pointer-events: all;
+}
+
+.stageObject line {
+  stroke: currentColor;
+  stroke-width: 0.42;
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.stageObject text {
+  fill: #cdd8e5;
+  font-size: 3px;
+  paint-order: stroke;
+  stroke: #10161d;
+  stroke-width: 1px;
+  pointer-events: none;
+}
+
+.stageObject.kind-stage {
+  color: #5dd64c;
+}
+
+.stageObject.kind-truss {
+  color: #f2c14e;
+}
+
+.stageObject.kind-screen {
+  color: #4cb7ff;
+}
+
+.stageObject.kind-riser {
+  color: #9b8cff;
+}
+
+.stageObject.kind-mask {
+  color: #727a84;
+}
+
+.stageObject.selected rect {
+  fill-opacity: 0.34;
+  stroke: #ffffff;
+  stroke-width: 1.05;
+}
+
+.stageObject.dragging rect {
+  fill-opacity: 0.42;
+}
+
+.stageObjectHandleLine {
+  stroke: #ffffff;
+  stroke-width: 0.48;
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+.stageObjectRotateHandle,
+.stageObjectResizeHandle {
+  fill: #fff4d6;
+  stroke: #10161d;
+  stroke-width: 0.7;
+  pointer-events: all;
+}
+
+.stageObjectRotateHandle {
+  cursor: grab;
+}
+
+.stageObjectResizeHandle.width {
+  cursor: ew-resize;
+}
+
+.stageObjectResizeHandle.depth {
+  cursor: ns-resize;
+}
+
+.stageObjectResizeHandle.both {
+  cursor: nwse-resize;
+}
+
+.stageObjectRotateHandle:hover,
+.stageObjectResizeHandle:hover {
+  fill: #ff2d83;
+  stroke: #ffffff;
 }
 
 .stageVideoSurface2d,
@@ -7630,6 +8245,51 @@ input[type="color"] {
   grid-column: 1 / -1;
 }
 
+.previewDiagnosticList {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.previewDiagnosticRow {
+  display: grid;
+  grid-template-columns: 54px minmax(120px, 0.7fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid #28313d;
+  border-radius: 6px;
+  background: #111820;
+  padding: 6px 8px;
+}
+
+.previewDiagnosticRow strong {
+  color: #edf3fb;
+  font-size: 12px;
+}
+
+.previewDiagnosticRow span,
+.previewDiagnosticRow small {
+  grid-column: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.previewDiagnosticRow.ready {
+  border-color: rgba(116, 217, 159, 0.55);
+}
+
+.previewDiagnosticRow.warming {
+  border-color: rgba(242, 193, 78, 0.55);
+}
+
+.previewDiagnosticRow.missing {
+  border-color: rgba(220, 92, 92, 0.55);
+}
+
 .videoPreview {
   display: grid;
   place-items: center;
@@ -8242,6 +8902,150 @@ input[type="color"] {
   min-width: 0;
 }
 
+.videoBackendGrid > small {
+  color: #728197;
+}
+
+.videoBackendPill {
+  display: grid;
+  gap: 1px;
+  min-width: 92px;
+  border: 1px solid #313b48;
+  border-radius: 5px;
+  background: #101923;
+  padding: 5px 7px;
+}
+
+.videoBackendPill strong,
+.videoBackendPill small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.videoBackendPill strong {
+  color: #dfe7f1;
+  font-size: 0.72rem;
+}
+
+.videoBackendPill small {
+  color: #8997a8;
+  font-size: 0.64rem;
+}
+
+.videoBackendPill.state-available {
+  border-color: rgba(116, 217, 159, 0.6);
+  background: rgba(63, 151, 101, 0.12);
+}
+
+.videoBackendPill.state-missing {
+  border-color: rgba(242, 193, 78, 0.65);
+  background: rgba(190, 133, 34, 0.12);
+}
+
+.videoBackendPill.state-notbuilt {
+  border-color: rgba(104, 116, 134, 0.7);
+}
+
+.videoIoPlanGrid .videoBackendPill {
+  min-width: 116px;
+}
+
+.videoOutputPlanGrid .videoBackendPill {
+  min-width: 124px;
+}
+
+.videoOutputPlanPill.state-live {
+  border-color: rgba(93, 214, 76, 0.68);
+  background: rgba(93, 214, 76, 0.12);
+}
+
+.videoOutputPlanPill.state-empty {
+  border-color: rgba(242, 193, 78, 0.65);
+  background: rgba(190, 133, 34, 0.12);
+}
+
+.videoOutputPlanPill.state-blackout {
+  border-color: rgba(104, 116, 134, 0.7);
+  background: rgba(16, 25, 35, 0.72);
+}
+
+.videoOutputPlanPill.state-disabled {
+  border-color: rgba(74, 83, 96, 0.72);
+  background: rgba(11, 17, 24, 0.72);
+}
+
+.videoIoPlanActions {
+  display: grid;
+  gap: 6px;
+  min-width: 96px;
+}
+
+.videoIoPlanActions button {
+  min-height: 28px;
+  padding: 4px 8px;
+}
+
+.videoIoPlanPill.state-enabled {
+  border-color: rgba(93, 214, 76, 0.6);
+  background: rgba(93, 214, 76, 0.1);
+}
+
+.videoIoPlanPill.state-disabled {
+  border-color: rgba(104, 116, 134, 0.7);
+  background: rgba(16, 25, 35, 0.72);
+}
+
+.videoIoPlanPill.state-blocked {
+  border-color: rgba(242, 193, 78, 0.68);
+  background: rgba(190, 133, 34, 0.13);
+}
+
+.videoTransportPill {
+  min-width: 122px;
+  border-style: dashed;
+}
+
+.videoTransportPill.state-started {
+  border-color: rgba(93, 214, 76, 0.72);
+  background: rgba(93, 214, 76, 0.12);
+}
+
+.videoTransportPill.state-kept {
+  border-color: rgba(95, 157, 220, 0.66);
+  background: rgba(95, 157, 220, 0.11);
+}
+
+.videoTransportPill.state-stopped {
+  border-color: rgba(242, 193, 78, 0.68);
+  background: rgba(190, 133, 34, 0.12);
+}
+
+.videoTransportPill.state-idle {
+  border-color: rgba(104, 116, 134, 0.7);
+}
+
+.videoTransportPill.state-blocked {
+  border-color: rgba(220, 92, 92, 0.72);
+  background: rgba(128, 33, 44, 0.16);
+}
+
+.videoTransportPill.state-failed {
+  border-color: rgba(255, 94, 94, 0.84);
+  background: rgba(150, 35, 45, 0.2);
+}
+
+.videoTransportPill.state-driver-start {
+  border-color: rgba(116, 217, 159, 0.56);
+  background: rgba(63, 151, 101, 0.1);
+}
+
+.videoTransportPill.state-driver-stop {
+  border-color: rgba(242, 193, 78, 0.58);
+  background: rgba(190, 133, 34, 0.1);
+}
+
 @media (max-width: 820px) {
   .videoBackendStatus {
     grid-template-columns: 1fr;
@@ -8291,8 +9095,29 @@ input[type="color"] {
   background: #111f2d;
 }
 
+.videoWindowStatusBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid #28313d;
+  border-radius: 6px;
+  background: #0f161d;
+  padding: 7px 8px;
+  color: #aab6c6;
+  font-size: 12px;
+}
+
+.videoWindowStatusBar > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .videoOutputControlItem strong,
-.videoOutputControlItem span {
+.videoOutputControlItem span,
+.videoOutputControlItem small {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -8302,6 +9127,70 @@ input[type="color"] {
 .videoOutputControlItem span {
   color: #8997a8;
   font-size: 12px;
+}
+
+.videoOutputControlItem small {
+  color: #728197;
+  font-size: 11px;
+}
+
+.videoOutputControlItem .outputRenderPlanStatus {
+  width: max-content;
+  max-width: 100%;
+  margin-top: 5px;
+  border: 1px solid #313b48;
+  border-radius: 999px;
+  background: #101923;
+  padding: 2px 8px;
+  color: #dfe7f1;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.videoOutputControlItem .outputRenderPlanStatus.state-live {
+  border-color: rgba(93, 214, 76, 0.64);
+  background: rgba(93, 214, 76, 0.12);
+  color: #9ef08d;
+}
+
+.videoOutputControlItem .outputRenderPlanStatus.state-empty {
+  border-color: rgba(242, 193, 78, 0.6);
+  background: rgba(190, 133, 34, 0.12);
+  color: #f4d480;
+}
+
+.videoOutputControlItem .outputRenderPlanStatus.state-blackout,
+.videoOutputControlItem .outputRenderPlanStatus.state-disabled,
+.videoOutputControlItem .outputRenderPlanStatus.state-unchecked {
+  border-color: rgba(104, 116, 134, 0.7);
+  background: rgba(16, 25, 35, 0.72);
+  color: #aab6c6;
+}
+
+.videoOutputControlItem .outputWindowStatus {
+  width: max-content;
+  max-width: 100%;
+  margin-top: 5px;
+  border: 1px solid #313b48;
+  border-radius: 999px;
+  background: #101923;
+  padding: 2px 8px;
+  color: #dfe7f1;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.videoOutputControlItem .outputWindowStatus.state-open {
+  border-color: rgba(95, 157, 220, 0.66);
+  background: rgba(95, 157, 220, 0.12);
+  color: #a9ceff;
+}
+
+.videoOutputControlItem .outputWindowStatus.state-closed,
+.videoOutputControlItem .outputWindowStatus.state-unchecked {
+  border-color: rgba(104, 116, 134, 0.7);
+  background: rgba(16, 25, 35, 0.72);
+  color: #aab6c6;
 }
 
 .outputOpacityMeter {
@@ -8740,6 +9629,7 @@ input[type="color"] {
 .timelineList {
   display: grid;
   gap: 6px;
+  min-width: 0;
 }
 
 .timelineItem {
@@ -8747,6 +9637,7 @@ input[type="color"] {
   grid-template-columns: 1fr 72px;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   min-height: 46px;
   border: 1px solid #28313d;
   border-radius: 6px;
@@ -9049,6 +9940,52 @@ input[type="color"] {
   stroke-width: 0.9;
   stroke-dasharray: 2 1.6;
   pointer-events: none;
+}
+
+.waveStageObject {
+  pointer-events: none;
+  color: #727a84;
+}
+
+.waveStageObject rect {
+  fill-opacity: 0.16;
+  stroke: currentColor;
+  stroke-width: 0.55;
+  stroke-dasharray: 1.8 1.2;
+}
+
+.waveStageObject line {
+  stroke: currentColor;
+  stroke-width: 0.34;
+  opacity: 0.58;
+}
+
+.waveStageObject text {
+  fill: #8fa3b8;
+  font-size: 2.7px;
+  paint-order: stroke;
+  stroke: #0d131a;
+  stroke-width: 0.85px;
+}
+
+.waveStageObject.kind-stage {
+  color: #5dd64c;
+}
+
+.waveStageObject.kind-truss {
+  color: #f2c14e;
+}
+
+.waveStageObject.kind-screen {
+  color: #4cb7ff;
+}
+
+.waveStageObject.kind-riser {
+  color: #9b8cff;
+}
+
+.waveStageObject.kind-mask {
+  color: #727a84;
 }
 
 .waveVideoSurface {
@@ -9373,7 +10310,12 @@ input[type="color"] {
 }
 
 .dmxRoutes .timelineItem {
-  grid-template-columns: minmax(120px, 1fr) 54px minmax(120px, 1.1fr) 58px 70px;
+  grid-template-columns: minmax(0, 1fr) auto minmax(58px, auto);
+}
+
+.dmxRoutes .timelineItem button {
+  min-width: 0;
+  padding: 0 8px;
 }
 
 .dmxOutputDiagnostics {

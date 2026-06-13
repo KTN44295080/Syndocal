@@ -26,8 +26,8 @@
   },
   "bundle": {
     "active": false,
-    "publisher": "Seraf() KTN",
-    "copyright": "Copyright (c) 2026 Seraf() KTN",
+    "publisher": "Seraf()のKTN",
+    "copyright": "Copyright (c) 2026 Seraf()のKTN",
     "targets": "all",
     "fileAssociations": [
       {

@@ -7,7 +7,7 @@ use std::{
     net::{IpAddr, UdpSocket},
     path::{Path, PathBuf},
     process::Command,
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -19,18 +19,18 @@ use io::osc::{OscInput, OscInputEvent};
 use io::remote_ws::{RemoteInputEvent, RemoteWsServer};
 use io::sacn::is_sacn_multicast_target;
 use protocol::{
-    AttributeControl, AttributeResolution, AudioAnalysisSummary, AutomationId,
-    AutomationKeyframeSummary, ClockSnapshot, CompositionId, CompositionSummary, CueFixtureTarget,
-    CueId, CueNodeGraphTarget, CustomFixtureProfileFile, CustomFixtureProfileRequest,
-    DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, EffectId, EffectKind, EffectPreset,
-    EffectSummary, EngineSnapshot, EngineTelemetry, FixtureId, FixtureLimits, FixturePreset,
-    FixtureProfileSummary, GeometrySummary, LearnedMidiControl, LearnedOscControl,
-    LfoEffectRequest, MidiControlAction, MidiControlMapping, MidiInputSummary, MidiOutputSummary,
-    NodeGraphId, NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp,
-    OscControlAction, OscControlMapping, OscInputConfig, PatchFixtureRequest,
+    canonical_video_output_mapping_field, AttributeControl, AttributeResolution,
+    AudioAnalysisSummary, AutomationId, AutomationKeyframeSummary, ClockSnapshot, CompositionId,
+    CompositionSummary, CueFixtureTarget, CueId, CueNodeGraphTarget, CustomFixtureProfileFile,
+    CustomFixtureProfileRequest, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, EffectId,
+    EffectKind, EffectPreset, EffectSummary, EngineSnapshot, EngineTelemetry, FixtureId,
+    FixtureLimits, FixturePreset, FixtureProfileSummary, GeometrySummary, LearnedMidiControl,
+    LearnedOscControl, LfoEffectRequest, MidiControlAction, MidiControlMapping, MidiInputSummary,
+    MidiOutputSummary, NodeGraphId, NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary,
+    NodeGraphTransformOp, OscControlAction, OscControlMapping, OscInputConfig, PatchFixtureRequest,
     PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RemoteControlConfig, Rotation3,
-    SerialPortSummary, StageMapConfig, StageMapPresetFile, StageMapPresetSummary,
-    TimelineEventId, TimelineTrackKind, Vec3,
+    SerialPortSummary, StageMapConfig, StageMapPresetFile, StageMapPresetSummary, StageObjectId,
+    StageObjectKind, StageObjectSummary, TimelineEventId, TimelineTrackKind, Vec3,
     VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode, VideoEffectTarget,
     VideoLayerId, VideoLayerState, VideoLayerTarget, VideoOutputId, VideoOutputKind,
     VideoOutputMapping, VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary,
@@ -71,6 +71,8 @@ fn validate_app_name(file_label: &str, app: &str) -> Result<(), String> {
 struct AppState {
     engine: EngineHandle,
     video_preview: Mutex<AppVideoPreviewRenderer>,
+    external_video_transport: Arc<Mutex<video::ExternalVideoTransportRuntime>>,
+    external_video_transport_events: Arc<Mutex<Vec<ExternalVideoTransportDriverEvent>>>,
     custom_profiles: Mutex<HashMap<String, FixtureProfileSummary>>,
     visualizer_model_assets: Mutex<HashMap<String, VisualizerModelAssetCacheEntry>>,
     midi_clock: Mutex<Option<MidiClockInput>>,
@@ -138,6 +140,12 @@ struct DmxTestFrameResult {
     bytes: usize,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct GdtfWheelMediaPayload {
+    bytes: Vec<u8>,
+    mime_type: String,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 struct EngineTelemetryReport {
     version: u8,
@@ -170,23 +178,67 @@ struct Phase1SmokeReport {
     passed: bool,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 struct VideoPreviewQueueSummary {
     layer_id: VideoLayerId,
     label: String,
+    source_kind: VideoSourceKind,
+    position_ms: u64,
+    source_duration_ms: Option<u64>,
+    playing: bool,
+    effective_speed: f32,
     queue_len: usize,
+    expected_queue_len: usize,
+    expected_positions_ms: Vec<u64>,
+    ready: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+struct VideoOutputDecodePreviewSummary {
+    output_id: VideoOutputId,
+    label: String,
+    width: u32,
+    height: u32,
+    enabled: bool,
+    blackout: bool,
+    report: Option<video::VideoDecodeEnqueueReport>,
+    error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 struct VideoPreviewDiagnostics {
     queue_count: usize,
+    frame_queue_capacity: usize,
     still_image_cache_len: usize,
     decoder_cache_len: usize,
     prefetch_count: usize,
     prefetch_interval_ms: u64,
     bpm: Option<f32>,
     layer_queues: Vec<VideoPreviewQueueSummary>,
+    output_decode_previews: Vec<VideoOutputDecodePreviewSummary>,
 }
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct ExternalVideoTransportDriverEvent {
+    sequence: u64,
+    action: ExternalVideoTransportDriverAction,
+    route: video::ExternalVideoTransportRoute,
+    message: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+enum ExternalVideoTransportDriverAction {
+    Start,
+    Stop,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct ExternalVideoTransportSyncResponse {
+    report: video::ExternalVideoTransportSyncReport,
+    events: Vec<ExternalVideoTransportDriverEvent>,
+}
+
+const EXTERNAL_VIDEO_TRANSPORT_EVENT_LIMIT: usize = 64;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 enum TelemetryBudgetStatus {
@@ -422,11 +474,30 @@ fn import_gdtf(state: State<'_, AppState>, path: String) -> Result<FixtureProfil
 }
 
 #[tauri::command]
-fn load_gdtf_wheel_media(path: String, media: String) -> Result<Option<Vec<u8>>, String> {
+fn load_gdtf_wheel_media(
+    path: String,
+    media: String,
+) -> Result<Option<GdtfWheelMediaPayload>, String> {
     if path.starts_with("memory://") || path.starts_with("snapshot://") {
         return Ok(None);
     }
-    gdtf::load_wheel_media(path, &media).map_err(|error| error.to_string())
+    let mime_type = gdtf_wheel_media_mime_type(&media).to_string();
+    gdtf::load_wheel_media(path, &media)
+        .map(|bytes| bytes.map(|bytes| GdtfWheelMediaPayload { bytes, mime_type }))
+        .map_err(|error| error.to_string())
+}
+
+fn gdtf_wheel_media_mime_type(media: &str) -> &'static str {
+    let normalized = media.trim().to_ascii_lowercase();
+    if normalized.ends_with(".jpg") || normalized.ends_with(".jpeg") {
+        "image/jpeg"
+    } else if normalized.ends_with(".webp") {
+        "image/webp"
+    } else if normalized.ends_with(".svg") {
+        "image/svg+xml"
+    } else {
+        "image/png"
+    }
 }
 
 #[tauri::command]
@@ -2104,7 +2175,13 @@ fn start_remote_control(
 ) -> Result<(), String> {
     let command_engine = state.engine.clone();
     let snapshot_engine = state.engine.clone();
-    let server = RemoteWsServer::start_with_snapshot_and_video_runtime_status(
+    let render_plans_engine = state.engine.clone();
+    let io_plans_engine = state.engine.clone();
+    let transport_status = Arc::clone(&state.external_video_transport);
+    let sync_engine = state.engine.clone();
+    let sync_transport = Arc::clone(&state.external_video_transport);
+    let sync_events = Arc::clone(&state.external_video_transport_events);
+    let server = RemoteWsServer::start_with_snapshot_and_video_status_providers(
         config,
         move |event| {
             let command = match event {
@@ -2341,6 +2418,70 @@ fn start_remote_control(
         },
         move || snapshot_engine.snapshot(),
         video::video_runtime_status,
+        move || {
+            let snapshot = render_plans_engine.snapshot();
+            match video::build_video_output_render_plans(&snapshot.video) {
+                Ok(plans) => serde_json::to_value(plans).unwrap_or_else(|_| {
+                    json!({
+                        "plans": [],
+                        "error": "Video output render plan serialization failed",
+                    })
+                }),
+                Err(error) => json!({
+                    "plans": [],
+                    "error": format!("{error:?}"),
+                }),
+            }
+        },
+        move || {
+            let snapshot = io_plans_engine.snapshot();
+            serde_json::to_value(video::build_external_video_io_route_plans(
+                &snapshot.video,
+                &video::video_runtime_status(),
+            ))
+            .unwrap_or_else(|_| {
+                json!({
+                    "inputs": [],
+                    "outputs": [],
+                    "error": "External video I/O plan serialization failed",
+                })
+            })
+        },
+        move || match transport_status.lock() {
+            Ok(transport) => serde_json::to_value(transport.status()).unwrap_or_else(|_| {
+                json!({
+                    "active_routes": [],
+                    "active_count": 0,
+                    "error": "External video transport status serialization failed",
+                })
+            }),
+            Err(_) => json!({
+                "active_routes": [],
+                "active_count": 0,
+                "error": "External video transport runtime lock was poisoned",
+            }),
+        },
+        move || {
+            let snapshot = sync_engine.snapshot();
+            match sync_external_video_transports_from_snapshot(
+                &snapshot,
+                sync_transport.as_ref(),
+                sync_events.as_ref(),
+            ) {
+                Ok(sync) => serde_json::to_value(sync).unwrap_or_else(|_| {
+                    json!({
+                        "report": null,
+                        "events": [],
+                        "error": "External video transport sync serialization failed",
+                    })
+                }),
+                Err(error) => json!({
+                    "report": null,
+                    "events": [],
+                    "error": error,
+                }),
+            }
+        },
     )
     .map_err(|error| error.to_string())?;
     let mut guard = state
@@ -2870,6 +3011,102 @@ fn add_still_image_layer(
         })
         .map_err(|error| error.to_string())?;
     Ok(layer_id)
+}
+
+#[tauri::command]
+fn refresh_video_layer_metadata(
+    state: State<'_, AppState>,
+    layer_id: VideoLayerId,
+) -> Result<String, String> {
+    let snapshot = state.engine.snapshot();
+    let layer = snapshot
+        .video
+        .layers
+        .iter()
+        .find(|layer| layer.id == layer_id)
+        .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
+    let (source, message) = refresh_video_source_metadata(&layer.source)?;
+    state
+        .engine
+        .send(EngineCommand::SetVideoLayerSource { layer_id, source })
+        .map_err(|error| error.to_string())?;
+    Ok(message)
+}
+
+fn refresh_video_source_metadata(
+    source: &VideoSourceSummary,
+) -> Result<(VideoSourceSummary, String), String> {
+    match source.kind {
+        VideoSourceKind::File => refresh_file_video_source_metadata(source),
+        VideoSourceKind::StillImage => refresh_still_image_source_metadata(source),
+        VideoSourceKind::Ndi | VideoSourceKind::Spout | VideoSourceKind::Syphon => {
+            Err("External video inputs do not expose local file metadata in this build".to_string())
+        }
+    }
+}
+
+fn refresh_file_video_source_metadata(
+    source: &VideoSourceSummary,
+) -> Result<(VideoSourceSummary, String), String> {
+    let path = source
+        .path
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| "Video file source path is required".to_string())?;
+    let path = validate_existing_file_path(path.to_string(), "Video file")?;
+    let probe = video::probe_video_file_metadata(&path);
+    let (codec, metadata, message) = match probe {
+        Ok(probe) => {
+            let codec = probe
+                .codec
+                .or_else(|| video::infer_video_codec_from_path(&path))
+                .or_else(|| source.codec.clone());
+            let message = if probe.metadata.is_some() {
+                "Refreshed video file metadata".to_string()
+            } else {
+                "Refreshed video codec; ffprobe returned no stream metadata".to_string()
+            };
+            (codec, probe.metadata, message)
+        }
+        Err(error) => (
+            video::infer_video_codec_from_path(&path).or_else(|| source.codec.clone()),
+            None,
+            format!("Refreshed video codec fallback; ffprobe failed: {error:?}"),
+        ),
+    };
+    Ok((
+        VideoSourceSummary {
+            kind: VideoSourceKind::File,
+            path: Some(path),
+            name: source.name.clone(),
+            codec,
+            metadata,
+        },
+        message,
+    ))
+}
+
+fn refresh_still_image_source_metadata(
+    source: &VideoSourceSummary,
+) -> Result<(VideoSourceSummary, String), String> {
+    let path = source
+        .path
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| "Still image source path is required".to_string())?;
+    let path = validate_existing_file_path(path.to_string(), "Still image")?;
+    let metadata = video::probe_still_image_metadata(&path)
+        .map_err(|error| format!("Still image metadata probe failed: {error:?}"))?;
+    Ok((
+        VideoSourceSummary {
+            kind: VideoSourceKind::StillImage,
+            path: Some(path),
+            name: source.name.clone(),
+            codec: source.codec.clone(),
+            metadata: Some(metadata),
+        },
+        "Refreshed still image metadata".to_string(),
+    ))
 }
 
 #[tauri::command]
@@ -4410,10 +4647,12 @@ fn validate_project_file(project: &ProjectFile) -> Result<(), String> {
         project.snapshot.node_graphs.iter().map(|graph| graph.id),
     )?;
     validate_project_fixture_patches(&project.snapshot.fixtures)?;
+    validate_project_fixture_geometries(&project.snapshot.fixtures)?;
     validate_project_fixture_attribute_values(&project.snapshot.fixtures)?;
     validate_project_dmx_outputs(&project.snapshot)?;
     validate_stage_map_config(&project.snapshot.stage_map)?;
     validate_project_stage_map_presets(&project.snapshot.stage_map_presets)?;
+    validate_project_stage_objects(&project.snapshot.stage_objects)?;
     validate_project_custom_profile_refs(&project.snapshot, &project.custom_profiles)?;
     validate_project_lighting_references(&project.snapshot)?;
     validate_project_video_graph(&project.snapshot)?;
@@ -4497,6 +4736,130 @@ fn validate_project_fixture_patches(fixtures: &[PatchedFixtureSummary]) -> Resul
             format!("fixture {} '{}'", fixture.id, fixture.label),
         ));
     }
+    Ok(())
+}
+
+fn validate_project_fixture_geometries(fixtures: &[PatchedFixtureSummary]) -> Result<(), String> {
+    for fixture in fixtures {
+        validate_geometry_collection(
+            &format!("fixture {} '{}'", fixture.id, fixture.label),
+            &fixture.geometries,
+            &fixture.controls,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_geometry_collection(
+    owner_label: &str,
+    geometries: &[GeometrySummary],
+    controls: &[AttributeControl],
+) -> Result<(), String> {
+    let mut geometry_names = HashSet::new();
+    let mut parents_by_name = HashMap::new();
+
+    for geometry in geometries {
+        let name = geometry.name.trim();
+        if name.is_empty() {
+            return Err(format!(
+                "Project {owner_label} has a geometry node with an empty name"
+            ));
+        }
+        if !geometry_names.insert(name.to_string()) {
+            return Err(format!(
+                "Project {owner_label} contains duplicate geometry node '{name}'"
+            ));
+        }
+        if geometry.kind.trim().is_empty() {
+            return Err(format!(
+                "Project {owner_label} geometry '{name}' has an empty kind"
+            ));
+        }
+        if geometry.matrix.iter().any(|value| !value.is_finite()) {
+            return Err(format!(
+                "Project {owner_label} geometry '{name}' has a non-finite transform matrix"
+            ));
+        }
+        let parent = geometry
+            .parent
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let Some(parent) = parent {
+            if parent == name {
+                return Err(format!(
+                    "Project {owner_label} geometry '{name}' cannot parent itself"
+                ));
+            }
+            parents_by_name.insert(name.to_string(), parent.to_string());
+        }
+        if let Some(dimensions) = geometry.model_dimensions {
+            if !dimensions.x.is_finite()
+                || !dimensions.y.is_finite()
+                || !dimensions.z.is_finite()
+                || dimensions.x < 0.0
+                || dimensions.y < 0.0
+                || dimensions.z < 0.0
+            {
+                return Err(format!(
+                    "Project {owner_label} geometry '{name}' has invalid model dimensions"
+                ));
+            }
+        }
+        for (label, value) in [
+            ("beam angle", geometry.beam_angle_deg),
+            ("field angle", geometry.field_angle_deg),
+            ("beam radius", geometry.beam_radius),
+        ] {
+            if let Some(value) = value {
+                if !value.is_finite() || value < 0.0 {
+                    return Err(format!(
+                        "Project {owner_label} geometry '{name}' has invalid {label}"
+                    ));
+                }
+            }
+        }
+    }
+
+    for (name, parent) in &parents_by_name {
+        if !geometry_names.contains(parent) {
+            return Err(format!(
+                "Project {owner_label} geometry '{name}' references missing parent '{parent}'"
+            ));
+        }
+    }
+
+    for geometry in geometries {
+        let mut seen = HashSet::new();
+        let mut current = geometry.name.trim().to_string();
+        while let Some(parent) = parents_by_name.get(&current) {
+            if !seen.insert(current.clone()) {
+                return Err(format!(
+                    "Project {owner_label} geometry '{}' contains a parent cycle",
+                    geometry.name
+                ));
+            }
+            current = parent.clone();
+        }
+    }
+
+    for control in controls {
+        let Some(geometry_name) = control
+            .geometry
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        if !geometry_names.contains(geometry_name) {
+            return Err(format!(
+                "Project {owner_label} control '{}' references missing geometry '{geometry_name}'",
+                control.attribute
+            ));
+        }
+    }
+
     Ok(())
 }
 
@@ -4767,6 +5130,11 @@ fn validate_project_custom_profiles(profiles: &[FixtureProfileSummary]) -> Resul
                     mode.name
                 )
             })?;
+            validate_geometry_collection(
+                &format!("custom profile {source_path} mode '{}'", mode.name),
+                &profile.geometries,
+                &mode.controls,
+            )?;
         }
     }
     Ok(())
@@ -5059,36 +5427,10 @@ fn validate_project_video_source_metadata(
 }
 
 fn validate_project_external_video_backends(snapshot: &EngineSnapshot) -> Result<(), String> {
-    let needs_status = snapshot
-        .video
-        .layers
-        .iter()
-        .any(|layer| video_input_backend(&layer.source.kind).is_some())
-        || snapshot
-            .video
-            .outputs
-            .iter()
-            .any(|output| video_output_backend(&output.kind).is_some());
-    if !needs_status {
-        return Ok(());
-    }
-    validate_project_external_video_backends_with_status(snapshot, &video::video_runtime_status())
-}
-
-fn validate_project_external_video_backends_with_status(
-    snapshot: &EngineSnapshot,
-    status: &VideoRuntimeStatus,
-) -> Result<(), String> {
     for layer in &snapshot.video.layers {
-        let Some((backend_id, feature_label)) = video_input_backend(&layer.source.kind) else {
+        let Some((_, feature_label)) = video_input_backend(&layer.source.kind) else {
             continue;
         };
-        validate_video_backend_available(status, backend_id, feature_label).map_err(|error| {
-            format!(
-                "Project video layer {} '{}' uses unavailable {feature_label}: {error}",
-                layer.id, layer.label
-            )
-        })?;
         if layer
             .source
             .name
@@ -5105,15 +5447,9 @@ fn validate_project_external_video_backends_with_status(
     }
 
     for output in &snapshot.video.outputs {
-        let Some((backend_id, feature_label)) = video_output_backend(&output.kind) else {
+        let Some((_, feature_label)) = video_output_backend(&output.kind) else {
             continue;
         };
-        validate_video_backend_available(status, backend_id, feature_label).map_err(|error| {
-            format!(
-                "Project video output {} '{}' uses unavailable {feature_label}: {error}",
-                output.id, output.label
-            )
-        })?;
         if output
             .endpoint_name
             .as_deref()
@@ -5777,6 +6113,7 @@ fn save_stage_map_preset(
         .send(EngineCommand::SaveStageMapPreset {
             label: label.clone(),
             config,
+            stage_objects: Some(state.engine.snapshot().stage_objects),
         })
         .map_err(|error| error.to_string())?;
     Ok(label)
@@ -5801,7 +6138,56 @@ fn remove_stage_map_preset(state: State<'_, AppState>, label: String) -> Result<
 }
 
 #[tauri::command]
+fn add_stage_object(
+    state: State<'_, AppState>,
+    label: String,
+    kind: StageObjectKind,
+    x: f32,
+    z: f32,
+    width: f32,
+    depth: f32,
+    rotation_deg: f32,
+    color: Option<String>,
+) -> Result<StageObjectId, String> {
+    let object_id = state.engine.allocate_stage_object_id();
+    let object = normalize_stage_object(StageObjectSummary {
+        id: object_id,
+        label,
+        kind,
+        x,
+        z,
+        width,
+        depth,
+        rotation_deg,
+        color,
+    })?;
+    state
+        .engine
+        .send(EngineCommand::UpsertStageObject(object))
+        .map_err(|error| error.to_string())?;
+    Ok(object_id)
+}
+
+#[tauri::command]
+fn set_stage_object(state: State<'_, AppState>, object: StageObjectSummary) -> Result<(), String> {
+    let object = normalize_stage_object(object)?;
+    state
+        .engine
+        .send(EngineCommand::UpsertStageObject(object))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn remove_stage_object(state: State<'_, AppState>, object_id: StageObjectId) -> Result<(), String> {
+    state
+        .engine
+        .send(EngineCommand::RemoveStageObject(object_id))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn save_stage_map_preset_file(
+    state: State<'_, AppState>,
     label: String,
     config: StageMapConfig,
 ) -> Result<Option<String>, String> {
@@ -5813,6 +6199,7 @@ fn save_stage_map_preset_file(
         preset: StageMapPresetSummary {
             label: label.clone(),
             config,
+            stage_objects: Some(state.engine.snapshot().stage_objects),
         },
     };
     let Some(path) = rfd::FileDialog::new()
@@ -5845,6 +6232,7 @@ fn load_stage_map_preset_file(state: State<'_, AppState>) -> Result<Option<Strin
         .send(EngineCommand::SaveStageMapPreset {
             label: file.preset.label,
             config: file.preset.config,
+            stage_objects: file.preset.stage_objects,
         })
         .map_err(|error| error.to_string())?;
     Ok(Some(label))
@@ -6262,6 +6650,128 @@ fn get_video_output_render_plans(
 }
 
 #[tauri::command]
+fn get_external_video_io_plans(state: State<'_, AppState>) -> video::ExternalVideoIoRoutePlans {
+    let snapshot = state.engine.snapshot();
+    video::build_external_video_io_route_plans(&snapshot.video, &video::video_runtime_status())
+}
+
+#[tauri::command]
+fn get_external_video_transport_status(
+    state: State<'_, AppState>,
+) -> Result<video::ExternalVideoTransportStatus, String> {
+    state
+        .external_video_transport
+        .lock()
+        .map(|transport| transport.status())
+        .map_err(|_| "External video transport runtime lock was poisoned".to_string())
+}
+
+struct RecordingExternalVideoTransportDriver<'a> {
+    events: &'a mut Vec<ExternalVideoTransportDriverEvent>,
+}
+
+impl RecordingExternalVideoTransportDriver<'_> {
+    fn push_event(
+        &mut self,
+        action: ExternalVideoTransportDriverAction,
+        route: &video::ExternalVideoTransportRoute,
+        message: String,
+    ) {
+        let sequence = self.events.last().map_or(1, |event| event.sequence + 1);
+        self.events.push(ExternalVideoTransportDriverEvent {
+            sequence,
+            action,
+            route: route.clone(),
+            message,
+        });
+        if self.events.len() > EXTERNAL_VIDEO_TRANSPORT_EVENT_LIMIT {
+            let overflow = self.events.len() - EXTERNAL_VIDEO_TRANSPORT_EVENT_LIMIT;
+            self.events.drain(0..overflow);
+        }
+    }
+}
+
+impl video::ExternalVideoTransportDriver for RecordingExternalVideoTransportDriver<'_> {
+    fn start_route(
+        &mut self,
+        route: &video::ExternalVideoTransportRoute,
+    ) -> Result<(), video::ExternalVideoTransportDriverError> {
+        self.push_event(
+            ExternalVideoTransportDriverAction::Start,
+            route,
+            format!(
+                "Queued {} {} external video route '{}'",
+                route.backend_id,
+                external_video_transport_direction_label(route.direction),
+                route.endpoint_name
+            ),
+        );
+        Ok(())
+    }
+
+    fn stop_route(
+        &mut self,
+        route: &video::ExternalVideoTransportRoute,
+    ) -> Result<(), video::ExternalVideoTransportDriverError> {
+        self.push_event(
+            ExternalVideoTransportDriverAction::Stop,
+            route,
+            format!(
+                "Released {} {} external video route '{}'",
+                route.backend_id,
+                external_video_transport_direction_label(route.direction),
+                route.endpoint_name
+            ),
+        );
+        Ok(())
+    }
+}
+
+fn external_video_transport_direction_label(
+    direction: video::ExternalVideoTransportDirection,
+) -> &'static str {
+    match direction {
+        video::ExternalVideoTransportDirection::Input => "input",
+        video::ExternalVideoTransportDirection::Output => "output",
+    }
+}
+
+fn sync_external_video_transports_from_snapshot(
+    snapshot: &EngineSnapshot,
+    transport: &Mutex<video::ExternalVideoTransportRuntime>,
+    event_log: &Mutex<Vec<ExternalVideoTransportDriverEvent>>,
+) -> Result<ExternalVideoTransportSyncResponse, String> {
+    let plans =
+        video::build_external_video_io_route_plans(&snapshot.video, &video::video_runtime_status());
+    let mut transport = transport
+        .lock()
+        .map_err(|_| "External video transport runtime lock was poisoned".to_string())?;
+    let mut events = event_log
+        .lock()
+        .map_err(|_| "External video transport event log lock was poisoned".to_string())?;
+    let mut driver = RecordingExternalVideoTransportDriver {
+        events: &mut events,
+    };
+    let report = transport.sync_routes_with_driver(&plans, &mut driver);
+    Ok(ExternalVideoTransportSyncResponse {
+        report,
+        events: events.clone(),
+    })
+}
+
+#[tauri::command]
+fn sync_external_video_transports(
+    state: State<'_, AppState>,
+) -> Result<ExternalVideoTransportSyncResponse, String> {
+    let snapshot = state.engine.snapshot();
+    sync_external_video_transports_from_snapshot(
+        &snapshot,
+        state.external_video_transport.as_ref(),
+        state.external_video_transport_events.as_ref(),
+    )
+}
+
+#[tauri::command]
 fn get_video_runtime_status() -> VideoRuntimeStatus {
     video::video_runtime_status()
 }
@@ -6276,24 +6786,116 @@ fn get_video_preview_diagnostics(
         .lock()
         .map_err(|_| "Video preview renderer lock was poisoned".to_string())?;
     let provider = renderer.frame_provider();
+    let config = renderer.config();
+    let prefetch_count = provider.prefetch_count();
+    let prefetch_interval_ms = provider.prefetch_interval_ms();
+    let bpm = provider.bpm();
     Ok(VideoPreviewDiagnostics {
         queue_count: renderer.queue_count(),
+        frame_queue_capacity: config.frame_queue_capacity,
         still_image_cache_len: provider.still_image_cache_len(),
         decoder_cache_len: provider.decoder().cache_len(),
-        prefetch_count: provider.prefetch_count(),
-        prefetch_interval_ms: provider.prefetch_interval_ms(),
-        bpm: provider.bpm(),
+        prefetch_count,
+        prefetch_interval_ms,
+        bpm,
         layer_queues: snapshot
             .video
             .layers
             .iter()
-            .map(|layer| VideoPreviewQueueSummary {
-                layer_id: layer.id,
-                label: layer.label.clone(),
-                queue_len: renderer.queue_len(layer.id),
+            .map(|layer| {
+                let queue_len = renderer.queue_len(layer.id);
+                let expected_positions_ms = video::preview_prefetch_positions_ms(
+                    layer,
+                    prefetch_count,
+                    prefetch_interval_ms,
+                    bpm,
+                );
+                let expected_queue_len = expected_positions_ms
+                    .len()
+                    .min(config.frame_queue_capacity.max(1));
+                VideoPreviewQueueSummary {
+                    layer_id: layer.id,
+                    label: layer.label.clone(),
+                    source_kind: layer.source.kind.clone(),
+                    position_ms: layer.state.position_ms,
+                    source_duration_ms: layer
+                        .source
+                        .metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.duration_ms),
+                    playing: layer.state.playing,
+                    effective_speed: video::effective_speed(&layer.state, provider.bpm()),
+                    queue_len,
+                    expected_queue_len,
+                    expected_positions_ms,
+                    ready: queue_len >= expected_queue_len,
+                }
             })
             .collect(),
+        output_decode_previews: video_output_decode_preview_summaries(
+            &snapshot.video,
+            config,
+            prefetch_count,
+            prefetch_interval_ms,
+            bpm,
+        ),
     })
+}
+
+fn video_output_decode_preview_summaries(
+    snapshot: &protocol::VideoSnapshot,
+    config: video::VideoRuntimeConfig,
+    prefetch_count: usize,
+    prefetch_interval_ms: u64,
+    bpm: Option<f32>,
+) -> Vec<VideoOutputDecodePreviewSummary> {
+    let scheduler_capacity = snapshot
+        .layers
+        .len()
+        .max(1)
+        .saturating_mul(prefetch_count.saturating_add(1).max(1));
+    snapshot
+        .outputs
+        .iter()
+        .map(|output| {
+            let mut scheduler = video::VideoDecodeScheduler::new(scheduler_capacity.max(1));
+            let result = scheduler.push_output_preview(
+                snapshot,
+                output.id,
+                config.preview_width,
+                config.preview_height,
+                prefetch_count,
+                prefetch_interval_ms,
+                bpm,
+            );
+            let (report, error) = match result {
+                Ok(report) => (Some(report), None),
+                Err(error) => (None, Some(format!("{error:?}"))),
+            };
+            VideoOutputDecodePreviewSummary {
+                output_id: output.id,
+                label: output.label.clone(),
+                width: output.width,
+                height: output.height,
+                enabled: output.enabled,
+                blackout: output.blackout,
+                report,
+                error,
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn expected_video_preview_queue_len(
+    layer: &protocol::VideoLayerSummary,
+    prefetch_count: usize,
+) -> usize {
+    if matches!(layer.source.kind, VideoSourceKind::StillImage) || prefetch_count == 0 {
+        1
+    } else {
+        prefetch_count.saturating_add(1)
+    }
 }
 
 #[tauri::command]
@@ -6310,6 +6912,10 @@ fn get_debug_video_preview(
     renderer
         .frame_provider_mut()
         .set_bpm(Some(snapshot.clock.bpm));
+    let decode_budget = video_preview_decode_budget(&renderer, snapshot.video.layers.len());
+    renderer
+        .warm_first_composition_decode_queue(&snapshot.video, width, height, decode_budget)
+        .map_err(|error| format!("{error:?}"))?;
     renderer
         .render(&snapshot.video, width, height)
         .map_err(|error| format!("{error:?}"))
@@ -6321,6 +6927,7 @@ fn get_debug_video_output_preview(
     output_id: VideoOutputId,
     width: u32,
     height: u32,
+    decode_budget: Option<usize>,
 ) -> Result<video::VideoFrame, String> {
     let snapshot = state.engine.snapshot();
     let mut renderer = state
@@ -6330,9 +6937,36 @@ fn get_debug_video_output_preview(
     renderer
         .frame_provider_mut()
         .set_bpm(Some(snapshot.clock.bpm));
+    let decode_budget =
+        resolved_video_preview_decode_budget(&renderer, snapshot.video.layers.len(), decode_budget);
+    renderer
+        .warm_output_decode_queue(&snapshot.video, output_id, width, height, decode_budget)
+        .map_err(|error| format!("{error:?}"))?;
     renderer
         .render_output_preview(&snapshot.video, output_id, width, height)
         .map_err(|error| format!("{error:?}"))
+}
+
+fn video_preview_decode_budget(renderer: &AppVideoPreviewRenderer, layer_count: usize) -> usize {
+    video_preview_decode_budget_from_prefetch(
+        layer_count,
+        renderer.frame_provider().prefetch_count(),
+    )
+}
+
+fn video_preview_decode_budget_from_prefetch(layer_count: usize, prefetch_count: usize) -> usize {
+    layer_count
+        .max(1)
+        .saturating_mul(prefetch_count.saturating_add(1).max(1))
+}
+
+fn resolved_video_preview_decode_budget(
+    renderer: &AppVideoPreviewRenderer,
+    layer_count: usize,
+    requested: Option<usize>,
+) -> usize {
+    let full_budget = video_preview_decode_budget(renderer, layer_count);
+    requested.unwrap_or(full_budget).clamp(1, full_budget)
 }
 
 #[tauri::command]
@@ -6345,6 +6979,30 @@ fn get_debug_video_output_test_pattern(
     let snapshot = state.engine.snapshot();
     video::render_video_output_test_pattern(&snapshot.video, output_id, width, height)
         .map_err(|error| format!("{error:?}"))
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct VideoOutputWindowStatus {
+    output_id: VideoOutputId,
+    label: String,
+    live_open: bool,
+    test_pattern_open: bool,
+    live_window_label: String,
+    test_pattern_window_label: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct VideoOutputWindowSyncSummary {
+    synced_live: usize,
+    synced_test_pattern: usize,
+    skipped_closed: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct VideoOutputWindowCloseSummary {
+    closed_live: usize,
+    closed_test_pattern: usize,
+    skipped_closed: usize,
 }
 
 fn apply_video_output_window_shell(
@@ -6400,6 +7058,122 @@ fn apply_video_output_window_shell(
         .map_err(|error| error.to_string())?;
 
     Ok(())
+}
+
+#[tauri::command]
+fn get_video_output_window_statuses(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Vec<VideoOutputWindowStatus> {
+    let snapshot = state.engine.snapshot();
+    snapshot
+        .video
+        .outputs
+        .iter()
+        .filter(|output| output.kind == VideoOutputKind::Display)
+        .map(|output| {
+            let live_window_label = video_output_window_label(output.id, false);
+            let test_pattern_window_label = video_output_window_label(output.id, true);
+            VideoOutputWindowStatus {
+                output_id: output.id,
+                label: output.label.clone(),
+                live_open: app.get_webview_window(&live_window_label).is_some(),
+                test_pattern_open: app.get_webview_window(&test_pattern_window_label).is_some(),
+                live_window_label,
+                test_pattern_window_label,
+            }
+        })
+        .collect()
+}
+
+#[tauri::command]
+async fn sync_open_video_output_windows(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<VideoOutputWindowSyncSummary, String> {
+    let snapshot = state.engine.snapshot();
+    let mut summary = VideoOutputWindowSyncSummary {
+        synced_live: 0,
+        synced_test_pattern: 0,
+        skipped_closed: 0,
+    };
+
+    for output in snapshot
+        .video
+        .outputs
+        .iter()
+        .filter(|output| output.kind == VideoOutputKind::Display)
+    {
+        let live_label = video_output_window_label(output.id, false);
+        if let Some(window) = app.get_webview_window(&live_label) {
+            apply_video_output_window_shell(&app, &window, output, false)?;
+            summary.synced_live += 1;
+        } else {
+            summary.skipped_closed += 1;
+        }
+
+        let test_pattern_label = video_output_window_label(output.id, true);
+        if let Some(window) = app.get_webview_window(&test_pattern_label) {
+            apply_video_output_window_shell(&app, &window, output, true)?;
+            summary.synced_test_pattern += 1;
+        } else {
+            summary.skipped_closed += 1;
+        }
+    }
+
+    Ok(summary)
+}
+
+#[tauri::command]
+async fn close_video_output_window(
+    app: tauri::AppHandle,
+    output_id: VideoOutputId,
+    test_pattern: Option<bool>,
+) -> Result<(), String> {
+    let test_pattern = test_pattern.unwrap_or(false);
+    let label = video_output_window_label(output_id, test_pattern);
+    let window = app
+        .get_webview_window(&label)
+        .ok_or_else(|| format!("Video output window {label} is not open"))?;
+    window.close().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn close_open_video_output_windows(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<VideoOutputWindowCloseSummary, String> {
+    let snapshot = state.engine.snapshot();
+    let mut summary = VideoOutputWindowCloseSummary {
+        closed_live: 0,
+        closed_test_pattern: 0,
+        skipped_closed: 0,
+    };
+
+    for output in snapshot
+        .video
+        .outputs
+        .iter()
+        .filter(|output| output.kind == VideoOutputKind::Display)
+    {
+        let live_label = video_output_window_label(output.id, false);
+        if let Some(window) = app.get_webview_window(&live_label) {
+            window.close().map_err(|error| error.to_string())?;
+            summary.closed_live += 1;
+        } else {
+            summary.skipped_closed += 1;
+        }
+
+        let test_pattern_label = video_output_window_label(output.id, true);
+        if let Some(window) = app.get_webview_window(&test_pattern_label) {
+            window.close().map_err(|error| error.to_string())?;
+            summary.closed_test_pattern += 1;
+        } else {
+            summary.skipped_closed += 1;
+        }
+    }
+
+    Ok(summary)
 }
 
 #[tauri::command]
@@ -6768,7 +7542,7 @@ fn custom_fixture_profile_from_request(
         .map(|layout| AttributeControl {
             attribute: layout.attribute.clone(),
             channel_name: layout.attribute.clone(),
-            geometry: None,
+            geometry: Some(custom_attribute_geometry_name(&layout.attribute).to_string()),
             offsets: layout.offsets,
             resolution: layout.resolution,
             default_value: custom_attribute_default_value(&layout.attribute),
@@ -6786,27 +7560,127 @@ fn custom_fixture_profile_from_request(
             name: mode_name,
             controls,
         }],
-        geometries: vec![GeometrySummary {
-            name: "Body".to_string(),
-            kind: "Geometry".to_string(),
-            parent: None,
-            matrix: [
-                1.0, 0.0, 0.0, 0.0, //
-                0.0, 1.0, 0.0, 0.0, //
-                0.0, 0.0, 1.0, 0.0, //
-                0.0, 0.0, 0.0, 1.0,
-            ],
-            model_name: None,
-            model_file: None,
-            model_primitive: None,
-            model_dimensions: None,
-            beam_type: None,
-            beam_angle_deg: None,
-            field_angle_deg: None,
-            beam_radius: None,
-        }],
-        warnings: vec!["Custom profile; no GDTF geometry or physical data".to_string()],
+        geometries: custom_profile_geometries(),
+        warnings: vec![
+            "Custom profile uses generated Body/Head/Beam geometry; no GDTF mesh assets are embedded"
+                .to_string(),
+        ],
     }
+}
+
+fn custom_profile_geometries() -> Vec<GeometrySummary> {
+    vec![
+        custom_profile_geometry(
+            "Body",
+            "Geometry",
+            None,
+            custom_profile_geometry_matrix(0.0, 0.0, 0.0),
+            "Cube",
+            Vec3 {
+                x: 0.5,
+                y: 0.25,
+                z: 0.5,
+            },
+            None,
+        ),
+        custom_profile_geometry(
+            "Head",
+            "Axis",
+            Some("Body"),
+            custom_profile_geometry_matrix(0.0, 0.3, 0.0),
+            "Sphere",
+            Vec3 {
+                x: 0.36,
+                y: 0.36,
+                z: 0.36,
+            },
+            None,
+        ),
+        custom_profile_geometry(
+            "Beam",
+            "Beam",
+            Some("Head"),
+            custom_profile_geometry_matrix(0.0, 0.0, -0.45),
+            "Cylinder",
+            Vec3 {
+                x: 0.18,
+                y: 0.18,
+                z: 0.18,
+            },
+            Some(("Wash", 18.0, 28.0, 0.12)),
+        ),
+    ]
+}
+
+fn custom_profile_geometry(
+    name: &str,
+    kind: &str,
+    parent: Option<&str>,
+    matrix: [f32; 16],
+    primitive: &str,
+    dimensions: Vec3,
+    beam: Option<(&str, f32, f32, f32)>,
+) -> GeometrySummary {
+    GeometrySummary {
+        name: name.to_string(),
+        kind: kind.to_string(),
+        parent: parent.map(str::to_string),
+        matrix,
+        model_name: None,
+        model_file: None,
+        model_primitive: Some(primitive.to_string()),
+        model_dimensions: Some(dimensions),
+        beam_type: beam.map(|(beam_type, _, _, _)| beam_type.to_string()),
+        beam_angle_deg: beam.map(|(_, angle, _, _)| angle),
+        field_angle_deg: beam.map(|(_, _, field, _)| field),
+        beam_radius: beam.map(|(_, _, _, radius)| radius),
+    }
+}
+
+fn custom_profile_geometry_matrix(x: f32, y: f32, z: f32) -> [f32; 16] {
+    [
+        1.0, 0.0, 0.0, x, //
+        0.0, 1.0, 0.0, y, //
+        0.0, 0.0, 1.0, z, //
+        0.0, 0.0, 0.0, 1.0,
+    ]
+}
+
+fn custom_attribute_geometry_name(attribute: &str) -> &'static str {
+    let normalized = normalize_custom_attribute_name(attribute);
+    if matches!(
+        normalized.as_str(),
+        "pan" | "tilt" | "panrotate" | "tiltrotate" | "panfine" | "tiltfine"
+    ) {
+        return "Head";
+    }
+    if normalized.contains("color")
+        || normalized.contains("dimmer")
+        || normalized.contains("shutter")
+        || normalized.contains("strobe")
+        || normalized.contains("gobo")
+        || normalized.contains("beam")
+        || normalized.contains("zoom")
+        || normalized.contains("focus")
+        || normalized.contains("frost")
+        || normalized.contains("iris")
+        || normalized.contains("prism")
+        || matches!(
+            normalized.as_str(),
+            "red" | "green" | "blue" | "white" | "amber" | "uv" | "lime" | "cyan" | "magenta"
+        )
+    {
+        return "Beam";
+    }
+    "Body"
+}
+
+fn normalize_custom_attribute_name(attribute: &str) -> String {
+    attribute
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 fn custom_attribute_default_value(attribute: &str) -> u16 {
@@ -7414,6 +8288,68 @@ fn validate_stage_map_config(config: &StageMapConfig) -> Result<(), String> {
     Ok(())
 }
 
+fn normalize_stage_object(mut object: StageObjectSummary) -> Result<StageObjectSummary, String> {
+    if object.id == 0 {
+        return Err("Stage object id must be greater than zero".to_string());
+    }
+    object.label = object.label.trim().to_string();
+    if object.label.is_empty() {
+        return Err("Stage object label is required".to_string());
+    }
+    if [
+        object.x,
+        object.z,
+        object.width,
+        object.depth,
+        object.rotation_deg,
+    ]
+    .iter()
+    .any(|value| !value.is_finite())
+    {
+        return Err("Stage object values must be finite".to_string());
+    }
+    if object.width <= 0.0 || object.depth <= 0.0 {
+        return Err("Stage object size must be greater than zero".to_string());
+    }
+    object.x = object.x.clamp(-1_000.0, 1_000.0);
+    object.z = object.z.clamp(-1_000.0, 1_000.0);
+    object.width = object.width.clamp(0.05, 1_000.0);
+    object.depth = object.depth.clamp(0.05, 1_000.0);
+    object.rotation_deg = object.rotation_deg.clamp(-360.0, 360.0);
+    object.color = match object.color {
+        Some(color) if color.trim().is_empty() => None,
+        Some(color) => Some(normalize_stage_object_color(color)?),
+        None => None,
+    };
+    Ok(object)
+}
+
+fn normalize_stage_object_color(color: String) -> Result<String, String> {
+    let trimmed = color.trim();
+    let hex = trimmed
+        .strip_prefix('#')
+        .ok_or_else(|| "Stage object color must be a #rrggbb value".to_string())?;
+    if hex.len() == 6 && hex.chars().all(|character| character.is_ascii_hexdigit()) {
+        Ok(format!("#{hex}"))
+    } else {
+        Err("Stage object color must be a #rrggbb value".to_string())
+    }
+}
+
+fn validate_project_stage_objects(objects: &[StageObjectSummary]) -> Result<(), String> {
+    let mut ids = HashSet::new();
+    for object in objects {
+        let normalized = normalize_stage_object(object.clone())?;
+        if !ids.insert(normalized.id) {
+            return Err(format!(
+                "Project contains duplicate stage object id {}",
+                normalized.id
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn normalize_stage_map_preset_label(label: String) -> Result<String, String> {
     let trimmed = label.trim();
     if trimmed.is_empty() {
@@ -7431,7 +8367,11 @@ fn validate_stage_map_preset_file(file: &StageMapPresetFile) -> Result<(), Strin
     }
     validate_app_name("stage map", &file.app)?;
     normalize_stage_map_preset_label(file.preset.label.clone())?;
-    validate_stage_map_config(&file.preset.config)
+    validate_stage_map_config(&file.preset.config)?;
+    if let Some(stage_objects) = &file.preset.stage_objects {
+        validate_project_stage_objects(stage_objects)?;
+    }
+    Ok(())
 }
 
 fn validate_project_stage_map_presets(presets: &[StageMapPresetSummary]) -> Result<(), String> {
@@ -7444,6 +8384,9 @@ fn validate_project_stage_map_presets(presets: &[StageMapPresetSummary]) -> Resu
             ));
         }
         validate_stage_map_config(&preset.config)?;
+        if let Some(stage_objects) = &preset.stage_objects {
+            validate_project_stage_objects(stage_objects)?;
+        }
     }
     Ok(())
 }
@@ -7934,7 +8877,9 @@ fn normalize_video_output_mapping_field(field: String) -> Result<String, String>
     if trimmed.is_empty() {
         return Err("Video output mapping field is required".to_string());
     }
-    Ok(trimmed.to_string())
+    canonical_video_output_mapping_field(trimmed)
+        .map(str::to_string)
+        .ok_or_else(|| format!("Video output mapping field '{trimmed}' is not supported"))
 }
 
 fn normalize_video_output_mapping_preset_label(label: String) -> Result<String, String> {
@@ -8800,6 +9745,7 @@ fn curl_binary_name() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use protocol::VideoLayerSummary;
 
     fn sample_preset(values: Vec<protocol::AttributeValueSummary>) -> FixturePreset {
         FixturePreset {
@@ -9297,6 +10243,27 @@ f 1 2 3
         assert_eq!(profile.dmx_modes[0].controls[0].offsets, vec![1]);
         assert_eq!(profile.dmx_modes[0].controls[1].offsets, vec![2]);
         assert_eq!(profile.dmx_modes[0].controls[1].default_value, 32_768);
+        assert_eq!(
+            profile
+                .geometries
+                .iter()
+                .map(|geometry| geometry.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Body", "Head", "Beam"]
+        );
+        assert_eq!(
+            profile.dmx_modes[0].controls[0].geometry.as_deref(),
+            Some("Beam")
+        );
+        assert_eq!(
+            profile.dmx_modes[0].controls[1].geometry.as_deref(),
+            Some("Head")
+        );
+        assert_eq!(
+            profile.dmx_modes[0].controls[2].geometry.as_deref(),
+            Some("Beam")
+        );
+        assert!(profile.warnings[0].contains("generated Body/Head/Beam"));
         assert_eq!(gdtf::profile_mode_footprint(&profile, Some("8ch")), Some(3));
     }
 
@@ -9327,6 +10294,10 @@ f 1 2 3
         assert_eq!(controls[2].attribute, "Tilt");
         assert_eq!(controls[2].offsets, vec![7, 8]);
         assert_eq!(controls[3].offsets, vec![10]);
+        assert_eq!(controls[0].geometry.as_deref(), Some("Beam"));
+        assert_eq!(controls[1].geometry.as_deref(), Some("Head"));
+        assert_eq!(controls[2].geometry.as_deref(), Some("Head"));
+        assert_eq!(controls[3].geometry.as_deref(), Some("Beam"));
         assert_eq!(
             gdtf::profile_mode_footprint(&profile, Some("Standard")),
             Some(10)
@@ -9521,6 +10492,16 @@ f 1 2 3
                 .offsets,
             vec![7, 8]
         );
+        assert_eq!(project.custom_profiles[0].geometries.len(), 3);
+        assert_eq!(project.snapshot.fixtures[0].geometries.len(), 3);
+        assert_eq!(
+            project.snapshot.fixtures[0].controls[0].geometry.as_deref(),
+            Some("Beam")
+        );
+        assert_eq!(
+            project.snapshot.fixtures[0].controls[4].geometry.as_deref(),
+            Some("Head")
+        );
         assert_eq!(project.snapshot.cues.len(), 1);
         assert_eq!(
             project.snapshot.cues[0].targets[0].fixture_id,
@@ -9540,6 +10521,21 @@ f 1 2 3
         assert_eq!(
             project.snapshot.video.mapping_presets[0].label,
             "16:9 Front Fit"
+        );
+        assert_eq!(project.snapshot.stage_map_presets.len(), 1);
+        assert_eq!(project.snapshot.stage_map_presets[0].label, "Mini Venue");
+        assert_eq!(
+            project.snapshot.stage_map_presets[0]
+                .stage_objects
+                .as_ref()
+                .map(Vec::len),
+            Some(3)
+        );
+        assert_eq!(project.snapshot.stage_objects.len(), 3);
+        assert_eq!(project.snapshot.stage_objects[0].label, "Main Deck");
+        assert_eq!(
+            project.snapshot.stage_objects[2].kind,
+            protocol::StageObjectKind::Screen
         );
     }
 
@@ -10564,6 +11560,144 @@ f 1 2 3
     }
 
     #[test]
+    fn video_preview_queue_expectation_accounts_for_stills_and_prefetch() {
+        let mut layer = VideoLayerSummary {
+            id: 1,
+            label: "Clip".to_string(),
+            source: VideoSourceSummary {
+                kind: VideoSourceKind::File,
+                path: Some("clip.mp4".to_string()),
+                name: None,
+                codec: None,
+                metadata: None,
+            },
+            blend_mode: VideoBlendMode::Normal,
+            state: VideoLayerState::default(),
+        };
+
+        assert_eq!(expected_video_preview_queue_len(&layer, 0), 1);
+        assert_eq!(expected_video_preview_queue_len(&layer, 3), 4);
+
+        layer.source.kind = VideoSourceKind::StillImage;
+        layer.source.path = Some("still.png".to_string());
+
+        assert_eq!(expected_video_preview_queue_len(&layer, 3), 1);
+    }
+
+    #[test]
+    fn video_preview_decode_budget_scales_by_layers_and_prefetch() {
+        assert_eq!(video_preview_decode_budget_from_prefetch(0, 0), 1);
+        assert_eq!(video_preview_decode_budget_from_prefetch(2, 0), 2);
+        assert_eq!(video_preview_decode_budget_from_prefetch(3, 2), 9);
+    }
+
+    #[test]
+    fn video_preview_decode_budget_request_is_clamped() {
+        let renderer = video::VideoPreviewRenderer::with_frame_provider(
+            video::VideoRuntimeConfig::default(),
+            video::DecoderBackedFrameProvider::new(video::FfmpegCliFrameDecoder::from_env())
+                .with_prefetch(2, 33),
+        );
+
+        assert_eq!(resolved_video_preview_decode_budget(&renderer, 3, None), 9);
+        assert_eq!(
+            resolved_video_preview_decode_budget(&renderer, 3, Some(0)),
+            1
+        );
+        assert_eq!(
+            resolved_video_preview_decode_budget(&renderer, 3, Some(1)),
+            1
+        );
+        assert_eq!(
+            resolved_video_preview_decode_budget(&renderer, 3, Some(99)),
+            9
+        );
+    }
+
+    #[test]
+    fn video_output_decode_preview_summaries_report_schedulable_requests() {
+        let snapshot = protocol::VideoSnapshot {
+            layers: vec![
+                VideoLayerSummary {
+                    id: 2,
+                    label: "Clip".to_string(),
+                    source: VideoSourceSummary {
+                        kind: VideoSourceKind::File,
+                        path: Some("clip.mp4".to_string()),
+                        name: None,
+                        codec: Some("H264".to_string()),
+                        metadata: None,
+                    },
+                    blend_mode: VideoBlendMode::Normal,
+                    state: VideoLayerState {
+                        position_ms: 100,
+                        playing: true,
+                        ..VideoLayerState::default()
+                    },
+                },
+                VideoLayerSummary {
+                    id: 3,
+                    label: "Still".to_string(),
+                    source: VideoSourceSummary {
+                        kind: VideoSourceKind::StillImage,
+                        path: Some("still.png".to_string()),
+                        name: None,
+                        codec: None,
+                        metadata: None,
+                    },
+                    blend_mode: VideoBlendMode::Normal,
+                    state: VideoLayerState::default(),
+                },
+            ],
+            compositions: vec![CompositionSummary {
+                id: 5,
+                label: "Main".to_string(),
+                layer_ids: vec![2, 3],
+                output_ids: vec![9],
+            }],
+            outputs: vec![VideoOutputSummary {
+                id: 9,
+                label: "Projector".to_string(),
+                kind: VideoOutputKind::Display,
+                enabled: true,
+                composition_id: 5,
+                fullscreen: false,
+                monitor_id: Some(0),
+                width: 1280,
+                height: 720,
+                endpoint_name: None,
+                opacity: 1.0,
+                blackout: false,
+                mapping: VideoOutputMapping::default(),
+            }],
+            mapping_presets: Vec::new(),
+            master_opacity: 1.0,
+            blackout: false,
+        };
+
+        let summaries = video_output_decode_preview_summaries(
+            &snapshot,
+            video::VideoRuntimeConfig {
+                frame_queue_capacity: 4,
+                preview_width: 64,
+                preview_height: 36,
+            },
+            2,
+            40,
+            None,
+        );
+
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].output_id, 9);
+        assert!(summaries[0].error.is_none());
+        let report = summaries[0].report.unwrap();
+        assert_eq!(report.layers_considered, 2);
+        assert_eq!(report.requests_attempted, 3);
+        assert_eq!(report.inserted, 3);
+        assert_eq!(report.pending, 3);
+    }
+
+    #[test]
     fn video_output_window_label_separates_live_and_test_pattern_windows() {
         assert_eq!(video_output_window_label(3, false), "video-output-3");
         assert_eq!(
@@ -10669,32 +11803,37 @@ f 1 2 3
     }
 
     #[test]
-    fn project_video_backend_validation_rejects_unavailable_external_io() {
-        let unavailable = VideoRuntimeStatus {
-            backends: vec![
-                protocol::VideoBackendStatus {
-                    id: "ndi".to_string(),
-                    label: "NDI input/output".to_string(),
-                    state: VideoBackendState::NotBuilt,
-                    detail: "NDI SDK backend is not linked in this build".to_string(),
-                },
-                protocol::VideoBackendStatus {
-                    id: "spout".to_string(),
-                    label: "Spout input/output".to_string(),
-                    state: VideoBackendState::Available,
-                    detail: "Spout backend loaded".to_string(),
-                },
-            ],
+    fn external_video_transport_driver_events_are_bounded_and_sequenced() {
+        let route = video::ExternalVideoTransportRoute {
+            route_id: 42,
+            direction: video::ExternalVideoTransportDirection::Input,
+            backend_id: "ndi".to_string(),
+            label: "Stage NDI".to_string(),
+            endpoint_name: "Stage".to_string(),
         };
-        let available = VideoRuntimeStatus {
-            backends: vec![protocol::VideoBackendStatus {
-                id: "ndi".to_string(),
-                label: "NDI input/output".to_string(),
-                state: VideoBackendState::Available,
-                detail: "NDI SDK backend loaded".to_string(),
-            }],
+        let mut events = Vec::new();
+        let mut driver = RecordingExternalVideoTransportDriver {
+            events: &mut events,
         };
 
+        for _ in 0..(EXTERNAL_VIDEO_TRANSPORT_EVENT_LIMIT + 4) {
+            video::ExternalVideoTransportDriver::start_route(&mut driver, &route).unwrap();
+        }
+
+        assert_eq!(driver.events.len(), EXTERNAL_VIDEO_TRANSPORT_EVENT_LIMIT);
+        assert_eq!(driver.events.first().unwrap().sequence, 5);
+        assert_eq!(
+            driver.events.last().unwrap().sequence,
+            (EXTERNAL_VIDEO_TRANSPORT_EVENT_LIMIT + 4) as u64
+        );
+        assert_eq!(
+            driver.events.last().unwrap().action,
+            ExternalVideoTransportDriverAction::Start
+        );
+    }
+
+    #[test]
+    fn project_external_video_validation_allows_unavailable_backends_but_requires_names() {
         let mut project = project_with_valid_video_graph();
         project.snapshot.video.layers[0].source = VideoSourceSummary {
             kind: VideoSourceKind::Ndi,
@@ -10704,33 +11843,54 @@ f 1 2 3
             metadata: None,
         };
 
-        assert!(validate_project_external_video_backends_with_status(
-            &project.snapshot,
-            &unavailable
-        )
-        .unwrap_err()
-        .contains("Project video layer 10 'Layer 10' uses unavailable NDI input"));
-
-        validate_project_external_video_backends_with_status(&project.snapshot, &available)
-            .unwrap();
+        validate_project_external_video_backends(&project.snapshot).unwrap();
 
         project.snapshot.video.layers[0].source.name = Some(" ".to_string());
-        assert!(validate_project_external_video_backends_with_status(
-            &project.snapshot,
-            &available
-        )
-        .unwrap_err()
-        .contains("requires a source name"));
+        assert!(validate_project_external_video_backends(&project.snapshot)
+            .unwrap_err()
+            .contains("requires a source name"));
 
         let mut project = project_with_valid_video_graph();
         project.snapshot.video.outputs[0].kind = VideoOutputKind::NdiSender;
         project.snapshot.video.outputs[0].endpoint_name = None;
-        assert!(validate_project_external_video_backends_with_status(
-            &project.snapshot,
-            &available
-        )
-        .unwrap_err()
-        .contains("requires an endpoint name"));
+        assert!(validate_project_external_video_backends(&project.snapshot)
+            .unwrap_err()
+            .contains("requires an endpoint name"));
+    }
+
+    #[test]
+    fn project_file_keeps_external_video_routes_as_runtime_diagnostics() {
+        let mut project = project_with_valid_video_graph();
+        project.snapshot.video.layers[0].source = VideoSourceSummary {
+            kind: VideoSourceKind::Ndi,
+            path: None,
+            name: Some("Stage NDI".to_string()),
+            codec: None,
+            metadata: None,
+        };
+        project.snapshot.video.outputs[0].kind = VideoOutputKind::NdiSender;
+        project.snapshot.video.outputs[0].endpoint_name = Some("Program Out".to_string());
+
+        validate_project_file(&project).unwrap();
+
+        let plans = video::build_external_video_io_route_plans(
+            &project.snapshot.video,
+            &video::video_runtime_status(),
+        );
+        assert_eq!(plans.inputs.len(), 1);
+        assert_eq!(plans.outputs.len(), 1);
+        assert!(!plans.inputs[0].ready);
+        assert!(!plans.outputs[0].ready);
+        assert!(plans.inputs[0]
+            .issue
+            .as_deref()
+            .unwrap_or_default()
+            .contains("NDI"));
+        assert!(plans.outputs[0]
+            .issue
+            .as_deref()
+            .unwrap_or_default()
+            .contains("NDI"));
     }
 
     #[test]
@@ -10817,14 +11977,21 @@ f 1 2 3
     }
 
     #[test]
-    fn video_output_mapping_field_is_trimmed_and_required() {
+    fn video_output_mapping_field_is_canonicalized_and_required() {
         assert_eq!(
             normalize_video_output_mapping_field("  keystone_x  ".to_string()).unwrap(),
             "keystone_x"
         );
+        assert_eq!(
+            normalize_video_output_mapping_field("key y".to_string()).unwrap(),
+            "keystone_y"
+        );
         assert!(normalize_video_output_mapping_field(" ".to_string())
             .unwrap_err()
             .contains("field"));
+        assert!(normalize_video_output_mapping_field("unknown".to_string())
+            .unwrap_err()
+            .contains("not supported"));
     }
 
     #[test]
@@ -11602,6 +12769,89 @@ f 1 2 3
         }
     }
 
+    fn project_geometry(name: &str, parent: Option<&str>) -> GeometrySummary {
+        GeometrySummary {
+            name: name.to_string(),
+            kind: if name == "Beam" { "Beam" } else { "Geometry" }.to_string(),
+            parent: parent.map(str::to_string),
+            matrix: [
+                1.0, 0.0, 0.0, 0.0, //
+                0.0, 1.0, 0.0, 0.0, //
+                0.0, 0.0, 1.0, 0.0, //
+                0.0, 0.0, 0.0, 1.0,
+            ],
+            model_name: None,
+            model_file: None,
+            model_primitive: None,
+            model_dimensions: None,
+            beam_type: None,
+            beam_angle_deg: None,
+            field_angle_deg: None,
+            beam_radius: None,
+        }
+    }
+
+    #[test]
+    fn project_file_validation_rejects_missing_fixture_geometry_reference() {
+        let mut fixture = project_fixture(1, "Fixture 1", 0, 1);
+        fixture.geometries = vec![project_geometry("Body", None)];
+        fixture.controls[0].geometry = Some("Beam".to_string());
+        let project = ProjectFile {
+            version: 1,
+            app: "Rayard".to_string(),
+            custom_profiles: Vec::new(),
+            snapshot: EngineSnapshot {
+                fixtures: vec![fixture],
+                ..EngineSnapshot::default()
+            },
+        };
+
+        let error = validate_project_file(&project).unwrap_err();
+
+        assert!(error.contains("control 'Dimmer' references missing geometry 'Beam'"));
+    }
+
+    #[test]
+    fn project_file_validation_rejects_fixture_geometry_parent_cycle() {
+        let mut fixture = project_fixture(1, "Fixture 1", 0, 1);
+        fixture.geometries = vec![
+            project_geometry("Body", Some("Head")),
+            project_geometry("Head", Some("Body")),
+        ];
+        fixture.controls[0].geometry = Some("Body".to_string());
+        let project = ProjectFile {
+            version: 1,
+            app: "Rayard".to_string(),
+            custom_profiles: Vec::new(),
+            snapshot: EngineSnapshot {
+                fixtures: vec![fixture],
+                ..EngineSnapshot::default()
+            },
+        };
+
+        let error = validate_project_file(&project).unwrap_err();
+
+        assert!(error.contains("parent cycle"));
+    }
+
+    #[test]
+    fn project_file_validation_rejects_custom_profile_geometry_mismatch() {
+        let mut profile = project_custom_profile();
+        profile.geometries = vec![project_geometry("Body", None)];
+        profile.dmx_modes[0].controls[0].geometry = Some("Beam".to_string());
+        let project = ProjectFile {
+            version: 1,
+            app: "Rayard".to_string(),
+            custom_profiles: vec![profile],
+            snapshot: EngineSnapshot::default(),
+        };
+
+        let error = validate_project_file(&project).unwrap_err();
+
+        assert!(error.contains("custom profile"));
+        assert!(error.contains("references missing geometry 'Beam'"));
+    }
+
     fn sample_automation_keyframes() -> Vec<AutomationKeyframeSummary> {
         vec![
             AutomationKeyframeSummary {
@@ -12347,6 +13597,32 @@ f 1 2 3
             .contains("min bounds"));
     }
 
+    #[test]
+    fn project_stage_object_validation_rejects_duplicate_ids_and_invalid_size() {
+        let valid = StageObjectSummary {
+            id: 1,
+            label: "Front Truss".to_string(),
+            kind: StageObjectKind::Truss,
+            x: 0.0,
+            z: -4.0,
+            width: 12.0,
+            depth: 0.4,
+            rotation_deg: 0.0,
+            color: Some("#55ccff".to_string()),
+        };
+        validate_project_stage_objects(&[valid.clone()]).unwrap();
+
+        let duplicate_error =
+            validate_project_stage_objects(&[valid.clone(), valid.clone()]).unwrap_err();
+        assert!(duplicate_error.contains("duplicate stage object id 1"));
+
+        let mut invalid_size = valid;
+        invalid_size.id = 2;
+        invalid_size.width = 0.0;
+        let size_error = validate_project_stage_objects(&[invalid_size]).unwrap_err();
+        assert!(size_error.contains("size must be greater than zero"));
+    }
+
     fn sample_patch_profile() -> FixtureProfileSummary {
         custom_fixture_profile_from_request(CustomFixtureProfileRequest {
             manufacturer: "Rayard".to_string(),
@@ -12937,6 +14213,10 @@ fn main() {
                 video::DecoderBackedFrameProvider::new(video::FfmpegCliFrameDecoder::from_env())
                     .with_prefetch(2, 33),
             )),
+            external_video_transport: Arc::new(Mutex::new(
+                video::ExternalVideoTransportRuntime::new(),
+            )),
+            external_video_transport_events: Arc::new(Mutex::new(Vec::new())),
             custom_profiles: Mutex::new(HashMap::new()),
             visualizer_model_assets: Mutex::new(HashMap::new()),
             midi_clock: Mutex::new(None),
@@ -13040,6 +14320,7 @@ fn main() {
             sync_ltc_timecode,
             add_video_file_layer,
             add_still_image_layer,
+            refresh_video_layer_metadata,
             add_video_input_layer,
             duplicate_video_layer,
             remove_video_layer,
@@ -13105,6 +14386,9 @@ fn main() {
             save_stage_map_preset,
             apply_stage_map_preset,
             remove_stage_map_preset,
+            add_stage_object,
+            set_stage_object,
+            remove_stage_object,
             save_stage_map_preset_file,
             load_stage_map_preset_file,
             get_visualizer_model_render_plans,
@@ -13114,11 +14398,18 @@ fn main() {
             get_visualizer_model_asset_cache_summary,
             get_video_composition_plans,
             get_video_output_render_plans,
+            get_external_video_io_plans,
+            get_external_video_transport_status,
+            sync_external_video_transports,
             get_video_runtime_status,
             get_video_preview_diagnostics,
             get_debug_video_preview,
             get_debug_video_output_preview,
             get_debug_video_output_test_pattern,
+            get_video_output_window_statuses,
+            sync_open_video_output_windows,
+            close_video_output_window,
+            close_open_video_output_windows,
             sync_video_output_window,
             open_video_output_window
         ])

@@ -10,10 +10,11 @@ use std::{
 };
 
 use protocol::{
-    ClockSource, CueId, EffectId, EngineSnapshot, FixtureId, NodeGraphId, RemoteControlConfig,
-    VideoLayerId, VideoOutputId, VideoOutputMapping, VideoParam, VideoRuntimeStatus,
+    canonical_video_output_mapping_field, ClockSource, CueId, EffectId, EngineSnapshot, FixtureId,
+    NodeGraphId, RemoteControlConfig, VideoLayerId, VideoOutputId, VideoOutputMapping, VideoParam,
+    VideoRuntimeStatus,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 use thiserror::Error;
 use tungstenite::{accept, Message};
 
@@ -54,6 +55,7 @@ const REMOTE_PAGE_HTML: &str = r##"<!doctype html>
     .row strong,.row span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.list{display:grid;gap:7px;max-height:220px;overflow:auto}.small{font-size:12px;color:#91a0b2}.bar{height:6px;border-radius:99px;background:#2a3340;overflow:hidden}.bar span{display:block;height:100%;background:#3ba1ff}
     .faderBank{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;max-height:300px;overflow:auto}.fixtureFader{border:1px solid #242c36;border-radius:7px;background:#121820;padding:8px}.fixtureFader span{display:flex;justify-content:space-between;gap:8px}.fixtureFader strong,.fixtureFader small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fixtureFader input{width:100%;padding:0}
     .visualDesk{display:grid;gap:8px}.remoteTargetInfo{display:grid;gap:5px;border:1px solid #242c36;border-radius:7px;background:#121820;padding:8px}.remoteTargetInfo strong,.remoteTargetInfo span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.remoteTargetSubmaster{display:grid;grid-template-columns:82px minmax(0,1fr) 42px;gap:8px;align-items:center;color:#aab6c6}.remoteTargetSubmaster input{width:100%;min-height:24px;padding:0}.remoteTargetSubmaster strong{text-align:right;color:#edf3fb;font-size:12px}.visualCard{display:grid;gap:8px;border:1px solid #242c36;border-radius:7px;background:#121820;padding:9px}.visualCardHeader{display:flex;justify-content:space-between;gap:8px}.visualCardHeader strong,.visualCardHeader span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.remoteDimmerQuick{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}.remoteDimmerQuick button{min-height:30px;padding:3px 6px}.remoteDimmerQuick .momentary{border-color:#6b5d2f;background:#2b2418;color:#ffd98a}.remoteDimmerQuick .momentary.active,.remoteDimmerQuick .momentary:active,.remoteDimmerQuick .momentary:focus-visible{border-color:#ffce5c;background:#463817;color:#fff3c4}.remoteDimmerSlider{display:grid;grid-template-columns:54px minmax(0,1fr) 42px;align-items:center;gap:8px;color:#aab6c6}.remoteDimmerSlider input{padding:0}.remoteDimmerSlider strong{text-align:right;color:#edf3fb;font-size:12px}.remotePanTiltPad{position:relative;min-height:180px;overflow:hidden;border:1px solid #323b48;border-radius:6px;background:linear-gradient(to right,transparent calc(50% - 1px),rgba(255,255,255,.25) calc(50% - 1px),rgba(255,255,255,.25) calc(50% + 1px),transparent calc(50% + 1px)),linear-gradient(to bottom,transparent calc(50% - 1px),rgba(255,255,255,.25) calc(50% - 1px),rgba(255,255,255,.25) calc(50% + 1px),transparent calc(50% + 1px)),repeating-linear-gradient(to right,transparent 0,transparent 22px,rgba(255,255,255,.055) 23px),repeating-linear-gradient(to bottom,transparent 0,transparent 22px,rgba(255,255,255,.055) 23px),#171d25;touch-action:none;cursor:crosshair}.remotePanTiltLimit{position:absolute;display:block;min-width:6px;min-height:6px;border:2px solid rgba(116,217,159,.78);border-radius:4px;background:rgba(116,217,159,.08);pointer-events:none}.remotePanTiltPad i{position:absolute;width:20px;height:20px;border:3px solid #d8e5f1;border-radius:999px;background:#101820;box-shadow:0 1px 8px rgba(0,0,0,.45);transform:translate(-50%,-50%);pointer-events:none}.remoteTargetGrid,.remotePanTiltMirrorRow{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.remoteTargetGrid button,.remotePanTiltMirrorRow button{min-height:30px;padding:3px 6px}.remotePositionFavoriteHeader{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px;align-items:center}.remotePositionFavoriteGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:6px}.remotePositionFavoriteGrid button{display:grid;grid-template-columns:34px minmax(0,1fr);grid-template-rows:auto auto;gap:2px 7px;min-height:46px;padding:5px 7px;text-align:left}.remotePositionFavoriteGrid button.active{border-color:#74d99f;background:#173122}.remotePositionFavoriteMap{grid-row:1/span 2;position:relative;width:34px;height:26px;border:1px solid #323b48;border-radius:4px;background:#101820}.remotePositionFavoriteMap i{position:absolute;width:8px;height:8px;border:2px solid #d8e5f1;border-radius:99px;background:#101820;transform:translate(-50%,-50%)}.remotePositionFavoriteGrid strong,.remotePositionFavoriteGrid small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.remotePositionFavoriteGrid small{color:#91a0b2;font-size:11px}.remoteColorPlane{display:grid;grid-template-columns:minmax(170px,1fr) minmax(100px,.42fr);gap:8px}.remoteColorPreview{min-height:120px;border:1px solid #323b48;border-radius:6px}.remoteColorGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(34px,1fr));gap:6px}.remoteColorPresetGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(86px,1fr));gap:6px}.remoteColorPresetGrid button{display:grid;grid-template-columns:16px minmax(0,1fr);align-items:center;gap:6px;min-height:32px;padding:5px 7px;text-align:left}.remoteColorPresetGrid button.active,.remoteColorButton.active{border-color:#74d99f;background:#173122;box-shadow:0 0 0 1px rgba(116,217,159,.42) inset}.remoteColorPresetGrid i{width:16px;height:16px;border:1px solid rgba(255,255,255,.45);border-radius:4px}.remoteColorPresetGrid span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.remoteColorButton{min-height:34px;border-color:rgba(255,255,255,.2);padding:0}.remoteColorOptions label{display:flex;align-items:center;justify-content:center;min-height:34px;border:1px solid #242c36;border-radius:6px;background:#151b22;color:#edf3fb;font-weight:700;text-transform:uppercase}.remoteColorOptions input{width:auto;min-height:16px;margin:0 7px 0 0}.remoteRgbSliders,.remoteExtraColorSliders{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.remoteExtraColorSliders{grid-template-columns:repeat(auto-fit,minmax(42px,1fr))}.remoteRgbSliders label,.remoteExtraColorSliders label{border:1px solid #242c36;border-radius:6px;background:#151b22;padding:6px}.remoteRgbSliders input,.remoteExtraColorSliders input{padding:0}.remoteColorWheelList{display:grid;gap:8px}.remoteColorWheelGroup{display:grid;gap:5px}.remoteColorWheelGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(92px,1fr));gap:5px}.remoteColorWheelGrid button{display:grid;grid-template-columns:18px minmax(0,1fr);grid-template-rows:auto auto;align-items:center;gap:2px 6px;min-height:46px;padding:5px 7px;text-align:left}.remoteColorWheelGrid button.active{border-color:#74d99f;background:#173122}.remoteColorWheelSwatch{grid-row:1/span 2;width:18px;height:18px;border:1px solid rgba(255,255,255,.45);border-radius:4px;background:#2a3340}.remoteColorWheelGrid strong,.remoteColorWheelGrid span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.remoteColorWheelGrid span{color:#91a0b2;font-size:11px}.remoteGoboWheelList{display:grid;gap:8px}.remoteGoboWheelGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:6px}.remoteGoboWheelGrid button{display:grid;grid-template-columns:30px minmax(0,1fr);grid-template-rows:auto auto;align-items:center;gap:2px 7px;min-height:52px;padding:6px 7px;text-align:left}.remoteGoboWheelGrid button.active{border-color:#74d99f;background:#173122;box-shadow:0 0 0 1px rgba(116,217,159,.42) inset}.remoteGoboWheelGrid strong,.remoteGoboWheelGrid span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.remoteGoboWheelGrid span{color:#91a0b2;font-size:11px}.remoteGoboSlotIcon{grid-row:1/span 2;width:30px;height:30px;border:1px solid rgba(255,255,255,.38);border-radius:999px;background:#101820;box-shadow:inset 0 0 0 2px rgba(0,0,0,.35)}.remoteGoboSlotIcon.open{background:#e7edf3}.remoteGoboSlotIcon.bars{background:repeating-linear-gradient(45deg,#e7edf3 0 4px,transparent 4px 8px),#111820}.remoteGoboSlotIcon.dots{background:radial-gradient(circle at 30% 32%,#e7edf3 0 3px,transparent 4px),radial-gradient(circle at 62% 38%,#e7edf3 0 2px,transparent 3px),radial-gradient(circle at 45% 68%,#e7edf3 0 4px,transparent 5px),#111820}.remoteGoboSlotIcon.breakup{background:radial-gradient(circle at 24% 32%,#e7edf3 0 5px,transparent 6px),radial-gradient(circle at 68% 24%,#e7edf3 0 4px,transparent 5px),radial-gradient(circle at 54% 70%,#e7edf3 0 6px,transparent 7px),radial-gradient(circle at 78% 66%,#e7edf3 0 3px,transparent 4px),#111820}.remoteGoboSlotIcon.ring{background:radial-gradient(circle,transparent 0 32%,#e7edf3 34% 54%,transparent 56%),#111820}.remoteGoboSlotIcon.spin{background:conic-gradient(from 20deg,#e7edf3 0 18deg,transparent 18deg 56deg,#e7edf3 56deg 78deg,transparent 78deg 126deg,#e7edf3 126deg 150deg,transparent 150deg 360deg),#111820}.remoteFunctionList{display:grid;gap:8px}.remoteFunctionGroup{display:grid;gap:5px}.remoteFunctionTitle{display:flex;justify-content:space-between;gap:8px;color:#aab6c6}.remoteFunctionTitle strong,.remoteFunctionTitle span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.remoteFunctionGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(88px,1fr));gap:5px}.remoteFunctionGrid button{display:grid;gap:2px;min-height:44px;padding:5px 7px;text-align:left}.remoteFunctionGrid button.active{border-color:#74d99f;background:#173122}.remoteFunctionGrid strong,.remoteFunctionGrid span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.remoteFunctionGrid span{color:#91a0b2;font-size:11px}
+    .remoteStagePanel{display:grid;gap:8px}.remoteStageSurface{display:block;width:100%;min-height:230px;aspect-ratio:16/9;border:1px solid #242c36;border-radius:7px;background:#0b1017;touch-action:manipulation}.remoteStageSurface pattern path{fill:none;stroke:#263847;stroke-width:.35}.remoteStageFloor{fill:#0d1720}.remoteStageGrid{opacity:.62}.remoteStageAxis{stroke:#405367;stroke-width:.04;stroke-dasharray:.22 .22}.remoteStageObject{fill:rgba(120,137,156,.14);stroke:#708095;stroke-width:.07}.remoteStageObject.kind-stage{fill:rgba(82,101,126,.18)}.remoteStageObject.kind-truss{fill:rgba(242,193,78,.16);stroke:#d5ad4b}.remoteStageObject.kind-screen{fill:rgba(74,168,255,.16);stroke:#63b8ff}.remoteStageObject.kind-riser{fill:rgba(116,217,159,.13);stroke:#74d99f}.remoteStageObject.kind-mask{fill:rgba(235,92,92,.12);stroke:#e26d6d}.remoteStageSurfaceLabel{fill:#d8e5f1;font-size:.42px;font-weight:700;paint-order:stroke;stroke:#0b1017;stroke-width:.12px}.remoteStageOutputGroup{cursor:pointer}.remoteStageOutput{fill:rgba(34,120,197,.2);stroke:#4aa8ff;stroke-width:.09}.remoteStageOutput.selected{stroke:#fff;stroke-width:.18;filter:drop-shadow(0 0 3px rgba(74,168,255,.55))}.remoteStageOutput.inactive{opacity:.36}.remoteStageOutputCenter{fill:#4aa8ff;stroke:#0b1017;stroke-width:.08}.remoteStageBeam{stroke:rgba(242,193,78,.3);stroke-width:.08;stroke-dasharray:.24 .18}.remoteStageFixture{cursor:pointer}.remoteStageFixtureShape{fill:#f2c14e;stroke:#0b1017;stroke-width:.12}.remoteStageFixtureShape.highlighted{fill:#8af071}.remoteStageFixtureShape.soloed{stroke:#fff;stroke-width:.18}.remoteStageFixtureShape.parked{fill:#8d96a3}.remoteStageFixture.selected .remoteStageFixtureShape{stroke:#fff;stroke-width:.22}.remoteStageReadout{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:6px}.remoteStageReadout span{border:1px solid #242c36;border-radius:6px;background:#121820;padding:6px 8px;color:#aab6c6;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.remoteStageSelection{display:grid;gap:6px}.remoteStageSelectionRow{display:grid;grid-template-columns:minmax(0,1fr) repeat(3,minmax(54px,auto));gap:6px;align-items:center;border:1px solid #242c36;border-radius:7px;background:#101720;padding:7px}.remoteStageSelectionRow.output{grid-template-columns:minmax(0,1fr) repeat(5,minmax(48px,auto));border-color:#244a5d;background:#0d1a22}.remoteStageSelectionRow.empty{grid-template-columns:minmax(0,1fr)}.remoteStageSelectionRow strong,.remoteStageSelectionRow span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.remoteStageSelectionRow strong{color:#edf3fb;font-size:12px}.remoteStageSelectionRow span{color:#91a0b2;font-size:11px}.remoteStageSelectionRow button{min-height:30px;padding:4px 8px;font-size:12px}.remoteStageLegend{display:flex;gap:8px;flex-wrap:wrap;color:#91a0b2;font-size:12px}.remoteStageLegend b{display:inline-flex;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}.remoteStageLegend .fixture{background:#f2c14e}.remoteStageLegend .output{background:#4aa8ff}.remoteStageLegend .object{background:#708095}
     .remoteOpticsGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px}.remoteOpticsCard{display:grid;gap:7px;border:1px solid #242c36;border-radius:7px;background:#0d141c;padding:8px}.remoteOpticsTitle,.remoteOpticsMeta{display:flex;justify-content:space-between;gap:8px}.remoteOpticsTitle strong,.remoteOpticsTitle span,.remoteOpticsMeta span,.remoteOpticsMeta b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.remoteOpticsTitle span,.remoteOpticsMeta span{color:#91a0b2;font-size:12px}.remoteOpticsPreview{position:relative;display:grid;place-items:center;min-height:86px;overflow:hidden;border:1px solid #323b48;border-radius:6px;background:linear-gradient(to right,transparent calc(var(--remote-optics-level) - 1px),rgba(242,193,78,.48) calc(var(--remote-optics-level) - 1px),rgba(242,193,78,.48) calc(var(--remote-optics-level) + 1px),transparent calc(var(--remote-optics-level) + 1px)),radial-gradient(circle,#182430 0,#0b1117 66%);touch-action:none;cursor:ew-resize}.remoteOpticsHalo,.remoteOpticsCore,.remoteOpticsPrism{position:absolute;border-radius:999px;pointer-events:none}.remoteOpticsHalo{width:calc(var(--remote-optics-size) + 24px);height:calc(var(--remote-optics-size) + 24px);background:rgba(242,193,78,.2);filter:blur(calc(var(--remote-optics-blur) + 3px));opacity:var(--remote-optics-opacity)}.remoteOpticsCore{width:var(--remote-optics-size);height:var(--remote-optics-size);background:#f4e6bc;box-shadow:0 0 14px rgba(242,193,78,.45);filter:blur(var(--remote-optics-blur));opacity:var(--remote-optics-opacity)}.remoteOpticsPreview.iris .remoteOpticsCore{box-shadow:0 0 0 6px rgba(16,24,32,.8) inset,0 0 14px rgba(242,193,78,.45)}.remoteOpticsPreview.focus .remoteOpticsCore,.remoteOpticsPreview.frost .remoteOpticsCore{background:rgba(244,230,188,.86)}.remoteOpticsPreview.strobe .remoteOpticsCore{background:repeating-linear-gradient(90deg,#f4e6bc 0 6px,rgba(244,230,188,.2) 6px 12px)}.remoteOpticsPrism{width:var(--remote-optics-ring-size);height:var(--remote-optics-ring-size);border:1px dashed rgba(242,193,78,var(--remote-optics-prism-opacity));opacity:var(--remote-optics-prism-opacity);transform:rotate(var(--remote-optics-prism-rotation))}.remoteOpticsScale{position:absolute;left:8px;right:8px;bottom:7px;height:4px;border-radius:99px;background:#222b36;overflow:hidden}.remoteOpticsScale i{display:block;width:var(--remote-optics-level);height:100%;background:#f2c14e}.remoteOpticsCard input{width:100%;padding:0}.remoteOpticsQuickRow,.remoteOpticsFunctionChips{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}.remoteOpticsQuickRow button,.remoteOpticsFunctionChips button{min-height:29px;padding:3px 6px;font-size:12px}.remoteOpticsFunctionChips{grid-template-columns:repeat(auto-fit,minmax(62px,1fr))}.remoteOpticsFunctionChips button.active{border-color:#74d99f;background:#173122}.remoteOpticsFunctionChips button{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .remoteOutputMap{display:grid;gap:7px;margin-top:8px;border:1px solid #242c36;border-radius:7px;background:#0d141c;padding:8px}.remoteMapSurface{display:block;width:100%;min-height:86px;aspect-ratio:16/9;border-radius:5px;background:#0b1117;touch-action:none}.remoteMapFloor{fill:#0d1720}.remoteMapGrid{opacity:.5}.remoteMapSurface pattern path{fill:none;stroke:#263847;stroke-width:.5}.remoteMapAxis{stroke:#355064;stroke-width:.45;stroke-dasharray:2 2}.remoteMapBase{fill:rgba(255,255,255,.025);stroke:#536273;stroke-width:.8;stroke-dasharray:2 2}.remoteMapWarp{fill:rgba(34,120,197,.18);stroke:#4aa8ff;stroke-width:1.2}.remoteMapHandleGuide{stroke:#f0b35a;stroke-width:.75;stroke-dasharray:1.8 1.8}.remoteMapBasePoint{fill:#536273}.remoteMapHandle{fill:#f2c14e;stroke:#101820;stroke-width:1.2;cursor:grab}.remoteMapCenterHandle{fill:#101820;stroke:#d8e5f1;stroke-width:1.4;cursor:move}.remoteMapKeyGuide{stroke:#74d99f;stroke-width:.75;stroke-dasharray:1.8 1.8}.remoteMapKeyHandle{fill:#74d99f;stroke:#101820;stroke-width:1.15;cursor:grab}.remoteMapKeyHandle.y{fill:#67b7ff}.remoteMapHandle:active,.remoteMapCenterHandle:active,.remoteMapKeyHandle:active{cursor:grabbing}.remoteMapHandleLabel,.remoteMapKeyLabel{fill:#d8e5f1;font-size:5px;font-weight:700;pointer-events:none}.remoteMapKeyLabel{fill:#cfe8db;font-size:4.6px}.remoteMapButtons,.remoteMapPresetRow,.remoteMapKeyPresetRow{display:grid;grid-template-columns:repeat(auto-fit,minmax(62px,1fr));gap:5px}.remoteMapButtons button,.remoteMapPresetRow button{min-height:28px;padding:3px 6px;font-size:12px}.remoteMapPresetRow button.active,.remoteMapKeyPresetRow button.active{border-color:#74d99f;background:#173122;color:#edf3fb}.remoteMapKeyPresetRow button{display:grid;justify-items:center;gap:2px;min-height:44px;padding:4px 5px;font-size:11px}.remoteMapKeyMini{width:38px;height:22px}.remoteMapKeyMini polygon{fill:rgba(34,120,197,.24);stroke:#74d99f;stroke-width:1.4}.remoteMapModeRow{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}.remoteMapModeRow button{min-height:28px;padding:3px 6px;font-size:12px}.remoteMapModeRow button.active{border-color:#4aa8ff;background:#16304a;color:#edf3fb}.remoteMapTuningGrid{display:grid;gap:6px}.remoteMapTuningGrid label{display:grid;grid-template-columns:56px minmax(0,1fr) 54px;gap:7px;align-items:center;color:#aab6c6;font-size:12px}.remoteMapTuningGrid input{width:100%;padding:0}.remoteMapTuningGrid strong{font-size:11px;text-align:right;color:#edf3fb;white-space:nowrap}.remoteOutputMap span{color:#91a0b2;font-size:12px;overflow-wrap:anywhere}
     .log{min-height:32px;color:#91a0b2;overflow-wrap:anywhere}.inline{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
@@ -98,6 +100,17 @@ const REMOTE_PAGE_HTML: &str = r##"<!doctype html>
       <button onclick='setAllBlackout(true)'>All BO</button>
       <button onclick='setAllBlackout(false)'>All Clear</button>
     </div>
+  </section>
+  <section class="remoteStagePanel">
+    <h2>Stage</h2>
+    <div class="grid">
+      <label>Stage Group<select id="remoteStageGroupFilter" onchange="renderRemoteStage(latestSnapshot||{})"><option value="">All fixtures</option></select></label>
+      <button onclick='document.getElementById("remoteStageGroupFilter").value="";renderRemoteStage(latestSnapshot||{})'>Show All</button>
+    </div>
+    <svg id="remoteStage" class="remoteStageSurface" viewBox="-10 -10 20 20" role="img" aria-label="Remote 2D stage overview"></svg>
+    <div id="remoteStageReadout" class="remoteStageReadout"></div>
+    <div id="remoteStageSelection" class="remoteStageSelection"></div>
+    <div class="remoteStageLegend"><span><b class="fixture"></b>Fixtures</span><span><b class="output"></b>Projectors</span><span><b class="object"></b>Stage objects</span></div>
   </section>
   <section>
     <h2>Fader</h2>
@@ -212,10 +225,17 @@ const REMOTE_PAGE_HTML: &str = r##"<!doctype html>
     </div>
     <div class="inline"><button onclick='requestVideoRuntimeStatus()'>Refresh Backends</button><span id="videoRuntimeSummary" class="small">Backend status not loaded</span></div>
     <div id="videoRuntimeBackends" class="liveGrid"></div>
+    <div class="inline"><button onclick='requestExternalVideoIoPlans()'>Refresh I/O Plans</button><span id="externalVideoIoPlanSummary" class="small">I/O plans not loaded</span></div>
+    <div id="externalVideoIoPlanRoutes" class="liveGrid"></div>
+    <div class="inline"><button onclick='requestExternalVideoTransportStatus()'>Refresh I/O Routes</button><button onclick='syncExternalVideoTransportsRemote()'>Sync Routes</button><span id="externalVideoTransportSummary" class="small">Transport routes not loaded</span><span id="externalVideoTransportSyncSummary" class="small">Routes not synced</span></div>
+    <div id="externalVideoTransportRoutes" class="liveGrid"></div>
+    <div id="externalVideoTransportSyncEvents" class="liveGrid"></div>
     <div id="layerList" class="list"></div>
   </section>
   <section>
     <h2>Video Outputs</h2>
+    <div class="inline"><button onclick='requestVideoOutputRenderPlans()'>Refresh Render Plans</button><span id="videoOutputRenderPlanSummary" class="small">Render plans not loaded</span></div>
+    <div id="videoOutputRenderPlans" class="liveGrid"></div>
     <label>Fade ms<input id="videoOutputFadeMs" type="number" min="0" step="10" value="1000"></label>
     <div id="videoOutputList" class="list"></div>
   </section>
@@ -262,11 +282,16 @@ const REMOTE_PAGE_HTML: &str = r##"<!doctype html>
 let ws;
 let latestSnapshot=null;
 let latestVideoRuntimeStatus={backends:[]};
+let latestVideoOutputRenderPlans=[];
+let latestExternalVideoIoPlans={inputs:[],outputs:[]};
+let latestExternalVideoTransportStatus={active_routes:[],active_count:0};
+let latestExternalVideoTransportSync={report:null,events:[]};
 let snapshotTimer=null;
 let snapshotPending=false;
 let cuePadBank=0;
 let cuePadFollowActive=true;
 let sceneFilterText="";
+let remoteStageSelectedOutputId=null;
 let remoteColorAutoWhite=false;
 let remoteDimmerBumpRestore=null;
 const remotePositionFavoritesStorageKey="rayard.remote.positionFavorites.v1";
@@ -298,7 +323,7 @@ function setStatus(ok){statusEl.textContent=ok?"Connected":"Disconnected";status
 function connect(){
   if(snapshotTimer)clearInterval(snapshotTimer);
   ws=new WebSocket(`ws://${location.host}/ws`);
-  ws.onopen=()=>{setStatus(true);requestSnapshot();requestVideoRuntimeStatus();snapshotTimer=setInterval(requestSnapshot,1000)};
+  ws.onopen=()=>{setStatus(true);requestSnapshot();requestVideoRuntimeStatus();requestVideoOutputRenderPlans();requestExternalVideoIoPlans();requestExternalVideoTransportStatus();snapshotTimer=setInterval(requestSnapshot,1000)};
   ws.onclose=()=>{setStatus(false);if(snapshotTimer)clearInterval(snapshotTimer);setTimeout(connect,1000)};
   ws.onerror=()=>setStatus(false);
   ws.onmessage=e=>handleMessage(e.data);
@@ -315,12 +340,19 @@ function queueSnapshot(delay){
 }
 function requestSnapshot(){send({type:"getSnapshot"},false)}
 function requestVideoRuntimeStatus(){send({type:"getVideoRuntimeStatus"},false)}
+function requestVideoOutputRenderPlans(){send({type:"getVideoOutputRenderPlans"},false)}
+function requestExternalVideoIoPlans(){send({type:"getExternalVideoIoPlans"},false)}
+function requestExternalVideoTransportStatus(){send({type:"getExternalVideoTransportStatus"},false)}
 function handleMessage(messageText){
   logEl.textContent=messageText;
   try{
     const msg=JSON.parse(messageText);
-    if(msg.type==="snapshot")applySnapshot(msg.snapshot);
+    if(msg.type==="snapshot"){applySnapshot(msg.snapshot);requestVideoOutputRenderPlans();}
     else if(msg.type==="videoRuntimeStatus")renderVideoRuntimeStatus(msg.video_runtime_status||msg.videoRuntimeStatus||{backends:[]});
+    else if(msg.type==="videoOutputRenderPlans")renderVideoOutputRenderPlans(msg.video_output_render_plans||msg.videoOutputRenderPlans||[]);
+    else if(msg.type==="externalVideoIoPlans")renderExternalVideoIoPlans(msg.external_video_io_plans||msg.externalVideoIoPlans||{inputs:[],outputs:[]});
+    else if(msg.type==="externalVideoTransportStatus")renderExternalVideoTransportStatus(msg.external_video_transport_status||msg.externalVideoTransportStatus||{active_routes:[],active_count:0});
+    else if(msg.type==="externalVideoTransportSync"){renderExternalVideoTransportSync(msg.external_video_transport_sync||msg.externalVideoTransportSync||{report:null,events:[]});requestExternalVideoIoPlans();requestExternalVideoTransportStatus();}
     else if(msg.ok)queueSnapshot(120);
   }catch(_e){}
 }
@@ -373,8 +405,31 @@ function fillGroupSelect(groups){
   el.disabled=false;
   el.value=[...el.options].some(option=>option.value===current)?current:"";
 }
+function fillRemoteStageGroupFilter(groups){
+  const el=document.getElementById("remoteStageGroupFilter");
+  if(!el)return;
+  const current=el.value;
+  el.innerHTML="";
+  const all=document.createElement("option");
+  all.value="";
+  all.textContent="All fixtures";
+  el.appendChild(all);
+  for(const group of groups){
+    const opt=document.createElement("option");
+    opt.value=String(group.id);
+    opt.textContent=group.label;
+    el.appendChild(opt);
+  }
+  el.value=[...el.options].some(option=>option.value===current)?current:"";
+}
 function selectedGroupId(){
   const value=remoteNormalizeGroup(document.getElementById("groupId").value);
+  return value||null;
+}
+function selectedRemoteStageGroupId(){
+  const el=document.getElementById("remoteStageGroupFilter");
+  if(!el)return null;
+  const value=remoteNormalizeGroup(el.value);
   return value||null;
 }
 function remoteGroupFixtures(groupId){
@@ -440,7 +495,9 @@ function applySnapshot(snapshot){
   const video=snapshot.video||{layers:[],master_opacity:1,blackout:false};
   const layers=video.layers||[];
   fillSelect("fixtureId",fixtures,f=>`${f.id}: ${f.label}`,"No fixtures");
-  fillGroupSelect(remoteGroupOptions(fixtures));
+  const groupOptions=remoteGroupOptions(fixtures);
+  fillGroupSelect(groupOptions);
+  fillRemoteStageGroupFilter(groupOptions);
   fillSelect("cueId",cues,c=>`${c.id}: ${c.label}`,"No cues");
   fillSelect("layerId",layers,l=>`${l.id}: ${l.label}`,"No layers");
   applyAttributeOptions();
@@ -465,6 +522,7 @@ function applySnapshot(snapshot){
   renderStatus(snapshot,video);
   renderRemoteDmxRoutes(snapshot,snapshot.telemetry||{});
   renderLiveDesk(snapshot,cues,video,snapshot.timeline||{events:[],position_ms:0,duration_ms:0,playing:false});
+  renderRemoteStage(snapshot);
 }
 function applyAttributeOptions(){
   const fixture=remoteControlFixture();
@@ -1266,8 +1324,11 @@ function renderVideoOutputList(outputs,compositions){
   el.innerHTML=outputs.map(o=>{
     const pct=Math.round((o.opacity??1)*100);
     const comp=compositions.find(c=>c.id===o.composition_id);
-    const active=o.enabled&&!o.blackout&&(o.opacity??1)>0;
-    return `<div class="row ${active?"active":""}"><div><strong>${escapeHtml(o.label)}</strong><span class="small">${escapeHtml(o.kind)} / ${escapeHtml(comp?comp.label:`Composition ${o.composition_id}`)} / ${pct}%${o.enabled?"":" / Disabled"}${o.blackout?" / Blackout":""}</span><div class="bar"><span style="width:${Math.max(0,Math.min(100,pct))}%"></span></div><label class="deckSlider">Opacity<input type="range" min="0" max="1" step="0.01" value="${Number(o.opacity??1)}" oninput="setVideoOutputOpacityFromInput(${o.id},this.value)"><strong>${pct}%</strong></label>${remoteVideoOutputMappingPanel(o)}</div><div class="inline"><button onclick="setVideoOutputEnabled(${o.id},${!o.enabled})">${o.enabled?"Disable":"Enable"}</button><button onclick="setVideoOutputBlackout(${o.id},${!o.blackout})">${o.blackout?"Clear":"Blackout"}</button><button onclick="fadeVideoOutput(${o.id},0)">Fade Out</button><button onclick="fadeVideoOutput(${o.id},1)">Fade In</button><button onclick="setVideoOutputOpacity(${o.id},0.5)">Half</button><button onclick="setVideoOutputOpacity(${o.id},1)">Full</button></div></div>`
+    const plan=remoteVideoOutputRenderPlanById(o.id);
+    const planState=remoteVideoOutputRenderPlanState(plan,o);
+    const active=planState.label==="Live"&&(o.opacity??1)>0;
+    const detail=remoteVideoOutputRenderPlanDetail(plan,o);
+    return `<div class="row ${active?"active":""}"><div><strong>${escapeHtml(o.label)}</strong><span class="small">${escapeHtml(o.kind)} / ${escapeHtml(comp?comp.label:`Composition ${o.composition_id}`)} / ${pct}%${o.enabled?"":" / Disabled"}${o.blackout?" / Blackout":""}</span><span class="status ${planState.badgeClass}">${escapeHtml(planState.label)} / ${planState.layers.length} layer${planState.layers.length===1?"":"s"}</span><span class="small">${escapeHtml(detail)}</span><div class="bar"><span style="width:${Math.max(0,Math.min(100,pct))}%"></span></div><label class="deckSlider">Opacity<input type="range" min="0" max="1" step="0.01" value="${Number(o.opacity??1)}" oninput="setVideoOutputOpacityFromInput(${o.id},this.value)"><strong>${pct}%</strong></label>${remoteVideoOutputMappingPanel(o)}</div><div class="inline"><button onclick="setVideoOutputEnabled(${o.id},${!o.enabled})">${o.enabled?"Disable":"Enable"}</button><button onclick="setVideoOutputBlackout(${o.id},${!o.blackout})">${o.blackout?"Clear":"Blackout"}</button><button onclick="fadeVideoOutput(${o.id},0)">Fade Out</button><button onclick="fadeVideoOutput(${o.id},1)">Fade In</button><button onclick="setVideoOutputOpacity(${o.id},0)">Cut</button><button onclick="setVideoOutputOpacity(${o.id},0.5)">Half</button><button onclick="setVideoOutputOpacity(${o.id},1)">Full</button></div></div>`
   }).join("");
 }
 function remoteFinite(value,fallback){return Number.isFinite(Number(value))?Number(value):fallback}
@@ -1356,6 +1417,186 @@ function remoteOutputRatio(output){
 }
 function remoteMapReadout(mapping){
   return `Stage ${remoteFinite(mapping.stage_x,0).toFixed(1)}, ${remoteFinite(mapping.stage_y,0).toFixed(1)}, ${remoteFinite(mapping.stage_z,0).toFixed(1)} / X ${remoteFinite(mapping.offset_x,0).toFixed(2)} / Y ${remoteFinite(mapping.offset_y,0).toFixed(2)} / Key ${remoteFinite(mapping.keystone_x,0).toFixed(2)}, ${remoteFinite(mapping.keystone_y,0).toFixed(2)} / ${mapping.aspect_mode||"Stretch"} ${remoteFinite(mapping.aspect_ratio,1).toFixed(2)}`;
+}
+const remoteStageSurfaceCornerGain=0.28;
+const remoteStageSurfaceCorners=[
+  {key:"tl",label:"TL",baseX:-1,baseZ:-1,xField:"corner_top_left_x",zField:"corner_top_left_y"},
+  {key:"tr",label:"TR",baseX:1,baseZ:-1,xField:"corner_top_right_x",zField:"corner_top_right_y"},
+  {key:"br",label:"BR",baseX:1,baseZ:1,xField:"corner_bottom_right_x",zField:"corner_bottom_right_y"},
+  {key:"bl",label:"BL",baseX:-1,baseZ:1,xField:"corner_bottom_left_x",zField:"corner_bottom_left_y"}
+];
+function remoteStageSurfaceHalfSize(output,mapping){
+  const outputAspect=Number(output.height)>0?Number(output.width)/Number(output.height):1;
+  const mappedAspect=remoteClamp(remoteFinite(mapping.aspect_ratio,outputAspect),0.35,4);
+  const aspect=(mapping.aspect_mode||"Stretch")==="Stretch"?outputAspect:mappedAspect;
+  const baseHeight=4.5*remoteClamp(remoteFinite(mapping.scale_y,1),0.25,3);
+  return {
+    width:baseHeight*Math.max(0.35,aspect)*remoteClamp(remoteFinite(mapping.scale_x,1),0.25,3),
+    height:baseHeight
+  };
+}
+function remoteStageRotatePoint(centerX,centerZ,localX,localZ,rotationDeg){
+  const angle=remoteFinite(rotationDeg,0)*(Math.PI/180);
+  const cos=Math.cos(angle);
+  const sin=Math.sin(angle);
+  return {x:centerX+localX*cos-localZ*sin,z:centerZ+localX*sin+localZ*cos};
+}
+function remoteStageObjectCorners(object){
+  const width=Math.max(0.1,remoteFinite(object.width,1));
+  const depth=Math.max(0.1,remoteFinite(object.depth,1));
+  return [
+    {x:-width/2,z:-depth/2},
+    {x:width/2,z:-depth/2},
+    {x:width/2,z:depth/2},
+    {x:-width/2,z:depth/2}
+  ].map(point=>remoteStageRotatePoint(remoteFinite(object.x,0),remoteFinite(object.z,0),point.x,point.z,object.rotation_deg));
+}
+function remoteStageOutputCorners(output){
+  const mapping={...remoteDefaultMapping(),...(output.mapping||{})};
+  const size=remoteStageSurfaceHalfSize(output,mapping);
+  return remoteStageSurfaceCorners.map(corner=>{
+    const localX=corner.baseX*size.width+remoteClamp(mapping[corner.xField],-1,1)*size.width*2*remoteStageSurfaceCornerGain;
+    const localZ=corner.baseZ*size.height+remoteClamp(mapping[corner.zField],-1,1)*size.height*2*remoteStageSurfaceCornerGain;
+    return remoteStageRotatePoint(remoteFinite(mapping.stage_x,0),remoteFinite(mapping.stage_z,0),localX,localZ,mapping.rotation_deg);
+  });
+}
+function remoteStageAddPoint(points,x,z){
+  const px=Number(x);
+  const pz=Number(z);
+  if(Number.isFinite(px)&&Number.isFinite(pz))points.push({x:px,z:pz});
+}
+function remoteStageBounds(snapshot){
+  const map=snapshot.stage_map||{};
+  if(map.locked&&Number.isFinite(Number(map.min_x))&&Number.isFinite(Number(map.max_x))&&Number.isFinite(Number(map.min_z))&&Number.isFinite(Number(map.max_z))&&Number(map.max_x)>Number(map.min_x)&&Number(map.max_z)>Number(map.min_z)){
+    return {minX:Number(map.min_x),maxX:Number(map.max_x),minZ:Number(map.min_z),maxZ:Number(map.max_z),locked:true};
+  }
+  const points=[];
+  for(const fixture of snapshot.fixtures||[])remoteStageAddPoint(points,fixture.position&&fixture.position.x,fixture.position&&fixture.position.z);
+  for(const output of (((snapshot.video||{}).outputs)||[]))for(const point of remoteStageOutputCorners(output))remoteStageAddPoint(points,point.x,point.z);
+  for(const object of snapshot.stage_objects||[])for(const point of remoteStageObjectCorners(object))remoteStageAddPoint(points,point.x,point.z);
+  if(!points.length)return {minX:-10,maxX:10,minZ:-10,maxZ:10,locked:false};
+  let minX=Math.min(...points.map(point=>point.x));
+  let maxX=Math.max(...points.map(point=>point.x));
+  let minZ=Math.min(...points.map(point=>point.z));
+  let maxZ=Math.max(...points.map(point=>point.z));
+  const centerX=(minX+maxX)/2;
+  const centerZ=(minZ+maxZ)/2;
+  const spanX=Math.max(20,maxX-minX);
+  const spanZ=Math.max(20,maxZ-minZ);
+  const pad=Math.max(2,Math.max(spanX,spanZ)*0.08);
+  minX=centerX-spanX/2-pad;
+  maxX=centerX+spanX/2+pad;
+  minZ=centerZ-spanZ/2-pad;
+  maxZ=centerZ+spanZ/2+pad;
+  return {minX,maxX,minZ,maxZ,locked:false};
+}
+function remoteStageGridStep(bounds){
+  const span=Math.max(bounds.maxX-bounds.minX,bounds.maxZ-bounds.minZ);
+  if(span>160)return 20;
+  if(span>80)return 10;
+  if(span>36)return 5;
+  if(span>18)return 2;
+  return 1;
+}
+function remoteStagePointList(points){
+  return points.map(point=>`${point.x.toFixed(3)},${point.z.toFixed(3)}`).join(" ");
+}
+function remoteStageKindClass(kind){
+  return String(kind||"stage").toLowerCase();
+}
+function remoteStageFixtureIntensity(fixture){
+  const values=fixture.attribute_values||[];
+  const dimmer=values.find(value=>/dimmer|intensity|master/i.test(String(value.attribute||"")));
+  return dimmer?remoteClamp(Number(dimmer.value)/65535,0,1):0.35;
+}
+function remoteStageSelectedOutput(outputs){
+  if(remoteStageSelectedOutputId===null)return null;
+  const output=(outputs||[]).find(candidate=>candidate.id===remoteStageSelectedOutputId)||null;
+  if(!output)remoteStageSelectedOutputId=null;
+  return output;
+}
+function selectRemoteStageOutput(id){
+  remoteStageSelectedOutputId=Number(id);
+  renderRemoteStage(latestSnapshot||{});
+}
+function renderRemoteStageSelection(snapshot,fixture,output){
+  const el=document.getElementById("remoteStageSelection");
+  if(!el)return;
+  const rows=[];
+  if(fixture){
+    const states=[fixture.highlighted?"Highlight":"",fixture.soloed?"Solo":"",fixture.parked?"Park":""].filter(Boolean).join(" / ")||"Live";
+    rows.push(`<div class="remoteStageSelectionRow"><div><strong>${escapeHtml(fixture.label)}</strong><span>U${fixture.universe} / ${fixture.address} / ${escapeHtml(fixture.group_ids&&fixture.group_ids.length?fixture.group_ids.join(", "):fixture.mode_name)} / ${states}</span></div><button onclick="setSelectedFixtureHighlight(${!fixture.highlighted})">HL</button><button onclick="setSelectedFixtureSolo(${!fixture.soloed})">Solo</button><button onclick="setSelectedFixturePark(${!fixture.parked})">Park</button></div>`);
+  }
+  if(output){
+    const opacity=Math.round(remoteClamp(Number(output.opacity??1),0,1)*100);
+    const plan=remoteVideoOutputRenderPlanById(output.id);
+    const planState=remoteVideoOutputRenderPlanState(plan,output);
+    rows.push(`<div class="remoteStageSelectionRow output"><div><strong>${escapeHtml(output.label)}</strong><span>${escapeHtml(output.kind)} / ${output.enabled?"Enabled":"Disabled"} / ${output.blackout?"Blackout":`${opacity}%`} / ${escapeHtml(planState.label)} ${planState.layers.length} layer${planState.layers.length===1?"":"s"}</span></div><button onclick="setVideoOutputEnabled(${output.id},${!output.enabled})">${output.enabled?"Off":"On"}</button><button onclick="setVideoOutputBlackout(${output.id},${!output.blackout})">BO</button><button onclick="fadeVideoOutput(${output.id},0)">Out</button><button onclick="fadeVideoOutput(${output.id},1)">In</button><button onclick="setVideoOutputOpacity(${output.id},1)">Full</button></div>`);
+  }
+  el.innerHTML=rows.length?rows.join(""):`<div class="remoteStageSelectionRow empty"><div><strong>No stage target</strong><span>Tap a fixture or projector surface.</span></div></div>`;
+}
+function renderRemoteStage(snapshot){
+  const svg=document.getElementById("remoteStage");
+  const readout=document.getElementById("remoteStageReadout");
+  if(!svg||!readout)return;
+  const fixtures=snapshot.fixtures||[];
+  const stageGroupId=selectedRemoteStageGroupId();
+  const visibleFixtures=stageGroupId?fixtures.filter(fixture=>remoteFixtureMatchesGroup(fixture,stageGroupId)):fixtures;
+  const outputs=(((snapshot.video||{}).outputs)||[]);
+  const objects=snapshot.stage_objects||[];
+  const bounds=remoteStageBounds(snapshot);
+  const width=Math.max(1,bounds.maxX-bounds.minX);
+  const height=Math.max(1,bounds.maxZ-bounds.minZ);
+  const span=Math.max(width,height);
+  const grid=remoteStageGridStep(bounds);
+  const labelSize=Math.max(0.42,Math.min(1.2,span*0.018));
+  const fixtureRadius=Math.max(0.28,Math.min(0.92,span*0.012));
+  const selectedFixtureId=selectedNumber("fixtureId");
+  const selectedFixture=remoteFixtureById(selectedFixtureId);
+  const selectedOutput=remoteStageSelectedOutput(outputs);
+  renderRemoteStageSelection(snapshot,selectedFixture,selectedOutput);
+  svg.setAttribute("viewBox",`${bounds.minX} ${bounds.minZ} ${width} ${height}`);
+  readout.innerHTML=[
+    `<span>${visibleFixtures.length}${stageGroupId?` / ${fixtures.length}`:""} fixture${visibleFixtures.length===1?"":"s"}</span>`,
+    `<span>${stageGroupId?`Group ${escapeHtml(stageGroupId)}`:"All groups"}</span>`,
+    `<span>${outputs.length} output${outputs.length===1?"":"s"}</span>`,
+    `<span>${objects.length} object${objects.length===1?"":"s"}</span>`,
+    `<span>${bounds.locked?"Locked map":"Auto map"}</span>`
+  ].join("");
+  const objectMarkup=objects.map(object=>{
+    const points=remoteStageObjectCorners(object);
+    const labelX=remoteFinite(object.x,0);
+    const labelZ=remoteFinite(object.z,0);
+    const color=/^#[0-9a-fA-F]{6}$/.test(String(object.color||""))?String(object.color):"";
+    const style=color?` style="fill:${color}22;stroke:${color}"`:"";
+    return `<g><polygon class="remoteStageObject kind-${remoteStageKindClass(object.kind)}" points="${remoteStagePointList(points)}"${style}><title>${escapeHtml(object.label)} / ${escapeHtml(object.kind)}</title></polygon><text class="remoteStageSurfaceLabel" style="font-size:${labelSize}px" x="${labelX}" y="${labelZ-labelSize*.8}">${escapeHtml(object.label)}</text></g>`;
+  }).join("");
+  const outputMarkup=outputs.map(output=>{
+    const points=remoteStageOutputCorners(output);
+    const mapping={...remoteDefaultMapping(),...(output.mapping||{})};
+    const className=`remoteStageOutput ${output.enabled&&!output.blackout?"":"inactive"} ${remoteStageSelectedOutputId===output.id?"selected":""}`;
+    const centerX=remoteFinite(mapping.stage_x,0);
+    const centerZ=remoteFinite(mapping.stage_z,0);
+    return `<g class="remoteStageOutputGroup" onclick="selectRemoteStageOutput(${output.id})"><polygon class="${className}" points="${remoteStagePointList(points)}"><title>${escapeHtml(output.label)} / ${escapeHtml(output.kind)}</title></polygon><circle class="remoteStageOutputCenter" cx="${centerX}" cy="${centerZ}" r="${fixtureRadius*.62}" /><text class="remoteStageSurfaceLabel" style="font-size:${labelSize}px" x="${centerX+fixtureRadius}" y="${centerZ-labelSize*.6}">${escapeHtml(output.label)}</text></g>`;
+  }).join("");
+  const fixtureMarkup=visibleFixtures.map(fixture=>{
+    const x=remoteFinite(fixture.position&&fixture.position.x,0);
+    const z=remoteFinite(fixture.position&&fixture.position.z,0);
+    const yaw=remoteFinite(fixture.rotation&&fixture.rotation.yaw,0);
+    const angle=(-90+yaw)*(Math.PI/180);
+    const intensity=remoteStageFixtureIntensity(fixture);
+    const beamLength=fixtureRadius*(4+intensity*9);
+    const beamX=x+Math.cos(angle)*beamLength;
+    const beamZ=z+Math.sin(angle)*beamLength;
+    const classes=["remoteStageFixture"];
+    if(selectedFixtureId===fixture.id)classes.push("selected");
+    const shapeClasses=["remoteStageFixtureShape"];
+    if(fixture.highlighted)shapeClasses.push("highlighted");
+    if(fixture.soloed)shapeClasses.push("soloed");
+    if(fixture.parked)shapeClasses.push("parked");
+    return `<g class="${classes.join(" ")}" onclick="selectFixture(${fixture.id})"><line class="remoteStageBeam" x1="${x}" y1="${z}" x2="${beamX}" y2="${beamZ}" /><circle class="${shapeClasses.join(" ")}" cx="${x}" cy="${z}" r="${fixtureRadius}"><title>${escapeHtml(fixture.label)} / U${fixture.universe} @ ${fixture.address}</title></circle><text class="remoteStageSurfaceLabel" style="font-size:${labelSize}px" x="${x+fixtureRadius*1.25}" y="${z-fixtureRadius*.7}">${escapeHtml(fixture.label)}</text></g>`;
+  }).join("");
+  svg.innerHTML=`<defs><pattern id="remote-stage-grid" width="${grid}" height="${grid}" patternUnits="userSpaceOnUse"><path d="M ${grid} 0 L 0 0 0 ${grid}" /></pattern></defs><rect class="remoteStageFloor" x="${bounds.minX}" y="${bounds.minZ}" width="${width}" height="${height}" /><rect class="remoteStageGrid" x="${bounds.minX}" y="${bounds.minZ}" width="${width}" height="${height}" fill="url(#remote-stage-grid)" /><line class="remoteStageAxis" x1="0" y1="${bounds.minZ}" x2="0" y2="${bounds.maxZ}" /><line class="remoteStageAxis" x1="${bounds.minX}" y1="0" x2="${bounds.maxX}" y2="0" />${objectMarkup}${outputMarkup}${fixtureMarkup}`;
 }
 function remoteVideoOutputMappingPanel(output){
   const mapping={...remoteDefaultMapping(),...(output.mapping||{})};
@@ -1570,6 +1811,122 @@ function renderVideoRuntimeStatus(status){
     return `<div class="liveTile backendTile ${className}"><span class="status ${badgeClass}">${escapeHtml(backend.state)}</span><strong>${escapeHtml(backend.label||backend.id)}</strong><small>${escapeHtml(backend.detail||"")}</small></div>`;
   }).join(""):`<span class="small">Backend status is not loaded</span>`;
 }
+function remoteVideoOutputRenderPlanPayload(payload){
+  if(Array.isArray(payload))return {plans:payload,error:""};
+  const plans=payload&&Array.isArray(payload.plans)?payload.plans:[];
+  return {plans,error:payload&&payload.error?String(payload.error):""};
+}
+function remoteVideoOutputMappingLabel(mapping){
+  const m=mapping||{};
+  const cornerWarp=Math.abs(Number(m.corner_top_left_x)||0)+Math.abs(Number(m.corner_top_left_y)||0)+Math.abs(Number(m.corner_top_right_x)||0)+Math.abs(Number(m.corner_top_right_y)||0)+Math.abs(Number(m.corner_bottom_right_x)||0)+Math.abs(Number(m.corner_bottom_right_y)||0)+Math.abs(Number(m.corner_bottom_left_x)||0)+Math.abs(Number(m.corner_bottom_left_y)||0);
+  const parts=[];
+  if(m.aspect_mode&&m.aspect_mode!=="Stretch")parts.push(String(m.aspect_mode));
+  if(Math.abs(Number(m.lens_distortion)||0)>0.001)parts.push(`lens ${Number(m.lens_distortion).toFixed(2)}`);
+  if(Math.abs(Number(m.keystone_x)||0)>0.001||Math.abs(Number(m.keystone_y)||0)>0.001)parts.push(`key ${Number(m.keystone_x||0).toFixed(2)},${Number(m.keystone_y||0).toFixed(2)}`);
+  if(cornerWarp>0.001)parts.push("corner warp");
+  return parts.length?parts.join(" / "):"flat mapping";
+}
+function remoteVideoOutputRenderPlanById(output_id){
+  return (latestVideoOutputRenderPlans||[]).find(plan=>Number(plan.output_id)===Number(output_id))||null;
+}
+function remoteVideoOutputRenderPlanState(plan,output){
+  const layers=((plan&&plan.composition||{}).layers||[]);
+  const enabled=plan?plan.enabled!==false:output&&output.enabled!==false;
+  const blackout=plan?plan.output_blackout:output&&output.blackout;
+  if(!enabled)return {label:"Disabled",className:"notbuilt",badgeClass:"warn",layers};
+  if(blackout)return {label:"Blackout",className:"missing",badgeClass:"bad",layers};
+  if(layers.length)return {label:"Live",className:"available",badgeClass:"ok",layers};
+  return {label:"Empty",className:"notbuilt",badgeClass:"warn",layers};
+}
+function remoteVideoOutputRenderPlanDetail(plan,output){
+  if(!plan)return "Render plan not loaded";
+  const state=remoteVideoOutputRenderPlanState(plan,output);
+  const composition=(plan.composition||{}).label||`Composition ${(plan.composition||{}).composition_id||""}`;
+  const mapping=remoteVideoOutputMappingLabel(plan.mapping);
+  const layers=state.layers.length?state.layers.slice(0,3).map(layer=>`${layer.label||`Layer ${layer.layer_id}`} ${Math.round((Number(layer.opacity)||0)*100)}%`).join(", "):"No active layers";
+  const more=state.layers.length>3?` +${state.layers.length-3} more`:"";
+  return `${state.label} / ${composition} / ${state.layers.length} layer(s) / ${Math.round((Number(plan.output_opacity)||0)*100)}% / ${mapping} / ${layers}${more}`;
+}
+function renderVideoOutputRenderPlans(payload){
+  const normalized=remoteVideoOutputRenderPlanPayload(payload);
+  latestVideoOutputRenderPlans=normalized.plans;
+  const plans=latestVideoOutputRenderPlans;
+  const activeOutputs=plans.filter(plan=>plan.enabled!==false&&!plan.output_blackout).length;
+  const blackoutOutputs=plans.filter(plan=>plan.output_blackout).length;
+  const activeLayers=plans.reduce((total,plan)=>total+(((plan.composition||{}).layers||[]).length),0);
+  const errorText=normalized.error?` / ${normalized.error}`:"";
+  text("videoOutputRenderPlanSummary",plans.length?`${plans.length} output(s) / ${activeOutputs} active / ${activeLayers} render layer(s) / ${blackoutOutputs} blackout${errorText}`:normalized.error?normalized.error:"No render plans");
+  const el=document.getElementById("videoOutputRenderPlans");
+  el.innerHTML=plans.length?plans.map(plan=>{
+    const planState=remoteVideoOutputRenderPlanState(plan,null);
+    const state=planState.label;
+    const className=planState.className;
+    const badgeClass=planState.badgeClass;
+    const endpoint=plan.kind==="Display"?`Monitor ${plan.monitor_id??0}`:(plan.endpoint_name||plan.label||"");
+    const composition=(plan.composition||{}).label||`Composition ${(plan.composition||{}).composition_id||""}`;
+    const layers=planState.layers;
+    const layerText=layers.length?layers.slice(0,3).map(layer=>`${layer.label||`Layer ${layer.layer_id}`} ${Math.round((Number(layer.opacity)||0)*100)}%`).join(", "):"No active layers";
+    const more=layers.length>3?` +${layers.length-3} more`:"";
+    return `<div class="liveTile backendTile ${className}"><span class="status ${badgeClass}">${escapeHtml(state)} ${escapeHtml(plan.kind||"Output")}</span><strong>${escapeHtml(plan.label||`Output ${plan.output_id}`)}</strong><small>${escapeHtml(endpoint)} / ${Number(plan.width)||0}x${Number(plan.height)||0}</small><small>${escapeHtml(composition)} / ${Math.round((Number(plan.output_opacity)||0)*100)}% / ${escapeHtml(remoteVideoOutputMappingLabel(plan.mapping))}</small><small>${escapeHtml(layerText+more)}</small></div>`;
+  }).join(""):`<span class="small">No video output render plans</span>`;
+  const video=(latestSnapshot&&latestSnapshot.video)||null;
+  if(video)renderVideoOutputList(video.outputs||[],video.compositions||[]);
+  if(latestSnapshot)renderRemoteStage(latestSnapshot);
+}
+function renderExternalVideoIoPlans(plans){
+  latestExternalVideoIoPlans=plans||{inputs:[],outputs:[]};
+  const inputs=Array.isArray(latestExternalVideoIoPlans.inputs)?latestExternalVideoIoPlans.inputs:[];
+  const outputs=Array.isArray(latestExternalVideoIoPlans.outputs)?latestExternalVideoIoPlans.outputs:[];
+  const routes=[
+    ...inputs.map(plan=>({...plan,direction:"IN",route_id:plan.layer_id,output:false})),
+    ...outputs.map(plan=>({...plan,direction:"OUT",route_id:plan.output_id,output:true}))
+  ];
+  const live=routes.filter(route=>route.live).length;
+  const blocked=routes.filter(route=>!route.ready).length;
+  const el=document.getElementById("externalVideoIoPlanRoutes");
+  text("externalVideoIoPlanSummary",routes.length?`${routes.length} planned / ${live} live / ${blocked} blocked`:"No external video I/O plans");
+  el.innerHTML=routes.length?routes.map(route=>{
+    const className=route.ready?(route.live?"available":"notbuilt"):"missing";
+    const badgeClass=route.ready?(route.live?"ok":"warn"):"bad";
+    const state=route.live?"Live":route.ready?(route.enabled?"Ready":"Disabled"):(route.backend_state||"Blocked");
+    const backend=String(route.backend_id||"").toUpperCase();
+    const detail=route.issue||route.backend_detail||`${route.kind||""}${route.output&&route.width&&route.height?` / ${route.width}x${route.height}`:""}`;
+    return `<div class="liveTile backendTile ${className}"><span class="status ${badgeClass}">${escapeHtml(route.direction)} ${escapeHtml(backend)} ${escapeHtml(state)}</span><strong>${escapeHtml(route.label||`Route ${route.route_id}`)}</strong><small>${escapeHtml(route.endpoint_name||"")}</small><small>${escapeHtml(detail||"")}</small></div>`;
+  }).join(""):`<span class="small">No external video I/O plans</span>`;
+}
+function renderExternalVideoTransportStatus(status){
+  latestExternalVideoTransportStatus=status||{active_routes:[],active_count:0};
+  const routes=Array.isArray(latestExternalVideoTransportStatus.active_routes)?latestExternalVideoTransportStatus.active_routes:[];
+  const activeCount=Number.isFinite(Number(latestExternalVideoTransportStatus.active_count))?Number(latestExternalVideoTransportStatus.active_count):routes.length;
+  const el=document.getElementById("externalVideoTransportRoutes");
+  text("externalVideoTransportSummary",routes.length?`${activeCount} active route(s)`:"No active external routes");
+  el.innerHTML=routes.length?routes.map(route=>{
+    const direction=String(route.direction||"").toUpperCase();
+    const backend=String(route.backend_id||"").toUpperCase();
+    const label=route.label||`Route ${route.route_id}`;
+    const endpoint=route.endpoint_name||"";
+    return `<div class="liveTile backendTile available"><span class="status ok">${escapeHtml(direction)} ${escapeHtml(backend)}</span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(endpoint)}</small></div>`;
+  }).join(""):`<span class="small">No active external video transport routes</span>`;
+}
+function renderExternalVideoTransportSync(sync){
+  latestExternalVideoTransportSync=sync||{report:null,events:[]};
+  const report=latestExternalVideoTransportSync.report||{};
+  const events=Array.isArray(latestExternalVideoTransportSync.events)?latestExternalVideoTransportSync.events:[];
+  const count=(key)=>Array.isArray(report[key])?report[key].length:0;
+  const active=Number.isFinite(Number(report.active_count))?Number(report.active_count):0;
+  const failed=count("start_failed")+count("stop_failed");
+  const failedText=failed?` / failed ${failed}`:"";
+  const hasReport=latestExternalVideoTransportSync.report&&typeof latestExternalVideoTransportSync.report==="object";
+  text("externalVideoTransportSyncSummary",hasReport?`sync active ${active} / +${count("started")} / =${count("kept")} / -${count("stopped")} / blocked ${count("blocked")}${failedText}`:"Routes not synced");
+  const el=document.getElementById("externalVideoTransportSyncEvents");
+  el.innerHTML=events.length?events.slice(-6).map(event=>{
+    const route=event.route||{};
+    const action=String(event.action||"Event");
+    const badgeClass=action==="Start"?"ok":"warn";
+    const backend=String(route.backend_id||"").toUpperCase();
+    return `<div class="liveTile backendTile available"><span class="status ${badgeClass}">${escapeHtml(action)} ${escapeHtml(route.direction||"")}</span><strong>${escapeHtml(route.label||`Route ${route.route_id||""}`)}</strong><small>${escapeHtml(backend)} / ${escapeHtml(route.endpoint_name||"")}</small><small>${escapeHtml(event.message||"")}</small></div>`;
+  }).join(""):`<span class="small">No sync driver events</span>`;
+}
 function renderStatus(snapshot,video){
   const clock=snapshot.clock||{};
   const telemetry=snapshot.telemetry||{};
@@ -1596,7 +1953,7 @@ function videoCuePointsForState(state){
     color:/^#[0-9a-fA-F]{6}$/.test(String(cue.color||""))?String(cue.color):"#4aa8ff"
   })).sort((a,b)=>a.position_ms-b.position_ms);
 }
-function selectFixture(id){document.getElementById("fixtureId").value=String(id);applyAttributeOptions()}
+function selectFixture(id){document.getElementById("fixtureId").value=String(id);applyAttributeOptions();renderRemoteStage(latestSnapshot||{})}
 function remoteFixtureById(fixture_id){
   return (latestSnapshot&&latestSnapshot.fixtures||[]).find(fixture=>fixture.id===fixture_id)||null;
 }
@@ -1877,6 +2234,9 @@ function setRemoteEffectEnabled(effect_id,enabled){send({type:"setEffectEnabled"
 function setRemoteNodeGraphEnabled(graph_id,enabled){send({type:"setNodeGraphEnabled",graph_id,enabled})}
 function moveRemoteEffect(effect_id,delta){send({type:"moveEffect",effect_id,delta})}
 function removeRemoteEffect(effect_id,label){if(window.confirm(`Remove ${label}?`))send({type:"removeEffect",effect_id})}
+function syncExternalVideoTransportsRemote(){
+  send({type:"syncExternalVideoTransports"},false);
+}
 function sendVideoParam(){const layer_id=selectedNumber("layerId");if(layer_id!==null)send({type:"setVideoParam",layer_id,param:document.getElementById("videoParam").value,value:numberValue("videoValue")})}
 function setLayerParamFromInput(layer_id,param,value){
   const numeric=Number(value);
@@ -2335,6 +2695,10 @@ pub enum RemoteClientRequest {
     Event(RemoteInputEvent),
     GetSnapshot,
     GetVideoRuntimeStatus,
+    GetVideoOutputRenderPlans,
+    GetExternalVideoIoPlans,
+    GetExternalVideoTransportStatus,
+    SyncExternalVideoTransports,
 }
 
 #[derive(Debug, Error)]
@@ -2401,6 +2765,37 @@ impl RemoteWsServer {
         S: Fn() -> EngineSnapshot + Send + Sync + 'static,
         V: Fn() -> VideoRuntimeStatus + Send + Sync + 'static,
     {
+        Self::start_with_snapshot_and_video_status_providers(
+            config,
+            callback,
+            snapshot_provider,
+            video_runtime_status_provider,
+            default_video_output_render_plans,
+            default_external_video_io_plans,
+            default_external_video_transport_status,
+            default_external_video_transport_sync,
+        )
+    }
+
+    pub fn start_with_snapshot_and_video_status_providers<F, S, V, R, I, T, X>(
+        config: RemoteControlConfig,
+        callback: F,
+        snapshot_provider: S,
+        video_runtime_status_provider: V,
+        video_output_render_plans_provider: R,
+        external_video_io_plans_provider: I,
+        external_video_transport_status_provider: T,
+        external_video_transport_sync_provider: X,
+    ) -> Result<Self, RemoteWsError>
+    where
+        F: Fn(RemoteInputEvent) + Send + Sync + 'static,
+        S: Fn() -> EngineSnapshot + Send + Sync + 'static,
+        V: Fn() -> VideoRuntimeStatus + Send + Sync + 'static,
+        R: Fn() -> Value + Send + Sync + 'static,
+        I: Fn() -> Value + Send + Sync + 'static,
+        T: Fn() -> Value + Send + Sync + 'static,
+        X: Fn() -> Value + Send + Sync + 'static,
+    {
         if config.bind_ip.trim().is_empty() {
             return Err(RemoteWsError::MissingBindAddress);
         }
@@ -2419,6 +2814,12 @@ impl RemoteWsServer {
         let callback = Arc::new(callback);
         let snapshot_provider = Arc::new(snapshot_provider);
         let video_runtime_status_provider = Arc::new(video_runtime_status_provider);
+        let video_output_render_plans_provider = Arc::new(video_output_render_plans_provider);
+        let external_video_io_plans_provider = Arc::new(external_video_io_plans_provider);
+        let external_video_transport_status_provider =
+            Arc::new(external_video_transport_status_provider);
+        let external_video_transport_sync_provider =
+            Arc::new(external_video_transport_sync_provider);
         let thread = thread::Builder::new()
             .name("rayard-remote-ws".to_string())
             .spawn(move || {
@@ -2430,6 +2831,14 @@ impl RemoteWsServer {
                             let client_snapshot_provider = Arc::clone(&snapshot_provider);
                             let client_video_runtime_status_provider =
                                 Arc::clone(&video_runtime_status_provider);
+                            let client_video_output_render_plans_provider =
+                                Arc::clone(&video_output_render_plans_provider);
+                            let client_external_video_io_plans_provider =
+                                Arc::clone(&external_video_io_plans_provider);
+                            let client_external_video_transport_status_provider =
+                                Arc::clone(&external_video_transport_status_provider);
+                            let client_external_video_transport_sync_provider =
+                                Arc::clone(&external_video_transport_sync_provider);
                             let _ = thread::Builder::new()
                                 .name("rayard-remote-ws-client".to_string())
                                 .spawn(move || {
@@ -2439,6 +2848,10 @@ impl RemoteWsServer {
                                         client_callback.as_ref(),
                                         client_snapshot_provider.as_ref(),
                                         client_video_runtime_status_provider.as_ref(),
+                                        client_video_output_render_plans_provider.as_ref(),
+                                        client_external_video_io_plans_provider.as_ref(),
+                                        client_external_video_transport_status_provider.as_ref(),
+                                        client_external_video_transport_sync_provider.as_ref(),
                                     );
                                 });
                         }
@@ -2478,6 +2891,18 @@ pub fn event_from_text(text: &str) -> Result<RemoteInputEvent, RemoteParseError>
         RemoteClientRequest::GetVideoRuntimeStatus => Err(RemoteParseError::UnknownType(
             "getVideoRuntimeStatus".to_string(),
         )),
+        RemoteClientRequest::GetVideoOutputRenderPlans => Err(RemoteParseError::UnknownType(
+            "getVideoOutputRenderPlans".to_string(),
+        )),
+        RemoteClientRequest::GetExternalVideoIoPlans => Err(RemoteParseError::UnknownType(
+            "getExternalVideoIoPlans".to_string(),
+        )),
+        RemoteClientRequest::GetExternalVideoTransportStatus => Err(RemoteParseError::UnknownType(
+            "getExternalVideoTransportStatus".to_string(),
+        )),
+        RemoteClientRequest::SyncExternalVideoTransports => Err(RemoteParseError::UnknownType(
+            "syncExternalVideoTransports".to_string(),
+        )),
     }
 }
 
@@ -2491,6 +2916,12 @@ pub fn request_from_text(text: &str) -> Result<RemoteClientRequest, RemoteParseE
     match command_type {
         "getSnapshot" => Ok(RemoteClientRequest::GetSnapshot),
         "getVideoRuntimeStatus" => Ok(RemoteClientRequest::GetVideoRuntimeStatus),
+        "getVideoOutputRenderPlans" => Ok(RemoteClientRequest::GetVideoOutputRenderPlans),
+        "getExternalVideoIoPlans" => Ok(RemoteClientRequest::GetExternalVideoIoPlans),
+        "getExternalVideoTransportStatus" => {
+            Ok(RemoteClientRequest::GetExternalVideoTransportStatus)
+        }
+        "syncExternalVideoTransports" => Ok(RemoteClientRequest::SyncExternalVideoTransports),
         "setAttribute" => Ok(RemoteClientRequest::Event(RemoteInputEvent::SetAttribute {
             fixture_id: read_u64(&value, "fixture_id")?,
             attribute: read_string(&value, "attribute")?,
@@ -2723,7 +3154,7 @@ pub fn request_from_text(text: &str) -> Result<RemoteClientRequest, RemoteParseE
         "setVideoOutputMappingField" => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SetVideoOutputMappingField {
                 output_id: read_u64(&value, "output_id")?,
-                field: read_string(&value, "field")?,
+                field: read_video_output_mapping_field(&value, "field")?,
                 value: read_f32(&value, "value")?,
             },
         )),
@@ -2755,6 +3186,10 @@ fn handle_connection<F, S>(
     callback: &F,
     snapshot_provider: &S,
     video_runtime_status_provider: &impl Fn() -> VideoRuntimeStatus,
+    video_output_render_plans_provider: &impl Fn() -> Value,
+    external_video_io_plans_provider: &impl Fn() -> Value,
+    external_video_transport_status_provider: &impl Fn() -> Value,
+    external_video_transport_sync_provider: &impl Fn() -> Value,
 ) where
     F: Fn(RemoteInputEvent) + ?Sized,
     S: Fn() -> EngineSnapshot + ?Sized,
@@ -2769,6 +3204,10 @@ fn handle_connection<F, S>(
                 callback,
                 snapshot_provider,
                 video_runtime_status_provider,
+                video_output_render_plans_provider,
+                external_video_io_plans_provider,
+                external_video_transport_status_provider,
+                external_video_transport_sync_provider,
             );
         }
         Ok(size) => {
@@ -2786,6 +3225,10 @@ fn handle_websocket_client<F, S>(
     callback: &F,
     snapshot_provider: &S,
     video_runtime_status_provider: &impl Fn() -> VideoRuntimeStatus,
+    video_output_render_plans_provider: &impl Fn() -> Value,
+    external_video_io_plans_provider: &impl Fn() -> Value,
+    external_video_transport_status_provider: &impl Fn() -> Value,
+    external_video_transport_sync_provider: &impl Fn() -> Value,
 ) where
     F: Fn(RemoteInputEvent) + ?Sized,
     S: Fn() -> EngineSnapshot + ?Sized,
@@ -2808,6 +3251,30 @@ fn handle_websocket_client<F, S>(
                 Ok(RemoteClientRequest::GetVideoRuntimeStatus) => {
                     let response =
                         video_runtime_status_response_json(&(video_runtime_status_provider)());
+                    let _ = websocket.send(Message::Text(response));
+                }
+                Ok(RemoteClientRequest::GetVideoOutputRenderPlans) => {
+                    let response = video_output_render_plans_response_json(
+                        &(video_output_render_plans_provider)(),
+                    );
+                    let _ = websocket.send(Message::Text(response));
+                }
+                Ok(RemoteClientRequest::GetExternalVideoIoPlans) => {
+                    let response = external_video_io_plans_response_json(
+                        &(external_video_io_plans_provider)(),
+                    );
+                    let _ = websocket.send(Message::Text(response));
+                }
+                Ok(RemoteClientRequest::GetExternalVideoTransportStatus) => {
+                    let response = external_video_transport_status_response_json(
+                        &(external_video_transport_status_provider)(),
+                    );
+                    let _ = websocket.send(Message::Text(response));
+                }
+                Ok(RemoteClientRequest::SyncExternalVideoTransports) => {
+                    let response = external_video_transport_sync_response_json(
+                        &(external_video_transport_sync_provider)(),
+                    );
                     let _ = websocket.send(Message::Text(response));
                 }
                 Err(error) => {
@@ -2842,6 +3309,67 @@ fn video_runtime_status_response_json(status: &VideoRuntimeStatus) -> String {
         "video_runtime_status": status,
     })
     .to_string()
+}
+
+fn video_output_render_plans_response_json(plans: &Value) -> String {
+    json!({
+        "ok": true,
+        "type": "videoOutputRenderPlans",
+        "video_output_render_plans": plans,
+    })
+    .to_string()
+}
+
+fn external_video_io_plans_response_json(plans: &Value) -> String {
+    json!({
+        "ok": true,
+        "type": "externalVideoIoPlans",
+        "external_video_io_plans": plans,
+    })
+    .to_string()
+}
+
+fn external_video_transport_status_response_json(status: &Value) -> String {
+    json!({
+        "ok": true,
+        "type": "externalVideoTransportStatus",
+        "external_video_transport_status": status,
+    })
+    .to_string()
+}
+
+fn external_video_transport_sync_response_json(sync: &Value) -> String {
+    json!({
+        "ok": true,
+        "type": "externalVideoTransportSync",
+        "external_video_transport_sync": sync,
+    })
+    .to_string()
+}
+
+fn default_external_video_io_plans() -> Value {
+    json!({
+        "inputs": [],
+        "outputs": [],
+    })
+}
+
+fn default_video_output_render_plans() -> Value {
+    json!([])
+}
+
+fn default_external_video_transport_sync() -> Value {
+    json!({
+        "report": null,
+        "events": [],
+    })
+}
+
+fn default_external_video_transport_status() -> Value {
+    json!({
+        "active_routes": [],
+        "active_count": 0,
+    })
 }
 
 fn serve_http_client(mut stream: TcpStream, path: &str) {
@@ -2989,6 +3517,16 @@ fn read_video_output_mapping(
     serde_json::from_value(mapping.clone()).map_err(|_| RemoteParseError::InvalidField(key))
 }
 
+fn read_video_output_mapping_field(
+    value: &Value,
+    key: &'static str,
+) -> Result<String, RemoteParseError> {
+    let field = read_string(value, key)?;
+    canonical_video_output_mapping_field(&field)
+        .map(str::to_string)
+        .ok_or(RemoteParseError::InvalidField(key))
+}
+
 fn read_u16_value(value: &Value, key: &'static str) -> Result<u16, RemoteParseError> {
     let number = value
         .get(key)
@@ -3072,6 +3610,10 @@ mod tests {
         assert_eq!(
             request_from_text(r#"{"type":"getVideoRuntimeStatus"}"#),
             Ok(RemoteClientRequest::GetVideoRuntimeStatus)
+        );
+        assert_eq!(
+            request_from_text(r#"{"type":"getVideoOutputRenderPlans"}"#),
+            Ok(RemoteClientRequest::GetVideoOutputRenderPlans)
         );
         assert_eq!(
             event_from_text(
@@ -3286,6 +3828,16 @@ mod tests {
             Ok(RemoteInputEvent::VideoBlackout(true))
         );
         assert_eq!(
+            request_from_text(r#"{"type":"syncExternalVideoTransports"}"#),
+            Ok(RemoteClientRequest::SyncExternalVideoTransports)
+        );
+        assert_eq!(
+            event_from_text(r#"{"type":"syncExternalVideoTransports"}"#),
+            Err(RemoteParseError::UnknownType(
+                "syncExternalVideoTransports".to_string()
+            ))
+        );
+        assert_eq!(
             event_from_text(r#"{"type":"allBlackout","enabled":true}"#),
             Ok(RemoteInputEvent::AllBlackout(true))
         );
@@ -3403,13 +3955,19 @@ mod tests {
         );
         assert_eq!(
             event_from_text(
-                r#"{"type":"setVideoOutputMappingField","output_id":4,"field":"keystone_x","value":0.25}"#
+                r#"{"type":"setVideoOutputMappingField","output_id":4,"field":"key x","value":0.25}"#
             ),
             Ok(RemoteInputEvent::SetVideoOutputMappingField {
                 output_id: 4,
                 field: "keystone_x".to_string(),
                 value: 0.25,
             })
+        );
+        assert_eq!(
+            event_from_text(
+                r#"{"type":"setVideoOutputMappingField","output_id":4,"field":"unknown","value":0.25}"#
+            ),
+            Err(RemoteParseError::InvalidField("field"))
         );
         assert_eq!(
             event_from_text(
@@ -3449,6 +4007,32 @@ mod tests {
             event_from_text(r#"{"fixture_id":1}"#),
             Err(RemoteParseError::MissingType)
         );
+        assert_eq!(
+            request_from_text(r#"{"type":"getExternalVideoTransportStatus"}"#),
+            Ok(RemoteClientRequest::GetExternalVideoTransportStatus)
+        );
+        assert_eq!(
+            request_from_text(r#"{"type":"getExternalVideoIoPlans"}"#),
+            Ok(RemoteClientRequest::GetExternalVideoIoPlans)
+        );
+        assert_eq!(
+            event_from_text(r#"{"type":"getExternalVideoIoPlans"}"#),
+            Err(RemoteParseError::UnknownType(
+                "getExternalVideoIoPlans".to_string()
+            ))
+        );
+        assert_eq!(
+            event_from_text(r#"{"type":"getVideoOutputRenderPlans"}"#),
+            Err(RemoteParseError::UnknownType(
+                "getVideoOutputRenderPlans".to_string()
+            ))
+        );
+        assert_eq!(
+            event_from_text(r#"{"type":"getExternalVideoTransportStatus"}"#),
+            Err(RemoteParseError::UnknownType(
+                "getExternalVideoTransportStatus".to_string()
+            ))
+        );
     }
 
     #[test]
@@ -3485,6 +4069,24 @@ mod tests {
         assert!(page.contains("getVideoRuntimeStatus"));
         assert!(page.contains("videoRuntimeBackends"));
         assert!(page.contains("renderVideoRuntimeStatus"));
+        assert!(page.contains("getVideoOutputRenderPlans"));
+        assert!(page.contains("videoOutputRenderPlans"));
+        assert!(page.contains("videoOutputRenderPlanSummary"));
+        assert!(page.contains("renderVideoOutputRenderPlans"));
+        assert!(page.contains("remoteVideoOutputRenderPlanById"));
+        assert!(page.contains("remoteVideoOutputRenderPlanDetail"));
+        assert!(page.contains("remoteVideoOutputRenderPlanState"));
+        assert!(page.contains("getExternalVideoIoPlans"));
+        assert!(page.contains("externalVideoIoPlanRoutes"));
+        assert!(page.contains("renderExternalVideoIoPlans"));
+        assert!(page.contains("getExternalVideoTransportStatus"));
+        assert!(page.contains("externalVideoTransportRoutes"));
+        assert!(page.contains("renderExternalVideoTransportStatus"));
+        assert!(page.contains("syncExternalVideoTransports"));
+        assert!(page.contains("syncExternalVideoTransportsRemote"));
+        assert!(page.contains("externalVideoTransportSyncSummary"));
+        assert!(page.contains("externalVideoTransportSyncEvents"));
+        assert!(page.contains("renderExternalVideoTransportSync"));
         assert!(page.contains("fixtureCount"));
         assert!(page.contains("effectCount"));
         assert!(page.contains("nodeGraphList"));
@@ -3578,6 +4180,13 @@ mod tests {
         assert!(page.contains("videoOutputList"));
         assert!(page.contains("renderVideoOutputList"));
         assert!(page.contains("remoteOutputMap"));
+        assert!(page.contains("remoteStage"));
+        assert!(page.contains("remoteStageGroupFilter"));
+        assert!(page.contains("selectedRemoteStageGroupId"));
+        assert!(page.contains("renderRemoteStage"));
+        assert!(page.contains("remoteStageSurfaceHalfSize"));
+        assert!(page.contains("remoteStageObjectCorners"));
+        assert!(page.contains("remoteStageOutputCorners"));
         assert!(page.contains("remoteVideoOutputMappingPanel"));
         assert!(page.contains("setVideoOutputMapping"));
         assert!(page.contains("nudgeRemoteOutputMapping"));
@@ -3644,8 +4253,13 @@ mod tests {
         assert!(page.contains("setVideoLoop"));
         assert!(page.contains("setVideoOutputEnabled"));
         assert!(page.contains("setVideoOutputOpacityFromInput"));
+        assert!(page.contains("setVideoOutputOpacity(${o.id},0)"));
         assert!(page.contains("setVideoOutputOpacity(${o.id},0.5)"));
         assert!(page.contains("fadeVideoOutputOpacity"));
+        assert!(page.contains("setVideoOutputEnabled(${output.id},${!output.enabled})"));
+        assert!(page.contains(r#"${output.enabled?"Off":"On"}"#));
+        assert!(page.contains("repeat(5,minmax(48px,auto))"));
+        assert!(page.contains(">Cut</button>"));
         assert!(page.contains(">Half</button>"));
         assert!(page.contains("setVideoPlaying"));
         assert!(page.contains("setAllBlackout"));
@@ -3702,5 +4316,111 @@ mod tests {
         assert!(response.contains(r#""type":"videoRuntimeStatus""#));
         assert!(response.contains(r#""video_runtime_status""#));
         assert!(response.contains(r#""state":"Missing""#));
+    }
+
+    #[test]
+    fn serializes_video_output_render_plans_response() {
+        let response = video_output_render_plans_response_json(&json!([{
+            "output_id": 7,
+            "label": "Projector",
+            "kind": "Display",
+            "enabled": true,
+            "width": 1920,
+            "height": 1080,
+            "output_blackout": false,
+            "composition": {
+                "composition_id": 2,
+                "label": "Main",
+                "layers": []
+            }
+        }]));
+
+        assert!(response.contains(r#""ok":true"#));
+        assert!(response.contains(r#""type":"videoOutputRenderPlans""#));
+        assert!(response.contains(r#""video_output_render_plans""#));
+        assert!(response.contains(r#""label":"Projector""#));
+        assert!(response.contains(r#""composition_id":2"#));
+    }
+
+    #[test]
+    fn serializes_external_video_io_plans_response() {
+        let response = external_video_io_plans_response_json(&json!({
+            "inputs": [{
+                "layer_id": 3,
+                "label": "Camera",
+                "backend_id": "ndi",
+                "endpoint_name": "Stage Cam",
+                "ready": false,
+                "live": false,
+                "issue": "NDI SDK backend is not linked"
+            }],
+            "outputs": []
+        }));
+
+        assert!(response.contains(r#""ok":true"#));
+        assert!(response.contains(r#""type":"externalVideoIoPlans""#));
+        assert!(response.contains(r#""external_video_io_plans""#));
+        assert!(response.contains(r#""backend_id":"ndi""#));
+        assert!(response.contains(r#""issue":"NDI SDK backend is not linked""#));
+    }
+
+    #[test]
+    fn serializes_external_video_transport_status_response() {
+        let response = external_video_transport_status_response_json(&json!({
+            "active_routes": [{
+                "direction": "Output",
+                "route_id": 4,
+                "label": "Program",
+                "backend_id": "spout",
+                "endpoint_name": "Rayard Stage"
+            }],
+            "active_count": 1
+        }));
+
+        assert!(response.contains(r#""ok":true"#));
+        assert!(response.contains(r#""type":"externalVideoTransportStatus""#));
+        assert!(response.contains(r#""external_video_transport_status""#));
+        assert!(response.contains(r#""backend_id":"spout""#));
+        assert!(response.contains(r#""active_count":1"#));
+    }
+
+    #[test]
+    fn serializes_external_video_transport_sync_response() {
+        let response = external_video_transport_sync_response_json(&json!({
+            "report": {
+                "started": [{
+                    "direction": "Output",
+                    "route_id": 4,
+                    "label": "Program",
+                    "backend_id": "spout",
+                    "endpoint_name": "Rayard Stage"
+                }],
+                "kept": [],
+                "stopped": [],
+                "blocked": [],
+                "start_failed": [],
+                "stop_failed": [],
+                "idle": [],
+                "active_count": 1
+            },
+            "events": [{
+                "sequence": 1,
+                "action": "Start",
+                "route": {
+                    "direction": "Output",
+                    "route_id": 4,
+                    "label": "Program",
+                    "backend_id": "spout",
+                    "endpoint_name": "Rayard Stage"
+                },
+                "message": "Queued spout output external video route 'Rayard Stage'"
+            }]
+        }));
+
+        assert!(response.contains(r#""ok":true"#));
+        assert!(response.contains(r#""type":"externalVideoTransportSync""#));
+        assert!(response.contains(r#""external_video_transport_sync""#));
+        assert!(response.contains(r#""action":"Start""#));
+        assert!(response.contains(r#""active_count":1"#));
     }
 }

@@ -5,6 +5,7 @@ export interface CustomProfileAttributePreview {
   resolution: AttributeResolution;
   startOffset: number | null;
   offsets: number[];
+  geometry: "Body" | "Head" | "Beam";
 }
 
 export interface CustomProfileAttributeDraft {
@@ -79,6 +80,35 @@ export const customProfileAttributeTemplates: CustomProfileAttributeTemplate[] =
 ];
 
 export const normalizeCustomResolutionText = (value: string) => value.toLowerCase().replace(/[-_\s]/g, "");
+
+const normalizeCustomAttributeName = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+
+export const customAttributeGeometryName = (attribute: string): "Body" | "Head" | "Beam" => {
+  const normalized = normalizeCustomAttributeName(attribute);
+  if (["pan", "tilt", "panrotate", "tiltrotate", "panfine", "tiltfine"].includes(normalized)) {
+    return "Head";
+  }
+  if (
+    normalized.includes("color") ||
+    normalized.includes("dimmer") ||
+    normalized.includes("shutter") ||
+    normalized.includes("strobe") ||
+    normalized.includes("gobo") ||
+    normalized.includes("beam") ||
+    normalized.includes("zoom") ||
+    normalized.includes("focus") ||
+    normalized.includes("frost") ||
+    normalized.includes("iris") ||
+    normalized.includes("prism") ||
+    ["red", "green", "blue", "white", "amber", "uv", "lime", "cyan", "magenta"].includes(normalized)
+  ) {
+    return "Beam";
+  }
+  return "Body";
+};
 
 const parseCustomAttributeStartOffset = (attribute: string, rawStart: string) => {
   const startOffset = Number(rawStart);
@@ -192,6 +222,7 @@ export const customProfilePreviewFromText = (value: string): CustomProfilePrevie
       resolution: spec.resolution,
       startOffset: spec.startOffset,
       offsets,
+      geometry: customAttributeGeometryName(spec.attribute),
     });
     nextOffset = Math.max(nextOffset, startOffset + width);
   }

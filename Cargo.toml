@@ -14,7 +14,7 @@ members = [
 [workspace.package]
 edition = "2021"
 license = "MIT"
-authors = ["Seraf() KTN"]
+authors = ["Seraf()のKTN"]
 repository = "https://example.invalid/rayard"
 
 [workspace.dependencies]
