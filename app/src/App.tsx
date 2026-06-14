@@ -12,7 +12,7 @@ import { DmxRoutesPanel } from "./components/DmxRoutesPanel";
 import { DmxTestFramePanel } from "./components/DmxTestFramePanel";
 import { EngineTelemetryPanel } from "./components/EngineTelemetryPanel";
 import { OpticsControlPanel, type OpticsControlEntry } from "./components/OpticsControlPanel";
-import { PositionControlPanel } from "./components/PositionControlPanel";
+import { PositionControlPanel, type PositionFavorite } from "./components/PositionControlPanel";
 import { ProjectorMapEditor, ProjectorMapPreview } from "./components/ProjectorMapEditor";
 import { readVideoOutputTestPattern, readVideoOutputWindowId, VideoOutputWindow } from "./components/VideoOutputWindow";
 import { TimelineOverview, type TimelineOverviewEvent } from "./components/TimelineOverview";
@@ -101,6 +101,170 @@ import type {
   VisualizerRenderPayload,
 } from "./types";
 import { videoFrameToDataUrl } from "./videoFrameCanvas";
+import { defaultColorAdjust, defaultFxAdjust, defaultTransform } from "./videoLayerDefaults";
+import {
+  colorQuickLooks,
+  defaultColorPalette,
+  mappingSnapPresets,
+  panTiltNudgeSteps,
+  panTiltTargetPoints,
+} from "./uiPresets";
+import {
+  controlCueHotkeyIndex,
+  isEditableShortcutTarget,
+  mappingStageToolFromHotkey,
+} from "./hotkeyHelpers";
+import {
+  applyAxisLimit,
+  defaultFixtureLimits,
+  dimmerValueWithinLimits,
+  effectivePanTiltValues,
+  normalizeLimitRange,
+  sourcePanTiltValues,
+  sourceValueForAxisLimit,
+} from "./fixtureLimits";
+import {
+  opticsRoleForControl,
+  quickLookValueForControl,
+  quickLooksForCategory,
+  type CategoryQuickLook,
+} from "./controlCategory";
+import {
+  controlCategories,
+  controlCategoryForAttribute,
+  setupSubTabs,
+  type ControlCategory,
+  type SetupSubTab,
+  type WorkspaceTab,
+} from "./uiModes";
+import { projectSnapshotSignature } from "./projectSnapshot";
+import { stageObjectClass, stageObjectDefaultColor, stageObjectKinds } from "./stageObjects";
+import {
+  defaultVideoOutputMapping,
+  mappingVideoOutputCornerGain,
+  mappingVideoOutputCorners,
+  outputAspectRatio,
+  videoOutputAspectModes,
+  type MappingVideoOutputCornerKey,
+} from "./videoOutputMapping";
+import {
+  canLoadWheelMedia,
+  wheelMediaCacheKey,
+  wheelMediaPayloadToObjectUrl,
+  wheelSlotMediaPath,
+  type WheelMediaPayload,
+} from "./wheelMedia";
+import {
+  clamp01,
+  clampDmxValue,
+  clampRange,
+  cumulativeGeometryMatrix,
+  defaultColorFavorites,
+  dmxValueToPercent,
+  finiteOr,
+  formatDmxPercent,
+  formatShortDmxPercent,
+  geometryIdentityMatrix,
+  geometryMatrixTranslation,
+  hsvToRgb,
+  multiplyGeometryMatrix,
+  normalizedGeometryMatrix,
+  normalizeHexColor,
+  percentToDmxValue,
+  rgbToHex,
+  rgbToHsv,
+  rotateStageOffsetYaw,
+  valueToHexByte,
+} from "./numericHelpers";
+import {
+  channelFunctionDetail,
+  channelFunctionLabel,
+  channelFunctionRangeLabel,
+  channelFunctionValue,
+  goboPatternForFunction,
+  indexedFunctionValue,
+  isColorWheelFunction,
+  isGoboWheelFunction,
+  normalizedFunctionText,
+  pickFunctionValue,
+  rankedFunctionValue,
+  sortedChannelFunctions,
+} from "./channelFunctionHelpers";
+import {
+  downloadTextFile,
+  inlineComputedSvgStyles,
+  safeExportFileNamePart,
+  standaloneSvgExportSelectorsToRemove,
+} from "./svgExportHelpers";
+import {
+  defaultPositionFavorites,
+  loadColorFavorites,
+  loadPositionFavorites,
+  saveColorFavorites,
+  savePositionFavorites,
+} from "./favoritesStorage";
+import {
+  loadMappingViewPresets,
+  saveMappingViewPresets,
+  type MappingStageTool,
+  type MappingViewPreset,
+} from "./mappingViewPresets";
+import {
+  cueMetadataDraftFromSummary,
+  timelineAutomationDraftFromSummary,
+  timelineEventDraftFromSummary,
+  timelineVideoAutomationDraftFromSummary,
+  videoOutputConfigDraftFromSummary,
+  type CueMetadataDraft,
+  type TimelineAutomationDraft,
+  type TimelineEventDraft,
+  type TimelineVideoAutomationDraft,
+  type VideoOutputConfigDraft,
+} from "./editorDrafts";
+import {
+  fixtureTypeKey,
+  fixtureTypeLabel,
+  fixtureVisualKind,
+  mappingFixtureStageSize,
+  mappingTypeGlyphClass,
+  type MappingFixtureVisualKind,
+} from "./fixtureVisuals";
+import {
+  beamPoints,
+  stagePadding,
+  stageViewBoxSize,
+  stageWorldToSvgPoint,
+  svgPointToStageWorld,
+  type StageWorldBounds,
+} from "./stageGeometry";
+import {
+  formatDuration,
+  formatVideoTime,
+  mediaLabelFromPath,
+  shouldReplaceVideoLayerDraftLabel,
+  videoSourceCanBrowseFile,
+  videoSourceInputLabel,
+  videoSourceInputPlaceholder,
+  videoSourceKindLabel,
+  videoSourceMetadataLabel,
+} from "./videoHelpers";
+import {
+  fixtureFlagClearKinds,
+  fixtureFlagMappingActions,
+  groupFlagMappingActions,
+  isFixtureFlagMappingAction,
+  isGroupFlagMappingAction,
+  isVideoLayerMappingAction,
+  isVideoOutputMappingAction,
+  normalizeFixtureFlagClearKind,
+  videoLayerMappingActions,
+  videoOutputMappingActions,
+  videoOutputMappingFieldOption,
+  videoOutputMappingFieldOptions,
+  type FixtureFlagClearKind,
+  type MappingFixtureFlag,
+  type NumericVideoOutputMappingField,
+} from "./controlMappingActions";
 
 const tauriBackendUnavailableMessage = "Rayard desktop backend is not connected in this browser preview.";
 
@@ -130,33 +294,12 @@ const profileLoadMessage = (prefix: string, profile: FixtureProfileSummary) => {
 };
 
 type TimelineSnapMode = "Off" | "Beat" | "Bar" | "Grid";
-type WorkspaceTab = "setup" | "control" | "touch";
-type SetupSubTab = "library" | "profiles" | "patch" | "mapping" | "output";
 type FixtureLayoutMode = "line" | "grid" | "circle";
 type MappingAxis = "x" | "z";
-type MappingVideoOutputCornerKey = "topLeft" | "topRight" | "bottomRight" | "bottomLeft";
 type MappingStageObjectResizeMode = "width" | "depth" | "both";
-type NumericVideoOutputMappingField = Exclude<keyof VideoOutputMapping, "aspect_mode">;
 type VideoOutputPreviewMode = "output" | "test";
 type DmxPatchViewMode = "grid" | "list";
-type ControlCategory = "dimmer" | "color" | "position" | "gobo" | "beam" | "focus" | "other" | "fader";
 type MappingBulkGroupMode = "add" | "remove" | "set";
-type MappingFixtureFlag = "highlight" | "solo" | "park";
-type FixtureFlagClearKind = MappingFixtureFlag | "all";
-type MappingStageTool = "select" | "place" | "rotate" | "pan";
-const mappingStageTools: MappingStageTool[] = ["select", "place", "rotate", "pan"];
-const stageObjectKinds: StageObjectKind[] = ["Stage", "Truss", "Screen", "Riser", "Mask"];
-const stageObjectDefaultColor = (kind: StageObjectKind) =>
-  kind === "Screen"
-    ? "#4cb7ff"
-    : kind === "Truss"
-      ? "#f2c14e"
-      : kind === "Riser"
-        ? "#9b8cff"
-        : kind === "Mask"
-          ? "#727a84"
-          : "#5dd64c";
-const stageObjectClass = (object: { kind: StageObjectKind }) => `stageObject kind-${object.kind.toLowerCase()}`;
 type WaveStageDragMode = "origin" | "direction" | "videoTarget";
 type CueCaptureScopeMode = "all" | "lighting" | "selectedFixture" | "selectedGroup" | "video";
 
@@ -174,81 +317,6 @@ type CueCaptureScopeRequest =
   | { kind: "selectedGroup"; groupId: string }
   | { kind: "videoOnly" };
 
-const fixtureFlagClearKinds: FixtureFlagClearKind[] = ["all", "highlight", "solo", "park"];
-const fixtureFlagMappingActions = ["FixtureHighlight", "FixtureSolo", "FixturePark"] as const;
-const groupFlagMappingActions = ["GroupHighlight", "GroupSolo", "GroupPark"] as const;
-const videoLayerMappingActions = [
-  "VideoParam",
-  "VideoCuePointAdd",
-  "VideoCuePointRemove",
-  "VideoCuePointJump",
-  "VideoCuePointPrevious",
-  "VideoCuePointNext",
-  "VideoLayerEnabled",
-  "VideoLayerSolo",
-  "VideoPlay",
-  "VideoLoop",
-  "VideoLayerFade",
-] as const;
-const videoOutputMappingActions = [
-  "VideoOutputEnabled",
-  "VideoOutputOpacity",
-  "VideoOutputFade",
-  "VideoOutputMappingField",
-  "VideoOutputMappingPreset",
-  "VideoOutputBlackout",
-] as const;
-
-const videoOutputMappingFieldOptions = [
-  { value: "stage_x", label: "Stage X", low: -10, high: 10 },
-  { value: "stage_y", label: "Stage Y", low: -10, high: 10 },
-  { value: "stage_z", label: "Stage Z", low: -10, high: 10 },
-  { value: "offset_x", label: "Offset X", low: -1, high: 1 },
-  { value: "offset_y", label: "Offset Y", low: -1, high: 1 },
-  { value: "scale_x", label: "Scale X", low: 0.1, high: 2 },
-  { value: "scale_y", label: "Scale Y", low: 0.1, high: 2 },
-  { value: "rotation_deg", label: "Rotation", low: -180, high: 180 },
-  { value: "aspect_ratio", label: "Aspect Ratio", low: 0.5, high: 3 },
-  { value: "lens_distortion", label: "Lens Distortion", low: -1, high: 1 },
-  { value: "keystone_x", label: "Keystone X", low: -1, high: 1 },
-  { value: "keystone_y", label: "Keystone Y", low: -1, high: 1 },
-  { value: "corner_top_left_x", label: "Top Left X", low: -1, high: 1 },
-  { value: "corner_top_left_y", label: "Top Left Y", low: -1, high: 1 },
-  { value: "corner_top_right_x", label: "Top Right X", low: -1, high: 1 },
-  { value: "corner_top_right_y", label: "Top Right Y", low: -1, high: 1 },
-  { value: "corner_bottom_right_x", label: "Bottom Right X", low: -1, high: 1 },
-  { value: "corner_bottom_right_y", label: "Bottom Right Y", low: -1, high: 1 },
-  { value: "corner_bottom_left_x", label: "Bottom Left X", low: -1, high: 1 },
-  { value: "corner_bottom_left_y", label: "Bottom Left Y", low: -1, high: 1 },
-] as const satisfies readonly {
-  value: NumericVideoOutputMappingField;
-  label: string;
-  low: number;
-  high: number;
-}[];
-
-const isFixtureFlagMappingAction = (action: MidiControlAction | OscControlAction) =>
-  (fixtureFlagMappingActions as readonly string[]).includes(action);
-
-const isGroupFlagMappingAction = (action: MidiControlAction | OscControlAction) =>
-  (groupFlagMappingActions as readonly string[]).includes(action);
-
-const isVideoLayerMappingAction = (action: MidiControlAction | OscControlAction) =>
-  (videoLayerMappingActions as readonly string[]).includes(action);
-
-const isVideoOutputMappingAction = (action: MidiControlAction | OscControlAction) =>
-  (videoOutputMappingActions as readonly string[]).includes(action);
-
-const normalizeFixtureFlagClearKind = (value: string | null | undefined): FixtureFlagClearKind => {
-  const normalized = (value ?? "").trim().toLowerCase();
-  return fixtureFlagClearKinds.includes(normalized as FixtureFlagClearKind)
-    ? (normalized as FixtureFlagClearKind)
-    : "all";
-};
-
-const videoOutputMappingFieldOption = (field: string | null | undefined) =>
-  videoOutputMappingFieldOptions.find((option) => option.value === field) ?? videoOutputMappingFieldOptions[10];
-
 const defaultOutput: DmxOutputConfig = {
   enabled: true,
   protocol: "ArtNet",
@@ -259,243 +327,15 @@ const defaultOutput: DmxOutputConfig = {
   serial_baud_rate: 57_600,
 };
 
-const defaultTransform = {
-  x: 0,
-  y: 0,
-  scale_x: 1,
-  scale_y: 1,
-  rotation_deg: 0,
-  crop_left: 0,
-  crop_top: 0,
-  crop_right: 0,
-  crop_bottom: 0,
-};
 
-const defaultColorAdjust = {
-  brightness: 0,
-  contrast: 1,
-  hue_deg: 0,
-  saturation: 1,
-  gamma: 1,
-};
 
-const defaultFxAdjust = {
-  pixelate: 1,
-  blur: 0,
-  glow: 0,
-  edge: 0,
-  key_red: 0,
-  key_green: 1,
-  key_blue: 0,
-  key_threshold: 0,
-};
-
-const defaultVideoOutputMapping: VideoOutputMapping = {
-  stage_x: 0,
-  stage_y: 0,
-  stage_z: 0,
-  offset_x: 0,
-  offset_y: 0,
-  scale_x: 1,
-  scale_y: 1,
-  rotation_deg: 0,
-  aspect_ratio: 1,
-  aspect_mode: "Stretch",
-  lens_distortion: 0,
-  keystone_x: 0,
-  keystone_y: 0,
-  corner_top_left_x: 0,
-  corner_top_left_y: 0,
-  corner_top_right_x: 0,
-  corner_top_right_y: 0,
-  corner_bottom_right_x: 0,
-  corner_bottom_right_y: 0,
-  corner_bottom_left_x: 0,
-  corner_bottom_left_y: 0,
-};
-
-const mappingVideoOutputCorners = [
-  {
-    key: "topLeft",
-    label: "TL",
-    baseX: -1,
-    baseZ: -1,
-    xField: "corner_top_left_x",
-    zField: "corner_top_left_y",
-  },
-  {
-    key: "topRight",
-    label: "TR",
-    baseX: 1,
-    baseZ: -1,
-    xField: "corner_top_right_x",
-    zField: "corner_top_right_y",
-  },
-  {
-    key: "bottomRight",
-    label: "BR",
-    baseX: 1,
-    baseZ: 1,
-    xField: "corner_bottom_right_x",
-    zField: "corner_bottom_right_y",
-  },
-  {
-    key: "bottomLeft",
-    label: "BL",
-    baseX: -1,
-    baseZ: 1,
-    xField: "corner_bottom_left_x",
-    zField: "corner_bottom_left_y",
-  },
-] as const satisfies readonly {
-  key: MappingVideoOutputCornerKey;
-  label: string;
-  baseX: -1 | 1;
-  baseZ: -1 | 1;
-  xField: NumericVideoOutputMappingField;
-  zField: NumericVideoOutputMappingField;
-}[];
-const mappingVideoOutputCornerGain = 0.28;
-
-const stageViewBoxSize = 100;
-const stagePadding = 10;
 const cuePadSize = 10;
 const enttecUsbProBaudRate = 57_600;
 const enttecOpenDmxBaudRate = 250_000;
-const mappingSnapPresets = [0.25, 0.5, 1, 2];
-const setupSubTabs: { id: SetupSubTab; label: string; description: string }[] = [
-  { id: "library", label: "Library", description: "GDTF import and share lookup" },
-  { id: "profiles", label: "Profiles", description: "Fixture profile authoring" },
-  { id: "patch", label: "Patch", description: "DMX addressing and fixture assignment" },
-  { id: "mapping", label: "Mapping", description: "2D fixture and projector mapping" },
-  { id: "output", label: "Output", description: "DMX and video output setup" },
-];
-const controlCategories: { id: ControlCategory; label: string }[] = [
-  { id: "dimmer", label: "Dimmer" },
-  { id: "color", label: "Color" },
-  { id: "position", label: "Position" },
-  { id: "gobo", label: "Gobo" },
-  { id: "beam", label: "Beam" },
-  { id: "focus", label: "Focus" },
-  { id: "other", label: "Other" },
-  { id: "fader", label: "Fader" },
-];
-const defaultColorPalette = [
-  "#ff0000",
-  "#00ff00",
-  "#0000ff",
-  "#ffff00",
-  "#ff00ff",
-  "#00ffff",
-  "#ffffff",
-  "#ff7a00",
-  "#7a2cff",
-  "#1ee6a8",
-  "#ff4fa3",
-  "#b5ff2f",
-];
-const colorQuickLooks = [
-  { label: "White", color: "#ffffff" },
-  { label: "Red", color: "#ff0000" },
-  { label: "Green", color: "#00ff00" },
-  { label: "Blue", color: "#0000ff" },
-  { label: "Amber", color: "#ff7a00" },
-  { label: "Cyan", color: "#00ffff" },
-];
-const panTiltNudgeSteps = [
-  { label: "Fine", value: 256 },
-  { label: "Small", value: 1024 },
-  { label: "Medium", value: 2048 },
-  { label: "Coarse", value: 8192 },
-];
-const panTiltTargetPoints = [
-  { label: "TL", pan: 0.2, tilt: 0.8 },
-  { label: "TC", pan: 0.5, tilt: 0.8 },
-  { label: "TR", pan: 0.8, tilt: 0.8 },
-  { label: "L", pan: 0.2, tilt: 0.5 },
-  { label: "C", pan: 0.5, tilt: 0.5 },
-  { label: "R", pan: 0.8, tilt: 0.5 },
-  { label: "BL", pan: 0.2, tilt: 0.2 },
-  { label: "BC", pan: 0.5, tilt: 0.2 },
-  { label: "BR", pan: 0.8, tilt: 0.2 },
-];
-const positionFavoritesStorageKey = "rayard.positionFavorites.v1";
-const colorFavoritesStorageKey = "rayard.colorFavorites.v1";
-const mappingViewPresetStorageKey = "rayard.mappingViewPresets.v1";
 const defaultCustomAttributesText = "Dimmer@1:8, Pan@2:16, Tilt@4:16, ColorRed@6:8, ColorGreen@7:8, ColorBlue@8:8";
-const defaultFixtureLimits: FixtureLimits = {
-  dimmer_min: 0,
-  dimmer_max: 65535,
-  pan_min: 0,
-  pan_max: 65535,
-  tilt_min: 0,
-  tilt_max: 65535,
-  invert_pan: false,
-  invert_tilt: false,
-  swap_pan_tilt: false,
-};
 
 const isSerialDmxProtocol = (protocol: DmxOutputConfig["protocol"]) =>
   protocol === "EnttecUsbPro" || protocol === "EnttecOpenDmx";
-
-const isEditableShortcutTarget = (target: EventTarget | null) => {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-  const tagName = target.tagName.toLowerCase();
-  return target.isContentEditable || tagName === "input" || tagName === "textarea" || tagName === "select";
-};
-
-const controlCueHotkeyIndex = (code: string) => {
-  const digitMatch = code.match(/^(Digit|Numpad)(\d)$/);
-  if (!digitMatch) {
-    return null;
-  }
-  const digit = Number(digitMatch[2]);
-  return digit === 0 ? 9 : digit - 1;
-};
-
-const mappingStageToolFromHotkey = (code: string): MappingStageTool | null => {
-  switch (code) {
-    case "KeyS":
-      return "select";
-    case "KeyP":
-      return "place";
-    case "KeyR":
-      return "rotate";
-    case "KeyH":
-      return "pan";
-    default:
-      return null;
-  }
-};
-
-const controlCategoryForAttribute = (attribute: string): Exclude<ControlCategory, "fader"> => {
-  const normalized = attribute.toLowerCase().replace(/[^a-z0-9]/g, "");
-  if (/(dimmer|intensity)/.test(normalized)) {
-    return "dimmer";
-  }
-  if (/(pan|tilt|position|move|movement)/.test(normalized)) {
-    return "position";
-  }
-  if (
-    /(color|colour|red|green|blue|cyan|magenta|yellow|amber|white|warmwhite|coldwhite|uv|hue|saturation|cto|ctc|ctb)/.test(
-      normalized,
-    )
-  ) {
-    return "color";
-  }
-  if (/(gobo|animationwheel)/.test(normalized)) {
-    return "gobo";
-  }
-  if (/(focus|focal)/.test(normalized)) {
-    return "focus";
-  }
-  if (/(zoom|iris|prism|frost|beam|shutter|strobe|blade|framing|wash|spot)/.test(normalized)) {
-    return "beam";
-  }
-  return "other";
-};
 
 const outputProtocolLabel = (protocol: DmxOutputConfig["protocol"]) => {
   switch (protocol) {
@@ -510,7 +350,6 @@ const outputProtocolLabel = (protocol: DmxOutputConfig["protocol"]) => {
   }
 };
 
-type MappingFixtureVisualKind = "point" | "moving" | "bar" | "panel" | "laser" | "par";
 
 interface VisualizerFixture {
   id: number;
@@ -691,23 +530,6 @@ interface MappingSnapLine {
   svg: number;
 }
 
-interface MappingViewPreset {
-  id: string;
-  label: string;
-  viewportZoom: number;
-  viewportCenterX: number;
-  viewportCenterZ: number;
-  snapEnabled: boolean;
-  snapSize: number;
-  showLabels: boolean;
-  showBeams: boolean;
-  showGeometry: boolean;
-  showProjectors: boolean;
-  showStageObjects: boolean;
-  showLevels: boolean;
-  stageTool: MappingStageTool;
-}
-
 interface MappingSvgBounds {
   minX: number;
   maxX: number;
@@ -715,49 +537,7 @@ interface MappingSvgBounds {
   maxZ: number;
 }
 
-interface StageWorldBounds {
-  minX: number;
-  maxX: number;
-  minZ: number;
-  maxZ: number;
-}
 
-const fixtureVisualKind = (fixture: PatchedFixtureSummary): MappingFixtureVisualKind => {
-  const text = `${fixture.manufacturer} ${fixture.profile_name} ${fixture.mode_name} ${fixture.label}`.toLowerCase();
-  const attributes = fixture.controls.map((control) => control.attribute.toLowerCase()).join(" ");
-  if (/(laser)/.test(text)) {
-    return "laser";
-  }
-  if (/(matrix|panel|pixel)/.test(text)) {
-    return "panel";
-  }
-  if (/(bar|strip|batten|tube|linear)/.test(text)) {
-    return "bar";
-  }
-  if (/(pan|tilt)/.test(attributes)) {
-    return "moving";
-  }
-  if (/(par|wash|rgb|rgba|rgbw|led)/.test(text) || /(red|green|blue|amber|white|uv)/.test(attributes)) {
-    return "par";
-  }
-  return "point";
-};
-
-const mappingFixtureStageSize = (visualKind: MappingFixtureVisualKind) =>
-  visualKind === "bar"
-    ? { width: 5.8, height: 1.4 }
-    : visualKind === "panel"
-      ? { width: 4.8, height: 3.2 }
-      : visualKind === "laser"
-        ? { width: 3.4, height: 3.4 }
-        : { width: 3.2, height: 3.2 };
-
-const fixtureTypeKey = (fixture: PatchedFixtureSummary) =>
-  `${fixture.manufacturer}::${fixture.profile_name}::${fixture.mode_name}`;
-
-const fixtureTypeLabel = (fixture: PatchedFixtureSummary) => `${fixture.profile_name} / ${fixture.mode_name}`;
-
-const mappingTypeGlyphClass = (kind: MappingFixtureVisualKind) => `mappingTypeGlyph kind-${kind}`;
 
 const surfaceWorldHalfSize = (output: VideoOutputSummary, mapping = output.mapping) => {
   const outputAspect = output.height > 0 ? output.width / output.height : 1;
@@ -796,19 +576,6 @@ interface PositionControlSet {
   tilt: string;
   panValue: number;
   tiltValue: number;
-}
-
-interface PositionFavorite {
-  id: string;
-  label: string;
-  pan: number;
-  tilt: number;
-}
-
-interface CategoryQuickLook {
-  id: string;
-  label: string;
-  description: string;
 }
 
 interface DimmerControlSet {
@@ -859,13 +626,6 @@ interface DmxAddressRange {
   end: number;
 }
 
-type WheelMediaBytes = number[] | Uint8Array | ArrayBuffer;
-
-interface WheelMediaPayload {
-  bytes: WheelMediaBytes;
-  mime_type: string;
-}
-
 interface DmxUniverseMap {
   universe: number;
   used: number;
@@ -884,48 +644,6 @@ interface DmxAddressCell {
   plannedConflict: boolean;
 }
 
-interface VideoOutputConfigDraft {
-  label: string;
-  kind: VideoOutputKind;
-  width: number;
-  height: number;
-  fullscreen: boolean;
-  monitor_id: number;
-  endpoint_name: string;
-}
-
-interface CueMetadataDraft {
-  label: string;
-  fade_ms: number;
-}
-
-interface TimelineEventDraft {
-  cue_id: number;
-  time_ms: number;
-  track: TimelineTrackKind;
-}
-
-interface TimelineAutomationDraft {
-  fixture_id: number;
-  attribute: string;
-  start_ms: number;
-  end_ms: number;
-  start_value: number;
-  end_value: number;
-  interpolation: AutomationInterpolation;
-}
-
-interface TimelineVideoAutomationDraft {
-  layer_id: number;
-  param: VideoParam;
-  start_ms: number;
-  end_ms: number;
-  start_value: number;
-  end_value: number;
-  interpolation: AutomationInterpolation;
-}
-
-const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
 const colorCandidates = {
   red: ["ColorRed", "Red"],
   green: ["ColorGreen", "Green"],
@@ -935,131 +653,11 @@ const colorCandidates = {
   uv: ["ColorUv", "ColorUV", "Uv", "UV", "Ultraviolet"],
 };
 
-const videoOutputConfigDraftFromSummary = (output: VideoOutputSummary): VideoOutputConfigDraft => ({
-  label: output.label,
-  kind: output.kind,
-  width: output.width,
-  height: output.height,
-  fullscreen: output.fullscreen,
-  monitor_id: output.monitor_id ?? 0,
-  endpoint_name: output.endpoint_name ?? "",
-});
-
-const cueMetadataDraftFromSummary = (cue: CueSummary): CueMetadataDraft => ({
-  label: cue.label,
-  fade_ms: cue.fade_ms,
-});
-
-const timelineEventDraftFromSummary = (event: TimelineCueEventSummary): TimelineEventDraft => ({
-  cue_id: event.cue_id,
-  time_ms: event.time_ms,
-  track: event.track,
-});
-
-const timelineAutomationDraftFromSummary = (automation: TimelineAutomationSummary): TimelineAutomationDraft => {
-  const first = automation.keyframes[0];
-  const last = automation.keyframes[automation.keyframes.length - 1] ?? first;
-  return {
-    fixture_id: automation.fixture_id,
-    attribute: automation.attribute,
-    start_ms: first?.time_ms ?? 0,
-    end_ms: last?.time_ms ?? first?.time_ms ?? 0,
-    start_value: first?.value ?? 0,
-    end_value: last?.value ?? first?.value ?? 0,
-    interpolation: first?.interpolation ?? "Linear",
-  };
-};
-
-const timelineVideoAutomationDraftFromSummary = (
-  automation: TimelineVideoAutomationSummary,
-): TimelineVideoAutomationDraft => {
-  const first = automation.keyframes[0];
-  const last = automation.keyframes[automation.keyframes.length - 1] ?? first;
-  return {
-    layer_id: automation.layer_id,
-    param: automation.param,
-    start_ms: first?.time_ms ?? 0,
-    end_ms: last?.time_ms ?? first?.time_ms ?? 0,
-    start_value: first?.value ?? 0,
-    end_value: last?.value ?? first?.value ?? 0,
-    interpolation: first?.interpolation ?? "Linear",
-  };
-};
-
 const findControlAttribute = (fixture: PatchedFixtureSummary, names: string[]) => {
   const normalizedNames = names.map((name) => name.toLowerCase());
   return fixture.controls.find((control) => normalizedNames.includes(control.attribute.toLowerCase()))?.attribute;
 };
 
-const valueToHexByte = (value: number) => (value >> 8).toString(16).padStart(2, "0");
-
-const outputAspectRatio = (width: number, height: number) => {
-  if (!Number.isFinite(width) || !Number.isFinite(height) || height <= 0) {
-    return 1;
-  }
-  return Number((width / height).toFixed(4));
-};
-
-const videoOutputAspectModes: VideoOutputAspectMode[] = ["Stretch", "Fit", "Fill"];
-
-const finiteOr = (value: number, fallback: number) => (Number.isFinite(value) ? value : fallback);
-const clampRange = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
-const clampDmxValue = (value: number) => Math.round(clampRange(Number.isFinite(value) ? value : 0, 0, 65_535));
-const formatDmxPercent = (value: number) => `${Math.round((clampDmxValue(value) / 65_535) * 1000) / 10}%`;
-const dmxValueToPercent = (value: number) => Math.round((clampDmxValue(value) / 65_535) * 1000) / 10;
-const percentToDmxValue = (value: number) => clampDmxValue((clampRange(value, 0, 100) / 100) * 65_535);
-const formatShortDmxPercent = (value: number) => `${Math.round(dmxValueToPercent(value))}%`;
-const geometryIdentityMatrix = [
-  1, 0, 0, 0,
-  0, 1, 0, 0,
-  0, 0, 1, 0,
-  0, 0, 0, 1,
-];
-const normalizedGeometryMatrix = (geometry: GeometrySummary) =>
-  geometry.matrix.length === 16
-    ? geometry.matrix.map((value, index) => finiteOr(value, geometryIdentityMatrix[index]))
-    : [...geometryIdentityMatrix];
-const multiplyGeometryMatrix = (left: readonly number[], right: readonly number[]) => {
-  const result = Array.from({ length: 16 }, () => 0);
-  for (let row = 0; row < 4; row += 1) {
-    for (let column = 0; column < 4; column += 1) {
-      result[row * 4 + column] = [0, 1, 2, 3].reduce(
-        (sum, index) => sum + left[row * 4 + index] * right[index * 4 + column],
-        0,
-      );
-    }
-  }
-  return result;
-};
-const cumulativeGeometryMatrix = (geometry: GeometrySummary, geometryByName: Map<string, GeometrySummary>) => {
-  const lineage: number[][] = [];
-  const seen = new Set<string>();
-  let current: GeometrySummary | undefined = geometry;
-  while (current && !seen.has(current.name) && lineage.length < 32) {
-    seen.add(current.name);
-    lineage.push(normalizedGeometryMatrix(current));
-    const parentName: string | undefined = typeof current.parent === "string" ? current.parent.trim() : undefined;
-    current = parentName ? geometryByName.get(parentName) : undefined;
-  }
-  return lineage.reverse().reduce(
-    (accumulated, matrix) => multiplyGeometryMatrix(accumulated, matrix),
-    [...geometryIdentityMatrix],
-  );
-};
-const geometryMatrixTranslation = (matrix: readonly number[]) => ({
-  x: finiteOr(matrix[3] ?? 0, 0),
-  y: finiteOr(matrix[7] ?? 0, 0),
-  z: finiteOr(matrix[11] ?? 0, 0),
-});
-const rotateStageOffsetYaw = (offset: { x: number; z: number }, yawDeg: number) => {
-  const angle = (yawDeg * Math.PI) / 180;
-  const cos = Math.cos(angle);
-  const sin = Math.sin(angle);
-  return {
-    x: offset.x * cos - offset.z * sin,
-    z: offset.x * sin + offset.z * cos,
-  };
-};
 const mappingGeometryClass = (geometry: GeometrySummary, mappedChannelCount: number, inGroupFilter: boolean, selected: boolean) => {
   const text = `${geometry.kind} ${geometry.model_primitive ?? ""} ${geometry.model_file ?? ""} ${geometry.beam_type ?? ""}`.toLowerCase();
   const baseClass = text.includes("beam") ? "beam" : text.includes("axis") ? "axis" : "body";
@@ -1079,160 +677,6 @@ const mappingGeometryClass = (geometry: GeometrySummary, mappedChannelCount: num
     inGroupFilter ? "" : "muted",
   ].filter(Boolean).join(" ");
 };
-const normalizeMappingStageTool = (value: unknown): MappingStageTool =>
-  typeof value === "string" && mappingStageTools.includes(value as MappingStageTool)
-    ? (value as MappingStageTool)
-    : "select";
-const defaultMappingViewPresets = (): MappingViewPreset[] => [
-  {
-    id: "overview",
-    label: "Overview",
-    viewportZoom: 1,
-    viewportCenterX: stageViewBoxSize / 2,
-    viewportCenterZ: stageViewBoxSize / 2,
-    snapEnabled: false,
-    snapSize: 0.5,
-    showLabels: true,
-    showBeams: true,
-    showGeometry: false,
-    showProjectors: true,
-    showStageObjects: true,
-    showLevels: false,
-    stageTool: "select",
-  },
-  {
-    id: "fixture-focus",
-    label: "Fixture Focus",
-    viewportZoom: 1.8,
-    viewportCenterX: stageViewBoxSize / 2,
-    viewportCenterZ: stageViewBoxSize / 2,
-    snapEnabled: true,
-    snapSize: 0.5,
-    showLabels: true,
-    showBeams: true,
-    showGeometry: true,
-    showProjectors: false,
-    showStageObjects: true,
-    showLevels: true,
-    stageTool: "select",
-  },
-  {
-    id: "projection",
-    label: "Projection",
-    viewportZoom: 1.4,
-    viewportCenterX: stageViewBoxSize / 2,
-    viewportCenterZ: stageViewBoxSize / 2,
-    snapEnabled: false,
-    snapSize: 1,
-    showLabels: false,
-    showBeams: false,
-    showGeometry: false,
-    showProjectors: true,
-    showStageObjects: true,
-    showLevels: false,
-    stageTool: "select",
-  },
-];
-const mappingViewPresetFromUnknown = (candidate: unknown): MappingViewPreset | null => {
-  if (!candidate || typeof candidate !== "object") {
-    return null;
-  }
-  const source = candidate as Partial<MappingViewPreset>;
-  const label = typeof source.label === "string" ? source.label.trim().slice(0, 28) : "";
-  if (!label) {
-    return null;
-  }
-  const idSource = typeof source.id === "string" ? source.id.trim() : "";
-  return {
-    id: idSource || `view-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
-    label,
-    viewportZoom: clampRange(finiteOr(Number(source.viewportZoom), 1), 1, 4),
-    viewportCenterX: clampRange(finiteOr(Number(source.viewportCenterX), stageViewBoxSize / 2), 0, stageViewBoxSize),
-    viewportCenterZ: clampRange(finiteOr(Number(source.viewportCenterZ), stageViewBoxSize / 2), 0, stageViewBoxSize),
-    snapEnabled: Boolean(source.snapEnabled),
-    snapSize: clampRange(Math.abs(finiteOr(Number(source.snapSize), 0.5)), 0.05, 20),
-    showLabels: source.showLabels !== false,
-    showBeams: source.showBeams !== false,
-    showGeometry: Boolean(source.showGeometry),
-    showProjectors: source.showProjectors !== false,
-    showStageObjects: source.showStageObjects !== false,
-    showLevels: Boolean(source.showLevels),
-    stageTool: normalizeMappingStageTool(source.stageTool),
-  };
-};
-const loadMappingViewPresets = () => {
-  const defaultPresets = defaultMappingViewPresets();
-  const defaultIds = new Set(defaultPresets.map((preset) => preset.id));
-  if (typeof window === "undefined") {
-    return defaultPresets;
-  }
-  try {
-    const raw = window.localStorage.getItem(mappingViewPresetStorageKey);
-    if (!raw) {
-      return defaultPresets;
-    }
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return defaultPresets;
-    }
-    const customPresets = parsed
-      .map(mappingViewPresetFromUnknown)
-      .filter((preset): preset is MappingViewPreset => Boolean(preset))
-      .filter((preset) => !defaultIds.has(preset.id))
-      .slice(0, 18);
-    return [...defaultPresets, ...customPresets].slice(0, 18);
-  } catch {
-    return defaultPresets;
-  }
-};
-const saveMappingViewPresets = (presets: MappingViewPreset[]) => {
-  if (typeof window === "undefined") {
-    return;
-  }
-  try {
-    window.localStorage.setItem(mappingViewPresetStorageKey, JSON.stringify(presets.slice(0, 18)));
-  } catch {
-    // Local storage can be unavailable in hardened WebViews; view presets still work in memory.
-  }
-};
-const normalizeLimitRange = (min: number, max: number) => {
-  const a = clampDmxValue(min);
-  const b = clampDmxValue(max);
-  return { min: Math.min(a, b), max: Math.max(a, b) };
-};
-const applyAxisLimit = (value: number, min: number, max: number, invert: boolean) => {
-  const range = normalizeLimitRange(min, max);
-  const clamped = clampDmxValue(clampRange(value, range.min, range.max));
-  return invert ? range.min + range.max - clamped : clamped;
-};
-const sourceValueForAxisLimit = (desiredValue: number, min: number, max: number, invert: boolean) => {
-  const range = normalizeLimitRange(min, max);
-  const clamped = clampDmxValue(clampRange(desiredValue, range.min, range.max));
-  return invert ? range.min + range.max - clamped : clamped;
-};
-const dimmerValueWithinLimits = (fixture: PatchedFixtureSummary, value: number) => {
-  const limits = fixture.limits ?? defaultFixtureLimits;
-  const range = normalizeLimitRange(limits.dimmer_min, limits.dimmer_max);
-  return clampDmxValue(clampRange(value, range.min, range.max));
-};
-const effectivePanTiltValues = (fixture: PatchedFixtureSummary, panValue: number, tiltValue: number) => {
-  const limits = fixture.limits ?? defaultFixtureLimits;
-  const panSource = limits.swap_pan_tilt ? tiltValue : panValue;
-  const tiltSource = limits.swap_pan_tilt ? panValue : tiltValue;
-  return {
-    pan: applyAxisLimit(panSource, limits.pan_min, limits.pan_max, limits.invert_pan),
-    tilt: applyAxisLimit(tiltSource, limits.tilt_min, limits.tilt_max, limits.invert_tilt),
-  };
-};
-const sourcePanTiltValues = (fixture: PatchedFixtureSummary, panValue: number, tiltValue: number) => {
-  const limits = fixture.limits ?? defaultFixtureLimits;
-  const panSource = sourceValueForAxisLimit(panValue, limits.pan_min, limits.pan_max, limits.invert_pan);
-  const tiltSource = sourceValueForAxisLimit(tiltValue, limits.tilt_min, limits.tilt_max, limits.invert_tilt);
-  return limits.swap_pan_tilt
-    ? { pan: tiltSource, tilt: panSource }
-    : { pan: panSource, tilt: tiltSource };
-};
-
 const bulkPatchLabel = (baseLabel: string, index: number, count: number) => {
   if (count === 1) {
     return baseLabel;
@@ -1242,26 +686,6 @@ const bulkPatchLabel = (baseLabel: string, index: number, count: number) => {
     return `${match[1]}${Number(match[2]) + index}`;
   }
   return `${baseLabel} ${index + 1}`;
-};
-
-const stageWorldToSvgPoint = (x: number, z: number, bounds: StageWorldBounds) => {
-  const drawableSize = stageViewBoxSize - stagePadding * 2;
-  const rangeX = Math.max(Number.EPSILON, bounds.maxX - bounds.minX);
-  const rangeZ = Math.max(Number.EPSILON, bounds.maxZ - bounds.minZ);
-  return {
-    x: stagePadding + ((x - bounds.minX) / rangeX) * drawableSize,
-    z: stagePadding + ((z - bounds.minZ) / rangeZ) * drawableSize,
-  };
-};
-
-const svgPointToStageWorld = (x: number, z: number, bounds: StageWorldBounds) => {
-  const drawableSize = stageViewBoxSize - stagePadding * 2;
-  const normalizedX = clamp01((x - stagePadding) / drawableSize);
-  const normalizedZ = clamp01((z - stagePadding) / drawableSize);
-  return {
-    x: bounds.minX + normalizedX * (bounds.maxX - bounds.minX),
-    z: bounds.minZ + normalizedZ * (bounds.maxZ - bounds.minZ),
-  };
 };
 
 const readFixtureAttribute = (
@@ -1283,676 +707,6 @@ const readFixtureAttribute = (
     }
   }
   return undefined;
-};
-
-const projectComparableSnapshot = (snapshot: EngineSnapshot) => {
-  const comparable = JSON.parse(JSON.stringify(snapshot)) as EngineSnapshot;
-  comparable.active_cue_id = null;
-  comparable.active_fade = null;
-  comparable.timeline = {
-    ...comparable.timeline,
-    playing: false,
-    position_ms: 0,
-  };
-  comparable.video = {
-    ...comparable.video,
-    layers: comparable.video.layers.map((layer) => ({
-      ...layer,
-      state: {
-        ...layer.state,
-        playing: false,
-        position_ms: 0,
-      },
-    })),
-  };
-  comparable.clock = {
-    ...comparable.clock,
-    beat_phase: 0,
-    beat_counter: 0,
-    tap_count: 0,
-  };
-  comparable.dmx_preview = [];
-  comparable.dmx_previews = [];
-  comparable.telemetry = {} as EngineSnapshot["telemetry"];
-  return comparable;
-};
-
-const projectSnapshotSignature = (snapshot: EngineSnapshot) => JSON.stringify(projectComparableSnapshot(snapshot));
-
-const hsvToRgb = (hue: number, saturation: number, value: number) => {
-  const h = ((hue % 360) + 360) % 360;
-  const s = clamp01(saturation);
-  const v = clamp01(value);
-  const c = v * s;
-  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
-  const m = v - c;
-  let red = 0;
-  let green = 0;
-  let blue = 0;
-  if (h < 60) {
-    red = c;
-    green = x;
-  } else if (h < 120) {
-    red = x;
-    green = c;
-  } else if (h < 180) {
-    green = c;
-    blue = x;
-  } else if (h < 240) {
-    green = x;
-    blue = c;
-  } else if (h < 300) {
-    red = x;
-    blue = c;
-  } else {
-    red = c;
-    blue = x;
-  }
-  return {
-    red: Math.round((red + m) * 255),
-    green: Math.round((green + m) * 255),
-    blue: Math.round((blue + m) * 255),
-  };
-};
-
-const rgbToHsv = (red: number, green: number, blue: number) => {
-  const r = clamp01(red / 255);
-  const g = clamp01(green / 255);
-  const b = clamp01(blue / 255);
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const delta = max - min;
-  let hue = 0;
-  if (delta !== 0) {
-    if (max === r) {
-      hue = 60 * (((g - b) / delta) % 6);
-    } else if (max === g) {
-      hue = 60 * ((b - r) / delta + 2);
-    } else {
-      hue = 60 * ((r - g) / delta + 4);
-    }
-  }
-  if (hue < 0) {
-    hue += 360;
-  }
-  return {
-    hue,
-    saturation: max === 0 ? 0 : delta / max,
-    value: max,
-  };
-};
-
-const rgbToHex = (red: number, green: number, blue: number) =>
-  `#${[red, green, blue].map((value) => Math.round(value).toString(16).padStart(2, "0")).join("")}`;
-
-const defaultColorFavorites = () => ["#ff0000", "#00ff00", "#0000ff", "#ffffff"];
-
-const normalizeHexColor = (value: unknown) => {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const normalized = value.trim().toLowerCase();
-  return /^#[0-9a-f]{6}$/.test(normalized) ? normalized : null;
-};
-
-const loadColorFavorites = () => {
-  if (typeof window === "undefined") {
-    return defaultColorFavorites();
-  }
-  try {
-    const raw = window.localStorage.getItem(colorFavoritesStorageKey);
-    if (!raw) {
-      return defaultColorFavorites();
-    }
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return defaultColorFavorites();
-    }
-    const unique = new Set<string>();
-    for (const candidate of parsed) {
-      const color = normalizeHexColor(candidate);
-      if (color) {
-        unique.add(color);
-      }
-    }
-    const favorites = [...unique].slice(0, 12);
-    return favorites.length > 0 ? favorites : defaultColorFavorites();
-  } catch {
-    return defaultColorFavorites();
-  }
-};
-
-const saveColorFavorites = (favorites: string[]) => {
-  if (typeof window === "undefined") {
-    return;
-  }
-  try {
-    const colors = favorites
-      .map(normalizeHexColor)
-      .filter((color): color is string => Boolean(color))
-      .slice(0, 12);
-    window.localStorage.setItem(colorFavoritesStorageKey, JSON.stringify(colors));
-  } catch {
-    // Local storage can be unavailable in hardened WebViews; the live palette still works in memory.
-  }
-};
-
-const quickLooksForCategory = (category: ControlCategory): CategoryQuickLook[] => {
-  switch (category) {
-    case "gobo":
-      return [
-        { id: "open", label: "Open", description: "Wheel open / index zero" },
-        { id: "slot1", label: "Slot 1", description: "First approximate gobo slot" },
-        { id: "slot2", label: "Slot 2", description: "Second approximate gobo slot" },
-        { id: "spin", label: "Spin", description: "High-range rotate/spin area" },
-      ];
-    case "beam":
-      return [
-        { id: "open", label: "Open", description: "Open shutter, no strobe/prism/frost" },
-        { id: "tight", label: "Tight", description: "Narrow iris/zoom style look" },
-        { id: "wide", label: "Wide", description: "Wide beam/iris style look" },
-        { id: "soft", label: "Soft", description: "Frost/soft beam emphasis" },
-      ];
-    case "focus":
-      return [
-        { id: "near", label: "Near", description: "Low focus range" },
-        { id: "mid", label: "Mid", description: "Middle focus range" },
-        { id: "far", label: "Far", description: "High focus range" },
-        { id: "default", label: "Default", description: "Fixture profile default" },
-      ];
-    default:
-      return [];
-  }
-};
-
-const normalizedFunctionText = (control: AttributeControl, fn: NonNullable<AttributeControl["functions"]>[number]) =>
-  `${fn.name} ${fn.attribute} ${fn.wheel_slot ?? ""} ${control.channel_name}`.toLowerCase().replace(/[^a-z0-9]+/g, " ");
-
-const channelFunctionValue = (fn: NonNullable<AttributeControl["functions"]>[number]) =>
-  clampDmxValue((fn.dmx_from + fn.dmx_to) / 2);
-
-const sortedChannelFunctions = (control: AttributeControl) =>
-  [...(control.functions ?? [])]
-    .filter((fn) => Number.isFinite(fn.dmx_from) && Number.isFinite(fn.dmx_to))
-    .sort((first, second) => first.dmx_from - second.dmx_from);
-
-const pickFunctionValue = (
-  control: AttributeControl,
-  predicate: (text: string, fn: NonNullable<AttributeControl["functions"]>[number]) => boolean,
-) => {
-  const fn = sortedChannelFunctions(control).find((candidate) =>
-    predicate(normalizedFunctionText(control, candidate), candidate),
-  );
-  return fn ? channelFunctionValue(fn) : null;
-};
-
-const indexedFunctionValue = (
-  control: AttributeControl,
-  predicate: (text: string, fn: NonNullable<AttributeControl["functions"]>[number]) => boolean,
-  index: number,
-) => {
-  const matches = sortedChannelFunctions(control).filter((candidate) =>
-    predicate(normalizedFunctionText(control, candidate), candidate),
-  );
-  return matches[index] ? channelFunctionValue(matches[index]) : null;
-};
-
-const rankedFunctionValue = (
-  control: AttributeControl,
-  rank: "first" | "middle" | "last",
-  predicate: (text: string, fn: NonNullable<AttributeControl["functions"]>[number]) => boolean = () => true,
-) => {
-  const matches = sortedChannelFunctions(control).filter((candidate) =>
-    predicate(normalizedFunctionText(control, candidate), candidate),
-  );
-  if (matches.length === 0) {
-    return null;
-  }
-  const index = rank === "first" ? 0 : rank === "last" ? matches.length - 1 : Math.floor(matches.length / 2);
-  return channelFunctionValue(matches[index]);
-};
-
-const channelFunctionLabel = (fn: NonNullable<AttributeControl["functions"]>[number]) =>
-  (fn.name || fn.attribute || "Function").trim();
-
-const channelFunctionRangeLabel = (fn: NonNullable<AttributeControl["functions"]>[number]) =>
-  `${formatShortDmxPercent(fn.dmx_from)}-${formatShortDmxPercent(fn.dmx_to)}`;
-
-const channelFunctionDetail = (fn: NonNullable<AttributeControl["functions"]>[number]) => {
-  if (fn.wheel_slot_name) {
-    const color = normalizeHexColor(fn.wheel_slot_color);
-    return color ? `${fn.wheel_slot_name} ${color}` : fn.wheel_slot_name;
-  }
-  if (fn.wheel_slot) {
-    return fn.wheel_slot;
-  }
-  if (fn.physical_from !== null && fn.physical_from !== undefined && fn.physical_to !== null && fn.physical_to !== undefined) {
-    return `Phys ${Number(fn.physical_from).toFixed(2)}-${Number(fn.physical_to).toFixed(2)}`;
-  }
-  return fn.attribute;
-};
-
-const wheelSlotMediaPath = (media: string | null | undefined) =>
-  media?.split(/[\\/]/).filter(Boolean).pop() ?? null;
-
-const wheelMediaCacheKey = (profileSourcePath: string, media: string) => `${profileSourcePath}\n${media}`;
-
-const canLoadWheelMedia = (profileSourcePath: string) =>
-  Boolean(profileSourcePath.trim()) &&
-  !profileSourcePath.startsWith("memory://") &&
-  !profileSourcePath.startsWith("snapshot://");
-
-const wheelMediaPayloadToObjectUrl = (payload: WheelMediaPayload) => {
-  const bytes = payload.bytes;
-  const data =
-    bytes instanceof ArrayBuffer
-      ? new Uint8Array(bytes)
-      : bytes instanceof Uint8Array
-        ? bytes
-        : new Uint8Array(bytes);
-  const copy = new ArrayBuffer(data.byteLength);
-  new Uint8Array(copy).set(data);
-  const mimeType = payload.mime_type.trim() || "image/png";
-  const blob = new Blob([copy], { type: mimeType });
-  return URL.createObjectURL(blob);
-};
-
-const svgExportComputedStyleProperties = [
-  "color",
-  "display",
-  "fill",
-  "fill-opacity",
-  "filter",
-  "font-family",
-  "font-size",
-  "font-style",
-  "font-weight",
-  "letter-spacing",
-  "line-height",
-  "mix-blend-mode",
-  "opacity",
-  "paint-order",
-  "stroke",
-  "stroke-dasharray",
-  "stroke-linecap",
-  "stroke-linejoin",
-  "stroke-miterlimit",
-  "stroke-opacity",
-  "stroke-width",
-  "text-anchor",
-  "visibility",
-  "white-space",
-] as const;
-
-const standaloneSvgExportSelectorsToRemove = [
-  ".stageCursorGuide",
-  ".mappingMarquee",
-  ".stagePlacePreview",
-  ".stageObjectHandleLine",
-  ".stageObjectRotateHandle",
-  ".stageObjectResizeHandle",
-  ".stageVideoSurfaceHandleLine",
-  ".stageVideoSurfaceRotateHandle",
-  ".stageVideoSurfaceScaleHandle",
-  ".stageVideoSurfaceCornerHandle",
-  ".stageYawHandle",
-].join(",");
-
-const inlineComputedSvgStyles = (source: Element, target: Element) => {
-  const computed = window.getComputedStyle(source);
-  const style = svgExportComputedStyleProperties
-    .map((property) => {
-      const value = computed.getPropertyValue(property);
-      return value ? `${property}:${value}` : "";
-    })
-    .filter(Boolean)
-    .join(";");
-  if (style) {
-    target.setAttribute("style", style);
-  }
-
-  const sourceChildren = Array.from(source.children);
-  const targetChildren = Array.from(target.children);
-  sourceChildren.forEach((sourceChild, index) => {
-    const targetChild = targetChildren[index];
-    if (targetChild) {
-      inlineComputedSvgStyles(sourceChild, targetChild);
-    }
-  });
-};
-
-const downloadTextFile = (fileName: string, text: string, mimeType: string) => {
-  const blob = new Blob([text], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = fileName;
-  link.style.display = "none";
-  document.body.append(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
-};
-
-const safeExportFileNamePart = (value: string) => {
-  const safe = value
-    .trim()
-    .replace(/[<>:"/\\|?*\x00-\x1f]+/g, "-")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
-  return safe || "stage-map";
-};
-
-const isColorWheelFunction = (
-  control: AttributeControl,
-  fn: NonNullable<AttributeControl["functions"]>[number],
-) => {
-  if (normalizeHexColor(fn.wheel_slot_color)) {
-    return true;
-  }
-  const text = normalizedFunctionText(control, fn);
-  return /\b(open|clear|white|red|green|blue|cyan|magenta|yellow|amber|orange|uv|cto|ctb|color|colour|slot)\b/.test(text);
-};
-
-const isGoboWheelFunction = (
-  control: AttributeControl,
-  fn: NonNullable<AttributeControl["functions"]>[number],
-) => {
-  const text = normalizedFunctionText(control, fn);
-  return Boolean(fn.wheel_slot) || /\b(open|clear|empty|gobo|slot|pattern|breakup|dot|dots|bars|stripe|ring|beam|rotate|rotation|spin|shake)\b/.test(text);
-};
-
-const goboPatternForFunction = (
-  control: AttributeControl,
-  fn: NonNullable<AttributeControl["functions"]>[number],
-): GoboSlotPattern => {
-  const text = normalizedFunctionText(control, fn);
-  if (/\b(open|clear|empty|none|white)\b/.test(text)) {
-    return "open";
-  }
-  if (/\b(spin|rotate|rotation|shake)\b/.test(text)) {
-    return "spin";
-  }
-  if (/\b(ring|circle|donut)\b/.test(text)) {
-    return "ring";
-  }
-  if (/\b(dot|dots|spot)\b/.test(text)) {
-    return "dots";
-  }
-  if (/\b(bar|bars|stripe|stripes|line|lines)\b/.test(text)) {
-    return "bars";
-  }
-  return "breakup";
-};
-
-const opticsRoleForControl = (control: AttributeControl, category: ControlCategory) => {
-  const text = `${control.attribute} ${control.channel_name}`.toLowerCase().replace(/[^a-z0-9]+/g, " ");
-  if (/\b(shutter|shutterstrobe)\b/.test(text)) {
-    return "Shutter";
-  }
-  if (/\b(strobe)\b/.test(text)) {
-    return "Strobe";
-  }
-  if (/\b(iris)\b/.test(text)) {
-    return "Iris";
-  }
-  if (/\b(zoom|beam|wash|spot)\b/.test(text)) {
-    return "Zoom";
-  }
-  if (/\b(frost|diffusion|diffuse|soft)\b/.test(text)) {
-    return "Frost";
-  }
-  if (/\b(prism|facet)\b/.test(text)) {
-    return "Prism";
-  }
-  if (/\b(focus|focal)\b/.test(text)) {
-    return "Focus";
-  }
-  return category === "focus" ? "Focus" : "Beam";
-};
-
-const quickLookValueForControl = (
-  category: ControlCategory,
-  lookId: string,
-  control: AttributeControl,
-) => {
-  const normalized = control.attribute.toLowerCase().replace(/[^a-z0-9]/g, "");
-  if (category === "gobo") {
-    const openValue = pickFunctionValue(control, (text) => /\b(open|clear|empty|none|white)\b/.test(text));
-    const goboValue = (index: number) =>
-      indexedFunctionValue(
-        control,
-        (text, fn) =>
-          (Boolean(fn.wheel_slot) || /\b(gobo|slot|pattern|breakup)\b/.test(text)) &&
-          !/\b(open|clear|empty|none|white|spin|rotate|rotation|shake)\b/.test(text),
-        index,
-      );
-    if (lookId === "slot1") {
-      return goboValue(0) ?? 8192;
-    }
-    if (lookId === "slot2") {
-      return goboValue(1) ?? 16_384;
-    }
-    if (lookId === "spin") {
-      return pickFunctionValue(control, (text) => /\b(spin|rotate|rotation|continuous|shake)\b/.test(text)) ?? 49_152;
-    }
-    return openValue ?? 0;
-  }
-  if (category === "focus") {
-    if (lookId === "near") {
-      return rankedFunctionValue(control, "first") ?? 0;
-    }
-    if (lookId === "mid") {
-      return rankedFunctionValue(control, "middle") ?? 32_768;
-    }
-    if (lookId === "far") {
-      return rankedFunctionValue(control, "last") ?? 65_535;
-    }
-    return control.default_value;
-  }
-  if (category === "beam") {
-    const isShutter = /shutter/.test(normalized);
-    const isStrobe = /strobe/.test(normalized);
-    const isIris = /iris/.test(normalized);
-    const isZoomOrBeam = /(zoom|beam|wash|spot)/.test(normalized);
-    const isFrost = /frost/.test(normalized);
-    const isPrism = /prism/.test(normalized);
-    const openOrOff = () =>
-      pickFunctionValue(control, (text) => /\b(open|off|none|disable|disabled|clear|home)\b/.test(text));
-    const narrow = () => pickFunctionValue(control, (text) => /\b(tight|narrow|small|min|minimum)\b/.test(text));
-    const wide = () => pickFunctionValue(control, (text) => /\b(wide|large|max|maximum|open)\b/.test(text));
-    const soft = () => pickFunctionValue(control, (text) => /\b(soft|frost|diffusion|diffuse|on|enable)\b/.test(text));
-    if (lookId === "open") {
-      if (isShutter || isIris) {
-        return openOrOff() ?? 65_535;
-      }
-      if (isStrobe || isFrost || isPrism) {
-        return openOrOff() ?? 0;
-      }
-      return control.default_value;
-    }
-    if (lookId === "tight") {
-      if (isShutter) {
-        return openOrOff() ?? 65_535;
-      }
-      if (isIris || isZoomOrBeam || isStrobe || isFrost || isPrism) {
-        return (isIris || isZoomOrBeam ? narrow() : openOrOff()) ?? 0;
-      }
-      return control.default_value;
-    }
-    if (lookId === "wide") {
-      if (isShutter || isIris || isZoomOrBeam) {
-        return (isIris || isZoomOrBeam ? wide() : openOrOff()) ?? 65_535;
-      }
-      if (isStrobe || isFrost || isPrism) {
-        return openOrOff() ?? 0;
-      }
-      return control.default_value;
-    }
-    if (lookId === "soft") {
-      if (isShutter || isIris || isZoomOrBeam || isFrost) {
-        return (isFrost ? soft() : wide()) ?? 65_535;
-      }
-      if (isStrobe || isPrism) {
-        return openOrOff() ?? 0;
-      }
-    }
-  }
-  return control.default_value;
-};
-
-const defaultPositionFavorites = (): PositionFavorite[] => [
-  { id: "home", label: "Home", pan: 32768, tilt: 32768 },
-  { id: "down", label: "Down", pan: 32768, tilt: 0 },
-  { id: "up", label: "Up", pan: 32768, tilt: 65535 },
-];
-
-const positionFavoriteFromUnknown = (candidate: unknown): PositionFavorite | null => {
-  if (!candidate || typeof candidate !== "object") {
-    return null;
-  }
-  const source = candidate as Partial<PositionFavorite>;
-  if (typeof source.id !== "string" || typeof source.label !== "string") {
-    return null;
-  }
-  return {
-    id: source.id.trim() || `position-${Date.now().toString(36)}`,
-    label: source.label.trim().slice(0, 16) || "Position",
-    pan: clampDmxValue(Number(source.pan)),
-    tilt: clampDmxValue(Number(source.tilt)),
-  };
-};
-
-const loadPositionFavorites = () => {
-  if (typeof window === "undefined") {
-    return defaultPositionFavorites();
-  }
-  try {
-    const raw = window.localStorage.getItem(positionFavoritesStorageKey);
-    if (!raw) {
-      return defaultPositionFavorites();
-    }
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return defaultPositionFavorites();
-    }
-    const favorites = parsed
-      .map(positionFavoriteFromUnknown)
-      .filter((favorite): favorite is PositionFavorite => Boolean(favorite))
-      .slice(0, 24);
-    return favorites.length > 0 ? favorites : defaultPositionFavorites();
-  } catch {
-    return defaultPositionFavorites();
-  }
-};
-
-const savePositionFavorites = (favorites: PositionFavorite[]) => {
-  if (typeof window === "undefined") {
-    return;
-  }
-  try {
-    window.localStorage.setItem(positionFavoritesStorageKey, JSON.stringify(favorites.slice(0, 24)));
-  } catch {
-    // Local storage can be unavailable in hardened WebViews; the live palette still works in memory.
-  }
-};
-
-const videoSourceInputLabel = (kind: VideoSourceKind) => {
-  switch (kind) {
-    case "File":
-    case "StillImage":
-      return "Source path";
-    case "Ndi":
-      return "NDI source";
-    case "Spout":
-      return "Spout sender";
-    case "Syphon":
-      return "Syphon server";
-  }
-};
-
-const videoSourceInputPlaceholder = (kind: VideoSourceKind) => {
-  switch (kind) {
-    case "File":
-      return "C:\\path\\clip.mp4";
-    case "StillImage":
-      return "C:\\path\\image.png";
-    case "Ndi":
-      return "OBS / Program";
-    case "Spout":
-      return "Spout sender name";
-    case "Syphon":
-      return "Syphon server name";
-  }
-};
-
-const videoSourceCanBrowseFile = (kind: VideoSourceKind) => kind === "File" || kind === "StillImage";
-
-const videoSourceKindLabel = (kind: VideoSourceKind) => {
-  switch (kind) {
-    case "File":
-      return "File";
-    case "StillImage":
-      return "Still";
-    case "Ndi":
-      return "NDI";
-    case "Spout":
-      return "Spout";
-    case "Syphon":
-      return "Syphon";
-  }
-};
-
-const mediaLabelFromPath = (path: string) => {
-  const fileName = path.split(/[\\/]/).pop()?.trim() || path.trim();
-  return fileName.replace(/\.[^/.]+$/, "") || fileName;
-};
-
-const shouldReplaceVideoLayerDraftLabel = (label: string) => {
-  const trimmed = label.trim();
-  return trimmed.length === 0 || /^Layer \d+$/i.test(trimmed);
-};
-
-const formatDuration = (durationMs?: number | null) => {
-  if (!durationMs) {
-    return null;
-  }
-  const totalSeconds = Math.round(durationMs / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
-};
-
-const formatVideoTime = (positionMs: number, durationMs?: number | null) => {
-  const position = formatDuration(Math.max(0, positionMs)) ?? "0:00";
-  const duration = formatDuration(durationMs);
-  return duration ? `${position} / ${duration}` : position;
-};
-
-const videoSourceMetadataLabel = (source: { codec?: string | null; metadata?: { duration_ms?: number | null; width?: number | null; height?: number | null; frame_rate?: number | null } | null }) => {
-  const metadata = source.metadata;
-  const parts = [
-    source.codec,
-    metadata?.width && metadata?.height ? `${metadata.width}x${metadata.height}` : null,
-    metadata?.frame_rate ? `${metadata.frame_rate.toFixed(2)} fps` : null,
-    formatDuration(metadata?.duration_ms),
-  ].filter((part): part is string => Boolean(part));
-  return parts.join(" / ");
-};
-
-const beamPoints = (x: number, z: number, yawDegrees: number, intensity: number) => {
-  const yaw = (yawDegrees * Math.PI) / 180;
-  const angle = -Math.PI / 2 + yaw;
-  const beamLength = 18 + intensity * 34;
-  const beamWidth = 5 + intensity * 15;
-  const tipX = x + Math.cos(angle) * beamLength;
-  const tipZ = z + Math.sin(angle) * beamLength;
-  const leftX = tipX + Math.cos(angle + Math.PI / 2) * beamWidth;
-  const leftZ = tipZ + Math.sin(angle + Math.PI / 2) * beamWidth;
-  const rightX = tipX + Math.cos(angle - Math.PI / 2) * beamWidth;
-  const rightZ = tipZ + Math.sin(angle - Math.PI / 2) * beamWidth;
-  return `${x},${z} ${leftX},${leftZ} ${rightX},${rightZ}`;
 };
 
 export default function App() {

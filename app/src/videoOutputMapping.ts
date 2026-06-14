@@ -33,6 +33,52 @@ export const defaultVideoOutputMapping: VideoOutputMapping = {
 
 export const videoOutputAspectModes: VideoOutputAspectMode[] = ["Stretch", "Fit", "Fill"];
 
+export type MappingVideoOutputCornerKey = "topLeft" | "topRight" | "bottomRight" | "bottomLeft";
+
+export const mappingVideoOutputCorners = [
+  {
+    key: "topLeft",
+    label: "TL",
+    baseX: -1,
+    baseZ: -1,
+    xField: "corner_top_left_x",
+    zField: "corner_top_left_y",
+  },
+  {
+    key: "topRight",
+    label: "TR",
+    baseX: 1,
+    baseZ: -1,
+    xField: "corner_top_right_x",
+    zField: "corner_top_right_y",
+  },
+  {
+    key: "bottomRight",
+    label: "BR",
+    baseX: 1,
+    baseZ: 1,
+    xField: "corner_bottom_right_x",
+    zField: "corner_bottom_right_y",
+  },
+  {
+    key: "bottomLeft",
+    label: "BL",
+    baseX: -1,
+    baseZ: 1,
+    xField: "corner_bottom_left_x",
+    zField: "corner_bottom_left_y",
+  },
+] as const satisfies readonly {
+  key: MappingVideoOutputCornerKey;
+  label: string;
+  baseX: -1 | 1;
+  baseZ: -1 | 1;
+  xField: NumericVideoOutputMappingField;
+  zField: NumericVideoOutputMappingField;
+}[];
+
+export const mappingVideoOutputCornerGain = 0.28;
+
 export const videoOutputAspectPresets = [
   { label: "16:9", ratio: 16 / 9 },
   { label: "16:10", ratio: 16 / 10 },
