@@ -36,6 +36,16 @@ export default defineConfig({
             return "control-panels";
           }
           if (
+            normalizedId.includes("/src/components/EffectActionControlsPanel") ||
+            normalizedId.includes("/src/components/EffectGroupTargetPanel") ||
+            normalizedId.includes("/src/components/EffectListPanel") ||
+            normalizedId.includes("/src/components/EffectSourceControlsPanel") ||
+            normalizedId.includes("/src/components/SampleEffectPresetPanel") ||
+            normalizedId.includes("/src/components/VideoEffectTargetPanel")
+          ) {
+            return "effect-panels";
+          }
+          if (
             normalizedId.includes("/src/components/GroupChip") ||
             normalizedId.includes("/src/components/WorkspaceChrome")
           ) {

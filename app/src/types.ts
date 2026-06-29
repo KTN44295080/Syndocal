@@ -506,6 +506,12 @@ export interface FixturePreset {
   values: AttributeValueSummary[];
 }
 
+export interface FixturePresetGroupLoadResult {
+  path: string;
+  applied_count: number;
+  skipped_count: number;
+}
+
 export interface NodeGraphLfoNode {
   shape: LfoShape;
   period_ms: number;
@@ -1160,7 +1166,12 @@ export interface EffectPreset {
   position_wave?: PositionWaveEffectRequest | null;
 }
 
-export type DmxOutputProtocol = "ArtNet" | "Sacn" | "EnttecUsbPro" | "EnttecOpenDmx";
+export type DmxOutputProtocol =
+  | "ArtNet"
+  | "Sacn"
+  | "EnttecUsbPro"
+  | "DmxKingUltraDmx"
+  | "EnttecOpenDmx";
 
 export interface DmxOutputConfig {
   enabled: boolean;

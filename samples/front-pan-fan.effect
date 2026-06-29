@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "effect_type": "PositionWave",
+  "enabled": true,
+  "lfo": null,
+  "position_wave": {
+    "label": "Front Pan Fan",
+    "fixture_ids": [],
+    "target_group_ids": ["Front"],
+    "attribute": "Pan",
+    "video_targets": [],
+    "shape": "Triangle",
+    "origin": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.0
+    },
+    "direction": {
+      "x": 1.0,
+      "y": 0.0,
+      "z": 0.0
+    },
+    "speed": 0.0,
+    "wavelength": 6.0,
+    "clock_sync": null,
+    "low": 24576,
+    "high": 40960,
+    "phase": 0.0,
+    "blend_mode": "Override"
+  }
+}

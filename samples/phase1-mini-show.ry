@@ -308,7 +308,68 @@
             ]
           }
         ],
-        "video_targets": [],
+        "video_targets": [
+          {
+            "layer_id": 1,
+            "state": {
+              "enabled": true,
+              "solo": false,
+              "opacity": 1.0,
+              "speed": 1.0,
+              "playing": true,
+              "position_ms": 0,
+              "loop_enabled": true,
+              "loop_start_ms": 0,
+              "loop_end_ms": 4000,
+              "bpm_sync": {
+                "enabled": true,
+                "ratio": 1.0,
+                "loop_bars": 2.0
+              },
+              "cue_points": [
+                {
+                  "position_ms": 0,
+                  "label": "Start",
+                  "color": "#5dd64c"
+                },
+                {
+                  "position_ms": 2000,
+                  "label": "Drop",
+                  "color": "#ff2b88"
+                }
+              ],
+              "cue_points_ms": [0, 2000],
+              "transform": {
+                "x": 0.0,
+                "y": 0.0,
+                "scale_x": 1.0,
+                "scale_y": 1.0,
+                "rotation_deg": 0.0,
+                "crop_left": 0.0,
+                "crop_top": 0.0,
+                "crop_right": 0.0,
+                "crop_bottom": 0.0
+              },
+              "color": {
+                "brightness": 0.0,
+                "contrast": 1.0,
+                "hue_deg": 0.0,
+                "saturation": 1.0,
+                "gamma": 1.0
+              },
+              "fx": {
+                "pixelate": 1.0,
+                "blur": 0.0,
+                "glow": 0.0,
+                "edge": 0.0,
+                "key_red": 0.0,
+                "key_green": 1.0,
+                "key_blue": 0.0,
+                "key_threshold": 0.0
+              }
+            }
+          }
+        ],
         "video_output_targets": [
           {
             "output_id": 1,
@@ -323,21 +384,144 @@
     "active_cue_id": null,
     "active_fade": null,
     "timeline": {
-      "events": [],
-      "automations": [],
-      "video_automations": [],
+      "events": [
+        {
+          "id": 1,
+          "cue_id": 1,
+          "time_ms": 0,
+          "track": "Lighting"
+        },
+        {
+          "id": 2,
+          "cue_id": 1,
+          "time_ms": 4000,
+          "track": "Lighting"
+        }
+      ],
+      "automations": [
+        {
+          "id": 1,
+          "fixture_id": 1,
+          "attribute": "Dimmer",
+          "track": "Lighting",
+          "keyframes": [
+            {
+              "time_ms": 0,
+              "value": 65535,
+              "interpolation": "Linear"
+            },
+            {
+              "time_ms": 4000,
+              "value": 0,
+              "interpolation": "Linear"
+            }
+          ],
+          "enabled": true
+        }
+      ],
+      "video_automations": [
+        {
+          "id": 2,
+          "layer_id": 1,
+          "param": "Opacity",
+          "track": "Video",
+          "keyframes": [
+            {
+              "time_ms": 0,
+              "value": 1.0,
+              "interpolation": "Linear"
+            },
+            {
+              "time_ms": 4000,
+              "value": 0.0,
+              "interpolation": "Linear"
+            }
+          ],
+          "enabled": true
+        }
+      ],
       "audio": null,
       "playing": false,
       "position_ms": 0,
-      "duration_ms": 0
+      "duration_ms": 4000
     },
     "video": {
-      "layers": [],
+      "layers": [
+        {
+          "id": 1,
+          "label": "Stage NDI",
+          "source": {
+            "kind": "Ndi",
+            "path": null,
+            "name": "Stage NDI",
+            "codec": null,
+            "metadata": null
+          },
+          "blend_mode": "Normal",
+          "state": {
+            "enabled": true,
+            "solo": false,
+            "opacity": 0.7,
+            "speed": 1.0,
+            "playing": false,
+            "position_ms": 0,
+            "loop_enabled": true,
+            "loop_start_ms": 0,
+            "loop_end_ms": 4000,
+            "bpm_sync": {
+              "enabled": true,
+              "ratio": 1.0,
+              "loop_bars": 2.0
+            },
+            "cue_points": [
+              {
+                "position_ms": 0,
+                "label": "Start",
+                "color": "#5dd64c"
+              },
+              {
+                "position_ms": 2000,
+                "label": "Drop",
+                "color": "#ff2b88"
+              }
+            ],
+            "cue_points_ms": [0, 2000],
+            "transform": {
+              "x": 0.0,
+              "y": 0.0,
+              "scale_x": 1.0,
+              "scale_y": 1.0,
+              "rotation_deg": 0.0,
+              "crop_left": 0.0,
+              "crop_top": 0.0,
+              "crop_right": 0.0,
+              "crop_bottom": 0.0
+            },
+            "color": {
+              "brightness": 0.0,
+              "contrast": 1.0,
+              "hue_deg": 0.0,
+              "saturation": 1.0,
+              "gamma": 1.0
+            },
+            "fx": {
+              "pixelate": 1.0,
+              "blur": 0.0,
+              "glow": 0.0,
+              "edge": 0.0,
+              "key_red": 0.0,
+              "key_green": 1.0,
+              "key_blue": 0.0,
+              "key_threshold": 0.0
+            }
+          }
+        }
+      ],
       "compositions": [
         {
           "id": 1,
           "label": "Main",
-          "layer_ids": [],
+          "layer_ids": [1],
           "output_ids": [1]
         }
       ],

@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "check:viewport": "node scripts/check-viewport-containment.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

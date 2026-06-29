@@ -49,6 +49,38 @@ type AppVideoPreviewRenderer =
 const APP_NAME: &str = "Rayard";
 const PHASE1_SAMPLE_PROJECT_LABEL: &str = "samples/phase1-mini-show.ry";
 const PHASE1_SAMPLE_PROJECT_JSON: &str = include_str!("../../../samples/phase1-mini-show.ry");
+const SAMPLE_EFFECT_PRESET_PULSE_LABEL: &str = "samples/front-dimmer-pulse.effect";
+const SAMPLE_EFFECT_PRESET_PULSE_JSON: &str =
+    include_str!("../../../samples/front-dimmer-pulse.effect");
+const SAMPLE_EFFECT_PRESET_SHARED_LABEL: &str = "samples/front-dimmer-shared.effect";
+const SAMPLE_EFFECT_PRESET_SHARED_JSON: &str =
+    include_str!("../../../samples/front-dimmer-shared.effect");
+const SAMPLE_EFFECT_PRESET_WAVE_LABEL: &str = "samples/front-dimmer-wave.effect";
+const SAMPLE_EFFECT_PRESET_WAVE_JSON: &str =
+    include_str!("../../../samples/front-dimmer-wave.effect");
+const SAMPLE_EFFECT_PRESET_FLASH_LABEL: &str = "samples/front-dimmer-flash.effect";
+const SAMPLE_EFFECT_PRESET_FLASH_JSON: &str =
+    include_str!("../../../samples/front-dimmer-flash.effect");
+const SAMPLE_EFFECT_PRESET_RANDOM_LABEL: &str = "samples/front-dimmer-random.effect";
+const SAMPLE_EFFECT_PRESET_RANDOM_JSON: &str =
+    include_str!("../../../samples/front-dimmer-random.effect");
+const SAMPLE_EFFECT_PRESET_PERLIN_LABEL: &str = "samples/front-dimmer-perlin.effect";
+const SAMPLE_EFFECT_PRESET_PERLIN_JSON: &str =
+    include_str!("../../../samples/front-dimmer-perlin.effect");
+const SAMPLE_EFFECT_PRESET_CHASE_LABEL: &str = "samples/front-dimmer-chase.effect";
+const SAMPLE_EFFECT_PRESET_CHASE_JSON: &str =
+    include_str!("../../../samples/front-dimmer-chase.effect");
+const SAMPLE_EFFECT_PRESET_BALL_LABEL: &str = "samples/front-dimmer-ball.effect";
+const SAMPLE_EFFECT_PRESET_BALL_JSON: &str =
+    include_str!("../../../samples/front-dimmer-ball.effect");
+const SAMPLE_EFFECT_PRESET_FAN_LABEL: &str = "samples/front-pan-fan.effect";
+const SAMPLE_EFFECT_PRESET_FAN_JSON: &str = include_str!("../../../samples/front-pan-fan.effect");
+const SAMPLE_EFFECT_PRESET_CIRCLE_PAN_LABEL: &str = "samples/front-circle-pan.effect";
+const SAMPLE_EFFECT_PRESET_CIRCLE_PAN_JSON: &str =
+    include_str!("../../../samples/front-circle-pan.effect");
+const SAMPLE_EFFECT_PRESET_CIRCLE_TILT_LABEL: &str = "samples/front-circle-tilt.effect";
+const SAMPLE_EFFECT_PRESET_CIRCLE_TILT_JSON: &str =
+    include_str!("../../../samples/front-circle-tilt.effect");
 const PHASE1_SMOKE_EXPECTED_FIRST_8: [u8; 8] = [255, 255, 255, 255, 0x80, 0x00, 0x80, 0x00];
 const TELEMETRY_DMX_TARGET_FRAME_RATE_HZ: u32 = 44;
 const TELEMETRY_DMX_TARGET_TICK_INTERVAL_US: u64 =
@@ -3757,6 +3789,50 @@ fn add_position_wave_effect(
 }
 
 #[tauri::command]
+fn update_lfo_effect(
+    state: State<'_, AppState>,
+    effect_id: EffectId,
+    request: LfoEffectRequest,
+) -> Result<(), String> {
+    validate_lfo_effect_request(&request)?;
+    if !state
+        .engine
+        .snapshot()
+        .effects
+        .iter()
+        .any(|effect| effect.id == effect_id)
+    {
+        return Err(format!("Effect {effect_id} was not found"));
+    }
+    state
+        .engine
+        .send(EngineCommand::UpdateLfoEffect { effect_id, request })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn update_position_wave_effect(
+    state: State<'_, AppState>,
+    effect_id: EffectId,
+    request: PositionWaveEffectRequest,
+) -> Result<(), String> {
+    validate_position_wave_effect_request(&request)?;
+    if !state
+        .engine
+        .snapshot()
+        .effects
+        .iter()
+        .any(|effect| effect.id == effect_id)
+    {
+        return Err(format!("Effect {effect_id} was not found"));
+    }
+    state
+        .engine
+        .send(EngineCommand::UpdatePositionWaveEffect { effect_id, request })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn save_node_graph(
     state: State<'_, AppState>,
     mut graph: NodeGraphSummary,
@@ -3909,12 +3985,205 @@ fn move_effect(state: State<'_, AppState>, effect_id: EffectId, delta: i32) -> R
         .map_err(|error| error.to_string())
 }
 
+fn relabel_effect_preset(mut preset: EffectPreset, label: String) -> EffectPreset {
+    match preset.effect_type {
+        EffectKind::Lfo => {
+            if let Some(request) = &mut preset.lfo {
+                request.label = label;
+            }
+        }
+        EffectKind::PositionWave => {
+            if let Some(request) = &mut preset.position_wave {
+                request.label = label;
+            }
+        }
+    }
+    preset
+}
+
+fn duplicate_effect_in_engine(
+    engine: &EngineHandle,
+    effect_id: EffectId,
+) -> Result<EffectId, String> {
+    let snapshot = engine.snapshot();
+    let effect = snapshot
+        .effects
+        .iter()
+        .find(|effect| effect.id == effect_id)
+        .ok_or_else(|| format!("Effect {effect_id} was not found"))?;
+    let preset = effect_summary_to_preset(effect)?;
+    let preset = relabel_effect_preset(preset, format!("{} Copy", effect.label));
+    add_effect_preset_to_engine(engine, preset, None)
+}
+
+#[tauri::command]
+fn duplicate_effect(state: State<'_, AppState>, effect_id: EffectId) -> Result<EffectId, String> {
+    duplicate_effect_in_engine(&state.engine, effect_id)
+}
+
 #[tauri::command]
 fn remove_effect(state: State<'_, AppState>, effect_id: EffectId) -> Result<(), String> {
     state
         .engine
         .send(EngineCommand::RemoveEffect(effect_id))
         .map_err(|error| error.to_string())
+}
+
+fn sample_effect_preset_json(preset: &str) -> Result<(&'static str, &'static str), String> {
+    match preset.trim().to_ascii_lowercase().as_str() {
+        "pulse" | "front-dimmer-pulse" | "front_dimmer_pulse" => Ok((
+            SAMPLE_EFFECT_PRESET_PULSE_LABEL,
+            SAMPLE_EFFECT_PRESET_PULSE_JSON,
+        )),
+        "shared" | "front-dimmer-shared" | "front_dimmer_shared" => Ok((
+            SAMPLE_EFFECT_PRESET_SHARED_LABEL,
+            SAMPLE_EFFECT_PRESET_SHARED_JSON,
+        )),
+        "wave" | "front-dimmer-wave" | "front_dimmer_wave" => Ok((
+            SAMPLE_EFFECT_PRESET_WAVE_LABEL,
+            SAMPLE_EFFECT_PRESET_WAVE_JSON,
+        )),
+        "flash" | "front-dimmer-flash" | "front_dimmer_flash" => Ok((
+            SAMPLE_EFFECT_PRESET_FLASH_LABEL,
+            SAMPLE_EFFECT_PRESET_FLASH_JSON,
+        )),
+        "random" | "front-dimmer-random" | "front_dimmer_random" => Ok((
+            SAMPLE_EFFECT_PRESET_RANDOM_LABEL,
+            SAMPLE_EFFECT_PRESET_RANDOM_JSON,
+        )),
+        "perlin" | "front-dimmer-perlin" | "front_dimmer_perlin" => Ok((
+            SAMPLE_EFFECT_PRESET_PERLIN_LABEL,
+            SAMPLE_EFFECT_PRESET_PERLIN_JSON,
+        )),
+        "chase" | "front-dimmer-chase" | "front_dimmer_chase" => Ok((
+            SAMPLE_EFFECT_PRESET_CHASE_LABEL,
+            SAMPLE_EFFECT_PRESET_CHASE_JSON,
+        )),
+        "ball" | "front-dimmer-ball" | "front_dimmer_ball" => Ok((
+            SAMPLE_EFFECT_PRESET_BALL_LABEL,
+            SAMPLE_EFFECT_PRESET_BALL_JSON,
+        )),
+        "fan" | "front-pan-fan" | "front_pan_fan" => {
+            Ok((SAMPLE_EFFECT_PRESET_FAN_LABEL, SAMPLE_EFFECT_PRESET_FAN_JSON))
+        }
+        value => Err(format!(
+            "Unknown sample effect preset '{value}'. Expected 'pulse', 'shared', 'wave', 'flash', 'random', 'perlin', 'chase', 'ball', or 'fan'."
+        )),
+    }
+}
+
+fn sample_effect_bundle_jsons(preset: &str) -> Result<Vec<(&'static str, &'static str)>, String> {
+    match preset.trim().to_ascii_lowercase().as_str() {
+        "circle" | "front-circle" | "front_circle" => Ok(vec![
+            (
+                SAMPLE_EFFECT_PRESET_CIRCLE_PAN_LABEL,
+                SAMPLE_EFFECT_PRESET_CIRCLE_PAN_JSON,
+            ),
+            (
+                SAMPLE_EFFECT_PRESET_CIRCLE_TILT_LABEL,
+                SAMPLE_EFFECT_PRESET_CIRCLE_TILT_JSON,
+            ),
+        ]),
+        value => Err(format!(
+            "Unknown sample effect bundle '{value}'. Expected 'circle'."
+        )),
+    }
+}
+
+fn add_effect_preset_to_engine(
+    engine: &EngineHandle,
+    preset: EffectPreset,
+    target_override: Option<&EffectTargetOverride>,
+) -> Result<EffectId, String> {
+    let snapshot = engine.snapshot();
+    let effect_id = engine.allocate_effect_id();
+    let enabled = preset.enabled;
+    match preset.effect_type {
+        EffectKind::Lfo => {
+            let request = preset
+                .lfo
+                .ok_or_else(|| "LFO effect preset is missing its request body".to_string())?;
+            let request = match target_override {
+                Some(target_override) => {
+                    let request = apply_lfo_effect_target_override(request, target_override);
+                    validate_lfo_effect_request(&request)?;
+                    request
+                }
+                None => request,
+            };
+            validate_effect_target_references(
+                &snapshot,
+                &request.fixture_ids,
+                &request.video_targets,
+            )?;
+            engine
+                .send(EngineCommand::AddLfoEffect { effect_id, request })
+                .map_err(|error| error.to_string())?;
+        }
+        EffectKind::PositionWave => {
+            let request = preset.position_wave.ok_or_else(|| {
+                "Position wave effect preset is missing its request body".to_string()
+            })?;
+            let request = match target_override {
+                Some(target_override) => {
+                    let request =
+                        apply_position_wave_effect_target_override(request, target_override);
+                    validate_position_wave_effect_request(&request)?;
+                    request
+                }
+                None => request,
+            };
+            validate_effect_target_references(
+                &snapshot,
+                &request.fixture_ids,
+                &request.video_targets,
+            )?;
+            engine
+                .send(EngineCommand::AddPositionWaveEffect { effect_id, request })
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    if !enabled {
+        engine
+            .send(EngineCommand::SetEffectEnabled {
+                effect_id,
+                enabled: false,
+            })
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(effect_id)
+}
+
+#[tauri::command]
+fn load_sample_effect_preset(
+    state: State<'_, AppState>,
+    preset: String,
+    target_override: Option<EffectTargetOverride>,
+) -> Result<EffectId, String> {
+    let (label, json) = sample_effect_preset_json(&preset)?;
+    let preset: EffectPreset =
+        serde_json::from_str(json).map_err(|error| format!("Failed to parse {label}: {error}"))?;
+    validate_effect_preset(&preset)?;
+    if let Some(target_override) = &target_override {
+        validate_effect_target_override(target_override)?;
+    }
+    add_effect_preset_to_engine(&state.engine, preset, target_override.as_ref())
+}
+
+#[tauri::command]
+fn load_sample_effect_bundle(
+    state: State<'_, AppState>,
+    preset: String,
+) -> Result<Vec<EffectId>, String> {
+    let mut effect_ids = Vec::new();
+    for (label, json) in sample_effect_bundle_jsons(&preset)? {
+        let preset: EffectPreset = serde_json::from_str(json)
+            .map_err(|error| format!("Failed to parse {label}: {error}"))?;
+        validate_effect_preset(&preset)?;
+        let effect_id = add_effect_preset_to_engine(&state.engine, preset, None)?;
+        effect_ids.push(effect_id);
+    }
+    Ok(effect_ids)
 }
 
 #[tauri::command]
@@ -3952,48 +4221,7 @@ fn load_effect_preset(state: State<'_, AppState>) -> Result<Option<EffectId>, St
     let json = fs::read_to_string(&path).map_err(|error| error.to_string())?;
     let preset: EffectPreset = serde_json::from_str(&json).map_err(|error| error.to_string())?;
     validate_effect_preset(&preset)?;
-    let snapshot = state.engine.snapshot();
-    let effect_id = state.engine.allocate_effect_id();
-    match preset.effect_type {
-        EffectKind::Lfo => {
-            let request = preset
-                .lfo
-                .ok_or_else(|| "LFO effect preset is missing its request body".to_string())?;
-            validate_effect_target_references(
-                &snapshot,
-                &request.fixture_ids,
-                &request.video_targets,
-            )?;
-            state
-                .engine
-                .send(EngineCommand::AddLfoEffect { effect_id, request })
-                .map_err(|error| error.to_string())?;
-        }
-        EffectKind::PositionWave => {
-            let request = preset.position_wave.ok_or_else(|| {
-                "Position wave effect preset is missing its request body".to_string()
-            })?;
-            validate_effect_target_references(
-                &snapshot,
-                &request.fixture_ids,
-                &request.video_targets,
-            )?;
-            state
-                .engine
-                .send(EngineCommand::AddPositionWaveEffect { effect_id, request })
-                .map_err(|error| error.to_string())?;
-        }
-    }
-    if !preset.enabled {
-        state
-            .engine
-            .send(EngineCommand::SetEffectEnabled {
-                effect_id,
-                enabled: false,
-            })
-            .map_err(|error| error.to_string())?;
-    }
-    Ok(Some(effect_id))
+    add_effect_preset_to_engine(&state.engine, preset, None).map(Some)
 }
 
 #[tauri::command]
@@ -4012,52 +4240,7 @@ fn load_effect_preset_for_target(
     validate_effect_preset(&preset)?;
     validate_effect_target_override(&target_override)?;
 
-    let snapshot = state.engine.snapshot();
-    let effect_id = state.engine.allocate_effect_id();
-    match preset.effect_type {
-        EffectKind::Lfo => {
-            let request = preset
-                .lfo
-                .ok_or_else(|| "LFO effect preset is missing its request body".to_string())?;
-            let request = apply_lfo_effect_target_override(request, &target_override);
-            validate_lfo_effect_request(&request)?;
-            validate_effect_target_references(
-                &snapshot,
-                &request.fixture_ids,
-                &request.video_targets,
-            )?;
-            state
-                .engine
-                .send(EngineCommand::AddLfoEffect { effect_id, request })
-                .map_err(|error| error.to_string())?;
-        }
-        EffectKind::PositionWave => {
-            let request = preset.position_wave.ok_or_else(|| {
-                "Position wave effect preset is missing its request body".to_string()
-            })?;
-            let request = apply_position_wave_effect_target_override(request, &target_override);
-            validate_position_wave_effect_request(&request)?;
-            validate_effect_target_references(
-                &snapshot,
-                &request.fixture_ids,
-                &request.video_targets,
-            )?;
-            state
-                .engine
-                .send(EngineCommand::AddPositionWaveEffect { effect_id, request })
-                .map_err(|error| error.to_string())?;
-        }
-    }
-    if !preset.enabled {
-        state
-            .engine
-            .send(EngineCommand::SetEffectEnabled {
-                effect_id,
-                enabled: false,
-            })
-            .map_err(|error| error.to_string())?;
-    }
-    Ok(Some(effect_id))
+    add_effect_preset_to_engine(&state.engine, preset, Some(&target_override)).map(Some)
 }
 
 #[tauri::command]
@@ -7697,7 +7880,9 @@ fn validate_dmx_output_config(config: &DmxOutputConfig) -> Result<(), String> {
 
     let is_serial_dmx = matches!(
         config.protocol,
-        DmxOutputProtocol::EnttecUsbPro | DmxOutputProtocol::EnttecOpenDmx
+        DmxOutputProtocol::EnttecUsbPro
+            | DmxOutputProtocol::DmxKingUltraDmx
+            | DmxOutputProtocol::EnttecOpenDmx
     );
     let is_sacn_multicast = matches!(config.protocol, DmxOutputProtocol::Sacn)
         && is_sacn_multicast_target(&config.target_ip);
@@ -7728,8 +7913,10 @@ fn validate_dmx_output_config(config: &DmxOutputConfig) -> Result<(), String> {
         if config.serial_port.trim().is_empty() {
             return Err("Serial port is required for serial DMX output".to_string());
         }
-        if matches!(config.protocol, DmxOutputProtocol::EnttecUsbPro)
-            && config.serial_baud_rate == 0
+        if matches!(
+            config.protocol,
+            DmxOutputProtocol::EnttecUsbPro | DmxOutputProtocol::DmxKingUltraDmx
+        ) && config.serial_baud_rate == 0
         {
             return Err("Serial baud rate must be greater than 0".to_string());
         }
@@ -7809,7 +7996,7 @@ fn send_dmx_config_test_frame(
         DmxOutputProtocol::Sacn => io::sacn::SacnSender::new(&config.target_ip, config.port)
             .and_then(|sender| sender.send_dmx_frame(config.universe, frame))
             .map_err(|error| error.to_string())?,
-        DmxOutputProtocol::EnttecUsbPro => {
+        DmxOutputProtocol::EnttecUsbPro | DmxOutputProtocol::DmxKingUltraDmx => {
             let mut sender = io::serial_dmx::EnttecUsbProSender::new(
                 &config.serial_port,
                 config.serial_baud_rate,
@@ -7866,7 +8053,9 @@ fn dmx_output_route_key(config: &DmxOutputConfig) -> String {
             config.port,
             config.universe
         ),
-        DmxOutputProtocol::EnttecUsbPro | DmxOutputProtocol::EnttecOpenDmx => {
+        DmxOutputProtocol::EnttecUsbPro
+        | DmxOutputProtocol::DmxKingUltraDmx
+        | DmxOutputProtocol::EnttecOpenDmx => {
             format!("serial|{}", config.serial_port.trim().to_ascii_lowercase())
         }
     }
@@ -7890,7 +8079,9 @@ fn dmx_output_route_label(config: &DmxOutputConfig) -> String {
                 config.protocol, config.target_ip, config.port, config.universe
             )
         }
-        DmxOutputProtocol::EnttecUsbPro | DmxOutputProtocol::EnttecOpenDmx => {
+        DmxOutputProtocol::EnttecUsbPro
+        | DmxOutputProtocol::DmxKingUltraDmx
+        | DmxOutputProtocol::EnttecOpenDmx => {
             format!(
                 "{:?} {} U{}",
                 config.protocol, config.serial_port, config.universe
@@ -9745,7 +9936,7 @@ fn curl_binary_name() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use protocol::VideoLayerSummary;
+    use protocol::{ClockSource, VideoLayerSummary};
 
     fn sample_preset(values: Vec<protocol::AttributeValueSummary>) -> FixturePreset {
         FixturePreset {
@@ -10503,11 +10694,80 @@ f 1 2 3
             Some("Head")
         );
         assert_eq!(project.snapshot.cues.len(), 1);
+        assert_eq!(project.snapshot.timeline.events.len(), 2);
+        assert_eq!(project.snapshot.timeline.events[0].cue_id, 1);
+        assert_eq!(project.snapshot.timeline.events[0].time_ms, 0);
+        assert_eq!(
+            project.snapshot.timeline.events[0].track,
+            TimelineTrackKind::Lighting
+        );
+        assert_eq!(project.snapshot.timeline.events[1].cue_id, 1);
+        assert_eq!(project.snapshot.timeline.events[1].time_ms, 4000);
+        assert_eq!(
+            project.snapshot.timeline.events[1].track,
+            TimelineTrackKind::Lighting
+        );
+        assert_eq!(project.snapshot.timeline.automations.len(), 1);
+        assert_eq!(project.snapshot.timeline.automations[0].fixture_id, 1);
+        assert_eq!(project.snapshot.timeline.automations[0].attribute, "Dimmer");
+        assert_eq!(
+            project.snapshot.timeline.automations[0].track,
+            TimelineTrackKind::Lighting
+        );
+        assert_eq!(
+            project.snapshot.timeline.automations[0].keyframes[0].value,
+            65_535
+        );
+        assert_eq!(
+            project.snapshot.timeline.automations[0].keyframes[1].time_ms,
+            4000
+        );
+        assert_eq!(project.snapshot.timeline.video_automations.len(), 1);
+        assert_eq!(project.snapshot.timeline.video_automations[0].layer_id, 1);
+        assert_eq!(
+            project.snapshot.timeline.video_automations[0].param,
+            VideoParam::Opacity
+        );
+        assert_eq!(
+            project.snapshot.timeline.video_automations[0].track,
+            TimelineTrackKind::Video
+        );
+        assert_eq!(
+            project.snapshot.timeline.video_automations[0].keyframes[0].value,
+            1.0
+        );
+        assert_eq!(
+            project.snapshot.timeline.video_automations[0].keyframes[1].time_ms,
+            4000
+        );
+        assert_eq!(project.snapshot.timeline.duration_ms, 4000);
         assert_eq!(
             project.snapshot.cues[0].targets[0].fixture_id,
             project.snapshot.fixtures[0].id
         );
         assert_eq!(project.snapshot.output.protocol, DmxOutputProtocol::ArtNet);
+        assert_eq!(project.snapshot.cues[0].video_targets.len(), 1);
+        assert_eq!(project.snapshot.cues[0].video_targets[0].layer_id, 1);
+        assert!(project.snapshot.cues[0].video_targets[0].state.playing);
+        assert!(
+            project.snapshot.cues[0].video_targets[0]
+                .state
+                .bpm_sync
+                .enabled
+        );
+        assert_eq!(project.snapshot.video.layers.len(), 1);
+        assert_eq!(project.snapshot.video.layers[0].id, 1);
+        assert_eq!(project.snapshot.video.layers[0].label, "Stage NDI");
+        assert_eq!(
+            project.snapshot.video.layers[0].source.kind,
+            VideoSourceKind::Ndi
+        );
+        assert_eq!(
+            project.snapshot.video.layers[0].source.name.as_deref(),
+            Some("Stage NDI")
+        );
+        assert_eq!(project.snapshot.video.layers[0].state.opacity, 0.7);
+        assert_eq!(project.snapshot.video.compositions[0].layer_ids, vec![1]);
         assert_eq!(project.snapshot.video.outputs.len(), 1);
         assert_eq!(project.snapshot.video.outputs[0].width, 1920);
         assert_eq!(project.snapshot.video.outputs[0].height, 1080);
@@ -10582,6 +10842,117 @@ f 1 2 3
         assert_eq!(snapshot.dmx_preview[5], 0x00);
         assert_eq!(snapshot.dmx_preview[6], 0x80);
         assert_eq!(snapshot.dmx_preview[7], 0x00);
+        assert_eq!(snapshot.video.layers.len(), 1);
+        assert_eq!(snapshot.video.layers[0].label, "Stage NDI");
+        assert!(snapshot.video.layers[0].state.playing);
+        assert_eq!(snapshot.video.layers[0].state.opacity, 1.0);
+        assert!(snapshot.video.layers[0].state.bpm_sync.enabled);
+        assert_eq!(snapshot.video.compositions[0].layer_ids, vec![1]);
+    }
+
+    #[test]
+    fn phase1_smoke_project_sample_timeline_event_triggers_light_and_video() {
+        let project: ProjectFile = serde_json::from_str(PHASE1_SAMPLE_PROJECT_JSON).unwrap();
+        validate_project_file(&project).unwrap();
+
+        let cue_id = project.snapshot.cues[0].id;
+        let mut snapshot_to_load = project.snapshot.clone();
+        snapshot_to_load.output.enabled = false;
+        for output in &mut snapshot_to_load.dmx_outputs {
+            output.enabled = false;
+        }
+
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine.load_project_snapshot(snapshot_to_load).unwrap();
+        engine
+            .send(EngineCommand::SyncTimelineTimecode {
+                position_ms: 0,
+                source: ClockSource::MidiTimecode,
+            })
+            .unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..30 {
+            if snapshot.active_cue_id == Some(cue_id)
+                && snapshot.dmx_preview.get(0) == Some(&255)
+                && snapshot
+                    .video
+                    .layers
+                    .first()
+                    .map(|layer| layer.state.playing && layer.state.opacity == 1.0)
+                    == Some(true)
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+            snapshot = engine.snapshot();
+        }
+
+        assert_eq!(snapshot.active_cue_id, Some(cue_id));
+        assert_eq!(snapshot.timeline.events.len(), 2);
+        assert_eq!(
+            snapshot.timeline.events[0].track,
+            TimelineTrackKind::Lighting
+        );
+        assert_eq!(snapshot.timeline.events[1].time_ms, 4000);
+        assert_eq!(snapshot.timeline.duration_ms, 4000);
+        assert_eq!(snapshot.dmx_preview[0], 255);
+        assert_eq!(snapshot.dmx_preview[1], 255);
+        assert_eq!(snapshot.dmx_preview[2], 255);
+        assert_eq!(snapshot.dmx_preview[3], 255);
+        let layer = snapshot.video.layers.first().unwrap();
+        assert_eq!(layer.label, "Stage NDI");
+        assert!(layer.state.playing);
+        assert_eq!(layer.state.opacity, 1.0);
+        assert!(layer.state.bpm_sync.enabled);
+    }
+
+    #[test]
+    fn phase1_smoke_project_sample_timeline_automations_share_position() {
+        let project: ProjectFile = serde_json::from_str(PHASE1_SAMPLE_PROJECT_JSON).unwrap();
+        validate_project_file(&project).unwrap();
+
+        let mut snapshot_to_load = project.snapshot.clone();
+        snapshot_to_load.output.enabled = false;
+        for output in &mut snapshot_to_load.dmx_outputs {
+            output.enabled = false;
+        }
+
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine.load_project_snapshot(snapshot_to_load).unwrap();
+        engine.send(EngineCommand::SeekTimeline(2000)).unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..30 {
+            if snapshot.timeline.position_ms == 2000
+                && snapshot.timeline.automations.len() == 1
+                && snapshot.timeline.video_automations.len() == 1
+                && snapshot.dmx_preview.get(0) == Some(&128)
+                && snapshot
+                    .video
+                    .layers
+                    .first()
+                    .map(|layer| (0.49..=0.51).contains(&layer.state.opacity))
+                    == Some(true)
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+            snapshot = engine.snapshot();
+        }
+
+        let layer = snapshot.video.layers.first().unwrap();
+        assert_eq!(snapshot.timeline.position_ms, 2000);
+        assert_eq!(snapshot.timeline.automations.len(), 1);
+        assert_eq!(snapshot.timeline.video_automations.len(), 1);
+        assert_eq!(snapshot.dmx_preview[0], 128);
+        assert!((0.49..=0.51).contains(&layer.state.opacity));
     }
 
     #[test]
@@ -11038,6 +11409,67 @@ f 1 2 3
     }
 
     #[test]
+    fn dmx_output_config_validation_treats_dmxking_as_serial_pro_route() {
+        validate_dmx_output_config(&DmxOutputConfig {
+            enabled: true,
+            protocol: DmxOutputProtocol::DmxKingUltraDmx,
+            target_ip: String::new(),
+            port: 0,
+            universe: 8,
+            serial_port: "COM4".to_string(),
+            serial_baud_rate: 57_600,
+        })
+        .unwrap();
+
+        let missing_port_error = validate_dmx_output_config(&DmxOutputConfig {
+            enabled: true,
+            protocol: DmxOutputProtocol::DmxKingUltraDmx,
+            target_ip: String::new(),
+            port: 0,
+            universe: 8,
+            serial_port: String::new(),
+            serial_baud_rate: 57_600,
+        })
+        .unwrap_err();
+        assert!(missing_port_error.contains("Serial port"));
+
+        let zero_baud_error = validate_dmx_output_config(&DmxOutputConfig {
+            enabled: true,
+            protocol: DmxOutputProtocol::DmxKingUltraDmx,
+            target_ip: String::new(),
+            port: 0,
+            universe: 8,
+            serial_port: "COM4".to_string(),
+            serial_baud_rate: 0,
+        })
+        .unwrap_err();
+        assert!(zero_baud_error.contains("Serial baud rate"));
+
+        let duplicate_error = validate_dmx_output_routes(&[
+            DmxOutputConfig {
+                enabled: true,
+                protocol: DmxOutputProtocol::EnttecUsbPro,
+                target_ip: String::new(),
+                port: 0,
+                universe: 1,
+                serial_port: " COM4 ".to_string(),
+                serial_baud_rate: 57_600,
+            },
+            DmxOutputConfig {
+                enabled: true,
+                protocol: DmxOutputProtocol::DmxKingUltraDmx,
+                target_ip: String::new(),
+                port: 0,
+                universe: 2,
+                serial_port: "com4".to_string(),
+                serial_baud_rate: 57_600,
+            },
+        ])
+        .unwrap_err();
+        assert!(duplicate_error.contains("Duplicate DMX output route"));
+    }
+
+    #[test]
     fn dmx_output_config_validation_allows_disabled_incomplete_routes() {
         validate_dmx_output_config(&DmxOutputConfig {
             enabled: false,
@@ -11359,6 +11791,76 @@ f 1 2 3
             assert_eq!(packet.data[14], 0);
         }
         let mut disabled_buffer = [0u8; 600];
+        assert!(disabled_receiver.recv_from(&mut disabled_buffer).is_err());
+    }
+
+    #[test]
+    fn sends_dmx_test_frame_to_enabled_sacn_routes() {
+        let receiver_a = UdpSocket::bind("127.0.0.1:0").unwrap();
+        receiver_a
+            .set_read_timeout(Some(Duration::from_millis(250)))
+            .unwrap();
+        let receiver_b = UdpSocket::bind("127.0.0.1:0").unwrap();
+        receiver_b
+            .set_read_timeout(Some(Duration::from_millis(250)))
+            .unwrap();
+        let disabled_receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        disabled_receiver
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let first_port = receiver_a.local_addr().unwrap().port();
+        let second_port = receiver_b.local_addr().unwrap().port();
+        let disabled_port = disabled_receiver.local_addr().unwrap().port();
+        let routes = vec![
+            DmxOutputConfig {
+                enabled: true,
+                protocol: DmxOutputProtocol::Sacn,
+                target_ip: "127.0.0.1".to_string(),
+                port: first_port,
+                universe: 4,
+                serial_port: String::new(),
+                serial_baud_rate: 57_600,
+            },
+            DmxOutputConfig {
+                enabled: true,
+                protocol: DmxOutputProtocol::Sacn,
+                target_ip: "127.0.0.1".to_string(),
+                port: second_port,
+                universe: 5,
+                serial_port: String::new(),
+                serial_baud_rate: 57_600,
+            },
+            DmxOutputConfig {
+                enabled: false,
+                protocol: DmxOutputProtocol::Sacn,
+                target_ip: "127.0.0.1".to_string(),
+                port: disabled_port,
+                universe: 6,
+                serial_port: String::new(),
+                serial_baud_rate: 57_600,
+            },
+        ];
+        let frame = build_dmx_test_frame(20, 4, 128).unwrap();
+
+        let results = send_dmx_route_test_frames(&routes, 20, 4, 128, &frame).unwrap();
+
+        assert_eq!(results.len(), 2);
+        for ((receiver, universe), result) in [(&receiver_a, 4), (&receiver_b, 5)]
+            .into_iter()
+            .zip(results.iter())
+        {
+            let mut buffer = [0u8; 700];
+            let (received, _) = receiver.recv_from(&mut buffer).unwrap();
+            let packet = io::sacn::parse_sacn_dmx_packet(&buffer[..received]).unwrap();
+            assert_eq!(result.bytes, received);
+            assert_eq!(result.protocol, DmxOutputProtocol::Sacn);
+            assert_eq!(result.universe, universe);
+            assert_eq!(packet.universe, universe);
+            assert_eq!(packet.data[18], 0);
+            assert_eq!(&packet.data[19..23], &[128, 128, 128, 128]);
+            assert_eq!(packet.data[23], 0);
+        }
+        let mut disabled_buffer = [0u8; 700];
         assert!(disabled_receiver.recv_from(&mut disabled_buffer).is_err());
     }
 
@@ -14098,6 +14600,80 @@ f 1 2 3
     }
 
     #[test]
+    fn effect_summary_serializes_position_wave_preset_with_shared_video_target() {
+        let video_target = VideoEffectTarget {
+            layer_ids: vec![2, 3],
+            param: VideoParam::ColorHueDeg,
+            low: -45.0,
+            high: 45.0,
+            position: Some(Vec3 {
+                x: 1.5,
+                y: 0.0,
+                z: -2.25,
+            }),
+        };
+        let origin = Vec3 {
+            x: -1.0,
+            y: 0.25,
+            z: 2.0,
+        };
+        let direction = Vec3 {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        };
+        let effect = EffectSummary {
+            id: 12,
+            label: "Shared sweep".to_string(),
+            effect_type: EffectKind::PositionWave,
+            fixture_ids: vec![4],
+            target_group_ids: vec!["Front".to_string()],
+            attribute: "Dimmer".to_string(),
+            video_targets: vec![video_target.clone()],
+            shape: protocol::LfoShape::Sine,
+            period_ms: None,
+            clock_sync: Some(protocol::EffectClockSync { beats: 4.0 }),
+            low: 8_192,
+            high: 57_344,
+            phase: 0.125,
+            blend_mode: protocol::EffectBlendMode::Multiply,
+            origin: Some(origin),
+            direction: Some(direction),
+            speed: Some(1.25),
+            wavelength: Some(3.5),
+            enabled: false,
+        };
+
+        let preset = effect_summary_to_preset(&effect).unwrap();
+        validate_effect_preset(&preset).unwrap();
+        let json = serde_json::to_string_pretty(&preset).unwrap();
+        let roundtrip: EffectPreset = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(roundtrip, preset);
+        assert_eq!(roundtrip.version, 1);
+        assert_eq!(roundtrip.effect_type, EffectKind::PositionWave);
+        assert!(!roundtrip.enabled);
+        assert!(roundtrip.lfo.is_none());
+        let wave = roundtrip.position_wave.unwrap();
+        assert_eq!(wave.label, "Shared sweep");
+        assert_eq!(wave.fixture_ids, vec![4]);
+        assert_eq!(wave.target_group_ids, vec!["Front".to_string()]);
+        assert_eq!(wave.attribute, "Dimmer");
+        assert_eq!(wave.video_targets, vec![video_target]);
+        assert_eq!(wave.origin, origin);
+        assert_eq!(wave.direction, direction);
+        assert_eq!(wave.speed, 1.25);
+        assert_eq!(wave.wavelength, 3.5);
+        assert_eq!(
+            wave.clock_sync,
+            Some(protocol::EffectClockSync { beats: 4.0 })
+        );
+        assert_eq!(wave.low, 8_192);
+        assert_eq!(wave.high, 57_344);
+        assert_eq!(wave.blend_mode, protocol::EffectBlendMode::Multiply);
+    }
+
+    #[test]
     fn effect_preset_target_override_retargets_lfo_without_losing_timing() {
         let request = sample_lfo_request();
         let target_override = EffectTargetOverride {
@@ -14183,6 +14759,9 @@ f 1 2 3
             serde_json::from_str(include_str!("../../../samples/front-dimmer-pulse.effect"))
                 .unwrap();
         validate_effect_preset(&pulse).unwrap();
+        let (pulse_label, pulse_json) = sample_effect_preset_json("pulse").unwrap();
+        assert_eq!(pulse_label, SAMPLE_EFFECT_PRESET_PULSE_LABEL);
+        assert_eq!(pulse_json, SAMPLE_EFFECT_PRESET_PULSE_JSON);
         assert_eq!(pulse.effect_type, EffectKind::Lfo);
         assert_eq!(
             pulse.lfo.as_ref().unwrap().target_group_ids,
@@ -14190,16 +14769,698 @@ f 1 2 3
         );
         assert_eq!(pulse.lfo.as_ref().unwrap().attribute, "Dimmer");
 
+        let shared: EffectPreset =
+            serde_json::from_str(include_str!("../../../samples/front-dimmer-shared.effect"))
+                .unwrap();
+        validate_effect_preset(&shared).unwrap();
+        let (shared_label, shared_json) = sample_effect_preset_json("shared").unwrap();
+        assert_eq!(shared_label, SAMPLE_EFFECT_PRESET_SHARED_LABEL);
+        assert_eq!(shared_json, SAMPLE_EFFECT_PRESET_SHARED_JSON);
+        assert_eq!(shared.effect_type, EffectKind::Lfo);
+        let shared_lfo = shared.lfo.as_ref().unwrap();
+        assert_eq!(shared_lfo.target_group_ids, vec!["Front".to_string()]);
+        assert_eq!(shared_lfo.attribute, "Dimmer");
+        assert!(shared_lfo.video_targets.is_empty());
+        assert_eq!(shared_lfo.period_ms, 1000);
+        assert_eq!(
+            shared_lfo.clock_sync,
+            Some(protocol::EffectClockSync { beats: 2.0 })
+        );
+        assert_eq!(shared_lfo.phase, 0.25);
+
         let wave: EffectPreset =
             serde_json::from_str(include_str!("../../../samples/front-dimmer-wave.effect"))
                 .unwrap();
         validate_effect_preset(&wave).unwrap();
+        let (wave_label, wave_json) = sample_effect_preset_json("wave").unwrap();
+        assert_eq!(wave_label, SAMPLE_EFFECT_PRESET_WAVE_LABEL);
+        assert_eq!(wave_json, SAMPLE_EFFECT_PRESET_WAVE_JSON);
         assert_eq!(wave.effect_type, EffectKind::PositionWave);
         assert_eq!(
             wave.position_wave.as_ref().unwrap().target_group_ids,
             vec!["Front".to_string()]
         );
         assert_eq!(wave.position_wave.as_ref().unwrap().attribute, "Dimmer");
+
+        let flash: EffectPreset =
+            serde_json::from_str(include_str!("../../../samples/front-dimmer-flash.effect"))
+                .unwrap();
+        validate_effect_preset(&flash).unwrap();
+        let (flash_label, flash_json) = sample_effect_preset_json("flash").unwrap();
+        assert_eq!(flash_label, SAMPLE_EFFECT_PRESET_FLASH_LABEL);
+        assert_eq!(flash_json, SAMPLE_EFFECT_PRESET_FLASH_JSON);
+        assert_eq!(flash.effect_type, EffectKind::Lfo);
+        let flash_lfo = flash.lfo.as_ref().unwrap();
+        assert_eq!(flash_lfo.target_group_ids, vec!["Front".to_string()]);
+        assert_eq!(flash_lfo.attribute, "Dimmer");
+        assert_eq!(flash_lfo.shape, protocol::LfoShape::Square);
+        assert_eq!(flash_lfo.period_ms, 125);
+        assert_eq!(
+            flash_lfo.clock_sync,
+            Some(protocol::EffectClockSync { beats: 0.25 })
+        );
+
+        let random: EffectPreset =
+            serde_json::from_str(include_str!("../../../samples/front-dimmer-random.effect"))
+                .unwrap();
+        validate_effect_preset(&random).unwrap();
+        let (random_label, random_json) = sample_effect_preset_json("random").unwrap();
+        assert_eq!(random_label, SAMPLE_EFFECT_PRESET_RANDOM_LABEL);
+        assert_eq!(random_json, SAMPLE_EFFECT_PRESET_RANDOM_JSON);
+        assert_eq!(random.effect_type, EffectKind::Lfo);
+        let random_lfo = random.lfo.as_ref().unwrap();
+        assert_eq!(random_lfo.target_group_ids, vec!["Front".to_string()]);
+        assert_eq!(random_lfo.attribute, "Dimmer");
+        assert_eq!(random_lfo.shape, protocol::LfoShape::Random);
+        assert_eq!(random_lfo.period_ms, 1000);
+        assert_eq!(
+            random_lfo.clock_sync,
+            Some(protocol::EffectClockSync { beats: 1.0 })
+        );
+
+        let perlin: EffectPreset =
+            serde_json::from_str(include_str!("../../../samples/front-dimmer-perlin.effect"))
+                .unwrap();
+        validate_effect_preset(&perlin).unwrap();
+        let (perlin_label, perlin_json) = sample_effect_preset_json("perlin").unwrap();
+        assert_eq!(perlin_label, SAMPLE_EFFECT_PRESET_PERLIN_LABEL);
+        assert_eq!(perlin_json, SAMPLE_EFFECT_PRESET_PERLIN_JSON);
+        assert_eq!(perlin.effect_type, EffectKind::Lfo);
+        let perlin_lfo = perlin.lfo.as_ref().unwrap();
+        assert_eq!(perlin_lfo.target_group_ids, vec!["Front".to_string()]);
+        assert_eq!(perlin_lfo.attribute, "Dimmer");
+        assert_eq!(perlin_lfo.shape, protocol::LfoShape::Perlin);
+        assert_eq!(perlin_lfo.period_ms, 4000);
+        assert_eq!(
+            perlin_lfo.clock_sync,
+            Some(protocol::EffectClockSync { beats: 8.0 })
+        );
+
+        let chase: EffectPreset =
+            serde_json::from_str(include_str!("../../../samples/front-dimmer-chase.effect"))
+                .unwrap();
+        validate_effect_preset(&chase).unwrap();
+        let (chase_label, chase_json) = sample_effect_preset_json("chase").unwrap();
+        assert_eq!(chase_label, SAMPLE_EFFECT_PRESET_CHASE_LABEL);
+        assert_eq!(chase_json, SAMPLE_EFFECT_PRESET_CHASE_JSON);
+        assert_eq!(chase.effect_type, EffectKind::PositionWave);
+        let chase_wave = chase.position_wave.as_ref().unwrap();
+        assert_eq!(chase_wave.target_group_ids, vec!["Front".to_string()]);
+        assert_eq!(chase_wave.attribute, "Dimmer");
+        assert_eq!(chase_wave.shape, protocol::LfoShape::Square);
+        assert_eq!(chase_wave.wavelength, 2.0);
+        assert_eq!(
+            chase_wave.clock_sync,
+            Some(protocol::EffectClockSync { beats: 2.0 })
+        );
+
+        let ball: EffectPreset =
+            serde_json::from_str(include_str!("../../../samples/front-dimmer-ball.effect"))
+                .unwrap();
+        validate_effect_preset(&ball).unwrap();
+        let (ball_label, ball_json) = sample_effect_preset_json("ball").unwrap();
+        assert_eq!(ball_label, SAMPLE_EFFECT_PRESET_BALL_LABEL);
+        assert_eq!(ball_json, SAMPLE_EFFECT_PRESET_BALL_JSON);
+        assert_eq!(ball.effect_type, EffectKind::PositionWave);
+        let ball_wave = ball.position_wave.as_ref().unwrap();
+        assert_eq!(ball_wave.target_group_ids, vec!["Front".to_string()]);
+        assert_eq!(ball_wave.attribute, "Dimmer");
+        assert_eq!(ball_wave.shape, protocol::LfoShape::Sine);
+        assert_eq!(ball_wave.direction, Vec3::default());
+        assert_eq!(ball_wave.speed, 1.0);
+        assert_eq!(ball_wave.wavelength, 3.0);
+        assert_eq!(
+            ball_wave.clock_sync,
+            Some(protocol::EffectClockSync { beats: 4.0 })
+        );
+
+        let fan: EffectPreset =
+            serde_json::from_str(include_str!("../../../samples/front-pan-fan.effect")).unwrap();
+        validate_effect_preset(&fan).unwrap();
+        let (fan_label, fan_json) = sample_effect_preset_json("fan").unwrap();
+        assert_eq!(fan_label, SAMPLE_EFFECT_PRESET_FAN_LABEL);
+        assert_eq!(fan_json, SAMPLE_EFFECT_PRESET_FAN_JSON);
+        assert_eq!(fan.effect_type, EffectKind::PositionWave);
+        let fan_wave = fan.position_wave.as_ref().unwrap();
+        assert_eq!(fan_wave.target_group_ids, vec!["Front".to_string()]);
+        assert_eq!(fan_wave.attribute, "Pan");
+        assert_eq!(fan_wave.shape, protocol::LfoShape::Triangle);
+        assert_eq!(fan_wave.speed, 0.0);
+        assert_eq!(fan_wave.wavelength, 6.0);
+        assert_eq!(fan_wave.low, 24576);
+        assert_eq!(fan_wave.high, 40960);
+        assert_eq!(fan_wave.clock_sync, None);
+
+        let circle_bundle = sample_effect_bundle_jsons("circle").unwrap();
+        assert_eq!(circle_bundle.len(), 2);
+        assert_eq!(circle_bundle[0].0, SAMPLE_EFFECT_PRESET_CIRCLE_PAN_LABEL);
+        assert_eq!(circle_bundle[0].1, SAMPLE_EFFECT_PRESET_CIRCLE_PAN_JSON);
+        assert_eq!(circle_bundle[1].0, SAMPLE_EFFECT_PRESET_CIRCLE_TILT_LABEL);
+        assert_eq!(circle_bundle[1].1, SAMPLE_EFFECT_PRESET_CIRCLE_TILT_JSON);
+        let circle_pan: EffectPreset = serde_json::from_str(circle_bundle[0].1).unwrap();
+        let circle_tilt: EffectPreset = serde_json::from_str(circle_bundle[1].1).unwrap();
+        validate_effect_preset(&circle_pan).unwrap();
+        validate_effect_preset(&circle_tilt).unwrap();
+        let circle_pan_lfo = circle_pan.lfo.as_ref().unwrap();
+        let circle_tilt_lfo = circle_tilt.lfo.as_ref().unwrap();
+        assert_eq!(circle_pan.effect_type, EffectKind::Lfo);
+        assert_eq!(circle_tilt.effect_type, EffectKind::Lfo);
+        assert_eq!(circle_pan_lfo.target_group_ids, vec!["Front".to_string()]);
+        assert_eq!(circle_tilt_lfo.target_group_ids, vec!["Front".to_string()]);
+        assert_eq!(circle_pan_lfo.attribute, "Pan");
+        assert_eq!(circle_tilt_lfo.attribute, "Tilt");
+        assert_eq!(circle_pan_lfo.shape, protocol::LfoShape::Sine);
+        assert_eq!(circle_tilt_lfo.shape, protocol::LfoShape::Cosine);
+        assert_eq!(circle_pan_lfo.period_ms, 2000);
+        assert_eq!(circle_tilt_lfo.period_ms, 2000);
+        assert_eq!(
+            circle_pan_lfo.clock_sync,
+            Some(protocol::EffectClockSync { beats: 4.0 })
+        );
+        assert_eq!(
+            circle_tilt_lfo.clock_sync,
+            Some(protocol::EffectClockSync { beats: 4.0 })
+        );
+        assert_eq!(circle_pan_lfo.low, 24576);
+        assert_eq!(circle_pan_lfo.high, 40960);
+        assert_eq!(circle_tilt_lfo.low, 24576);
+        assert_eq!(circle_tilt_lfo.high, 40960);
+        assert!(sample_effect_preset_json("missing").is_err());
+        assert!(sample_effect_bundle_jsons("missing").is_err());
+    }
+
+    #[test]
+    fn embedded_sample_effect_presets_can_retarget_current_effect_target() {
+        let target_override = EffectTargetOverride {
+            fixture_ids: vec![42],
+            target_group_ids: vec!["floor".to_string()],
+            attribute: "ColorRed".to_string(),
+            video_targets: vec![sample_video_effect_target(7)],
+        };
+        validate_effect_target_override(&target_override).unwrap();
+
+        let (_, pulse_json) = sample_effect_preset_json("pulse").unwrap();
+        let pulse: EffectPreset = serde_json::from_str(pulse_json).unwrap();
+        validate_effect_preset(&pulse).unwrap();
+        let pulse_request = apply_lfo_effect_target_override(pulse.lfo.unwrap(), &target_override);
+        validate_lfo_effect_request(&pulse_request).unwrap();
+        assert_eq!(pulse_request.fixture_ids, vec![42]);
+        assert_eq!(pulse_request.target_group_ids, vec!["floor".to_string()]);
+        assert_eq!(pulse_request.attribute, "ColorRed");
+        assert_eq!(
+            pulse_request.video_targets,
+            vec![sample_video_effect_target(7)]
+        );
+        assert_eq!(pulse_request.period_ms, 500);
+        assert_eq!(
+            pulse_request.clock_sync,
+            Some(protocol::EffectClockSync { beats: 1.0 })
+        );
+
+        let (_, shared_json) = sample_effect_preset_json("front_dimmer_shared").unwrap();
+        let shared: EffectPreset = serde_json::from_str(shared_json).unwrap();
+        validate_effect_preset(&shared).unwrap();
+        let shared_request =
+            apply_lfo_effect_target_override(shared.lfo.unwrap(), &target_override);
+        validate_lfo_effect_request(&shared_request).unwrap();
+        assert_eq!(shared_request.fixture_ids, vec![42]);
+        assert_eq!(shared_request.target_group_ids, vec!["floor".to_string()]);
+        assert_eq!(shared_request.attribute, "ColorRed");
+        assert_eq!(
+            shared_request.video_targets,
+            vec![sample_video_effect_target(7)]
+        );
+        assert_eq!(shared_request.period_ms, 1000);
+        assert_eq!(
+            shared_request.clock_sync,
+            Some(protocol::EffectClockSync { beats: 2.0 })
+        );
+        assert_eq!(shared_request.phase, 0.25);
+
+        let (_, flash_json) = sample_effect_preset_json("front_dimmer_flash").unwrap();
+        let flash: EffectPreset = serde_json::from_str(flash_json).unwrap();
+        validate_effect_preset(&flash).unwrap();
+        let flash_request = apply_lfo_effect_target_override(flash.lfo.unwrap(), &target_override);
+        validate_lfo_effect_request(&flash_request).unwrap();
+        assert_eq!(flash_request.fixture_ids, vec![42]);
+        assert_eq!(flash_request.target_group_ids, vec!["floor".to_string()]);
+        assert_eq!(flash_request.attribute, "ColorRed");
+        assert_eq!(
+            flash_request.video_targets,
+            vec![sample_video_effect_target(7)]
+        );
+        assert_eq!(flash_request.shape, protocol::LfoShape::Square);
+        assert_eq!(flash_request.period_ms, 125);
+        assert_eq!(
+            flash_request.clock_sync,
+            Some(protocol::EffectClockSync { beats: 0.25 })
+        );
+
+        let (_, random_json) = sample_effect_preset_json("front-dimmer-random").unwrap();
+        let random: EffectPreset = serde_json::from_str(random_json).unwrap();
+        validate_effect_preset(&random).unwrap();
+        let random_request =
+            apply_lfo_effect_target_override(random.lfo.unwrap(), &target_override);
+        validate_lfo_effect_request(&random_request).unwrap();
+        assert_eq!(random_request.fixture_ids, vec![42]);
+        assert_eq!(random_request.target_group_ids, vec!["floor".to_string()]);
+        assert_eq!(random_request.attribute, "ColorRed");
+        assert_eq!(
+            random_request.video_targets,
+            vec![sample_video_effect_target(7)]
+        );
+        assert_eq!(random_request.shape, protocol::LfoShape::Random);
+        assert_eq!(random_request.period_ms, 1000);
+        assert_eq!(
+            random_request.clock_sync,
+            Some(protocol::EffectClockSync { beats: 1.0 })
+        );
+
+        let (_, perlin_json) = sample_effect_preset_json("front_dimmer_perlin").unwrap();
+        let perlin: EffectPreset = serde_json::from_str(perlin_json).unwrap();
+        validate_effect_preset(&perlin).unwrap();
+        let perlin_request =
+            apply_lfo_effect_target_override(perlin.lfo.unwrap(), &target_override);
+        validate_lfo_effect_request(&perlin_request).unwrap();
+        assert_eq!(perlin_request.fixture_ids, vec![42]);
+        assert_eq!(perlin_request.target_group_ids, vec!["floor".to_string()]);
+        assert_eq!(perlin_request.attribute, "ColorRed");
+        assert_eq!(
+            perlin_request.video_targets,
+            vec![sample_video_effect_target(7)]
+        );
+        assert_eq!(perlin_request.shape, protocol::LfoShape::Perlin);
+        assert_eq!(perlin_request.period_ms, 4000);
+        assert_eq!(
+            perlin_request.clock_sync,
+            Some(protocol::EffectClockSync { beats: 8.0 })
+        );
+
+        let (_, wave_json) = sample_effect_preset_json("wave").unwrap();
+        let wave: EffectPreset = serde_json::from_str(wave_json).unwrap();
+        validate_effect_preset(&wave).unwrap();
+        let wave_request = apply_position_wave_effect_target_override(
+            wave.position_wave.unwrap(),
+            &target_override,
+        );
+        validate_position_wave_effect_request(&wave_request).unwrap();
+        assert_eq!(wave_request.fixture_ids, vec![42]);
+        assert_eq!(wave_request.target_group_ids, vec!["floor".to_string()]);
+        assert_eq!(wave_request.attribute, "ColorRed");
+        assert_eq!(
+            wave_request.video_targets,
+            vec![sample_video_effect_target(7)]
+        );
+        assert_eq!(wave_request.origin, Vec3::default());
+        assert_eq!(
+            wave_request.direction,
+            Vec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            }
+        );
+        assert_eq!(wave_request.wavelength, 4.0);
+        assert_eq!(
+            wave_request.clock_sync,
+            Some(protocol::EffectClockSync { beats: 4.0 })
+        );
+
+        let (_, chase_json) = sample_effect_preset_json("front-dimmer-chase").unwrap();
+        let chase: EffectPreset = serde_json::from_str(chase_json).unwrap();
+        validate_effect_preset(&chase).unwrap();
+        let chase_request = apply_position_wave_effect_target_override(
+            chase.position_wave.unwrap(),
+            &target_override,
+        );
+        validate_position_wave_effect_request(&chase_request).unwrap();
+        assert_eq!(chase_request.fixture_ids, vec![42]);
+        assert_eq!(chase_request.target_group_ids, vec!["floor".to_string()]);
+        assert_eq!(chase_request.attribute, "ColorRed");
+        assert_eq!(
+            chase_request.video_targets,
+            vec![sample_video_effect_target(7)]
+        );
+        assert_eq!(chase_request.shape, protocol::LfoShape::Square);
+        assert_eq!(chase_request.wavelength, 2.0);
+        assert_eq!(
+            chase_request.clock_sync,
+            Some(protocol::EffectClockSync { beats: 2.0 })
+        );
+
+        let (_, ball_json) = sample_effect_preset_json("front_dimmer_ball").unwrap();
+        let ball: EffectPreset = serde_json::from_str(ball_json).unwrap();
+        validate_effect_preset(&ball).unwrap();
+        let ball_request = apply_position_wave_effect_target_override(
+            ball.position_wave.unwrap(),
+            &target_override,
+        );
+        validate_position_wave_effect_request(&ball_request).unwrap();
+        assert_eq!(ball_request.fixture_ids, vec![42]);
+        assert_eq!(ball_request.target_group_ids, vec!["floor".to_string()]);
+        assert_eq!(ball_request.attribute, "ColorRed");
+        assert_eq!(
+            ball_request.video_targets,
+            vec![sample_video_effect_target(7)]
+        );
+        assert_eq!(ball_request.shape, protocol::LfoShape::Sine);
+        assert_eq!(ball_request.direction, Vec3::default());
+        assert_eq!(ball_request.speed, 1.0);
+        assert_eq!(ball_request.wavelength, 3.0);
+        assert_eq!(
+            ball_request.clock_sync,
+            Some(protocol::EffectClockSync { beats: 4.0 })
+        );
+
+        let (_, fan_json) = sample_effect_preset_json("front-pan-fan").unwrap();
+        let fan: EffectPreset = serde_json::from_str(fan_json).unwrap();
+        validate_effect_preset(&fan).unwrap();
+        let fan_request = apply_position_wave_effect_target_override(
+            fan.position_wave.unwrap(),
+            &target_override,
+        );
+        validate_position_wave_effect_request(&fan_request).unwrap();
+        assert_eq!(fan_request.fixture_ids, vec![42]);
+        assert_eq!(fan_request.target_group_ids, vec!["floor".to_string()]);
+        assert_eq!(fan_request.attribute, "ColorRed");
+        assert_eq!(
+            fan_request.video_targets,
+            vec![sample_video_effect_target(7)]
+        );
+        assert_eq!(fan_request.shape, protocol::LfoShape::Triangle);
+        assert_eq!(fan_request.speed, 0.0);
+        assert_eq!(fan_request.wavelength, 6.0);
+        assert_eq!(fan_request.low, 24576);
+        assert_eq!(fan_request.high, 40960);
+        assert_eq!(fan_request.clock_sync, None);
+    }
+
+    #[test]
+    fn embedded_sample_effect_preset_adds_retargeted_effect_to_engine() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let profile = custom_fixture_profile_from_request(CustomFixtureProfileRequest {
+            manufacturer: "Rayard".to_string(),
+            name: "Preset Target Spot".to_string(),
+            mode_name: "8ch".to_string(),
+            attributes: vec!["Dimmer".to_string(), "ColorRed".to_string()],
+        });
+        let fixture_id = engine.allocate_fixture_id();
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id,
+                request: PatchFixtureRequest {
+                    profile_path: profile.source_path.clone(),
+                    mode_name: Some("8ch".to_string()),
+                    label: "Preset Target".to_string(),
+                    universe: 0,
+                    address: 1,
+                    group_ids: Vec::new(),
+                    position: Vec3::default(),
+                    rotation: Rotation3::default(),
+                },
+                profile,
+            })
+            .unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if snapshot
+                .fixtures
+                .iter()
+                .any(|fixture| fixture.id == fixture_id)
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+            snapshot = engine.snapshot();
+        }
+        assert!(snapshot
+            .fixtures
+            .iter()
+            .any(|fixture| fixture.id == fixture_id));
+
+        let (_, pulse_json) = sample_effect_preset_json("pulse").unwrap();
+        let pulse: EffectPreset = serde_json::from_str(pulse_json).unwrap();
+        let target_override = EffectTargetOverride {
+            fixture_ids: vec![fixture_id],
+            target_group_ids: Vec::new(),
+            attribute: "Dimmer".to_string(),
+            video_targets: Vec::new(),
+        };
+        let effect_id =
+            add_effect_preset_to_engine(&engine, pulse, Some(&target_override)).unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if snapshot.effects.iter().any(|effect| effect.id == effect_id) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+            snapshot = engine.snapshot();
+        }
+        let effect = snapshot
+            .effects
+            .iter()
+            .find(|effect| effect.id == effect_id)
+            .expect("retargeted sample effect should be in the engine snapshot");
+        assert_eq!(effect.effect_type, EffectKind::Lfo);
+        assert_eq!(effect.fixture_ids, vec![fixture_id]);
+        assert!(effect.target_group_ids.is_empty());
+        assert_eq!(effect.attribute, "Dimmer");
+        assert_eq!(effect.period_ms, Some(500));
+        assert_eq!(
+            effect.clock_sync,
+            Some(protocol::EffectClockSync { beats: 1.0 })
+        );
+        assert!(effect.enabled);
+    }
+
+    #[test]
+    fn duplicate_effect_copies_lfo_preset_details_into_new_stack_item() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let profile = custom_fixture_profile_from_request(CustomFixtureProfileRequest {
+            manufacturer: "Rayard".to_string(),
+            name: "Duplicate Target Spot".to_string(),
+            mode_name: "8ch".to_string(),
+            attributes: vec!["Dimmer".to_string()],
+        });
+        let fixture_id = engine.allocate_fixture_id();
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id,
+                request: PatchFixtureRequest {
+                    profile_path: profile.source_path.clone(),
+                    mode_name: Some("8ch".to_string()),
+                    label: "Duplicate Target".to_string(),
+                    universe: 0,
+                    address: 1,
+                    group_ids: Vec::new(),
+                    position: Vec3::default(),
+                    rotation: Rotation3::default(),
+                },
+                profile,
+            })
+            .unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if snapshot
+                .fixtures
+                .iter()
+                .any(|fixture| fixture.id == fixture_id)
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+            snapshot = engine.snapshot();
+        }
+        assert!(snapshot
+            .fixtures
+            .iter()
+            .any(|fixture| fixture.id == fixture_id));
+
+        let source_id = add_effect_preset_to_engine(
+            &engine,
+            EffectPreset {
+                version: 1,
+                effect_type: EffectKind::Lfo,
+                enabled: false,
+                lfo: Some(LfoEffectRequest {
+                    label: "Dimmer pulse".to_string(),
+                    fixture_ids: vec![fixture_id],
+                    target_group_ids: Vec::new(),
+                    attribute: "Dimmer".to_string(),
+                    video_targets: Vec::new(),
+                    shape: protocol::LfoShape::Square,
+                    period_ms: 250,
+                    clock_sync: Some(protocol::EffectClockSync { beats: 0.5 }),
+                    low: 1_024,
+                    high: 62_000,
+                    phase: 0.125,
+                    blend_mode: protocol::EffectBlendMode::Add,
+                }),
+                position_wave: None,
+            },
+            None,
+        )
+        .unwrap();
+
+        snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if snapshot.effects.iter().any(|effect| effect.id == source_id) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+            snapshot = engine.snapshot();
+        }
+        assert!(snapshot.effects.iter().any(|effect| effect.id == source_id));
+
+        let duplicate_id = duplicate_effect_in_engine(&engine, source_id).unwrap();
+        assert_ne!(duplicate_id, source_id);
+
+        snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if snapshot
+                .effects
+                .iter()
+                .any(|effect| effect.id == duplicate_id)
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+            snapshot = engine.snapshot();
+        }
+
+        let source = snapshot
+            .effects
+            .iter()
+            .find(|effect| effect.id == source_id)
+            .expect("source effect should remain in the engine snapshot");
+        let duplicate = snapshot
+            .effects
+            .iter()
+            .find(|effect| effect.id == duplicate_id)
+            .expect("duplicated effect should be in the engine snapshot");
+
+        assert_eq!(duplicate.label, "Dimmer pulse Copy");
+        assert_eq!(duplicate.effect_type, source.effect_type);
+        assert_eq!(duplicate.fixture_ids, source.fixture_ids);
+        assert_eq!(duplicate.attribute, source.attribute);
+        assert_eq!(duplicate.shape, source.shape);
+        assert_eq!(duplicate.period_ms, source.period_ms);
+        assert_eq!(duplicate.clock_sync, source.clock_sync);
+        assert_eq!(duplicate.low, source.low);
+        assert_eq!(duplicate.high, source.high);
+        assert_eq!(duplicate.phase, source.phase);
+        assert_eq!(duplicate.blend_mode, source.blend_mode);
+        assert_eq!(duplicate.enabled, source.enabled);
+    }
+
+    #[test]
+    fn embedded_sample_effect_bundle_adds_circle_pair_to_engine() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let profile = custom_fixture_profile_from_request(CustomFixtureProfileRequest {
+            manufacturer: "Rayard".to_string(),
+            name: "Circle Target Spot".to_string(),
+            mode_name: "8ch".to_string(),
+            attributes: vec!["Pan".to_string(), "Tilt".to_string()],
+        });
+        let fixture_id = engine.allocate_fixture_id();
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id,
+                request: PatchFixtureRequest {
+                    profile_path: profile.source_path.clone(),
+                    mode_name: Some("8ch".to_string()),
+                    label: "Circle Target".to_string(),
+                    universe: 0,
+                    address: 1,
+                    group_ids: vec!["Front".to_string()],
+                    position: Vec3::default(),
+                    rotation: Rotation3::default(),
+                },
+                profile,
+            })
+            .unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if snapshot
+                .fixtures
+                .iter()
+                .any(|fixture| fixture.id == fixture_id)
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+            snapshot = engine.snapshot();
+        }
+        assert!(snapshot
+            .fixtures
+            .iter()
+            .any(|fixture| fixture.id == fixture_id));
+
+        let mut effect_ids = Vec::new();
+        for (_, json) in sample_effect_bundle_jsons("front_circle").unwrap() {
+            let preset: EffectPreset = serde_json::from_str(json).unwrap();
+            let effect_id = add_effect_preset_to_engine(&engine, preset, None).unwrap();
+            effect_ids.push(effect_id);
+        }
+        assert_eq!(effect_ids.len(), 2);
+
+        snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if effect_ids.iter().all(|effect_id| {
+                snapshot
+                    .effects
+                    .iter()
+                    .any(|effect| effect.id == *effect_id)
+            }) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+            snapshot = engine.snapshot();
+        }
+
+        let circle_effects: Vec<&EffectSummary> = effect_ids
+            .iter()
+            .map(|effect_id| {
+                snapshot
+                    .effects
+                    .iter()
+                    .find(|effect| effect.id == *effect_id)
+                    .expect("circle bundle effect should be in the engine snapshot")
+            })
+            .collect();
+        assert_eq!(circle_effects[0].effect_type, EffectKind::Lfo);
+        assert_eq!(circle_effects[1].effect_type, EffectKind::Lfo);
+        assert_eq!(circle_effects[0].attribute, "Pan");
+        assert_eq!(circle_effects[1].attribute, "Tilt");
+        assert_eq!(circle_effects[0].shape, protocol::LfoShape::Sine);
+        assert_eq!(circle_effects[1].shape, protocol::LfoShape::Cosine);
+        assert_eq!(circle_effects[0].period_ms, Some(2000));
+        assert_eq!(circle_effects[1].period_ms, Some(2000));
+        assert_eq!(
+            circle_effects[0].clock_sync,
+            Some(protocol::EffectClockSync { beats: 4.0 })
+        );
+        assert_eq!(
+            circle_effects[1].clock_sync,
+            Some(protocol::EffectClockSync { beats: 4.0 })
+        );
+        assert_eq!(circle_effects[0].low, 24576);
+        assert_eq!(circle_effects[0].high, 40960);
+        assert_eq!(circle_effects[1].low, 24576);
+        assert_eq!(circle_effects[1].high, 40960);
     }
 }
 
@@ -14356,6 +15617,8 @@ fn main() {
             load_video_output_mapping_preset_file,
             add_lfo_effect,
             add_position_wave_effect,
+            update_lfo_effect,
+            update_position_wave_effect,
             save_node_graph,
             set_node_graph_enabled,
             remove_node_graph,
@@ -14364,10 +15627,13 @@ fn main() {
             set_effect_enabled,
             set_effect_video_target_position,
             move_effect,
+            duplicate_effect,
             remove_effect,
             save_effect_preset,
             load_effect_preset,
             load_effect_preset_for_target,
+            load_sample_effect_preset,
+            load_sample_effect_bundle,
             save_fixture_preset,
             load_fixture_preset,
             load_fixture_preset_for_group,

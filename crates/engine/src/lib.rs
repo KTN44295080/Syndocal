@@ -169,6 +169,14 @@ pub enum EngineCommand {
         effect_id: EffectId,
         request: PositionWaveEffectRequest,
     },
+    UpdateLfoEffect {
+        effect_id: EffectId,
+        request: LfoEffectRequest,
+    },
+    UpdatePositionWaveEffect {
+        effect_id: EffectId,
+        request: PositionWaveEffectRequest,
+    },
     SetEffectEnabled {
         effect_id: EffectId,
         enabled: bool,
@@ -446,6 +454,8 @@ impl EngineCommand {
                 | EngineCommand::SetGroupSubmaster { .. }
                 | EngineCommand::AddLfoEffect { .. }
                 | EngineCommand::AddPositionWaveEffect { .. }
+                | EngineCommand::UpdateLfoEffect { .. }
+                | EngineCommand::UpdatePositionWaveEffect { .. }
                 | EngineCommand::SetEffectEnabled { .. }
                 | EngineCommand::SetEffectVideoTargetPosition { .. }
                 | EngineCommand::MoveEffect { .. }
@@ -2120,6 +2130,46 @@ impl EngineRuntime {
                     created_at: Instant::now(),
                 });
                 self.last_error = None;
+            }
+            EngineCommand::UpdateLfoEffect { effect_id, request } => {
+                let request = match self.resolve_lfo_effect_request(request) {
+                    Ok(request) => request,
+                    Err(error) => {
+                        self.last_error = Some(error);
+                        return;
+                    }
+                };
+                if let Some(effect) = self
+                    .effects
+                    .iter_mut()
+                    .find(|effect| effect.id == effect_id)
+                {
+                    effect.kind = RuntimeEffectKind::Lfo(request);
+                    effect.created_at = Instant::now();
+                    self.last_error = None;
+                } else {
+                    self.last_error = Some(format!("Effect {effect_id} was not found"));
+                }
+            }
+            EngineCommand::UpdatePositionWaveEffect { effect_id, request } => {
+                let request = match self.resolve_position_wave_effect_request(request) {
+                    Ok(request) => request,
+                    Err(error) => {
+                        self.last_error = Some(error);
+                        return;
+                    }
+                };
+                if let Some(effect) = self
+                    .effects
+                    .iter_mut()
+                    .find(|effect| effect.id == effect_id)
+                {
+                    effect.kind = RuntimeEffectKind::PositionWave(request);
+                    effect.created_at = Instant::now();
+                    self.last_error = None;
+                } else {
+                    self.last_error = Some(format!("Effect {effect_id} was not found"));
+                }
             }
             EngineCommand::SetEffectEnabled { effect_id, enabled } => {
                 if let Some(effect) = self
@@ -6936,7 +6986,7 @@ fn create_dmx_sender(output: &DmxOutputConfig) -> Result<DmxSender, String> {
         DmxOutputProtocol::Sacn => SacnSender::new(&output.target_ip, output.port)
             .map(DmxSender::Sacn)
             .map_err(|error| error.to_string()),
-        DmxOutputProtocol::EnttecUsbPro => {
+        DmxOutputProtocol::EnttecUsbPro | DmxOutputProtocol::DmxKingUltraDmx => {
             EnttecUsbProSender::new(&output.serial_port, output.serial_baud_rate)
                 .map(DmxSender::EnttecUsbPro)
                 .map_err(|error| error.to_string())
@@ -13233,6 +13283,24 @@ mod tests {
     }
 
     #[test]
+    fn dmxking_ultradmx_uses_enttec_pro_serial_sender_path() {
+        let result = create_dmx_sender(&DmxOutputConfig {
+            enabled: true,
+            protocol: DmxOutputProtocol::DmxKingUltraDmx,
+            target_ip: String::new(),
+            port: 0,
+            universe: 1,
+            serial_port: String::new(),
+            serial_baud_rate: 57_600,
+        });
+
+        match result {
+            Ok(_) => panic!("DMXKing ultraDMX without a serial port should not create a sender"),
+            Err(error) => assert!(error.contains("serial port path is required")),
+        }
+    }
+
+    #[test]
     fn disabled_incomplete_dmx_output_is_not_an_error_or_send_route() {
         let engine = EngineHandle::start(DmxOutputConfig {
             enabled: false,
@@ -17749,6 +17817,104 @@ mod tests {
     }
 
     #[test]
+    fn lfo_effect_can_target_fixture_and_video_layer_from_same_source() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let fixture_id = engine.allocate_fixture_id();
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id,
+                request: PatchFixtureRequest {
+                    profile_path: "memory://fixture.gdtf".to_string(),
+                    mode_name: Some("Standard".to_string()),
+                    label: "Fixture 1".to_string(),
+                    universe: 0,
+                    address: 1,
+                    group_ids: Vec::new(),
+                    position: Vec3::default(),
+                    rotation: Default::default(),
+                },
+                profile: sample_profile(),
+            })
+            .unwrap();
+        let layer_id = engine.allocate_video_layer_id();
+        engine
+            .send(EngineCommand::AddVideoLayer {
+                layer_id,
+                label: "Layer 1".to_string(),
+                source: VideoSourceSummary {
+                    kind: protocol::VideoSourceKind::File,
+                    path: Some("memory://clip.mp4".to_string()),
+                    name: None,
+                    codec: Some("H264".to_string()),
+                    metadata: None,
+                },
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::AddLfoEffect {
+                effect_id: engine.allocate_effect_id(),
+                request: LfoEffectRequest {
+                    label: "Dimmer + Opacity Pulse".to_string(),
+                    fixture_ids: vec![fixture_id],
+                    target_group_ids: Vec::new(),
+                    attribute: "Dimmer".to_string(),
+                    video_targets: vec![VideoEffectTarget {
+                        layer_ids: vec![layer_id],
+                        param: VideoParam::Opacity,
+                        low: 0.25,
+                        high: 0.75,
+                        position: None,
+                    }],
+                    shape: LfoShape::Square,
+                    period_ms: 10_000,
+                    clock_sync: None,
+                    low: 0,
+                    high: 65_535,
+                    phase: 0.25,
+                    blend_mode: EffectBlendMode::Override,
+                },
+            })
+            .unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            let opacity = snapshot
+                .video
+                .layers
+                .iter()
+                .find(|layer| layer.id == layer_id)
+                .map(|layer| layer.state.opacity);
+            if snapshot.dmx_preview[0] == 255 && opacity == Some(0.75) {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+        }
+
+        let layer = snapshot
+            .video
+            .layers
+            .iter()
+            .find(|layer| layer.id == layer_id)
+            .unwrap();
+        assert_eq!(snapshot.dmx_preview[0], 255);
+        assert_eq!(layer.state.opacity, 0.75);
+        assert_eq!(snapshot.effects.len(), 1);
+        assert_eq!(snapshot.effects[0].fixture_ids, vec![fixture_id]);
+        assert_eq!(
+            snapshot.effects[0].video_targets[0].layer_ids,
+            vec![layer_id]
+        );
+        assert_eq!(
+            snapshot.effects[0].video_targets[0].param,
+            VideoParam::Opacity
+        );
+    }
+
+    #[test]
     fn lfo_effect_can_target_video_layer_color() {
         let engine = EngineHandle::start(DmxOutputConfig {
             enabled: false,
@@ -18003,6 +18169,115 @@ mod tests {
                 x: 1.0,
                 y: 0.0,
                 z: 0.0,
+            })
+        );
+    }
+
+    #[test]
+    fn position_wave_effect_can_span_fixture_and_video_layer_positions() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let fixture_id = engine.allocate_fixture_id();
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id,
+                request: PatchFixtureRequest {
+                    profile_path: "memory://fixture.gdtf".to_string(),
+                    mode_name: Some("Standard".to_string()),
+                    label: "Fixture 1".to_string(),
+                    universe: 0,
+                    address: 1,
+                    group_ids: Vec::new(),
+                    position: Vec3::default(),
+                    rotation: Default::default(),
+                },
+                profile: sample_profile(),
+            })
+            .unwrap();
+        let layer_id = engine.allocate_video_layer_id();
+        engine
+            .send(EngineCommand::AddVideoLayer {
+                layer_id,
+                label: "Projection Surface".to_string(),
+                source: VideoSourceSummary {
+                    kind: protocol::VideoSourceKind::File,
+                    path: Some("memory://projection.mp4".to_string()),
+                    name: None,
+                    codec: Some("H264".to_string()),
+                    metadata: None,
+                },
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::AddPositionWaveEffect {
+                effect_id: engine.allocate_effect_id(),
+                request: PositionWaveEffectRequest {
+                    label: "Fixture + Projection Wave".to_string(),
+                    fixture_ids: vec![fixture_id],
+                    target_group_ids: Vec::new(),
+                    attribute: "Dimmer".to_string(),
+                    video_targets: vec![VideoEffectTarget {
+                        layer_ids: vec![layer_id],
+                        param: VideoParam::Opacity,
+                        low: 0.0,
+                        high: 1.0,
+                        position: Some(Vec3 {
+                            x: 1.0,
+                            y: 0.0,
+                            z: 0.0,
+                        }),
+                    }],
+                    shape: LfoShape::Square,
+                    origin: Vec3::default(),
+                    direction: Vec3 {
+                        x: 1.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                    speed: 0.0,
+                    wavelength: 2.0,
+                    clock_sync: None,
+                    low: 0,
+                    high: 65_535,
+                    phase: 0.25,
+                    blend_mode: EffectBlendMode::Override,
+                },
+            })
+            .unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            let opacity = snapshot
+                .video
+                .layers
+                .iter()
+                .find(|layer| layer.id == layer_id)
+                .map(|layer| layer.state.opacity);
+            if snapshot.dmx_preview[0] == 255 && opacity == Some(0.0) {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+        }
+
+        let layer = snapshot
+            .video
+            .layers
+            .iter()
+            .find(|layer| layer.id == layer_id)
+            .unwrap();
+        assert_eq!(snapshot.dmx_preview[0], 255);
+        assert_eq!(layer.state.opacity, 0.0);
+        assert_eq!(snapshot.effects.len(), 1);
+        assert_eq!(snapshot.effects[0].fixture_ids, vec![fixture_id]);
+        assert_eq!(
+            snapshot.effects[0].video_targets[0].position,
+            Some(Vec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0
             })
         );
     }
@@ -18334,6 +18609,263 @@ mod tests {
         }
         assert_eq!(snapshot.dmx_preview[0], 0);
         assert_eq!(snapshot.effects.len(), 1);
+        assert!(!snapshot.effects[0].enabled);
+    }
+
+    #[test]
+    fn update_lfo_effect_preserves_id_order_and_enabled_state() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let fixture_id = engine.allocate_fixture_id();
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id,
+                request: PatchFixtureRequest {
+                    profile_path: "memory://fixture.gdtf".to_string(),
+                    mode_name: Some("Standard".to_string()),
+                    label: "Fixture 1".to_string(),
+                    universe: 0,
+                    address: 1,
+                    group_ids: Vec::new(),
+                    position: Vec3::default(),
+                    rotation: Default::default(),
+                },
+                profile: sample_profile(),
+            })
+            .unwrap();
+
+        let first_id = engine.allocate_effect_id();
+        let second_id = engine.allocate_effect_id();
+        for (effect_id, label, low) in [
+            (first_id, "First", 1_000u16),
+            (second_id, "Second", 2_000u16),
+        ] {
+            engine
+                .send(EngineCommand::AddLfoEffect {
+                    effect_id,
+                    request: LfoEffectRequest {
+                        label: label.to_string(),
+                        fixture_ids: vec![fixture_id],
+                        target_group_ids: Vec::new(),
+                        attribute: "Dimmer".to_string(),
+                        video_targets: Vec::new(),
+                        shape: LfoShape::Sine,
+                        period_ms: 10_000,
+                        clock_sync: None,
+                        low,
+                        high: low,
+                        phase: 0.0,
+                        blend_mode: EffectBlendMode::Override,
+                    },
+                })
+                .unwrap();
+        }
+        engine
+            .send(EngineCommand::SetEffectEnabled {
+                effect_id: first_id,
+                enabled: false,
+            })
+            .unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if snapshot.effects.len() == 2
+                && snapshot
+                    .effects
+                    .iter()
+                    .any(|effect| effect.id == first_id && !effect.enabled)
+            {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+        }
+
+        engine
+            .send(EngineCommand::UpdateLfoEffect {
+                effect_id: first_id,
+                request: LfoEffectRequest {
+                    label: "Updated".to_string(),
+                    fixture_ids: vec![fixture_id],
+                    target_group_ids: Vec::new(),
+                    attribute: "Dimmer".to_string(),
+                    video_targets: Vec::new(),
+                    shape: LfoShape::Square,
+                    period_ms: 500,
+                    clock_sync: Some(protocol::EffectClockSync { beats: 1.0 }),
+                    low: 4_000,
+                    high: 5_000,
+                    phase: 0.25,
+                    blend_mode: EffectBlendMode::Add,
+                },
+            })
+            .unwrap();
+
+        for _ in 0..20 {
+            snapshot = engine.snapshot();
+            if snapshot.effects[0].label == "Updated" {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+        }
+
+        assert_eq!(snapshot.effects.len(), 2);
+        assert_eq!(snapshot.effects[0].id, first_id);
+        assert_eq!(snapshot.effects[1].id, second_id);
+        assert_eq!(snapshot.effects[0].label, "Updated");
+        assert_eq!(snapshot.effects[0].attribute, "Dimmer");
+        assert_eq!(snapshot.effects[0].shape, LfoShape::Square);
+        assert_eq!(snapshot.effects[0].period_ms, Some(500));
+        assert_eq!(
+            snapshot.effects[0].clock_sync,
+            Some(protocol::EffectClockSync { beats: 1.0 })
+        );
+        assert_eq!(snapshot.effects[0].low, 4_000);
+        assert_eq!(snapshot.effects[0].high, 5_000);
+        assert_eq!(snapshot.effects[0].blend_mode, EffectBlendMode::Add);
+        assert!(!snapshot.effects[0].enabled);
+    }
+
+    #[test]
+    fn update_position_wave_effect_preserves_id_order_and_enabled_state() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let fixture_id = engine.allocate_fixture_id();
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id,
+                request: PatchFixtureRequest {
+                    profile_path: "memory://fixture.gdtf".to_string(),
+                    mode_name: Some("Standard".to_string()),
+                    label: "Fixture 1".to_string(),
+                    universe: 0,
+                    address: 1,
+                    group_ids: Vec::new(),
+                    position: Vec3::default(),
+                    rotation: Default::default(),
+                },
+                profile: sample_profile(),
+            })
+            .unwrap();
+
+        let first_id = engine.allocate_effect_id();
+        let second_id = engine.allocate_effect_id();
+        for (effect_id, label, wavelength) in [
+            (first_id, "First Wave", 2.0f32),
+            (second_id, "Second Wave", 3.0f32),
+        ] {
+            engine
+                .send(EngineCommand::AddPositionWaveEffect {
+                    effect_id,
+                    request: PositionWaveEffectRequest {
+                        label: label.to_string(),
+                        fixture_ids: vec![fixture_id],
+                        target_group_ids: Vec::new(),
+                        attribute: "Dimmer".to_string(),
+                        video_targets: Vec::new(),
+                        shape: LfoShape::Sine,
+                        origin: Vec3::default(),
+                        direction: Vec3 {
+                            x: 1.0,
+                            y: 0.0,
+                            z: 0.0,
+                        },
+                        speed: 0.0,
+                        wavelength,
+                        clock_sync: None,
+                        low: 1_000,
+                        high: 2_000,
+                        phase: 0.0,
+                        blend_mode: EffectBlendMode::Override,
+                    },
+                })
+                .unwrap();
+        }
+        engine
+            .send(EngineCommand::SetEffectEnabled {
+                effect_id: first_id,
+                enabled: false,
+            })
+            .unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if snapshot.effects.len() == 2
+                && snapshot
+                    .effects
+                    .iter()
+                    .any(|effect| effect.id == first_id && !effect.enabled)
+            {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+        }
+
+        let updated_origin = Vec3 {
+            x: 1.5,
+            y: 0.25,
+            z: -0.5,
+        };
+        let updated_direction = Vec3 {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        };
+        engine
+            .send(EngineCommand::UpdatePositionWaveEffect {
+                effect_id: first_id,
+                request: PositionWaveEffectRequest {
+                    label: "Updated Wave".to_string(),
+                    fixture_ids: vec![fixture_id],
+                    target_group_ids: Vec::new(),
+                    attribute: "Dimmer".to_string(),
+                    video_targets: Vec::new(),
+                    shape: LfoShape::Triangle,
+                    origin: updated_origin,
+                    direction: updated_direction,
+                    speed: 1.25,
+                    wavelength: 4.5,
+                    clock_sync: Some(protocol::EffectClockSync { beats: 2.0 }),
+                    low: 3_000,
+                    high: 6_000,
+                    phase: 0.5,
+                    blend_mode: EffectBlendMode::Multiply,
+                },
+            })
+            .unwrap();
+
+        for _ in 0..20 {
+            snapshot = engine.snapshot();
+            if snapshot.effects[0].label == "Updated Wave" {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+        }
+
+        assert_eq!(snapshot.effects.len(), 2);
+        assert_eq!(snapshot.effects[0].id, first_id);
+        assert_eq!(snapshot.effects[1].id, second_id);
+        assert_eq!(snapshot.effects[0].effect_type, EffectKind::PositionWave);
+        assert_eq!(snapshot.effects[0].label, "Updated Wave");
+        assert_eq!(snapshot.effects[0].attribute, "Dimmer");
+        assert_eq!(snapshot.effects[0].shape, LfoShape::Triangle);
+        assert_eq!(
+            snapshot.effects[0].clock_sync,
+            Some(protocol::EffectClockSync { beats: 2.0 })
+        );
+        assert_eq!(snapshot.effects[0].low, 3_000);
+        assert_eq!(snapshot.effects[0].high, 6_000);
+        assert_eq!(snapshot.effects[0].phase, 0.5);
+        assert_eq!(snapshot.effects[0].blend_mode, EffectBlendMode::Multiply);
+        assert_eq!(snapshot.effects[0].origin, Some(updated_origin));
+        assert_eq!(snapshot.effects[0].direction, Some(updated_direction));
+        assert_eq!(snapshot.effects[0].speed, Some(1.25));
+        assert_eq!(snapshot.effects[0].wavelength, Some(4.5));
         assert!(!snapshot.effects[0].enabled);
     }
 

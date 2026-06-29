@@ -2,6 +2,26 @@
 // hotkey mapping, and mapping stage-tool hotkeys. Pure; no SolidJS/state deps.
 import type { MappingStageTool } from "./mappingViewPresets";
 
+export type MappingLayerToggle = "labels" | "beams" | "geometry" | "projectors" | "objects" | "levels";
+export type MappingSelectionFlagHotkey = "highlight" | "solo" | "park";
+export type MappingSelectionManagementAction = "pickVisible" | "clearPick" | "pickInside" | "addInside";
+export type MappingSelectionAction =
+  | "layoutLine"
+  | "layoutGrid"
+  | "layoutCircle"
+  | "layoutObjectLine"
+  | "layoutObjectGrid"
+  | "alignX"
+  | "alignZ"
+  | "distributeX"
+  | "distributeZ"
+  | "mirrorX"
+  | "mirrorZ"
+  | "rotateLeft"
+  | "rotateRight"
+  | "flip180";
+export type MappingViewportAction = "fitVisible" | "fitSelection" | "zoomIn" | "zoomOut" | "reset";
+
 export const isEditableShortcutTarget = (target: EventTarget | null) => {
   if (!(target instanceof HTMLElement)) {
     return false;
@@ -29,6 +49,105 @@ export const mappingStageToolFromHotkey = (code: string): MappingStageTool | nul
       return "rotate";
     case "KeyH":
       return "pan";
+    default:
+      return null;
+  }
+};
+
+export const mappingLayerToggleFromHotkey = (code: string, shiftKey: boolean): MappingLayerToggle | null => {
+  switch (code) {
+    case "KeyL":
+      return "labels";
+    case "KeyB":
+      return "beams";
+    case "KeyG":
+      return "geometry";
+    case "KeyV":
+      return "projectors";
+    case "KeyO":
+      return "objects";
+    case "Digit5":
+    case "Numpad5":
+      return shiftKey ? "levels" : null;
+    default:
+      return null;
+  }
+};
+
+export const mappingViewportActionFromHotkey = (code: string, shiftKey: boolean): MappingViewportAction | null => {
+  switch (code) {
+    case "KeyF":
+      return shiftKey ? "fitSelection" : "fitVisible";
+    case "Equal":
+    case "NumpadAdd":
+      return "zoomIn";
+    case "Minus":
+    case "NumpadSubtract":
+      return "zoomOut";
+    case "Digit0":
+    case "Numpad0":
+      return "reset";
+    default:
+      return null;
+  }
+};
+
+export const mappingSelectionManagementActionFromHotkey = (
+  code: string,
+  shiftKey: boolean,
+  modifierKey: boolean,
+): MappingSelectionManagementAction | null => {
+  if (!modifierKey || code !== "KeyA") {
+    return null;
+  }
+  return shiftKey ? "clearPick" : "pickVisible";
+};
+
+export const mappingStageObjectSelectionActionFromHotkey = (
+  code: string,
+  shiftKey: boolean,
+): MappingSelectionManagementAction | null => {
+  if (code !== "KeyI") {
+    return null;
+  }
+  return shiftKey ? "addInside" : "pickInside";
+};
+
+export const mappingSelectionFlagFromHotkey = (code: string): MappingSelectionFlagHotkey | null => {
+  switch (code) {
+    case "KeyQ":
+      return "highlight";
+    case "KeyW":
+      return "solo";
+    case "KeyE":
+      return "park";
+    default:
+      return null;
+  }
+};
+
+export const mappingSelectionActionFromHotkey = (code: string, shiftKey: boolean): MappingSelectionAction | null => {
+  switch (code) {
+    case "Digit1":
+    case "Numpad1":
+      return shiftKey ? "layoutObjectLine" : "layoutLine";
+    case "Digit2":
+    case "Numpad2":
+      return shiftKey ? "layoutObjectGrid" : "layoutGrid";
+    case "Digit3":
+    case "Numpad3":
+      return shiftKey ? null : "layoutCircle";
+    case "Digit4":
+    case "Numpad4":
+      return shiftKey ? null : "flip180";
+    case "KeyX":
+      return shiftKey ? "distributeX" : "alignX";
+    case "KeyZ":
+      return shiftKey ? "distributeZ" : "alignZ";
+    case "BracketLeft":
+      return shiftKey ? "mirrorX" : "rotateLeft";
+    case "BracketRight":
+      return shiftKey ? "mirrorZ" : "rotateRight";
     default:
       return null;
   }

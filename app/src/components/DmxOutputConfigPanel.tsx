@@ -11,6 +11,46 @@ interface DmxOutputConfigPanelProps {
   onApply: () => void | Promise<void>;
 }
 
+const SACN_MAX_UNIVERSE = 63_999;
+
+const normalizeSacnUniverse = (universe: number) =>
+  Math.max(1, Math.min(SACN_MAX_UNIVERSE, Math.trunc(Number.isFinite(universe) ? universe : 1)));
+
+const sacnMulticastAddress = (universe: number) => {
+  const normalized = normalizeSacnUniverse(universe);
+  return `239.255.${normalized >> 8}.${normalized & 0xff}`;
+};
+
+const isSacnMulticastTarget = (target: string) => {
+  const normalized = target.trim().toLowerCase();
+  return normalized === "" || normalized === "auto" || normalized === "multicast";
+};
+
+const serialProtocolHint = (protocol: DmxOutputConfig["protocol"]) => {
+  switch (protocol) {
+    case "EnttecUsbPro":
+      return {
+        tone: "ok",
+        label: "Device-timed USB PRO",
+        detail: "Break and mark timing are handled by the interface firmware.",
+      };
+    case "DmxKingUltraDmx":
+      return {
+        tone: "ok",
+        label: "PRO-compatible DMXKing",
+        detail: "Uses the Enttec USB PRO packet path with DMXKing serial interfaces.",
+      };
+    case "EnttecOpenDmx":
+      return {
+        tone: "warn",
+        label: "Host-timed Open DMX",
+        detail: "FTDI break timing can vary by OS; use PRO/DMXKing for critical live output.",
+      };
+    default:
+      return null;
+  }
+};
+
 export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
   return (
     <>
@@ -29,6 +69,7 @@ export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
           <option value="ArtNet">Art-Net</option>
           <option value="Sacn">sACN / E1.31</option>
           <option value="EnttecUsbPro">Enttec USB PRO</option>
+          <option value="DmxKingUltraDmx">DMXKing ultraDMX</option>
           <option value="EnttecOpenDmx">Enttec Open DMX</option>
         </select>
       </label>
@@ -37,9 +78,24 @@ export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
           Target IP
           <input
             value={props.output.target_ip}
+            placeholder={props.output.protocol === "Sacn" ? "multicast, auto, or unicast IP" : "127.0.0.1"}
             onInput={(event) => props.onOutputChange({ ...props.output, target_ip: event.currentTarget.value })}
           />
         </label>
+        <Show when={props.output.protocol === "Sacn"}>
+          <div class="dmxOutputNetworkHint">
+            <span>sACN multicast</span>
+            <strong>{sacnMulticastAddress(props.output.universe)}</strong>
+            <button
+              type="button"
+              title="Use the standard sACN multicast target for the selected universe"
+              disabled={isSacnMulticastTarget(props.output.target_ip)}
+              onClick={() => props.onOutputChange({ ...props.output, target_ip: "multicast" })}
+            >
+              Multicast
+            </button>
+          </div>
+        </Show>
         <div class="split">
           <label>
             Port
@@ -62,6 +118,14 @@ export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
       </Show>
       <Show when={props.isSerialProtocol(props.output.protocol)}>
         <div class="serialOutput">
+          <Show when={serialProtocolHint(props.output.protocol)}>
+            {(hint) => (
+              <div class={`dmxOutputProtocolHint ${hint().tone}`}>
+                <strong>{hint().label}</strong>
+                <span>{hint().detail}</span>
+              </div>
+            )}
+          </Show>
           <div class="buttonRow">
             <button onClick={props.onRefreshSerialPorts}>Scan Serial</button>
             <button onClick={() => props.onOutputChange({ ...props.output, serial_port: "" })}>Clear Port</button>

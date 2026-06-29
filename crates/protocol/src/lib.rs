@@ -1101,6 +1101,7 @@ pub enum DmxOutputProtocol {
     ArtNet,
     Sacn,
     EnttecUsbPro,
+    DmxKingUltraDmx,
     EnttecOpenDmx,
 }
 

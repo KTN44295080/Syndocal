@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "effect_type": "Lfo",
+  "enabled": true,
+  "lfo": {
+    "label": "Front Dimmer Perlin",
+    "fixture_ids": [],
+    "target_group_ids": ["Front"],
+    "attribute": "Dimmer",
+    "video_targets": [],
+    "shape": "Perlin",
+    "period_ms": 4000,
+    "clock_sync": {
+      "beats": 8.0
+    },
+    "low": 0,
+    "high": 65535,
+    "phase": 0.0,
+    "blend_mode": "Override"
+  },
+  "position_wave": null
+}

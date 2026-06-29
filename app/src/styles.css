@@ -9,6 +9,13 @@
   text-rendering: optimizeLegibility;
 }
 
+html {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #111419;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -16,8 +23,19 @@
 body {
   margin: 0;
   min-width: 0;
-  min-height: 100vh;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  overscroll-behavior: none;
   background: #111419;
+}
+
+#root {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 body.outputBody {
@@ -114,11 +132,25 @@ h3 {
 }
 
 .app {
+  position: fixed;
+  inset: 0;
   display: grid;
-  grid-template-rows: auto auto auto 1fr auto;
-  gap: 12px;
-  min-height: 100vh;
-  padding: 14px;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 6px;
+  width: auto;
+  height: auto;
+  max-height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  padding: 6px;
+}
+
+.workspaceChrome {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .videoOutputWindow {
@@ -201,44 +233,63 @@ h3 {
 
 .topbar {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  min-height: 60px;
+  gap: 10px;
+  min-height: 36px;
   border-bottom: 1px solid #242c36;
-  padding-bottom: 12px;
+  padding-bottom: 6px;
 }
 
 .topbar > div:first-child {
-  flex: 1 1 320px;
-  min-width: 220px;
+  flex: 0 1 300px;
+  min-width: 120px;
+}
+
+.topbar h1 {
+  font-size: 18px;
 }
 
 .topbar p {
+  display: none;
   color: #91a0b2;
   margin-top: 4px;
 }
 
 .status {
   display: flex;
-  flex: 2 1 720px;
-  flex-wrap: wrap;
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
+  overflow: hidden;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 
 .pill,
 .metric {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
-  min-height: 28px;
-  border-radius: 999px;
-  padding: 0 10px;
+  min-height: 24px;
+  border-radius: 4px;
+  padding: 0 7px;
   background: #202833;
   color: #bcc8d7;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.status button {
+  flex: 0 0 auto;
+  min-height: 28px;
+  border-radius: 4px;
+  padding: 0 8px;
+  font-size: 12px;
 }
 
 .projectFile {
@@ -448,7 +499,15 @@ h3 {
 .layout {
   display: grid;
   grid-template-columns: minmax(240px, 300px) minmax(220px, 250px) minmax(220px, 260px) minmax(360px, 1fr) minmax(240px, 280px);
-  gap: 12px;
+  gap: 8px;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.layout > * {
+  min-width: 0;
   min-height: 0;
 }
 
@@ -466,7 +525,10 @@ h3 {
 }
 
 .layoutSetup.setupMode-mapping > .fixtures {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
   grid-column: 1;
+  overflow: hidden;
 }
 
 .layoutSetup.setupMode-mapping > .output {
@@ -483,6 +545,13 @@ h3 {
 
 .layoutSetup.setupMode-mapping .mappingVisualizer {
   order: -1;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border-top: 0;
+  padding-top: 0;
 }
 
 .layoutControl {
@@ -491,7 +560,7 @@ h3 {
 
 .layoutTouch {
   grid-template-columns: minmax(360px, 1fr) minmax(380px, 1fr) 320px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .layoutTouch .panel:not(.touchPanel) {
@@ -575,11 +644,11 @@ h3 {
 
 .touchCuePanel,
 .touchFixturePanel {
-  min-height: 620px;
+  min-height: 0;
 }
 
 .touchStagePanel {
-  min-height: 420px;
+  min-height: 0;
 }
 
 .touchStage {
@@ -1560,13 +1629,18 @@ h3 {
 .panel {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
   min-width: 0;
   min-height: 0;
   border: 1px solid #242c36;
-  border-radius: 8px;
+  border-radius: 6px;
   background: #171d25;
-  padding: 12px;
+  padding: 8px;
+}
+
+.layout > .panel {
+  overflow: hidden auto;
+  overscroll-behavior: contain;
 }
 
 .layoutSetup .setupPanelFocus {
@@ -1585,6 +1659,8 @@ h3 {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
   color: #d6dfeb;
 }
 
@@ -1603,7 +1679,10 @@ h3 {
 .panelHeaderActions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
 }
 
 .panelHeaderActions button {
@@ -3469,6 +3548,13 @@ h3 {
   overflow-x: auto;
 }
 
+.layoutSetup.setupMode-mapping .mappingStageShell {
+  grid-template-columns: 38px minmax(0, 1fr) minmax(170px, 220px);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .mappingToolRail {
   display: grid;
   align-content: start;
@@ -3518,6 +3604,10 @@ h3 {
   min-width: 0;
   min-height: 0;
   padding: 8px;
+}
+
+.layoutSetup.setupMode-mapping .mappingStageViewport {
+  overflow: hidden;
 }
 
 .mappingViewportControls {
@@ -3948,6 +4038,11 @@ h3 {
   border-color: #29241f;
   border-radius: 0;
   background: #1c1814;
+}
+
+.layoutSetup.setupMode-mapping .mappingStageViewport .visualizerStage {
+  height: 100%;
+  min-height: 0;
 }
 
 .mappingVisualizer .stageFloor {
@@ -9287,6 +9382,32 @@ input[type="color"] {
   margin-top: 8px;
 }
 
+.projectorMapCornerResetRow {
+  display: grid;
+  grid-template-columns: auto repeat(4, minmax(0, 1fr));
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.projectorMapCornerResetRow span {
+  color: #8d9aaa;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.projectorMapCornerResetRow button {
+  min-width: 0;
+  min-height: 28px;
+  padding: 3px 6px;
+  overflow: hidden;
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .projectorMapModeRow button {
   min-height: 28px;
   padding: 3px 6px;
@@ -9702,9 +9823,187 @@ input[type="color"] {
   padding-top: 10px;
 }
 
+.sampleEffectPresetPanel {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #28313d;
+  border-radius: 6px;
+  background: #10161d;
+  padding: 8px;
+}
+
+.sampleEffectPresetHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sampleEffectPresetHeader > div:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sampleEffectPresetHeader strong {
+  color: #edf3fb;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.sampleEffectPresetHeader span,
+.sampleEffectPresetHint {
+  min-width: 0;
+  color: #8d9aaa;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.sampleEffectPresetGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 6px;
+}
+
+.sampleEffectPresetCard {
+  display: grid;
+  grid-template-rows: minmax(76px, 1fr) auto;
+  gap: 6px;
+  min-width: 0;
+  border: 1px solid #28313d;
+  border-radius: 5px;
+  background: #151b22;
+  padding: 6px;
+}
+
+.sampleEffectPresetCard.active {
+  border-color: #5dd64c;
+  background: #142419;
+}
+
+.sampleEffectPresetPick {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  padding: 0;
+  color: #d6dfeb;
+  text-align: left;
+}
+
+.sampleEffectPresetPick:hover {
+  background: transparent;
+}
+
+.sampleEffectPresetPick strong,
+.sampleEffectPresetPick span,
+.sampleEffectPresetPick small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sampleEffectPresetPick strong {
+  color: #edf3fb;
+  font-size: 12px;
+}
+
+.sampleEffectPresetPick span {
+  color: #8fdd9d;
+  font-size: 11px;
+}
+
+.sampleEffectPresetPick small {
+  color: #8d9aaa;
+  font-size: 11px;
+  line-height: 1.25;
+  white-space: normal;
+}
+
+.sampleEffectPresetActions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.sampleEffectPresetActions button {
+  min-height: 28px;
+  padding: 0 7px;
+  overflow: hidden;
+  border-radius: 4px;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .effectForm {
   display: grid;
   gap: 8px;
+}
+
+.effectShapePresetPanel {
+  display: grid;
+  gap: 7px;
+  border: 1px solid #28313d;
+  border-radius: 6px;
+  background: #10161d;
+  padding: 8px;
+}
+
+.effectShapePresetGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(78px, 1fr));
+  gap: 6px;
+}
+
+.effectShapePresetGrid button {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 2px 6px;
+  min-width: 0;
+  min-height: 42px;
+  padding: 5px 7px;
+  text-align: left;
+}
+
+.effectShapePresetGrid button.active {
+  border-color: #74d99f;
+  background: #173122;
+}
+
+.effectShapeMini {
+  grid-row: 1 / span 2;
+  width: 36px;
+  height: 18px;
+}
+
+.effectShapeMini path {
+  fill: none;
+  stroke: #74d99f;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.effectShapePresetGrid strong,
+.effectShapePresetGrid span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.effectShapePresetGrid span {
+  color: #8997a8;
+  font-size: 11px;
 }
 
 .effectBpmPeriodPanel {
@@ -10135,9 +10434,18 @@ input[type="color"] {
   gap: 6px;
 }
 
+.effectListEmpty {
+  border: 1px dashed #2f3946;
+  border-radius: 6px;
+  background: #0d131a;
+  color: #8997a8;
+  padding: 10px;
+  font-size: 12px;
+}
+
 .effectItem {
   display: grid;
-  grid-template-columns: 1fr 52px 60px 84px 64px 72px;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, max-content);
   align-items: center;
   gap: 8px;
   min-height: 48px;
@@ -10145,6 +10453,12 @@ input[type="color"] {
   border-radius: 6px;
   background: #111820;
   padding: 6px 8px;
+}
+
+.effectItem.disabled {
+  border-color: #2b3038;
+  background: #10151b;
+  opacity: 0.78;
 }
 
 .nodeGraphList .effectItem {
@@ -10190,25 +10504,144 @@ input[type="color"] {
   color: #a6e6ff;
 }
 
+.nodeGraphMetaChip.sync {
+  border-color: #70622d;
+  color: #ffd27d;
+}
+
 .nodeGraphMetaChip.target {
   max-width: 44%;
 }
 
 .effectItemSummary {
   display: grid;
-  gap: 2px;
+  gap: 5px;
   min-width: 0;
 }
 
-.effectItemSummary > strong,
-.effectItemSummary > span {
+.effectItemTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.effectItemTitleRow > strong {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.effectItemSummary > span {
-  color: #8997a8;
+.effectMetaGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.effectMetaChip {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 34%;
+  min-height: 19px;
+  border: 1px solid #263546;
+  border-radius: 4px;
+  background: #0c141c;
+  color: #9ba9bb;
+  padding: 2px 6px;
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.effectMetaChip.lfo {
+  border-color: #2b6d44;
+  color: #9fe8b9;
+}
+
+.effectMetaChip.wave {
+  border-color: #2b6174;
+  color: #a6e6ff;
+}
+
+.effectMetaChip.sync {
+  border-color: #70622d;
+  color: #ffd27d;
+}
+
+.effectMetaChip.range,
+.effectMetaChip.blend,
+.effectMetaChip.state-on,
+.effectMetaChip.state-off {
+  max-width: 76px;
+}
+
+.effectMetaChip.state-on {
+  border-color: #2b6d44;
+  color: #9fe8b9;
+}
+
+.effectMetaChip.state-off {
+  border-color: #6b3030;
+  color: #ffaaa0;
+}
+
+.effectMetaChip.target {
+  max-width: 52%;
+}
+
+.effectItemActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+  min-width: 0;
+  max-width: 360px;
+}
+
+.effectItemActions button {
+  min-height: 24px;
+  padding: 3px 7px;
+  font-size: 11px;
+}
+
+.effectSubmitActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.effectSubmitActions button {
+  flex: 1 1 120px;
+}
+
+.effectLinkedVideoToggle {
+  justify-content: flex-start;
+  min-height: 28px;
+  padding: 4px 7px;
+}
+
+.effectEditBadge {
+  flex: 1 1 150px;
+  min-width: 0;
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(166, 157, 145, 0.24);
+  background: rgba(83, 79, 72, 0.28);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .effectVideoTargetSyncRow {
@@ -10334,6 +10767,83 @@ input[type="color"] {
   border-radius: 6px;
   background: #10161d;
   padding: 8px;
+}
+
+.phase1SmokePanel {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #28313d;
+  border-radius: 6px;
+  background: #10161d;
+  padding: 8px;
+}
+
+.phase1SmokeHint {
+  color: #8997a8;
+  font-size: 12px;
+}
+
+.phase1SmokeSummary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.phase1SmokeSummary span,
+.phase1SmokeBytes span {
+  display: grid;
+  min-width: 0;
+  border: 1px solid #303947;
+  border-radius: 5px;
+  background: #151c25;
+  padding: 5px 6px;
+}
+
+.phase1SmokeSummary small,
+.phase1SmokeBytes small {
+  min-width: 0;
+  overflow: hidden;
+  color: #8997a8;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.phase1SmokeSummary strong,
+.phase1SmokeBytes strong,
+.phase1SmokeBytes em {
+  min-width: 0;
+  overflow: hidden;
+  color: #edf3fb;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.phase1SmokeBytes {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.phase1SmokeBytes span.ok {
+  border-color: #2d6f45;
+  background: #102218;
+}
+
+.phase1SmokeBytes span.bad {
+  border-color: #813a3a;
+  background: #261313;
+}
+
+.phase1SmokeBytes strong {
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+
+.phase1SmokeBytes em {
+  color: #8997a8;
+  font-size: 10px;
 }
 
 .dmxOutputDiagnosticsHeader {
@@ -10573,6 +11083,75 @@ input[type="color"] {
   padding: 8px;
 }
 
+.dmxOutputNetworkHint {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid #28313d;
+  border-radius: 6px;
+  background: #111820;
+  padding: 7px 8px;
+  color: #9aa8ba;
+  font-size: 12px;
+}
+
+.dmxOutputNetworkHint span,
+.dmxOutputNetworkHint strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dmxOutputNetworkHint strong {
+  color: #edf3fb;
+  font-variant-numeric: tabular-nums;
+}
+
+.dmxOutputNetworkHint button {
+  min-height: 28px;
+  padding: 0 8px;
+}
+
+.dmxOutputProtocolHint {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  border: 1px solid #28313d;
+  border-radius: 6px;
+  background: #151b22;
+  padding: 7px 8px;
+}
+
+.dmxOutputProtocolHint.warn {
+  border-color: #6b5428;
+  background: #211a10;
+}
+
+.dmxOutputProtocolHint.ok {
+  border-color: #284c3a;
+}
+
+.dmxOutputProtocolHint strong,
+.dmxOutputProtocolHint span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dmxOutputProtocolHint strong {
+  color: #edf3fb;
+  font-size: 12px;
+}
+
+.dmxOutputProtocolHint span {
+  color: #9aa8ba;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
 .telemetry {
   display: grid;
   gap: 8px;
@@ -10632,8 +11211,15 @@ input[type="color"] {
 }
 
 footer {
-  min-height: 32px;
+  min-width: 0;
+  min-height: 22px;
+  max-height: 22px;
+  overflow: hidden;
   border-top: 1px solid #242c36;
   color: #aab6c6;
-  padding-top: 8px;
+  padding-top: 4px;
+  font-size: 12px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

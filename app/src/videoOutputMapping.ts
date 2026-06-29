@@ -159,6 +159,27 @@ export const aspectRatioLabel = (ratio: number) => {
   return preset?.label ?? `${normalized.toFixed(2)}:1`;
 };
 
+export const cornerWarpAmount = (mapping: VideoOutputMapping) =>
+  Math.abs(mappingNumber(mapping, "corner_top_left_x", 0)) +
+  Math.abs(mappingNumber(mapping, "corner_top_left_y", 0)) +
+  Math.abs(mappingNumber(mapping, "corner_top_right_x", 0)) +
+  Math.abs(mappingNumber(mapping, "corner_top_right_y", 0)) +
+  Math.abs(mappingNumber(mapping, "corner_bottom_right_x", 0)) +
+  Math.abs(mappingNumber(mapping, "corner_bottom_right_y", 0)) +
+  Math.abs(mappingNumber(mapping, "corner_bottom_left_x", 0)) +
+  Math.abs(mappingNumber(mapping, "corner_bottom_left_y", 0));
+
+export const mappingCorrectionReadout = (mapping: VideoOutputMapping) =>
+  `Aspect ${mapping.aspect_mode} ${aspectRatioLabel(mappingNumber(mapping, "aspect_ratio", 1))} / Lens ${mappingNumber(
+    mapping,
+    "lens_distortion",
+    0,
+  ).toFixed(2)} / Key ${mappingNumber(mapping, "keystone_x", 0).toFixed(2)}, ${mappingNumber(
+    mapping,
+    "keystone_y",
+    0,
+  ).toFixed(2)} / Corners ${cornerWarpAmount(mapping).toFixed(2)}`;
+
 export const mappingFieldRange = (field: NumericVideoOutputMappingField): [number, number] => {
   if (field === "stage_x" || field === "stage_y" || field === "stage_z") {
     return [-1000, 1000];

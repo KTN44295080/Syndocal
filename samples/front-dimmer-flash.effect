@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "effect_type": "Lfo",
+  "enabled": true,
+  "lfo": {
+    "label": "Front Dimmer Flash",
+    "fixture_ids": [],
+    "target_group_ids": ["Front"],
+    "attribute": "Dimmer",
+    "video_targets": [],
+    "shape": "Square",
+    "period_ms": 125,
+    "clock_sync": {
+      "beats": 0.25
+    },
+    "low": 0,
+    "high": 65535,
+    "phase": 0.0,
+    "blend_mode": "Override"
+  },
+  "position_wave": null
+}

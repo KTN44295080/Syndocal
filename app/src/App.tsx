@@ -1,28 +1,69 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
-import { CategoryQuickPanel } from "./components/CategoryQuickPanel";
-import { ChannelFunctionPanel } from "./components/ChannelFunctionPanel";
-import { ColorControlPanel } from "./components/ColorControlPanel";
-import { CueCapturePreviewPanel } from "./components/CueCapturePreviewPanel";
-import { DimmerControlPanel } from "./components/DimmerControlPanel";
+import { CueManagementPanel } from "./components/CueManagementPanel";
+import { CustomProfileEditorPanel } from "./components/CustomProfileEditorPanel";
+import { DmxPatchMapPanel, type DmxPatchViewMode } from "./components/DmxPatchMapPanel";
 import { DmxOutputConfigPanel } from "./components/DmxOutputConfigPanel";
 import { DmxRawMonitor } from "./components/DmxRawMonitor";
-import { DmxRoutesPanel } from "./components/DmxRoutesPanel";
-import { DmxTestFramePanel } from "./components/DmxTestFramePanel";
-import { EngineTelemetryPanel } from "./components/EngineTelemetryPanel";
-import { OpticsControlPanel, type OpticsControlEntry } from "./components/OpticsControlPanel";
-import { PositionControlPanel, type PositionFavorite } from "./components/PositionControlPanel";
-import { ProjectorMapEditor, ProjectorMapPreview } from "./components/ProjectorMapEditor";
+import { EffectActionControlsPanel } from "./components/EffectActionControlsPanel";
+import { EffectGroupTargetPanel } from "./components/EffectGroupTargetPanel";
+import { EffectListPanel } from "./components/EffectListPanel";
+import { EffectSourceControlsPanel } from "./components/EffectSourceControlsPanel";
+import { FaderAttributeEditorPanel } from "./components/FaderAttributeEditorPanel";
+import { FaderAuxiliaryAttributePanels } from "./components/FaderAuxiliaryAttributePanels";
+import { FaderFixtureControlPanel } from "./components/FaderFixtureControlPanel";
+import { FaderGridPanel } from "./components/FaderGridPanel";
+import { FaderPrimaryAttributePanels } from "./components/FaderPrimaryAttributePanels";
+import { LightingRuntimeControlsPanel } from "./components/LightingRuntimeControlsPanel";
+import { LoadedProfileSummaryPanel } from "./components/LoadedProfileSummaryPanel";
+import { MappingEditableStageShell } from "./components/MappingEditableStageShell";
+import { MappingFilterStrips } from "./components/MappingFilterStrips";
+import { MappingSelectionSidebarPanel } from "./components/MappingSelectionSidebarPanel";
+import { MappingStageConfigPanel } from "./components/MappingStageConfigPanel";
+import { MappingStageLayersPanel } from "./components/MappingStageLayersPanel";
+import { MappingToolRail } from "./components/MappingToolRail";
+import { MappingViewportControls } from "./components/MappingViewportControls";
+import { MidiControlMappingPanel } from "./components/MidiControlMappingPanel";
+import { NodeGraphEditorPanel } from "./components/NodeGraphEditorPanel";
+import { OscControlMappingPanel } from "./components/OscControlMappingPanel";
+import { OutputDiagnosticsPanel } from "./components/OutputDiagnosticsPanel";
+import { type OpticsControlEntry } from "./components/OpticsControlPanel";
+import { PatchFixtureFormPanel, type FixtureLayoutMode } from "./components/PatchFixtureFormPanel";
+import { type PositionFavorite } from "./components/PositionControlPanel";
+import { ProfileLoadPanel } from "./components/ProfileLoadPanel";
+import { RemoteControlPanel } from "./components/RemoteControlPanel";
+import { SampleEffectPresetPanel, sampleEffectPresetSupportsTarget, type SampleEffectPreset } from "./components/SampleEffectPresetPanel";
+import { SetupFixtureEditorPanel } from "./components/SetupFixtureEditorPanel";
+import { SetupFixtureListPanel } from "./components/SetupFixtureListPanel";
+import { StagePreview2D } from "./components/StagePreview2D";
+import { VideoEffectTargetPanel } from "./components/VideoEffectTargetPanel";
+import { VideoLayerListPanel } from "./components/VideoLayerListPanel";
+import { VideoMasterControlsPanel, VideoOutputControlListPanel } from "./components/VideoControlOutputsPanel";
 import { readVideoOutputTestPattern, readVideoOutputWindowId, VideoOutputWindow } from "./components/VideoOutputWindow";
-import { TimelineOverview, type TimelineOverviewEvent } from "./components/TimelineOverview";
+import { VideoCompositionSetupPanel } from "./components/VideoCompositionSetupPanel";
+import { VideoOutputCreatePanel } from "./components/VideoOutputCreatePanel";
+import { VideoOutputListPanel } from "./components/VideoOutputListPanel";
+import { VideoPreviewDiagnosticsPanel } from "./components/VideoPreviewDiagnosticsPanel";
 import {
-  ColorWheelSlotPanel,
-  GoboWheelSlotPanel,
-  type ColorWheelFunctionEntry,
-  type GoboSlotPattern,
-  type GoboWheelFunctionEntry,
-} from "./components/WheelSlotPanel";
+  ExternalVideoIoStatusPanel,
+  VideoBackendStatusPanel,
+  VideoOutputRenderPlanStatusPanel,
+} from "./components/VideoRuntimeStatusPanels";
+import { VideoPreviewImagePanel, VideoSourceCreatePanel } from "./components/VideoSourceCreatePanel";
+import { VideoTimelineAutomationPanel } from "./components/VideoTimelineAutomationPanel";
+import { TimelineCueEventsPanel } from "./components/TimelineCueEventsPanel";
+import { TimelineLightingAutomationPanel } from "./components/TimelineLightingAutomationPanel";
+import { TouchColorPalettePanel } from "./components/TouchColorPalettePanel";
+import { TouchDimmerControlPanel } from "./components/TouchDimmerControlPanel";
+import { TouchFixturePanel } from "./components/TouchFixturePanel";
+import { TouchGenericAttributeGrid } from "./components/TouchGenericAttributeGrid";
+import { TouchPanTiltPad } from "./components/TouchPanTiltPad";
+import { TouchRemotePanel } from "./components/TouchRemotePanel";
+import { TouchVideoPanel } from "./components/TouchVideoPanel";
+import type { TimelineOverviewEvent } from "./components/TimelineOverview";
+import { WorkspaceChrome } from "./components/WorkspaceChrome";
+import { type ColorWheelFunctionEntry, type GoboSlotPattern, type GoboWheelFunctionEntry } from "./components/WheelSlotPanel";
 import {
   customProfileAttributeDraftChannelLabel,
   customProfileAttributeDraftsFromText,
@@ -45,6 +86,7 @@ import type {
   DmxTestFrameResult,
   EffectBlendMode,
   EffectKind,
+  EffectSummary,
   EngineTelemetryReport,
   EngineSnapshot,
   ExternalVideoIoPlans,
@@ -53,11 +95,13 @@ import type {
   ExternalVideoTransportSyncResponse,
   ExternalVideoTransportSyncReport,
   FixtureLimits,
+  FixturePresetGroupLoadResult,
   FixtureProfileSummary,
   GeometrySummary,
   LearnedMidiControl,
   LearnedOscControl,
   LfoShape,
+  LfoEffectRequest,
   MidiControlAction,
   MidiControlMapping,
   MidiControlMessage,
@@ -71,6 +115,7 @@ import type {
   PatchFixtureRequest,
   PatchedFixtureSummary,
   Phase1SmokeReport,
+  PositionWaveEffectRequest,
   ProjectLoadResult,
   RemoteControlConfig,
   SerialPortSummary,
@@ -86,7 +131,6 @@ import type {
   VideoFrame,
   VideoEffectTarget,
   VideoLayerState,
-  VideoOutputAspectMode,
   VideoOutputKind,
   VideoOutputMapping,
   VideoOutputRenderPlan,
@@ -105,14 +149,19 @@ import { defaultColorAdjust, defaultFxAdjust, defaultTransform } from "./videoLa
 import {
   colorQuickLooks,
   defaultColorPalette,
-  mappingSnapPresets,
   panTiltNudgeSteps,
   panTiltTargetPoints,
 } from "./uiPresets";
 import {
   controlCueHotkeyIndex,
   isEditableShortcutTarget,
+  mappingLayerToggleFromHotkey,
+  mappingSelectionActionFromHotkey,
+  mappingSelectionFlagFromHotkey,
+  mappingSelectionManagementActionFromHotkey,
+  mappingStageObjectSelectionActionFromHotkey,
   mappingStageToolFromHotkey,
+  mappingViewportActionFromHotkey,
 } from "./hotkeyHelpers";
 import {
   applyAxisLimit,
@@ -132,19 +181,17 @@ import {
 import {
   controlCategories,
   controlCategoryForAttribute,
-  setupSubTabs,
   type ControlCategory,
   type SetupSubTab,
   type WorkspaceTab,
 } from "./uiModes";
 import { projectSnapshotSignature } from "./projectSnapshot";
-import { stageObjectClass, stageObjectDefaultColor, stageObjectKinds } from "./stageObjects";
+import { stageObjectDefaultColor } from "./stageObjects";
 import {
   defaultVideoOutputMapping,
   mappingVideoOutputCornerGain,
   mappingVideoOutputCorners,
   outputAspectRatio,
-  videoOutputAspectModes,
   type MappingVideoOutputCornerKey,
 } from "./videoOutputMapping";
 import {
@@ -226,7 +273,6 @@ import {
   fixtureTypeLabel,
   fixtureVisualKind,
   mappingFixtureStageSize,
-  mappingTypeGlyphClass,
   type MappingFixtureVisualKind,
 } from "./fixtureVisuals";
 import {
@@ -243,10 +289,7 @@ import {
   mediaLabelFromPath,
   shouldReplaceVideoLayerDraftLabel,
   videoSourceCanBrowseFile,
-  videoSourceInputLabel,
-  videoSourceInputPlaceholder,
   videoSourceKindLabel,
-  videoSourceMetadataLabel,
 } from "./videoHelpers";
 import {
   fixtureFlagClearKinds,
@@ -294,11 +337,9 @@ const profileLoadMessage = (prefix: string, profile: FixtureProfileSummary) => {
 };
 
 type TimelineSnapMode = "Off" | "Beat" | "Bar" | "Grid";
-type FixtureLayoutMode = "line" | "grid" | "circle";
 type MappingAxis = "x" | "z";
 type MappingStageObjectResizeMode = "width" | "depth" | "both";
 type VideoOutputPreviewMode = "output" | "test";
-type DmxPatchViewMode = "grid" | "list";
 type MappingBulkGroupMode = "add" | "remove" | "set";
 type WaveStageDragMode = "origin" | "direction" | "videoTarget";
 type CueCaptureScopeMode = "all" | "lighting" | "selectedFixture" | "selectedGroup" | "video";
@@ -335,7 +376,7 @@ const enttecOpenDmxBaudRate = 250_000;
 const defaultCustomAttributesText = "Dimmer@1:8, Pan@2:16, Tilt@4:16, ColorRed@6:8, ColorGreen@7:8, ColorBlue@8:8";
 
 const isSerialDmxProtocol = (protocol: DmxOutputConfig["protocol"]) =>
-  protocol === "EnttecUsbPro" || protocol === "EnttecOpenDmx";
+  protocol === "EnttecUsbPro" || protocol === "DmxKingUltraDmx" || protocol === "EnttecOpenDmx";
 
 const outputProtocolLabel = (protocol: DmxOutputConfig["protocol"]) => {
   switch (protocol) {
@@ -345,6 +386,8 @@ const outputProtocolLabel = (protocol: DmxOutputConfig["protocol"]) => {
       return "sACN";
     case "EnttecUsbPro":
       return "Enttec USB PRO";
+    case "DmxKingUltraDmx":
+      return "DMXKing ultraDMX";
     case "EnttecOpenDmx":
       return "Enttec Open DMX";
   }
@@ -889,6 +932,7 @@ export default function App() {
   const [videoOutputPreviewUrl, setVideoOutputPreviewUrl] = createSignal("");
   const [videoOutputPreviewId, setVideoOutputPreviewId] = createSignal<number | null>(null);
   const [videoOutputPreviewMode, setVideoOutputPreviewMode] = createSignal<VideoOutputPreviewMode>("output");
+  const [phase1SmokeReport, setPhase1SmokeReport] = createSignal<Phase1SmokeReport | null>(null);
   const [videoOutputLabel, setVideoOutputLabel] = createSignal("Projector 1");
   const [videoOutputKind, setVideoOutputKind] = createSignal<VideoOutputKind>("Display");
   const [videoOutputWidth, setVideoOutputWidth] = createSignal(1920);
@@ -930,7 +974,11 @@ export default function App() {
   const [effectVideoPositionX, setEffectVideoPositionX] = createSignal(0);
   const [effectVideoPositionY, setEffectVideoPositionY] = createSignal(0);
   const [effectVideoPositionZ, setEffectVideoPositionZ] = createSignal(0);
+  const [effectVideoTargetLinked, setEffectVideoTargetLinked] = createSignal(false);
+  const [sampleEffectPreset, setSampleEffectPreset] = createSignal<SampleEffectPreset>("pulse");
+  const [editingEffectId, setEditingEffectId] = createSignal<number | null>(null);
   const [effectPeriod, setEffectPeriod] = createSignal(1000);
+  const [effectClockSyncBeats, setEffectClockSyncBeats] = createSignal<number | null>(null);
   const [effectLow, setEffectLow] = createSignal(0);
   const [effectHigh, setEffectHigh] = createSignal(65535);
   const [effectPhase, setEffectPhase] = createSignal(0);
@@ -2065,6 +2113,13 @@ export default function App() {
     }
     return controls[0]?.attribute ?? "";
   });
+  const editingEffectSummary = createMemo<EffectSummary | null>(() => {
+    const effectId = editingEffectId();
+    if (effectId === null) {
+      return null;
+    }
+    return snapshot().effects.find((effect) => effect.id === effectId) ?? null;
+  });
   const dmxPreviewOptions = createMemo(() =>
     snapshot().dmx_previews.length > 0
       ? snapshot().dmx_previews
@@ -3176,10 +3231,6 @@ export default function App() {
     }
     setMessage(`Removed mapping view preset ${preset.label}.`);
   };
-  const mappingViewPresetIdFromButtonEvent = (event: MouseEvent & { currentTarget: HTMLButtonElement }) => {
-    const select = event.currentTarget.closest(".mappingViewPresetPanel")?.querySelector("select");
-    return select instanceof HTMLSelectElement && select.value ? select.value : selectedMappingViewPresetId();
-  };
   const exportMappingStageSvg = () => {
     if (!mappingStageSvgElement) {
       setMessage("2D mapping stage is not ready for SVG export.");
@@ -3934,11 +3985,6 @@ export default function App() {
       if (!panel) {
         return;
       }
-      panel.scrollIntoView({
-        behavior: "smooth",
-        block: "nearest",
-        inline: "center",
-      });
       panel.focus({ preventScroll: true });
     });
   };
@@ -3999,14 +4045,18 @@ export default function App() {
     const fixtures = mappingFilteredFixtures();
     if (fixtures.length === 0) {
       setSelectedMappingFixtureIds([]);
+      setMessage("No visible fixtures to pick in 2D mapping.");
       return;
     }
     activateFixture(fixtures[0]);
     setSelectedMappingFixtureIds(fixtures.map((fixture) => fixture.id));
+    setMessage(`Picked ${fixtures.length} visible fixture${fixtures.length === 1 ? "" : "s"} in 2D mapping.`);
   };
 
   const clearMappingFixtureSelection = () => {
+    const count = selectedMappingFixtureIds().length;
     setSelectedMappingFixtureIds([]);
+    setMessage(count > 0 ? `Cleared ${count} mapped fixture pick${count === 1 ? "" : "s"}.` : "No mapped fixtures are picked.");
   };
 
   const handleDmxAddressCellClick = (cell: DmxAddressCell) => {
@@ -5614,6 +5664,13 @@ export default function App() {
       return Math.abs(local.x) <= halfWidth && Math.abs(local.z) <= halfDepth;
     });
   };
+  const stageObjectFixtureCounts = createMemo<Record<number, number>>(() => {
+    const counts: Record<number, number> = {};
+    for (const object of snapshot().stage_objects) {
+      counts[object.id] = fixturesInsideStageObject(object).length;
+    }
+    return counts;
+  });
 
   const pickFixturesInsideSelectedStageObject = (mode: "replace" | "add") => {
     const object = selectedStageObject();
@@ -6344,6 +6401,7 @@ export default function App() {
   const loadPhase1SampleProject = async () => {
     try {
       const result = await invoke<ProjectLoadResult>("load_phase1_sample_project");
+      setPhase1SmokeReport(null);
       setCurrentProjectPath(null);
       setWorkspaceTab("setup");
       setSetupSubTab("patch");
@@ -6360,6 +6418,7 @@ export default function App() {
   const runPhase1Smoke = async () => {
     try {
       const report = await invoke<Phase1SmokeReport>("run_phase1_smoke");
+      setPhase1SmokeReport(report);
       setCurrentProjectPath(null);
       setWorkspaceTab("control");
       setRawDmxUniverse(0);
@@ -6395,6 +6454,41 @@ export default function App() {
         setMessage(`Loaded preset ${path}`);
       } else {
         setMessage("Preset load canceled.");
+      }
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const fixturePresetGroupLoadMessage = (result: FixturePresetGroupLoadResult, scope: string) =>
+    `Loaded preset ${result.path} to ${scope}: ${result.applied_count} applied, ${result.skipped_count} skipped.`;
+
+  const loadPresetForSelectedGroup = async (groupId: string) => {
+    if (!groupId) {
+      setMessage("Select a group first.");
+      return;
+    }
+    try {
+      const result = await invoke<FixturePresetGroupLoadResult | null>("load_fixture_preset_for_group", { groupId });
+      if (result) {
+        await refreshSnapshot();
+        setMessage(fixturePresetGroupLoadMessage(result, `group ${groupId}`));
+      } else {
+        setMessage("Group preset load canceled.");
+      }
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const loadPresetForAllMatching = async () => {
+    try {
+      const result = await invoke<FixturePresetGroupLoadResult | null>("load_fixture_preset_for_all_matching");
+      if (result) {
+        await refreshSnapshot();
+        setMessage(fixturePresetGroupLoadMessage(result, "matching fixtures"));
+      } else {
+        setMessage("Matching preset load canceled.");
       }
     } catch (error) {
       setMessage(String(error));
@@ -7075,7 +7169,8 @@ export default function App() {
     const serial_baud_rate =
       protocol === "EnttecOpenDmx"
         ? enttecOpenDmxBaudRate
-        : protocol === "EnttecUsbPro" && current.serial_baud_rate === enttecOpenDmxBaudRate
+        : (protocol === "EnttecUsbPro" || protocol === "DmxKingUltraDmx") &&
+            current.serial_baud_rate === enttecOpenDmxBaudRate
           ? enttecUsbProBaudRate
           : current.serial_baud_rate;
     setOutput({ ...current, protocol, target_ip, port, universe, serial_port, serial_baud_rate });
@@ -9035,6 +9130,15 @@ export default function App() {
     setWaveDirectionZ(z);
   };
 
+  const setEffectClockSyncPreset = (beats: number | null) => {
+    setEffectClockSyncBeats(beats);
+    if (beats === null) {
+      return;
+    }
+    const bpm = Number.isFinite(snapshot().clock.bpm) && snapshot().clock.bpm > 0 ? snapshot().clock.bpm : 120;
+    setEffectPeriod(Math.max(10, Math.round((60_000 / bpm) * beats)));
+  };
+
   const waveStageWorldFromPointer = (event: PointerEvent & { currentTarget: SVGElement }) => {
     const svg = event.currentTarget instanceof SVGSVGElement ? event.currentTarget : event.currentTarget.ownerSVGElement;
     if (!svg) {
@@ -9131,9 +9235,10 @@ export default function App() {
     }
   };
 
-  const buildEffectVideoTargets = (includePosition: boolean): VideoEffectTarget[] => {
+  const buildEffectVideoTargets = (includePosition: boolean, forceVideoTarget = false): VideoEffectTarget[] => {
     const videoLayerId = selectedEffectVideoLayerId();
-    if (effectTargetMode() !== "video" || videoLayerId === null) {
+    const shouldIncludeVideoTarget = forceVideoTarget || effectTargetMode() === "video" || effectVideoTargetLinked();
+    if (!shouldIncludeVideoTarget || videoLayerId === null) {
       return [];
     }
     return [
@@ -9147,73 +9252,224 @@ export default function App() {
     ];
   };
 
-  const addEffect = async () => {
+  type EffectRequestDraft =
+    | { effectType: "Lfo"; request: LfoEffectRequest }
+    | { effectType: "PositionWave"; request: PositionWaveEffectRequest };
+
+  const buildEffectRequestFromForm = (): EffectRequestDraft | null => {
     const fixture = selectedFixture();
     const attribute = selectedEffectAttribute();
     const targetMode = effectTargetMode();
     const isVideoTarget = targetMode === "video";
-    if (!isVideoTarget && (!fixture || !attribute)) {
+    const includesVideoTarget = isVideoTarget || effectVideoTargetLinked();
+    if (targetMode === "fixture" && (!fixture || !attribute)) {
       setMessage("Select a fixture and attribute first.");
-      return;
+      return null;
     }
     const targetGroupIds = parseGroupIds(effectTargetGroups());
     if (targetMode === "group" && targetGroupIds.length === 0) {
       setMessage("Enter at least one target group.");
-      return;
+      return null;
+    }
+    if (targetMode === "group" && !attribute) {
+      setMessage("Select a fixture profile attribute before targeting a group.");
+      return null;
     }
     const videoLayerId = selectedEffectVideoLayerId();
-    if (isVideoTarget && videoLayerId === null) {
-      setMessage("Add a video layer before adding a video effect.");
-      return;
+    if (includesVideoTarget && videoLayerId === null) {
+      setMessage(isVideoTarget ? "Add a video layer before adding a video effect." : "Add a video layer before linking video to this effect.");
+      return null;
     }
     const lightAttribute = attribute ?? "";
-
-    try {
-      const videoTargets = buildEffectVideoTargets(effectType() === "PositionWave");
-      const requestBase = {
-        label: `${isVideoTarget ? effectVideoParam() : lightAttribute} ${effectType()}`,
-        fixture_ids: targetMode === "fixture" && fixture ? [fixture.id] : [],
-        target_group_ids: targetMode === "group" ? targetGroupIds : [],
-        attribute: isVideoTarget ? "" : lightAttribute,
-        video_targets: videoTargets,
-        shape: effectShape(),
-        low: effectLow(),
-        high: effectHigh(),
-        phase: effectPhase(),
-        blend_mode: effectBlendMode(),
+    const videoTargets = buildEffectVideoTargets(effectType() === "PositionWave");
+    const clockSyncBeats = effectClockSyncBeats();
+    const labelTarget = !isVideoTarget && videoTargets.length > 0 ? `${lightAttribute} + ${effectVideoParam()}` : isVideoTarget ? effectVideoParam() : lightAttribute;
+    const requestBase = {
+      label: `${labelTarget} ${effectType()}`,
+      fixture_ids: targetMode === "fixture" && fixture ? [fixture.id] : [],
+      target_group_ids: targetMode === "group" ? targetGroupIds : [],
+      attribute: isVideoTarget ? "" : lightAttribute,
+      video_targets: videoTargets,
+      shape: effectShape(),
+      clock_sync: clockSyncBeats === null ? null : { beats: clockSyncBeats },
+      low: effectLow(),
+      high: effectHigh(),
+      phase: effectPhase(),
+      blend_mode: effectBlendMode(),
+    };
+    if (effectType() === "Lfo") {
+      return {
+        effectType: "Lfo",
+        request: {
+          ...requestBase,
+          period_ms: effectPeriod(),
+        },
       };
+    }
+    return {
+      effectType: "PositionWave",
+      request: {
+        ...requestBase,
+        origin: { x: waveOriginX(), y: waveOriginY(), z: waveOriginZ() },
+        direction: { x: waveDirectionX(), y: waveDirectionY(), z: waveDirectionZ() },
+        speed: waveSpeed(),
+        wavelength: waveWavelength(),
+      },
+    };
+  };
+
+  const addEffect = async () => {
+    const draft = buildEffectRequestFromForm();
+    if (!draft) {
+      return;
+    }
+    try {
       const effectId =
-        effectType() === "Lfo"
+        draft.effectType === "Lfo"
           ? await invoke<number>("add_lfo_effect", {
-              request: {
-                ...requestBase,
-                period_ms: effectPeriod(),
-              },
+              request: draft.request,
             })
           : await invoke<number>("add_position_wave_effect", {
-              request: {
-                ...requestBase,
-                origin: { x: waveOriginX(), y: waveOriginY(), z: waveOriginZ() },
-                direction: { x: waveDirectionX(), y: waveDirectionY(), z: waveDirectionZ() },
-                speed: waveSpeed(),
-                wavelength: waveWavelength(),
-              },
+              request: draft.request,
             });
-      setMessage(`Added ${effectType() === "PositionWave" ? "position wave" : "LFO"} effect ${effectId}`);
+      setEditingEffectId(null);
+      setMessage(`Added ${draft.effectType === "PositionWave" ? "position wave" : "LFO"} effect ${effectId}`);
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
     }
   };
 
+  const updateEditingEffect = async () => {
+    const effectId = editingEffectId();
+    if (effectId === null) {
+      await addEffect();
+      return;
+    }
+    const draft = buildEffectRequestFromForm();
+    if (!draft) {
+      return;
+    }
+    try {
+      if (draft.effectType === "Lfo") {
+        await invoke("update_lfo_effect", { effectId, request: draft.request });
+      } else {
+        await invoke("update_position_wave_effect", { effectId, request: draft.request });
+      }
+      setMessage(`Updated effect ${effectId}`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const cancelEffectEdit = () => {
+    const effectId = editingEffectId();
+    setEditingEffectId(null);
+    setMessage(effectId === null ? "No effect draft edit is active." : `Canceled edit for effect ${effectId}.`);
+  };
+
   const removeEffect = async (effectId: number) => {
     try {
       await invoke("remove_effect", { effectId });
+      if (editingEffectId() === effectId) {
+        setEditingEffectId(null);
+      }
       setMessage(`Removed effect ${effectId}`);
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
     }
+  };
+
+  const duplicateEffect = async (effectId: number) => {
+    try {
+      const duplicateId = await invoke<number>("duplicate_effect", { effectId });
+      setMessage(`Duplicated effect ${effectId} as ${duplicateId}`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const useEffectAsDraft = (effect: EffectSummary) => {
+    setEditingEffectId(effect.id);
+    setEffectType(effect.effect_type);
+    setEffectShape(effect.shape);
+    setEffectClockSyncBeats(effect.clock_sync?.beats ?? null);
+    if (effect.period_ms) {
+      setEffectPeriod(effect.period_ms);
+    }
+    setEffectLow(effect.low);
+    setEffectHigh(effect.high);
+    setEffectPhase(effect.phase);
+    setEffectBlendMode(effect.blend_mode);
+    if (effect.origin) {
+      setWaveOriginX(effect.origin.x);
+      setWaveOriginY(effect.origin.y);
+      setWaveOriginZ(effect.origin.z);
+    }
+    if (effect.direction) {
+      setWaveDirectionX(effect.direction.x);
+      setWaveDirectionY(effect.direction.y);
+      setWaveDirectionZ(effect.direction.z);
+    }
+    if (effect.speed !== null && effect.speed !== undefined) {
+      setWaveSpeed(effect.speed);
+    }
+    if (effect.wavelength !== null && effect.wavelength !== undefined) {
+      setWaveWavelength(effect.wavelength);
+    }
+
+    const firstVideoTarget = effect.video_targets[0];
+    const hasLightTarget = effect.fixture_ids.length > 0 || effect.target_group_ids.length > 0;
+    if (firstVideoTarget) {
+      setEffectVideoLayerId(firstVideoTarget.layer_ids[0] ?? null);
+      setEffectVideoParam(firstVideoTarget.param);
+      setEffectVideoLow(firstVideoTarget.low);
+      setEffectVideoHigh(firstVideoTarget.high);
+      if (firstVideoTarget.position) {
+        setEffectVideoPositionX(firstVideoTarget.position.x);
+        setEffectVideoPositionY(firstVideoTarget.position.y);
+        setEffectVideoPositionZ(firstVideoTarget.position.z);
+      }
+    }
+    setEffectVideoTargetLinked(Boolean(firstVideoTarget && hasLightTarget));
+
+    if (!hasLightTarget && firstVideoTarget) {
+      setEffectTargetMode("video");
+      setMessage(`Loaded effect ${effect.id} into the video effect draft.`);
+      return;
+    }
+
+    if (effect.target_group_ids.length > 0) {
+      setEffectTargetMode("group");
+      setEffectTargetGroups(effect.target_group_ids.join(", "));
+      setEffectAttribute(effect.attribute);
+      setMessage(
+        firstVideoTarget
+          ? `Loaded effect ${effect.id} into the mixed group + video draft.`
+          : `Loaded effect ${effect.id} into the group effect draft.`,
+      );
+      return;
+    }
+
+    const fixture = snapshot().fixtures.find((candidate) => candidate.id === effect.fixture_ids[0]);
+    if (fixture) {
+      activateFixture(fixture);
+      setEffectTargetMode("fixture");
+      setEffectAttribute(effect.attribute);
+      setMessage(
+        firstVideoTarget
+          ? `Loaded effect ${effect.id} into the mixed fixture + video draft.`
+          : `Loaded effect ${effect.id} into the fixture effect draft.`,
+      );
+      return;
+    }
+
+    setEffectVideoTargetLinked(false);
+    setEffectAttribute(effect.attribute);
+    setMessage(`Loaded effect ${effect.id} source settings into the draft.`);
   };
 
   const saveEffectPreset = async (effectId: number) => {
@@ -9225,10 +9481,21 @@ export default function App() {
     }
   };
 
-  const effectTargetOverrideError = () => {
+  type EffectTargetOverrideOptions = {
+    forceVideoTarget?: boolean;
+    requireLightTarget?: boolean;
+  };
+
+  const sampleEffectTargetOverrideOptions = (preset: SampleEffectPreset): EffectTargetOverrideOptions =>
+    preset === "shared" ? { forceVideoTarget: true, requireLightTarget: true } : {};
+
+  const effectTargetOverrideError = (options: EffectTargetOverrideOptions = {}) => {
     const targetMode = effectTargetMode();
     const fixture = selectedFixture();
     const attribute = selectedEffectAttribute();
+    if (options.requireLightTarget && targetMode === "video") {
+      return "Select a fixture or group target for this shared lighting + video preset.";
+    }
     if (targetMode === "fixture" && (!fixture || !attribute)) {
       return "Select a fixture and attribute first.";
     }
@@ -9240,20 +9507,25 @@ export default function App() {
         return "Select a fixture profile attribute before targeting a group.";
       }
     }
-    if (targetMode === "video" && selectedEffectVideoLayerId() === null) {
-      return "Add a video layer before loading a video effect preset.";
+    if ((targetMode === "video" || effectVideoTargetLinked() || options.forceVideoTarget) && selectedEffectVideoLayerId() === null) {
+      return targetMode === "video"
+        ? "Add a video layer before loading a video effect preset."
+        : "Add a video layer before loading this lighting + video preset.";
     }
     return "";
   };
 
-  const effectTargetOverrideFromForm = (): EffectTargetOverride | null => {
-    if (effectTargetOverrideError()) {
+  const sampleEffectTargetOverrideError = (preset: SampleEffectPreset) =>
+    effectTargetOverrideError(sampleEffectTargetOverrideOptions(preset));
+
+  const effectTargetOverrideFromForm = (options: EffectTargetOverrideOptions = {}): EffectTargetOverride | null => {
+    if (effectTargetOverrideError(options)) {
       return null;
     }
     const targetMode = effectTargetMode();
     const fixture = selectedFixture();
     const attribute = selectedEffectAttribute();
-    const videoTargets = buildEffectVideoTargets(true);
+    const videoTargets = buildEffectVideoTargets(true, Boolean(options.forceVideoTarget));
     return {
       fixture_ids: targetMode === "fixture" && fixture ? [fixture.id] : [],
       target_group_ids: targetMode === "group" ? parseGroupIds(effectTargetGroups()) : [],
@@ -9291,6 +9563,16 @@ export default function App() {
     return `${op} ${nodeGraphTransformAmount()}`;
   };
 
+  const nodeGraphClockSync = () => {
+    const beats = effectClockSyncBeats();
+    return beats === null ? null : { beats };
+  };
+
+  const nodeGraphSourceDetail = () => {
+    const sync = nodeGraphClockSync();
+    return sync ? `${effectShape()} / ${sync.beats}b` : effectShape();
+  };
+
   const buildNodeGraphFromForm = (): NodeGraphSummary | null => {
     const target = effectTargetOverrideFromForm();
     if (!target) {
@@ -9301,6 +9583,7 @@ export default function App() {
     const label =
       nodeGraphLabel().trim() ||
       `${effectTargetMode() === "video" ? effectVideoParam() : selectedEffectAttribute()} ${nodeGraphSourceLabel()}`;
+    const clockSync = nodeGraphClockSync();
     const sourceNode =
       effectType() === "PositionWave"
         ? {
@@ -9316,7 +9599,7 @@ export default function App() {
               direction: { x: waveDirectionX(), y: waveDirectionY(), z: waveDirectionZ() },
               speed: waveSpeed(),
               wavelength: waveWavelength(),
-              clock_sync: null,
+              clock_sync: clockSync,
               phase: effectPhase(),
             },
             transform: null,
@@ -9331,7 +9614,7 @@ export default function App() {
             lfo: {
               shape: effectShape(),
               period_ms: Math.max(10, Math.round(effectPeriod())),
-              clock_sync: null,
+              clock_sync: clockSync,
               phase: effectPhase(),
               amplitude: 1,
               bias: 0,
@@ -9462,6 +9745,41 @@ export default function App() {
     }
   };
 
+  const loadSampleEffectPreset = async (preset: SampleEffectPreset, useCurrentTarget = false) => {
+    if (useCurrentTarget && !sampleEffectPresetSupportsTarget(preset)) {
+      setMessage("Circle sample creates a Pan/Tilt pair and cannot be retargeted to one current attribute.");
+      return;
+    }
+    const targetOverrideOptions = sampleEffectTargetOverrideOptions(preset);
+    const targetOverride = useCurrentTarget ? effectTargetOverrideFromForm(targetOverrideOptions) : null;
+    if (useCurrentTarget && !targetOverride) {
+      setMessage(sampleEffectTargetOverrideError(preset));
+      return;
+    }
+    try {
+      if (preset === "circle") {
+        const effectIds = await invoke<number[]>("load_sample_effect_bundle", { preset });
+        setMessage(`Loaded sample circle bundle as effects ${effectIds.join(", ")}`);
+        await refreshSnapshot();
+        return;
+      }
+      const effectId = await invoke<number>("load_sample_effect_preset", {
+        preset,
+        targetOverride,
+      });
+      setMessage(
+        useCurrentTarget
+          ? preset === "shared"
+            ? `Loaded sample ${preset} effect as effect ${effectId} for current lighting + video targets`
+            : `Loaded sample ${preset} effect as effect ${effectId} for current target`
+          : `Loaded sample ${preset} effect as effect ${effectId}`,
+      );
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
   const loadEffectPresetForCurrentTarget = async () => {
     const targetOverride = effectTargetOverrideFromForm();
     if (!targetOverride) {
@@ -9537,6 +9855,146 @@ export default function App() {
     }
   };
 
+  const toggleMappingLayer = (layer: NonNullable<ReturnType<typeof mappingLayerToggleFromHotkey>>) => {
+    switch (layer) {
+      case "labels": {
+        const next = !mappingShowLabels();
+        setMappingShowLabels(next);
+        setMessage(`2D mapping labels ${next ? "shown" : "hidden"}.`);
+        return;
+      }
+      case "beams": {
+        const next = !mappingShowBeams();
+        setMappingShowBeams(next);
+        setMessage(`2D mapping beams ${next ? "shown" : "hidden"}.`);
+        return;
+      }
+      case "geometry": {
+        const next = !mappingShowGeometry();
+        setMappingShowGeometry(next);
+        setMessage(`2D mapping geometry ${next ? "shown" : "hidden"}.`);
+        return;
+      }
+      case "projectors": {
+        const next = !mappingShowProjectors();
+        setMappingShowProjectors(next);
+        setMessage(`2D mapping projectors ${next ? "shown" : "hidden"}.`);
+        return;
+      }
+      case "objects": {
+        const next = !mappingShowStageObjects();
+        setMappingShowStageObjects(next);
+        setMessage(`2D mapping stage objects ${next ? "shown" : "hidden"}.`);
+        return;
+      }
+      case "levels": {
+        const next = !mappingShowLevels();
+        setMappingShowLevels(next);
+        setMessage(`2D mapping levels ${next ? "shown" : "hidden"}.`);
+        return;
+      }
+    }
+  };
+
+  const applyMappingViewportAction = (action: NonNullable<ReturnType<typeof mappingViewportActionFromHotkey>>) => {
+    switch (action) {
+      case "fitVisible":
+        fitMappingViewportToVisible();
+        return;
+      case "fitSelection":
+        fitMappingViewportToSelection();
+        return;
+      case "zoomIn":
+        zoomMappingViewport(1);
+        setMessage(`2D mapping zoom ${mappingViewportZoomLabel()}.`);
+        return;
+      case "zoomOut":
+        zoomMappingViewport(-1);
+        setMessage(`2D mapping zoom ${mappingViewportZoomLabel()}.`);
+        return;
+      case "reset":
+        resetMappingViewport();
+        return;
+    }
+  };
+
+  const applyMappingSelectionAction = (action: NonNullable<ReturnType<typeof mappingSelectionActionFromHotkey>>) => {
+    switch (action) {
+      case "layoutLine":
+        void layoutSelectedMappingFixtures("line");
+        return;
+      case "layoutGrid":
+        void layoutSelectedMappingFixtures("grid");
+        return;
+      case "layoutCircle":
+        void layoutSelectedMappingFixtures("circle");
+        return;
+      case "layoutObjectLine":
+        void layoutSelectedFixturesOnStageObject("line");
+        return;
+      case "layoutObjectGrid":
+        void layoutSelectedFixturesOnStageObject("grid");
+        return;
+      case "alignX":
+        void alignSelectedMappingFixtures("x");
+        return;
+      case "alignZ":
+        void alignSelectedMappingFixtures("z");
+        return;
+      case "distributeX":
+        void distributeSelectedMappingFixtures("x");
+        return;
+      case "distributeZ":
+        void distributeSelectedMappingFixtures("z");
+        return;
+      case "mirrorX":
+        void mirrorSelectedMappingFixtures("x");
+        return;
+      case "mirrorZ":
+        void mirrorSelectedMappingFixtures("z");
+        return;
+      case "rotateLeft":
+        void rotateSelectedMappingFixtures(-15);
+        return;
+      case "rotateRight":
+        void rotateSelectedMappingFixtures(15);
+        return;
+      case "flip180":
+        void rotateSelectedMappingFixtures(180);
+        return;
+    }
+  };
+
+  const applyMappingSelectionManagementAction = (
+    action: NonNullable<ReturnType<typeof mappingSelectionManagementActionFromHotkey>>,
+  ) => {
+    switch (action) {
+      case "pickVisible":
+        pickVisibleMappingFixtures();
+        return;
+      case "clearPick":
+        clearMappingFixtureSelection();
+        return;
+      case "pickInside":
+        pickFixturesInsideSelectedStageObject("replace");
+        return;
+      case "addInside":
+        pickFixturesInsideSelectedStageObject("add");
+        return;
+    }
+  };
+
+  const toggleMappingSelectionFlag = (flag: NonNullable<ReturnType<typeof mappingSelectionFlagFromHotkey>>) => {
+    const flagState = selectedMappingFlagState();
+    const enabled =
+      flag === "highlight"
+        ? !flagState.allHighlighted
+        : flag === "solo"
+          ? !flagState.allSoloed
+          : !flagState.allParked;
+    void setMappingSelectionFlag(flag, enabled);
+  };
+
   const handleControlKeyDown = (event: KeyboardEvent) => {
     if (
       event.repeat ||
@@ -9547,6 +10005,16 @@ export default function App() {
     }
 
     if (workspaceTab() === "setup" && setupSubTab() === "mapping") {
+      const selectionManagementAction = mappingSelectionManagementActionFromHotkey(
+        event.code,
+        event.shiftKey,
+        event.ctrlKey || event.metaKey,
+      );
+      if (selectionManagementAction) {
+        event.preventDefault();
+        applyMappingSelectionManagementAction(selectionManagementAction);
+        return;
+      }
       if ((event.ctrlKey || event.metaKey) && event.code === "KeyD") {
         event.preventDefault();
         void duplicateSelectedMappingFixtures();
@@ -9560,6 +10028,36 @@ export default function App() {
         event.preventDefault();
         setMappingStageTool(nextTool);
         setMessage(`2D mapping tool: ${nextTool.toUpperCase()}.`);
+        return;
+      }
+      const layerToggle = mappingLayerToggleFromHotkey(event.code, event.shiftKey);
+      if (layerToggle) {
+        event.preventDefault();
+        toggleMappingLayer(layerToggle);
+        return;
+      }
+      const selectionFlag = mappingSelectionFlagFromHotkey(event.code);
+      if (selectionFlag) {
+        event.preventDefault();
+        toggleMappingSelectionFlag(selectionFlag);
+        return;
+      }
+      const stageObjectSelectionAction = mappingStageObjectSelectionActionFromHotkey(event.code, event.shiftKey);
+      if (stageObjectSelectionAction) {
+        event.preventDefault();
+        applyMappingSelectionManagementAction(stageObjectSelectionAction);
+        return;
+      }
+      const viewportAction = mappingViewportActionFromHotkey(event.code, event.shiftKey);
+      if (viewportAction) {
+        event.preventDefault();
+        applyMappingViewportAction(viewportAction);
+        return;
+      }
+      const selectionAction = mappingSelectionActionFromHotkey(event.code, event.shiftKey);
+      if (selectionAction) {
+        event.preventDefault();
+        applyMappingSelectionAction(selectionAction);
         return;
       }
       const nudgeAmount = normalizedMappingSnapSize() * (event.shiftKey ? 5 : 1);
@@ -9680,83 +10178,29 @@ export default function App() {
 
   return (
     <main class="app">
-      <header class="topbar">
-        <div>
-          <h1>Rayard</h1>
-          <p>Unified lighting and video control: GDTF patch, cues, timeline, effects, DMX output.</p>
-        </div>
-        <div class="status">
-          <span class={snapshot().blackout || snapshot().video.blackout ? "pill danger" : "pill ok"}>
-            {snapshot().blackout && snapshot().video.blackout
-              ? "All BO"
-              : snapshot().blackout
-                ? "DMX BO"
-                : snapshot().video.blackout
-                  ? "Video BO"
-                  : "Live"}
-          </span>
-          <span class="metric">{snapshot().clock.bpm.toFixed(1)} BPM</span>
-          <span class="metric">{Math.round(snapshot().telemetry.last_tick_interval_us / 1000)} ms tick</span>
-          <span class="metric">{Math.round(snapshot().telemetry.tick_jitter_stddev_us)} us jitter</span>
-          <span class="metric">{snapshot().telemetry.last_packet_bytes} bytes</span>
-          <span class="metric">
-            {snapshot().telemetry.last_dmx_send_success_count}/{snapshot().telemetry.last_dmx_output_count} outputs
-          </span>
-          <span
-            class={projectDirty() ? "metric projectFile dirty" : "metric projectFile"}
-            title={currentProjectPath() ?? "Unsaved project"}
-          >
-            {projectFileLabel()}
-          </span>
-          <button onClick={newProject}>New</button>
-          <button onClick={saveProject}>Save</button>
-          <button onClick={saveProjectAs}>Save As</button>
-          <button onClick={loadProject}>Load</button>
-          <button onClick={loadPhase1SampleProject}>Load Sample</button>
-          <button onClick={runPhase1Smoke}>Run Smoke</button>
-        </div>
-      </header>
-
-      <nav class="workspaceTabs" aria-label="Workspace">
-        <button
-          class={workspaceTab() === "setup" ? "active" : ""}
-          onClick={() => setWorkspaceTab("setup")}
-          aria-pressed={workspaceTab() === "setup"}
-        >
-          Setup
-        </button>
-        <button
-          class={workspaceTab() === "control" ? "active" : ""}
-          onClick={() => setWorkspaceTab("control")}
-          aria-pressed={workspaceTab() === "control"}
-        >
-          Control
-        </button>
-        <button
-          class={workspaceTab() === "touch" ? "active" : ""}
-          onClick={() => setWorkspaceTab("touch")}
-          aria-pressed={workspaceTab() === "touch"}
-        >
-          Touch
-        </button>
-      </nav>
-
-      <Show when={workspaceTab() === "setup"}>
-        <nav class="setupModeTabs" aria-label="Setup mode">
-          <For each={setupSubTabs}>
-            {(tab) => (
-              <button
-                class={setupSubTab() === tab.id ? "active" : ""}
-                title={tab.description}
-                onClick={() => selectSetupMode(tab.id)}
-                aria-pressed={setupSubTab() === tab.id}
-              >
-                {tab.label}
-              </button>
-            )}
-          </For>
-        </nav>
-      </Show>
+      <WorkspaceChrome
+        workspaceTab={workspaceTab()}
+        setupSubTab={setupSubTab()}
+        blackout={snapshot().blackout}
+        videoBlackout={snapshot().video.blackout}
+        bpm={snapshot().clock.bpm}
+        tickMs={Math.round(snapshot().telemetry.last_tick_interval_us / 1000)}
+        jitterUs={Math.round(snapshot().telemetry.tick_jitter_stddev_us)}
+        packetBytes={snapshot().telemetry.last_packet_bytes}
+        dmxSuccessCount={snapshot().telemetry.last_dmx_send_success_count}
+        dmxOutputCount={snapshot().telemetry.last_dmx_output_count}
+        projectLabel={projectFileLabel()}
+        projectDirty={projectDirty()}
+        currentProjectPath={currentProjectPath()}
+        onWorkspaceTab={setWorkspaceTab}
+        onSetupSubTab={selectSetupMode}
+        onNewProject={newProject}
+        onSaveProject={saveProject}
+        onSaveProjectAs={saveProjectAs}
+        onLoadProject={loadProject}
+        onLoadSample={loadPhase1SampleProject}
+        onRunSmoke={runPhase1Smoke}
+      />
 
       <section class={`layout ${touchLayoutClass()}`}>
         <section class="panel liveControlPanel controlPanel">
@@ -9854,142 +10298,30 @@ export default function App() {
                 {visualizerStageObjects2d().length} ref(s)
               </span>
             </div>
-            <svg class="visualizerStage liveStage" viewBox={`0 0 ${stageViewBoxSize} ${stageViewBoxSize}`}>
-              <defs>
-                <pattern id="live-stage-grid" width="10" height="10" patternUnits="userSpaceOnUse">
-                  <path d="M 10 0 L 0 0 0 10" />
-                </pattern>
-              </defs>
-              <rect class="stageFloor" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
-              <rect class="stageGrid" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
-              <line class="stageAxis2d" x1={stageOrigin2d().x} y1="0" x2={stageOrigin2d().x} y2={stageViewBoxSize} />
-              <line class="stageAxis2d" x1="0" y1={stageOrigin2d().z} x2={stageViewBoxSize} y2={stageOrigin2d().z} />
-              <For each={visualizerStageObjects2d()}>
-                {(object) => (
-                  <g
-                    class={`${stageObjectClass(object)} liveStageObject`}
-                    transform={`translate(${object.x} ${object.z}) rotate(${object.rotationDeg})`}
-                  >
-                    <rect
-                      x={-object.width / 2}
-                      y={-object.depth / 2}
-                      width={object.width}
-                      height={object.depth}
-                      fill={object.color}
-                    />
-                    <line x1={-object.width / 2} y1="0" x2={object.width / 2} y2="0" />
-                    <line x1="0" y1={-object.depth / 2} x2="0" y2={object.depth / 2} />
-                    <text x={-object.width / 2 + 1} y={-object.depth / 2 - 1}>
-                      {object.label}
-                    </text>
-                  </g>
-                )}
-              </For>
-              <For each={visualizerVideoSurfaces2d()}>
-                {(surface) => (
-                  <g
-                    class={[
-                      "stageVideoSurface2d",
-                      selectedVideoOutputId() === surface.id ? "selected" : "",
-                      surface.active ? "" : "inactive",
-                    ].filter(Boolean).join(" ")}
-                    transform={`translate(${surface.x} ${surface.z}) rotate(${surface.rotationDeg})`}
-                    opacity={Math.max(0.22, surface.opacity)}
-                    onPointerDown={(event) => {
-                      event.stopPropagation();
-                      setSelectedVideoOutputId(surface.id);
-                    }}
-                  >
-                    <rect
-                      class="stageVideoSurfaceShape"
-                      x={-surface.width / 2}
-                      y={-surface.height / 2}
-                      width={surface.width}
-                      height={surface.height}
-                    />
-                    <line x1={-surface.width / 2} y1="0" x2={surface.width / 2} y2="0" />
-                    <line x1="0" y1={-surface.height / 2} x2="0" y2={surface.height / 2} />
-                    <text x={-surface.width / 2 + 1.2} y={-surface.height / 2 - 1.6}>
-                      {surface.label}
-                    </text>
-                  </g>
-                )}
-              </For>
-              <For each={visualizerFixtures()}>
-                {(fixture) => (
-                  <polygon
-                    class="stageBeam"
-                    points={fixture.beamPoints}
-                    fill={fixture.color}
-                    opacity={Math.max(0.08, fixture.intensity * 0.55)}
-                  />
-                )}
-              </For>
-              <For each={visualizerFixtures()}>
-                {(fixture) => {
-                  const className = () => [
-                    "stageFixture",
-                    "stageFixtureBlock",
-                    `kind-${fixture.visualKind}`,
-                    selectedFixtureId() === fixture.id ? "selected picked" : "",
-                    selectedFixtureGroupFilter() && fixture.inGroupFilter ? "groupMatch" : "",
-                    selectedFixtureTypeFilter() && fixture.typeKey === selectedFixtureTypeFilter() ? "typeMatch" : "",
-                    fixture.highlighted ? "highlighted" : "",
-                    fixture.soloed ? "soloed" : "",
-                    fixture.parked ? "parked" : "",
-                  ].filter(Boolean).join(" ");
-                  return (
-                    <g
-                      class={className()}
-                      transform={`translate(${fixture.x} ${fixture.z}) rotate(${fixture.yaw})`}
-                      onPointerDown={(event) => {
-                        event.stopPropagation();
-                        const patchedFixture = snapshot().fixtures.find((candidate) => candidate.id === fixture.id);
-                        if (patchedFixture) {
-                          activateFixture(patchedFixture);
-                        }
-                      }}
-                    >
-                      <Show
-                        when={fixture.visualKind === "bar" || fixture.visualKind === "panel"}
-                        fallback={
-                          <Show
-                            when={fixture.visualKind === "laser"}
-                            fallback={
-                              <circle
-                                class="stageFixtureShape"
-                                cx="0"
-                                cy="0"
-                                r={Math.max(fixture.width, fixture.height) / 2 + fixture.intensity * 1.5}
-                                fill={fixture.color}
-                              />
-                            }
-                          >
-                            <polygon
-                              class="stageFixtureShape"
-                              points={`0,${-fixture.height / 2} ${fixture.width / 2},${fixture.height / 2} ${-fixture.width / 2},${fixture.height / 2}`}
-                              fill={fixture.color}
-                            />
-                          </Show>
-                        }
-                      >
-                        <rect
-                          class="stageFixtureShape"
-                          x={-fixture.width / 2}
-                          y={-fixture.height / 2}
-                          width={fixture.width}
-                          height={fixture.height}
-                          fill={fixture.color}
-                        />
-                      </Show>
-                      <line class="stageFixtureCenterLine" x1="0" y1="0" x2="0" y2="-7" />
-                      <circle class="stageFixtureLaserMark" cx="0" cy="-7" r="0.9" />
-                      <title>{`${fixture.label} / ${fixture.dmxLabel} / ${fixture.groupLabel}`}</title>
-                    </g>
-                  );
-                }}
-              </For>
-            </svg>
+            <StagePreview2D
+              className="liveStage"
+              patternId="live-stage-grid"
+              stageOrigin={stageOrigin2d()}
+              fixtures={visualizerFixtures()}
+              videoSurfaces={visualizerVideoSurfaces2d()}
+              stageObjects={visualizerStageObjects2d()}
+              selectedFixtureId={selectedFixtureId()}
+              selectedVideoOutputId={selectedVideoOutputId()}
+              selectedFixtureGroupFilter={selectedFixtureGroupFilter()}
+              selectedFixtureTypeFilter={selectedFixtureTypeFilter()}
+              stageObjectClassName="liveStageObject"
+              surfaceMinOpacity={0.22}
+              beamMinOpacity={0.08}
+              beamIntensityScale={0.55}
+              fixtureRadiusIntensityScale={1.5}
+              onSelectVideoOutput={setSelectedVideoOutputId}
+              onSelectFixture={(fixtureId) => {
+                const patchedFixture = snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
+                if (patchedFixture) {
+                  activateFixture(patchedFixture);
+                }
+              }}
+            />
             <div class="liveStageSelectionBar">
               <Show
                 when={selectedFixture()}
@@ -10302,141 +10634,29 @@ export default function App() {
               {visualizerStageObjects2d().length} ref(s)
             </span>
           </div>
-          <svg class="visualizerStage touchStage" viewBox={`0 0 ${stageViewBoxSize} ${stageViewBoxSize}`}>
-            <defs>
-              <pattern id="touch-stage-grid" width="10" height="10" patternUnits="userSpaceOnUse">
-                <path d="M 10 0 L 0 0 0 10" />
-              </pattern>
-            </defs>
-            <rect class="stageFloor" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
-            <rect class="stageGrid" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
-            <line class="stageAxis2d" x1={stageOrigin2d().x} y1="0" x2={stageOrigin2d().x} y2={stageViewBoxSize} />
-            <line class="stageAxis2d" x1="0" y1={stageOrigin2d().z} x2={stageViewBoxSize} y2={stageOrigin2d().z} />
-            <For each={visualizerStageObjects2d()}>
-              {(object) => (
-                <g
-                  class={`${stageObjectClass(object)} touchStageObject`}
-                  transform={`translate(${object.x} ${object.z}) rotate(${object.rotationDeg})`}
-                >
-                  <rect
-                    x={-object.width / 2}
-                    y={-object.depth / 2}
-                    width={object.width}
-                    height={object.depth}
-                    fill={object.color}
-                  />
-                  <line x1={-object.width / 2} y1="0" x2={object.width / 2} y2="0" />
-                  <line x1="0" y1={-object.depth / 2} x2="0" y2={object.depth / 2} />
-                  <text x={-object.width / 2 + 1} y={-object.depth / 2 - 1}>
-                    {object.label}
-                  </text>
-                </g>
-              )}
-            </For>
-            <For each={visualizerVideoSurfaces2d()}>
-              {(surface) => (
-                <g
-                  class={[
-                    "stageVideoSurface2d",
-                    selectedVideoOutputId() === surface.id ? "selected" : "",
-                    surface.active ? "" : "inactive",
-                  ].filter(Boolean).join(" ")}
-                  transform={`translate(${surface.x} ${surface.z}) rotate(${surface.rotationDeg})`}
-                  opacity={Math.max(0.2, surface.opacity)}
-                  onPointerDown={(event) => {
-                    event.stopPropagation();
-                    setSelectedVideoOutputId(surface.id);
-                  }}
-                >
-                  <rect
-                    class="stageVideoSurfaceShape"
-                    x={-surface.width / 2}
-                    y={-surface.height / 2}
-                    width={surface.width}
-                    height={surface.height}
-                  />
-                  <line x1={-surface.width / 2} y1="0" x2={surface.width / 2} y2="0" />
-                  <line x1="0" y1={-surface.height / 2} x2="0" y2={surface.height / 2} />
-                  <text x={-surface.width / 2 + 1.2} y={-surface.height / 2 - 1.6}>
-                    {surface.label}
-                  </text>
-                </g>
-              )}
-            </For>
-            <For each={visualizerFixtures()}>
-              {(fixture) => (
-                <polygon
-                  class="stageBeam"
-                  points={fixture.beamPoints}
-                  fill={fixture.color}
-                  opacity={Math.max(0.06, fixture.intensity * 0.48)}
-                />
-              )}
-            </For>
-            <For each={visualizerFixtures()}>
-              {(fixture) => {
-                const className = () => [
-                  "stageFixture",
-                  "stageFixtureBlock",
-                  `kind-${fixture.visualKind}`,
-                  selectedFixtureId() === fixture.id ? "selected picked" : "",
-                  selectedFixtureGroupFilter() && fixture.inGroupFilter ? "groupMatch" : "",
-                  fixture.highlighted ? "highlighted" : "",
-                  fixture.soloed ? "soloed" : "",
-                  fixture.parked ? "parked" : "",
-                ].filter(Boolean).join(" ");
-                return (
-                  <g
-                    class={className()}
-                    transform={`translate(${fixture.x} ${fixture.z}) rotate(${fixture.yaw})`}
-                    onPointerDown={(event) => {
-                      event.stopPropagation();
-                      const patchedFixture = snapshot().fixtures.find((candidate) => candidate.id === fixture.id);
-                      if (patchedFixture) {
-                        selectFixture(patchedFixture);
-                      }
-                    }}
-                  >
-                    <Show
-                      when={fixture.visualKind === "bar" || fixture.visualKind === "panel"}
-                      fallback={
-                        <Show
-                          when={fixture.visualKind === "laser"}
-                          fallback={
-                            <circle
-                              class="stageFixtureShape"
-                              cx="0"
-                              cy="0"
-                              r={Math.max(fixture.width, fixture.height) / 2 + fixture.intensity * 1.2}
-                              fill={fixture.color}
-                            />
-                          }
-                        >
-                          <polygon
-                            class="stageFixtureShape"
-                            points={`0,${-fixture.height / 2} ${fixture.width / 2},${fixture.height / 2} ${-fixture.width / 2},${fixture.height / 2}`}
-                            fill={fixture.color}
-                          />
-                        </Show>
-                      }
-                    >
-                      <rect
-                        class="stageFixtureShape"
-                        x={-fixture.width / 2}
-                        y={-fixture.height / 2}
-                        width={fixture.width}
-                        height={fixture.height}
-                        fill={fixture.color}
-                      />
-                    </Show>
-                    <line class="stageFixtureCenterLine" x1="0" y1="0" x2="0" y2="-7" />
-                    <circle class="stageFixtureLaserMark" cx="0" cy="-7" r="0.9" />
-                    <title>{`${fixture.label} / ${fixture.dmxLabel} / ${fixture.groupLabel}`}</title>
-                  </g>
-                );
-              }}
-            </For>
-          </svg>
+          <StagePreview2D
+            className="touchStage"
+            patternId="touch-stage-grid"
+            stageOrigin={stageOrigin2d()}
+            fixtures={visualizerFixtures()}
+            videoSurfaces={visualizerVideoSurfaces2d()}
+            stageObjects={visualizerStageObjects2d()}
+            selectedFixtureId={selectedFixtureId()}
+            selectedVideoOutputId={selectedVideoOutputId()}
+            selectedFixtureGroupFilter={selectedFixtureGroupFilter()}
+            stageObjectClassName="touchStageObject"
+            surfaceMinOpacity={0.2}
+            beamMinOpacity={0.06}
+            beamIntensityScale={0.48}
+            fixtureRadiusIntensityScale={1.2}
+            onSelectVideoOutput={setSelectedVideoOutputId}
+            onSelectFixture={(fixtureId) => {
+              const patchedFixture = snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
+              if (patchedFixture) {
+                selectFixture(patchedFixture);
+              }
+            }}
+          />
           <div class="touchStageSelectionBar">
             <Show
               when={selectedFixture()}
@@ -10535,986 +10755,200 @@ export default function App() {
             </For>
           </div>
         </section>
-        <section class="panel touchPanel touchFixturePanel">
-          <div class="panelHeader">
-            <h2>Touch Fixtures</h2>
-            <span>{selectedFixtureGroupFilter() ? `Group ${selectedFixtureGroupFilter()}` : selectedFixture()?.label ?? "No selection"}</span>
-          </div>
-          <div class="touchGroupScroller">
-            <button
-              class={!selectedFixtureGroupFilter() ? "groupChip active" : "groupChip"}
-              onClick={() => selectFixtureGroupFilter(null)}
-            >
-              All
-              <span>{snapshot().fixtures.length}</span>
-            </button>
-            <For each={fixtureGroupRows()}>
-              {(group) => (
-                <button
-                  class={selectedFixtureGroupFilter() === group.groupId ? "groupChip active" : "groupChip"}
-                  onClick={() => selectFixtureGroupFilter(group.groupId)}
-                >
-                  {group.groupId}
-                  <span>{group.count}</span>
-                </button>
-              )}
-            </For>
-          </div>
-          <div class="touchFixtureScroller">
-            <For each={filteredFixtures()}>
-              {(fixture) => (
-                <button
-                  class={fixture.id === selectedFixtureId() ? "fixture selected" : "fixture"}
-                  onClick={() => selectFixture(fixture)}
-                >
-                  <strong>{fixture.label}</strong>
-                  <span>U{fixture.universe} A{fixture.address}</span>
-                  <small>{fixture.group_ids.join(", ") || fixture.mode_name}</small>
-                </button>
-              )}
-            </For>
-            <Show when={filteredFixtures().length === 0}>
-              <p class="empty">No fixtures.</p>
-            </Show>
-          </div>
-          <Show when={selectedFixture()}>
-            {(fixture) => (
-              <div class="touchFixtureActions">
-                <div class="touchGuardRow">
-                  <Show
-                    when={selectedFixtureGroupFilter()}
-                    fallback={
-                      <>
-                        <button onClick={() => void setFixtureHighlight(fixture().id, !fixture().highlighted)}>
-                          {fixture().highlighted ? "Clear Highlight" : "Highlight"}
-                        </button>
-                        <button onClick={() => void setFixtureSolo(fixture().id, !fixture().soloed)}>
-                          {fixture().soloed ? "Clear Solo" : "Solo"}
-                        </button>
-                        <button onClick={() => void setFixturePark(fixture().id, !fixture().parked)}>
-                          {fixture().parked ? "Clear Park" : "Park"}
-                        </button>
-                        <button disabled={!globalFixtureFlagState().anyFlagged} onClick={() => void clearFixtureFlags("all")}>
-                          Clear Flags
-                        </button>
-                      </>
-                    }
-                  >
-                    {(groupId) => (
-                      <>
-                        <button
-                          disabled={selectedGroupFlagState().count === 0}
-                          onClick={() => void setGroupHighlight(groupId(), !selectedGroupFlagState().anyHighlighted)}
-                        >
-                          {selectedGroupFlagState().anyHighlighted ? "Clear Group Highlight" : "Group Highlight"}
-                        </button>
-                        <button
-                          disabled={selectedGroupFlagState().count === 0}
-                          onClick={() => void setGroupSolo(groupId(), !selectedGroupFlagState().anySoloed)}
-                        >
-                          {selectedGroupFlagState().anySoloed ? "Clear Group Solo" : "Group Solo"}
-                        </button>
-                        <button
-                          disabled={selectedGroupFlagState().count === 0}
-                          onClick={() => void setGroupPark(groupId(), !selectedGroupFlagState().anyParked)}
-                        >
-                          {selectedGroupFlagState().anyParked ? "Clear Group Park" : "Group Park"}
-                        </button>
-                        <button disabled={!globalFixtureFlagState().anyFlagged} onClick={() => void clearFixtureFlags("all")}>
-                          Clear Flags
-                        </button>
-                      </>
-                    )}
-                  </Show>
-                </div>
-                <nav class="touchAttributeCategoryRail" aria-label="Touch attribute category">
-                  <For each={controlCategoryRows()}>
-                    {(category) => (
-                      <button
-                        class={activeControlCategory() === category.id ? "active" : ""}
-                        disabled={!category.hasVisual && category.count === 0}
-                        onClick={() => setControlCategory(category.id)}
-                        aria-pressed={activeControlCategory() === category.id}
-                      >
-                        <span>{category.label}</span>
-                        <small>{category.count}</small>
-                      </button>
-                    )}
-                  </For>
-                </nav>
-                <Show when={showDimmerPanel() ? selectedDimmerControl() : undefined}>
-                  {(dimmer) => (
-                    <>
-                      <label class="touchSlider">
-                        Dimmer
-                        <input
-                          type="range"
-                          min={normalizeLimitRange(selectedFixtureLimits().dimmer_min, selectedFixtureLimits().dimmer_max).min}
-                          max={normalizeLimitRange(selectedFixtureLimits().dimmer_min, selectedFixtureLimits().dimmer_max).max}
-                          value={dimmer().value}
-                          onInput={(event) => setDimmerValue(Number(event.currentTarget.value))}
-                        />
-                        <strong>{formatDmxPercent(dimmer().value)}</strong>
-                      </label>
-                      <div class="touchDimmerQuickRow">
-                        <button onClick={() => setTouchDimmerQuickLevel("out")} disabled={!selectedTouchDimmerTarget()}>
-                          Out
-                        </button>
-                        <button onClick={() => setTouchDimmerQuickLevel("half")} disabled={!selectedTouchDimmerTarget()}>
-                          Half
-                        </button>
-                        <button class="primary" onClick={() => setTouchDimmerQuickLevel("full")} disabled={!selectedTouchDimmerTarget()}>
-                          Full
-                        </button>
-                        <button
-                          class={touchDimmerQuickActive() ? "momentary active" : "momentary"}
-                          disabled={!selectedTouchDimmerTarget()}
-                          onPointerDown={startTouchDimmerFlash}
-                          onPointerUp={endTouchDimmerFlash}
-                          onPointerCancel={endTouchDimmerFlash}
-                          onPointerLeave={endTouchDimmerFlash}
-                          onBlur={endTouchDimmerFlash}
-                          onKeyDown={handleTouchDimmerFlashKeyDown}
-                          onKeyUp={handleTouchDimmerFlashKeyUp}
-                        >
-                          Flash
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </Show>
-                <Show when={showPositionPad() ? selectedPositionControls() : undefined}>
-                  {(positionControls) => (
-                    <div
-                      class="panTiltPad touchPanTiltPad"
-                      role="slider"
-                      aria-label="Touch pan tilt pad"
-                      aria-valuetext={`Pan ${positionControls().panValue}, Tilt ${positionControls().tiltValue}`}
-                      onPointerDown={(event) => {
-                        event.currentTarget.setPointerCapture(event.pointerId);
-                        void setPanTiltFromPointer(event);
-                      }}
-                      onPointerMove={(event) => {
-                        if (event.buttons === 1) {
-                          void setPanTiltFromPointer(event);
-                        }
-                      }}
-                      onPointerUp={(event) => event.currentTarget.releasePointerCapture(event.pointerId)}
-                    >
-                      <b class="panTiltLimitWindow" style={selectedFixtureLimitOverlayStyle()} />
-                      <i
-                        style={{
-                          left: `${(positionControls().panValue / 65535) * 100}%`,
-                          top: `${100 - (positionControls().tiltValue / 65535) * 100}%`,
-                        }}
-                      />
-                    </div>
-                  )}
-                </Show>
-                <Show when={showColorPad() ? selectedColorControls() : undefined}>
-                  <div class="touchColorGrid">
-                    <For each={defaultColorPalette.slice(0, 8)}>
-                      {(color) => (
-                        <button
-                          class="colorSwatch"
-                          style={{ "background-color": color }}
-                          title={color}
-                          onClick={() => void setFixtureColor(color)}
-                          aria-label={`Set color ${color}`}
-                        />
-                      )}
-                    </For>
-                  </div>
-                </Show>
-                <Show when={!showDimmerPanel() && !showPositionPad() && !showColorPad() && visibleControls().length > 0}>
-                  <div class="touchGenericAttributeGrid">
-                    <For each={visibleControls()}>
-                      {(control) => (
-                        <label class="touchGenericAttributeRow">
-                          <span>
-                            <strong>{control.channel_name || control.attribute}</strong>
-                            <small>{control.attribute}</small>
-                          </span>
-                          <input
-                            type="range"
-                            min="0"
-                            max="65535"
-                            value={currentControlValue(control)}
-                            onInput={(event) => setControlAttributeValue(control, Number(event.currentTarget.value))}
-                          />
-                          <output>{formatShortDmxPercent(currentControlValue(control))}</output>
-                        </label>
-                      )}
-                    </For>
-                  </div>
-                </Show>
-                <Show when={selectedFixture() && visibleControls().length === 0}>
-                  <p class="empty">No {activeControlCategoryLabel().toLowerCase()} controls.</p>
-                </Show>
-              </div>
+        <TouchFixturePanel
+          selectedGroupId={selectedFixtureGroupFilter()}
+          selectedFixture={selectedFixture() ?? null}
+          groups={fixtureGroupRows()}
+          fixtures={filteredFixtures()}
+          totalFixtureCount={snapshot().fixtures.length}
+          selectedFixtureId={selectedFixtureId()}
+          groupFlagState={selectedGroupFlagState()}
+          globalAnyFlagged={globalFixtureFlagState().anyFlagged}
+          categories={controlCategoryRows()}
+          activeCategory={activeControlCategory()}
+          activeCategoryLabel={activeControlCategoryLabel()}
+          visibleControlCount={visibleControls().length}
+          onSelectGroup={selectFixtureGroupFilter}
+          onSelectFixture={selectFixture}
+          onSetFixtureHighlight={setFixtureHighlight}
+          onSetFixtureSolo={setFixtureSolo}
+          onSetFixturePark={setFixturePark}
+          onSetGroupHighlight={setGroupHighlight}
+          onSetGroupSolo={setGroupSolo}
+          onSetGroupPark={setGroupPark}
+          onClearFixtureFlags={() => clearFixtureFlags("all")}
+          onCategory={setControlCategory}
+        >
+          <Show when={showDimmerPanel() ? selectedDimmerControl() : undefined}>
+            {(dimmer) => (
+              <TouchDimmerControlPanel
+                value={dimmer().value}
+                sliderMin={dimmerSliderRange().min}
+                sliderMax={dimmerSliderRange().max}
+                canControl={Boolean(selectedTouchDimmerTarget())}
+                flashActive={touchDimmerQuickActive()}
+                formatDmxPercent={formatDmxPercent}
+                onSetValue={setDimmerValue}
+                onQuickLevel={setTouchDimmerQuickLevel}
+                onFlashStart={startTouchDimmerFlash}
+                onFlashEnd={endTouchDimmerFlash}
+                onFlashKeyDown={handleTouchDimmerFlashKeyDown}
+                onFlashKeyUp={handleTouchDimmerFlashKeyUp}
+              />
             )}
           </Show>
-        </section>
-        <section class="panel touchPanel touchRemotePanel">
-          <div class="panelHeader">
-            <h2>Touch Remote</h2>
-            <span>{remoteRunning() ? "Running" : "Stopped"}</span>
-          </div>
-          <div class="touchRemoteUrl">
-            <span>Remote URL</span>
-            <strong>{remoteUrl()}</strong>
-          </div>
-          <div class="split">
-            <label>
-              Bind IP
-              <input value={remoteBindIp()} onInput={(event) => setRemoteBindIp(event.currentTarget.value)} />
-            </label>
-            <label>
-              Port
-              <input
-                type="number"
-                min="1"
-                value={remotePort()}
-                onInput={(event) => setRemotePort(Number(event.currentTarget.value))}
+          <Show when={showPositionPad() ? selectedPositionControls() : undefined}>
+            {(positionControls) => (
+              <TouchPanTiltPad
+                panValue={positionControls().panValue}
+                tiltValue={positionControls().tiltValue}
+                limitOverlayStyle={selectedFixtureLimitOverlayStyle()}
+                onPointerValue={setPanTiltFromPointer}
               />
-            </label>
-          </div>
-          <div class="touchGuardRow">
-            <button class="primary" onClick={startRemoteControl} disabled={remoteRunning()}>
-              Start Remote
-            </button>
-            <button onClick={stopRemoteControl} disabled={!remoteRunning()}>
-              Stop Remote
-            </button>
-          </div>
-          <div class="touchMasterGrid compact">
-            <label>
-              BPM
-              <input
-                type="number"
-                min="20"
-                max="300"
-                step="0.1"
-                value={bpmDraft()}
-                onInput={(event) => setBpmDraft(event.currentTarget.value)}
-              />
-            </label>
-            <button onClick={applyBpm}>Set BPM</button>
-            <button class="primary" onClick={tapBpm}>Tap</button>
-          </div>
-          <Show when={snapshot().submasters.length > 0}>
-            <div class="submasterList">
-              <h3>Submasters</h3>
-              <For each={snapshot().submasters}>
-                {(submaster) => (
-                  <label class="submasterControl">
-                    <span>{submaster.label}</span>
-                    <input
-                      type="range"
-                      min="0"
-                      max="1"
-                      step="0.01"
-                      value={submaster.level}
-                      onInput={(event) => void setGroupSubmaster(submaster.group_id, Number(event.currentTarget.value))}
-                    />
-                    <strong>{Math.round(submaster.level * 100)}%</strong>
-                  </label>
-                )}
-              </For>
-            </div>
+            )}
           </Show>
-        </section>
-        <section class="panel touchPanel touchVideoPanel">
-          <div class="panelHeader">
-            <h2>Touch Video</h2>
-            <span>{snapshot().video.layers.length} layer(s)</span>
-          </div>
-          <Show when={snapshot().video.layers.length > 0} fallback={<p class="empty">No video layers.</p>}>
-            <div class="touchVideoDeckGrid">
-              <For each={snapshot().video.layers}>
-                {(layer) => {
-                  const durationMs = () => layer.source.metadata?.duration_ms ?? null;
-                  const progress = () => {
-                    const duration = durationMs();
-                    return duration && duration > 0
-                      ? clampRange((layer.state.position_ms / duration) * 100, 0, 100)
-                      : 0;
-                  };
-                  const seekTo = (positionMs: number) =>
-                    setVideoLayerState(layer.id, {
-                      ...layer.state,
-                      position_ms: durationMs()
-                        ? Math.min(durationMs()!, Math.max(0, Math.round(positionMs)))
-                        : Math.max(0, Math.round(positionMs)),
-                    });
-                  return (
-                    <div class={layer.state.enabled ? "touchVideoDeck active" : "touchVideoDeck"}>
-                      <div class="touchVideoHeader">
-                        <div>
-                          <strong>{layer.label}</strong>
-                          <span>{layer.source.path ?? layer.source.name ?? layer.source.kind}</span>
-                        </div>
-                        <small>{formatVideoTime(layer.state.position_ms, durationMs())}</small>
-                      </div>
-                      <div class="touchVideoProgress">
-                        <span style={{ width: `${progress()}%` }} />
-                      </div>
-                      <div class="touchTransportRow">
-                        <button
-                          class={layer.state.playing ? "primary" : ""}
-                          onClick={() =>
-                            void setVideoLayerState(layer.id, {
-                              ...layer.state,
-                              playing: !layer.state.playing,
-                            })
-                          }
-                        >
-                          {layer.state.playing ? "Pause" : "Play"}
-                        </button>
-                        <button
-                          onClick={() =>
-                            void setVideoLayerState(layer.id, {
-                              ...layer.state,
-                              position_ms: layer.state.loop_enabled ? layer.state.loop_start_ms : 0,
-                            })
-                          }
-                        >
-                          Cue In
-                        </button>
-                        <button
-                          onClick={() =>
-                            void setVideoLayerState(layer.id, {
-                              ...layer.state,
-                              speed: -Math.abs(layer.state.speed || 1),
-                              playing: true,
-                            })
-                          }
-                        >
-                          Rev
-                        </button>
-                        <button
-                          onClick={() =>
-                            void setVideoLayerState(layer.id, {
-                              ...layer.state,
-                              speed: Math.abs(layer.state.speed || 1),
-                              playing: true,
-                            })
-                          }
-                        >
-                          Fwd
-                        </button>
-                      </div>
-                      <label class="touchSlider">
-                        Opacity
-                        <input
-                          type="range"
-                          min="0"
-                          max="1"
-                          step="0.01"
-                          value={layer.state.opacity}
-                          onInput={(event) =>
-                            void setVideoLayerState(layer.id, {
-                              ...layer.state,
-                              opacity: Number(event.currentTarget.value),
-                            })
-                          }
-                        />
-                        <strong>{Math.round(layer.state.opacity * 100)}%</strong>
-                      </label>
-                      <label class="touchSlider">
-                        Speed
-                        <input
-                          type="range"
-                          min="-4"
-                          max="4"
-                          step="0.25"
-                          value={layer.state.speed}
-                          onChange={(event) =>
-                            void setVideoLayerState(layer.id, {
-                              ...layer.state,
-                              speed: Number(event.currentTarget.value),
-                            })
-                          }
-                        />
-                        <strong>{layer.state.speed.toFixed(2)}x</strong>
-                      </label>
-                      <Show when={durationMs()}>
-                        {(duration) => (
-                          <label class="touchSlider">
-                            Seek
-                            <input
-                              type="range"
-                              min="0"
-                              max={duration()}
-                              step="1"
-                              value={layer.state.position_ms}
-                              onChange={(event) => void seekTo(Number(event.currentTarget.value))}
-                            />
-                            <strong>{Math.round(progress())}%</strong>
-                          </label>
-                        )}
-                      </Show>
-                      <div class="touchTransportRow">
-                        <button
-                          onClick={() =>
-                            void setVideoLayerState(layer.id, {
-                              ...layer.state,
-                              enabled: !layer.state.enabled,
-                            })
-                          }
-                        >
-                          {layer.state.enabled ? "Disable" : "Enable"}
-                        </button>
-                        <button
-                          class={layer.state.solo ? "primary" : ""}
-                          onClick={() =>
-                            void setVideoLayerState(layer.id, {
-                              ...layer.state,
-                              solo: !layer.state.solo,
-                            })
-                          }
-                        >
-                          Solo
-                        </button>
-                        <button
-                          class={layer.state.loop_enabled ? "primary" : ""}
-                          onClick={() =>
-                            void setVideoLayerState(layer.id, {
-                              ...layer.state,
-                              loop_enabled: !layer.state.loop_enabled,
-                            })
-                          }
-                        >
-                          Loop
-                        </button>
-                        <button onClick={() => void addVideoCuePoint(layer.id)}>
-                          Add Cue
-                        </button>
-                      </div>
-                      <Show when={layer.state.cue_points_ms.length > 0}>
-                        <div class="touchCuePointRow">
-                          <For each={layer.state.cue_points_ms.slice(0, 6)}>
-                            {(cuePoint, cuePointIndex) => (
-                              <button onClick={() => void jumpVideoCuePoint(layer.id, cuePointIndex())}>
-                                {formatDuration(cuePoint) ?? `${cuePoint}ms`}
-                              </button>
-                            )}
-                          </For>
-                        </div>
-                      </Show>
-                    </div>
-                  );
-                }}
-              </For>
-            </div>
+          <Show when={showColorPad() ? selectedColorControls() : undefined}>
+            <TouchColorPalettePanel colors={defaultColorPalette.slice(0, 8)} onSetColor={setFixtureColor} />
           </Show>
-        </section>
+          <Show when={!showDimmerPanel() && !showPositionPad() && !showColorPad() && visibleControls().length > 0}>
+            <TouchGenericAttributeGrid
+              controls={visibleControls()}
+              currentValue={currentControlValue}
+              formatValue={formatShortDmxPercent}
+              onSetValue={setControlAttributeValue}
+            />
+          </Show>
+        </TouchFixturePanel>
+        <TouchRemotePanel
+          running={remoteRunning()}
+          remoteUrl={remoteUrl()}
+          bindIp={remoteBindIp()}
+          port={remotePort()}
+          bpmDraft={bpmDraft()}
+          submasters={snapshot().submasters}
+          onBindIp={setRemoteBindIp}
+          onPort={setRemotePort}
+          onStart={startRemoteControl}
+          onStop={stopRemoteControl}
+          onBpmDraft={setBpmDraft}
+          onApplyBpm={applyBpm}
+          onTapBpm={tapBpm}
+          onSetSubmaster={setGroupSubmaster}
+        />
+        <TouchVideoPanel
+          layers={snapshot().video.layers}
+          onSetLayerState={setVideoLayerState}
+          onAddCuePoint={addVideoCuePoint}
+          onJumpCuePoint={jumpVideoCuePoint}
+        />
         <aside
           class={setupPanelClass("panel setup setupPanel", ["library", "profiles", "patch"])}
           ref={registerSetupPanel(["library", "profiles"])}
           tabIndex={-1}
         >
-          <h2>Patch</h2>
-          <label>
-            GDTF path
-            <input
-              value={gdtfPath()}
-              onInput={(event) => setGdtfPath(event.currentTarget.value)}
-              placeholder="C:\\path\\fixture.gdtf"
-            />
-          </label>
-          <div class="buttonRow">
-            <button onClick={selectGdtfFile}>Browse</button>
-            <button class="primary" onClick={importGdtf}>Load GDTF</button>
-          </div>
-          <label>
-            GDTF Share URL
-            <input
-              value={gdtfShareUrl()}
-              onInput={(event) => setGdtfShareUrl(event.currentTarget.value)}
-              placeholder="https://gdtf-share.com/.../fixture.gdtf"
-            />
-          </label>
-          <button onClick={downloadGdtfFromUrl}>Download GDTF URL</button>
-          <div class="customProfileForm">
-            <h3>Custom Profile</h3>
-            <div class="split">
-              <label>
-                Maker
-                <input value={customManufacturer()} onInput={(event) => setCustomManufacturer(event.currentTarget.value)} />
-              </label>
-              <label>
-                Name
-                <input value={customProfileName()} onInput={(event) => setCustomProfileName(event.currentTarget.value)} />
-              </label>
-            </div>
-            <label>
-              Mode
-              <input value={customModeName()} onInput={(event) => setCustomModeName(event.currentTarget.value)} />
-            </label>
-            <label>
-              Attributes
-              <input
-                value={customAttributes()}
-                onInput={(event) => setCustomAttributesText(event.currentTarget.value)}
-                placeholder="Dimmer@1:8, Pan@2:16, Tilt@4:16, ColorRed@6:8"
-              />
-            </label>
-            <div class="customProfileEditor">
-              <div class="customProfileTemplateGrid" aria-label="Custom profile attribute templates">
-                <For each={customProfileAttributeTemplates}>
-                  {(template) => (
-                    <button type="button" onClick={() => appendCustomAttributeTemplate(template.rows)}>
-                      {template.label}
-                    </button>
-                  )}
-                </For>
-              </div>
-              <div class="customProfileAttributeRows">
-                <For each={customAttributeDrafts()}>
-                  {(draft, index) => (
-                    <div
-                      class={[
-                        "customProfileAttributeRow",
-                        selectedCustomAttributeIndexValue() === index() ? "selected" : "",
-                        customProfileDraftAnalysis().rowConflicts.has(index()) ? "conflict" : "",
-                      ].join(" ")}
-                      onClick={() => setSelectedCustomAttributeIndex(index())}
-                    >
-                      <label>
-                        Attribute
-                        <input
-                          value={draft.attribute}
-                          onInput={(event) => updateCustomAttributeDraft(index(), { attribute: event.currentTarget.value })}
-                        />
-                      </label>
-                      <label>
-                        Bits
-                        <select
-                          value={draft.resolution}
-                          onInput={(event) =>
-                            updateCustomAttributeDraft(index(), {
-                              resolution: event.currentTarget.value as AttributeResolution,
-                            })
-                          }
-                        >
-                          <option value="EightBit">8-bit</option>
-                          <option value="SixteenBit">16-bit</option>
-                        </select>
-                      </label>
-                      <label>
-                        Start
-                        <input
-                          value={draft.startOffset}
-                          inputMode="numeric"
-                          placeholder="auto"
-                          onInput={(event) => updateCustomAttributeDraft(index(), { startOffset: event.currentTarget.value })}
-                        />
-                      </label>
-                      <span class="customProfileRowFootprint" title={customProfileDraftRowStatusText(index())}>
-                        {customProfileDraftRowStatusText(index())}
-                      </span>
-                      <button
-                        type="button"
-                        class="iconButton"
-                        title={`Remove ${draft.attribute || "attribute"}`}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          removeCustomAttributeDraft(index());
-                        }}
-                      >
-                        -
-                      </button>
-                    </div>
-                  )}
-                </For>
-              </div>
-              <div class="buttonRow">
-                <button type="button" onClick={addCustomAttributeDraft}>Add Attribute</button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const index = selectedCustomAttributeIndexValue();
-                    if (index !== null) {
-                      moveCustomAttributeDraft(index, -1);
-                    }
-                  }}
-                  disabled={selectedCustomAttributeIndexValue() === null || selectedCustomAttributeIndexValue() === 0}
-                >
-                  Move Up
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const index = selectedCustomAttributeIndexValue();
-                    if (index !== null) {
-                      moveCustomAttributeDraft(index, 1);
-                    }
-                  }}
-                  disabled={
-                    selectedCustomAttributeIndexValue() === null ||
-                    selectedCustomAttributeIndexValue() === customAttributeDrafts().length - 1
-                  }
-                >
-                  Move Down
-                </button>
-                <button type="button" onClick={() => commitCustomAttributeDrafts([], null)} disabled={customAttributeDrafts().length === 0}>
-                  Clear
-                </button>
-              </div>
-              <div class="customProfileDmxMap">
-                <div class="customProfilePreviewHeader">
-                  <strong>DMX Map</strong>
-                  <span>{customProfilePreview().footprint || 0} ch</span>
-                </div>
-                <div class="customProfileDmxGrid" aria-label="Custom profile DMX map">
-                  <For each={customProfileDmxCells()}>
-                    {(cell) => (
-                      <button
-                        type="button"
-                        class={[
-                          "customProfileDmxCell",
-                          cell.control ? "" : "empty",
-                          cell.selected ? "selected" : "",
-                          cell.conflict ? "conflict" : "",
-                        ].join(" ")}
-                        onClick={() => {
-                          if (cell.controlIndex >= 0) {
-                            setSelectedCustomAttributeIndex(cell.controlIndex);
-                          }
-                        }}
-                      >
-                        <small>{cell.channel}</small>
-                        <strong>{cell.control?.attribute ?? ""}</strong>
-                        <span>
-                          {cell.control ? `${cell.control.resolution === "SixteenBit" ? "16" : "8"} / ${cell.control.geometry}` : ""}
-                        </span>
-                      </button>
-                    )}
-                  </For>
-                </div>
-              </div>
-            </div>
-            <div class={`customProfilePreview ${customProfilePreview().errors.length > 0 ? "bad" : ""}`}>
-              <div class="customProfilePreviewHeader">
-                <strong>DMX Footprint</strong>
-                <span>{customProfilePreview().footprint} ch</span>
-              </div>
-              <Show when={customProfilePreview().errors.length > 0}>
-                <ul class="warnings">
-                  <For each={customProfilePreview().errors}>{(error) => <li>{error}</li>}</For>
-                </ul>
-              </Show>
-              <div class="customProfileChannelList">
-                <For each={customProfilePreview().controls}>
-                  {(control) => (
-                    <div class="customProfileChannel">
-                      <strong>{control.attribute}</strong>
-                      <span>{control.resolution === "SixteenBit" ? "16-bit" : "8-bit"}</span>
-                      <em>{control.geometry}</em>
-                      <small>CH {control.offsets.join("/")}</small>
-                    </div>
-                  )}
-                </For>
-              </div>
-            </div>
-            <div class="buttonRow">
-              <button
-                onClick={createCustomProfile}
-                disabled={customProfilePreview().errors.length > 0 || customProfilePreview().controls.length === 0}
-              >
-                Create Custom Profile
-              </button>
-              <button
-                onClick={saveCustomProfile}
-                disabled={customProfilePreview().errors.length > 0 || customProfilePreview().controls.length === 0}
-              >
-                Save Custom
-              </button>
-            </div>
-            <button onClick={loadCustomProfile}>Load Custom Profile</button>
-          </div>
+          <ProfileLoadPanel
+            gdtfPath={gdtfPath()}
+            gdtfShareUrl={gdtfShareUrl()}
+            onGdtfPath={setGdtfPath}
+            onGdtfShareUrl={setGdtfShareUrl}
+            onBrowse={selectGdtfFile}
+            onLoadGdtf={importGdtf}
+            onDownloadGdtf={downloadGdtfFromUrl}
+          />
+          <CustomProfileEditorPanel
+            manufacturer={customManufacturer()}
+            profileName={customProfileName()}
+            modeName={customModeName()}
+            attributesText={customAttributes()}
+            templates={customProfileAttributeTemplates}
+            drafts={customAttributeDrafts()}
+            selectedIndex={selectedCustomAttributeIndexValue()}
+            rowConflicts={customProfileDraftAnalysis().rowConflicts}
+            dmxCells={customProfileDmxCells()}
+            preview={customProfilePreview()}
+            rowStatusText={customProfileDraftRowStatusText}
+            onManufacturer={setCustomManufacturer}
+            onProfileName={setCustomProfileName}
+            onModeName={setCustomModeName}
+            onAttributesText={setCustomAttributesText}
+            onAppendTemplate={appendCustomAttributeTemplate}
+            onSelectIndex={setSelectedCustomAttributeIndex}
+            onUpdateDraft={updateCustomAttributeDraft}
+            onRemoveDraft={removeCustomAttributeDraft}
+            onAddDraft={addCustomAttributeDraft}
+            onMoveDraft={moveCustomAttributeDraft}
+            onClearDrafts={() => commitCustomAttributeDrafts([], null)}
+            onCreate={createCustomProfile}
+            onSave={saveCustomProfile}
+            onLoad={loadCustomProfile}
+          />
 
           <Show when={profile()}>
             {(loaded) => (
               <div class="profile">
-                <strong>{loaded().manufacturer} {loaded().name}</strong>
-                <span>{loaded().dmx_modes.length} mode(s), {loaded().geometries.length} geometry node(s)</span>
-                <Show when={loaded().warnings.length > 0}>
-                  <div class="profileWarningBanner">
-                    <strong>{loaded().warnings.length} warning{loaded().warnings.length === 1 ? "" : "s"}</strong>
-                    <span>Review before patching this profile.</span>
-                  </div>
-                </Show>
-                <label>
-                  Mode
-                  <select value={selectedMode()} onInput={(event) => setSelectedMode(event.currentTarget.value)}>
-                    <For each={loaded().dmx_modes}>
-                      {(mode) => <option value={mode.name}>{mode.name}</option>}
-                    </For>
-                  </select>
-                </label>
-                <Show when={selectedModeSummary()}>
-                  {(mode) => (
-                    <>
-                      <div class="profileDmxSummary">
-                        <div class="customProfilePreviewHeader">
-                          <strong>Mode DMX Map</strong>
-                          <span>{selectedFootprint()} ch / {mode().controls.length} control(s)</span>
-                        </div>
-                        <Show when={selectedModeDmxCells().length > 0} fallback={<p class="empty">No DMX controls.</p>}>
-                          <div class="profileDmxGrid" aria-label="Selected mode DMX map">
-                            <For each={selectedModeDmxCells()}>
-                              {(cell) => (
-                                <div class={`profileDmxCell ${cell.category}`}>
-                                  <small>CH {cell.channel}</small>
-                                  <strong title={`${cell.control.attribute} / ${cell.control.channel_name}`}>
-                                    {cell.control.attribute}
-                                  </strong>
-                                  <span>{cell.bitLabel}</span>
-                                </div>
-                              )}
-                            </For>
-                          </div>
-                        </Show>
-                      </div>
-                      <Show when={selectedModeFunctionEntries().length > 0}>
-                        <div class="profileFunctionSummary">
-                          <div class="customProfilePreviewHeader">
-                            <strong>Channel Functions</strong>
-                            <span>{selectedModeFunctionEntries().length} range(s)</span>
-                          </div>
-                          <div class="profileFunctionList">
-                            <For each={visibleSelectedModeFunctionEntries()}>
-                              {(entry) => (
-                                <div class="profileFunctionRow">
-                                  <strong title={`${entry.control.attribute} / ${entry.control.channel_name}`}>
-                                    {entry.control.attribute}
-                                  </strong>
-                                  <span>{channelFunctionRangeLabel(entry.fn)}</span>
-                                  <small>
-                                    <b title={channelFunctionLabel(entry.fn)}>{channelFunctionLabel(entry.fn)}</b>
-                                    <b title={channelFunctionDetail(entry.fn)}>{channelFunctionDetail(entry.fn)}</b>
-                                  </small>
-                                </div>
-                              )}
-                            </For>
-                            <Show when={selectedModeFunctionEntries().length - visibleSelectedModeFunctionEntries().length}>
-                              {(remaining) => (
-                                <span class="profileFunctionMore">+ {remaining()} more function(s)</span>
-                              )}
-                            </Show>
-                          </div>
-                        </div>
-                      </Show>
-                      <div class="profileGeometrySummary">
-                        <div class="customProfilePreviewHeader">
-                          <strong>Geometry</strong>
-                          <span>{selectedModeGeometryRows().length} node(s)</span>
-                        </div>
-                        <Show when={selectedModeGeometryRows().length > 0} fallback={<p class="empty">No geometry nodes.</p>}>
-                          <div class="profileGeometryList" aria-label="Selected profile geometry">
-                            <For each={selectedModeGeometryRows()}>
-                              {(row) => (
-                                <div class="profileGeometryRow">
-                                  <strong
-                                    style={{ "padding-left": `${Math.min(row.depth, 8) * 12}px` }}
-                                    title={row.geometry.name}
-                                  >
-                                    {row.geometry.name}
-                                  </strong>
-                                  <span>{row.geometry.kind}</span>
-                                  <small title={row.geometry.parent ?? "root"}>
-                                    {row.geometry.parent ? `parent ${row.geometry.parent}` : "root"}
-                                  </small>
-                                  <small>{row.controlCount} ctrl</small>
-                                  <small class="profileGeometryPosition" title={row.positionLabel}>
-                                    <Show when={row.geometry.model_file || row.geometry.model_name || row.geometry.model_primitive}>
-                                      <b
-                                        class={`profileGeometryAsset ${
-                                          row.geometry.model_file || row.geometry.model_primitive ? "available" : "missing"
-                                        }`}
-                                      >
-                                        {row.geometry.model_file ? "mesh" : row.geometry.model_primitive ? "primitive" : "model"}
-                                      </b>
-                                    </Show>
-                                    <span>{row.positionLabel || "no transform detail"}</span>
-                                  </small>
-                                </div>
-                              )}
-                            </For>
-                          </div>
-                        </Show>
-                        <Show when={selectedModeUnresolvedGeometryReferences().length > 0}>
-                          <ul class="warnings">
-                            <For each={selectedModeUnresolvedGeometryReferences()}>
-                              {(reference) => <li>Unresolved geometry reference: {reference}</li>}
-                            </For>
-                          </ul>
-                        </Show>
-                      </div>
-                    </>
-                  )}
-                </Show>
-                <label>
-                  Label
-                  <input value={label()} onInput={(event) => setLabel(event.currentTarget.value)} />
-                </label>
-                <div class="split">
-                  <label>
-                    Universe
-                    <input
-                      type="number"
-                      min="0"
-                      value={universe()}
-                      onInput={(event) => setUniverse(Number(event.currentTarget.value))}
-                    />
-                  </label>
-                  <label>
-                    Address
-                    <input
-                      type="number"
-                      min="1"
-                      max="512"
-                      value={address()}
-                      onInput={(event) => setAddress(Number(event.currentTarget.value))}
-                    />
-                  </label>
-                </div>
-                <div class="split">
-                  <label>
-                    Count
-                    <input
-                      type="number"
-                      min="1"
-                      max="256"
-                      value={patchCount()}
-                      onInput={(event) => setPatchCount(Number(event.currentTarget.value))}
-                    />
-                  </label>
-                  <label>
-                    Addr Step
-                    <input
-                      type="number"
-                      min="0"
-                      value={patchAddressStride()}
-                      onInput={(event) => setPatchAddressStride(Number(event.currentTarget.value))}
-                    />
-                  </label>
-                </div>
-                <div class="split">
-                  <label>
-                    Layout
-                    <select
-                      value={patchLayoutMode()}
-                      onInput={(event) => setPatchLayoutMode(event.currentTarget.value as FixtureLayoutMode)}
-                    >
-                      <option value="line">Line</option>
-                      <option value="grid">Grid</option>
-                      <option value="circle">Circle</option>
-                    </select>
-                  </label>
-                  <Show
-                    when={patchLayoutMode() === "circle"}
-                    fallback={
-                      <label>
-                        Grid Cols
-                        <input
-                          type="number"
-                          min="1"
-                          max="64"
-                          value={patchGridColumns()}
-                          onInput={(event) => setPatchGridColumns(Number(event.currentTarget.value))}
-                          disabled={patchLayoutMode() !== "grid"}
-                        />
-                      </label>
-                    }
-                  >
-                    <label>
-                      Radius
-                      <input
-                        type="number"
-                        min="0.1"
-                        step="0.1"
-                        value={patchCircleRadius()}
-                        onInput={(event) => setPatchCircleRadius(Number(event.currentTarget.value))}
-                      />
-                    </label>
-                  </Show>
-                </div>
-                <div class="triple">
-                  <label>
-                    X
-                    <input type="number" value={patchX()} onInput={(event) => setPatchX(Number(event.currentTarget.value))} />
-                  </label>
-                  <label>
-                    Y
-                    <input type="number" value={patchY()} onInput={(event) => setPatchY(Number(event.currentTarget.value))} />
-                  </label>
-                  <label>
-                    Z
-                    <input type="number" value={patchZ()} onInput={(event) => setPatchZ(Number(event.currentTarget.value))} />
-                  </label>
-                </div>
-                <div class="split">
-                  <label>
-                    X Step
-                    <input type="number" value={patchXStep()} onInput={(event) => setPatchXStep(Number(event.currentTarget.value))} />
-                  </label>
-                  <label>
-                    Z Step
-                    <input type="number" value={patchZStep()} onInput={(event) => setPatchZStep(Number(event.currentTarget.value))} />
-                  </label>
-                </div>
-                <div class="triple">
-                  <label>
-                    Pitch
-                    <input type="number" value={patchPitch()} onInput={(event) => setPatchPitch(Number(event.currentTarget.value))} />
-                  </label>
-                  <label>
-                    Yaw
-                    <input type="number" value={patchYaw()} onInput={(event) => setPatchYaw(Number(event.currentTarget.value))} />
-                  </label>
-                  <label>
-                    Roll
-                    <input type="number" value={patchRoll()} onInput={(event) => setPatchRoll(Number(event.currentTarget.value))} />
-                  </label>
-                </div>
-                <label>
-                  Groups
-                  <input
-                    value={groupText()}
-                    onInput={(event) => setGroupText(event.currentTarget.value)}
-                    placeholder="front, movers"
-                  />
-                </label>
-                <div class={patchAddressInvalid() ? "footprint bad" : "footprint"}>
-                  <span>Footprint {selectedFootprint()}ch</span>
-                  <span>Count {patchCountValue()}</span>
-                  <span>Step {patchAddressStrideValue()}ch</span>
-                  <span>
-                    {patchLayoutMode() === "grid"
-                      ? `Grid ${patchGridColumnsValue()} col`
-                      : patchLayoutMode() === "circle"
-                        ? `Circle r${patchCircleRadiusValue().toFixed(1)}`
-                        : "Line"}
-                  </span>
-                  <span>End address {endAddress()}</span>
-                  <Show when={patchAddressConflictText()}>
-                    {(text) => <span>{text()}</span>}
-                  </Show>
-                </div>
-                <button class="primary" onClick={patchFixture} disabled={patchAddressInvalid()}>
-                  {patchCountValue() === 1 ? "Patch Fixture" : "Patch Fixtures"}
-                </button>
-                <button onClick={selectNextFreePatchAddress} disabled={nextFreePatchAddress() === null}>
-                  Next Free A{nextFreePatchAddress() ?? "-"}
-                </button>
-                <Show when={loaded().warnings.length > 0}>
-                  <ul class="warnings">
-                    <For each={loaded().warnings}>{(warning) => <li>{warning}</li>}</For>
-                  </ul>
-                </Show>
+                <LoadedProfileSummaryPanel
+                  profile={loaded()}
+                  selectedMode={selectedMode()}
+                  selectedModeSummary={selectedModeSummary()}
+                  selectedFootprint={selectedFootprint()}
+                  dmxCells={selectedModeDmxCells()}
+                  functionEntries={selectedModeFunctionEntries()}
+                  visibleFunctionEntries={visibleSelectedModeFunctionEntries()}
+                  geometryRows={selectedModeGeometryRows()}
+                  unresolvedGeometryReferences={selectedModeUnresolvedGeometryReferences()}
+                  functionLabel={channelFunctionLabel}
+                  functionRangeLabel={channelFunctionRangeLabel}
+                  functionDetail={channelFunctionDetail}
+                  onSelectedMode={setSelectedMode}
+                />
+                <PatchFixtureFormPanel
+                  label={label()}
+                  universe={universe()}
+                  address={address()}
+                  count={patchCount()}
+                  addressStride={patchAddressStride()}
+                  layoutMode={patchLayoutMode()}
+                  gridColumns={patchGridColumns()}
+                  circleRadius={patchCircleRadius()}
+                  x={patchX()}
+                  y={patchY()}
+                  z={patchZ()}
+                  xStep={patchXStep()}
+                  zStep={patchZStep()}
+                  pitch={patchPitch()}
+                  yaw={patchYaw()}
+                  roll={patchRoll()}
+                  groupText={groupText()}
+                  footprint={selectedFootprint()}
+                  normalizedCount={patchCountValue()}
+                  normalizedAddressStride={patchAddressStrideValue()}
+                  normalizedGridColumns={patchGridColumnsValue()}
+                  normalizedCircleRadius={patchCircleRadiusValue()}
+                  endAddress={endAddress()}
+                  conflictText={patchAddressConflictText()}
+                  invalid={patchAddressInvalid()}
+                  nextFreeAddress={nextFreePatchAddress()}
+                  warnings={loaded().warnings}
+                  onLabel={setLabel}
+                  onUniverse={setUniverse}
+                  onAddress={setAddress}
+                  onCount={setPatchCount}
+                  onAddressStride={setPatchAddressStride}
+                  onLayoutMode={setPatchLayoutMode}
+                  onGridColumns={setPatchGridColumns}
+                  onCircleRadius={setPatchCircleRadius}
+                  onX={setPatchX}
+                  onY={setPatchY}
+                  onZ={setPatchZ}
+                  onXStep={setPatchXStep}
+                  onZStep={setPatchZStep}
+                  onPitch={setPatchPitch}
+                  onYaw={setPatchYaw}
+                  onRoll={setPatchRoll}
+                  onGroupText={setGroupText}
+                  onPatch={patchFixture}
+                  onNextFreeAddress={selectNextFreePatchAddress}
+                />
               </div>
             )}
           </Show>
@@ -11525,474 +10959,65 @@ export default function App() {
           ref={registerSetupPanel(["patch"])}
           tabIndex={-1}
         >
-          <div class="panelHeader">
-            <h2>Fixtures</h2>
-            <span>{filteredFixtures().length} / {snapshot().fixtures.length}</span>
-          </div>
-          <div class="groupOverview">
-            <button
-              class={!selectedFixtureGroupFilter() ? "groupChip active" : "groupChip"}
-              onClick={() => selectFixtureGroupFilter(null)}
-            >
-              All
-              <span>{snapshot().fixtures.length}</span>
-            </button>
-            <For each={fixtureGroupRows()}>
-              {(group) => (
-                <button
-                  class={selectedFixtureGroupFilter() === group.groupId ? "groupChip active" : "groupChip"}
-                  onClick={() => selectFixtureGroupFilter(group.groupId)}
-                >
-                  {group.groupId}
-                  <span>{group.count}</span>
-                </button>
-              )}
-            </For>
-          </div>
-          <div class="dmxPatchMap">
-            <div class="panelHeader">
-              <h3>DMX Patch Grid</h3>
-              <div class="panelHeaderActions">
-                <button onClick={selectNextFreePatchAddress} disabled={nextFreePatchAddress() === null}>
-                  Next Free
-                </button>
-                <select
-                  value={activePatchGridUniverse()}
-                  onInput={(event) => setPatchGridUniverse(Number(event.currentTarget.value))}
-                >
-                  <For each={patchGridUniverseOptions()}>
-                    {(universeId) => <option value={universeId}>Universe {universeId}</option>}
-                  </For>
-                </select>
-                <div class="viewToggle" aria-label="DMX map view">
-                  <button
-                    class={dmxPatchViewMode() === "grid" ? "active" : ""}
-                    onClick={() => setDmxPatchViewMode("grid")}
-                    aria-pressed={dmxPatchViewMode() === "grid"}
-                  >
-                    Grid
-                  </button>
-                  <button
-                    class={dmxPatchViewMode() === "list" ? "active" : ""}
-                    onClick={() => setDmxPatchViewMode("list")}
-                    aria-pressed={dmxPatchViewMode() === "list"}
-                  >
-                    List
-                  </button>
-                </div>
-              </div>
-            </div>
-            <Show
-              when={dmxPatchViewMode() === "grid"}
-              fallback={
-                <div class="dmxPatchList">
-                  <For each={activePatchGridMap().segments}>
-                    {(segment) => (
-                      <button
-                        class={segment.fixture.id === selectedFixtureId() ? "dmxPatchListItem selected" : "dmxPatchListItem"}
-                        onClick={() => selectFixture(segment.fixture)}
-                      >
-                        <strong>{segment.fixture.label}</strong>
-                        <span>
-                          U{activePatchGridUniverse()} A{segment.start}-{segment.end} / {segment.end - segment.start + 1}ch
-                        </span>
-                        <small>{segment.fixture.manufacturer} {segment.fixture.profile_name}</small>
-                      </button>
-                    )}
-                  </For>
-                  <Show when={activePatchGridMap().segments.length === 0}>
-                    <p class="empty">No fixtures patched in this universe.</p>
-                  </Show>
-                </div>
-              }
-            >
-              <div class="dmxAddressGrid" role="grid" aria-label={`Universe ${activePatchGridUniverse()} DMX addresses`}>
-                <For each={dmxAddressCells()}>
-                  {(cell) => (
-                    <button
-                      class={`dmxAddressCell ${cell.segment ? "occupied" : ""} ${cell.isStart ? "start" : ""} ${
-                        cell.plannedIndex !== null ? "planned" : ""
-                      } ${cell.plannedStart ? "plannedStart" : ""} ${cell.plannedConflict ? "plannedConflict" : ""} ${
-                        cell.isSelected ? "selected" : ""
-                      }`}
-                      title={
-                        cell.segment || cell.plannedIndex !== null
-                          ? [
-                              `U${activePatchGridUniverse()} A${cell.channel}`,
-                              cell.segment ? `${cell.segment.fixture.label} (${cell.segment.start}-${cell.segment.end})` : "",
-                              cell.plannedIndex !== null ? `Pending fixture ${cell.plannedIndex + 1}` : "",
-                            ]
-                              .filter(Boolean)
-                              .join(" / ")
-                          : `U${activePatchGridUniverse()} A${cell.channel}`
-                      }
-                      onClick={() => handleDmxAddressCellClick(cell)}
-                      aria-label={
-                        cell.segment
-                          ? `Address ${cell.channel}, ${cell.segment.fixture.label}`
-                          : `Address ${cell.channel}, empty`
-                      }
-                    >
-                      {cell.channel}
-                    </button>
-                  )}
-                </For>
-              </div>
-            </Show>
-            <div class="dmxGridSummary">
-              <span>{activePatchGridMap().used}/512 used</span>
-              <span>{activePatchGridMap().largestFree}ch max free</span>
-              <span>{plannedAddressSummary()}</span>
-              <span>{snapshot().fixtures.length} fixture(s)</span>
-            </div>
-          </div>
-          <div class="dmxPatchMap compact">
-            <div class="panelHeader">
-              <h3>Universe Overview</h3>
-              <span>{dmxUniverseMaps().length} universe(s)</span>
-            </div>
-            <For each={dmxUniverseMaps()}>
-              {(map) => (
-                <div class="dmxUniverseMap">
-                  <div class="dmxUniverseHeader">
-                    <strong>U{map.universe}</strong>
-                    <span>{map.used}/512 used</span>
-                    <span>{map.largestFree}ch max free</span>
-                  </div>
-                  <div class="dmxUniverseTrack">
-                    <For each={map.segments}>
-                      {(segment) => (
-                        <button
-                          class={segment.fixture.id === selectedFixtureId() ? "dmxPatchSegment selected" : "dmxPatchSegment"}
-                          style={{
-                            left: `${segment.left}%`,
-                            width: `${Math.max(segment.width, 0.7)}%`,
-                          }}
-                          title={`${segment.fixture.label} A${segment.start}-${segment.end}`}
-                          onClick={() => selectFixture(segment.fixture)}
-                        />
-                      )}
-                    </For>
-                  </div>
-                  <div class="dmxUniverseLegend">
-                    <For each={map.segments.slice(0, 6)}>
-                      {(segment) => (
-                        <button onClick={() => selectFixture(segment.fixture)}>
-                          A{segment.start}-{segment.end} {segment.fixture.label}
-                        </button>
-                      )}
-                    </For>
-                    <Show when={map.segments.length === 0}>
-                      <span>Empty</span>
-                    </Show>
-                    <Show when={map.segments.length > 6}>
-                      <span>+{map.segments.length - 6}</span>
-                    </Show>
-                  </div>
-                </div>
-              )}
-            </For>
-          </div>
-          <div class="fixtureList">
-            <For each={filteredFixtures()}>
-              {(fixture) => (
-                <button
-                  class={fixture.id === selectedFixtureId() ? "fixture selected" : "fixture"}
-                  onClick={() => selectFixture(fixture)}
-                >
-                  <strong>{fixture.label}</strong>
-                  <span>{fixture.manufacturer} {fixture.profile_name}</span>
-                  <small>U{fixture.universe} A{fixture.address} / {fixture.mode_name}</small>
-                  <Show when={fixture.highlighted || fixture.soloed || fixture.parked}>
-                    <small>{[fixture.highlighted ? "Highlight" : "", fixture.soloed ? "Solo" : "", fixture.parked ? "Park" : ""].filter(Boolean).join(" / ")}</small>
-                  </Show>
-                  <Show when={fixture.group_ids.length > 0}>
-                    <small>{fixture.group_ids.join(", ")}</small>
-                  </Show>
-                </button>
-              )}
-            </For>
-            <Show when={snapshot().fixtures.length === 0}>
-              <p class="empty">No fixtures patched.</p>
-            </Show>
-            <Show when={snapshot().fixtures.length > 0 && filteredFixtures().length === 0}>
-              <p class="empty">No fixtures in group.</p>
-            </Show>
-          </div>
+          <SetupFixtureListPanel
+            fixtures={filteredFixtures()}
+            totalFixtureCount={snapshot().fixtures.length}
+            selectedGroupId={selectedFixtureGroupFilter()}
+            groupRows={fixtureGroupRows()}
+            selectedFixtureId={selectedFixtureId()}
+            onSelectGroup={selectFixtureGroupFilter}
+            onSelectFixture={selectFixture}
+          >
+            <DmxPatchMapPanel
+              activeUniverse={activePatchGridUniverse()}
+              universeOptions={patchGridUniverseOptions()}
+              viewMode={dmxPatchViewMode()}
+              nextFreeAddress={nextFreePatchAddress()}
+              activeMap={activePatchGridMap()}
+              addressCells={dmxAddressCells()}
+              universeMaps={dmxUniverseMaps()}
+              fixtureCount={snapshot().fixtures.length}
+              selectedFixtureId={selectedFixtureId()}
+              plannedAddressSummary={plannedAddressSummary()}
+              onNextFreeAddress={selectNextFreePatchAddress}
+              onUniverse={setPatchGridUniverse}
+              onViewMode={setDmxPatchViewMode}
+              onSelectFixture={selectFixture}
+              onAddressCell={(cell) => handleDmxAddressCellClick(cell)}
+            />
+          </SetupFixtureListPanel>
           <Show when={selectedFixture()}>
             {(fixture) => (
-              <div class="fixtureSetupEditor">
-                <div class="panelHeader">
-                  <h3>Fixture Setup</h3>
-                  <span>{fixture().label}</span>
-                </div>
-                <button onClick={() => void useFixtureProfileForPatch(fixture())}>
-                  Use Profile for Patch
-                </button>
-                <button onClick={() => void duplicateFixture(fixture())}>
-                  Duplicate Fixture
-                </button>
-                <label>
-                  Label
-                  <input
-                    value={selectedFixtureLabelDraft()}
-                    onInput={(event) => setSelectedFixtureLabelDraft(event.currentTarget.value)}
-                  />
-                </label>
-                <div class="split">
-                  <label>
-                    Universe
-                    <input
-                      type="number"
-                      min="0"
-                      value={selectedFixtureUniverseDraft()}
-                      onInput={(event) => setSelectedFixtureUniverseDraft(Number(event.currentTarget.value))}
-                    />
-                  </label>
-                  <label>
-                    Address
-                    <input
-                      type="number"
-                      min="1"
-                      max="512"
-                      value={selectedFixtureAddressDraft()}
-                      onInput={(event) => setSelectedFixtureAddressDraft(Number(event.currentTarget.value))}
-                    />
-                  </label>
-                </div>
-                <button onClick={() => void setFixturePatch(fixture())}>Apply Patch</button>
-                <label>
-                  Groups
-                  <input
-                    value={selectedFixtureGroupText()}
-                    onInput={(event) => setSelectedFixtureGroupText(event.currentTarget.value)}
-                    placeholder="front, movers"
-                  />
-                </label>
-                <button onClick={() => void setFixtureGroups(fixture())}>Apply Groups</button>
-                <div class="limitEditor">
-                  <div class="limitEditorHeader">
-                    <strong>Dimmer Limits</strong>
-                    <span>
-                      {formatDmxPercent(normalizedSelectedFixtureLimitsDraft().dimmer_min)} -{" "}
-                      {formatDmxPercent(normalizedSelectedFixtureLimitsDraft().dimmer_max)}
-                    </span>
-                  </div>
-                  <div class="split">
-                    <label>
-                      Min
-                      <input
-                        type="number"
-                        min="0"
-                        max="65535"
-                        value={selectedFixtureLimitsDraft().dimmer_min}
-                        onInput={(event) => updateSelectedFixtureLimit("dimmer_min", Number(event.currentTarget.value))}
-                      />
-                    </label>
-                    <label>
-                      Max
-                      <input
-                        type="number"
-                        min="0"
-                        max="65535"
-                        value={selectedFixtureLimitsDraft().dimmer_max}
-                        onInput={(event) => updateSelectedFixtureLimit("dimmer_max", Number(event.currentTarget.value))}
-                      />
-                    </label>
-                  </div>
-                  <div class="limitEditorHeader">
-                    <strong>Movement Limits</strong>
-                    <span>
-                      Pan {formatDmxPercent(normalizedSelectedFixtureLimitsDraft().pan_min)} -{" "}
-                      {formatDmxPercent(normalizedSelectedFixtureLimitsDraft().pan_max)}
-                    </span>
-                  </div>
-                  <div class="movementLimitEditor">
-                    <div
-                      class={movementLimitDrag() ? "movementLimitMap dragging" : "movementLimitMap"}
-                      aria-label="Pan tilt movement limits"
-                      role="slider"
-                      aria-valuetext={`Pan ${normalizedSelectedFixtureLimitsDraft().pan_min}-${normalizedSelectedFixtureLimitsDraft().pan_max}, Tilt ${normalizedSelectedFixtureLimitsDraft().tilt_min}-${normalizedSelectedFixtureLimitsDraft().tilt_max}`}
-                      onPointerDown={startMovementLimitDrag}
-                      onPointerMove={dragMovementLimit}
-                      onPointerUp={endMovementLimitDrag}
-                      onPointerCancel={endMovementLimitDrag}
-                    >
-                      <i style={selectedFixtureLimitWindowStyle()} />
-                    </div>
-                    <div class="movementLimitFields">
-                      <div class="split">
-                        <label>
-                          Pan Min
-                          <input
-                            type="number"
-                            min="0"
-                            max="65535"
-                            value={selectedFixtureLimitsDraft().pan_min}
-                            onInput={(event) => updateSelectedFixtureLimit("pan_min", Number(event.currentTarget.value))}
-                          />
-                        </label>
-                        <label>
-                          Pan Max
-                          <input
-                            type="number"
-                            min="0"
-                            max="65535"
-                            value={selectedFixtureLimitsDraft().pan_max}
-                            onInput={(event) => updateSelectedFixtureLimit("pan_max", Number(event.currentTarget.value))}
-                          />
-                        </label>
-                      </div>
-                      <div class="split">
-                        <label>
-                          Tilt Min
-                          <input
-                            type="number"
-                            min="0"
-                            max="65535"
-                            value={selectedFixtureLimitsDraft().tilt_min}
-                            onInput={(event) => updateSelectedFixtureLimit("tilt_min", Number(event.currentTarget.value))}
-                          />
-                        </label>
-                        <label>
-                          Tilt Max
-                          <input
-                            type="number"
-                            min="0"
-                            max="65535"
-                            value={selectedFixtureLimitsDraft().tilt_max}
-                            onInput={(event) => updateSelectedFixtureLimit("tilt_max", Number(event.currentTarget.value))}
-                          />
-                        </label>
-                      </div>
-                      <div class="limitToggleRow">
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={selectedFixtureLimitsDraft().invert_pan}
-                            onChange={(event) => updateSelectedFixtureLimit("invert_pan", event.currentTarget.checked)}
-                          />
-                          Invert Pan
-                        </label>
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={selectedFixtureLimitsDraft().invert_tilt}
-                            onChange={(event) => updateSelectedFixtureLimit("invert_tilt", event.currentTarget.checked)}
-                          />
-                          Invert Tilt
-                        </label>
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={selectedFixtureLimitsDraft().swap_pan_tilt}
-                            onChange={(event) => updateSelectedFixtureLimit("swap_pan_tilt", event.currentTarget.checked)}
-                          />
-                          Swap
-                        </label>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="presetRow">
-                    <button onClick={() => setSelectedFixtureLimitsDraft(defaultFixtureLimits)}>
-                      Reset
-                    </button>
-                    <button class="primary" onClick={() => void setFixtureLimits(fixture())}>
-                      Apply Limits
-                    </button>
-                  </div>
-                </div>
-                <div class="transformEditor">
-                  <strong>2D Mapping</strong>
-                  <div class="triple">
-                    <label>
-                      X
-                      <input
-                        type="number"
-                        value={fixture().position.x}
-                        onInput={(event) =>
-                          void setFixtureTransform(fixture(), {
-                            position: { ...fixture().position, x: Number(event.currentTarget.value) },
-                          })
-                        }
-                      />
-                    </label>
-                    <label>
-                      Y
-                      <input
-                        type="number"
-                        value={fixture().position.y}
-                        onInput={(event) =>
-                          void setFixtureTransform(fixture(), {
-                            position: { ...fixture().position, y: Number(event.currentTarget.value) },
-                          })
-                        }
-                      />
-                    </label>
-                    <label>
-                      Z
-                      <input
-                        type="number"
-                        value={fixture().position.z}
-                        onInput={(event) =>
-                          void setFixtureTransform(fixture(), {
-                            position: { ...fixture().position, z: Number(event.currentTarget.value) },
-                          })
-                        }
-                      />
-                    </label>
-                  </div>
-                  <div class="triple">
-                    <label>
-                      Pitch
-                      <input
-                        type="number"
-                        value={fixture().rotation.pitch}
-                        onInput={(event) =>
-                          void setFixtureTransform(fixture(), {
-                            rotation: { ...fixture().rotation, pitch: Number(event.currentTarget.value) },
-                          })
-                        }
-                      />
-                    </label>
-                    <label>
-                      Yaw
-                      <input
-                        type="number"
-                        value={fixture().rotation.yaw}
-                        onInput={(event) =>
-                          void setFixtureTransform(fixture(), {
-                            rotation: { ...fixture().rotation, yaw: Number(event.currentTarget.value) },
-                          })
-                        }
-                      />
-                    </label>
-                    <label>
-                      Roll
-                      <input
-                        type="number"
-                        value={fixture().rotation.roll}
-                        onInput={(event) =>
-                          void setFixtureTransform(fixture(), {
-                            rotation: { ...fixture().rotation, roll: Number(event.currentTarget.value) },
-                          })
-                        }
-                      />
-                    </label>
-                  </div>
-                  <div class="presetRow">
-                    <button onClick={() => void layoutFixturePositions("line")} disabled={filteredFixtures().length === 0}>
-                      Line X
-                    </button>
-                    <button onClick={() => void layoutFixturePositions("grid")} disabled={filteredFixtures().length === 0}>
-                      Grid
-                    </button>
-                    <button onClick={() => void layoutFixturePositions("circle")} disabled={filteredFixtures().length === 0}>
-                      Circle
-                    </button>
-                  </div>
-                </div>
-              </div>
+              <SetupFixtureEditorPanel
+                fixture={fixture()}
+                labelDraft={selectedFixtureLabelDraft()}
+                universeDraft={selectedFixtureUniverseDraft()}
+                addressDraft={selectedFixtureAddressDraft()}
+                groupText={selectedFixtureGroupText()}
+                limitsDraft={selectedFixtureLimitsDraft()}
+                normalizedLimits={normalizedSelectedFixtureLimitsDraft()}
+                limitWindowStyle={selectedFixtureLimitWindowStyle()}
+                movementLimitDragging={Boolean(movementLimitDrag())}
+                filteredFixtureCount={filteredFixtures().length}
+                formatDmxPercent={formatDmxPercent}
+                onUseProfileForPatch={useFixtureProfileForPatch}
+                onDuplicateFixture={duplicateFixture}
+                onLabelDraft={setSelectedFixtureLabelDraft}
+                onUniverseDraft={setSelectedFixtureUniverseDraft}
+                onAddressDraft={setSelectedFixtureAddressDraft}
+                onApplyPatch={setFixturePatch}
+                onGroupText={setSelectedFixtureGroupText}
+                onApplyGroups={setFixtureGroups}
+                onUpdateNumericLimit={(field, value) => updateSelectedFixtureLimit(field, value)}
+                onUpdateToggleLimit={(field, value) => updateSelectedFixtureLimit(field, value)}
+                onResetLimits={() => setSelectedFixtureLimitsDraft(defaultFixtureLimits)}
+                onApplyLimits={setFixtureLimits}
+                onMovementLimitPointerDown={startMovementLimitDrag}
+                onMovementLimitPointerMove={dragMovementLimit}
+                onMovementLimitPointerEnd={endMovementLimitDrag}
+                onSetTransform={setFixtureTransform}
+                onLayoutFixtures={layoutFixturePositions}
+              />
             )}
           </Show>
           <div class="mappingVisualizer visualizer">
@@ -12000,1674 +11025,249 @@ export default function App() {
               <h2>2D Mapping</h2>
               <span>{mappingFilteredFixtures().length} fixture(s) / {snapshot().video.outputs.length} projector(s)</span>
             </div>
-            <div class="mappingGroupStrip">
-              <span>Groups</span>
-              <button
-                class={!selectedFixtureGroupFilter() ? "active" : ""}
-                onClick={() => selectFixtureGroupFilter(null)}
-              >
-                All
-                <small>{snapshot().fixtures.length}</small>
-              </button>
-              <For each={fixtureGroupRows()}>
-                {(group) => (
-                  <button
-                    class={selectedFixtureGroupFilter() === group.groupId ? "active" : ""}
-                    onClick={() => selectFixtureGroupFilter(group.groupId)}
-                  >
-                    {group.groupId}
-                    <small>{group.count}</small>
-                  </button>
-                )}
-              </For>
-            </div>
-            <div class="mappingTypeStrip">
-              <span>Types</span>
-              <button
-                class={!selectedFixtureTypeFilter() ? "active" : ""}
-                onClick={() => setSelectedFixtureTypeFilter(null)}
-              >
-                <span class="mappingTypeGlyph kind-all" />
-                All
-                <small>{filteredFixtures().length}</small>
-              </button>
-              <For each={fixtureTypeRows()}>
-                {(row) => (
-                  <button
-                    class={selectedFixtureTypeFilter() === row.key ? "active" : ""}
-                    onClick={() => setSelectedFixtureTypeFilter(row.key)}
-                    title={`${row.manufacturer} ${row.label}`}
-                  >
-                    <span class={mappingTypeGlyphClass(row.visualKind)} />
-                    {row.label}
-                    <small>{row.count}</small>
-                  </button>
-                )}
-              </For>
-            </div>
+            <MappingFilterStrips
+              fixtureCount={snapshot().fixtures.length}
+              filteredFixtureCount={filteredFixtures().length}
+              selectedGroupId={selectedFixtureGroupFilter()}
+              groupRows={fixtureGroupRows()}
+              selectedTypeKey={selectedFixtureTypeFilter()}
+              fixtureTypeRows={fixtureTypeRows()}
+              onSelectGroup={selectFixtureGroupFilter}
+              onSelectType={setSelectedFixtureTypeFilter}
+            />
             <div class="mappingStageShell">
-              <div class="mappingToolRail" aria-label="2D mapping tools">
-                <button
-                  class={mappingStageTool() === "select" ? "active" : ""}
-                  onClick={() => setMappingStageTool("select")}
-                  title="Select fixture or projector (S)"
-                >
-                  S
-                </button>
-                <button
-                  class={mappingStageTool() === "place" ? "active" : ""}
-                  onClick={() => setMappingStageTool("place")}
-                  title="Place selected fixture (P)"
-                >
-                  P
-                </button>
-                <button
-                  class={mappingStageTool() === "rotate" ? "active" : ""}
-                  onClick={() => setMappingStageTool("rotate")}
-                  title="Set selected fixture yaw (R)"
-                >
-                  R
-                </button>
-                <button
-                  class={mappingStageTool() === "pan" ? "active" : ""}
-                  onClick={() => setMappingStageTool("pan")}
-                  title="Pan stage view (H)"
-                >
-                  H
-                </button>
-                <div class="mappingToolDivider" />
-                <button
-                  class={mappingShowLabels() ? "active" : ""}
-                  onClick={() => setMappingShowLabels((value) => !value)}
-                  title="Toggle labels"
-                >
-                  L
-                </button>
-                <button
-                  class={mappingShowBeams() ? "active" : ""}
-                  onClick={() => setMappingShowBeams((value) => !value)}
-                  title="Toggle beams"
-                >
-                  B
-                </button>
-                <button
-                  class={mappingShowGeometry() ? "active" : ""}
-                  onClick={() => setMappingShowGeometry((value) => !value)}
-                  title="Toggle GDTF geometry nodes"
-                >
-                  G
-                </button>
-                <button
-                  class={mappingShowProjectors() ? "active" : ""}
-                  onClick={() => setMappingShowProjectors((value) => !value)}
-                  title="Toggle projector surfaces"
-                >
-                  V
-                </button>
-                <button
-                  class={mappingShowStageObjects() ? "active" : ""}
-                  onClick={() => setMappingShowStageObjects((value) => !value)}
-                  title="Toggle stage reference objects"
-                >
-                  O
-                </button>
-                <button
-                  class={mappingShowLevels() ? "active" : ""}
-                  onClick={() => setMappingShowLevels((value) => !value)}
-                  title="Toggle fixture level readouts"
-                >
-                  %
-                </button>
-              </div>
+              <MappingToolRail
+                stageTool={mappingStageTool()}
+                showLabels={mappingShowLabels()}
+                showBeams={mappingShowBeams()}
+                showGeometry={mappingShowGeometry()}
+                showProjectors={mappingShowProjectors()}
+                showStageObjects={mappingShowStageObjects()}
+                showLevels={mappingShowLevels()}
+                onStageTool={setMappingStageTool}
+                onToggleLabels={() => setMappingShowLabels((value) => !value)}
+                onToggleBeams={() => setMappingShowBeams((value) => !value)}
+                onToggleGeometry={() => setMappingShowGeometry((value) => !value)}
+                onToggleProjectors={() => setMappingShowProjectors((value) => !value)}
+                onToggleStageObjects={() => setMappingShowStageObjects((value) => !value)}
+                onToggleLevels={() => setMappingShowLevels((value) => !value)}
+              />
               <div class="mappingStageViewport">
-                <div class="mappingViewportControls">
-                  <span>Tool</span>
-                  <strong>{mappingStageTool().toUpperCase()}</strong>
-                  <span>Fixtures</span>
-                  <strong>{mappingFilteredFixtures().length}</strong>
-                  <span>Outputs</span>
-                  <strong>{snapshot().video.outputs.length}</strong>
-                  <span>Objects</span>
-                  <strong>{snapshot().stage_objects.length}</strong>
-                </div>
-                <div class={mappingStageCursorWorld() ? "mappingCursorReadout active" : "mappingCursorReadout"}>
-                  {mappingStageCursorWorld()
-                    ? `${mappingStageCursorLabel()} / ${mappingStageTool().toUpperCase()}`
-                    : "Move over the stage"}
-                </div>
-                <div class="mappingViewControls" aria-label="2D mapping viewport">
-                  <span>View</span>
-                  <button onClick={fitMappingViewportToVisible} disabled={!canFitMappingViewportToVisible()}>
-                    Fit All
-                  </button>
-                  <button onClick={fitMappingViewportToSelection} disabled={!canFitMappingViewportToSelection()}>
-                    Fit Sel
-                  </button>
-                  <button onClick={() => zoomMappingViewport(-1)} disabled={normalizedMappingViewportZoom() <= 1.001}>
-                    Zoom -
-                  </button>
-                  <strong>{mappingViewportZoomLabel()}</strong>
-                  <button onClick={() => zoomMappingViewport(1)} disabled={normalizedMappingViewportZoom() >= 3.999}>
-                    Zoom +
-                  </button>
-                  <button onClick={resetMappingViewport} disabled={normalizedMappingViewportZoom() <= 1.001}>
-                    Reset
-                  </button>
-                </div>
-                <div class="mappingStageSnapControls">
-                  <button
-                    class={!mappingSnapEnabled() ? "active" : ""}
-                    onClick={() => setMappingSnapEnabled(false)}
-                  >
-                    Snap Off
-                  </button>
-                  <For each={mappingSnapPresets}>
-                    {(preset) => (
-                      <button
-                        class={mappingSnapEnabled() && Math.abs(normalizedMappingSnapSize() - preset) < 0.001 ? "active" : ""}
-                        onClick={() => {
-                          setMappingSnapSize(preset);
-                          setMappingSnapEnabled(true);
-                        }}
-                      >
-                        {preset}m
-                      </button>
-                    )}
-                  </For>
-                  <label>
-                    Grid
-                    <input
-                      type="number"
-                      min="0.05"
-                      max="20"
-                      step="0.05"
-                      value={normalizedMappingSnapSize()}
-                      onChange={(event) => {
-                        setMappingSnapSize(Number(event.currentTarget.value));
-                        setMappingSnapEnabled(true);
-                      }}
-                    />
-                  </label>
-                </div>
-                <div class="mappingLayerToggles">
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={mappingShowLabels()}
-                      onChange={(event) => setMappingShowLabels(event.currentTarget.checked)}
-                    />
-                    Labels
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={mappingShowBeams()}
-                      onChange={(event) => setMappingShowBeams(event.currentTarget.checked)}
-                  />
-                  Beams
-                </label>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={mappingShowGeometry()}
-                    onChange={(event) => setMappingShowGeometry(event.currentTarget.checked)}
-                  />
-                  Geometry
-                </label>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={mappingShowProjectors()}
-                      onChange={(event) => setMappingShowProjectors(event.currentTarget.checked)}
-                    />
-                    Projectors
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={mappingShowStageObjects()}
-                      onChange={(event) => setMappingShowStageObjects(event.currentTarget.checked)}
-                    />
-                    Objects
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={mappingShowLevels()}
-                      onChange={(event) => setMappingShowLevels(event.currentTarget.checked)}
-                    />
-                    Levels
-                  </label>
-                </div>
-                <div class="mappingStageBoundsPanel">
-                  <div class="mappingStageBoundsStatus">
-                    <strong>Stage Bounds</strong>
-                    <span>
-                      {snapshot().stage_map.locked ? "Locked" : "Auto fit"} / X {stageWorldBounds().minX.toFixed(1)} to{" "}
-                      {stageWorldBounds().maxX.toFixed(1)} / Z {stageWorldBounds().minZ.toFixed(1)} to{" "}
-                      {stageWorldBounds().maxZ.toFixed(1)}
-                    </span>
-                  </div>
-                  <div class="mappingStageBoundsActions">
-                    <button
-                      class={snapshot().stage_map.locked ? "active" : ""}
-                      onClick={() => void lockStageMapToCurrentBounds()}
-                    >
-                      Fit Current
-                    </button>
-                    <button
-                      class={!snapshot().stage_map.locked ? "active" : ""}
-                      onClick={() => void setStageMapConfig({ locked: false }, "Unlocked 2D stage map auto-fit.")}
-                    >
-                      Auto Fit
-                    </button>
-                  </div>
-                  <div class="mappingStageBoundsGrid">
-                    <label>
-                      Min X
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={snapshot().stage_map.min_x}
-                        onChange={(event) =>
-                          void setStageMapConfig({ locked: true, min_x: Number(event.currentTarget.value) })
-                        }
-                      />
-                    </label>
-                    <label>
-                      Max X
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={snapshot().stage_map.max_x}
-                        onChange={(event) =>
-                          void setStageMapConfig({ locked: true, max_x: Number(event.currentTarget.value) })
-                        }
-                      />
-                    </label>
-                    <label>
-                      Min Z
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={snapshot().stage_map.min_z}
-                        onChange={(event) =>
-                          void setStageMapConfig({ locked: true, min_z: Number(event.currentTarget.value) })
-                        }
-                      />
-                    </label>
-                    <label>
-                      Max Z
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={snapshot().stage_map.max_z}
-                        onChange={(event) =>
-                          void setStageMapConfig({ locked: true, max_z: Number(event.currentTarget.value) })
-                        }
-                      />
-                    </label>
-                  </div>
-                  <div class="mappingStagePresetPanel">
-                    <label>
-                      Preset
-                      <input
-                        type="text"
-                        value={stageMapPresetLabel()}
-                        onInput={(event) => setStageMapPresetLabel(event.currentTarget.value)}
-                      />
-                    </label>
-                    <label>
-                      Stored
-                      <select
-                        value={selectedStageMapPresetLabel()}
-                        disabled={snapshot().stage_map_presets.length === 0}
-                        onInput={(event) => setSelectedStageMapPresetLabel(event.currentTarget.value)}
-                      >
-                        <option value="">Select preset</option>
-                        <For each={snapshot().stage_map_presets}>
-                          {(preset) => (
-                            <option value={preset.label}>
-                              {preset.label} ({stageMapPresetObjectCountLabel(preset)})
-                            </option>
-                          )}
-                        </For>
-                      </select>
-                    </label>
-                    <div class="mappingStagePresetActions">
-                      <button onClick={() => void saveStageMapPreset()}>
-                        Save
-                      </button>
-                      <button onClick={() => void exportStageMapPreset()}>
-                        Export
-                      </button>
-                      <button onClick={() => void importStageMapPreset()}>
-                        Import
-                      </button>
-                      <button
-                        disabled={!selectedStageMapPresetLabel()}
-                        onClick={() => void applyStageMapPreset(selectedStageMapPresetLabel())}
-                      >
-                        Apply
-                      </button>
-                      <button
-                        disabled={!selectedStageMapPresetLabel()}
-                        onClick={() => void removeStageMapPreset(selectedStageMapPresetLabel())}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                  <div class="mappingStagePresetPanel mappingViewPresetPanel">
-                    <label>
-                      View
-                      <input
-                        type="text"
-                        value={mappingViewPresetLabel()}
-                        onInput={(event) => setMappingViewPresetLabel(event.currentTarget.value)}
-                      />
-                    </label>
-                    <label>
-                      Stored View
-                      <select
-                        value={selectedMappingViewPresetId()}
-                        disabled={mappingViewPresets().length === 0}
-                        onChange={(event) => setSelectedMappingViewPresetId(event.currentTarget.value)}
-                      >
-                        <option value="">Select view</option>
-                        <For each={mappingViewPresets()}>
-                          {(preset) => (
-                            <option value={preset.id}>
-                              {preset.label} ({mappingViewPresetObjectLabel(preset)})
-                            </option>
-                          )}
-                        </For>
-                      </select>
-                    </label>
-                    <div class="mappingStagePresetActions viewPresetActions">
-                      <button onClick={saveMappingViewPreset}>
-                        Save View
-                      </button>
-                      <button
-                        disabled={!selectedMappingViewPresetId()}
-                        onClick={(event) => applyMappingViewPreset(mappingViewPresetIdFromButtonEvent(event))}
-                      >
-                        Apply View
-                      </button>
-                      <button
-                        disabled={!selectedMappingViewPresetId()}
-                        onClick={(event) => removeMappingViewPreset(mappingViewPresetIdFromButtonEvent(event))}
-                      >
-                        Delete View
-                      </button>
-                      <button onClick={exportMappingStageSvg}>
-                        Export SVG
-                      </button>
-                      <button onClick={() => void exportVisualizerRenderPayload()}>
-                        Export JSON
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                <svg
-                  ref={(element) => {
+                <MappingViewportControls
+                  stageTool={mappingStageTool()}
+                  fixtureCount={mappingFilteredFixtures().length}
+                  outputCount={snapshot().video.outputs.length}
+                  objectCount={snapshot().stage_objects.length}
+                  cursorReadout={
+                    mappingStageCursorWorld()
+                      ? `${mappingStageCursorLabel()} / ${mappingStageTool().toUpperCase()}`
+                      : null
+                  }
+                  canFitVisible={canFitMappingViewportToVisible()}
+                  canFitSelection={canFitMappingViewportToSelection()}
+                  zoomLabel={mappingViewportZoomLabel()}
+                  canZoomOut={normalizedMappingViewportZoom() > 1.001}
+                  canZoomIn={normalizedMappingViewportZoom() < 3.999}
+                  canResetZoom={normalizedMappingViewportZoom() > 1.001}
+                  snapEnabled={mappingSnapEnabled()}
+                  snapSize={normalizedMappingSnapSize()}
+                  showLabels={mappingShowLabels()}
+                  showBeams={mappingShowBeams()}
+                  showGeometry={mappingShowGeometry()}
+                  showProjectors={mappingShowProjectors()}
+                  showStageObjects={mappingShowStageObjects()}
+                  showLevels={mappingShowLevels()}
+                  onFitVisible={fitMappingViewportToVisible}
+                  onFitSelection={fitMappingViewportToSelection}
+                  onZoomOut={() => zoomMappingViewport(-1)}
+                  onZoomIn={() => zoomMappingViewport(1)}
+                  onResetZoom={resetMappingViewport}
+                  onSnapOff={() => setMappingSnapEnabled(false)}
+                  onSnapPreset={(preset) => {
+                    setMappingSnapSize(preset);
+                    setMappingSnapEnabled(true);
+                  }}
+                  onSnapSizeChange={(size) => {
+                    setMappingSnapSize(size);
+                    setMappingSnapEnabled(true);
+                  }}
+                  onShowLabels={setMappingShowLabels}
+                  onShowBeams={setMappingShowBeams}
+                  onShowGeometry={setMappingShowGeometry}
+                  onShowProjectors={setMappingShowProjectors}
+                  onShowStageObjects={setMappingShowStageObjects}
+                  onShowLevels={setMappingShowLevels}
+                />
+                <MappingStageConfigPanel
+                  stageMap={snapshot().stage_map}
+                  stageWorldBounds={stageWorldBounds()}
+                  stageMapPresetLabel={stageMapPresetLabel()}
+                  selectedStageMapPresetLabel={selectedStageMapPresetLabel()}
+                  stageMapPresets={snapshot().stage_map_presets}
+                  mappingViewPresetLabel={mappingViewPresetLabel()}
+                  selectedMappingViewPresetId={selectedMappingViewPresetId()}
+                  mappingViewPresets={mappingViewPresets()}
+                  stageMapPresetLabelFor={stageMapPresetObjectCountLabel}
+                  mappingViewPresetLabelFor={mappingViewPresetObjectLabel}
+                  onLockToCurrentBounds={lockStageMapToCurrentBounds}
+                  onSetStageMapConfig={setStageMapConfig}
+                  onStageMapPresetLabel={setStageMapPresetLabel}
+                  onSelectedStageMapPresetLabel={setSelectedStageMapPresetLabel}
+                  onSaveStageMapPreset={saveStageMapPreset}
+                  onExportStageMapPreset={exportStageMapPreset}
+                  onImportStageMapPreset={importStageMapPreset}
+                  onApplyStageMapPreset={applyStageMapPreset}
+                  onRemoveStageMapPreset={removeStageMapPreset}
+                  onMappingViewPresetLabel={setMappingViewPresetLabel}
+                  onSelectedMappingViewPresetId={setSelectedMappingViewPresetId}
+                  onSaveMappingViewPreset={saveMappingViewPreset}
+                  onApplyMappingViewPreset={applyMappingViewPreset}
+                  onRemoveMappingViewPreset={removeMappingViewPreset}
+                  onExportMappingStageSvg={exportMappingStageSvg}
+                  onExportVisualizerRenderPayload={exportVisualizerRenderPayload}
+                />
+                <MappingEditableStageShell
+                  svgRef={(element) => {
                     mappingStageSvgElement = element;
                   }}
-                  class={[
-                    "visualizerStage",
-                    "editableStage",
-                    mappingDrag() || mappingViewportPanDrag() ? "dragging" : "",
-                    mappingStageTool() === "place"
-                      ? "placeMode"
-                      : mappingStageTool() === "rotate"
-                        ? "rotateMode"
-                        : mappingStageTool() === "pan"
-                          ? "panMode"
-                          : "selectMode",
-                  ].filter(Boolean).join(" ")}
+                  dragging={Boolean(mappingDrag() || mappingViewportPanDrag())}
+                  stageTool={mappingStageTool()}
                   viewBox={mappingStageViewBox()}
-                  role="img"
-                  aria-label="2D fixture and projector mapping stage"
-                  onPointerDown={(event) => void handleMappingStagePointerDown(event)}
+                  stageOrigin={stageOrigin2d()}
+                  cursorPoint={mappingStageCursorSvgPoint()}
+                  cursorLabel={mappingStageCursorLabel()}
+                  snapEnabled={mappingSnapEnabled()}
+                  snapLines={mappingSnapLines()}
+                  marqueeBox={mappingMarqueeBox()}
+                  onPointerDown={handleMappingStagePointerDown}
                   onPointerMove={handleMappingStagePointerMove}
-                  onPointerUp={(event) => void finishMappingStageDrag(event)}
-                  onPointerCancel={(event) => void finishMappingStageDrag(event)}
+                  onPointerUp={finishMappingStageDrag}
                   onPointerLeave={() => setMappingStageCursorWorld(null)}
                   onWheel={handleMappingStageWheel}
                 >
-                  <defs>
-                    <pattern id="stage-grid" width="10" height="10" patternUnits="userSpaceOnUse">
-                      <path d="M 10 0 L 0 0 0 10" />
-                    </pattern>
-                  </defs>
-                  <rect class="stageFloor" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
-                  <rect class="stageGrid" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
-                  <line class="stageAxis2d" x1={stageOrigin2d().x} y1="0" x2={stageOrigin2d().x} y2={stageViewBoxSize} />
-                  <line class="stageAxis2d" x1="0" y1={stageOrigin2d().z} x2={stageViewBoxSize} y2={stageOrigin2d().z} />
-                  <Show when={mappingStageCursorSvgPoint()}>
-                    {(cursor) => (
-                      <g class="stageCursorGuide">
-                        <line x1={cursor().x} y1="0" x2={cursor().x} y2={stageViewBoxSize} />
-                        <line x1="0" y1={cursor().z} x2={stageViewBoxSize} y2={cursor().z} />
-                        <circle cx={cursor().x} cy={cursor().z} r="1.6">
-                          <title>{mappingStageCursorLabel()}</title>
-                        </circle>
-                      </g>
-                    )}
-                  </Show>
-                  <Show when={mappingSnapEnabled()}>
-                    <g>
-                      <For each={mappingSnapLines()}>
-                        {(line) => (
-                          <line
-                            class={`stageSnapLine ${line.axis}`}
-                            x1={line.axis === "x" ? line.svg : 0}
-                            y1={line.axis === "z" ? line.svg : 0}
-                            x2={line.axis === "x" ? line.svg : stageViewBoxSize}
-                            y2={line.axis === "z" ? line.svg : stageViewBoxSize}
-                          />
-                        )}
-                      </For>
-                    </g>
-                  </Show>
-                  <Show when={mappingMarqueeBox()}>
-                    {(box) => (
-                      <rect
-                        class="mappingMarquee"
-                        x={box().x}
-                        y={box().z}
-                        width={box().width}
-                        height={box().height}
-                      />
-                    )}
-                  </Show>
-                  <Show when={mappingShowStageObjects()}>
-                    <g class="stageObjectLayer">
-                      <For each={visualizerStageObjects2d()}>
-                        {(object) => (
-                          <g
-                            class={`${stageObjectClass(object)} ${object.selected ? "selected" : ""} ${isDraggingMappingStageObject(object.id) ? "dragging" : ""}`}
-                            transform={`translate(${object.x} ${object.z}) rotate(${object.rotationDeg})`}
-                            onPointerDown={(event) => beginMappingStageObjectDrag(event, object.id)}
-                          >
-                            <rect
-                              x={-object.width / 2}
-                              y={-object.depth / 2}
-                              width={object.width}
-                              height={object.depth}
-                              fill={object.color}
-                            >
-                              <title>{object.label} / {object.kind}</title>
-                            </rect>
-                            <line x1={-object.width / 2} y1="0" x2={object.width / 2} y2="0" />
-                            <line x1="0" y1={-object.depth / 2} x2="0" y2={object.depth / 2} />
-                            <text x={-object.width / 2 + 1} y={-object.depth / 2 - 1}>
-                              {object.label}
-                            </text>
-                            <Show when={object.selected}>
-                              <line
-                                class="stageObjectHandleLine"
-                                x1="0"
-                                y1={-object.depth / 2}
-                                x2="0"
-                                y2={-object.depth / 2 - 5}
-                              />
-                              <circle
-                                class="stageObjectRotateHandle"
-                                cx="0"
-                                cy={-object.depth / 2 - 5}
-                                r="1.8"
-                                onPointerDown={(event) => beginMappingStageObjectRotate(event, object.id)}
-                              >
-                                <title>Rotate {object.label}</title>
-                              </circle>
-                              <circle
-                                class="stageObjectResizeHandle width"
-                                cx={object.width / 2 + 2.3}
-                                cy="0"
-                                r="1.7"
-                                onPointerDown={(event) => beginMappingStageObjectResize(event, object.id, "width")}
-                              >
-                                <title>Resize width of {object.label}</title>
-                              </circle>
-                              <circle
-                                class="stageObjectResizeHandle depth"
-                                cx="0"
-                                cy={object.depth / 2 + 2.3}
-                                r="1.7"
-                                onPointerDown={(event) => beginMappingStageObjectResize(event, object.id, "depth")}
-                              >
-                                <title>Resize depth of {object.label}</title>
-                              </circle>
-                              <rect
-                                class="stageObjectResizeHandle both"
-                                x={object.width / 2 + 0.9}
-                                y={object.depth / 2 + 0.9}
-                                width="3"
-                                height="3"
-                                onPointerDown={(event) => beginMappingStageObjectResize(event, object.id, "both")}
-                              >
-                                <title>Resize {object.label}</title>
-                              </rect>
-                            </Show>
-                          </g>
-                        )}
-                      </For>
-                    </g>
-                  </Show>
-                  <Show when={mappingShowProjectors()}>
-                    <For each={visualizerVideoSurfaces2d()}>
-                      {(surface) => {
-                        const output = () => snapshot().video.outputs.find((candidate) => candidate.id === surface.id);
-                        const surfaceMapping = () => {
-                          const mappedOutput = output();
-                          return mappedOutput ? mappingVideoOutputMapping(mappedOutput) : defaultVideoOutputMapping;
-                        };
-                        const corners = () => mappingVideoSurfaceCornerLocals(surface, surfaceMapping());
-                        return (
-                          <g
-                            class={[
-                              "stageVideoSurface2d",
-                              selectedVideoOutputId() === surface.id ? "selected" : "",
-                              isDraggingMappingVideoOutput(surface.id) ? "dragging" : "",
-                              surface.active ? "" : "inactive",
-                            ].filter(Boolean).join(" ")}
-                            transform={`translate(${surface.x} ${surface.z}) rotate(${surface.rotationDeg})`}
-                            opacity={Math.max(0.22, surface.opacity)}
-                            onPointerDown={(event) => {
-                              if (mappingStageTool() === "pan") {
-                                return;
-                              }
-                              event.stopPropagation();
-                              setSelectedVideoOutputId(surface.id);
-                              beginMappingVideoOutputDrag(event, surface.id);
-                            }}
-                          >
-                          <polygon
-                            class="stageVideoSurfaceShape"
-                            points={mappingVideoSurfaceCornerPointList(surface, surfaceMapping())}
-                          >
-                            <title>{surface.label} / projector warp surface</title>
-                          </polygon>
-                          <line x1={-surface.width / 2} y1="0" x2={surface.width / 2} y2="0" />
-                          <line x1="0" y1={-surface.height / 2} x2="0" y2={surface.height / 2} />
-                          <text x={-surface.width / 2 + 1.2} y={-surface.height / 2 - 1.6}>
-                            {surface.label}
-                          </text>
-                          <Show when={selectedVideoOutputId() === surface.id}>
-                            <For each={corners()}>
-                              {(corner) => (
-                                <rect
-                                  class="stageVideoSurfaceCornerHandle"
-                                  x={corner.x - 1.25}
-                                  y={corner.z - 1.25}
-                                  width="2.5"
-                                  height="2.5"
-                                  onPointerDown={(event) => beginMappingVideoOutputCornerDrag(event, surface.id, corner.key)}
-                                >
-                                  <title>{corner.label} corner pin</title>
-                                </rect>
-                              )}
-                            </For>
-                            <line
-                              class="stageVideoSurfaceHandleLine"
-                              x1="0"
-                              y1={-surface.height / 2}
-                              x2="0"
-                              y2={-surface.height / 2 - 5}
-                            />
-                            <circle
-                              class="stageVideoSurfaceRotateHandle"
-                              cx="0"
-                              cy={-surface.height / 2 - 5}
-                              r="1.8"
-                              onPointerDown={(event) => {
-                                if (mappingStageTool() === "pan") {
-                                  return;
-                                }
-                                event.preventDefault();
-                                event.stopPropagation();
-                                setSelectedVideoOutputId(surface.id);
-                                beginMappingVideoOutputRotate(event, surface.id);
-                              }}
-                            />
-                            <circle
-                              class="stageVideoSurfaceScaleHandle"
-                              cx={surface.width / 2 + 2.4}
-                              cy={surface.height / 2 + 2.4}
-                              r="1.8"
-                              onPointerDown={(event) => {
-                                if (mappingStageTool() === "pan") {
-                                  return;
-                                }
-                                event.preventDefault();
-                                event.stopPropagation();
-                                setSelectedVideoOutputId(surface.id);
-                                beginMappingVideoOutputScale(event, surface.id);
-                              }}
-                            />
-                          </Show>
-                        </g>
-                        );
-                      }}
-                    </For>
-                  </Show>
-                  <Show when={mappingShowBeams()}>
-                    <For each={visualizerFixtures()}>
-                      {(fixture) => (
-                        <polygon
-                          class="stageBeam"
-                          points={fixture.beamPoints}
-                          fill={fixture.color}
-                          opacity={Math.max(0.08, fixture.intensity * 0.55)}
-                        />
-                      )}
-                    </For>
-                  </Show>
-                  <Show when={mappingShowGeometry()}>
-                    <For each={mappingGeometryNodes2d()}>
-                      {(geometry) => (
-                        <g class={geometry.className}>
-                          <ellipse
-                            class="stageGeometryFootprint"
-                            cx={geometry.x}
-                            cy={geometry.z}
-                            rx={geometry.footprintWidth / 2}
-                            ry={geometry.footprintHeight / 2}
-                          >
-                            <title>
-                              {geometry.fixtureLabel} / {geometry.name} / {geometry.kind}
-                              {geometry.mappedChannelCount > 0 ? ` / ${geometry.mappedChannelCount} channel(s)` : ""}
-                            </title>
-                          </ellipse>
-                          <circle cx={geometry.x} cy={geometry.z} r={geometry.radius}>
-                            <title>
-                              {geometry.fixtureLabel} / {geometry.name} / {geometry.kind}
-                              {geometry.mappedChannelCount > 0 ? ` / ${geometry.mappedChannelCount} channel(s)` : ""}
-                            </title>
-                          </circle>
-                          <Show when={mappingShowLabels()}>
-                            <text x={geometry.x + 1.8} y={geometry.z - 1.6}>
-                              {geometry.name}
-                            </text>
-                          </Show>
-                        </g>
-                      )}
-                    </For>
-                  </Show>
-                  <For each={visualizerFixtures()}>
-                    {(fixture) => {
-                      const selected = () => selectedMappingFixtureIdSet().has(fixture.id);
-                      const className = () => [
-                        "stageFixture",
-                        "stageFixtureBlock",
-                        `kind-${fixture.visualKind}`,
-                        selected() ? "selected picked" : "",
-                        isDraggingMappingFixture(fixture.id) ? "dragging" : "",
-                        selectedFixtureGroupFilter() && fixture.inGroupFilter ? "groupMatch" : "",
-                        selectedFixtureTypeFilter() && fixture.typeKey === selectedFixtureTypeFilter() ? "typeMatch" : "",
-                        fixture.highlighted ? "highlighted" : "",
-                        fixture.soloed ? "soloed" : "",
-                        fixture.parked ? "parked" : "",
-                      ].filter(Boolean).join(" ");
-                      const yawDragging = () => {
-                        const drag = mappingDrag();
-                        return drag?.kind === "fixtureYaw" && drag.fixtureId === fixture.id;
-                      };
-                      const showYawHandle = () => selected() || selectedFixtureId() === fixture.id || yawDragging();
-                      return (
-                        <>
-                          <g
-                            class={className()}
-                            transform={`translate(${fixture.x} ${fixture.z}) rotate(${fixture.yaw})`}
-                            onPointerDown={(event) => {
-                              if (mappingStageTool() === "pan") {
-                                return;
-                              }
-                              event.stopPropagation();
-                              const patchedFixture = snapshot().fixtures.find((candidate) => candidate.id === fixture.id);
-                              if (patchedFixture && mappingStageTool() === "rotate") {
-                                selectMappingFixture(patchedFixture, event);
-                              }
-                              beginMappingFixtureDrag(event, fixture.id);
-                            }}
-                          >
-                            <Show
-                              when={fixture.visualKind === "bar" || fixture.visualKind === "panel"}
-                              fallback={
-                                <Show
-                                  when={fixture.visualKind === "laser"}
-                                  fallback={
-                                    <circle
-                                      class="stageFixtureShape"
-                                      cx="0"
-                                      cy="0"
-                                      r={Math.max(fixture.width, fixture.height) / 2 + fixture.intensity * 1.5}
-                                      fill={fixture.color}
-                                    />
-                                  }
-                                >
-                                  <polygon
-                                    class="stageFixtureShape"
-                                    points={`0,${-fixture.height / 2} ${fixture.width / 2},${fixture.height / 2} ${-fixture.width / 2},${fixture.height / 2}`}
-                                    fill={fixture.color}
-                                  />
-                                </Show>
-                              }
-                            >
-                              <rect
-                                class="stageFixtureShape"
-                                x={-fixture.width / 2}
-                                y={-fixture.height / 2}
-                                width={fixture.width}
-                                height={fixture.height}
-                                fill={fixture.color}
-                              />
-                            </Show>
-                            <line class="stageFixtureCenterLine" x1="0" y1="0" x2="0" y2="-7" />
-                            <circle class="stageFixtureLaserMark" cx="0" cy="-7" r="0.9" />
-                            <title>{`${fixture.label} / ${fixture.dmxLabel} / ${fixture.groupLabel}`}</title>
-                          </g>
-                          <Show when={showYawHandle()}>
-                            <line
-                              class={yawDragging() ? "stageYawLine dragging" : "stageYawLine"}
-                              x1={fixture.x}
-                              y1={fixture.z}
-                              x2={fixture.yawHandleX}
-                              y2={fixture.yawHandleZ}
-                            />
-                            <circle
-                              class={yawDragging() ? "stageYawHandle dragging" : "stageYawHandle"}
-                              cx={fixture.yawHandleX}
-                              cy={fixture.yawHandleZ}
-                              r="2.3"
-                              onPointerDown={(event) => beginMappingFixtureYawDrag(event, fixture.id)}
-                            >
-                              <title>{fixture.label} yaw {fixture.yaw} deg</title>
-                            </circle>
-                          </Show>
-                          <Show when={mappingShowLabels()}>
-                            <text class="stageLabel" x={fixture.x + 3.5} y={fixture.z - 3.5}>
-                              {fixture.label}
-                            </text>
-                          </Show>
-                          <Show when={mappingShowLevels()}>
-                            <text class={fixture.inGroupFilter ? "stageLevelLabel" : "stageLevelLabel muted"} x={fixture.x + 3.5} y={fixture.z + 5}>
-                              {Math.round(fixture.intensity * 100)}%
-                            </text>
-                          </Show>
-                        </>
-                      );
+                  <MappingStageLayersPanel
+                    showStageObjects={mappingShowStageObjects()}
+                    showProjectors={mappingShowProjectors()}
+                    showBeams={mappingShowBeams()}
+                    showGeometry={mappingShowGeometry()}
+                    showLabels={mappingShowLabels()}
+                    showLevels={mappingShowLevels()}
+                    stageTool={mappingStageTool()}
+                    stageObjects={visualizerStageObjects2d()}
+                    videoSurfaces={visualizerVideoSurfaces2d()}
+                    beamFixtures={visualizerFixtures()}
+                    geometryNodes={mappingGeometryNodes2d()}
+                    fixtures={visualizerFixtures()}
+                    selectedFixtureIds={selectedMappingFixtureIdSet()}
+                    selectedFixtureId={selectedFixtureId()}
+                    selectedGroupId={selectedFixtureGroupFilter()}
+                    selectedTypeKey={selectedFixtureTypeFilter()}
+                    selectedVideoOutputId={selectedVideoOutputId()}
+                    placePreview={mappingPlacePreview()}
+                    isDraggingStageObject={isDraggingMappingStageObject}
+                    isDraggingVideoOutput={isDraggingMappingVideoOutput}
+                    isDraggingFixture={isDraggingMappingFixture}
+                    isYawDragging={(fixtureId) => {
+                      const drag = mappingDrag();
+                      return drag?.kind === "fixtureYaw" && drag.fixtureId === fixtureId;
                     }}
-                  </For>
-                  <Show when={mappingPlacePreview()}>
-                    {(preview) => (
-                      <g
-                        class={`stagePlacePreview kind-${preview().visualKind}`}
-                        transform={`translate(${preview().x} ${preview().z}) rotate(${preview().yaw})`}
-                      >
-                        <Show
-                          when={preview().visualKind === "bar" || preview().visualKind === "panel"}
-                          fallback={
-                            <Show
-                              when={preview().visualKind === "laser"}
-                              fallback={
-                                <circle
-                                  r={Math.max(preview().width, preview().height) / 2}
-                                  fill={preview().color}
-                                >
-                                  <title>Place {preview().label} / {preview().dmxLabel} / {preview().groupLabel}</title>
-                                </circle>
-                              }
-                            >
-                              <polygon
-                                class="stagePlacePreviewShape"
-                                points={`0,${-preview().height / 2} ${preview().width / 2},${preview().height / 2} ${-preview().width / 2},${preview().height / 2}`}
-                                fill={preview().color}
-                              >
-                                <title>Place {preview().label} / {preview().dmxLabel} / {preview().groupLabel}</title>
-                              </polygon>
-                            </Show>
-                          }
-                        >
-                          <rect
-                            class="stagePlacePreviewShape"
-                            x={-preview().width / 2}
-                            y={-preview().height / 2}
-                            width={preview().width}
-                            height={preview().height}
-                            fill={preview().color}
-                          >
-                            <title>Place {preview().label} / {preview().dmxLabel} / {preview().groupLabel}</title>
-                          </rect>
-                          <line
-                            class="stagePlacePreviewCenterLine"
-                            x1="0"
-                            y1="0"
-                            x2="0"
-                            y2={-Math.max(5, preview().height / 2 + 2)}
-                          />
-                        </Show>
-                        <text x={preview().width / 2 + 1.6} y={-preview().height / 2 - 1}>
-                          Place {preview().label}
-                        </text>
-                      </g>
-                    )}
-                  </Show>
-                </svg>
+                    surfaceMapping={(surface) => {
+                      const output = snapshot().video.outputs.find((candidate) => candidate.id === surface.id);
+                      return output ? mappingVideoOutputMapping(output) : defaultVideoOutputMapping;
+                    }}
+                    cornerLocals={mappingVideoSurfaceCornerLocals}
+                    cornerPointList={mappingVideoSurfaceCornerPointList}
+                    onBeginStageObjectDrag={beginMappingStageObjectDrag}
+                    onBeginStageObjectRotate={beginMappingStageObjectRotate}
+                    onBeginStageObjectResize={beginMappingStageObjectResize}
+                    onSelectVideoOutput={setSelectedVideoOutputId}
+                    onBeginVideoOutputDrag={beginMappingVideoOutputDrag}
+                    onBeginVideoOutputCornerDrag={beginMappingVideoOutputCornerDrag}
+                    onBeginVideoOutputRotate={beginMappingVideoOutputRotate}
+                    onBeginVideoOutputScale={beginMappingVideoOutputScale}
+                    onBeginFixtureYawDrag={beginMappingFixtureYawDrag}
+                    onFixturePointerDown={(event, fixtureId) => {
+                      if (mappingStageTool() === "pan") {
+                        return;
+                      }
+                      event.stopPropagation();
+                      const patchedFixture = snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
+                      if (patchedFixture && mappingStageTool() === "rotate") {
+                        selectMappingFixture(patchedFixture, event);
+                      }
+                      beginMappingFixtureDrag(event, fixtureId);
+                    }}
+                  />
+                </MappingEditableStageShell>
               </div>
-              <aside class="mappingSelectionPanel">
-                <div class="mappingSelectionHeader">
-                  <strong>Selections</strong>
-                  <span>
-                    {selectedMappingFixtures().length > 0
-                      ? `${selectedMappingFixtures().length} picked / ${mappingFilteredFixtures().length}`
-                      : `${mappingFilteredFixtures().length} fixture(s)`}
-                  </span>
-                </div>
-                <div class="mappingSearchPanel">
-                  <label>
-                    Search
-                    <input
-                      type="search"
-                      value={mappingFixtureSearch()}
-                      onInput={(event) => setMappingFixtureSearch(event.currentTarget.value)}
-                      placeholder="label, U1 A24, group"
-                    />
-                  </label>
-                  <button onClick={() => setMappingFixtureSearch("")} disabled={mappingFixtureSearch().trim().length === 0}>
-                    Clear
-                  </button>
-                  <div class="mappingSearchActions">
-                    <button onClick={pickVisibleMappingFixtures} disabled={mappingFilteredFixtures().length === 0}>
-                      Pick Visible
-                      <span>{mappingFilteredFixtures().length}</span>
-                    </button>
-                    <button
-                      onClick={() => void duplicateSelectedMappingFixtures()}
-                      disabled={selectedMappingFixtures().length === 0}
-                    >
-                      Duplicate
-                      <span>{selectedMappingFixtures().length}</span>
-                    </button>
-                    <button
-                      onClick={() => void removeSelectedMappingFixtures()}
-                      disabled={selectedMappingFixtures().length === 0}
-                    >
-                      Remove
-                      <span>{selectedMappingFixtures().length}</span>
-                    </button>
-                    <button onClick={clearMappingFixtureSelection} disabled={selectedMappingFixtures().length === 0}>
-                      Clear Pick
-                      <span>{selectedMappingFixtures().length}</span>
-                    </button>
-                  </div>
-                </div>
-                <div class="mappingSelectionAssign">
-                  <label>
-                    Selected Groups
-                    <input
-                      type="text"
-                      value={mappingSelectionGroupText()}
-                      onInput={(event) => setMappingSelectionGroupText(event.currentTarget.value)}
-                      placeholder="front, movers, floor"
-                    />
-                  </label>
-                  <div class="mappingSelectionQuickActions">
-                    <button
-                      onClick={() => void applyMappingSelectionGroups("add")}
-                      disabled={selectedMappingFixtures().length === 0 || parseGroupIds(mappingSelectionGroupText()).length === 0}
-                    >
-                      Add
-                    </button>
-                    <button
-                      onClick={() => void applyMappingSelectionGroups("remove")}
-                      disabled={selectedMappingFixtures().length === 0 || parseGroupIds(mappingSelectionGroupText()).length === 0}
-                    >
-                      Remove
-                    </button>
-                    <button
-                      onClick={() => void applyMappingSelectionGroups("set")}
-                      disabled={selectedMappingFixtures().length === 0 || parseGroupIds(mappingSelectionGroupText()).length === 0}
-                    >
-                      Set
-                    </button>
-                  </div>
-                </div>
-                <div class="mappingStageObjectPanel">
-                  <div class="mappingTransformTitle">
-                    <strong>Stage Objects</strong>
-                    <span>{snapshot().stage_objects.length} reference(s)</span>
-                  </div>
-                  <label>
-                    Label
-                    <input
-                      type="text"
-                      value={stageObjectLabel()}
-                      onInput={(event) => setStageObjectLabel(event.currentTarget.value)}
-                    />
-                  </label>
-                  <div class="mappingProjectorFieldGrid">
-                    <label>
-                      Kind
-                      <select
-                        value={stageObjectKind()}
-                        onChange={(event) => {
-                          const kind = event.currentTarget.value as StageObjectKind;
-                          setStageObjectKind(kind);
-                          setStageObjectColor(stageObjectDefaultColor(kind));
-                        }}
-                      >
-                        <For each={stageObjectKinds}>{(kind) => <option value={kind}>{kind}</option>}</For>
-                      </select>
-                    </label>
-                    <label>
-                      Width
-                      <input
-                        type="number"
-                        min="0.05"
-                        step="0.1"
-                        value={stageObjectWidth()}
-                        onInput={(event) => setStageObjectWidth(Number(event.currentTarget.value))}
-                      />
-                    </label>
-                    <label>
-                      Depth
-                      <input
-                        type="number"
-                        min="0.05"
-                        step="0.1"
-                        value={stageObjectDepth()}
-                        onInput={(event) => setStageObjectDepth(Number(event.currentTarget.value))}
-                      />
-                    </label>
-                    <label>
-                      Rot
-                      <input
-                        type="number"
-                        step="1"
-                        value={stageObjectRotation()}
-                        onInput={(event) => setStageObjectRotation(Number(event.currentTarget.value))}
-                      />
-                    </label>
-                  </div>
-                  <div class="mappingStageObjectColorRow">
-                    <label>
-                      Color
-                      <input
-                        type="color"
-                        value={stageObjectColor()}
-                        onInput={(event) => setStageObjectColor(event.currentTarget.value)}
-                      />
-                    </label>
-                    <button class="primary" onClick={() => void addStageObjectAtCenter()}>
-                      Add Center
-                    </button>
-                  </div>
-                  <For each={snapshot().stage_objects}>
-                    {(object) => (
-                      <button
-                        class={selectedStageObjectId() === object.id ? "stageObjectListItem active" : "stageObjectListItem"}
-                        onClick={() => setSelectedStageObjectId(object.id)}
-                      >
-                        <strong>{object.label}</strong>
-                        <span>{object.kind}</span>
-                        <small>X {object.x.toFixed(1)} / Z {object.z.toFixed(1)}</small>
-                      </button>
-                    )}
-                  </For>
-                </div>
-                <Show when={selectedStageObject()}>
-                  {(object) => (
-                    <div class="mappingStageObjectPanel selectedObject">
-                      <div class="mappingTransformTitle">
-                        <strong>{object().label}</strong>
-                        <span>{object().kind} / {object().width.toFixed(1)}x{object().depth.toFixed(1)}m</span>
-                      </div>
-                      <div class="mappingTransformGrid">
-                        <label>
-                          X
-                          <input
-                            type="number"
-                            step="0.1"
-                            value={object().x}
-                            onChange={(event) => void setStageObject(object(), { x: Number(event.currentTarget.value) })}
-                          />
-                        </label>
-                        <label>
-                          Z
-                          <input
-                            type="number"
-                            step="0.1"
-                            value={object().z}
-                            onChange={(event) => void setStageObject(object(), { z: Number(event.currentTarget.value) })}
-                          />
-                        </label>
-                        <label>
-                          Width
-                          <input
-                            type="number"
-                            min="0.05"
-                            step="0.1"
-                            value={object().width}
-                            onChange={(event) => void setStageObject(object(), { width: Number(event.currentTarget.value) })}
-                          />
-                        </label>
-                        <label>
-                          Depth
-                          <input
-                            type="number"
-                            min="0.05"
-                            step="0.1"
-                            value={object().depth}
-                            onChange={(event) => void setStageObject(object(), { depth: Number(event.currentTarget.value) })}
-                          />
-                        </label>
-                        <label>
-                          Rot
-                          <input
-                            type="number"
-                            step="1"
-                            value={object().rotation_deg}
-                            onChange={(event) => void setStageObject(object(), { rotation_deg: Number(event.currentTarget.value) })}
-                          />
-                        </label>
-                        <label>
-                          Kind
-                          <select
-                            value={object().kind}
-                            onChange={(event) => {
-                              const kind = event.currentTarget.value as StageObjectKind;
-                              void setStageObject(object(), {
-                                kind,
-                                color: object().color ?? stageObjectDefaultColor(kind),
-                              });
-                            }}
-                          >
-                            <For each={stageObjectKinds}>{(kind) => <option value={kind}>{kind}</option>}</For>
-                          </select>
-                        </label>
-                      </div>
-                      <label>
-                        Label
-                        <input
-                          type="text"
-                          value={object().label}
-                          onChange={(event) => void setStageObject(object(), { label: event.currentTarget.value })}
-                        />
-                      </label>
-                      <div class="mappingStageObjectColorRow">
-                        <label>
-                          Color
-                          <input
-                            type="color"
-                            value={object().color ?? stageObjectDefaultColor(object().kind)}
-                            onInput={(event) => void setStageObject(object(), { color: event.currentTarget.value })}
-                          />
-                        </label>
-                        <button onClick={() => void removeStageObject(object().id)}>
-                          Delete Object
-                        </button>
-                      </div>
-                      <div class="mappingTransformActions">
-                        <button onClick={() => pickFixturesInsideSelectedStageObject("replace")}>
-                          Pick Inside
-                        </button>
-                        <button onClick={() => pickFixturesInsideSelectedStageObject("add")}>
-                          Add Inside
-                        </button>
-                        <button
-                          onClick={() => void layoutSelectedFixturesOnStageObject("line")}
-                          disabled={selectedMappingFixtures().length === 0}
-                        >
-                          Line Here
-                        </button>
-                        <button
-                          onClick={() => void layoutSelectedFixturesOnStageObject("grid")}
-                          disabled={selectedMappingFixtures().length === 0}
-                        >
-                          Grid Here
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </Show>
-                <div class="mappingTransformInspector">
-                  <div class="mappingTransformTitle">
-                    <strong>Selection Flags</strong>
-                    <span>
-                      {selectedMappingFlagState().count > 0
-                        ? `${selectedMappingFlagState().count} fixture(s) picked`
-                        : "Pick fixtures on the map or list."}
-                    </span>
-                  </div>
-                  <div class="mappingFlagActions">
-                    <button
-                      class={selectedMappingFlagState().allHighlighted ? "active" : ""}
-                      onClick={() => void setMappingSelectionFlag("highlight", !selectedMappingFlagState().allHighlighted)}
-                      disabled={selectedMappingFlagState().count === 0}
-                    >
-                      {selectedMappingFlagState().allHighlighted ? "Clear High" : "Highlight"}
-                    </button>
-                    <button
-                      class={selectedMappingFlagState().allSoloed ? "active" : ""}
-                      onClick={() => void setMappingSelectionFlag("solo", !selectedMappingFlagState().allSoloed)}
-                      disabled={selectedMappingFlagState().count === 0}
-                    >
-                      {selectedMappingFlagState().allSoloed ? "Clear Solo" : "Solo"}
-                    </button>
-                    <button
-                      class={selectedMappingFlagState().allParked ? "active" : ""}
-                      onClick={() => void setMappingSelectionFlag("park", !selectedMappingFlagState().allParked)}
-                      disabled={selectedMappingFlagState().count === 0}
-                    >
-                      {selectedMappingFlagState().allParked ? "Clear Park" : "Park"}
-                    </button>
-                  </div>
-                  <div class="mappingNudgePanel">
-                    <span>Nudge {normalizedMappingSnapSize()}m</span>
-                    <div class="mappingNudgeGrid">
-                      <button
-                        onClick={() => void nudgeSelectedMappingFixtures(0, -normalizedMappingSnapSize())}
-                        disabled={selectedMappingFlagState().count === 0}
-                      >
-                        Up
-                      </button>
-                      <button
-                        onClick={() => void nudgeSelectedMappingFixtures(-normalizedMappingSnapSize(), 0)}
-                        disabled={selectedMappingFlagState().count === 0}
-                      >
-                        Left
-                      </button>
-                      <button
-                        onClick={() => void nudgeSelectedMappingFixtures(normalizedMappingSnapSize(), 0)}
-                        disabled={selectedMappingFlagState().count === 0}
-                      >
-                        Right
-                      </button>
-                      <button
-                        onClick={() => void nudgeSelectedMappingFixtures(0, normalizedMappingSnapSize())}
-                        disabled={selectedMappingFlagState().count === 0}
-                      >
-                        Down
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                <Show when={selectedMappingFixtures().length > 1}>
-                  <div class="mappingTransformInspector">
-                    <div class="mappingTransformTitle">
-                      <strong>{selectedMappingFixtures().length} fixtures selected</strong>
-                      <span>Drag any selected fixture to move the group.</span>
-                    </div>
-                    <div class="mappingTransformActions">
-                      <button onClick={() => void layoutSelectedMappingFixtures("line")}>Line</button>
-                      <button onClick={() => void layoutSelectedMappingFixtures("grid")}>Grid</button>
-                      <button onClick={() => void layoutSelectedMappingFixtures("circle")}>Circle</button>
-                      <button
-                        onClick={() => void layoutSelectedFixturesOnStageObject("line")}
-                        disabled={!selectedStageObject()}
-                      >
-                        Object Line
-                      </button>
-                      <button
-                        onClick={() => void layoutSelectedFixturesOnStageObject("grid")}
-                        disabled={!selectedStageObject()}
-                      >
-                        Object Grid
-                      </button>
-                      <button onClick={() => void alignSelectedMappingFixtures("x")}>Align X</button>
-                      <button onClick={() => void alignSelectedMappingFixtures("z")}>Align Z</button>
-                      <button
-                        onClick={() => void distributeSelectedMappingFixtures("x")}
-                        disabled={selectedMappingFixtures().length < 3}
-                      >
-                        Distribute X
-                      </button>
-                      <button
-                        onClick={() => void distributeSelectedMappingFixtures("z")}
-                        disabled={selectedMappingFixtures().length < 3}
-                      >
-                        Distribute Z
-                      </button>
-                      <button onClick={() => void mirrorSelectedMappingFixtures("x")}>Mirror X</button>
-                      <button onClick={() => void mirrorSelectedMappingFixtures("z")}>Mirror Z</button>
-                      <button onClick={() => void rotateSelectedMappingFixtures(-15)}>Rot -15</button>
-                      <button onClick={() => void rotateSelectedMappingFixtures(15)}>Rot +15</button>
-                      <button onClick={() => void rotateSelectedMappingFixtures(180)}>Flip 180</button>
-                      <button onClick={() => void duplicateSelectedMappingFixtures()}>Duplicate</button>
-                      <button onClick={() => void removeSelectedMappingFixtures()}>Remove</button>
-                      <button onClick={() => setWorkspaceTab("control")}>Control Active</button>
-                      <button onClick={clearMappingFixtureSelection}>Clear</button>
-                    </div>
-                  </div>
-                </Show>
-                <Show
-                  when={selectedMappingFixture()}
-                  fallback={
-                    <div class="mappingTransformInspector">
-                      <div class="mappingTransformTitle">
-                        <strong>No fixture selected</strong>
-                        <span>Select a fixture on the map or patch list.</span>
-                      </div>
-                    </div>
-                  }
-                >
-                  {(fixture) => (
-                    <div class="mappingTransformInspector">
-                      <div class="mappingTransformTitle">
-                        <strong>{fixture().label}</strong>
-                        <span>{fixture().manufacturer} {fixture().profile_name} / U{fixture().universe} A{fixture().address}</span>
-                      </div>
-                      <div class="mappingTransformGrid">
-                        <label>
-                          X
-                          <input
-                            type="number"
-                            step="0.1"
-                            value={fixture().position.x}
-                            onChange={(event) =>
-                              void setFixtureTransform(fixture(), {
-                                position: { ...fixture().position, x: Number(event.currentTarget.value) },
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          Z
-                          <input
-                            type="number"
-                            step="0.1"
-                            value={fixture().position.z}
-                            onChange={(event) =>
-                              void setFixtureTransform(fixture(), {
-                                position: { ...fixture().position, z: Number(event.currentTarget.value) },
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          Y
-                          <input
-                            type="number"
-                            step="0.1"
-                            value={fixture().position.y}
-                            onChange={(event) =>
-                              void setFixtureTransform(fixture(), {
-                                position: { ...fixture().position, y: Number(event.currentTarget.value) },
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          Yaw
-                          <input
-                            type="number"
-                            step="1"
-                            value={fixture().rotation.yaw}
-                            onChange={(event) =>
-                              void setFixtureTransform(fixture(), {
-                                rotation: { ...fixture().rotation, yaw: Number(event.currentTarget.value) },
-                              })
-                            }
-                          />
-                        </label>
-                      </div>
-                      <div class="mappingGeometrySummary">
-                        <div class="mappingTransformTitle">
-                          <strong>GDTF Geometry</strong>
-                          <span>{selectedMappingGeometryRows().length} node(s)</span>
-                        </div>
-                        <Show when={selectedMappingGeometryRows().length > 0} fallback={<p class="empty">No geometry nodes on this fixture.</p>}>
-                          <div class="mappingGeometryList">
-                            <For each={selectedMappingGeometryRows()}>
-                              {(row) => (
-                                <div class="mappingGeometryRow">
-                                  <strong title={row.geometry.name}>{row.geometry.name}</strong>
-                                  <span>{row.geometry.kind}</span>
-                                  <small title={row.positionLabel}>{row.positionLabel}</small>
-                                  <b>{row.controlCount} ctl</b>
-                                  <Show when={row.geometry.model_file || row.geometry.model_name || row.geometry.model_primitive}>
-                                    <em title={row.geometry.model_file ?? row.geometry.model_name ?? row.geometry.model_primitive ?? ""}>
-                                      {row.geometry.model_file ? "mesh" : row.geometry.model_primitive ? row.geometry.model_primitive : "model"}
-                                    </em>
-                                  </Show>
-                                </div>
-                              )}
-                            </For>
-                          </div>
-                        </Show>
-                        <Show when={selectedMappingUnresolvedGeometryReferences().length > 0}>
-                          <ul class="mappingGeometryWarnings">
-                            <For each={selectedMappingUnresolvedGeometryReferences()}>
-                              {(reference) => <li>Missing geometry reference: {reference}</li>}
-                            </For>
-                          </ul>
-                        </Show>
-                      </div>
-                      <div class="mappingFlagActions">
-                        <button
-                          class={fixture().highlighted ? "active" : ""}
-                          onClick={() => void setFixtureHighlight(fixture().id, !fixture().highlighted)}
-                        >
-                          Highlight
-                        </button>
-                        <button
-                          class={fixture().soloed ? "active" : ""}
-                          onClick={() => void setFixtureSolo(fixture().id, !fixture().soloed)}
-                        >
-                          Solo
-                        </button>
-                        <button
-                          class={fixture().parked ? "active" : ""}
-                          onClick={() => void setFixturePark(fixture().id, !fixture().parked)}
-                        >
-                          Park
-                        </button>
-                      </div>
-                      <div class="mappingControlShortcuts">
-                        <button onClick={() => setWorkspaceTab("control")}>Control</button>
-                        <button onClick={() => selectSetupMode("patch")}>Patch</button>
-                        <button onClick={() => void duplicateSelectedMappingFixtures()}>Duplicate</button>
-                        <button onClick={() => void removeSelectedMappingFixtures()}>Remove</button>
-                      </div>
-                    </div>
-                  )}
-                </Show>
-                <div class="mappingSelectionHeader secondary">
-                  <strong>Fixtures</strong>
-                  <span>{mappingFilteredFixtures().length}</span>
-                </div>
-                <For each={mappingFilteredFixtures()}>
-                  {(fixture) => (
-                    <button
-                      class={selectedMappingFixtureIdSet().has(fixture.id) ? "active" : ""}
-                      onClick={(event) => selectMappingFixture(fixture, event)}
-                    >
-                      <strong>{fixture.label}</strong>
-                      <span>U{fixture.universe} A{fixture.address}</span>
-                      <small>{fixture.manufacturer} {fixture.profile_name} / {fixture.group_ids.join(", ") || "No group"}</small>
-                    </button>
-                  )}
-                </For>
-                <Show when={mappingFilteredFixtures().length === 0}>
-                  <div class="mappingTransformInspector">
-                    <div class="mappingTransformTitle">
-                      <strong>No fixtures</strong>
-                      <span>Patch fixtures or adjust filters.</span>
-                    </div>
-                  </div>
-                </Show>
-                <div class="mappingSelectionHeader secondary">
-                  <strong>Projectors</strong>
-                  <span>{snapshot().video.outputs.length}</span>
-                </div>
-                <For each={snapshot().video.outputs}>
-                  {(output) => (
-                    <button
-                      class={`projector ${selectedVideoOutputId() === output.id ? "active" : ""}`}
-                      onClick={() => setSelectedVideoOutputId(output.id)}
-                    >
-                      <strong>{output.label}</strong>
-                      <span>{output.width}x{output.height}</span>
-                      <small>{output.kind} / {output.enabled ? "Enabled" : "Disabled"} / {output.blackout ? "Blackout" : "Live"}</small>
-                    </button>
-                  )}
-                </For>
-                <Show when={selectedMappingVideoOutput()}>
-                  {(output) => (
-                    <div class="mappingProjectorControls">
-                      <div class="mappingProjectorPreview">
-                        <ProjectorMapPreview
-                          mapping={output().mapping}
-                          outputId={output().id}
-                          class="projectorMapSurface outputMappingMiniSurface"
-                        />
-                        <div>
-                          <strong>{output().label}</strong>
-                          <span>{output().mapping.aspect_mode} / {output().mapping.aspect_ratio.toFixed(2)} / lens {output().mapping.lens_distortion.toFixed(2)}</span>
-                        </div>
-                      </div>
-                      <div class="mappingProjectorActionRow">
-                        <button onClick={() => void setVideoOutputEnabled(output().id, !output().enabled)}>
-                          {output().enabled ? "Disable" : "Enable"}
-                        </button>
-                        <button onClick={() => void setVideoOutputBlackout(output().id, !output().blackout)}>
-                          {output().blackout ? "Clear BO" : "Blackout"}
-                        </button>
-                        <button onClick={() => void openVideoOutputWindow(output().id)}>Window</button>
-                        <button onClick={() => void openVideoOutputWindow(output().id, true)}>Pattern</button>
-                        <button onClick={() => void syncVideoOutputWindow(output().id)}>Sync</button>
-                        <button
-                          disabled={!selectedStageObject()}
-                          onClick={() => {
-                            const object = selectedStageObject();
-                            if (object) {
-                              void fitVideoOutputToStageObject(output(), object);
-                            }
-                          }}
-                        >
-                          Fit Object
-                        </button>
-                      </div>
-                      <ProjectorMapEditor
-                        mapping={output().mapping}
-                        outputId={output().id}
-                        label={output().label}
-                        onPatch={(patch) => void setVideoOutputMapping(output().id, { ...output().mapping, ...patch })}
-                      />
-                      <div class="mappingProjectorFieldGrid">
-                        <label>
-                          X
-                          <input
-                            type="number"
-                            step="0.1"
-                            value={output().mapping.stage_x}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output().id, {
-                                ...output().mapping,
-                                stage_x: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          Z
-                          <input
-                            type="number"
-                            step="0.1"
-                            value={output().mapping.stage_z}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output().id, {
-                                ...output().mapping,
-                                stage_z: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          Y
-                          <input
-                            type="number"
-                            step="0.1"
-                            value={output().mapping.stage_y}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output().id, {
-                                ...output().mapping,
-                                stage_y: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          Rot
-                          <input
-                            type="number"
-                            step="1"
-                            value={output().mapping.rotation_deg}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output().id, {
-                                ...output().mapping,
-                                rotation_deg: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                      </div>
-                      <div class="mappingProjectorWarpGrid">
-                        <label>
-                          Aspect
-                          <input
-                            type="number"
-                            step="0.01"
-                            min="0.1"
-                            value={output().mapping.aspect_ratio}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output().id, {
-                                ...output().mapping,
-                                aspect_ratio: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          Mode
-                          <select
-                            value={output().mapping.aspect_mode}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output().id, {
-                                ...output().mapping,
-                                aspect_mode: event.currentTarget.value as VideoOutputAspectMode,
-                              })
-                            }
-                          >
-                            <For each={videoOutputAspectModes}>
-                              {(mode) => <option value={mode}>{mode}</option>}
-                            </For>
-                          </select>
-                        </label>
-                        <label>
-                          Lens
-                          <input
-                            type="number"
-                            step="0.01"
-                            min="-1"
-                            max="1"
-                            value={output().mapping.lens_distortion}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output().id, {
-                                ...output().mapping,
-                                lens_distortion: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          Keystone X
-                          <input
-                            type="number"
-                            step="0.01"
-                            min="-1"
-                            max="1"
-                            value={output().mapping.keystone_x}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output().id, {
-                                ...output().mapping,
-                                keystone_x: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          Keystone Y
-                          <input
-                            type="number"
-                            step="0.01"
-                            min="-1"
-                            max="1"
-                            value={output().mapping.keystone_y}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output().id, {
-                                ...output().mapping,
-                                keystone_y: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <div class="mappingProjectorPresetGrid">
-                          <button onClick={() => void setVideoOutputMapping(output().id, defaultVideoOutputMapping)}>
-                            Reset
-                          </button>
-                          <button
-                            onClick={() =>
-                              void setVideoOutputMapping(output().id, {
-                                ...output().mapping,
-                                lens_distortion: 0,
-                                keystone_x: 0,
-                                keystone_y: 0,
-                                corner_top_left_x: 0,
-                                corner_top_left_y: 0,
-                                corner_top_right_x: 0,
-                                corner_top_right_y: 0,
-                                corner_bottom_right_x: 0,
-                                corner_bottom_right_y: 0,
-                                corner_bottom_left_x: 0,
-                                corner_bottom_left_y: 0,
-                              })
-                            }
-                          >
-                            Clear Warp
-                          </button>
-                          <button
-                            onClick={() =>
-                              void setVideoOutputMapping(output().id, {
-                                ...output().mapping,
-                                aspect_ratio: outputAspectRatio(output().width, output().height),
-                                aspect_mode: "Fit",
-                              })
-                            }
-                          >
-                            Output Ratio
-                          </button>
-                          <button
-                            onClick={() =>
-                              void setVideoOutputMapping(output().id, {
-                                ...output().mapping,
-                                aspect_ratio: 16 / 9,
-                                aspect_mode: "Fit",
-                              })
-                            }
-                          >
-                            16:9
-                          </button>
-                          <button
-                            onClick={() =>
-                              void setVideoOutputMapping(output().id, {
-                                ...output().mapping,
-                                aspect_ratio: 4 / 3,
-                                aspect_mode: "Fit",
-                              })
-                            }
-                          >
-                            4:3
-                          </button>
-                          <button
-                            onClick={() =>
-                              void setVideoOutputMapping(output().id, {
-                                ...output().mapping,
-                                aspect_ratio: 1,
-                                aspect_mode: "Fit",
-                              })
-                            }
-                          >
-                            1:1
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </Show>
-              </aside>
+              <MappingSelectionSidebarPanel
+                selectedFixtureCount={selectedMappingFixtures().length}
+                filteredFixtureCount={mappingFilteredFixtures().length}
+                fixtureSearch={mappingFixtureSearch()}
+                groupText={mappingSelectionGroupText()}
+                groupTokenCount={parseGroupIds(mappingSelectionGroupText()).length}
+                stageObjects={snapshot().stage_objects}
+                stageObjectFixtureCounts={stageObjectFixtureCounts()}
+                selectedStageObject={selectedStageObject()}
+                selectedStageObjectId={selectedStageObjectId()}
+                stageObjectDraftLabel={stageObjectLabel()}
+                stageObjectDraftKind={stageObjectKind()}
+                stageObjectDraftWidth={stageObjectWidth()}
+                stageObjectDraftDepth={stageObjectDepth()}
+                stageObjectDraftRotation={stageObjectRotation()}
+                stageObjectDraftColor={stageObjectColor()}
+                flagState={selectedMappingFlagState()}
+                snapSize={normalizedMappingSnapSize()}
+                selectedFixture={selectedMappingFixture()}
+                selectedGeometryRows={selectedMappingGeometryRows()}
+                unresolvedGeometryReferences={selectedMappingUnresolvedGeometryReferences()}
+                filteredFixtures={mappingFilteredFixtures()}
+                selectedFixtureIds={selectedMappingFixtureIdSet()}
+                outputs={snapshot().video.outputs}
+                selectedOutput={selectedMappingVideoOutput()}
+                selectedOutputId={selectedVideoOutputId()}
+                onSearch={setMappingFixtureSearch}
+                onGroupText={setMappingSelectionGroupText}
+                onPickVisible={pickVisibleMappingFixtures}
+                onDuplicateSelected={duplicateSelectedMappingFixtures}
+                onRemoveSelected={removeSelectedMappingFixtures}
+                onClearSelection={clearMappingFixtureSelection}
+                onApplyGroups={applyMappingSelectionGroups}
+                onStageObjectDraftLabel={setStageObjectLabel}
+                onStageObjectDraftKind={setStageObjectKind}
+                onStageObjectDraftWidth={setStageObjectWidth}
+                onStageObjectDraftDepth={setStageObjectDepth}
+                onStageObjectDraftRotation={setStageObjectRotation}
+                onStageObjectDraftColor={setStageObjectColor}
+                onAddStageObjectCenter={addStageObjectAtCenter}
+                onSelectStageObject={setSelectedStageObjectId}
+                onSetStageObject={setStageObject}
+                onRemoveStageObject={removeStageObject}
+                onPickInsideStageObject={pickFixturesInsideSelectedStageObject}
+                onLayoutOnStageObject={layoutSelectedFixturesOnStageObject}
+                onSetSelectionFlag={setMappingSelectionFlag}
+                onNudgeSelection={nudgeSelectedMappingFixtures}
+                onLayoutSelection={layoutSelectedMappingFixtures}
+                onAlignSelection={alignSelectedMappingFixtures}
+                onDistributeSelection={distributeSelectedMappingFixtures}
+                onMirrorSelection={mirrorSelectedMappingFixtures}
+                onRotateSelection={rotateSelectedMappingFixtures}
+                onControlActive={() => setWorkspaceTab("control")}
+                onSetFixtureTransform={setFixtureTransform}
+                onSetFixtureHighlight={setFixtureHighlight}
+                onSetFixtureSolo={setFixtureSolo}
+                onSetFixturePark={setFixturePark}
+                onControlFixture={() => setWorkspaceTab("control")}
+                onPatchFixture={() => selectSetupMode("patch")}
+                onSelectFixture={selectMappingFixture}
+                onSelectOutput={setSelectedVideoOutputId}
+                onSetOutputEnabled={setVideoOutputEnabled}
+                onSetOutputBlackout={setVideoOutputBlackout}
+                onOpenOutputWindow={openVideoOutputWindow}
+                onSyncOutputWindow={syncVideoOutputWindow}
+                onFitOutputToStageObject={fitVideoOutputToStageObject}
+                onSetOutputMapping={setVideoOutputMapping}
+              />
             </div>
           </div>
         </section>
@@ -13681,726 +11281,68 @@ export default function App() {
             <h2>Video Setup</h2>
             <span>{snapshot().video.outputs.length} output(s)</span>
           </div>
-          <div class="compositionList">
-            <For each={snapshot().video.compositions}>
-              {(composition) => (
-                <div class="compositionItem">
-                  <div class="compositionHeader">
-                    <strong>{composition.label}</strong>
-                    <span>{composition.layer_ids.length} layer(s) / {composition.output_ids.length} output(s)</span>
-                  </div>
-                  <Show when={composition.id !== 1}>
-                    <Show when={composition.layer_ids.length > 0}>
-                      <div class="compositionLayerOrder">
-                        <For each={composition.layer_ids}>
-                          {(layerId, orderIndex) => {
-                            const layerLabel = () =>
-                              snapshot().video.layers.find((candidate) => candidate.id === layerId)?.label ?? `Layer ${layerId}`;
-                            return (
-                              <div class="compositionOrderRow">
-                                <span>{orderIndex() + 1}. {layerLabel()}</span>
-                                <div class="buttonRow">
-                                  <button
-                                    onClick={() => moveVideoCompositionLayer(composition.id, composition.layer_ids, layerId, -1)}
-                                    disabled={orderIndex() === 0}
-                                  >
-                                    Up
-                                  </button>
-                                  <button
-                                    onClick={() => moveVideoCompositionLayer(composition.id, composition.layer_ids, layerId, 1)}
-                                    disabled={orderIndex() === composition.layer_ids.length - 1}
-                                  >
-                                    Down
-                                  </button>
-                                </div>
-                              </div>
-                            );
-                          }}
-                        </For>
-                      </div>
-                    </Show>
-                    <div class="compositionLayerPicker">
-                      <For each={snapshot().video.layers}>
-                        {(layer) => (
-                          <label class="checkbox">
-                            <input
-                              type="checkbox"
-                              checked={composition.layer_ids.includes(layer.id)}
-                              onChange={(event) => {
-                                const layerIds = event.currentTarget.checked
-                                  ? [...composition.layer_ids, layer.id]
-                                  : composition.layer_ids.filter((candidate) => candidate !== layer.id);
-                                void setVideoCompositionLayers(composition.id, layerIds);
-                              }}
-                            />
-                            {layer.label}
-                          </label>
-                        )}
-                      </For>
-                    </div>
-                    <button onClick={() => void removeVideoComposition(composition.id)}>Remove Composition</button>
-                  </Show>
-                </div>
-              )}
-            </For>
-          </div>
-          <div class="videoCompositionForm">
-            <h3>Composition</h3>
-            <label>
-              Name
-              <input value={videoCompositionLabel()} onInput={(event) => setVideoCompositionLabel(event.currentTarget.value)} />
-            </label>
-            <div class="compositionLayerPicker">
-              <For each={snapshot().video.layers}>
-                {(layer) => (
-                  <label class="checkbox">
-                    <input
-                      type="checkbox"
-                      checked={videoCompositionLayerIds().includes(layer.id)}
-                      onChange={(event) => toggleVideoCompositionLayer(layer.id, event.currentTarget.checked)}
-                    />
-                    {layer.label}
-                  </label>
-                )}
-              </For>
-            </div>
-            <button class="primary" onClick={addVideoComposition}>
-              Add Composition
-            </button>
-          </div>
-          <div class="videoOutputForm">
-            <h3>Composition Output</h3>
-            <div class="split">
-              <label>
-                Output label
-                <input value={videoOutputLabel()} onInput={(event) => setVideoOutputLabel(event.currentTarget.value)} />
-              </label>
-              <label>
-                Kind
-                <select value={videoOutputKind()} onInput={(event) => setVideoOutputKind(event.currentTarget.value as VideoOutputKind)}>
-                  <option value="Display">Display</option>
-                  <option value="NdiSender">NDI Sender</option>
-                  <option value="SpoutSender">Spout Sender</option>
-                  <option value="SyphonServer">Syphon Server</option>
-                </select>
-              </label>
-            </div>
-            <div class="split">
-              <label>
-                Width
-                <input type="number" min="1" value={videoOutputWidth()} onInput={(event) => setVideoOutputWidth(Number(event.currentTarget.value))} />
-              </label>
-              <label>
-                Height
-                <input type="number" min="1" value={videoOutputHeight()} onInput={(event) => setVideoOutputHeight(Number(event.currentTarget.value))} />
-              </label>
-            </div>
-            <label>
-              Output Fade ms
-              <input
-                type="number"
-                min="0"
-                step="10"
-                value={videoOutputFadeMs()}
-                onInput={(event) => setVideoOutputFadeMs(Number(event.currentTarget.value))}
-              />
-            </label>
-            <Show when={videoOutputKind() === "Display"}>
-              <div class="split">
-                <label>
-                  Monitor
-                  <input type="number" min="0" value={videoOutputMonitorId()} onInput={(event) => setVideoOutputMonitorId(Number(event.currentTarget.value))} />
-                </label>
-                <label class="checkbox inlineCheckbox">
-                  <input type="checkbox" checked={videoOutputFullscreen()} onChange={(event) => setVideoOutputFullscreen(event.currentTarget.checked)} />
-                  Fullscreen
-                </label>
-              </div>
-            </Show>
-            <Show when={videoOutputKind() !== "Display"}>
-              <label>
-                Endpoint
-                <input value={videoOutputEndpoint()} onInput={(event) => setVideoOutputEndpoint(event.currentTarget.value)} />
-              </label>
-            </Show>
-            <button class="primary" onClick={addVideoOutput}>
-              Add Output
-            </button>
-            <div class="timelineList">
-              <For each={snapshot().video.outputs}>
-                {(output) => {
-                  const configDraft = () => videoOutputConfigDraft(output);
-                  return (
-                  <div class="timelineItem">
-                    <strong>{output.label}</strong>
-                    <span>
-                      {output.kind} / {output.width}x{output.height} / C{output.composition_id}
-                      {output.endpoint_name ? ` / ${output.endpoint_name}` : ""}
-                    </span>
-                    <div class="videoOutputConfig">
-                      <h3>Output Config</h3>
-                      <div class="split">
-                        <label>
-                          Label
-                          <input
-                            value={configDraft().label}
-                            onInput={(event) => updateVideoOutputConfigDraft(output, { label: event.currentTarget.value })}
-                          />
-                        </label>
-                        <label>
-                          Kind
-                          <select
-                            value={configDraft().kind}
-                            onInput={(event) =>
-                              updateVideoOutputConfigDraft(output, {
-                                kind: event.currentTarget.value as VideoOutputKind,
-                              })
-                            }
-                          >
-                            <option value="Display">Display</option>
-                            <option value="NdiSender">NDI Sender</option>
-                            <option value="SpoutSender">Spout Sender</option>
-                            <option value="SyphonServer">Syphon Server</option>
-                          </select>
-                        </label>
-                      </div>
-                      <div class="split">
-                        <label>
-                          Width
-                          <input
-                            type="number"
-                            min="1"
-                            value={configDraft().width}
-                            onInput={(event) => updateVideoOutputConfigDraft(output, { width: Number(event.currentTarget.value) })}
-                          />
-                        </label>
-                        <label>
-                          Height
-                          <input
-                            type="number"
-                            min="1"
-                            value={configDraft().height}
-                            onInput={(event) => updateVideoOutputConfigDraft(output, { height: Number(event.currentTarget.value) })}
-                          />
-                        </label>
-                      </div>
-                      <Show when={configDraft().kind === "Display"}>
-                        <div class="split">
-                          <label>
-                            Monitor
-                            <input
-                              type="number"
-                              min="0"
-                              value={configDraft().monitor_id}
-                              onInput={(event) => updateVideoOutputConfigDraft(output, { monitor_id: Number(event.currentTarget.value) })}
-                            />
-                          </label>
-                          <label class="checkbox inlineCheckbox">
-                            <input
-                              type="checkbox"
-                              checked={configDraft().fullscreen}
-                              onChange={(event) => updateVideoOutputConfigDraft(output, { fullscreen: event.currentTarget.checked })}
-                            />
-                            Fullscreen
-                          </label>
-                        </div>
-                      </Show>
-                      <Show when={configDraft().kind !== "Display"}>
-                        <label>
-                          Endpoint
-                          <input
-                            value={configDraft().endpoint_name}
-                            onInput={(event) => updateVideoOutputConfigDraft(output, { endpoint_name: event.currentTarget.value })}
-                          />
-                        </label>
-                      </Show>
-                      <div class="buttonRow">
-                        <button class="primary" onClick={() => void setVideoOutputConfig(output)}>
-                          Apply Output
-                        </button>
-                      </div>
-                    </div>
-                    <label>
-                      Route
-                      <select
-                        value={output.composition_id}
-                        onInput={(event) => void setVideoOutputRouting(output.id, Number(event.currentTarget.value))}
-                      >
-                        <For each={snapshot().video.compositions}>
-                          {(composition) => <option value={composition.id}>{composition.label}</option>}
-                        </For>
-                      </select>
-                    </label>
-                    <div class="videoOutputMapping">
-                      <h3>Projector Map</h3>
-                      <div class="split">
-                        <label>
-                          Preset Label
-                          <input
-                            value={videoOutputMappingPresetLabel()}
-                            onInput={(event) => setVideoOutputMappingPresetLabel(event.currentTarget.value)}
-                          />
-                        </label>
-                        <label>
-                          Saved Preset
-                          <select
-                            value={selectedVideoOutputMappingPresetLabel()}
-                            disabled={snapshot().video.mapping_presets.length === 0}
-                            onInput={(event) => setSelectedVideoOutputMappingPresetLabel(event.currentTarget.value)}
-                          >
-                            <option value="">Select preset</option>
-                            <For each={snapshot().video.mapping_presets}>
-                              {(preset) => <option value={preset.label}>{preset.label}</option>}
-                            </For>
-                          </select>
-                        </label>
-                      </div>
-                      <div class="presetRow">
-                        <button class="primary" onClick={() => void saveVideoOutputMappingPreset(output.mapping)}>
-                          Save Preset
-                        </button>
-                        <button onClick={() => void exportVideoOutputMappingPreset(output.mapping)}>
-                          Export
-                        </button>
-                        <button onClick={() => void importVideoOutputMappingPreset()}>
-                          Import
-                        </button>
-                        <button
-                          disabled={!selectedVideoOutputMappingPresetLabel()}
-                          onClick={() => void applyVideoOutputMappingPreset(output.id, selectedVideoOutputMappingPresetLabel())}
-                        >
-                          Apply Preset
-                        </button>
-                        <button
-                          disabled={!selectedVideoOutputMappingPresetLabel()}
-                          onClick={() => void removeVideoOutputMappingPreset(selectedVideoOutputMappingPresetLabel())}
-                        >
-                          Delete Preset
-                        </button>
-                        <button onClick={() => void setVideoOutputMapping(output.id, defaultVideoOutputMapping)}>
-                          Reset
-                        </button>
-                        <button
-                          onClick={() =>
-                            void setVideoOutputMapping(output.id, {
-                              ...output.mapping,
-                              lens_distortion: 0,
-                              keystone_x: 0,
-                              keystone_y: 0,
-                              corner_top_left_x: 0,
-                              corner_top_left_y: 0,
-                              corner_top_right_x: 0,
-                              corner_top_right_y: 0,
-                              corner_bottom_right_x: 0,
-                              corner_bottom_right_y: 0,
-                              corner_bottom_left_x: 0,
-                              corner_bottom_left_y: 0,
-                            })
-                          }
-                        >
-                          Clear Warp
-                        </button>
-                        <button
-                          onClick={() =>
-                            void setVideoOutputMapping(output.id, {
-                              ...output.mapping,
-                              aspect_ratio: outputAspectRatio(output.width, output.height),
-                              aspect_mode: "Fit",
-                            })
-                          }
-                        >
-                          Output Ratio
-                        </button>
-                        <button
-                          onClick={() =>
-                            void setVideoOutputMapping(output.id, {
-                              ...output.mapping,
-                              aspect_ratio: 16 / 9,
-                              aspect_mode: "Fit",
-                            })
-                          }
-                        >
-                          16:9
-                        </button>
-                        <button
-                          onClick={() =>
-                            void setVideoOutputMapping(output.id, {
-                              ...output.mapping,
-                              aspect_ratio: 4 / 3,
-                              aspect_mode: "Fit",
-                            })
-                          }
-                        >
-                          4:3
-                        </button>
-                        <button
-                          onClick={() =>
-                            void setVideoOutputMapping(output.id, {
-                              ...output.mapping,
-                              aspect_ratio: 1,
-                              aspect_mode: "Fit",
-                            })
-                          }
-                        >
-                          1:1
-                        </button>
-                      </div>
-                      <ProjectorMapEditor
-                        mapping={output.mapping}
-                        outputId={output.id}
-                        label={output.label}
-                        onPatch={(patch) => void setVideoOutputMapping(output.id, { ...output.mapping, ...patch })}
-                      />
-                      <div class="videoOutputPreviewCard">
-                        <div class="sectionHeader">
-                          <h4>Output Preview</h4>
-                          <span>
-                            {videoOutputPreviewId() === output.id
-                              ? `${videoOutputPreviewMode() === "test" ? "Pattern" : "Output"} / ${videoOutputPreviewInfo()}`
-                              : "No preview"}
-                          </span>
-                        </div>
-                        <Show
-                          when={videoOutputPreviewId() === output.id && videoOutputPreviewUrl()}
-                          fallback={<span class="emptyState">No preview</span>}
-                        >
-                          {(url) => <img src={url()} alt={`${output.label} preview`} />}
-                        </Show>
-                      </div>
-                      <div class="triple">
-                        <label>
-                          X
-                          <input
-                            type="number"
-                            step="0.01"
-                            value={output.mapping.offset_x}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output.id, {
-                                ...output.mapping,
-                                offset_x: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          Y
-                          <input
-                            type="number"
-                            step="0.01"
-                            value={output.mapping.offset_y}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output.id, {
-                                ...output.mapping,
-                                offset_y: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          Rotate
-                          <input
-                            type="number"
-                            step="0.1"
-                            value={output.mapping.rotation_deg}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output.id, {
-                                ...output.mapping,
-                                rotation_deg: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                      </div>
-                      <div class="triple">
-                        <label>
-                          Scale X
-                          <input
-                            type="number"
-                            min="0.01"
-                            step="0.01"
-                            value={output.mapping.scale_x}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output.id, {
-                                ...output.mapping,
-                                scale_x: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          Scale Y
-                          <input
-                            type="number"
-                            min="0.01"
-                            step="0.01"
-                            value={output.mapping.scale_y}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output.id, {
-                                ...output.mapping,
-                                scale_y: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          Aspect
-                          <input
-                            type="number"
-                            min="0.1"
-                            step="0.01"
-                            value={output.mapping.aspect_ratio}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output.id, {
-                                ...output.mapping,
-                                aspect_ratio: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                      </div>
-                      <div class="split">
-                        <label>
-                          Aspect Mode
-                          <select
-                            value={output.mapping.aspect_mode}
-                            onInput={(event) =>
-                              void setVideoOutputMapping(output.id, {
-                                ...output.mapping,
-                                aspect_mode: event.currentTarget.value as VideoOutputAspectMode,
-                              })
-                            }
-                          >
-                            <For each={videoOutputAspectModes}>{(mode) => <option value={mode}>{mode}</option>}</For>
-                          </select>
-                        </label>
-                        <label>
-                          Lens Distortion
-                          <input
-                            type="number"
-                            min="-1"
-                            max="1"
-                            step="0.01"
-                            value={output.mapping.lens_distortion}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output.id, {
-                                ...output.mapping,
-                                lens_distortion: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                      </div>
-                      <div class="split">
-                        <label>
-                          Keystone H
-                          <input
-                            type="number"
-                            min="-1"
-                            max="1"
-                            step="0.01"
-                            value={output.mapping.keystone_x}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output.id, {
-                                ...output.mapping,
-                                keystone_x: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          Keystone V
-                          <input
-                            type="number"
-                            min="-1"
-                            max="1"
-                            step="0.01"
-                            value={output.mapping.keystone_y}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output.id, {
-                                ...output.mapping,
-                                keystone_y: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                      </div>
-                      <div class="quad">
-                        <label>
-                          TL X
-                          <input
-                            type="number"
-                            min="-1"
-                            max="1"
-                            step="0.01"
-                            value={output.mapping.corner_top_left_x}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output.id, {
-                                ...output.mapping,
-                                corner_top_left_x: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          TL Y
-                          <input
-                            type="number"
-                            min="-1"
-                            max="1"
-                            step="0.01"
-                            value={output.mapping.corner_top_left_y}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output.id, {
-                                ...output.mapping,
-                                corner_top_left_y: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          TR X
-                          <input
-                            type="number"
-                            min="-1"
-                            max="1"
-                            step="0.01"
-                            value={output.mapping.corner_top_right_x}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output.id, {
-                                ...output.mapping,
-                                corner_top_right_x: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          TR Y
-                          <input
-                            type="number"
-                            min="-1"
-                            max="1"
-                            step="0.01"
-                            value={output.mapping.corner_top_right_y}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output.id, {
-                                ...output.mapping,
-                                corner_top_right_y: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                      </div>
-                      <div class="quad">
-                        <label>
-                          BR X
-                          <input
-                            type="number"
-                            min="-1"
-                            max="1"
-                            step="0.01"
-                            value={output.mapping.corner_bottom_right_x}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output.id, {
-                                ...output.mapping,
-                                corner_bottom_right_x: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          BR Y
-                          <input
-                            type="number"
-                            min="-1"
-                            max="1"
-                            step="0.01"
-                            value={output.mapping.corner_bottom_right_y}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output.id, {
-                                ...output.mapping,
-                                corner_bottom_right_y: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          BL X
-                          <input
-                            type="number"
-                            min="-1"
-                            max="1"
-                            step="0.01"
-                            value={output.mapping.corner_bottom_left_x}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output.id, {
-                                ...output.mapping,
-                                corner_bottom_left_x: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          BL Y
-                          <input
-                            type="number"
-                            min="-1"
-                            max="1"
-                            step="0.01"
-                            value={output.mapping.corner_bottom_left_y}
-                            onChange={(event) =>
-                              void setVideoOutputMapping(output.id, {
-                                ...output.mapping,
-                                corner_bottom_left_y: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                      </div>
-                    </div>
-                    <div class="buttonRow">
-                      <button onClick={() => void setVideoOutputEnabled(output.id, !output.enabled)}>
-                        {output.enabled ? "Disable" : "Enable"}
-                      </button>
-                      <button onClick={() => void setVideoOutputBlackout(output.id, !output.blackout)}>
-                        {output.blackout ? "Clear" : "Blackout"}
-                      </button>
-                      <button onClick={() => void setVideoOutputOpacity(output.id, output.opacity >= 1 ? 0.5 : 1)}>
-                        {output.opacity >= 1 ? "Half" : "Full"}
-                      </button>
-                      <button onClick={() => void fadeVideoOutputOpacity(output.id, 0)}>
-                        Fade Out
-                      </button>
-                      <button onClick={() => void fadeVideoOutputOpacity(output.id, 1)}>
-                        Fade In
-                      </button>
-                      <button onClick={() => void renderDebugVideoOutputPreview(output.id)}>
-                        Preview
-                      </button>
-                      <button onClick={() => void renderDebugVideoOutputPreview(output.id, true)}>
-                        Pattern Preview
-                      </button>
-                      <Show when={output.kind === "Display"}>
-                        <button onClick={() => void openVideoOutputWindow(output.id)}>
-                          Open Window
-                        </button>
-                        <button onClick={() => void openVideoOutputWindow(output.id, true)}>
-                          Test Pattern
-                        </button>
-                        <button onClick={() => void syncVideoOutputWindow(output.id)}>
-                          Sync Window
-                        </button>
-                        <button onClick={() => void syncVideoOutputWindow(output.id, true)}>
-                          Sync Pattern
-                        </button>
-                      </Show>
-                      <button onClick={() => void removeVideoOutput(output.id)}>Remove</button>
-                    </div>
-                  </div>
-                  );
-                }}
-              </For>
-            </div>
-          </div>
+          <VideoCompositionSetupPanel
+            compositions={snapshot().video.compositions}
+            layers={snapshot().video.layers}
+            draftLabel={videoCompositionLabel()}
+            draftLayerIds={videoCompositionLayerIds()}
+            onDraftLabel={setVideoCompositionLabel}
+            onToggleDraftLayer={toggleVideoCompositionLayer}
+            onAddComposition={addVideoComposition}
+            onRemoveComposition={removeVideoComposition}
+            onSetCompositionLayers={setVideoCompositionLayers}
+            onMoveCompositionLayer={moveVideoCompositionLayer}
+          />
+          <VideoOutputCreatePanel
+            label={videoOutputLabel()}
+            kind={videoOutputKind()}
+            width={videoOutputWidth()}
+            height={videoOutputHeight()}
+            fadeMs={videoOutputFadeMs()}
+            monitorId={videoOutputMonitorId()}
+            fullscreen={videoOutputFullscreen()}
+            endpoint={videoOutputEndpoint()}
+            onLabel={setVideoOutputLabel}
+            onKind={setVideoOutputKind}
+            onWidth={setVideoOutputWidth}
+            onHeight={setVideoOutputHeight}
+            onFadeMs={setVideoOutputFadeMs}
+            onMonitorId={setVideoOutputMonitorId}
+            onFullscreen={setVideoOutputFullscreen}
+            onEndpoint={setVideoOutputEndpoint}
+            onAddOutput={addVideoOutput}
+          />
+          <VideoOutputListPanel
+            outputs={snapshot().video.outputs}
+            compositions={snapshot().video.compositions}
+            mappingPresets={snapshot().video.mapping_presets}
+            mappingPresetLabel={videoOutputMappingPresetLabel()}
+            selectedMappingPresetLabel={selectedVideoOutputMappingPresetLabel()}
+            previewOutputId={videoOutputPreviewId()}
+            previewMode={videoOutputPreviewMode()}
+            previewInfo={videoOutputPreviewInfo()}
+            previewUrl={videoOutputPreviewUrl()}
+            configDraftFor={videoOutputConfigDraft}
+            onConfigDraft={updateVideoOutputConfigDraft}
+            onApplyConfig={setVideoOutputConfig}
+            onSetRouting={setVideoOutputRouting}
+            onMappingPresetLabel={setVideoOutputMappingPresetLabel}
+            onSelectedMappingPresetLabel={setSelectedVideoOutputMappingPresetLabel}
+            onSaveMappingPreset={saveVideoOutputMappingPreset}
+            onExportMappingPreset={exportVideoOutputMappingPreset}
+            onImportMappingPreset={importVideoOutputMappingPreset}
+            onApplyMappingPreset={applyVideoOutputMappingPreset}
+            onRemoveMappingPreset={removeVideoOutputMappingPreset}
+            onSetMapping={setVideoOutputMapping}
+            onSetEnabled={setVideoOutputEnabled}
+            onSetBlackout={setVideoOutputBlackout}
+            onSetOpacity={setVideoOutputOpacity}
+            onFadeOpacity={fadeVideoOutputOpacity}
+            onPreview={renderDebugVideoOutputPreview}
+            onOpenWindow={openVideoOutputWindow}
+            onSyncWindow={syncVideoOutputWindow}
+            onRemoveOutput={removeVideoOutput}
+          />
         </section>
 
         <section class="panel videoControlPanel controlPanel">
@@ -14408,1228 +11350,121 @@ export default function App() {
             <h2>Video Control</h2>
             <span>{snapshot().video.layers.length} layer(s)</span>
           </div>
-          <div class="previewDebug">
-            <button onClick={renderDebugVideoPreview} disabled={snapshot().video.layers.length === 0}>
-              CPU Preview
-            </button>
-            <button onClick={() => void refreshVideoPreviewDiagnostics()}>
-              Preview Status
-            </button>
-            <span>{videoPreviewInfo()}</span>
-            <small>{videoPreviewDiagnosticsText()}</small>
-            <Show when={videoPreviewLayerDiagnostics().length > 0}>
-              <div class="previewDiagnosticList">
-                <For each={videoPreviewLayerDiagnostics()}>
-                  {(row) => (
-                    <div class={videoPreviewLayerDiagnosticClass(row)}>
-                      <strong>{row.ready ? "Ready" : row.queue_len > 0 ? "Warm" : "Wait"}</strong>
-                      <span>{row.label}</span>
-                      <small title={videoPreviewLayerDiagnosticLabel(row)}>
-                        {videoPreviewLayerDiagnosticLabel(row)}
-                      </small>
-                    </div>
-                  )}
-                </For>
-              </div>
-            </Show>
-            <Show when={videoPreviewOutputDecodePlans().length > 0}>
-              <div class="previewDiagnosticList">
-                <For each={videoPreviewOutputDecodePlans()}>
-                  {(row) => (
-                    <div class={videoPreviewOutputDecodePlanClass(row)}>
-                      <strong>{row.error ? "Error" : row.report?.rejected_full ? "Full" : "Plan"}</strong>
-                      <span>{row.label}</span>
-                      <small title={videoPreviewOutputDecodePlanLabel(row)}>
-                        {videoPreviewOutputDecodePlanLabel(row)}
-                      </small>
-                    </div>
-                  )}
-                </For>
-              </div>
-            </Show>
-          </div>
-          <div class="videoBackendStatus videoOutputPlanStatus">
-            <div>
-              <strong>Render Plans</strong>
-              <span>{videoOutputRenderPlanSummary()}</span>
-            </div>
-            <div class="videoBackendGrid videoOutputPlanGrid">
-              <Show when={videoOutputRenderPlans()} fallback={<small>No render plan status</small>}>
-                <Show when={videoOutputRenderPlanRows().length > 0} fallback={<small>No video outputs</small>}>
-                  <For each={videoOutputRenderPlanRows()}>
-                    {(plan) => (
-                      <span class={`videoBackendPill videoOutputPlanPill state-${plan.stateClass}`} title={plan.detail}>
-                        <strong>{plan.stateLabel}</strong>
-                        <small>{plan.label}</small>
-                        <small>{plan.endpoint}</small>
-                      </span>
-                    )}
-                  </For>
-                </Show>
-              </Show>
-            </div>
-            <button onClick={() => void refreshVideoOutputRenderPlans()}>Check Plans</button>
-          </div>
-          <div class="videoBackendStatus">
-            <div>
-              <strong>Backends</strong>
-              <span>{videoRuntimeBackendSummary()}</span>
-            </div>
-            <div class="videoBackendGrid">
-              <Show when={videoRuntimeStatus()} fallback={<small>No backend status</small>}>
-                {(status) => (
-                  <For each={status().backends}>
-                    {(backend) => (
-                      <span class={videoRuntimeBackendClass(backend.state)} title={backend.detail}>
-                        <strong>{backend.label}</strong>
-                        <small>{backend.state}</small>
-                      </span>
-                    )}
-                  </For>
-                )}
-              </Show>
-            </div>
-            <button onClick={() => void refreshVideoRuntimeStatus()}>Check Backends</button>
-          </div>
-          <div class="videoBackendStatus videoIoPlanStatus">
-            <div>
-              <strong>I/O Plans</strong>
-              <span>{externalVideoIoPlanSummary()}</span>
-              <span>{externalVideoTransportSummary()}</span>
-            </div>
-            <div class="videoBackendGrid videoIoPlanGrid">
-              <Show when={externalVideoIoPlans()} fallback={<small>No I/O plan status</small>}>
-                <Show when={externalVideoIoPlanRows().length > 0} fallback={<small>No external routes</small>}>
-                  <For each={externalVideoIoPlanRows()}>
-                    {(plan) => (
-                      <span class={externalVideoIoPlanClass(plan.stateClass)} title={`${plan.detail} / ${plan.endpoint}`}>
-                        <strong>
-                          {plan.direction} {plan.backend}
-                        </strong>
-                        <small>
-                          {plan.stateLabel} / {plan.label}
-                        </small>
-                        <small>{plan.endpoint}</small>
-                      </span>
-                    )}
-                  </For>
-                </Show>
-              </Show>
-              <Show when={externalVideoTransportActiveRows().length > 0}>
-                <For each={externalVideoTransportActiveRows()}>
-                  {(route) => (
-                    <span class={externalVideoTransportClass(route.stateClass)} title={`${route.detail} / ${route.endpoint}`}>
-                      <strong>
-                        {route.stateLabel} {route.direction}
-                      </strong>
-                      <small>
-                        {route.backend} / {route.label}
-                      </small>
-                      <small>{route.endpoint}</small>
-                    </span>
-                  )}
-                </For>
-              </Show>
-              <Show when={externalVideoTransportRows().length > 0}>
-                <For each={externalVideoTransportRows()}>
-                  {(route) => (
-                    <span class={externalVideoTransportClass(route.stateClass)} title={`${route.detail} / ${route.endpoint}`}>
-                      <strong>
-                        {route.stateLabel} {route.direction}
-                      </strong>
-                      <small>
-                        {route.backend} / {route.label}
-                      </small>
-                      <small>{route.endpoint}</small>
-                    </span>
-                  )}
-                </For>
-              </Show>
-              <Show when={externalVideoTransportEventRows().length > 0}>
-                <For each={externalVideoTransportEventRows()}>
-                  {(event) => (
-                    <span class={externalVideoTransportClass(event.stateClass)} title={`${event.detail} / ${event.endpoint}`}>
-                      <strong>
-                        Driver {event.stateLabel}
-                      </strong>
-                      <small>
-                        {event.direction} {event.backend} / {event.label}
-                      </small>
-                      <small>{event.endpoint}</small>
-                    </span>
-                  )}
-                </For>
-              </Show>
-            </div>
-            <div class="videoIoPlanActions">
-              <button onClick={() => void refreshExternalVideoIoPlans()}>Check I/O</button>
-              <button onClick={() => void syncExternalVideoTransports()}>Sync Routes</button>
-            </div>
-          </div>
-          <div class="videoMasterControls">
-            <label>
-              Master
-              <input
-                type="number"
-                min="0"
-                max="1"
-                step="0.01"
-                value={snapshot().video.master_opacity}
-                onChange={(event) => void setVideoMasterOpacity(Number(event.currentTarget.value))}
-              />
-            </label>
-            <div class="buttonRow">
-              <button onClick={() => setVideoBlackout(true)} disabled={snapshot().video.blackout}>
-                V Blackout
-              </button>
-              <button onClick={() => setVideoBlackout(false)} disabled={!snapshot().video.blackout}>
-                V Clear
-              </button>
-            </div>
-          </div>
-          <div class="videoOutputControlList">
-            <div class="sectionHeader">
-              <h3>Outputs</h3>
-              <label>
-                Fade ms
-                <input
-                  type="number"
-                  min="0"
-                  step="10"
-                  value={videoOutputFadeMs()}
-                  onInput={(event) => setVideoOutputFadeMs(Number(event.currentTarget.value))}
-                />
-              </label>
-            </div>
-            <div class="videoWindowStatusBar">
-              <span>{videoOutputWindowSummary()}</span>
-              <div class="buttonRow">
-                <button onClick={() => void refreshVideoOutputWindowStatuses()}>Check Windows</button>
-                <button onClick={() => void openAllVideoOutputWindows()}>Open All</button>
-                <button onClick={() => void openAllVideoOutputWindows(true)}>Pattern All</button>
-                <button onClick={() => void syncOpenVideoOutputWindows()}>Sync Open</button>
-                <button onClick={() => void closeOpenVideoOutputWindows()}>Close Open</button>
-              </div>
-            </div>
-            <Show when={snapshot().video.outputs.length > 0} fallback={<span class="emptyState">No video outputs</span>}>
-              <For each={snapshot().video.outputs}>
-                {(output) => {
-                  const compositionLabel = () =>
-                    snapshot().video.compositions.find((composition) => composition.id === output.composition_id)?.label ??
-                    `Composition ${output.composition_id}`;
-                  const renderPlanState = () => videoOutputRenderPlanState(output);
-                  const outputWindowStatus = () => videoOutputWindowStatusForOutput(output.id);
-                  const windowState = () => videoOutputWindowState(output.id);
-                  const outputLive = () => renderPlanState().stateLabel === "Live" && output.opacity > 0;
-                  return (
-                    <div class={outputLive() ? "videoOutputControlItem active" : "videoOutputControlItem"}>
-                      <div>
-                        <strong>{output.label}</strong>
-                        <span>
-                          {output.kind} / {compositionLabel()} / {Math.round(output.opacity * 100)}%
-                          {!output.enabled ? " / Disabled" : ""}
-                          {output.blackout ? " / Blackout" : ""}
-                        </span>
-                        <span class={`outputRenderPlanStatus state-${renderPlanState().stateClass}`}>
-                          {renderPlanState().stateLabel} / {renderPlanState().layerCount} layer
-                          {renderPlanState().layerCount === 1 ? "" : "s"}
-                        </span>
-                        <small title={renderPlanState().detail}>{renderPlanState().detail}</small>
-                        <Show when={output.kind === "Display"}>
-                          <span class={`outputWindowStatus state-${windowState().stateClass}`}>
-                            {windowState().stateLabel}
-                          </span>
-                          <small title={windowState().detail}>{windowState().detail}</small>
-                        </Show>
-                        <div class="outputOpacityMeter">
-                          <span style={{ width: `${Math.round(output.opacity * 100)}%` }} />
-                        </div>
-                      </div>
-                      <div class="buttonRow">
-                        <button onClick={() => void setVideoOutputEnabled(output.id, !output.enabled)}>
-                          {output.enabled ? "Disable" : "Enable"}
-                        </button>
-                        <button onClick={() => void setVideoOutputBlackout(output.id, !output.blackout)}>
-                          {output.blackout ? "Clear" : "Blackout"}
-                        </button>
-                        <button onClick={() => void fadeVideoOutputOpacity(output.id, 0)}>
-                          Fade Out
-                        </button>
-                        <button onClick={() => void fadeVideoOutputOpacity(output.id, 1)}>
-                          Fade In
-                        </button>
-                        <button onClick={() => void setVideoOutputOpacity(output.id, 1)}>Full</button>
-                        <Show when={output.kind === "Display"}>
-                          <button onClick={() => void openVideoOutputWindow(output.id)}>Window</button>
-                          <button onClick={() => void openVideoOutputWindow(output.id, true)}>Pattern</button>
-                          <button onClick={() => void syncVideoOutputWindow(output.id)}>Sync</button>
-                          <button onClick={() => void syncVideoOutputWindow(output.id, true)}>Sync Pattern</button>
-                          <Show when={outputWindowStatus()?.live_open}>
-                            <button onClick={() => void closeVideoOutputWindow(output.id)}>Close</button>
-                          </Show>
-                          <Show when={outputWindowStatus()?.test_pattern_open}>
-                            <button onClick={() => void closeVideoOutputWindow(output.id, true)}>Close Pattern</button>
-                          </Show>
-                        </Show>
-                      </div>
-                    </div>
-                  );
-                }}
-              </For>
-            </Show>
-          </div>
-          <div class="videoPreview">
-            <Show
-              when={videoPreviewUrl()}
-              fallback={<span>{snapshot().video.layers.length === 0 ? "Add a video layer" : "Render a CPU preview"}</span>}
-            >
-              {(url) => <img src={url()} alt="CPU video preview" />}
-            </Show>
-          </div>
-          <label>
-            Source
-            <select
-              value={videoSourceKind()}
-              onInput={(event) => setVideoSourceKind(event.currentTarget.value as VideoSourceKind)}
-            >
-              <option value="File">Video file</option>
-              <option value="StillImage">Still image</option>
-              <option value="Ndi">NDI input</option>
-              <option value="Spout">Spout input</option>
-              <option value="Syphon">Syphon input</option>
-            </select>
-          </label>
-          <label>
-            Layer label
-            <input value={videoLabel()} onInput={(event) => setVideoLabel(event.currentTarget.value)} />
-          </label>
-          <label>
-            {videoSourceInputLabel(videoSourceKind())}
-            <input
-              value={videoPath()}
-              placeholder={videoSourceInputPlaceholder(videoSourceKind())}
-              onInput={(event) => setVideoPath(event.currentTarget.value)}
-            />
-          </label>
-          <button onClick={selectVideoSourceFile} disabled={!videoSourceCanBrowseFile(videoSourceKind())}>
-            Browse Source
-          </button>
-          <button class="primary" onClick={addVideoLayer}>
-            Add Video Layer
-          </button>
-          <div class="videoLayerList">
-            <For each={snapshot().video.layers}>
-              {(layer, index) => (
-                <div class="videoLayerItem">
-                  <div>
-                    <label>
-                      Layer name
-                      <input
-                        value={layer.label}
-                        onChange={(event) => void setVideoLayerLabel(layer.id, event.currentTarget.value)}
-                      />
-                    </label>
-                    <span>{layer.source.path ?? layer.source.name ?? layer.source.kind}</span>
-                    <Show when={videoSourceMetadataLabel(layer.source)}>
-                      {(metadata) => <small>{metadata()}</small>}
-                    </Show>
-                  </div>
-                  <div class="buttonRow">
-                    <button onClick={() => void moveVideoLayer(layer.id, -1)} disabled={index() === 0}>
-                      Up
-                    </button>
-                    <button
-                      onClick={() => void moveVideoLayer(layer.id, 1)}
-                      disabled={index() === snapshot().video.layers.length - 1}
-                    >
-                      Down
-                    </button>
-                    <button onClick={() => void duplicateVideoLayer(layer)}>Duplicate</button>
-                    <button
-                      onClick={() => void refreshVideoLayerMetadata(layer.id)}
-                      disabled={layer.source.kind !== "File" && layer.source.kind !== "StillImage"}
-                    >
-                      Refresh Metadata
-                    </button>
-                  </div>
-                  <label>
-                    Blend
-                    <select
-                      value={layer.blend_mode}
-                      onInput={(event) =>
-                        void setVideoLayerBlendMode(layer.id, event.currentTarget.value as VideoBlendMode)
-                      }
-                    >
-                      <option value="Normal">Normal</option>
-                      <option value="Add">Add</option>
-                      <option value="Multiply">Multiply</option>
-                      <option value="Screen">Screen</option>
-                    </select>
-                  </label>
-                  <label class="checkbox">
-                    <input
-                      type="checkbox"
-                      checked={layer.state.enabled}
-                      onChange={(event) =>
-                        void setVideoLayerState(layer.id, {
-                          ...layer.state,
-                          enabled: event.currentTarget.checked,
-                        })
-                      }
-                    />
-                    Layer enabled
-                  </label>
-                  <label class="checkbox">
-                    <input
-                      type="checkbox"
-                      checked={layer.state.solo}
-                      onChange={(event) =>
-                        void setVideoLayerState(layer.id, {
-                          ...layer.state,
-                          solo: event.currentTarget.checked,
-                        })
-                      }
-                    />
-                    Solo layer
-                  </label>
-                  <div class="split">
-                    <label>
-                      Opacity
-                      <input
-                        type="number"
-                        min="0"
-                        max="1"
-                        step="0.01"
-                        value={layer.state.opacity}
-                        onInput={(event) =>
-                          void setVideoLayerState(layer.id, {
-                            ...layer.state,
-                            opacity: Number(event.currentTarget.value),
-                          })
-                        }
-                      />
-                    </label>
-                    <label>
-                      Speed
-                      <input
-                        type="number"
-                        min="-4"
-                        max="4"
-                        step="0.1"
-                        value={layer.state.speed}
-                        onInput={(event) =>
-                          void setVideoLayerState(layer.id, {
-                            ...layer.state,
-                            speed: Number(event.currentTarget.value),
-                          })
-                        }
-                      />
-                    </label>
-                  </div>
-                  <div class="videoTransformControls">
-                    <h3>Transform</h3>
-                    <div class="split">
-                      <label>
-                        X
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={layer.state.transform.x}
-                          onChange={(event) =>
-                            void setVideoLayerTransform(layer.id, layer.state, {
-                              x: Number(event.currentTarget.value),
-                            })
-                          }
-                        />
-                      </label>
-                      <label>
-                        Y
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={layer.state.transform.y}
-                          onChange={(event) =>
-                            void setVideoLayerTransform(layer.id, layer.state, {
-                              y: Number(event.currentTarget.value),
-                            })
-                          }
-                        />
-                      </label>
-                    </div>
-                    <div class="split">
-                      <label>
-                        Scale X
-                        <input
-                          type="number"
-                          min="0.001"
-                          step="0.01"
-                          value={layer.state.transform.scale_x}
-                          onChange={(event) =>
-                            void setVideoLayerTransform(layer.id, layer.state, {
-                              scale_x: Number(event.currentTarget.value),
-                            })
-                          }
-                        />
-                      </label>
-                      <label>
-                        Scale Y
-                        <input
-                          type="number"
-                          min="0.001"
-                          step="0.01"
-                          value={layer.state.transform.scale_y}
-                          onChange={(event) =>
-                            void setVideoLayerTransform(layer.id, layer.state, {
-                              scale_y: Number(event.currentTarget.value),
-                            })
-                          }
-                        />
-                      </label>
-                    </div>
-                    <label>
-                      Rotation
-                      <input
-                        type="number"
-                        step="1"
-                        value={layer.state.transform.rotation_deg}
-                        onChange={(event) =>
-                          void setVideoLayerTransform(layer.id, layer.state, {
-                            rotation_deg: Number(event.currentTarget.value),
-                          })
-                        }
-                      />
-                    </label>
-                    <div class="split">
-                      <label>
-                        Crop L
-                        <input
-                          type="number"
-                          min="0"
-                          max="1"
-                          step="0.01"
-                          value={layer.state.transform.crop_left}
-                          onChange={(event) =>
-                            void setVideoLayerTransform(layer.id, layer.state, {
-                              crop_left: Number(event.currentTarget.value),
-                            })
-                          }
-                        />
-                      </label>
-                      <label>
-                        Crop R
-                        <input
-                          type="number"
-                          min="0"
-                          max="1"
-                          step="0.01"
-                          value={layer.state.transform.crop_right}
-                          onChange={(event) =>
-                            void setVideoLayerTransform(layer.id, layer.state, {
-                              crop_right: Number(event.currentTarget.value),
-                            })
-                          }
-                        />
-                      </label>
-                    </div>
-                    <div class="split">
-                      <label>
-                        Crop T
-                        <input
-                          type="number"
-                          min="0"
-                          max="1"
-                          step="0.01"
-                          value={layer.state.transform.crop_top}
-                          onChange={(event) =>
-                            void setVideoLayerTransform(layer.id, layer.state, {
-                              crop_top: Number(event.currentTarget.value),
-                            })
-                          }
-                        />
-                      </label>
-                      <label>
-                        Crop B
-                        <input
-                          type="number"
-                          min="0"
-                          max="1"
-                          step="0.01"
-                          value={layer.state.transform.crop_bottom}
-                          onChange={(event) =>
-                            void setVideoLayerTransform(layer.id, layer.state, {
-                              crop_bottom: Number(event.currentTarget.value),
-                            })
-                          }
-                        />
-                      </label>
-                    </div>
-                  </div>
-                  <div class="videoColorControls">
-                    <h3>Color</h3>
-                    <div class="split">
-                      <label>
-                        Bright
-                        <input
-                          type="number"
-                          min="-1"
-                          max="1"
-                          step="0.01"
-                          value={layer.state.color?.brightness ?? defaultColorAdjust.brightness}
-                          onChange={(event) =>
-                            void setVideoLayerColor(layer.id, layer.state, {
-                              brightness: Number(event.currentTarget.value),
-                            })
-                          }
-                        />
-                      </label>
-                      <label>
-                        Contrast
-                        <input
-                          type="number"
-                          min="0"
-                          max="4"
-                          step="0.01"
-                          value={layer.state.color?.contrast ?? defaultColorAdjust.contrast}
-                          onChange={(event) =>
-                            void setVideoLayerColor(layer.id, layer.state, {
-                              contrast: Number(event.currentTarget.value),
-                            })
-                          }
-                        />
-                      </label>
-                    </div>
-                    <div class="split">
-                      <label>
-                        Hue
-                        <input
-                          type="number"
-                          step="1"
-                          value={layer.state.color?.hue_deg ?? defaultColorAdjust.hue_deg}
-                          onChange={(event) =>
-                            void setVideoLayerColor(layer.id, layer.state, {
-                              hue_deg: Number(event.currentTarget.value),
-                            })
-                          }
-                        />
-                      </label>
-                      <label>
-                        Sat
-                        <input
-                          type="number"
-                          min="0"
-                          max="4"
-                          step="0.01"
-                          value={layer.state.color?.saturation ?? defaultColorAdjust.saturation}
-                          onChange={(event) =>
-                            void setVideoLayerColor(layer.id, layer.state, {
-                              saturation: Number(event.currentTarget.value),
-                            })
-                          }
-                        />
-                      </label>
-                    </div>
-                    <label>
-                      Gamma
-                      <input
-                        type="number"
-                        min="0.1"
-                        max="4"
-                        step="0.01"
-                        value={layer.state.color?.gamma ?? defaultColorAdjust.gamma}
-                        onChange={(event) =>
-                          void setVideoLayerColor(layer.id, layer.state, {
-                            gamma: Number(event.currentTarget.value),
-                          })
-                        }
-                      />
-                    </label>
-                  </div>
-                  <div class="videoFxControls">
-                    <h3>FX</h3>
-                    <div class="split">
-                      <label>
-                        Pixelate
-                        <input
-                          type="number"
-                          min="1"
-                          max="128"
-                          step="1"
-                          value={layer.state.fx?.pixelate ?? defaultFxAdjust.pixelate}
-                          onChange={(event) =>
-                            void setVideoLayerFx(layer.id, layer.state, {
-                              pixelate: Number(event.currentTarget.value),
-                            })
-                          }
-                        />
-                      </label>
-                      <label>
-                        Blur
-                        <input
-                          type="number"
-                          min="0"
-                          max="8"
-                          step="1"
-                          value={layer.state.fx?.blur ?? defaultFxAdjust.blur}
-                          onChange={(event) =>
-                            void setVideoLayerFx(layer.id, layer.state, {
-                              blur: Number(event.currentTarget.value),
-                            })
-                          }
-                        />
-                      </label>
-                    </div>
-                    <div class="split">
-                      <label>
-                        Glow
-                        <input
-                          type="number"
-                          min="0"
-                          max="4"
-                          step="0.01"
-                          value={layer.state.fx?.glow ?? defaultFxAdjust.glow}
-                          onChange={(event) =>
-                            void setVideoLayerFx(layer.id, layer.state, {
-                              glow: Number(event.currentTarget.value),
-                            })
-                          }
-                        />
-                      </label>
-                      <label>
-                        Edge
-                        <input
-                          type="number"
-                          min="0"
-                          max="4"
-                          step="0.01"
-                          value={layer.state.fx?.edge ?? defaultFxAdjust.edge}
-                          onChange={(event) =>
-                            void setVideoLayerFx(layer.id, layer.state, {
-                              edge: Number(event.currentTarget.value),
-                            })
-                          }
-                        />
-                      </label>
-                    </div>
-                    <div class="triple">
-                      <label>
-                        Key R
-                        <input
-                          type="number"
-                          min="0"
-                          max="1"
-                          step="0.01"
-                          value={layer.state.fx?.key_red ?? defaultFxAdjust.key_red}
-                          onChange={(event) =>
-                            void setVideoLayerFx(layer.id, layer.state, {
-                              key_red: Number(event.currentTarget.value),
-                            })
-                          }
-                        />
-                      </label>
-                      <label>
-                        Key G
-                        <input
-                          type="number"
-                          min="0"
-                          max="1"
-                          step="0.01"
-                          value={layer.state.fx?.key_green ?? defaultFxAdjust.key_green}
-                          onChange={(event) =>
-                            void setVideoLayerFx(layer.id, layer.state, {
-                              key_green: Number(event.currentTarget.value),
-                            })
-                          }
-                        />
-                      </label>
-                      <label>
-                        Key B
-                        <input
-                          type="number"
-                          min="0"
-                          max="1"
-                          step="0.01"
-                          value={layer.state.fx?.key_blue ?? defaultFxAdjust.key_blue}
-                          onChange={(event) =>
-                            void setVideoLayerFx(layer.id, layer.state, {
-                              key_blue: Number(event.currentTarget.value),
-                            })
-                          }
-                        />
-                      </label>
-                    </div>
-                    <label>
-                      Key Threshold
-                      <input
-                        type="number"
-                        min="0"
-                        max="1"
-                        step="0.01"
-                        value={layer.state.fx?.key_threshold ?? defaultFxAdjust.key_threshold}
-                        onChange={(event) =>
-                          void setVideoLayerFx(layer.id, layer.state, {
-                            key_threshold: Number(event.currentTarget.value),
-                          })
-                        }
-                      />
-                    </label>
-                  </div>
-                  <label class="checkbox">
-                    <input
-                      type="checkbox"
-                      checked={layer.state.playing}
-                      onChange={(event) =>
-                        void setVideoLayerState(layer.id, {
-                          ...layer.state,
-                          playing: event.currentTarget.checked,
-                        })
-                      }
-                    />
-                    Playing
-                  </label>
-                  <div class="split">
-                    <label>
-                      Position ms
-                      <input
-                        type="number"
-                        min="0"
-                        max={layer.source.metadata?.duration_ms ?? undefined}
-                        value={layer.state.position_ms}
-                        onChange={(event) =>
-                          void setVideoLayerState(layer.id, {
-                            ...layer.state,
-                            position_ms: Number(event.currentTarget.value),
-                          })
-                        }
-                      />
-                    </label>
-                    <label class="checkbox inlineCheckbox">
-                      <input
-                        type="checkbox"
-                        checked={layer.state.loop_enabled}
-                        onChange={(event) =>
-                          void setVideoLayerState(layer.id, {
-                            ...layer.state,
-                            loop_enabled: event.currentTarget.checked,
-                          })
-                        }
-                      />
-                      Loop
-                    </label>
-                  </div>
-                  <Show when={layer.state.loop_enabled}>
-                    <>
-                      <div class="split">
-                        <label>
-                          Loop in
-                          <input
-                            type="number"
-                            min="0"
-                            max={layer.source.metadata?.duration_ms ?? undefined}
-                            value={layer.state.loop_start_ms}
-                            onChange={(event) =>
-                              void setVideoLayerState(layer.id, {
-                                ...layer.state,
-                                loop_start_ms: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          Loop out
-                          <input
-                            type="number"
-                            min="0"
-                            max={layer.source.metadata?.duration_ms ?? undefined}
-                            value={layer.state.loop_end_ms}
-                            onChange={(event) =>
-                              void setVideoLayerState(layer.id, {
-                                ...layer.state,
-                                loop_end_ms: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                      </div>
-                      <Show when={layer.source.metadata?.duration_ms}>
-                        {(durationMs) => (
-                          <button
-                            onClick={() =>
-                              void setVideoLayerState(layer.id, {
-                                ...layer.state,
-                                loop_enabled: true,
-                                loop_start_ms: 0,
-                                loop_end_ms: durationMs(),
-                              })
-                            }
-                          >
-                            Use Source Length
-                          </button>
-                        )}
-                      </Show>
-                    </>
-                  </Show>
-                  <div class="videoSyncControls">
-                    <label class="checkbox">
-                      <input
-                        type="checkbox"
-                        checked={layer.state.bpm_sync.enabled}
-                        onChange={(event) =>
-                          void setVideoLayerState(layer.id, {
-                            ...layer.state,
-                            bpm_sync: {
-                              ...layer.state.bpm_sync,
-                              enabled: event.currentTarget.checked,
-                            },
-                          })
-                        }
-                      />
-                      BPM sync
-                    </label>
-                    <div class="split">
-                      <label>
-                        Ratio
-                        <select
-                          value={layer.state.bpm_sync.ratio}
-                          onInput={(event) =>
-                            void setVideoLayerState(layer.id, {
-                              ...layer.state,
-                              bpm_sync: {
-                                ...layer.state.bpm_sync,
-                                ratio: Number(event.currentTarget.value),
-                              },
-                            })
-                          }
-                        >
-                          <option value="0.25">0.25x</option>
-                          <option value="0.5">0.5x</option>
-                          <option value="1">1x</option>
-                          <option value="2">2x</option>
-                          <option value="4">4x</option>
-                        </select>
-                      </label>
-                      <label>
-                        Bars
-                        <input
-                          type="number"
-                          min="0.25"
-                          step="0.25"
-                          value={layer.state.bpm_sync.loop_bars}
-                          onChange={(event) =>
-                            void setVideoLayerState(layer.id, {
-                              ...layer.state,
-                              bpm_sync: {
-                                ...layer.state.bpm_sync,
-                                loop_bars: Number(event.currentTarget.value),
-                              },
-                            })
-                          }
-                        />
-                      </label>
-                    </div>
-                  </div>
-                  <div class="cuePointList">
-                    <div class="buttonRow">
-                      <button
-                        onClick={() => void addVideoCuePoint(layer.id)}
-                      >
-                        Add Cue Pt
-                      </button>
-                      <button
-                        onClick={() => void jumpVideoCuePoint(layer.id, 0)}
-                        disabled={layer.state.cue_points_ms.length === 0}
-                      >
-                        Jump First
-                      </button>
-                    </div>
-                    <For each={layer.state.cue_points_ms}>
-                      {(cuePoint, cuePointIndex) => (
-                        <div class="cuePointItem">
-                          <button
-                            onClick={() => void jumpVideoCuePoint(layer.id, cuePointIndex())}
-                          >
-                            {cuePoint} ms
-                          </button>
-                          <button
-                            onClick={() => void removeVideoCuePoint(layer.id, cuePoint)}
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      )}
-                    </For>
-                  </div>
-                  <div class="buttonRow">
-                    <button
-                      onClick={() =>
-                        setVideoLayerState(layer.id, {
-                          ...layer.state,
-                          opacity: 0,
-                        })
-                      }
-                    >
-                      Fade Out
-                    </button>
-                    <button onClick={() => removeVideoLayer(layer.id)}>Remove</button>
-                  </div>
-                </div>
-              )}
-            </For>
-          </div>
-          <div class="videoAutomationForm">
-            <h3>Timeline Automation</h3>
-            <label>
-              Layer
-              <select
-                value={selectedVideoAutomationLayerId() ?? ""}
-                disabled={snapshot().video.layers.length === 0}
-                onInput={(event) => setVideoAutomationLayerId(Number(event.currentTarget.value))}
-              >
-                <For each={snapshot().video.layers}>
-                  {(layer) => <option value={layer.id}>{layer.label}</option>}
-                </For>
-              </select>
-            </label>
-            <div class="split">
-              <label>
-                Param
-                <select
-                  value={videoAutomationParam()}
-                  onInput={(event) => setVideoAutomationParam(event.currentTarget.value as VideoParam)}
-                >
-                  <option value="Opacity">Opacity</option>
-                  <option value="Speed">Speed</option>
-                  <option value="PositionMs">Position</option>
-                  <option value="BpmSyncEnabled">BPM Sync</option>
-                  <option value="BpmSyncRatio">BPM Sync Ratio</option>
-                  <option value="BpmSyncLoopBars">BPM Loop Bars</option>
-                  <option value="TransformX">Transform X</option>
-                  <option value="TransformY">Transform Y</option>
-                  <option value="TransformScaleX">Scale X</option>
-                  <option value="TransformScaleY">Scale Y</option>
-                  <option value="TransformRotationDeg">Rotation</option>
-                  <option value="TransformCropLeft">Crop L</option>
-                  <option value="TransformCropTop">Crop T</option>
-                  <option value="TransformCropRight">Crop R</option>
-                  <option value="TransformCropBottom">Crop B</option>
-                  <option value="ColorBrightness">Brightness</option>
-                  <option value="ColorContrast">Contrast</option>
-                  <option value="ColorHueDeg">Hue</option>
-                  <option value="ColorSaturation">Saturation</option>
-                  <option value="ColorGamma">Gamma</option>
-                  <option value="FxPixelate">Pixelate</option>
-                  <option value="FxBlur">Blur</option>
-                  <option value="FxGlow">Glow</option>
-                  <option value="FxEdge">Edge</option>
-                  <option value="FxKeyRed">Key R</option>
-                  <option value="FxKeyGreen">Key G</option>
-                  <option value="FxKeyBlue">Key B</option>
-                  <option value="FxKeyThreshold">Key Threshold</option>
-                </select>
-              </label>
-              <label>
-                Curve
-                <select
-                  value={videoAutomationInterpolation()}
-                  onInput={(event) =>
-                    setVideoAutomationInterpolation(event.currentTarget.value as AutomationInterpolation)
-                  }
-                >
-                  <option value="Linear">Linear</option>
-                  <option value="Step">Step</option>
-                  <option value="Bezier">Bezier</option>
-                </select>
-              </label>
-            </div>
-            <div class="split">
-              <label>
-                Start
-                <input
-                  type="number"
-                  min="0"
-                  value={videoAutomationStartMs()}
-                  onInput={(event) => setVideoAutomationStartMs(Number(event.currentTarget.value))}
-                />
-              </label>
-              <label>
-                End
-                <input
-                  type="number"
-                  min="0"
-                  value={videoAutomationEndMs()}
-                  onInput={(event) => setVideoAutomationEndMs(Number(event.currentTarget.value))}
-                />
-              </label>
-            </div>
-            <div class="split">
-              <label>
-                From
-                <input
-                  type="number"
-                  step="0.01"
-                  value={videoAutomationStartValue()}
-                  onInput={(event) => setVideoAutomationStartValue(Number(event.currentTarget.value))}
-                />
-              </label>
-              <label>
-                To
-                <input
-                  type="number"
-                  step="0.01"
-                  value={videoAutomationEndValue()}
-                  onInput={(event) => setVideoAutomationEndValue(Number(event.currentTarget.value))}
-                />
-              </label>
-            </div>
-            <button class="primary" onClick={addTimelineVideoAutomation} disabled={snapshot().video.layers.length === 0}>
-              Add Video Automation
-            </button>
-            <div class="timelineList">
-              <For each={timelineVideoAutomationRows()}>
-                {(automation) => {
-                  const draft = () => timelineVideoAutomationDraft(automation);
-                  return (
-                    <div class="timelineItem timelineAutomationItem">
-                      <div>
-                        <strong>{automation.layer_label} / {automation.param}</strong>
-                        <span>
-                          {automation.keyframes[0]?.time_ms ?? 0}-
-                          {automation.keyframes[automation.keyframes.length - 1]?.time_ms ?? 0} ms / {automation.keyframes.length} keys
-                        </span>
-                      </div>
-                      <div class="automationEditGrid">
-                        <label>
-                          Layer
-                          <select
-                            value={draft().layer_id}
-                            onInput={(event) =>
-                              updateTimelineVideoAutomationDraft(automation, {
-                                layer_id: Number(event.currentTarget.value),
-                              })
-                            }
-                          >
-                            <For each={snapshot().video.layers}>
-                              {(layer) => <option value={layer.id}>{layer.label}</option>}
-                            </For>
-                          </select>
-                        </label>
-                        <label>
-                          Param
-                          <select
-                            value={draft().param}
-                            onInput={(event) =>
-                              updateTimelineVideoAutomationDraft(automation, {
-                                param: event.currentTarget.value as VideoParam,
-                              })
-                            }
-                          >
-                            <option value="Opacity">Opacity</option>
-                            <option value="Speed">Speed</option>
-                            <option value="PositionMs">Position</option>
-                            <option value="BpmSyncEnabled">BPM Sync</option>
-                            <option value="BpmSyncRatio">BPM Sync Ratio</option>
-                            <option value="BpmSyncLoopBars">BPM Loop Bars</option>
-                            <option value="TransformX">Transform X</option>
-                            <option value="TransformY">Transform Y</option>
-                            <option value="TransformScaleX">Scale X</option>
-                            <option value="TransformScaleY">Scale Y</option>
-                            <option value="TransformRotationDeg">Rotation</option>
-                            <option value="TransformCropLeft">Crop L</option>
-                            <option value="TransformCropTop">Crop T</option>
-                            <option value="TransformCropRight">Crop R</option>
-                            <option value="TransformCropBottom">Crop B</option>
-                            <option value="ColorBrightness">Brightness</option>
-                            <option value="ColorContrast">Contrast</option>
-                            <option value="ColorHueDeg">Hue</option>
-                            <option value="ColorSaturation">Saturation</option>
-                            <option value="ColorGamma">Gamma</option>
-                            <option value="FxPixelate">Pixelate</option>
-                            <option value="FxBlur">Blur</option>
-                            <option value="FxGlow">Glow</option>
-                            <option value="FxEdge">Edge</option>
-                            <option value="FxKeyRed">Key R</option>
-                            <option value="FxKeyGreen">Key G</option>
-                            <option value="FxKeyBlue">Key B</option>
-                            <option value="FxKeyThreshold">Key Threshold</option>
-                          </select>
-                        </label>
-                        <label>
-                          Start
-                          <input
-                            type="number"
-                            min="0"
-                            value={draft().start_ms}
-                            onInput={(event) =>
-                              updateTimelineVideoAutomationDraft(automation, {
-                                start_ms: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          End
-                          <input
-                            type="number"
-                            min="0"
-                            value={draft().end_ms}
-                            onInput={(event) =>
-                              updateTimelineVideoAutomationDraft(automation, {
-                                end_ms: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          From
-                          <input
-                            type="number"
-                            step="0.01"
-                            value={draft().start_value}
-                            onInput={(event) =>
-                              updateTimelineVideoAutomationDraft(automation, {
-                                start_value: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          To
-                          <input
-                            type="number"
-                            step="0.01"
-                            value={draft().end_value}
-                            onInput={(event) =>
-                              updateTimelineVideoAutomationDraft(automation, {
-                                end_value: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          Curve
-                          <select
-                            value={draft().interpolation}
-                            onInput={(event) =>
-                              updateTimelineVideoAutomationDraft(automation, {
-                                interpolation: event.currentTarget.value as AutomationInterpolation,
-                              })
-                            }
-                          >
-                            <option value="Linear">Linear</option>
-                            <option value="Step">Step</option>
-                            <option value="Bezier">Bezier</option>
-                          </select>
-                        </label>
-                      </div>
-                      <div class="buttonRow">
-                        <button onClick={() => void setTimelineVideoAutomation(automation)}>Save</button>
-                        <button onClick={() => removeTimelineAutomation(automation.id)}>Remove</button>
-                      </div>
-                    </div>
-                  );
-                }}
-              </For>
-            </div>
-          </div>
+          <VideoPreviewDiagnosticsPanel
+            layerCount={snapshot().video.layers.length}
+            info={videoPreviewInfo()}
+            diagnosticsText={videoPreviewDiagnosticsText()}
+            layerDiagnostics={videoPreviewLayerDiagnostics()}
+            outputDecodePlans={videoPreviewOutputDecodePlans()}
+            onRenderPreview={renderDebugVideoPreview}
+            onRefreshDiagnostics={() => refreshVideoPreviewDiagnostics()}
+            layerClass={videoPreviewLayerDiagnosticClass}
+            layerLabel={videoPreviewLayerDiagnosticLabel}
+            outputClass={videoPreviewOutputDecodePlanClass}
+            outputLabel={videoPreviewOutputDecodePlanLabel}
+          />
+          <VideoOutputRenderPlanStatusPanel
+            summary={videoOutputRenderPlanSummary()}
+            checked={videoOutputRenderPlans() !== null}
+            rows={videoOutputRenderPlanRows()}
+            onRefresh={refreshVideoOutputRenderPlans}
+          />
+          <VideoBackendStatusPanel
+            summary={videoRuntimeBackendSummary()}
+            backends={videoRuntimeStatus()?.backends ?? null}
+            backendClass={videoRuntimeBackendClass}
+            onRefresh={refreshVideoRuntimeStatus}
+          />
+          <ExternalVideoIoStatusPanel
+            ioSummary={externalVideoIoPlanSummary()}
+            transportSummary={externalVideoTransportSummary()}
+            checked={externalVideoIoPlans() !== null}
+            planRows={externalVideoIoPlanRows()}
+            activeTransportRows={externalVideoTransportActiveRows()}
+            transportRows={externalVideoTransportRows()}
+            transportEventRows={externalVideoTransportEventRows()}
+            planClass={externalVideoIoPlanClass}
+            transportClass={externalVideoTransportClass}
+            onRefreshPlans={refreshExternalVideoIoPlans}
+            onSyncRoutes={syncExternalVideoTransports}
+          />
+          <VideoMasterControlsPanel
+            masterOpacity={snapshot().video.master_opacity}
+            blackout={snapshot().video.blackout}
+            onSetMasterOpacity={setVideoMasterOpacity}
+            onSetBlackout={setVideoBlackout}
+          />
+          <VideoOutputControlListPanel
+            outputs={snapshot().video.outputs}
+            compositions={snapshot().video.compositions}
+            fadeMs={videoOutputFadeMs()}
+            windowSummary={videoOutputWindowSummary()}
+            onSetFadeMs={setVideoOutputFadeMs}
+            onRefreshWindows={refreshVideoOutputWindowStatuses}
+            onOpenAllWindows={openAllVideoOutputWindows}
+            onSyncOpenWindows={syncOpenVideoOutputWindows}
+            onCloseOpenWindows={closeOpenVideoOutputWindows}
+            renderPlanState={videoOutputRenderPlanState}
+            windowStatusForOutput={videoOutputWindowStatusForOutput}
+            windowState={videoOutputWindowState}
+            onSetOutputEnabled={setVideoOutputEnabled}
+            onSetOutputBlackout={setVideoOutputBlackout}
+            onFadeOutputOpacity={fadeVideoOutputOpacity}
+            onSetOutputOpacity={setVideoOutputOpacity}
+            onOpenOutputWindow={openVideoOutputWindow}
+            onSyncOutputWindow={syncVideoOutputWindow}
+            onCloseOutputWindow={closeVideoOutputWindow}
+          />
+          <VideoPreviewImagePanel previewUrl={videoPreviewUrl()} layerCount={snapshot().video.layers.length} />
+          <VideoSourceCreatePanel
+            sourceKind={videoSourceKind()}
+            label={videoLabel()}
+            path={videoPath()}
+            onSetSourceKind={setVideoSourceKind}
+            onSetLabel={setVideoLabel}
+            onSetPath={setVideoPath}
+            onBrowseSource={selectVideoSourceFile}
+            onAddLayer={addVideoLayer}
+          />
+          <VideoLayerListPanel
+            layers={snapshot().video.layers}
+            onSetLayerLabel={setVideoLayerLabel}
+            onMoveLayer={moveVideoLayer}
+            onDuplicateLayer={duplicateVideoLayer}
+            onRefreshMetadata={refreshVideoLayerMetadata}
+            onSetBlendMode={setVideoLayerBlendMode}
+            onSetLayerState={setVideoLayerState}
+            onSetLayerTransform={setVideoLayerTransform}
+            onSetLayerColor={setVideoLayerColor}
+            onSetLayerFx={setVideoLayerFx}
+            onAddCuePoint={addVideoCuePoint}
+            onJumpCuePoint={jumpVideoCuePoint}
+            onRemoveCuePoint={removeVideoCuePoint}
+            onRemoveLayer={removeVideoLayer}
+          />
+          <VideoTimelineAutomationPanel
+            layers={snapshot().video.layers}
+            selectedLayerId={selectedVideoAutomationLayerId()}
+            param={videoAutomationParam()}
+            interpolation={videoAutomationInterpolation()}
+            startMs={videoAutomationStartMs()}
+            endMs={videoAutomationEndMs()}
+            startValue={videoAutomationStartValue()}
+            endValue={videoAutomationEndValue()}
+            automations={timelineVideoAutomationRows()}
+            draftForAutomation={timelineVideoAutomationDraft}
+            onSetLayerId={setVideoAutomationLayerId}
+            onSetParam={setVideoAutomationParam}
+            onSetInterpolation={setVideoAutomationInterpolation}
+            onSetStartMs={setVideoAutomationStartMs}
+            onSetEndMs={setVideoAutomationEndMs}
+            onSetStartValue={setVideoAutomationStartValue}
+            onSetEndValue={setVideoAutomationEndValue}
+            onAddAutomation={addTimelineVideoAutomation}
+            onUpdateAutomationDraft={updateTimelineVideoAutomationDraft}
+            onSaveAutomation={setTimelineVideoAutomation}
+            onRemoveAutomation={removeTimelineAutomation}
+          />
         </section>
 
         <section class="panel faders controlPanel">
@@ -15637,937 +11472,248 @@ export default function App() {
             <h2>Faders</h2>
             <span>{selectedFixtureGroupFilter() ? `Group ${selectedFixtureGroupFilter()}` : selectedFixture()?.label}</span>
           </div>
-          <Show when={selectedFixtureGroupFilter()}>
-            {(groupId) => (
-              <div class="groupControlBanner">
-                <div>
-                  <strong>{groupId()}</strong>
-                  <span>{filteredFixtures().length} fixture(s)</span>
-                </div>
-                <label class="groupSubmasterControl">
-                  Submaster
-                  <input
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.01"
-                    value={selectedGroupSubmaster()?.level ?? 1}
-                    onChange={(event) => void setGroupSubmaster(groupId(), Number(event.currentTarget.value))}
-                  />
-                  <span>{Math.round((selectedGroupSubmaster()?.level ?? 1) * 100)}%</span>
-                </label>
-              </div>
-            )}
-          </Show>
-          <Show when={selectedFixture()}>
-            {(fixture) => (
-              <>
-                <div class="buttonRow">
-                  <button onClick={savePreset}>Save Preset</button>
-                  <button onClick={loadPreset}>Load Preset</button>
-                  <button onClick={() => void duplicateFixture(fixture())}>Duplicate</button>
-                  <button onClick={() => void removeFixture(fixture().id)}>Remove Fixture</button>
-                </div>
-                <div class="buttonRow">
-                  <Show
-                    when={selectedFixtureGroupFilter()}
-                    fallback={
-                      <>
-                        <button onClick={() => void setFixtureHighlight(fixture().id, !fixture().highlighted)}>
-                          {fixture().highlighted ? "Clear Highlight" : "Highlight"}
-                        </button>
-                        <button onClick={() => void setFixtureSolo(fixture().id, !fixture().soloed)}>
-                          {fixture().soloed ? "Clear Solo" : "Solo"}
-                        </button>
-                        <button onClick={() => void setFixturePark(fixture().id, !fixture().parked)}>
-                          {fixture().parked ? "Clear Park" : "Park"}
-                        </button>
-                        <button disabled={!globalFixtureFlagState().anyFlagged} onClick={() => void clearFixtureFlags("all")}>
-                          Clear Flags
-                        </button>
-                      </>
-                    }
-                  >
-                    {(groupId) => (
-                      <>
-                        <button
-                          disabled={selectedGroupFlagState().count === 0}
-                          onClick={() => void setGroupHighlight(groupId(), !selectedGroupFlagState().anyHighlighted)}
-                        >
-                          {selectedGroupFlagState().anyHighlighted ? "Clear Group Highlight" : "Group Highlight"}
-                        </button>
-                        <button
-                          disabled={selectedGroupFlagState().count === 0}
-                          onClick={() => void setGroupSolo(groupId(), !selectedGroupFlagState().anySoloed)}
-                        >
-                          {selectedGroupFlagState().anySoloed ? "Clear Group Solo" : "Group Solo"}
-                        </button>
-                        <button
-                          disabled={selectedGroupFlagState().count === 0}
-                          onClick={() => void setGroupPark(groupId(), !selectedGroupFlagState().anyParked)}
-                        >
-                          {selectedGroupFlagState().anyParked ? "Clear Group Park" : "Group Park"}
-                        </button>
-                        <button disabled={!globalFixtureFlagState().anyFlagged} onClick={() => void clearFixtureFlags("all")}>
-                          Clear Flags
-                        </button>
-                      </>
-                    )}
-                  </Show>
-                </div>
-                <div class="transformEditor">
-                  <strong>Transform</strong>
-                  <div class="triple">
-                    <label>
-                      X
-                      <input
-                        type="number"
-                        value={fixture().position.x}
-                        onInput={(event) =>
-                          void setFixtureTransform(fixture(), {
-                            position: { ...fixture().position, x: Number(event.currentTarget.value) },
-                          })
-                        }
-                      />
-                    </label>
-                    <label>
-                      Y
-                      <input
-                        type="number"
-                        value={fixture().position.y}
-                        onInput={(event) =>
-                          void setFixtureTransform(fixture(), {
-                            position: { ...fixture().position, y: Number(event.currentTarget.value) },
-                          })
-                        }
-                      />
-                    </label>
-                    <label>
-                      Z
-                      <input
-                        type="number"
-                        value={fixture().position.z}
-                        onInput={(event) =>
-                          void setFixtureTransform(fixture(), {
-                            position: { ...fixture().position, z: Number(event.currentTarget.value) },
-                          })
-                        }
-                      />
-                    </label>
-                  </div>
-                  <div class="triple">
-                    <label>
-                      Pitch
-                      <input
-                        type="number"
-                        value={fixture().rotation.pitch}
-                        onInput={(event) =>
-                          void setFixtureTransform(fixture(), {
-                            rotation: { ...fixture().rotation, pitch: Number(event.currentTarget.value) },
-                          })
-                        }
-                      />
-                    </label>
-                    <label>
-                      Yaw
-                      <input
-                        type="number"
-                        value={fixture().rotation.yaw}
-                        onInput={(event) =>
-                          void setFixtureTransform(fixture(), {
-                            rotation: { ...fixture().rotation, yaw: Number(event.currentTarget.value) },
-                          })
-                        }
-                      />
-                    </label>
-                    <label>
-                      Roll
-                      <input
-                        type="number"
-                        value={fixture().rotation.roll}
-                        onInput={(event) =>
-                          void setFixtureTransform(fixture(), {
-                            rotation: { ...fixture().rotation, roll: Number(event.currentTarget.value) },
-                          })
-                        }
-                      />
-                    </label>
-                  </div>
-                </div>
-              </>
-            )}
-          </Show>
-          <div class="attributeEditor">
-            <nav class="attributeCategoryRail" aria-label="Attribute category">
-              <For each={controlCategoryRows()}>
-                {(category) => (
-                  <button
-                    class={activeControlCategory() === category.id ? "active" : ""}
-                    disabled={!category.hasVisual && category.count === 0}
-                    onClick={() => setControlCategory(category.id)}
-                    aria-pressed={activeControlCategory() === category.id}
-                  >
-                    <span>{category.label}</span>
-                    <small>{category.count}</small>
-                  </button>
-                )}
-              </For>
-            </nav>
-            <div class="attributeEditorBody">
-          <Show when={showDimmerPanel() ? selectedDimmerControl() : undefined}>
-            {(dimmerControl) => (
-              <DimmerControlPanel
-                control={dimmerControl()}
-                sliderMin={dimmerSliderRange().min}
-                sliderMax={dimmerSliderRange().max}
-                canEditLimits={Boolean(selectedFixture())}
-                limitsDraft={selectedFixtureLimitsDraft()}
-                normalizedLimits={normalizedSelectedFixtureLimitsDraft()}
-                formatDmxPercent={formatDmxPercent}
-                applyLimitsLabel={selectedFixture() ? "Apply to Fixture" : "No Fixture"}
-                onSetValue={setDimmerValue}
-                onUpdateLimit={(field, value) => updateSelectedFixtureLimit(field, value)}
-                onResetLimits={resetSelectedDimmerLimits}
-                onApplyLimits={applySelectedFixtureLimits}
-              />
-            )}
-          </Show>
-          <Show when={showPositionPad() ? selectedPositionControls() : undefined}>
-            {(positionControls) => (
-              <PositionControlPanel
-                controls={positionControls()}
-                nudgeAmount={panTiltNudgeAmount()}
-                nudgeSteps={panTiltNudgeSteps}
-                targetPoints={panTiltTargetPoints}
-                limitOverlayStyle={selectedFixtureLimitOverlayStyle()}
-                limitWindowStyle={selectedFixtureLimitWindowStyle()}
-                movementLimitDragging={Boolean(movementLimitDrag())}
-                canEditLimits={Boolean(selectedFixture())}
-                limitsDraft={selectedFixtureLimitsDraft()}
-                normalizedLimits={normalizedSelectedFixtureLimitsDraft()}
-                favorites={positionFavorites()}
-                favoriteLabel={positionFavoriteLabel()}
-                formatDmxPercent={formatDmxPercent}
-                formatShortDmxPercent={formatShortDmxPercent}
-                applyLimitsLabel={selectedFixture() ? "Apply to Fixture" : "No Fixture"}
-                dmxValueToPercent={dmxValueToPercent}
-                clampDmxValue={clampDmxValue}
-                onNudge={nudgePanTilt}
-                onCenter={centerPanTilt}
-                onMirrorAxis={mirrorPanTiltAxis}
-                onSetTarget={setPanTiltTargetPoint}
-                onPointerPad={(event) => void setPanTiltFromPointer(event)}
-                onPadKeyDown={handlePanTiltPadKeyDown}
-                onSetValues={(panValue, tiltValue) => void setPanTiltValues(panValue, tiltValue)}
-                onSetPercent={setPanTiltPercent}
-                onSetNudgeAmount={setPanTiltNudgeAmount}
-                onMovementLimitPointerDown={startMovementLimitDrag}
-                onMovementLimitPointerMove={dragMovementLimit}
-                onMovementLimitPointerEnd={endMovementLimitDrag}
-                onUpdateLimit={(field, value) => updateSelectedFixtureLimit(field, value)}
-                onUpdateLimitToggle={(field, value) => updateSelectedFixtureLimit(field, value)}
-                onResetMovementLimits={resetSelectedMovementLimits}
-                onApplyLimits={applySelectedFixtureLimits}
-                onSetFavoriteLabel={setPositionFavoriteLabel}
-                onAddFavorite={addCurrentPositionFavorite}
-                onResetFavorites={resetPositionFavorites}
-                onRemoveFavorite={removePositionFavorite}
-                onApplyFavorite={(pan, tilt) => void setPanTiltValues(pan, tilt)}
-              />
-            )}
-          </Show>
-          <Show when={showColorPad() ? selectedColorControls() : undefined}>
-            {(colorControls) => (
-              <ColorControlPanel
-                controls={colorControls()}
-                hsv={selectedColorHsv()}
-                saturationRamp={colorSaturationRamp()}
-                autoWhite={colorAutoWhite()}
-                quickLooks={colorQuickLooks}
-                palette={defaultColorPalette}
-                favorites={colorFavorites()}
-                targetLabel={controlTargetLabel()}
-                formatPercent={formatShortDmxPercent}
-                previewForSaturation={colorPreviewForSaturation}
-                onPointerColor={setColorFromPointer}
-                onSetColor={(color) => void setFixtureColor(color)}
-                onSetAutoWhite={setColorAutoWhite}
-                onSetChannel={setColorChannelValue}
-                onSetExtraChannel={setColorExtraChannelValue}
-                onSetHsv={setColorHsvValue}
-                onAddFavorite={addCurrentColorFavorite}
-                onResetFavorites={resetColorFavorites}
-                onRemoveFavorite={removeColorFavorite}
-              />
-            )}
-          </Show>
-          <Show when={showColorWheelPanel()}>
-            <ColorWheelSlotPanel
-              targetLabel={controlTargetLabel()}
-              entries={colorWheelEntries()}
-              wheelMediaUrlFor={wheelMediaUrlForCurrentFixture}
-              wheelSlotMediaPath={wheelSlotMediaPath}
-              functionLabel={channelFunctionLabel}
-              functionRangeLabel={channelFunctionRangeLabel}
-              functionDetail={channelFunctionDetail}
-              onSetValue={setControlAttributeValue}
-              onApplyFunction={(control, fn) => void applyChannelFunction(control, fn)}
-            />
-          </Show>
-          <Show when={showGoboWheelPanel()}>
-            <GoboWheelSlotPanel
-              targetLabel={controlTargetLabel()}
-              entries={goboWheelEntries()}
-              wheelMediaUrlFor={wheelMediaUrlForCurrentFixture}
-              wheelSlotMediaPath={wheelSlotMediaPath}
-              functionLabel={channelFunctionLabel}
-              functionRangeLabel={channelFunctionRangeLabel}
-              functionDetail={channelFunctionDetail}
-              onSetValue={setControlAttributeValue}
-              onApplyFunction={(control, fn) => void applyChannelFunction(control, fn)}
-            />
-          </Show>
-          <Show when={showOpticsPanel()}>
-            <OpticsControlPanel
-              title={opticsPanelTitle()}
-              count={opticsEntries().length}
-              targetLabel={controlTargetLabel()}
-              entries={opticsEntries()}
-              formatShortDmxPercent={formatShortDmxPercent}
-              clampDmxValue={clampDmxValue}
-              previewClass={opticsPreviewClass}
-              previewStyle={opticsPreviewStyle}
-              presetButtons={opticsPresetButtons}
-              sortedFunctions={sortedChannelFunctions}
-              functionContainsValue={channelFunctionContainsValue}
-              functionBandStyle={channelFunctionBandStyle}
-              functionLabel={channelFunctionLabel}
-              functionRangeLabel={channelFunctionRangeLabel}
-              functionDetail={channelFunctionDetail}
-              onPointerValue={setOpticsValueFromPointer}
-              onKeyValue={setOpticsValueFromKey}
-              onSetValue={setControlAttributeValue}
-              onApplyFunction={(control, fn) => void applyChannelFunction(control, fn)}
-            />
-          </Show>
-          <Show when={showCategoryQuickPanel()}>
-            <CategoryQuickPanel
-              categoryLabel={activeControlCategoryLabel()}
-              attributeCount={visibleControls().length}
-              looks={categoryQuickLooks()}
-              onSetValueMode={(mode) => void applyVisibleControlValues(mode)}
-              onApplyLook={(look) => void applyCategoryQuickLook(look)}
-            />
-          </Show>
-          <Show when={visibleFunctionControls().length > 0}>
-            <ChannelFunctionPanel
-              categoryLabel={activeControlCategoryLabel()}
-              entries={visibleFunctionControls()}
-              currentValue={currentControlValue}
-              clampDmxValue={clampDmxValue}
-              functionContainsValue={channelFunctionContainsValue}
-              functionBandStyle={channelFunctionBandStyle}
-              functionLabel={channelFunctionLabel}
-              functionRangeLabel={channelFunctionRangeLabel}
-              functionDetail={channelFunctionDetail}
-              functionSwatchColor={channelFunctionSwatchColor}
-              onApplyFunction={(control, fn) => void applyChannelFunction(control, fn)}
-            />
-          </Show>
-          <div class="faderGrid">
-            <For each={visibleControls()}>
-              {(control) => (
-                <div class="fader">
-                  <input
-                    type="range"
-                    min="0"
-                    max="65535"
-                    value={
-                      selectedFixture()
-                        ? faderValue(selectedFixture()!.id, control.attribute, control.default_value)
-                        : control.default_value
-                    }
-                    onInput={(event) => {
-                      const fixture = selectedFixture();
-                      const groupId = selectedFixtureGroupFilter();
-                      if (fixture) {
-                        const value = Number(event.currentTarget.value);
-                        if (groupId) {
-                          void setGroupAttribute(groupId, control.attribute, value);
-                        } else {
-                          void setAttribute(fixture.id, control.attribute, value);
-                        }
-                      }
-                    }}
-                  />
-                  <strong>{control.attribute}</strong>
-                  <span>{control.resolution === "SixteenBit" ? "16-bit" : "8-bit"}</span>
-                  <small>{control.offsets.join(", ")}</small>
-                </div>
-              )}
-            </For>
-            <Show when={!selectedFixture()}>
-              <p class="empty">Select or patch a fixture.</p>
-            </Show>
-            <Show when={selectedFixture() && visibleControls().length === 0}>
-              <p class="empty">No controls in this category.</p>
-            </Show>
-          </div>
-          </div>
-          </div>
-          <div class="cuePanel">
-            <div class="panelHeader">
-              <h2>Cues</h2>
-              <span>{snapshot().cues.length}</span>
-            </div>
-            <div class="cueForm">
-              <label>
-                Label
-                <input value={cueLabel()} onInput={(event) => setCueLabel(event.currentTarget.value)} />
-              </label>
-              <label>
-                Fade ms
-                <input
-                  type="number"
-                  min="0"
-                  value={cueFadeMs()}
-                  onInput={(event) => setCueFadeMs(Number(event.currentTarget.value))}
-                />
-              </label>
-              <label>
-                Scope
-                <select
-                  value={cueCaptureScope()}
-                  onInput={(event) => setCueCaptureScope(event.currentTarget.value as CueCaptureScopeMode)}
-                >
-                  <option value="all">Lighting + Video</option>
-                  <option value="lighting">Lighting Only</option>
-                  <option value="selectedFixture">Selected Fixture</option>
-                  <option value="selectedGroup">Selected Group</option>
-                  <option value="video">Video Only</option>
-                </select>
-              </label>
-              <Show when={cueCaptureScopeError()}>
-                {(error) => <span class="cueScopeHint invalid">{error()}</span>}
-              </Show>
-              <button class="primary" onClick={createCue} disabled={!hasCueSources() || Boolean(cueCaptureScopeError())}>
-                Store Cue
-              </button>
-            </div>
-            <CueCapturePreviewPanel
-              preview={cueCapturePreview()}
-              invalid={Boolean(cueCaptureScopeError())}
-              stageViewBoxSize={stageViewBoxSize}
-              stageOrigin={stageOrigin2d()}
-              selectedFixtureId={selectedFixtureId()}
-              onSelectFixture={setSelectedFixtureId}
-            />
-            <div class="buttonRow">
-              <button onClick={triggerPreviousCue} disabled={snapshot().cues.length === 0}>
-                Back
-              </button>
-              <button class="primary" onClick={triggerNextCue} disabled={snapshot().cues.length === 0}>
-                GO
-              </button>
-              <button
-                onClick={() => void setCueFadePaused(!snapshot().active_fade?.paused)}
-                disabled={!snapshot().active_fade}
-              >
-                {snapshot().active_fade?.paused ? "Resume" : "Pause"}
-              </button>
-            </div>
-            <Show when={snapshot().active_fade}>
-              {(fade) => (
-                <div class="fadeMeter">
-                  <span>{fade().paused ? "Paused " : ""}{Math.round(fade().progress * 100)}%</span>
-                  <div>
-                    <i style={{ width: `${Math.round(fade().progress * 100)}%` }} />
-                  </div>
-                </div>
-              )}
-            </Show>
-            <div class="cueList">
-              <For each={snapshot().cues}>
-                {(cue, index) => {
-                  const draft = () => cueMetadataDraft(cue);
-                  return (
-                    <div class={cue.id === snapshot().active_cue_id ? "cueItem active" : "cueItem"}>
-                      <div class="cueMetaLine">
-                        <strong>{cue.label}</strong>
-                        <span>
-                          {cue.targets.length} fixture(s) / {cue.video_targets.length} video /{" "}
-                          {cue.video_output_targets.length} output(s) / {cue.fade_ms}ms
-                        </span>
-                      </div>
-                      <div class="cueEditRow">
-                        <input
-                          value={draft().label}
-                          onInput={(event) => updateCueMetadataDraft(cue, { label: event.currentTarget.value })}
-                        />
-                        <input
-                          type="number"
-                          min="0"
-                          value={draft().fade_ms}
-                          onInput={(event) => updateCueMetadataDraft(cue, { fade_ms: Number(event.currentTarget.value) })}
-                        />
-                      </div>
-                      <div class="cueActionRow">
-                        <button onClick={() => void moveCue(cue.id, -1)} disabled={index() === 0}>
-                          Up
-                        </button>
-                        <button onClick={() => void moveCue(cue.id, 1)} disabled={index() === snapshot().cues.length - 1}>
-                          Down
-                        </button>
-                        <button onClick={() => void setCueMetadata(cue)}>
-                          Save
-                        </button>
-                        <button onClick={() => void duplicateCue(cue)}>
-                          Copy
-                        </button>
-                        <button
-                          onClick={() => updateCue(cue.id, draft().label, draft().fade_ms)}
-                          disabled={!hasCueSources() || Boolean(cueCaptureScopeError())}
-                        >
-                          Update
-                        </button>
-                        <button onClick={() => triggerCue(cue.id)}>GO</button>
-                        <button
-                          onClick={() => void addTimelineCueEventAt(cue.id, snapshot().timeline.position_ms, timelineTrack(), false)}
-                        >
-                          At Playhead
-                        </button>
-                        <button onClick={() => removeCue(cue.id)}>Remove</button>
-                      </div>
-                      <Show when={cueTimelinePlacementsForCue(cue.id).length > 0}>
-                        <div class="cueTimelinePlacements">
-                          <For each={cueTimelinePlacementsForCue(cue.id)}>
-                            {(placement) => (
-                              <span
-                                class={[
-                                  "cueTimelinePlacementChip",
-                                  placement.track === "Lighting" ? "lighting" : "video",
-                                  placement.time_ms < snapshot().timeline.position_ms ? "past" : "",
-                                ].filter(Boolean).join(" ")}
-                              >
-                                <button
-                                  class="cueTimelinePlacementMain"
-                                  title={`Seek to ${placement.time_ms} ms / ${placement.track}`}
-                                  onClick={() => void seekTimeline(placement.time_ms)}
-                                >
-                                  <b>{placement.track === "Lighting" ? "L" : "V"}</b>
-                                  <small>{placement.time_ms} ms</small>
-                                </button>
-                                <button
-                                  class="cueTimelinePlacementMove"
-                                  title={`Nudge ${timelinePlacementNudgeMs()} ms. Shift-click nudges left.`}
-                                  onClick={(event) =>
-                                    void moveTimelineCueEvent(
-                                      placement,
-                                      event.shiftKey ? -timelinePlacementNudgeMs() : timelinePlacementNudgeMs(),
-                                    )
-                                  }
-                                >
-                                  &gt;
-                                </button>
-                                <button
-                                  class="cueTimelinePlacementRemove"
-                                  title="Remove timeline placement"
-                                  onClick={() => removeTimelineEvent(placement.id)}
-                                >
-                                  x
-                                </button>
-                              </span>
-                            )}
-                          </For>
-                        </div>
-                      </Show>
-                    </div>
-                  );
-                }}
-              </For>
-            </div>
-          </div>
+          <FaderFixtureControlPanel
+            selectedGroupId={selectedFixtureGroupFilter()}
+            selectedGroupFixtureCount={filteredFixtures().length}
+            patchedFixtureCount={snapshot().fixtures.length}
+            selectedGroupSubmasterLevel={selectedGroupSubmaster()?.level ?? 1}
+            selectedFixture={selectedFixture() ?? null}
+            groupFlagState={selectedGroupFlagState()}
+            globalAnyFlagged={globalFixtureFlagState().anyFlagged}
+            onSetGroupSubmaster={setGroupSubmaster}
+            onSavePreset={savePreset}
+            onLoadPreset={loadPreset}
+            onLoadPresetForGroup={loadPresetForSelectedGroup}
+            onLoadPresetForAllMatching={loadPresetForAllMatching}
+            onDuplicateFixture={duplicateFixture}
+            onRemoveFixture={removeFixture}
+            onSetFixtureHighlight={setFixtureHighlight}
+            onSetFixtureSolo={setFixtureSolo}
+            onSetFixturePark={setFixturePark}
+            onSetGroupHighlight={setGroupHighlight}
+            onSetGroupSolo={setGroupSolo}
+            onSetGroupPark={setGroupPark}
+            onClearFixtureFlags={() => clearFixtureFlags("all")}
+            onSetFixtureTransform={setFixtureTransform}
+          />
+          <FaderAttributeEditorPanel
+            categories={controlCategoryRows()}
+            activeCategory={activeControlCategory()}
+            onCategory={setControlCategory}
+          >
+          <FaderPrimaryAttributePanels
+            dimmerControl={showDimmerPanel() ? selectedDimmerControl() : undefined}
+            positionControls={showPositionPad() ? selectedPositionControls() : undefined}
+            colorControls={showColorPad() ? selectedColorControls() : undefined}
+            dimmerSliderMin={dimmerSliderRange().min}
+            dimmerSliderMax={dimmerSliderRange().max}
+            canEditLimits={Boolean(selectedFixture())}
+            limitsDraft={selectedFixtureLimitsDraft()}
+            normalizedLimits={normalizedSelectedFixtureLimitsDraft()}
+            applyLimitsLabel={selectedFixture() ? "Apply to Fixture" : "No Fixture"}
+            nudgeAmount={panTiltNudgeAmount()}
+            nudgeSteps={panTiltNudgeSteps}
+            targetPoints={panTiltTargetPoints}
+            limitOverlayStyle={selectedFixtureLimitOverlayStyle()}
+            limitWindowStyle={selectedFixtureLimitWindowStyle()}
+            movementLimitDragging={Boolean(movementLimitDrag())}
+            positionFavorites={positionFavorites()}
+            positionFavoriteLabel={positionFavoriteLabel()}
+            colorHsv={selectedColorHsv()}
+            colorSaturationRamp={colorSaturationRamp()}
+            colorAutoWhite={colorAutoWhite()}
+            colorQuickLooks={colorQuickLooks}
+            colorPalette={defaultColorPalette}
+            colorFavorites={colorFavorites()}
+            targetLabel={controlTargetLabel()}
+            formatDmxPercent={formatDmxPercent}
+            formatShortDmxPercent={formatShortDmxPercent}
+            dmxValueToPercent={dmxValueToPercent}
+            clampDmxValue={clampDmxValue}
+            colorPreviewForSaturation={colorPreviewForSaturation}
+            onSetDimmerValue={setDimmerValue}
+            onUpdateDimmerLimit={(field, value) => updateSelectedFixtureLimit(field, value)}
+            onResetDimmerLimits={resetSelectedDimmerLimits}
+            onApplyLimits={applySelectedFixtureLimits}
+            onNudgePanTilt={nudgePanTilt}
+            onCenterPanTilt={centerPanTilt}
+            onMirrorPanTiltAxis={mirrorPanTiltAxis}
+            onSetPanTiltTarget={setPanTiltTargetPoint}
+            onPanTiltPointerPad={(event) => void setPanTiltFromPointer(event)}
+            onPanTiltPadKeyDown={handlePanTiltPadKeyDown}
+            onSetPanTiltValues={(panValue, tiltValue) => void setPanTiltValues(panValue, tiltValue)}
+            onSetPanTiltPercent={setPanTiltPercent}
+            onSetPanTiltNudgeAmount={setPanTiltNudgeAmount}
+            onMovementLimitPointerDown={startMovementLimitDrag}
+            onMovementLimitPointerMove={dragMovementLimit}
+            onMovementLimitPointerEnd={endMovementLimitDrag}
+            onUpdateMovementLimit={(field, value) => updateSelectedFixtureLimit(field, value)}
+            onUpdateMovementLimitToggle={(field, value) => updateSelectedFixtureLimit(field, value)}
+            onResetMovementLimits={resetSelectedMovementLimits}
+            onSetPositionFavoriteLabel={setPositionFavoriteLabel}
+            onAddPositionFavorite={addCurrentPositionFavorite}
+            onResetPositionFavorites={resetPositionFavorites}
+            onRemovePositionFavorite={removePositionFavorite}
+            onApplyPositionFavorite={(pan, tilt) => void setPanTiltValues(pan, tilt)}
+            onPointerColor={setColorFromPointer}
+            onSetColor={(color) => void setFixtureColor(color)}
+            onSetColorAutoWhite={setColorAutoWhite}
+            onSetColorChannel={setColorChannelValue}
+            onSetColorExtraChannel={setColorExtraChannelValue}
+            onSetColorHsv={setColorHsvValue}
+            onAddColorFavorite={addCurrentColorFavorite}
+            onResetColorFavorites={resetColorFavorites}
+            onRemoveColorFavorite={removeColorFavorite}
+          />
+          <FaderAuxiliaryAttributePanels
+            showColorWheel={showColorWheelPanel()}
+            showGoboWheel={showGoboWheelPanel()}
+            showOptics={showOpticsPanel()}
+            showCategoryQuick={showCategoryQuickPanel()}
+            targetLabel={controlTargetLabel()}
+            categoryLabel={activeControlCategoryLabel()}
+            attributeCount={visibleControls().length}
+            colorWheelEntries={colorWheelEntries()}
+            goboWheelEntries={goboWheelEntries()}
+            wheelMediaUrlFor={wheelMediaUrlForCurrentFixture}
+            wheelSlotMediaPath={wheelSlotMediaPath}
+            opticsTitle={opticsPanelTitle()}
+            opticsEntries={opticsEntries()}
+            formatShortDmxPercent={formatShortDmxPercent}
+            clampDmxValue={clampDmxValue}
+            opticsPreviewClass={opticsPreviewClass}
+            opticsPreviewStyle={opticsPreviewStyle}
+            opticsPresetButtons={opticsPresetButtons}
+            sortedFunctions={sortedChannelFunctions}
+            functionContainsValue={channelFunctionContainsValue}
+            functionBandStyle={channelFunctionBandStyle}
+            functionLabel={channelFunctionLabel}
+            functionRangeLabel={channelFunctionRangeLabel}
+            functionDetail={channelFunctionDetail}
+            functionSwatchColor={channelFunctionSwatchColor}
+            quickLooks={categoryQuickLooks()}
+            functionEntries={visibleFunctionControls()}
+            currentValue={currentControlValue}
+            onOpticsPointerValue={setOpticsValueFromPointer}
+            onOpticsKeyValue={setOpticsValueFromKey}
+            onSetValue={setControlAttributeValue}
+            onApplyFunction={(control, fn) => void applyChannelFunction(control, fn)}
+            onSetValueMode={(mode) => void applyVisibleControlValues(mode)}
+            onApplyLook={(look) => void applyCategoryQuickLook(look)}
+          />
+          <FaderGridPanel
+            controls={visibleControls()}
+            selectedFixtureId={selectedFixture()?.id ?? null}
+            selectedGroupId={selectedFixtureGroupFilter()}
+            valueForControl={(control) => {
+              const fixture = selectedFixture();
+              return fixture ? faderValue(fixture.id, control.attribute, control.default_value) : control.default_value;
+            }}
+            onSetFixtureAttribute={setAttribute}
+            onSetGroupAttribute={setGroupAttribute}
+          />
+          </FaderAttributeEditorPanel>
+          <CueManagementPanel
+            cues={snapshot().cues}
+            activeCueId={snapshot().active_cue_id}
+            activeFade={snapshot().active_fade}
+            timelinePositionMs={snapshot().timeline.position_ms}
+            timelineTrack={timelineTrack()}
+            cueLabel={cueLabel()}
+            cueFadeMs={cueFadeMs()}
+            cueCaptureScope={cueCaptureScope()}
+            cueCaptureScopeError={cueCaptureScopeError()}
+            hasCueSources={hasCueSources()}
+            cueCapturePreview={cueCapturePreview()}
+            stageViewBoxSize={stageViewBoxSize}
+            stageOrigin={stageOrigin2d()}
+            selectedFixtureId={selectedFixtureId()}
+            timelinePlacementNudgeMs={timelinePlacementNudgeMs()}
+            cueMetadataDraft={cueMetadataDraft}
+            cueTimelinePlacementsForCue={cueTimelinePlacementsForCue}
+            onCueLabel={setCueLabel}
+            onCueFadeMs={setCueFadeMs}
+            onCueCaptureScope={setCueCaptureScope}
+            onCreateCue={createCue}
+            onSelectFixture={setSelectedFixtureId}
+            onTriggerPreviousCue={triggerPreviousCue}
+            onTriggerNextCue={triggerNextCue}
+            onSetCueFadePaused={setCueFadePaused}
+            onUpdateCueMetadataDraft={updateCueMetadataDraft}
+            onMoveCue={moveCue}
+            onSetCueMetadata={setCueMetadata}
+            onDuplicateCue={duplicateCue}
+            onUpdateCue={updateCue}
+            onTriggerCue={triggerCue}
+            onAddTimelineCueEventAt={addTimelineCueEventAt}
+            onRemoveCue={removeCue}
+            onSeekTimeline={seekTimeline}
+            onMoveTimelineCueEvent={moveTimelineCueEvent}
+            onRemoveTimelineEvent={removeTimelineEvent}
+          />
           <div class="timelinePanel">
-            <div class="panelHeader">
-              <h2>Timeline</h2>
-              <span>
-                {snapshot().timeline.position_ms} / {snapshot().timeline.duration_ms} ms
-              </span>
-            </div>
-            <div class="timelineTransport">
-              <button onClick={() => seekTimeline(0)}>|&lt;</button>
-              <button onClick={pauseTimeline} disabled={!snapshot().timeline.playing}>
-                Pause
-              </button>
-              <button class="primary" onClick={playTimeline} disabled={snapshot().timeline.duration_ms === 0 || snapshot().timeline.playing}>
-                Play
-              </button>
-            </div>
-            <input
-              type="range"
-              min="0"
-              max={Math.max(snapshot().timeline.duration_ms, 1)}
-              value={snapshot().timeline.position_ms}
-              onInput={(event) => void seekTimeline(Number(event.currentTarget.value))}
-            />
-            <TimelineOverview
-              events={timelineOverviewEvents()}
-              playheadX={timelineOverviewPlayheadX()}
+            <TimelineCueEventsPanel
+              positionMs={snapshot().timeline.position_ms}
+              durationMs={snapshot().timeline.duration_ms}
+              playing={snapshot().timeline.playing}
+              cuesCount={snapshot().cues.length}
+              overviewEvents={timelineOverviewEvents()}
+              overviewPlayheadX={timelineOverviewPlayheadX()}
+              audioAnalysis={audioAnalysis()}
+              audioWaveformPoints={audioWaveformPoints()}
+              audioBeatMarkers={audioBeatMarkers()}
+              snapMode={timelineSnapMode()}
+              gridMs={timelineGridMs()}
+              selectedCueId={selectedTimelineCueId()}
+              eventTimeMs={timelineEventTimeMs()}
+              track={timelineTrack()}
+              cueOptions={timelineCueOptions()}
+              eventRows={timelineEventRows()}
+              timelineEventDraft={timelineEventDraft}
+              onSeek={seekTimeline}
+              onPause={pauseTimeline}
+              onPlay={playTimeline}
               onSeekRatio={seekTimelineFromOverviewRatio}
-              onSeekTime={(timeMs) => void seekTimeline(timeMs)}
-              onMoveEventRatio={(eventId, ratio) => void moveTimelineCueEventToRatio(eventId, ratio)}
+              onMoveEventRatio={moveTimelineCueEventToRatio}
+              onAnalyzeAudio={analyzeAudioFile}
+              onClearAudio={clearTimelineAudio}
+              onApplyAudioBpm={applyAudioBpm}
+              onSnapMode={setTimelineSnapMode}
+              onGridMs={setTimelineGridMs}
+              onSnapDrafts={snapTimelineDrafts}
+              onSelectedCueId={setTimelineCueId}
+              onEventTimeMs={setTimelineEventTimeMs}
+              onTrack={setTimelineTrack}
+              onAddEvent={addTimelineCueEvent}
+              onAddEventAtPlayhead={addTimelineCueEventAtPlayhead}
+              onUpdateEventDraft={updateTimelineEventDraft}
+              onSaveEvent={setTimelineCueEvent}
+              onRemoveEvent={removeTimelineEvent}
             />
-            <div class="audioAnalysisPanel">
-              <div class="panelHeader">
-                <h3>Audio</h3>
-                <div class="buttonRow">
-                  <button onClick={analyzeAudioFile}>Analyze WAV</button>
-                  <button onClick={clearTimelineAudio} disabled={!audioAnalysis()}>
-                    Clear
-                  </button>
-                </div>
-              </div>
-              <Show when={audioAnalysis()}>
-                {(analysis) => (
-                  <>
-                    <div class="audioStats">
-                      <span>{Math.round(analysis().duration_ms / 1000)}s</span>
-                      <span>{analysis().sample_rate} Hz</span>
-                      <span>{analysis().channels} ch</span>
-                      <span>{analysis().estimated_bpm ? `${analysis().estimated_bpm!.toFixed(1)} BPM` : "BPM n/a"}</span>
-                      <button onClick={applyAudioBpm} disabled={!analysis().estimated_bpm}>
-                        Apply BPM
-                      </button>
-                    </div>
-                    <svg class="waveformView" viewBox="0 0 100 36" role="img">
-                      <rect x="0" y="0" width="100" height="36" />
-                      <polyline points={audioWaveformPoints()} />
-                      <For each={audioBeatMarkers()}>
-                        {(beat) => <line class="beatMarker" x1={beat.x} x2={beat.x} y1="0" y2="36" />}
-                      </For>
-                    </svg>
-                    <small>{analysis().path}</small>
-                  </>
-                )}
-              </Show>
-            </div>
-            <div class="timelineSnapControls">
-              <label>
-                Snap
-                <select
-                  value={timelineSnapMode()}
-                  onInput={(event) => setTimelineSnapMode(event.currentTarget.value as TimelineSnapMode)}
-                >
-                  <option value="Off">Off</option>
-                  <option value="Beat">Beat</option>
-                  <option value="Bar">Bar</option>
-                  <option value="Grid">Grid</option>
-                </select>
-              </label>
-              <label>
-                Grid ms
-                <input
-                  type="number"
-                  min="1"
-                  value={timelineGridMs()}
-                  disabled={timelineSnapMode() !== "Grid"}
-                  onInput={(event) => setTimelineGridMs(Number(event.currentTarget.value))}
-                />
-              </label>
-              <button onClick={snapTimelineDrafts} disabled={timelineSnapMode() === "Off"}>
-                Snap Times
-              </button>
-            </div>
-            <div class="timelineForm">
-              <label>
-                Cue
-                <select
-                  value={selectedTimelineCueId() ?? ""}
-                  onInput={(event) => setTimelineCueId(Number(event.currentTarget.value))}
-                  disabled={snapshot().cues.length === 0}
-                >
-                  <For each={timelineCueOptions()}>
-                    {(cue) => <option value={cue.id}>{cue.label}</option>}
-                  </For>
-                </select>
-              </label>
-              <label>
-                Time ms
-                <input
-                  type="number"
-                  min="0"
-                  value={timelineEventTimeMs()}
-                  onInput={(event) => setTimelineEventTimeMs(Number(event.currentTarget.value))}
-                />
-              </label>
-              <label>
-                Track
-                <select
-                  value={timelineTrack()}
-                  onInput={(event) => setTimelineTrack(event.currentTarget.value as TimelineTrackKind)}
-                >
-                  <option value="Lighting">Lighting</option>
-                  <option value="Video">Video</option>
-                </select>
-              </label>
-              <button class="primary" onClick={addTimelineCueEvent} disabled={snapshot().cues.length === 0}>
-                Add Event
-              </button>
-              <button onClick={addTimelineCueEventAtPlayhead} disabled={snapshot().cues.length === 0}>
-                At Playhead
-              </button>
-            </div>
-            <div class="timelineList">
-              <For each={timelineEventRows()}>
-                {(event) => {
-                  const draft = () => timelineEventDraft(event);
-                  return (
-                    <div class="timelineItem timelineEventItem">
-                      <div>
-                        <strong>{event.time_ms} ms</strong>
-                        <span>{event.cue_label} / {event.track}</span>
-                      </div>
-                      <label>
-                        Cue
-                        <select
-                          value={draft().cue_id}
-                          onInput={(inputEvent) =>
-                            updateTimelineEventDraft(event, {
-                              cue_id: Number(inputEvent.currentTarget.value),
-                            })
-                          }
-                        >
-                          <For each={timelineCueOptions()}>
-                            {(cue) => <option value={cue.id}>{cue.label}</option>}
-                          </For>
-                        </select>
-                      </label>
-                      <label>
-                        Time
-                        <input
-                          type="number"
-                          min="0"
-                          value={draft().time_ms}
-                          onInput={(inputEvent) =>
-                            updateTimelineEventDraft(event, {
-                              time_ms: Number(inputEvent.currentTarget.value),
-                            })
-                          }
-                        />
-                      </label>
-                      <label>
-                        Track
-                        <select
-                          value={draft().track}
-                          onInput={(inputEvent) =>
-                            updateTimelineEventDraft(event, {
-                              track: inputEvent.currentTarget.value as TimelineTrackKind,
-                            })
-                          }
-                        >
-                          <option value="Lighting">Lighting</option>
-                          <option value="Video">Video</option>
-                        </select>
-                      </label>
-                      <div class="buttonRow">
-                        <button onClick={() => void setTimelineCueEvent(event)}>Save</button>
-                        <button onClick={() => removeTimelineEvent(event.id)}>Remove</button>
-                      </div>
-                    </div>
-                  );
-                }}
-              </For>
-            </div>
-            <div class="automationForm">
-              <label>
-                Automation
-                <select
-                  value={selectedEffectAttribute()}
-                  disabled={!selectedFixture()}
-                  onInput={(event) => setEffectAttribute(event.currentTarget.value)}
-                >
-                  <For each={activeControls()}>
-                    {(control) => <option value={control.attribute}>{control.attribute}</option>}
-                  </For>
-                </select>
-              </label>
-              <label>
-                Start
-                <input
-                  type="number"
-                  min="0"
-                  value={automationStartMs()}
-                  onInput={(event) => setAutomationStartMs(Number(event.currentTarget.value))}
-                />
-              </label>
-              <label>
-                End
-                <input
-                  type="number"
-                  min="0"
-                  value={automationEndMs()}
-                  onInput={(event) => setAutomationEndMs(Number(event.currentTarget.value))}
-                />
-              </label>
-              <label>
-                From
-                <input
-                  type="number"
-                  min="0"
-                  max="65535"
-                  value={automationStartValue()}
-                  onInput={(event) => setAutomationStartValue(Number(event.currentTarget.value))}
-                />
-              </label>
-              <label>
-                To
-                <input
-                  type="number"
-                  min="0"
-                  max="65535"
-                  value={automationEndValue()}
-                  onInput={(event) => setAutomationEndValue(Number(event.currentTarget.value))}
-                />
-              </label>
-              <label>
-                Curve
-                <select
-                  value={automationInterpolation()}
-                  onInput={(event) => setAutomationInterpolation(event.currentTarget.value as AutomationInterpolation)}
-                >
-                  <option value="Linear">Linear</option>
-                  <option value="Step">Step</option>
-                  <option value="Bezier">Bezier</option>
-                </select>
-              </label>
-              <button class="primary" onClick={addTimelineAutomation} disabled={!selectedFixture()}>
-                Add Automation
-              </button>
-            </div>
-            <div class="timelineList">
-              <For each={timelineAutomationRows()}>
-                {(automation) => {
-                  const draft = () => timelineAutomationDraft(automation);
-                  const attributes = () => fixtureAttributeOptions(draft().fixture_id);
-                  return (
-                    <div class="timelineItem timelineAutomationItem">
-                      <div>
-                        <strong>{automation.fixture_label} / {automation.attribute}</strong>
-                        <span>
-                          {automation.keyframes[0]?.time_ms ?? 0}-
-                          {automation.keyframes[automation.keyframes.length - 1]?.time_ms ?? 0} ms / {automation.keyframes.length} keys
-                        </span>
-                      </div>
-                      <div class="automationEditGrid">
-                        <label>
-                          Fixture
-                          <select
-                            value={draft().fixture_id}
-                            onInput={(event) =>
-                              updateTimelineAutomationDraft(automation, {
-                                fixture_id: Number(event.currentTarget.value),
-                              })
-                            }
-                          >
-                            <For each={snapshot().fixtures}>
-                              {(fixture) => <option value={fixture.id}>{fixture.label}</option>}
-                            </For>
-                          </select>
-                        </label>
-                        <label>
-                          Attribute
-                          <select
-                            value={draft().attribute}
-                            onInput={(event) =>
-                              updateTimelineAutomationDraft(automation, {
-                                attribute: event.currentTarget.value,
-                              })
-                            }
-                          >
-                            <For each={attributes()}>
-                              {(attribute) => <option value={attribute}>{attribute}</option>}
-                            </For>
-                          </select>
-                        </label>
-                        <label>
-                          Start
-                          <input
-                            type="number"
-                            min="0"
-                            value={draft().start_ms}
-                            onInput={(event) =>
-                              updateTimelineAutomationDraft(automation, {
-                                start_ms: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          End
-                          <input
-                            type="number"
-                            min="0"
-                            value={draft().end_ms}
-                            onInput={(event) =>
-                              updateTimelineAutomationDraft(automation, {
-                                end_ms: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          From
-                          <input
-                            type="number"
-                            min="0"
-                            max="65535"
-                            value={draft().start_value}
-                            onInput={(event) =>
-                              updateTimelineAutomationDraft(automation, {
-                                start_value: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          To
-                          <input
-                            type="number"
-                            min="0"
-                            max="65535"
-                            value={draft().end_value}
-                            onInput={(event) =>
-                              updateTimelineAutomationDraft(automation, {
-                                end_value: Number(event.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          Curve
-                          <select
-                            value={draft().interpolation}
-                            onInput={(event) =>
-                              updateTimelineAutomationDraft(automation, {
-                                interpolation: event.currentTarget.value as AutomationInterpolation,
-                              })
-                            }
-                          >
-                            <option value="Linear">Linear</option>
-                            <option value="Step">Step</option>
-                            <option value="Bezier">Bezier</option>
-                          </select>
-                        </label>
-                      </div>
-                      <div class="buttonRow">
-                        <button onClick={() => void setTimelineAutomation(automation)}>Save</button>
-                        <button onClick={() => removeTimelineAutomation(automation.id)}>Remove</button>
-                      </div>
-                    </div>
-                  );
-                }}
-              </For>
-            </div>
+            <TimelineLightingAutomationPanel
+              activeControls={activeControls()}
+              selectedAttribute={selectedEffectAttribute()}
+              canAddAutomation={Boolean(selectedFixture())}
+              startMs={automationStartMs()}
+              endMs={automationEndMs()}
+              startValue={automationStartValue()}
+              endValue={automationEndValue()}
+              interpolation={automationInterpolation()}
+              rows={timelineAutomationRows()}
+              fixtureOptions={snapshot().fixtures.map((fixture) => ({ id: fixture.id, label: fixture.label }))}
+              timelineAutomationDraft={timelineAutomationDraft}
+              fixtureAttributeOptions={fixtureAttributeOptions}
+              onAttribute={setEffectAttribute}
+              onStartMs={setAutomationStartMs}
+              onEndMs={setAutomationEndMs}
+              onStartValue={setAutomationStartValue}
+              onEndValue={setAutomationEndValue}
+              onInterpolation={setAutomationInterpolation}
+              onAddAutomation={addTimelineAutomation}
+              onUpdateDraft={updateTimelineAutomationDraft}
+              onSaveAutomation={setTimelineAutomation}
+              onRemoveAutomation={removeTimelineAutomation}
+            />
           </div>
           <div class="effectEditor">
             <div class="panelHeader">
@@ -16580,6 +11726,13 @@ export default function App() {
                 </button>
               </div>
             </div>
+            <SampleEffectPresetPanel
+              selectedPreset={sampleEffectPreset()}
+              targetErrorForPreset={sampleEffectTargetOverrideError}
+              onSelectPreset={setSampleEffectPreset}
+              onLoadPreset={(preset) => loadSampleEffectPreset(preset)}
+              onLoadPresetForTarget={(preset) => loadSampleEffectPreset(preset, true)}
+            />
             <div class="effectForm">
               <Show when={effectTargetMode() !== "video"}>
                 <label>
@@ -16598,7 +11751,16 @@ export default function App() {
               <div class="split">
                 <label>
                   Target
-                  <select value={effectTargetMode()} onInput={(event) => setEffectTargetMode(event.currentTarget.value as "fixture" | "group" | "video")}>
+                  <select
+                    value={effectTargetMode()}
+                    onInput={(event) => {
+                      const nextMode = event.currentTarget.value as "fixture" | "group" | "video";
+                      setEffectTargetMode(nextMode);
+                      if (nextMode === "video") {
+                        setEffectVideoTargetLinked(false);
+                      }
+                    }}
+                  >
                     <option value="fixture">Selected fixture</option>
                     <option value="group">Group</option>
                     <option value="video">Video layer</option>
@@ -16612,609 +11774,175 @@ export default function App() {
                   </select>
                 </label>
               </div>
-              <Show when={effectTargetMode() === "group"}>
-                <div class="effectGroupPicker">
-                  <label>
-                    Target groups
-                    <input
-                      value={effectTargetGroups()}
-                      onInput={(event) => setEffectTargetGroups(event.currentTarget.value)}
-                      placeholder="front, movers"
-                    />
-                  </label>
-                  <Show when={fixtureGroupRows().length > 0}>
-                    <div class="groupOverview">
-                      <For each={fixtureGroupRows()}>
-                        {(group) => {
-                          const isActive = () => parseGroupIds(effectTargetGroups()).includes(group.groupId);
-                          return (
-                            <button
-                              class={isActive() ? "groupChip active" : "groupChip"}
-                              onClick={() => toggleEffectTargetGroup(group.groupId)}
-                            >
-                              {group.groupId}
-                              <span>{group.count}</span>
-                            </button>
-                          );
-                        }}
-                      </For>
-                    </div>
-                  </Show>
-                </div>
-              </Show>
-              <Show when={effectTargetMode() === "video"}>
-                <div class="videoEffectTarget">
-                  <label>
-                    Layer
-                    <select
-                      value={selectedEffectVideoLayerId() ?? ""}
-                      disabled={snapshot().video.layers.length === 0}
-                      onInput={(event) => setEffectVideoLayerId(Number(event.currentTarget.value))}
-                    >
-                      <For each={snapshot().video.layers}>
-                        {(layer) => <option value={layer.id}>{layer.label}</option>}
-                      </For>
-                    </select>
-                  </label>
-                  <label>
-                    Param
-                    <select value={effectVideoParam()} onInput={(event) => setEffectVideoParam(event.currentTarget.value as VideoParam)}>
-                      <option value="Opacity">Opacity</option>
-                      <option value="Speed">Speed</option>
-                      <option value="BpmSyncEnabled">BPM Sync</option>
-                      <option value="BpmSyncRatio">BPM Sync Ratio</option>
-                      <option value="BpmSyncLoopBars">BPM Loop Bars</option>
-                      <option value="TransformX">Transform X</option>
-                      <option value="TransformY">Transform Y</option>
-                      <option value="TransformScaleX">Scale X</option>
-                      <option value="TransformScaleY">Scale Y</option>
-                      <option value="TransformRotationDeg">Rotation</option>
-                      <option value="TransformCropLeft">Crop L</option>
-                      <option value="TransformCropTop">Crop T</option>
-                      <option value="TransformCropRight">Crop R</option>
-                      <option value="TransformCropBottom">Crop B</option>
-                      <option value="ColorBrightness">Brightness</option>
-                      <option value="ColorContrast">Contrast</option>
-                      <option value="ColorHueDeg">Hue</option>
-                      <option value="ColorSaturation">Saturation</option>
-                      <option value="ColorGamma">Gamma</option>
-                      <option value="FxPixelate">Pixelate</option>
-                      <option value="FxBlur">Blur</option>
-                      <option value="FxGlow">Glow</option>
-                      <option value="FxEdge">Edge</option>
-                      <option value="FxKeyRed">Key R</option>
-                      <option value="FxKeyGreen">Key G</option>
-                      <option value="FxKeyBlue">Key B</option>
-                      <option value="FxKeyThreshold">Key Threshold</option>
-                    </select>
-                  </label>
-                  <div class="split">
-                    <label>
-                      Low
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={effectVideoLow()}
-                        onInput={(event) => setEffectVideoLow(Number(event.currentTarget.value))}
-                      />
-                    </label>
-                    <label>
-                      High
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={effectVideoHigh()}
-                        onInput={(event) => setEffectVideoHigh(Number(event.currentTarget.value))}
-                      />
-                    </label>
-                  </div>
-                  <Show when={effectType() === "PositionWave"}>
-                    <div class="videoTargetPositionPanel">
-                      <div class="waveStageHeader">
-                        <div>
-                          <strong>Video Position</strong>
-                          <span>
-                            X {effectVideoPositionX().toFixed(1)}, Y {effectVideoPositionY().toFixed(1)}, Z{" "}
-                            {effectVideoPositionZ().toFixed(1)}
-                          </span>
-                        </div>
-                      </div>
-                      <div class="buttonRow">
-                        <button onClick={setEffectVideoPositionFromSelectedOutput} disabled={snapshot().video.outputs.length === 0}>
-                          Output Surface
-                        </button>
-                        <button onClick={setEffectVideoPositionFromWaveOrigin}>Wave Origin</button>
-                        <button onClick={setEffectVideoPositionFromStageCenter}>Stage Center</button>
-                        <button onClick={setEffectVideoPositionFromSelectedStageObject} disabled={!selectedStageObject()}>
-                          Stage Object
-                        </button>
-                      </div>
-                      <div class="triple">
-                        <label>
-                          X
-                          <input
-                            type="number"
-                            step="0.1"
-                            value={effectVideoPositionX()}
-                            onInput={(event) => setEffectVideoPositionX(Number(event.currentTarget.value))}
-                          />
-                        </label>
-                        <label>
-                          Y
-                          <input
-                            type="number"
-                            step="0.1"
-                            value={effectVideoPositionY()}
-                            onInput={(event) => setEffectVideoPositionY(Number(event.currentTarget.value))}
-                          />
-                        </label>
-                        <label>
-                          Z
-                          <input
-                            type="number"
-                            step="0.1"
-                            value={effectVideoPositionZ()}
-                            onInput={(event) => setEffectVideoPositionZ(Number(event.currentTarget.value))}
-                          />
-                        </label>
-                      </div>
-                    </div>
-                  </Show>
-                </div>
-              </Show>
-              <div class="split">
-                <label>
-                  Shape
-                  <select value={effectShape()} onInput={(event) => setEffectShape(event.currentTarget.value as LfoShape)}>
-                    <option value="Sine">Sine</option>
-                    <option value="Cosine">Cosine</option>
-                    <option value="Triangle">Triangle</option>
-                    <option value="Saw">Saw</option>
-                    <option value="Square">Square</option>
-                    <option value="Random">Random</option>
-                    <option value="Perlin">Perlin</option>
-                  </select>
-                </label>
-              </div>
-              <Show when={effectType() === "Lfo"}>
-                <label>
-                  Period ms
-                  <input
-                    type="number"
-                    min="10"
-                    value={effectPeriod()}
-                    onInput={(event) => setEffectPeriod(Number(event.currentTarget.value))}
-                  />
-                </label>
-              </Show>
-              <Show when={effectType() === "PositionWave"}>
-                <div class="waveControls">
-                  <div class="waveStagePicker">
-                    <div class="waveStageHeader">
-                      <div>
-                        <strong>Stage Wave</strong>
-                        <span>
-                          O {waveOriginX().toFixed(1)}, {waveOriginY().toFixed(1)}, {waveOriginZ().toFixed(1)} / D{" "}
-                          {waveDirectionX().toFixed(1)}, {waveDirectionY().toFixed(1)}, {waveDirectionZ().toFixed(1)}
-                        </span>
-                      </div>
-                    </div>
-                    <div class="buttonRow">
-                      <button onClick={setWaveOriginFromStageCenter}>Stage Center</button>
-                      <button onClick={setWaveOriginFromSelectedFixture} disabled={!selectedFixture()}>
-                        Selected Fixture
-                      </button>
-                      <button onClick={setWaveOriginFromSelectedStageObject} disabled={!selectedStageObject()}>
-                        Stage Object
-                      </button>
-                      <button onClick={() => setWaveDirectionPreset(1, 0, 0)}>X</button>
-                      <button onClick={() => setWaveDirectionPreset(0, 0, 1)}>Z</button>
-                      <button onClick={() => setWaveDirectionPreset(0, 0, 0)}>Radial</button>
-                    </div>
-                    <svg
-                      class="waveStageMap"
-                      viewBox={`0 0 ${stageViewBoxSize} ${stageViewBoxSize}`}
-                      onPointerDown={(event) =>
-                        startWaveStageDrag(event, event.altKey ? "videoTarget" : event.shiftKey ? "direction" : "origin")
-                      }
-                      onPointerMove={moveWaveStageDrag}
-                      onPointerUp={endWaveStageDrag}
-                      onPointerCancel={endWaveStageDrag}
-                    >
-                      <defs>
-                        <pattern id="wave-stage-grid" width="5" height="5" patternUnits="userSpaceOnUse">
-                          <path d="M 5 0 L 0 0 0 5" />
-                        </pattern>
-                      </defs>
-                      <rect class="stageFloor" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
-                      <rect class="stageGrid" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
-                      <For each={visualizerStageObjects2d()}>
-                        {(object) => (
-                          <g
-                            class={`waveStageObject kind-${object.kind.toLowerCase()}`}
-                            transform={`translate(${object.x} ${object.z}) rotate(${object.rotationDeg})`}
-                          >
-                            <rect
-                              x={-object.width / 2}
-                              y={-object.depth / 2}
-                              width={object.width}
-                              height={object.depth}
-                              fill={object.color}
-                            />
-                            <line x1={-object.width / 2} y1="0" x2={object.width / 2} y2="0" />
-                            <line x1="0" y1={-object.depth / 2} x2="0" y2={object.depth / 2} />
-                            <text x={-object.width / 2 + 1} y={-object.depth / 2 - 1}>
-                              {object.label}
-                            </text>
-                          </g>
-                        )}
-                      </For>
-                      <line class="waveGuideLine" x1={stageOrigin2d().x} y1="0" x2={stageOrigin2d().x} y2={stageViewBoxSize} />
-                      <line class="waveGuideLine" x1="0" y1={stageOrigin2d().z} x2={stageViewBoxSize} y2={stageOrigin2d().z} />
-                      <For each={visualizerVideoSurfaces2d()}>
-                        {(surface) => (
-                          <g
-                            class={[
-                              "waveVideoSurface",
-                              selectedVideoOutputId() === surface.id ? "selected" : "",
-                              surface.active ? "" : "inactive",
-                              effectTargetMode() === "video" ? "" : "inert",
-                            ]
-                              .filter(Boolean)
-                              .join(" ")}
-                            transform={`translate(${surface.x} ${surface.z}) rotate(${surface.rotationDeg})`}
-                            onPointerDown={(event) => {
-                              if (effectTargetMode() !== "video") {
-                                return;
-                              }
-                              const output = snapshot().video.outputs.find((candidate) => candidate.id === surface.id);
-                              if (!output) {
-                                return;
-                              }
-                              event.preventDefault();
-                              event.stopPropagation();
-                              setEffectVideoPositionFromVideoOutput(output);
-                            }}
-                          >
-                            <rect x={-surface.width / 2} y={-surface.height / 2} width={surface.width} height={surface.height} />
-                            <line x1={-surface.width / 2} y1="0" x2={surface.width / 2} y2="0" />
-                            <line x1="0" y1={-surface.height / 2} x2="0" y2={surface.height / 2} />
-                          </g>
-                        )}
-                      </For>
-                      <For each={visualizerFixtures()}>
-                        {(fixture) => (
-                          <circle
-                            class={[
-                              "waveStageFixture",
-                              waveTargetFixtureIds().has(fixture.id) ? "target" : "muted",
-                              selectedFixtureId() === fixture.id ? "selected" : "",
-                            ]
-                              .filter(Boolean)
-                              .join(" ")}
-                            cx={fixture.x}
-                            cy={fixture.z}
-                            r={waveTargetFixtureIds().has(fixture.id) ? 1.8 : 1.35}
-                            fill={fixture.color}
-                          />
-                        )}
-                      </For>
-                      <Show when={waveDirectionIsRadial()}>
-                        <circle class="waveGuideRing" cx={waveOriginSvgPoint().x} cy={waveOriginSvgPoint().z} r={waveRadialRadius()} />
-                      </Show>
-                      <Show when={!waveDirectionIsRadial()}>
-                        <line
-                          class="waveDirectionLine"
-                          x1={waveOriginSvgPoint().x}
-                          y1={waveOriginSvgPoint().z}
-                          x2={waveDirectionSvgPoint().x}
-                          y2={waveDirectionSvgPoint().z}
-                        />
-                      </Show>
-                      <Show when={effectTargetMode() === "video"}>
-                        <line
-                          class="waveVideoTargetLine"
-                          x1={waveOriginSvgPoint().x}
-                          y1={waveOriginSvgPoint().z}
-                          x2={effectVideoTargetSvgPoint().x}
-                          y2={effectVideoTargetSvgPoint().z}
-                        />
-                      </Show>
-                      <circle
-                        class={waveStageDrag() === "origin" ? "waveOriginHandle dragging" : "waveOriginHandle"}
-                        cx={waveOriginSvgPoint().x}
-                        cy={waveOriginSvgPoint().z}
-                        r="2.1"
-                      />
-                      <Show when={!waveDirectionIsRadial()}>
-                        <circle
-                          class={waveStageDrag() === "direction" ? "waveDirectionHandle dragging" : "waveDirectionHandle"}
-                          cx={waveDirectionSvgPoint().x}
-                          cy={waveDirectionSvgPoint().z}
-                          r="2"
-                          onPointerDown={(event) => startWaveStageDrag(event, "direction")}
-                          onPointerMove={moveWaveStageDrag}
-                          onPointerUp={endWaveStageDrag}
-                          onPointerCancel={endWaveStageDrag}
-                        />
-                      </Show>
-                      <Show when={effectTargetMode() === "video"}>
-                        <circle
-                          class={waveStageDrag() === "videoTarget" ? "waveVideoTargetHandle dragging" : "waveVideoTargetHandle"}
-                          cx={effectVideoTargetSvgPoint().x}
-                          cy={effectVideoTargetSvgPoint().z}
-                          r="2.1"
-                          onPointerDown={(event) => startWaveStageDrag(event, "videoTarget")}
-                          onPointerMove={moveWaveStageDrag}
-                          onPointerUp={endWaveStageDrag}
-                          onPointerCancel={endWaveStageDrag}
-                        />
-                      </Show>
-                    </svg>
-                    <div class="waveStageReadout">
-                      <span>X {stageWorldBounds().minX.toFixed(1)} to {stageWorldBounds().maxX.toFixed(1)}</span>
-                      <span>Z {stageWorldBounds().minZ.toFixed(1)} to {stageWorldBounds().maxZ.toFixed(1)}</span>
-                    </div>
-                  </div>
-                  <div class="triple">
-                    <label>
-                      Origin X
-                      <input type="number" value={waveOriginX()} onInput={(event) => setWaveOriginX(Number(event.currentTarget.value))} />
-                    </label>
-                    <label>
-                      Origin Y
-                      <input type="number" value={waveOriginY()} onInput={(event) => setWaveOriginY(Number(event.currentTarget.value))} />
-                    </label>
-                    <label>
-                      Origin Z
-                      <input type="number" value={waveOriginZ()} onInput={(event) => setWaveOriginZ(Number(event.currentTarget.value))} />
-                    </label>
-                  </div>
-                  <div class="triple">
-                    <label>
-                      Dir X
-                      <input type="number" value={waveDirectionX()} onInput={(event) => setWaveDirectionX(Number(event.currentTarget.value))} />
-                    </label>
-                    <label>
-                      Dir Y
-                      <input type="number" value={waveDirectionY()} onInput={(event) => setWaveDirectionY(Number(event.currentTarget.value))} />
-                    </label>
-                    <label>
-                      Dir Z
-                      <input type="number" value={waveDirectionZ()} onInput={(event) => setWaveDirectionZ(Number(event.currentTarget.value))} />
-                    </label>
-                  </div>
-                  <div class="split">
-                    <label>
-                      Speed
-                      <input type="number" step="0.1" value={waveSpeed()} onInput={(event) => setWaveSpeed(Number(event.currentTarget.value))} />
-                    </label>
-                    <label>
-                      Wavelength
-                      <input type="number" min="0.001" step="0.1" value={waveWavelength()} onInput={(event) => setWaveWavelength(Number(event.currentTarget.value))} />
-                    </label>
-                  </div>
-                </div>
-              </Show>
               <Show when={effectTargetMode() !== "video"}>
-                <div class="split">
-                  <label>
-                    Low
-                    <input
-                      type="number"
-                      min="0"
-                      max="65535"
-                      value={effectLow()}
-                      onInput={(event) => setEffectLow(Number(event.currentTarget.value))}
-                    />
-                  </label>
-                  <label>
-                    High
-                    <input
-                      type="number"
-                      min="0"
-                      max="65535"
-                      value={effectHigh()}
-                      onInput={(event) => setEffectHigh(Number(event.currentTarget.value))}
-                    />
-                  </label>
-                </div>
+                <label class="checkbox inlineCheckbox effectLinkedVideoToggle">
+                  <input
+                    type="checkbox"
+                    checked={effectVideoTargetLinked()}
+                    disabled={snapshot().video.layers.length === 0}
+                    onChange={(event) => setEffectVideoTargetLinked(event.currentTarget.checked)}
+                  />
+                  Link video layer
+                </label>
               </Show>
-              <label>
-                Phase
-                <input
-                  type="number"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  value={effectPhase()}
-                  onInput={(event) => setEffectPhase(Number(event.currentTarget.value))}
+              <Show when={effectTargetMode() === "group"}>
+                <EffectGroupTargetPanel
+                  value={effectTargetGroups()}
+                  groups={fixtureGroupRows()}
+                  activeGroupIds={parseGroupIds(effectTargetGroups())}
+                  onValue={setEffectTargetGroups}
+                  onToggleGroup={toggleEffectTargetGroup}
                 />
-              </label>
-              <label>
-                Blend
-                <select value={effectBlendMode()} onInput={(event) => setEffectBlendMode(event.currentTarget.value as EffectBlendMode)}>
-                  <option value="Override">Override</option>
-                  <option value="Add">Add</option>
-                  <option value="Multiply">Multiply</option>
-                </select>
-              </label>
-              <button
-                class="primary"
-                onClick={addEffect}
-                disabled={effectTargetMode() === "video" ? snapshot().video.layers.length === 0 : !selectedFixture()}
-              >
-                Add Effect
-              </button>
-            </div>
-            <div class="nodeGraphPanel">
-              <div class="panelHeader">
-                <h3>Node Graph</h3>
-                <div class="panelHeaderActions">
-                  <span>{snapshot().node_graphs.length}</span>
-                  <button onClick={loadNodeGraphPreset}>Load Graph</button>
-                </div>
-              </div>
-              <div class="split">
-                <label>
-                  Label
-                  <input value={nodeGraphLabel()} onInput={(event) => setNodeGraphLabel(event.currentTarget.value)} />
-                </label>
-                <label>
-                  Transform
-                  <select value={nodeGraphTransformOp()} onInput={(event) => setNodeGraphTransformOp(event.currentTarget.value as NodeGraphTransformOp)}>
-                    <option value="Scale">Scale</option>
-                    <option value="Offset">Offset</option>
-                    <option value="Clamp">Clamp</option>
-                    <option value="Invert">Invert</option>
-                    <option value="Abs">Abs</option>
-                  </select>
-                </label>
-              </div>
-              <div class="triple">
-                <label>
-                  Amount
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={nodeGraphTransformAmount()}
-                    disabled={nodeGraphTransformOp() === "Invert" || nodeGraphTransformOp() === "Abs"}
-                    onInput={(event) => setNodeGraphTransformAmount(Number(event.currentTarget.value))}
-                  />
-                </label>
-                <label>
-                  Min
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={nodeGraphTransformMin()}
-                    disabled={nodeGraphTransformOp() !== "Clamp"}
-                    onInput={(event) => setNodeGraphTransformMin(Number(event.currentTarget.value))}
-                  />
-                </label>
-                <label>
-                  Max
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={nodeGraphTransformMax()}
-                    disabled={nodeGraphTransformOp() !== "Clamp"}
-                    onInput={(event) => setNodeGraphTransformMax(Number(event.currentTarget.value))}
-                  />
-                </label>
-              </div>
-              <svg class="nodeGraphCanvas" viewBox="0 0 100 44" aria-label="Node graph preview">
-                <defs>
-                  <pattern id="node-graph-grid" width="5" height="5" patternUnits="userSpaceOnUse">
-                    <path d="M 5 0 L 0 0 0 5" />
-                  </pattern>
-                  <marker id="node-graph-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="4" markerHeight="4" orient="auto">
-                    <path d="M 0 0 L 8 4 L 0 8 z" />
-                  </marker>
-                </defs>
-                <rect class="nodeGraphCanvasBg" x="0" y="0" width="100" height="44" />
-                <line class="nodeGraphEdge" x1="31" y1="22" x2="39" y2="22" />
-                <line class="nodeGraphEdge" x1="63" y1="22" x2="71" y2="22" />
-                <g class={effectType() === "PositionWave" ? "nodeGraphNode wave" : "nodeGraphNode lfo"} transform="translate(6 10)">
-                  <rect x="0" y="0" width="25" height="24" rx="2" />
-                  <text class="nodeGraphNodeLabel" x="12.5" y="10">{nodeGraphSourceLabel()}</text>
-                  <text class="nodeGraphNodeDetail" x="12.5" y="17">
-                    {effectShape()}
-                  </text>
-                </g>
-                <g class="nodeGraphNode transform" transform="translate(38 10)">
-                  <rect x="0" y="0" width="25" height="24" rx="2" />
-                  <text class="nodeGraphNodeLabel" x="12.5" y="10">Transform</text>
-                  <text class="nodeGraphNodeDetail" x="12.5" y="17">
-                    {nodeGraphTransformLabel()}
-                  </text>
-                </g>
-                <g class="nodeGraphNode output" transform="translate(70 10)">
-                  <rect x="0" y="0" width="25" height="24" rx="2" />
-                  <text class="nodeGraphNodeLabel" x="12.5" y="10">Output</text>
-                  <text class="nodeGraphNodeDetail" x="12.5" y="17">
-                    {effectTargetMode()}
-                  </text>
-                </g>
-              </svg>
-              <div class="buttonRow">
-                <button class="primary" onClick={saveNodeGraphFromForm} disabled={Boolean(effectTargetOverrideError())}>
-                  Save Graph
-                </button>
-                <button onClick={() => {
-                  setNodeGraphTransformOp("Scale");
-                  setNodeGraphTransformAmount(1);
-                  setNodeGraphTransformMin(0);
-                  setNodeGraphTransformMax(1);
-                }}>
-                  Reset Transform
-                </button>
-              </div>
-              <Show when={snapshot().node_graphs.length > 0}>
-                <div class="effectList nodeGraphList">
-                  <For each={snapshot().node_graphs}>
-                    {(graph) => (
-                      <div class={graph.enabled ? "effectItem" : "effectItem editing"}>
-                        <div class="effectItemSummary">
-                          <strong>{graph.label}</strong>
-                          <span>{nodeGraphTargetLabel(graph)}</span>
-                          <div class="nodeGraphMetaRow">
-                            <span class={`nodeGraphMetaChip ${graph.nodes.some((node) => node.kind === "PositionWave") ? "wave" : "lfo"}`}>
-                              {graph.nodes.some((node) => node.kind === "PositionWave") ? "Wave" : "LFO"}
-                            </span>
-                            <span class="nodeGraphMetaChip">{graph.nodes.length} node(s)</span>
-                            <span class="nodeGraphMetaChip target">{graph.edges.length} edge(s)</span>
-                          </div>
-                        </div>
-                        <button onClick={() => void setNodeGraphEnabled(graph.id, !graph.enabled)}>
-                          {graph.enabled ? "Disable" : "Enable"}
-                        </button>
-                        <button onClick={() => void saveNodeGraphPreset(graph.id)}>Save</button>
-                        <button onClick={() => void removeNodeGraph(graph.id)}>Remove</button>
-                      </div>
-                    )}
-                  </For>
-                </div>
               </Show>
+              <Show when={effectTargetMode() === "video" || effectVideoTargetLinked()}>
+                <VideoEffectTargetPanel
+                  layers={snapshot().video.layers}
+                  outputsCount={snapshot().video.outputs.length}
+                  selectedLayerId={selectedEffectVideoLayerId()}
+                  param={effectVideoParam()}
+                  low={effectVideoLow()}
+                  high={effectVideoHigh()}
+                  effectType={effectType()}
+                  positionX={effectVideoPositionX()}
+                  positionY={effectVideoPositionY()}
+                  positionZ={effectVideoPositionZ()}
+                  hasSelectedStageObject={Boolean(selectedStageObject())}
+                  onSetLayerId={setEffectVideoLayerId}
+                  onSetParam={setEffectVideoParam}
+                  onSetLow={setEffectVideoLow}
+                  onSetHigh={setEffectVideoHigh}
+                  onUseSelectedOutput={setEffectVideoPositionFromSelectedOutput}
+                  onUseWaveOrigin={setEffectVideoPositionFromWaveOrigin}
+                  onUseStageCenter={setEffectVideoPositionFromStageCenter}
+                  onUseSelectedStageObject={setEffectVideoPositionFromSelectedStageObject}
+                  onSetPositionX={setEffectVideoPositionX}
+                  onSetPositionY={setEffectVideoPositionY}
+                  onSetPositionZ={setEffectVideoPositionZ}
+                />
+              </Show>
+              <EffectSourceControlsPanel
+                effectType={effectType()}
+                shape={effectShape()}
+                periodMs={effectPeriod()}
+                bpm={snapshot().clock.bpm}
+                clockSyncBeats={effectClockSyncBeats()}
+                stageViewBoxSize={stageViewBoxSize}
+                originX={waveOriginX()}
+                originY={waveOriginY()}
+                originZ={waveOriginZ()}
+                directionX={waveDirectionX()}
+                directionY={waveDirectionY()}
+                directionZ={waveDirectionZ()}
+                speed={waveSpeed()}
+                wavelength={waveWavelength()}
+                stageOrigin={stageOrigin2d()}
+                stageBounds={stageWorldBounds()}
+                originPoint={waveOriginSvgPoint()}
+                directionPoint={waveDirectionSvgPoint()}
+                videoTargetPoint={effectVideoTargetSvgPoint()}
+                directionIsRadial={waveDirectionIsRadial()}
+                radialRadius={waveRadialRadius()}
+                fixtures={visualizerFixtures()}
+                videoSurfaces={visualizerVideoSurfaces2d()}
+                stageObjects={visualizerStageObjects2d()}
+                targetFixtureIds={waveTargetFixtureIds()}
+                selectedFixtureId={selectedFixtureId()}
+                selectedVideoOutputId={selectedVideoOutputId()}
+                videoTargetMode={effectTargetMode() === "video" || effectVideoTargetLinked()}
+                dragging={waveStageDrag()}
+                hasSelectedFixture={Boolean(selectedFixture())}
+                hasSelectedStageObject={Boolean(selectedStageObject())}
+                onShape={setEffectShape}
+                onPeriodMs={setEffectPeriod}
+                onClockSyncBeats={setEffectClockSyncPreset}
+                onUseStageCenter={setWaveOriginFromStageCenter}
+                onUseSelectedFixture={setWaveOriginFromSelectedFixture}
+                onUseSelectedStageObject={setWaveOriginFromSelectedStageObject}
+                onDirectionPreset={setWaveDirectionPreset}
+                onStagePointerDown={startWaveStageDrag}
+                onStagePointerMove={moveWaveStageDrag}
+                onStagePointerUp={endWaveStageDrag}
+                onPickVideoSurface={(surfaceId) => {
+                  const output = snapshot().video.outputs.find((candidate) => candidate.id === surfaceId);
+                  if (output) {
+                    setEffectVideoPositionFromVideoOutput(output);
+                  }
+                }}
+                onOriginX={setWaveOriginX}
+                onOriginY={setWaveOriginY}
+                onOriginZ={setWaveOriginZ}
+                onDirectionX={setWaveDirectionX}
+                onDirectionY={setWaveDirectionY}
+                onDirectionZ={setWaveDirectionZ}
+                onSpeed={setWaveSpeed}
+                onWavelength={setWaveWavelength}
+              />
+              <EffectActionControlsPanel
+                showLightRange={effectTargetMode() !== "video"}
+                low={effectLow()}
+                high={effectHigh()}
+                phase={effectPhase()}
+                blendMode={effectBlendMode()}
+                addDisabled={
+                  effectTargetMode() === "video"
+                    ? snapshot().video.layers.length === 0
+                    : effectTargetMode() === "group"
+                      ? parseGroupIds(effectTargetGroups()).length === 0 || !selectedEffectAttribute() || (effectVideoTargetLinked() && selectedEffectVideoLayerId() === null)
+                      : !selectedFixture() || (effectVideoTargetLinked() && selectedEffectVideoLayerId() === null)
+                }
+                submitLabel={editingEffectId() === null ? "Add Effect" : `Update Effect ${editingEffectId()}`}
+                editing={editingEffectId() !== null}
+                editingLabel={editingEffectSummary()?.label ?? null}
+                onLow={setEffectLow}
+                onHigh={setEffectHigh}
+                onPhase={setEffectPhase}
+                onBlendMode={setEffectBlendMode}
+                onSubmitEffect={updateEditingEffect}
+                onCancelEdit={cancelEffectEdit}
+              />
             </div>
-            <div class="effectList">
-              <For each={snapshot().effects}>
-                {(effect, index) => (
-                  <div class="effectItem">
-                    <div>
-                      <strong>{effect.label}</strong>
-                      <span>
-                        {effect.enabled ? "" : "Disabled / "}
-                        {effect.attribute} / {effect.effect_type === "PositionWave" ? "Wave" : "LFO"} / {effect.shape}
-                        {effect.period_ms ? ` / ${effect.period_ms}ms` : ""}
-                        {effect.wavelength ? ` / wl ${effect.wavelength}` : ""}
-                        {effect.target_group_ids.length > 0 ? ` / groups ${effect.target_group_ids.join(",")}` : ""}
-                        {effect.video_targets.length > 0
-                          ? ` / video ${effect.video_targets.map((target) => target.param).join(",")}`
-                          : ""}
-                        {` / ${effect.blend_mode}`}
-                      </span>
-                    </div>
-                    <button onClick={() => void moveEffect(effect.id, -1)} disabled={index() === 0}>
-                      Up
-                    </button>
-                    <button onClick={() => void moveEffect(effect.id, 1)} disabled={index() === snapshot().effects.length - 1}>
-                      Down
-                    </button>
-                    <button onClick={() => void setEffectEnabled(effect.id, !effect.enabled)}>
-                      {effect.enabled ? "Disable" : "Enable"}
-                    </button>
-                    <Show when={effect.effect_type === "PositionWave" && effect.video_targets.length > 0}>
-                      <button onClick={() => void setEffectVideoTargetsFromSelectedOutput(effect.id, effect.video_targets)}>
-                        Use Output Pos
-                      </button>
-                    </Show>
-                    <button onClick={() => saveEffectPreset(effect.id)}>Save</button>
-                    <button onClick={() => removeEffect(effect.id)}>Remove</button>
-                  </div>
-                )}
-              </For>
-            </div>
+            <NodeGraphEditorPanel
+              graphCount={snapshot().node_graphs.length}
+              label={nodeGraphLabel()}
+              transformOp={nodeGraphTransformOp()}
+              transformAmount={nodeGraphTransformAmount()}
+              transformMin={nodeGraphTransformMin()}
+              transformMax={nodeGraphTransformMax()}
+              effectType={effectType()}
+              sourceLabel={nodeGraphSourceLabel()}
+              sourceDetail={nodeGraphSourceDetail()}
+              transformLabel={nodeGraphTransformLabel()}
+              targetMode={effectTargetMode()}
+              canSave={!effectTargetOverrideError()}
+              graphs={snapshot().node_graphs}
+              targetLabel={nodeGraphTargetLabel}
+              onLoadPreset={loadNodeGraphPreset}
+              onLabel={setNodeGraphLabel}
+              onTransformOp={setNodeGraphTransformOp}
+              onTransformAmount={setNodeGraphTransformAmount}
+              onTransformMin={setNodeGraphTransformMin}
+              onTransformMax={setNodeGraphTransformMax}
+              onSaveGraph={saveNodeGraphFromForm}
+              onResetTransform={() => {
+                setNodeGraphTransformOp("Scale");
+                setNodeGraphTransformAmount(1);
+                setNodeGraphTransformMin(0);
+                setNodeGraphTransformMax(1);
+              }}
+              onSetGraphEnabled={setNodeGraphEnabled}
+              onSaveGraphPreset={saveNodeGraphPreset}
+              onRemoveGraph={removeNodeGraph}
+            />
+            <EffectListPanel
+              effects={snapshot().effects}
+              onMoveEffect={moveEffect}
+              onSetEnabled={setEffectEnabled}
+              onUseOutputPosition={setEffectVideoTargetsFromSelectedOutput}
+              onDuplicateEffect={duplicateEffect}
+              onUseAsDraft={useEffectAsDraft}
+              onSavePreset={saveEffectPreset}
+              onRemoveEffect={removeEffect}
+            />
           </div>
           <DmxRawMonitor
             previews={dmxPreviewOptions()}
@@ -17239,714 +11967,168 @@ export default function App() {
             onRefreshSerialPorts={refreshSerialPorts}
             onApply={applyOutput}
           />
-          <DmxTestFramePanel
+          <OutputDiagnosticsPanel
             protocolLabel={outputProtocolLabel(output().protocol)}
-            channel={dmxTestChannel()}
-            width={dmxTestWidth()}
-            value={dmxTestValue()}
-            onChannelChange={setDmxTestChannel}
-            onWidthChange={setDmxTestWidth}
-            onValueChange={setDmxTestValue}
+            testChannel={dmxTestChannel()}
+            testWidth={dmxTestWidth()}
+            testValue={dmxTestValue()}
+            routes={dmxOutputRoutes()}
+            telemetry={snapshot().telemetry}
+            telemetryBudget={engineTelemetryReport()?.budget ?? null}
+            phase1SmokeReport={phase1SmokeReport()}
+            routeLabel={dmxRouteLabel}
+            onTestChannel={setDmxTestChannel}
+            onTestWidth={setDmxTestWidth}
+            onTestValue={setDmxTestValue}
             onSendTest={sendDmxTestFrame}
             onSendRoutes={sendDmxRoutesTestFrame}
-          />
-          <DmxRoutesPanel
-            routes={dmxOutputRoutes()}
-            routeLabel={dmxRouteLabel}
-            onAddCurrent={addCurrentDmxRoute}
+            onAddCurrentRoute={addCurrentDmxRoute}
             onApplyRoutes={applyCurrentDmxRoutes}
             onRemoveRoute={removeDmxRoute}
+            onResetTelemetry={resetEngineTelemetry}
+            onSaveTelemetryReport={saveEngineTelemetryReport}
           />
-          <label>
-            Lighting Master
-            <input
-              type="number"
-              min="0"
-              max="1"
-              step="0.01"
-              value={snapshot().lighting_master}
-              onChange={(event) => void setLightingMaster(Number(event.currentTarget.value))}
-            />
-          </label>
-          <Show when={snapshot().submasters.length > 0}>
-            <div class="submasterList">
-              <h3>Submasters</h3>
-              <For each={snapshot().submasters}>
-                {(submaster) => (
-                  <label class="submasterControl">
-                    <span>{submaster.label}</span>
-                    <input
-                      type="range"
-                      min="0"
-                      max="1"
-                      step="0.01"
-                      value={submaster.level}
-                      onChange={(event) => void setGroupSubmaster(submaster.group_id, Number(event.currentTarget.value))}
-                    />
-                    <strong>{Math.round(submaster.level * 100)}%</strong>
-                  </label>
-                )}
-              </For>
-            </div>
-          </Show>
-          <div class="blackout">
-            <button onClick={() => setBlackout(true)}>DMX BO</button>
-            <button onClick={() => setBlackout(false)}>DMX Clear</button>
-            <button onClick={() => setAllBlackout(true)}>All BO</button>
-            <button onClick={() => setAllBlackout(false)}>All Clear</button>
-          </div>
-          <div class="clock">
-            <h3>Clock</h3>
-            <div class="clockSource">
-              <span>Source</span>
-              <strong>{snapshot().clock.source === "MidiClock" ? "MIDI Clock" : snapshot().clock.source}</strong>
-            </div>
-            <div class="split">
-              <label>
-                BPM
-                <input
-                  type="number"
-                  min="20"
-                  max="300"
-                  step="0.1"
-                  value={bpmDraft()}
-                  onInput={(event) => setBpmDraft(event.currentTarget.value)}
-                />
-              </label>
-              <label>
-                Beat
-                <input value={`${snapshot().clock.beat_counter}.${Math.floor(snapshot().clock.beat_phase * 100)}`} readOnly />
-              </label>
-            </div>
-            <div class="blackout">
-              <button onClick={applyBpm}>Set BPM</button>
-              <button class="primary" onClick={tapBpm}>Tap</button>
-            </div>
-            <div class="midiClock">
-              <div class="buttonRow">
-                <button onClick={() => {
-                  void refreshMidiInputs();
-                  void refreshMidiOutputs();
-                }}>Scan MIDI</button>
-                <button onClick={disconnectMidiClock} disabled={!midiConnected()}>Disconnect</button>
-              </div>
-              <select
-                value={selectedMidiInput() ?? ""}
-                onInput={(event) => setSelectedMidiInput(Number(event.currentTarget.value))}
-              >
-                <For each={midiInputs()}>
-                  {(input) => <option value={input.index}>{input.name}</option>}
-                </For>
-              </select>
-              <button class="primary" onClick={connectMidiClock} disabled={midiInputs().length === 0}>
-                Connect MIDI Clock / MTC
-              </button>
-              <h3>MIDI Feedback</h3>
-              <select
-                value={selectedMidiOutput() ?? ""}
-                onInput={(event) => setSelectedMidiOutput(Number(event.currentTarget.value))}
-              >
-                <For each={midiOutputs()}>
-                  {(output) => <option value={output.index}>{output.name}</option>}
-                </For>
-              </select>
-              <div class="buttonRow">
-                <button class="primary" onClick={connectMidiFeedback} disabled={midiOutputs().length === 0 || midiFeedbackConnected()}>
-                  Connect Feedback
-                </button>
-                <button onClick={disconnectMidiFeedback} disabled={!midiFeedbackConnected()}>
-                  Disconnect Feedback
-                </button>
-                <button onClick={() => void sendMidiFeedback()} disabled={!midiFeedbackConnected() || midiMappings().length === 0}>
-                  Send Feedback
-                </button>
-              </div>
-              <label class="checkbox">
-                <input
-                  type="checkbox"
-                  checked={midiFeedbackEnabled()}
-                  disabled={!midiFeedbackConnected()}
-                  onChange={(event) => setMidiFeedbackEnabled(event.currentTarget.checked)}
-                />
-                Auto feedback
-              </label>
-              <h3>MIDI Control</h3>
-              <div class="split">
-                <label>
-                  Message
-                  <select value={midiMapMessage()} onInput={(event) => setMidiMapMessage(event.currentTarget.value as MidiControlMessage)}>
-                    <option value="ControlChange">CC</option>
-                    <option value="NoteOn">Note On</option>
-                    <option value="NoteOff">Note Off</option>
-                    <option value="ProgramChange">Program</option>
-                  </select>
-                </label>
-                <label>
-                  Number
-                  <input type="number" min="0" max="127" value={midiMapNumber()} onInput={(event) => setMidiMapNumber(Number(event.currentTarget.value))} />
-                </label>
-              </div>
-              <div class="split">
-                <label>
-                  Channel
-                  <input type="number" min="-1" max="15" value={midiMapChannel()} onInput={(event) => setMidiMapChannel(Number(event.currentTarget.value))} />
-                </label>
-                <label>
-                  Action
-                  <select value={midiMapAction()} onInput={(event) => setMidiControlMappingAction(event.currentTarget.value as MidiControlAction)}>
-                    <option value="FixtureAttribute">Fixture Attribute</option>
-                    <option value="FixtureHighlight">Fixture Highlight</option>
-                    <option value="FixtureSolo">Fixture Solo</option>
-                    <option value="FixturePark">Fixture Park</option>
-                    <option value="GroupHighlight">Group Highlight</option>
-                    <option value="GroupSolo">Group Solo</option>
-                    <option value="GroupPark">Group Park</option>
-                    <option value="TriggerCue">Trigger Cue</option>
-                    <option value="TriggerNextCue">Cue Next</option>
-                    <option value="TriggerPreviousCue">Cue Previous</option>
-                    <option value="EffectEnabled">Effect Enable</option>
-                    <option value="NodeGraphEnabled">Node Graph Enable</option>
-                    <option value="VideoParam">Video Param</option>
-                    <option value="VideoCuePointAdd">Video Cue Add</option>
-                    <option value="VideoCuePointRemove">Video Cue Remove</option>
-                    <option value="VideoCuePointJump">Video Cue Jump</option>
-                    <option value="VideoCuePointPrevious">Video Cue Previous</option>
-                    <option value="VideoCuePointNext">Video Cue Next</option>
-                    <option value="VideoLayerEnabled">Layer Enable</option>
-                    <option value="VideoLayerSolo">Layer Solo</option>
-                    <option value="VideoPlay">Video Play</option>
-                    <option value="VideoLoop">Video A-B Loop</option>
-                    <option value="VideoLayerFade">Layer Fade</option>
-                    <option value="VideoOutputEnabled">Output Enable</option>
-                    <option value="VideoOutputOpacity">Output Opacity</option>
-                    <option value="VideoOutputFade">Output Fade</option>
-                    <option value="VideoOutputMappingField">Output Mapping Field</option>
-                    <option value="VideoOutputMappingPreset">Output Mapping Preset</option>
-                    <option value="VideoOutputBlackout">Output Blackout</option>
-                    <option value="TimelinePlay">Timeline Play</option>
-                    <option value="TimelineSeek">Timeline Seek</option>
-                    <option value="TimelineBeatPrevious">Beat Previous</option>
-                    <option value="TimelineBeatNext">Beat Next</option>
-                    <option value="LightingMaster">Lighting Master</option>
-                    <option value="GroupSubmaster">Group Submaster</option>
-                    <option value="SetBpm">Set BPM</option>
-                    <option value="TapBpm">Tap BPM</option>
-                    <option value="CueFadePause">Cue Fade Pause</option>
-                    <option value="Blackout">DMX Blackout</option>
-                    <option value="AllBlackout">All Blackout</option>
-                    <option value="VideoBlackout">Video Blackout</option>
-                    <option value="ClearFixtureFlags">Clear Fixture Flags</option>
-                  </select>
-                </label>
-              </div>
-              <Show when={midiMapAction() === "FixtureAttribute"}>
-                <label>
-                  Attribute
-                  <input value={midiMapAttribute()} onInput={(event) => setMidiMapAttribute(event.currentTarget.value)} />
-                </label>
-              </Show>
-              <Show when={midiMapAction() === "ClearFixtureFlags"}>
-                <label>
-                  Clear flags
-                  <select value={midiClearFixtureFlagKind()} onInput={(event) => setMidiMapAttribute(event.currentTarget.value)}>
-                    <For each={fixtureFlagClearKinds}>
-                      {(kind) => <option value={kind}>{kind}</option>}
-                    </For>
-                  </select>
-                </label>
-              </Show>
-              <Show when={midiMapAction() === "TriggerCue"}>
-                <label>
-                  Cue
-                  <select value={selectedMidiCueId() ?? ""} onInput={(event) => setMidiMapCueId(Number(event.currentTarget.value))}>
-                    <For each={snapshot().cues}>
-                      {(cue) => <option value={cue.id}>{cue.id}: {cue.label}</option>}
-                    </For>
-                  </select>
-                </label>
-              </Show>
-              <Show when={midiMapAction() === "EffectEnabled"}>
-                <label>
-                  Effect
-                  <select value={selectedMidiEffectId() ?? ""} onInput={(event) => setMidiMapEffectId(Number(event.currentTarget.value))}>
-                    <For each={snapshot().effects}>
-                      {(effect) => <option value={effect.id}>{effect.id}: {effect.label}</option>}
-                    </For>
-                  </select>
-                </label>
-              </Show>
-              <Show when={midiMapAction() === "NodeGraphEnabled"}>
-                <label>
-                  Node Graph
-                  <select value={selectedMidiNodeGraphId() ?? ""} onInput={(event) => setMidiMapNodeGraphId(Number(event.currentTarget.value))}>
-                    <For each={snapshot().node_graphs}>
-                      {(graph) => <option value={graph.id}>{graph.id}: {graph.label}</option>}
-                    </For>
-                  </select>
-                </label>
-              </Show>
-              <Show when={midiMapAction() === "GroupSubmaster" || isGroupFlagMappingAction(midiMapAction())}>
-                <label>
-                  Group ID
-                  <input value={midiMapGroupId()} onInput={(event) => setMidiMapGroupId(event.currentTarget.value)} />
-                </label>
-              </Show>
-              <Show
-                when={isVideoLayerMappingAction(midiMapAction())}
-              >
-                <label>
-                  Layer
-                  <select value={selectedMidiLayerId() ?? ""} onInput={(event) => setMidiMapLayerId(Number(event.currentTarget.value))}>
-                    <For each={snapshot().video.layers}>
-                      {(layer) => <option value={layer.id}>{layer.id}: {layer.label}</option>}
-                    </For>
-                  </select>
-                </label>
-              </Show>
-              <Show
-                when={isVideoOutputMappingAction(midiMapAction())}
-              >
-                <label>
-                  Output
-                  <select
-                    value={selectedMidiVideoOutputId() ?? ""}
-                    onInput={(event) => setMidiMapVideoOutputId(Number(event.currentTarget.value))}
-                  >
-                    <For each={snapshot().video.outputs}>
-                      {(output) => <option value={output.id}>{output.id}: {output.label}</option>}
-                    </For>
-                  </select>
-                </label>
-              </Show>
-              <Show when={midiMapAction() === "VideoOutputMappingField"}>
-                <label>
-                  Mapping Field
-                  <select
-                    value={selectedMidiVideoOutputMappingField()}
-                    onInput={(event) => setMidiVideoOutputMappingFieldTarget(event.currentTarget.value)}
-                  >
-                    <For each={videoOutputMappingFieldOptions}>
-                      {(field) => <option value={field.value}>{field.label}</option>}
-                    </For>
-                  </select>
-                </label>
-              </Show>
-              <Show when={midiMapAction() === "VideoOutputMappingPreset"}>
-                <label>
-                  Mapping Preset
-                  <select
-                    value={selectedMidiVideoOutputMappingPresetLabel()}
-                    disabled={snapshot().video.mapping_presets.length === 0}
-                    onInput={(event) => setMidiMapVideoOutputMappingPresetLabel(event.currentTarget.value)}
-                  >
-                    <Show when={snapshot().video.mapping_presets.length === 0}>
-                      <option value="">No presets</option>
-                    </Show>
-                    <For each={snapshot().video.mapping_presets}>
-                      {(preset) => <option value={preset.label}>{preset.label}</option>}
-                    </For>
-                  </select>
-                </label>
-              </Show>
-              <Show when={midiMapAction() === "VideoParam"}>
-                <label>
-                  Video Param
-                  <select value={midiMapVideoParam()} onInput={(event) => setMidiMapVideoParam(event.currentTarget.value as VideoParam)}>
-                    <option value="Opacity">Opacity</option>
-                    <option value="Speed">Speed</option>
-                    <option value="PositionMs">Position</option>
-                    <option value="BpmSyncEnabled">BPM Sync</option>
-                    <option value="BpmSyncRatio">BPM Sync Ratio</option>
-                    <option value="BpmSyncLoopBars">BPM Loop Bars</option>
-                    <option value="TransformX">X</option>
-                    <option value="TransformY">Y</option>
-                    <option value="TransformScaleX">Scale X</option>
-                    <option value="TransformScaleY">Scale Y</option>
-                    <option value="TransformRotationDeg">Rotation</option>
-                    <option value="ColorBrightness">Brightness</option>
-                    <option value="ColorContrast">Contrast</option>
-                    <option value="ColorHueDeg">Hue</option>
-                    <option value="ColorSaturation">Saturation</option>
-                    <option value="ColorGamma">Gamma</option>
-                    <option value="FxPixelate">Pixelate</option>
-                    <option value="FxBlur">Blur</option>
-                    <option value="FxGlow">Glow</option>
-                    <option value="FxEdge">Edge</option>
-                    <option value="FxKeyRed">Key R</option>
-                    <option value="FxKeyGreen">Key G</option>
-                    <option value="FxKeyBlue">Key B</option>
-                    <option value="FxKeyThreshold">Key Threshold</option>
-                  </select>
-                </label>
-              </Show>
-              <Show when={midiMapAction() === "VideoCuePointJump"}>
-                <label>
-                  Cue point index
-                  <input type="number" min="0" value={midiMapCuePointIndex()} onInput={(event) => setMidiMapCuePointIndex(Number(event.currentTarget.value))} />
-                </label>
-              </Show>
-              <Show when={midiMapAction() === "VideoOutputFade" || midiMapAction() === "VideoLayerFade" || midiMapAction() === "VideoCuePointAdd" || midiMapAction() === "VideoCuePointRemove"}>
-                <label>
-                  {midiMapAction() === "VideoOutputFade" || midiMapAction() === "VideoLayerFade" ? "Fade ms" : "Cue point ms"}
-                  <input type="number" min="0" step="10" value={midiMapDurationMs()} onInput={(event) => setMidiMapDurationMs(Number(event.currentTarget.value))} />
-                </label>
-              </Show>
-              <div class="split">
-                <label>
-                  {midiMapAction() === "VideoLoop"
-                    ? "Loop In ms"
-                    : midiMapAction() === "SetBpm"
-                      ? "BPM Low"
-                      : midiMapAction() === "VideoOutputMappingField"
-                        ? "Field Low"
-                        : "Low"}
-                  <input type="number" value={midiMapLow()} onInput={(event) => setMidiMapLow(Number(event.currentTarget.value))} />
-                </label>
-                <label>
-                  {midiMapAction() === "VideoLoop"
-                    ? "Loop Out ms"
-                    : midiMapAction() === "SetBpm"
-                      ? "BPM High"
-                      : midiMapAction() === "VideoOutputMappingField"
-                        ? "Field High"
-                        : "High"}
-                  <input type="number" value={midiMapHigh()} onInput={(event) => setMidiMapHigh(Number(event.currentTarget.value))} />
-                </label>
-              </div>
-              <div class="buttonRow">
-                <button onClick={learnMidiControl} disabled={midiInputs().length === 0}>
-                  Learn
-                </button>
-                <button onClick={addMidiMapping}>Add Mapping</button>
-                <button class="primary" onClick={connectMidiControl} disabled={midiInputs().length === 0 || midiMappings().length === 0 || midiControlConnected()}>
-                  Connect MIDI Control
-                </button>
-                <button onClick={disconnectMidiControl} disabled={!midiControlConnected()}>
-                  Disconnect Control
-                </button>
-              </div>
-              <div class="buttonRow">
-                <button onClick={loadMidiMappings}>Load Mapping</button>
-                <button onClick={saveMidiMappings} disabled={midiMappings().length === 0}>Save Mapping</button>
-              </div>
-              <div class="timelineList">
-                <For each={midiMappings()}>
-                  {(mapping, index) => (
-                    <div class="timelineItem">
-                      <strong>{mapping.message} {mapping.number}</strong>
-                      <span>{mapping.channel === null || mapping.channel === undefined ? "Any ch" : `Ch ${mapping.channel}`} / {midiMappingTargetLabel(mapping)}</span>
-                      <button onClick={() => removeMidiMapping(index())}>Remove</button>
-                    </div>
-                  )}
-                </For>
-              </div>
-            </div>
-            <div class="oscInput">
-              <h3>OSC Input</h3>
-              <div class="split">
-                <label>
-                  Bind IP
-                  <input value={oscBindIp()} onInput={(event) => setOscBindIp(event.currentTarget.value)} />
-                </label>
-                <label>
-                  Port
-                  <input
-                    type="number"
-                    min="1"
-                    value={oscPort()}
-                    onInput={(event) => setOscPort(Number(event.currentTarget.value))}
-                  />
-                </label>
-              </div>
-              <div class="buttonRow">
-                <button class="primary" onClick={startOscInput} disabled={oscRunning()}>
-                  Start OSC
-                </button>
-                <button onClick={stopOscInput} disabled={!oscRunning()}>
-                  Stop OSC
-                </button>
-              </div>
-              <label>
-                Address
-                <input
-                  value={oscMapAddress()}
-                  placeholder="/touchosc/page/*/fader/1"
-                  onInput={(event) => setOscMapAddress(event.currentTarget.value)}
-                />
-              </label>
-              <div class="split">
-                <label>
-                  Action
-                  <select value={oscMapAction()} onInput={(event) => setOscControlMappingAction(event.currentTarget.value as OscControlAction)}>
-                    <option value="FixtureAttribute">Fixture Attribute</option>
-                    <option value="FixtureHighlight">Fixture Highlight</option>
-                    <option value="FixtureSolo">Fixture Solo</option>
-                    <option value="FixturePark">Fixture Park</option>
-                    <option value="GroupHighlight">Group Highlight</option>
-                    <option value="GroupSolo">Group Solo</option>
-                    <option value="GroupPark">Group Park</option>
-                    <option value="TriggerCue">Trigger Cue</option>
-                    <option value="TriggerNextCue">Cue Next</option>
-                    <option value="TriggerPreviousCue">Cue Previous</option>
-                    <option value="EffectEnabled">Effect Enable</option>
-                    <option value="NodeGraphEnabled">Node Graph Enable</option>
-                    <option value="VideoParam">Video Param</option>
-                    <option value="VideoCuePointAdd">Video Cue Add</option>
-                    <option value="VideoCuePointRemove">Video Cue Remove</option>
-                    <option value="VideoCuePointJump">Video Cue Jump</option>
-                    <option value="VideoCuePointPrevious">Video Cue Previous</option>
-                    <option value="VideoCuePointNext">Video Cue Next</option>
-                    <option value="VideoLayerEnabled">Layer Enable</option>
-                    <option value="VideoLayerSolo">Layer Solo</option>
-                    <option value="VideoPlay">Video Play</option>
-                    <option value="VideoLoop">Video A-B Loop</option>
-                    <option value="VideoLayerFade">Layer Fade</option>
-                    <option value="VideoOutputEnabled">Output Enable</option>
-                    <option value="VideoOutputOpacity">Output Opacity</option>
-                    <option value="VideoOutputFade">Output Fade</option>
-                    <option value="VideoOutputMappingField">Output Mapping Field</option>
-                    <option value="VideoOutputMappingPreset">Output Mapping Preset</option>
-                    <option value="VideoOutputBlackout">Output Blackout</option>
-                    <option value="TimelinePlay">Timeline Play</option>
-                    <option value="TimelineSeek">Timeline Seek</option>
-                    <option value="TimelineBeatPrevious">Beat Previous</option>
-                    <option value="TimelineBeatNext">Beat Next</option>
-                    <option value="LightingMaster">Lighting Master</option>
-                    <option value="GroupSubmaster">Group Submaster</option>
-                    <option value="SetBpm">Set BPM</option>
-                    <option value="TapBpm">Tap BPM</option>
-                    <option value="CueFadePause">Cue Fade Pause</option>
-                    <option value="Blackout">DMX Blackout</option>
-                    <option value="AllBlackout">All Blackout</option>
-                    <option value="VideoBlackout">Video Blackout</option>
-                    <option value="ClearFixtureFlags">Clear Fixture Flags</option>
-                  </select>
-                </label>
-                <label>
-                  Attribute
-                  <input value={oscMapAttribute()} onInput={(event) => setOscMapAttribute(event.currentTarget.value)} disabled={oscMapAction() !== "FixtureAttribute"} />
-                </label>
-              </div>
-              <Show when={oscMapAction() === "ClearFixtureFlags"}>
-                <label>
-                  Clear flags
-                  <select value={oscClearFixtureFlagKind()} onInput={(event) => setOscMapAttribute(event.currentTarget.value)}>
-                    <For each={fixtureFlagClearKinds}>
-                      {(kind) => <option value={kind}>{kind}</option>}
-                    </For>
-                  </select>
-                </label>
-              </Show>
-              <Show when={oscMapAction() === "TriggerCue"}>
-                <label>
-                  Cue
-                  <select value={selectedOscCueId() ?? ""} onInput={(event) => setOscMapCueId(Number(event.currentTarget.value))}>
-                    <For each={snapshot().cues}>
-                      {(cue) => <option value={cue.id}>{cue.id}: {cue.label}</option>}
-                    </For>
-                  </select>
-                </label>
-              </Show>
-              <Show when={oscMapAction() === "EffectEnabled"}>
-                <label>
-                  Effect
-                  <select value={selectedOscEffectId() ?? ""} onInput={(event) => setOscMapEffectId(Number(event.currentTarget.value))}>
-                    <For each={snapshot().effects}>
-                      {(effect) => <option value={effect.id}>{effect.id}: {effect.label}</option>}
-                    </For>
-                  </select>
-                </label>
-              </Show>
-              <Show when={oscMapAction() === "NodeGraphEnabled"}>
-                <label>
-                  Node Graph
-                  <select value={selectedOscNodeGraphId() ?? ""} onInput={(event) => setOscMapNodeGraphId(Number(event.currentTarget.value))}>
-                    <For each={snapshot().node_graphs}>
-                      {(graph) => <option value={graph.id}>{graph.id}: {graph.label}</option>}
-                    </For>
-                  </select>
-                </label>
-              </Show>
-              <Show when={oscMapAction() === "GroupSubmaster" || isGroupFlagMappingAction(oscMapAction())}>
-                <label>
-                  Group ID
-                  <input value={oscMapGroupId()} onInput={(event) => setOscMapGroupId(event.currentTarget.value)} />
-                </label>
-              </Show>
-              <Show
-                when={isVideoLayerMappingAction(oscMapAction())}
-              >
-                <label>
-                  Layer
-                  <select value={selectedOscLayerId() ?? ""} onInput={(event) => setOscMapLayerId(Number(event.currentTarget.value))}>
-                    <For each={snapshot().video.layers}>
-                      {(layer) => <option value={layer.id}>{layer.id}: {layer.label}</option>}
-                    </For>
-                  </select>
-                </label>
-              </Show>
-              <Show
-                when={isVideoOutputMappingAction(oscMapAction())}
-              >
-                <label>
-                  Output
-                  <select
-                    value={selectedOscVideoOutputId() ?? ""}
-                    onInput={(event) => setOscMapVideoOutputId(Number(event.currentTarget.value))}
-                  >
-                    <For each={snapshot().video.outputs}>
-                      {(output) => <option value={output.id}>{output.id}: {output.label}</option>}
-                    </For>
-                  </select>
-                </label>
-              </Show>
-              <Show when={oscMapAction() === "VideoOutputMappingField"}>
-                <label>
-                  Mapping Field
-                  <select
-                    value={selectedOscVideoOutputMappingField()}
-                    onInput={(event) => setOscVideoOutputMappingFieldTarget(event.currentTarget.value)}
-                  >
-                    <For each={videoOutputMappingFieldOptions}>
-                      {(field) => <option value={field.value}>{field.label}</option>}
-                    </For>
-                  </select>
-                </label>
-              </Show>
-              <Show when={oscMapAction() === "VideoOutputMappingPreset"}>
-                <label>
-                  Mapping Preset
-                  <select
-                    value={selectedOscVideoOutputMappingPresetLabel()}
-                    disabled={snapshot().video.mapping_presets.length === 0}
-                    onInput={(event) => setOscMapVideoOutputMappingPresetLabel(event.currentTarget.value)}
-                  >
-                    <Show when={snapshot().video.mapping_presets.length === 0}>
-                      <option value="">No presets</option>
-                    </Show>
-                    <For each={snapshot().video.mapping_presets}>
-                      {(preset) => <option value={preset.label}>{preset.label}</option>}
-                    </For>
-                  </select>
-                </label>
-              </Show>
-              <Show when={oscMapAction() === "VideoParam"}>
-                <label>
-                  Video Param
-                  <select value={oscMapVideoParam()} onInput={(event) => setOscMapVideoParam(event.currentTarget.value as VideoParam)}>
-                    <option value="Opacity">Opacity</option>
-                    <option value="Speed">Speed</option>
-                    <option value="PositionMs">Position</option>
-                    <option value="BpmSyncEnabled">BPM Sync</option>
-                    <option value="BpmSyncRatio">BPM Sync Ratio</option>
-                    <option value="BpmSyncLoopBars">BPM Loop Bars</option>
-                    <option value="TransformX">X</option>
-                    <option value="TransformY">Y</option>
-                    <option value="TransformScaleX">Scale X</option>
-                    <option value="TransformScaleY">Scale Y</option>
-                    <option value="TransformRotationDeg">Rotation</option>
-                    <option value="ColorBrightness">Brightness</option>
-                    <option value="ColorContrast">Contrast</option>
-                    <option value="ColorHueDeg">Hue</option>
-                    <option value="ColorSaturation">Saturation</option>
-                    <option value="ColorGamma">Gamma</option>
-                    <option value="FxPixelate">Pixelate</option>
-                    <option value="FxBlur">Blur</option>
-                    <option value="FxGlow">Glow</option>
-                    <option value="FxEdge">Edge</option>
-                    <option value="FxKeyRed">Key R</option>
-                    <option value="FxKeyGreen">Key G</option>
-                    <option value="FxKeyBlue">Key B</option>
-                    <option value="FxKeyThreshold">Key Threshold</option>
-                  </select>
-                </label>
-              </Show>
-              <Show when={oscMapAction() === "VideoCuePointJump"}>
-                <label>
-                  Cue point index
-                  <input type="number" min="0" value={oscMapCuePointIndex()} onInput={(event) => setOscMapCuePointIndex(Number(event.currentTarget.value))} />
-                </label>
-              </Show>
-              <Show when={oscMapAction() === "VideoOutputFade" || oscMapAction() === "VideoLayerFade" || oscMapAction() === "VideoCuePointAdd" || oscMapAction() === "VideoCuePointRemove"}>
-                <label>
-                  {oscMapAction() === "VideoOutputFade" || oscMapAction() === "VideoLayerFade" ? "Fade ms" : "Cue point ms"}
-                  <input type="number" min="0" step="10" value={oscMapDurationMs()} onInput={(event) => setOscMapDurationMs(Number(event.currentTarget.value))} />
-                </label>
-              </Show>
-              <div class="split">
-                <label>
-                  {oscMapAction() === "VideoLoop"
-                    ? "Loop In ms"
-                    : oscMapAction() === "SetBpm"
-                      ? "BPM Low"
-                      : oscMapAction() === "VideoOutputMappingField"
-                        ? "Field Low"
-                        : "Low"}
-                  <input type="number" value={oscMapLow()} onInput={(event) => setOscMapLow(Number(event.currentTarget.value))} />
-                </label>
-                <label>
-                  {oscMapAction() === "VideoLoop"
-                    ? "Loop Out ms"
-                    : oscMapAction() === "SetBpm"
-                      ? "BPM High"
-                      : oscMapAction() === "VideoOutputMappingField"
-                        ? "Field High"
-                        : "High"}
-                  <input type="number" value={oscMapHigh()} onInput={(event) => setOscMapHigh(Number(event.currentTarget.value))} />
-                </label>
-              </div>
-              <div class="buttonRow">
-                <button onClick={learnOscControl} disabled={oscRunning()}>
-                  Learn
-                </button>
-                <button onClick={addOscMapping}>Add OSC Mapping</button>
-                <button onClick={loadOscMappings}>Load Mapping</button>
-                <button onClick={saveOscMappings} disabled={oscMappings().length === 0}>Save Mapping</button>
-              </div>
-              <div class="timelineList">
-                <For each={oscMappings()}>
-                  {(mapping, index) => (
-                    <div class="timelineItem">
-                      <strong>{mapping.address}</strong>
-                      <span>{oscMappingTargetLabel(mapping)}</span>
-                      <button onClick={() => removeOscMapping(index())}>Remove</button>
-                    </div>
-                  )}
-                </For>
-              </div>
-            </div>
-            <div class="remoteControl">
-              <h3>Web Remote</h3>
-              <div class="split">
-                <label>
-                  Bind IP
-                  <input value={remoteBindIp()} onInput={(event) => setRemoteBindIp(event.currentTarget.value)} />
-                </label>
-                <label>
-                  Port
-                  <input
-                    type="number"
-                    min="1"
-                    value={remotePort()}
-                    onInput={(event) => setRemotePort(Number(event.currentTarget.value))}
-                  />
-                </label>
-              </div>
-              <div class="buttonRow">
-                <button class="primary" onClick={startRemoteControl} disabled={remoteRunning()}>
-                  Start Remote
-                </button>
-                <button onClick={stopRemoteControl} disabled={!remoteRunning()}>
-                  Stop Remote
-                </button>
-              </div>
-            </div>
-          </div>
-          <EngineTelemetryPanel
-            telemetry={snapshot().telemetry}
-            budget={engineTelemetryReport()?.budget ?? null}
-            onReset={resetEngineTelemetry}
-            onSaveReport={saveEngineTelemetryReport}
+          <LightingRuntimeControlsPanel
+            lightingMaster={snapshot().lighting_master}
+            submasters={snapshot().submasters}
+            clock={snapshot().clock}
+            bpmDraft={bpmDraft()}
+            midiInputs={midiInputs()}
+            selectedMidiInput={selectedMidiInput()}
+            midiConnected={midiConnected()}
+            onLightingMaster={setLightingMaster}
+            onSubmaster={setGroupSubmaster}
+            onBlackout={setBlackout}
+            onAllBlackout={setAllBlackout}
+            onBpmDraft={setBpmDraft}
+            onApplyBpm={applyBpm}
+            onTapBpm={tapBpm}
+            onRefreshMidi={() => {
+              void refreshMidiInputs();
+              void refreshMidiOutputs();
+            }}
+            onDisconnectMidiClock={disconnectMidiClock}
+            onSelectedMidiInput={setSelectedMidiInput}
+            onConnectMidiClock={connectMidiClock}
+          />
+          <MidiControlMappingPanel
+            snapshot={snapshot()}
+            midiOutputs={midiOutputs()}
+            selectedMidiOutput={selectedMidiOutput()}
+            feedbackConnected={midiFeedbackConnected()}
+            feedbackEnabled={midiFeedbackEnabled()}
+            midiInputsCount={midiInputs().length}
+            controlConnected={midiControlConnected()}
+            mappings={midiMappings()}
+            mapMessage={midiMapMessage()}
+            mapNumber={midiMapNumber()}
+            mapChannel={midiMapChannel()}
+            mapAction={midiMapAction()}
+            mapAttribute={midiMapAttribute()}
+            clearFixtureFlagKind={midiClearFixtureFlagKind()}
+            selectedCueId={selectedMidiCueId()}
+            selectedEffectId={selectedMidiEffectId()}
+            selectedNodeGraphId={selectedMidiNodeGraphId()}
+            mapGroupId={midiMapGroupId()}
+            selectedLayerId={selectedMidiLayerId()}
+            selectedOutputId={selectedMidiVideoOutputId()}
+            selectedMappingField={selectedMidiVideoOutputMappingField()}
+            selectedMappingPresetLabel={selectedMidiVideoOutputMappingPresetLabel()}
+            mapVideoParam={midiMapVideoParam()}
+            mapCuePointIndex={midiMapCuePointIndex()}
+            mapDurationMs={midiMapDurationMs()}
+            mapLow={midiMapLow()}
+            mapHigh={midiMapHigh()}
+            mappingTargetLabel={midiMappingTargetLabel}
+            onSelectedMidiOutput={setSelectedMidiOutput}
+            onConnectFeedback={connectMidiFeedback}
+            onDisconnectFeedback={disconnectMidiFeedback}
+            onSendFeedback={sendMidiFeedback}
+            onFeedbackEnabled={setMidiFeedbackEnabled}
+            onMapMessage={setMidiMapMessage}
+            onMapNumber={setMidiMapNumber}
+            onMapChannel={setMidiMapChannel}
+            onMapAction={setMidiControlMappingAction}
+            onMapAttribute={setMidiMapAttribute}
+            onMapCueId={setMidiMapCueId}
+            onMapEffectId={setMidiMapEffectId}
+            onMapNodeGraphId={setMidiMapNodeGraphId}
+            onMapGroupId={setMidiMapGroupId}
+            onMapLayerId={setMidiMapLayerId}
+            onMapOutputId={setMidiMapVideoOutputId}
+            onMappingField={setMidiVideoOutputMappingFieldTarget}
+            onMappingPresetLabel={setMidiMapVideoOutputMappingPresetLabel}
+            onMapVideoParam={setMidiMapVideoParam}
+            onMapCuePointIndex={setMidiMapCuePointIndex}
+            onMapDurationMs={setMidiMapDurationMs}
+            onMapLow={setMidiMapLow}
+            onMapHigh={setMidiMapHigh}
+            onLearn={learnMidiControl}
+            onAddMapping={addMidiMapping}
+            onConnectControl={connectMidiControl}
+            onDisconnectControl={disconnectMidiControl}
+            onLoadMappings={loadMidiMappings}
+            onSaveMappings={saveMidiMappings}
+            onRemoveMapping={removeMidiMapping}
+          />
+          <OscControlMappingPanel
+            snapshot={snapshot()}
+            bindIp={oscBindIp()}
+            port={oscPort()}
+            running={oscRunning()}
+            mappings={oscMappings()}
+            mapAddress={oscMapAddress()}
+            mapAction={oscMapAction()}
+            mapAttribute={oscMapAttribute()}
+            clearFixtureFlagKind={oscClearFixtureFlagKind()}
+            selectedCueId={selectedOscCueId()}
+            selectedEffectId={selectedOscEffectId()}
+            selectedNodeGraphId={selectedOscNodeGraphId()}
+            mapGroupId={oscMapGroupId()}
+            selectedLayerId={selectedOscLayerId()}
+            selectedOutputId={selectedOscVideoOutputId()}
+            selectedMappingField={selectedOscVideoOutputMappingField()}
+            selectedMappingPresetLabel={selectedOscVideoOutputMappingPresetLabel()}
+            mapVideoParam={oscMapVideoParam()}
+            mapCuePointIndex={oscMapCuePointIndex()}
+            mapDurationMs={oscMapDurationMs()}
+            mapLow={oscMapLow()}
+            mapHigh={oscMapHigh()}
+            mappingTargetLabel={oscMappingTargetLabel}
+            onBindIp={setOscBindIp}
+            onPort={setOscPort}
+            onStart={startOscInput}
+            onStop={stopOscInput}
+            onMapAddress={setOscMapAddress}
+            onMapAction={setOscControlMappingAction}
+            onMapAttribute={setOscMapAttribute}
+            onMapCueId={setOscMapCueId}
+            onMapEffectId={setOscMapEffectId}
+            onMapNodeGraphId={setOscMapNodeGraphId}
+            onMapGroupId={setOscMapGroupId}
+            onMapLayerId={setOscMapLayerId}
+            onMapOutputId={setOscMapVideoOutputId}
+            onMappingField={setOscVideoOutputMappingFieldTarget}
+            onMappingPresetLabel={setOscMapVideoOutputMappingPresetLabel}
+            onMapVideoParam={setOscMapVideoParam}
+            onMapCuePointIndex={setOscMapCuePointIndex}
+            onMapDurationMs={setOscMapDurationMs}
+            onMapLow={setOscMapLow}
+            onMapHigh={setOscMapHigh}
+            onLearn={learnOscControl}
+            onAddMapping={addOscMapping}
+            onLoadMappings={loadOscMappings}
+            onSaveMappings={saveOscMappings}
+            onRemoveMapping={removeOscMapping}
+          />
+          <RemoteControlPanel
+            bindIp={remoteBindIp()}
+            port={remotePort()}
+            running={remoteRunning()}
+            onBindIp={setRemoteBindIp}
+            onPort={setRemotePort}
+            onStart={startRemoteControl}
+            onStop={stopRemoteControl}
           />
         </aside>
       </section>

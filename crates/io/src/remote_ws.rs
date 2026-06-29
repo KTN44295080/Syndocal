@@ -1753,11 +1753,12 @@ function remoteDmxProtocolLabel(protocol){
   if(protocol==="ArtNet")return "Art-Net";
   if(protocol==="Sacn")return "sACN";
   if(protocol==="EnttecUsbPro")return "Enttec Pro";
+  if(protocol==="DmxKingUltraDmx")return "DMXKing ultraDMX";
   if(protocol==="EnttecOpenDmx")return "Enttec Open";
   return String(protocol||"DMX");
 }
 function remoteDmxRouteEndpoint(route){
-  if(route.protocol==="EnttecUsbPro"||route.protocol==="EnttecOpenDmx"){
+  if(route.protocol==="EnttecUsbPro"||route.protocol==="DmxKingUltraDmx"||route.protocol==="EnttecOpenDmx"){
     return `${route.serial_port||"(no port)"} @ ${route.protocol==="EnttecOpenDmx"?250000:(route.serial_baud_rate||57600)}`;
   }
   return `${route.target_ip||"0.0.0.0"}:${route.port||6454}`;

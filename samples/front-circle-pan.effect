@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "effect_type": "Lfo",
+  "enabled": true,
+  "lfo": {
+    "label": "Front Circle Pan",
+    "fixture_ids": [],
+    "target_group_ids": ["Front"],
+    "attribute": "Pan",
+    "video_targets": [],
+    "shape": "Sine",
+    "period_ms": 2000,
+    "clock_sync": {
+      "beats": 4.0
+    },
+    "low": 24576,
+    "high": 40960,
+    "phase": 0.0,
+    "blend_mode": "Override"
+  },
+  "position_wave": null
+}

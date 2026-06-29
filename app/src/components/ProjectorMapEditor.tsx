@@ -292,6 +292,10 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
     props.onPatch({ [field]: roundedRangeValue(value, min, max, digits) } as Partial<VideoOutputMapping>);
   };
 
+  const resetCornerOffset = (corner: ProjectorCorner) => {
+    props.onPatch({ [corner.xField]: 0, [corner.yField]: 0 } as Partial<VideoOutputMapping>);
+  };
+
   const setCornerFromPointer = (event: PointerEvent & { currentTarget: SVGCircleElement }, corner: ProjectorCorner) => {
     event.preventDefault();
     const pointer = projectorMapPointerPoint(event, event.currentTarget.ownerSVGElement);
@@ -670,6 +674,16 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
           }}
         </For>
       </svg>
+      <div class="projectorMapCornerResetRow" aria-label={`${props.label} corner pin resets`}>
+        <span>Corners</span>
+        <For each={projectorCorners}>
+          {(corner) => (
+            <button onClick={() => resetCornerOffset(corner)} title={`Reset ${corner.label} corner pin`}>
+              {corner.label} 0
+            </button>
+          )}
+        </For>
+      </div>
       <div class="projectorMapModeRow" aria-label={`${props.label} aspect mode`}>
         <button
           class={props.mapping.aspect_mode === "Stretch" ? "active" : ""}
