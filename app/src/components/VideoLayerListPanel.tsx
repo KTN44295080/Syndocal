@@ -31,16 +31,92 @@ interface VideoLayerListPanelProps {
 export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
   return (
     <div class="videoLayerList">
-      <For each={props.layers}>
-        {(layer, index) => (
-          <div class="videoLayerItem">
+      <Show when={props.layers.length > 0} fallback={<span class="emptyState">No video layers</span>}>
+        <For each={props.layers}>
+          {(layer, index) => (
+            <div class="videoLayerItem">
             <div>
+              <strong class="videoLayerTitle">{layer.label}</strong>
               <label>
                 Layer name
                 <input value={layer.label} onChange={(event) => void props.onSetLayerLabel(layer.id, event.currentTarget.value)} />
               </label>
               <span>{layer.source.path ?? layer.source.name ?? layer.source.kind}</span>
               <Show when={videoSourceMetadataLabel(layer.source)}>{(metadata) => <small>{metadata()}</small>}</Show>
+            </div>
+            <div class="videoMixerLayerDeck">
+              <label>
+                Opacity
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={layer.state.opacity}
+                  onInput={(event) =>
+                    void props.onSetLayerState(layer.id, {
+                      ...layer.state,
+                      opacity: Number(event.currentTarget.value),
+                    })
+                  }
+                />
+                <strong>{Math.round(layer.state.opacity * 100)}%</strong>
+              </label>
+              <div class="buttonRow">
+                <button
+                  class={layer.state.playing ? "active" : ""}
+                  onClick={() =>
+                    void props.onSetLayerState(layer.id, {
+                      ...layer.state,
+                      playing: !layer.state.playing,
+                    })
+                  }
+                >
+                  {layer.state.playing ? "Pause" : "Play"}
+                </button>
+                <button
+                  class={layer.state.solo ? "active" : ""}
+                  onClick={() =>
+                    void props.onSetLayerState(layer.id, {
+                      ...layer.state,
+                      solo: !layer.state.solo,
+                    })
+                  }
+                >
+                  {layer.state.solo ? "Solo On" : "Solo"}
+                </button>
+                <button
+                  class={layer.state.enabled ? "active" : ""}
+                  onClick={() =>
+                    void props.onSetLayerState(layer.id, {
+                      ...layer.state,
+                      enabled: !layer.state.enabled,
+                    })
+                  }
+                >
+                  {layer.state.enabled ? "On" : "Off"}
+                </button>
+                <button
+                  onClick={() =>
+                    void props.onSetLayerState(layer.id, {
+                      ...layer.state,
+                      opacity: 0,
+                    })
+                  }
+                >
+                  Out
+                </button>
+                <button
+                  onClick={() =>
+                    void props.onSetLayerState(layer.id, {
+                      ...layer.state,
+                      opacity: 1,
+                    })
+                  }
+                >
+                  Full
+                </button>
+              </div>
             </div>
             <div class="buttonRow">
               <button onClick={() => void props.onMoveLayer(layer.id, -1)} disabled={index() === 0}>
@@ -659,9 +735,10 @@ export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
               </button>
               <button onClick={() => void props.onRemoveLayer(layer.id)}>Remove</button>
             </div>
-          </div>
-        )}
-      </For>
+            </div>
+          )}
+        </For>
+      </Show>
     </div>
   );
 }

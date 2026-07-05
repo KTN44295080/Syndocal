@@ -1,7 +1,7 @@
 import { For, Show } from "solid-js";
 import type { TimelineEventDraft } from "../editorDrafts";
 import type { AudioAnalysisSummary, TimelineCueEventSummary, TimelineTrackKind } from "../types";
-import { TimelineOverview, type TimelineOverviewEvent } from "./TimelineOverview";
+import { TimelineOverview, type TimelineOverviewAutomationRange, type TimelineOverviewEvent } from "./TimelineOverview";
 
 export type TimelineSnapMode = "Off" | "Beat" | "Bar" | "Grid";
 
@@ -24,7 +24,11 @@ interface TimelineCueEventsPanelProps {
   durationMs: number;
   playing: boolean;
   cuesCount: number;
+  lightingAutomationCount: number;
+  videoAutomationCount: number;
   overviewEvents: TimelineOverviewEvent[];
+  overviewAutomationRanges: TimelineOverviewAutomationRange[];
+  selectedAutomationRangeId: string | null;
   overviewPlayheadX: number;
   audioAnalysis: AudioAnalysisSummary | null;
   audioWaveformPoints: string;
@@ -42,12 +46,25 @@ interface TimelineCueEventsPanelProps {
   onPlay: () => void | Promise<void>;
   onSeekRatio: (ratio: number) => void;
   onMoveEventRatio: (eventId: number, ratio: number) => void | Promise<void>;
+  onSelectAutomationRange: (range: TimelineOverviewAutomationRange) => void;
+  onMoveAutomationRangeRatio: (range: TimelineOverviewAutomationRange, ratio: number) => void | Promise<void>;
+  onResizeAutomationRangeRatio: (
+    range: TimelineOverviewAutomationRange,
+    edge: "start" | "end",
+    ratio: number,
+  ) => void | Promise<void>;
+  onMoveAutomationKeyframeRatio: (
+    range: TimelineOverviewAutomationRange,
+    keyframeIndex: number,
+    ratio: number,
+  ) => void | Promise<void>;
   onAnalyzeAudio: () => void | Promise<void>;
   onClearAudio: () => void | Promise<void>;
   onApplyAudioBpm: () => void | Promise<void>;
   onSnapMode: (mode: TimelineSnapMode) => void;
   onGridMs: (value: number) => void;
   onSnapDrafts: () => void;
+  onSnapItems: () => void | Promise<void>;
   onSelectedCueId: (cueId: number) => void;
   onEventTimeMs: (timeMs: number) => void;
   onTrack: (track: TimelineTrackKind) => void;
@@ -63,9 +80,24 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
     <>
       <div class="panelHeader">
         <h2>Timeline</h2>
-        <span>
-          {props.positionMs} / {props.durationMs} ms
-        </span>
+        <div class="timelineHeaderMeta" aria-label="Timeline summary">
+          <span>
+            <small>Cue</small>
+            <strong>{props.eventRows.length}</strong>
+          </span>
+          <span>
+            <small>Light</small>
+            <strong>{props.lightingAutomationCount}</strong>
+          </span>
+          <span>
+            <small>Video</small>
+            <strong>{props.videoAutomationCount}</strong>
+          </span>
+          <span>
+            <small>Time</small>
+            <strong>{props.positionMs}/{props.durationMs}ms</strong>
+          </span>
+        </div>
       </div>
       <div class="timelineTransport">
         <button onClick={() => void props.onSeek(0)}>|&lt;</button>
@@ -85,10 +117,18 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
       />
       <TimelineOverview
         events={props.overviewEvents}
+        automationRanges={props.overviewAutomationRanges}
+        selectedRangeId={props.selectedAutomationRangeId}
         playheadX={props.overviewPlayheadX}
         onSeekRatio={props.onSeekRatio}
         onSeekTime={(timeMs) => void props.onSeek(timeMs)}
+        onSelectAutomationRange={props.onSelectAutomationRange}
         onMoveEventRatio={(eventId, ratio) => void props.onMoveEventRatio(eventId, ratio)}
+        onMoveAutomationRangeRatio={(range, ratio) => void props.onMoveAutomationRangeRatio(range, ratio)}
+        onResizeAutomationRangeRatio={(range, edge, ratio) => void props.onResizeAutomationRangeRatio(range, edge, ratio)}
+        onMoveAutomationKeyframeRatio={(range, keyframeIndex, ratio) =>
+          void props.onMoveAutomationKeyframeRatio(range, keyframeIndex, ratio)
+        }
       />
       <div class="audioAnalysisPanel">
         <div class="panelHeader">
@@ -146,6 +186,15 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         </label>
         <button onClick={props.onSnapDrafts} disabled={props.snapMode === "Off"}>
           Snap Times
+        </button>
+        <button
+          onClick={() => void props.onSnapItems()}
+          disabled={
+            props.snapMode === "Off" ||
+            (props.eventRows.length + props.lightingAutomationCount + props.videoAutomationCount === 0)
+          }
+        >
+          Snap Items
         </button>
       </div>
       <div class="timelineForm">

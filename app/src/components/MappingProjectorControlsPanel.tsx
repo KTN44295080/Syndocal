@@ -11,6 +11,8 @@ import {
   outputAspectRatio,
   resetVideoOutputCornerOffsets,
   resetVideoOutputLensKeystone,
+  resetVideoOutputPose,
+  resetVideoOutputStagePosition,
   resetVideoOutputWarp,
   videoOutputAspectPresets,
   videoOutputAspectModes,
@@ -178,6 +180,12 @@ export function MappingProjectorControlsPanel(props: MappingProjectorControlsPan
         <div class="mappingProjectorPresetGrid">
           <button onClick={() => void props.onSetMapping(props.output.id, defaultVideoOutputMapping)}>
             Reset
+          </button>
+          <button onClick={() => void props.onSetMapping(props.output.id, resetVideoOutputStagePosition(props.output.mapping))}>
+            Reset Stage
+          </button>
+          <button onClick={() => void props.onSetMapping(props.output.id, resetVideoOutputPose(props.output.mapping))}>
+            Reset Pose
           </button>
           <button onClick={() => void props.onSetMapping(props.output.id, resetVideoOutputWarp(props.output.mapping))}>
             Clear Warp

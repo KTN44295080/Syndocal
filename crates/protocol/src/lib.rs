@@ -590,26 +590,84 @@ impl Default for VideoOutputMapping {
 
 pub fn canonical_video_output_mapping_field(field: &str) -> Option<&'static str> {
     match normalized_video_output_mapping_field_name(field).as_str() {
-        "stagex" | "stageposx" | "stagepositionx" | "sx" => Some("stage_x"),
-        "stagey" | "stageposy" | "stagepositiony" | "sy" => Some("stage_y"),
-        "stagez" | "stageposz" | "stagepositionz" | "sz" => Some("stage_z"),
-        "offsetx" | "x" => Some("offset_x"),
-        "offsety" | "y" => Some("offset_y"),
-        "scalex" | "widthscale" => Some("scale_x"),
-        "scaley" | "heightscale" => Some("scale_y"),
-        "rotation" | "rotationdeg" | "angle" => Some("rotation_deg"),
-        "aspect" | "aspectratio" | "ratio" => Some("aspect_ratio"),
-        "lens" | "lensdistortion" | "distortion" => Some("lens_distortion"),
-        "keystonex" | "keyx" | "keyh" | "hkeystone" => Some("keystone_x"),
-        "keystoney" | "keyy" | "keyv" | "vkeystone" => Some("keystone_y"),
-        "cornertopleftx" | "tlx" => Some("corner_top_left_x"),
-        "cornertoplefty" | "tly" => Some("corner_top_left_y"),
-        "cornertoprightx" | "trx" => Some("corner_top_right_x"),
-        "cornertoprighty" | "try" => Some("corner_top_right_y"),
-        "cornerbottomrightx" | "brx" => Some("corner_bottom_right_x"),
-        "cornerbottomrighty" | "bry" => Some("corner_bottom_right_y"),
-        "cornerbottomleftx" | "blx" => Some("corner_bottom_left_x"),
-        "cornerbottomlefty" | "bly" => Some("corner_bottom_left_y"),
+        "stagex" | "stageposx" | "stagepositionx" | "stagelocx" | "stagelocationx" | "sx" => {
+            Some("stage_x")
+        }
+        "stagey" | "stageposy" | "stagepositiony" | "stagelocy" | "stagelocationy" | "sy" => {
+            Some("stage_y")
+        }
+        "stagez" | "stageposz" | "stagepositionz" | "stagelocz" | "stagelocationz" | "depth"
+        | "sz" => Some("stage_z"),
+        "offsetx" | "imagex" | "screenx" | "shiftx" | "translatex" | "positionx" | "posx" | "x" => {
+            Some("offset_x")
+        }
+        "offsety" | "imagey" | "screeny" | "shifty" | "translatey" | "positiony" | "posy" | "y" => {
+            Some("offset_y")
+        }
+        "scalex" | "widthscale" | "horizontalscale" | "stretchx" | "sizex" | "width" | "w" => {
+            Some("scale_x")
+        }
+        "scaley" | "heightscale" | "verticalscale" | "stretchy" | "sizey" | "height" | "h" => {
+            Some("scale_y")
+        }
+        "rotation" | "rotationdeg" | "rotate" | "rot" | "angle" | "angledeg" => {
+            Some("rotation_deg")
+        }
+        "aspect" | "aspectratio" | "ratio" | "outputaspect" | "outputratio" | "projectoraspect"
+        | "projectorratio" | "screenaspect" | "screenratio" => Some("aspect_ratio"),
+        "lens"
+        | "lensdistortion"
+        | "distortion"
+        | "barrel"
+        | "barreldistortion"
+        | "pincushion"
+        | "pincushiondistortion"
+        | "lenswarp"
+        | "warplens" => Some("lens_distortion"),
+        "keystonex"
+        | "keystoneh"
+        | "keyx"
+        | "keyh"
+        | "hkeystone"
+        | "horizontalkeystone"
+        | "keystonehorizontal"
+        | "perspectivex"
+        | "perspectiveh"
+        | "horizontalperspective" => Some("keystone_x"),
+        "keystoney"
+        | "keystonev"
+        | "keyy"
+        | "keyv"
+        | "vkeystone"
+        | "verticalkeystone"
+        | "keystonevertical"
+        | "perspectivey"
+        | "perspectivev"
+        | "verticalperspective" => Some("keystone_y"),
+        "cornertopleftx" | "topleftx" | "upperleftx" | "lefttopx" | "tlx" | "ulx" => {
+            Some("corner_top_left_x")
+        }
+        "cornertoplefty" | "toplefty" | "upperlefty" | "lefttopy" | "tly" | "uly" => {
+            Some("corner_top_left_y")
+        }
+        "cornertoprightx" | "toprightx" | "upperrightx" | "righttopx" | "trx" | "urx" => {
+            Some("corner_top_right_x")
+        }
+        "cornertoprighty" | "toprighty" | "upperrighty" | "righttopy" | "try" | "ury" => {
+            Some("corner_top_right_y")
+        }
+        "cornerbottomrightx" | "bottomrightx" | "lowerrightx" | "rightbottomx" | "brx" | "lrx" => {
+            Some("corner_bottom_right_x")
+        }
+        "cornerbottomrighty" | "bottomrighty" | "lowerrighty" | "rightbottomy" | "bry" | "lry" => {
+            Some("corner_bottom_right_y")
+        }
+        "cornerbottomleftx" | "bottomleftx" | "lowerleftx" | "leftbottomx" | "blx" | "llx" => {
+            Some("corner_bottom_left_x")
+        }
+        "cornerbottomlefty" | "bottomlefty" | "lowerlefty" | "leftbottomy" | "bly" | "lly" => {
+            Some("corner_bottom_left_y")
+        }
         _ => None,
     }
 }
@@ -1662,8 +1720,40 @@ mod tests {
             Some("keystone_x")
         );
         assert_eq!(
+            canonical_video_output_mapping_field("horizontal keystone"),
+            Some("keystone_x")
+        );
+        assert_eq!(
+            canonical_video_output_mapping_field("vertical perspective"),
+            Some("keystone_y")
+        );
+        assert_eq!(
+            canonical_video_output_mapping_field("projector ratio"),
+            Some("aspect_ratio")
+        );
+        assert_eq!(
+            canonical_video_output_mapping_field("barrel distortion"),
+            Some("lens_distortion")
+        );
+        assert_eq!(
+            canonical_video_output_mapping_field("rotate"),
+            Some("rotation_deg")
+        );
+        assert_eq!(
+            canonical_video_output_mapping_field("top left x"),
+            Some("corner_top_left_x")
+        );
+        assert_eq!(
             canonical_video_output_mapping_field("corner_top_left_y"),
             Some("corner_top_left_y")
+        );
+        assert_eq!(
+            canonical_video_output_mapping_field("stage location z"),
+            Some("stage_z")
+        );
+        assert_eq!(
+            canonical_video_output_mapping_field("position x"),
+            Some("offset_x")
         );
         assert_eq!(canonical_video_output_mapping_field("unknown"), None);
     }
@@ -1673,12 +1763,27 @@ mod tests {
         let mut mapping = VideoOutputMapping::default();
         set_video_output_mapping_field_value(&mut mapping, "key y", -0.25).unwrap();
         set_video_output_mapping_field_value(&mut mapping, "stage_position_x", 3.5).unwrap();
+        set_video_output_mapping_field_value(&mut mapping, "screen x", 0.125).unwrap();
+        set_video_output_mapping_field_value(&mut mapping, "projector ratio", 16.0 / 9.0).unwrap();
+        set_video_output_mapping_field_value(&mut mapping, "barrel", -0.1).unwrap();
 
         assert_eq!(
             video_output_mapping_field_value(&mapping, "keystone_y"),
             Some(-0.25)
         );
         assert_eq!(video_output_mapping_field_value(&mapping, "sx"), Some(3.5));
+        assert_eq!(
+            video_output_mapping_field_value(&mapping, "offset_x"),
+            Some(0.125)
+        );
+        assert_eq!(
+            video_output_mapping_field_value(&mapping, "aspect_ratio"),
+            Some(16.0 / 9.0)
+        );
+        assert_eq!(
+            video_output_mapping_field_value(&mapping, "lens distortion"),
+            Some(-0.1)
+        );
         assert!(set_video_output_mapping_field_value(&mut mapping, "not a field", 1.0).is_err());
     }
 }

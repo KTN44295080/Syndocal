@@ -39,7 +39,6 @@ use protocol::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
-#[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
 use tauri::Emitter;
 use tauri::{Manager, State};
 
@@ -89,7 +88,6 @@ const TELEMETRY_TICK_JITTER_P99_TARGET_US: u64 = 1_000;
 const TELEMETRY_COMMAND_QUEUE_P99_TARGET_US: u64 = 1_000;
 const TELEMETRY_COMMAND_TO_DMX_P99_TARGET_US: u64 = 5_000;
 const TELEMETRY_DMX_SEND_INTERVAL_TOLERANCE_US: u64 = 1_000;
-#[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
 const OPEN_PROJECT_EVENT: &str = "rayard://open-project";
 
 fn validate_app_name(file_label: &str, app: &str) -> Result<(), String> {
@@ -198,12 +196,27 @@ struct EngineTelemetryReport {
     telemetry: EngineTelemetry,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 struct Phase1SmokeReport {
     path: String,
     cue_id: CueId,
     cue_label: String,
     active_cue_id: Option<CueId>,
+    timeline_event_count: usize,
+    timeline_automation_count: usize,
+    timeline_video_automation_count: usize,
+    timeline_duration_ms: u64,
+    timeline_probe_ms: u64,
+    timeline_probe_dimmer_byte: u8,
+    timeline_probe_video_opacity: Option<f32>,
+    dmx_output_count: usize,
+    enabled_dmx_output_count: usize,
+    dmx_preview_universe_count: usize,
+    primary_output_label: String,
+    video_layer_count: usize,
+    video_layer_label: Option<String>,
+    video_layer_playing: bool,
+    video_layer_opacity: Option<f32>,
     first_8: Vec<u8>,
     expected_first_8: Vec<u8>,
     non_zero_first_8: usize,
@@ -2939,6 +2952,35 @@ fn set_timeline_video_automation(
 }
 
 #[tauri::command]
+fn set_timeline_automation_enabled(
+    state: State<'_, AppState>,
+    automation_id: AutomationId,
+    enabled: bool,
+) -> Result<(), String> {
+    let snapshot = state.engine.snapshot();
+    let found = snapshot
+        .timeline
+        .automations
+        .iter()
+        .any(|automation| automation.id == automation_id)
+        || snapshot
+            .timeline
+            .video_automations
+            .iter()
+            .any(|automation| automation.id == automation_id);
+    if !found {
+        return Err(format!("Automation {automation_id} was not found"));
+    }
+    state
+        .engine
+        .send(EngineCommand::SetTimelineAutomationEnabled {
+            automation_id,
+            enabled,
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn remove_timeline_automation(
     state: State<'_, AppState>,
     automation_id: AutomationId,
@@ -4600,12 +4642,97 @@ fn run_phase1_smoke(state: State<'_, AppState>) -> Result<Phase1SmokeReport, Str
 
     let first_8 = phase1_smoke_first_8(&snapshot);
     let non_zero_first_8 = first_8.iter().filter(|value| **value != 0).count();
-    let passed = snapshot.active_cue_id == Some(cue.id) && first_8 == PHASE1_SMOKE_EXPECTED_FIRST_8;
+    let cue_video_layer = snapshot.video.layers.first().cloned();
+    let video_layer_count = snapshot.video.layers.len();
+    let video_layer_label = cue_video_layer.as_ref().map(|layer| layer.label.clone());
+    let video_layer_playing = cue_video_layer
+        .as_ref()
+        .is_some_and(|layer| layer.state.playing);
+    let video_layer_opacity = cue_video_layer.as_ref().map(|layer| layer.state.opacity);
+    let timeline_event_count = snapshot.timeline.events.len();
+    let timeline_automation_count = snapshot.timeline.automations.len();
+    let timeline_video_automation_count = snapshot.timeline.video_automations.len();
+    let timeline_duration_ms = snapshot.timeline.duration_ms;
+    let dmx_output_count = snapshot.dmx_outputs.len();
+    let enabled_dmx_output_count = snapshot
+        .dmx_outputs
+        .iter()
+        .filter(|output| output.enabled)
+        .count();
+    let dmx_preview_universe_count = snapshot.dmx_previews.len();
+    let primary_output = snapshot
+        .dmx_outputs
+        .iter()
+        .find(|output| output.enabled)
+        .or_else(|| snapshot.dmx_outputs.first())
+        .unwrap_or(&snapshot.output);
+    let primary_output_label = dmx_output_route_label(primary_output);
+
+    let timeline_probe_ms = 2000;
+    state
+        .engine
+        .send(EngineCommand::SeekTimeline(timeline_probe_ms))
+        .map_err(|error| error.to_string())?;
+    let mut probe_snapshot = state.engine.snapshot();
+    for _ in 0..30 {
+        if probe_snapshot.timeline.position_ms == timeline_probe_ms
+            && phase1_smoke_first_8(&probe_snapshot).first() == Some(&128)
+            && probe_snapshot
+                .video
+                .layers
+                .first()
+                .map(|layer| (0.49..=0.51).contains(&layer.state.opacity))
+                == Some(true)
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+        probe_snapshot = state.engine.snapshot();
+    }
+    let timeline_probe_dimmer_byte = phase1_smoke_first_8(&probe_snapshot)
+        .first()
+        .copied()
+        .unwrap_or(0);
+    let timeline_probe_video_opacity = probe_snapshot
+        .video
+        .layers
+        .first()
+        .map(|layer| layer.state.opacity);
+
+    let passed = snapshot.active_cue_id == Some(cue.id)
+        && first_8 == PHASE1_SMOKE_EXPECTED_FIRST_8
+        && timeline_event_count >= 2
+        && timeline_automation_count >= 1
+        && timeline_video_automation_count >= 1
+        && timeline_duration_ms >= 4000
+        && dmx_output_count >= 1
+        && enabled_dmx_output_count >= 1
+        && dmx_preview_universe_count >= 1
+        && video_layer_count >= 1
+        && video_layer_playing
+        && video_layer_opacity.is_some_and(|opacity| (opacity - 1.0).abs() < 0.001)
+        && timeline_probe_dimmer_byte == 128
+        && timeline_probe_video_opacity.is_some_and(|opacity| (0.49..=0.51).contains(&opacity));
     Ok(Phase1SmokeReport {
         path: result.path,
         cue_id: cue.id,
         cue_label: cue.label,
         active_cue_id: snapshot.active_cue_id,
+        timeline_event_count,
+        timeline_automation_count,
+        timeline_video_automation_count,
+        timeline_duration_ms,
+        timeline_probe_ms,
+        timeline_probe_dimmer_byte,
+        timeline_probe_video_opacity,
+        dmx_output_count,
+        enabled_dmx_output_count,
+        dmx_preview_universe_count,
+        primary_output_label,
+        video_layer_count,
+        video_layer_label,
+        video_layer_playing,
+        video_layer_opacity,
         first_8,
         expected_first_8: PHASE1_SMOKE_EXPECTED_FIRST_8.to_vec(),
         non_zero_first_8,
@@ -4745,10 +4872,40 @@ fn is_rayard_fixture_preset_path(path: &Path) -> bool {
 }
 
 fn startup_project_path_from_args(args: impl IntoIterator<Item = OsString>) -> Option<PathBuf> {
+    project_paths_from_args(args, None).into_iter().next()
+}
+
+fn project_paths_from_single_instance_args(args: Vec<String>, cwd: &str) -> Vec<String> {
+    let cwd_path = (!cwd.trim().is_empty()).then(|| PathBuf::from(cwd));
+    project_paths_from_args(
+        args.into_iter().map(OsString::from),
+        cwd_path.as_deref(),
+    )
+    .into_iter()
+    .map(|path| path.to_string_lossy().to_string())
+    .collect()
+}
+
+fn project_paths_from_args(
+    args: impl IntoIterator<Item = OsString>,
+    cwd: Option<&Path>,
+) -> Vec<PathBuf> {
     args.into_iter()
         .skip(1)
         .map(PathBuf::from)
-        .find(|path| is_rayard_project_path(path))
+        .map(|path| resolve_project_arg_path(path, cwd))
+        .filter(|path| is_rayard_project_path(path))
+        .collect()
+}
+
+fn resolve_project_arg_path(path: PathBuf, cwd: Option<&Path>) -> PathBuf {
+    if path.is_absolute() {
+        path
+    } else if let Some(cwd) = cwd {
+        cwd.join(path)
+    } else {
+        path
+    }
 }
 
 fn is_rayard_project_path(path: &Path) -> bool {
@@ -11865,6 +12022,42 @@ f 1 2 3
     }
 
     #[test]
+    fn dmx_route_test_frame_validates_all_routes_before_sending_any_frame() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        receiver
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let valid_port = receiver.local_addr().unwrap().port();
+        let routes = vec![
+            DmxOutputConfig {
+                enabled: true,
+                protocol: DmxOutputProtocol::ArtNet,
+                target_ip: "127.0.0.1".to_string(),
+                port: valid_port,
+                universe: 1,
+                serial_port: String::new(),
+                serial_baud_rate: 57_600,
+            },
+            DmxOutputConfig {
+                enabled: true,
+                protocol: DmxOutputProtocol::ArtNet,
+                target_ip: " ".to_string(),
+                port: 6454,
+                universe: 2,
+                serial_port: String::new(),
+                serial_baud_rate: 57_600,
+            },
+        ];
+        let frame = build_dmx_test_frame(1, 1, 255).unwrap();
+
+        let error = send_dmx_route_test_frames(&routes, 1, 1, 255, &frame).unwrap_err();
+
+        assert!(error.contains("target IP"));
+        let mut buffer = [0u8; 600];
+        assert!(receiver.recv_from(&mut buffer).is_err());
+    }
+
+    #[test]
     fn dmx_route_test_frame_requires_enabled_route() {
         let frame = build_dmx_test_frame(1, 1, 255).unwrap();
         let routes = vec![DmxOutputConfig {
@@ -12652,6 +12845,33 @@ f 1 2 3
         ];
 
         assert_eq!(startup_project_path_from_args(args), None);
+    }
+
+    #[test]
+    fn single_instance_project_paths_collect_ry_arguments() {
+        let args = vec![
+            "rayard.exe".to_string(),
+            "--ignored".to_string(),
+            "C:/shows/opening.RY".to_string(),
+            "C:/shows/notes.txt".to_string(),
+            "C:/shows/backup.ry".to_string(),
+        ];
+
+        let paths = project_paths_from_single_instance_args(args, "");
+
+        assert_eq!(paths.len(), 2);
+        assert!(paths[0].ends_with("opening.RY"));
+        assert!(paths[1].ends_with("backup.ry"));
+    }
+
+    #[test]
+    fn single_instance_project_paths_resolve_relative_arguments_with_cwd() {
+        let cwd = PathBuf::from("C:/shows");
+        let args = vec!["rayard.exe".to_string(), "looks/strobe.ry".to_string()];
+
+        let paths = project_paths_from_single_instance_args(args, &cwd.to_string_lossy());
+
+        assert_eq!(paths, vec![cwd.join("looks/strobe.ry").to_string_lossy()]);
     }
 
     #[test]
@@ -15488,6 +15708,24 @@ fn main() {
             pending_project_open_paths: Mutex::new(Vec::new()),
             current_project_path: Mutex::new(None),
         })
+        .plugin(tauri_plugin_single_instance::init(|app_handle, args, cwd| {
+            let project_paths = project_paths_from_single_instance_args(args, &cwd);
+            if project_paths.is_empty() {
+                return;
+            }
+            if let Ok(mut pending_paths) = app_handle
+                .state::<AppState>()
+                .pending_project_open_paths
+                .lock()
+            {
+                pending_paths.extend(project_paths.clone());
+            }
+            let _ = app_handle.emit(OPEN_PROJECT_EVENT, project_paths);
+            if let Some(window) = app_handle.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .invoke_handler(tauri::generate_handler![
             select_gdtf_file,
             select_video_source_file,
@@ -15574,6 +15812,7 @@ fn main() {
             set_timeline_automation,
             add_timeline_video_automation,
             set_timeline_video_automation,
+            set_timeline_automation_enabled,
             remove_timeline_automation,
             set_timeline_playing,
             seek_timeline,

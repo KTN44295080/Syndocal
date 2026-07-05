@@ -1,4 +1,4 @@
-import { For } from "solid-js";
+import { createEffect, For } from "solid-js";
 import type {
   AutomationInterpolation,
   TimelineVideoAutomationSummary,
@@ -54,6 +54,9 @@ interface VideoTimelineAutomationPanelProps {
   startValue: number;
   endValue: number;
   automations: VideoTimelineAutomationRow[];
+  selectedAutomationId: number | null;
+  rowScope: "all" | "layer";
+  allRowsCount: number;
   draftForAutomation: (automation: VideoTimelineAutomationRow) => TimelineVideoAutomationDraft;
   onSetLayerId: (layerId: number) => void;
   onSetParam: (param: VideoParam) => void;
@@ -62,16 +65,56 @@ interface VideoTimelineAutomationPanelProps {
   onSetEndMs: (endMs: number) => void;
   onSetStartValue: (startValue: number) => void;
   onSetEndValue: (endValue: number) => void;
+  onRowScope: (scope: "all" | "layer") => void;
+  onUsePlayheadRange: () => void;
   onAddAutomation: () => void | Promise<void>;
   onUpdateAutomationDraft: (
     automation: VideoTimelineAutomationRow,
     patch: Partial<TimelineVideoAutomationDraft>,
   ) => void;
+  onAlignDraftToPlayhead: (automation: VideoTimelineAutomationRow) => void;
+  onAddKeyframeAtPlayhead: (automation: VideoTimelineAutomationRow) => void | Promise<void>;
+  onRemoveKeyframeAtPlayhead: (automation: VideoTimelineAutomationRow) => void | Promise<void>;
+  onRemoveKeyframe: (automation: VideoTimelineAutomationRow, keyframeIndex: number) => void | Promise<void>;
+  onSetKeyframeInterpolation: (
+    automation: VideoTimelineAutomationRow,
+    keyframeIndex: number,
+    interpolation: AutomationInterpolation,
+  ) => void | Promise<void>;
+  onSetKeyframeValue: (
+    automation: VideoTimelineAutomationRow,
+    keyframeIndex: number,
+    value: number,
+  ) => void | Promise<void>;
+  onSetAutomationEnabled: (automation: VideoTimelineAutomationRow, enabled: boolean) => void | Promise<void>;
+  onSetRowsEnabled: (automations: VideoTimelineAutomationRow[], enabled: boolean) => void | Promise<void>;
+  onSeekKeyframe: (timeMs: number) => void | Promise<void>;
   onSaveAutomation: (automation: VideoTimelineAutomationRow) => void | Promise<void>;
   onRemoveAutomation: (automationId: number) => void | Promise<void>;
 }
 
+const formatVideoKeyValue = (value: number) => {
+  if (Math.abs(value) >= 100 || Number.isInteger(value)) {
+    return value.toFixed(0);
+  }
+  return value.toFixed(2);
+};
+
 export function VideoTimelineAutomationPanel(props: VideoTimelineAutomationPanelProps) {
+  let automationListElement: HTMLDivElement | undefined;
+  const enabledRowCount = () => props.automations.filter((automation) => automation.enabled).length;
+  const disabledRowCount = () => props.automations.length - enabledRowCount();
+
+  createEffect(() => {
+    const selectedAutomationId = props.selectedAutomationId;
+    if (selectedAutomationId === null) {
+      return;
+    }
+    automationListElement
+      ?.querySelector(`[data-automation-id="${selectedAutomationId}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  });
+
   return (
     <div class="videoAutomationForm">
       <h3>Timeline Automation</h3>
@@ -132,23 +175,120 @@ export function VideoTimelineAutomationPanel(props: VideoTimelineAutomationPanel
           />
         </label>
       </div>
-      <button class="primary" onClick={() => void props.onAddAutomation()} disabled={props.layers.length === 0}>
-        Add Video Automation
-      </button>
-      <div class="timelineList">
+      <div class="buttonRow timelineAutomationActions">
+        <button onClick={props.onUsePlayheadRange}>Playhead</button>
+        <button class="primary" onClick={() => void props.onAddAutomation()} disabled={props.layers.length === 0}>
+          Add Video
+        </button>
+      </div>
+      <div class="timelineAutomationBatch">
+        <span>
+          {enabledRowCount()}/{props.automations.length} on, {props.automations.length}/{props.allRowsCount} shown
+        </span>
+        <select
+          class="timelineAutomationScope"
+          aria-label="Video automation rows"
+          value={props.rowScope}
+          onInput={(event) => props.onRowScope(event.currentTarget.value as "all" | "layer")}
+        >
+          <option value="all">All</option>
+          <option value="layer">Layer</option>
+        </select>
+        <div class="buttonRow timelineAutomationBatchActions">
+          <button
+            title="Enable every video automation row"
+            disabled={props.automations.length === 0 || disabledRowCount() === 0}
+            onClick={() => void props.onSetRowsEnabled(props.automations, true)}
+          >
+            All On
+          </button>
+          <button
+            title="Disable every video automation row"
+            disabled={props.automations.length === 0 || enabledRowCount() === 0}
+            onClick={() => void props.onSetRowsEnabled(props.automations, false)}
+          >
+            Mute
+          </button>
+        </div>
+      </div>
+      <div class="timelineList" ref={(element) => { automationListElement = element; }}>
         <For each={props.automations}>
           {(automation) => {
             const draft = () => props.draftForAutomation(automation);
             return (
-              <div class="timelineItem timelineAutomationItem">
-                <div>
-                  <strong>
-                    {automation.layer_label} / {automation.param}
-                  </strong>
-                  <span>
-                    {automation.keyframes[0]?.time_ms ?? 0}-
-                    {automation.keyframes[automation.keyframes.length - 1]?.time_ms ?? 0} ms / {automation.keyframes.length} keys
-                  </span>
+              <div
+                class="timelineItem timelineAutomationItem"
+                data-automation-id={automation.id}
+                classList={{
+                  disabled: !automation.enabled,
+                  selected: props.selectedAutomationId === automation.id,
+                }}
+              >
+                <div class="timelineAutomationTitle">
+                  <div>
+                    <strong>
+                      {automation.layer_label} / {automation.param}
+                    </strong>
+                    <span>
+                      {automation.keyframes[0]?.time_ms ?? 0}-
+                      {automation.keyframes[automation.keyframes.length - 1]?.time_ms ?? 0} ms / {automation.keyframes.length} keys
+                    </span>
+                  </div>
+                  <label class="timelineAutomationEnabled">
+                    <input
+                      type="checkbox"
+                      checked={automation.enabled}
+                      onChange={(event) => void props.onSetAutomationEnabled(automation, event.currentTarget.checked)}
+                    />
+                    Enabled
+                  </label>
+                </div>
+                <div class="timelineKeyframeStrip" aria-label={`${automation.layer_label} ${automation.param} keyframes`}>
+                  <For each={automation.keyframes}>
+                    {(keyframe, index) => (
+                      <div class="timelineKeyframeChip">
+                        <button
+                          class="timelineKeyframeSeek"
+                          title={`Seek to key ${index() + 1}`}
+                          onClick={() => void props.onSeekKeyframe(keyframe.time_ms)}
+                        >
+                          <strong>{keyframe.time_ms}ms</strong>
+                        </button>
+                        <input
+                          class="timelineKeyframeValue"
+                          type="number"
+                          step="0.01"
+                          aria-label={`Key ${index() + 1} value`}
+                          value={formatVideoKeyValue(keyframe.value)}
+                          onChange={(event) => void props.onSetKeyframeValue(automation, index(), Number(event.currentTarget.value))}
+                        />
+                        <select
+                          class="timelineKeyframeCurve"
+                          aria-label={`Key ${index() + 1} interpolation`}
+                          value={keyframe.interpolation}
+                          onInput={(event) =>
+                            void props.onSetKeyframeInterpolation(
+                              automation,
+                              index(),
+                              event.currentTarget.value as AutomationInterpolation,
+                            )
+                          }
+                        >
+                          <For each={interpolationOptions}>{(option) => <option value={option}>{option}</option>}</For>
+                        </select>
+                        <button
+                          class="timelineKeyframeDelete"
+                          type="button"
+                          aria-label={`Remove key ${index() + 1}`}
+                          title={`Remove key ${index() + 1}`}
+                          disabled={automation.keyframes.length <= 2}
+                          onClick={() => void props.onRemoveKeyframe(automation, index())}
+                        >
+                          x
+                        </button>
+                      </div>
+                    )}
+                  </For>
                 </div>
                 <div class="automationEditGrid">
                   <label>
@@ -244,6 +384,15 @@ export function VideoTimelineAutomationPanel(props: VideoTimelineAutomationPanel
                   </label>
                 </div>
                 <div class="buttonRow">
+                  <button title="Add a keyframe at the current playhead" onClick={() => void props.onAddKeyframeAtPlayhead(automation)}>
+                    Key
+                  </button>
+                  <button title="Remove the keyframe nearest to the current playhead" onClick={() => void props.onRemoveKeyframeAtPlayhead(automation)}>
+                    Del Key
+                  </button>
+                  <button title="Move draft start to the current playhead" onClick={() => props.onAlignDraftToPlayhead(automation)}>
+                    Align
+                  </button>
                   <button onClick={() => void props.onSaveAutomation(automation)}>Save</button>
                   <button onClick={() => void props.onRemoveAutomation(automation.id)}>Remove</button>
                 </div>

@@ -105,6 +105,14 @@ const resizeLimitRange = (min: number, max: number, delta: number) => {
 };
 
 export function PositionControlPanel(props: PositionControlPanelProps) {
+  const panPercent = () => Math.round((props.controls.panValue / 65_535) * 1000) / 10;
+  const tiltPercent = () => Math.round((props.controls.tiltValue / 65_535) * 1000) / 10;
+  const limitSpanLabel = () =>
+    `${props.formatShortDmxPercent(props.normalizedLimits.pan_min)}-${props.formatShortDmxPercent(
+      props.normalizedLimits.pan_max,
+    )} / ${props.formatShortDmxPercent(props.normalizedLimits.tilt_min)}-${props.formatShortDmxPercent(
+      props.normalizedLimits.tilt_max,
+    )}`;
   const favoriteMatchesCurrent = (favorite: PositionFavorite) =>
     Math.abs(clampDmxLimit(favorite.pan) - clampDmxLimit(props.controls.panValue)) <= favoriteMatchTolerance &&
     Math.abs(clampDmxLimit(favorite.tilt) - clampDmxLimit(props.controls.tiltValue)) <= favoriteMatchTolerance;
@@ -159,11 +167,28 @@ export function PositionControlPanel(props: PositionControlPanelProps) {
         <div>
           <strong>Position</strong>
           <span>
-            Pan {Math.round((props.controls.panValue / 65535) * 1000) / 10}% / Tilt{" "}
-            {Math.round((props.controls.tiltValue / 65535) * 1000) / 10}%
+            Pan {panPercent()}% / Tilt {tiltPercent()}%
           </span>
         </div>
         <span>{props.controls.pan} / {props.controls.tilt}</span>
+      </div>
+      <div class="visualReadoutStrip positionReadoutStrip">
+        <span>
+          <small>Pan</small>
+          <strong>{panPercent()}%</strong>
+        </span>
+        <span>
+          <small>Tilt</small>
+          <strong>{tiltPercent()}%</strong>
+        </span>
+        <span>
+          <small>Nudge</small>
+          <strong>{props.formatShortDmxPercent(props.nudgeAmount)}</strong>
+        </span>
+        <span title={limitSpanLabel()}>
+          <small>Limits</small>
+          <strong>{props.canEditLimits ? limitSpanLabel() : "No fixture"}</strong>
+        </span>
       </div>
       <div class="positionNudgeGrid">
         <span />

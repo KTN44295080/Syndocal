@@ -271,6 +271,10 @@ pub enum EngineCommand {
         param: VideoParam,
         keyframes: Vec<VideoAutomationKeyframeSummary>,
     },
+    SetTimelineAutomationEnabled {
+        automation_id: AutomationId,
+        enabled: bool,
+    },
     RemoveTimelineAutomation(AutomationId),
     SetTimelineAudio(Option<AudioAnalysisSummary>),
     SetTimelinePlaying(bool),
@@ -2559,7 +2563,6 @@ impl EngineRuntime {
                     automation.attribute = attribute;
                     automation.track = TimelineTrackKind::Lighting;
                     automation.keyframes = keyframes;
-                    automation.enabled = true;
                     self.last_error = None;
                 }
             }
@@ -2617,8 +2620,34 @@ impl EngineRuntime {
                     automation.param = param;
                     automation.track = TimelineTrackKind::Video;
                     automation.keyframes = keyframes;
-                    automation.enabled = true;
                     self.last_error = None;
+                }
+            }
+            EngineCommand::SetTimelineAutomationEnabled {
+                automation_id,
+                enabled,
+            } => {
+                let mut found = false;
+                if let Some(automation) = self
+                    .timeline_automations
+                    .iter_mut()
+                    .find(|automation| automation.id == automation_id)
+                {
+                    automation.enabled = enabled;
+                    found = true;
+                }
+                if let Some(automation) = self
+                    .timeline_video_automations
+                    .iter_mut()
+                    .find(|automation| automation.id == automation_id)
+                {
+                    automation.enabled = enabled;
+                    found = true;
+                }
+                if found {
+                    self.last_error = None;
+                } else {
+                    self.last_error = Some(format!("Automation {automation_id} was not found"));
                 }
             }
             EngineCommand::RemoveTimelineAutomation(automation_id) => {
@@ -11504,6 +11533,151 @@ mod tests {
     }
 
     #[test]
+    fn set_timeline_automation_enabled_preserves_state_across_lighting_updates() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let fixture_id = engine.allocate_fixture_id();
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id,
+                request: PatchFixtureRequest {
+                    profile_path: "memory://fixture.gdtf".to_string(),
+                    mode_name: Some("Standard".to_string()),
+                    label: "Fixture 1".to_string(),
+                    universe: 0,
+                    address: 1,
+                    group_ids: Vec::new(),
+                    position: Vec3::default(),
+                    rotation: Default::default(),
+                },
+                profile: sample_profile(),
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::AddTimelineAutomation {
+                automation_id: 31,
+                fixture_id,
+                attribute: "Dimmer".to_string(),
+                keyframes: vec![AutomationKeyframeSummary {
+                    time_ms: 0,
+                    value: 1_000,
+                    interpolation: AutomationInterpolation::Step,
+                }],
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SetTimelineAutomationEnabled {
+                automation_id: 31,
+                enabled: false,
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SetTimelineAutomation {
+                automation_id: 31,
+                fixture_id,
+                attribute: "Pan".to_string(),
+                keyframes: vec![AutomationKeyframeSummary {
+                    time_ms: 100,
+                    value: 2_000,
+                    interpolation: AutomationInterpolation::Linear,
+                }],
+            })
+            .unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if snapshot
+                .timeline
+                .automations
+                .first()
+                .map(|automation| automation.attribute.as_str() == "Pan")
+                == Some(true)
+            {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+        }
+
+        let automation = &snapshot.timeline.automations[0];
+        assert_eq!(automation.attribute, "Pan");
+        assert!(!automation.enabled);
+    }
+
+    #[test]
+    fn set_timeline_automation_enabled_preserves_state_across_video_updates() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let layer_id = engine.allocate_video_layer_id();
+        engine
+            .send(EngineCommand::AddVideoLayer {
+                layer_id,
+                label: "Layer 1".to_string(),
+                source: VideoSourceSummary {
+                    kind: protocol::VideoSourceKind::File,
+                    path: Some("memory://clip.mp4".to_string()),
+                    name: None,
+                    codec: Some("H264".to_string()),
+                    metadata: None,
+                },
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::AddTimelineVideoAutomation {
+                automation_id: 32,
+                layer_id,
+                param: VideoParam::Opacity,
+                keyframes: vec![VideoAutomationKeyframeSummary {
+                    time_ms: 0,
+                    value: 1.0,
+                    interpolation: AutomationInterpolation::Step,
+                }],
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SetTimelineAutomationEnabled {
+                automation_id: 32,
+                enabled: false,
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SetTimelineVideoAutomation {
+                automation_id: 32,
+                layer_id,
+                param: VideoParam::Speed,
+                keyframes: vec![VideoAutomationKeyframeSummary {
+                    time_ms: 100,
+                    value: 0.5,
+                    interpolation: AutomationInterpolation::Linear,
+                }],
+            })
+            .unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if snapshot
+                .timeline
+                .video_automations
+                .first()
+                .map(|automation| automation.param == VideoParam::Speed)
+                == Some(true)
+            {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+        }
+
+        let automation = &snapshot.timeline.video_automations[0];
+        assert_eq!(automation.param, VideoParam::Speed);
+        assert!(!automation.enabled);
+    }
+
+    #[test]
     fn timeline_lighting_automation_validates_and_canonicalizes_attribute() {
         let engine = EngineHandle::start(DmxOutputConfig {
             enabled: false,
@@ -19131,6 +19305,90 @@ mod tests {
         assert!(saw_expected_wave);
         assert_eq!(snapshot.dmx_preview[0], 255);
         assert_eq!(snapshot.dmx_preview[9], 0);
+        assert_eq!(snapshot.effects[0].effect_type, EffectKind::PositionWave);
+    }
+
+    #[test]
+    fn position_wave_effect_targets_map_selection_fixture_ids() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let fixture_specs = [
+            ("Map Left", 1, -4.0),
+            ("Map Center", 10, 0.0),
+            ("Map Right", 20, 4.0),
+        ];
+        let mut fixture_ids = Vec::new();
+        for (label, address, x) in fixture_specs {
+            let fixture_id = engine.allocate_fixture_id();
+            fixture_ids.push(fixture_id);
+            engine
+                .send(EngineCommand::PatchFixture {
+                    fixture_id,
+                    request: PatchFixtureRequest {
+                        profile_path: "memory://fixture.gdtf".to_string(),
+                        mode_name: Some("Standard".to_string()),
+                        label: label.to_string(),
+                        universe: 0,
+                        address,
+                        group_ids: Vec::new(),
+                        position: Vec3 { x, y: 0.0, z: 0.0 },
+                        rotation: Default::default(),
+                    },
+                    profile: sample_profile(),
+                })
+                .unwrap();
+        }
+
+        let effect_id = engine.allocate_effect_id();
+        engine
+            .send(EngineCommand::AddPositionWaveEffect {
+                effect_id,
+                request: PositionWaveEffectRequest {
+                    label: "Map Selection Wave".to_string(),
+                    fixture_ids: fixture_ids.clone(),
+                    target_group_ids: Vec::new(),
+                    attribute: "Dimmer".to_string(),
+                    video_targets: Vec::new(),
+                    shape: LfoShape::Square,
+                    origin: Vec3::default(),
+                    direction: Vec3 {
+                        x: 1.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                    speed: 0.0,
+                    wavelength: 8.0,
+                    clock_sync: None,
+                    low: 0,
+                    high: 65_535,
+                    phase: 0.25,
+                    blend_mode: EffectBlendMode::Override,
+                },
+            })
+            .unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if snapshot.dmx_preview[0] == 0
+                && snapshot.dmx_preview[9] == 255
+                && snapshot.dmx_preview[19] == 0
+                && snapshot.effects.iter().any(|effect| effect.id == effect_id)
+            {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+        }
+
+        assert_eq!(snapshot.dmx_preview[0], 0);
+        assert_eq!(snapshot.dmx_preview[9], 255);
+        assert_eq!(snapshot.dmx_preview[19], 0);
+        assert_eq!(snapshot.effects.len(), 1);
+        assert_eq!(snapshot.effects[0].id, effect_id);
+        assert_eq!(snapshot.effects[0].fixture_ids, fixture_ids);
+        assert_eq!(snapshot.effects[0].attribute, "Dimmer");
         assert_eq!(snapshot.effects[0].effect_type, EffectKind::PositionWave);
     }
 

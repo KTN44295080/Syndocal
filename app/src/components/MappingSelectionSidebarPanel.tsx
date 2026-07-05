@@ -76,6 +76,8 @@ interface MappingSelectionSidebarPanelProps {
   onMirrorSelection: (axis: MappingAxis) => MaybePromise;
   onRotateSelection: (degrees: number) => MaybePromise;
   onControlActive: () => void;
+  onUseSelectionAsEffectTarget: () => void;
+  onUseSelectionAsWaveEffectTarget: () => void;
   onSetFixtureTransform: (
     fixture: PatchedFixtureSummary,
     updates: Partial<Pick<PatchedFixtureSummary, "position" | "rotation">>,
@@ -153,6 +155,8 @@ export function MappingSelectionSidebarPanel(props: MappingSelectionSidebarPanel
         onDuplicate={props.onDuplicateSelected}
         onRemove={props.onRemoveSelected}
         onControlActive={props.onControlActive}
+        onUseSelectionAsEffectTarget={props.onUseSelectionAsEffectTarget}
+        onUseSelectionAsWaveEffectTarget={props.onUseSelectionAsWaveEffectTarget}
         onClearSelection={props.onClearSelection}
       />
       <MappingFixtureInspectorPanel

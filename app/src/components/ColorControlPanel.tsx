@@ -83,6 +83,10 @@ const valueKeyboardStep = (event: KeyboardEvent) => {
 };
 
 export function ColorControlPanel(props: ColorControlPanelProps) {
+  const rgbLevelLabel = () =>
+    `${props.formatPercent(props.controls.redValue)} / ${props.formatPercent(props.controls.greenValue)} / ${props.formatPercent(
+      props.controls.blueValue,
+    )}`;
   const colorMatchesCurrent = (color: string) =>
     normalizeColorHex(color) !== "" && normalizeColorHex(color) === normalizeColorHex(props.controls.value);
 
@@ -124,6 +128,24 @@ export function ColorControlPanel(props: ColorControlPanelProps) {
         </div>
         <span title={props.targetLabel}>
           {[props.controls.red, props.controls.green, props.controls.blue, ...props.controls.extras.map((extra) => extra.attribute)].join(" / ")}
+        </span>
+      </div>
+      <div class="visualReadoutStrip colorReadoutStrip">
+        <span class="currentColorReadout">
+          <i style={{ "background-color": props.controls.value }} />
+          <strong>{props.controls.value.toUpperCase()}</strong>
+        </span>
+        <span>
+          <small>Hue</small>
+          <strong>{Math.round(props.hsv.hue)} deg</strong>
+        </span>
+        <span>
+          <small>Sat / Val</small>
+          <strong>{Math.round(props.hsv.saturation * 100)}% / {Math.round(props.hsv.value * 100)}%</strong>
+        </span>
+        <span title={rgbLevelLabel()}>
+          <small>RGB</small>
+          <strong>{rgbLevelLabel()}</strong>
         </span>
       </div>
       <div class="colorPickerRow">

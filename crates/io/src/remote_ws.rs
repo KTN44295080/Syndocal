@@ -49,7 +49,7 @@ const REMOTE_PAGE_HTML: &str = r##"<!doctype html>
     .liveGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px}.liveTile{border:1px solid #242c36;border-radius:7px;background:#121820;padding:9px}.liveTile strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}.liveTile small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#91a0b2;margin-top:2px}
     .backendTile.available{border-color:#247c55}.backendTile.missing{border-color:#a84949}.backendTile.notbuilt{border-color:#75642b}.backendTile span{display:inline-block;margin-top:4px}
     .remoteDmxRoutes{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px}.remoteDmxRoute{display:grid;gap:3px;border:1px solid #242c36;border-radius:7px;background:#121820;padding:8px}.remoteDmxRoute.live{border-color:#247c55}.remoteDmxRoute.off{opacity:.62}.remoteDmxRoute.fail{border-color:#a84949;background:#231519}.remoteDmxRoute strong,.remoteDmxRoute span,.remoteDmxRoute small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.remoteDmxRoute span,.remoteDmxRoute small{color:#91a0b2;font-size:12px}
-    .row{display:grid;grid-template-columns:1fr auto;align-items:center;gap:8px;border:1px solid #242c36;border-radius:7px;background:#121820;padding:8px}.row.active{border-color:#287fca;background:#132236}
+    .row{display:grid;grid-template-columns:1fr auto;align-items:center;gap:8px;border:1px solid #242c36;border-radius:7px;background:#121820;padding:8px}.row.active{border-color:#287fca;background:#132236}.row.selected{border-color:#d8e5f1;box-shadow:inset 3px 0 0 #d8e5f1}
     .videoDeck{display:grid;gap:8px;border:1px solid #242c36;border-radius:7px;background:#121820;padding:9px}.videoDeck.active{border-color:#287fca;background:#132236}.videoDeckHeader{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}.videoDeckHeader strong,.videoDeckHeader span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.videoDeckControls{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}.videoDeckSliders{display:grid;gap:7px}.deckSlider{display:grid;grid-template-columns:70px minmax(0,1fr) 54px;gap:8px;align-items:center;color:#aab6c6}.deckSlider input{width:100%;padding:0}.deckSlider strong{text-align:right;font-size:12px;color:#edf3fb}.loopGrid{display:grid;grid-template-columns:1fr 1fr;gap:7px}.remoteBpmPresetRow{display:grid;grid-template-columns:repeat(auto-fit,minmax(68px,1fr));gap:6px}.remoteBpmPresetRow button{min-height:30px;padding:3px 6px}.remoteBpmPresetRow button.active{border-color:#74d99f;background:#173122}.cuePointRow{display:flex;gap:6px;overflow:auto;padding-bottom:2px}.cuePointRow button{white-space:nowrap}.effectDeck{display:grid;gap:8px;border:1px solid #242c36;border-radius:7px;background:#121820;padding:9px}.effectDeck.active{border-color:#247c55;background:#13271f}.effectDeck.off{opacity:.72}.effectDeckHeader{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}.effectDeckHeader strong,.effectDeckHeader span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.effectDeckChips{display:flex;gap:5px;flex-wrap:wrap}.effectDeckChip{border:1px solid #323b48;border-radius:999px;background:#151b22;color:#aab6c6;padding:3px 7px;font-size:12px}.effectDeckChip.sync{border-color:#5dd64c;color:#c9f4d4}.effectDeckControls{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}.effectDeckControls button{min-height:30px;padding:3px 6px}
     .remoteVideoTimeline{display:grid;gap:4px}.remoteVideoTimelineSurface{display:block;width:100%;min-height:58px;border:1px solid #242c36;border-radius:6px;background:#0b1017;touch-action:none}.remoteVideoTimelineHit{fill:transparent;cursor:crosshair}.remoteVideoTimelineTrack{fill:#151f2a;stroke:#334253;stroke-width:.8}.remoteVideoTimelineLoop{fill:rgba(85,214,106,.26)}.remoteVideoTimelineLoop.off{fill:rgba(150,164,179,.16)}.remoteVideoTimelineCueLine{stroke:var(--remote-cue-color,#4aa8ff);stroke-width:.65;opacity:.72;pointer-events:none}.remoteVideoTimelineCue{fill:var(--remote-cue-color,#4aa8ff);stroke:#0b1017;stroke-width:.8;cursor:pointer}.remoteVideoTimelineLoopHandle{fill:#55d66a;stroke:#0b1017;stroke-width:.8;cursor:ew-resize}.remoteVideoTimelineLoopHandle.end{fill:#8be88f}.remoteVideoTimelinePlayhead{stroke:#fff;stroke-width:1.15;pointer-events:none}.remoteVideoTimelineReadout{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}.remoteVideoTimelineReadout span{border:1px solid #242c36;border-radius:4px;background:#0d141c;padding:3px 5px;color:#aab6c6;font-size:12px;font-weight:700;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .row strong,.row span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.list{display:grid;gap:7px;max-height:220px;overflow:auto}.small{font-size:12px;color:#91a0b2}.bar{height:6px;border-radius:99px;background:#2a3340;overflow:hidden}.bar span{display:block;height:100%;background:#3ba1ff}
@@ -1327,8 +1327,9 @@ function renderVideoOutputList(outputs,compositions){
     const plan=remoteVideoOutputRenderPlanById(o.id);
     const planState=remoteVideoOutputRenderPlanState(plan,o);
     const active=planState.label==="Live"&&(o.opacity??1)>0;
+    const selected=remoteStageSelectedOutputId===o.id;
     const detail=remoteVideoOutputRenderPlanDetail(plan,o);
-    return `<div class="row ${active?"active":""}"><div><strong>${escapeHtml(o.label)}</strong><span class="small">${escapeHtml(o.kind)} / ${escapeHtml(comp?comp.label:`Composition ${o.composition_id}`)} / ${pct}%${o.enabled?"":" / Disabled"}${o.blackout?" / Blackout":""}</span><span class="status ${planState.badgeClass}">${escapeHtml(planState.label)} / ${planState.layers.length} layer${planState.layers.length===1?"":"s"}</span><span class="small">${escapeHtml(detail)}</span><div class="bar"><span style="width:${Math.max(0,Math.min(100,pct))}%"></span></div><label class="deckSlider">Opacity<input type="range" min="0" max="1" step="0.01" value="${Number(o.opacity??1)}" oninput="setVideoOutputOpacityFromInput(${o.id},this.value)"><strong>${pct}%</strong></label>${remoteVideoOutputMappingPanel(o)}</div><div class="inline"><button onclick="setVideoOutputEnabled(${o.id},${!o.enabled})">${o.enabled?"Disable":"Enable"}</button><button onclick="setVideoOutputBlackout(${o.id},${!o.blackout})">${o.blackout?"Clear":"Blackout"}</button><button onclick="fadeVideoOutput(${o.id},0)">Fade Out</button><button onclick="fadeVideoOutput(${o.id},1)">Fade In</button><button onclick="setVideoOutputOpacity(${o.id},0)">Cut</button><button onclick="setVideoOutputOpacity(${o.id},0.5)">Half</button><button onclick="setVideoOutputOpacity(${o.id},1)">Full</button></div></div>`
+    return `<div class="row ${active?"active":""} ${selected?"selected":""}"><div><strong>${escapeHtml(o.label)}</strong><span class="small">${escapeHtml(o.kind)} / ${escapeHtml(comp?comp.label:`Composition ${o.composition_id}`)} / ${pct}%${o.enabled?"":" / Disabled"}${o.blackout?" / Blackout":""}</span><span class="status ${planState.badgeClass}">${escapeHtml(planState.label)} / ${planState.layers.length} layer${planState.layers.length===1?"":"s"}</span><span class="small">${escapeHtml(detail)}</span><div class="bar"><span style="width:${Math.max(0,Math.min(100,pct))}%"></span></div><label class="deckSlider">Opacity<input type="range" min="0" max="1" step="0.01" value="${Number(o.opacity??1)}" oninput="setVideoOutputOpacityFromInput(${o.id},this.value)"><strong>${pct}%</strong></label>${remoteVideoOutputMappingPanel(o)}</div><div class="inline"><button onclick="selectRemoteVideoOutput(${o.id})">Sel</button><button onclick="setVideoOutputEnabled(${o.id},${!o.enabled})">${o.enabled?"Disable":"Enable"}</button><button onclick="setVideoOutputBlackout(${o.id},${!o.blackout})">${o.blackout?"Clear":"Blackout"}</button><button onclick="fadeVideoOutput(${o.id},0)">Fade Out</button><button onclick="fadeVideoOutput(${o.id},1)">Fade In</button><button onclick="setVideoOutputOpacity(${o.id},0)">Cut</button><button onclick="setVideoOutputOpacity(${o.id},0.5)">Half</button><button onclick="setVideoOutputOpacity(${o.id},1)">Full</button></div></div>`
   }).join("");
 }
 function remoteFinite(value,fallback){return Number.isFinite(Number(value))?Number(value):fallback}
@@ -2254,10 +2255,18 @@ function setLayerPlaying(layer_id,playing){send({type:"setVideoPlaying",layer_id
 function setVideoPlaying(playing){const layer_id=selectedNumber("layerId");if(layer_id!==null)setLayerPlaying(layer_id,playing)}
 function fadeLayerOpacity(layer_id,opacity){send({type:"fadeVideoLayerOpacity",layer_id,opacity,duration_ms:Math.max(0,Math.round(numberValue("videoLayerFadeMs")))})}
 function fadeSelectedLayer(opacity){const layer_id=selectedNumber("layerId");if(layer_id!==null)fadeLayerOpacity(layer_id,opacity)}
-function setVideoOutputEnabled(output_id,enabled){send({type:"setVideoOutputEnabled",output_id,enabled})}
-function setVideoOutputBlackout(output_id,blackout){send({type:"setVideoOutputBlackout",output_id,blackout})}
-function setVideoOutputOpacity(output_id,opacity){send({type:"setVideoOutputOpacity",output_id,opacity})}
-function setVideoOutputOpacityFromInput(output_id,value){const opacity=Number(value);if(Number.isFinite(opacity)){send({type:"setVideoOutputOpacity",output_id,opacity},false);queueSnapshot(160)}}
+function selectRemoteVideoOutput(output_id,rerenderList=true){
+  remoteStageSelectedOutputId=Number(output_id);
+  renderRemoteStage(latestSnapshot||{});
+  if(rerenderList){
+    const video=(latestSnapshot&&latestSnapshot.video)||{};
+    renderVideoOutputList(video.outputs||[],video.compositions||[]);
+  }
+}
+function setVideoOutputEnabled(output_id,enabled){selectRemoteVideoOutput(output_id);send({type:"setVideoOutputEnabled",output_id,enabled})}
+function setVideoOutputBlackout(output_id,blackout){selectRemoteVideoOutput(output_id);send({type:"setVideoOutputBlackout",output_id,blackout})}
+function setVideoOutputOpacity(output_id,opacity){selectRemoteVideoOutput(output_id);send({type:"setVideoOutputOpacity",output_id,opacity})}
+function setVideoOutputOpacityFromInput(output_id,value){const opacity=Number(value);if(Number.isFinite(opacity)){selectRemoteVideoOutput(output_id,false);send({type:"setVideoOutputOpacity",output_id,opacity},false);queueSnapshot(160)}}
 function remoteOutputById(output_id){
   const video=(latestSnapshot&&latestSnapshot.video)||{};
   return (video.outputs||[]).find(output=>output.id===output_id)||null;
@@ -2374,7 +2383,7 @@ function resetRemoteOutputPose(output_id){
 function resetRemoteOutputStage(output_id){
   patchRemoteOutputMapping(output_id,{stage_x:0,stage_y:0,stage_z:0});
 }
-function fadeVideoOutput(output_id,opacity){send({type:"fadeVideoOutputOpacity",output_id,opacity,duration_ms:Math.max(0,Math.round(numberValue("videoOutputFadeMs")))})}
+function fadeVideoOutput(output_id,opacity){selectRemoteVideoOutput(output_id);send({type:"fadeVideoOutputOpacity",output_id,opacity,duration_ms:Math.max(0,Math.round(numberValue("videoOutputFadeMs")))})}
 function seekSelectedLayer(position_ms){const layer_id=selectedNumber("layerId");if(layer_id!==null&&Number.isFinite(position_ms))send({type:"seekVideoLayer",layer_id,position_ms:Math.max(0,Math.round(position_ms))})}
 function seekLayerFromInput(layer_id,value){
   const position_ms=Math.max(0,Math.round(Number(value)));
@@ -4180,6 +4189,9 @@ mod tests {
         assert!(page.contains("layerList"));
         assert!(page.contains("videoOutputList"));
         assert!(page.contains("renderVideoOutputList"));
+        assert!(page.contains("selectRemoteVideoOutput"));
+        assert!(page.contains(".row.selected"));
+        assert!(page.contains(">Sel</button>"));
         assert!(page.contains("remoteOutputMap"));
         assert!(page.contains("remoteStage"));
         assert!(page.contains("remoteStageGroupFilter"));

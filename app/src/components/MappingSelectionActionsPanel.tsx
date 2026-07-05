@@ -28,6 +28,8 @@ type MappingSelectionActionsPanelProps = {
   onDuplicate: () => MaybePromise;
   onRemove: () => MaybePromise;
   onControlActive: () => void;
+  onUseSelectionAsEffectTarget: () => void;
+  onUseSelectionAsWaveEffectTarget: () => void;
   onClearSelection: () => MaybePromise;
 };
 
@@ -69,6 +71,19 @@ export function MappingSelectionActionsPanel(props: MappingSelectionActionsPanel
             title="Toggle park for the picked fixtures (E)"
           >
             {props.flagState.allParked ? "Clear Park" : "Park"}
+          </button>
+        </div>
+        <div class="mappingEffectActions">
+          <button onClick={() => props.onUseSelectionAsEffectTarget()} disabled={!hasSelection()} title="Use picked fixtures as the Control/Edit effect target">
+            Use in Effects
+          </button>
+          <button
+            class="primary"
+            onClick={() => props.onUseSelectionAsWaveEffectTarget()}
+            disabled={!hasSelection()}
+            title="Open Control/Edit with a Position Wave draft for the picked fixtures"
+          >
+            Wave Draft
           </button>
         </div>
         <div class="mappingNudgePanel">

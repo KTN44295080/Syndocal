@@ -13,6 +13,7 @@ import {
   outputAspectRatio,
   resetVideoOutputCornerOffsets,
   resetVideoOutputLensKeystone,
+  resetVideoOutputPose,
   resetVideoOutputWarp,
   videoOutputAspectPresets,
   videoOutputAspectModes,
@@ -114,6 +115,9 @@ export function VideoOutputMappingPanel(props: VideoOutputMappingPanelProps) {
         </button>
         <button onClick={() => void props.onSetMapping(props.output.id, defaultVideoOutputMapping)}>
           Reset
+        </button>
+        <button onClick={() => void props.onSetMapping(props.output.id, resetVideoOutputPose(props.output.mapping))}>
+          Reset Pose
         </button>
         <button onClick={() => void props.onSetMapping(props.output.id, resetVideoOutputWarp(props.output.mapping))}>
           Clear Warp

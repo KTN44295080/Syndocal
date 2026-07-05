@@ -12,7 +12,7 @@ interface NodeGraphEditorPanelProps {
   sourceLabel: string;
   sourceDetail: string;
   transformLabel: string;
-  targetMode: "fixture" | "group" | "video";
+  targetMode: "fixture" | "selection" | "group" | "video";
   canSave: boolean;
   graphs: NodeGraphSummary[];
   targetLabel: (graph: NodeGraphSummary) => string;

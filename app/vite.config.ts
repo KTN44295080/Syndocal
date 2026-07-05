@@ -16,6 +16,15 @@ export default defineConfig({
         manualChunks(id) {
           const normalizedId = id.replace(/\\/g, "/");
           if (
+            normalizedId.includes("/src/components/TimelineCueEventsPanel") ||
+            normalizedId.includes("/src/components/TimelineLightingAutomationPanel") ||
+            normalizedId.includes("/src/components/TimelineOverview") ||
+            normalizedId.includes("/src/components/VideoTimelineAutomationPanel") ||
+            normalizedId.includes("/src/timelineAutomationHelpers")
+          ) {
+            return "timeline-panels";
+          }
+          if (
             normalizedId.includes("/src/components/ProjectorMapEditor") ||
             normalizedId.includes("/src/components/VideoColorFxEditor") ||
             normalizedId.includes("/src/components/VideoCropEditor") ||

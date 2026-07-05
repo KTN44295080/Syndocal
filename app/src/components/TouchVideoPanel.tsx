@@ -1,13 +1,21 @@
 import { For, Show } from "solid-js";
 import { clampRange } from "../numericHelpers";
-import type { VideoLayerState, VideoLayerSummary } from "../types";
+import type { VideoLayerState, VideoLayerSummary, VideoOutputSummary } from "../types";
 import { formatDuration, formatVideoTime } from "../videoHelpers";
 
 interface TouchVideoPanelProps {
   layers: VideoLayerSummary[];
+  outputs: VideoOutputSummary[];
+  selectedOutputId: number | null;
   onSetLayerState: (layerId: number, state: VideoLayerState) => void | Promise<void>;
   onAddCuePoint: (layerId: number) => void | Promise<void>;
   onJumpCuePoint: (layerId: number, cuePointIndex: number) => void | Promise<void>;
+  onSelectOutput: (outputId: number) => void;
+  onSetOutputEnabled: (outputId: number, enabled: boolean) => void | Promise<void>;
+  onSetOutputBlackout: (outputId: number, blackout: boolean) => void | Promise<void>;
+  onSetOutputOpacity: (outputId: number, opacity: number) => void | Promise<void>;
+  onFadeOutputOpacity: (outputId: number, opacity: number) => void | Promise<void>;
+  onOpenOutputWindow: (outputId: number, testPattern?: boolean) => void | Promise<void>;
 }
 
 export function TouchVideoPanel(props: TouchVideoPanelProps) {
@@ -15,8 +23,110 @@ export function TouchVideoPanel(props: TouchVideoPanelProps) {
     <section class="panel touchPanel touchVideoPanel">
       <div class="panelHeader">
         <h2>Touch Video</h2>
-        <span>{props.layers.length} layer(s)</span>
+        <span>{props.layers.length} layer(s) / {props.outputs.length} out(s)</span>
       </div>
+      <Show when={props.outputs.length > 0}>
+        <div class="touchVideoOutputGrid">
+          <For each={props.outputs}>
+            {(output) => {
+              const selected = () => props.selectedOutputId === output.id;
+              const selectOutput = () => props.onSelectOutput(output.id);
+              const outputDeckClass = () =>
+                [
+                  "touchVideoOutputDeck",
+                  output.enabled && !output.blackout ? "active" : "",
+                  selected() ? "selected" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ");
+
+              return (
+                <div class={outputDeckClass()}>
+                  <div class="touchVideoHeader">
+                    <div>
+                      <strong>{output.label}</strong>
+                      <span>
+                        {output.kind} / {output.width}x{output.height}
+                      </span>
+                    </div>
+                    <div class="touchVideoOutputStatus">
+                      <button
+                        class={selected() ? "touchVideoOutputSelect selected" : "touchVideoOutputSelect"}
+                        aria-pressed={selected()}
+                        onClick={selectOutput}
+                      >
+                        Sel
+                      </button>
+                      <small>{output.blackout ? "Blackout" : `${Math.round(output.opacity * 100)}%`}</small>
+                    </div>
+                  </div>
+                  <label class="touchSlider">
+                    Output
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.01"
+                      value={output.opacity}
+                      onInput={(event) => {
+                        selectOutput();
+                        void props.onSetOutputOpacity(output.id, Number(event.currentTarget.value));
+                      }}
+                    />
+                    <strong>{Math.round(output.opacity * 100)}%</strong>
+                  </label>
+                  <div class="touchTransportRow compact">
+                    <button
+                      class={output.enabled ? "primary" : ""}
+                      onClick={() => {
+                        selectOutput();
+                        void props.onSetOutputEnabled(output.id, !output.enabled);
+                      }}
+                    >
+                      {output.enabled ? "On" : "Off"}
+                    </button>
+                    <button
+                      class={output.blackout ? "primary" : ""}
+                      onClick={() => {
+                        selectOutput();
+                        void props.onSetOutputBlackout(output.id, !output.blackout);
+                      }}
+                    >
+                      {output.blackout ? "Clear" : "BO"}
+                    </button>
+                    <button
+                      onClick={() => {
+                        selectOutput();
+                        void props.onFadeOutputOpacity(output.id, 0);
+                      }}
+                    >
+                      Out
+                    </button>
+                    <button
+                      onClick={() => {
+                        selectOutput();
+                        void props.onFadeOutputOpacity(output.id, 1);
+                      }}
+                    >
+                      In
+                    </button>
+                    <Show when={output.kind === "Display"}>
+                      <button
+                        onClick={() => {
+                          selectOutput();
+                          void props.onOpenOutputWindow(output.id, true);
+                        }}
+                      >
+                        Pattern
+                      </button>
+                    </Show>
+                  </div>
+                </div>
+              );
+            }}
+          </For>
+        </div>
+      </Show>
       <Show when={props.layers.length > 0} fallback={<p class="empty">No video layers.</p>}>
         <div class="touchVideoDeckGrid">
           <For each={props.layers}>

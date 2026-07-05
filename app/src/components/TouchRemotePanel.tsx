@@ -3,13 +3,15 @@ import type { SubmasterSummary } from "../types";
 
 interface TouchRemotePanelProps {
   running: boolean;
-  remoteUrl: string;
+  remoteUrls: string[];
   bindIp: string;
   port: number;
   bpmDraft: string;
   submasters: SubmasterSummary[];
   onBindIp: (value: string) => void;
   onPort: (value: number) => void;
+  onCopyRemoteUrl: (url: string) => void | Promise<void>;
+  onOpenRemoteUrl: (url: string) => void | Promise<void>;
   onStart: () => void | Promise<void>;
   onStop: () => void | Promise<void>;
   onBpmDraft: (value: string) => void;
@@ -26,13 +28,27 @@ export function TouchRemotePanel(props: TouchRemotePanelProps) {
         <span>{props.running ? "Running" : "Stopped"}</span>
       </div>
       <div class="touchRemoteUrl">
-        <span>Remote URL</span>
-        <strong>{props.remoteUrl}</strong>
+        <span>Remote URLs</span>
+        <div class="remoteUrlList">
+          <For each={props.remoteUrls}>
+            {(url) => (
+              <div class="remoteUrlItem">
+                <strong>{url}</strong>
+                <div class="remoteUrlActions">
+                  <button onClick={() => void props.onCopyRemoteUrl(url)}>Copy</button>
+                  <button class="remoteUrlOpenButton" onClick={() => void props.onOpenRemoteUrl(url)}>
+                    Open
+                  </button>
+                </div>
+              </div>
+            )}
+          </For>
+        </div>
       </div>
       <div class="split">
         <label>
           Bind IP
-          <input value={props.bindIp} onInput={(event) => props.onBindIp(event.currentTarget.value)} />
+          <input value={props.bindIp} disabled={props.running} onInput={(event) => props.onBindIp(event.currentTarget.value)} />
         </label>
         <label>
           Port
@@ -40,6 +56,7 @@ export function TouchRemotePanel(props: TouchRemotePanelProps) {
             type="number"
             min="1"
             value={props.port}
+            disabled={props.running}
             onInput={(event) => props.onPort(Number(event.currentTarget.value))}
           />
         </label>

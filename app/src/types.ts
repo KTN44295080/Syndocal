@@ -512,6 +512,12 @@ export interface FixturePresetGroupLoadResult {
   skipped_count: number;
 }
 
+export interface TimelineGroupAutomationAddResult {
+  automation_ids: number[];
+  applied_count: number;
+  skipped_count: number;
+}
+
 export interface NodeGraphLfoNode {
   shape: LfoShape;
   period_ms: number;
@@ -598,6 +604,21 @@ export interface Phase1SmokeReport {
   cue_id: number;
   cue_label: string;
   active_cue_id?: number | null;
+  timeline_event_count: number;
+  timeline_automation_count: number;
+  timeline_video_automation_count: number;
+  timeline_duration_ms: number;
+  timeline_probe_ms: number;
+  timeline_probe_dimmer_byte: number;
+  timeline_probe_video_opacity?: number | null;
+  dmx_output_count: number;
+  enabled_dmx_output_count: number;
+  dmx_preview_universe_count: number;
+  primary_output_label: string;
+  video_layer_count: number;
+  video_layer_label?: string | null;
+  video_layer_playing: boolean;
+  video_layer_opacity?: number | null;
   first_8: number[];
   expected_first_8: number[];
   non_zero_first_8: number;

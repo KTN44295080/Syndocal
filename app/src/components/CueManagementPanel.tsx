@@ -6,6 +6,7 @@ import { CueCapturePreviewPanel, type CueCapturePreviewModel } from "./CueCaptur
 export type CueCaptureScopeMode = "all" | "lighting" | "selectedFixture" | "selectedGroup" | "video";
 
 interface CueManagementPanelProps {
+  mode: "edit" | "live";
   cues: CueSummary[];
   activeCueId: number | null | undefined;
   activeFade: ActiveFadeSummary | null | undefined;
@@ -51,7 +52,7 @@ interface CueManagementPanelProps {
 
 export function CueManagementPanel(props: CueManagementPanelProps) {
   return (
-    <div class="cuePanel">
+    <div class={props.mode === "live" ? "cuePanel cuePanelLive" : "cuePanel"}>
       <div class="panelHeader">
         <h2>Cues</h2>
         <span>{props.cues.length}</span>
@@ -138,29 +139,30 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                   />
                 </div>
                 <div class="cueActionRow">
-                  <button onClick={() => void props.onMoveCue(cue.id, -1)} disabled={index() === 0}>
+                  <button class="cueEditOnly" onClick={() => void props.onMoveCue(cue.id, -1)} disabled={index() === 0}>
                     Up
                   </button>
-                  <button onClick={() => void props.onMoveCue(cue.id, 1)} disabled={index() === props.cues.length - 1}>
+                  <button class="cueEditOnly" onClick={() => void props.onMoveCue(cue.id, 1)} disabled={index() === props.cues.length - 1}>
                     Down
                   </button>
-                  <button onClick={() => void props.onSetCueMetadata(cue)}>
+                  <button class="cueEditOnly" onClick={() => void props.onSetCueMetadata(cue)}>
                     Save
                   </button>
-                  <button onClick={() => void props.onDuplicateCue(cue)}>
+                  <button class="cueEditOnly" onClick={() => void props.onDuplicateCue(cue)}>
                     Copy
                   </button>
                   <button
+                    class="cueEditOnly"
                     onClick={() => void props.onUpdateCue(cue.id, draft().label, draft().fade_ms)}
                     disabled={!props.hasCueSources || Boolean(props.cueCaptureScopeError)}
                   >
                     Update
                   </button>
-                  <button onClick={() => void props.onTriggerCue(cue.id)}>GO</button>
-                  <button onClick={() => void props.onAddTimelineCueEventAt(cue.id, props.timelinePositionMs, props.timelineTrack, false)}>
+                  <button class="cueLiveGo" onClick={() => void props.onTriggerCue(cue.id)}>GO</button>
+                  <button class="cueEditOnly" onClick={() => void props.onAddTimelineCueEventAt(cue.id, props.timelinePositionMs, props.timelineTrack, false)}>
                     At Playhead
                   </button>
-                  <button onClick={() => void props.onRemoveCue(cue.id)}>Remove</button>
+                  <button class="cueEditOnly" onClick={() => void props.onRemoveCue(cue.id)}>Remove</button>
                 </div>
                 <Show when={placements().length > 0}>
                   <div class="cueTimelinePlacements">

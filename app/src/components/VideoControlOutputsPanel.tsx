@@ -24,8 +24,10 @@ interface VideoMasterControlsPanelProps {
 interface VideoOutputControlListPanelProps {
   outputs: VideoOutputSummary[];
   compositions: CompositionSummary[];
+  selectedOutputId: number | null;
   fadeMs: number;
   windowSummary: string;
+  onSelectOutput: (outputId: number) => void;
   onSetFadeMs: (fadeMs: number) => void;
   onRefreshWindows: () => void | Promise<void>;
   onOpenAllWindows: (testPattern?: boolean) => void | Promise<void>;
@@ -46,18 +48,28 @@ interface VideoOutputControlListPanelProps {
 export function VideoMasterControlsPanel(props: VideoMasterControlsPanelProps) {
   return (
     <div class="videoMasterControls">
-      <label>
-        Master
+      <div class="videoMasterReadout">
+        <strong>Master</strong>
+        <span>{Math.round(props.masterOpacity * 100)}%</span>
+      </div>
+      <label class="videoMasterFader">
+        <span>Level</span>
         <input
-          type="number"
+          type="range"
           min="0"
           max="1"
           step="0.01"
           value={props.masterOpacity}
-          onChange={(event) => void props.onSetMasterOpacity(Number(event.currentTarget.value))}
+          onInput={(event) => void props.onSetMasterOpacity(Number(event.currentTarget.value))}
         />
       </label>
       <div class="buttonRow">
+        <button onClick={() => void props.onSetMasterOpacity(0)} disabled={props.masterOpacity <= 0}>
+          Out
+        </button>
+        <button onClick={() => void props.onSetMasterOpacity(1)} disabled={props.masterOpacity >= 1}>
+          Full
+        </button>
         <button onClick={() => void props.onSetBlackout(true)} disabled={props.blackout}>
           V Blackout
         </button>
@@ -106,8 +118,12 @@ export function VideoOutputControlListPanel(props: VideoOutputControlListPanelPr
             const outputWindowStatus = () => props.windowStatusForOutput(output.id);
             const windowState = () => props.windowState(output.id);
             const outputLive = () => renderPlanState().stateLabel === "Live" && output.opacity > 0;
+            const selected = () => props.selectedOutputId === output.id;
+            const selectOutput = () => props.onSelectOutput(output.id);
             return (
-              <div class={outputLive() ? "videoOutputControlItem active" : "videoOutputControlItem"}>
+              <div
+                class={`videoOutputControlItem ${outputLive() ? "active" : ""} ${selected() ? "selected" : ""}`}
+              >
                 <div>
                   <strong>{output.label}</strong>
                   <span>
@@ -128,26 +144,192 @@ export function VideoOutputControlListPanel(props: VideoOutputControlListPanelPr
                     <span style={{ width: `${Math.round(output.opacity * 100)}%` }} />
                   </div>
                 </div>
-                <div class="buttonRow">
-                  <button onClick={() => void props.onSetOutputEnabled(output.id, !output.enabled)}>
+                <div class="videoMixerOutputDeck">
+                  <label>
+                    Opacity
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.01"
+                      value={output.opacity}
+                      onInput={(event) => {
+                        selectOutput();
+                        void props.onSetOutputOpacity(output.id, Number(event.currentTarget.value));
+                      }}
+                    />
+                    <strong>{Math.round(output.opacity * 100)}%</strong>
+                  </label>
+                  <div class="buttonRow">
+                    <button
+                      class={selected() ? "active selected" : ""}
+                      onClick={selectOutput}
+                      title="Select this video output for stage mapping and live preview"
+                    >
+                      Sel
+                    </button>
+                    <button
+                      class={output.enabled ? "active" : ""}
+                      onClick={() => {
+                        selectOutput();
+                        void props.onSetOutputEnabled(output.id, !output.enabled);
+                      }}
+                    >
+                      {output.enabled ? "On" : "Off"}
+                    </button>
+                    <button
+                      class={output.blackout ? "active" : ""}
+                      onClick={() => {
+                        selectOutput();
+                        void props.onSetOutputBlackout(output.id, !output.blackout);
+                      }}
+                    >
+                      {output.blackout ? "Clear BO" : "BO"}
+                    </button>
+                    <button
+                      onClick={() => {
+                        selectOutput();
+                        void props.onFadeOutputOpacity(output.id, 0);
+                      }}
+                    >
+                      Out
+                    </button>
+                    <button
+                      onClick={() => {
+                        selectOutput();
+                        void props.onFadeOutputOpacity(output.id, 1);
+                      }}
+                    >
+                      In
+                    </button>
+                    <button
+                      onClick={() => {
+                        selectOutput();
+                        void props.onSetOutputOpacity(output.id, 1);
+                      }}
+                    >
+                      Full
+                    </button>
+                    <Show when={output.kind === "Display"}>
+                      <button
+                        onClick={() => {
+                          selectOutput();
+                          void props.onOpenOutputWindow(output.id);
+                        }}
+                      >
+                        Window
+                      </button>
+                      <button
+                        onClick={() => {
+                          selectOutput();
+                          void props.onOpenOutputWindow(output.id, true);
+                        }}
+                      >
+                        Pattern
+                      </button>
+                    </Show>
+                  </div>
+                </div>
+                <div class="buttonRow videoOutputDetailActions">
+                  <button
+                    class={selected() ? "selected" : ""}
+                    onClick={selectOutput}
+                    title="Select this video output for stage mapping and live preview"
+                  >
+                    Select
+                  </button>
+                  <button
+                    onClick={() => {
+                      selectOutput();
+                      void props.onSetOutputEnabled(output.id, !output.enabled);
+                    }}
+                  >
                     {output.enabled ? "Disable" : "Enable"}
                   </button>
-                  <button onClick={() => void props.onSetOutputBlackout(output.id, !output.blackout)}>
+                  <button
+                    onClick={() => {
+                      selectOutput();
+                      void props.onSetOutputBlackout(output.id, !output.blackout);
+                    }}
+                  >
                     {output.blackout ? "Clear" : "Blackout"}
                   </button>
-                  <button onClick={() => void props.onFadeOutputOpacity(output.id, 0)}>Fade Out</button>
-                  <button onClick={() => void props.onFadeOutputOpacity(output.id, 1)}>Fade In</button>
-                  <button onClick={() => void props.onSetOutputOpacity(output.id, 1)}>Full</button>
+                  <button
+                    onClick={() => {
+                      selectOutput();
+                      void props.onFadeOutputOpacity(output.id, 0);
+                    }}
+                  >
+                    Fade Out
+                  </button>
+                  <button
+                    onClick={() => {
+                      selectOutput();
+                      void props.onFadeOutputOpacity(output.id, 1);
+                    }}
+                  >
+                    Fade In
+                  </button>
+                  <button
+                    onClick={() => {
+                      selectOutput();
+                      void props.onSetOutputOpacity(output.id, 1);
+                    }}
+                  >
+                    Full
+                  </button>
                   <Show when={output.kind === "Display"}>
-                    <button onClick={() => void props.onOpenOutputWindow(output.id)}>Window</button>
-                    <button onClick={() => void props.onOpenOutputWindow(output.id, true)}>Pattern</button>
-                    <button onClick={() => void props.onSyncOutputWindow(output.id)}>Sync</button>
-                    <button onClick={() => void props.onSyncOutputWindow(output.id, true)}>Sync Pattern</button>
+                    <button
+                      onClick={() => {
+                        selectOutput();
+                        void props.onOpenOutputWindow(output.id);
+                      }}
+                    >
+                      Window
+                    </button>
+                    <button
+                      onClick={() => {
+                        selectOutput();
+                        void props.onOpenOutputWindow(output.id, true);
+                      }}
+                    >
+                      Pattern
+                    </button>
+                    <button
+                      onClick={() => {
+                        selectOutput();
+                        void props.onSyncOutputWindow(output.id);
+                      }}
+                    >
+                      Sync
+                    </button>
+                    <button
+                      onClick={() => {
+                        selectOutput();
+                        void props.onSyncOutputWindow(output.id, true);
+                      }}
+                    >
+                      Sync Pattern
+                    </button>
                     <Show when={outputWindowStatus()?.live_open}>
-                      <button onClick={() => void props.onCloseOutputWindow(output.id)}>Close</button>
+                      <button
+                        onClick={() => {
+                          selectOutput();
+                          void props.onCloseOutputWindow(output.id);
+                        }}
+                      >
+                        Close
+                      </button>
                     </Show>
                     <Show when={outputWindowStatus()?.test_pattern_open}>
-                      <button onClick={() => void props.onCloseOutputWindow(output.id, true)}>Close Pattern</button>
+                      <button
+                        onClick={() => {
+                          selectOutput();
+                          void props.onCloseOutputWindow(output.id, true);
+                        }}
+                      >
+                        Close Pattern
+                      </button>
                     </Show>
                   </Show>
                 </div>

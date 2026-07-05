@@ -17,5 +17,6 @@ rfd.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri.workspace = true
+tauri-plugin-single-instance.workspace = true
 video.workspace = true
 visualizer.workspace = true

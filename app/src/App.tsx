@@ -1,5 +1,7 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { CueManagementPanel } from "./components/CueManagementPanel";
 import { CustomProfileEditorPanel } from "./components/CustomProfileEditorPanel";
@@ -61,7 +63,7 @@ import { TouchGenericAttributeGrid } from "./components/TouchGenericAttributeGri
 import { TouchPanTiltPad } from "./components/TouchPanTiltPad";
 import { TouchRemotePanel } from "./components/TouchRemotePanel";
 import { TouchVideoPanel } from "./components/TouchVideoPanel";
-import type { TimelineOverviewEvent } from "./components/TimelineOverview";
+import type { TimelineOverviewAutomationRange, TimelineOverviewEvent } from "./components/TimelineOverview";
 import { WorkspaceChrome } from "./components/WorkspaceChrome";
 import { type ColorWheelFunctionEntry, type GoboSlotPattern, type GoboWheelFunctionEntry } from "./components/WheelSlotPanel";
 import {
@@ -79,7 +81,9 @@ import type {
   AttributeControl,
   AttributeResolution,
   AudioAnalysisSummary,
+  AutomationKeyframeSummary,
   AutomationInterpolation,
+  CompositionSummary,
   CustomFixtureProfileRequest,
   CueSummary,
   DmxOutputConfig,
@@ -125,11 +129,14 @@ import type {
   StageObjectSummary,
   TimelineCueEventSummary,
   TimelineAutomationSummary,
+  TimelineGroupAutomationAddResult,
   TimelineTrackKind,
   TimelineVideoAutomationSummary,
+  VideoAutomationKeyframeSummary,
   VideoBlendMode,
   VideoFrame,
   VideoEffectTarget,
+  VideoLayerSummary,
   VideoLayerState,
   VideoOutputKind,
   VideoOutputMapping,
@@ -181,6 +188,10 @@ import {
 import {
   controlCategories,
   controlCategoryForAttribute,
+  controlModeForShortcut,
+  setupSubTabForShortcut,
+  workspaceTabForShortcut,
+  type ControlMode,
   type ControlCategory,
   type SetupSubTab,
   type WorkspaceTab,
@@ -257,6 +268,11 @@ import {
   type MappingViewPreset,
 } from "./mappingViewPresets";
 import {
+  loadRecentProjectPaths,
+  saveRecentProjectPaths,
+  touchRecentProjectPath,
+} from "./projectRecentStorage";
+import {
   cueMetadataDraftFromSummary,
   timelineAutomationDraftFromSummary,
   timelineEventDraftFromSummary,
@@ -308,6 +324,24 @@ import {
   type MappingFixtureFlag,
   type NumericVideoOutputMappingField,
 } from "./controlMappingActions";
+import {
+  draftRangeFromKeyframes,
+  evaluateTimelineKeyframes,
+  interpolationForInsertedKeyframe,
+  keyframesWithDraftEndpoints,
+  keyframesWithInterpolationAtIndex,
+  keyframesWithValueAtIndex,
+  keyframesWithoutIndex,
+  keyframesWithoutPlayheadKeyframe,
+  movedTimelineKeyframe,
+  resizedTimelineKeyframes,
+  shiftedTimelineKeyframes,
+  snappedTimelineKeyframes,
+  sortedTimelineKeyframes,
+  timelineKeyframeMoveTime,
+  upsertTimelineKeyframe,
+  videoAutomationValueFromState,
+} from "./timelineAutomationHelpers";
 
 const tauriBackendUnavailableMessage = "Rayard desktop backend is not connected in this browser preview.";
 
@@ -328,6 +362,15 @@ const listen = <T,>(event: string, handler: (event: { payload: T }) => void) => 
   return tauriListen<T>(event, handler);
 };
 
+const browserViewportFixture = () => {
+  if (isTauriRuntime() || typeof window === "undefined") {
+    return "";
+  }
+  return new URLSearchParams(window.location.search).get("rayardViewportFixture") ?? "";
+};
+
+const isRayardProjectPath = (path: string) => path.trim().toLowerCase().endsWith(".ry");
+
 const profileLoadMessage = (prefix: string, profile: FixtureProfileSummary) => {
   const warningSuffix =
     profile.warnings.length > 0
@@ -342,7 +385,14 @@ type MappingStageObjectResizeMode = "width" | "depth" | "both";
 type VideoOutputPreviewMode = "output" | "test";
 type MappingBulkGroupMode = "add" | "remove" | "set";
 type WaveStageDragMode = "origin" | "direction" | "videoTarget";
+type EffectTargetMode = "fixture" | "selection" | "group" | "video";
 type CueCaptureScopeMode = "all" | "lighting" | "selectedFixture" | "selectedGroup" | "video";
+type TimelineLightingAutomationRowScope = "all" | "current";
+type TimelineVideoAutomationRowScope = "all" | "layer";
+type SelectedTimelineAutomation = {
+  kind: "lighting" | "video";
+  automationId: number;
+};
 
 interface EffectTargetOverride {
   fixture_ids: number[];
@@ -374,6 +424,188 @@ const cuePadSize = 10;
 const enttecUsbProBaudRate = 57_600;
 const enttecOpenDmxBaudRate = 250_000;
 const defaultCustomAttributesText = "Dimmer@1:8, Pan@2:16, Tilt@4:16, ColorRed@6:8, ColorGreen@7:8, ColorBlue@8:8";
+
+const viewportFixtureControls: AttributeControl[] = [
+  {
+    attribute: "Dimmer",
+    channel_name: "Dimmer",
+    offsets: [0],
+    resolution: "EightBit",
+    default_value: 0,
+    functions: [],
+  },
+  {
+    attribute: "Pan",
+    channel_name: "Pan",
+    offsets: [1, 2],
+    resolution: "SixteenBit",
+    default_value: 32_768,
+    functions: [],
+  },
+  {
+    attribute: "Tilt",
+    channel_name: "Tilt",
+    offsets: [3, 4],
+    resolution: "SixteenBit",
+    default_value: 32_768,
+    functions: [],
+  },
+  {
+    attribute: "ColorRed",
+    channel_name: "Red",
+    offsets: [5],
+    resolution: "EightBit",
+    default_value: 0,
+    functions: [],
+  },
+  {
+    attribute: "ColorGreen",
+    channel_name: "Green",
+    offsets: [6],
+    resolution: "EightBit",
+    default_value: 0,
+    functions: [],
+  },
+  {
+    attribute: "ColorBlue",
+    channel_name: "Blue",
+    offsets: [7],
+    resolution: "EightBit",
+    default_value: 0,
+    functions: [],
+  },
+];
+
+const viewportPatchedFixture = (
+  id: number,
+  label: string,
+  address: number,
+  x: number,
+  z: number,
+): PatchedFixtureSummary => ({
+  id,
+  label,
+  profile_source_path: "viewport://rayard-mini-par",
+  profile_name: "Viewport Mini Par",
+  manufacturer: "Rayard",
+  mode_name: "Dimmer Pan Tilt RGB",
+  universe: 0,
+  address,
+  group_ids: ["front"],
+  position: { x, y: 3, z },
+  rotation: { pitch: 0, yaw: 0, roll: 0 },
+  geometries: [],
+  controls: viewportFixtureControls,
+  attribute_values: [
+    { attribute: "Dimmer", value: 0 },
+    { attribute: "Pan", value: 32_768 },
+    { attribute: "Tilt", value: 32_768 },
+    { attribute: "ColorRed", value: 65_535 },
+    { attribute: "ColorGreen", value: 0 },
+    { attribute: "ColorBlue", value: 0 },
+  ],
+  limits: defaultFixtureLimits,
+  highlighted: false,
+  soloed: false,
+  parked: false,
+});
+
+const viewportProjectorMapping: VideoOutputMapping = {
+  ...defaultVideoOutputMapping,
+  stage_x: 0,
+  stage_y: 2.8,
+  stage_z: 3.2,
+  offset_x: 0.08,
+  offset_y: -0.04,
+  scale_x: 1.06,
+  scale_y: 0.94,
+  aspect_ratio: 16 / 9,
+  aspect_mode: "Fit",
+  lens_distortion: -0.05,
+  keystone_x: 0.12,
+  keystone_y: -0.08,
+  corner_top_left_x: -0.04,
+  corner_top_right_y: 0.05,
+  corner_bottom_right_x: 0.03,
+  corner_bottom_left_y: -0.04,
+};
+
+const viewportVideoLayer: VideoLayerSummary = {
+  id: 1,
+  label: "Viewport Visual",
+  source: {
+    kind: "StillImage",
+    path: "viewport://visual.png",
+    name: "Viewport Visual",
+    codec: "RGBA",
+    metadata: {
+      duration_ms: 4000,
+      width: 1920,
+      height: 1080,
+      frame_rate: 60,
+    },
+  },
+  blend_mode: "Add",
+  state: {
+    enabled: true,
+    solo: false,
+    opacity: 0.72,
+    speed: 1,
+    playing: true,
+    position_ms: 1000,
+    loop_enabled: true,
+    loop_start_ms: 0,
+    loop_end_ms: 4000,
+    bpm_sync: {
+      enabled: true,
+      ratio: 1,
+      loop_bars: 1,
+    },
+    cue_points: [
+      { position_ms: 0, label: "Start", color: "#4aa8ff" },
+      { position_ms: 2000, label: "Drop", color: "#f2c14e" },
+    ],
+    cue_points_ms: [0, 2000],
+    transform: { ...defaultTransform },
+    color: { ...defaultColorAdjust },
+    fx: { ...defaultFxAdjust },
+  },
+};
+
+const viewportComposition: CompositionSummary = {
+  id: 1,
+  label: "Viewport Comp",
+  layer_ids: [1],
+  output_ids: [1],
+};
+
+const viewportVideoOutput: VideoOutputSummary = {
+  id: 1,
+  label: "Viewport Projector",
+  kind: "Display",
+  enabled: true,
+  composition_id: 1,
+  fullscreen: false,
+  monitor_id: 1,
+  width: 1920,
+  height: 1080,
+  endpoint_name: null,
+  opacity: 1,
+  blackout: false,
+  mapping: viewportProjectorMapping,
+};
+
+const viewportStageObject: StageObjectSummary = {
+  id: 1,
+  label: "Viewport Screen",
+  kind: "Screen",
+  x: 0,
+  z: 3.2,
+  width: 6.4,
+  depth: 3.6,
+  rotation_deg: 0,
+  color: "#2f6f9f",
+};
 
 const isSerialDmxProtocol = (protocol: DmxOutputConfig["protocol"]) =>
   protocol === "EnttecUsbPro" || protocol === "DmxKingUltraDmx" || protocol === "EnttecOpenDmx";
@@ -701,6 +933,11 @@ const findControlAttribute = (fixture: PatchedFixtureSummary, names: string[]) =
   return fixture.controls.find((control) => normalizedNames.includes(control.attribute.toLowerCase()))?.attribute;
 };
 
+const findControlAttributeInControls = (controls: AttributeControl[], names: string[]) => {
+  const normalizedNames = names.map((name) => name.toLowerCase());
+  return controls.find((control) => normalizedNames.includes(control.attribute.toLowerCase()))?.attribute;
+};
+
 const mappingGeometryClass = (geometry: GeometrySummary, mappedChannelCount: number, inGroupFilter: boolean, selected: boolean) => {
   const text = `${geometry.kind} ${geometry.model_primitive ?? ""} ${geometry.model_file ?? ""} ${geometry.beam_type ?? ""}`.toLowerCase();
   const baseClass = text.includes("beam") ? "beam" : text.includes("axis") ? "axis" : "body";
@@ -763,9 +1000,12 @@ export default function App() {
   const [gdtfShareUrl, setGdtfShareUrl] = createSignal("");
   const [currentProjectPath, setCurrentProjectPath] = createSignal<string | null>(null);
   const [projectDirty, setProjectDirty] = createSignal(false);
+  const [projectDropState, setProjectDropState] = createSignal<"project" | "invalid" | null>(null);
+  const [recentProjectPaths, setRecentProjectPaths] = createSignal<string[]>(loadRecentProjectPaths());
   const [cleanProjectSignature, setCleanProjectSignature] = createSignal<string | null>(null);
   const [workspaceTab, setWorkspaceTab] = createSignal<WorkspaceTab>("setup");
   const [setupSubTab, setSetupSubTab] = createSignal<SetupSubTab>("patch");
+  const [controlMode, setControlMode] = createSignal<ControlMode>("edit");
   const [profile, setProfile] = createSignal<FixtureProfileSummary | null>(null);
   const [selectedMode, setSelectedMode] = createSignal("");
   const [customManufacturer, setCustomManufacturer] = createSignal("Rayard");
@@ -894,6 +1134,7 @@ export default function App() {
   const [remoteBindIp, setRemoteBindIp] = createSignal("0.0.0.0");
   const [remotePort, setRemotePort] = createSignal(9100);
   const [remoteRunning, setRemoteRunning] = createSignal(false);
+  const [remoteAccessUrls, setRemoteAccessUrls] = createSignal<string[]>([]);
   const [cueLabel, setCueLabel] = createSignal("Cue 1");
   const [cueFadeMs, setCueFadeMs] = createSignal(1000);
   const [cueCaptureScope, setCueCaptureScope] = createSignal<CueCaptureScopeMode>("all");
@@ -906,7 +1147,11 @@ export default function App() {
   const [timelineEventDrafts, setTimelineEventDrafts] = createSignal<Record<number, TimelineEventDraft>>({});
   const [timelineSnapMode, setTimelineSnapMode] = createSignal<TimelineSnapMode>("Off");
   const [timelineGridMs, setTimelineGridMs] = createSignal(500);
+  const [selectedTimelineAutomation, setSelectedTimelineAutomation] =
+    createSignal<SelectedTimelineAutomation | null>(null);
   const [timelineAutomationDrafts, setTimelineAutomationDrafts] = createSignal<Record<number, TimelineAutomationDraft>>({});
+  const [lightingAutomationRowScope, setLightingAutomationRowScope] =
+    createSignal<TimelineLightingAutomationRowScope>("all");
   const [automationStartMs, setAutomationStartMs] = createSignal(0);
   const [automationEndMs, setAutomationEndMs] = createSignal(1000);
   const [automationStartValue, setAutomationStartValue] = createSignal(0);
@@ -963,9 +1208,11 @@ export default function App() {
   const [timelineVideoAutomationDrafts, setTimelineVideoAutomationDrafts] = createSignal<
     Record<number, TimelineVideoAutomationDraft>
   >({});
+  const [videoAutomationRowScope, setVideoAutomationRowScope] =
+    createSignal<TimelineVideoAutomationRowScope>("all");
   const [effectShape, setEffectShape] = createSignal<LfoShape>("Sine");
   const [effectType, setEffectType] = createSignal<EffectKind>("Lfo");
-  const [effectTargetMode, setEffectTargetMode] = createSignal<"fixture" | "group" | "video">("fixture");
+  const [effectTargetMode, setEffectTargetMode] = createSignal<EffectTargetMode>("fixture");
   const [effectTargetGroups, setEffectTargetGroups] = createSignal("");
   const [effectVideoLayerId, setEffectVideoLayerId] = createSignal<number | null>(null);
   const [effectVideoParam, setEffectVideoParam] = createSignal<VideoParam>("Opacity");
@@ -1087,6 +1334,58 @@ export default function App() {
       last_error: null,
     },
   });
+  if (browserViewportFixture() === "timeline") {
+    setWorkspaceTab("control");
+    setSelectedFixtureGroupFilter("front");
+    setSnapshot((current) => ({
+      ...current,
+      fixtures: [
+        viewportPatchedFixture(1, "Viewport Par L", 1, -4, -2),
+        viewportPatchedFixture(2, "Viewport Par C", 9, 0, -2),
+        viewportPatchedFixture(3, "Viewport Par R", 17, 4, -2),
+      ],
+      submasters: [{ group_id: "front", label: "front", level: 1 }],
+      video: {
+        ...current.video,
+        layers: [viewportVideoLayer],
+        compositions: [viewportComposition],
+        outputs: [viewportVideoOutput],
+        mapping_presets: [{ label: "Viewport 16:9", mapping: viewportProjectorMapping }],
+      },
+      stage_objects: [viewportStageObject],
+      timeline: {
+        ...current.timeline,
+        duration_ms: 4000,
+        position_ms: 1000,
+        automations: [
+          {
+            id: 1,
+            fixture_id: 1,
+            attribute: "Dimmer",
+            track: "Lighting",
+            enabled: true,
+            keyframes: [
+              { time_ms: 0, value: 65535, interpolation: "Linear" },
+              { time_ms: 4000, value: 0, interpolation: "Step" },
+            ],
+          },
+        ],
+        video_automations: [
+          {
+            id: 2,
+            layer_id: 1,
+            param: "Opacity",
+            track: "Video",
+            enabled: true,
+            keyframes: [
+              { time_ms: 0, value: 1, interpolation: "Linear" },
+              { time_ms: 4000, value: 0, interpolation: "Step" },
+            ],
+          },
+        ],
+      },
+    }));
+  }
   const [output, setOutput] = createSignal<DmxOutputConfig>(defaultOutput);
   const [dmxOutputRoutes, setDmxOutputRoutes] = createSignal<DmxOutputConfig[]>([defaultOutput]);
   const [engineTelemetryReport, setEngineTelemetryReport] = createSignal<EngineTelemetryReport | null>(null);
@@ -1577,13 +1876,87 @@ export default function App() {
     });
   });
 
-  const activeControls = createMemo(() => selectedFixture()?.controls ?? []);
-  const selectedDimmerControl = createMemo<DimmerControlSet | undefined>(() => {
+  const commonAttributeControls = (fixtures: PatchedFixtureSummary[]) => {
+    if (fixtures.length === 0) {
+      return [];
+    }
+    const attributeCounts = new Map<string, number>();
+    for (const fixture of fixtures) {
+      const fixtureAttributes = new Set(fixture.controls.map((control) => control.attribute.toLowerCase()));
+      for (const attribute of fixtureAttributes) {
+        attributeCounts.set(attribute, (attributeCounts.get(attribute) ?? 0) + 1);
+      }
+    }
+    const returnedAttributes = new Set<string>();
+    return fixtures[0].controls.filter((control) => {
+      const key = control.attribute.toLowerCase();
+      if (returnedAttributes.has(key) || attributeCounts.get(key) !== fixtures.length) {
+        return false;
+      }
+      returnedAttributes.add(key);
+      return true;
+    });
+  };
+  const selectedControlTargetFixtures = createMemo<PatchedFixtureSummary[]>(() => {
+    const groupId = selectedFixtureGroupFilter();
+    if (groupId) {
+      return filteredFixtures();
+    }
     const fixture = selectedFixture();
+    return fixture ? [fixture] : [];
+  });
+  const selectedControlReferenceFixture = createMemo<PatchedFixtureSummary | null>(() => {
+    const fixtures = selectedControlTargetFixtures();
+    if (fixtures.length === 0) {
+      return null;
+    }
+    const selected = selectedFixture();
+    return selected && fixtures.some((fixture) => fixture.id === selected.id) ? selected : fixtures[0];
+  });
+  const activeControls = createMemo(() => {
+    const groupId = selectedFixtureGroupFilter();
+    return groupId ? commonAttributeControls(selectedControlTargetFixtures()) : (selectedFixture()?.controls ?? []);
+  });
+  const timelineAutomationControls = createMemo<AttributeControl[]>(() => {
+    const groupId = selectedFixtureGroupFilter();
+    const fixtures = groupId
+      ? filteredFixtures()
+      : selectedFixture()
+        ? [selectedFixture() as PatchedFixtureSummary]
+        : [];
+    const controlsByAttribute = new Map<string, AttributeControl>();
+    for (const fixture of fixtures) {
+      for (const control of fixture.controls) {
+        if (!controlsByAttribute.has(control.attribute)) {
+          controlsByAttribute.set(control.attribute, control);
+        }
+      }
+    }
+    return [...controlsByAttribute.values()];
+  });
+  const selectedTimelineAutomationAttribute = createMemo(() => {
+    const controls = timelineAutomationControls();
+    const current = effectAttribute();
+    if (controls.some((control) => control.attribute === current)) {
+      return current;
+    }
+    return controls[0]?.attribute ?? "";
+  });
+  const selectedFixtureSupportsTimelineAutomationAttribute = createMemo(() => {
+    const fixture = selectedFixture();
+    const attribute = selectedTimelineAutomationAttribute();
+    return Boolean(fixture && attribute && fixture.controls.some((control) => control.attribute === attribute));
+  });
+  const canAddTimelineAutomation = createMemo(() => selectedFixtureSupportsTimelineAutomationAttribute());
+  const canAddTimelineGroupAutomation = createMemo(() =>
+    Boolean(selectedFixtureGroupFilter() && selectedTimelineAutomationAttribute() && timelineAutomationControls().length > 0),
+  );
+  const selectedDimmerControl = createMemo<DimmerControlSet | undefined>(() => {
+    const fixture = selectedControlReferenceFixture();
     if (!fixture) {
       return undefined;
     }
-    const attribute = findControlAttribute(fixture, ["Dimmer", "Intensity", "MasterIntensity"]);
+    const attribute = findControlAttributeInControls(activeControls(), ["Dimmer", "Intensity", "MasterIntensity"]);
     if (!attribute) {
       return undefined;
     }
@@ -1642,12 +2015,13 @@ export default function App() {
   });
   const touchDimmerQuickActive = createMemo(() => Boolean(touchDimmerRestore()));
   const selectedPositionControls = createMemo<PositionControlSet | undefined>(() => {
-    const fixture = selectedFixture();
+    const fixture = selectedControlReferenceFixture();
     if (!fixture) {
       return undefined;
     }
-    const pan = findControlAttribute(fixture, ["Pan"]);
-    const tilt = findControlAttribute(fixture, ["Tilt"]);
+    const controls = activeControls();
+    const pan = findControlAttributeInControls(controls, ["Pan"]);
+    const tilt = findControlAttributeInControls(controls, ["Tilt"]);
     if (!pan || !tilt) {
       return undefined;
     }
@@ -1663,13 +2037,14 @@ export default function App() {
     };
   });
   const selectedColorControls = createMemo<ColorControlSet | undefined>(() => {
-    const fixture = selectedFixture();
+    const fixture = selectedControlReferenceFixture();
     if (!fixture) {
       return undefined;
     }
-    const red = findControlAttribute(fixture, colorCandidates.red);
-    const green = findControlAttribute(fixture, colorCandidates.green);
-    const blue = findControlAttribute(fixture, colorCandidates.blue);
+    const controls = activeControls();
+    const red = findControlAttributeInControls(controls, colorCandidates.red);
+    const green = findControlAttributeInControls(controls, colorCandidates.green);
+    const blue = findControlAttributeInControls(controls, colorCandidates.blue);
     if (!red || !green || !blue) {
       return undefined;
     }
@@ -1682,19 +2057,19 @@ export default function App() {
         key: "white" as const,
         label: "White",
         shortLabel: "W",
-        attribute: findControlAttribute(fixture, colorCandidates.white),
+        attribute: findControlAttributeInControls(controls, colorCandidates.white),
       },
       {
         key: "amber" as const,
         label: "Amber",
         shortLabel: "A",
-        attribute: findControlAttribute(fixture, colorCandidates.amber),
+        attribute: findControlAttributeInControls(controls, colorCandidates.amber),
       },
       {
         key: "uv" as const,
         label: "UV",
         shortLabel: "UV",
-        attribute: findControlAttribute(fixture, colorCandidates.uv),
+        attribute: findControlAttributeInControls(controls, colorCandidates.uv),
       },
     ]
       .filter(
@@ -1812,6 +2187,24 @@ export default function App() {
       ? `Group ${selectedFixtureGroupFilter()}`
       : selectedFixture()?.label ?? "No fixture selected",
   );
+  const controlTargetKind = createMemo<"fixture" | "group" | "empty">(() =>
+    selectedFixtureGroupFilter() ? "group" : selectedFixture() ? "fixture" : "empty",
+  );
+  const controlTargetDetail = createMemo(() => {
+    const targetCount = selectedControlTargetFixtures().length;
+    const attributeCount = activeControls().length;
+    if (selectedFixtureGroupFilter()) {
+      return `${targetCount} fixture${targetCount === 1 ? "" : "s"} / ${attributeCount} common attr${attributeCount === 1 ? "" : "s"}`;
+    }
+    return attributeCount > 0 ? `${attributeCount} attr${attributeCount === 1 ? "" : "s"}` : "No controls";
+  });
+  const controlReferenceLabel = createMemo(() => {
+    const reference = selectedControlReferenceFixture();
+    if (!reference) {
+      return "No readout";
+    }
+    return selectedFixtureGroupFilter() ? `Ref ${reference.label}` : `U${reference.universe} A${reference.address}`;
+  });
   const activeControlCategoryLabel = createMemo(() =>
     controlCategories.find((category) => category.id === activeControlCategory())?.label ?? activeControlCategory(),
   );
@@ -2105,13 +2498,62 @@ export default function App() {
       { label: "Wide", value: 65_535 },
     ];
   };
+  const effectTargetFixtures = createMemo<PatchedFixtureSummary[]>(() => {
+    switch (effectTargetMode()) {
+      case "fixture": {
+        const fixture = selectedFixture();
+        return fixture ? [fixture] : [];
+      }
+      case "selection":
+        return selectedMappingFixtures();
+      case "group": {
+        const groups = parseGroupIds(effectTargetGroups());
+        if (groups.length === 0) {
+          return [];
+        }
+        return snapshot().fixtures.filter((fixture) => groups.some((groupId) => fixture.group_ids.includes(groupId)));
+      }
+      case "video":
+      default:
+        return [];
+    }
+  });
+  const effectTargetControls = createMemo<AttributeControl[]>(() => commonAttributeControls(effectTargetFixtures()));
   const selectedEffectAttribute = createMemo(() => {
-    const controls = activeControls();
+    const controls = effectTargetControls();
     const current = effectAttribute();
     if (controls.some((control) => control.attribute === current)) {
       return current;
     }
     return controls[0]?.attribute ?? "";
+  });
+  const effectTargetSummary = createMemo(() => {
+    const fixtureCount = effectTargetFixtures().length;
+    const attributeCount = effectTargetControls().length;
+    switch (effectTargetMode()) {
+      case "selection":
+        return `${fixtureCount} mapped fixture${fixtureCount === 1 ? "" : "s"} / ${attributeCount} common attribute${attributeCount === 1 ? "" : "s"}`;
+      case "group": {
+        const groups = parseGroupIds(effectTargetGroups());
+        return groups.length > 0
+          ? `${groups.join(", ")} / ${fixtureCount} fixture${fixtureCount === 1 ? "" : "s"} / ${attributeCount} common attribute${attributeCount === 1 ? "" : "s"}`
+          : "No group target";
+      }
+      case "video":
+        return selectedEffectVideoLayerId() === null
+          ? "No video layer target"
+          : `Layer ${selectedEffectVideoLayerId()} / ${effectVideoParam()} ${Math.round(effectVideoLow() * 100)}-${Math.round(effectVideoHigh() * 100)}%`;
+      case "fixture":
+      default:
+        return selectedFixture()?.label ?? "No fixture selected";
+    }
+  });
+  const effectDraftSummary = createMemo(() => {
+    if (effectType() === "PositionWave") {
+      return `Wave O ${waveOriginX().toFixed(1)},${waveOriginY().toFixed(1)},${waveOriginZ().toFixed(1)} / D ${waveDirectionX().toFixed(1)},${waveDirectionY().toFixed(1)},${waveDirectionZ().toFixed(1)} / ${waveWavelength().toFixed(1)}m`;
+    }
+    const sync = effectClockSyncBeats();
+    return sync === null ? `LFO ${effectShape()} / ${effectPeriod()}ms` : `LFO ${effectShape()} / ${sync} beat`;
   });
   const editingEffectSummary = createMemo<EffectSummary | null>(() => {
     const effectId = editingEffectId();
@@ -2226,9 +2668,21 @@ export default function App() {
       };
     }),
   );
-  const timelineOverviewDurationMs = createMemo(() =>
-    Math.max(1, snapshot().timeline.duration_ms, ...snapshot().timeline.events.map((event) => event.time_ms + 1000)),
-  );
+  const timelineOverviewDurationMs = createMemo(() => {
+    const lightingAutomationEndMs = snapshot().timeline.automations.flatMap((automation) =>
+      automation.keyframes.map((keyframe) => keyframe.time_ms),
+    );
+    const videoAutomationEndMs = snapshot().timeline.video_automations.flatMap((automation) =>
+      automation.keyframes.map((keyframe) => keyframe.time_ms),
+    );
+    return Math.max(
+      1,
+      snapshot().timeline.duration_ms,
+      ...snapshot().timeline.events.map((event) => event.time_ms + 1000),
+      ...lightingAutomationEndMs,
+      ...videoAutomationEndMs,
+    );
+  });
   const timelineOverviewPlayheadX = createMemo(() =>
     clampRange((snapshot().timeline.position_ms / timelineOverviewDurationMs()) * 100, 0, 100),
   );
@@ -2244,6 +2698,131 @@ export default function App() {
       active: snapshot().active_cue_id === event.cue_id,
     })),
   );
+  const timelineOverviewAutomationRanges = createMemo<TimelineOverviewAutomationRange[]>(() => {
+    const duration = timelineOverviewDurationMs();
+    const currentSnapshot = snapshot();
+    const lightingGroupId = selectedFixtureGroupFilter();
+    const lightingFixtureId = selectedFixtureId();
+    const lightingGroupFixtureIds =
+      lightingAutomationRowScope() === "current" && lightingGroupId
+        ? new Set(
+            currentSnapshot.fixtures
+              .filter((fixture) => fixture.group_ids.includes(lightingGroupId))
+              .map((fixture) => fixture.id),
+          )
+        : null;
+    const visibleLightingAutomation = (fixtureId: number) => {
+      if (lightingAutomationRowScope() === "all") {
+        return true;
+      }
+      if (lightingGroupFixtureIds) {
+        return lightingGroupFixtureIds.has(fixtureId);
+      }
+      return lightingFixtureId === null || fixtureId === lightingFixtureId;
+    };
+    const visibleVideoAutomationLayerId = (() => {
+      const current = videoAutomationLayerId();
+      if (current !== null && currentSnapshot.video.layers.some((layer) => layer.id === current)) {
+        return current;
+      }
+      return currentSnapshot.video.layers[0]?.id ?? null;
+    })();
+    const visibleVideoAutomation = (layerId: number) =>
+      videoAutomationRowScope() === "all" ||
+      visibleVideoAutomationLayerId === null ||
+      layerId === visibleVideoAutomationLayerId;
+    const rangeFor = (
+      id: string,
+      kind: "lighting" | "video",
+      automationId: number,
+      targetId: number,
+      label: string,
+      track: TimelineTrackKind,
+      keyframes: { time_ms: number }[],
+      enabled: boolean,
+    ): TimelineOverviewAutomationRange | null => {
+      if (keyframes.length === 0) {
+        return null;
+      }
+      const times = keyframes.map((keyframe) => keyframe.time_ms);
+      const startMs = Math.min(...times);
+      const endMs = Math.max(...times);
+      const x = clampRange((startMs / duration) * 100, 0, 100);
+      const width = Math.max(0.75, clampRange(((endMs - startMs) / duration) * 100, 0, 100 - x));
+      return {
+        id,
+        kind,
+        automation_id: automationId,
+        target_id: targetId,
+        label,
+        track,
+        start_ms: startMs,
+        end_ms: endMs,
+        keyframes: keyframes
+          .map((keyframe, keyframeIndex) => ({
+            keyframe_index: keyframeIndex,
+            time_ms: keyframe.time_ms,
+          }))
+          .sort((left, right) => left.time_ms - right.time_ms)
+          .map((keyframe) => ({
+            keyframe_index: keyframe.keyframe_index,
+            time_ms: keyframe.time_ms,
+          })),
+        x,
+        width,
+        y: track === "Lighting" ? 17.2 : 35.2,
+        enabled,
+      };
+    };
+    const lightingRanges = currentSnapshot.timeline.automations
+      .filter((automation) => visibleLightingAutomation(automation.fixture_id))
+      .map((automation) => {
+        const fixture = currentSnapshot.fixtures.find((candidate) => candidate.id === automation.fixture_id);
+        return rangeFor(
+          `l-${automation.id}`,
+          "lighting",
+          automation.id,
+          automation.fixture_id,
+          `${fixture?.label ?? `Fixture ${automation.fixture_id}`} ${automation.attribute}`,
+          automation.track,
+          automation.keyframes,
+          automation.enabled,
+        );
+      })
+      .filter((range): range is TimelineOverviewAutomationRange => Boolean(range));
+    const videoRanges = currentSnapshot.timeline.video_automations
+      .filter((automation) => visibleVideoAutomation(automation.layer_id))
+      .map((automation) => {
+        const layer = currentSnapshot.video.layers.find((candidate) => candidate.id === automation.layer_id);
+        return rangeFor(
+          `v-${automation.id}`,
+          "video",
+          automation.id,
+          automation.layer_id,
+          `${layer?.label ?? `Layer ${automation.layer_id}`} ${automation.param}`,
+          automation.track,
+          automation.keyframes,
+          automation.enabled,
+        );
+      })
+      .filter((range): range is TimelineOverviewAutomationRange => Boolean(range));
+    return [...lightingRanges, ...videoRanges];
+  });
+  const selectedTimelineAutomationRangeId = createMemo(() => {
+    const selected = selectedTimelineAutomation();
+    if (!selected) {
+      return null;
+    }
+    return `${selected.kind === "lighting" ? "l" : "v"}-${selected.automationId}`;
+  });
+  const selectedLightingTimelineAutomationId = createMemo(() => {
+    const selected = selectedTimelineAutomation();
+    return selected?.kind === "lighting" ? selected.automationId : null;
+  });
+  const selectedVideoTimelineAutomationId = createMemo(() => {
+    const selected = selectedTimelineAutomation();
+    return selected?.kind === "video" ? selected.automationId : null;
+  });
   const cueTimelinePlacementsForCue = (cueId: number) =>
     timelineEventRows()
       .filter((event) => event.cue_id === cueId)
@@ -2262,7 +2841,7 @@ export default function App() {
   });
   const fixtureAttributeOptions = (fixtureId: number) =>
     snapshot().fixtures.find((fixture) => fixture.id === fixtureId)?.controls.map((control) => control.attribute) ?? [];
-  const timelineAutomationRows = createMemo(() =>
+  const allTimelineAutomationRows = createMemo(() =>
     snapshot().timeline.automations.map((automation) => {
       const fixture = snapshot().fixtures.find((candidate) => candidate.id === automation.fixture_id);
       return {
@@ -2271,6 +2850,23 @@ export default function App() {
       };
     }),
   );
+  const timelineAutomationRows = createMemo(() => {
+    const rows = allTimelineAutomationRows();
+    if (lightingAutomationRowScope() === "all") {
+      return rows;
+    }
+    const groupId = selectedFixtureGroupFilter();
+    if (groupId) {
+      const groupFixtureIds = new Set(
+        snapshot()
+          .fixtures.filter((fixture) => fixture.group_ids.includes(groupId))
+          .map((fixture) => fixture.id),
+      );
+      return rows.filter((automation) => groupFixtureIds.has(automation.fixture_id));
+    }
+    const fixtureId = selectedFixtureId();
+    return fixtureId === null ? rows : rows.filter((automation) => automation.fixture_id === fixtureId);
+  });
   const selectedVideoAutomationLayerId = createMemo(() => {
     const current = videoAutomationLayerId();
     const layers = snapshot().video.layers;
@@ -2889,7 +3485,7 @@ export default function App() {
         return { kind: "videoOnly" };
     }
   };
-  const timelineVideoAutomationRows = createMemo(() =>
+  const allTimelineVideoAutomationRows = createMemo(() =>
     snapshot().timeline.video_automations.map((automation) => {
       const layer = snapshot().video.layers.find((candidate) => candidate.id === automation.layer_id);
       return {
@@ -2898,6 +3494,26 @@ export default function App() {
       };
     }),
   );
+  const timelineVideoAutomationRows = createMemo(() => {
+    const rows = allTimelineVideoAutomationRows();
+    if (videoAutomationRowScope() === "all") {
+      return rows;
+    }
+    const layerId = selectedVideoAutomationLayerId();
+    return layerId === null ? rows : rows.filter((automation) => automation.layer_id === layerId);
+  });
+  createEffect(() => {
+    const selected = selectedTimelineAutomation();
+    if (!selected) {
+      return;
+    }
+    const exists = selected.kind === "lighting"
+      ? snapshot().timeline.automations.some((automation) => automation.id === selected.automationId)
+      : snapshot().timeline.video_automations.some((automation) => automation.id === selected.automationId);
+    if (!exists) {
+      setSelectedTimelineAutomation(null);
+    }
+  });
   const activeCue = createMemo(() => {
     const activeCueId = snapshot().active_cue_id;
     return snapshot().cues.find((cue) => cue.id === activeCueId) ?? null;
@@ -2915,6 +3531,13 @@ export default function App() {
   });
   const cuePadBankCount = createMemo(() => Math.max(1, Math.ceil(snapshot().cues.length / cuePadSize)));
   const cuePadStartIndex = createMemo(() => cuePadBank() * cuePadSize);
+  const cuePadRangeLabel = createMemo(() => {
+    const cueCount = snapshot().cues.length;
+    if (cueCount === 0) {
+      return "No cues";
+    }
+    return `${cuePadStartIndex() + 1}-${Math.min(cuePadStartIndex() + cuePadSize, cueCount)} / ${cueCount}`;
+  });
   const activeCueIndex = createMemo(() => {
     const activeCueId = snapshot().active_cue_id;
     if (activeCueId === null || activeCueId === undefined) {
@@ -2937,12 +3560,20 @@ export default function App() {
       ? `layoutSetup setupMode-${setupSubTab()}`
       : workspaceTab() === "touch"
         ? "layoutTouch"
-        : "layoutControl",
+        : `layoutControl controlMode${controlMode()[0].toUpperCase()}${controlMode().slice(1)}`,
   );
-  const remoteUrl = createMemo(() => {
+  const remoteConfig = createMemo<RemoteControlConfig>(() => ({
+    bind_ip: remoteBindIp(),
+    port: remotePort(),
+  }));
+  const fallbackRemoteUrl = createMemo(() => {
     const host = remoteBindIp().trim();
     const displayHost = host === "" || host === "0.0.0.0" ? "localhost" : host;
     return `http://${displayHost}:${remotePort()}/remote`;
+  });
+  const remoteUrls = createMemo(() => {
+    const urls = remoteAccessUrls();
+    return urls.length > 0 ? urls : [fallbackRemoteUrl()];
   });
   const autoStageWorldBounds = createMemo<StageWorldBounds>(() => {
     const fixtures = snapshot().fixtures;
@@ -3754,6 +4385,9 @@ export default function App() {
       const fixture = selectedFixture();
       return new Set(fixture ? [fixture.id] : []);
     }
+    if (mode === "selection") {
+      return selectedMappingFixtureIdSet();
+    }
     if (mode === "group") {
       const groups = parseGroupIds(effectTargetGroups());
       return new Set(
@@ -4059,6 +4693,71 @@ export default function App() {
     setMessage(count > 0 ? `Cleared ${count} mapped fixture pick${count === 1 ? "" : "s"}.` : "No mapped fixtures are picked.");
   };
 
+  const prepareMappingSelectionEffectTarget = () => {
+    const fixtures = selectedMappingFixtures();
+    if (fixtures.length === 0) {
+      setMessage("Select one or more fixtures on the 2D mapping stage first.");
+      return null;
+    }
+    const activeFixture = selectedFixture();
+    if (!activeFixture || !fixtures.some((fixture) => fixture.id === activeFixture.id)) {
+      activateFixture(fixtures[0]);
+    }
+    const center = selectedMappingFixtureCenter(fixtures);
+    const averageY = fixtures.reduce((sum, fixture) => sum + fixture.position.y, 0) / fixtures.length;
+    setWaveOriginX(Number(center.x.toFixed(3)));
+    setWaveOriginY(Number(averageY.toFixed(3)));
+    setWaveOriginZ(Number(center.z.toFixed(3)));
+    setEffectTargetMode("selection");
+    setWorkspaceTab("control");
+    setControlMode("edit");
+    return { center, averageY };
+  };
+
+  const useMappingSelectionAsEffectTarget = () => {
+    const fixtures = selectedMappingFixtures();
+    if (!prepareMappingSelectionEffectTarget()) {
+      return;
+    }
+    setMessage(`Using ${fixtures.length} mapped fixture${fixtures.length === 1 ? "" : "s"} as the effect target.`);
+  };
+
+  const useMappingSelectionAsWaveEffectTarget = () => {
+    const fixtures = selectedMappingFixtures();
+    if (!prepareMappingSelectionEffectTarget()) {
+      return;
+    }
+    const minX = Math.min(...fixtures.map((fixture) => fixture.position.x));
+    const maxX = Math.max(...fixtures.map((fixture) => fixture.position.x));
+    const minZ = Math.min(...fixtures.map((fixture) => fixture.position.z));
+    const maxZ = Math.max(...fixtures.map((fixture) => fixture.position.z));
+    const width = Math.abs(maxX - minX);
+    const depth = Math.abs(maxZ - minZ);
+    const span = Math.max(width, depth);
+    const controls = commonAttributeControls(fixtures);
+    const preferredAttribute =
+      controls.find((control) => ["dimmer", "intensity", "masterintensity"].includes(control.attribute.toLowerCase())) ??
+      controls[0];
+    if (preferredAttribute) {
+      setEffectAttribute(preferredAttribute.attribute);
+    }
+    setEffectType("PositionWave");
+    setEffectShape("Sine");
+    setEffectBlendMode("Override");
+    setEffectLow(0);
+    setEffectHigh(65_535);
+    setEffectPhase(0);
+    setWaveSpeed(1);
+    setWaveWavelength(Number(clampRange(span > 0 ? span / 2 : 2, 1, 8).toFixed(2)));
+    setWaveDirectionPreset(width >= depth ? 1 : 0, 0, depth > width ? 1 : 0);
+    setEffectClockSyncPreset(1);
+    setMessage(
+      preferredAttribute
+        ? `Prepared a position wave draft for ${fixtures.length} mapped fixture${fixtures.length === 1 ? "" : "s"} on ${preferredAttribute.attribute}.`
+        : `Prepared a position wave draft for ${fixtures.length} mapped fixture${fixtures.length === 1 ? "" : "s"}, but no common light attribute was found.`,
+    );
+  };
+
   const handleDmxAddressCellClick = (cell: DmxAddressCell) => {
     setUniverse(activePatchGridUniverse());
     setAddress(cell.segment?.start ?? cell.channel);
@@ -4247,6 +4946,30 @@ export default function App() {
     setProjectDirty(false);
   };
 
+  const rememberRecentProjectPath = (path: string | null) => {
+    if (!path) {
+      return;
+    }
+    setRecentProjectPaths((current) => {
+      const next = touchRecentProjectPath(current, path);
+      saveRecentProjectPaths(next);
+      return next;
+    });
+  };
+
+  const clearRecentProjects = () => {
+    setRecentProjectPaths([]);
+    saveRecentProjectPaths([]);
+    setMessage("Recent projects cleared.");
+  };
+
+  const confirmDiscardProjectChanges = (actionLabel: string) => {
+    if (!projectDirty()) {
+      return true;
+    }
+    return window.confirm(`Discard unsaved changes and ${actionLabel}?`);
+  };
+
   const applyEngineSnapshot = (next: EngineSnapshot) => {
     setSnapshot(next);
     const signature = projectSnapshotSignature(next);
@@ -4335,6 +5058,7 @@ export default function App() {
     void loadQueuedOpenProjects();
     let disposed = false;
     let unlistenOpenProject: (() => void) | null = null;
+    let unlistenProjectDrop: (() => void) | null = null;
     void listen<string[]>("rayard://open-project", (event) => {
       const paths = Array.isArray(event.payload) ? event.payload : [];
       const path = paths[paths.length - 1];
@@ -4350,9 +5074,41 @@ export default function App() {
         }
       })
       .catch((error) => setMessage(String(error)));
+    void getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type === "enter") {
+          setProjectDropState(event.payload.paths.some(isRayardProjectPath) ? "project" : "invalid");
+          return;
+        }
+        if (event.payload.type === "leave") {
+          setProjectDropState(null);
+          return;
+        }
+        if (event.payload.type !== "drop") {
+          return;
+        }
+        setProjectDropState(null);
+        const projectPath = event.payload.paths.find(isRayardProjectPath);
+        if (!projectPath) {
+          if (event.payload.paths.length > 0) {
+            setMessage("Drop a .ry project file to open it.");
+          }
+          return;
+        }
+        void loadProjectPath(projectPath);
+      })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+        } else {
+          unlistenProjectDrop = unlisten;
+        }
+      })
+      .catch((error) => setMessage(String(error)));
     onCleanup(() => {
       disposed = true;
       unlistenOpenProject?.();
+      unlistenProjectDrop?.();
     });
   });
   createEffect(() => {
@@ -6292,6 +7048,10 @@ export default function App() {
   };
 
   const newProject = async () => {
+    if (!confirmDiscardProjectChanges("create a new project")) {
+      setMessage("New project canceled.");
+      return;
+    }
     try {
       await invoke("new_project");
       setCurrentProjectPath(null);
@@ -6312,6 +7072,7 @@ export default function App() {
       const path = await invoke<string | null>("save_project");
       if (path) {
         setCurrentProjectPath(path);
+        rememberRecentProjectPath(path);
         const next = await refreshSnapshot();
         if (next) {
           markProjectClean(next);
@@ -6328,6 +7089,7 @@ export default function App() {
       const path = await invoke<string | null>("save_project_as");
       if (path) {
         setCurrentProjectPath(path);
+        rememberRecentProjectPath(path);
         const next = await refreshSnapshot();
         if (next) {
           markProjectClean(next);
@@ -6346,6 +7108,7 @@ export default function App() {
 
   const applyLoadedProjectResult = async (result: ProjectLoadResult, currentPath: string | null) => {
     setCurrentProjectPath(currentPath);
+    rememberRecentProjectPath(currentPath);
     setMessage(loadedProjectMessage(result));
     const next = await refreshSnapshot();
     if (next) {
@@ -6354,6 +7117,10 @@ export default function App() {
   };
 
   const loadProject = async () => {
+    if (!confirmDiscardProjectChanges("load another project")) {
+      setMessage("Project load canceled.");
+      return;
+    }
     try {
       const result = await invoke<ProjectLoadResult | null>("load_project");
       if (!result) {
@@ -6367,12 +7134,20 @@ export default function App() {
   };
 
   const loadProjectPath = async (path: string) => {
+    if (!confirmDiscardProjectChanges(`open ${path}`)) {
+      setMessage("Project open canceled.");
+      return;
+    }
     try {
       const result = await invoke<ProjectLoadResult>("load_project_path", { path });
       await applyLoadedProjectResult(result, result.path);
     } catch (error) {
       setMessage(String(error));
     }
+  };
+
+  const loadRecentProject = (path: string) => {
+    void loadProjectPath(path);
   };
 
   const loadStartupProject = async () => {
@@ -6399,6 +7174,10 @@ export default function App() {
   };
 
   const loadPhase1SampleProject = async () => {
+    if (!confirmDiscardProjectChanges("load the Phase 1 sample project")) {
+      setMessage("Sample project load canceled.");
+      return;
+    }
     try {
       const result = await invoke<ProjectLoadResult>("load_phase1_sample_project");
       setPhase1SmokeReport(null);
@@ -6420,7 +7199,8 @@ export default function App() {
       const report = await invoke<Phase1SmokeReport>("run_phase1_smoke");
       setPhase1SmokeReport(report);
       setCurrentProjectPath(null);
-      setWorkspaceTab("control");
+      setWorkspaceTab("setup");
+      setSetupSubTab("output");
       setRawDmxUniverse(0);
       setDmxTestChannel(1);
       setDmxTestWidth(8);
@@ -6433,8 +7213,8 @@ export default function App() {
       const expected = report.expected_first_8.map((value) => value.toString(16).padStart(2, "0").toUpperCase()).join(" ");
       setMessage(
         report.passed
-          ? `Smoke passed: ${report.path}, ${report.cue_label}, U0 A1-A8 ${values}.`
-          : `Smoke failed: active cue ${report.active_cue_id ?? "none"}, got ${values}, expected ${expected}.`,
+          ? `Smoke passed: ${report.path}, ${report.cue_label}, ${report.primary_output_label}, U0 A1-A8 ${values}.`
+          : `Smoke failed: ${report.primary_output_label}, active cue ${report.active_cue_id ?? "none"}, got ${values}, expected ${expected}.`,
       );
     } catch (error) {
       setMessage(String(error));
@@ -6496,10 +7276,10 @@ export default function App() {
   };
 
   const setFixtureColor = async (hexColor: string) => {
-    const fixture = selectedFixture();
+    const fixture = selectedControlReferenceFixture();
     const controls = selectedColorControls();
     if (!fixture || !controls) {
-      setMessage("Selected fixture has no RGB color controls.");
+      setMessage(selectedFixtureGroupFilter() ? "Selected group has no common RGB color controls." : "Selected fixture has no RGB color controls.");
       return;
     }
     const red = Number.parseInt(hexColor.slice(1, 3), 16) * 257;
@@ -6515,12 +7295,7 @@ export default function App() {
       updates.push({ attribute: whiteChannel.attribute, value: Math.min(red, green, blue) });
     }
     const groupId = selectedFixtureGroupFilter();
-    const fixtureIds = groupId
-      ? snapshot()
-          .fixtures
-          .filter((candidate) => candidate.group_ids.includes(groupId))
-          .map((candidate) => candidate.id)
-      : [fixture.id];
+    const fixtureIds = groupId ? selectedControlTargetFixtures().map((candidate) => candidate.id) : [fixture.id];
     setFaderValues((current) => {
       const next = { ...current };
       for (const fixtureId of fixtureIds) {
@@ -6554,7 +7329,7 @@ export default function App() {
   };
 
   const setPanTiltFromPointer = async (event: PointerEvent) => {
-    const fixture = selectedFixture();
+    const fixture = selectedControlReferenceFixture();
     const controls = selectedPositionControls();
     if (!fixture || !controls) {
       return;
@@ -6576,10 +7351,10 @@ export default function App() {
   };
 
   const setPanTiltValues = async (panValue: number, tiltValue: number) => {
-    const fixture = selectedFixture();
+    const fixture = selectedControlReferenceFixture();
     const controls = selectedPositionControls();
     if (!fixture || !controls) {
-      setMessage("Selected fixture has no Pan/Tilt controls.");
+      setMessage(selectedFixtureGroupFilter() ? "Selected group has no common Pan/Tilt controls." : "Selected fixture has no Pan/Tilt controls.");
       return;
     }
     const { pan: nextPan, tilt: nextTilt } = sourcePanTiltValues(fixture, panValue, tiltValue);
@@ -6730,9 +7505,9 @@ export default function App() {
   };
 
   const setColorExtraChannelValue = (extra: ColorExtraControl, value: number) => {
-    const fixture = selectedFixture();
+    const fixture = selectedControlReferenceFixture();
     if (!fixture) {
-      setMessage("Select a fixture before setting an extra color channel.");
+      setMessage(selectedFixtureGroupFilter() ? "Selected group has no common extra color channel." : "Select a fixture before setting an extra color channel.");
       return;
     }
     const nextValue = clampDmxValue(value);
@@ -6771,10 +7546,10 @@ export default function App() {
   };
 
   const setDimmerValue = (value: number) => {
-    const fixture = selectedFixture();
+    const fixture = selectedControlReferenceFixture();
     const control = selectedDimmerControl();
     if (!fixture || !control) {
-      setMessage("Selected fixture has no dimmer control.");
+      setMessage(selectedFixtureGroupFilter() ? "Selected group has no common dimmer control." : "Selected fixture has no dimmer control.");
       return;
     }
     const nextValue = dimmerValueWithinLimits(fixture, value);
@@ -6857,9 +7632,9 @@ export default function App() {
   };
 
   const setControlAttributeValue = (control: AttributeControl, value: number) => {
-    const fixture = selectedFixture();
+    const fixture = selectedControlReferenceFixture();
     if (!fixture) {
-      setMessage("Select a fixture before setting a control value.");
+      setMessage(selectedFixtureGroupFilter() ? "Selected group has no compatible fixture for this control." : "Select a fixture before setting a control value.");
       return;
     }
     const nextValue = clampDmxValue(value);
@@ -7932,15 +8707,76 @@ export default function App() {
     }
   };
 
-  const startRemoteControl = async () => {
-    const config: RemoteControlConfig = {
-      bind_ip: remoteBindIp(),
-      port: remotePort(),
-    };
+  const refreshRemoteAccessUrls = async (config: RemoteControlConfig = remoteConfig()) => {
+    if (!isTauriRuntime()) {
+      setRemoteAccessUrls([]);
+      return [];
+    }
     try {
-      await invoke("start_remote_control", { config });
-      setRemoteRunning(true);
-      setMessage(`Remote WebSocket listening on ${config.bind_ip}:${config.port}`);
+      const urls = await invoke<string[]>("remote_access_urls", { config });
+      setRemoteAccessUrls(urls);
+      return urls;
+    } catch {
+      setRemoteAccessUrls([]);
+      return [];
+    }
+  };
+
+  const copyRemoteUrl = async (url: string) => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        const textArea = document.createElement("textarea");
+        textArea.value = url;
+        textArea.setAttribute("readonly", "");
+        textArea.style.position = "fixed";
+        textArea.style.left = "-9999px";
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textArea);
+      }
+      setMessage(`Copied remote URL: ${url}`);
+    } catch (error) {
+      setMessage(`Could not copy remote URL: ${String(error)}`);
+    }
+  };
+
+  const startRemoteServer = async (config: RemoteControlConfig = remoteConfig()) => {
+    await invoke("start_remote_control", { config });
+    const urls = await refreshRemoteAccessUrls(config);
+    setRemoteRunning(true);
+    return urls;
+  };
+
+  const openRemoteUrl = async (url: string) => {
+    let targetUrl = url;
+    try {
+      if (!remoteRunning() && isTauriRuntime()) {
+        const urls = await startRemoteServer();
+        targetUrl = urls.includes(url) ? url : urls[0] ?? url;
+      }
+      const opened = window.open(targetUrl, "_blank", "noopener,noreferrer");
+      if (opened) {
+        setMessage(`Opened remote URL: ${targetUrl}`);
+      } else {
+        setMessage(`Could not open remote URL. Copy it instead: ${targetUrl}`);
+      }
+    } catch (error) {
+      setMessage(`Could not start remote before opening: ${String(error)}`);
+    }
+  };
+
+  createEffect(() => {
+    const config = remoteConfig();
+    void refreshRemoteAccessUrls(config);
+  });
+
+  const startRemoteControl = async () => {
+    try {
+      const urls = await startRemoteServer();
+      setMessage(`Remote listening: ${(urls[0] ?? fallbackRemoteUrl())}`);
     } catch (error) {
       setMessage(String(error));
     }
@@ -7950,6 +8786,7 @@ export default function App() {
     try {
       await invoke("stop_remote_control");
       setRemoteRunning(false);
+      void refreshRemoteAccessUrls();
       setMessage("Remote WebSocket stopped.");
     } catch (error) {
       setMessage(String(error));
@@ -8108,6 +8945,94 @@ export default function App() {
     setMessage(`Snapped timeline inputs to ${timelineSnapMode().toLowerCase()}.`);
   };
 
+  const snapTimelineItems = async () => {
+    if (timelineSnapMode() === "Off") {
+      setMessage("Choose Beat, Bar, or Grid before snapping timeline items.");
+      return;
+    }
+    const timeline = snapshot().timeline;
+    const cueEventUpdates = timeline.events.map((event) => ({
+      event,
+      timeMs: snapTimeMs(event.time_ms),
+    }));
+    const lightingAutomationUpdates = timeline.automations.map((automation) => ({
+      automation,
+      keyframes: snappedTimelineKeyframes(automation.keyframes, snapTimeMs),
+    }));
+    const videoAutomationUpdates = timeline.video_automations.map((automation) => ({
+      automation,
+      keyframes: snappedTimelineKeyframes(automation.keyframes, snapTimeMs),
+    }));
+    const itemCount = cueEventUpdates.length + lightingAutomationUpdates.length + videoAutomationUpdates.length;
+    if (itemCount === 0) {
+      setMessage("No timeline items to snap.");
+      return;
+    }
+    try {
+      await Promise.all([
+        ...cueEventUpdates.map(({ event, timeMs }) =>
+          invoke("set_timeline_cue_event", {
+            eventId: event.id,
+            cueId: event.cue_id,
+            timeMs,
+            track: event.track,
+          }),
+        ),
+        ...lightingAutomationUpdates.map(({ automation, keyframes }) =>
+          invoke("set_timeline_automation", {
+            automationId: automation.id,
+            fixtureId: automation.fixture_id,
+            attribute: automation.attribute,
+            keyframes,
+          }),
+        ),
+        ...videoAutomationUpdates.map(({ automation, keyframes }) =>
+          invoke("set_timeline_video_automation", {
+            automationId: automation.id,
+            layerId: automation.layer_id,
+            param: automation.param,
+            keyframes,
+          }),
+        ),
+      ]);
+      setTimelineEventDrafts((current) => {
+        const next = { ...current };
+        for (const { event, timeMs } of cueEventUpdates) {
+          next[event.id] = {
+            cue_id: event.cue_id,
+            time_ms: timeMs,
+            track: event.track,
+          };
+        }
+        return next;
+      });
+      setTimelineAutomationDrafts((current) => {
+        const next = { ...current };
+        for (const { automation, keyframes } of lightingAutomationUpdates) {
+          next[automation.id] = {
+            ...(current[automation.id] ?? timelineAutomationDraftFromSummary(automation)),
+            ...draftRangeFromKeyframes(keyframes),
+          };
+        }
+        return next;
+      });
+      setTimelineVideoAutomationDrafts((current) => {
+        const next = { ...current };
+        for (const { automation, keyframes } of videoAutomationUpdates) {
+          next[automation.id] = {
+            ...(current[automation.id] ?? timelineVideoAutomationDraftFromSummary(automation)),
+            ...draftRangeFromKeyframes(keyframes),
+          };
+        }
+        return next;
+      });
+      setMessage(`Snapped ${itemCount} timeline item(s) to ${timelineSnapMode().toLowerCase()}.`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
   const addTimelineCueEventAt = async (cueId: number | null, timeMs: number, track: TimelineTrackKind, nextDraftTime = true) => {
     if (cueId === null) {
       setMessage("Create a cue before adding timeline events.");
@@ -8219,6 +9144,262 @@ export default function App() {
     }
   };
 
+  const currentLightingAutomationValue = (automation: TimelineAutomationSummary) => {
+    const fixture = snapshot().fixtures.find((candidate) => candidate.id === automation.fixture_id);
+    if (!fixture) {
+      return null;
+    }
+    const control = fixture?.controls.find((candidate) => candidate.attribute === automation.attribute);
+    const fallbackValue = fixture?.attribute_values.find((value) => value.attribute === automation.attribute)?.value ?? control?.default_value;
+    return faderValue(automation.fixture_id, automation.attribute, fallbackValue ?? 0);
+  };
+
+  const currentVideoAutomationValue = (automation: TimelineVideoAutomationSummary) => {
+    const layer = snapshot().video.layers.find((candidate) => candidate.id === automation.layer_id);
+    const state = layer?.state;
+    if (!state) {
+      return null;
+    }
+    return videoAutomationValueFromState(state, automation.param);
+  };
+
+  const selectTimelineAutomationRange = (range: TimelineOverviewAutomationRange) => {
+    setSelectedTimelineAutomation({
+      kind: range.kind,
+      automationId: range.automation_id,
+    });
+  };
+
+  const keyframeDeleteToleranceMs = () => Math.max(1, Math.min(100, Math.round(timelinePlacementNudgeMs() / 4)));
+
+  const automationBoundsFromResizeRatio = (
+    range: TimelineOverviewAutomationRange,
+    edge: "start" | "end",
+    ratio: number,
+  ) => {
+    const targetMs = snapTimeMs(Math.round(clampRange(ratio, 0, 1) * timelineOverviewDurationMs()));
+    const startMs = Math.max(0, range.start_ms);
+    const endMs = Math.max(startMs + 1, range.end_ms);
+    if (edge === "start") {
+      return {
+        startMs: Math.max(0, Math.min(targetMs, endMs - 1)),
+        endMs,
+      };
+    }
+    return {
+      startMs,
+      endMs: Math.max(startMs + 1, targetMs),
+    };
+  };
+
+  const moveTimelineAutomationRangeToRatio = async (range: TimelineOverviewAutomationRange, ratio: number) => {
+    const nextStartMs = snapTimeMs(Math.round(clampRange(ratio, 0, 1) * timelineOverviewDurationMs()));
+    if (range.kind === "lighting") {
+      const automation = snapshot().timeline.automations.find((candidate) => candidate.id === range.automation_id);
+      if (!automation) {
+        setMessage(`Lighting automation ${range.automation_id} was not found.`);
+        return;
+      }
+      const keyframes = shiftedTimelineKeyframes(automation.keyframes, nextStartMs);
+      if (!keyframes) {
+        setMessage(`Lighting automation ${automation.id} has no keyframes.`);
+        return;
+      }
+      try {
+        await invoke("set_timeline_automation", {
+          automationId: automation.id,
+          fixtureId: automation.fixture_id,
+          attribute: automation.attribute,
+          keyframes,
+        });
+        setTimelineAutomationDrafts((current) => ({
+          ...current,
+          [automation.id]: {
+            ...(current[automation.id] ?? timelineAutomationDraftFromSummary(automation)),
+            ...draftRangeFromKeyframes(keyframes),
+          },
+        }));
+        setMessage(`Moved automation ${automation.id} to ${nextStartMs} ms`);
+        await refreshSnapshot();
+      } catch (error) {
+        setMessage(String(error));
+      }
+      return;
+    }
+
+    const automation = snapshot().timeline.video_automations.find((candidate) => candidate.id === range.automation_id);
+    if (!automation) {
+      setMessage(`Video automation ${range.automation_id} was not found.`);
+      return;
+    }
+    const keyframes = shiftedTimelineKeyframes(automation.keyframes, nextStartMs);
+    if (!keyframes) {
+      setMessage(`Video automation ${automation.id} has no keyframes.`);
+      return;
+    }
+    try {
+      await invoke("set_timeline_video_automation", {
+        automationId: automation.id,
+        layerId: automation.layer_id,
+        param: automation.param,
+        keyframes,
+      });
+      setTimelineVideoAutomationDrafts((current) => ({
+        ...current,
+        [automation.id]: {
+          ...(current[automation.id] ?? timelineVideoAutomationDraftFromSummary(automation)),
+          ...draftRangeFromKeyframes(keyframes),
+        },
+      }));
+      setMessage(`Moved video automation ${automation.id} to ${nextStartMs} ms`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const resizeTimelineAutomationRangeToRatio = async (
+    range: TimelineOverviewAutomationRange,
+    edge: "start" | "end",
+    ratio: number,
+  ) => {
+    const bounds = automationBoundsFromResizeRatio(range, edge, ratio);
+    if (range.kind === "lighting") {
+      const automation = snapshot().timeline.automations.find((candidate) => candidate.id === range.automation_id);
+      if (!automation) {
+        setMessage(`Lighting automation ${range.automation_id} was not found.`);
+        return;
+      }
+      const keyframes = resizedTimelineKeyframes(automation.keyframes, bounds.startMs, bounds.endMs);
+      if (!keyframes) {
+        setMessage(`Lighting automation ${automation.id} has no keyframes.`);
+        return;
+      }
+      try {
+        await invoke("set_timeline_automation", {
+          automationId: automation.id,
+          fixtureId: automation.fixture_id,
+          attribute: automation.attribute,
+          keyframes,
+        });
+        setTimelineAutomationDrafts((current) => ({
+          ...current,
+          [automation.id]: {
+            ...(current[automation.id] ?? timelineAutomationDraftFromSummary(automation)),
+            ...draftRangeFromKeyframes(keyframes),
+          },
+        }));
+        setMessage(`Resized automation ${automation.id} to ${bounds.startMs}-${bounds.endMs} ms`);
+        await refreshSnapshot();
+      } catch (error) {
+        setMessage(String(error));
+      }
+      return;
+    }
+
+    const automation = snapshot().timeline.video_automations.find((candidate) => candidate.id === range.automation_id);
+    if (!automation) {
+      setMessage(`Video automation ${range.automation_id} was not found.`);
+      return;
+    }
+    const keyframes = resizedTimelineKeyframes(automation.keyframes, bounds.startMs, bounds.endMs);
+    if (!keyframes) {
+      setMessage(`Video automation ${automation.id} has no keyframes.`);
+      return;
+    }
+    try {
+      await invoke("set_timeline_video_automation", {
+        automationId: automation.id,
+        layerId: automation.layer_id,
+        param: automation.param,
+        keyframes,
+      });
+      setTimelineVideoAutomationDrafts((current) => ({
+        ...current,
+        [automation.id]: {
+          ...(current[automation.id] ?? timelineVideoAutomationDraftFromSummary(automation)),
+          ...draftRangeFromKeyframes(keyframes),
+        },
+      }));
+      setMessage(`Resized video automation ${automation.id} to ${bounds.startMs}-${bounds.endMs} ms`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const moveTimelineAutomationKeyframeToRatio = async (
+    range: TimelineOverviewAutomationRange,
+    keyframeIndex: number,
+    ratio: number,
+  ) => {
+    const nextTimeMs = snapTimeMs(Math.round(clampRange(ratio, 0, 1) * timelineOverviewDurationMs()));
+    if (range.kind === "lighting") {
+      const automation = snapshot().timeline.automations.find((candidate) => candidate.id === range.automation_id);
+      if (!automation) {
+        setMessage(`Lighting automation ${range.automation_id} was not found.`);
+        return;
+      }
+      const keyframes = movedTimelineKeyframe(automation.keyframes, keyframeIndex, nextTimeMs);
+      if (!keyframes) {
+        setMessage(`Lighting automation keyframe ${keyframeIndex + 1} was not found.`);
+        return;
+      }
+      const movedTimeMs = timelineKeyframeMoveTime(automation.keyframes, keyframeIndex, nextTimeMs) ?? nextTimeMs;
+      try {
+        await invoke("set_timeline_automation", {
+          automationId: automation.id,
+          fixtureId: automation.fixture_id,
+          attribute: automation.attribute,
+          keyframes,
+        });
+        setTimelineAutomationDrafts((current) => ({
+          ...current,
+          [automation.id]: {
+            ...(current[automation.id] ?? timelineAutomationDraftFromSummary(automation)),
+            ...draftRangeFromKeyframes(keyframes),
+          },
+        }));
+        setMessage(`Moved automation ${automation.id} key ${keyframeIndex + 1} to ${movedTimeMs} ms`);
+        await refreshSnapshot();
+      } catch (error) {
+        setMessage(String(error));
+      }
+      return;
+    }
+
+    const automation = snapshot().timeline.video_automations.find((candidate) => candidate.id === range.automation_id);
+    if (!automation) {
+      setMessage(`Video automation ${range.automation_id} was not found.`);
+      return;
+    }
+    const keyframes = movedTimelineKeyframe(automation.keyframes, keyframeIndex, nextTimeMs);
+    if (!keyframes) {
+      setMessage(`Video automation keyframe ${keyframeIndex + 1} was not found.`);
+      return;
+    }
+    const movedTimeMs = timelineKeyframeMoveTime(automation.keyframes, keyframeIndex, nextTimeMs) ?? nextTimeMs;
+    try {
+      await invoke("set_timeline_video_automation", {
+        automationId: automation.id,
+        layerId: automation.layer_id,
+        param: automation.param,
+        keyframes,
+      });
+      setTimelineVideoAutomationDrafts((current) => ({
+        ...current,
+        [automation.id]: {
+          ...(current[automation.id] ?? timelineVideoAutomationDraftFromSummary(automation)),
+          ...draftRangeFromKeyframes(keyframes),
+        },
+      }));
+      setMessage(`Moved video automation ${automation.id} key ${keyframeIndex + 1} to ${movedTimeMs} ms`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
   const removeTimelineEvent = async (eventId: number) => {
     try {
       await invoke("remove_timeline_event", { eventId });
@@ -8229,11 +9410,419 @@ export default function App() {
     }
   };
 
+  const automationRangeFromPlayhead = () => {
+    const startMs = snapTimeMs(snapshot().timeline.position_ms);
+    const endMs = Math.max(startMs, snapTimeMs(startMs + timelinePlacementNudgeMs()));
+    return { startMs, endMs };
+  };
+
+  const usePlayheadForLightingAutomation = () => {
+    const { startMs, endMs } = automationRangeFromPlayhead();
+    setAutomationStartMs(startMs);
+    setAutomationEndMs(endMs);
+    setMessage(`Lighting automation draft ${startMs}-${endMs} ms`);
+  };
+
+  const usePlayheadForVideoAutomation = () => {
+    const { startMs, endMs } = automationRangeFromPlayhead();
+    setVideoAutomationStartMs(startMs);
+    setVideoAutomationEndMs(endMs);
+    setMessage(`Video automation draft ${startMs}-${endMs} ms`);
+  };
+
+  const automationDraftRangeAtPlayhead = (startMs: number, endMs: number) => {
+    const nextStartMs = snapTimeMs(snapshot().timeline.position_ms);
+    const sourceDurationMs = Math.max(0, Math.round(endMs - startMs));
+    const durationMs = sourceDurationMs > 0 ? sourceDurationMs : Math.max(1, timelinePlacementNudgeMs());
+    let nextEndMs = snapTimeMs(nextStartMs + durationMs);
+    if (nextEndMs <= nextStartMs) {
+      nextEndMs = nextStartMs + Math.max(1, durationMs);
+    }
+    return { startMs: nextStartMs, endMs: nextEndMs };
+  };
+
+  const alignLightingAutomationDraftToPlayhead = (automation: TimelineAutomationSummary) => {
+    const draft = timelineAutomationDraft(automation);
+    const range = automationDraftRangeAtPlayhead(draft.start_ms, draft.end_ms);
+    updateTimelineAutomationDraft(automation, {
+      start_ms: range.startMs,
+      end_ms: range.endMs,
+    });
+    setMessage(`Aligned automation ${automation.id} draft to ${range.startMs}-${range.endMs} ms`);
+  };
+
+  const alignVideoAutomationDraftToPlayhead = (automation: TimelineVideoAutomationSummary) => {
+    const draft = timelineVideoAutomationDraft(automation);
+    const range = automationDraftRangeAtPlayhead(draft.start_ms, draft.end_ms);
+    updateTimelineVideoAutomationDraft(automation, {
+      start_ms: range.startMs,
+      end_ms: range.endMs,
+    });
+    setMessage(`Aligned video automation ${automation.id} draft to ${range.startMs}-${range.endMs} ms`);
+  };
+
+  const addLightingAutomationKeyframeAtPlayhead = async (automation: TimelineAutomationSummary) => {
+    const timeMs = snapTimeMs(snapshot().timeline.position_ms);
+    const capturedValue = currentLightingAutomationValue(automation);
+    const evaluatedValue = capturedValue ?? evaluateTimelineKeyframes(automation.keyframes, timeMs);
+    if (evaluatedValue === null || !Number.isFinite(evaluatedValue)) {
+      setMessage(`Lighting automation ${automation.id} has no keyframes.`);
+      return;
+    }
+    const value = Math.max(0, Math.min(65535, Math.round(evaluatedValue)));
+    const keyframes = upsertTimelineKeyframe<AutomationKeyframeSummary>(automation.keyframes, {
+      time_ms: timeMs,
+      value,
+      interpolation: interpolationForInsertedKeyframe(automation.keyframes, timeMs),
+    });
+    try {
+      await invoke("set_timeline_automation", {
+        automationId: automation.id,
+        fixtureId: automation.fixture_id,
+        attribute: automation.attribute,
+        keyframes,
+      });
+      setTimelineAutomationDrafts((current) => ({
+        ...current,
+        [automation.id]: {
+          ...(current[automation.id] ?? timelineAutomationDraftFromSummary(automation)),
+          ...draftRangeFromKeyframes(keyframes),
+        },
+      }));
+      setMessage(`Captured automation ${automation.id} key at ${timeMs} ms = ${value}`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const addVideoAutomationKeyframeAtPlayhead = async (automation: TimelineVideoAutomationSummary) => {
+    const timeMs = snapTimeMs(snapshot().timeline.position_ms);
+    const capturedValue = currentVideoAutomationValue(automation);
+    const evaluatedValue = capturedValue ?? evaluateTimelineKeyframes(automation.keyframes, timeMs);
+    if (evaluatedValue === null || !Number.isFinite(evaluatedValue)) {
+      setMessage(`Video automation ${automation.id} has no finite keyframe value.`);
+      return;
+    }
+    const keyframes = upsertTimelineKeyframe<VideoAutomationKeyframeSummary>(automation.keyframes, {
+      time_ms: timeMs,
+      value: evaluatedValue,
+      interpolation: interpolationForInsertedKeyframe(automation.keyframes, timeMs),
+    });
+    try {
+      await invoke("set_timeline_video_automation", {
+        automationId: automation.id,
+        layerId: automation.layer_id,
+        param: automation.param,
+        keyframes,
+      });
+      setTimelineVideoAutomationDrafts((current) => ({
+        ...current,
+        [automation.id]: {
+          ...(current[automation.id] ?? timelineVideoAutomationDraftFromSummary(automation)),
+          ...draftRangeFromKeyframes(keyframes),
+        },
+      }));
+      setMessage(`Captured video automation ${automation.id} key at ${timeMs} ms = ${evaluatedValue.toFixed(3)}`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const removeLightingAutomationKeyframeResult = async (
+    automation: TimelineAutomationSummary,
+    result: { keyframes: AutomationKeyframeSummary[]; keyframeIndex: number; timeMs: number } | null,
+  ) => {
+    if (!result) {
+      setMessage(`Automation ${automation.id} needs at least two keyframes.`);
+      return;
+    }
+    try {
+      await invoke("set_timeline_automation", {
+        automationId: automation.id,
+        fixtureId: automation.fixture_id,
+        attribute: automation.attribute,
+        keyframes: result.keyframes,
+      });
+      setTimelineAutomationDrafts((current) => ({
+        ...current,
+        [automation.id]: timelineAutomationDraftFromSummary({
+          ...automation,
+          keyframes: result.keyframes,
+        }),
+      }));
+      setMessage(`Removed automation ${automation.id} key ${result.keyframeIndex + 1} at ${result.timeMs} ms`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const removeLightingAutomationKeyframeAtPlayhead = async (automation: TimelineAutomationSummary) => {
+    if (automation.keyframes.length <= 2) {
+      setMessage(`Automation ${automation.id} needs at least two keyframes.`);
+      return;
+    }
+    const result = keyframesWithoutPlayheadKeyframe(
+      automation.keyframes,
+      snapshot().timeline.position_ms,
+      keyframeDeleteToleranceMs(),
+    );
+    if (!result) {
+      setMessage(`Seek to a keyframe before removing it from automation ${automation.id}.`);
+      return;
+    }
+    await removeLightingAutomationKeyframeResult(automation, result);
+  };
+
+  const removeLightingAutomationKeyframe = async (automation: TimelineAutomationSummary, keyframeIndex: number) => {
+    await removeLightingAutomationKeyframeResult(automation, keyframesWithoutIndex(automation.keyframes, keyframeIndex));
+  };
+
+  const setLightingAutomationKeyframeInterpolation = async (
+    automation: TimelineAutomationSummary,
+    keyframeIndex: number,
+    interpolation: AutomationInterpolation,
+  ) => {
+    const keyframes = keyframesWithInterpolationAtIndex(automation.keyframes, keyframeIndex, interpolation);
+    if (!keyframes) {
+      setMessage(`Lighting automation key ${keyframeIndex + 1} was not found.`);
+      return;
+    }
+    try {
+      await invoke("set_timeline_automation", {
+        automationId: automation.id,
+        fixtureId: automation.fixture_id,
+        attribute: automation.attribute,
+        keyframes,
+      });
+      setTimelineAutomationDrafts((current) => ({
+        ...current,
+        [automation.id]: timelineAutomationDraftFromSummary({
+          ...automation,
+          keyframes,
+        }),
+      }));
+      setMessage(`Set automation ${automation.id} key ${keyframeIndex + 1} curve ${interpolation}`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const setLightingAutomationKeyframeValue = async (
+    automation: TimelineAutomationSummary,
+    keyframeIndex: number,
+    value: number,
+  ) => {
+    const nextValue = clampDmxValue(Math.round(value));
+    const keyframes = keyframesWithValueAtIndex(automation.keyframes, keyframeIndex, nextValue);
+    if (!keyframes) {
+      setMessage(`Lighting automation key ${keyframeIndex + 1} needs a finite DMX value.`);
+      return;
+    }
+    try {
+      await invoke("set_timeline_automation", {
+        automationId: automation.id,
+        fixtureId: automation.fixture_id,
+        attribute: automation.attribute,
+        keyframes,
+      });
+      setTimelineAutomationDrafts((current) => ({
+        ...current,
+        [automation.id]: timelineAutomationDraftFromSummary({
+          ...automation,
+          keyframes,
+        }),
+      }));
+      setMessage(`Set automation ${automation.id} key ${keyframeIndex + 1} value ${nextValue}`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const removeVideoAutomationKeyframeResult = async (
+    automation: TimelineVideoAutomationSummary,
+    result: { keyframes: VideoAutomationKeyframeSummary[]; keyframeIndex: number; timeMs: number } | null,
+  ) => {
+    if (!result) {
+      setMessage(`Video automation ${automation.id} needs at least two keyframes.`);
+      return;
+    }
+    try {
+      await invoke("set_timeline_video_automation", {
+        automationId: automation.id,
+        layerId: automation.layer_id,
+        param: automation.param,
+        keyframes: result.keyframes,
+      });
+      setTimelineVideoAutomationDrafts((current) => ({
+        ...current,
+        [automation.id]: timelineVideoAutomationDraftFromSummary({
+          ...automation,
+          keyframes: result.keyframes,
+        }),
+      }));
+      setMessage(`Removed video automation ${automation.id} key ${result.keyframeIndex + 1} at ${result.timeMs} ms`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const removeVideoAutomationKeyframeAtPlayhead = async (automation: TimelineVideoAutomationSummary) => {
+    if (automation.keyframes.length <= 2) {
+      setMessage(`Video automation ${automation.id} needs at least two keyframes.`);
+      return;
+    }
+    const result = keyframesWithoutPlayheadKeyframe(
+      automation.keyframes,
+      snapshot().timeline.position_ms,
+      keyframeDeleteToleranceMs(),
+    );
+    if (!result) {
+      setMessage(`Seek to a keyframe before removing it from video automation ${automation.id}.`);
+      return;
+    }
+    await removeVideoAutomationKeyframeResult(automation, result);
+  };
+
+  const removeVideoAutomationKeyframe = async (automation: TimelineVideoAutomationSummary, keyframeIndex: number) => {
+    await removeVideoAutomationKeyframeResult(automation, keyframesWithoutIndex(automation.keyframes, keyframeIndex));
+  };
+
+  const setVideoAutomationKeyframeInterpolation = async (
+    automation: TimelineVideoAutomationSummary,
+    keyframeIndex: number,
+    interpolation: AutomationInterpolation,
+  ) => {
+    const keyframes = keyframesWithInterpolationAtIndex(automation.keyframes, keyframeIndex, interpolation);
+    if (!keyframes) {
+      setMessage(`Video automation key ${keyframeIndex + 1} was not found.`);
+      return;
+    }
+    try {
+      await invoke("set_timeline_video_automation", {
+        automationId: automation.id,
+        layerId: automation.layer_id,
+        param: automation.param,
+        keyframes,
+      });
+      setTimelineVideoAutomationDrafts((current) => ({
+        ...current,
+        [automation.id]: timelineVideoAutomationDraftFromSummary({
+          ...automation,
+          keyframes,
+        }),
+      }));
+      setMessage(`Set video automation ${automation.id} key ${keyframeIndex + 1} curve ${interpolation}`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const setVideoAutomationKeyframeValue = async (
+    automation: TimelineVideoAutomationSummary,
+    keyframeIndex: number,
+    value: number,
+  ) => {
+    const keyframes = keyframesWithValueAtIndex(automation.keyframes, keyframeIndex, value);
+    if (!keyframes) {
+      setMessage(`Video automation key ${keyframeIndex + 1} needs a finite value.`);
+      return;
+    }
+    try {
+      await invoke("set_timeline_video_automation", {
+        automationId: automation.id,
+        layerId: automation.layer_id,
+        param: automation.param,
+        keyframes,
+      });
+      setTimelineVideoAutomationDrafts((current) => ({
+        ...current,
+        [automation.id]: timelineVideoAutomationDraftFromSummary({
+          ...automation,
+          keyframes,
+        }),
+      }));
+      setMessage(`Set video automation ${automation.id} key ${keyframeIndex + 1} value ${value}`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const setTimelineAutomationEnabled = async (automationId: number, enabled: boolean) => {
+    try {
+      await invoke("set_timeline_automation_enabled", {
+        automationId,
+        enabled,
+      });
+      setMessage(`${enabled ? "Enabled" : "Disabled"} automation ${automationId}`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const setLightingAutomationRowsEnabled = async (
+    automations: TimelineAutomationSummary[],
+    enabled: boolean,
+  ) => {
+    const automationIds = automations
+      .filter((automation) => automation.enabled !== enabled)
+      .map((automation) => automation.id);
+    if (automationIds.length === 0) {
+      setMessage(`Lighting automation rows are already ${enabled ? "enabled" : "disabled"}.`);
+      return;
+    }
+    try {
+      for (const automationId of automationIds) {
+        await invoke("set_timeline_automation_enabled", {
+          automationId,
+          enabled,
+        });
+      }
+      setMessage(`${enabled ? "Enabled" : "Disabled"} ${automationIds.length} lighting automation row(s).`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const setVideoAutomationRowsEnabled = async (
+    automations: TimelineVideoAutomationSummary[],
+    enabled: boolean,
+  ) => {
+    const automationIds = automations
+      .filter((automation) => automation.enabled !== enabled)
+      .map((automation) => automation.id);
+    if (automationIds.length === 0) {
+      setMessage(`Video automation rows are already ${enabled ? "enabled" : "disabled"}.`);
+      return;
+    }
+    try {
+      for (const automationId of automationIds) {
+        await invoke("set_timeline_automation_enabled", {
+          automationId,
+          enabled,
+        });
+      }
+      setMessage(`${enabled ? "Enabled" : "Disabled"} ${automationIds.length} video automation row(s).`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
   const addTimelineAutomation = async () => {
     const fixture = selectedFixture();
-    const attribute = selectedEffectAttribute();
-    if (!fixture || !attribute) {
-      setMessage("Select a fixture and attribute first.");
+    const attribute = selectedTimelineAutomationAttribute();
+    if (!fixture || !attribute || !selectedFixtureSupportsTimelineAutomationAttribute()) {
+      setMessage("Select a fixture and supported automation attribute first.");
       return;
     }
     const startMs = snapTimeMs(automationStartMs());
@@ -8262,6 +9851,41 @@ export default function App() {
     }
   };
 
+  const addTimelineGroupAutomation = async () => {
+    const groupId = selectedFixtureGroupFilter();
+    const attribute = selectedTimelineAutomationAttribute();
+    if (!groupId || !attribute) {
+      setMessage("Select a group and attribute first.");
+      return;
+    }
+    const startMs = snapTimeMs(automationStartMs());
+    const endMs = Math.max(startMs, snapTimeMs(automationEndMs()));
+    try {
+      const result = await invoke<TimelineGroupAutomationAddResult>("add_timeline_group_automation", {
+        groupId,
+        attribute,
+        keyframes: [
+          {
+            time_ms: startMs,
+            value: automationStartValue(),
+            interpolation: automationInterpolation(),
+          },
+          {
+            time_ms: endMs,
+            value: automationEndValue(),
+            interpolation: "Step",
+          },
+        ],
+      });
+      setMessage(
+        `Added ${result.applied_count} automation(s) to ${groupId}; ${result.skipped_count} incompatible fixture(s) skipped.`,
+      );
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
   const setTimelineAutomation = async (automation: TimelineAutomationSummary) => {
     const draft = timelineAutomationDraft(automation);
     if (!draft.attribute.trim()) {
@@ -8272,23 +9896,20 @@ export default function App() {
     const endMs = Math.max(startMs, snapTimeMs(draft.end_ms));
     const startValue = Math.max(0, Math.min(65535, Math.round(draft.start_value)));
     const endValue = Math.max(0, Math.min(65535, Math.round(draft.end_value)));
+    const keyframes = keyframesWithDraftEndpoints<AutomationKeyframeSummary>(
+      automation.keyframes,
+      startMs,
+      endMs,
+      startValue,
+      endValue,
+      draft.interpolation,
+    );
     try {
       await invoke("set_timeline_automation", {
         automationId: automation.id,
         fixtureId: Math.max(0, Math.round(draft.fixture_id)),
         attribute: draft.attribute,
-        keyframes: [
-          {
-            time_ms: startMs,
-            value: startValue,
-            interpolation: draft.interpolation,
-          },
-          {
-            time_ms: endMs,
-            value: endValue,
-            interpolation: "Step",
-          },
-        ],
+        keyframes,
       });
       setTimelineAutomationDrafts((current) => ({
         ...current,
@@ -8347,23 +9968,20 @@ export default function App() {
     }
     const startMs = snapTimeMs(draft.start_ms);
     const endMs = Math.max(startMs, snapTimeMs(draft.end_ms));
+    const keyframes = keyframesWithDraftEndpoints<VideoAutomationKeyframeSummary>(
+      automation.keyframes,
+      startMs,
+      endMs,
+      draft.start_value,
+      draft.end_value,
+      draft.interpolation,
+    );
     try {
       await invoke("set_timeline_video_automation", {
         automationId: automation.id,
         layerId: Math.max(0, Math.round(draft.layer_id)),
         param: draft.param,
-        keyframes: [
-          {
-            time_ms: startMs,
-            value: draft.start_value,
-            interpolation: draft.interpolation,
-          },
-          {
-            time_ms: endMs,
-            value: draft.end_value,
-            interpolation: "Step",
-          },
-        ],
+        keyframes,
       });
       setTimelineVideoAutomationDrafts((current) => ({
         ...current,
@@ -9251,6 +10869,20 @@ export default function App() {
       },
     ];
   };
+  const effectSubmitDisabled = createMemo(() => {
+    const linkedVideoMissing = effectVideoTargetLinked() && selectedEffectVideoLayerId() === null;
+    switch (effectTargetMode()) {
+      case "video":
+        return snapshot().video.layers.length === 0;
+      case "selection":
+        return selectedMappingFixtures().length === 0 || !selectedEffectAttribute() || linkedVideoMissing;
+      case "group":
+        return parseGroupIds(effectTargetGroups()).length === 0 || !selectedEffectAttribute() || linkedVideoMissing;
+      case "fixture":
+      default:
+        return !selectedFixture() || !selectedEffectAttribute() || linkedVideoMissing;
+    }
+  });
 
   type EffectRequestDraft =
     | { effectType: "Lfo"; request: LfoEffectRequest }
@@ -9264,6 +10896,15 @@ export default function App() {
     const includesVideoTarget = isVideoTarget || effectVideoTargetLinked();
     if (targetMode === "fixture" && (!fixture || !attribute)) {
       setMessage("Select a fixture and attribute first.");
+      return null;
+    }
+    const selectedMapFixtureIds = selectedMappingFixtures().map((candidate) => candidate.id);
+    if (targetMode === "selection" && selectedMapFixtureIds.length === 0) {
+      setMessage("Select one or more fixtures on the 2D mapping stage first.");
+      return null;
+    }
+    if (targetMode === "selection" && !attribute) {
+      setMessage("Select a fixture profile attribute before targeting a map selection.");
       return null;
     }
     const targetGroupIds = parseGroupIds(effectTargetGroups());
@@ -9286,7 +10927,12 @@ export default function App() {
     const labelTarget = !isVideoTarget && videoTargets.length > 0 ? `${lightAttribute} + ${effectVideoParam()}` : isVideoTarget ? effectVideoParam() : lightAttribute;
     const requestBase = {
       label: `${labelTarget} ${effectType()}`,
-      fixture_ids: targetMode === "fixture" && fixture ? [fixture.id] : [],
+      fixture_ids:
+        targetMode === "selection"
+          ? selectedMapFixtureIds
+          : targetMode === "fixture" && fixture
+            ? [fixture.id]
+            : [],
       target_group_ids: targetMode === "group" ? targetGroupIds : [],
       attribute: isVideoTarget ? "" : lightAttribute,
       video_targets: videoTargets,
@@ -9454,6 +11100,22 @@ export default function App() {
       return;
     }
 
+    const selectedTargetFixtures = effect.fixture_ids
+      .map((fixtureId) => snapshot().fixtures.find((candidate) => candidate.id === fixtureId))
+      .filter((fixture): fixture is PatchedFixtureSummary => Boolean(fixture));
+    if (selectedTargetFixtures.length > 1) {
+      setSelectedMappingFixtureIds(selectedTargetFixtures.map((fixture) => fixture.id));
+      activateFixture(selectedTargetFixtures[0]);
+      setEffectTargetMode("selection");
+      setEffectAttribute(effect.attribute);
+      setMessage(
+        firstVideoTarget
+          ? `Loaded effect ${effect.id} into the mixed map selection + video draft.`
+          : `Loaded effect ${effect.id} into the map selection draft.`,
+      );
+      return;
+    }
+
     const fixture = snapshot().fixtures.find((candidate) => candidate.id === effect.fixture_ids[0]);
     if (fixture) {
       activateFixture(fixture);
@@ -9499,6 +11161,14 @@ export default function App() {
     if (targetMode === "fixture" && (!fixture || !attribute)) {
       return "Select a fixture and attribute first.";
     }
+    if (targetMode === "selection") {
+      if (selectedMappingFixtures().length === 0) {
+        return "Select one or more fixtures on the 2D mapping stage first.";
+      }
+      if (!attribute) {
+        return "Select a fixture profile attribute before targeting a map selection.";
+      }
+    }
     if (targetMode === "group") {
       if (parseGroupIds(effectTargetGroups()).length === 0) {
         return "Enter at least one target group.";
@@ -9527,7 +11197,12 @@ export default function App() {
     const attribute = selectedEffectAttribute();
     const videoTargets = buildEffectVideoTargets(true, Boolean(options.forceVideoTarget));
     return {
-      fixture_ids: targetMode === "fixture" && fixture ? [fixture.id] : [],
+      fixture_ids:
+        targetMode === "selection"
+          ? selectedMappingFixtures().map((candidate) => candidate.id)
+          : targetMode === "fixture" && fixture
+            ? [fixture.id]
+            : [],
       target_group_ids: targetMode === "group" ? parseGroupIds(effectTargetGroups()) : [],
       attribute: targetMode === "video" ? "" : attribute,
       video_targets: videoTargets,
@@ -9996,31 +11671,72 @@ export default function App() {
   };
 
   const handleControlKeyDown = (event: KeyboardEvent) => {
-    if (
-      event.repeat ||
-      event.altKey ||
-      isEditableShortcutTarget(event.target)
-    ) {
+    if (event.repeat || event.altKey) {
       return;
+    }
+
+    const commandModifier = event.ctrlKey || event.metaKey;
+    if (commandModifier) {
+      if (event.code === "KeyS") {
+        event.preventDefault();
+        if (event.shiftKey) {
+          void saveProjectAs();
+        } else {
+          void saveProject();
+        }
+        return;
+      }
+      if (!event.shiftKey && event.code === "KeyO") {
+        event.preventDefault();
+        void loadProject();
+        return;
+      }
+      if (!event.shiftKey && event.code === "KeyN") {
+        event.preventDefault();
+        void newProject();
+        return;
+      }
+    }
+
+    const nextWorkspaceTab = workspaceTabForShortcut(event.code);
+    if (nextWorkspaceTab) {
+      event.preventDefault();
+      setWorkspaceTab(nextWorkspaceTab);
+      setMessage(`Workspace: ${nextWorkspaceTab.toUpperCase()}.`);
+      return;
+    }
+
+    if (isEditableShortcutTarget(event.target)) {
+      return;
+    }
+
+    if (workspaceTab() === "setup") {
+      const nextSetupSubTab = setupSubTabForShortcut(event.code);
+      if (nextSetupSubTab) {
+        event.preventDefault();
+        selectSetupMode(nextSetupSubTab);
+        setMessage(`Setup mode: ${nextSetupSubTab.toUpperCase()}.`);
+        return;
+      }
     }
 
     if (workspaceTab() === "setup" && setupSubTab() === "mapping") {
       const selectionManagementAction = mappingSelectionManagementActionFromHotkey(
         event.code,
         event.shiftKey,
-        event.ctrlKey || event.metaKey,
+        commandModifier,
       );
       if (selectionManagementAction) {
         event.preventDefault();
         applyMappingSelectionManagementAction(selectionManagementAction);
         return;
       }
-      if ((event.ctrlKey || event.metaKey) && event.code === "KeyD") {
+      if (commandModifier && event.code === "KeyD") {
         event.preventDefault();
         void duplicateSelectedMappingFixtures();
         return;
       }
-      if (event.ctrlKey || event.metaKey) {
+      if (commandModifier) {
         return;
       }
       const nextTool = mappingStageToolFromHotkey(event.code);
@@ -10099,7 +11815,15 @@ export default function App() {
     if (workspaceTab() !== "control") {
       return;
     }
-    if (event.ctrlKey || event.metaKey) {
+    if (commandModifier) {
+      return;
+    }
+
+    const nextControlMode = controlModeForShortcut(event.code);
+    if (nextControlMode) {
+      event.preventDefault();
+      setControlMode(nextControlMode);
+      setMessage(`Control mode: ${nextControlMode.toUpperCase()}.`);
       return;
     }
 
@@ -10173,14 +11897,61 @@ export default function App() {
     }
   };
 
+  let nativeCloseApproved = false;
+  let closeRequestListenerDisposed = false;
+  let unlistenCloseRequested: (() => void) | undefined;
+  const approveNativeCloseOnce = () => {
+    nativeCloseApproved = true;
+    window.setTimeout(() => {
+      nativeCloseApproved = false;
+    }, 1000);
+  };
+
+  const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+    if (nativeCloseApproved || !projectDirty()) {
+      return;
+    }
+    event.preventDefault();
+    event.returnValue = "";
+  };
+
   window.addEventListener("keydown", handleControlKeyDown);
-  onCleanup(() => window.removeEventListener("keydown", handleControlKeyDown));
+  window.addEventListener("beforeunload", handleBeforeUnload);
+  if (isTauriRuntime()) {
+    void getCurrentWindow()
+      .onCloseRequested((event) => {
+        if (!projectDirty()) {
+          return;
+        }
+        if (confirmDiscardProjectChanges("close Rayard")) {
+          approveNativeCloseOnce();
+          return;
+        }
+        event.preventDefault();
+        setMessage("Close canceled.");
+      })
+      .then((unlisten) => {
+        if (closeRequestListenerDisposed) {
+          unlisten();
+          return;
+        }
+        unlistenCloseRequested = unlisten;
+      })
+      .catch((error) => setMessage(String(error)));
+  }
+  onCleanup(() => {
+    closeRequestListenerDisposed = true;
+    unlistenCloseRequested?.();
+    window.removeEventListener("keydown", handleControlKeyDown);
+    window.removeEventListener("beforeunload", handleBeforeUnload);
+  });
 
   return (
     <main class="app">
       <WorkspaceChrome
         workspaceTab={workspaceTab()}
         setupSubTab={setupSubTab()}
+        controlMode={controlMode()}
         blackout={snapshot().blackout}
         videoBlackout={snapshot().video.blackout}
         bpm={snapshot().clock.bpm}
@@ -10192,15 +11963,28 @@ export default function App() {
         projectLabel={projectFileLabel()}
         projectDirty={projectDirty()}
         currentProjectPath={currentProjectPath()}
+        recentProjectPaths={recentProjectPaths()}
+        canGo={snapshot().cues.length > 0}
+        nextCueLabel={nextCue()?.label ?? "No cue"}
         onWorkspaceTab={setWorkspaceTab}
         onSetupSubTab={selectSetupMode}
+        onControlMode={setControlMode}
+        onGo={() => void triggerNextCue()}
         onNewProject={newProject}
         onSaveProject={saveProject}
         onSaveProjectAs={saveProjectAs}
         onLoadProject={loadProject}
+        onLoadRecentProject={loadRecentProject}
+        onClearRecentProjects={clearRecentProjects}
         onLoadSample={loadPhase1SampleProject}
         onRunSmoke={runPhase1Smoke}
       />
+      <Show when={projectDropState()}>
+        <div class={`projectDropOverlay ${projectDropState() === "invalid" ? "invalid" : ""}`}>
+          <strong>{projectDropState() === "project" ? "Open Rayard Project" : "Unsupported File"}</strong>
+          <span>{projectDropState() === "project" ? "Drop to load the .ry project." : "Drop a .ry project file."}</span>
+        </div>
+      </Show>
 
       <section class={`layout ${touchLayoutClass()}`}>
         <section class="panel liveControlPanel controlPanel">
@@ -10328,7 +12112,7 @@ export default function App() {
                 fallback={
                   <div class="liveStageSelectionItem empty">
                     <strong>No fixture selected</strong>
-                    <span>Click a fixture on the stage.</span>
+                    <span>Selection standby</span>
                   </div>
                 }
               >
@@ -10391,10 +12175,7 @@ export default function App() {
           </div>
           <div class="liveCuePadHeader">
             <h3>Cue Pads</h3>
-            <span>
-              {snapshot().cues.length === 0 ? "0" : cuePadStartIndex() + 1}-
-              {Math.min(cuePadStartIndex() + cuePadSize, snapshot().cues.length)} / {snapshot().cues.length}
-            </span>
+            <span>{cuePadRangeLabel()}</span>
             <label class="checkbox compactCheckbox">
               <input
                 type="checkbox"
@@ -10523,10 +12304,7 @@ export default function App() {
           </div>
           <div class="liveCuePadHeader">
             <h3>Cue Pads</h3>
-            <span>
-              {snapshot().cues.length === 0 ? "0" : cuePadStartIndex() + 1}-
-              {Math.min(cuePadStartIndex() + cuePadSize, snapshot().cues.length)} / {snapshot().cues.length}
-            </span>
+            <span>{cuePadRangeLabel()}</span>
             <button
               onClick={() => {
                 setCuePadFollowActive(false);
@@ -10662,8 +12440,8 @@ export default function App() {
               when={selectedFixture()}
               fallback={
                 <div class="touchStageSelectionItem empty">
-                  <strong>No fixture</strong>
-                  <span>Tap a fixture on the stage.</span>
+                  <strong>No fixture selected</strong>
+                  <span>Selection standby</span>
                 </div>
               }
             >
@@ -10821,13 +12599,15 @@ export default function App() {
         </TouchFixturePanel>
         <TouchRemotePanel
           running={remoteRunning()}
-          remoteUrl={remoteUrl()}
+          remoteUrls={remoteUrls()}
           bindIp={remoteBindIp()}
           port={remotePort()}
           bpmDraft={bpmDraft()}
           submasters={snapshot().submasters}
           onBindIp={setRemoteBindIp}
           onPort={setRemotePort}
+          onCopyRemoteUrl={copyRemoteUrl}
+          onOpenRemoteUrl={openRemoteUrl}
           onStart={startRemoteControl}
           onStop={stopRemoteControl}
           onBpmDraft={setBpmDraft}
@@ -10837,9 +12617,17 @@ export default function App() {
         />
         <TouchVideoPanel
           layers={snapshot().video.layers}
+          outputs={snapshot().video.outputs}
+          selectedOutputId={selectedVideoOutputId()}
           onSetLayerState={setVideoLayerState}
           onAddCuePoint={addVideoCuePoint}
           onJumpCuePoint={jumpVideoCuePoint}
+          onSelectOutput={setSelectedVideoOutputId}
+          onSetOutputEnabled={setVideoOutputEnabled}
+          onSetOutputBlackout={setVideoOutputBlackout}
+          onSetOutputOpacity={setVideoOutputOpacity}
+          onFadeOutputOpacity={fadeVideoOutputOpacity}
+          onOpenOutputWindow={openVideoOutputWindow}
         />
         <aside
           class={setupPanelClass("panel setup setupPanel", ["library", "profiles", "patch"])}
@@ -11253,6 +13041,8 @@ export default function App() {
                 onMirrorSelection={mirrorSelectedMappingFixtures}
                 onRotateSelection={rotateSelectedMappingFixtures}
                 onControlActive={() => setWorkspaceTab("control")}
+                onUseSelectionAsEffectTarget={useMappingSelectionAsEffectTarget}
+                onUseSelectionAsWaveEffectTarget={useMappingSelectionAsWaveEffectTarget}
                 onSetFixtureTransform={setFixtureTransform}
                 onSetFixtureHighlight={setFixtureHighlight}
                 onSetFixtureSolo={setFixtureSolo}
@@ -11318,6 +13108,7 @@ export default function App() {
             mappingPresets={snapshot().video.mapping_presets}
             mappingPresetLabel={videoOutputMappingPresetLabel()}
             selectedMappingPresetLabel={selectedVideoOutputMappingPresetLabel()}
+            selectedOutputId={selectedVideoOutputId()}
             previewOutputId={videoOutputPreviewId()}
             previewMode={videoOutputPreviewMode()}
             previewInfo={videoOutputPreviewInfo()}
@@ -11325,6 +13116,7 @@ export default function App() {
             configDraftFor={videoOutputConfigDraft}
             onConfigDraft={updateVideoOutputConfigDraft}
             onApplyConfig={setVideoOutputConfig}
+            onSelectOutput={setSelectedVideoOutputId}
             onSetRouting={setVideoOutputRouting}
             onMappingPresetLabel={setVideoOutputMappingPresetLabel}
             onSelectedMappingPresetLabel={setSelectedVideoOutputMappingPresetLabel}
@@ -11345,49 +13137,51 @@ export default function App() {
           />
         </section>
 
-        <section class="panel videoControlPanel controlPanel">
+        <section class={`panel videoControlPanel controlPanel ${controlMode() === "mixer" ? "videoControlPanelMixer" : ""}`}>
           <div class="panelHeader">
             <h2>Video Control</h2>
             <span>{snapshot().video.layers.length} layer(s)</span>
           </div>
-          <VideoPreviewDiagnosticsPanel
-            layerCount={snapshot().video.layers.length}
-            info={videoPreviewInfo()}
-            diagnosticsText={videoPreviewDiagnosticsText()}
-            layerDiagnostics={videoPreviewLayerDiagnostics()}
-            outputDecodePlans={videoPreviewOutputDecodePlans()}
-            onRenderPreview={renderDebugVideoPreview}
-            onRefreshDiagnostics={() => refreshVideoPreviewDiagnostics()}
-            layerClass={videoPreviewLayerDiagnosticClass}
-            layerLabel={videoPreviewLayerDiagnosticLabel}
-            outputClass={videoPreviewOutputDecodePlanClass}
-            outputLabel={videoPreviewOutputDecodePlanLabel}
-          />
-          <VideoOutputRenderPlanStatusPanel
-            summary={videoOutputRenderPlanSummary()}
-            checked={videoOutputRenderPlans() !== null}
-            rows={videoOutputRenderPlanRows()}
-            onRefresh={refreshVideoOutputRenderPlans}
-          />
-          <VideoBackendStatusPanel
-            summary={videoRuntimeBackendSummary()}
-            backends={videoRuntimeStatus()?.backends ?? null}
-            backendClass={videoRuntimeBackendClass}
-            onRefresh={refreshVideoRuntimeStatus}
-          />
-          <ExternalVideoIoStatusPanel
-            ioSummary={externalVideoIoPlanSummary()}
-            transportSummary={externalVideoTransportSummary()}
-            checked={externalVideoIoPlans() !== null}
-            planRows={externalVideoIoPlanRows()}
-            activeTransportRows={externalVideoTransportActiveRows()}
-            transportRows={externalVideoTransportRows()}
-            transportEventRows={externalVideoTransportEventRows()}
-            planClass={externalVideoIoPlanClass}
-            transportClass={externalVideoTransportClass}
-            onRefreshPlans={refreshExternalVideoIoPlans}
-            onSyncRoutes={syncExternalVideoTransports}
-          />
+          <div class="videoMixerDiagnostics">
+            <VideoPreviewDiagnosticsPanel
+              layerCount={snapshot().video.layers.length}
+              info={videoPreviewInfo()}
+              diagnosticsText={videoPreviewDiagnosticsText()}
+              layerDiagnostics={videoPreviewLayerDiagnostics()}
+              outputDecodePlans={videoPreviewOutputDecodePlans()}
+              onRenderPreview={renderDebugVideoPreview}
+              onRefreshDiagnostics={() => refreshVideoPreviewDiagnostics()}
+              layerClass={videoPreviewLayerDiagnosticClass}
+              layerLabel={videoPreviewLayerDiagnosticLabel}
+              outputClass={videoPreviewOutputDecodePlanClass}
+              outputLabel={videoPreviewOutputDecodePlanLabel}
+            />
+            <VideoOutputRenderPlanStatusPanel
+              summary={videoOutputRenderPlanSummary()}
+              checked={videoOutputRenderPlans() !== null}
+              rows={videoOutputRenderPlanRows()}
+              onRefresh={refreshVideoOutputRenderPlans}
+            />
+            <VideoBackendStatusPanel
+              summary={videoRuntimeBackendSummary()}
+              backends={videoRuntimeStatus()?.backends ?? null}
+              backendClass={videoRuntimeBackendClass}
+              onRefresh={refreshVideoRuntimeStatus}
+            />
+            <ExternalVideoIoStatusPanel
+              ioSummary={externalVideoIoPlanSummary()}
+              transportSummary={externalVideoTransportSummary()}
+              checked={externalVideoIoPlans() !== null}
+              planRows={externalVideoIoPlanRows()}
+              activeTransportRows={externalVideoTransportActiveRows()}
+              transportRows={externalVideoTransportRows()}
+              transportEventRows={externalVideoTransportEventRows()}
+              planClass={externalVideoIoPlanClass}
+              transportClass={externalVideoTransportClass}
+              onRefreshPlans={refreshExternalVideoIoPlans}
+              onSyncRoutes={syncExternalVideoTransports}
+            />
+          </div>
           <VideoMasterControlsPanel
             masterOpacity={snapshot().video.master_opacity}
             blackout={snapshot().video.blackout}
@@ -11397,8 +13191,10 @@ export default function App() {
           <VideoOutputControlListPanel
             outputs={snapshot().video.outputs}
             compositions={snapshot().video.compositions}
+            selectedOutputId={selectedVideoOutputId()}
             fadeMs={videoOutputFadeMs()}
             windowSummary={videoOutputWindowSummary()}
+            onSelectOutput={setSelectedVideoOutputId}
             onSetFadeMs={setVideoOutputFadeMs}
             onRefreshWindows={refreshVideoOutputWindowStatuses}
             onOpenAllWindows={openAllVideoOutputWindows}
@@ -11416,16 +13212,18 @@ export default function App() {
             onCloseOutputWindow={closeVideoOutputWindow}
           />
           <VideoPreviewImagePanel previewUrl={videoPreviewUrl()} layerCount={snapshot().video.layers.length} />
-          <VideoSourceCreatePanel
-            sourceKind={videoSourceKind()}
-            label={videoLabel()}
-            path={videoPath()}
-            onSetSourceKind={setVideoSourceKind}
-            onSetLabel={setVideoLabel}
-            onSetPath={setVideoPath}
-            onBrowseSource={selectVideoSourceFile}
-            onAddLayer={addVideoLayer}
-          />
+          <div class="videoMixerSetupTools">
+            <VideoSourceCreatePanel
+              sourceKind={videoSourceKind()}
+              label={videoLabel()}
+              path={videoPath()}
+              onSetSourceKind={setVideoSourceKind}
+              onSetLabel={setVideoLabel}
+              onSetPath={setVideoPath}
+              onBrowseSource={selectVideoSourceFile}
+              onAddLayer={addVideoLayer}
+            />
+          </div>
           <VideoLayerListPanel
             layers={snapshot().video.layers}
             onSetLayerLabel={setVideoLayerLabel}
@@ -11442,29 +13240,45 @@ export default function App() {
             onRemoveCuePoint={removeVideoCuePoint}
             onRemoveLayer={removeVideoLayer}
           />
-          <VideoTimelineAutomationPanel
-            layers={snapshot().video.layers}
-            selectedLayerId={selectedVideoAutomationLayerId()}
-            param={videoAutomationParam()}
-            interpolation={videoAutomationInterpolation()}
-            startMs={videoAutomationStartMs()}
-            endMs={videoAutomationEndMs()}
-            startValue={videoAutomationStartValue()}
-            endValue={videoAutomationEndValue()}
-            automations={timelineVideoAutomationRows()}
-            draftForAutomation={timelineVideoAutomationDraft}
-            onSetLayerId={setVideoAutomationLayerId}
-            onSetParam={setVideoAutomationParam}
-            onSetInterpolation={setVideoAutomationInterpolation}
-            onSetStartMs={setVideoAutomationStartMs}
-            onSetEndMs={setVideoAutomationEndMs}
-            onSetStartValue={setVideoAutomationStartValue}
-            onSetEndValue={setVideoAutomationEndValue}
-            onAddAutomation={addTimelineVideoAutomation}
-            onUpdateAutomationDraft={updateTimelineVideoAutomationDraft}
-            onSaveAutomation={setTimelineVideoAutomation}
-            onRemoveAutomation={removeTimelineAutomation}
-          />
+          <div class="videoMixerAutomationTools">
+            <VideoTimelineAutomationPanel
+              layers={snapshot().video.layers}
+              selectedLayerId={selectedVideoAutomationLayerId()}
+              param={videoAutomationParam()}
+              interpolation={videoAutomationInterpolation()}
+              startMs={videoAutomationStartMs()}
+              endMs={videoAutomationEndMs()}
+              startValue={videoAutomationStartValue()}
+              endValue={videoAutomationEndValue()}
+              automations={timelineVideoAutomationRows()}
+              selectedAutomationId={selectedVideoTimelineAutomationId()}
+              rowScope={videoAutomationRowScope()}
+              allRowsCount={allTimelineVideoAutomationRows().length}
+              draftForAutomation={timelineVideoAutomationDraft}
+              onSetLayerId={setVideoAutomationLayerId}
+              onSetParam={setVideoAutomationParam}
+              onSetInterpolation={setVideoAutomationInterpolation}
+              onSetStartMs={setVideoAutomationStartMs}
+              onSetEndMs={setVideoAutomationEndMs}
+              onSetStartValue={setVideoAutomationStartValue}
+              onSetEndValue={setVideoAutomationEndValue}
+              onRowScope={setVideoAutomationRowScope}
+              onUsePlayheadRange={usePlayheadForVideoAutomation}
+              onAddAutomation={addTimelineVideoAutomation}
+              onUpdateAutomationDraft={updateTimelineVideoAutomationDraft}
+              onAlignDraftToPlayhead={alignVideoAutomationDraftToPlayhead}
+              onAddKeyframeAtPlayhead={addVideoAutomationKeyframeAtPlayhead}
+              onRemoveKeyframeAtPlayhead={removeVideoAutomationKeyframeAtPlayhead}
+              onRemoveKeyframe={removeVideoAutomationKeyframe}
+              onSetKeyframeInterpolation={setVideoAutomationKeyframeInterpolation}
+              onSetKeyframeValue={setVideoAutomationKeyframeValue}
+              onSetAutomationEnabled={(automation, enabled) => setTimelineAutomationEnabled(automation.id, enabled)}
+              onSetRowsEnabled={setVideoAutomationRowsEnabled}
+              onSeekKeyframe={seekTimeline}
+              onSaveAutomation={setTimelineVideoAutomation}
+              onRemoveAutomation={removeTimelineAutomation}
+            />
+          </div>
         </section>
 
         <section class="panel faders controlPanel">
@@ -11499,6 +13313,10 @@ export default function App() {
           <FaderAttributeEditorPanel
             categories={controlCategoryRows()}
             activeCategory={activeControlCategory()}
+            targetKind={controlTargetKind()}
+            targetLabel={controlTargetLabel()}
+            targetDetail={controlTargetDetail()}
+            referenceLabel={controlReferenceLabel()}
             onCategory={setControlCategory}
           >
           <FaderPrimaryAttributePanels
@@ -11606,7 +13424,7 @@ export default function App() {
             selectedFixtureId={selectedFixture()?.id ?? null}
             selectedGroupId={selectedFixtureGroupFilter()}
             valueForControl={(control) => {
-              const fixture = selectedFixture();
+              const fixture = selectedControlReferenceFixture();
               return fixture ? faderValue(fixture.id, control.attribute, control.default_value) : control.default_value;
             }}
             onSetFixtureAttribute={setAttribute}
@@ -11614,6 +13432,7 @@ export default function App() {
           />
           </FaderAttributeEditorPanel>
           <CueManagementPanel
+            mode={controlMode() === "live" ? "live" : "edit"}
             cues={snapshot().cues}
             activeCueId={snapshot().active_cue_id}
             activeFade={snapshot().active_fade}
@@ -11657,7 +13476,11 @@ export default function App() {
               durationMs={snapshot().timeline.duration_ms}
               playing={snapshot().timeline.playing}
               cuesCount={snapshot().cues.length}
+              lightingAutomationCount={snapshot().timeline.automations.length}
+              videoAutomationCount={snapshot().timeline.video_automations.length}
               overviewEvents={timelineOverviewEvents()}
+              overviewAutomationRanges={timelineOverviewAutomationRanges()}
+              selectedAutomationRangeId={selectedTimelineAutomationRangeId()}
               overviewPlayheadX={timelineOverviewPlayheadX()}
               audioAnalysis={audioAnalysis()}
               audioWaveformPoints={audioWaveformPoints()}
@@ -11675,12 +13498,17 @@ export default function App() {
               onPlay={playTimeline}
               onSeekRatio={seekTimelineFromOverviewRatio}
               onMoveEventRatio={moveTimelineCueEventToRatio}
+              onSelectAutomationRange={selectTimelineAutomationRange}
+              onMoveAutomationRangeRatio={moveTimelineAutomationRangeToRatio}
+              onResizeAutomationRangeRatio={resizeTimelineAutomationRangeToRatio}
+              onMoveAutomationKeyframeRatio={moveTimelineAutomationKeyframeToRatio}
               onAnalyzeAudio={analyzeAudioFile}
               onClearAudio={clearTimelineAudio}
               onApplyAudioBpm={applyAudioBpm}
               onSnapMode={setTimelineSnapMode}
               onGridMs={setTimelineGridMs}
               onSnapDrafts={snapTimelineDrafts}
+              onSnapItems={snapTimelineItems}
               onSelectedCueId={setTimelineCueId}
               onEventTimeMs={setTimelineEventTimeMs}
               onTrack={setTimelineTrack}
@@ -11691,15 +13519,20 @@ export default function App() {
               onRemoveEvent={removeTimelineEvent}
             />
             <TimelineLightingAutomationPanel
-              activeControls={activeControls()}
-              selectedAttribute={selectedEffectAttribute()}
-              canAddAutomation={Boolean(selectedFixture())}
+              activeControls={timelineAutomationControls()}
+              selectedAttribute={selectedTimelineAutomationAttribute()}
+              canAddAutomation={canAddTimelineAutomation()}
+              selectedGroupId={selectedFixtureGroupFilter()}
+              canAddGroupAutomation={canAddTimelineGroupAutomation()}
+              rowScope={lightingAutomationRowScope()}
+              allRowsCount={allTimelineAutomationRows().length}
               startMs={automationStartMs()}
               endMs={automationEndMs()}
               startValue={automationStartValue()}
               endValue={automationEndValue()}
               interpolation={automationInterpolation()}
               rows={timelineAutomationRows()}
+              selectedAutomationId={selectedLightingTimelineAutomationId()}
               fixtureOptions={snapshot().fixtures.map((fixture) => ({ id: fixture.id, label: fixture.label }))}
               timelineAutomationDraft={timelineAutomationDraft}
               fixtureAttributeOptions={fixtureAttributeOptions}
@@ -11709,8 +13542,20 @@ export default function App() {
               onStartValue={setAutomationStartValue}
               onEndValue={setAutomationEndValue}
               onInterpolation={setAutomationInterpolation}
+              onRowScope={setLightingAutomationRowScope}
+              onUsePlayheadRange={usePlayheadForLightingAutomation}
               onAddAutomation={addTimelineAutomation}
+              onAddGroupAutomation={addTimelineGroupAutomation}
               onUpdateDraft={updateTimelineAutomationDraft}
+              onAlignDraftToPlayhead={alignLightingAutomationDraftToPlayhead}
+              onAddKeyframeAtPlayhead={addLightingAutomationKeyframeAtPlayhead}
+              onRemoveKeyframeAtPlayhead={removeLightingAutomationKeyframeAtPlayhead}
+              onRemoveKeyframe={removeLightingAutomationKeyframe}
+              onSetKeyframeInterpolation={setLightingAutomationKeyframeInterpolation}
+              onSetKeyframeValue={setLightingAutomationKeyframeValue}
+              onSetAutomationEnabled={(automation, enabled) => setTimelineAutomationEnabled(automation.id, enabled)}
+              onSetRowsEnabled={setLightingAutomationRowsEnabled}
+              onSeekKeyframe={seekTimeline}
               onSaveAutomation={setTimelineAutomation}
               onRemoveAutomation={removeTimelineAutomation}
             />
@@ -11734,15 +13579,21 @@ export default function App() {
               onLoadPresetForTarget={(preset) => loadSampleEffectPreset(preset, true)}
             />
             <div class="effectForm">
+              <div class="effectTargetHint">
+                <strong>{effectTargetMode() === "selection" ? "Map selection" : effectTargetMode()}</strong>
+                <span title={`${effectTargetSummary()} / ${effectDraftSummary()}`}>
+                  {effectTargetSummary()} / {effectDraftSummary()}
+                </span>
+              </div>
               <Show when={effectTargetMode() !== "video"}>
                 <label>
                   Attribute
                   <select
                     value={selectedEffectAttribute()}
-                    disabled={!selectedFixture()}
+                    disabled={effectTargetControls().length === 0}
                     onInput={(event) => setEffectAttribute(event.currentTarget.value)}
                   >
-                    <For each={activeControls()}>
+                    <For each={effectTargetControls()}>
                       {(control) => <option value={control.attribute}>{control.attribute}</option>}
                     </For>
                   </select>
@@ -11754,7 +13605,7 @@ export default function App() {
                   <select
                     value={effectTargetMode()}
                     onInput={(event) => {
-                      const nextMode = event.currentTarget.value as "fixture" | "group" | "video";
+                      const nextMode = event.currentTarget.value as EffectTargetMode;
                       setEffectTargetMode(nextMode);
                       if (nextMode === "video") {
                         setEffectVideoTargetLinked(false);
@@ -11762,6 +13613,7 @@ export default function App() {
                     }}
                   >
                     <option value="fixture">Selected fixture</option>
+                    <option value="selection">Map selection ({selectedMappingFixtures().length})</option>
                     <option value="group">Group</option>
                     <option value="video">Video layer</option>
                   </select>
@@ -11883,13 +13735,7 @@ export default function App() {
                 high={effectHigh()}
                 phase={effectPhase()}
                 blendMode={effectBlendMode()}
-                addDisabled={
-                  effectTargetMode() === "video"
-                    ? snapshot().video.layers.length === 0
-                    : effectTargetMode() === "group"
-                      ? parseGroupIds(effectTargetGroups()).length === 0 || !selectedEffectAttribute() || (effectVideoTargetLinked() && selectedEffectVideoLayerId() === null)
-                      : !selectedFixture() || (effectVideoTargetLinked() && selectedEffectVideoLayerId() === null)
-                }
+                addDisabled={effectSubmitDisabled()}
                 submitLabel={editingEffectId() === null ? "Add Effect" : `Update Effect ${editingEffectId()}`}
                 editing={editingEffectId() !== null}
                 editingLabel={editingEffectSummary()?.label ?? null}
@@ -12125,8 +13971,11 @@ export default function App() {
             bindIp={remoteBindIp()}
             port={remotePort()}
             running={remoteRunning()}
+            remoteUrls={remoteUrls()}
             onBindIp={setRemoteBindIp}
             onPort={setRemotePort}
+            onCopyRemoteUrl={copyRemoteUrl}
+            onOpenRemoteUrl={openRemoteUrl}
             onStart={startRemoteControl}
             onStop={stopRemoteControl}
           />
