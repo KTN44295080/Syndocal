@@ -198,6 +198,7 @@ import { effectDraftTargetPlan } from "./effectDraft";
 import { createMappingViewportModel } from "./createMappingViewportModel";
 import { createMappingRenderModel } from "./createMappingRenderModel";
 import { createMappingInteractionController } from "./createMappingInteractionController";
+import { createMappingLayoutController, mappingFixtureSelectionCenter } from "./createMappingLayoutController";
 import {
   bulkPatchLabel,
   colorCandidates,
@@ -3728,7 +3729,7 @@ export default function App() {
     if (!activeFixture || !fixtures.some((fixture) => fixture.id === activeFixture.id)) {
       activateFixture(fixtures[0]);
     }
-    const center = selectedMappingFixtureCenter(fixtures);
+    const center = mappingFixtureSelectionCenter(fixtures);
     const averageY = fixtures.reduce((sum, fixture) => sum + fixture.position.y, 0) / fixtures.length;
     setWaveOriginX(Number(center.x.toFixed(3)));
     setWaveOriginY(Number(averageY.toFixed(3)));
@@ -4761,357 +4762,33 @@ export default function App() {
     }
   };
 
-  const layoutFixtures = async (fixtures: PatchedFixtureSummary[], mode: FixtureLayoutMode, scopeLabel: string) => {
-    if (fixtures.length === 0) {
-      setMessage(`No fixtures to arrange for ${scopeLabel}.`);
-      return;
-    }
-    const count = fixtures.length;
-    const spacing = 2;
-    const radius = Math.max(3, count * 0.55);
-    const columns = Math.ceil(Math.sqrt(count));
-    const rows = Math.ceil(count / columns);
-
-    await Promise.all(
-      fixtures.map((fixture, index) => {
-        let x = fixture.position.x;
-        let z = fixture.position.z;
-        if (mode === "line") {
-          x = (index - (count - 1) / 2) * spacing;
-          z = 0;
-        } else if (mode === "grid") {
-          const column = index % columns;
-          const row = Math.floor(index / columns);
-          x = (column - (columns - 1) / 2) * spacing;
-          z = (row - (rows - 1) / 2) * spacing;
-        } else {
-          const angle = (index / count) * Math.PI * 2 - Math.PI / 2;
-          x = Math.cos(angle) * radius;
-          z = Math.sin(angle) * radius;
-        }
-        return setFixtureTransform(
-          fixture,
-          {
-            position: snapStagePosition({
-              ...fixture.position,
-              x,
-              z,
-            }),
-          },
-          false,
-        );
-      }),
-    );
-    setMessage(
-      `Applied ${mode} layout to ${count} fixture${count === 1 ? "" : "s"} ${scopeLabel}.`,
-    );
-    await refreshSnapshot();
-  };
-
-  const layoutFixturePositions = async (mode: FixtureLayoutMode) => {
-    await layoutFixtures(
-      filteredFixtures(),
-      mode,
-      selectedFixtureGroupFilter() ? `in ${selectedFixtureGroupFilter()}` : "in patch",
-    );
-  };
-
-  const layoutSelectedMappingFixtures = async (mode: FixtureLayoutMode) => {
-    await layoutFixtures(selectedMappingFixtures(), mode, "in selection");
-  };
-
-  const stageObjectLocalToWorld = (object: StageObjectSummary, localX: number, localZ: number) => {
-    const angle = (object.rotation_deg * Math.PI) / 180;
-    const cos = Math.cos(angle);
-    const sin = Math.sin(angle);
-    return {
-      x: object.x + localX * cos - localZ * sin,
-      z: object.z + localX * sin + localZ * cos,
-    };
-  };
-
-  const layoutSelectedFixturesOnStageObject = async (mode: Exclude<FixtureLayoutMode, "circle">) => {
-    const fixtures = selectedMappingFixtures();
-    const object = selectedStageObject();
-    if (fixtures.length === 0) {
-      setMessage("Select fixtures before arranging them on a stage object.");
-      return;
-    }
-    if (!object) {
-      setMessage("Select a stage object before using it as a layout reference.");
-      return;
-    }
-
-    const count = fixtures.length;
-    const columns = mode === "line" ? count : Math.ceil(Math.sqrt(count));
-    const rows = mode === "line" ? 1 : Math.ceil(count / columns);
-    const usableWidth = Math.max(0.05, object.width * 0.86);
-    const usableDepth = Math.max(0.05, object.depth * 0.78);
-
-    try {
-      await Promise.all(
-        fixtures.map((fixture, index) => {
-          const column = mode === "line" ? index : index % columns;
-          const row = mode === "line" ? 0 : Math.floor(index / columns);
-          const localX = columns <= 1 ? 0 : -usableWidth / 2 + (usableWidth * column) / (columns - 1);
-          const localZ = rows <= 1 ? 0 : -usableDepth / 2 + (usableDepth * row) / (rows - 1);
-          const point = stageObjectLocalToWorld(object, localX, localZ);
-          return setFixtureTransform(
-            fixture,
-            {
-              position: snapStagePosition({
-                ...fixture.position,
-                x: point.x,
-                z: point.z,
-              }),
-              rotation: {
-                ...fixture.rotation,
-                yaw: Number(object.rotation_deg.toFixed(1)),
-              },
-            },
-            false,
-          );
-        }),
-      );
-      await refreshSnapshot();
-      setMessage(`Arranged ${count} fixture${count === 1 ? "" : "s"} on ${object.label}.`);
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const fixturesInsideStageObject = (object: StageObjectSummary) => {
-    const halfWidth = Math.max(0.025, object.width / 2);
-    const halfDepth = Math.max(0.025, object.depth / 2);
-    return snapshot().fixtures.filter((fixture) => {
-      const local = mappingWorldToStageObjectLocal(
-        { x: fixture.position.x, z: fixture.position.z },
-        object,
-      );
-      return Math.abs(local.x) <= halfWidth && Math.abs(local.z) <= halfDepth;
-    });
-  };
-  const stageObjectFixtureCounts = createMemo<Record<number, number>>(() => {
-    const counts: Record<number, number> = {};
-    for (const object of snapshot().stage_objects) {
-      counts[object.id] = fixturesInsideStageObject(object).length;
-    }
-    return counts;
+  const {
+    layoutFixturePositions,
+    layoutSelectedMappingFixtures,
+    layoutSelectedFixturesOnStageObject,
+    stageObjectFixtureCounts,
+    pickFixturesInsideSelectedStageObject,
+    alignSelectedMappingFixtures,
+    distributeSelectedMappingFixtures,
+    nudgeSelectedMappingFixtures,
+    mirrorSelectedMappingFixtures,
+    rotateSelectedMappingFixtures,
+  } = createMappingLayoutController({
+    snapshot,
+    filteredFixtures,
+    selectedFixtureGroupFilter,
+    selectedMappingFixtures,
+    selectedStageObject,
+    selectedFixture,
+    selectedMappingFixtureIds,
+    setSelectedMappingFixtureIds,
+    activateFixture,
+    setFixtureTransform,
+    snapStagePosition,
+    mappingWorldToStageObjectLocal,
+    refreshSnapshot,
+    setMessage,
   });
-
-  const pickFixturesInsideSelectedStageObject = (mode: "replace" | "add") => {
-    const object = selectedStageObject();
-    if (!object) {
-      setMessage("Select a stage object before picking fixtures inside it.");
-      return;
-    }
-    const pickedIds = fixturesInsideStageObject(object).map((fixture) => fixture.id);
-    if (pickedIds.length === 0) {
-      if (mode === "replace") {
-        setSelectedMappingFixtureIds([]);
-      }
-      setMessage(`No fixtures inside ${object.label}.`);
-      return;
-    }
-    const nextIds =
-      mode === "add"
-        ? [...new Set([...selectedMappingFixtureIds(), ...pickedIds])]
-        : pickedIds;
-    setSelectedMappingFixtureIds(nextIds);
-    const active = snapshot().fixtures.find((fixture) => fixture.id === pickedIds[0]);
-    if (active) {
-      activateFixture(active);
-    }
-    setMessage(
-      `${mode === "add" ? "Added" : "Selected"} ${pickedIds.length} fixture${pickedIds.length === 1 ? "" : "s"} inside ${object.label}.`,
-    );
-  };
-
-  const alignSelectedMappingFixtures = async (axis: MappingAxis) => {
-    const fixtures = selectedMappingFixtures();
-    if (fixtures.length < 2) {
-      setMessage("Select at least two fixtures to align.");
-      return;
-    }
-    const active = selectedFixture();
-    const anchor = active && fixtures.some((fixture) => fixture.id === active.id) ? active : fixtures[0];
-    const targetValue = anchor.position[axis];
-    try {
-      await Promise.all(
-        fixtures.map((fixture) =>
-          setFixtureTransform(
-            fixture,
-            {
-              position: snapStagePosition({
-                ...fixture.position,
-                [axis]: targetValue,
-              }),
-            },
-            false,
-          ),
-        ),
-      );
-      await refreshSnapshot();
-      setMessage(`Aligned ${fixtures.length} selected fixture(s) on ${axis.toUpperCase()} ${targetValue.toFixed(2)}.`);
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const distributeSelectedMappingFixtures = async (axis: MappingAxis) => {
-    const fixtures = [...selectedMappingFixtures()].sort((left, right) => left.position[axis] - right.position[axis]);
-    if (fixtures.length < 3) {
-      setMessage("Select at least three fixtures to distribute.");
-      return;
-    }
-    const first = fixtures[0].position[axis];
-    const last = fixtures[fixtures.length - 1].position[axis];
-    if (Math.abs(last - first) < 0.001) {
-      setMessage(`Selected fixtures need different ${axis.toUpperCase()} positions before distributing.`);
-      return;
-    }
-    const step = (last - first) / (fixtures.length - 1);
-    try {
-      await Promise.all(
-        fixtures.map((fixture, index) =>
-          setFixtureTransform(
-            fixture,
-            {
-              position: snapStagePosition({
-                ...fixture.position,
-                [axis]: first + step * index,
-              }),
-            },
-            false,
-          ),
-        ),
-      );
-      await refreshSnapshot();
-      setMessage(`Distributed ${fixtures.length} selected fixture(s) along ${axis.toUpperCase()}.`);
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const nudgeSelectedMappingFixtures = async (deltaX: number, deltaZ: number) => {
-    const fixtures = selectedMappingFixtures();
-    if (fixtures.length === 0) {
-      setMessage("Select fixtures on the mapping stage first.");
-      return;
-    }
-    try {
-      await Promise.all(
-        fixtures.map((fixture) =>
-          setFixtureTransform(
-            fixture,
-            {
-              position: snapStagePosition({
-                ...fixture.position,
-                x: fixture.position.x + deltaX,
-                z: fixture.position.z + deltaZ,
-              }),
-            },
-            false,
-          ),
-        ),
-      );
-      await refreshSnapshot();
-      setMessage(`Nudged ${fixtures.length} selected fixture(s).`);
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const normalizeFixtureYaw = (yaw: number) => Number((((yaw % 360) + 360) % 360).toFixed(1));
-
-  const selectedMappingFixtureCenter = (fixtures: PatchedFixtureSummary[]) => {
-    const minX = Math.min(...fixtures.map((fixture) => fixture.position.x));
-    const maxX = Math.max(...fixtures.map((fixture) => fixture.position.x));
-    const minZ = Math.min(...fixtures.map((fixture) => fixture.position.z));
-    const maxZ = Math.max(...fixtures.map((fixture) => fixture.position.z));
-    return {
-      x: (minX + maxX) / 2,
-      z: (minZ + maxZ) / 2,
-    };
-  };
-
-  const mirrorSelectedMappingFixtures = async (axis: MappingAxis) => {
-    const fixtures = selectedMappingFixtures();
-    if (fixtures.length < 2) {
-      setMessage("Select at least two fixtures to mirror.");
-      return;
-    }
-    const center = selectedMappingFixtureCenter(fixtures);
-    try {
-      await Promise.all(
-        fixtures.map((fixture) => {
-          const nextPosition =
-            axis === "x"
-              ? { ...fixture.position, x: center.x * 2 - fixture.position.x }
-              : { ...fixture.position, z: center.z * 2 - fixture.position.z };
-          const nextYaw =
-            axis === "x"
-              ? normalizeFixtureYaw(360 - fixture.rotation.yaw)
-              : normalizeFixtureYaw(180 - fixture.rotation.yaw);
-          return setFixtureTransform(
-            fixture,
-            {
-              position: snapStagePosition(nextPosition),
-              rotation: {
-                ...fixture.rotation,
-                yaw: nextYaw,
-              },
-            },
-            false,
-          );
-        }),
-      );
-      await refreshSnapshot();
-      setMessage(`Mirrored ${fixtures.length} selected fixture(s) across ${axis.toUpperCase()}.`);
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const rotateSelectedMappingFixtures = async (degrees: number) => {
-    const fixtures = selectedMappingFixtures();
-    if (fixtures.length < 2) {
-      setMessage("Select at least two fixtures to rotate.");
-      return;
-    }
-    const center = selectedMappingFixtureCenter(fixtures);
-    const radians = (degrees * Math.PI) / 180;
-    const cos = Math.cos(radians);
-    const sin = Math.sin(radians);
-    try {
-      await Promise.all(
-        fixtures.map((fixture) => {
-          const localX = fixture.position.x - center.x;
-          const localZ = fixture.position.z - center.z;
-          const nextPosition = {
-            ...fixture.position,
-            x: center.x + localX * cos - localZ * sin,
-            z: center.z + localX * sin + localZ * cos,
-          };
-          return setFixtureTransform(
-            fixture,
-            {
-              position: snapStagePosition(nextPosition),
-              rotation: {
-                ...fixture.rotation,
-                yaw: normalizeFixtureYaw(fixture.rotation.yaw + degrees),
-              },
-            },
-            false,
-          );
-        }),
-      );
-      await refreshSnapshot();
-      setMessage(`Rotated ${fixtures.length} selected fixture(s) by ${degrees} deg.`);
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
 
   const addStageObjectAtCenter = async () => {
     const kind = stageObjectKind();
