@@ -209,6 +209,7 @@ import { createTimelineKeyframeController } from "./createTimelineKeyframeContro
 import { createTimelineAutomationController } from "./createTimelineAutomationController";
 import { createVideoRuntimeController } from "./createVideoRuntimeController";
 import { createAppKeyboardController } from "./createAppKeyboardController";
+import { createStageMapController } from "./createStageMapController";
 import {
   bulkPatchLabel,
   colorCandidates,
@@ -4706,167 +4707,40 @@ export default function App() {
     setMessage,
   });
 
-  const addStageObjectAtCenter = async () => {
-    const kind = stageObjectKind();
-    try {
-      const objectId = await invoke<number>("add_stage_object", {
-        label: stageObjectLabel(),
-        kind,
-        x: Number(((stageWorldBounds().minX + stageWorldBounds().maxX) / 2).toFixed(2)),
-        z: Number(((stageWorldBounds().minZ + stageWorldBounds().maxZ) / 2).toFixed(2)),
-        width: stageObjectWidth(),
-        depth: stageObjectDepth(),
-        rotationDeg: stageObjectRotation(),
-        color: stageObjectColor() || stageObjectDefaultColor(kind),
-      });
-      setSelectedStageObjectId(objectId);
-      setMappingShowStageObjects(true);
-      await refreshSnapshot();
-      setMessage(`Added stage object ${stageObjectLabel()}.`);
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const setStageObject = async (object: StageObjectSummary, updates: Partial<StageObjectSummary>) => {
-    try {
-      await invoke("set_stage_object", {
-        object: {
-          ...object,
-          ...updates,
-        },
-      });
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const removeStageObject = async (objectId: number) => {
-    try {
-      await invoke("remove_stage_object", { objectId });
-      if (selectedStageObjectId() === objectId) {
-        setSelectedStageObjectId(null);
-      }
-      await refreshSnapshot();
-      setMessage(`Removed stage object ${objectId}.`);
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const setStageMapConfig = async (updates: Partial<StageMapConfig>, successMessage = "Updated 2D stage map.") => {
-    const nextConfig = {
-      ...snapshot().stage_map,
-      ...updates,
-    };
-    try {
-      await invoke("set_stage_map_config", { config: nextConfig });
-      setMessage(successMessage);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const lockStageMapToCurrentBounds = async () => {
-    const bounds = autoStageWorldBounds();
-    await setStageMapConfig(
-      {
-        locked: true,
-        min_x: Number(bounds.minX.toFixed(2)),
-        max_x: Number(bounds.maxX.toFixed(2)),
-        min_z: Number(bounds.minZ.toFixed(2)),
-        max_z: Number(bounds.maxZ.toFixed(2)),
-      },
-      "Locked 2D stage map to current bounds.",
-    );
-  };
-
-  const stageMapPresetObjectCountLabel = (preset: StageMapPresetSummary) => {
-    const count = preset.stage_objects?.length;
-    if (count === undefined) {
-      return "bounds only";
-    }
-    return `${count} object${count === 1 ? "" : "s"}`;
-  };
-  const mappingViewPresetObjectLabel = (preset: MappingViewPreset) =>
-    preset.showStageObjects ? "objects shown" : "objects hidden";
-
-  const saveStageMapPreset = async () => {
-    try {
-      const stageObjectCount = snapshot().stage_objects.length;
-      const label = await invoke<string>("save_stage_map_preset", {
-        label: stageMapPresetLabel(),
-        config: snapshot().stage_map,
-      });
-      setStageMapPresetLabel(label);
-      setSelectedStageMapPresetLabel(label);
-      setMessage(`Saved stage map preset ${label} with ${stageObjectCount} stage object${stageObjectCount === 1 ? "" : "s"}.`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const applyStageMapPreset = async (label: string) => {
-    try {
-      const preset = snapshot().stage_map_presets.find((candidate) => candidate.label === label);
-      const stageObjectLabel = preset ? stageMapPresetObjectCountLabel(preset) : "selected layout";
-      await invoke("apply_stage_map_preset", { label });
-      setSelectedStageMapPresetLabel(label);
-      setMessage(`Applied stage map preset ${label} (${stageObjectLabel}).`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const removeStageMapPreset = async (label: string) => {
-    try {
-      await invoke("remove_stage_map_preset", { label });
-      if (selectedStageMapPresetLabel() === label) {
-        setSelectedStageMapPresetLabel("");
-      }
-      setMessage(`Removed stage map preset ${label}.`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const exportStageMapPreset = async () => {
-    try {
-      const stageObjectCount = snapshot().stage_objects.length;
-      const path = await invoke<string | null>("save_stage_map_preset_file", {
-        label: stageMapPresetLabel(),
-        config: snapshot().stage_map,
-      });
-      setMessage(
-        path
-          ? `Exported stage map preset ${path} with ${stageObjectCount} stage object${stageObjectCount === 1 ? "" : "s"}.`
-          : "Stage map preset export canceled.",
-      );
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const importStageMapPreset = async () => {
-    try {
-      const label = await invoke<string | null>("load_stage_map_preset_file");
-      if (label === null) {
-        setMessage("Stage map preset import canceled.");
-        return;
-      }
-      setStageMapPresetLabel(label);
-      setSelectedStageMapPresetLabel(label);
-      setMessage(`Imported stage map preset ${label}.`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
+  const {
+    addStageObjectAtCenter,
+    setStageObject,
+    removeStageObject,
+    setStageMapConfig,
+    lockStageMapToCurrentBounds,
+    stageMapPresetObjectCountLabel,
+    mappingViewPresetObjectLabel,
+    saveStageMapPreset,
+    applyStageMapPreset,
+    removeStageMapPreset,
+    exportStageMapPreset,
+    importStageMapPreset,
+  } = createStageMapController({
+    invoke,
+    snapshot,
+    refreshSnapshot,
+    setMessage,
+    stageObjectLabel,
+    stageObjectKind,
+    stageObjectWidth,
+    stageObjectDepth,
+    stageObjectRotation,
+    stageObjectColor,
+    stageWorldBounds,
+    autoStageWorldBounds,
+    setSelectedStageObjectId,
+    selectedStageObjectId,
+    setMappingShowStageObjects,
+    stageMapPresetLabel,
+    setStageMapPresetLabel,
+    selectedStageMapPresetLabel,
+    setSelectedStageMapPresetLabel,
+  });
 
   const applyMappingSelectionGroups = async (mode: MappingBulkGroupMode) => {
     const fixtures = selectedMappingFixtures();

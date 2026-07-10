@@ -53,6 +53,7 @@ export default defineConfig({
             normalizedId.includes("/src/createMappingRenderModel") ||
             normalizedId.includes("/src/createMappingInteractionController") ||
             normalizedId.includes("/src/createMappingLayoutController") ||
+            normalizedId.includes("/src/createStageMapController") ||
             normalizedId.includes("/src/mappingRuntime") ||
             normalizedId.includes("/src/components/SetupMappingWorkspace") ||
             normalizedId.includes("/src/components/Mapping")
