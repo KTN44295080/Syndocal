@@ -1,11 +1,11 @@
 use std::sync::mpsc;
 
-use protocol::{Transform2D, VideoBlendMode, VideoColorAdjust, VideoFxAdjust, VideoLayerId};
+use protocol::{Transform2D, VideoBlendMode, VideoColorAdjust, VideoFxAdjust};
 use wgpu::util::DeviceExt;
 
 use crate::{
-    convert_frame_to_rgba8, sanitize_color_adjust, CompositionPlan, CpuCompositeError, VideoFrame,
-    VideoPixelFormat,
+    convert_frame_to_rgba8, sanitize_color_adjust, sanitize_fx_adjust, CompositionPlan,
+    CpuCompositeError, VideoFrame, VideoPixelFormat,
 };
 
 const WORKGROUP_SIZE: u32 = 64;
@@ -15,7 +15,6 @@ pub enum GpuCompositeError {
     Cpu(CpuCompositeError),
     Adapter(String),
     Device(String),
-    UnsupportedLayerProcessing { layer_id: VideoLayerId },
     BufferMap(String),
 }
 
@@ -136,11 +135,6 @@ impl GpuCompositor {
             });
 
         for layer in &plan.layers {
-            if layer.fx != VideoFxAdjust::default() {
-                return Err(GpuCompositeError::UnsupportedLayerProcessing {
-                    layer_id: layer.layer_id,
-                });
-            }
             let frame = frames
                 .iter()
                 .filter(|frame| frame.layer_id == layer.layer_id)
@@ -165,6 +159,7 @@ impl GpuCompositor {
                 blend_mode_index(&layer.blend_mode),
                 &layer.transform,
                 &layer.color,
+                &layer.fx,
             );
             let params_buffer = self
                 .device
@@ -279,8 +274,10 @@ fn compositor_params(
     blend_mode: u32,
     transform: &Transform2D,
     color: &VideoColorAdjust,
-) -> [u8; 96] {
+    fx: &VideoFxAdjust,
+) -> [u8; 128] {
     let color = sanitize_color_adjust(*color);
+    let fx = sanitize_fx_adjust(*fx);
     let crop_left = transform.crop_left.clamp(0.0, 1.0);
     let crop_top = transform.crop_top.clamp(0.0, 1.0);
     let crop_right = (1.0 - transform.crop_right.clamp(0.0, 1.0)).clamp(0.0, 1.0);
@@ -310,8 +307,16 @@ fn compositor_params(
         color.gamma.to_bits(),
         0,
         0,
+        fx.pixelate.to_bits(),
+        fx.blur.to_bits(),
+        fx.glow.to_bits(),
+        fx.edge.to_bits(),
+        fx.key_red.to_bits(),
+        fx.key_green.to_bits(),
+        fx.key_blue.to_bits(),
+        fx.key_threshold.to_bits(),
     ];
-    let mut bytes = [0; 96];
+    let mut bytes = [0; 128];
     for (index, value) in values.into_iter().enumerate() {
         let start = index * 4;
         bytes[start..start + 4].copy_from_slice(&value.to_le_bytes());
@@ -321,7 +326,7 @@ fn compositor_params(
 
 #[cfg(test)]
 mod tests {
-    use protocol::{VideoSourceKind, VideoSourceSummary};
+    use protocol::{VideoLayerId, VideoSourceKind, VideoSourceSummary};
 
     use super::*;
     use crate::{composite_rgba8, CompositionLayerPlan};
@@ -581,24 +586,63 @@ mod tests {
     }
 
     #[test]
-    fn gpu_compositor_rejects_unimplemented_fx_processing() {
+    fn gpu_compositor_matches_cpu_pixelate_and_blur() {
         let Some(compositor) = compositor() else {
             return;
         };
         let mut layer = layer_plan(1, VideoBlendMode::Normal, 1.0);
+        layer.fx.pixelate = 2.0;
         layer.fx.blur = 1.0;
-        let error = compositor
-            .composite_rgba8(
-                &plan(vec![layer]),
-                &[frame(1, 1, 1, VideoPixelFormat::Rgba8, vec![1, 2, 3, 255])],
-                1,
-                1,
-            )
-            .unwrap_err();
+        let mut data = Vec::new();
+        for value in 0..16u8 {
+            data.extend_from_slice(&[
+                value.saturating_mul(13),
+                value.saturating_mul(7),
+                255u8.saturating_sub(value.saturating_mul(11)),
+                255,
+            ]);
+        }
+        assert_gpu_matches_cpu(
+            &compositor,
+            &plan(vec![layer]),
+            &[frame(1, 4, 4, VideoPixelFormat::Rgba8, data)],
+            4,
+            4,
+        );
+    }
 
-        assert_eq!(
-            error,
-            GpuCompositeError::UnsupportedLayerProcessing { layer_id: 1 }
+    #[test]
+    fn gpu_compositor_matches_cpu_glow_edge_and_color_key() {
+        let Some(compositor) = compositor() else {
+            return;
+        };
+        let mut layer = layer_plan(1, VideoBlendMode::Normal, 1.0);
+        layer.fx = VideoFxAdjust {
+            glow: 0.75,
+            edge: 0.35,
+            key_red: 0.0,
+            key_green: 1.0,
+            key_blue: 0.0,
+            key_threshold: 0.4,
+            ..VideoFxAdjust::default()
+        };
+        assert_gpu_matches_cpu_with_channel_tolerance(
+            &compositor,
+            &plan(vec![layer]),
+            &[frame(
+                1,
+                3,
+                3,
+                VideoPixelFormat::Rgba8,
+                vec![
+                    0, 255, 0, 255, 240, 240, 240, 255, 10, 20, 30, 255, 20, 220, 15, 180, 255,
+                    255, 255, 220, 100, 30, 200, 128, 0, 0, 0, 255, 180, 210, 230, 255, 40, 50, 60,
+                    64,
+                ],
+            )],
+            3,
+            3,
+            1,
         );
     }
 }

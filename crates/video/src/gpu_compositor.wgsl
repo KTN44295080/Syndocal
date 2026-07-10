@@ -11,6 +11,8 @@ struct Params {
     transform_b: vec4<f32>,
     transform_c: vec4<f32>,
     color: vec4<f32>,
+    fx_a: vec4<f32>,
+    fx_b: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -84,6 +86,111 @@ fn adjust_color(pixel: u32) -> vec4<f32> {
     return vec4<f32>(rgb * 255.0, unpack_alpha(pixel));
 }
 
+fn raw_pixel(x: u32, y: u32) -> vec4<f32> {
+    let pixel = source_pixels[y * params.source_width + x];
+    return vec4<f32>(unpack_rgb(pixel), unpack_alpha(pixel));
+}
+
+fn average_pixel(source_x: u32, source_y: u32, radius: i32) -> vec4<f32> {
+    var channels = vec4<u32>(0u);
+    var count = 0u;
+    for (var offset_y = -radius; offset_y <= radius; offset_y += 1) {
+        let y = i32(source_y) + offset_y;
+        if (y < 0 || y >= i32(params.source_height)) {
+            continue;
+        }
+        for (var offset_x = -radius; offset_x <= radius; offset_x += 1) {
+            let x = i32(source_x) + offset_x;
+            if (x < 0 || x >= i32(params.source_width)) {
+                continue;
+            }
+            channels += vec4<u32>(raw_pixel(u32(x), u32(y)));
+            count += 1u;
+        }
+    }
+    if (count == 0u) {
+        return vec4<f32>(0.0);
+    }
+    return vec4<f32>(channels / vec4<u32>(count));
+}
+
+fn bright_neighbor_average(source_x: u32, source_y: u32, radius: i32) -> vec3<f32> {
+    var channels = vec3<f32>(0.0);
+    var weight_sum = 0.0;
+    for (var offset_y = -radius; offset_y <= radius; offset_y += 1) {
+        let y = i32(source_y) + offset_y;
+        if (y < 0 || y >= i32(params.source_height)) {
+            continue;
+        }
+        for (var offset_x = -radius; offset_x <= radius; offset_x += 1) {
+            let x = i32(source_x) + offset_x;
+            if (x < 0 || x >= i32(params.source_width)) {
+                continue;
+            }
+            let pixel = raw_pixel(u32(x), u32(y)).rgb;
+            let brightness = max(max(pixel.r, pixel.g), pixel.b) / 255.0;
+            let weight = clamp((brightness - 0.6) / 0.4, 0.0, 1.0);
+            if (weight > 0.0) {
+                channels += pixel * weight;
+                weight_sum += weight;
+            }
+        }
+    }
+    if (weight_sum <= 0.00000011920928955078125) {
+        return vec3<f32>(0.0);
+    }
+    return channels / weight_sum;
+}
+
+fn luminance(pixel: vec3<f32>) -> f32 {
+    return (0.299 * pixel.r + 0.587 * pixel.g + 0.114 * pixel.b) / 255.0;
+}
+
+fn edge_intensity(source_x: u32, source_y: u32) -> f32 {
+    let center = luminance(raw_pixel(source_x, source_y).rgb);
+    let left = luminance(raw_pixel(select(source_x - 1u, 0u, source_x == 0u), source_y).rgb);
+    let right = luminance(raw_pixel(min(source_x + 1u, params.source_width - 1u), source_y).rgb);
+    let top = luminance(raw_pixel(source_x, select(source_y - 1u, 0u, source_y == 0u)).rgb);
+    let bottom = luminance(raw_pixel(source_x, min(source_y + 1u, params.source_height - 1u)).rgb);
+    return clamp(max(max(abs(center - left), abs(center - right)), max(abs(center - top), abs(center - bottom))), 0.0, 1.0);
+}
+
+fn sample_with_fx(input_x: u32, input_y: u32) -> vec4<f32> {
+    var source_x = input_x;
+    var source_y = input_y;
+    let pixelate = u32(clamp(floor(params.fx_a.x + 0.5), 1.0, 128.0));
+    if (pixelate > 1u) {
+        source_x = min((source_x / pixelate) * pixelate + pixelate / 2u, params.source_width - 1u);
+        source_y = min((source_y / pixelate) * pixelate + pixelate / 2u, params.source_height - 1u);
+    }
+
+    let blur_radius = i32(clamp(floor(params.fx_a.y + 0.5), 0.0, 8.0));
+    var sample = select(raw_pixel(source_x, source_y), average_pixel(source_x, source_y, blur_radius), blur_radius > 0);
+
+    if (params.fx_a.z > 0.0) {
+        let glow_radius = i32(clamp(ceil(params.fx_a.z * 2.0), 1.0, 8.0));
+        let glow = bright_neighbor_average(source_x, source_y, glow_radius);
+        sample = vec4<f32>(clamp(floor(sample.rgb + glow * params.fx_a.z + vec3<f32>(0.5)), vec3<f32>(0.0), vec3<f32>(255.0)), sample.a);
+    }
+    if (params.fx_a.w > 0.0) {
+        let edge = edge_intensity(source_x, source_y) * 255.0;
+        let amount = clamp(params.fx_a.w, 0.0, 4.0);
+        sample = vec4<f32>(clamp(floor(sample.rgb + (vec3<f32>(edge) - sample.rgb) * amount + vec3<f32>(0.5)), vec3<f32>(0.0), vec3<f32>(255.0)), sample.a);
+    }
+    return sample;
+}
+
+fn apply_color_key(input_pixel: vec4<f32>) -> vec4<f32> {
+    var pixel = input_pixel;
+    if (params.fx_b.w <= 0.0) {
+        return pixel;
+    }
+    let distance = length(pixel.rgb / 255.0 - params.fx_b.rgb);
+    let alpha_scale = clamp(distance / max(params.fx_b.w, 0.001), 0.0, 1.0);
+    pixel.a = floor(pixel.a * alpha_scale + 0.5);
+    return pixel;
+}
+
 @compute @workgroup_size(64)
 fn composite_layer(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
     let index = invocation_id.x;
@@ -113,7 +220,9 @@ fn composite_layer(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
     }
     let source_x = min(u32(floor(source_u * f32(params.source_width))), params.source_width - 1u);
     let source_y = min(u32(floor(source_v * f32(params.source_height))), params.source_height - 1u);
-    let source = adjust_color(source_pixels[source_y * params.source_width + source_x]);
+    let sampled = sample_with_fx(source_x, source_y);
+    let sampled_pixel = pack_rgba(sampled.rgb, sampled.a);
+    let source = apply_color_key(adjust_color(sampled_pixel));
     let source_alpha = (source.a / 255.0) * clamp(params.opacity, 0.0, 1.0);
     if (source_alpha <= 0.0) {
         return;
