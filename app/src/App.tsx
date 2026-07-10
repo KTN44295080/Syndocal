@@ -207,6 +207,7 @@ import { createInitialEngineSnapshot } from "./initialEngineSnapshot";
 import { createTimelineOverviewAutomationController } from "./createTimelineOverviewAutomationController";
 import { createTimelineKeyframeController } from "./createTimelineKeyframeController";
 import { createTimelineAutomationController } from "./createTimelineAutomationController";
+import { createVideoRuntimeController } from "./createVideoRuntimeController";
 import {
   bulkPatchLabel,
   colorCandidates,
@@ -6676,384 +6677,59 @@ export default function App() {
     refreshSnapshot,
   });
 
-  const addVideoLayer = async () => {
-    try {
-      const sourceKind = videoSourceKind();
-      const layerId =
-        sourceKind === "File" || sourceKind === "StillImage"
-          ? await invoke<number>(sourceKind === "StillImage" ? "add_still_image_layer" : "add_video_file_layer", {
-              label: videoLabel(),
-              path: videoPath(),
-            })
-          : await invoke<number>("add_video_input_layer", {
-              label: videoLabel(),
-              kind: sourceKind,
-              name: videoPath(),
-            });
-      setVideoLabel(`Layer ${snapshot().video.layers.length + 2}`);
-      setMessage(`Added video layer ${layerId}`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const removeVideoLayer = async (layerId: number) => {
-    try {
-      await invoke("remove_video_layer", { layerId });
-      setMessage(`Removed video layer ${layerId}`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const duplicateVideoLayer = async (layer: { id: number; label: string }) => {
-    try {
-      const layerId = await invoke<number>("duplicate_video_layer", {
-        sourceLayerId: layer.id,
-        label: `${layer.label} Copy`,
-      });
-      setMessage(`Duplicated video layer ${layerId}`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const moveVideoLayer = async (layerId: number, delta: -1 | 1) => {
-    const layerIds = snapshot().video.layers.map((layer) => layer.id);
-    const index = layerIds.indexOf(layerId);
-    const nextIndex = index + delta;
-    if (index < 0 || nextIndex < 0 || nextIndex >= layerIds.length) {
-      return;
-    }
-    const nextLayerIds = [...layerIds];
-    [nextLayerIds[index], nextLayerIds[nextIndex]] = [nextLayerIds[nextIndex], nextLayerIds[index]];
-    try {
-      await invoke("set_video_layer_order", { layerIds: nextLayerIds });
-      setMessage(`Moved video layer ${layerId}`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const setVideoLayerLabel = async (layerId: number, label: string) => {
-    try {
-      await invoke("set_video_layer_label", { layerId, label });
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const refreshVideoLayerMetadata = async (layerId: number) => {
-    try {
-      const result = await invoke<string>("refresh_video_layer_metadata", { layerId });
-      setMessage(result);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const renderDebugVideoPreview = async () => {
-    try {
-      const frame = await invoke<VideoFrame>("get_debug_video_preview", { width: 64, height: 36 });
-      setVideoPreviewUrl(videoFrameToDataUrl(frame));
-      setVideoPreviewInfo(`${frame.width}x${frame.height} ${frame.format} / pts ${frame.pts_ms}ms / ${frame.data.length} bytes`);
-      setMessage("Rendered CPU video preview.");
-      await refreshVideoPreviewDiagnostics(true);
-    } catch (error) {
-      setVideoPreviewUrl("");
-      setMessage(String(error));
-    }
-  };
-
-  const refreshVideoPreviewDiagnostics = async (silent = false) => {
-    try {
-      const diagnostics = await invoke<VideoPreviewDiagnostics>("get_video_preview_diagnostics");
-      setVideoPreviewDiagnostics(diagnostics);
-      if (!silent) {
-        setMessage("Updated video preview diagnostics.");
-      }
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const refreshVideoOutputRenderPlans = async (silent = false) => {
-    try {
-      const plans = await invoke<VideoOutputRenderPlan[]>("get_video_output_render_plans");
-      setVideoOutputRenderPlans(plans);
-      if (!silent) {
-        const activeLayers = plans.reduce((total, plan) => total + plan.composition.layers.length, 0);
-        setMessage(`Video output render plans: ${plans.length} output(s), ${activeLayers} render layer(s).`);
-      }
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const refreshVideoOutputWindowStatuses = async (silent = false) => {
-    try {
-      const statuses = await invoke<VideoOutputWindowStatus[]>("get_video_output_window_statuses");
-      setVideoOutputWindowStatuses(statuses);
-      if (!silent) {
-        const liveOpen = statuses.filter((status) => status.live_open).length;
-        const patternOpen = statuses.filter((status) => status.test_pattern_open).length;
-        setMessage(`Video output windows: ${liveOpen} live, ${patternOpen} pattern open.`);
-      }
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const refreshSnapshotAndVideoOutputRenderPlans = async () => {
-    await Promise.all([
-      refreshSnapshot(),
-      refreshVideoOutputRenderPlans(true),
-      refreshVideoOutputWindowStatuses(true),
-    ]);
-  };
-
-  const syncOpenVideoOutputWindows = async () => {
-    try {
-      const summary = await invoke<VideoOutputWindowSyncSummary>("sync_open_video_output_windows");
-      await Promise.all([refreshVideoOutputRenderPlans(true), refreshVideoOutputWindowStatuses(true)]);
-      setMessage(
-        `Synced ${summary.synced_live} live and ${summary.synced_test_pattern} pattern output window(s); ${summary.skipped_closed} closed slot(s) skipped.`,
-      );
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const closeOpenVideoOutputWindows = async () => {
-    try {
-      const summary = await invoke<VideoOutputWindowCloseSummary>("close_open_video_output_windows");
-      await refreshVideoOutputWindowStatuses(true);
-      setMessage(
-        `Closed ${summary.closed_live} live and ${summary.closed_test_pattern} pattern output window(s); ${summary.skipped_closed} closed slot(s) skipped.`,
-      );
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const openAllVideoOutputWindows = async (testPattern = false) => {
-    const displayOutputs = snapshot().video.outputs.filter((output) => output.kind === "Display");
-    if (displayOutputs.length === 0) {
-      setMessage("No Display video outputs to open.");
-      return;
-    }
-    let opened = 0;
-    let failed = 0;
-    for (const output of displayOutputs) {
-      try {
-        await invoke("open_video_output_window", { outputId: output.id, testPattern });
-        opened += 1;
-      } catch {
-        failed += 1;
-      }
-    }
-    await Promise.all([refreshVideoOutputRenderPlans(true), refreshVideoOutputWindowStatuses(true)]);
-    setMessage(
-      `Opened ${opened}/${displayOutputs.length} ${testPattern ? "pattern" : "live"} output window(s)${
-        failed > 0 ? `; ${failed} failed` : ""
-      }.`,
-    );
-  };
-
-  const refreshVideoRuntimeStatus = async () => {
-    try {
-      const status = await invoke<VideoRuntimeStatus>("get_video_runtime_status");
-      setVideoRuntimeStatus(status);
-      const available = status.backends.filter((backend) => backend.state === "Available").length;
-      setMessage(`Video backends: ${available}/${status.backends.length} available.`);
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const refreshExternalVideoIoPlans = async () => {
-    try {
-      const [plans, status, transportStatus] = await Promise.all([
-        invoke<ExternalVideoIoPlans>("get_external_video_io_plans"),
-        invoke<VideoRuntimeStatus>("get_video_runtime_status"),
-        invoke<ExternalVideoTransportStatus>("get_external_video_transport_status"),
-      ]);
-      setExternalVideoIoPlans(plans);
-      setVideoRuntimeStatus(status);
-      setExternalVideoTransportStatus(transportStatus);
-      const available = status.backends.filter((backend) => backend.state === "Available").length;
-      setMessage(
-        `External video I/O: ${plans.inputs.length} input(s), ${plans.outputs.length} output(s), ${transportStatus.active_count} active route(s), ${available}/${status.backends.length} backend(s) available.`,
-      );
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const syncExternalVideoTransports = async () => {
-    try {
-      const [plans, status, sync] = await Promise.all([
-        invoke<ExternalVideoIoPlans>("get_external_video_io_plans"),
-        invoke<VideoRuntimeStatus>("get_video_runtime_status"),
-        invoke<ExternalVideoTransportSyncResponse>("sync_external_video_transports"),
-      ]);
-      const transportStatus = await invoke<ExternalVideoTransportStatus>("get_external_video_transport_status");
-      const report = sync.report;
-      setExternalVideoIoPlans(plans);
-      setVideoRuntimeStatus(status);
-      setExternalVideoTransportStatus(transportStatus);
-      setExternalVideoTransportReport(report);
-      setExternalVideoTransportEvents(sync.events);
-      const failedRoutes = report.start_failed.length + report.stop_failed.length;
-      setMessage(
-        `External video routes: ${report.active_count} active, ${report.started.length} started, ${report.stopped.length} stopped, ${report.blocked.length} blocked, ${failedRoutes} failed, ${sync.events.length} driver event(s).`,
-      );
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const renderDebugVideoOutputPreview = async (outputId: number, testPattern = false) => {
-    try {
-      const frame = await invoke<VideoFrame>(testPattern ? "get_debug_video_output_test_pattern" : "get_debug_video_output_preview", {
-        outputId,
-        width: 128,
-        height: 72,
-      });
-      const previewUrl = videoFrameToDataUrl(frame);
-      const label = testPattern ? "Pattern" : "Output";
-      const info = `${frame.width}x${frame.height} ${frame.format} / ${frame.data.length} bytes`;
-      setVideoOutputPreviewUrl(previewUrl);
-      setVideoOutputPreviewInfo(info);
-      setVideoOutputPreviewId(outputId);
-      setVideoOutputPreviewMode(testPattern ? "test" : "output");
-      setVideoPreviewUrl(previewUrl);
-      setVideoPreviewInfo(`${label} ${outputId}: ${info}`);
-      setMessage(`Rendered ${testPattern ? "test pattern" : "output"} ${outputId} preview.`);
-      if (!testPattern) {
-        await Promise.all([refreshVideoPreviewDiagnostics(true), refreshVideoOutputRenderPlans(true)]);
-      }
-    } catch (error) {
-      setVideoOutputPreviewUrl("");
-      setVideoOutputPreviewId(outputId);
-      setVideoPreviewUrl("");
-      setMessage(String(error));
-    }
-  };
-
-  const setVideoLayerState = async (layerId: number, stateValue: VideoLayerState) => {
-    try {
-      await invoke("set_video_layer_state", { layerId, stateValue });
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const setVideoLayerTransform = (
-    layerId: number,
-    stateValue: VideoLayerState,
-    transformPatch: Partial<VideoLayerState["transform"]>,
-  ) =>
-    setVideoLayerState(layerId, {
-      ...stateValue,
-      transform: {
-        ...defaultTransform,
-        ...stateValue.transform,
-        ...transformPatch,
-      },
-    });
-
-  const setVideoLayerColor = (
-    layerId: number,
-    stateValue: VideoLayerState,
-    colorPatch: Partial<VideoLayerState["color"]>,
-  ) =>
-    setVideoLayerState(layerId, {
-      ...stateValue,
-      color: {
-        ...defaultColorAdjust,
-        ...stateValue.color,
-        ...colorPatch,
-      },
-    });
-
-  const setVideoLayerFx = (
-    layerId: number,
-    stateValue: VideoLayerState,
-    fxPatch: Partial<VideoLayerState["fx"]>,
-  ) =>
-    setVideoLayerState(layerId, {
-      ...stateValue,
-      fx: {
-        ...defaultFxAdjust,
-        ...stateValue.fx,
-        ...fxPatch,
-      },
-    });
-
-  const addVideoCuePoint = async (layerId: number, positionMs?: number) => {
-    try {
-      await invoke("add_video_cue_point", { layerId, positionMs });
-      setMessage(`Added video cue point${positionMs === undefined ? "" : ` at ${positionMs}ms`}`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const removeVideoCuePoint = async (layerId: number, positionMs: number) => {
-    try {
-      await invoke("remove_video_cue_point", { layerId, positionMs });
-      setMessage(`Removed video cue point ${positionMs}ms`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const jumpVideoCuePoint = async (layerId: number, cuePointIndex: number) => {
-    try {
-      await invoke("jump_video_cue_point", { layerId, cuePointIndex });
-      setMessage(`Jumped video layer ${layerId} to cue point ${cuePointIndex + 1}`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const setVideoLayerBlendMode = async (layerId: number, blendMode: VideoBlendMode) => {
-    try {
-      await invoke("set_video_layer_blend_mode", { layerId, blendMode });
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const setVideoMasterOpacity = async (opacity: number) => {
-    try {
-      await invoke("set_video_master_opacity", { opacity });
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const setVideoBlackout = async (enabled: boolean) => {
-    try {
-      await invoke("set_video_blackout", { enabled });
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
+  const {
+    addVideoLayer,
+    removeVideoLayer,
+    duplicateVideoLayer,
+    moveVideoLayer,
+    setVideoLayerLabel,
+    refreshVideoLayerMetadata,
+    renderDebugVideoPreview,
+    refreshVideoPreviewDiagnostics,
+    refreshVideoOutputRenderPlans,
+    refreshVideoOutputWindowStatuses,
+    refreshSnapshotAndVideoOutputRenderPlans,
+    syncOpenVideoOutputWindows,
+    closeOpenVideoOutputWindows,
+    openAllVideoOutputWindows,
+    refreshVideoRuntimeStatus,
+    refreshExternalVideoIoPlans,
+    syncExternalVideoTransports,
+    renderDebugVideoOutputPreview,
+    setVideoLayerState,
+    setVideoLayerTransform,
+    setVideoLayerColor,
+    setVideoLayerFx,
+    addVideoCuePoint,
+    removeVideoCuePoint,
+    jumpVideoCuePoint,
+    setVideoLayerBlendMode,
+    setVideoMasterOpacity,
+    setVideoBlackout,
+  } = createVideoRuntimeController({
+    invoke,
+    snapshot,
+    refreshSnapshot,
+    setMessage,
+    videoSourceKind,
+    videoLabel,
+    setVideoLabel,
+    videoPath,
+    setVideoPreviewUrl,
+    setVideoPreviewInfo,
+    setVideoPreviewDiagnostics,
+    setVideoOutputRenderPlans,
+    setVideoOutputWindowStatuses,
+    setVideoRuntimeStatus,
+    setExternalVideoIoPlans,
+    setExternalVideoTransportStatus,
+    setExternalVideoTransportReport,
+    setExternalVideoTransportEvents,
+    setVideoOutputPreviewUrl,
+    setVideoOutputPreviewInfo,
+    setVideoOutputPreviewId,
+    setVideoOutputPreviewMode,
+  });
 
   const toggleVideoCompositionLayer = (layerId: number, checked: boolean) => {
     setVideoCompositionLayerIds((current) => {

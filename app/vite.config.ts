@@ -43,7 +43,8 @@ export default defineConfig({
             normalizedId.includes("/src/components/VideoLayerListPanel") ||
             normalizedId.includes("/src/components/VideoPreviewDiagnosticsPanel") ||
             normalizedId.includes("/src/components/VideoRuntimeStatusPanels") ||
-            normalizedId.includes("/src/components/VideoSourceCreatePanel")
+            normalizedId.includes("/src/components/VideoSourceCreatePanel") ||
+            normalizedId.includes("/src/createVideoRuntimeController")
           ) {
             return "video-control-panels";
           }
