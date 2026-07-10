@@ -4,7 +4,8 @@ use protocol::{Transform2D, VideoBlendMode, VideoColorAdjust, VideoFxAdjust, Vid
 use wgpu::util::DeviceExt;
 
 use crate::{
-    convert_frame_to_rgba8, CompositionPlan, CpuCompositeError, VideoFrame, VideoPixelFormat,
+    convert_frame_to_rgba8, sanitize_color_adjust, CompositionPlan, CpuCompositeError, VideoFrame,
+    VideoPixelFormat,
 };
 
 const WORKGROUP_SIZE: u32 = 64;
@@ -15,7 +16,6 @@ pub enum GpuCompositeError {
     Adapter(String),
     Device(String),
     UnsupportedLayerProcessing { layer_id: VideoLayerId },
-    FrameDimensionsMismatch { layer_id: VideoLayerId },
     BufferMap(String),
 }
 
@@ -136,10 +136,7 @@ impl GpuCompositor {
             });
 
         for layer in &plan.layers {
-            if layer.transform != Transform2D::default()
-                || layer.color != VideoColorAdjust::default()
-                || layer.fx != VideoFxAdjust::default()
-            {
+            if layer.fx != VideoFxAdjust::default() {
                 return Err(GpuCompositeError::UnsupportedLayerProcessing {
                     layer_id: layer.layer_id,
                 });
@@ -151,11 +148,6 @@ impl GpuCompositor {
                 .ok_or(CpuCompositeError::MissingFrame {
                     layer_id: layer.layer_id,
                 })?;
-            if frame.width != width || frame.height != height {
-                return Err(GpuCompositeError::FrameDimensionsMismatch {
-                    layer_id: layer.layer_id,
-                });
-            }
             let normalized = convert_frame_to_rgba8(frame)?;
             let source_buffer = self
                 .device
@@ -165,9 +157,14 @@ impl GpuCompositor {
                     usage: wgpu::BufferUsages::STORAGE,
                 });
             let params = compositor_params(
-                pixel_count,
+                width,
+                height,
+                normalized.width,
+                normalized.height,
                 layer.opacity.clamp(0.0, 1.0),
                 blend_mode_index(&layer.blend_mode),
+                &layer.transform,
+                &layer.color,
             );
             let params_buffer = self
                 .device
@@ -273,11 +270,52 @@ fn blend_mode_index(mode: &VideoBlendMode) -> u32 {
     }
 }
 
-fn compositor_params(pixel_count: u32, opacity: f32, blend_mode: u32) -> [u8; 16] {
-    let mut bytes = [0; 16];
-    bytes[0..4].copy_from_slice(&pixel_count.to_le_bytes());
-    bytes[4..8].copy_from_slice(&opacity.to_bits().to_le_bytes());
-    bytes[8..12].copy_from_slice(&blend_mode.to_le_bytes());
+fn compositor_params(
+    output_width: u32,
+    output_height: u32,
+    source_width: u32,
+    source_height: u32,
+    opacity: f32,
+    blend_mode: u32,
+    transform: &Transform2D,
+    color: &VideoColorAdjust,
+) -> [u8; 96] {
+    let color = sanitize_color_adjust(*color);
+    let crop_left = transform.crop_left.clamp(0.0, 1.0);
+    let crop_top = transform.crop_top.clamp(0.0, 1.0);
+    let crop_right = (1.0 - transform.crop_right.clamp(0.0, 1.0)).clamp(0.0, 1.0);
+    let crop_bottom = (1.0 - transform.crop_bottom.clamp(0.0, 1.0)).clamp(0.0, 1.0);
+    let values = [
+        output_width,
+        output_height,
+        source_width,
+        source_height,
+        opacity.to_bits(),
+        blend_mode,
+        0,
+        0,
+        transform.x.to_bits(),
+        transform.y.to_bits(),
+        transform.scale_x.max(0.001).to_bits(),
+        transform.scale_y.max(0.001).to_bits(),
+        (-transform.rotation_deg.to_radians()).to_bits(),
+        crop_left.to_bits(),
+        crop_top.to_bits(),
+        crop_right.to_bits(),
+        crop_bottom.to_bits(),
+        color.brightness.to_bits(),
+        color.contrast.to_bits(),
+        color.hue_deg.to_radians().to_bits(),
+        color.saturation.to_bits(),
+        color.gamma.to_bits(),
+        0,
+        0,
+    ];
+    let mut bytes = [0; 96];
+    for (index, value) in values.into_iter().enumerate() {
+        let start = index * 4;
+        bytes[start..start + 4].copy_from_slice(&value.to_le_bytes());
+    }
     bytes
 }
 
@@ -372,6 +410,31 @@ mod tests {
         assert_eq!(gpu.data, cpu.data);
     }
 
+    fn assert_gpu_matches_cpu_with_channel_tolerance(
+        compositor: &GpuCompositor,
+        plan: &CompositionPlan,
+        frames: &[VideoFrame],
+        width: u32,
+        height: u32,
+        tolerance: u8,
+    ) {
+        let cpu = composite_rgba8(plan, frames, width, height).unwrap();
+        let gpu = compositor
+            .composite_rgba8(plan, frames, width, height)
+            .unwrap();
+        assert_eq!(gpu.width, cpu.width);
+        assert_eq!(gpu.height, cpu.height);
+        assert_eq!(gpu.pts_ms, cpu.pts_ms);
+        assert_eq!(gpu.format, VideoPixelFormat::Rgba8);
+        assert_eq!(gpu.data.len(), cpu.data.len());
+        for (index, (gpu_channel, cpu_channel)) in gpu.data.iter().zip(&cpu.data).enumerate() {
+            assert!(
+                gpu_channel.abs_diff(*cpu_channel) <= tolerance,
+                "channel {index} differs: GPU={gpu_channel}, CPU={cpu_channel}, tolerance={tolerance}"
+            );
+        }
+    }
+
     #[test]
     fn gpu_compositor_matches_cpu_for_rgba_bgra_dxt1_and_dxt5() {
         let Some(compositor) = compositor() else {
@@ -452,12 +515,78 @@ mod tests {
     }
 
     #[test]
-    fn gpu_compositor_rejects_unimplemented_layer_processing() {
+    fn gpu_compositor_matches_cpu_transform_crop_and_source_size() {
+        let Some(compositor) = compositor() else {
+            return;
+        };
+        let mut layer = layer_plan(1, VideoBlendMode::Normal, 0.8);
+        layer.transform = Transform2D {
+            x: 0.125,
+            y: -0.125,
+            scale_x: 0.75,
+            scale_y: 0.5,
+            rotation_deg: 90.0,
+            crop_left: 0.25,
+            crop_top: 0.0,
+            crop_right: 0.0,
+            crop_bottom: 0.25,
+        };
+        let mut data = Vec::new();
+        for value in 0..12u8 {
+            data.extend_from_slice(&[
+                value.saturating_mul(17),
+                255u8.saturating_sub(value.saturating_mul(13)),
+                value.saturating_mul(7),
+                64u8.saturating_add(value.saturating_mul(11)),
+            ]);
+        }
+        assert_gpu_matches_cpu(
+            &compositor,
+            &plan(vec![layer]),
+            &[frame(1, 4, 3, VideoPixelFormat::Rgba8, data)],
+            8,
+            6,
+        );
+    }
+
+    #[test]
+    fn gpu_compositor_matches_cpu_color_adjustments() {
         let Some(compositor) = compositor() else {
             return;
         };
         let mut layer = layer_plan(1, VideoBlendMode::Normal, 1.0);
-        layer.transform.x = 0.25;
+        layer.color = VideoColorAdjust {
+            brightness: 0.08,
+            contrast: 1.15,
+            hue_deg: 35.0,
+            saturation: 0.75,
+            gamma: 1.3,
+        };
+        assert_gpu_matches_cpu_with_channel_tolerance(
+            &compositor,
+            &plan(vec![layer]),
+            &[frame(
+                1,
+                2,
+                2,
+                VideoPixelFormat::Rgba8,
+                vec![
+                    12, 67, 201, 255, 240, 80, 30, 200, 90, 180, 45, 128, 130, 140, 150, 64,
+                ],
+            )],
+            2,
+            2,
+            1,
+        );
+    }
+
+    #[test]
+    fn gpu_compositor_rejects_unimplemented_fx_processing() {
+        let Some(compositor) = compositor() else {
+            return;
+        };
+        let mut layer = layer_plan(1, VideoBlendMode::Normal, 1.0);
+        layer.fx.blur = 1.0;
         let error = compositor
             .composite_rgba8(
                 &plan(vec![layer]),

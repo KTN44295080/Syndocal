@@ -100,7 +100,8 @@ Phase 2(エフェクト/タイムライン/マッピングの操作性)を「完
 CPU プレビューを wgpu 実出力に置き換える。**照明エンジンと分離したまま進める**(DMX 44Hz を巻き込まない)。
 - 段階 1: `crates/video` に wgpu コンポジタを追加し、既存 CPU リファレンスコンポジタと**同一入力 → 同一出力のゴールデンテスト**を作る(RGBA/BGRA/DXT1/DXT5)。
   - [x] M3.1a: wgpu 25.0.2 のオフスクリーン計算パイプラインを追加。RGBA/BGRA/DXT1/DXT5、Normal/Add/Multiply/Screen、opacity が CPU 参照と完全一致するゴールデンテストを実GPUで通す。変形/色補正/FXは未対応時に明示エラーとする。(2026-07-11)
-  - [ ] M3.1b: transform/crop/color/fx と出力マッピングをGPUパスへ移し、CPU参照とのゴールデンテストを拡張する。
+  - [x] M3.1b-1: transform/crop、異解像度ソース、brightness/contrast/hue/saturation/gamma をGPUパスへ移す。座標変換は完全一致、超越関数を使う色補正はチャンネル誤差1/255以内でCPUゴールデンと一致。(2026-07-11)
+  - [ ] M3.1b-2: pixelate/blur/glow/edge/color-key と出力マッピングをGPUパスへ移し、CPU参照とのゴールデンテストを拡張する。
 - 段階 2: 出力ウィンドウ(Tauri/winit)に wgpu サーフェスを張り、静止画 → 単一動画レイヤー → 多レイヤー合成 → 補正(コーナーピン/レンズ/キーストーン)の順に段階的に載せ替える。各段階でスライスを切る。
 - 段階 3: インプロセスデコードワーカー。方針決定が必要(§5 決定事項 D1): (a) `ffmpeg-next`(libav バインディング)、(b) HAP + DXT 直接アップロード優先、(c) 当面 CLI 抽出を最適化して据え置き。推奨は (b)→(a) の順(HAP は VJ 用途の主流で、既に DXT パスがある)。
 - 段階 4: 既存のフレームキュー/デコード診断/テレメトリを新パスに接続。CPU プレビューは「Preview (Reference)」として残す。
