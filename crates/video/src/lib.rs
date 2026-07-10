@@ -1696,11 +1696,7 @@ impl VideoFrameDecoder for FfmpegCliFrameDecoder {
         request: &VideoFrameRequest,
     ) -> Result<Option<VideoFrame>, VideoDecodeError> {
         if request.source.kind != VideoSourceKind::File {
-            return Err(VideoDecodeError::UnsupportedSource {
-                layer_id: request.layer_id,
-                label: request.label.clone(),
-                kind: request.source.kind.clone(),
-            });
+            return Ok(None);
         }
 
         let path = request
@@ -5852,7 +5848,7 @@ mod tests {
     }
 
     #[test]
-    fn ffmpeg_cli_decoder_requires_file_source_path() {
+    fn ffmpeg_cli_decoder_defers_non_file_sources_to_provider_fallback() {
         let mut decoder = FfmpegCliFrameDecoder::new("ffmpeg");
         let request = VideoFrameRequest {
             layer_id: 15,
@@ -5869,14 +5865,7 @@ mod tests {
             height: 1,
         };
 
-        assert_eq!(
-            decoder.decode_frame(&request),
-            Err(VideoDecodeError::UnsupportedSource {
-                layer_id: 15,
-                label: "NDI".to_string(),
-                kind: VideoSourceKind::Ndi,
-            })
-        );
+        assert_eq!(decoder.decode_frame(&request), Ok(None));
     }
 
     #[test]
