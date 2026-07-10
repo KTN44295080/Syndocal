@@ -7,6 +7,7 @@ This workspace is a large, intentionally dirty prototype branch for Rayard, a Ru
 - Product name: Rayard.
 - Developer / publisher: Seraf()のKTN.
 - Project files use `.ry`. Keep legacy project-name and extension aliases out of user-facing files.
+- Platform support is a v1.0 release requirement: Windows 10+ and macOS 12+ are Tier 1; Linux (Ubuntu 22.04+) is Tier 2. Keep the shared engine, project format, network I/O, MIDI/OSC, UI, and wgpu video path portable. Isolate Spout, Syphon, serial timing, and thread-priority code behind platform modules/features so unavailable integrations never prevent startup.
 - The user prefers lightweight checks for small changes. Use full Tauri builds only at major milestones.
 - 3D visualization is deferred/external for now. Keep the app focused on the Setup 2D mapping visualizer unless the user asks otherwise.
 - The Setup UI should keep a DasLight-like operational feel: dense, dark, tabbed, grid-based, and tool-oriented.

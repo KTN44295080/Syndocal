@@ -25,7 +25,10 @@
 - [ ] `pnpm --dir app build`(tsc + vite)が green、メインチャンク < 500 kB。
 - [ ] `npm run check:viewport` が green(アプリ本体はスクロールしない一画面デスク)。
 - [ ] 44 Hz DMX ティックがテレメトリ予算内(budget report が pass)で、1 時間ソークでドロップ/リークなし。
-- [ ] Windows 用リリースビルド(`pnpm --dir app tauri build`)+ インストーラが動作し、`.ry` 拡張子関連付けが機能する。
+- [ ] **Tier 1: Windows 10+ / macOS 12+** でネイティブリリースビルド、起動、`.ry` 保存/読込、Art-Net/sACN、MIDI/OSC、wgpu 映像出力、1画面UIのスモークテストが通る。
+- [ ] **Tier 2: Linux (Ubuntu 22.04+)** でビルド・起動し、`.ry` 保存/読込、Art-Net/sACN、MIDI/OSC、wgpu 映像出力、1画面UIのスモークテストが通る。配布形式とデスクトップ統合の差は既知の制限として記録する。
+- [ ] Windows の NSIS/MSI、macOS の `.app`/DMG、Linux の AppImage または `.deb` を生成し、Tier 1 では `.ry` 関連付けまで確認する。
+- [ ] CI の Windows / macOS / Linux マトリクスで Rust ワークスペースとフロントエンドの非実機テストが green。OS固有機能を無効化した共通コアも全OSでコンパイルできる。
 - [ ] クラッシュ/強制終了 → 再起動 → リカバリチェックポイントから復元、が手動テストで通る。
 
 ### ドキュメント要件
@@ -103,9 +106,10 @@ CPU プレビューを wgpu 実出力に置き換える。**照明エンジン�
 
 ### M4 — 外部 I/O 仕上げ(1〜2 週、M3 と並行可)
 - [ ] NDI: `crates/io` に NDI SDK バインディング(feature flag `ndi` でビルド切替)。既存のプレースホルダルート/Blocked 表示をそのまま実配線に昇格。
-- [ ] 決定事項 D2: Spout(Windows)を v1.0 に含めるか。含めるなら wgpu の D3D11 相互運用が前提なので M3 完了後。Syphon(macOS)は Windows 開発機では検証不能のため v1.0 スコープ外を推奨。
+- [ ] 決定事項 D2: Spout(Windows)を v1.0 に含めるか。含めるなら wgpu の D3D11 相互運用が前提なので M3 完了後。Syphon(macOS)は任意機能とし、未搭載でも共通のDisplay/NDI出力とmacOS本体は完全動作させる。
 - [ ] Enttec Open DMX: FTDI ブレークタイミングの改善(専用送信スレッド + 高精度タイマ)。PRO/DMXKing 推奨の UI ヒントは維持。
 - [ ] 実機テストマトリクス作成: 手持ちのノード/インターフェースで Art-Net、sACN(マルチキャスト)、シリアルを各 1 回以上実測し、結果を記録。
+- [ ] プラットフォーム境界: Spout(Windows)、Syphon(macOS)、シリアル/優先度制御を `cfg` + feature の背後に隔離し、利用不能な機能は診断付きで無効化する。未導入SDKや未対応デバイスがアプリ起動を妨げない。
 - 検証ゲート: `cargo test -p io`、実機 or ループバック計測記録、feature flag なしビルドが従来どおり green。
 
 ### M5 — 信頼性・パフォーマンス(1 週)
@@ -117,11 +121,12 @@ CPU プレビューを wgpu 実出力に置き換える。**照明エンジン�
 
 ### M6 — リリース準備(1 週)
 - [ ] バージョニング確定(v1.0.0)、`tauri.conf.json` / `package.json` / Cargo メタデータ整合。
-- [ ] インストーラ(NSIS/MSI)生成と `.ry` 関連付け・アイコン・発行者名(Seraf()のKTN)確認。
-- [ ] コード署名の要否決定(D3)。署名しない場合は SmartScreen 警告を README に明記。
+- [ ] GitHub Actions または同等CIに `windows-latest` / `macos-latest` / `ubuntu-22.04` のマトリクスを用意し、Rustテスト、フロントエンドビルド、Tauriコンパイルを継続検証する。
+- [ ] Windows NSIS/MSI、macOS `.app`/DMG、Linux AppImageまたは`.deb`を生成し、製品名・`.ry`関連付け・アイコン・発行者名(Seraf()のKTN)を確認する。
+- [ ] コード署名/公証の要否決定(D3)。未署名ならWindows SmartScreenとmacOS Gatekeeperの手順をREADMEに明記する。
 - [ ] ドキュメント一括更新: README(ユーザ向け)、samples/README.md、ホットキー一覧、既知の制限(Spout/Syphon 等)。
 - [ ] 最終 QA パス: 本計画書 §1 の Definition of Done を上から全チェック。
-- 検証ゲート: クリーンな Windows 環境(または新規ユーザプロファイル)でインストーラから起動 → Run Smoke green。
+- 検証ゲート: クリーンな Windows / macOS 環境でインストーラから起動 → Run Smoke green。Linux は Ubuntu 22.04 のクリーン環境でパッケージ起動 → Run Smoke green。
 
 ---
 
@@ -163,6 +168,7 @@ CPU プレビューを wgpu 実出力に置き換える。**照明エンジン�
 - `App.tsx` を成長させない。追加 UI は最初からコンポーネントへ。抽出前に既存 `app/src/*.ts`(特に `uiModes.ts` / `videoOutputMapping.ts` / `videoLayerDefaults.ts`)を grep して重複モジュールを作らない。
 - メインチャンク 500 kB 未満を維持。新しい重いパネルは `manualChunks` か lazy-load へ。
 - 製品名 Rayard / 拡張子 `.ry` / 開発者名 Seraf()のKTN を維持。旧名エイリアスをユーザ向けファイルに出さない。
+- 共通コードからOS固有APIを直接呼ばない。Windows/macOS/Linux差分は専用モジュール、`cfg`、feature flagで隔離し、非対応機能は起動失敗ではなく明示的なUnavailable状態にする。
 - 3D ビジュアライザをメイン UI に戻さない(`crates/visualizer` はデータ境界のまま)。
 - README/docs の更新は M6 まで意図的にバッチする(従来方針の継続)。ただし CLAUDE.md への記録は毎スライス必須。
 - `pnpm --dir app build` が node_modules パージを対話で求めた場合は答えず、`node node_modules/typescript/bin/tsc --noEmit` + `node node_modules/vite/bin/vite.js build` の直接実行で代替。
