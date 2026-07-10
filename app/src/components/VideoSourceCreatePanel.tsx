@@ -42,7 +42,7 @@ export function VideoSourceCreatePanel(props: VideoSourceCreatePanelProps) {
         </select>
       </label>
       <label>
-        Layer label
+        Video Layer label
         <input value={props.label} onInput={(event) => props.onSetLabel(event.currentTarget.value)} />
       </label>
       <label>

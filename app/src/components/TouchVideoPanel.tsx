@@ -23,7 +23,7 @@ export function TouchVideoPanel(props: TouchVideoPanelProps) {
     <section class="panel touchPanel touchVideoPanel">
       <div class="panelHeader">
         <h2>Touch Video</h2>
-        <span>{props.layers.length} layer(s) / {props.outputs.length} out(s)</span>
+        <span>{props.layers.length} video layer(s) / {props.outputs.length} video output(s)</span>
       </div>
       <Show when={props.outputs.length > 0}>
         <div class="touchVideoOutputGrid">
@@ -284,7 +284,7 @@ export function TouchVideoPanel(props: TouchVideoPanelProps) {
                     >
                       Loop
                     </button>
-                    <button onClick={() => void props.onAddCuePoint(layer.id)}>Add Cue</button>
+                    <button onClick={() => void props.onAddCuePoint(layer.id)}>Add Cue Point</button>
                   </div>
                   <Show when={layer.state.cue_points_ms.length > 0}>
                     <div class="touchCuePointRow">

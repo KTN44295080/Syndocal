@@ -61,7 +61,7 @@ export function VideoOutputMappingPanel(props: VideoOutputMappingPanelProps) {
 
   return (
     <div class="videoOutputMapping">
-      <h3>Projector Map</h3>
+      <h3>Projection Mapping</h3>
       <div class="mappingReadout">
         <span>
           {props.output.width}x{props.output.height} / native {nativeAspectLabel()}

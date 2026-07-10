@@ -80,7 +80,7 @@ export function EffectListPanel(props: EffectListPanelProps) {
                 <button onClick={() => props.onUseAsDraft(effect)}>Use Draft</button>
                 <button onClick={() => void props.onDuplicateEffect(effect.id)}>Duplicate</button>
                 <Show when={effect.effect_type === "PositionWave" && effect.video_targets.length > 0}>
-                  <button onClick={() => void props.onUseOutputPosition(effect.id, effect.video_targets)}>Use Output Pos</button>
+                  <button onClick={() => void props.onUseOutputPosition(effect.id, effect.video_targets)}>Use Video Output Pos</button>
                 </Show>
                 <button onClick={() => void props.onSavePreset(effect.id)}>Save</button>
                 <button onClick={() => void props.onRemoveEffect(effect.id)}>Remove</button>

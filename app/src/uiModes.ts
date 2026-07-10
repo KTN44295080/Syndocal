@@ -7,7 +7,7 @@ export const setupSubTabs: { id: SetupSubTab; label: string; description: string
   { id: "library", label: "Library", description: "GDTF import and share lookup" },
   { id: "profiles", label: "Profiles", description: "Fixture profile authoring" },
   { id: "patch", label: "Patch", description: "DMX addressing and fixture assignment" },
-  { id: "mapping", label: "Mapping", description: "2D fixture and projector mapping" },
+  { id: "mapping", label: "Mapping", description: "2D fixture and projection surface mapping" },
   { id: "output", label: "Output", description: "DMX and video output setup" },
 ];
 

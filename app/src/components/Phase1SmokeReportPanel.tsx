@@ -76,7 +76,7 @@ export function Phase1SmokeReportPanel(props: Phase1SmokeReportPanelProps) {
                 <strong>{report().timeline_duration_ms}ms</strong>
               </span>
               <span>
-                <small>Layer</small>
+                <small>Video Layer</small>
                 <strong>{report().video_layer_label ?? `${report().video_layer_count} layer(s)`}</strong>
               </span>
               <span>

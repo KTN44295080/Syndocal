@@ -66,7 +66,7 @@ export function MappingVideoSurfacesLayer(props: MappingVideoSurfacesLayerProps)
               class="stageVideoSurfaceShape"
               points={props.cornerPointList(surface, surfaceMapping())}
             >
-              <title>{surface.label} / projector warp surface</title>
+              <title>{surface.label} / projection surface warp</title>
             </polygon>
             <line x1={-surface.width / 2} y1="0" x2={surface.width / 2} y2="0" />
             <line x1="0" y1={-surface.height / 2} x2="0" y2={surface.height / 2} />

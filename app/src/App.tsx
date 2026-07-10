@@ -628,7 +628,7 @@ export default function App() {
   const [automationStartValue, setAutomationStartValue] = createSignal(0);
   const [automationEndValue, setAutomationEndValue] = createSignal(65535);
   const [automationInterpolation, setAutomationInterpolation] = createSignal<AutomationInterpolation>("Linear");
-  const [videoLabel, setVideoLabel] = createSignal("Layer 1");
+  const [videoLabel, setVideoLabel] = createSignal("Video Layer 1");
   const [videoSourceKind, setVideoSourceKind] = createSignal<VideoSourceKind>("File");
   const [videoPath, setVideoPath] = createSignal("");
   const [videoPreviewInfo, setVideoPreviewInfo] = createSignal("No preview");
@@ -649,7 +649,7 @@ export default function App() {
   const [videoOutputPreviewId, setVideoOutputPreviewId] = createSignal<number | null>(null);
   const [videoOutputPreviewMode, setVideoOutputPreviewMode] = createSignal<VideoOutputPreviewMode>("output");
   const [phase1SmokeReport, setPhase1SmokeReport] = createSignal<Phase1SmokeReport | null>(null);
-  const [videoOutputLabel, setVideoOutputLabel] = createSignal("Projector 1");
+  const [videoOutputLabel, setVideoOutputLabel] = createSignal("Video Output 1");
   const [videoOutputKind, setVideoOutputKind] = createSignal<VideoOutputKind>("Display");
   const [videoOutputWidth, setVideoOutputWidth] = createSignal(1920);
   const [videoOutputHeight, setVideoOutputHeight] = createSignal(1080);
@@ -658,7 +658,7 @@ export default function App() {
   const [videoOutputEndpoint, setVideoOutputEndpoint] = createSignal("");
   const [videoOutputConfigDrafts, setVideoOutputConfigDrafts] = createSignal<Record<number, VideoOutputConfigDraft>>({});
   const [videoOutputFadeMs, setVideoOutputFadeMs] = createSignal(1000);
-  const [videoOutputMappingPresetLabel, setVideoOutputMappingPresetLabel] = createSignal("Projector preset");
+  const [videoOutputMappingPresetLabel, setVideoOutputMappingPresetLabel] = createSignal("Output mapping preset");
   const [selectedVideoOutputMappingPresetLabel, setSelectedVideoOutputMappingPresetLabel] = createSignal("");
   const [stageMapPresetLabel, setStageMapPresetLabel] = createSignal("Stage map preset");
   const [selectedStageMapPresetLabel, setSelectedStageMapPresetLabel] = createSignal("");
@@ -1939,7 +1939,7 @@ export default function App() {
       case "video":
         return selectedEffectVideoLayerId() === null
           ? "No video layer target"
-          : `Layer ${selectedEffectVideoLayerId()} / ${effectVideoParam()} ${Math.round(effectVideoLow() * 100)}-${Math.round(effectVideoHigh() * 100)}%`;
+          : `Video Layer ${selectedEffectVideoLayerId()} / ${effectVideoParam()} ${Math.round(effectVideoLow() * 100)}-${Math.round(effectVideoHigh() * 100)}%`;
       case "fixture":
       default:
         return selectedFixture()?.label ?? "No fixture selected";
@@ -2196,7 +2196,7 @@ export default function App() {
           "video",
           automation.id,
           automation.layer_id,
-          `${layer?.label ?? `Layer ${automation.layer_id}`} ${automation.param}`,
+          `${layer?.label ?? `Video Layer ${automation.layer_id}`} ${automation.param}`,
           automation.track,
           automation.keyframes,
           automation.enabled,
@@ -2458,7 +2458,7 @@ export default function App() {
     const activeOutputs = plans.filter((plan) => plan.enabled && !plan.output_blackout).length;
     const blackoutOutputs = plans.filter((plan) => plan.output_blackout).length;
     const activeLayers = plans.reduce((total, plan) => total + plan.composition.layers.length, 0);
-    return `${plans.length} output(s), ${activeOutputs} active, ${activeLayers} render layer(s), ${blackoutOutputs} blackout`;
+    return `${plans.length} video output(s), ${activeOutputs} active, ${activeLayers} render layer(s), ${blackoutOutputs} blackout`;
   });
   const videoOutputMappingDiagnosticLabel = (mapping: VideoOutputMapping) => {
     const cornerWarp =
@@ -2551,7 +2551,7 @@ export default function App() {
     }
     const liveOpen = statuses.filter((status) => status.live_open).length;
     const patternOpen = statuses.filter((status) => status.test_pattern_open).length;
-    return `${liveOpen} live, ${patternOpen} pattern open / ${statuses.length} display output(s)`;
+    return `${liveOpen} live, ${patternOpen} pattern open / ${statuses.length} display video output(s)`;
   });
   const videoOutputWindowState = (outputId: number) => {
     const status = videoOutputWindowStatusForOutput(outputId);
@@ -2630,7 +2630,7 @@ export default function App() {
         backend: plan.backend_id.toUpperCase(),
         label: plan.label,
         endpoint: plan.endpoint_name,
-        detail: `${videoSourceKindLabel(plan.kind)} / Layer ${plan.layer_id} / ${
+        detail: `${videoSourceKindLabel(plan.kind)} / Video Layer ${plan.layer_id} / ${
           plan.issue ?? plan.backend_detail ?? (plan.ready ? "Ready" : "Unavailable")
         }`,
         stateLabel: plan.live ? "Live" : plan.ready ? (plan.enabled ? "Ready" : "Disabled") : "Blocked",
@@ -2887,7 +2887,7 @@ export default function App() {
       const layer = snapshot().video.layers.find((candidate) => candidate.id === automation.layer_id);
       return {
         ...automation,
-        layer_label: layer?.label ?? `Layer ${automation.layer_id}`,
+        layer_label: layer?.label ?? `Video Layer ${automation.layer_id}`,
       };
     }),
   );
@@ -3240,7 +3240,7 @@ export default function App() {
     description.textContent = [
       `Exported ${new Date().toISOString()}`,
       `${mappingFilteredFixtures().length} fixture(s)`,
-      `${snapshot().video.outputs.length} projector surface(s)`,
+      `${snapshot().video.outputs.length} projection surface(s)`,
       `${snapshot().stage_objects.length} stage object(s)`,
       `viewBox ${mappingStageViewBox()}`,
     ].join(" / ");
@@ -3269,7 +3269,7 @@ export default function App() {
       const fileName = `${safeExportFileNamePart(projectLabel)}-visualizer-scene.json`;
       downloadTextFile(fileName, jsonText, "application/json;charset=utf-8");
       setMessage(
-        `Exported visualizer scene JSON ${fileName} (${payload.scene.fixtures.length} fixture(s), ${payload.scene.video_surfaces.length} projector(s)).`,
+        `Exported visualizer scene JSON ${fileName} (${payload.scene.fixtures.length} fixture(s), ${payload.scene.video_surfaces.length} projection surface(s)).`,
       );
     } catch (error) {
       setMessage(String(error));
@@ -6688,7 +6688,7 @@ export default function App() {
         monitorId: videoOutputKind() === "Display" ? videoOutputMonitorId() : null,
         endpointName: videoOutputKind() === "Display" ? null : videoOutputEndpoint(),
       });
-      setVideoOutputLabel(`Projector ${snapshot().video.outputs.length + 2}`);
+      setVideoOutputLabel(`Video Output ${snapshot().video.outputs.length + 2}`);
       setMessage(`Added video output ${outputId}`);
       await refreshSnapshotAndVideoOutputRenderPlans();
     } catch (error) {
@@ -6915,7 +6915,7 @@ export default function App() {
       setVideoOutputMappingPresetLabel(label);
       setSelectedVideoOutputMappingPresetLabel(label);
       await refreshSnapshot();
-      setMessage(`Saved projector mapping preset ${label}.`);
+      setMessage(`Saved video output mapping preset ${label}.`);
     } catch (error) {
       setMessage(String(error));
     }
@@ -6927,7 +6927,7 @@ export default function App() {
       return;
     }
     await setVideoOutputMapping(outputId, preset.mapping);
-    setMessage(`Applied projector mapping preset ${preset.label}.`);
+    setMessage(`Applied video output mapping preset ${preset.label}.`);
   };
 
   const removeVideoOutputMappingPreset = async (label: string) => {
@@ -6937,7 +6937,7 @@ export default function App() {
         setSelectedVideoOutputMappingPresetLabel("");
       }
       await refreshSnapshot();
-      setMessage(`Removed projector mapping preset ${label}.`);
+      setMessage(`Removed video output mapping preset ${label}.`);
     } catch (error) {
       setMessage(String(error));
     }
@@ -6949,7 +6949,7 @@ export default function App() {
         label: videoOutputMappingPresetLabel(),
         mapping,
       });
-      setMessage(path ? `Exported projector mapping preset ${path}` : "Projector mapping preset export canceled.");
+      setMessage(path ? `Exported video output mapping preset ${path}` : "Video output mapping preset export canceled.");
     } catch (error) {
       setMessage(String(error));
     }
@@ -6959,13 +6959,13 @@ export default function App() {
     try {
       const label = await invoke<string | null>("load_video_output_mapping_preset_file");
       if (!label) {
-        setMessage("Projector mapping preset import canceled.");
+        setMessage("Video output mapping preset import canceled.");
         return;
       }
       setVideoOutputMappingPresetLabel(label);
       setSelectedVideoOutputMappingPresetLabel(label);
       await refreshSnapshot();
-      setMessage(`Imported projector mapping preset ${label}.`);
+      setMessage(`Imported video output mapping preset ${label}.`);
     } catch (error) {
       setMessage(String(error));
     }
@@ -7778,7 +7778,7 @@ export default function App() {
       case "projectors": {
         const next = !mappingShowProjectors();
         setMappingShowProjectors(next);
-        setMessage(`2D mapping projectors ${next ? "shown" : "hidden"}.`);
+        setMessage(`2D mapping projection surfaces ${next ? "shown" : "hidden"}.`);
         return;
       }
       case "objects": {
@@ -8119,7 +8119,7 @@ export default function App() {
             <div class="liveStageHeader">
               <h3>Live Stage</h3>
               <span>
-                {visualizerFixtures().length} fixture(s) / {snapshot().video.outputs.length} projector(s) /{" "}
+                {visualizerFixtures().length} fixture(s) / {snapshot().video.outputs.length} projection surface(s) /{" "}
                 {visualizerStageObjects2d().length} ref(s)
               </span>
             </div>
@@ -8452,7 +8452,7 @@ export default function App() {
           <div class="panelHeader">
             <h2>Touch Stage</h2>
             <span>
-              {visualizerFixtures().length} fixture(s) / {snapshot().video.outputs.length} projector(s) /{" "}
+              {visualizerFixtures().length} fixture(s) / {snapshot().video.outputs.length} projection surface(s) /{" "}
               {visualizerStageObjects2d().length} ref(s)
             </span>
           </div>

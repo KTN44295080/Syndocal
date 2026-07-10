@@ -191,7 +191,7 @@ const composition: CompositionSummary = {
 
 const videoOutput: VideoOutputSummary = {
   id: 1,
-  label: "Viewport Projector",
+  label: "Viewport Video Output",
   kind: "Display",
   enabled: true,
   composition_id: 1,

@@ -25,8 +25,8 @@ export function MappingToolRail(props: MappingToolRailProps) {
       <button
         class={props.stageTool === "select" ? "active" : ""}
         onClick={() => props.onStageTool("select")}
-        title="Select fixture or projector (S)"
-        aria-label="Select fixture or projector"
+        title="Select fixture or projection surface (S)"
+        aria-label="Select fixture or projection surface"
       >
         S
       </button>
@@ -82,8 +82,8 @@ export function MappingToolRail(props: MappingToolRailProps) {
       <button
         class={props.showProjectors ? "active" : ""}
         onClick={props.onToggleProjectors}
-        title="Toggle projector surfaces (V)"
-        aria-label="Toggle projector surfaces"
+        title="Toggle projection surfaces (V)"
+        aria-label="Toggle projection surfaces"
       >
         V
       </button>

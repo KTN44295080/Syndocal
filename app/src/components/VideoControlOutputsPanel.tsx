@@ -89,7 +89,7 @@ export function VideoOutputControlListPanel(props: VideoOutputControlListPanelPr
   return (
     <div class="videoOutputControlList">
       <div class="sectionHeader">
-        <h3>Outputs</h3>
+        <h3>Video Outputs</h3>
         <label>
           Fade ms
           <input

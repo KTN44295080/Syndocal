@@ -129,7 +129,7 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                   <strong>{cue.label}</strong>
                   <span>
                     {cue.targets.length} fixture(s) / {cue.video_targets.length} video /{" "}
-                    {cue.video_output_targets.length} output(s) / {cue.fade_ms}ms
+                    {cue.video_output_targets.length} video output(s) / {cue.fade_ms}ms
                   </span>
                 </div>
                 <div class="cueEditRow">

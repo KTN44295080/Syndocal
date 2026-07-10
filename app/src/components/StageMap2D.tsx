@@ -192,7 +192,7 @@ export const StageMap2D = (props: StageMap2DProps) => (
     ].filter(Boolean).join(" ")}
     viewBox={props.mappingStageViewBox()}
     role="img"
-    aria-label="2D fixture and projector mapping stage"
+    aria-label="2D fixture and projection surface mapping stage"
     onPointerDown={props.handleMappingStagePointerDown}
     onPointerMove={props.handleMappingStagePointerMove}
     onPointerUp={props.handleMappingStagePointerUp}
@@ -320,7 +320,7 @@ export const StageMap2D = (props: StageMap2DProps) => (
             >
               <polygon class="stageVideoSurfaceShape" points={props.stageVideoSurfaceCornerPointList(surface, mapping())}>
                 <title>
-                  {surface.label} / Output surface
+                  {surface.label} / Projection surface
                 </title>
               </polygon>
               <line x1={0} y1={-surface.height / 2} x2={0} y2={surface.height / 2} />

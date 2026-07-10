@@ -192,7 +192,7 @@ export function VideoTimelineAutomationPanel(props: VideoTimelineAutomationPanel
           onInput={(event) => props.onRowScope(event.currentTarget.value as "all" | "layer")}
         >
           <option value="all">All</option>
-          <option value="layer">Layer</option>
+          <option value="layer">Video Layer</option>
         </select>
         <div class="buttonRow timelineAutomationBatchActions">
           <button

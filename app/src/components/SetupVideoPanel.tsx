@@ -86,7 +86,7 @@ export function SetupVideoPanel(props: SetupVideoPanelProps) {
     <section class={props.className} ref={(element) => props.panelRef(element)} tabIndex={-1}>
       <div class="panelHeader">
         <h2>Video Setup</h2>
-        <span>{props.outputs.length} output(s)</span>
+        <span>{props.outputs.length} video output(s)</span>
       </div>
       <VideoCompositionSetupPanel
         compositions={props.compositions}

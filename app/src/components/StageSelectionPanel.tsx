@@ -440,8 +440,8 @@ export const StageSelectionPanel = (props: StageSelectionPanelProps) => (
       <p class="empty">No fixture types.</p>
     </Show>
     <div class="mappingSelectionHeader secondary">
-      <strong>Projectors</strong>
-      <span>{props.mappingVideoOutputRows().length} output(s)</span>
+      <strong>Projection Surfaces</strong>
+      <span>{props.mappingVideoOutputRows().length} surface(s)</span>
     </div>
     <For each={props.mappingVideoOutputRows()}>
       {(row) => (
@@ -458,7 +458,7 @@ export const StageSelectionPanel = (props: StageSelectionPanelProps) => (
       )}
     </For>
     <Show when={props.mappingVideoOutputRows().length === 0}>
-      <p class="empty">No projectors.</p>
+      <p class="empty">No projection surfaces. Add a Video Output in Setup &gt; Output.</p>
     </Show>
     <Show when={props.selectedMappingVideoOutput()}>
       {(output) => (

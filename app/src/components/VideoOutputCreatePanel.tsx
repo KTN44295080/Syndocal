@@ -26,7 +26,7 @@ type VideoOutputCreatePanelProps = {
 export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
   return (
     <div class="videoOutputForm">
-      <h3>Composition Output</h3>
+      <h3>Video Output</h3>
       <div class="split">
         <label>
           Output label

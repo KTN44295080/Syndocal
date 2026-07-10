@@ -97,7 +97,7 @@ export function VideoEffectTargetPanel(props: VideoEffectTargetPanelProps) {
           </div>
           <div class="buttonRow">
             <button onClick={props.onUseSelectedOutput} disabled={props.outputsCount === 0}>
-              Output Surface
+              Projection Surface
             </button>
             <button onClick={props.onUseWaveOrigin}>Wave Origin</button>
             <button onClick={props.onUseStageCenter}>Stage Center</button>

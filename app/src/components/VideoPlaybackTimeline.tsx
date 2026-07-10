@@ -282,7 +282,7 @@ export function VideoPlaybackTimeline(props: VideoPlaybackTimelineProps) {
       </div>
       <Show when={!props.compact}>
         <div class="videoPlaybackToolbar">
-          <button onClick={() => props.onAddCuePoint(position())}>+ Cue</button>
+          <button onClick={() => props.onAddCuePoint(position())}>+ Cue Point</button>
           <button
             class={props.state.loop_enabled ? "active" : ""}
             onClick={() => props.onStatePatch({ loop_enabled: !props.state.loop_enabled })}

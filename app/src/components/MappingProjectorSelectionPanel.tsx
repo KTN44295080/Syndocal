@@ -22,7 +22,7 @@ export function MappingProjectorSelectionPanel(props: MappingProjectorSelectionP
   return (
     <>
       <div class="mappingSelectionHeader secondary">
-        <strong>Projectors</strong>
+        <strong>Projection Surfaces</strong>
         <span>{props.outputs.length}</span>
       </div>
       <For each={props.outputs}>

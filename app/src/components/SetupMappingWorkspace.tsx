@@ -44,7 +44,7 @@ export function SetupMappingWorkspace(props: SetupMappingWorkspaceProps) {
       <div class="mappingVisualizer visualizer">
         <div class="panelHeader">
           <h2>2D Mapping</h2>
-          <span>{props.fixtureCount} fixture(s) / {props.projectorCount} projector(s)</span>
+          <span>{props.fixtureCount} fixture(s) / {props.projectorCount} projection surface(s)</span>
         </div>
         <MappingFilterStrips {...props.filters} />
         <div class="mappingStageShell">

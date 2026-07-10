@@ -14,7 +14,7 @@ type VideoOutputConfigPanelProps = {
 export function VideoOutputConfigPanel(props: VideoOutputConfigPanelProps) {
   return (
     <div class="videoOutputConfig">
-      <h3>Output Config</h3>
+      <h3>Video Output Config</h3>
       <div class="split">
         <label>
           Label

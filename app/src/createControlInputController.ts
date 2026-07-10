@@ -161,7 +161,7 @@ export function createControlInputController(options: ControlInputControllerOpti
     if (isVideoLayerMappingAction(action) && layerId === null) return reportMessage("Add a video layer before mapping MIDI to video.");
     if (isVideoOutputMappingAction(action) && outputId === null) return reportMessage("Add a video output before mapping MIDI to video output.");
     if (action === "VideoOutputMappingPreset" && !outputMappingPresetLabel) {
-      return reportMessage("Save a projector mapping preset before mapping MIDI to a preset.");
+      return reportMessage("Save a video output mapping preset before mapping MIDI to a preset.");
     }
     const mapping: MidiControlMapping = {
       channel: options.midiMapChannel() >= 0 ? options.midiMapChannel() : null,
@@ -303,7 +303,7 @@ export function createControlInputController(options: ControlInputControllerOpti
     if (isVideoLayerMappingAction(action) && layerId === null) return reportMessage("Add a video layer before mapping OSC to video.");
     if (isVideoOutputMappingAction(action) && outputId === null) return reportMessage("Add a video output before mapping OSC to video output.");
     if (action === "VideoOutputMappingPreset" && !outputMappingPresetLabel) {
-      return reportMessage("Save a projector mapping preset before mapping OSC to a preset.");
+      return reportMessage("Save a video output mapping preset before mapping OSC to a preset.");
     }
     const mapping: OscControlMapping = {
       address: options.oscMapAddress().startsWith("/") ? options.oscMapAddress() : `/${options.oscMapAddress()}`,

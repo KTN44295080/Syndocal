@@ -57,11 +57,11 @@ export function CueCapturePreviewPanel(props: CueCapturePreviewPanelProps) {
           <strong>{props.preview.fixtureAttributeCount}</strong>
         </span>
         <span>
-          <small>Layers</small>
+          <small>Video Layers</small>
           <strong>{props.preview.layerCount}</strong>
         </span>
         <span>
-          <small>Outputs</small>
+          <small>Video Outputs</small>
           <strong>{props.preview.outputCount}</strong>
         </span>
         <span>

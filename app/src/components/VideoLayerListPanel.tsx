@@ -38,7 +38,7 @@ export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
             <div>
               <strong class="videoLayerTitle">{layer.label}</strong>
               <label>
-                Layer name
+                Video Layer name
                 <input value={layer.label} onChange={(event) => void props.onSetLayerLabel(layer.id, event.currentTarget.value)} />
               </label>
               <span>{layer.source.path ?? layer.source.name ?? layer.source.kind}</span>
@@ -156,7 +156,7 @@ export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
                   })
                 }
               />
-              Layer enabled
+              Video layer enabled
             </label>
             <label class="checkbox">
               <input
@@ -708,7 +708,7 @@ export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
             </div>
             <div class="cuePointList">
               <div class="buttonRow">
-                <button onClick={() => void props.onAddCuePoint(layer.id)}>Add Cue Pt</button>
+                <button onClick={() => void props.onAddCuePoint(layer.id)}>Add Cue Point</button>
                 <button onClick={() => void props.onJumpCuePoint(layer.id, 0)} disabled={layer.state.cue_points_ms.length === 0}>
                   Jump First
                 </button>

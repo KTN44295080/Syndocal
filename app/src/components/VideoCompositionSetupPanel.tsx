@@ -23,7 +23,7 @@ type VideoCompositionSetupPanelProps = {
 
 export function VideoCompositionSetupPanel(props: VideoCompositionSetupPanelProps) {
   const layerLabel = (layerId: number) =>
-    props.layers.find((candidate) => candidate.id === layerId)?.label ?? `Layer ${layerId}`;
+    props.layers.find((candidate) => candidate.id === layerId)?.label ?? `Video Layer ${layerId}`;
 
   return (
     <>
@@ -33,7 +33,7 @@ export function VideoCompositionSetupPanel(props: VideoCompositionSetupPanelProp
             <div class="compositionItem">
               <div class="compositionHeader">
                 <strong>{composition.label}</strong>
-                <span>{composition.layer_ids.length} layer(s) / {composition.output_ids.length} output(s)</span>
+                <span>{composition.layer_ids.length} video layer(s) / {composition.output_ids.length} video output(s)</span>
               </div>
               <Show when={composition.id !== 1}>
                 <Show when={composition.layer_ids.length > 0}>

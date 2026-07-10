@@ -63,7 +63,7 @@ export function MappingEditableStageShell(props: MappingEditableStageShellProps)
       class={className()}
       viewBox={props.viewBox}
       role="img"
-      aria-label="2D fixture and projector mapping stage"
+      aria-label="2D fixture and projection surface mapping stage"
       onPointerDown={(event) => void props.onPointerDown(event)}
       onPointerMove={(event) => props.onPointerMove(event)}
       onPointerUp={(event) => void props.onPointerUp(event)}

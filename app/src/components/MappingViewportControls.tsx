@@ -46,7 +46,7 @@ export function MappingViewportControls(props: MappingViewportControlsProps) {
         <strong>{props.stageTool.toUpperCase()}</strong>
         <span>Fixtures</span>
         <strong>{props.fixtureCount}</strong>
-        <span>Outputs</span>
+        <span>Surfaces</span>
         <strong>{props.outputCount}</strong>
         <span>Objects</span>
         <strong>{props.objectCount}</strong>
@@ -130,7 +130,7 @@ export function MappingViewportControls(props: MappingViewportControlsProps) {
             checked={props.showProjectors}
             onChange={(event) => props.onShowProjectors(event.currentTarget.checked)}
           />
-          Projectors
+          Surfaces
         </label>
         <label>
           <input
