@@ -197,6 +197,7 @@ import {
   type WorkspaceTab,
 } from "./uiModes";
 import { projectSnapshotSignature } from "./projectSnapshot";
+import { effectDraftTargetPlan } from "./effectDraft";
 import { stageObjectDefaultColor } from "./stageObjects";
 import {
   defaultVideoOutputMapping,
@@ -11095,6 +11096,7 @@ export default function App() {
   };
 
   const useEffectAsDraft = (effect: EffectSummary) => {
+    const targetPlan = effectDraftTargetPlan(effect, snapshot().fixtures);
     setEditingEffectId(effect.id);
     setEffectType(effect.effect_type);
     setEffectShape(effect.shape);
@@ -11123,8 +11125,7 @@ export default function App() {
       setWaveWavelength(effect.wavelength);
     }
 
-    const firstVideoTarget = effect.video_targets[0];
-    const hasLightTarget = effect.fixture_ids.length > 0 || effect.target_group_ids.length > 0;
+    const firstVideoTarget = targetPlan.videoTarget;
     if (firstVideoTarget) {
       setEffectVideoLayerId(firstVideoTarget.layer_ids[0] ?? null);
       setEffectVideoParam(firstVideoTarget.param);
@@ -11136,58 +11137,20 @@ export default function App() {
         setEffectVideoPositionZ(firstVideoTarget.position.z);
       }
     }
-    setEffectVideoTargetLinked(Boolean(firstVideoTarget && hasLightTarget));
-
-    if (!hasLightTarget && firstVideoTarget) {
-      setEffectTargetMode("video");
-      setMessage(`Loaded effect ${effect.id} into the video effect draft.`);
-      return;
+    setEffectVideoTargetLinked(targetPlan.videoTargetLinked);
+    setEffectTargetMode(targetPlan.mode === "source" ? effectTargetMode() : targetPlan.mode);
+    setEffectTargetGroups(targetPlan.targetGroups);
+    setEffectAttribute(targetPlan.attribute);
+    if (targetPlan.mode === "selection") {
+      setSelectedMappingFixtureIds(targetPlan.fixtureIds);
     }
-
-    if (effect.target_group_ids.length > 0) {
-      setEffectTargetMode("group");
-      setEffectTargetGroups(effect.target_group_ids.join(", "));
-      setEffectAttribute(effect.attribute);
-      setMessage(
-        firstVideoTarget
-          ? `Loaded effect ${effect.id} into the mixed group + video draft.`
-          : `Loaded effect ${effect.id} into the group effect draft.`,
-      );
-      return;
+    if (targetPlan.activeFixtureId !== null) {
+      const fixture = snapshot().fixtures.find((candidate) => candidate.id === targetPlan.activeFixtureId);
+      if (fixture) {
+        activateFixture(fixture);
+      }
     }
-
-    const selectedTargetFixtures = effect.fixture_ids
-      .map((fixtureId) => snapshot().fixtures.find((candidate) => candidate.id === fixtureId))
-      .filter((fixture): fixture is PatchedFixtureSummary => Boolean(fixture));
-    if (selectedTargetFixtures.length > 1) {
-      setSelectedMappingFixtureIds(selectedTargetFixtures.map((fixture) => fixture.id));
-      activateFixture(selectedTargetFixtures[0]);
-      setEffectTargetMode("selection");
-      setEffectAttribute(effect.attribute);
-      setMessage(
-        firstVideoTarget
-          ? `Loaded effect ${effect.id} into the mixed map selection + video draft.`
-          : `Loaded effect ${effect.id} into the map selection draft.`,
-      );
-      return;
-    }
-
-    const fixture = snapshot().fixtures.find((candidate) => candidate.id === effect.fixture_ids[0]);
-    if (fixture) {
-      activateFixture(fixture);
-      setEffectTargetMode("fixture");
-      setEffectAttribute(effect.attribute);
-      setMessage(
-        firstVideoTarget
-          ? `Loaded effect ${effect.id} into the mixed fixture + video draft.`
-          : `Loaded effect ${effect.id} into the fixture effect draft.`,
-      );
-      return;
-    }
-
-    setEffectVideoTargetLinked(false);
-    setEffectAttribute(effect.attribute);
-    setMessage(`Loaded effect ${effect.id} source settings into the draft.`);
+    setMessage(targetPlan.message);
   };
 
   const saveEffectPreset = async (effectId: number) => {
