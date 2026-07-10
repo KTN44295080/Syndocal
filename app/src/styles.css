@@ -344,6 +344,13 @@ h3 {
   gap: 1px;
 }
 
+.appProjectMenu .recoveryProjectMenuItem {
+  min-height: 38px;
+  gap: 1px;
+  background: #221d16;
+  box-shadow: inset 2px 0 0 #f2c14e;
+}
+
 .appProjectMenu .mutedMenuItem {
   color: #aeb6bf;
 }
@@ -384,6 +391,10 @@ h3 {
   font-size: 10px;
   font-weight: 900;
   text-transform: uppercase;
+}
+
+.appProjectMenuLabel.recoveryLabel {
+  color: #d7b85e;
 }
 
 .topbarProject {
@@ -2097,6 +2108,7 @@ h3 {
   .workspaceTabs button,
   .setupModeTabs button,
   .controlModeTabs button,
+  .fieldWithAction button,
   .panelHeaderActions button,
   .panelHeaderActions select {
     min-height: 26px;
@@ -2468,6 +2480,24 @@ h3 {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
   gap: 8px;
+}
+
+.fieldWithAction {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fieldWithAction label {
+  min-width: 0;
+}
+
+.fieldWithAction button {
+  min-width: 54px;
+  min-height: 34px;
+  padding: 0 8px;
 }
 
 .quad {

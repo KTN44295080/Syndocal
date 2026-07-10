@@ -1,4 +1,9 @@
 import { createSignal, For, onCleanup, Show } from "solid-js";
+import {
+  projectRecoverySourceLabel,
+  projectRecoveryTimeLabel,
+  type ProjectRecoveryCheckpoint,
+} from "../projectRecoveryStorage";
 import { recentProjectFileName } from "../projectRecentStorage";
 import { controlModes, setupSubTabs } from "../uiModes";
 import type { ControlMode, SetupSubTab, WorkspaceTab } from "../uiModes";
@@ -19,6 +24,7 @@ type WorkspaceChromeProps = {
   projectDirty: boolean;
   currentProjectPath: string | null;
   recentProjectPaths: string[];
+  recoveryCheckpoint: ProjectRecoveryCheckpoint | null;
   canGo: boolean;
   nextCueLabel: string;
   onWorkspaceTab: (tab: WorkspaceTab) => void;
@@ -31,6 +37,8 @@ type WorkspaceChromeProps = {
   onLoadProject: () => void;
   onLoadRecentProject: (path: string) => void;
   onClearRecentProjects: () => void;
+  onLoadRecovery: () => void;
+  onDiscardRecovery: () => void;
   onLoadSample: () => void;
   onRunSmoke: () => void;
 };
@@ -115,6 +123,22 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               <button role="menuitem" aria-keyshortcuts="Control+O Meta+O" onClick={() => runProjectMenuAction(props.onLoadProject)}>
                 <span>Load</span>
               </button>
+              <Show when={props.recoveryCheckpoint}>
+                {(checkpoint) => (
+                  <>
+                    <div class="appProjectMenuLabel recoveryLabel" role="separator">
+                      <span>Recovery</span>
+                    </div>
+                    <button class="recoveryProjectMenuItem" role="menuitem" onClick={() => runProjectMenuAction(props.onLoadRecovery)}>
+                      <span>{projectRecoverySourceLabel(checkpoint())}</span>
+                      <small>{projectRecoveryTimeLabel(checkpoint())}</small>
+                    </button>
+                    <button class="mutedMenuItem" role="menuitem" onClick={() => runProjectMenuAction(props.onDiscardRecovery)}>
+                      <span>Discard Recovery</span>
+                    </button>
+                  </>
+                )}
+              </Show>
               <Show when={props.recentProjectPaths.length > 0}>
                 <div class="appProjectMenuLabel" role="separator">
                   <span>Recent</span>

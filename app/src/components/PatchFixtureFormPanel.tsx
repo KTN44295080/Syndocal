@@ -97,15 +97,26 @@ export function PatchFixtureFormPanel(props: PatchFixtureFormPanelProps) {
             onInput={(event) => props.onCount(Number(event.currentTarget.value))}
           />
         </label>
-        <label>
-          Addr Step
-          <input
-            type="number"
-            min="0"
-            value={props.addressStride}
-            onInput={(event) => props.onAddressStride(Number(event.currentTarget.value))}
-          />
-        </label>
+        <div class="fieldWithAction">
+          <label>
+            Addr Step
+            <input
+              type="number"
+              min="0"
+              value={props.addressStride}
+              title="0 uses the selected profile footprint as the spacing."
+              onInput={(event) => props.onAddressStride(Number(event.currentTarget.value))}
+            />
+          </label>
+          <button
+            type="button"
+            title={`Use the selected profile footprint (${props.footprint || 1}ch) as the fixture spacing.`}
+            disabled={props.addressStride <= 0}
+            onClick={() => props.onAddressStride(0)}
+          >
+            Auto
+          </button>
+        </div>
       </div>
       <div class="split">
         <label>
@@ -203,12 +214,14 @@ export function PatchFixtureFormPanel(props: PatchFixtureFormPanelProps) {
           {(text) => <span>{text()}</span>}
         </Show>
       </div>
-      <button class="primary" onClick={props.onPatch} disabled={props.invalid}>
-        {props.normalizedCount === 1 ? "Patch Fixture" : "Patch Fixtures"}
-      </button>
-      <button onClick={props.onNextFreeAddress} disabled={props.nextFreeAddress === null}>
-        Next Free A{props.nextFreeAddress ?? "-"}
-      </button>
+      <div class="patchActionRow">
+        <button class="primary" onClick={props.onPatch} disabled={props.invalid}>
+          {props.normalizedCount === 1 ? "Patch Fixture" : "Patch Fixtures"}
+        </button>
+        <button onClick={props.onNextFreeAddress} disabled={props.nextFreeAddress === null}>
+          Next Free A{props.nextFreeAddress ?? "-"}
+        </button>
+      </div>
       <Show when={props.warnings.length > 0}>
         <ul class="warnings">
           <For each={props.warnings}>{(warning) => <li>{warning}</li>}</For>

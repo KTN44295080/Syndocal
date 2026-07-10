@@ -77,6 +77,15 @@ import {
   unresolvedGeometryReferences,
   type CustomProfileAttributeDraft,
 } from "./customFixtureProfile";
+import {
+  addressRange,
+  buildOccupiedDmxRanges,
+  findFreeDmxAddress,
+  findNextFreePatchAddress,
+  fixtureFootprint,
+  rangesOverlap,
+  reserveDmxAddressRange,
+} from "./dmxAddressing";
 import type {
   AttributeControl,
   AttributeResolution,
@@ -120,6 +129,7 @@ import type {
   PatchedFixtureSummary,
   Phase1SmokeReport,
   PositionWaveEffectRequest,
+  ProjectFile,
   ProjectLoadResult,
   RemoteControlConfig,
   SerialPortSummary,
@@ -272,6 +282,15 @@ import {
   saveRecentProjectPaths,
   touchRecentProjectPath,
 } from "./projectRecentStorage";
+import {
+  clearProjectRecoveryCheckpoint,
+  createProjectRecoveryCheckpoint,
+  loadProjectRecoveryCheckpoint,
+  projectRecoverySourceLabel,
+  projectRecoveryTimeLabel,
+  saveProjectRecoveryCheckpoint,
+  type ProjectRecoveryCheckpoint,
+} from "./projectRecoveryStorage";
 import {
   cueMetadataDraftFromSummary,
   timelineAutomationDraftFromSummary,
@@ -429,7 +448,7 @@ const viewportFixtureControls: AttributeControl[] = [
   {
     attribute: "Dimmer",
     channel_name: "Dimmer",
-    offsets: [0],
+    offsets: [1],
     resolution: "EightBit",
     default_value: 0,
     functions: [],
@@ -437,7 +456,7 @@ const viewportFixtureControls: AttributeControl[] = [
   {
     attribute: "Pan",
     channel_name: "Pan",
-    offsets: [1, 2],
+    offsets: [2, 3],
     resolution: "SixteenBit",
     default_value: 32_768,
     functions: [],
@@ -445,7 +464,7 @@ const viewportFixtureControls: AttributeControl[] = [
   {
     attribute: "Tilt",
     channel_name: "Tilt",
-    offsets: [3, 4],
+    offsets: [4, 5],
     resolution: "SixteenBit",
     default_value: 32_768,
     functions: [],
@@ -453,7 +472,7 @@ const viewportFixtureControls: AttributeControl[] = [
   {
     attribute: "ColorRed",
     channel_name: "Red",
-    offsets: [5],
+    offsets: [6],
     resolution: "EightBit",
     default_value: 0,
     functions: [],
@@ -461,7 +480,7 @@ const viewportFixtureControls: AttributeControl[] = [
   {
     attribute: "ColorGreen",
     channel_name: "Green",
-    offsets: [6],
+    offsets: [7],
     resolution: "EightBit",
     default_value: 0,
     functions: [],
@@ -469,12 +488,28 @@ const viewportFixtureControls: AttributeControl[] = [
   {
     attribute: "ColorBlue",
     channel_name: "Blue",
-    offsets: [7],
+    offsets: [8],
     resolution: "EightBit",
     default_value: 0,
     functions: [],
   },
 ];
+
+const viewportFixtureProfile: FixtureProfileSummary = {
+  source_path: "viewport://rayard-mini-par",
+  manufacturer: "Rayard",
+  name: "Viewport Mini Par",
+  short_name: "Viewport Par",
+  fixture_type_id: "viewport-mini-par",
+  dmx_modes: [
+    {
+      name: "Dimmer Pan Tilt RGB",
+      controls: viewportFixtureControls,
+    },
+  ],
+  geometries: [],
+  warnings: [],
+};
 
 const viewportPatchedFixture = (
   id: number,
@@ -896,11 +931,6 @@ interface DmxPatchSegment {
   width: number;
 }
 
-interface DmxAddressRange {
-  start: number;
-  end: number;
-}
-
 interface DmxUniverseMap {
   universe: number;
   used: number;
@@ -1002,6 +1032,9 @@ export default function App() {
   const [projectDirty, setProjectDirty] = createSignal(false);
   const [projectDropState, setProjectDropState] = createSignal<"project" | "invalid" | null>(null);
   const [recentProjectPaths, setRecentProjectPaths] = createSignal<string[]>(loadRecentProjectPaths());
+  const [projectRecoveryCheckpoint, setProjectRecoveryCheckpoint] = createSignal<ProjectRecoveryCheckpoint | null>(
+    loadProjectRecoveryCheckpoint(),
+  );
   const [cleanProjectSignature, setCleanProjectSignature] = createSignal<string | null>(null);
   const [workspaceTab, setWorkspaceTab] = createSignal<WorkspaceTab>("setup");
   const [setupSubTab, setSetupSubTab] = createSignal<SetupSubTab>("patch");
@@ -1337,6 +1370,22 @@ export default function App() {
   if (browserViewportFixture() === "timeline") {
     setWorkspaceTab("control");
     setSelectedFixtureGroupFilter("front");
+    setProfile(viewportFixtureProfile);
+    setGdtfPath(viewportFixtureProfile.source_path);
+    setSelectedMode(viewportFixtureProfile.dmx_modes[0]?.name ?? "");
+    setLabel("Viewport Par");
+    setUniverse(0);
+    setAddress(25);
+    setPatchCount(2);
+    setPatchAddressStride(0);
+    setGroupText("front");
+    setSelectedFixtureId(1);
+    setSelectedMappingFixtureIds([1]);
+    setSelectedFixtureLabelDraft("Viewport Par L");
+    setSelectedFixtureUniverseDraft(0);
+    setSelectedFixtureAddressDraft(1);
+    setSelectedFixtureGroupText("front");
+    setSelectedFixtureLimitsDraft(defaultFixtureLimits);
     setSnapshot((current) => ({
       ...current,
       fixtures: [
@@ -1386,6 +1435,7 @@ export default function App() {
       },
     }));
   }
+  let lastRecoverySignature = projectRecoveryCheckpoint()?.signature ?? null;
   const [output, setOutput] = createSignal<DmxOutputConfig>(defaultOutput);
   const [dmxOutputRoutes, setDmxOutputRoutes] = createSignal<DmxOutputConfig[]>([defaultOutput]);
   const [engineTelemetryReport, setEngineTelemetryReport] = createSignal<EngineTelemetryReport | null>(null);
@@ -1633,16 +1683,6 @@ export default function App() {
     unresolvedGeometryReferences(profile()?.geometries ?? [], selectedModeSummary()?.controls ?? []),
   );
 
-  const fixtureFootprint = (fixture: PatchedFixtureSummary) =>
-    Math.max(0, ...fixture.controls.flatMap((control) => control.offsets));
-  const addressRange = (start: number, footprint: number): [number, number] | null => {
-    if (!Number.isFinite(start) || !Number.isFinite(footprint) || start < 1 || footprint < 1) {
-      return null;
-    }
-    return [start, start + footprint - 1];
-  };
-  const rangesOverlap = (first: [number, number], second: [number, number]) =>
-    first[0] <= second[1] && second[0] <= first[1];
   const patchCountValue = createMemo(() => Math.min(256, Math.max(1, Math.floor(patchCount() || 1))));
   const patchAddressStrideValue = createMemo(() => {
     const manualStride = Math.floor(patchAddressStride() || 0);
@@ -1686,49 +1726,15 @@ export default function App() {
     return "";
   });
   const patchAddressInvalid = createMemo(() => selectedFootprint() === 0 || endAddress() > 512 || Boolean(patchAddressConflictText()));
-  const canPatchAtAddress = (startAddress: number, targetUniverse: number) => {
-    if (selectedFootprint() <= 0 || startAddress < 1) {
-      return false;
-    }
-    const ranges = Array.from({ length: patchCountValue() }, (_, index) => {
-      const start = startAddress + index * patchAddressStrideValue();
-      return addressRange(start, selectedFootprint());
-    });
-    if (ranges.some((range) => !range || range[1] > 512)) {
-      return false;
-    }
-    for (let index = 0; index < ranges.length; index += 1) {
-      const range = ranges[index];
-      if (!range) {
-        return false;
-      }
-      for (let previousIndex = 0; previousIndex < index; previousIndex += 1) {
-        const previousRange = ranges[previousIndex];
-        if (previousRange && rangesOverlap(range, previousRange)) {
-          return false;
-        }
-      }
-      const conflictsExisting = snapshot().fixtures.some((fixture) => {
-        if (fixture.universe !== targetUniverse) {
-          return false;
-        }
-        const existingRange = addressRange(fixture.address, fixtureFootprint(fixture));
-        return existingRange ? rangesOverlap(range, existingRange) : false;
-      });
-      if (conflictsExisting) {
-        return false;
-      }
-    }
-    return true;
-  };
   const nextFreePatchAddress = createMemo(() => {
     const targetUniverse = universe();
-    for (let candidate = 1; candidate <= 512; candidate += 1) {
-      if (canPatchAtAddress(candidate, targetUniverse)) {
-        return candidate;
-      }
-    }
-    return null;
+    return findNextFreePatchAddress(
+      snapshot().fixtures,
+      targetUniverse,
+      selectedFootprint(),
+      patchCountValue(),
+      patchAddressStrideValue(),
+    );
   });
   const patchGridColumnsValue = createMemo(() => Math.min(64, Math.max(1, Math.floor(patchGridColumns() || 1))));
   const patchCircleRadiusValue = createMemo(() => Math.max(0.1, Number.isFinite(patchCircleRadius()) ? patchCircleRadius() : 4));
@@ -1853,7 +1859,10 @@ export default function App() {
     }
     const first = ranges[0].range;
     const last = ranges[ranges.length - 1].range;
-    return ranges.length === 1 ? `Pending A${first[0]}-${first[1]}` : `Pending A${first[0]}-${last[1]} (${ranges.length} fixtures)`;
+    const stepText = patchAddressStrideValue() === selectedFootprint() ? "" : `, step ${patchAddressStrideValue()}ch`;
+    return ranges.length === 1
+      ? `Pending A${first[0]}-${first[1]}`
+      : `Pending A${first[0]}-${last[1]} (${ranges.length} fixtures${stepText})`;
   });
 
   const dmxAddressCells = createMemo<DmxAddressCell[]>(() => {
@@ -4763,7 +4772,10 @@ export default function App() {
     setAddress(cell.segment?.start ?? cell.channel);
     if (cell.segment) {
       selectFixture(cell.segment.fixture);
+      setMessage(`Selected ${cell.segment.fixture.label} at U${activePatchGridUniverse()} A${cell.segment.start}-${cell.segment.end}.`);
+      return;
     }
+    setMessage(`Patch start set to U${activePatchGridUniverse()} A${cell.channel}.`);
   };
 
   const selectNextFreePatchAddress = () => {
@@ -4946,6 +4958,31 @@ export default function App() {
     setProjectDirty(false);
   };
 
+  const clearProjectRecovery = () => {
+    lastRecoverySignature = null;
+    setProjectRecoveryCheckpoint(null);
+    clearProjectRecoveryCheckpoint();
+  };
+
+  const saveProjectRecovery = async () => {
+    if (!isTauriRuntime() || !projectDirty()) {
+      return;
+    }
+    const signature = projectSnapshotSignature(snapshot());
+    if (signature === lastRecoverySignature) {
+      return;
+    }
+    try {
+      const project = await invoke<ProjectFile>("get_project_checkpoint");
+      const checkpoint = createProjectRecoveryCheckpoint(project, currentProjectPath(), signature);
+      saveProjectRecoveryCheckpoint(checkpoint);
+      lastRecoverySignature = signature;
+      setProjectRecoveryCheckpoint(checkpoint);
+    } catch (error) {
+      setMessage(`Recovery checkpoint failed: ${String(error)}`);
+    }
+  };
+
   const rememberRecentProjectPath = (path: string | null) => {
     if (!path) {
       return;
@@ -5031,12 +5068,16 @@ export default function App() {
 
   const timer = isTauriRuntime() ? window.setInterval(refreshSnapshot, 250) : null;
   const telemetryReportTimer = isTauriRuntime() ? window.setInterval(refreshEngineTelemetryReport, 1000) : null;
+  const recoveryTimer = isTauriRuntime() ? window.setInterval(() => void saveProjectRecovery(), 10_000) : null;
   onCleanup(() => {
     if (timer !== null) {
       window.clearInterval(timer);
     }
     if (telemetryReportTimer !== null) {
       window.clearInterval(telemetryReportTimer);
+    }
+    if (recoveryTimer !== null) {
+      window.clearInterval(recoveryTimer);
     }
   });
   createEffect(() => {
@@ -5371,26 +5412,27 @@ export default function App() {
 
   const duplicateFixture = async (fixture: PatchedFixtureSummary) => {
     try {
-      const imported = await invoke<FixtureProfileSummary>("use_fixture_profile", { fixtureId: fixture.id });
       const footprint = Math.max(1, fixtureFootprint(fixture));
-      const address = fixture.address + footprint;
-      if (address > 512) {
-        setMessage(`Cannot duplicate ${fixture.label}: next address ${address} exceeds universe 512.`);
+      const occupiedRanges = buildOccupiedDmxRanges(snapshot().fixtures);
+      const address = findFreeDmxAddress(occupiedRanges, fixture.universe, footprint, fixture.address + footprint);
+      if (address === null) {
+        setMessage(`Cannot duplicate ${fixture.label}: no ${footprint}ch gap remains in universe ${fixture.universe}.`);
         return;
       }
+      const imported = await invoke<FixtureProfileSummary>("use_fixture_profile", { fixtureId: fixture.id });
       const request: PatchFixtureRequest = {
         profile_path: imported.source_path,
         mode_name: fixture.mode_name,
         label: `${fixture.label} Copy`,
         universe: fixture.universe,
         address,
-        group_ids: fixture.group_ids,
+        group_ids: [...fixture.group_ids],
         position: {
           x: Number((fixture.position.x + 1).toFixed(2)),
           y: Number(fixture.position.y.toFixed(2)),
           z: Number(fixture.position.z.toFixed(2)),
         },
-        rotation: fixture.rotation,
+        rotation: { ...fixture.rotation },
       };
       const fixtureIds = await invoke<number[]>("patch_fixtures", { requests: [request] });
       const fixtureId = fixtureIds[0];
@@ -5399,6 +5441,15 @@ export default function App() {
         return;
       }
       await invoke("set_fixture_limits", { fixtureId, limits: fixture.limits });
+      const copiedValues: Record<string, number> = {};
+      for (const value of fixture.attribute_values) {
+        await invoke("set_attribute", {
+          fixtureId,
+          attribute: value.attribute,
+          value: value.value,
+        });
+        copiedValues[`${fixtureId}:${value.attribute}`] = value.value;
+      }
       setSelectedFixtureId(fixtureId);
       setSelectedMappingFixtureIds([fixtureId]);
       setSelectedFixtureLabelDraft(request.label);
@@ -5406,73 +5457,16 @@ export default function App() {
       setSelectedFixtureAddressDraft(request.address);
       setSelectedFixtureGroupText(request.group_ids.join(", "));
       setSelectedFixtureLimitsDraft(fixture.limits);
-      setMessage(`Duplicated ${fixture.label} as ${request.label} at U${request.universe} A${request.address}.`);
+      setFaderValues((current) => ({ ...current, ...copiedValues }));
+      setMessage(
+        `Duplicated ${fixture.label} as ${request.label} at U${request.universe} A${request.address}-${
+          request.address + footprint - 1
+        }.`,
+      );
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
     }
-  };
-
-  const buildOccupiedDmxRanges = () => {
-    const ranges = new Map<number, DmxAddressRange[]>();
-    for (const fixture of snapshot().fixtures) {
-      const range = addressRange(fixture.address, fixtureFootprint(fixture));
-      if (!range) {
-        continue;
-      }
-      const universeRanges = ranges.get(fixture.universe) ?? [];
-      universeRanges.push({ start: range[0], end: Math.min(512, range[1]) });
-      ranges.set(fixture.universe, universeRanges);
-    }
-    return ranges;
-  };
-
-  const dmxAddressIsFree = (
-    ranges: Map<number, DmxAddressRange[]>,
-    universe: number,
-    start: number,
-    footprint: number,
-  ) => {
-    const end = start + footprint - 1;
-    if (start < 1 || end > 512) {
-      return false;
-    }
-    return !(ranges.get(universe) ?? []).some((range) => rangesOverlap([start, end], [range.start, range.end]));
-  };
-
-  const reserveDmxAddressRange = (
-    ranges: Map<number, DmxAddressRange[]>,
-    universe: number,
-    start: number,
-    footprint: number,
-  ) => {
-    const universeRanges = ranges.get(universe) ?? [];
-    universeRanges.push({ start, end: start + footprint - 1 });
-    ranges.set(universe, universeRanges);
-  };
-
-  const findFreeDmxAddress = (
-    ranges: Map<number, DmxAddressRange[]>,
-    universe: number,
-    footprint: number,
-    preferredStart: number,
-  ) => {
-    const maxStart = 512 - footprint + 1;
-    if (maxStart < 1) {
-      return null;
-    }
-    const startHint = clampRange(Math.floor(preferredStart), 1, maxStart);
-    for (let candidate = startHint; candidate <= maxStart; candidate += 1) {
-      if (dmxAddressIsFree(ranges, universe, candidate, footprint)) {
-        return candidate;
-      }
-    }
-    for (let candidate = 1; candidate < startHint; candidate += 1) {
-      if (dmxAddressIsFree(ranges, universe, candidate, footprint)) {
-        return candidate;
-      }
-    }
-    return null;
   };
 
   const duplicateSelectedMappingFixtures = async () => {
@@ -5484,7 +5478,7 @@ export default function App() {
       return;
     }
 
-    const occupiedRanges = buildOccupiedDmxRanges();
+    const occupiedRanges = buildOccupiedDmxRanges(snapshot().fixtures);
     const nextAddressByUniverse = new Map<number, number>();
     for (const [universeId, ranges] of occupiedRanges) {
       const maxEnd = Math.max(0, ...ranges.map((range) => range.end));
@@ -5591,6 +5585,7 @@ export default function App() {
     }
     const count = patchCountValue();
     const addressStride = patchAddressStrideValue();
+    const footprint = selectedFootprint();
     const groupIds = parseGroupIds(groupText());
     const baseLabel = label().trim() || "Fixture";
     const requests: PatchFixtureRequest[] = Array.from({ length: count }, (_, index) => {
@@ -5615,6 +5610,10 @@ export default function App() {
       const fixtureIds = await invoke<number[]>("patch_fixtures", { requests });
       const fixtureId = fixtureIds[fixtureIds.length - 1];
       const request = requests[requests.length - 1];
+      if (fixtureId === undefined || request === undefined) {
+        setMessage("Patch did not return a fixture id.");
+        return;
+      }
       setSelectedFixtureId(fixtureId);
       setSelectedFixtureLabelDraft(request.label);
       setSelectedFixtureUniverseDraft(request.universe);
@@ -5627,8 +5626,32 @@ export default function App() {
         }
       }
       setFaderValues((current) => ({ ...current, ...initialValues }));
-      setMessage(count === 1 ? `Patched fixture ${fixtureId}` : `Patched ${fixtureIds.length} fixtures`);
-      await refreshSnapshot();
+      const next = await refreshSnapshot();
+      const preferredNextAddress = request.address + addressStride;
+      const nextAddress = next
+        ? findNextFreePatchAddress(next.fixtures, request.universe, footprint, count, addressStride, preferredNextAddress)
+        : null;
+      if (nextAddress !== null) {
+        setUniverse(request.universe);
+        setAddress(nextAddress);
+        setPatchGridUniverse(request.universe);
+        setDmxPatchViewMode("grid");
+      }
+      const firstRequest = requests[0];
+      const patchedRangeText =
+        count === 1
+          ? `U${request.universe} A${request.address}-${request.address + footprint - 1}`
+          : firstRequest
+            ? `U${request.universe} A${firstRequest.address}-${request.address + footprint - 1}${
+                addressStride === footprint ? "" : ` (${count} fixtures, step ${addressStride}ch)`
+              }`
+            : `U${request.universe}`;
+      const nextText = nextAddress !== null ? ` Next free A${nextAddress}.` : " No matching free range remains.";
+      setMessage(
+        count === 1
+          ? `Patched ${request.label} at ${patchedRangeText}.${nextText}`
+          : `Patched ${fixtureIds.length} fixtures at ${patchedRangeText}.${nextText}`,
+      );
     } catch (error) {
       setMessage(String(error));
     }
@@ -7062,6 +7085,7 @@ export default function App() {
       if (next) {
         markProjectClean(next);
       }
+      clearProjectRecovery();
     } catch (error) {
       setMessage(String(error));
     }
@@ -7077,6 +7101,7 @@ export default function App() {
         if (next) {
           markProjectClean(next);
         }
+        clearProjectRecovery();
       }
       setMessage(path ? `Saved project ${path}` : "Project save canceled.");
     } catch (error) {
@@ -7094,6 +7119,7 @@ export default function App() {
         if (next) {
           markProjectClean(next);
         }
+        clearProjectRecovery();
       }
       setMessage(path ? `Saved project ${path}` : "Project save canceled.");
     } catch (error) {
@@ -7114,6 +7140,7 @@ export default function App() {
     if (next) {
       markProjectClean(next);
     }
+    clearProjectRecovery();
   };
 
   const loadProject = async () => {
@@ -7148,6 +7175,42 @@ export default function App() {
 
   const loadRecentProject = (path: string) => {
     void loadProjectPath(path);
+  };
+
+  const loadProjectRecovery = async () => {
+    const checkpoint = projectRecoveryCheckpoint();
+    if (!checkpoint) {
+      setMessage("No recovery checkpoint is available.");
+      return;
+    }
+    if (!confirmDiscardProjectChanges("recover the autosaved project")) {
+      setMessage("Project recovery canceled.");
+      return;
+    }
+    try {
+      const result = await invoke<ProjectLoadResult>("load_project_checkpoint", {
+        project: checkpoint.project,
+        label: `Recovery ${checkpoint.saved_at}`,
+        currentPath: checkpoint.source_path,
+      });
+      setCurrentProjectPath(checkpoint.source_path);
+      setMessage(
+        `Recovered ${projectRecoverySourceLabel(checkpoint)} from ${projectRecoveryTimeLabel(checkpoint)} (${result.profiles.length} embedded profiles). Save to keep it.`,
+      );
+      const next = await refreshSnapshot();
+      if (next) {
+        setCleanProjectSignature("__rayard_recovered_unsaved__");
+        setProjectDirty(true);
+      }
+      clearProjectRecovery();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const discardProjectRecovery = () => {
+    clearProjectRecovery();
+    setMessage("Recovery checkpoint discarded.");
   };
 
   const loadStartupProject = async () => {
@@ -7189,6 +7252,7 @@ export default function App() {
       if (next) {
         markProjectClean(next);
       }
+      clearProjectRecovery();
     } catch (error) {
       setMessage(String(error));
     }
@@ -7209,6 +7273,7 @@ export default function App() {
       if (afterSmoke) {
         markProjectClean(afterSmoke);
       }
+      clearProjectRecovery();
       const values = report.first_8.map((value) => value.toString(16).padStart(2, "0").toUpperCase()).join(" ");
       const expected = report.expected_first_8.map((value) => value.toString(16).padStart(2, "0").toUpperCase()).join(" ");
       setMessage(
@@ -11964,6 +12029,7 @@ export default function App() {
         projectDirty={projectDirty()}
         currentProjectPath={currentProjectPath()}
         recentProjectPaths={recentProjectPaths()}
+        recoveryCheckpoint={projectRecoveryCheckpoint()}
         canGo={snapshot().cues.length > 0}
         nextCueLabel={nextCue()?.label ?? "No cue"}
         onWorkspaceTab={setWorkspaceTab}
@@ -11976,6 +12042,8 @@ export default function App() {
         onLoadProject={loadProject}
         onLoadRecentProject={loadRecentProject}
         onClearRecentProjects={clearRecentProjects}
+        onLoadRecovery={loadProjectRecovery}
+        onDiscardRecovery={discardProjectRecovery}
         onLoadSample={loadPhase1SampleProject}
         onRunSmoke={runPhase1Smoke}
       />

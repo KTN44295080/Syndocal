@@ -4532,6 +4532,11 @@ fn project_file_for_save(state: &State<'_, AppState>) -> Result<ProjectFile, Str
     })
 }
 
+#[tauri::command]
+fn get_project_checkpoint(state: State<'_, AppState>) -> Result<ProjectFile, String> {
+    project_file_for_save(&state)
+}
+
 fn set_current_project_path(state: &State<'_, AppState>, path: &Path) -> Result<(), String> {
     let mut current_path = state
         .current_project_path
@@ -4764,6 +4769,34 @@ fn load_project_from_json(
     current_path: Option<&Path>,
 ) -> Result<ProjectLoadResult, String> {
     let project: ProjectFile = serde_json::from_str(&json).map_err(|error| error.to_string())?;
+    load_project_from_file(state, project, path_label, current_path)
+}
+
+#[tauri::command]
+fn load_project_checkpoint(
+    state: State<'_, AppState>,
+    project: ProjectFile,
+    label: String,
+    current_path: Option<String>,
+) -> Result<ProjectLoadResult, String> {
+    let current_path = current_path.map(PathBuf::from);
+    if let Some(path) = current_path.as_deref() {
+        if !is_rayard_project_path(path) {
+            return Err(format!(
+                "Recovered Rayard project path must use the .ry extension: {}",
+                path.to_string_lossy()
+            ));
+        }
+    }
+    load_project_from_file(&state, project, label, current_path.as_deref())
+}
+
+fn load_project_from_file(
+    state: &State<'_, AppState>,
+    project: ProjectFile,
+    path_label: String,
+    current_path: Option<&Path>,
+) -> Result<ProjectLoadResult, String> {
     validate_project_file(&project)?;
     let profiles = project.custom_profiles.clone();
     {
@@ -4877,13 +4910,10 @@ fn startup_project_path_from_args(args: impl IntoIterator<Item = OsString>) -> O
 
 fn project_paths_from_single_instance_args(args: Vec<String>, cwd: &str) -> Vec<String> {
     let cwd_path = (!cwd.trim().is_empty()).then(|| PathBuf::from(cwd));
-    project_paths_from_args(
-        args.into_iter().map(OsString::from),
-        cwd_path.as_deref(),
-    )
-    .into_iter()
-    .map(|path| path.to_string_lossy().to_string())
-    .collect()
+    project_paths_from_args(args.into_iter().map(OsString::from), cwd_path.as_deref())
+        .into_iter()
+        .map(|path| path.to_string_lossy().to_string())
+        .collect()
 }
 
 fn project_paths_from_args(
@@ -15708,24 +15738,26 @@ fn main() {
             pending_project_open_paths: Mutex::new(Vec::new()),
             current_project_path: Mutex::new(None),
         })
-        .plugin(tauri_plugin_single_instance::init(|app_handle, args, cwd| {
-            let project_paths = project_paths_from_single_instance_args(args, &cwd);
-            if project_paths.is_empty() {
-                return;
-            }
-            if let Ok(mut pending_paths) = app_handle
-                .state::<AppState>()
-                .pending_project_open_paths
-                .lock()
-            {
-                pending_paths.extend(project_paths.clone());
-            }
-            let _ = app_handle.emit(OPEN_PROJECT_EVENT, project_paths);
-            if let Some(window) = app_handle.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
-        }))
+        .plugin(tauri_plugin_single_instance::init(
+            |app_handle, args, cwd| {
+                let project_paths = project_paths_from_single_instance_args(args, &cwd);
+                if project_paths.is_empty() {
+                    return;
+                }
+                if let Ok(mut pending_paths) = app_handle
+                    .state::<AppState>()
+                    .pending_project_open_paths
+                    .lock()
+                {
+                    pending_paths.extend(project_paths.clone());
+                }
+                let _ = app_handle.emit(OPEN_PROJECT_EVENT, project_paths);
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            },
+        ))
         .invoke_handler(tauri::generate_handler![
             select_gdtf_file,
             select_video_source_file,
@@ -15882,6 +15914,8 @@ fn main() {
             save_project_as,
             load_project,
             load_project_path,
+            get_project_checkpoint,
+            load_project_checkpoint,
             load_startup_project,
             load_phase1_sample_project,
             run_phase1_smoke,

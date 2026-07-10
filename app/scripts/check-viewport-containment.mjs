@@ -31,6 +31,22 @@ const viewportRecentProjects = [
   "C:/shows/long/path/with/a/very-long-rayard-project-name-for-menu-containment.ry",
   "C:/shows/backup.ry",
 ];
+const viewportRecoveryCheckpoint = {
+  version: 1,
+  app: "Rayard",
+  saved_at: "2026-07-09T12:34:00.000Z",
+  source_path: "C:/shows/recovered-main-stage.ry",
+  signature: "viewport-recovery",
+  project: {
+    version: 1,
+    app: "Rayard",
+    custom_profiles: [],
+    snapshot: {
+      fixtures: [],
+      cues: [],
+    },
+  },
+};
 
 const sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 
@@ -204,6 +220,7 @@ async function waitForApp(client) {
 async function seedViewportLocalStorage(client) {
   await client.evaluate(`(() => {
     window.localStorage.setItem('rayard.recentProjects.v1', ${JSON.stringify(JSON.stringify(viewportRecentProjects))});
+    window.localStorage.setItem('rayard.projectRecovery.v1', ${JSON.stringify(JSON.stringify(viewportRecoveryCheckpoint))});
   })()`);
 }
 
@@ -310,6 +327,7 @@ async function measure(client, label) {
       visibleProjectMenuItemCount: visibleCount('.appProjectMenu button[role="menuitem"]'),
       visibleProjectMenuShortcutCount: document.querySelectorAll('.appProjectMenu button[aria-keyshortcuts]').length,
       visibleRecentProjectMenuItemCount: visibleCount('.appProjectMenu .recentProjectMenuItem'),
+      visibleRecoveryProjectMenuItemCount: visibleCount('.appProjectMenu .recoveryProjectMenuItem'),
       timelineAutomationRangeCount: document.querySelectorAll('.timelineOverview .timelineAutomationRange').length,
       timelineAutomationHandleCount: document.querySelectorAll('.timelineOverview .timelineAutomationHandle').length,
       timelineAutomationKeyframeCount: document.querySelectorAll('.timelineOverview .timelineAutomationKeyframe').length,
@@ -327,6 +345,24 @@ async function measure(client, label) {
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'use in effects').length,
       mappingWaveDraftButtonCount: [...document.querySelectorAll('.mappingSelectionPanel button')]
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'wave draft').length,
+      visiblePatchActionRowCount: visibleCount('.patchActionRow'),
+      visiblePatchAutoButtonCount: [...document.querySelectorAll('.fieldWithAction button')]
+        .filter((button) => (button.textContent || '').trim().toLowerCase() === 'auto').length,
+      visiblePatchPrimaryButtonCount: [...document.querySelectorAll('.patchActionRow button.primary')]
+        .filter((button) => (button.textContent || '').trim().toLowerCase().startsWith('patch fixture')).length,
+      visiblePatchNextFreeButtonCount: [...document.querySelectorAll('.patchActionRow button')]
+        .filter((button) => (button.textContent || '').trim().toLowerCase().startsWith('next free')).length,
+      visiblePatchFootprintCount: visibleCount('.footprint'),
+      visibleDmxAddressGridCount: visibleCount('.dmxAddressGrid'),
+      dmxAddressCellCount: document.querySelectorAll('.dmxAddressCell').length,
+      dmxAddressOccupiedCellCount: document.querySelectorAll('.dmxAddressCell.occupied').length,
+      dmxAddressPlannedCellCount: document.querySelectorAll('.dmxAddressCell.planned').length,
+      visibleDmxGridSummaryCount: visibleCount('.dmxGridSummary'),
+      visibleFixtureSetupEditorCount: visibleCount('.fixtureSetupEditor'),
+      visibleUseProfileForPatchButtonCount: [...document.querySelectorAll('.fixtureSetupEditor button')]
+        .filter((button) => (button.textContent || '').trim().toLowerCase() === 'use profile for patch').length,
+      visibleDuplicateFixtureButtonCount: [...document.querySelectorAll('.fixtureSetupEditor button')]
+        .filter((button) => (button.textContent || '').trim().toLowerCase() === 'duplicate fixture').length,
       controlModeTabCount: document.querySelectorAll('.controlModeTabs button').length,
       effectTargetValue: (() => {
         const select = [...document.querySelectorAll('.effectEditor select')]
@@ -467,7 +503,8 @@ function hasExpectedProjectMenu(result) {
     result.visibleProjectMenuCount === 1 &&
     result.visibleProjectMenuItemCount >= 6 &&
     result.visibleProjectMenuShortcutCount >= 4 &&
-    result.visibleRecentProjectMenuItemCount >= 5
+    result.visibleRecentProjectMenuItemCount >= 5 &&
+    result.visibleRecoveryProjectMenuItemCount >= 1
   );
 }
 
@@ -584,6 +621,23 @@ function hasExpectedControlModeSurface(result) {
 }
 
 function hasExpectedSetupSurface(result) {
+  if (result.label.startsWith("setup-patch-")) {
+    return (
+      result.visiblePatchActionRowCount >= 1 &&
+      result.visiblePatchAutoButtonCount >= 1 &&
+      result.visiblePatchPrimaryButtonCount >= 1 &&
+      result.visiblePatchNextFreeButtonCount >= 1 &&
+      result.visiblePatchFootprintCount >= 1 &&
+      result.visibleDmxAddressGridCount >= 1 &&
+      result.dmxAddressCellCount === 512 &&
+      result.dmxAddressOccupiedCellCount > 0 &&
+      result.dmxAddressPlannedCellCount > 0 &&
+      result.visibleDmxGridSummaryCount >= 1 &&
+      result.visibleFixtureSetupEditorCount >= 1 &&
+      result.visibleUseProfileForPatchButtonCount >= 1 &&
+      result.visibleDuplicateFixtureButtonCount >= 1
+    );
+  }
   if (result.label.startsWith("setup-mapping-")) {
     return (
       result.mappingUseInEffectsButtonCount >= 1 &&
@@ -780,13 +834,16 @@ async function main() {
         ? ` timelineAutomation=${result.timelineAutomationRangeCount}/${result.timelineAutomationHandleCount}/${result.timelineAutomationKeyframeCount}/${result.timelineAutomationChipCount}/${result.timelineAutomationCurveCount}/${result.timelineAutomationValueInputCount}/${result.timelineAutomationEnabledToggleCount}/${result.timelineAutomationScopeCount}/${result.timelineAutomationBatchButtonCount}/${result.timelineAutomationGroupButtonCount}`
         : "";
       const projectMenuSuffix = result.label.startsWith("project-menu-")
-        ? ` projectMenu=${result.visibleProjectMenuCount}/${result.visibleProjectMenuItemCount}/${result.visibleProjectMenuShortcutCount}/${result.visibleRecentProjectMenuItemCount}`
+        ? ` projectMenu=${result.visibleProjectMenuCount}/${result.visibleProjectMenuItemCount}/${result.visibleProjectMenuShortcutCount}/${result.visibleRecentProjectMenuItemCount}/${result.visibleRecoveryProjectMenuItemCount}`
         : "";
       const touchSuffix = result.label.startsWith("touch-")
         ? ` touch=${result.visibleTouchCuePanelCount}/${result.visibleTouchGoDeckCount}/${result.visibleTouchCuePadCount}/${result.visibleTouchStagePanelCount}/${result.visibleTouchStageCount}/${result.visibleTouchFixturePanelCount}/${result.visibleTouchFixtureScrollerCount}/${result.visibleTouchRemotePanelCount}/${result.visibleTouchRemoteUrlItemCount}/${result.visibleTouchRemoteCopyButtonCount}/${result.visibleTouchRemoteOpenButtonCount}/${result.visibleTouchVideoPanelCount}/${result.visibleTouchVideoOutputDeckCount}/${result.visibleTouchVideoSelectedOutputDeckCount}/${result.visibleTouchVideoOutputFaderCount}/${result.visibleTouchVideoOutputButtonCount}/${result.visibleTouchVideoOutputSelectButtonCount}/${result.visibleTouchVideoDeckCount}/${result.visibleTouchVideoLayerFaderCount}/${result.visibleTouchMasterGridCount}`
         : "";
       const mappingSuffix = result.label.startsWith("setup-mapping-")
         ? ` mapping=${result.mappingUseInEffectsButtonCount}/${result.mappingWaveDraftButtonCount}/${result.visibleMappingProjectorButtonCount}/${result.visibleMappingProjectorControlsCount}/${result.visibleMappingProjectorWarpGridCount}/${result.visibleMappingProjectorActionButtonCount}/${result.visibleMappingProjectorResetPoseButtonCount}/${result.visibleStageVideoSurfaceCount}`
+        : "";
+      const patchSuffix = result.label.startsWith("setup-patch-")
+        ? ` patch=${result.visiblePatchActionRowCount}/${result.visiblePatchAutoButtonCount}/${result.visiblePatchPrimaryButtonCount}/${result.visiblePatchNextFreeButtonCount}/${result.visiblePatchFootprintCount}/${result.visibleDmxAddressGridCount}/${result.dmxAddressCellCount}/${result.dmxAddressOccupiedCellCount}/${result.dmxAddressPlannedCellCount}/${result.visibleDmxGridSummaryCount}/${result.visibleFixtureSetupEditorCount}/${result.visibleUseProfileForPatchButtonCount}/${result.visibleDuplicateFixtureButtonCount}`
         : "";
       const outputSetupSuffix = result.label.startsWith("setup-output-")
         ? ` outputSetup=${result.visibleSetupVideoPanelCount}/${result.visibleSetupVideoOutputDeckCount}/${result.visibleSetupVideoOutputActiveDeckCount}/${result.visibleSetupVideoOutputDetailPaneCount}/${result.visibleVideoOutputMappingPanelCount}/${result.visibleProjectorMapEditorCount}/${result.visibleProjectorMapHandleCount}/${result.visibleProjectorKeystoneHandleCount}/${result.visibleProjectorScaleHandleCount}/${result.visibleProjectorRotateHandleCount}/${result.visibleProjectorAspectModeButtonCount}/${result.visibleProjectorAspectPresetButtonCount}/${result.visibleProjectorResetPoseButtonCount}`
@@ -801,7 +858,7 @@ async function main() {
         ? ` mixer=${result.visibleVideoOutputItemCount}/${result.visibleVideoOutputSelectedItemCount}/${result.visibleVideoMixerOutputDeckCount}/${result.visibleVideoMixerOutputFaderCount}/${result.visibleVideoMixerOutputSelectButtonCount}/${result.visibleVideoLayerItemCount}/${result.visibleVideoMixerLayerDeckCount}/${result.visibleVideoMixerLayerFaderCount}/${result.visibleVideoMixerLayerButtonCount}`
         : "";
       console.log(
-        `${status} ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${timelineSuffix}${touchSuffix}${projectMenuSuffix}${mappingSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${mixerSuffix}`,
+        `${status} ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${timelineSuffix}${touchSuffix}${projectMenuSuffix}${mappingSuffix}${patchSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${mixerSuffix}`,
       );
     }
     if (
