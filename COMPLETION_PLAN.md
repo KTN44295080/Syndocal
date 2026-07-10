@@ -107,6 +107,8 @@ CPU プレビューを wgpu 実出力に置き換える。**照明エンジン�
   - [x] M3.2a: `raw-window-handle`を介したクロスプラットフォーム`GpuSurfacePresenter`を追加し、TauriのWebViewなしWindowへVSync付きwgpu Surfaceを生成。補正済みTest Patternをネイティブ提示し、Windows実画面で非空表示・終了を確認。(2026-07-11)
   - [x] M3.2b: 静止画/単一ライブレイヤーを出力ごとの60HzループからネイティブSurfaceへ継続提示し、現行Canvas/IPC経路をReference用途へ降格する。GO後のフレーム変化、個別Window終了、本体終了後のプロセス解放をWindows実画面で確認。(2026-07-11)
   - [ ] M3.2c: 多レイヤーGPU合成バッファからSurfaceへCPU readbackなしで直接提示し、リサイズ・複数出力・fullscreenを検証する。
+    - [x] M3.2c-1: 出力プランとComposition順の選択済みレイヤーフレームを返す`PreparedVideoOutput`境界を追加。ブラックアウト/無効出力はデコードせず空集合を返す。(2026-07-11)
+    - [ ] M3.2c-2: Prepared入力を同一deviceの合成/補正Storage BufferからSurfaceへ直結し、CPU合成/readback/Canvasを通さない。
 - 段階 3: インプロセスデコードワーカー。方針決定が必要(§5 決定事項 D1): (a) `ffmpeg-next`(libav バインディング)、(b) HAP + DXT 直接アップロード優先、(c) 当面 CLI 抽出を最適化して据え置き。推奨は (b)→(a) の順(HAP は VJ 用途の主流で、既に DXT パスがある)。
 - 段階 4: 既存のフレームキュー/デコード診断/テレメトリを新パスに接続。CPU プレビューは「Preview (Reference)」として残す。
 - 検証ゲート: `cargo test -p video`(ゴールデン含む)、1080p60 多レイヤーでのフレームタイム計測、既存 `video_preview*` テスト green、DMX テレメトリ予算に影響なし。

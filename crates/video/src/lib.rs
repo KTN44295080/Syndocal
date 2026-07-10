@@ -93,6 +93,12 @@ pub struct VideoOutputRenderPlan {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PreparedVideoOutput {
+    pub plan: VideoOutputRenderPlan,
+    pub frames: Vec<VideoFrame>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExternalVideoInputPlan {
     pub layer_id: VideoLayerId,
     pub label: String,
@@ -2112,6 +2118,38 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         let plan = build_video_output_render_plan(snapshot, output_id)
             .map_err(VideoPreviewError::Output)?;
         self.render_output_plan(snapshot, &plan, width, height)
+    }
+
+    pub fn prepare_output_frames(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        output_id: VideoOutputId,
+        width: u32,
+        height: u32,
+    ) -> Result<PreparedVideoOutput, VideoPreviewError> {
+        if width == 0 || height == 0 {
+            return Err(VideoPreviewError::InvalidSize);
+        }
+        let plan = build_video_output_render_plan(snapshot, output_id)
+            .map_err(VideoPreviewError::Output)?;
+        if plan.output_blackout
+            || plan.output_opacity <= f32::EPSILON
+            || plan.composition.layers.is_empty()
+        {
+            return Ok(PreparedVideoOutput {
+                plan,
+                frames: Vec::new(),
+            });
+        }
+        let layer_ids = plan
+            .composition
+            .layers
+            .iter()
+            .map(|layer| layer.layer_id)
+            .collect::<Vec<_>>();
+        self.prepare_frames(snapshot, &layer_ids, width, height)?;
+        let frames = self.runtime.select_frames_for_plan(&plan.composition);
+        Ok(PreparedVideoOutput { plan, frames })
     }
 
     fn render_output_plan(
@@ -7115,23 +7153,41 @@ mod tests {
             TestFrameProvider::default(),
         );
 
+        let prepared = renderer.prepare_output_frames(&snapshot, 9, 2, 1).unwrap();
+        assert_eq!(prepared.plan.output_id, 9);
+        assert_eq!(prepared.plan.composition.layers[0].layer_id, 2);
+        assert_eq!(prepared.frames.len(), 1);
+        assert_eq!(prepared.frames[0].layer_id, 2);
+
         let frame = renderer.render_output(&snapshot, 9).unwrap();
         assert_eq!(frame.data, vec![2, 0, 0, 255, 2, 0, 0, 255]);
-        assert_eq!(renderer.frame_provider().retained, vec![vec![1, 2]]);
-        assert_eq!(renderer.frame_provider().requested, vec![2]);
+        assert_eq!(
+            renderer.frame_provider().retained,
+            vec![vec![1, 2], vec![1, 2]]
+        );
+        assert_eq!(renderer.frame_provider().requested, vec![2, 2]);
 
         snapshot.outputs[0].blackout = true;
+        let prepared = renderer.prepare_output_frames(&snapshot, 9, 2, 1).unwrap();
+        assert!(prepared.plan.output_blackout);
+        assert!(prepared.frames.is_empty());
         let frame = renderer.render_output(&snapshot, 9).unwrap();
         assert_eq!(frame.data, vec![0, 0, 0, 255, 0, 0, 0, 255]);
-        assert_eq!(renderer.frame_provider().retained, vec![vec![1, 2]]);
-        assert_eq!(renderer.frame_provider().requested, vec![2]);
+        assert_eq!(
+            renderer.frame_provider().retained,
+            vec![vec![1, 2], vec![1, 2]]
+        );
+        assert_eq!(renderer.frame_provider().requested, vec![2, 2]);
 
         snapshot.outputs[0].blackout = false;
         snapshot.outputs[0].enabled = false;
         let frame = renderer.render_output(&snapshot, 9).unwrap();
         assert_eq!(frame.data, vec![0, 0, 0, 255, 0, 0, 0, 255]);
-        assert_eq!(renderer.frame_provider().retained, vec![vec![1, 2]]);
-        assert_eq!(renderer.frame_provider().requested, vec![2]);
+        assert_eq!(
+            renderer.frame_provider().retained,
+            vec![vec![1, 2], vec![1, 2]]
+        );
+        assert_eq!(renderer.frame_provider().requested, vec![2, 2]);
     }
 
     #[test]
