@@ -116,6 +116,9 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
         )}
       </Show>
       <div class="cueList">
+        <Show when={props.cues.length === 0}>
+          <p class="empty">{props.hasCueSources ? "No cues. Choose a scope, then Store Cue." : "No cues. Patch fixtures or add a video layer, then Store Cue."}</p>
+        </Show>
         <For each={props.cues}>
           {(cue, index) => {
             const draft = () => props.cueMetadataDraft(cue);

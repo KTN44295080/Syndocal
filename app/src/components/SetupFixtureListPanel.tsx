@@ -69,7 +69,7 @@ export function SetupFixtureListPanel(props: SetupFixtureListPanelProps) {
           )}
         </For>
         <Show when={props.totalFixtureCount === 0}>
-          <p class="empty">No fixtures patched.</p>
+          <p class="empty">No fixtures patched. Load a profile in Library, then use Patch Fixture.</p>
         </Show>
         <Show when={props.totalFixtureCount > 0 && props.fixtures.length === 0}>
           <p class="empty">No fixtures in group.</p>

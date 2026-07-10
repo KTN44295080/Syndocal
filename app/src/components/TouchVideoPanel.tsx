@@ -127,7 +127,7 @@ export function TouchVideoPanel(props: TouchVideoPanelProps) {
           </For>
         </div>
       </Show>
-      <Show when={props.layers.length > 0} fallback={<p class="empty">No video layers.</p>}>
+      <Show when={props.layers.length > 0} fallback={<p class="empty">No video layers. Add one in Setup &gt; Output.</p>}>
         <div class="touchVideoDeckGrid">
           <For each={props.layers}>
             {(layer) => {

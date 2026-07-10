@@ -102,7 +102,7 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
                 )}
               </For>
               <Show when={props.activeMap.segments.length === 0}>
-                <p class="empty">No fixtures patched in this universe.</p>
+                <p class="empty">No fixtures in this universe. Use Setup &gt; Patch to assign one.</p>
               </Show>
             </div>
           }

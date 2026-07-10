@@ -9,6 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "check:dmx-addressing": "node scripts/check-dmx-addressing-helpers.mjs",
     "check:destructive-actions": "node scripts/check-destructive-actions.mjs",
+    "check:empty-states": "node scripts/check-empty-state-guidance.mjs",
     "check:effect-draft": "node scripts/check-effect-draft-helpers.mjs",
     "check:project-storage": "node scripts/check-project-storage-helpers.mjs",
     "check:status": "node scripts/check-status-model.mjs",

@@ -31,7 +31,7 @@ interface VideoLayerListPanelProps {
 export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
   return (
     <div class="videoLayerList">
-      <Show when={props.layers.length > 0} fallback={<span class="emptyState">No video layers</span>}>
+      <Show when={props.layers.length > 0} fallback={<span class="emptyState">No video layers. Add a file, still, or input above.</span>}>
         <For each={props.layers}>
           {(layer, index) => (
             <div class="videoLayerItem">

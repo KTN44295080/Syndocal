@@ -55,7 +55,7 @@ export function TouchFixturePickerPanel(props: TouchFixturePickerPanelProps) {
           )}
         </For>
         <Show when={props.fixtures.length === 0}>
-          <p class="empty">No fixtures.</p>
+          <p class="empty">No fixtures. Patch one in Setup &gt; Patch.</p>
         </Show>
       </div>
     </>

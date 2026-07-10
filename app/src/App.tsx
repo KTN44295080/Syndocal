@@ -8386,6 +8386,9 @@ export default function App() {
               )}
             </For>
           </div>
+          <Show when={snapshot().cues.length === 0}>
+            <p class="empty">No cues. Create one in Control &gt; Live with Store Cue.</p>
+          </Show>
           <Show when={snapshot().active_fade}>
             {(fade) => (
               <div class="liveFadeMeter touchFadeMeter">
