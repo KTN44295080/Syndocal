@@ -12679,3 +12679,24 @@ input[type="color"] {
 .appStatusLine.warning .appStatusIndicator { background: #e4b64f; }
 .appStatusLine.error .appStatusIndicator { background: #eb6a6a; }
 .appStatusLine.error .appStatusText { color: #ffc0c0; }
+
+.app .layoutTouch button,
+.app .layoutTouch .buttonLink,
+.app .layoutTouch input:not([type="checkbox"]),
+.app .layoutTouch select {
+  min-width: 40px;
+  min-height: 40px;
+}
+
+.app .layoutTouch label:has(input[type="checkbox"]) {
+  min-height: 40px;
+  align-items: center;
+}
+
+.app .layoutTouch .touchFaderFunctionBands {
+  grid-template-columns: repeat(4, minmax(40px, 1fr));
+}
+
+.app .layoutTouch .touchFaderFunctionBands button {
+  min-height: 40px;
+}

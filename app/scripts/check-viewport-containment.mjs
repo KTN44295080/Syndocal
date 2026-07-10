@@ -16,11 +16,12 @@ const shouldStartVite = appUrl === defaultUrl && process.env.RAYARD_VIEWPORT_NO_
 const shouldCheckTimelineAutomation = new URL(appUrl).searchParams.get("rayardViewportFixture") === "timeline";
 const vitePort = 5173;
 const cdpPort = Number(process.env.RAYARD_CDP_PORT ?? 9227);
-const viewports = [
+const allViewports = [
   { width: 1280, height: 720 },
   { width: 1366, height: 768 },
   { width: 2048, height: 1129 },
 ];
+const viewports = process.env.RAYARD_VIEWPORT_SINGLE === "1" ? [allViewports[1]] : allViewports;
 const setupTabs = ["Library", "Profiles", "Patch", "Mapping", "Output"];
 const controlTabs = ["Edit", "Live", "Mixer"];
 const viewportRecentProjects = [
@@ -465,6 +466,29 @@ async function measure(client, label) {
       visibleTouchVideoDeckCount: visibleCount('.touchVideoPanel .touchVideoDeck'),
       visibleTouchVideoLayerFaderCount: visibleCount('.touchVideoPanel .touchVideoDeck input[type="range"]'),
       visibleTouchMasterGridCount: visibleCount('.touchMasterGrid'),
+      touchUndersizedTargetCount: [...document.querySelectorAll('.layoutTouch button, .layoutTouch .buttonLink, .layoutTouch input:not([type="checkbox"]), .layoutTouch select')]
+        .filter((element) => {
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+        })
+        .filter((element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.width < 39.5 || rect.height < 39.5;
+        }).length,
+      touchUndersizedTargets: [...document.querySelectorAll('.layoutTouch button, .layoutTouch .buttonLink, .layoutTouch input:not([type="checkbox"]), .layoutTouch select')]
+        .filter((element) => {
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && (rect.width < 39.5 || rect.height < 39.5);
+        })
+        .slice(0, 40)
+        .map((element) => {
+          const rect = element.getBoundingClientRect();
+          return element.tagName.toLowerCase() + '.' + (element.className || '-') + ' ' + Math.round(rect.width) + 'x' + Math.round(rect.height) + ' ' + (element.textContent || element.getAttribute('aria-label') || element.getAttribute('type') || '').trim().replace(/\\s+/g, ' ').slice(0, 42);
+        }),
+      touchMomentaryFlashPassed: window.__rayardTouchMomentaryCheck?.passed === true,
+      touchMomentaryFlashResult: window.__rayardTouchMomentaryCheck ?? null,
       timelineOverviewVisible: (() => {
         const overview = document.querySelector('.timelineOverview');
         if (!overview) {
@@ -720,8 +744,46 @@ function hasExpectedTouchSurface(result) {
     result.visibleTouchVideoOutputSelectButtonCount >= result.visibleTouchVideoOutputDeckCount &&
     result.visibleTouchVideoDeckCount > 0 &&
     result.visibleTouchVideoLayerFaderCount >= 2 &&
-    result.visibleTouchMasterGridCount > 0
+    result.visibleTouchMasterGridCount > 0 &&
+    result.touchUndersizedTargetCount === 0 &&
+    result.touchMomentaryFlashPassed
   );
+}
+
+async function checkTouchMomentaryFlash(client) {
+  return await client.evaluate(`(async () => {
+    const findFlashButton = () => [...document.querySelectorAll('.touchDimmerQuickRow button.momentary')]
+      .find((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        const style = window.getComputedStyle(candidate);
+        return !candidate.disabled && rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      });
+    let button = findFlashButton();
+    if (!button) {
+      const dimmerCategory = [...document.querySelectorAll('.touchAttributeCategoryRail button')]
+        .find((candidate) => (candidate.textContent || '').trim().toLowerCase().startsWith('dimmer'));
+      dimmerCategory?.click();
+      await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+      button = findFlashButton();
+    }
+    if (!button) {
+      window.__rayardTouchMomentaryCheck = { passed: false, found: false, activeOnPress: false, inactiveOnRelease: false };
+      return false;
+    }
+    button.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, pointerType: 'touch', isPrimary: true }));
+    await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
+    const activeOnPress = button.classList.contains('active');
+    button.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, pointerType: 'touch', isPrimary: true }));
+    await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
+    const inactiveOnRelease = !button.classList.contains('active');
+    window.__rayardTouchMomentaryCheck = {
+      passed: activeOnPress && inactiveOnRelease,
+      found: true,
+      activeOnPress,
+      inactiveOnRelease,
+    };
+    return window.__rayardTouchMomentaryCheck.passed;
+  })()`);
 }
 
 async function runViewport(client, viewport) {
@@ -753,6 +815,7 @@ async function runViewport(client, viewport) {
   await sleep(80);
   await pressKey(client, "F3");
   await sleep(120);
+  await checkTouchMomentaryFlash(client);
   results.push(await measure(client, `touch-keyboard-${viewport.width}x${viewport.height}`));
   await pressKey(client, "F1");
   await sleep(80);
@@ -791,6 +854,7 @@ async function runViewport(client, viewport) {
   }
   await clickByText(client, "Touch");
   await sleep(180);
+  await checkTouchMomentaryFlash(client);
   results.push(await measure(client, `touch-${viewport.width}x${viewport.height}`));
   return results;
 }
