@@ -197,6 +197,7 @@ import { projectSnapshotSignature } from "./projectSnapshot";
 import { effectDraftTargetPlan } from "./effectDraft";
 import { createMappingViewportModel } from "./createMappingViewportModel";
 import { createMappingRenderModel } from "./createMappingRenderModel";
+import { createMappingInteractionController } from "./createMappingInteractionController";
 import {
   bulkPatchLabel,
   colorCandidates,
@@ -215,16 +216,12 @@ import {
   type TouchDimmerRestoreState,
 } from "./fixtureControlRuntime";
 import {
-  mappingGeometryClass,
   surfaceWorldHalfSize,
   type MappingAxis,
   type MappingBulkGroupMode,
   type MappingDragState,
   type MappingFixtureTypeRow,
-  type MappingGeometryNode2d,
   type MappingMarqueeState,
-  type MappingSnapLine,
-  type MappingStageObjectResizeMode,
   type MappingSvgBounds,
   type MappingViewportPanDragState,
   type VisualizerFixture,
@@ -235,10 +232,7 @@ import {
 import { stageObjectDefaultColor } from "./stageObjects";
 import {
   defaultVideoOutputMapping,
-  mappingVideoOutputCornerGain,
-  mappingVideoOutputCorners,
   outputAspectRatio,
-  type MappingVideoOutputCornerKey,
 } from "./videoOutputMapping";
 import {
   canLoadWheelMedia,
@@ -4767,574 +4761,6 @@ export default function App() {
     }
   };
 
-  const stageSvgPointFromClient = (clientX: number, clientY: number, targetSvg: SVGSVGElement) => {
-    const rect = targetSvg.getBoundingClientRect();
-    const viewBox = mappingViewportBox();
-    return {
-      x: clampRange(viewBox.x + ((clientX - rect.left) / rect.width) * viewBox.size, 0, stageViewBoxSize),
-      z: clampRange(viewBox.z + ((clientY - rect.top) / rect.height) * viewBox.size, 0, stageViewBoxSize),
-    };
-  };
-
-  const stageWorldPointFromPointer = (event: PointerEvent, svg?: SVGSVGElement) => {
-    const point = stageSvgPointFromPointer(event, svg);
-    return svgPointToStageWorld(point.x, point.z, stageWorldBounds());
-  };
-
-  const stageSvgPointFromPointer = (event: PointerEvent, svg?: SVGSVGElement) => {
-    const targetSvg = svg ?? (event.currentTarget as SVGSVGElement);
-    return stageSvgPointFromClient(event.clientX, event.clientY, targetSvg);
-  };
-
-  const handleMappingStageWheel = (event: WheelEvent & { currentTarget: SVGSVGElement }) => {
-    event.preventDefault();
-    const point = stageSvgPointFromClient(event.clientX, event.clientY, event.currentTarget);
-    zoomMappingViewportAtPoint(event.deltaY < 0 ? 1 : -1, point);
-  };
-
-  const placeSelectedFixtureFromStage = async (
-    event: PointerEvent & { currentTarget: SVGSVGElement },
-  ) => {
-    const fixture = selectedFixture();
-    if (!fixture) {
-      return;
-    }
-    const point = snapStagePoint(stageWorldPointFromPointer(event));
-    await setFixtureTransform(fixture, {
-      position: {
-        ...fixture.position,
-        x: point.x,
-        z: point.z,
-      },
-    });
-  };
-
-  const rotateSelectedFixtureFromStage = async (
-    event: PointerEvent & { currentTarget: SVGSVGElement },
-  ) => {
-    const fixture = selectedFixture();
-    if (!fixture) {
-      return;
-    }
-    const point = stageWorldPointFromPointer(event);
-    const dx = point.x - fixture.position.x;
-    const dz = point.z - fixture.position.z;
-    if (Math.abs(dx) < 0.001 && Math.abs(dz) < 0.001) {
-      return;
-    }
-    const yaw = Math.round(((Math.atan2(dz, dx) * 180) / Math.PI + 90 + 360) % 360);
-    await setFixtureTransform(fixture, {
-      rotation: {
-        ...fixture.rotation,
-        yaw,
-      },
-    });
-  };
-
-  const beginMappingFixtureDrag = (event: PointerEvent, fixtureId: number) => {
-    if (event.button !== 0 || mappingStageTool() !== "select") {
-      return;
-    }
-    const fixture = snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
-    const svg = (event.currentTarget as SVGElement).ownerSVGElement;
-    if (!fixture || !svg) {
-      return;
-    }
-    if (isAdditiveMappingSelectionEvent(event)) {
-      selectMappingFixture(fixture, event);
-      return;
-    }
-    const selectedIds = selectedMappingFixtureIdSet();
-    const fixtureIds = selectedIds.has(fixtureId) ? selectedMappingFixtureIds() : [fixtureId];
-    if (!selectedIds.has(fixtureId)) {
-      selectFixture(fixture);
-    } else {
-      activateFixture(fixture);
-    }
-    setSelectedStageObjectId(null);
-    const startPositions = Object.fromEntries(
-      snapshot()
-        .fixtures
-        .filter((candidate) => fixtureIds.includes(candidate.id))
-        .map((candidate) => [candidate.id, candidate.position]),
-    ) as Record<number, PatchFixtureRequest["position"]>;
-    const point = stageWorldPointFromPointer(event, svg);
-    svg.setPointerCapture(event.pointerId);
-    setMappingDrag({
-      kind: "fixture",
-      pointerId: event.pointerId,
-      fixtureIds,
-      startWorld: point,
-      currentWorld: point,
-      startPositions,
-    });
-  };
-
-  const beginMappingFixtureYawDrag = (event: PointerEvent, fixtureId: number) => {
-    if (event.button !== 0 || mappingStageTool() === "pan" || mappingStageTool() === "place") {
-      return;
-    }
-    const fixture = snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
-    const svg = (event.currentTarget as SVGElement).ownerSVGElement;
-    if (!fixture || !svg) {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    selectFixture(fixture);
-    activateFixture(fixture);
-    const point = stageWorldPointFromPointer(event, svg);
-    svg.setPointerCapture(event.pointerId);
-    setMappingDrag({
-      kind: "fixtureYaw",
-      pointerId: event.pointerId,
-      fixtureId,
-      startWorld: point,
-      currentWorld: point,
-      centerWorld: {
-        x: fixture.position.x,
-        z: fixture.position.z,
-      },
-    });
-  };
-
-  const beginMappingVideoOutputDrag = (event: PointerEvent, outputId: number) => {
-    if (event.button !== 0 || mappingStageTool() !== "select") {
-      return;
-    }
-    const output = snapshot().video.outputs.find((candidate) => candidate.id === outputId);
-    const svg = (event.currentTarget as SVGElement).ownerSVGElement;
-    if (!output || !svg) {
-      return;
-    }
-    const point = stageWorldPointFromPointer(event, svg);
-    svg.setPointerCapture(event.pointerId);
-    setSelectedStageObjectId(null);
-    setMappingDrag({
-      kind: "videoOutput",
-      pointerId: event.pointerId,
-      outputId,
-      startWorld: point,
-      currentWorld: point,
-      startMapping: output.mapping,
-    });
-  };
-
-  const beginMappingVideoOutputRotate = (event: PointerEvent, outputId: number) => {
-    if (event.button !== 0 || mappingStageTool() !== "select") {
-      return;
-    }
-    const output = snapshot().video.outputs.find((candidate) => candidate.id === outputId);
-    const svg = (event.currentTarget as SVGElement).ownerSVGElement;
-    if (!output || !svg) {
-      return;
-    }
-    const point = stageWorldPointFromPointer(event, svg);
-    const centerWorld = {
-      x: output.mapping.stage_x,
-      z: output.mapping.stage_z,
-    };
-    svg.setPointerCapture(event.pointerId);
-    setMappingDrag({
-      kind: "videoOutputRotate",
-      pointerId: event.pointerId,
-      outputId,
-      startWorld: point,
-      currentWorld: point,
-      centerWorld,
-      startAngleDeg: mappingOutputHandleAngleDeg(centerWorld, point),
-      startMapping: output.mapping,
-    });
-  };
-
-  const beginMappingVideoOutputScale = (event: PointerEvent, outputId: number) => {
-    if (event.button !== 0 || mappingStageTool() !== "select") {
-      return;
-    }
-    const output = snapshot().video.outputs.find((candidate) => candidate.id === outputId);
-    const svg = (event.currentTarget as SVGElement).ownerSVGElement;
-    if (!output || !svg) {
-      return;
-    }
-    const point = stageWorldPointFromPointer(event, svg);
-    const centerWorld = {
-      x: output.mapping.stage_x,
-      z: output.mapping.stage_z,
-    };
-    svg.setPointerCapture(event.pointerId);
-    setMappingDrag({
-      kind: "videoOutputScale",
-      pointerId: event.pointerId,
-      outputId,
-      startWorld: point,
-      currentWorld: point,
-      centerWorld,
-      startDistance: mappingOutputHandleDistance(centerWorld, point),
-      startMapping: output.mapping,
-    });
-  };
-
-  const beginMappingVideoOutputCornerDrag = (
-    event: PointerEvent,
-    outputId: number,
-    corner: MappingVideoOutputCornerKey,
-  ) => {
-    if (event.button !== 0 || mappingStageTool() !== "select") {
-      return;
-    }
-    const output = snapshot().video.outputs.find((candidate) => candidate.id === outputId);
-    const svg = (event.currentTarget as SVGElement).ownerSVGElement;
-    if (!output || !svg) {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    setSelectedVideoOutputId(outputId);
-    const point = stageWorldPointFromPointer(event, svg);
-    svg.setPointerCapture(event.pointerId);
-    setMappingDrag({
-      kind: "videoOutputCorner",
-      pointerId: event.pointerId,
-      outputId,
-      corner,
-      startWorld: point,
-      currentWorld: point,
-      startMapping: output.mapping,
-    });
-  };
-
-  const beginMappingStageObjectDrag = (event: PointerEvent, objectId: number) => {
-    if (event.button !== 0 || mappingStageTool() !== "select") {
-      return;
-    }
-    const object = snapshot().stage_objects.find((candidate) => candidate.id === objectId);
-    const svg = (event.currentTarget as SVGElement).ownerSVGElement;
-    if (!object || !svg) {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    clearMappingFixtureSelection();
-    setSelectedVideoOutputId(null);
-    setSelectedStageObjectId(objectId);
-    const point = stageWorldPointFromPointer(event, svg);
-    svg.setPointerCapture(event.pointerId);
-    setMappingDrag({
-      kind: "stageObject",
-      pointerId: event.pointerId,
-      objectId,
-      startWorld: point,
-      currentWorld: point,
-      startObject: object,
-    });
-  };
-
-  const beginMappingStageObjectRotate = (event: PointerEvent, objectId: number) => {
-    if (event.button !== 0 || mappingStageTool() !== "select") {
-      return;
-    }
-    const object = snapshot().stage_objects.find((candidate) => candidate.id === objectId);
-    const svg = (event.currentTarget as SVGElement).ownerSVGElement;
-    if (!object || !svg) {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    clearMappingFixtureSelection();
-    setSelectedVideoOutputId(null);
-    setSelectedStageObjectId(objectId);
-    const point = stageWorldPointFromPointer(event, svg);
-    const centerWorld = { x: object.x, z: object.z };
-    svg.setPointerCapture(event.pointerId);
-    setMappingDrag({
-      kind: "stageObjectRotate",
-      pointerId: event.pointerId,
-      objectId,
-      startWorld: point,
-      currentWorld: point,
-      centerWorld,
-      startAngleDeg: mappingOutputHandleAngleDeg(centerWorld, point),
-      startObject: object,
-    });
-  };
-
-  const beginMappingStageObjectResize = (
-    event: PointerEvent,
-    objectId: number,
-    resizeMode: MappingStageObjectResizeMode,
-  ) => {
-    if (event.button !== 0 || mappingStageTool() !== "select") {
-      return;
-    }
-    const object = snapshot().stage_objects.find((candidate) => candidate.id === objectId);
-    const svg = (event.currentTarget as SVGElement).ownerSVGElement;
-    if (!object || !svg) {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    clearMappingFixtureSelection();
-    setSelectedVideoOutputId(null);
-    setSelectedStageObjectId(objectId);
-    const point = stageWorldPointFromPointer(event, svg);
-    svg.setPointerCapture(event.pointerId);
-    setMappingDrag({
-      kind: "stageObjectResize",
-      pointerId: event.pointerId,
-      objectId,
-      resizeMode,
-      startWorld: point,
-      currentWorld: point,
-      startObject: object,
-    });
-  };
-
-  const beginMappingViewportPan = (event: PointerEvent & { currentTarget: SVGSVGElement }) => {
-    if (event.button !== 0 || mappingStageTool() !== "pan") {
-      return;
-    }
-    const rect = event.currentTarget.getBoundingClientRect();
-    const box = mappingViewportBox();
-    event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setMappingViewportPanDrag({
-      pointerId: event.pointerId,
-      startClientX: event.clientX,
-      startClientY: event.clientY,
-      startCenterX: box.x + box.size / 2,
-      startCenterZ: box.z + box.size / 2,
-      viewBoxSize: box.size,
-      rectWidth: Math.max(1, rect.width),
-      rectHeight: Math.max(1, rect.height),
-    });
-  };
-
-  const updateMappingViewportPan = (event: PointerEvent & { currentTarget: SVGSVGElement }) => {
-    const drag = mappingViewportPanDrag();
-    if (!drag || drag.pointerId !== event.pointerId) {
-      return false;
-    }
-    const deltaX = ((event.clientX - drag.startClientX) / drag.rectWidth) * drag.viewBoxSize;
-    const deltaZ = ((event.clientY - drag.startClientY) / drag.rectHeight) * drag.viewBoxSize;
-    setMappingViewport(normalizedMappingViewportZoom(), drag.startCenterX - deltaX, drag.startCenterZ - deltaZ);
-    return true;
-  };
-
-  const finishMappingViewportPan = (event: PointerEvent & { currentTarget: SVGSVGElement }) => {
-    const drag = mappingViewportPanDrag();
-    if (!drag || drag.pointerId !== event.pointerId) {
-      return false;
-    }
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-    setMappingViewportPanDrag(null);
-    return true;
-  };
-
-  const beginMappingMarquee = (event: PointerEvent & { currentTarget: SVGSVGElement }) => {
-    if (event.button !== 0 || mappingStageTool() !== "select") {
-      return;
-    }
-    const point = stageSvgPointFromPointer(event);
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setMappingMarquee({
-      pointerId: event.pointerId,
-      start: point,
-      current: point,
-      additive: isAdditiveMappingSelectionEvent(event),
-    });
-  };
-
-  const handleMappingStagePointerDown = async (
-    event: PointerEvent & { currentTarget: SVGSVGElement },
-  ) => {
-    if (event.button !== 0) {
-      return;
-    }
-    if (mappingStageTool() === "place") {
-      await placeSelectedFixtureFromStage(event);
-    } else if (mappingStageTool() === "rotate") {
-      await rotateSelectedFixtureFromStage(event);
-    } else if (mappingStageTool() === "pan") {
-      beginMappingViewportPan(event);
-    } else {
-      beginMappingMarquee(event);
-    }
-  };
-
-  const handleMappingStagePointerMove = (event: PointerEvent & { currentTarget: SVGSVGElement }) => {
-    const cursorWorld = stageWorldPointFromPointer(event);
-    setMappingStageCursorWorld(mappingStageTool() === "place" ? snapStagePoint(cursorWorld) : cursorWorld);
-
-    if (updateMappingViewportPan(event)) {
-      return;
-    }
-
-    const drag = mappingDrag();
-    if (drag && drag.pointerId === event.pointerId) {
-      setMappingDrag({
-        ...drag,
-        currentWorld: cursorWorld,
-      });
-      return;
-    }
-
-    const marquee = mappingMarquee();
-    if (!marquee || marquee.pointerId !== event.pointerId) {
-      return;
-    }
-    setMappingMarquee({
-      ...marquee,
-      current: stageSvgPointFromPointer(event),
-    });
-  };
-
-  const finishMappingStageDrag = async (event: PointerEvent & { currentTarget: SVGSVGElement }) => {
-    if (finishMappingViewportPan(event)) {
-      return;
-    }
-
-    const drag = mappingDrag();
-    if (drag && drag.pointerId === event.pointerId) {
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      }
-      if (drag.kind === "fixtureYaw") {
-        setMappingDrag(null);
-        const fixture = snapshot().fixtures.find((candidate) => candidate.id === drag.fixtureId);
-        if (!fixture) {
-          return;
-        }
-        const yaw = mappingFixtureYawFromPoint(drag.centerWorld, drag.currentWorld);
-        if (yaw === null) {
-          return;
-        }
-        await setFixtureTransform(fixture, {
-          rotation: {
-            ...fixture.rotation,
-            yaw,
-          },
-        });
-        setMessage(`Set ${fixture.label} yaw to ${yaw} deg.`);
-        return;
-      }
-      const delta = dragWorldDelta(drag);
-      if (Math.abs(delta.x) < 0.01 && Math.abs(delta.z) < 0.01) {
-        setMappingDrag(null);
-        return;
-      }
-
-      if (drag.kind === "fixture") {
-        setMappingDrag(null);
-        const movedFixtures = snapshot().fixtures.filter((candidate) => drag.fixtureIds.includes(candidate.id));
-        if (movedFixtures.length === 0) {
-          return;
-        }
-        await Promise.all(
-          movedFixtures.map((fixture) => {
-            const startPosition = drag.startPositions[fixture.id] ?? fixture.position;
-            const nextPosition = snapStagePosition({
-              ...startPosition,
-              x: startPosition.x + delta.x,
-              z: startPosition.z + delta.z,
-            });
-            return setFixtureTransform(fixture, { position: nextPosition }, false);
-          }),
-        );
-        await refreshSnapshot();
-        setMessage(
-          movedFixtures.length === 1
-            ? `Moved ${movedFixtures[0].label}`
-            : `Moved ${movedFixtures.length} selected fixtures`,
-        );
-        return;
-      }
-
-      if (isMappingStageObjectDrag(drag)) {
-        const object = snapshot().stage_objects.find((candidate) => candidate.id === drag.objectId);
-        if (!object) {
-          setMappingDrag(null);
-          return;
-        }
-        const nextObject = mappingStageObjectPreview(object);
-        setMappingDrag(null);
-        await setStageObject(object, {
-          x: nextObject.x,
-          z: nextObject.z,
-          width: nextObject.width,
-          depth: nextObject.depth,
-          rotation_deg: nextObject.rotation_deg,
-        });
-        if (drag.kind === "stageObjectRotate") {
-          setMessage(`Rotated ${object.label} to ${nextObject.rotation_deg} deg.`);
-        } else if (drag.kind === "stageObjectResize") {
-          setMessage(`Resized ${object.label} to ${nextObject.width} x ${nextObject.depth}.`);
-        } else {
-          setMessage(`Moved ${object.label} to X ${nextObject.x}, Z ${nextObject.z}.`);
-        }
-        return;
-      }
-
-      setMappingDrag(null);
-      const output = snapshot().video.outputs.find((candidate) => candidate.id === drag.outputId);
-      if (!output) {
-        return;
-      }
-      const nextMapping = mappingVideoOutputPreviewMapping(drag, output);
-      await setVideoOutputMapping(output.id, nextMapping);
-      if (drag.kind === "videoOutput") {
-        setMessage(`Moved ${output.label} to X ${nextMapping.stage_x}, Z ${nextMapping.stage_z}`);
-      } else if (drag.kind === "videoOutputRotate") {
-        setMessage(`Rotated ${output.label} to ${nextMapping.rotation_deg} deg`);
-      } else if (drag.kind === "videoOutputCorner") {
-        const corner = mappingVideoOutputCorners.find((candidate) => candidate.key === drag.corner);
-        setMessage(`Adjusted ${corner?.label ?? "corner"} warp for ${output.label}.`);
-      } else {
-        setMessage(`Scaled ${output.label} to ${nextMapping.scale_x.toFixed(2)} x ${nextMapping.scale_y.toFixed(2)}`);
-      }
-      return;
-    }
-
-    const marquee = mappingMarquee();
-    if (!marquee || marquee.pointerId !== event.pointerId) {
-      return;
-    }
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-    const box = {
-      x: Math.min(marquee.start.x, marquee.current.x),
-      z: Math.min(marquee.start.z, marquee.current.z),
-      width: Math.abs(marquee.current.x - marquee.start.x),
-      height: Math.abs(marquee.current.z - marquee.start.z),
-    };
-    setMappingMarquee(null);
-    if (box.width < 0.8 && box.height < 0.8) {
-      if (!marquee.additive) {
-        clearMappingFixtureSelection();
-      }
-      return;
-    }
-    const pickedIds = visualizerFixtures()
-      .filter((fixture) =>
-        fixture.x >= box.x &&
-        fixture.x <= box.x + box.width &&
-        fixture.z >= box.z &&
-        fixture.z <= box.z + box.height,
-      )
-      .map((fixture) => fixture.id);
-    const nextIds = marquee.additive ? [...new Set([...selectedMappingFixtureIds(), ...pickedIds])] : pickedIds;
-    setSelectedMappingFixtureIds(nextIds);
-    const active = snapshot().fixtures.find((fixture) => fixture.id === nextIds[0]);
-    if (active) {
-      activateFixture(active);
-    } else if (!marquee.additive) {
-      setSelectedFixtureId(null);
-    }
-    setMessage(`Selected ${nextIds.length} fixture${nextIds.length === 1 ? "" : "s"}`);
-  };
-
   const layoutFixtures = async (fixtures: PatchedFixtureSummary[], mode: FixtureLayoutMode, scopeLabel: string) => {
     if (fixtures.length === 0) {
       setMessage(`No fixtures to arrange for ${scopeLabel}.`);
@@ -9689,6 +9115,64 @@ export default function App() {
       return false;
     }
   };
+
+  const {
+    handleMappingStageWheel,
+    beginMappingFixtureDrag,
+    beginMappingFixtureYawDrag,
+    beginMappingVideoOutputDrag,
+    beginMappingVideoOutputRotate,
+    beginMappingVideoOutputScale,
+    beginMappingVideoOutputCornerDrag,
+    beginMappingStageObjectDrag,
+    beginMappingStageObjectRotate,
+    beginMappingStageObjectResize,
+    handleMappingStagePointerDown,
+    handleMappingStagePointerMove,
+    finishMappingStageDrag,
+  } = createMappingInteractionController({
+    snapshot,
+    mappingViewportBox,
+    stageWorldBounds,
+    zoomMappingViewportAtPoint,
+    selectedFixture,
+    snapStagePoint,
+    setFixtureTransform,
+    mappingStageTool,
+    isAdditiveMappingSelectionEvent,
+    selectMappingFixture,
+    selectedMappingFixtureIdSet,
+    selectedMappingFixtureIds,
+    setSelectedMappingFixtureIds,
+    selectFixture,
+    activateFixture,
+    setSelectedFixtureId,
+    setSelectedStageObjectId,
+    setSelectedVideoOutputId,
+    clearMappingFixtureSelection,
+    mappingDrag,
+    setMappingDrag,
+    mappingMarquee,
+    setMappingMarquee,
+    mappingViewportPanDrag,
+    setMappingViewportPanDrag,
+    normalizedMappingViewportZoom,
+    setMappingViewport,
+    setMappingStageCursorWorld,
+    mappingOutputHandleAngleDeg,
+    mappingOutputHandleDistance,
+    mappingFixtureYawFromPoint,
+    dragWorldDelta,
+    snapStagePosition,
+    refreshSnapshot,
+    setMessage,
+    isMappingStageObjectDrag,
+    mappingStageObjectPreview,
+    setStageObject,
+    mappingVideoOutputPreviewMapping,
+    setVideoOutputMapping,
+    visualizerFixtures,
+  });
 
   const fitVideoOutputToStageObject = async (output: VideoOutputSummary, object: StageObjectSummary) => {
     const outputAspect = outputAspectRatio(output.width, output.height);
