@@ -6,7 +6,6 @@ import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "so
 import { CueManagementPanel } from "./components/CueManagementPanel";
 import { CustomProfileEditorPanel } from "./components/CustomProfileEditorPanel";
 import {
-  DmxPatchMapPanel,
   type DmxAddressCell,
   type DmxPatchSegment,
   type DmxPatchViewMode,
@@ -25,14 +24,6 @@ import { FaderGridPanel } from "./components/FaderGridPanel";
 import { FaderPrimaryAttributePanels } from "./components/FaderPrimaryAttributePanels";
 import { LightingRuntimeControlsPanel } from "./components/LightingRuntimeControlsPanel";
 import { LoadedProfileSummaryPanel } from "./components/LoadedProfileSummaryPanel";
-import { MappingEditableStageShell } from "./components/MappingEditableStageShell";
-import { MappingFilterStrips } from "./components/MappingFilterStrips";
-import { MappingHotkeyHelp } from "./components/MappingHotkeyHelp";
-import { MappingSelectionSidebarPanel } from "./components/MappingSelectionSidebarPanel";
-import { MappingStageConfigPanel } from "./components/MappingStageConfigPanel";
-import { MappingStageLayersPanel } from "./components/MappingStageLayersPanel";
-import { MappingToolRail } from "./components/MappingToolRail";
-import { MappingViewportControls } from "./components/MappingViewportControls";
 import { MidiControlMappingPanel } from "./components/MidiControlMappingPanel";
 import { NodeGraphEditorPanel } from "./components/NodeGraphEditorPanel";
 import { OscControlMappingPanel } from "./components/OscControlMappingPanel";
@@ -43,8 +34,7 @@ import { type PositionFavorite } from "./components/PositionControlPanel";
 import { ProfileLoadPanel } from "./components/ProfileLoadPanel";
 import { RemoteControlPanel } from "./components/RemoteControlPanel";
 import { SampleEffectPresetPanel, sampleEffectPresetSupportsTarget, type SampleEffectPreset } from "./components/SampleEffectPresetPanel";
-import { SetupFixtureEditorPanel } from "./components/SetupFixtureEditorPanel";
-import { SetupFixtureListPanel } from "./components/SetupFixtureListPanel";
+import { SetupMappingWorkspace } from "./components/SetupMappingWorkspace";
 import { SetupVideoPanel } from "./components/SetupVideoPanel";
 import { StagePreview2D } from "./components/StagePreview2D";
 import { VideoControlPanel } from "./components/VideoControlPanel";
@@ -11814,330 +11804,305 @@ export default function App() {
           </Show>
         </aside>
 
-        <section
-          class={setupPanelClass("panel fixtures setupPanel", ["patch", "mapping"])}
-          ref={registerSetupPanel(["patch"])}
-          tabIndex={-1}
-        >
-          <SetupFixtureListPanel
-            fixtures={filteredFixtures()}
-            totalFixtureCount={snapshot().fixtures.length}
-            selectedGroupId={selectedFixtureGroupFilter()}
-            groupRows={fixtureGroupRows()}
-            selectedFixtureId={selectedFixtureId()}
-            onSelectGroup={selectFixtureGroupFilter}
-            onSelectFixture={selectFixture}
-          >
-            <DmxPatchMapPanel
-              activeUniverse={activePatchGridUniverse()}
-              universeOptions={patchGridUniverseOptions()}
-              viewMode={dmxPatchViewMode()}
-              nextFreeAddress={nextFreePatchAddress()}
-              activeMap={activePatchGridMap()}
-              addressCells={dmxAddressCells()}
-              universeMaps={dmxUniverseMaps()}
-              fixtureCount={snapshot().fixtures.length}
-              selectedFixtureId={selectedFixtureId()}
-              plannedAddressSummary={plannedAddressSummary()}
-              onNextFreeAddress={selectNextFreePatchAddress}
-              onUniverse={setPatchGridUniverse}
-              onViewMode={setDmxPatchViewMode}
-              onSelectFixture={selectFixture}
-              onAddressCell={(cell) => handleDmxAddressCellClick(cell)}
-            />
-          </SetupFixtureListPanel>
-          <Show when={selectedFixture()}>
-            {(fixture) => (
-              <SetupFixtureEditorPanel
-                fixture={fixture()}
-                labelDraft={selectedFixtureLabelDraft()}
-                universeDraft={selectedFixtureUniverseDraft()}
-                addressDraft={selectedFixtureAddressDraft()}
-                groupText={selectedFixtureGroupText()}
-                limitsDraft={selectedFixtureLimitsDraft()}
-                normalizedLimits={normalizedSelectedFixtureLimitsDraft()}
-                limitWindowStyle={selectedFixtureLimitWindowStyle()}
-                movementLimitDragging={Boolean(movementLimitDrag())}
-                filteredFixtureCount={filteredFixtures().length}
-                formatDmxPercent={formatDmxPercent}
-                onUseProfileForPatch={useFixtureProfileForPatch}
-                onDuplicateFixture={duplicateFixture}
-                onLabelDraft={setSelectedFixtureLabelDraft}
-                onUniverseDraft={setSelectedFixtureUniverseDraft}
-                onAddressDraft={setSelectedFixtureAddressDraft}
-                onApplyPatch={setFixturePatch}
-                onGroupText={setSelectedFixtureGroupText}
-                onApplyGroups={setFixtureGroups}
-                onUpdateNumericLimit={(field, value) => updateSelectedFixtureLimit(field, value)}
-                onUpdateToggleLimit={(field, value) => updateSelectedFixtureLimit(field, value)}
-                onResetLimits={() => setSelectedFixtureLimitsDraft(defaultFixtureLimits)}
-                onApplyLimits={setFixtureLimits}
-                onMovementLimitPointerDown={startMovementLimitDrag}
-                onMovementLimitPointerMove={dragMovementLimit}
-                onMovementLimitPointerEnd={endMovementLimitDrag}
-                onSetTransform={setFixtureTransform}
-                onLayoutFixtures={layoutFixturePositions}
-              />
-            )}
-          </Show>
-          <div class="mappingVisualizer visualizer">
-            <div class="panelHeader">
-              <h2>2D Mapping</h2>
-              <span>{mappingFilteredFixtures().length} fixture(s) / {snapshot().video.outputs.length} projector(s)</span>
-            </div>
-            <MappingFilterStrips
-              fixtureCount={snapshot().fixtures.length}
-              filteredFixtureCount={filteredFixtures().length}
-              selectedGroupId={selectedFixtureGroupFilter()}
-              groupRows={fixtureGroupRows()}
-              selectedTypeKey={selectedFixtureTypeFilter()}
-              fixtureTypeRows={fixtureTypeRows()}
-              onSelectGroup={selectFixtureGroupFilter}
-              onSelectType={setSelectedFixtureTypeFilter}
-            />
-            <div class="mappingStageShell">
-              <MappingToolRail
-                stageTool={mappingStageTool()}
-                showLabels={mappingShowLabels()}
-                showBeams={mappingShowBeams()}
-                showGeometry={mappingShowGeometry()}
-                showProjectors={mappingShowProjectors()}
-                showStageObjects={mappingShowStageObjects()}
-                showLevels={mappingShowLevels()}
-                helpOpen={mappingHotkeyHelpOpen()}
-                onStageTool={setMappingStageTool}
-                onToggleLabels={() => setMappingShowLabels((value) => !value)}
-                onToggleBeams={() => setMappingShowBeams((value) => !value)}
-                onToggleGeometry={() => setMappingShowGeometry((value) => !value)}
-                onToggleProjectors={() => setMappingShowProjectors((value) => !value)}
-                onToggleStageObjects={() => setMappingShowStageObjects((value) => !value)}
-                onToggleLevels={() => setMappingShowLevels((value) => !value)}
-                onToggleHelp={() => setMappingHotkeyHelpOpen((open) => !open)}
-              />
-              <div class="mappingStageViewport">
-                <MappingViewportControls
-                  stageTool={mappingStageTool()}
-                  fixtureCount={mappingFilteredFixtures().length}
-                  outputCount={snapshot().video.outputs.length}
-                  objectCount={snapshot().stage_objects.length}
-                  cursorReadout={
-                    mappingStageCursorWorld()
-                      ? `${mappingStageCursorLabel()} / ${mappingStageTool().toUpperCase()}`
-                      : null
-                  }
-                  canFitVisible={canFitMappingViewportToVisible()}
-                  canFitSelection={canFitMappingViewportToSelection()}
-                  zoomLabel={mappingViewportZoomLabel()}
-                  canZoomOut={normalizedMappingViewportZoom() > 1.001}
-                  canZoomIn={normalizedMappingViewportZoom() < 3.999}
-                  canResetZoom={normalizedMappingViewportZoom() > 1.001}
-                  snapEnabled={mappingSnapEnabled()}
-                  snapSize={normalizedMappingSnapSize()}
-                  showLabels={mappingShowLabels()}
-                  showBeams={mappingShowBeams()}
-                  showGeometry={mappingShowGeometry()}
-                  showProjectors={mappingShowProjectors()}
-                  showStageObjects={mappingShowStageObjects()}
-                  showLevels={mappingShowLevels()}
-                  onFitVisible={fitMappingViewportToVisible}
-                  onFitSelection={fitMappingViewportToSelection}
-                  onZoomOut={() => zoomMappingViewport(-1)}
-                  onZoomIn={() => zoomMappingViewport(1)}
-                  onResetZoom={resetMappingViewport}
-                  onSnapOff={() => setMappingSnapEnabled(false)}
-                  onSnapPreset={(preset) => {
-                    setMappingSnapSize(preset);
-                    setMappingSnapEnabled(true);
-                  }}
-                  onSnapSizeChange={(size) => {
-                    setMappingSnapSize(size);
-                    setMappingSnapEnabled(true);
-                  }}
-                  onShowLabels={setMappingShowLabels}
-                  onShowBeams={setMappingShowBeams}
-                  onShowGeometry={setMappingShowGeometry}
-                  onShowProjectors={setMappingShowProjectors}
-                  onShowStageObjects={setMappingShowStageObjects}
-                  onShowLevels={setMappingShowLevels}
-                />
-                <MappingStageConfigPanel
-                  stageMap={snapshot().stage_map}
-                  stageWorldBounds={stageWorldBounds()}
-                  stageMapPresetLabel={stageMapPresetLabel()}
-                  selectedStageMapPresetLabel={selectedStageMapPresetLabel()}
-                  stageMapPresets={snapshot().stage_map_presets}
-                  mappingViewPresetLabel={mappingViewPresetLabel()}
-                  selectedMappingViewPresetId={selectedMappingViewPresetId()}
-                  mappingViewPresets={mappingViewPresets()}
-                  stageMapPresetLabelFor={stageMapPresetObjectCountLabel}
-                  mappingViewPresetLabelFor={mappingViewPresetObjectLabel}
-                  onLockToCurrentBounds={lockStageMapToCurrentBounds}
-                  onSetStageMapConfig={setStageMapConfig}
-                  onStageMapPresetLabel={setStageMapPresetLabel}
-                  onSelectedStageMapPresetLabel={setSelectedStageMapPresetLabel}
-                  onSaveStageMapPreset={saveStageMapPreset}
-                  onExportStageMapPreset={exportStageMapPreset}
-                  onImportStageMapPreset={importStageMapPreset}
-                  onApplyStageMapPreset={applyStageMapPreset}
-                  onRemoveStageMapPreset={removeStageMapPreset}
-                  onMappingViewPresetLabel={setMappingViewPresetLabel}
-                  onSelectedMappingViewPresetId={setSelectedMappingViewPresetId}
-                  onSaveMappingViewPreset={saveMappingViewPreset}
-                  onApplyMappingViewPreset={applyMappingViewPreset}
-                  onRemoveMappingViewPreset={removeMappingViewPreset}
-                  onExportMappingStageSvg={exportMappingStageSvg}
-                  onExportVisualizerRenderPayload={exportVisualizerRenderPayload}
-                />
-                <MappingEditableStageShell
-                  svgRef={(element) => {
-                    mappingStageSvgElement = element;
-                  }}
-                  dragging={Boolean(mappingDrag() || mappingViewportPanDrag())}
-                  stageTool={mappingStageTool()}
-                  viewBox={mappingStageViewBox()}
-                  stageOrigin={stageOrigin2d()}
-                  cursorPoint={mappingStageCursorSvgPoint()}
-                  cursorLabel={mappingStageCursorLabel()}
-                  snapEnabled={mappingSnapEnabled()}
-                  snapLines={mappingSnapLines()}
-                  marqueeBox={mappingMarqueeBox()}
-                  onPointerDown={handleMappingStagePointerDown}
-                  onPointerMove={handleMappingStagePointerMove}
-                  onPointerUp={finishMappingStageDrag}
-                  onPointerLeave={() => setMappingStageCursorWorld(null)}
-                  onWheel={handleMappingStageWheel}
-                >
-                  <MappingStageLayersPanel
-                    showStageObjects={mappingShowStageObjects()}
-                    showProjectors={mappingShowProjectors()}
-                    showBeams={mappingShowBeams()}
-                    showGeometry={mappingShowGeometry()}
-                    showLabels={mappingShowLabels()}
-                    showLevels={mappingShowLevels()}
-                    stageTool={mappingStageTool()}
-                    stageObjects={visualizerStageObjects2d()}
-                    videoSurfaces={visualizerVideoSurfaces2d()}
-                    beamFixtures={visualizerFixtures()}
-                    geometryNodes={mappingGeometryNodes2d()}
-                    fixtures={visualizerFixtures()}
-                    selectedFixtureIds={selectedMappingFixtureIdSet()}
-                    selectedFixtureId={selectedFixtureId()}
-                    selectedGroupId={selectedFixtureGroupFilter()}
-                    selectedTypeKey={selectedFixtureTypeFilter()}
-                    selectedVideoOutputId={selectedVideoOutputId()}
-                    placePreview={mappingPlacePreview()}
-                    isDraggingStageObject={isDraggingMappingStageObject}
-                    isDraggingVideoOutput={isDraggingMappingVideoOutput}
-                    isDraggingFixture={isDraggingMappingFixture}
-                    isYawDragging={(fixtureId) => {
-                      const drag = mappingDrag();
-                      return drag?.kind === "fixtureYaw" && drag.fixtureId === fixtureId;
-                    }}
-                    surfaceMapping={(surface) => {
-                      const output = snapshot().video.outputs.find((candidate) => candidate.id === surface.id);
-                      return output ? mappingVideoOutputMapping(output) : defaultVideoOutputMapping;
-                    }}
-                    cornerLocals={mappingVideoSurfaceCornerLocals}
-                    cornerPointList={mappingVideoSurfaceCornerPointList}
-                    onBeginStageObjectDrag={beginMappingStageObjectDrag}
-                    onBeginStageObjectRotate={beginMappingStageObjectRotate}
-                    onBeginStageObjectResize={beginMappingStageObjectResize}
-                    onSelectVideoOutput={setSelectedVideoOutputId}
-                    onBeginVideoOutputDrag={beginMappingVideoOutputDrag}
-                    onBeginVideoOutputCornerDrag={beginMappingVideoOutputCornerDrag}
-                    onBeginVideoOutputRotate={beginMappingVideoOutputRotate}
-                    onBeginVideoOutputScale={beginMappingVideoOutputScale}
-                    onBeginFixtureYawDrag={beginMappingFixtureYawDrag}
-                    onFixturePointerDown={(event, fixtureId) => {
-                      if (mappingStageTool() === "pan") {
-                        return;
-                      }
-                      event.stopPropagation();
-                      const patchedFixture = snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
-                      if (patchedFixture && mappingStageTool() === "rotate") {
-                        selectMappingFixture(patchedFixture, event);
-                      }
-                      beginMappingFixtureDrag(event, fixtureId);
-                    }}
-                  />
-                </MappingEditableStageShell>
-              </div>
-              <MappingSelectionSidebarPanel
-                selectedFixtureCount={selectedMappingFixtures().length}
-                filteredFixtureCount={mappingFilteredFixtures().length}
-                fixtureSearch={mappingFixtureSearch()}
-                groupText={mappingSelectionGroupText()}
-                groupTokenCount={parseGroupIds(mappingSelectionGroupText()).length}
-                stageObjects={snapshot().stage_objects}
-                stageObjectFixtureCounts={stageObjectFixtureCounts()}
-                selectedStageObject={selectedStageObject()}
-                selectedStageObjectId={selectedStageObjectId()}
-                stageObjectDraftLabel={stageObjectLabel()}
-                stageObjectDraftKind={stageObjectKind()}
-                stageObjectDraftWidth={stageObjectWidth()}
-                stageObjectDraftDepth={stageObjectDepth()}
-                stageObjectDraftRotation={stageObjectRotation()}
-                stageObjectDraftColor={stageObjectColor()}
-                flagState={selectedMappingFlagState()}
-                snapSize={normalizedMappingSnapSize()}
-                selectedFixture={selectedMappingFixture()}
-                selectedGeometryRows={selectedMappingGeometryRows()}
-                unresolvedGeometryReferences={selectedMappingUnresolvedGeometryReferences()}
-                filteredFixtures={mappingFilteredFixtures()}
-                selectedFixtureIds={selectedMappingFixtureIdSet()}
-                outputs={snapshot().video.outputs}
-                selectedOutput={selectedMappingVideoOutput()}
-                selectedOutputId={selectedVideoOutputId()}
-                onSearch={setMappingFixtureSearch}
-                onGroupText={setMappingSelectionGroupText}
-                onPickVisible={pickVisibleMappingFixtures}
-                onDuplicateSelected={duplicateSelectedMappingFixtures}
-                onRemoveSelected={removeSelectedMappingFixtures}
-                onClearSelection={clearMappingFixtureSelection}
-                onApplyGroups={applyMappingSelectionGroups}
-                onStageObjectDraftLabel={setStageObjectLabel}
-                onStageObjectDraftKind={setStageObjectKind}
-                onStageObjectDraftWidth={setStageObjectWidth}
-                onStageObjectDraftDepth={setStageObjectDepth}
-                onStageObjectDraftRotation={setStageObjectRotation}
-                onStageObjectDraftColor={setStageObjectColor}
-                onAddStageObjectCenter={addStageObjectAtCenter}
-                onSelectStageObject={setSelectedStageObjectId}
-                onSetStageObject={setStageObject}
-                onRemoveStageObject={removeStageObject}
-                onPickInsideStageObject={pickFixturesInsideSelectedStageObject}
-                onLayoutOnStageObject={layoutSelectedFixturesOnStageObject}
-                onSetSelectionFlag={setMappingSelectionFlag}
-                onNudgeSelection={nudgeSelectedMappingFixtures}
-                onLayoutSelection={layoutSelectedMappingFixtures}
-                onAlignSelection={alignSelectedMappingFixtures}
-                onDistributeSelection={distributeSelectedMappingFixtures}
-                onMirrorSelection={mirrorSelectedMappingFixtures}
-                onRotateSelection={rotateSelectedMappingFixtures}
-                onControlActive={() => setWorkspaceTab("control")}
-                onUseSelectionAsEffectTarget={useMappingSelectionAsEffectTarget}
-                onUseSelectionAsWaveEffectTarget={useMappingSelectionAsWaveEffectTarget}
-                onSetFixtureTransform={setFixtureTransform}
-                onSetFixtureHighlight={setFixtureHighlight}
-                onSetFixtureSolo={setFixtureSolo}
-                onSetFixturePark={setFixturePark}
-                onControlFixture={() => setWorkspaceTab("control")}
-                onPatchFixture={() => selectSetupMode("patch")}
-                onSelectFixture={selectMappingFixture}
-                onSelectOutput={setSelectedVideoOutputId}
-                onSetOutputEnabled={setVideoOutputEnabled}
-                onSetOutputBlackout={setVideoOutputBlackout}
-                onOpenOutputWindow={openVideoOutputWindow}
-                onSyncOutputWindow={syncVideoOutputWindow}
-                onFitOutputToStageObject={fitVideoOutputToStageObject}
-                onSetOutputMapping={setVideoOutputMapping}
-              />
-              <Show when={mappingHotkeyHelpOpen()}>
-                <MappingHotkeyHelp onClose={() => setMappingHotkeyHelpOpen(false)} />
-              </Show>
-            </div>
-          </div>
-        </section>
+        <SetupMappingWorkspace
+          className={setupPanelClass("panel fixtures setupPanel", ["patch", "mapping"])}
+          panelRef={registerSetupPanel(["patch"])}
+          fixtureList={{
+            fixtures: filteredFixtures(),
+            totalFixtureCount: snapshot().fixtures.length,
+            selectedGroupId: selectedFixtureGroupFilter(),
+            groupRows: fixtureGroupRows(),
+            selectedFixtureId: selectedFixtureId(),
+            onSelectGroup: selectFixtureGroupFilter,
+            onSelectFixture: selectFixture,
+          }}
+          patchMap={{
+            activeUniverse: activePatchGridUniverse(),
+            universeOptions: patchGridUniverseOptions(),
+            viewMode: dmxPatchViewMode(),
+            nextFreeAddress: nextFreePatchAddress(),
+            activeMap: activePatchGridMap(),
+            addressCells: dmxAddressCells(),
+            universeMaps: dmxUniverseMaps(),
+            fixtureCount: snapshot().fixtures.length,
+            selectedFixtureId: selectedFixtureId(),
+            plannedAddressSummary: plannedAddressSummary(),
+            onNextFreeAddress: selectNextFreePatchAddress,
+            onUniverse: setPatchGridUniverse,
+            onViewMode: setDmxPatchViewMode,
+            onSelectFixture: selectFixture,
+            onAddressCell: handleDmxAddressCellClick,
+          }}
+          fixtureEditor={selectedFixture() ? {
+            fixture: selectedFixture()!,
+            labelDraft: selectedFixtureLabelDraft(),
+            universeDraft: selectedFixtureUniverseDraft(),
+            addressDraft: selectedFixtureAddressDraft(),
+            groupText: selectedFixtureGroupText(),
+            limitsDraft: selectedFixtureLimitsDraft(),
+            normalizedLimits: normalizedSelectedFixtureLimitsDraft(),
+            limitWindowStyle: selectedFixtureLimitWindowStyle(),
+            movementLimitDragging: Boolean(movementLimitDrag()),
+            filteredFixtureCount: filteredFixtures().length,
+            formatDmxPercent,
+            onUseProfileForPatch: useFixtureProfileForPatch,
+            onDuplicateFixture: duplicateFixture,
+            onLabelDraft: setSelectedFixtureLabelDraft,
+            onUniverseDraft: setSelectedFixtureUniverseDraft,
+            onAddressDraft: setSelectedFixtureAddressDraft,
+            onApplyPatch: setFixturePatch,
+            onGroupText: setSelectedFixtureGroupText,
+            onApplyGroups: setFixtureGroups,
+            onUpdateNumericLimit: (field, value) => updateSelectedFixtureLimit(field, value),
+            onUpdateToggleLimit: (field, value) => updateSelectedFixtureLimit(field, value),
+            onResetLimits: () => setSelectedFixtureLimitsDraft(defaultFixtureLimits),
+            onApplyLimits: setFixtureLimits,
+            onMovementLimitPointerDown: startMovementLimitDrag,
+            onMovementLimitPointerMove: dragMovementLimit,
+            onMovementLimitPointerEnd: endMovementLimitDrag,
+            onSetTransform: setFixtureTransform,
+            onLayoutFixtures: layoutFixturePositions,
+          } : null}
+          fixtureCount={mappingFilteredFixtures().length}
+          projectorCount={snapshot().video.outputs.length}
+          filters={{
+            fixtureCount: snapshot().fixtures.length,
+            filteredFixtureCount: filteredFixtures().length,
+            selectedGroupId: selectedFixtureGroupFilter(),
+            groupRows: fixtureGroupRows(),
+            selectedTypeKey: selectedFixtureTypeFilter(),
+            fixtureTypeRows: fixtureTypeRows(),
+            onSelectGroup: selectFixtureGroupFilter,
+            onSelectType: setSelectedFixtureTypeFilter,
+          }}
+          toolRail={{
+            stageTool: mappingStageTool(),
+            showLabels: mappingShowLabels(),
+            showBeams: mappingShowBeams(),
+            showGeometry: mappingShowGeometry(),
+            showProjectors: mappingShowProjectors(),
+            showStageObjects: mappingShowStageObjects(),
+            showLevels: mappingShowLevels(),
+            helpOpen: mappingHotkeyHelpOpen(),
+            onStageTool: setMappingStageTool,
+            onToggleLabels: () => setMappingShowLabels((value) => !value),
+            onToggleBeams: () => setMappingShowBeams((value) => !value),
+            onToggleGeometry: () => setMappingShowGeometry((value) => !value),
+            onToggleProjectors: () => setMappingShowProjectors((value) => !value),
+            onToggleStageObjects: () => setMappingShowStageObjects((value) => !value),
+            onToggleLevels: () => setMappingShowLevels((value) => !value),
+            onToggleHelp: () => setMappingHotkeyHelpOpen((open) => !open),
+          }}
+          viewportControls={{
+            stageTool: mappingStageTool(),
+            fixtureCount: mappingFilteredFixtures().length,
+            outputCount: snapshot().video.outputs.length,
+            objectCount: snapshot().stage_objects.length,
+            cursorReadout: mappingStageCursorWorld()
+              ? `${mappingStageCursorLabel()} / ${mappingStageTool().toUpperCase()}`
+              : null,
+            canFitVisible: canFitMappingViewportToVisible(),
+            canFitSelection: canFitMappingViewportToSelection(),
+            zoomLabel: mappingViewportZoomLabel(),
+            canZoomOut: normalizedMappingViewportZoom() > 1.001,
+            canZoomIn: normalizedMappingViewportZoom() < 3.999,
+            canResetZoom: normalizedMappingViewportZoom() > 1.001,
+            snapEnabled: mappingSnapEnabled(),
+            snapSize: normalizedMappingSnapSize(),
+            showLabels: mappingShowLabels(),
+            showBeams: mappingShowBeams(),
+            showGeometry: mappingShowGeometry(),
+            showProjectors: mappingShowProjectors(),
+            showStageObjects: mappingShowStageObjects(),
+            showLevels: mappingShowLevels(),
+            onFitVisible: fitMappingViewportToVisible,
+            onFitSelection: fitMappingViewportToSelection,
+            onZoomOut: () => zoomMappingViewport(-1),
+            onZoomIn: () => zoomMappingViewport(1),
+            onResetZoom: resetMappingViewport,
+            onSnapOff: () => setMappingSnapEnabled(false),
+            onSnapPreset: (preset) => {
+              setMappingSnapSize(preset);
+              setMappingSnapEnabled(true);
+            },
+            onSnapSizeChange: (size) => {
+              setMappingSnapSize(size);
+              setMappingSnapEnabled(true);
+            },
+            onShowLabels: setMappingShowLabels,
+            onShowBeams: setMappingShowBeams,
+            onShowGeometry: setMappingShowGeometry,
+            onShowProjectors: setMappingShowProjectors,
+            onShowStageObjects: setMappingShowStageObjects,
+            onShowLevels: setMappingShowLevels,
+          }}
+          stageConfig={{
+            stageMap: snapshot().stage_map,
+            stageWorldBounds: stageWorldBounds(),
+            stageMapPresetLabel: stageMapPresetLabel(),
+            selectedStageMapPresetLabel: selectedStageMapPresetLabel(),
+            stageMapPresets: snapshot().stage_map_presets,
+            mappingViewPresetLabel: mappingViewPresetLabel(),
+            selectedMappingViewPresetId: selectedMappingViewPresetId(),
+            mappingViewPresets: mappingViewPresets(),
+            stageMapPresetLabelFor: stageMapPresetObjectCountLabel,
+            mappingViewPresetLabelFor: mappingViewPresetObjectLabel,
+            onLockToCurrentBounds: lockStageMapToCurrentBounds,
+            onSetStageMapConfig: setStageMapConfig,
+            onStageMapPresetLabel: setStageMapPresetLabel,
+            onSelectedStageMapPresetLabel: setSelectedStageMapPresetLabel,
+            onSaveStageMapPreset: saveStageMapPreset,
+            onExportStageMapPreset: exportStageMapPreset,
+            onImportStageMapPreset: importStageMapPreset,
+            onApplyStageMapPreset: applyStageMapPreset,
+            onRemoveStageMapPreset: removeStageMapPreset,
+            onMappingViewPresetLabel: setMappingViewPresetLabel,
+            onSelectedMappingViewPresetId: setSelectedMappingViewPresetId,
+            onSaveMappingViewPreset: saveMappingViewPreset,
+            onApplyMappingViewPreset: applyMappingViewPreset,
+            onRemoveMappingViewPreset: removeMappingViewPreset,
+            onExportMappingStageSvg: exportMappingStageSvg,
+            onExportVisualizerRenderPayload: exportVisualizerRenderPayload,
+          }}
+          editableStage={{
+            svgRef: (element) => { mappingStageSvgElement = element; },
+            dragging: Boolean(mappingDrag() || mappingViewportPanDrag()),
+            stageTool: mappingStageTool(),
+            viewBox: mappingStageViewBox(),
+            stageOrigin: stageOrigin2d(),
+            cursorPoint: mappingStageCursorSvgPoint(),
+            cursorLabel: mappingStageCursorLabel(),
+            snapEnabled: mappingSnapEnabled(),
+            snapLines: mappingSnapLines(),
+            marqueeBox: mappingMarqueeBox(),
+            onPointerDown: handleMappingStagePointerDown,
+            onPointerMove: handleMappingStagePointerMove,
+            onPointerUp: finishMappingStageDrag,
+            onPointerLeave: () => setMappingStageCursorWorld(null),
+            onWheel: handleMappingStageWheel,
+          }}
+          stageLayers={{
+            showStageObjects: mappingShowStageObjects(),
+            showProjectors: mappingShowProjectors(),
+            showBeams: mappingShowBeams(),
+            showGeometry: mappingShowGeometry(),
+            showLabels: mappingShowLabels(),
+            showLevels: mappingShowLevels(),
+            stageTool: mappingStageTool(),
+            stageObjects: visualizerStageObjects2d(),
+            videoSurfaces: visualizerVideoSurfaces2d(),
+            beamFixtures: visualizerFixtures(),
+            geometryNodes: mappingGeometryNodes2d(),
+            fixtures: visualizerFixtures(),
+            selectedFixtureIds: selectedMappingFixtureIdSet(),
+            selectedFixtureId: selectedFixtureId(),
+            selectedGroupId: selectedFixtureGroupFilter(),
+            selectedTypeKey: selectedFixtureTypeFilter(),
+            selectedVideoOutputId: selectedVideoOutputId(),
+            placePreview: mappingPlacePreview(),
+            isDraggingStageObject: isDraggingMappingStageObject,
+            isDraggingVideoOutput: isDraggingMappingVideoOutput,
+            isDraggingFixture: isDraggingMappingFixture,
+            isYawDragging: (fixtureId) => {
+              const drag = mappingDrag();
+              return drag?.kind === "fixtureYaw" && drag.fixtureId === fixtureId;
+            },
+            surfaceMapping: (surface) => {
+              const output = snapshot().video.outputs.find((candidate) => candidate.id === surface.id);
+              return output ? mappingVideoOutputMapping(output) : defaultVideoOutputMapping;
+            },
+            cornerLocals: mappingVideoSurfaceCornerLocals,
+            cornerPointList: mappingVideoSurfaceCornerPointList,
+            onBeginStageObjectDrag: beginMappingStageObjectDrag,
+            onBeginStageObjectRotate: beginMappingStageObjectRotate,
+            onBeginStageObjectResize: beginMappingStageObjectResize,
+            onSelectVideoOutput: setSelectedVideoOutputId,
+            onBeginVideoOutputDrag: beginMappingVideoOutputDrag,
+            onBeginVideoOutputCornerDrag: beginMappingVideoOutputCornerDrag,
+            onBeginVideoOutputRotate: beginMappingVideoOutputRotate,
+            onBeginVideoOutputScale: beginMappingVideoOutputScale,
+            onBeginFixtureYawDrag: beginMappingFixtureYawDrag,
+            onFixturePointerDown: (event, fixtureId) => {
+              if (mappingStageTool() === "pan") return;
+              event.stopPropagation();
+              const fixture = snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
+              if (fixture && mappingStageTool() === "rotate") selectMappingFixture(fixture, event);
+              beginMappingFixtureDrag(event, fixtureId);
+            },
+          }}
+          selectionSidebar={{
+            selectedFixtureCount: selectedMappingFixtures().length,
+            filteredFixtureCount: mappingFilteredFixtures().length,
+            fixtureSearch: mappingFixtureSearch(),
+            groupText: mappingSelectionGroupText(),
+            groupTokenCount: parseGroupIds(mappingSelectionGroupText()).length,
+            stageObjects: snapshot().stage_objects,
+            stageObjectFixtureCounts: stageObjectFixtureCounts(),
+            selectedStageObject: selectedStageObject(),
+            selectedStageObjectId: selectedStageObjectId(),
+            stageObjectDraftLabel: stageObjectLabel(),
+            stageObjectDraftKind: stageObjectKind(),
+            stageObjectDraftWidth: stageObjectWidth(),
+            stageObjectDraftDepth: stageObjectDepth(),
+            stageObjectDraftRotation: stageObjectRotation(),
+            stageObjectDraftColor: stageObjectColor(),
+            flagState: selectedMappingFlagState(),
+            snapSize: normalizedMappingSnapSize(),
+            selectedFixture: selectedMappingFixture(),
+            selectedGeometryRows: selectedMappingGeometryRows(),
+            unresolvedGeometryReferences: selectedMappingUnresolvedGeometryReferences(),
+            filteredFixtures: mappingFilteredFixtures(),
+            selectedFixtureIds: selectedMappingFixtureIdSet(),
+            outputs: snapshot().video.outputs,
+            selectedOutput: selectedMappingVideoOutput(),
+            selectedOutputId: selectedVideoOutputId(),
+            onSearch: setMappingFixtureSearch,
+            onGroupText: setMappingSelectionGroupText,
+            onPickVisible: pickVisibleMappingFixtures,
+            onDuplicateSelected: duplicateSelectedMappingFixtures,
+            onRemoveSelected: removeSelectedMappingFixtures,
+            onClearSelection: clearMappingFixtureSelection,
+            onApplyGroups: applyMappingSelectionGroups,
+            onStageObjectDraftLabel: setStageObjectLabel,
+            onStageObjectDraftKind: setStageObjectKind,
+            onStageObjectDraftWidth: setStageObjectWidth,
+            onStageObjectDraftDepth: setStageObjectDepth,
+            onStageObjectDraftRotation: setStageObjectRotation,
+            onStageObjectDraftColor: setStageObjectColor,
+            onAddStageObjectCenter: addStageObjectAtCenter,
+            onSelectStageObject: setSelectedStageObjectId,
+            onSetStageObject: setStageObject,
+            onRemoveStageObject: removeStageObject,
+            onPickInsideStageObject: pickFixturesInsideSelectedStageObject,
+            onLayoutOnStageObject: layoutSelectedFixturesOnStageObject,
+            onSetSelectionFlag: setMappingSelectionFlag,
+            onNudgeSelection: nudgeSelectedMappingFixtures,
+            onLayoutSelection: layoutSelectedMappingFixtures,
+            onAlignSelection: alignSelectedMappingFixtures,
+            onDistributeSelection: distributeSelectedMappingFixtures,
+            onMirrorSelection: mirrorSelectedMappingFixtures,
+            onRotateSelection: rotateSelectedMappingFixtures,
+            onControlActive: () => setWorkspaceTab("control"),
+            onUseSelectionAsEffectTarget: useMappingSelectionAsEffectTarget,
+            onUseSelectionAsWaveEffectTarget: useMappingSelectionAsWaveEffectTarget,
+            onSetFixtureTransform: setFixtureTransform,
+            onSetFixtureHighlight: setFixtureHighlight,
+            onSetFixtureSolo: setFixtureSolo,
+            onSetFixturePark: setFixturePark,
+            onControlFixture: () => setWorkspaceTab("control"),
+            onPatchFixture: () => selectSetupMode("patch"),
+            onSelectFixture: selectMappingFixture,
+            onSelectOutput: setSelectedVideoOutputId,
+            onSetOutputEnabled: setVideoOutputEnabled,
+            onSetOutputBlackout: setVideoOutputBlackout,
+            onOpenOutputWindow: openVideoOutputWindow,
+            onSyncOutputWindow: syncVideoOutputWindow,
+            onFitOutputToStageObject: fitVideoOutputToStageObject,
+            onSetOutputMapping: setVideoOutputMapping,
+          }}
+          hotkeyHelpOpen={mappingHotkeyHelpOpen()}
+          onCloseHotkeyHelp={() => setMappingHotkeyHelpOpen(false)}
+        />
 
         <SetupVideoPanel
           className={setupPanelClass("panel videoSetupPanel setupPanel", ["mapping", "output"])}
