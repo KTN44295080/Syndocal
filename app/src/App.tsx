@@ -152,6 +152,7 @@ import type {
   VisualizerRenderPayload,
 } from "./types";
 import { videoFrameToDataUrl } from "./videoFrameCanvas";
+import { browserViewportFixture, viewportFixtureData, viewportPatchedFixture } from "./viewportFixtureData";
 import { defaultColorAdjust, defaultFxAdjust, defaultTransform } from "./videoLayerDefaults";
 import {
   colorQuickLooks,
@@ -372,13 +373,6 @@ const listen = <T,>(event: string, handler: (event: { payload: T }) => void) => 
   return tauriListen<T>(event, handler);
 };
 
-const browserViewportFixture = () => {
-  if (isTauriRuntime() || typeof window === "undefined") {
-    return "";
-  }
-  return new URLSearchParams(window.location.search).get("rayardViewportFixture") ?? "";
-};
-
 const isRayardProjectPath = (path: string) => path.trim().toLowerCase().endsWith(".ry");
 
 const profileLoadMessage = (prefix: string, profile: FixtureProfileSummary) => {
@@ -435,203 +429,6 @@ const enttecUsbProBaudRate = 57_600;
 const enttecOpenDmxBaudRate = 250_000;
 const defaultCustomAttributesText = "Dimmer@1:8, Pan@2:16, Tilt@4:16, ColorRed@6:8, ColorGreen@7:8, ColorBlue@8:8";
 
-const viewportFixtureControls: AttributeControl[] = [
-  {
-    attribute: "Dimmer",
-    channel_name: "Dimmer",
-    offsets: [1],
-    resolution: "EightBit",
-    default_value: 0,
-    functions: [],
-  },
-  {
-    attribute: "Pan",
-    channel_name: "Pan",
-    offsets: [2, 3],
-    resolution: "SixteenBit",
-    default_value: 32_768,
-    functions: [],
-  },
-  {
-    attribute: "Tilt",
-    channel_name: "Tilt",
-    offsets: [4, 5],
-    resolution: "SixteenBit",
-    default_value: 32_768,
-    functions: [],
-  },
-  {
-    attribute: "ColorRed",
-    channel_name: "Red",
-    offsets: [6],
-    resolution: "EightBit",
-    default_value: 0,
-    functions: [],
-  },
-  {
-    attribute: "ColorGreen",
-    channel_name: "Green",
-    offsets: [7],
-    resolution: "EightBit",
-    default_value: 0,
-    functions: [],
-  },
-  {
-    attribute: "ColorBlue",
-    channel_name: "Blue",
-    offsets: [8],
-    resolution: "EightBit",
-    default_value: 0,
-    functions: [],
-  },
-];
-
-const viewportFixtureProfile: FixtureProfileSummary = {
-  source_path: "viewport://rayard-mini-par",
-  manufacturer: "Rayard",
-  name: "Viewport Mini Par",
-  short_name: "Viewport Par",
-  fixture_type_id: "viewport-mini-par",
-  dmx_modes: [
-    {
-      name: "Dimmer Pan Tilt RGB",
-      controls: viewportFixtureControls,
-    },
-  ],
-  geometries: [],
-  warnings: [],
-};
-
-const viewportPatchedFixture = (
-  id: number,
-  label: string,
-  address: number,
-  x: number,
-  z: number,
-): PatchedFixtureSummary => ({
-  id,
-  label,
-  profile_source_path: "viewport://rayard-mini-par",
-  profile_name: "Viewport Mini Par",
-  manufacturer: "Rayard",
-  mode_name: "Dimmer Pan Tilt RGB",
-  universe: 0,
-  address,
-  group_ids: ["front"],
-  position: { x, y: 3, z },
-  rotation: { pitch: 0, yaw: 0, roll: 0 },
-  geometries: [],
-  controls: viewportFixtureControls,
-  attribute_values: [
-    { attribute: "Dimmer", value: 0 },
-    { attribute: "Pan", value: 32_768 },
-    { attribute: "Tilt", value: 32_768 },
-    { attribute: "ColorRed", value: 65_535 },
-    { attribute: "ColorGreen", value: 0 },
-    { attribute: "ColorBlue", value: 0 },
-  ],
-  limits: defaultFixtureLimits,
-  highlighted: false,
-  soloed: false,
-  parked: false,
-});
-
-const viewportProjectorMapping: VideoOutputMapping = {
-  ...defaultVideoOutputMapping,
-  stage_x: 0,
-  stage_y: 2.8,
-  stage_z: 3.2,
-  offset_x: 0.08,
-  offset_y: -0.04,
-  scale_x: 1.06,
-  scale_y: 0.94,
-  aspect_ratio: 16 / 9,
-  aspect_mode: "Fit",
-  lens_distortion: -0.05,
-  keystone_x: 0.12,
-  keystone_y: -0.08,
-  corner_top_left_x: -0.04,
-  corner_top_right_y: 0.05,
-  corner_bottom_right_x: 0.03,
-  corner_bottom_left_y: -0.04,
-};
-
-const viewportVideoLayer: VideoLayerSummary = {
-  id: 1,
-  label: "Viewport Visual",
-  source: {
-    kind: "StillImage",
-    path: "viewport://visual.png",
-    name: "Viewport Visual",
-    codec: "RGBA",
-    metadata: {
-      duration_ms: 4000,
-      width: 1920,
-      height: 1080,
-      frame_rate: 60,
-    },
-  },
-  blend_mode: "Add",
-  state: {
-    enabled: true,
-    solo: false,
-    opacity: 0.72,
-    speed: 1,
-    playing: true,
-    position_ms: 1000,
-    loop_enabled: true,
-    loop_start_ms: 0,
-    loop_end_ms: 4000,
-    bpm_sync: {
-      enabled: true,
-      ratio: 1,
-      loop_bars: 1,
-    },
-    cue_points: [
-      { position_ms: 0, label: "Start", color: "#4aa8ff" },
-      { position_ms: 2000, label: "Drop", color: "#f2c14e" },
-    ],
-    cue_points_ms: [0, 2000],
-    transform: { ...defaultTransform },
-    color: { ...defaultColorAdjust },
-    fx: { ...defaultFxAdjust },
-  },
-};
-
-const viewportComposition: CompositionSummary = {
-  id: 1,
-  label: "Viewport Comp",
-  layer_ids: [1],
-  output_ids: [1],
-};
-
-const viewportVideoOutput: VideoOutputSummary = {
-  id: 1,
-  label: "Viewport Projector",
-  kind: "Display",
-  enabled: true,
-  composition_id: 1,
-  fullscreen: false,
-  monitor_id: 1,
-  width: 1920,
-  height: 1080,
-  endpoint_name: null,
-  opacity: 1,
-  blackout: false,
-  mapping: viewportProjectorMapping,
-};
-
-const viewportStageObject: StageObjectSummary = {
-  id: 1,
-  label: "Viewport Screen",
-  kind: "Screen",
-  x: 0,
-  z: 3.2,
-  width: 6.4,
-  depth: 3.6,
-  rotation_deg: 0,
-  color: "#2f6f9f",
-};
 
 const isSerialDmxProtocol = (protocol: DmxOutputConfig["protocol"]) =>
   protocol === "EnttecUsbPro" || protocol === "DmxKingUltraDmx" || protocol === "EnttecOpenDmx";
@@ -1359,12 +1156,12 @@ export default function App() {
       last_error: null,
     },
   });
-  if (browserViewportFixture() === "timeline") {
+  if (browserViewportFixture(isTauriRuntime()) === "timeline") {
     setWorkspaceTab("control");
     setSelectedFixtureGroupFilter("front");
-    setProfile(viewportFixtureProfile);
-    setGdtfPath(viewportFixtureProfile.source_path);
-    setSelectedMode(viewportFixtureProfile.dmx_modes[0]?.name ?? "");
+    setProfile(viewportFixtureData.profile);
+    setGdtfPath(viewportFixtureData.profile.source_path);
+    setSelectedMode(viewportFixtureData.profile.dmx_modes[0]?.name ?? "");
     setLabel("Viewport Par");
     setUniverse(0);
     setAddress(25);
@@ -1388,12 +1185,12 @@ export default function App() {
       submasters: [{ group_id: "front", label: "front", level: 1 }],
       video: {
         ...current.video,
-        layers: [viewportVideoLayer],
-        compositions: [viewportComposition],
-        outputs: [viewportVideoOutput],
-        mapping_presets: [{ label: "Viewport 16:9", mapping: viewportProjectorMapping }],
+        layers: [viewportFixtureData.videoLayer],
+        compositions: [viewportFixtureData.composition],
+        outputs: [viewportFixtureData.videoOutput],
+        mapping_presets: [{ label: "Viewport 16:9", mapping: viewportFixtureData.projectorMapping }],
       },
-      stage_objects: [viewportStageObject],
+      stage_objects: [viewportFixtureData.stageObject],
       timeline: {
         ...current.timeline,
         duration_ms: 4000,
