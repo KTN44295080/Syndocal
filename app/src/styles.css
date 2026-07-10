@@ -102,6 +102,16 @@ select {
   padding: 6px 8px;
 }
 
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a[href]:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible {
+  outline: 2px solid #f2c14e;
+  outline-offset: 2px;
+}
+
 label {
   display: grid;
   gap: 6px;
