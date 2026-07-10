@@ -35,6 +35,16 @@ export default defineConfig({
             return "video-setup-panels";
           }
           if (
+            normalizedId.includes("/src/components/VideoControlPanel") ||
+            normalizedId.includes("/src/components/VideoControlOutputsPanel") ||
+            normalizedId.includes("/src/components/VideoLayerListPanel") ||
+            normalizedId.includes("/src/components/VideoPreviewDiagnosticsPanel") ||
+            normalizedId.includes("/src/components/VideoRuntimeStatusPanels") ||
+            normalizedId.includes("/src/components/VideoSourceCreatePanel")
+          ) {
+            return "video-control-panels";
+          }
+          if (
             normalizedId.includes("/src/components/ProjectorMapEditor") ||
             normalizedId.includes("/src/components/VideoColorFxEditor") ||
             normalizedId.includes("/src/components/VideoCropEditor") ||

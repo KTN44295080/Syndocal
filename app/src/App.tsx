@@ -40,18 +40,9 @@ import { SetupFixtureEditorPanel } from "./components/SetupFixtureEditorPanel";
 import { SetupFixtureListPanel } from "./components/SetupFixtureListPanel";
 import { SetupVideoPanel } from "./components/SetupVideoPanel";
 import { StagePreview2D } from "./components/StagePreview2D";
+import { VideoControlPanel } from "./components/VideoControlPanel";
 import { VideoEffectTargetPanel } from "./components/VideoEffectTargetPanel";
-import { VideoLayerListPanel } from "./components/VideoLayerListPanel";
-import { VideoMasterControlsPanel, VideoOutputControlListPanel } from "./components/VideoControlOutputsPanel";
 import { readVideoOutputTestPattern, readVideoOutputWindowId, VideoOutputWindow } from "./components/VideoOutputWindow";
-import { VideoPreviewDiagnosticsPanel } from "./components/VideoPreviewDiagnosticsPanel";
-import {
-  ExternalVideoIoStatusPanel,
-  VideoBackendStatusPanel,
-  VideoOutputRenderPlanStatusPanel,
-} from "./components/VideoRuntimeStatusPanels";
-import { VideoPreviewImagePanel, VideoSourceCreatePanel } from "./components/VideoSourceCreatePanel";
-import { VideoTimelineAutomationPanel } from "./components/VideoTimelineAutomationPanel";
 import { TimelineCueEventsPanel } from "./components/TimelineCueEventsPanel";
 import { TimelineLightingAutomationPanel } from "./components/TimelineLightingAutomationPanel";
 import { TouchColorPalettePanel } from "./components/TouchColorPalettePanel";
@@ -13190,149 +13181,144 @@ export default function App() {
           onRemoveOutput={removeVideoOutput}
         />
 
-        <section class={`panel videoControlPanel controlPanel ${controlMode() === "mixer" ? "videoControlPanelMixer" : ""}`}>
-          <div class="panelHeader">
-            <h2>Video Control</h2>
-            <span>{snapshot().video.layers.length} layer(s)</span>
-          </div>
-          <div class="videoMixerDiagnostics">
-            <VideoPreviewDiagnosticsPanel
-              layerCount={snapshot().video.layers.length}
-              info={videoPreviewInfo()}
-              diagnosticsText={videoPreviewDiagnosticsText()}
-              layerDiagnostics={videoPreviewLayerDiagnostics()}
-              outputDecodePlans={videoPreviewOutputDecodePlans()}
-              onRenderPreview={renderDebugVideoPreview}
-              onRefreshDiagnostics={() => refreshVideoPreviewDiagnostics()}
-              layerClass={videoPreviewLayerDiagnosticClass}
-              layerLabel={videoPreviewLayerDiagnosticLabel}
-              outputClass={videoPreviewOutputDecodePlanClass}
-              outputLabel={videoPreviewOutputDecodePlanLabel}
-            />
-            <VideoOutputRenderPlanStatusPanel
-              summary={videoOutputRenderPlanSummary()}
-              checked={videoOutputRenderPlans() !== null}
-              rows={videoOutputRenderPlanRows()}
-              onRefresh={refreshVideoOutputRenderPlans}
-            />
-            <VideoBackendStatusPanel
-              summary={videoRuntimeBackendSummary()}
-              backends={videoRuntimeStatus()?.backends ?? null}
-              backendClass={videoRuntimeBackendClass}
-              onRefresh={refreshVideoRuntimeStatus}
-            />
-            <ExternalVideoIoStatusPanel
-              ioSummary={externalVideoIoPlanSummary()}
-              transportSummary={externalVideoTransportSummary()}
-              checked={externalVideoIoPlans() !== null}
-              planRows={externalVideoIoPlanRows()}
-              activeTransportRows={externalVideoTransportActiveRows()}
-              transportRows={externalVideoTransportRows()}
-              transportEventRows={externalVideoTransportEventRows()}
-              planClass={externalVideoIoPlanClass}
-              transportClass={externalVideoTransportClass}
-              onRefreshPlans={refreshExternalVideoIoPlans}
-              onSyncRoutes={syncExternalVideoTransports}
-            />
-          </div>
-          <VideoMasterControlsPanel
-            masterOpacity={snapshot().video.master_opacity}
-            blackout={snapshot().video.blackout}
-            onSetMasterOpacity={setVideoMasterOpacity}
-            onSetBlackout={setVideoBlackout}
-          />
-          <VideoOutputControlListPanel
-            outputs={snapshot().video.outputs}
-            compositions={snapshot().video.compositions}
-            selectedOutputId={selectedVideoOutputId()}
-            fadeMs={videoOutputFadeMs()}
-            windowSummary={videoOutputWindowSummary()}
-            onSelectOutput={setSelectedVideoOutputId}
-            onSetFadeMs={setVideoOutputFadeMs}
-            onRefreshWindows={refreshVideoOutputWindowStatuses}
-            onOpenAllWindows={openAllVideoOutputWindows}
-            onSyncOpenWindows={syncOpenVideoOutputWindows}
-            onCloseOpenWindows={closeOpenVideoOutputWindows}
-            renderPlanState={videoOutputRenderPlanState}
-            windowStatusForOutput={videoOutputWindowStatusForOutput}
-            windowState={videoOutputWindowState}
-            onSetOutputEnabled={setVideoOutputEnabled}
-            onSetOutputBlackout={setVideoOutputBlackout}
-            onFadeOutputOpacity={fadeVideoOutputOpacity}
-            onSetOutputOpacity={setVideoOutputOpacity}
-            onOpenOutputWindow={openVideoOutputWindow}
-            onSyncOutputWindow={syncVideoOutputWindow}
-            onCloseOutputWindow={closeVideoOutputWindow}
-          />
-          <VideoPreviewImagePanel previewUrl={videoPreviewUrl()} layerCount={snapshot().video.layers.length} />
-          <div class="videoMixerSetupTools">
-            <VideoSourceCreatePanel
-              sourceKind={videoSourceKind()}
-              label={videoLabel()}
-              path={videoPath()}
-              onSetSourceKind={setVideoSourceKind}
-              onSetLabel={setVideoLabel}
-              onSetPath={setVideoPath}
-              onBrowseSource={selectVideoSourceFile}
-              onAddLayer={addVideoLayer}
-            />
-          </div>
-          <VideoLayerListPanel
-            layers={snapshot().video.layers}
-            onSetLayerLabel={setVideoLayerLabel}
-            onMoveLayer={moveVideoLayer}
-            onDuplicateLayer={duplicateVideoLayer}
-            onRefreshMetadata={refreshVideoLayerMetadata}
-            onSetBlendMode={setVideoLayerBlendMode}
-            onSetLayerState={setVideoLayerState}
-            onSetLayerTransform={setVideoLayerTransform}
-            onSetLayerColor={setVideoLayerColor}
-            onSetLayerFx={setVideoLayerFx}
-            onAddCuePoint={addVideoCuePoint}
-            onJumpCuePoint={jumpVideoCuePoint}
-            onRemoveCuePoint={removeVideoCuePoint}
-            onRemoveLayer={removeVideoLayer}
-          />
-          <div class="videoMixerAutomationTools">
-            <VideoTimelineAutomationPanel
-              layers={snapshot().video.layers}
-              selectedLayerId={selectedVideoAutomationLayerId()}
-              param={videoAutomationParam()}
-              interpolation={videoAutomationInterpolation()}
-              startMs={videoAutomationStartMs()}
-              endMs={videoAutomationEndMs()}
-              startValue={videoAutomationStartValue()}
-              endValue={videoAutomationEndValue()}
-              automations={timelineVideoAutomationRows()}
-              selectedAutomationId={selectedVideoTimelineAutomationId()}
-              rowScope={videoAutomationRowScope()}
-              allRowsCount={allTimelineVideoAutomationRows().length}
-              draftForAutomation={timelineVideoAutomationDraft}
-              onSetLayerId={setVideoAutomationLayerId}
-              onSetParam={setVideoAutomationParam}
-              onSetInterpolation={setVideoAutomationInterpolation}
-              onSetStartMs={setVideoAutomationStartMs}
-              onSetEndMs={setVideoAutomationEndMs}
-              onSetStartValue={setVideoAutomationStartValue}
-              onSetEndValue={setVideoAutomationEndValue}
-              onRowScope={setVideoAutomationRowScope}
-              onUsePlayheadRange={usePlayheadForVideoAutomation}
-              onAddAutomation={addTimelineVideoAutomation}
-              onUpdateAutomationDraft={updateTimelineVideoAutomationDraft}
-              onAlignDraftToPlayhead={alignVideoAutomationDraftToPlayhead}
-              onAddKeyframeAtPlayhead={addVideoAutomationKeyframeAtPlayhead}
-              onRemoveKeyframeAtPlayhead={removeVideoAutomationKeyframeAtPlayhead}
-              onRemoveKeyframe={removeVideoAutomationKeyframe}
-              onSetKeyframeInterpolation={setVideoAutomationKeyframeInterpolation}
-              onSetKeyframeValue={setVideoAutomationKeyframeValue}
-              onSetAutomationEnabled={(automation, enabled) => setTimelineAutomationEnabled(automation.id, enabled)}
-              onSetRowsEnabled={setVideoAutomationRowsEnabled}
-              onSeekKeyframe={seekTimeline}
-              onSaveAutomation={setTimelineVideoAutomation}
-              onRemoveAutomation={removeTimelineAutomation}
-            />
-          </div>
-        </section>
+        <VideoControlPanel
+          mixer={controlMode() === "mixer"}
+          layerCount={snapshot().video.layers.length}
+          previewDiagnostics={{
+            get layerCount() { return snapshot().video.layers.length; },
+            get info() { return videoPreviewInfo(); },
+            get diagnosticsText() { return videoPreviewDiagnosticsText(); },
+            get layerDiagnostics() { return videoPreviewLayerDiagnostics(); },
+            get outputDecodePlans() { return videoPreviewOutputDecodePlans(); },
+            onRenderPreview: renderDebugVideoPreview,
+            onRefreshDiagnostics: refreshVideoPreviewDiagnostics,
+            layerClass: videoPreviewLayerDiagnosticClass,
+            layerLabel: videoPreviewLayerDiagnosticLabel,
+            outputClass: videoPreviewOutputDecodePlanClass,
+            outputLabel: videoPreviewOutputDecodePlanLabel,
+          }}
+          renderPlanStatus={{
+            get summary() { return videoOutputRenderPlanSummary(); },
+            get checked() { return videoOutputRenderPlans() !== null; },
+            get rows() { return videoOutputRenderPlanRows(); },
+            onRefresh: refreshVideoOutputRenderPlans,
+          }}
+          backendStatus={{
+            get summary() { return videoRuntimeBackendSummary(); },
+            get backends() { return videoRuntimeStatus()?.backends ?? null; },
+            backendClass: videoRuntimeBackendClass,
+            onRefresh: refreshVideoRuntimeStatus,
+          }}
+          externalIoStatus={{
+            get ioSummary() { return externalVideoIoPlanSummary(); },
+            get transportSummary() { return externalVideoTransportSummary(); },
+            get checked() { return externalVideoIoPlans() !== null; },
+            get planRows() { return externalVideoIoPlanRows(); },
+            get activeTransportRows() { return externalVideoTransportActiveRows(); },
+            get transportRows() { return externalVideoTransportRows(); },
+            get transportEventRows() { return externalVideoTransportEventRows(); },
+            planClass: externalVideoIoPlanClass,
+            transportClass: externalVideoTransportClass,
+            onRefreshPlans: refreshExternalVideoIoPlans,
+            onSyncRoutes: syncExternalVideoTransports,
+          }}
+          masterControls={{
+            get masterOpacity() { return snapshot().video.master_opacity; },
+            get blackout() { return snapshot().video.blackout; },
+            onSetMasterOpacity: setVideoMasterOpacity,
+            onSetBlackout: setVideoBlackout,
+          }}
+          outputControls={{
+            get outputs() { return snapshot().video.outputs; },
+            get compositions() { return snapshot().video.compositions; },
+            get selectedOutputId() { return selectedVideoOutputId(); },
+            get fadeMs() { return videoOutputFadeMs(); },
+            get windowSummary() { return videoOutputWindowSummary(); },
+            onSelectOutput: setSelectedVideoOutputId,
+            onSetFadeMs: setVideoOutputFadeMs,
+            onRefreshWindows: refreshVideoOutputWindowStatuses,
+            onOpenAllWindows: openAllVideoOutputWindows,
+            onSyncOpenWindows: syncOpenVideoOutputWindows,
+            onCloseOpenWindows: closeOpenVideoOutputWindows,
+            renderPlanState: videoOutputRenderPlanState,
+            windowStatusForOutput: videoOutputWindowStatusForOutput,
+            windowState: videoOutputWindowState,
+            onSetOutputEnabled: setVideoOutputEnabled,
+            onSetOutputBlackout: setVideoOutputBlackout,
+            onFadeOutputOpacity: fadeVideoOutputOpacity,
+            onSetOutputOpacity: setVideoOutputOpacity,
+            onOpenOutputWindow: openVideoOutputWindow,
+            onSyncOutputWindow: syncVideoOutputWindow,
+            onCloseOutputWindow: closeVideoOutputWindow,
+          }}
+          previewImage={{
+            get previewUrl() { return videoPreviewUrl(); },
+            get layerCount() { return snapshot().video.layers.length; },
+          }}
+          sourceCreate={{
+            get sourceKind() { return videoSourceKind(); },
+            get label() { return videoLabel(); },
+            get path() { return videoPath(); },
+            onSetSourceKind: setVideoSourceKind,
+            onSetLabel: setVideoLabel,
+            onSetPath: setVideoPath,
+            onBrowseSource: selectVideoSourceFile,
+            onAddLayer: addVideoLayer,
+          }}
+          layerList={{
+            get layers() { return snapshot().video.layers; },
+            onSetLayerLabel: setVideoLayerLabel,
+            onMoveLayer: moveVideoLayer,
+            onDuplicateLayer: duplicateVideoLayer,
+            onRefreshMetadata: refreshVideoLayerMetadata,
+            onSetBlendMode: setVideoLayerBlendMode,
+            onSetLayerState: setVideoLayerState,
+            onSetLayerTransform: setVideoLayerTransform,
+            onSetLayerColor: setVideoLayerColor,
+            onSetLayerFx: setVideoLayerFx,
+            onAddCuePoint: addVideoCuePoint,
+            onJumpCuePoint: jumpVideoCuePoint,
+            onRemoveCuePoint: removeVideoCuePoint,
+            onRemoveLayer: removeVideoLayer,
+          }}
+          timelineAutomation={{
+            get layers() { return snapshot().video.layers; },
+            get selectedLayerId() { return selectedVideoAutomationLayerId(); },
+            get param() { return videoAutomationParam(); },
+            get interpolation() { return videoAutomationInterpolation(); },
+            get startMs() { return videoAutomationStartMs(); },
+            get endMs() { return videoAutomationEndMs(); },
+            get startValue() { return videoAutomationStartValue(); },
+            get endValue() { return videoAutomationEndValue(); },
+            get automations() { return timelineVideoAutomationRows(); },
+            get selectedAutomationId() { return selectedVideoTimelineAutomationId(); },
+            get rowScope() { return videoAutomationRowScope(); },
+            get allRowsCount() { return allTimelineVideoAutomationRows().length; },
+            draftForAutomation: timelineVideoAutomationDraft,
+            onSetLayerId: setVideoAutomationLayerId,
+            onSetParam: setVideoAutomationParam,
+            onSetInterpolation: setVideoAutomationInterpolation,
+            onSetStartMs: setVideoAutomationStartMs,
+            onSetEndMs: setVideoAutomationEndMs,
+            onSetStartValue: setVideoAutomationStartValue,
+            onSetEndValue: setVideoAutomationEndValue,
+            onRowScope: setVideoAutomationRowScope,
+            onUsePlayheadRange: usePlayheadForVideoAutomation,
+            onAddAutomation: addTimelineVideoAutomation,
+            onUpdateAutomationDraft: updateTimelineVideoAutomationDraft,
+            onAlignDraftToPlayhead: alignVideoAutomationDraftToPlayhead,
+            onAddKeyframeAtPlayhead: addVideoAutomationKeyframeAtPlayhead,
+            onRemoveKeyframeAtPlayhead: removeVideoAutomationKeyframeAtPlayhead,
+            onRemoveKeyframe: removeVideoAutomationKeyframe,
+            onSetKeyframeInterpolation: setVideoAutomationKeyframeInterpolation,
+            onSetKeyframeValue: setVideoAutomationKeyframeValue,
+            onSetAutomationEnabled: (automation, enabled) => setTimelineAutomationEnabled(automation.id, enabled),
+            onSetRowsEnabled: setVideoAutomationRowsEnabled,
+            onSeekKeyframe: seekTimeline,
+            onSaveAutomation: setTimelineVideoAutomation,
+            onRemoveAutomation: removeTimelineAutomation,
+          }}
+        />
 
         <section class="panel faders controlPanel">
           <div class="panelHeader">
