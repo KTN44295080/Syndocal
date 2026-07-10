@@ -1,7 +1,6 @@
 import { For, Show } from "solid-js";
+import { stageViewBoxSize } from "../stageGeometry";
 import type { GeometryModelMeshKind, VideoOutputMapping } from "../types";
-
-export const stageViewBoxSize = 100;
 
 const clampRange = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 

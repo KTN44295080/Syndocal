@@ -77,7 +77,7 @@
 Phase 2(エフェクト/タイムライン/マッピングの操作性)を「完了」と宣言できる状態にする。
 - [ ] エフェクト UI の残課題洗い出し: 混合照明+映像ドラフトの完全復元(現在は主ターゲットのみ復元の制限あり)を解消するか、v1.0 制限として明文化。
 - [ ] 2D マッピングのホットキー一覧を UI 内ヘルプ(`?` キーまたはツールレール)として表示。
-- [ ] `StageMap2D.tsx` / `CueCapturePreviewPanel.tsx` のローカル `StageWorldBounds` を `stageGeometry.ts` に統一(既知の宿題)。
+- [x] Stage 2D 境界/定数を `stageGeometry.ts` に統一(`StageWorldBounds` と `stageViewBoxSize` の重複解消)。
 - [ ] App.tsx 継続削減: 目標 10,000 行未満。残る大物(Setup Mapping ビューポート/設定シェル、Output/Telemetry 診断のオーケストレーション)を各 1 スライスで抽出。新規抽出モジュールは `vite.config.ts` の `manualChunks` に振り分けてメインチャンクを 450 kB 以下に維持。
 - [ ] エラー/ステータス表示の統一: 現在パネルごとにばらつくメッセージ表示を、単一のステータス行 or トースト規約に揃える(一画面制約内で)。
 - 検証ゲート: `cargo test --workspace`、`pnpm --dir app build`、`npm run check:viewport`、手動スモーク(Run Smoke + Setup/Control/Touch 一巡)。
