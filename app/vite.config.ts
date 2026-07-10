@@ -46,6 +46,7 @@ export default defineConfig({
           }
           if (
             normalizedId.includes("/src/createMappingViewportModel") ||
+            normalizedId.includes("/src/createMappingRenderModel") ||
             normalizedId.includes("/src/mappingRuntime") ||
             normalizedId.includes("/src/components/Mapping")
           ) {

@@ -329,3 +329,5 @@ Move in small verified slices. For this repo, a useful slice usually touches one
 - Tauri command/validation/project files -> `app/src-tauri/src/main.rs` plus `cargo test -p rayard ...`.
 - Frontend UI -> extracted component/helper plus `pnpm --dir app build`.
 - GDTF parsing -> `crates/gdtf/src/lib.rs` plus `cargo test -p gdtf`.
+
+- 2026-07-10 (Codex M1 mapping render model extraction): Moved fixture/projector/stage-object drag previews and 2D visualizer render-model derivation out of `App.tsx` into `app/src/createMappingRenderModel.ts`. `App.tsx` dropped from 13,382 to 13,047 lines, the main Vite index chunk dropped to about 371.85 kB, and Mapping remains in the existing `mapping-panels` chunk. Verification: `npm run build`, the full `npm run check:viewport --silent` matrix at 1280x720, 1366x768, and 2048x1129, and `git diff --check` passed.
