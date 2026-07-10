@@ -7,7 +7,10 @@ use std::{
     net::{IpAddr, UdpSocket},
     path::{Path, PathBuf},
     process::Command,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -7430,6 +7433,88 @@ fn apply_video_output_window_shell(
     Ok(())
 }
 
+fn apply_native_video_output_window_shell(
+    app: &tauri::AppHandle,
+    window: &tauri::Window,
+    output: &VideoOutputSummary,
+) -> Result<(), String> {
+    window
+        .set_title(&format!("Rayard Test Pattern - {}", output.label))
+        .map_err(|error| error.to_string())?;
+    if let Some(monitor_id) = output.monitor_id {
+        let monitors = app
+            .available_monitors()
+            .map_err(|error| error.to_string())?;
+        if let Some(monitor) = monitors.get(monitor_id as usize) {
+            window
+                .set_position(monitor.position().clone())
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    window
+        .set_fullscreen(output.fullscreen)
+        .map_err(|error| error.to_string())?;
+    window
+        .set_decorations(!output.fullscreen)
+        .map_err(|error| error.to_string())?;
+    if !output.fullscreen {
+        window
+            .set_size(tauri::LogicalSize::new(
+                f64::from(output.width.max(1)),
+                f64::from(output.height.max(1)),
+            ))
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn start_native_video_test_pattern(
+    window: tauri::Window,
+    frame: video::VideoFrame,
+) -> Result<(), String> {
+    let initial_size = window.inner_size().map_err(|error| error.to_string())?;
+    let window = Arc::new(window);
+    let mut presenter = video::GpuSurfacePresenter::new(
+        Arc::clone(&window),
+        initial_size.width.max(1),
+        initial_size.height.max(1),
+    )
+    .map_err(|error| format!("Native video output initialization failed: {error:?}"))?;
+    presenter
+        .present_rgba8(&frame)
+        .map_err(|error| format!("Native video output first frame failed: {error:?}"))?;
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let event_stop = Arc::clone(&stop);
+    window.on_window_event(move |event| {
+        if matches!(
+            event,
+            tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
+        ) {
+            event_stop.store(true, Ordering::Release);
+        }
+    });
+    std::thread::Builder::new()
+        .name("rayard-video-test-pattern".to_string())
+        .spawn(move || {
+            while !stop.load(Ordering::Acquire) {
+                let Ok(size) = window.inner_size() else {
+                    break;
+                };
+                if size.width > 0 && size.height > 0 {
+                    if presenter.resize(size.width, size.height).is_err()
+                        || presenter.present_rgba8(&frame).is_err()
+                    {
+                        break;
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        })
+        .map_err(|error| format!("Native video output thread failed: {error}"))?;
+    Ok(())
+}
+
 #[tauri::command]
 fn get_video_output_window_statuses(
     app: tauri::AppHandle,
@@ -7448,7 +7533,7 @@ fn get_video_output_window_statuses(
                 output_id: output.id,
                 label: output.label.clone(),
                 live_open: app.get_webview_window(&live_window_label).is_some(),
-                test_pattern_open: app.get_webview_window(&test_pattern_window_label).is_some(),
+                test_pattern_open: app.windows().contains_key(&test_pattern_window_label),
                 live_window_label,
                 test_pattern_window_label,
             }
@@ -7483,8 +7568,8 @@ async fn sync_open_video_output_windows(
         }
 
         let test_pattern_label = video_output_window_label(output.id, true);
-        if let Some(window) = app.get_webview_window(&test_pattern_label) {
-            apply_video_output_window_shell(&app, &window, output, true)?;
+        if let Some(window) = app.windows().get(&test_pattern_label).cloned() {
+            apply_native_video_output_window_shell(&app, &window, output)?;
             summary.synced_test_pattern += 1;
         } else {
             summary.skipped_closed += 1;
@@ -7502,10 +7587,19 @@ async fn close_video_output_window(
 ) -> Result<(), String> {
     let test_pattern = test_pattern.unwrap_or(false);
     let label = video_output_window_label(output_id, test_pattern);
-    let window = app
-        .get_webview_window(&label)
-        .ok_or_else(|| format!("Video output window {label} is not open"))?;
-    window.close().map_err(|error| error.to_string())
+    if test_pattern {
+        app.windows()
+            .get(&label)
+            .cloned()
+            .ok_or_else(|| format!("Video output window {label} is not open"))?
+            .close()
+            .map_err(|error| error.to_string())
+    } else {
+        app.get_webview_window(&label)
+            .ok_or_else(|| format!("Video output window {label} is not open"))?
+            .close()
+            .map_err(|error| error.to_string())
+    }
 }
 
 #[tauri::command]
@@ -7535,7 +7629,7 @@ async fn close_open_video_output_windows(
         }
 
         let test_pattern_label = video_output_window_label(output.id, true);
-        if let Some(window) = app.get_webview_window(&test_pattern_label) {
+        if let Some(window) = app.windows().get(&test_pattern_label).cloned() {
             window.close().map_err(|error| error.to_string())?;
             summary.closed_test_pattern += 1;
         } else {
@@ -7566,10 +7660,19 @@ async fn sync_video_output_window(
         return Err("Only Display video outputs can be synced as windows".to_string());
     }
     let label = video_output_window_label(output_id, test_pattern);
-    let window = app
-        .get_webview_window(&label)
-        .ok_or_else(|| format!("Video output window {label} is not open"))?;
-    apply_video_output_window_shell(&app, &window, &output, test_pattern)
+    if test_pattern {
+        let window = app
+            .windows()
+            .get(&label)
+            .cloned()
+            .ok_or_else(|| format!("Video output window {label} is not open"))?;
+        apply_native_video_output_window_shell(&app, &window, &output)
+    } else {
+        let window = app
+            .get_webview_window(&label)
+            .ok_or_else(|| format!("Video output window {label} is not open"))?;
+        apply_video_output_window_shell(&app, &window, &output, false)
+    }
 }
 
 #[tauri::command]
@@ -7593,8 +7696,41 @@ async fn open_video_output_window(
     }
 
     let label = video_output_window_label(output_id, test_pattern);
+    if test_pattern {
+        if let Some(window) = app.windows().get(&label).cloned() {
+            apply_native_video_output_window_shell(&app, &window, &output)?;
+            window.show().map_err(|error| error.to_string())?;
+            window.set_focus().map_err(|error| error.to_string())?;
+            return Ok(());
+        }
+        let mut builder = tauri::window::WindowBuilder::new(&app, label)
+            .title(format!("Rayard Test Pattern - {}", output.label))
+            .inner_size(output.width as f64, output.height as f64)
+            .resizable(true)
+            .decorations(!output.fullscreen)
+            .fullscreen(output.fullscreen);
+        if let Some(monitor_id) = output.monitor_id {
+            let monitors = app
+                .available_monitors()
+                .map_err(|error| error.to_string())?;
+            if let Some(monitor) = monitors.get(monitor_id as usize) {
+                let position = monitor.position();
+                builder = builder.position(position.x as f64, position.y as f64);
+            }
+        }
+        let window = builder.build().map_err(|error| error.to_string())?;
+        apply_native_video_output_window_shell(&app, &window, &output)?;
+        let frame = video::render_video_output_test_pattern(
+            &snapshot.video,
+            output_id,
+            output.width.max(1),
+            output.height.max(1),
+        )
+        .map_err(|error| format!("{error:?}"))?;
+        return start_native_video_test_pattern(window, frame);
+    }
     if let Some(window) = app.get_webview_window(&label) {
-        apply_video_output_window_shell(&app, &window, &output, test_pattern)?;
+        apply_video_output_window_shell(&app, &window, &output, false)?;
         window.show().map_err(|error| error.to_string())?;
         window.set_focus().map_err(|error| error.to_string())?;
         return Ok(());
