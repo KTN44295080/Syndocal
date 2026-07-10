@@ -269,6 +269,92 @@ async function pressKey(client, code, key = code) {
   await client.send("Input.dispatchKeyEvent", { type: "keyUp", code, key });
 }
 
+async function checkKeyboardNavigation(client) {
+  const firstWorkspaceFocus = await client.evaluate(`(() => {
+    const button = [...document.querySelectorAll('.workspaceTabs button')]
+      .find((candidate) => (candidate.textContent || '').trim() === 'Setup');
+    button?.focus();
+    return (document.activeElement?.textContent || '').trim();
+  })()`);
+  await pressKey(client, "Tab", "Tab");
+  const tabOrder = await client.evaluate(`(() => {
+    const active = document.activeElement;
+    const style = active ? getComputedStyle(active) : null;
+    return {
+      label: (active?.textContent || '').trim(),
+      outlineStyle: style?.outlineStyle ?? '',
+      outlineWidth: Number.parseFloat(style?.outlineWidth ?? '0'),
+    };
+  })()`);
+
+  await pressKey(client, "F1");
+  await sleep(60);
+  await pressKey(client, "Digit4", "4");
+  await sleep(80);
+  const setupEditableGuard = await client.evaluate(`(async () => {
+    const visible = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return !element.disabled && rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const input = [...document.querySelectorAll('.layoutSetup input:not([type="checkbox"])')].find(visible);
+    const activeSetupBefore = (document.querySelector('.setupModeTabs button.active')?.textContent || '').trim();
+    const activeToolBefore = (document.querySelector('.mappingViewportControls strong')?.textContent || '').trim();
+    input?.focus();
+    input?.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, code: 'Digit1', key: '1' }));
+    input?.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, code: 'KeyP', key: 'p' }));
+    await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
+    const activeSetupAfter = (document.querySelector('.setupModeTabs button.active')?.textContent || '').trim();
+    const activeToolAfter = (document.querySelector('.mappingViewportControls strong')?.textContent || '').trim();
+    return {
+      found: Boolean(input),
+      setupModePreserved: activeSetupBefore === 'Mapping' && activeSetupAfter === activeSetupBefore,
+      mappingToolPreserved: activeToolBefore.length > 0 && activeToolAfter === activeToolBefore,
+    };
+  })()`);
+
+  await pressKey(client, "F2");
+  await sleep(80);
+  const controlEditableGuard = await client.evaluate(`(async () => {
+    const visible = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return !element.disabled && rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const input = [...document.querySelectorAll('.layoutControl input:not([type="checkbox"]), .layoutControl select')].find(visible);
+    const activeModeBefore = (document.querySelector('.controlModeTabs button.active')?.textContent || '').trim();
+    input?.focus();
+    input?.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, code: 'KeyL', key: 'l' }));
+    await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
+    const activeModeAfter = (document.querySelector('.controlModeTabs button.active')?.textContent || '').trim();
+    return {
+      found: Boolean(input),
+      modePreserved: activeModeBefore === 'Edit' && activeModeAfter === activeModeBefore,
+    };
+  })()`);
+
+  const result = {
+    firstWorkspaceFocus,
+    tabOrder,
+    setupEditableGuard,
+    controlEditableGuard,
+  };
+  result.passed =
+    firstWorkspaceFocus === "Setup" &&
+    tabOrder.label === "Control" &&
+    tabOrder.outlineStyle !== "none" &&
+    tabOrder.outlineWidth >= 1 &&
+    setupEditableGuard.found &&
+    setupEditableGuard.setupModePreserved &&
+    setupEditableGuard.mappingToolPreserved &&
+    controlEditableGuard.found &&
+    controlEditableGuard.modePreserved;
+  await client.evaluate(`(() => {
+    window.__rayardKeyboardNavigationCheck = ${JSON.stringify(result)};
+  })()`);
+  return result.passed;
+}
+
 async function measure(client, label) {
   return await client.evaluate(`(async () => {
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
@@ -489,6 +575,8 @@ async function measure(client, label) {
         }),
       touchMomentaryFlashPassed: window.__rayardTouchMomentaryCheck?.passed === true,
       touchMomentaryFlashResult: window.__rayardTouchMomentaryCheck ?? null,
+      keyboardNavigationPassed: window.__rayardKeyboardNavigationCheck?.passed === true,
+      keyboardNavigationResult: window.__rayardKeyboardNavigationCheck ?? null,
       timelineOverviewVisible: (() => {
         const overview = document.querySelector('.timelineOverview');
         if (!overview) {
@@ -534,6 +622,13 @@ function hasExpectedProjectMenu(result) {
     result.visibleRecentProjectMenuItemCount >= 5 &&
     result.visibleRecoveryProjectMenuItemCount >= 1
   );
+}
+
+function hasExpectedKeyboardNavigation(result) {
+  if (!result.label.startsWith("control-edit-keyboard-")) {
+    return true;
+  }
+  return result.keyboardNavigationPassed;
 }
 
 function isContained(result) {
@@ -802,6 +897,7 @@ async function runViewport(client, viewport) {
   const results = [];
   await pressKey(client, "F2");
   await sleep(120);
+  await checkKeyboardNavigation(client);
   results.push(await measure(client, `control-edit-keyboard-${viewport.width}x${viewport.height}`));
   await pressKey(client, "F1");
   await sleep(80);
@@ -902,6 +998,7 @@ async function main() {
     const failures = results.filter((result) => !isContained(result));
     const setupSurfaceFailures = results.filter((result) => !hasExpectedSetupSurface(result));
     const projectMenuFailures = results.filter((result) => !hasExpectedProjectMenu(result));
+    const keyboardNavigationFailures = results.filter((result) => !hasExpectedKeyboardNavigation(result));
     const mappingHotkeyHelpFailures = results.filter((result) => !hasExpectedMappingHotkeyHelp(result));
     const mappingWaveDraftFailures = results.filter((result) => !hasExpectedMappingWaveDraft(result));
     const controlModeFailures = results.filter((result) => !hasExpectedControlModeSurface(result));
@@ -919,6 +1016,9 @@ async function main() {
         : "";
       const projectMenuSuffix = result.label.startsWith("project-menu-")
         ? ` projectMenu=${result.visibleProjectMenuCount}/${result.visibleProjectMenuItemCount}/${result.visibleProjectMenuShortcutCount}/${result.visibleRecentProjectMenuItemCount}/${result.visibleRecoveryProjectMenuItemCount}`
+        : "";
+      const keyboardSuffix = result.label.startsWith("control-edit-keyboard-")
+        ? ` keyboard=${result.keyboardNavigationPassed ? 'pass' : 'fail'}`
         : "";
       const touchSuffix = result.label.startsWith("touch-")
         ? ` touch=${result.visibleTouchCuePanelCount}/${result.visibleTouchGoDeckCount}/${result.visibleTouchCuePadCount}/${result.visibleTouchStagePanelCount}/${result.visibleTouchStageCount}/${result.visibleTouchFixturePanelCount}/${result.visibleTouchFixtureScrollerCount}/${result.visibleTouchRemotePanelCount}/${result.visibleTouchRemoteUrlItemCount}/${result.visibleTouchRemoteCopyButtonCount}/${result.visibleTouchRemoteOpenButtonCount}/${result.visibleTouchVideoPanelCount}/${result.visibleTouchVideoOutputDeckCount}/${result.visibleTouchVideoSelectedOutputDeckCount}/${result.visibleTouchVideoOutputFaderCount}/${result.visibleTouchVideoOutputButtonCount}/${result.visibleTouchVideoOutputSelectButtonCount}/${result.visibleTouchVideoDeckCount}/${result.visibleTouchVideoLayerFaderCount}/${result.visibleTouchMasterGridCount}`
@@ -945,11 +1045,12 @@ async function main() {
         ? ` mixer=${result.visibleVideoOutputItemCount}/${result.visibleVideoOutputSelectedItemCount}/${result.visibleVideoMixerOutputDeckCount}/${result.visibleVideoMixerOutputFaderCount}/${result.visibleVideoMixerOutputSelectButtonCount}/${result.visibleVideoLayerItemCount}/${result.visibleVideoMixerLayerDeckCount}/${result.visibleVideoMixerLayerFaderCount}/${result.visibleVideoMixerLayerButtonCount}`
         : "";
       console.log(
-        `${status} ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${timelineSuffix}${touchSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${mixerSuffix}`,
+        `${status} ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${keyboardSuffix}${timelineSuffix}${touchSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${mixerSuffix}`,
       );
     }
     if (
       failures.length > 0 ||
+      keyboardNavigationFailures.length > 0 ||
       setupSurfaceFailures.length > 0 ||
       projectMenuFailures.length > 0 ||
       mappingHotkeyHelpFailures.length > 0 ||
@@ -963,6 +1064,7 @@ async function main() {
         JSON.stringify(
           {
             viewport: failures,
+            keyboardNavigation: keyboardNavigationFailures,
             setupSurface: setupSurfaceFailures,
             projectMenu: projectMenuFailures,
             mappingHotkeyHelp: mappingHotkeyHelpFailures,
@@ -977,7 +1079,7 @@ async function main() {
         ),
       );
       throw new Error(
-        `${failures.length} viewport containment check(s), ${setupSurfaceFailures.length} setup surface check(s), ${projectMenuFailures.length} project menu check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${statusLineFailures.length} status line check(s) failed.`,
+        `${failures.length} viewport containment check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${projectMenuFailures.length} project menu check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${statusLineFailures.length} status line check(s) failed.`,
       );
     }
   } finally {

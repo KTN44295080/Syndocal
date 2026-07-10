@@ -85,12 +85,13 @@ Phase 2(エフェクト/タイムライン/マッピングの操作性)を「完
 ### M2 — UI/UX 完成パス(1〜2 週)
 「DasLight 的な一画面デスク」としての完成度を上げる。機能追加ではなく磨き込み。
 - [x] 全ワークスペース(Setup 5 タブ / Control / Touch)を 1366x768 と 2048x1129 で目視レビューし、詰まり/はみ出し/読めない表示を列挙 → 修正。共通クローム刷新後、1280x720 も含む全 viewport マトリクスで document/app scroll 0 を確認済み。
-- [ ] キーボード操作の一貫性監査: 編集ターゲットガード、フォーカスリング、Tab 順。
+- [x] キーボード操作の一貫性監査: 編集ターゲットガード、フォーカスリング、Tab 順。Setup→Control のTab順、可視アウトライン、Setup/Mapping/Control入力編集中のショートカット抑止を3解像度で自動検証。
 - [x] Touch ワークスペースのポインタエミュレーション検証: 可視ヒットターゲット最小 40px、Flash は pointer-down 中のみ active で pointer-up 時に復元。1280x720 / 1366x768 / 2048x1129 で自動検証済み。
 - [x] 空状態(fixture 0 台、video layer 0 枚、cue 0 個)は、Setup/Control/Touch の各主要パネルで次に開く画面と操作を表示する。
 - [x] 用語統一パス: Fixture/Group/Cue/Video Output/Video Layer/Projection Surface/Cue Point/DMX Output を全 UI で統一し、`check:terminology` で旧表記の再侵入を検出。
 - [x] 破壊的操作(Remove Fixture/Cue/Output/Effect)は、v1.0 では共通のネイティブ確認ダイアログ + Undo 不可の明示に統一。Undo は v1.x の拡張候補とする。
 - 検証ゲート: `npm run check:viewport` + 上記チェックリストを CLAUDE.md に結果記録。
+- **M2 完了 (2026-07-11)**: 全チェック項目と検証ゲートを通過。以後のUI変更は同じ一画面・用語・キーボード・Touch回帰ゲートを維持する。
 
 ### M3 — ネイティブビデオ出力(2〜4 週、最大の技術リスク)
 CPU プレビューを wgpu 実出力に置き換える。**照明エンジンと分離したまま進める**(DMX 44Hz を巻き込まない)。
