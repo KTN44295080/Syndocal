@@ -82,11 +82,9 @@ import type {
   CustomFixtureProfileRequest,
   CueSummary,
   DmxOutputConfig,
-  DmxTestFrameResult,
   EffectBlendMode,
   EffectKind,
   EffectSummary,
-  EngineTelemetryReport,
   EngineSnapshot,
   ExternalVideoIoPlans,
   ExternalVideoTransportDriverEvent,
@@ -199,6 +197,12 @@ import { createMappingViewportModel } from "./createMappingViewportModel";
 import { createMappingRenderModel } from "./createMappingRenderModel";
 import { createMappingInteractionController } from "./createMappingInteractionController";
 import { createMappingLayoutController, mappingFixtureSelectionCenter } from "./createMappingLayoutController";
+import {
+  createOutputDiagnosticsController,
+  defaultOutput,
+  isSerialDmxProtocol,
+  outputProtocolLabel,
+} from "./createOutputDiagnosticsController";
 import {
   bulkPatchLabel,
   colorCandidates,
@@ -436,41 +440,8 @@ type CueCaptureScopeRequest =
   | { kind: "selectedGroup"; groupId: string }
   | { kind: "videoOnly" };
 
-const defaultOutput: DmxOutputConfig = {
-  enabled: true,
-  protocol: "ArtNet",
-  target_ip: "127.0.0.1",
-  port: 6454,
-  universe: 0,
-  serial_port: "",
-  serial_baud_rate: 57_600,
-};
-
-
-
 const cuePadSize = 10;
-const enttecUsbProBaudRate = 57_600;
-const enttecOpenDmxBaudRate = 250_000;
 const defaultCustomAttributesText = "Dimmer@1:8, Pan@2:16, Tilt@4:16, ColorRed@6:8, ColorGreen@7:8, ColorBlue@8:8";
-
-
-const isSerialDmxProtocol = (protocol: DmxOutputConfig["protocol"]) =>
-  protocol === "EnttecUsbPro" || protocol === "DmxKingUltraDmx" || protocol === "EnttecOpenDmx";
-
-const outputProtocolLabel = (protocol: DmxOutputConfig["protocol"]) => {
-  switch (protocol) {
-    case "ArtNet":
-      return "Art-Net";
-    case "Sacn":
-      return "sACN";
-    case "EnttecUsbPro":
-      return "Enttec USB PRO";
-    case "DmxKingUltraDmx":
-      return "DMXKing ultraDMX";
-    case "EnttecOpenDmx":
-      return "Enttec Open DMX";
-  }
-};
 
 
 export default function App() {
@@ -891,14 +862,39 @@ export default function App() {
     }));
   }
   let lastRecoverySignature = projectRecoveryCheckpoint()?.signature ?? null;
-  const [output, setOutput] = createSignal<DmxOutputConfig>(defaultOutput);
-  const [dmxOutputRoutes, setDmxOutputRoutes] = createSignal<DmxOutputConfig[]>([defaultOutput]);
-  const [engineTelemetryReport, setEngineTelemetryReport] = createSignal<EngineTelemetryReport | null>(null);
-  const [dmxTestChannel, setDmxTestChannel] = createSignal(1);
-  const [dmxTestWidth, setDmxTestWidth] = createSignal(1);
-  const [dmxTestValue, setDmxTestValue] = createSignal(255);
-  const audioAnalysis = createMemo<AudioAnalysisSummary | null>(() => snapshot().timeline.audio ?? null);
   const [message, setMessage] = createSignal("Ready");
+  const {
+    output,
+    setOutput,
+    dmxOutputRoutes,
+    setDmxOutputRoutes,
+    engineTelemetryReport,
+    dmxTestChannel,
+    setDmxTestChannel,
+    dmxTestWidth,
+    setDmxTestWidth,
+    dmxTestValue,
+    setDmxTestValue,
+    refreshEngineTelemetryReport,
+    resetEngineTelemetry,
+    saveEngineTelemetryReport,
+    applyOutput,
+    sendDmxTestFrame,
+    sendDmxRoutesTestFrame,
+    dmxRouteLabel,
+    applyCurrentDmxRoutes,
+    addCurrentDmxRoute,
+    removeDmxRoute,
+    setOutputProtocol,
+    refreshSerialPorts,
+  } = createOutputDiagnosticsController({
+    invoke,
+    setMessage,
+    refreshSnapshot: () => refreshSnapshot(),
+    serialPorts,
+    setSerialPorts,
+  });
+  const audioAnalysis = createMemo<AudioAnalysisSummary | null>(() => snapshot().timeline.audio ?? null);
   const [touchDimmerRestore, setTouchDimmerRestore] = createSignal<TouchDimmerRestoreState | null>(null);
 
   createEffect(() => {
@@ -912,6 +908,14 @@ export default function App() {
   const selectedFixture = createMemo<PatchedFixtureSummary | undefined>(() =>
     snapshot().fixtures.find((fixture) => fixture.id === selectedFixtureId()),
   );
+  const faderValue = (fixtureId: number, attribute: string, defaultValue: number) => {
+    const localValue = faderValues()[`${fixtureId}:${attribute}`];
+    if (localValue !== undefined) {
+      return localValue;
+    }
+    const fixture = snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
+    return fixture?.attribute_values.find((value) => value.attribute === attribute)?.value ?? defaultValue;
+  };
   const normalizedSelectedFixtureLimitsDraft = createMemo<FixtureLimits>(() => {
     const limits = selectedFixtureLimitsDraft();
     const dimmer = normalizeLimitRange(limits.dimmer_min, limits.dimmer_max);
@@ -4075,14 +4079,6 @@ export default function App() {
     }
   };
 
-  const refreshEngineTelemetryReport = async () => {
-    try {
-      setEngineTelemetryReport(await invoke<EngineTelemetryReport>("get_engine_telemetry_report"));
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
   const timer = isTauriRuntime() ? window.setInterval(refreshSnapshot, 250) : null;
   const telemetryReportTimer = isTauriRuntime() ? window.setInterval(refreshEngineTelemetryReport, 1000) : null;
   const recoveryTimer = isTauriRuntime() ? window.setInterval(() => void saveProjectRecovery(), 10_000) : null;
@@ -5997,150 +5993,6 @@ export default function App() {
     }
   };
 
-  const resetEngineTelemetry = async () => {
-    try {
-      await invoke("reset_engine_telemetry");
-      setMessage("Reset engine telemetry.");
-      await refreshSnapshot();
-      await refreshEngineTelemetryReport();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const saveEngineTelemetryReport = async () => {
-    try {
-      const path = await invoke<string | null>("save_engine_telemetry_report");
-      setMessage(path ? `Saved telemetry report ${path}` : "Telemetry report save canceled.");
-      await refreshEngineTelemetryReport();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const faderValue = (fixtureId: number, attribute: string, defaultValue: number) => {
-    const localValue = faderValues()[`${fixtureId}:${attribute}`];
-    if (localValue !== undefined) {
-      return localValue;
-    }
-    const fixture = snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
-    return fixture?.attribute_values.find((value) => value.attribute === attribute)?.value ?? defaultValue;
-  };
-
-  const applyOutput = async () => {
-    try {
-      await invoke("set_output_config", { config: output() });
-      setDmxOutputRoutes((current) => [output(), ...current.slice(1)]);
-      if (isSerialDmxProtocol(output().protocol)) {
-        setMessage(`${outputProtocolLabel(output().protocol)} target ${output().serial_port} @ ${output().serial_baud_rate}`);
-      } else {
-        setMessage(
-          `${outputProtocolLabel(output().protocol)} target ${output().target_ip}:${output().port} universe ${output().universe}`,
-        );
-      }
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const sendDmxTestFrame = async () => {
-    try {
-      const result = await invoke<DmxTestFrameResult>("send_dmx_test_frame", {
-        request: {
-          config: output(),
-          channel: dmxTestChannel(),
-          width: dmxTestWidth(),
-          value: dmxTestValue(),
-        },
-      });
-      setMessage(
-        `Sent ${outputProtocolLabel(result.protocol)} test U${result.universe} CH${result.channel} +${result.width} @ ${result.value} (${result.bytes} bytes)`,
-      );
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const sendDmxRoutesTestFrame = async () => {
-    const routes = [output(), ...dmxOutputRoutes().slice(1)];
-    try {
-      const results = await invoke<DmxTestFrameResult[]>("send_dmx_routes_test_frame", {
-        request: {
-          configs: routes,
-          channel: dmxTestChannel(),
-          width: dmxTestWidth(),
-          value: dmxTestValue(),
-        },
-      });
-      const bytes = results.reduce((sum, result) => sum + result.bytes, 0);
-      setMessage(`Sent test frame to ${results.length} DMX route(s) (${bytes} bytes).`);
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const dmxRouteLabel = (route: DmxOutputConfig) =>
-    isSerialDmxProtocol(route.protocol)
-      ? `${outputProtocolLabel(route.protocol)} ${route.serial_port || "(no port)"}`
-      : `${outputProtocolLabel(route.protocol)} ${route.target_ip}:${route.port} U${route.universe}`;
-
-  const applyDmxOutputRoutes = async (routes: DmxOutputConfig[]) => {
-    try {
-      await invoke("set_dmx_outputs", { configs: routes });
-      setDmxOutputRoutes(routes);
-      setOutput(routes[0] ?? defaultOutput);
-      setMessage(`Applied ${routes.length} DMX output route(s).`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const applyCurrentDmxRoutes = async () => {
-    const routes = [output(), ...dmxOutputRoutes().slice(1)];
-    await applyDmxOutputRoutes(routes);
-  };
-
-  const addCurrentDmxRoute = async () => {
-    const routes = [...dmxOutputRoutes(), output()];
-    await applyDmxOutputRoutes(routes);
-  };
-
-  const removeDmxRoute = async (index: number) => {
-    const routes = dmxOutputRoutes().filter((_, candidate) => candidate !== index);
-    await applyDmxOutputRoutes(routes.length > 0 ? routes : [{ ...defaultOutput, enabled: false }]);
-  };
-
-  const setOutputProtocol = (protocol: DmxOutputConfig["protocol"]) => {
-    const current = output();
-    const port =
-      protocol === "Sacn" && current.port === 6454
-        ? 5568
-        : protocol === "ArtNet" && current.port === 5568
-          ? 6454
-          : current.port;
-    const universe = protocol === "Sacn" && current.universe === 0 ? 1 : current.universe;
-    const target_ip =
-      protocol === "Sacn" && (current.target_ip === defaultOutput.target_ip || current.target_ip.trim() === "")
-        ? "multicast"
-        : protocol === "ArtNet" && current.target_ip === "multicast"
-          ? defaultOutput.target_ip
-          : current.target_ip;
-    const serial_port =
-      isSerialDmxProtocol(protocol) && !current.serial_port && serialPorts().length > 0
-        ? serialPorts()[0].name
-        : current.serial_port;
-    const serial_baud_rate =
-      protocol === "EnttecOpenDmx"
-        ? enttecOpenDmxBaudRate
-        : (protocol === "EnttecUsbPro" || protocol === "DmxKingUltraDmx") &&
-            current.serial_baud_rate === enttecOpenDmxBaudRate
-          ? enttecUsbProBaudRate
-          : current.serial_baud_rate;
-    setOutput({ ...current, protocol, target_ip, port, universe, serial_port, serial_baud_rate });
-  };
-
   const setBlackout = async (enabled: boolean) => {
     try {
       await invoke("set_blackout", { enabled });
@@ -6265,18 +6117,6 @@ export default function App() {
       setMidiOutputs(outputs);
       if (selectedMidiOutput() === null && outputs.length > 0) {
         setSelectedMidiOutput(outputs[0].index);
-      }
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const refreshSerialPorts = async () => {
-    try {
-      const ports = await invoke<SerialPortSummary[]>("list_serial_ports");
-      setSerialPorts(ports);
-      if (!output().serial_port && ports.length > 0) {
-        setOutput((current) => ({ ...current, serial_port: ports[0].name }));
       }
     } catch (error) {
       setMessage(String(error));

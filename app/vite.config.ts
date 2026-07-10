@@ -65,6 +65,14 @@ export default defineConfig({
             return "mapping-editors";
           }
           if (
+            normalizedId.includes("/src/createOutputDiagnosticsController") ||
+            normalizedId.includes("/src/components/DmxOutputConfigPanel") ||
+            normalizedId.includes("/src/components/EngineTelemetryPanel") ||
+            normalizedId.includes("/src/components/OutputDiagnosticsPanel")
+          ) {
+            return "output-panels";
+          }
+          if (
             normalizedId.includes("/src/components/ChannelFunctionPanel") ||
             normalizedId.includes("/src/components/CategoryQuickPanel") ||
             normalizedId.includes("/src/components/ColorControlPanel") ||
