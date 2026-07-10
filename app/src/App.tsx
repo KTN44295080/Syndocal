@@ -199,6 +199,24 @@ import {
 } from "./uiModes";
 import { projectSnapshotSignature } from "./projectSnapshot";
 import { effectDraftTargetPlan } from "./effectDraft";
+import {
+  mappingGeometryClass,
+  surfaceWorldHalfSize,
+  type MappingAxis,
+  type MappingBulkGroupMode,
+  type MappingDragState,
+  type MappingFixtureTypeRow,
+  type MappingGeometryNode2d,
+  type MappingMarqueeState,
+  type MappingSnapLine,
+  type MappingStageObjectResizeMode,
+  type MappingSvgBounds,
+  type MappingViewportPanDragState,
+  type VisualizerFixture,
+  type VisualizerStageObject2d,
+  type VisualizerVideoSurface2d,
+  type WaveStageDragMode,
+} from "./mappingRuntime";
 import { stageObjectDefaultColor } from "./stageObjects";
 import {
   defaultVideoOutputMapping,
@@ -384,11 +402,7 @@ const profileLoadMessage = (prefix: string, profile: FixtureProfileSummary) => {
 };
 
 type TimelineSnapMode = "Off" | "Beat" | "Bar" | "Grid";
-type MappingAxis = "x" | "z";
-type MappingStageObjectResizeMode = "width" | "depth" | "both";
 type VideoOutputPreviewMode = "output" | "test";
-type MappingBulkGroupMode = "add" | "remove" | "set";
-type WaveStageDragMode = "origin" | "direction" | "videoTarget";
 type EffectTargetMode = "fixture" | "selection" | "group" | "video";
 type CueCaptureScopeMode = "all" | "lighting" | "selectedFixture" | "selectedGroup" | "video";
 type TimelineLightingAutomationRowScope = "all" | "current";
@@ -448,205 +462,6 @@ const outputProtocolLabel = (protocol: DmxOutputConfig["protocol"]) => {
   }
 };
 
-
-interface VisualizerFixture {
-  id: number;
-  label: string;
-  dmxLabel: string;
-  groupLabel: string;
-  typeKey: string;
-  visualKind: MappingFixtureVisualKind;
-  x: number;
-  z: number;
-  width: number;
-  height: number;
-  yaw: number;
-  yawHandleX: number;
-  yawHandleZ: number;
-  beamPoints: string;
-  intensity: number;
-  color: string;
-  inGroupFilter: boolean;
-  highlighted: boolean;
-  soloed: boolean;
-  parked: boolean;
-}
-
-interface VisualizerVideoSurface2d {
-  id: number;
-  label: string;
-  x: number;
-  z: number;
-  width: number;
-  height: number;
-  rotationDeg: number;
-  opacity: number;
-  active: boolean;
-}
-
-interface VisualizerStageObject2d {
-  id: number;
-  label: string;
-  kind: StageObjectKind;
-  x: number;
-  z: number;
-  width: number;
-  depth: number;
-  rotationDeg: number;
-  color: string;
-  selected: boolean;
-}
-
-interface MappingGeometryNode2d {
-  key: string;
-  fixtureId: number;
-  fixtureLabel: string;
-  name: string;
-  kind: string;
-  x: number;
-  z: number;
-  radius: number;
-  footprintWidth: number;
-  footprintHeight: number;
-  mappedChannelCount: number;
-  className: string;
-  inGroupFilter: boolean;
-  selected: boolean;
-}
-
-interface MappingFixtureTypeRow {
-  key: string;
-  label: string;
-  manufacturer: string;
-  mode: string;
-  visualKind: MappingFixtureVisualKind;
-  count: number;
-}
-
-type MappingDragState =
-  | {
-      kind: "fixture";
-      pointerId: number;
-      fixtureIds: number[];
-      startWorld: { x: number; z: number };
-      currentWorld: { x: number; z: number };
-      startPositions: Record<number, PatchFixtureRequest["position"]>;
-    }
-  | {
-      kind: "fixtureYaw";
-      pointerId: number;
-      fixtureId: number;
-      startWorld: { x: number; z: number };
-      currentWorld: { x: number; z: number };
-      centerWorld: { x: number; z: number };
-    }
-  | {
-      kind: "videoOutput";
-      pointerId: number;
-      outputId: number;
-      startWorld: { x: number; z: number };
-      currentWorld: { x: number; z: number };
-      startMapping: VideoOutputMapping;
-    }
-  | {
-      kind: "videoOutputRotate";
-      pointerId: number;
-      outputId: number;
-      startWorld: { x: number; z: number };
-      currentWorld: { x: number; z: number };
-      centerWorld: { x: number; z: number };
-      startAngleDeg: number;
-      startMapping: VideoOutputMapping;
-    }
-  | {
-      kind: "videoOutputScale";
-      pointerId: number;
-      outputId: number;
-      startWorld: { x: number; z: number };
-      currentWorld: { x: number; z: number };
-      centerWorld: { x: number; z: number };
-      startDistance: number;
-      startMapping: VideoOutputMapping;
-    }
-  | {
-      kind: "videoOutputCorner";
-      pointerId: number;
-      outputId: number;
-      corner: MappingVideoOutputCornerKey;
-      startWorld: { x: number; z: number };
-      currentWorld: { x: number; z: number };
-      startMapping: VideoOutputMapping;
-    }
-  | {
-      kind: "stageObject";
-      pointerId: number;
-      objectId: number;
-      startWorld: { x: number; z: number };
-      currentWorld: { x: number; z: number };
-      startObject: StageObjectSummary;
-    }
-  | {
-      kind: "stageObjectRotate";
-      pointerId: number;
-      objectId: number;
-      startWorld: { x: number; z: number };
-      currentWorld: { x: number; z: number };
-      centerWorld: { x: number; z: number };
-      startAngleDeg: number;
-      startObject: StageObjectSummary;
-    }
-  | {
-      kind: "stageObjectResize";
-      pointerId: number;
-      objectId: number;
-      resizeMode: MappingStageObjectResizeMode;
-      startWorld: { x: number; z: number };
-      currentWorld: { x: number; z: number };
-      startObject: StageObjectSummary;
-    };
-
-interface MappingMarqueeState {
-  pointerId: number;
-  start: { x: number; z: number };
-  current: { x: number; z: number };
-  additive: boolean;
-}
-
-interface MappingViewportPanDragState {
-  pointerId: number;
-  startClientX: number;
-  startClientY: number;
-  startCenterX: number;
-  startCenterZ: number;
-  viewBoxSize: number;
-  rectWidth: number;
-  rectHeight: number;
-}
-
-interface MappingSnapLine {
-  axis: "x" | "z";
-  svg: number;
-}
-
-interface MappingSvgBounds {
-  minX: number;
-  maxX: number;
-  minZ: number;
-  maxZ: number;
-}
-
-
-
-const surfaceWorldHalfSize = (output: VideoOutputSummary, mapping = output.mapping) => {
-  const outputAspect = output.height > 0 ? output.width / output.height : 1;
-  const mappedAspect = clampRange(finiteOr(mapping.aspect_ratio, outputAspect), 0.35, 4);
-  const aspect = mapping.aspect_mode === "Stretch" ? outputAspect : mappedAspect;
-  const baseHeight = 4.5 * clampRange(mapping.scale_y, 0.25, 3);
-  return {
-    width: baseHeight * Math.max(0.35, aspect) * clampRange(mapping.scale_x, 0.25, 3),
-    height: baseHeight,
-  };
-};
 
 type ColorExtraChannelKey = "white" | "amber" | "uv";
 
@@ -756,25 +571,6 @@ const findControlAttributeInControls = (controls: AttributeControl[], names: str
   return controls.find((control) => normalizedNames.includes(control.attribute.toLowerCase()))?.attribute;
 };
 
-const mappingGeometryClass = (geometry: GeometrySummary, mappedChannelCount: number, inGroupFilter: boolean, selected: boolean) => {
-  const text = `${geometry.kind} ${geometry.model_primitive ?? ""} ${geometry.model_file ?? ""} ${geometry.beam_type ?? ""}`.toLowerCase();
-  const baseClass = text.includes("beam") ? "beam" : text.includes("axis") ? "axis" : "body";
-  const primitive = geometry.model_primitive?.toLowerCase();
-  const meshClass =
-    geometry.model_file && geometry.model_file.trim().length > 0
-      ? "mesh-mesh"
-      : primitive === "cylinder" || primitive === "sphere" || primitive === "plane"
-        ? `mesh-${primitive}`
-        : "";
-  return [
-    "stageGeometryNode",
-    baseClass,
-    meshClass,
-    mappedChannelCount > 0 ? "mapped" : "",
-    selected ? "selected" : "",
-    inGroupFilter ? "" : "muted",
-  ].filter(Boolean).join(" ");
-};
 const bulkPatchLabel = (baseLabel: string, index: number, count: number) => {
   if (count === 1) {
     return baseLabel;
