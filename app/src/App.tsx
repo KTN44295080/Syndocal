@@ -206,6 +206,7 @@ import {
 import { createInitialEngineSnapshot } from "./initialEngineSnapshot";
 import { createTimelineOverviewAutomationController } from "./createTimelineOverviewAutomationController";
 import { createTimelineKeyframeController } from "./createTimelineKeyframeController";
+import { createTimelineAutomationController } from "./createTimelineAutomationController";
 import {
   bulkPatchLabel,
   colorCandidates,
@@ -6998,292 +6999,48 @@ export default function App() {
     refreshSnapshot,
   });
 
-  const setTimelineAutomationEnabled = async (automationId: number, enabled: boolean) => {
-    try {
-      await invoke("set_timeline_automation_enabled", {
-        automationId,
-        enabled,
-      });
-      setMessage(`${enabled ? "Enabled" : "Disabled"} automation ${automationId}`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const setLightingAutomationRowsEnabled = async (
-    automations: TimelineAutomationSummary[],
-    enabled: boolean,
-  ) => {
-    const automationIds = automations
-      .filter((automation) => automation.enabled !== enabled)
-      .map((automation) => automation.id);
-    if (automationIds.length === 0) {
-      setMessage(`Lighting automation rows are already ${enabled ? "enabled" : "disabled"}.`);
-      return;
-    }
-    try {
-      for (const automationId of automationIds) {
-        await invoke("set_timeline_automation_enabled", {
-          automationId,
-          enabled,
-        });
-      }
-      setMessage(`${enabled ? "Enabled" : "Disabled"} ${automationIds.length} lighting automation row(s).`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const setVideoAutomationRowsEnabled = async (
-    automations: TimelineVideoAutomationSummary[],
-    enabled: boolean,
-  ) => {
-    const automationIds = automations
-      .filter((automation) => automation.enabled !== enabled)
-      .map((automation) => automation.id);
-    if (automationIds.length === 0) {
-      setMessage(`Video automation rows are already ${enabled ? "enabled" : "disabled"}.`);
-      return;
-    }
-    try {
-      for (const automationId of automationIds) {
-        await invoke("set_timeline_automation_enabled", {
-          automationId,
-          enabled,
-        });
-      }
-      setMessage(`${enabled ? "Enabled" : "Disabled"} ${automationIds.length} video automation row(s).`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const addTimelineAutomation = async () => {
-    const fixture = selectedFixture();
-    const attribute = selectedTimelineAutomationAttribute();
-    if (!fixture || !attribute || !selectedFixtureSupportsTimelineAutomationAttribute()) {
-      setMessage("Select a fixture and supported automation attribute first.");
-      return;
-    }
-    const startMs = snapTimeMs(automationStartMs());
-    const endMs = Math.max(startMs, snapTimeMs(automationEndMs()));
-    try {
-      const automationId = await invoke<number>("add_timeline_automation", {
-        fixtureId: fixture.id,
-        attribute,
-        keyframes: [
-          {
-            time_ms: startMs,
-            value: automationStartValue(),
-            interpolation: automationInterpolation(),
-          },
-          {
-            time_ms: endMs,
-            value: automationEndValue(),
-            interpolation: "Step",
-          },
-        ],
-      });
-      setMessage(`Added automation ${automationId}`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const addTimelineGroupAutomation = async () => {
-    const groupId = selectedFixtureGroupFilter();
-    const attribute = selectedTimelineAutomationAttribute();
-    if (!groupId || !attribute) {
-      setMessage("Select a group and attribute first.");
-      return;
-    }
-    const startMs = snapTimeMs(automationStartMs());
-    const endMs = Math.max(startMs, snapTimeMs(automationEndMs()));
-    try {
-      const result = await invoke<TimelineGroupAutomationAddResult>("add_timeline_group_automation", {
-        groupId,
-        attribute,
-        keyframes: [
-          {
-            time_ms: startMs,
-            value: automationStartValue(),
-            interpolation: automationInterpolation(),
-          },
-          {
-            time_ms: endMs,
-            value: automationEndValue(),
-            interpolation: "Step",
-          },
-        ],
-      });
-      setMessage(
-        `Added ${result.applied_count} automation(s) to ${groupId}; ${result.skipped_count} incompatible fixture(s) skipped.`,
-      );
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const setTimelineAutomation = async (automation: TimelineAutomationSummary) => {
-    const draft = timelineAutomationDraft(automation);
-    if (!draft.attribute.trim()) {
-      setMessage("Select an automation attribute.");
-      return;
-    }
-    const startMs = snapTimeMs(draft.start_ms);
-    const endMs = Math.max(startMs, snapTimeMs(draft.end_ms));
-    const startValue = Math.max(0, Math.min(65535, Math.round(draft.start_value)));
-    const endValue = Math.max(0, Math.min(65535, Math.round(draft.end_value)));
-    const keyframes = keyframesWithDraftEndpoints<AutomationKeyframeSummary>(
-      automation.keyframes,
-      startMs,
-      endMs,
-      startValue,
-      endValue,
-      draft.interpolation,
-    );
-    try {
-      await invoke("set_timeline_automation", {
-        automationId: automation.id,
-        fixtureId: Math.max(0, Math.round(draft.fixture_id)),
-        attribute: draft.attribute,
-        keyframes,
-      });
-      setTimelineAutomationDrafts((current) => ({
-        ...current,
-        [automation.id]: {
-          ...draft,
-          start_ms: startMs,
-          end_ms: endMs,
-          start_value: startValue,
-          end_value: endValue,
-        },
-      }));
-      setMessage(`Saved automation ${automation.id}`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const addTimelineVideoAutomation = async () => {
-    const layerId = selectedVideoAutomationLayerId();
-    if (layerId === null) {
-      setMessage("Add a video layer before adding video automation.");
-      return;
-    }
-    const startMs = snapTimeMs(videoAutomationStartMs());
-    const endMs = Math.max(startMs, snapTimeMs(videoAutomationEndMs()));
-    try {
-      const automationId = await invoke<number>("add_timeline_video_automation", {
-        layerId,
-        param: videoAutomationParam(),
-        keyframes: [
-          {
-            time_ms: startMs,
-            value: videoAutomationStartValue(),
-            interpolation: videoAutomationInterpolation(),
-          },
-          {
-            time_ms: endMs,
-            value: videoAutomationEndValue(),
-            interpolation: "Step",
-          },
-        ],
-      });
-      setMessage(`Added video automation ${automationId}`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const setTimelineVideoAutomation = async (automation: TimelineVideoAutomationSummary) => {
-    const draft = timelineVideoAutomationDraft(automation);
-    if (!Number.isFinite(draft.start_value) || !Number.isFinite(draft.end_value)) {
-      setMessage("Video automation values must be finite.");
-      return;
-    }
-    const startMs = snapTimeMs(draft.start_ms);
-    const endMs = Math.max(startMs, snapTimeMs(draft.end_ms));
-    const keyframes = keyframesWithDraftEndpoints<VideoAutomationKeyframeSummary>(
-      automation.keyframes,
-      startMs,
-      endMs,
-      draft.start_value,
-      draft.end_value,
-      draft.interpolation,
-    );
-    try {
-      await invoke("set_timeline_video_automation", {
-        automationId: automation.id,
-        layerId: Math.max(0, Math.round(draft.layer_id)),
-        param: draft.param,
-        keyframes,
-      });
-      setTimelineVideoAutomationDrafts((current) => ({
-        ...current,
-        [automation.id]: {
-          ...draft,
-          start_ms: startMs,
-          end_ms: endMs,
-        },
-      }));
-      setMessage(`Saved video automation ${automation.id}`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const removeTimelineAutomation = async (automationId: number) => {
-    try {
-      await invoke("remove_timeline_automation", { automationId });
-      setMessage(`Removed automation ${automationId}`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const playTimeline = async () => {
-    try {
-      await invoke("set_timeline_playing", { playing: true });
-      setMessage("Timeline playing.");
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const pauseTimeline = async () => {
-    try {
-      await invoke("set_timeline_playing", { playing: false });
-      setMessage("Timeline paused.");
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const seekTimeline = async (positionMs: number) => {
-    try {
-      await invoke("seek_timeline", { positionMs });
-      setMessage(`Timeline seek ${positionMs}ms`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const seekTimelineFromOverviewRatio = (ratio: number) => {
-    void seekTimeline(snapTimeMs(Math.round(ratio * timelineOverviewDurationMs())));
-  };
+  const {
+    setTimelineAutomationEnabled,
+    setLightingAutomationRowsEnabled,
+    setVideoAutomationRowsEnabled,
+    addTimelineAutomation,
+    addTimelineGroupAutomation,
+    setTimelineAutomation,
+    addTimelineVideoAutomation,
+    setTimelineVideoAutomation,
+    removeTimelineAutomation,
+    playTimeline,
+    pauseTimeline,
+    seekTimeline,
+    seekTimelineFromOverviewRatio,
+  } = createTimelineAutomationController({
+    snapshot,
+    selectedFixture,
+    selectedFixtureGroupFilter,
+    selectedTimelineAutomationAttribute,
+    selectedFixtureSupportsTimelineAutomationAttribute,
+    automationStartMs,
+    automationEndMs,
+    automationStartValue,
+    automationEndValue,
+    automationInterpolation,
+    selectedVideoAutomationLayerId,
+    videoAutomationParam,
+    videoAutomationStartMs,
+    videoAutomationEndMs,
+    videoAutomationStartValue,
+    videoAutomationEndValue,
+    videoAutomationInterpolation,
+    timelineAutomationDraft,
+    timelineVideoAutomationDraft,
+    setTimelineAutomationDrafts,
+    setTimelineVideoAutomationDrafts,
+    snapTimeMs,
+    timelineOverviewDurationMs,
+    invoke,
+    setMessage,
+    refreshSnapshot,
+  });
 
   const addVideoLayer = async () => {
     try {

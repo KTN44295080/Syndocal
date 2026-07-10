@@ -20,6 +20,7 @@ export default defineConfig({
             normalizedId.includes("/src/components/TimelineLightingAutomationPanel") ||
             normalizedId.includes("/src/components/TimelineOverview") ||
             normalizedId.includes("/src/components/VideoTimelineAutomationPanel") ||
+            normalizedId.includes("/src/createTimelineAutomationController") ||
             normalizedId.includes("/src/createTimelineKeyframeController") ||
             normalizedId.includes("/src/createTimelineOverviewAutomationController") ||
             normalizedId.includes("/src/timelineAutomationHelpers")
