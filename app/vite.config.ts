@@ -106,6 +106,7 @@ export default defineConfig({
             return "effect-panels";
           }
           if (
+            normalizedId.includes("/src/createAppKeyboardController") ||
             normalizedId.includes("/src/components/GroupChip") ||
             normalizedId.includes("/src/components/WorkspaceChrome")
           ) {

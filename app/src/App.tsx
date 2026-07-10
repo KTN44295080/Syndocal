@@ -208,6 +208,7 @@ import { createTimelineOverviewAutomationController } from "./createTimelineOver
 import { createTimelineKeyframeController } from "./createTimelineKeyframeController";
 import { createTimelineAutomationController } from "./createTimelineAutomationController";
 import { createVideoRuntimeController } from "./createVideoRuntimeController";
+import { createAppKeyboardController } from "./createAppKeyboardController";
 import {
   bulkPatchLabel,
   colorCandidates,
@@ -8000,242 +8001,45 @@ export default function App() {
     void setMappingSelectionFlag(flag, enabled);
   };
 
-  const handleControlKeyDown = (event: KeyboardEvent) => {
-    if (event.repeat || event.altKey) {
-      return;
-    }
-
-    const commandModifier = event.ctrlKey || event.metaKey;
-    if (commandModifier) {
-      if (event.code === "KeyS") {
-        event.preventDefault();
-        if (event.shiftKey) {
-          void saveProjectAs();
-        } else {
-          void saveProject();
-        }
-        return;
-      }
-      if (!event.shiftKey && event.code === "KeyO") {
-        event.preventDefault();
-        void loadProject();
-        return;
-      }
-      if (!event.shiftKey && event.code === "KeyN") {
-        event.preventDefault();
-        void newProject();
-        return;
-      }
-    }
-
-    const nextWorkspaceTab = workspaceTabForShortcut(event.code);
-    if (nextWorkspaceTab) {
-      event.preventDefault();
-      setWorkspaceTab(nextWorkspaceTab);
-      setMessage(`Workspace: ${nextWorkspaceTab.toUpperCase()}.`);
-      return;
-    }
-
-    if (isEditableShortcutTarget(event.target)) {
-      return;
-    }
-
-    if (workspaceTab() === "setup") {
-      const nextSetupSubTab = setupSubTabForShortcut(event.code);
-      if (nextSetupSubTab) {
-        event.preventDefault();
-        selectSetupMode(nextSetupSubTab);
-        setMessage(`Setup mode: ${nextSetupSubTab.toUpperCase()}.`);
-        return;
-      }
-    }
-
-    if (workspaceTab() === "setup" && setupSubTab() === "mapping") {
-      if (event.key === "?" || (event.code === "Slash" && event.shiftKey)) {
-        event.preventDefault();
-        setMappingHotkeyHelpOpen((open) => !open);
-        return;
-      }
-      if (event.code === "Escape" && mappingHotkeyHelpOpen()) {
-        event.preventDefault();
-        setMappingHotkeyHelpOpen(false);
-        return;
-      }
-      const selectionManagementAction = mappingSelectionManagementActionFromHotkey(
-        event.code,
-        event.shiftKey,
-        commandModifier,
-      );
-      if (selectionManagementAction) {
-        event.preventDefault();
-        applyMappingSelectionManagementAction(selectionManagementAction);
-        return;
-      }
-      if (commandModifier && event.code === "KeyD") {
-        event.preventDefault();
-        void duplicateSelectedMappingFixtures();
-        return;
-      }
-      if (commandModifier) {
-        return;
-      }
-      const nextTool = mappingStageToolFromHotkey(event.code);
-      if (nextTool) {
-        event.preventDefault();
-        setMappingStageTool(nextTool);
-        setMessage(`2D mapping tool: ${nextTool.toUpperCase()}.`);
-        return;
-      }
-      const layerToggle = mappingLayerToggleFromHotkey(event.code, event.shiftKey);
-      if (layerToggle) {
-        event.preventDefault();
-        toggleMappingLayer(layerToggle);
-        return;
-      }
-      const selectionFlag = mappingSelectionFlagFromHotkey(event.code);
-      if (selectionFlag) {
-        event.preventDefault();
-        toggleMappingSelectionFlag(selectionFlag);
-        return;
-      }
-      const stageObjectSelectionAction = mappingStageObjectSelectionActionFromHotkey(event.code, event.shiftKey);
-      if (stageObjectSelectionAction) {
-        event.preventDefault();
-        applyMappingSelectionManagementAction(stageObjectSelectionAction);
-        return;
-      }
-      const viewportAction = mappingViewportActionFromHotkey(event.code, event.shiftKey);
-      if (viewportAction) {
-        event.preventDefault();
-        applyMappingViewportAction(viewportAction);
-        return;
-      }
-      const selectionAction = mappingSelectionActionFromHotkey(event.code, event.shiftKey);
-      if (selectionAction) {
-        event.preventDefault();
-        applyMappingSelectionAction(selectionAction);
-        return;
-      }
-      const nudgeAmount = normalizedMappingSnapSize() * (event.shiftKey ? 5 : 1);
-      if (event.code === "ArrowLeft") {
-        event.preventDefault();
-        void nudgeSelectedMappingFixtures(-nudgeAmount, 0);
-        return;
-      }
-      if (event.code === "ArrowRight") {
-        event.preventDefault();
-        void nudgeSelectedMappingFixtures(nudgeAmount, 0);
-        return;
-      }
-      if (event.code === "ArrowUp") {
-        event.preventDefault();
-        void nudgeSelectedMappingFixtures(0, -nudgeAmount);
-        return;
-      }
-      if (event.code === "ArrowDown") {
-        event.preventDefault();
-        void nudgeSelectedMappingFixtures(0, nudgeAmount);
-        return;
-      }
-      if (event.code === "Delete" || event.code === "Backspace") {
-        event.preventDefault();
-        void removeSelectedMappingFixtures();
-        return;
-      }
-      if (event.code === "Escape") {
-        event.preventDefault();
-        setMappingStageTool("select");
-        setMappingDrag(null);
-        setMappingMarquee(null);
-        setMappingViewportPanDrag(null);
-        return;
-      }
-    }
-
-    if (workspaceTab() !== "control") {
-      return;
-    }
-    if (commandModifier) {
-      return;
-    }
-
-    const nextControlMode = controlModeForShortcut(event.code);
-    if (nextControlMode) {
-      event.preventDefault();
-      setControlMode(nextControlMode);
-      setMessage(`Control mode: ${nextControlMode.toUpperCase()}.`);
-      return;
-    }
-
-    if (event.code === "Space") {
-      event.preventDefault();
-      if (snapshot().cues.length === 0) {
-        return;
-      }
-      if (event.shiftKey) {
-        void triggerPreviousCue();
-      } else {
-        void triggerNextCue();
-      }
-      return;
-    }
-
-    if (event.shiftKey) {
-      return;
-    }
-
-    const cueHotkeyIndex = controlCueHotkeyIndex(event.code);
-    if (cueHotkeyIndex !== null) {
-      const cue = snapshot().cues[cuePadStartIndex() + cueHotkeyIndex];
-      if (cue) {
-        event.preventDefault();
-        void triggerCue(cue.id);
-      }
-      return;
-    }
-
-    if (event.code === "KeyG" || event.code === "Enter") {
-      event.preventDefault();
-      if (snapshot().cues.length > 0) {
-        void triggerNextCue();
-      }
-      return;
-    }
-    if (event.code === "KeyP") {
-      event.preventDefault();
-      if (snapshot().active_fade) {
-        void setCueFadePaused(!snapshot().active_fade?.paused);
-      }
-      return;
-    }
-    if (event.code === "KeyT") {
-      event.preventDefault();
-      if (snapshot().timeline.playing) {
-        void pauseTimeline();
-      } else if (snapshot().timeline.duration_ms > 0) {
-        void playTimeline();
-      }
-      return;
-    }
-    if (event.code === "KeyB") {
-      event.preventDefault();
-      if (event.shiftKey) {
-        void setAllBlackout(!(snapshot().blackout && snapshot().video.blackout));
-      } else {
-        void setBlackout(!snapshot().blackout);
-      }
-      return;
-    }
-    if (event.code === "KeyV") {
-      event.preventDefault();
-      void setVideoBlackout(!snapshot().video.blackout);
-      return;
-    }
-    if (event.code === "KeyK") {
-      event.preventDefault();
-      void tapBpm();
-    }
-  };
+  const { handleControlKeyDown } = createAppKeyboardController({
+    workspaceTab,
+    setWorkspaceTab,
+    setupSubTab,
+    selectSetupMode,
+    setControlMode,
+    setMessage,
+    saveProject,
+    saveProjectAs,
+    loadProject,
+    newProject,
+    mappingHotkeyHelpOpen,
+    setMappingHotkeyHelpOpen,
+    applyMappingSelectionManagementAction,
+    duplicateSelectedMappingFixtures,
+    setMappingStageTool,
+    toggleMappingLayer,
+    toggleMappingSelectionFlag,
+    applyMappingViewportAction,
+    applyMappingSelectionAction,
+    normalizedMappingSnapSize,
+    nudgeSelectedMappingFixtures,
+    removeSelectedMappingFixtures,
+    setMappingDrag,
+    setMappingMarquee,
+    setMappingViewportPanDrag,
+    snapshot,
+    triggerPreviousCue,
+    triggerNextCue,
+    triggerCue,
+    cuePadStartIndex,
+    setCueFadePaused,
+    playTimeline,
+    pauseTimeline,
+    setAllBlackout,
+    setBlackout,
+    setVideoBlackout,
+    tapBpm,
+  });
 
   let nativeCloseApproved = false;
   let closeRequestListenerDisposed = false;
