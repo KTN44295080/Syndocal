@@ -66,11 +66,11 @@
 
 ### M0 — 作業ツリーの収束(即時、〜1 セッション)
 ダーティな進行中スライスを完結させ、安全なチェックポイントを作る。
-- [ ] DMX アドレッシングヘルパーのスライス完了: `node app/scripts/check-dmx-addressing-helpers.mjs` green、App.tsx/PatchFixtureFormPanel の配線確認。
-- [ ] プロジェクトリカバリのスライス完了: `node app/scripts/check-project-storage-helpers.mjs` green、保存/復元/破棄の UI フロー手動確認。
-- [ ] `pnpm --dir app build` + `npm run check:viewport` green。
-- [ ] `cargo test -p rayard project_` green(main.rs を触っているため)。
-- [ ] **意味のあるコミットメッセージでコミット**(「s」のような無意味メッセージは今後禁止 — §6 参照)。
+- [x] DMX アドレッシングヘルパーのスライス完了: `node app/scripts/check-dmx-addressing-helpers.mjs` green、App.tsx/PatchFixtureFormPanel の配線確認。
+- [x] プロジェクトリカバリのスライス完了: `node app/scripts/check-project-storage-helpers.mjs` green、保存/復元/破棄の UI フロー手動確認。
+- [x] `pnpm --dir app build` + `npm run check:viewport` green。
+- [x] `cargo test -p rayard project_` green(main.rs を触っているため)。
+- [x] **意味のあるコミットメッセージでコミット**(「s」のような無意味メッセージは今後禁止 — §6 参照)。
 - 検証ゲート: 上記すべて + `git status` がクリーン。
 
 ### M1 — Phase 2 完了宣言 + 安定化(1〜2 週)
