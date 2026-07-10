@@ -205,6 +205,7 @@ import {
 } from "./createOutputDiagnosticsController";
 import { createInitialEngineSnapshot } from "./initialEngineSnapshot";
 import { createTimelineOverviewAutomationController } from "./createTimelineOverviewAutomationController";
+import { createTimelineKeyframeController } from "./createTimelineKeyframeController";
 import {
   bulkPatchLabel,
   colorCandidates,
@@ -6960,350 +6961,42 @@ export default function App() {
     }
   };
 
-  const automationRangeFromPlayhead = () => {
-    const startMs = snapTimeMs(snapshot().timeline.position_ms);
-    const endMs = Math.max(startMs, snapTimeMs(startMs + timelinePlacementNudgeMs()));
-    return { startMs, endMs };
-  };
-
-  const usePlayheadForLightingAutomation = () => {
-    const { startMs, endMs } = automationRangeFromPlayhead();
-    setAutomationStartMs(startMs);
-    setAutomationEndMs(endMs);
-    setMessage(`Lighting automation draft ${startMs}-${endMs} ms`);
-  };
-
-  const usePlayheadForVideoAutomation = () => {
-    const { startMs, endMs } = automationRangeFromPlayhead();
-    setVideoAutomationStartMs(startMs);
-    setVideoAutomationEndMs(endMs);
-    setMessage(`Video automation draft ${startMs}-${endMs} ms`);
-  };
-
-  const automationDraftRangeAtPlayhead = (startMs: number, endMs: number) => {
-    const nextStartMs = snapTimeMs(snapshot().timeline.position_ms);
-    const sourceDurationMs = Math.max(0, Math.round(endMs - startMs));
-    const durationMs = sourceDurationMs > 0 ? sourceDurationMs : Math.max(1, timelinePlacementNudgeMs());
-    let nextEndMs = snapTimeMs(nextStartMs + durationMs);
-    if (nextEndMs <= nextStartMs) {
-      nextEndMs = nextStartMs + Math.max(1, durationMs);
-    }
-    return { startMs: nextStartMs, endMs: nextEndMs };
-  };
-
-  const alignLightingAutomationDraftToPlayhead = (automation: TimelineAutomationSummary) => {
-    const draft = timelineAutomationDraft(automation);
-    const range = automationDraftRangeAtPlayhead(draft.start_ms, draft.end_ms);
-    updateTimelineAutomationDraft(automation, {
-      start_ms: range.startMs,
-      end_ms: range.endMs,
-    });
-    setMessage(`Aligned automation ${automation.id} draft to ${range.startMs}-${range.endMs} ms`);
-  };
-
-  const alignVideoAutomationDraftToPlayhead = (automation: TimelineVideoAutomationSummary) => {
-    const draft = timelineVideoAutomationDraft(automation);
-    const range = automationDraftRangeAtPlayhead(draft.start_ms, draft.end_ms);
-    updateTimelineVideoAutomationDraft(automation, {
-      start_ms: range.startMs,
-      end_ms: range.endMs,
-    });
-    setMessage(`Aligned video automation ${automation.id} draft to ${range.startMs}-${range.endMs} ms`);
-  };
-
-  const addLightingAutomationKeyframeAtPlayhead = async (automation: TimelineAutomationSummary) => {
-    const timeMs = snapTimeMs(snapshot().timeline.position_ms);
-    const capturedValue = currentLightingAutomationValue(automation);
-    const evaluatedValue = capturedValue ?? evaluateTimelineKeyframes(automation.keyframes, timeMs);
-    if (evaluatedValue === null || !Number.isFinite(evaluatedValue)) {
-      setMessage(`Lighting automation ${automation.id} has no keyframes.`);
-      return;
-    }
-    const value = Math.max(0, Math.min(65535, Math.round(evaluatedValue)));
-    const keyframes = upsertTimelineKeyframe<AutomationKeyframeSummary>(automation.keyframes, {
-      time_ms: timeMs,
-      value,
-      interpolation: interpolationForInsertedKeyframe(automation.keyframes, timeMs),
-    });
-    try {
-      await invoke("set_timeline_automation", {
-        automationId: automation.id,
-        fixtureId: automation.fixture_id,
-        attribute: automation.attribute,
-        keyframes,
-      });
-      setTimelineAutomationDrafts((current) => ({
-        ...current,
-        [automation.id]: {
-          ...(current[automation.id] ?? timelineAutomationDraftFromSummary(automation)),
-          ...draftRangeFromKeyframes(keyframes),
-        },
-      }));
-      setMessage(`Captured automation ${automation.id} key at ${timeMs} ms = ${value}`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const addVideoAutomationKeyframeAtPlayhead = async (automation: TimelineVideoAutomationSummary) => {
-    const timeMs = snapTimeMs(snapshot().timeline.position_ms);
-    const capturedValue = currentVideoAutomationValue(automation);
-    const evaluatedValue = capturedValue ?? evaluateTimelineKeyframes(automation.keyframes, timeMs);
-    if (evaluatedValue === null || !Number.isFinite(evaluatedValue)) {
-      setMessage(`Video automation ${automation.id} has no finite keyframe value.`);
-      return;
-    }
-    const keyframes = upsertTimelineKeyframe<VideoAutomationKeyframeSummary>(automation.keyframes, {
-      time_ms: timeMs,
-      value: evaluatedValue,
-      interpolation: interpolationForInsertedKeyframe(automation.keyframes, timeMs),
-    });
-    try {
-      await invoke("set_timeline_video_automation", {
-        automationId: automation.id,
-        layerId: automation.layer_id,
-        param: automation.param,
-        keyframes,
-      });
-      setTimelineVideoAutomationDrafts((current) => ({
-        ...current,
-        [automation.id]: {
-          ...(current[automation.id] ?? timelineVideoAutomationDraftFromSummary(automation)),
-          ...draftRangeFromKeyframes(keyframes),
-        },
-      }));
-      setMessage(`Captured video automation ${automation.id} key at ${timeMs} ms = ${evaluatedValue.toFixed(3)}`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const removeLightingAutomationKeyframeResult = async (
-    automation: TimelineAutomationSummary,
-    result: { keyframes: AutomationKeyframeSummary[]; keyframeIndex: number; timeMs: number } | null,
-  ) => {
-    if (!result) {
-      setMessage(`Automation ${automation.id} needs at least two keyframes.`);
-      return;
-    }
-    try {
-      await invoke("set_timeline_automation", {
-        automationId: automation.id,
-        fixtureId: automation.fixture_id,
-        attribute: automation.attribute,
-        keyframes: result.keyframes,
-      });
-      setTimelineAutomationDrafts((current) => ({
-        ...current,
-        [automation.id]: timelineAutomationDraftFromSummary({
-          ...automation,
-          keyframes: result.keyframes,
-        }),
-      }));
-      setMessage(`Removed automation ${automation.id} key ${result.keyframeIndex + 1} at ${result.timeMs} ms`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const removeLightingAutomationKeyframeAtPlayhead = async (automation: TimelineAutomationSummary) => {
-    if (automation.keyframes.length <= 2) {
-      setMessage(`Automation ${automation.id} needs at least two keyframes.`);
-      return;
-    }
-    const result = keyframesWithoutPlayheadKeyframe(
-      automation.keyframes,
-      snapshot().timeline.position_ms,
-      keyframeDeleteToleranceMs(),
-    );
-    if (!result) {
-      setMessage(`Seek to a keyframe before removing it from automation ${automation.id}.`);
-      return;
-    }
-    await removeLightingAutomationKeyframeResult(automation, result);
-  };
-
-  const removeLightingAutomationKeyframe = async (automation: TimelineAutomationSummary, keyframeIndex: number) => {
-    await removeLightingAutomationKeyframeResult(automation, keyframesWithoutIndex(automation.keyframes, keyframeIndex));
-  };
-
-  const setLightingAutomationKeyframeInterpolation = async (
-    automation: TimelineAutomationSummary,
-    keyframeIndex: number,
-    interpolation: AutomationInterpolation,
-  ) => {
-    const keyframes = keyframesWithInterpolationAtIndex(automation.keyframes, keyframeIndex, interpolation);
-    if (!keyframes) {
-      setMessage(`Lighting automation key ${keyframeIndex + 1} was not found.`);
-      return;
-    }
-    try {
-      await invoke("set_timeline_automation", {
-        automationId: automation.id,
-        fixtureId: automation.fixture_id,
-        attribute: automation.attribute,
-        keyframes,
-      });
-      setTimelineAutomationDrafts((current) => ({
-        ...current,
-        [automation.id]: timelineAutomationDraftFromSummary({
-          ...automation,
-          keyframes,
-        }),
-      }));
-      setMessage(`Set automation ${automation.id} key ${keyframeIndex + 1} curve ${interpolation}`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const setLightingAutomationKeyframeValue = async (
-    automation: TimelineAutomationSummary,
-    keyframeIndex: number,
-    value: number,
-  ) => {
-    const nextValue = clampDmxValue(Math.round(value));
-    const keyframes = keyframesWithValueAtIndex(automation.keyframes, keyframeIndex, nextValue);
-    if (!keyframes) {
-      setMessage(`Lighting automation key ${keyframeIndex + 1} needs a finite DMX value.`);
-      return;
-    }
-    try {
-      await invoke("set_timeline_automation", {
-        automationId: automation.id,
-        fixtureId: automation.fixture_id,
-        attribute: automation.attribute,
-        keyframes,
-      });
-      setTimelineAutomationDrafts((current) => ({
-        ...current,
-        [automation.id]: timelineAutomationDraftFromSummary({
-          ...automation,
-          keyframes,
-        }),
-      }));
-      setMessage(`Set automation ${automation.id} key ${keyframeIndex + 1} value ${nextValue}`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const removeVideoAutomationKeyframeResult = async (
-    automation: TimelineVideoAutomationSummary,
-    result: { keyframes: VideoAutomationKeyframeSummary[]; keyframeIndex: number; timeMs: number } | null,
-  ) => {
-    if (!result) {
-      setMessage(`Video automation ${automation.id} needs at least two keyframes.`);
-      return;
-    }
-    try {
-      await invoke("set_timeline_video_automation", {
-        automationId: automation.id,
-        layerId: automation.layer_id,
-        param: automation.param,
-        keyframes: result.keyframes,
-      });
-      setTimelineVideoAutomationDrafts((current) => ({
-        ...current,
-        [automation.id]: timelineVideoAutomationDraftFromSummary({
-          ...automation,
-          keyframes: result.keyframes,
-        }),
-      }));
-      setMessage(`Removed video automation ${automation.id} key ${result.keyframeIndex + 1} at ${result.timeMs} ms`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const removeVideoAutomationKeyframeAtPlayhead = async (automation: TimelineVideoAutomationSummary) => {
-    if (automation.keyframes.length <= 2) {
-      setMessage(`Video automation ${automation.id} needs at least two keyframes.`);
-      return;
-    }
-    const result = keyframesWithoutPlayheadKeyframe(
-      automation.keyframes,
-      snapshot().timeline.position_ms,
-      keyframeDeleteToleranceMs(),
-    );
-    if (!result) {
-      setMessage(`Seek to a keyframe before removing it from video automation ${automation.id}.`);
-      return;
-    }
-    await removeVideoAutomationKeyframeResult(automation, result);
-  };
-
-  const removeVideoAutomationKeyframe = async (automation: TimelineVideoAutomationSummary, keyframeIndex: number) => {
-    await removeVideoAutomationKeyframeResult(automation, keyframesWithoutIndex(automation.keyframes, keyframeIndex));
-  };
-
-  const setVideoAutomationKeyframeInterpolation = async (
-    automation: TimelineVideoAutomationSummary,
-    keyframeIndex: number,
-    interpolation: AutomationInterpolation,
-  ) => {
-    const keyframes = keyframesWithInterpolationAtIndex(automation.keyframes, keyframeIndex, interpolation);
-    if (!keyframes) {
-      setMessage(`Video automation key ${keyframeIndex + 1} was not found.`);
-      return;
-    }
-    try {
-      await invoke("set_timeline_video_automation", {
-        automationId: automation.id,
-        layerId: automation.layer_id,
-        param: automation.param,
-        keyframes,
-      });
-      setTimelineVideoAutomationDrafts((current) => ({
-        ...current,
-        [automation.id]: timelineVideoAutomationDraftFromSummary({
-          ...automation,
-          keyframes,
-        }),
-      }));
-      setMessage(`Set video automation ${automation.id} key ${keyframeIndex + 1} curve ${interpolation}`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const setVideoAutomationKeyframeValue = async (
-    automation: TimelineVideoAutomationSummary,
-    keyframeIndex: number,
-    value: number,
-  ) => {
-    const keyframes = keyframesWithValueAtIndex(automation.keyframes, keyframeIndex, value);
-    if (!keyframes) {
-      setMessage(`Video automation key ${keyframeIndex + 1} needs a finite value.`);
-      return;
-    }
-    try {
-      await invoke("set_timeline_video_automation", {
-        automationId: automation.id,
-        layerId: automation.layer_id,
-        param: automation.param,
-        keyframes,
-      });
-      setTimelineVideoAutomationDrafts((current) => ({
-        ...current,
-        [automation.id]: timelineVideoAutomationDraftFromSummary({
-          ...automation,
-          keyframes,
-        }),
-      }));
-      setMessage(`Set video automation ${automation.id} key ${keyframeIndex + 1} value ${value}`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
+  const {
+    usePlayheadForLightingAutomation,
+    usePlayheadForVideoAutomation,
+    alignLightingAutomationDraftToPlayhead,
+    alignVideoAutomationDraftToPlayhead,
+    addLightingAutomationKeyframeAtPlayhead,
+    addVideoAutomationKeyframeAtPlayhead,
+    removeLightingAutomationKeyframeAtPlayhead,
+    removeLightingAutomationKeyframe,
+    setLightingAutomationKeyframeInterpolation,
+    setLightingAutomationKeyframeValue,
+    removeVideoAutomationKeyframeAtPlayhead,
+    removeVideoAutomationKeyframe,
+    setVideoAutomationKeyframeInterpolation,
+    setVideoAutomationKeyframeValue,
+  } = createTimelineKeyframeController({
+    snapshot,
+    snapTimeMs,
+    timelinePlacementNudgeMs,
+    setAutomationStartMs,
+    setAutomationEndMs,
+    setVideoAutomationStartMs,
+    setVideoAutomationEndMs,
+    timelineAutomationDraft,
+    timelineVideoAutomationDraft,
+    updateTimelineAutomationDraft,
+    updateTimelineVideoAutomationDraft,
+    currentLightingAutomationValue,
+    currentVideoAutomationValue,
+    keyframeDeleteToleranceMs,
+    invoke,
+    setTimelineAutomationDrafts,
+    setTimelineVideoAutomationDrafts,
+    setMessage,
+    refreshSnapshot,
+  });
 
   const setTimelineAutomationEnabled = async (automationId: number, enabled: boolean) => {
     try {
