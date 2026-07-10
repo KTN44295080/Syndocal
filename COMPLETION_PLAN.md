@@ -1,0 +1,205 @@
+# Rayard 完成計画書 / Codex 作業指示書
+
+作成日: 2026-07-10
+対象: Rayard — Rust/Tauri/SolidJS 製 DMX 照明 + VJ 統合コントロールアプリ
+運用: この文書は「完成(v1.0)」までのロードマップと、Codex/Claude セッションへの標準作業指示を兼ねる。
+日々のスライス記録は従来どおり `CLAUDE.md` に追記し、この文書はマイルストーン単位でのみ更新する。
+
+---
+
+## 1. 完成(v1.0)の定義 — Definition of Done
+
+以下がすべて満たされたとき、Rayard v1.0 とする。
+
+### 機能要件
+- [ ] 照明: GDTF/カスタムプロファイルのパッチ → 2D マッピング → キュー/タイムライン/エフェクト → Art-Net / sACN / シリアル DMX 出力が、実機で安定動作する。
+- [ ] ビデオ: レイヤー合成 → プロジェクター補正(コーナーピン/レンズ/キーストーン) → ディスプレイ出力が、**ネイティブ wgpu 出力**で 60fps 動作する(CPU プレビューはデバッグ用途に降格)。
+- [ ] 動画デコード: FFmpeg CLI 抽出ではなく、**インプロセスのデコードワーカー**(FFmpeg ライブラリまたは HAP)でフレーム供給する。
+- [ ] 共有エフェクト: 1 つの LFO/PositionWave ソースが照明と映像の両方を駆動する(実装済み — 回帰させない)。
+- [ ] タイムライン: キューイベント + 照明/映像オートメーションが 1 本のタイムラインで同期する(実装済み — 回帰させない)。
+- [ ] 外部 I/O: MIDI 入出力、OSC、Web リモートが動作する(実装済み)。NDI 送出は実バインディングで動作する。Spout/Syphon は v1.0 では「実装 or 明示的にロードマップ外」を決定済みであること。
+- [ ] プロジェクト: `.ry` の保存/読込/検証/自動リカバリが完結し、外部ファイル欠損時も自己完結スナップショットで復元できる。
+
+### 品質要件
+- [ ] `cargo test --workspace` が green。
+- [ ] `pnpm --dir app build`(tsc + vite)が green、メインチャンク < 500 kB。
+- [ ] `npm run check:viewport` が green(アプリ本体はスクロールしない一画面デスク)。
+- [ ] 44 Hz DMX ティックがテレメトリ予算内(budget report が pass)で、1 時間ソークでドロップ/リークなし。
+- [ ] Windows 用リリースビルド(`pnpm --dir app tauri build`)+ インストーラが動作し、`.ry` 拡張子関連付けが機能する。
+- [ ] クラッシュ/強制終了 → 再起動 → リカバリチェックポイントから復元、が手動テストで通る。
+
+### ドキュメント要件
+- [ ] README がユーザ向けに完成(機能概要、対応ハード、クイックスタート、スモークフロー)。
+- [ ] `samples/README.md` が最新のサンプル群(mini-show / effect presets)を反映。
+- [ ] ホットキー一覧が UI 内(またはドキュメント)で参照できる。
+
+---
+
+## 2. 現状評価(2026-07-10 時点)
+
+### 完了済み(回帰させないこと)
+- Phase 1 MVP: パッチ → DMX 出力 → キュー → スモークテスト一式。埋め込みサンプル `Load Sample` / `Run Smoke`。
+- Phase 2 の大部分: エフェクトプリセット群(pulse/wave/flash/chase/fan/circle/ball/random/perlin/shared)、エフェクト複製/編集/ドラフト再利用、混合照明+映像ターゲット、タイムラインオートメーション(ドラッグ/リサイズ/Playhead/Align)、2D マッピングのホットキー群、sACN/シリアル出力 UI、Node Graph の clock-sync。
+- フロントエンド分割: App.tsx を約 19,200 行 → 現在約 14,000 行まで削減。85+ スライスで `app/src/components/` と純粋ヘルパーモジュールへ抽出済み。
+- ビューポート回帰ハーネス: `app/scripts/check-viewport-containment.mjs`(`npm run check:viewport`)。
+
+### 進行中(未コミットの作業ツリー)
+- `app/src/dmxAddressing.ts` + `app/scripts/check-dmx-addressing-helpers.mjs`: DMX アドレス占有/空き判定の純粋ヘルパー抽出。
+- `app/src/projectRecoveryStorage.ts` + `app/scripts/check-project-storage-helpers.mjs`: localStorage ベースのプロジェクト自動リカバリチェックポイント(`rayard.projectRecovery.v1`)。
+- App.tsx / PatchFixtureFormPanel / WorkspaceChrome / styles.css / main.rs への対応配線。
+
+**→ 最初のアクション: この進行中スライスを検証して完結させ、コミットチェックポイントを切ること(§4 M0 参照)。**
+
+### 未着手(v1.0 の主要残作業)
+1. ネイティブ wgpu ビデオ出力(現在は CPU リファレンスコンポジタ + プレビューウィンドウ)。
+2. インプロセス FFmpeg/HAP デコードワーカー(現在は FFmpeg CLI フレーム抽出 + 静止画デコード)。
+3. NDI 実バインディング(現在はプレースホルダルート + 診断表示のみ)。Spout/Syphon の採否決定。
+4. Enttec Open DMX のハードウェアタイミング改善(FTDI ブレークタイミング)。
+5. リリースエンジニアリング(インストーラ、署名、バージョニング、QA パス)。
+6. ドキュメント一括更新(意図的に後回しにしてきた分)。
+
+---
+
+## 3. マイルストーン計画
+
+依存関係順。各マイルストーンの末尾に「検証ゲート」を置き、ゲートを通過するまで次へ進まない。
+
+### M0 — 作業ツリーの収束(即時、〜1 セッション)
+ダーティな進行中スライスを完結させ、安全なチェックポイントを作る。
+- [ ] DMX アドレッシングヘルパーのスライス完了: `node app/scripts/check-dmx-addressing-helpers.mjs` green、App.tsx/PatchFixtureFormPanel の配線確認。
+- [ ] プロジェクトリカバリのスライス完了: `node app/scripts/check-project-storage-helpers.mjs` green、保存/復元/破棄の UI フロー手動確認。
+- [ ] `pnpm --dir app build` + `npm run check:viewport` green。
+- [ ] `cargo test -p rayard project_` green(main.rs を触っているため)。
+- [ ] **意味のあるコミットメッセージでコミット**(「s」のような無意味メッセージは今後禁止 — §6 参照)。
+- 検証ゲート: 上記すべて + `git status` がクリーン。
+
+### M1 — Phase 2 完了宣言 + 安定化(1〜2 週)
+Phase 2(エフェクト/タイムライン/マッピングの操作性)を「完了」と宣言できる状態にする。
+- [ ] エフェクト UI の残課題洗い出し: 混合照明+映像ドラフトの完全復元(現在は主ターゲットのみ復元の制限あり)を解消するか、v1.0 制限として明文化。
+- [ ] 2D マッピングのホットキー一覧を UI 内ヘルプ(`?` キーまたはツールレール)として表示。
+- [ ] `StageMap2D.tsx` / `CueCapturePreviewPanel.tsx` のローカル `StageWorldBounds` を `stageGeometry.ts` に統一(既知の宿題)。
+- [ ] App.tsx 継続削減: 目標 10,000 行未満。残る大物(Setup Mapping ビューポート/設定シェル、Output/Telemetry 診断のオーケストレーション)を各 1 スライスで抽出。新規抽出モジュールは `vite.config.ts` の `manualChunks` に振り分けてメインチャンクを 450 kB 以下に維持。
+- [ ] エラー/ステータス表示の統一: 現在パネルごとにばらつくメッセージ表示を、単一のステータス行 or トースト規約に揃える(一画面制約内で)。
+- 検証ゲート: `cargo test --workspace`、`pnpm --dir app build`、`npm run check:viewport`、手動スモーク(Run Smoke + Setup/Control/Touch 一巡)。
+
+### M2 — UI/UX 完成パス(1〜2 週)
+「DasLight 的な一画面デスク」としての完成度を上げる。機能追加ではなく磨き込み。
+- [ ] 全ワークスペース(Setup 5 タブ / Control / Touch)を 1366x768 と 2048x1129 で目視レビューし、詰まり/はみ出し/読めない表示を列挙 → 修正。
+- [ ] キーボード操作の一貫性監査: 編集ターゲットガード、フォーカスリング、Tab 順。
+- [ ] Touch ワークスペースの実タッチ検証(またはポインタエミュレーション): ヒットターゲット最小 40px、フラッシュボタンの momentary 動作。
+- [ ] 空状態(fixture 0 台、video layer 0 枚、cue 0 個)の各パネルが「次に何をすべきか」を示すこと。
+- [ ] 用語統一パス: Fixture/Group/Cue/Output/Layer/Surface の表記ゆれを全 UI で統一。
+- [ ] 破壊的操作(Remove Fixture/Cue/Output/Effect)の確認 or Undo 方針を決めて統一。
+- 検証ゲート: `npm run check:viewport` + 上記チェックリストを CLAUDE.md に結果記録。
+
+### M3 — ネイティブビデオ出力(2〜4 週、最大の技術リスク)
+CPU プレビューを wgpu 実出力に置き換える。**照明エンジンと分離したまま進める**(DMX 44Hz を巻き込まない)。
+- 段階 1: `crates/video` に wgpu コンポジタを追加し、既存 CPU リファレンスコンポジタと**同一入力 → 同一出力のゴールデンテスト**を作る(RGBA/BGRA/DXT1/DXT5)。
+- 段階 2: 出力ウィンドウ(Tauri/winit)に wgpu サーフェスを張り、静止画 → 単一動画レイヤー → 多レイヤー合成 → 補正(コーナーピン/レンズ/キーストーン)の順に段階的に載せ替える。各段階でスライスを切る。
+- 段階 3: インプロセスデコードワーカー。方針決定が必要(§5 決定事項 D1): (a) `ffmpeg-next`(libav バインディング)、(b) HAP + DXT 直接アップロード優先、(c) 当面 CLI 抽出を最適化して据え置き。推奨は (b)→(a) の順(HAP は VJ 用途の主流で、既に DXT パスがある)。
+- 段階 4: 既存のフレームキュー/デコード診断/テレメトリを新パスに接続。CPU プレビューは「Preview (Reference)」として残す。
+- 検証ゲート: `cargo test -p video`(ゴールデン含む)、1080p60 多レイヤーでのフレームタイム計測、既存 `video_preview*` テスト green、DMX テレメトリ予算に影響なし。
+
+### M4 — 外部 I/O 仕上げ(1〜2 週、M3 と並行可)
+- [ ] NDI: `crates/io` に NDI SDK バインディング(feature flag `ndi` でビルド切替)。既存のプレースホルダルート/Blocked 表示をそのまま実配線に昇格。
+- [ ] 決定事項 D2: Spout(Windows)を v1.0 に含めるか。含めるなら wgpu の D3D11 相互運用が前提なので M3 完了後。Syphon(macOS)は Windows 開発機では検証不能のため v1.0 スコープ外を推奨。
+- [ ] Enttec Open DMX: FTDI ブレークタイミングの改善(専用送信スレッド + 高精度タイマ)。PRO/DMXKing 推奨の UI ヒントは維持。
+- [ ] 実機テストマトリクス作成: 手持ちのノード/インターフェースで Art-Net、sACN(マルチキャスト)、シリアルを各 1 回以上実測し、結果を記録。
+- 検証ゲート: `cargo test -p io`、実機 or ループバック計測記録、feature flag なしビルドが従来どおり green。
+
+### M5 — 信頼性・パフォーマンス(1 週)
+- [ ] 1 時間ソークテスト: mini-show + エフェクト複数 + 動画 1 レイヤー再生で、メモリ/テレメトリ/フレームドロップを記録するスクリプト or 手順を整備。
+- [ ] プロジェクトリカバリ(M0 の機能)をクラッシュ注入で検証: プロセス kill → 再起動 → 復元。
+- [ ] 大規模プロジェクト負荷: フィクスチャ 200 台 / 8 ユニバース / キュー 100 個で UI 応答と DMX 予算を確認。
+- [ ] `.ry` 後方互換: 旧サンプルとバージョンフィールドの移行方針(未知フィールド許容/バージョンアップ規約)を確定しテスト化。
+- 検証ゲート: ソーク記録、`engine_telemetry_budget_report*` green、負荷時 budget pass。
+
+### M6 — リリース準備(1 週)
+- [ ] バージョニング確定(v1.0.0)、`tauri.conf.json` / `package.json` / Cargo メタデータ整合。
+- [ ] インストーラ(NSIS/MSI)生成と `.ry` 関連付け・アイコン・発行者名(Seraf()のKTN)確認。
+- [ ] コード署名の要否決定(D3)。署名しない場合は SmartScreen 警告を README に明記。
+- [ ] ドキュメント一括更新: README(ユーザ向け)、samples/README.md、ホットキー一覧、既知の制限(Spout/Syphon 等)。
+- [ ] 最終 QA パス: 本計画書 §1 の Definition of Done を上から全チェック。
+- 検証ゲート: クリーンな Windows 環境(または新規ユーザプロファイル)でインストーラから起動 → Run Smoke green。
+
+---
+
+## 4. 見積りサマリー
+
+| マイルストーン | 内容 | 目安 |
+|---|---|---|
+| M0 | 作業ツリー収束 | 即時(1 セッション) |
+| M1 | Phase 2 完了 + 安定化 | 1〜2 週 |
+| M2 | UI/UX 磨き込み | 1〜2 週 |
+| M3 | wgpu 出力 + インプロセスデコード | 2〜4 週 |
+| M4 | NDI / Open DMX / 実機 | 1〜2 週(M3 と並行可) |
+| M5 | 信頼性・性能 | 1 週 |
+| M6 | リリース | 1 週 |
+
+合計目安: 6〜10 週(1 日 1〜3 スライスのペース想定)。クリティカルパスは M3。
+
+---
+
+## 5. 要決定事項(ユーザ判断待ちリスト)
+
+- **D1 — 動画デコード方式**: (a) libav バインディング / (b) HAP 優先 / (c) CLI 据え置き最適化。推奨: (b) を先行し、H.264 等は (a) を後続スライスで。
+- **D2 — Spout/Syphon の v1.0 スコープ**: 推奨: Spout は M3 完了後に判断、Syphon は scope 外。
+- **D3 — コード署名**: 証明書取得の有無。
+- **D4 — UI 言語**: 現在英語 UI。日本語化(i18n)を v1.0 に含めるか。含めるなら M2 で文字列外出しだけ先行しておくこと。
+- **D5 — Undo システム**: 破壊的操作の Undo を v1.0 に入れるか、確認ダイアログ統一で代替するか。推奨: v1.0 は確認統一、Undo は v1.1。
+
+---
+
+## 6. Codex への標準作業指示(全セッション共通)
+
+### スライス規律
+1. **1 スライス = 1 境界 + 1 検証**。Engine → `cargo test -p engine`、Tauri/検証/プロジェクトファイル → `cargo test -p rayard`、フロントエンド → `pnpm --dir app build`(+ UI/CSS 変更時は `npm run check:viewport`)、GDTF → `cargo test -p gdtf`。
+2. スライス完了ごとに `CLAUDE.md` に日付付きで記録(従来形式を踏襲)。
+3. **コミット規約(新規)**: スライス完了 = コミット。メッセージは `<領域>: <変更内容>` 形式(例: `mapping: extract viewport shell into component`)。「s」のような無意味メッセージは禁止。M0 以降、未コミットの巨大ダーティツリーを再び作らない。
+
+### ガードレール(違反 = 回帰)
+- アプリ本体(window/document/.app)をスクロールさせない。長いリストはパネル内スクロールのみ。UI/CSS を触ったら必ず `npm run check:viewport`。
+- `App.tsx` を成長させない。追加 UI は最初からコンポーネントへ。抽出前に既存 `app/src/*.ts`(特に `uiModes.ts` / `videoOutputMapping.ts` / `videoLayerDefaults.ts`)を grep して重複モジュールを作らない。
+- メインチャンク 500 kB 未満を維持。新しい重いパネルは `manualChunks` か lazy-load へ。
+- 製品名 Rayard / 拡張子 `.ry` / 開発者名 Seraf()のKTN を維持。旧名エイリアスをユーザ向けファイルに出さない。
+- 3D ビジュアライザをメイン UI に戻さない(`crates/visualizer` はデータ境界のまま)。
+- README/docs の更新は M6 まで意図的にバッチする(従来方針の継続)。ただし CLAUDE.md への記録は毎スライス必須。
+- `pnpm --dir app build` が node_modules パージを対話で求めた場合は答えず、`node node_modules/typescript/bin/tsc --noEmit` + `node node_modules/vite/bin/vite.js build` の直接実行で代替。
+- 広範囲な変更をリバートしない。ダーティツリーは意図的な状態。
+
+### ビルド/検証コマンド早見
+```powershell
+# フロント(軽量)
+pnpm --dir app build
+npm --prefix app run check:viewport
+
+# Rust(対象を絞る)
+cargo test -p engine <name>
+cargo test -p rayard <name>
+cargo test -p io / -p gdtf / -p video
+
+# マイルストーン時のみ
+cargo test --workspace
+pnpm --dir app tauri build --debug
+pnpm --dir app tauri build   # リリースチェックポイントのみ
+```
+
+---
+
+## 7. リスクと対策
+
+| リスク | 影響 | 対策 |
+|---|---|---|
+| wgpu 出力(M3)が想定より難航 | クリティカルパス遅延 | CPU/wgpu ゴールデンテストで段階移行。最悪 v1.0 は「wgpu 出力 + CLI デコード」で出荷し、インプロセスデコードを v1.1 へ |
+| NDI SDK ライセンス/配布制約 | M4 遅延 | feature flag で分離済みの設計を維持。動的ロード方式も検討 |
+| App.tsx 抽出中の JSX 破壊(過去に発生) | ビルド赤 | スライス毎の `git diff --check` + build。抽出は 1 パネルずつ |
+| 実機不足(DMX ノード/プロジェクター) | M4/M5 検証穴 | ループバックテスト網を維持しつつ、実機テスト項目を明示的に「未検証」記録 |
+| PowerShell 上書き事故の再発(App.tsx 消失の前歴) | 作業消失 | M0 以降のコミット規律 + プロジェクトリカバリ機能自体の完成 |
+
+---
+
+## 8. 次の一手(このまま実行してよい順)
+
+1. **M0**: 現在の未コミットスライス(dmxAddressing / projectRecoveryStorage)を検証 → 完結 → コミット。
+2. D1〜D5 の決定をユーザに確認(特に D1 デコード方式と D4 UI 言語は M2/M3 の内容に影響)。
+3. M1 の App.tsx 残り大物抽出(Setup Mapping ビューポートシェル → Output/Telemetry オーケストレーション)から着手。
