@@ -45,6 +45,13 @@ export default defineConfig({
             return "video-control-panels";
           }
           if (
+            normalizedId.includes("/src/createMappingViewportModel") ||
+            normalizedId.includes("/src/mappingRuntime") ||
+            normalizedId.includes("/src/components/Mapping")
+          ) {
+            return "mapping-panels";
+          }
+          if (
             normalizedId.includes("/src/components/ProjectorMapEditor") ||
             normalizedId.includes("/src/components/VideoColorFxEditor") ||
             normalizedId.includes("/src/components/VideoCropEditor") ||
