@@ -25,6 +25,16 @@ export default defineConfig({
             return "timeline-panels";
           }
           if (
+            normalizedId.includes("/src/components/SetupVideoPanel") ||
+            normalizedId.includes("/src/components/VideoCompositionSetupPanel") ||
+            normalizedId.includes("/src/components/VideoOutputActionsPanel") ||
+            normalizedId.includes("/src/components/VideoOutputConfigPanel") ||
+            normalizedId.includes("/src/components/VideoOutputCreatePanel") ||
+            normalizedId.includes("/src/components/VideoOutputListPanel")
+          ) {
+            return "video-setup-panels";
+          }
+          if (
             normalizedId.includes("/src/components/ProjectorMapEditor") ||
             normalizedId.includes("/src/components/VideoColorFxEditor") ||
             normalizedId.includes("/src/components/VideoCropEditor") ||

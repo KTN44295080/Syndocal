@@ -38,14 +38,12 @@ import { RemoteControlPanel } from "./components/RemoteControlPanel";
 import { SampleEffectPresetPanel, sampleEffectPresetSupportsTarget, type SampleEffectPreset } from "./components/SampleEffectPresetPanel";
 import { SetupFixtureEditorPanel } from "./components/SetupFixtureEditorPanel";
 import { SetupFixtureListPanel } from "./components/SetupFixtureListPanel";
+import { SetupVideoPanel } from "./components/SetupVideoPanel";
 import { StagePreview2D } from "./components/StagePreview2D";
 import { VideoEffectTargetPanel } from "./components/VideoEffectTargetPanel";
 import { VideoLayerListPanel } from "./components/VideoLayerListPanel";
 import { VideoMasterControlsPanel, VideoOutputControlListPanel } from "./components/VideoControlOutputsPanel";
 import { readVideoOutputTestPattern, readVideoOutputWindowId, VideoOutputWindow } from "./components/VideoOutputWindow";
-import { VideoCompositionSetupPanel } from "./components/VideoCompositionSetupPanel";
-import { VideoOutputCreatePanel } from "./components/VideoOutputCreatePanel";
-import { VideoOutputListPanel } from "./components/VideoOutputListPanel";
 import { VideoPreviewDiagnosticsPanel } from "./components/VideoPreviewDiagnosticsPanel";
 import {
   ExternalVideoIoStatusPanel,
@@ -13130,80 +13128,67 @@ export default function App() {
           </div>
         </section>
 
-        <section
-          class={setupPanelClass("panel videoSetupPanel setupPanel", ["mapping", "output"])}
-          ref={registerSetupPanel(["mapping"])}
-          tabIndex={-1}
-        >
-          <div class="panelHeader">
-            <h2>Video Setup</h2>
-            <span>{snapshot().video.outputs.length} output(s)</span>
-          </div>
-          <VideoCompositionSetupPanel
-            compositions={snapshot().video.compositions}
-            layers={snapshot().video.layers}
-            draftLabel={videoCompositionLabel()}
-            draftLayerIds={videoCompositionLayerIds()}
-            onDraftLabel={setVideoCompositionLabel}
-            onToggleDraftLayer={toggleVideoCompositionLayer}
-            onAddComposition={addVideoComposition}
-            onRemoveComposition={removeVideoComposition}
-            onSetCompositionLayers={setVideoCompositionLayers}
-            onMoveCompositionLayer={moveVideoCompositionLayer}
-          />
-          <VideoOutputCreatePanel
-            label={videoOutputLabel()}
-            kind={videoOutputKind()}
-            width={videoOutputWidth()}
-            height={videoOutputHeight()}
-            fadeMs={videoOutputFadeMs()}
-            monitorId={videoOutputMonitorId()}
-            fullscreen={videoOutputFullscreen()}
-            endpoint={videoOutputEndpoint()}
-            onLabel={setVideoOutputLabel}
-            onKind={setVideoOutputKind}
-            onWidth={setVideoOutputWidth}
-            onHeight={setVideoOutputHeight}
-            onFadeMs={setVideoOutputFadeMs}
-            onMonitorId={setVideoOutputMonitorId}
-            onFullscreen={setVideoOutputFullscreen}
-            onEndpoint={setVideoOutputEndpoint}
-            onAddOutput={addVideoOutput}
-          />
-          <VideoOutputListPanel
-            outputs={snapshot().video.outputs}
-            compositions={snapshot().video.compositions}
-            mappingPresets={snapshot().video.mapping_presets}
-            mappingPresetLabel={videoOutputMappingPresetLabel()}
-            selectedMappingPresetLabel={selectedVideoOutputMappingPresetLabel()}
-            selectedOutputId={selectedVideoOutputId()}
-            previewOutputId={videoOutputPreviewId()}
-            previewMode={videoOutputPreviewMode()}
-            previewInfo={videoOutputPreviewInfo()}
-            previewUrl={videoOutputPreviewUrl()}
-            configDraftFor={videoOutputConfigDraft}
-            onConfigDraft={updateVideoOutputConfigDraft}
-            onApplyConfig={setVideoOutputConfig}
-            onSelectOutput={setSelectedVideoOutputId}
-            onSetRouting={setVideoOutputRouting}
-            onMappingPresetLabel={setVideoOutputMappingPresetLabel}
-            onSelectedMappingPresetLabel={setSelectedVideoOutputMappingPresetLabel}
-            onSaveMappingPreset={saveVideoOutputMappingPreset}
-            onExportMappingPreset={exportVideoOutputMappingPreset}
-            onImportMappingPreset={importVideoOutputMappingPreset}
-            onApplyMappingPreset={applyVideoOutputMappingPreset}
-            onRemoveMappingPreset={removeVideoOutputMappingPreset}
-            onSetMapping={setVideoOutputMapping}
-            onSetEnabled={setVideoOutputEnabled}
-            onSetBlackout={setVideoOutputBlackout}
-            onSetOpacity={setVideoOutputOpacity}
-            onFadeOpacity={fadeVideoOutputOpacity}
-            onPreview={renderDebugVideoOutputPreview}
-            onOpenWindow={openVideoOutputWindow}
-            onSyncWindow={syncVideoOutputWindow}
-            onRemoveOutput={removeVideoOutput}
-          />
-        </section>
+        <SetupVideoPanel
+          className={setupPanelClass("panel videoSetupPanel setupPanel", ["mapping", "output"])}
+          panelRef={registerSetupPanel(["mapping"])}
+          outputs={snapshot().video.outputs}
+          compositions={snapshot().video.compositions}
+          layers={snapshot().video.layers}
+          mappingPresets={snapshot().video.mapping_presets}
+          compositionLabel={videoCompositionLabel()}
+          compositionLayerIds={videoCompositionLayerIds()}
+          outputLabel={videoOutputLabel()}
+          outputKind={videoOutputKind()}
+          outputWidth={videoOutputWidth()}
+          outputHeight={videoOutputHeight()}
+          outputFadeMs={videoOutputFadeMs()}
+          outputMonitorId={videoOutputMonitorId()}
+          outputFullscreen={videoOutputFullscreen()}
+          outputEndpoint={videoOutputEndpoint()}
+          mappingPresetLabel={videoOutputMappingPresetLabel()}
+          selectedMappingPresetLabel={selectedVideoOutputMappingPresetLabel()}
+          selectedOutputId={selectedVideoOutputId()}
+          previewOutputId={videoOutputPreviewId()}
+          previewMode={videoOutputPreviewMode()}
+          previewInfo={videoOutputPreviewInfo()}
+          previewUrl={videoOutputPreviewUrl()}
+          configDraftFor={videoOutputConfigDraft}
+          onCompositionLabel={setVideoCompositionLabel}
+          onToggleCompositionLayer={toggleVideoCompositionLayer}
+          onAddComposition={addVideoComposition}
+          onRemoveComposition={removeVideoComposition}
+          onSetCompositionLayers={setVideoCompositionLayers}
+          onMoveCompositionLayer={moveVideoCompositionLayer}
+          onOutputLabel={setVideoOutputLabel}
+          onOutputKind={setVideoOutputKind}
+          onOutputWidth={setVideoOutputWidth}
+          onOutputHeight={setVideoOutputHeight}
+          onOutputFadeMs={setVideoOutputFadeMs}
+          onOutputMonitorId={setVideoOutputMonitorId}
+          onOutputFullscreen={setVideoOutputFullscreen}
+          onOutputEndpoint={setVideoOutputEndpoint}
+          onAddOutput={addVideoOutput}
+          onConfigDraft={updateVideoOutputConfigDraft}
+          onApplyConfig={setVideoOutputConfig}
+          onSelectOutput={setSelectedVideoOutputId}
+          onSetRouting={setVideoOutputRouting}
+          onMappingPresetLabel={setVideoOutputMappingPresetLabel}
+          onSelectedMappingPresetLabel={setSelectedVideoOutputMappingPresetLabel}
+          onSaveMappingPreset={saveVideoOutputMappingPreset}
+          onExportMappingPreset={exportVideoOutputMappingPreset}
+          onImportMappingPreset={importVideoOutputMappingPreset}
+          onApplyMappingPreset={applyVideoOutputMappingPreset}
+          onRemoveMappingPreset={removeVideoOutputMappingPreset}
+          onSetMapping={setVideoOutputMapping}
+          onSetEnabled={setVideoOutputEnabled}
+          onSetBlackout={setVideoOutputBlackout}
+          onSetOpacity={setVideoOutputOpacity}
+          onFadeOpacity={fadeVideoOutputOpacity}
+          onPreview={renderDebugVideoOutputPreview}
+          onOpenWindow={openVideoOutputWindow}
+          onSyncWindow={syncVideoOutputWindow}
+          onRemoveOutput={removeVideoOutput}
+        />
 
         <section class={`panel videoControlPanel controlPanel ${controlMode() === "mixer" ? "videoControlPanelMixer" : ""}`}>
           <div class="panelHeader">
