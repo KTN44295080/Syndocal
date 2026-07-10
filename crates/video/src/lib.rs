@@ -18,7 +18,7 @@ mod gpu_compositor;
 mod gpu_surface;
 
 pub use gpu_compositor::{GpuCompositeError, GpuCompositor};
-pub use gpu_surface::{GpuSurfaceError, GpuSurfacePresenter};
+pub use gpu_surface::{GpuSurfaceBufferStats, GpuSurfaceError, GpuSurfacePresenter};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum VideoPixelFormat {

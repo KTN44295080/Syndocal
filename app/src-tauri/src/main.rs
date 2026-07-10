@@ -115,6 +115,8 @@ struct AppState {
     remote_control: Mutex<Option<RemoteWsServer>>,
     pending_project_open_paths: Mutex<Vec<String>>,
     current_project_path: Mutex<Option<PathBuf>>,
+    native_video_output_metrics:
+        Mutex<HashMap<VideoOutputId, Arc<Mutex<NativeVideoOutputMetrics>>>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -7362,6 +7364,113 @@ struct VideoOutputWindowStatus {
     test_pattern_open: bool,
     live_window_label: String,
     test_pattern_window_label: String,
+    performance: Option<NativeVideoOutputPerformance>,
+}
+
+#[derive(Debug)]
+struct NativeVideoOutputMetrics {
+    frame_count: u64,
+    total_frame_us: u128,
+    last_frame_us: u64,
+    max_frame_us: u64,
+    deadline_miss_count: u64,
+    width: u32,
+    height: u32,
+    buffer_stats: video::GpuSurfaceBufferStats,
+    last_error: Option<String>,
+    warmup_remaining: u32,
+}
+
+impl Default for NativeVideoOutputMetrics {
+    fn default() -> Self {
+        Self {
+            frame_count: 0,
+            total_frame_us: 0,
+            last_frame_us: 0,
+            max_frame_us: 0,
+            deadline_miss_count: 0,
+            width: 0,
+            height: 0,
+            buffer_stats: video::GpuSurfaceBufferStats::default(),
+            last_error: None,
+            warmup_remaining: 60,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct NativeVideoOutputPerformance {
+    frame_count: u64,
+    average_frame_us: u64,
+    last_frame_us: u64,
+    max_frame_us: u64,
+    deadline_miss_count: u64,
+    width: u32,
+    height: u32,
+    output_capacity_bytes: u64,
+    layer_slots: usize,
+    output_reallocations: u64,
+    layer_reallocations: u64,
+    last_error: Option<String>,
+    warmup_remaining: u32,
+}
+
+impl NativeVideoOutputMetrics {
+    fn record(
+        &mut self,
+        width: u32,
+        height: u32,
+        elapsed: Duration,
+        buffer_stats: video::GpuSurfaceBufferStats,
+        error: Option<String>,
+    ) {
+        let elapsed_us = elapsed.as_micros().min(u128::from(u64::MAX)) as u64;
+        if self.width != 0 && (self.width != width || self.height != height) {
+            self.frame_count = 0;
+            self.total_frame_us = 0;
+            self.last_frame_us = 0;
+            self.max_frame_us = 0;
+            self.deadline_miss_count = 0;
+            self.warmup_remaining = 60;
+        }
+        self.width = width;
+        self.height = height;
+        self.buffer_stats = buffer_stats;
+        self.last_error = error;
+        if self.last_error.is_none() {
+            if self.warmup_remaining > 0 {
+                self.warmup_remaining -= 1;
+                return;
+            }
+            self.last_frame_us = elapsed_us;
+            self.max_frame_us = self.max_frame_us.max(elapsed_us);
+            self.frame_count = self.frame_count.saturating_add(1);
+            self.total_frame_us = self.total_frame_us.saturating_add(u128::from(elapsed_us));
+            if elapsed > Duration::from_nanos(1_000_000_000 / 60) {
+                self.deadline_miss_count = self.deadline_miss_count.saturating_add(1);
+            }
+        }
+    }
+
+    fn snapshot(&self) -> NativeVideoOutputPerformance {
+        NativeVideoOutputPerformance {
+            frame_count: self.frame_count,
+            average_frame_us: (self.frame_count > 0)
+                .then(|| (self.total_frame_us / u128::from(self.frame_count)) as u64)
+                .unwrap_or(0),
+            last_frame_us: self.last_frame_us,
+            max_frame_us: self.max_frame_us,
+            deadline_miss_count: self.deadline_miss_count,
+            width: self.width,
+            height: self.height,
+            output_capacity_bytes: self.buffer_stats.output_capacity_bytes,
+            layer_slots: self.buffer_stats.layer_slots,
+            output_reallocations: self.buffer_stats.output_reallocations,
+            layer_reallocations: self.buffer_stats.layer_reallocations,
+            last_error: self.last_error.clone(),
+            warmup_remaining: self.warmup_remaining,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -7485,10 +7594,24 @@ fn prepare_native_video_output(
         .map_err(|error| format!("{error:?}"))
 }
 
+fn record_native_video_output_metrics(
+    metrics: &Arc<Mutex<NativeVideoOutputMetrics>>,
+    width: u32,
+    height: u32,
+    started: Instant,
+    buffer_stats: video::GpuSurfaceBufferStats,
+    error: Option<String>,
+) {
+    if let Ok(mut metrics) = metrics.lock() {
+        metrics.record(width, height, started.elapsed(), buffer_stats, error);
+    }
+}
+
 fn start_native_video_live_output(
     window: tauri::Window,
     engine: EngineHandle,
     output_id: VideoOutputId,
+    metrics: Arc<Mutex<NativeVideoOutputMetrics>>,
 ) -> Result<(), String> {
     let initial_size = window.inner_size().map_err(|error| error.to_string())?;
     let window = Arc::new(window);
@@ -7503,20 +7626,32 @@ fn start_native_video_live_output(
         video::DecoderBackedFrameProvider::new(video::FfmpegCliFrameDecoder::from_env())
             .with_prefetch(0, 33),
     );
-    let first_output = prepare_native_video_output(
+    let first_started = Instant::now();
+    let first_result = prepare_native_video_output(
         &mut renderer,
         &engine,
         output_id,
         initial_size.width,
         initial_size.height,
-    )?;
-    presenter
-        .present_prepared_output(
-            &first_output,
-            initial_size.width.max(1),
-            initial_size.height.max(1),
-        )
-        .map_err(|error| format!("Native video output first frame failed: {error:?}"))?;
+    )
+    .and_then(|first_output| {
+        presenter
+            .present_prepared_output(
+                &first_output,
+                initial_size.width.max(1),
+                initial_size.height.max(1),
+            )
+            .map_err(|error| format!("Native video output first frame failed: {error:?}"))
+    });
+    record_native_video_output_metrics(
+        &metrics,
+        initial_size.width,
+        initial_size.height,
+        first_started,
+        presenter.buffer_stats(),
+        first_result.as_ref().err().cloned(),
+    );
+    first_result?;
 
     let stop = Arc::new(AtomicBool::new(false));
     let event_stop = Arc::clone(&stop);
@@ -7553,6 +7688,14 @@ fn start_native_video_live_output(
                         .and_then(|prepared| {
                             presenter.present_prepared_output(&prepared, size.width, size.height)
                         });
+                    record_native_video_output_metrics(
+                        &metrics,
+                        size.width,
+                        size.height,
+                        frame_started,
+                        presenter.buffer_stats(),
+                        result.as_ref().err().map(|error| format!("{error:?}")),
+                    );
                     if result.is_err() {
                         break;
                     }
@@ -7564,6 +7707,20 @@ fn start_native_video_live_output(
         })
         .map_err(|error| format!("Native video output thread failed: {error}"))?;
     Ok(())
+}
+
+fn native_video_output_performance(
+    state: &AppState,
+    output_id: VideoOutputId,
+) -> Option<NativeVideoOutputPerformance> {
+    let metrics = state
+        .native_video_output_metrics
+        .lock()
+        .ok()?
+        .get(&output_id)
+        .cloned()?;
+    let snapshot = metrics.lock().ok()?.snapshot();
+    Some(snapshot)
 }
 
 #[tauri::command]
@@ -7587,6 +7744,7 @@ fn get_video_output_window_statuses(
                 test_pattern_open: app.windows().contains_key(&test_pattern_window_label),
                 live_window_label,
                 test_pattern_window_label,
+                performance: native_video_output_performance(&state, output.id),
             }
         })
         .collect()
@@ -7813,9 +7971,15 @@ async fn open_video_output_window(
     let window = builder.build().map_err(|error| error.to_string())?;
     apply_native_video_output_window_shell(&app, &window, &output, false)?;
     let cleanup_window = window.clone();
-    start_native_video_live_output(window, state.engine.clone(), output_id).inspect_err(|_| {
-        let _ = cleanup_window.close();
-    })
+    let metrics = Arc::new(Mutex::new(NativeVideoOutputMetrics::default()));
+    if let Ok(mut active_metrics) = state.native_video_output_metrics.lock() {
+        active_metrics.insert(output_id, Arc::clone(&metrics));
+    }
+    start_native_video_live_output(window, state.engine.clone(), output_id, metrics).inspect_err(
+        |_| {
+            let _ = cleanup_window.close();
+        },
+    )
 }
 
 fn load_patch_profile(
@@ -12635,6 +12799,49 @@ f 1 2 3
     }
 
     #[test]
+    fn native_video_output_metrics_report_frame_budget_and_buffer_reuse() {
+        let buffer_stats = video::GpuSurfaceBufferStats {
+            output_capacity_bytes: 8_294_400,
+            layer_slots: 3,
+            output_reallocations: 1,
+            layer_reallocations: 3,
+            frames_presented: 2,
+        };
+        let mut metrics = NativeVideoOutputMetrics::default();
+        metrics.warmup_remaining = 0;
+        metrics.record(1920, 1080, Duration::from_millis(10), buffer_stats, None);
+        metrics.record(1920, 1080, Duration::from_millis(20), buffer_stats, None);
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.frame_count, 2);
+        assert_eq!(snapshot.average_frame_us, 15_000);
+        assert_eq!(snapshot.max_frame_us, 20_000);
+        assert_eq!(snapshot.deadline_miss_count, 1);
+        assert_eq!(snapshot.layer_slots, 3);
+        assert_eq!(snapshot.output_reallocations, 1);
+        assert_eq!(snapshot.layer_reallocations, 3);
+        assert!(snapshot.last_error.is_none());
+
+        metrics.record(
+            1920,
+            1080,
+            Duration::from_millis(1),
+            buffer_stats,
+            Some("surface lost".to_string()),
+        );
+        let failed = metrics.snapshot();
+        assert_eq!(failed.frame_count, 2);
+        assert_eq!(failed.average_frame_us, 15_000);
+        assert_eq!(failed.last_error.as_deref(), Some("surface lost"));
+
+        metrics.record(1280, 720, Duration::from_millis(4), buffer_stats, None);
+        let resized = metrics.snapshot();
+        assert_eq!(resized.frame_count, 0);
+        assert_eq!(resized.warmup_remaining, 59);
+        assert!(resized.last_error.is_none());
+    }
+
+    #[test]
     fn video_output_config_normalization_trims_and_separates_output_fields() {
         let display = normalize_video_output_config(
             "  Projector  ".to_string(),
@@ -15940,6 +16147,7 @@ fn main() {
             remote_control: Mutex::new(None),
             pending_project_open_paths: Mutex::new(Vec::new()),
             current_project_path: Mutex::new(None),
+            native_video_output_metrics: Mutex::new(HashMap::new()),
         })
         .plugin(tauri_plugin_single_instance::init(
             |app_handle, args, cwd| {

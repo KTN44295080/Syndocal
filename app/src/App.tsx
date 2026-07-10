@@ -2563,6 +2563,23 @@ export default function App() {
       };
     }
     const openCount = Number(status.live_open) + Number(status.test_pattern_open);
+    const performance = status.performance;
+    const performanceDetail = performance
+      ? performance.warmup_remaining > 0
+        ? ` / ${performance.width}x${performance.height} / warming ${performance.warmup_remaining} frame(s) / GPU alloc ${performance.output_reallocations}+${performance.layer_reallocations}`
+        : ` / ${performance.width}x${performance.height} / avg ${(performance.average_frame_us / 1000).toFixed(2)} ms / max ${(
+            performance.max_frame_us / 1000
+          ).toFixed(2)} ms / ${performance.deadline_miss_count} late / GPU alloc ${performance.output_reallocations}+${
+            performance.layer_reallocations
+          }`
+      : "";
+    if (performance?.last_error) {
+      return {
+        stateLabel: "Output error",
+        stateClass: "error",
+        detail: `${performance.last_error}${performanceDetail}`,
+      };
+    }
     const stateLabel =
       openCount === 2
         ? "Live + Pattern open"
@@ -2576,7 +2593,7 @@ export default function App() {
       stateClass: openCount > 0 ? "open" : "closed",
       detail: `Live ${status.live_open ? "open" : "closed"} / Pattern ${
         status.test_pattern_open ? "open" : "closed"
-      }`,
+      }${performanceDetail}`,
     };
   };
   const videoRuntimeBackendCounts = createMemo(() => {
@@ -6616,6 +6633,18 @@ export default function App() {
     setVideoOutputPreviewInfo,
     setVideoOutputPreviewId,
     setVideoOutputPreviewMode,
+  });
+  const videoOutputMetricsTimer = isTauriRuntime()
+    ? window.setInterval(() => {
+        if (videoOutputWindowStatuses()?.some((status) => status.live_open)) {
+          void refreshVideoOutputWindowStatuses(true);
+        }
+      }, 1000)
+    : null;
+  onCleanup(() => {
+    if (videoOutputMetricsTimer !== null) {
+      window.clearInterval(videoOutputMetricsTimer);
+    }
   });
 
   const toggleVideoCompositionLayer = (layerId: number, checked: boolean) => {

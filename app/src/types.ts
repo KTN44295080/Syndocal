@@ -986,6 +986,23 @@ export interface VideoOutputWindowStatus {
   test_pattern_open: boolean;
   live_window_label: string;
   test_pattern_window_label: string;
+  performance?: NativeVideoOutputPerformance | null;
+}
+
+export interface NativeVideoOutputPerformance {
+  frame_count: number;
+  average_frame_us: number;
+  last_frame_us: number;
+  max_frame_us: number;
+  deadline_miss_count: number;
+  width: number;
+  height: number;
+  output_capacity_bytes: number;
+  layer_slots: number;
+  output_reallocations: number;
+  layer_reallocations: number;
+  last_error?: string | null;
+  warmup_remaining: number;
 }
 
 export interface VideoOutputWindowSyncSummary {
