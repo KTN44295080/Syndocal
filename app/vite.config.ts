@@ -68,6 +68,14 @@ export default defineConfig({
             return "mapping-editors";
           }
           if (
+            normalizedId.includes("/src/createControlInputController") ||
+            normalizedId.includes("/src/controlMappingLabels") ||
+            normalizedId.includes("/src/components/MidiControlMappingPanel") ||
+            normalizedId.includes("/src/components/OscControlMappingPanel")
+          ) {
+            return "input-panels";
+          }
+          if (
             normalizedId.includes("/src/createOutputDiagnosticsController") ||
             normalizedId.includes("/src/components/DmxOutputConfigPanel") ||
             normalizedId.includes("/src/components/EngineTelemetryPanel") ||

@@ -372,6 +372,7 @@ import {
   type NumericVideoOutputMappingField,
 } from "./controlMappingActions";
 import { controlMappingTargetLabel } from "./controlMappingLabels";
+import { createControlInputController } from "./createControlInputController";
 import {
   draftRangeFromKeyframes,
   evaluateTimelineKeyframes,
@@ -6016,461 +6017,94 @@ export default function App() {
     }
   };
 
-  const refreshMidiInputs = async () => {
-    try {
-      const inputs = await invoke<MidiInputSummary[]>("list_midi_inputs");
-      setMidiInputs(inputs);
-      if (selectedMidiInput() === null && inputs.length > 0) {
-        setSelectedMidiInput(inputs[0].index);
-      }
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const refreshMidiOutputs = async () => {
-    try {
-      const outputs = await invoke<MidiOutputSummary[]>("list_midi_outputs");
-      setMidiOutputs(outputs);
-      if (selectedMidiOutput() === null && outputs.length > 0) {
-        setSelectedMidiOutput(outputs[0].index);
-      }
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const connectMidiClock = async () => {
-    const inputIndex = selectedMidiInput();
-    if (inputIndex === null) {
-      setMessage("No MIDI input selected.");
-      return;
-    }
-    try {
-      await invoke("connect_midi_clock", { inputIndex });
-      setMidiConnected(true);
-      setMessage("MIDI Clock connected.");
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const disconnectMidiClock = async () => {
-    try {
-      await invoke("disconnect_midi_clock");
-      setMidiConnected(false);
-      setMessage("MIDI Clock disconnected.");
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const addMidiMapping = () => {
-    const action = midiMapAction();
-    const fixture = selectedFixture();
-    const cueId = selectedMidiCueId();
-    const effectId = selectedMidiEffectId();
-    const nodeGraphId = selectedMidiNodeGraphId();
-    const layerId = selectedMidiLayerId();
-    const outputId = selectedMidiVideoOutputId();
-    const outputMappingField = selectedMidiVideoOutputMappingField();
-    const outputMappingPresetLabel = selectedMidiVideoOutputMappingPresetLabel();
-    const attribute = midiMapAttribute() || selectedEffectAttribute();
-    if (action === "FixtureAttribute" && (!fixture || !attribute)) {
-      setMessage("Select a fixture and MIDI attribute target first.");
-      return;
-    }
-    if (isFixtureFlagMappingAction(action) && !fixture) {
-      setMessage("Select a fixture before mapping MIDI to a fixture flag.");
-      return;
-    }
-    if (action === "TriggerCue" && cueId === null) {
-      setMessage("Create a cue before mapping MIDI to cues.");
-      return;
-    }
-    if (action === "EffectEnabled" && effectId === null) {
-      setMessage("Add an effect before mapping MIDI to effect enable.");
-      return;
-    }
-    if (action === "NodeGraphEnabled" && nodeGraphId === null) {
-      setMessage("Add a node graph before mapping MIDI to node graph enable.");
-      return;
-    }
-    if ((action === "GroupSubmaster" || isGroupFlagMappingAction(action)) && !midiMapGroupId().trim()) {
-      setMessage("Enter a group ID before mapping MIDI to a group.");
-      return;
-    }
-    if (isVideoLayerMappingAction(action) && layerId === null) {
-      setMessage("Add a video layer before mapping MIDI to video.");
-      return;
-    }
-    if (isVideoOutputMappingAction(action) && outputId === null) {
-      setMessage("Add a video output before mapping MIDI to video output.");
-      return;
-    }
-    if (action === "VideoOutputMappingPreset" && !outputMappingPresetLabel) {
-      setMessage("Save a projector mapping preset before mapping MIDI to a preset.");
-      return;
-    }
-
-    const mapping: MidiControlMapping = {
-      channel: midiMapChannel() >= 0 ? midiMapChannel() : null,
-      message: midiMapMessage(),
-      number: Math.max(0, Math.min(127, Math.round(midiMapNumber()))),
-      action,
-      fixture_id: action === "FixtureAttribute" || isFixtureFlagMappingAction(action) ? fixture?.id ?? null : null,
-      attribute:
-        action === "FixtureAttribute"
-          ? attribute
-          : action === "ClearFixtureFlags"
-            ? midiClearFixtureFlagKind()
-            : action === "VideoOutputMappingField"
-              ? outputMappingField
-              : action === "VideoOutputMappingPreset"
-                ? outputMappingPresetLabel
-            : null,
-      group_id: action === "GroupSubmaster" || isGroupFlagMappingAction(action) ? midiMapGroupId().trim() : null,
-      cue_id: action === "TriggerCue" ? cueId : action === "EffectEnabled" ? effectId : action === "NodeGraphEnabled" ? nodeGraphId : null,
-      layer_id:
-        action === "VideoParam" ||
-        action === "VideoCuePointAdd" ||
-        action === "VideoCuePointRemove" ||
-        action === "VideoCuePointJump" ||
-        action === "VideoCuePointPrevious" ||
-        action === "VideoCuePointNext" ||
-        action === "VideoLayerEnabled" ||
-        action === "VideoLayerSolo" ||
-        action === "VideoPlay" ||
-        action === "VideoLoop" ||
-        action === "VideoLayerFade"
-          ? layerId
-          : null,
-      output_id: isVideoOutputMappingAction(action) ? outputId : null,
-      video_param: action === "VideoParam" ? midiMapVideoParam() : null,
-      cue_point_index: action === "VideoCuePointJump" ? Math.max(0, Math.round(midiMapCuePointIndex())) : null,
-      duration_ms:
-        action === "VideoOutputFade" ||
-        action === "VideoLayerFade" ||
-        action === "VideoCuePointAdd" ||
-        action === "VideoCuePointRemove"
-          ? Math.max(0, Math.round(midiMapDurationMs()))
-          : null,
-      low: midiMapLow(),
-      high: midiMapHigh(),
-    };
-    setMidiMappings((current) => [...current, mapping]);
-    setMessage(`Added MIDI mapping ${mapping.message} ${mapping.number}`);
-  };
-
-  const removeMidiMapping = (index: number) => {
-    setMidiMappings((current) => current.filter((_, candidate) => candidate !== index));
-  };
-
-  const applyLearnedMidiControl = (learned: LearnedMidiControl) => {
-    setMidiMapChannel(learned.channel);
-    setMidiMapMessage(learned.message);
-    setMidiMapNumber(learned.number);
-    setMessage(`Learned ${learned.message} ch ${learned.channel} #${learned.number}`);
-  };
-
-  const learnMidiControl = async () => {
-    const inputIndex = selectedMidiInput();
-    if (inputIndex === null) {
-      setMessage("No MIDI input selected.");
-      return;
-    }
-    try {
-      setMessage("Waiting for MIDI input...");
-      const learned = await invoke<LearnedMidiControl | null>("learn_midi_control", { inputIndex });
-      if (learned) {
-        applyLearnedMidiControl(learned);
-      } else {
-        setMessage("MIDI learn timed out.");
-      }
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const saveMidiMappings = async () => {
-    try {
-      const path = await invoke<string | null>("save_midi_mappings", { mappings: midiMappings() });
-      if (path) {
-        setMessage(`Saved MIDI mappings to ${path}`);
-      }
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const loadMidiMappings = async () => {
-    try {
-      const loaded = await invoke<MidiControlMapping[] | null>("load_midi_mappings");
-      if (loaded) {
-        setMidiMappings(loaded);
-        setMessage(`Loaded ${loaded.length} MIDI mapping(s).`);
-      }
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const connectMidiControl = async () => {
-    const inputIndex = selectedMidiInput();
-    if (inputIndex === null) {
-      setMessage("No MIDI input selected.");
-      return;
-    }
-    if (midiMappings().length === 0) {
-      setMessage("Add at least one MIDI mapping first.");
-      return;
-    }
-    try {
-      await invoke("connect_midi_control", { inputIndex, mappings: midiMappings() });
-      setMidiControlConnected(true);
-      setMessage(`MIDI control connected with ${midiMappings().length} mapping(s).`);
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const disconnectMidiControl = async () => {
-    try {
-      await invoke("disconnect_midi_control");
-      setMidiControlConnected(false);
-      setMessage("MIDI control disconnected.");
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const connectMidiFeedback = async () => {
-    const outputIndex = selectedMidiOutput();
-    if (outputIndex === null) {
-      setMessage("No MIDI output selected.");
-      return;
-    }
-    try {
-      await invoke("connect_midi_feedback", { outputIndex });
-      setMidiFeedbackConnected(true);
-      setMessage("MIDI feedback connected.");
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const disconnectMidiFeedback = async () => {
-    try {
-      await invoke("disconnect_midi_feedback");
-      setMidiFeedbackConnected(false);
-      setMidiFeedbackEnabled(false);
-      setMessage("MIDI feedback disconnected.");
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const sendMidiFeedback = async (report = true) => {
-    if (!midiFeedbackConnected() || midiMappings().length === 0) {
-      if (report) {
-        setMessage("Connect MIDI feedback and add mappings first.");
-      }
-      return;
-    }
-    try {
-      const sent = await invoke<number>("send_midi_feedback", { mappings: midiMappings() });
-      if (report) {
-        setMessage(`Sent ${sent} MIDI feedback message(s).`);
-      }
-    } catch (error) {
-      setMidiFeedbackEnabled(false);
-      setMessage(String(error));
-    }
-  };
-
-  const midiFeedbackTimer = window.setInterval(() => {
-    if (midiFeedbackEnabled() && midiFeedbackConnected() && midiMappings().length > 0) {
-      void sendMidiFeedback(false);
-    }
-  }, 500);
-  onCleanup(() => window.clearInterval(midiFeedbackTimer));
-
-  const addOscMapping = () => {
-    const action = oscMapAction();
-    const fixture = selectedFixture();
-    const cueId = selectedOscCueId();
-    const effectId = selectedOscEffectId();
-    const nodeGraphId = selectedOscNodeGraphId();
-    const layerId = selectedOscLayerId();
-    const outputId = selectedOscVideoOutputId();
-    const outputMappingField = selectedOscVideoOutputMappingField();
-    const outputMappingPresetLabel = selectedOscVideoOutputMappingPresetLabel();
-    const attribute = oscMapAttribute() || selectedEffectAttribute();
-    if (!oscMapAddress().trim()) {
-      setMessage("Enter an OSC address.");
-      return;
-    }
-    if (action === "FixtureAttribute" && (!fixture || !attribute)) {
-      setMessage("Select a fixture and OSC attribute target first.");
-      return;
-    }
-    if (isFixtureFlagMappingAction(action) && !fixture) {
-      setMessage("Select a fixture before mapping OSC to a fixture flag.");
-      return;
-    }
-    if (action === "TriggerCue" && cueId === null) {
-      setMessage("Create a cue before mapping OSC to cues.");
-      return;
-    }
-    if (action === "EffectEnabled" && effectId === null) {
-      setMessage("Add an effect before mapping OSC to effect enable.");
-      return;
-    }
-    if (action === "NodeGraphEnabled" && nodeGraphId === null) {
-      setMessage("Add a node graph before mapping OSC to node graph enable.");
-      return;
-    }
-    if ((action === "GroupSubmaster" || isGroupFlagMappingAction(action)) && !oscMapGroupId().trim()) {
-      setMessage("Enter a group ID before mapping OSC to a group.");
-      return;
-    }
-    if (isVideoLayerMappingAction(action) && layerId === null) {
-      setMessage("Add a video layer before mapping OSC to video.");
-      return;
-    }
-    if (isVideoOutputMappingAction(action) && outputId === null) {
-      setMessage("Add a video output before mapping OSC to video output.");
-      return;
-    }
-    if (action === "VideoOutputMappingPreset" && !outputMappingPresetLabel) {
-      setMessage("Save a projector mapping preset before mapping OSC to a preset.");
-      return;
-    }
-    const mapping: OscControlMapping = {
-      address: oscMapAddress().startsWith("/") ? oscMapAddress() : `/${oscMapAddress()}`,
-      action,
-      fixture_id: action === "FixtureAttribute" || isFixtureFlagMappingAction(action) ? fixture?.id ?? null : null,
-      attribute:
-        action === "FixtureAttribute"
-          ? attribute
-          : action === "ClearFixtureFlags"
-            ? oscClearFixtureFlagKind()
-            : action === "VideoOutputMappingField"
-              ? outputMappingField
-              : action === "VideoOutputMappingPreset"
-                ? outputMappingPresetLabel
-            : null,
-      group_id: action === "GroupSubmaster" || isGroupFlagMappingAction(action) ? oscMapGroupId().trim() : null,
-      cue_id: action === "TriggerCue" ? cueId : action === "EffectEnabled" ? effectId : action === "NodeGraphEnabled" ? nodeGraphId : null,
-      layer_id:
-        action === "VideoParam" ||
-        action === "VideoCuePointAdd" ||
-        action === "VideoCuePointRemove" ||
-        action === "VideoCuePointJump" ||
-        action === "VideoCuePointPrevious" ||
-        action === "VideoCuePointNext" ||
-        action === "VideoLayerEnabled" ||
-        action === "VideoLayerSolo" ||
-        action === "VideoPlay" ||
-        action === "VideoLoop" ||
-        action === "VideoLayerFade"
-          ? layerId
-          : null,
-      output_id: isVideoOutputMappingAction(action) ? outputId : null,
-      video_param: action === "VideoParam" ? oscMapVideoParam() : null,
-      cue_point_index: action === "VideoCuePointJump" ? Math.max(0, Math.round(oscMapCuePointIndex())) : null,
-      duration_ms:
-        action === "VideoOutputFade" ||
-        action === "VideoLayerFade" ||
-        action === "VideoCuePointAdd" ||
-        action === "VideoCuePointRemove"
-          ? Math.max(0, Math.round(oscMapDurationMs()))
-          : null,
-      low: oscMapLow(),
-      high: oscMapHigh(),
-    };
-    setOscMappings((current) => [...current, mapping]);
-    setMessage(`Added OSC mapping ${mapping.address}`);
-  };
-
-  const removeOscMapping = (index: number) => {
-    setOscMappings((current) => current.filter((_, candidate) => candidate !== index));
-  };
-
-  const saveOscMappings = async () => {
-    try {
-      const path = await invoke<string | null>("save_osc_mappings", { mappings: oscMappings() });
-      if (path) {
-        setMessage(`Saved OSC mappings to ${path}`);
-      }
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const loadOscMappings = async () => {
-    try {
-      const loaded = await invoke<OscControlMapping[] | null>("load_osc_mappings");
-      if (loaded) {
-        setOscMappings(loaded);
-        setMessage(`Loaded ${loaded.length} OSC mapping(s).`);
-      }
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const applyLearnedOscControl = (learned: LearnedOscControl) => {
-    setOscMapAddress(learned.address);
-    const valueLabel = learned.value === null || learned.value === undefined ? "no numeric value" : `value ${learned.value}`;
-    setMessage(`Learned OSC ${learned.address} (${learned.argument_count} arg(s), ${valueLabel}).`);
-  };
-
-  const learnOscControl = async () => {
-    if (oscRunning()) {
-      setMessage("Stop OSC input before OSC learn.");
-      return;
-    }
-    const config: OscInputConfig = {
-      bind_ip: oscBindIp(),
-      port: oscPort(),
-    };
-    try {
-      setMessage("Waiting for OSC input...");
-      const learned = await invoke<LearnedOscControl | null>("learn_osc_control", { config });
-      if (learned) {
-        applyLearnedOscControl(learned);
-      } else {
-        setMessage("OSC learn timed out.");
-      }
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const startOscInput = async () => {
-    const config: OscInputConfig = {
-      bind_ip: oscBindIp(),
-      port: oscPort(),
-    };
-    try {
-      await invoke("start_osc_input", { config, mappings: oscMappings() });
-      setOscRunning(true);
-      setMessage(`OSC input listening on ${config.bind_ip}:${config.port} with ${oscMappings().length} mapping(s)`);
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const stopOscInput = async () => {
-    try {
-      await invoke("stop_osc_input");
-      setOscRunning(false);
-      setMessage("OSC input stopped.");
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
+  const {
+    refreshMidiInputs,
+    refreshMidiOutputs,
+    connectMidiClock,
+    disconnectMidiClock,
+    addMidiMapping,
+    removeMidiMapping,
+    learnMidiControl,
+    saveMidiMappings,
+    loadMidiMappings,
+    connectMidiControl,
+    disconnectMidiControl,
+    connectMidiFeedback,
+    disconnectMidiFeedback,
+    sendMidiFeedback,
+    addOscMapping,
+    removeOscMapping,
+    saveOscMappings,
+    loadOscMappings,
+    learnOscControl,
+    startOscInput,
+    stopOscInput,
+  } = createControlInputController({
+    invoke,
+    setMessage,
+    selectedFixture,
+    selectedEffectAttribute,
+    setMidiInputs,
+    setMidiOutputs,
+    selectedMidiInput,
+    setSelectedMidiInput,
+    selectedMidiOutput,
+    setSelectedMidiOutput,
+    setMidiConnected,
+    setMidiControlConnected,
+    midiFeedbackConnected,
+    setMidiFeedbackConnected,
+    midiFeedbackEnabled,
+    setMidiFeedbackEnabled,
+    midiMappings,
+    setMidiMappings,
+    midiMapMessage,
+    setMidiMapMessage,
+    midiMapChannel,
+    setMidiMapChannel,
+    midiMapNumber,
+    setMidiMapNumber,
+    midiMapAction,
+    midiMapAttribute,
+    midiMapGroupId,
+    midiClearFixtureFlagKind,
+    selectedMidiCueId,
+    selectedMidiEffectId,
+    selectedMidiNodeGraphId,
+    selectedMidiLayerId,
+    selectedMidiVideoOutputId,
+    selectedMidiVideoOutputMappingField,
+    selectedMidiVideoOutputMappingPresetLabel,
+    midiMapVideoParam,
+    midiMapCuePointIndex,
+    midiMapDurationMs,
+    midiMapLow,
+    midiMapHigh,
+    oscRunning,
+    setOscRunning,
+    oscMappings,
+    setOscMappings,
+    oscBindIp,
+    oscPort,
+    oscMapAddress,
+    setOscMapAddress,
+    oscMapAction,
+    oscMapAttribute,
+    oscMapGroupId,
+    oscClearFixtureFlagKind,
+    selectedOscCueId,
+    selectedOscEffectId,
+    selectedOscNodeGraphId,
+    selectedOscLayerId,
+    selectedOscVideoOutputId,
+    selectedOscVideoOutputMappingField,
+    selectedOscVideoOutputMappingPresetLabel,
+    oscMapVideoParam,
+    oscMapCuePointIndex,
+    oscMapDurationMs,
+    oscMapLow,
+    oscMapHigh,
+  });
 
   const refreshRemoteAccessUrls = async (config: RemoteControlConfig = remoteConfig()) => {
     if (!isTauriRuntime()) {
