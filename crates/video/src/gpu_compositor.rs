@@ -1,11 +1,11 @@
 use std::sync::mpsc;
 
-use protocol::{Transform2D, VideoBlendMode, VideoColorAdjust, VideoFxAdjust};
+use protocol::{Transform2D, VideoBlendMode, VideoColorAdjust, VideoFxAdjust, VideoOutputMapping};
 use wgpu::util::DeviceExt;
 
 use crate::{
-    convert_frame_to_rgba8, sanitize_color_adjust, sanitize_fx_adjust, CompositionPlan,
-    CpuCompositeError, VideoFrame, VideoPixelFormat,
+    convert_frame_to_rgba8, finite_or, sanitize_color_adjust, sanitize_fx_adjust,
+    video_output_mapping_scale, CompositionPlan, CpuCompositeError, VideoFrame, VideoPixelFormat,
 };
 
 const WORKGROUP_SIZE: u32 = 64;
@@ -29,6 +29,7 @@ pub struct GpuCompositor {
     queue: wgpu::Queue,
     bind_group_layout: wgpu::BindGroupLayout,
     pipeline: wgpu::ComputePipeline,
+    output_mapping_pipeline: wgpu::ComputePipeline,
     adapter_name: String,
 }
 
@@ -100,12 +101,26 @@ impl GpuCompositor {
             compilation_options: Default::default(),
             cache: None,
         });
+        let output_mapping_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Rayard video GPU output mapping shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("gpu_output_mapping.wgsl").into()),
+        });
+        let output_mapping_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Rayard video GPU output mapping pipeline"),
+                layout: Some(&pipeline_layout),
+                module: &output_mapping_shader,
+                entry_point: Some("map_output"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
 
         Ok(Self {
             device,
             queue,
             bind_group_layout,
             pipeline,
+            output_mapping_pipeline,
             adapter_name,
         })
     }
@@ -254,6 +269,119 @@ impl GpuCompositor {
             data,
         })
     }
+
+    pub fn apply_output_mapping_rgba8(
+        &self,
+        frame: &VideoFrame,
+        mapping: &VideoOutputMapping,
+    ) -> Result<VideoFrame, GpuCompositeError> {
+        let normalized = convert_frame_to_rgba8(frame)?;
+        let pixel_count = normalized
+            .width
+            .checked_mul(normalized.height)
+            .filter(|count| *count > 0)
+            .ok_or(CpuCompositeError::InvalidOutputSize)?;
+        let buffer_size = u64::from(pixel_count) * 4;
+        let source_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Rayard video GPU output mapping source"),
+                contents: &normalized.data,
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        let output_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Rayard video GPU output mapping output"),
+                contents: &vec![0; buffer_size as usize],
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            });
+        let params = output_mapping_params(normalized.width, normalized.height, mapping);
+        let params_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Rayard video GPU output mapping params"),
+                contents: &params,
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Rayard video GPU output mapping bind group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: source_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: output_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Rayard video GPU output mapping encoder"),
+            });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Rayard video GPU output mapping pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.output_mapping_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(pixel_count.div_ceil(WORKGROUP_SIZE), 1, 1);
+        }
+        self.queue.submit(Some(encoder.finish()));
+        let data = self.readback_rgba8(&output_buffer, buffer_size)?;
+
+        Ok(VideoFrame {
+            format: VideoPixelFormat::Rgba8,
+            data,
+            ..normalized
+        })
+    }
+
+    fn readback_rgba8(
+        &self,
+        source_buffer: &wgpu::Buffer,
+        buffer_size: u64,
+    ) -> Result<Vec<u8>, GpuCompositeError> {
+        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Rayard video GPU readback"),
+            size: buffer_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Rayard video GPU readback encoder"),
+            });
+        encoder.copy_buffer_to_buffer(source_buffer, 0, &readback, 0, buffer_size);
+        self.queue.submit(Some(encoder.finish()));
+
+        let (sender, receiver) = mpsc::sync_channel(1);
+        readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let _ = sender.send(result.map_err(|error| error.to_string()));
+            });
+        self.device
+            .poll(wgpu::PollType::wait())
+            .map_err(|error| GpuCompositeError::BufferMap(error.to_string()))?;
+        receiver
+            .recv()
+            .map_err(|error| GpuCompositeError::BufferMap(error.to_string()))?
+            .map_err(GpuCompositeError::BufferMap)?;
+        let data = readback.slice(..).get_mapped_range().to_vec();
+        readback.unmap();
+        Ok(data)
+    }
 }
 
 fn blend_mode_index(mode: &VideoBlendMode) -> u32 {
@@ -324,12 +452,54 @@ fn compositor_params(
     bytes
 }
 
+fn output_mapping_params(width: u32, height: u32, mapping: &VideoOutputMapping) -> [u8; 80] {
+    let output_aspect = (width as f32 / height as f32).max(0.001);
+    let (scale_x, scale_y) = video_output_mapping_scale(mapping, output_aspect);
+    let values = [
+        width,
+        height,
+        0,
+        0,
+        finite_or(mapping.offset_x, 0.0).to_bits(),
+        finite_or(mapping.offset_y, 0.0).to_bits(),
+        scale_x.to_bits(),
+        scale_y.to_bits(),
+        (-finite_or(mapping.rotation_deg, 0.0).to_radians()).to_bits(),
+        finite_or(mapping.lens_distortion, 0.0)
+            .clamp(-1.0, 1.0)
+            .to_bits(),
+        finite_or(mapping.keystone_x, 0.0)
+            .clamp(-1.0, 1.0)
+            .to_bits(),
+        finite_or(mapping.keystone_y, 0.0)
+            .clamp(-1.0, 1.0)
+            .to_bits(),
+        finite_or(mapping.corner_top_left_x, 0.0).to_bits(),
+        finite_or(mapping.corner_top_left_y, 0.0).to_bits(),
+        finite_or(mapping.corner_top_right_x, 0.0).to_bits(),
+        finite_or(mapping.corner_top_right_y, 0.0).to_bits(),
+        finite_or(mapping.corner_bottom_left_x, 0.0).to_bits(),
+        finite_or(mapping.corner_bottom_left_y, 0.0).to_bits(),
+        finite_or(mapping.corner_bottom_right_x, 0.0).to_bits(),
+        finite_or(mapping.corner_bottom_right_y, 0.0).to_bits(),
+    ];
+    let mut bytes = [0; 80];
+    for (index, value) in values.into_iter().enumerate() {
+        let start = index * 4;
+        bytes[start..start + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    bytes
+}
+
 #[cfg(test)]
 mod tests {
-    use protocol::{VideoLayerId, VideoSourceKind, VideoSourceSummary};
+    use protocol::{
+        VideoLayerId, VideoOutputAspectMode, VideoOutputMapping, VideoSourceKind,
+        VideoSourceSummary,
+    };
 
     use super::*;
-    use crate::{composite_rgba8, CompositionLayerPlan};
+    use crate::{apply_video_output_mapping, composite_rgba8, CompositionLayerPlan};
 
     fn compositor() -> Option<GpuCompositor> {
         match GpuCompositor::new() {
@@ -438,6 +608,22 @@ mod tests {
                 "channel {index} differs: GPU={gpu_channel}, CPU={cpu_channel}, tolerance={tolerance}"
             );
         }
+    }
+
+    fn assert_gpu_mapping_matches_cpu(
+        compositor: &GpuCompositor,
+        frame: &VideoFrame,
+        mapping: &VideoOutputMapping,
+    ) {
+        let cpu = apply_video_output_mapping(frame.clone(), mapping);
+        let gpu = compositor
+            .apply_output_mapping_rgba8(frame, mapping)
+            .unwrap();
+        assert_eq!(gpu.width, cpu.width);
+        assert_eq!(gpu.height, cpu.height);
+        assert_eq!(gpu.pts_ms, cpu.pts_ms);
+        assert_eq!(gpu.format, VideoPixelFormat::Rgba8);
+        assert_eq!(gpu.data, cpu.data);
     }
 
     #[test]
@@ -644,5 +830,88 @@ mod tests {
             3,
             1,
         );
+    }
+
+    #[test]
+    fn gpu_output_mapping_matches_cpu_aspect_modes() {
+        let Some(compositor) = compositor() else {
+            return;
+        };
+        let source = frame(
+            9,
+            8,
+            6,
+            VideoPixelFormat::Rgba8,
+            (0..48u8)
+                .flat_map(|value| {
+                    [
+                        value.saturating_mul(5),
+                        value.saturating_mul(3),
+                        255u8.saturating_sub(value.saturating_mul(4)),
+                        255,
+                    ]
+                })
+                .collect(),
+        );
+        for aspect_mode in [
+            VideoOutputAspectMode::Stretch,
+            VideoOutputAspectMode::Fit,
+            VideoOutputAspectMode::Fill,
+        ] {
+            assert_gpu_mapping_matches_cpu(
+                &compositor,
+                &source,
+                &VideoOutputMapping {
+                    aspect_ratio: 16.0 / 9.0,
+                    aspect_mode,
+                    ..VideoOutputMapping::default()
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn gpu_output_mapping_matches_cpu_projection_corrections() {
+        let Some(compositor) = compositor() else {
+            return;
+        };
+        let source = frame(
+            10,
+            12,
+            8,
+            VideoPixelFormat::Rgba8,
+            (0..96u8)
+                .flat_map(|value| {
+                    [
+                        value.saturating_mul(2),
+                        255u8.saturating_sub(value.saturating_mul(2)),
+                        value,
+                        255,
+                    ]
+                })
+                .collect(),
+        );
+        let mapping = VideoOutputMapping {
+            offset_x: 0.04,
+            offset_y: -0.03,
+            scale_x: 0.92,
+            scale_y: 0.88,
+            rotation_deg: 4.0,
+            aspect_ratio: 4.0 / 3.0,
+            aspect_mode: VideoOutputAspectMode::Fit,
+            lens_distortion: 0.12,
+            keystone_x: 0.06,
+            keystone_y: -0.04,
+            corner_top_left_x: -0.02,
+            corner_top_left_y: 0.01,
+            corner_top_right_x: 0.03,
+            corner_top_right_y: -0.02,
+            corner_bottom_right_x: 0.02,
+            corner_bottom_right_y: 0.03,
+            corner_bottom_left_x: -0.01,
+            corner_bottom_left_y: -0.03,
+            ..VideoOutputMapping::default()
+        };
+        assert_gpu_mapping_matches_cpu(&compositor, &source, &mapping);
     }
 }
