@@ -14,6 +14,10 @@ use protocol::{
 };
 use serde::{Deserialize, Serialize};
 
+mod gpu_compositor;
+
+pub use gpu_compositor::{GpuCompositeError, GpuCompositor};
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum VideoPixelFormat {
     Rgba8,
@@ -2354,7 +2358,7 @@ fn rgba_frame_len(width: u32, height: u32) -> Option<usize> {
         .checked_mul(4)
 }
 
-fn convert_frame_to_rgba8(frame: &VideoFrame) -> Result<VideoFrame, CpuCompositeError> {
+pub(crate) fn convert_frame_to_rgba8(frame: &VideoFrame) -> Result<VideoFrame, CpuCompositeError> {
     let data = match frame.format {
         VideoPixelFormat::Rgba8 => {
             validate_rgba_frame_size(frame)?;
