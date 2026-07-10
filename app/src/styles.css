@@ -12700,3 +12700,809 @@ input[type="color"] {
 .app .layoutTouch .touchFaderFunctionBands button {
   min-height: 40px;
 }
+
+/* Rayard visual system: dense, neutral live-production workspace. */
+:root {
+  color: #f0ece7;
+  background: #141311;
+  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  font-size: 12px;
+  --ray-bg: #141311;
+  --ray-surface: #1b1917;
+  --ray-surface-raised: #24211e;
+  --ray-surface-control: #2b2824;
+  --ray-surface-hover: #35302b;
+  --ray-border: #3d3934;
+  --ray-border-strong: #57504a;
+  --ray-text: #f0ece7;
+  --ray-text-muted: #aaa198;
+  --ray-text-faint: #776f68;
+  --ray-accent: #e47b28;
+  --ray-accent-strong: #f08a32;
+  --ray-success: #70c967;
+  --ray-cyan: #39b8cb;
+  --ray-danger: #dc625b;
+}
+
+html,
+body {
+  background: var(--ray-bg);
+  color: var(--ray-text);
+}
+
+* {
+  scrollbar-color: #5a534c #191715;
+  scrollbar-width: thin;
+}
+
+button,
+.buttonLink {
+  min-height: 30px;
+  border-color: var(--ray-border-strong);
+  border-radius: 3px;
+  background: var(--ray-surface-control);
+  color: #e8e2dc;
+  font-weight: 600;
+}
+
+button:hover,
+.buttonLink:hover {
+  border-color: #756b62;
+  background: var(--ray-surface-hover);
+  color: #fff;
+}
+
+button.primary,
+.app button.primary {
+  border-color: #9c5c2c;
+  background: #39302a;
+  color: #f2e9e1;
+  box-shadow: none;
+}
+
+button.primary:hover,
+.app button.primary:hover {
+  border-color: #d87b34;
+  background: #49372b;
+}
+
+.app button.active,
+.app button[aria-pressed="true"] {
+  border-color: #8c8178;
+  background: #4a433d;
+  color: #fff;
+  box-shadow: inset 2px 0 0 var(--ray-accent);
+}
+
+input,
+select,
+textarea {
+  min-height: 30px;
+  border-color: #413c37;
+  border-radius: 3px;
+  background: #171513;
+  color: #f2ede8;
+  padding: 5px 7px;
+}
+
+input:hover,
+select:hover,
+textarea:hover {
+  border-color: #5c554e;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #6f6862;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a[href]:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible {
+  outline: 1px solid #f4a259;
+  outline-offset: 1px;
+}
+
+label {
+  gap: 4px;
+  color: var(--ray-text-muted);
+  font-size: 11px;
+}
+
+h1 {
+  font-size: 18px;
+}
+
+h2 {
+  font-size: 13px;
+}
+
+h3 {
+  font-size: 12px;
+  color: #ddd6cf;
+}
+
+.app {
+  grid-template-rows: auto minmax(0, 1fr) 20px;
+  gap: 3px;
+  padding: 4px;
+  background: var(--ray-bg);
+}
+
+.workspaceChrome {
+  gap: 3px;
+}
+
+.topbar {
+  grid-template-columns: minmax(245px, 0.8fr) minmax(180px, 0.52fr) minmax(330px, 1fr);
+  gap: 6px;
+  min-height: 36px;
+  border: 1px solid var(--ray-border);
+  border-radius: 0;
+  background: #25221f;
+  padding: 0 5px;
+}
+
+.topbarLeft {
+  gap: 5px;
+}
+
+.appMenuButton {
+  flex-basis: 29px;
+  width: 29px;
+  min-height: 29px;
+  color: #d6cfc8;
+  font-size: 14px;
+}
+
+.appMenuButton:hover,
+.appMenuButton.active {
+  background: #35302b;
+  color: #fff;
+  box-shadow: none;
+}
+
+.workspaceTabs {
+  align-self: stretch;
+  gap: 1px;
+}
+
+.workspaceTabs button {
+  position: relative;
+  min-width: 70px;
+  min-height: 34px;
+  color: #bbb1a8;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.workspaceTabs button:hover {
+  background: #302c28;
+}
+
+.app .workspaceTabs button.active,
+.app .workspaceTabs button[aria-pressed="true"] {
+  border-color: transparent;
+  background: transparent;
+  color: #fff;
+  box-shadow: inset 0 -2px 0 #f2eee9;
+}
+
+.topbarProject {
+  gap: 4px;
+  color: #9e958d;
+  font-size: 11px;
+}
+
+.topbarProject strong {
+  color: #fff;
+  font-size: 12px;
+}
+
+.status {
+  gap: 4px;
+  overflow: hidden;
+}
+
+.status button {
+  min-height: 27px;
+  border-radius: 3px;
+  padding: 0 8px;
+  font-size: 10px;
+}
+
+.goButton {
+  min-width: 48px;
+  border-color: #71685f;
+  background: #312d29;
+  color: #fff;
+  font-size: 14px !important;
+}
+
+.goButton:not(:disabled) {
+  border-color: var(--ray-accent);
+  background: #6f3b1c;
+}
+
+.bpmReadout {
+  gap: 5px;
+  min-height: 27px;
+  border-left: 1px solid var(--ray-border);
+  padding-left: 8px;
+}
+
+.bpmReadout strong {
+  color: #d6cec7;
+  font-size: 17px;
+}
+
+.pill,
+.metric {
+  min-height: 23px;
+  border: 1px solid #38332f;
+  border-radius: 2px;
+  background: #1a1816;
+  color: #a79e96;
+  padding: 0 6px;
+  font-size: 10px;
+}
+
+.pill.ok {
+  border-color: #315d35;
+  background: #1b2b1c;
+  color: #8cdb80;
+}
+
+.pill.danger {
+  border-color: #703e3a;
+  background: #341d1b;
+  color: #ffaaa4;
+}
+
+.outputMetric {
+  gap: 5px;
+}
+
+.outputMetric small {
+  color: #827a73;
+  font-size: 9px;
+}
+
+.outputMetric strong {
+  color: #d8d0c9;
+  font-variant-numeric: tabular-nums;
+}
+
+.projectAction {
+  border-color: #4d4741;
+  background: #292521;
+  color: #d9d1ca;
+  text-transform: uppercase;
+}
+
+.setupModeTabs,
+.controlModeTabs {
+  min-height: 33px;
+  border: 1px solid var(--ray-border);
+  background: #282521;
+}
+
+.setupModeTabs button,
+.controlModeTabs button {
+  position: relative;
+  min-width: 96px;
+  min-height: 31px;
+  border-right-color: var(--ray-border);
+  background: transparent;
+  color: #a79d94;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.setupModeTabs button:hover,
+.controlModeTabs button:hover {
+  background: #35302b;
+  color: #eee8e2;
+}
+
+.app .setupModeTabs button.active,
+.app .setupModeTabs button[aria-pressed="true"],
+.app .controlModeTabs button.active,
+.app .controlModeTabs button[aria-pressed="true"] {
+  border-color: transparent var(--ray-border) transparent transparent;
+  background: #171513;
+  color: #fff;
+  box-shadow: inset 0 -2px 0 var(--ray-accent);
+}
+
+.app .liveGoButton.primary,
+.app .touchGoDeck button.primary {
+  border-color: var(--ray-accent-strong);
+  background: #b85b1b;
+  color: #fff;
+}
+
+.layout {
+  gap: 4px;
+}
+
+.panel {
+  gap: 6px;
+  border-color: var(--ray-border);
+  border-radius: 1px;
+  background: #1d1b19;
+  padding: 7px;
+}
+
+.layoutSetup .setupPanelFocus {
+  border-color: #514a43;
+  box-shadow: inset 0 2px 0 #796b5f;
+}
+
+.layoutSetup .setupPanel:focus {
+  outline: 1px solid #8e8175;
+  outline-offset: -1px;
+}
+
+.panelHeader {
+  min-height: 23px;
+  border-bottom: 1px solid #35312d;
+  padding-bottom: 5px;
+  color: #eee8e2;
+}
+
+.panelHeader h2,
+.panelHeader h3,
+.sectionHeader h2,
+.sectionHeader h3 {
+  color: #f0ebe5;
+  font-weight: 700;
+}
+
+.panelHeader span,
+.panelHeader small {
+  color: #938a82;
+  font-variant-numeric: tabular-nums;
+}
+
+.panelHeaderActions {
+  gap: 4px;
+}
+
+.panelHeaderActions button,
+.panelHeaderActions select {
+  min-height: 25px;
+}
+
+.viewToggle {
+  min-height: 26px;
+  border-color: #48413b;
+  border-radius: 2px;
+  background: #171513;
+}
+
+.viewToggle button {
+  min-height: 24px;
+  color: #938a82;
+  font-size: 10px;
+}
+
+.viewToggle button.active {
+  background: #3b3530;
+  color: #fff;
+  box-shadow: inset 0 -2px 0 var(--ray-accent);
+}
+
+.profile,
+.customProfileForm,
+.clock,
+.telemetry {
+  border-top-color: #39342f;
+  padding-top: 8px;
+}
+
+.gdtfSharePanel,
+.profileDmxSummary,
+.recentProfilePanel,
+.customProfilePreview,
+.customProfileEditor,
+.profileFunctionSummary,
+.profileGeometrySummary,
+.presetSnapshotPanel,
+.dmxPatchMap,
+.fixtureGroupAssign,
+.groupBulkAssign,
+.transformEditor,
+.liveStagePanel,
+.serialOutput,
+.beatMeterPanel,
+.dmxOutputNetworkHint,
+.dmxOutputProtocolHint {
+  border-color: #393530;
+  border-radius: 2px;
+  background: #181715;
+}
+
+.dmxPatchMap.compact {
+  background: #171614;
+}
+
+.groupChip {
+  min-height: 27px;
+  border-color: #49433d;
+  border-radius: 3px;
+  background: #25221f;
+  color: #b5aca4;
+}
+
+.groupChip span {
+  border-radius: 2px;
+  background: #171513;
+}
+
+.groupChip.active {
+  border-color: #8c8178;
+  background: #423b35;
+  color: #fff;
+  box-shadow: inset 2px 0 0 var(--ray-accent);
+}
+
+.fixtureList {
+  gap: 4px;
+}
+
+.profileDmxCell,
+.customProfileAttributeRow,
+.customProfileChannel,
+.profileGeometryRow,
+.presetSnapshotRow,
+.liveStatusItem,
+.liveStageSelectionItem,
+.connectionBadge,
+.dmxOutputDiagnosticCard,
+.telemetryGrid span {
+  border-color: #38342f;
+  border-radius: 2px;
+  background: #211f1c;
+}
+
+.patchFreeSummary,
+.dmxSearchSummary,
+.footprint {
+  border-color: #413b35;
+  border-radius: 2px;
+  background: #191715;
+}
+
+.categoryQuickRow,
+.categoryLookGrid,
+.channelFunctionGrid,
+.buttonRow,
+.split,
+.triple,
+.quad {
+  gap: 5px;
+}
+
+.empty,
+.emptyState {
+  color: #8d847c;
+}
+
+.sampleEffectPresetPanel {
+  gap: 5px;
+  border: 0;
+  border-top: 1px solid #39342f;
+  border-radius: 0;
+  background: transparent;
+  padding: 7px 0 0;
+}
+
+.sampleEffectPresetHeader {
+  min-height: 28px;
+}
+
+.sampleEffectPresetHeader strong {
+  color: #e9e3dc;
+  font-size: 10px;
+}
+
+.sampleEffectPresetHeader span,
+.sampleEffectPresetHint {
+  color: #8c837b;
+  font-size: 10px;
+}
+
+.sampleEffectPresetGrid {
+  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
+  gap: 3px;
+}
+
+.sampleEffectPresetCard {
+  grid-template-rows: minmax(43px, 1fr) auto;
+  gap: 0;
+  border-color: #3b3732;
+  border-radius: 1px;
+  background: #211f1c;
+  padding: 0;
+}
+
+.sampleEffectPresetCard.active {
+  border-color: #9d6a3f;
+  background: #2e2924;
+  box-shadow: inset 0 2px 0 var(--ray-accent);
+}
+
+.sampleEffectPresetPick {
+  gap: 2px;
+  min-height: 43px;
+  border-bottom: 1px solid #35312d;
+  border-radius: 0;
+  padding: 6px;
+}
+
+.sampleEffectPresetPick strong {
+  color: #f0ebe5;
+  font-size: 11px;
+}
+
+.sampleEffectPresetPick span {
+  color: #87c97e;
+  font-size: 9px;
+}
+
+.sampleEffectPresetPick small {
+  display: none;
+}
+
+.sampleEffectPresetActions {
+  gap: 0;
+}
+
+.sampleEffectPresetActions button {
+  min-height: 24px;
+  border: 0;
+  border-right: 1px solid #35312d;
+  border-radius: 0;
+  background: #282521;
+  padding: 0 5px;
+  font-size: 10px;
+}
+
+.sampleEffectPresetActions button:last-child {
+  border-right: 0;
+}
+
+.effectEditor,
+.effectForm {
+  gap: 6px;
+}
+
+.effectEditor {
+  border-top-color: #39342f;
+  padding-top: 7px;
+}
+
+.effectShapePresetPanel,
+.effectBpmPeriodPanel,
+.effectTargetHint,
+.effectItem,
+.nodeGraphItem {
+  border-color: #393530;
+  border-radius: 2px;
+  background: #191715;
+}
+
+.mappingStageObjectPanel,
+.mappingTransformInspector,
+.mappingGeometrySummary,
+.mappingSearchPanel,
+.mappingStageBoundsPanel,
+.mappingStagePresetPanel,
+.mappingViewPresetPanel,
+.mappingNudgePanel,
+.mappingBoundsPanel,
+.mappingProjectorControls {
+  border-color: #3b3732;
+  border-radius: 1px;
+  background: #191715;
+}
+
+.mappingStageObjectPanel.selectedObject,
+.mappingTransformInspector.selected,
+.mappingSelectionPanel button.active {
+  border-color: #6d6259;
+  background: #28231f;
+  box-shadow: inset 2px 0 0 var(--ray-accent);
+}
+
+.mappingSelectionPanel,
+.mappingSelectionHeader,
+.mappingProjectorControls {
+  border-color: #3b3732;
+  background: #1b1917;
+}
+
+.mappingSelectionPanel button,
+.mappingSelectionPanel button.mappingTypeButton,
+.mappingSelectionPanel .mappingProjectorActionRow button,
+.mappingSelectionPanel .mappingProjectorFieldGrid button,
+.mappingSelectionPanel .mappingProjectorWarpGrid button {
+  border-color: #45403a;
+  border-radius: 1px;
+  background: #24211e;
+}
+
+.mappingViewportControls button,
+.mappingViewControls button,
+.mappingStageSnapControls button,
+.mappingLayerToggles label {
+  border-color: #45403a;
+  border-radius: 2px;
+  background: #24211e;
+}
+
+.mappingStageSnapControls button.active,
+.mappingLabelMode button.active,
+.mappingViewControls button.active {
+  border-color: #8c8178;
+  background: #403933;
+  color: #fff;
+  box-shadow: inset 0 -2px 0 var(--ray-accent);
+}
+
+.dmxTestFramePanel,
+.phase1SmokePanel,
+.dmxOutputDiagnostics,
+.dmxRoutes,
+.serialOutput,
+.outputRouteList,
+.outputRouteItem {
+  border-color: #3a3631;
+  border-radius: 1px;
+  background: #191715;
+}
+
+.timelineItem,
+.videoLayerItem,
+.videoBackendStatus,
+.videoBackendPill,
+.previewDiagnosticRow,
+.videoSourceDraftStatus,
+.videoPlaybackReadout span,
+.videoTransformReadout span,
+.videoCropReadout span {
+  border-color: #393530;
+  border-radius: 2px;
+  background: #211f1c;
+}
+
+.touchCueStatus > div,
+.touchRemoteUrl,
+.touchStageSelectionItem,
+.touchVideoDeck,
+.touchVideoOutputDeck,
+.touchMasterGrid label,
+.touchSlider,
+.touchGuardRow,
+.touchFixtureActionPanel {
+  border-color: #3b3732;
+  border-radius: 2px;
+  background: #1b1917;
+}
+
+.sourceRuntimeBadge,
+.videoSyncBadge,
+.healthBadge,
+.connectionBadge,
+.effectMetaChip {
+  border-radius: 2px;
+}
+
+.layoutControl.controlModeEdit .faders > * {
+  flex: 0 0 auto;
+}
+
+.layoutControl.controlModeEdit .fixtureEditSurface {
+  min-height: 292px;
+}
+
+.attributeEditor {
+  grid-template-columns: 94px minmax(0, 1fr);
+  gap: 6px;
+}
+
+.attributeCategoryRail {
+  gap: 1px;
+  border-color: #3b3732;
+  border-radius: 1px;
+  background: #191715;
+  padding: 3px;
+}
+
+.attributeCategoryRail button {
+  min-height: 29px;
+  border-radius: 1px;
+  color: #aaa198;
+  padding: 0 7px;
+  font-size: 10px;
+}
+
+.attributeCategoryRail button.active {
+  border-color: #514a43;
+  background: #302b27;
+  color: #fff;
+  box-shadow: inset 2px 0 0 var(--ray-accent);
+}
+
+.attributeEditorBody {
+  gap: 6px;
+}
+
+.attributeTargetSummary {
+  gap: 3px;
+}
+
+.attributeTargetSummary > span {
+  min-height: 25px;
+  border-color: #393530;
+  border-radius: 1px;
+  background: #1a1816;
+  padding: 3px 6px;
+}
+
+.attributeTargetSummary small {
+  font-size: 9px;
+}
+
+.attributeTargetSummary strong {
+  font-size: 10px;
+}
+
+.visualControlPanel,
+.controlLimitPanel,
+.axisSlider,
+.rgbChannelSlider {
+  border-color: #393530;
+  border-radius: 2px;
+  background: #1a1816;
+}
+
+.appStatusLine {
+  min-height: 20px;
+  max-height: 20px;
+  border-top-color: #38332f;
+  background: #191715;
+  color: #9b928a;
+  padding: 1px 7px 0;
+  font-size: 10px;
+  line-height: 17px;
+}
+
+.appStatusIndicator {
+  width: 6px;
+  height: 6px;
+  flex-basis: 6px;
+}
+
+@media (max-height: 760px) {
+  .app {
+    gap: 2px;
+    padding: 3px;
+  }
+
+  .panel {
+    gap: 5px;
+    padding: 6px;
+  }
+
+  button,
+  input,
+  select,
+  .buttonLink {
+    min-height: 28px;
+  }
+}

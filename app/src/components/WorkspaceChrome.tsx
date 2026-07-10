@@ -222,33 +222,21 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
             <strong>{props.bpm.toFixed(0)}</strong>
           </span>
           <span class={props.blackout || props.videoBlackout ? "pill danger" : "pill ok"}>{liveLabel()}</span>
-          <span class="metric tickMetric">{props.tickMs} ms</span>
-          <span class="metric jitterMetric">{props.jitterUs} us</span>
-          <span class="metric bytesMetric">{props.packetBytes} B</span>
-          <span class="metric outputMetric">
-            {props.dmxSuccessCount}/{props.dmxOutputCount} outputs
+          <span
+            class="metric tickMetric"
+            title={`Engine ${props.tickMs} ms / jitter ${props.jitterUs} us / ${props.packetBytes} B`}
+          >
+            {props.tickMs} ms
           </span>
-          <button class="projectAction secondary" title="New project (Ctrl/Cmd+N)" onClick={props.onNewProject}>
-            New
-          </button>
+          <span class="metric outputMetric" title="Healthy DMX outputs / configured DMX outputs">
+            <small>DMX</small>
+            <strong>{props.dmxSuccessCount}/{props.dmxOutputCount}</strong>
+          </span>
           <button class="projectAction" title="Save project (Ctrl/Cmd+S)" onClick={props.onSaveProject}>
             Save
           </button>
-          <button
-            class="projectAction secondary"
-            title="Save project as (Ctrl/Cmd+Shift+S)"
-            onClick={props.onSaveProjectAs}
-          >
-            As
-          </button>
           <button class="projectAction" title="Load project (Ctrl/Cmd+O)" onClick={props.onLoadProject}>
             Load
-          </button>
-          <button class="projectAction secondary" onClick={props.onLoadSample}>
-            Sample
-          </button>
-          <button class="projectAction secondary" onClick={props.onRunSmoke}>
-            Smoke
           </button>
         </div>
       </header>
