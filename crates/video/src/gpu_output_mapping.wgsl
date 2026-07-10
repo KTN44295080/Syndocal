@@ -26,16 +26,14 @@ fn corner_offset(centered_x: f32, centered_y: f32) -> vec2<f32> {
     return mix(top, bottom, v);
 }
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(8, 8)
 fn map_output(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
-    let index = invocation_id.x;
-    let pixel_count = params.width * params.height;
-    if (index >= pixel_count) {
+    let output_x = invocation_id.x;
+    let output_y = invocation_id.y;
+    if (output_x >= params.width || output_y >= params.height) {
         return;
     }
-
-    let output_x = index % params.width;
-    let output_y = index / params.width;
+    let index = output_y * params.width + output_x;
     let centered_x = (f32(output_x) + 0.5) / f32(params.width) - 0.5;
     let centered_y = (f32(output_y) + 0.5) / f32(params.height) - 0.5;
     let corner = corner_offset(centered_x, centered_y);

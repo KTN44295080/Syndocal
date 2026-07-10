@@ -191,16 +191,14 @@ fn apply_color_key(input_pixel: vec4<f32>) -> vec4<f32> {
     return pixel;
 }
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(8, 8)
 fn composite_layer(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
-    let index = invocation_id.x;
-    let pixel_count = params.output_width * params.output_height;
-    if (index >= pixel_count) {
+    let output_x = invocation_id.x;
+    let output_y = invocation_id.y;
+    if (output_x >= params.output_width || output_y >= params.output_height) {
         return;
     }
-
-    let output_x = index % params.output_width;
-    let output_y = index / params.output_width;
+    let index = output_y * params.output_width + output_x;
     let centered_x = (f32(output_x) + 0.5) / f32(params.output_width) - 0.5 - params.transform_a.x;
     let centered_y = (f32(output_y) + 0.5) / f32(params.output_height) - 0.5 - params.transform_a.y;
     let sine = sin(params.transform_b.x);

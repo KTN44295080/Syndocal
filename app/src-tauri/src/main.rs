@@ -7469,19 +7469,19 @@ fn start_native_video_test_pattern(
     Ok(())
 }
 
-fn render_native_video_output_frame(
+fn prepare_native_video_output(
     renderer: &mut AppVideoPreviewRenderer,
     engine: &EngineHandle,
     output_id: VideoOutputId,
     width: u32,
     height: u32,
-) -> Result<video::VideoFrame, String> {
+) -> Result<video::PreparedVideoOutput, String> {
     let snapshot = engine.snapshot();
     renderer
         .frame_provider_mut()
         .set_bpm(Some(snapshot.clock.bpm));
     renderer
-        .render_output_preview(&snapshot.video, output_id, width.max(1), height.max(1))
+        .prepare_output_frames(&snapshot.video, output_id, width.max(1), height.max(1))
         .map_err(|error| format!("{error:?}"))
 }
 
@@ -7503,7 +7503,7 @@ fn start_native_video_live_output(
         video::DecoderBackedFrameProvider::new(video::FfmpegCliFrameDecoder::from_env())
             .with_prefetch(0, 33),
     );
-    let first_frame = render_native_video_output_frame(
+    let first_output = prepare_native_video_output(
         &mut renderer,
         &engine,
         output_id,
@@ -7511,7 +7511,11 @@ fn start_native_video_live_output(
         initial_size.height,
     )?;
     presenter
-        .present_rgba8(&first_frame)
+        .present_prepared_output(
+            &first_output,
+            initial_size.width.max(1),
+            initial_size.height.max(1),
+        )
         .map_err(|error| format!("Native video output first frame failed: {error:?}"))?;
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -7537,7 +7541,7 @@ fn start_native_video_live_output(
                     let result = presenter
                         .resize(size.width, size.height)
                         .and_then(|_| {
-                            render_native_video_output_frame(
+                            prepare_native_video_output(
                                 &mut renderer,
                                 &engine,
                                 output_id,
@@ -7546,7 +7550,9 @@ fn start_native_video_live_output(
                             )
                             .map_err(video::GpuSurfaceError::Present)
                         })
-                        .and_then(|frame| presenter.present_rgba8(&frame));
+                        .and_then(|prepared| {
+                            presenter.present_prepared_output(&prepared, size.width, size.height)
+                        });
                     if result.is_err() {
                         break;
                     }

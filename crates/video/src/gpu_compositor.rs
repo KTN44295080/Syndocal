@@ -8,7 +8,15 @@ use crate::{
     video_output_mapping_scale, CompositionPlan, CpuCompositeError, VideoFrame, VideoPixelFormat,
 };
 
-const WORKGROUP_SIZE: u32 = 64;
+const WORKGROUP_WIDTH: u32 = 8;
+const WORKGROUP_HEIGHT: u32 = 8;
+
+pub(crate) fn dispatch_dimensions(width: u32, height: u32) -> (u32, u32) {
+    (
+        width.div_ceil(WORKGROUP_WIDTH),
+        height.div_ceil(WORKGROUP_HEIGHT),
+    )
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GpuCompositeError {
@@ -27,10 +35,86 @@ impl From<CpuCompositeError> for GpuCompositeError {
 pub struct GpuCompositor {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    bind_group_layout: wgpu::BindGroupLayout,
-    pipeline: wgpu::ComputePipeline,
-    output_mapping_pipeline: wgpu::ComputePipeline,
+    pipelines: GpuCompositePipelines,
     adapter_name: String,
+}
+
+pub(crate) struct GpuCompositePipelines {
+    pub bind_group_layout: wgpu::BindGroupLayout,
+    pub composite: wgpu::ComputePipeline,
+    pub output_mapping: wgpu::ComputePipeline,
+}
+
+pub(crate) fn create_gpu_composite_pipelines(device: &wgpu::Device) -> GpuCompositePipelines {
+    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("Rayard video GPU compositor bind group layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ],
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Rayard video GPU compositor pipeline layout"),
+        bind_group_layouts: &[&bind_group_layout],
+        push_constant_ranges: &[],
+    });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Rayard video GPU compositor shader"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("gpu_compositor.wgsl").into()),
+    });
+    let composite = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("Rayard video GPU compositor pipeline"),
+        layout: Some(&pipeline_layout),
+        module: &shader,
+        entry_point: Some("composite_layer"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let output_mapping_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Rayard video GPU output mapping shader"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("gpu_output_mapping.wgsl").into()),
+    });
+    let output_mapping = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("Rayard video GPU output mapping pipeline"),
+        layout: Some(&pipeline_layout),
+        module: &output_mapping_shader,
+        entry_point: Some("map_output"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    GpuCompositePipelines {
+        bind_group_layout,
+        composite,
+        output_mapping,
+    }
 }
 
 impl GpuCompositor {
@@ -49,78 +133,12 @@ impl GpuCompositor {
         }))
         .map_err(|error| GpuCompositeError::Device(error.to_string()))?;
 
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Rayard video GPU compositor bind group layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Rayard video GPU compositor pipeline layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
-        });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Rayard video GPU compositor shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("gpu_compositor.wgsl").into()),
-        });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Rayard video GPU compositor pipeline"),
-            layout: Some(&pipeline_layout),
-            module: &shader,
-            entry_point: Some("composite_layer"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-        let output_mapping_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Rayard video GPU output mapping shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("gpu_output_mapping.wgsl").into()),
-        });
-        let output_mapping_pipeline =
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("Rayard video GPU output mapping pipeline"),
-                layout: Some(&pipeline_layout),
-                module: &output_mapping_shader,
-                entry_point: Some("map_output"),
-                compilation_options: Default::default(),
-                cache: None,
-            });
+        let pipelines = create_gpu_composite_pipelines(&device);
 
         Ok(Self {
             device,
             queue,
-            bind_group_layout,
-            pipeline,
-            output_mapping_pipeline,
+            pipelines,
             adapter_name,
         })
     }
@@ -185,7 +203,7 @@ impl GpuCompositor {
                 });
             let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Rayard video GPU compositor bind group"),
-                layout: &self.bind_group_layout,
+                layout: &self.pipelines.bind_group_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
@@ -211,9 +229,10 @@ impl GpuCompositor {
                     label: Some("Rayard video GPU compositor pass"),
                     timestamp_writes: None,
                 });
-                pass.set_pipeline(&self.pipeline);
+                pass.set_pipeline(&self.pipelines.composite);
                 pass.set_bind_group(0, &bind_group, &[]);
-                pass.dispatch_workgroups(pixel_count.div_ceil(WORKGROUP_SIZE), 1, 1);
+                let (workgroups_x, workgroups_y) = dispatch_dimensions(width, height);
+                pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
             }
             self.queue.submit(Some(encoder.finish()));
         }
@@ -306,7 +325,7 @@ impl GpuCompositor {
             });
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Rayard video GPU output mapping bind group"),
-            layout: &self.bind_group_layout,
+            layout: &self.pipelines.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -332,9 +351,11 @@ impl GpuCompositor {
                 label: Some("Rayard video GPU output mapping pass"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&self.output_mapping_pipeline);
+            pass.set_pipeline(&self.pipelines.output_mapping);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(pixel_count.div_ceil(WORKGROUP_SIZE), 1, 1);
+            let (workgroups_x, workgroups_y) =
+                dispatch_dimensions(normalized.width, normalized.height);
+            pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
         }
         self.queue.submit(Some(encoder.finish()));
         let data = self.readback_rgba8(&output_buffer, buffer_size)?;
@@ -384,7 +405,7 @@ impl GpuCompositor {
     }
 }
 
-fn blend_mode_index(mode: &VideoBlendMode) -> u32 {
+pub(crate) fn blend_mode_index(mode: &VideoBlendMode) -> u32 {
     match mode {
         VideoBlendMode::Normal => 0,
         VideoBlendMode::Add => 1,
@@ -393,7 +414,7 @@ fn blend_mode_index(mode: &VideoBlendMode) -> u32 {
     }
 }
 
-fn compositor_params(
+pub(crate) fn compositor_params(
     output_width: u32,
     output_height: u32,
     source_width: u32,
@@ -452,7 +473,11 @@ fn compositor_params(
     bytes
 }
 
-fn output_mapping_params(width: u32, height: u32, mapping: &VideoOutputMapping) -> [u8; 80] {
+pub(crate) fn output_mapping_params(
+    width: u32,
+    height: u32,
+    mapping: &VideoOutputMapping,
+) -> [u8; 80] {
     let output_aspect = (width as f32 / height as f32).max(0.001);
     let (scale_x, scale_y) = video_output_mapping_scale(mapping, output_aspect);
     let values = [
@@ -500,6 +525,14 @@ mod tests {
 
     use super::*;
     use crate::{apply_video_output_mapping, composite_rgba8, CompositionLayerPlan};
+
+    #[test]
+    fn dispatch_dimensions_cover_hd_and_4k_without_exceeding_gpu_limits() {
+        assert_eq!(dispatch_dimensions(1920, 1080), (240, 135));
+        assert_eq!(dispatch_dimensions(3840, 2160), (480, 270));
+        assert!(dispatch_dimensions(3840, 2160).0 <= 65_535);
+        assert!(dispatch_dimensions(3840, 2160).1 <= 65_535);
+    }
 
     fn compositor() -> Option<GpuCompositor> {
         match GpuCompositor::new() {
