@@ -5,7 +5,13 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { CueManagementPanel } from "./components/CueManagementPanel";
 import { CustomProfileEditorPanel } from "./components/CustomProfileEditorPanel";
-import { DmxPatchMapPanel, type DmxPatchViewMode } from "./components/DmxPatchMapPanel";
+import {
+  DmxPatchMapPanel,
+  type DmxAddressCell,
+  type DmxPatchSegment,
+  type DmxPatchViewMode,
+  type DmxUniverseMap,
+} from "./components/DmxPatchMapPanel";
 import { DmxOutputConfigPanel } from "./components/DmxOutputConfigPanel";
 import { DmxRawMonitor } from "./components/DmxRawMonitor";
 import { EffectActionControlsPanel } from "./components/EffectActionControlsPanel";
@@ -199,6 +205,23 @@ import {
 } from "./uiModes";
 import { projectSnapshotSignature } from "./projectSnapshot";
 import { effectDraftTargetPlan } from "./effectDraft";
+import {
+  bulkPatchLabel,
+  colorCandidates,
+  findControlAttribute,
+  findControlAttributeInControls,
+  readFixtureAttribute,
+  type ColorControlSet,
+  type ColorExtraChannelKey,
+  type ColorExtraControl,
+  type DimmerControlSet,
+  type MovementLimitDragState,
+  type MovementLimitPoint,
+  type PositionControlSet,
+  type TouchDimmerQuickEntry,
+  type TouchDimmerQuickTarget,
+  type TouchDimmerRestoreState,
+} from "./fixtureControlRuntime";
 import {
   mappingGeometryClass,
   surfaceWorldHalfSize,
@@ -462,146 +485,6 @@ const outputProtocolLabel = (protocol: DmxOutputConfig["protocol"]) => {
   }
 };
 
-
-type ColorExtraChannelKey = "white" | "amber" | "uv";
-
-interface ColorExtraControl {
-  key: ColorExtraChannelKey;
-  label: string;
-  shortLabel: string;
-  attribute: string;
-  value: number;
-}
-
-interface ColorControlSet {
-  red: string;
-  green: string;
-  blue: string;
-  redValue: number;
-  greenValue: number;
-  blueValue: number;
-  extras: ColorExtraControl[];
-  value: string;
-}
-
-interface PositionControlSet {
-  pan: string;
-  tilt: string;
-  panValue: number;
-  tiltValue: number;
-}
-
-interface DimmerControlSet {
-  attribute: string;
-  value: number;
-}
-
-interface TouchDimmerQuickEntry {
-  fixtureId: number;
-  label: string;
-  attribute: string;
-  value: number;
-  outValue: number;
-  halfValue: number;
-  fullValue: number;
-}
-
-interface TouchDimmerQuickTarget {
-  kind: "fixture" | "group";
-  label: string;
-  entries: TouchDimmerQuickEntry[];
-}
-
-interface TouchDimmerRestoreState {
-  label: string;
-  entries: Pick<TouchDimmerQuickEntry, "fixtureId" | "attribute" | "value">[];
-}
-
-interface MovementLimitPoint {
-  pan: number;
-  tilt: number;
-}
-
-interface MovementLimitDragState {
-  anchor: MovementLimitPoint;
-}
-
-interface DmxPatchSegment {
-  fixture: PatchedFixtureSummary;
-  start: number;
-  end: number;
-  left: number;
-  width: number;
-}
-
-interface DmxUniverseMap {
-  universe: number;
-  used: number;
-  free: number;
-  largestFree: number;
-  segments: DmxPatchSegment[];
-}
-
-interface DmxAddressCell {
-  channel: number;
-  segment: DmxPatchSegment | null;
-  isStart: boolean;
-  isSelected: boolean;
-  plannedIndex: number | null;
-  plannedStart: boolean;
-  plannedConflict: boolean;
-}
-
-const colorCandidates = {
-  red: ["ColorRed", "Red"],
-  green: ["ColorGreen", "Green"],
-  blue: ["ColorBlue", "Blue"],
-  white: ["ColorWhite", "White", "WarmWhite", "ColdWhite", "CoolWhite"],
-  amber: ["ColorAmber", "Amber"],
-  uv: ["ColorUv", "ColorUV", "Uv", "UV", "Ultraviolet"],
-};
-
-const findControlAttribute = (fixture: PatchedFixtureSummary, names: string[]) => {
-  const normalizedNames = names.map((name) => name.toLowerCase());
-  return fixture.controls.find((control) => normalizedNames.includes(control.attribute.toLowerCase()))?.attribute;
-};
-
-const findControlAttributeInControls = (controls: AttributeControl[], names: string[]) => {
-  const normalizedNames = names.map((name) => name.toLowerCase());
-  return controls.find((control) => normalizedNames.includes(control.attribute.toLowerCase()))?.attribute;
-};
-
-const bulkPatchLabel = (baseLabel: string, index: number, count: number) => {
-  if (count === 1) {
-    return baseLabel;
-  }
-  const match = baseLabel.match(/^(.*?)(\d+)$/);
-  if (match) {
-    return `${match[1]}${Number(match[2]) + index}`;
-  }
-  return `${baseLabel} ${index + 1}`;
-};
-
-const readFixtureAttribute = (
-  fixture: PatchedFixtureSummary,
-  currentValues: Record<string, number>,
-  names: string[],
-) => {
-  const attributeValues = new Map(
-    fixture.attribute_values.map((value) => [value.attribute.toLowerCase(), value.value]),
-  );
-  for (const name of names) {
-    const directValue = currentValues[`${fixture.id}:${name}`];
-    if (directValue !== undefined) {
-      return directValue;
-    }
-    const snapshotValue = attributeValues.get(name.toLowerCase());
-    if (snapshotValue !== undefined) {
-      return snapshotValue;
-    }
-  }
-  return undefined;
-};
 
 export default function App() {
   const outputWindowId = readVideoOutputWindowId();
