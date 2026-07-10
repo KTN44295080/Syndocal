@@ -110,7 +110,10 @@ CPU プレビューを wgpu 実出力に置き換える。**照明エンジン�
     - [x] M3.2c-1: 出力プランとComposition順の選択済みレイヤーフレームを返す`PreparedVideoOutput`境界を追加。ブラックアウト/無効出力はデコードせず空集合を返す。(2026-07-11)
     - [x] M3.2c-2: Prepared入力を同一deviceの合成/補正Storage BufferからSurfaceへ直結し、CPU合成/readback/Canvasを通さない。8x8の2次元compute dispatchでHD/4K時も各次元のGPU上限を超えないことをテストし、Windows実画面で補正済みフレームとGO後の連続更新を確認。(2026-07-11)
     - [x] M3.2c-3: フレームごとのGPUバッファ生成を再利用プールへ置換し、リサイズ・複数出力・fullscreen・1080p60フレーム時間を検証してM3.2cを完了する。(2026-07-11)
-- 段階 3: インプロセスデコードワーカー。方針決定が必要(§5 決定事項 D1): (a) `ffmpeg-next`(libav バインディング)、(b) HAP + DXT 直接アップロード優先、(c) 当面 CLI 抽出を最適化して据え置き。推奨は (b)→(a) の順(HAP は VJ 用途の主流で、既に DXT パスがある)。
+- 段階 3: インプロセスデコードワーカー。D1 は (b) HAP 優先 → (a) libav 後続で確定。一般コーデック移行中のみ CLI を互換フォールバックとして残す。
+  - [x] M3.3a: 純RustのMOV/MP4デマルチプレクサ + HAPフレームパーサを既定デコーダへ配線し、HAP BC1/BC3とHAP Q YCoCgをFFmpegプロセスなしで供給する。(2026-07-11)
+  - [ ] M3.3b: HAPのBC圧縮データをCPU RGBA展開せずwgpuテクスチャへ直接アップロードし、HAP Q変換をGPUパスへ移す。HAP Q Alpha/BC7の対応範囲もここで確定する。
+  - [ ] M3.3c: H.264/H.265/ProResをインプロセスlibavワーカーへ移し、FFmpeg CLIフレーム抽出をReference/診断用途へ降格する。
 - 段階 4: 既存のフレームキュー/デコード診断/テレメトリを新パスに接続。CPU プレビューは「Preview (Reference)」として残す。
 - 検証ゲート: `cargo test -p video`(ゴールデン含む)、1080p60 多レイヤーでのフレームタイム計測、既存 `video_preview*` テスト green、DMX テレメトリ予算に影響なし。
 

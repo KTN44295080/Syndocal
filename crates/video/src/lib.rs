@@ -16,9 +16,11 @@ use serde::{Deserialize, Serialize};
 
 mod gpu_compositor;
 mod gpu_surface;
+mod hap_decoder;
 
 pub use gpu_compositor::{GpuCompositeError, GpuCompositor};
 pub use gpu_surface::{GpuSurfaceBufferStats, GpuSurfaceError, GpuSurfacePresenter};
+pub use hap_decoder::{HapMovFrameDecoder, PreferredVideoFrameDecoder};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum VideoPixelFormat {
@@ -26,6 +28,7 @@ pub enum VideoPixelFormat {
     Bgra8,
     Dxt1,
     Dxt5,
+    YcoCgDxt5,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1364,11 +1367,10 @@ pub fn video_runtime_status_with_binaries(
             },
             VideoBackendStatus {
                 id: "hap_gpu".to_string(),
-                label: "HAP GPU decode".to_string(),
-                state: VideoBackendState::NotBuilt,
-                detail:
-                    "HAP GPU/DXT texture decode path is not linked in this build; FFmpeg preview may still work"
-                        .to_string(),
+                label: "HAP in-process decode".to_string(),
+                state: VideoBackendState::Available,
+                detail: "Pure Rust MOV demux and HAP/HAP Q BC1/BC3 frame decode are built in; HAP Q Alpha and BC7 are staged separately"
+                    .to_string(),
             },
             external_backend_status("ndi", "NDI input/output", "NDI SDK"),
             platform_external_backend_status(
@@ -2403,6 +2405,7 @@ pub(crate) fn convert_frame_to_rgba8(frame: &VideoFrame) -> Result<VideoFrame, C
         VideoPixelFormat::Bgra8 => convert_bgra8_to_rgba8(frame)?,
         VideoPixelFormat::Dxt1 => decode_dxt1_rgba8(frame)?,
         VideoPixelFormat::Dxt5 => decode_dxt5_rgba8(frame)?,
+        VideoPixelFormat::YcoCgDxt5 => decode_ycocg_dxt5_rgba8(frame)?,
     };
     Ok(VideoFrame {
         layer_id: frame.layer_id,
@@ -2516,6 +2519,21 @@ fn decode_dxt5_rgba8(frame: &VideoFrame) -> Result<Vec<u8>, CpuCompositeError> {
         );
     }
     Ok(output)
+}
+
+fn decode_ycocg_dxt5_rgba8(frame: &VideoFrame) -> Result<Vec<u8>, CpuCompositeError> {
+    let mut data = decode_dxt5_rgba8(frame)?;
+    for pixel in data.chunks_exact_mut(4) {
+        let scale = f32::from(pixel[2]) / 8.0 + 1.0;
+        let co = ((f32::from(pixel[0]) - 128.0) / 255.0) / scale;
+        let cg = ((f32::from(pixel[1]) - 128.0) / 255.0) / scale;
+        let y = f32::from(pixel[3]) / 255.0;
+        pixel[0] = ((y + co - cg).clamp(0.0, 1.0) * 255.0).round() as u8;
+        pixel[1] = ((y + cg).clamp(0.0, 1.0) * 255.0).round() as u8;
+        pixel[2] = ((y - co - cg).clamp(0.0, 1.0) * 255.0).round() as u8;
+        pixel[3] = 255;
+    }
+    Ok(data)
 }
 
 fn write_dxt_color_block(
@@ -5944,8 +5962,8 @@ mod tests {
             .iter()
             .find(|backend| backend.id == "hap_gpu")
             .unwrap();
-        assert_eq!(hap_gpu.state, VideoBackendState::NotBuilt);
-        assert!(hap_gpu.detail.contains("HAP GPU/DXT"));
+        assert_eq!(hap_gpu.state, VideoBackendState::Available);
+        assert!(hap_gpu.detail.contains("Pure Rust MOV demux"));
         let ndi = status
             .backends
             .iter()
@@ -7722,6 +7740,27 @@ mod tests {
         .unwrap();
 
         assert_eq!(output.data, vec![128, 0, 0, 128]);
+    }
+
+    #[test]
+    fn cpu_compositor_converts_hap_q_ycocg_blocks() {
+        let mut block = vec![100, 100, 0, 0, 0, 0, 0, 0];
+        block.extend_from_slice(&0x8400u16.to_le_bytes());
+        block.extend_from_slice(&0x8400u16.to_le_bytes());
+        block.extend_from_slice(&0u32.to_le_bytes());
+        let output = composite_rgba8(
+            &plan(vec![layer_plan(1, VideoBlendMode::Normal, 1.0)]),
+            &[VideoFrame {
+                format: VideoPixelFormat::YcoCgDxt5,
+                data: block,
+                ..dxt5_frame(1, 1, 1, Vec::new())
+            }],
+            1,
+            1,
+        )
+        .unwrap();
+
+        assert_eq!(output.data, vec![102, 102, 94, 255]);
     }
 
     #[test]

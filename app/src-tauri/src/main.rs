@@ -45,8 +45,9 @@ use serde_json::{json, Map, Value};
 use tauri::Emitter;
 use tauri::{Manager, State};
 
-type AppVideoPreviewRenderer =
-    video::VideoPreviewRenderer<video::DecoderBackedFrameProvider<video::FfmpegCliFrameDecoder>>;
+type AppVideoPreviewRenderer = video::VideoPreviewRenderer<
+    video::DecoderBackedFrameProvider<video::PreferredVideoFrameDecoder>,
+>;
 
 const APP_NAME: &str = "Rayard";
 const PHASE1_SAMPLE_PROJECT_LABEL: &str = "samples/phase1-mini-show.ry";
@@ -7623,7 +7624,7 @@ fn start_native_video_live_output(
     .map_err(|error| format!("Native video output initialization failed: {error:?}"))?;
     let mut renderer = video::VideoPreviewRenderer::with_frame_provider(
         video::VideoRuntimeConfig::default(),
-        video::DecoderBackedFrameProvider::new(video::FfmpegCliFrameDecoder::from_env())
+        video::DecoderBackedFrameProvider::new(video::PreferredVideoFrameDecoder::from_env())
             .with_prefetch(0, 33),
     );
     let first_started = Instant::now();
@@ -12687,7 +12688,7 @@ f 1 2 3
     fn video_preview_decode_budget_request_is_clamped() {
         let renderer = video::VideoPreviewRenderer::with_frame_provider(
             video::VideoRuntimeConfig::default(),
-            video::DecoderBackedFrameProvider::new(video::FfmpegCliFrameDecoder::from_env())
+            video::DecoderBackedFrameProvider::new(video::PreferredVideoFrameDecoder::from_env())
                 .with_prefetch(2, 33),
         );
 
@@ -16131,8 +16132,10 @@ fn main() {
             engine,
             video_preview: Mutex::new(video::VideoPreviewRenderer::with_frame_provider(
                 video::VideoRuntimeConfig::default(),
-                video::DecoderBackedFrameProvider::new(video::FfmpegCliFrameDecoder::from_env())
-                    .with_prefetch(2, 33),
+                video::DecoderBackedFrameProvider::new(
+                    video::PreferredVideoFrameDecoder::from_env(),
+                )
+                .with_prefetch(2, 33),
             )),
             external_video_transport: Arc::new(Mutex::new(
                 video::ExternalVideoTransportRuntime::new(),

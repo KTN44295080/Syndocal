@@ -22,8 +22,10 @@ audio = { path = "crates/audio" }
 crossbeam-queue = "0.3"
 gdtf = { path = "crates/gdtf" }
 image = { version = "=0.24.9", default-features = false, features = ["jpeg", "png"] }
+hap-parser = "=0.2.0"
 io = { path = "crates/io" }
 midir = "0.11"
+mp4 = "=0.14.0"
 protocol = { path = "crates/protocol" }
 pollster = "=0.4.0"
 raw-window-handle = "=0.6.2"
