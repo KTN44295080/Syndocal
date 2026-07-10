@@ -73,6 +73,7 @@ import {
   rangesOverlap,
   reserveDmxAddressRange,
 } from "./dmxAddressing";
+import { confirmDestructiveAction } from "./destructiveActions";
 import type {
   AttributeControl,
   AttributeResolution,
@@ -4600,7 +4601,7 @@ export default function App() {
 
   const removeFixture = async (fixtureId: number) => {
     const fixture = snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
-    if (fixture && !window.confirm(`Remove fixture ${fixture.label}?`)) {
+    if (fixture && !confirmDestructiveAction("fixture", fixture.label)) {
       return;
     }
     try {
@@ -6209,6 +6210,10 @@ export default function App() {
   };
 
   const removeCue = async (cueId: number) => {
+    const cue = snapshot().cues.find((candidate) => candidate.id === cueId);
+    if (cue && !confirmDestructiveAction("cue", cue.label)) {
+      return;
+    }
     try {
       await invoke("remove_cue", { cueId });
       setMessage(`Removed cue ${cueId}`);
@@ -6692,6 +6697,10 @@ export default function App() {
   };
 
   const removeVideoOutput = async (outputId: number) => {
+    const output = snapshot().video.outputs.find((candidate) => candidate.id === outputId);
+    if (output && !confirmDestructiveAction("video output", output.label)) {
+      return;
+    }
     try {
       await invoke("remove_video_output", { outputId });
       setMessage(`Removed video output ${outputId}`);
@@ -7266,6 +7275,10 @@ export default function App() {
   };
 
   const removeEffect = async (effectId: number) => {
+    const effect = snapshot().effects.find((candidate) => candidate.id === effectId);
+    if (effect && !confirmDestructiveAction("effect", effect.label)) {
+      return;
+    }
     try {
       await invoke("remove_effect", { effectId });
       if (editingEffectId() === effectId) {

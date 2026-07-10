@@ -89,7 +89,7 @@ Phase 2(エフェクト/タイムライン/マッピングの操作性)を「完
 - [ ] Touch ワークスペースの実タッチ検証(またはポインタエミュレーション): ヒットターゲット最小 40px、フラッシュボタンの momentary 動作。
 - [ ] 空状態(fixture 0 台、video layer 0 枚、cue 0 個)の各パネルが「次に何をすべきか」を示すこと。
 - [ ] 用語統一パス: Fixture/Group/Cue/Output/Layer/Surface の表記ゆれを全 UI で統一。
-- [ ] 破壊的操作(Remove Fixture/Cue/Output/Effect)の確認 or Undo 方針を決めて統一。
+- [x] 破壊的操作(Remove Fixture/Cue/Output/Effect)は、v1.0 では共通のネイティブ確認ダイアログ + Undo 不可の明示に統一。Undo は v1.x の拡張候補とする。
 - 検証ゲート: `npm run check:viewport` + 上記チェックリストを CLAUDE.md に結果記録。
 
 ### M3 — ネイティブビデオ出力(2〜4 週、最大の技術リスク)
