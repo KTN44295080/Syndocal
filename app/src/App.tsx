@@ -4,6 +4,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { CueManagementPanel } from "./components/CueManagementPanel";
+import { AppStatusLine } from "./components/AppStatusLine";
 import { CustomProfileEditorPanel } from "./components/CustomProfileEditorPanel";
 import {
   type DmxAddressCell,
@@ -210,6 +211,7 @@ import { createTimelineAutomationController } from "./createTimelineAutomationCo
 import { createVideoRuntimeController } from "./createVideoRuntimeController";
 import { createAppKeyboardController } from "./createAppKeyboardController";
 import { createStageMapController } from "./createStageMapController";
+import { appStatusFromMessage } from "./statusModel";
 import {
   bulkPatchLabel,
   colorCandidates,
@@ -783,7 +785,12 @@ export default function App() {
     }));
   }
   let lastRecoverySignature = projectRecoveryCheckpoint()?.signature ?? null;
-  const [message, setMessage] = createSignal("Ready");
+  const [appStatus, setAppStatus] = createSignal(appStatusFromMessage("Ready"));
+  const message = () => appStatus().text;
+  const setMessage = (text: string) => {
+    setAppStatus(appStatusFromMessage(text));
+    return text;
+  };
   const {
     output,
     setOutput,
@@ -9965,7 +9972,7 @@ export default function App() {
         </aside>
       </section>
 
-      <footer>{message()}</footer>
+      <AppStatusLine status={appStatus()} />
     </main>
   );
 }

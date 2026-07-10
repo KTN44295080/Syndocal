@@ -69,7 +69,7 @@ interface MappingInteractionControllerOptions {
   dragWorldDelta: (drag: MappingDragState) => StagePoint;
   snapStagePosition: (position: PatchFixtureRequest["position"]) => PatchFixtureRequest["position"];
   refreshSnapshot: () => Promise<EngineSnapshot | null>;
-  setMessage: Setter<string>;
+  setMessage: (message: string) => unknown;
   isMappingStageObjectDrag: (drag: MappingDragState) => drag is MappingStageObjectDrag;
   mappingStageObjectPreview: (object: StageObjectSummary) => StageObjectSummary;
   setStageObject: (object: StageObjectSummary, updates: Partial<StageObjectSummary>) => Promise<void>;

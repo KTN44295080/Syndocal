@@ -12635,16 +12635,37 @@ input[type="color"] {
   padding: 12px 0;
 }
 
-footer {
+.appStatusLine {
   min-width: 0;
   min-height: 22px;
   max-height: 22px;
   overflow: hidden;
   border-top: 1px solid #242c36;
   color: #aab6c6;
-  padding-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 8px 0;
   font-size: 12px;
   line-height: 18px;
+}
+
+.appStatusIndicator {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: #718096;
+}
+
+.appStatusText {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.appStatusLine.success .appStatusIndicator { background: #4fc483; }
+.appStatusLine.warning .appStatusIndicator { background: #e4b64f; }
+.appStatusLine.error .appStatusIndicator { background: #eb6a6a; }
+.appStatusLine.error .appStatusText { color: #ffc0c0; }

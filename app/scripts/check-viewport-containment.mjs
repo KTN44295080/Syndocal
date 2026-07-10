@@ -323,6 +323,8 @@ async function measure(client, label) {
       layoutScrollHeight: layout ? layout.scrollHeight : null,
       layoutRectWidth: layoutRect ? Math.round(layoutRect.width) : null,
       layoutRectHeight: layoutRect ? Math.round(layoutRect.height) : null,
+      visibleAppStatusLineCount: visibleCount('.appStatusLine[role="status"]'),
+      appStatusTone: document.querySelector('.appStatusLine')?.getAttribute('data-status-tone') ?? '',
       visibleProjectMenuCount: visibleCount('.appProjectMenu'),
       visibleProjectMenuItemCount: visibleCount('.appProjectMenu button[role="menuitem"]'),
       visibleProjectMenuShortcutCount: document.querySelectorAll('.appProjectMenu button[aria-keyshortcuts]').length,
@@ -843,6 +845,9 @@ async function main() {
     const timelineAutomationFailures = shouldCheckTimelineAutomation
       ? results.filter((result) => result.label.startsWith("control-live-") && !hasTimelineAutomationVisuals(result))
       : [];
+    const statusLineFailures = results.filter(
+      (result) => result.visibleAppStatusLineCount !== 1 || !["info", "success", "warning", "error"].includes(result.appStatusTone),
+    );
     for (const result of results) {
       const status = isContained(result) ? "pass" : "fail";
       const timelineSuffix = result.label.startsWith("control-live-")
@@ -887,7 +892,8 @@ async function main() {
       mappingWaveDraftFailures.length > 0 ||
       controlModeFailures.length > 0 ||
       touchSurfaceFailures.length > 0 ||
-      timelineAutomationFailures.length > 0
+      timelineAutomationFailures.length > 0 ||
+      statusLineFailures.length > 0
     ) {
       console.error(
         JSON.stringify(
@@ -900,13 +906,14 @@ async function main() {
             controlMode: controlModeFailures,
             touchSurface: touchSurfaceFailures,
             timelineAutomation: timelineAutomationFailures,
+            statusLine: statusLineFailures,
           },
           null,
           2,
         ),
       );
       throw new Error(
-        `${failures.length} viewport containment check(s), ${setupSurfaceFailures.length} setup surface check(s), ${projectMenuFailures.length} project menu check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s) failed.`,
+        `${failures.length} viewport containment check(s), ${setupSurfaceFailures.length} setup surface check(s), ${projectMenuFailures.length} project menu check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${statusLineFailures.length} status line check(s) failed.`,
       );
     }
   } finally {

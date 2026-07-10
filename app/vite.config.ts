@@ -108,6 +108,8 @@ export default defineConfig({
           }
           if (
             normalizedId.includes("/src/createAppKeyboardController") ||
+            normalizedId.includes("/src/statusModel") ||
+            normalizedId.includes("/src/components/AppStatusLine") ||
             normalizedId.includes("/src/components/GroupChip") ||
             normalizedId.includes("/src/components/WorkspaceChrome")
           ) {
