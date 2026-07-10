@@ -8,6 +8,7 @@ type MappingToolRailProps = {
   showProjectors: boolean;
   showStageObjects: boolean;
   showLevels: boolean;
+  helpOpen: boolean;
   onStageTool: (tool: MappingStageTool) => void;
   onToggleLabels: () => void;
   onToggleBeams: () => void;
@@ -15,6 +16,7 @@ type MappingToolRailProps = {
   onToggleProjectors: () => void;
   onToggleStageObjects: () => void;
   onToggleLevels: () => void;
+  onToggleHelp: () => void;
 };
 
 export function MappingToolRail(props: MappingToolRailProps) {
@@ -100,6 +102,16 @@ export function MappingToolRail(props: MappingToolRailProps) {
         aria-label="Toggle fixture level readouts"
       >
         %
+      </button>
+      <div class="mappingToolDivider" />
+      <button
+        class={props.helpOpen ? "active" : ""}
+        onClick={props.onToggleHelp}
+        title="Keyboard shortcut help (?)"
+        aria-label="Keyboard shortcut help"
+        aria-expanded={props.helpOpen}
+      >
+        ?
       </button>
     </div>
   );

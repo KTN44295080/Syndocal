@@ -345,6 +345,8 @@ async function measure(client, label) {
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'use in effects').length,
       mappingWaveDraftButtonCount: [...document.querySelectorAll('.mappingSelectionPanel button')]
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'wave draft').length,
+      visibleMappingHotkeyHelpCount: visibleCount('.mappingHotkeyHelp'),
+      mappingHotkeyHelpKeyCount: document.querySelectorAll('.mappingHotkeyHelp kbd').length,
       visiblePatchActionRowCount: visibleCount('.patchActionRow'),
       visiblePatchAutoButtonCount: [...document.querySelectorAll('.fieldWithAction button')]
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'auto').length,
@@ -685,6 +687,13 @@ function hasExpectedMappingWaveDraft(result) {
   );
 }
 
+function hasExpectedMappingHotkeyHelp(result) {
+  if (!result.label.startsWith("mapping-hotkey-help-")) {
+    return true;
+  }
+  return result.visibleMappingHotkeyHelpCount === 1 && result.mappingHotkeyHelpKeyCount >= 20;
+}
+
 function hasExpectedTouchSurface(result) {
   if (!result.label.startsWith("touch-")) {
     return true;
@@ -735,6 +744,11 @@ async function runViewport(client, viewport) {
   await pressKey(client, "Digit4", "4");
   await sleep(120);
   results.push(await measure(client, `setup-mapping-keyboard-${viewport.width}x${viewport.height}`));
+  await pressKey(client, "Slash", "?");
+  await sleep(120);
+  results.push(await measure(client, `mapping-hotkey-help-${viewport.width}x${viewport.height}`));
+  await pressKey(client, "Escape", "Escape");
+  await sleep(80);
   await pressKey(client, "F3");
   await sleep(120);
   results.push(await measure(client, `touch-keyboard-${viewport.width}x${viewport.height}`));
@@ -822,6 +836,7 @@ async function main() {
     const failures = results.filter((result) => !isContained(result));
     const setupSurfaceFailures = results.filter((result) => !hasExpectedSetupSurface(result));
     const projectMenuFailures = results.filter((result) => !hasExpectedProjectMenu(result));
+    const mappingHotkeyHelpFailures = results.filter((result) => !hasExpectedMappingHotkeyHelp(result));
     const mappingWaveDraftFailures = results.filter((result) => !hasExpectedMappingWaveDraft(result));
     const controlModeFailures = results.filter((result) => !hasExpectedControlModeSurface(result));
     const touchSurfaceFailures = results.filter((result) => !hasExpectedTouchSurface(result));
@@ -842,6 +857,9 @@ async function main() {
       const mappingSuffix = result.label.startsWith("setup-mapping-")
         ? ` mapping=${result.mappingUseInEffectsButtonCount}/${result.mappingWaveDraftButtonCount}/${result.visibleMappingProjectorButtonCount}/${result.visibleMappingProjectorControlsCount}/${result.visibleMappingProjectorWarpGridCount}/${result.visibleMappingProjectorActionButtonCount}/${result.visibleMappingProjectorResetPoseButtonCount}/${result.visibleStageVideoSurfaceCount}`
         : "";
+      const mappingHotkeyHelpSuffix = result.label.startsWith("mapping-hotkey-help-")
+        ? ` mappingHelp=${result.visibleMappingHotkeyHelpCount}/${result.mappingHotkeyHelpKeyCount}`
+        : "";
       const patchSuffix = result.label.startsWith("setup-patch-")
         ? ` patch=${result.visiblePatchActionRowCount}/${result.visiblePatchAutoButtonCount}/${result.visiblePatchPrimaryButtonCount}/${result.visiblePatchNextFreeButtonCount}/${result.visiblePatchFootprintCount}/${result.visibleDmxAddressGridCount}/${result.dmxAddressCellCount}/${result.dmxAddressOccupiedCellCount}/${result.dmxAddressPlannedCellCount}/${result.visibleDmxGridSummaryCount}/${result.visibleFixtureSetupEditorCount}/${result.visibleUseProfileForPatchButtonCount}/${result.visibleDuplicateFixtureButtonCount}`
         : "";
@@ -858,13 +876,14 @@ async function main() {
         ? ` mixer=${result.visibleVideoOutputItemCount}/${result.visibleVideoOutputSelectedItemCount}/${result.visibleVideoMixerOutputDeckCount}/${result.visibleVideoMixerOutputFaderCount}/${result.visibleVideoMixerOutputSelectButtonCount}/${result.visibleVideoLayerItemCount}/${result.visibleVideoMixerLayerDeckCount}/${result.visibleVideoMixerLayerFaderCount}/${result.visibleVideoMixerLayerButtonCount}`
         : "";
       console.log(
-        `${status} ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${timelineSuffix}${touchSuffix}${projectMenuSuffix}${mappingSuffix}${patchSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${mixerSuffix}`,
+        `${status} ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${timelineSuffix}${touchSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${mixerSuffix}`,
       );
     }
     if (
       failures.length > 0 ||
       setupSurfaceFailures.length > 0 ||
       projectMenuFailures.length > 0 ||
+      mappingHotkeyHelpFailures.length > 0 ||
       mappingWaveDraftFailures.length > 0 ||
       controlModeFailures.length > 0 ||
       touchSurfaceFailures.length > 0 ||
@@ -876,6 +895,7 @@ async function main() {
             viewport: failures,
             setupSurface: setupSurfaceFailures,
             projectMenu: projectMenuFailures,
+            mappingHotkeyHelp: mappingHotkeyHelpFailures,
             mappingWaveDraft: mappingWaveDraftFailures,
             controlMode: controlModeFailures,
             touchSurface: touchSurfaceFailures,
@@ -886,7 +906,7 @@ async function main() {
         ),
       );
       throw new Error(
-        `${failures.length} viewport containment check(s), ${setupSurfaceFailures.length} setup surface check(s), ${projectMenuFailures.length} project menu check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s) failed.`,
+        `${failures.length} viewport containment check(s), ${setupSurfaceFailures.length} setup surface check(s), ${projectMenuFailures.length} project menu check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s) failed.`,
       );
     }
   } finally {

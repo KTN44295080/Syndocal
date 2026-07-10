@@ -21,6 +21,7 @@ import { LightingRuntimeControlsPanel } from "./components/LightingRuntimeContro
 import { LoadedProfileSummaryPanel } from "./components/LoadedProfileSummaryPanel";
 import { MappingEditableStageShell } from "./components/MappingEditableStageShell";
 import { MappingFilterStrips } from "./components/MappingFilterStrips";
+import { MappingHotkeyHelp } from "./components/MappingHotkeyHelp";
 import { MappingSelectionSidebarPanel } from "./components/MappingSelectionSidebarPanel";
 import { MappingStageConfigPanel } from "./components/MappingStageConfigPanel";
 import { MappingStageLayersPanel } from "./components/MappingStageLayersPanel";
@@ -1066,6 +1067,7 @@ export default function App() {
   const [selectedMappingFixtureIds, setSelectedMappingFixtureIds] = createSignal<number[]>([]);
   const [mappingSelectionGroupText, setMappingSelectionGroupText] = createSignal("");
   const [mappingStageTool, setMappingStageTool] = createSignal<MappingStageTool>("select");
+  const [mappingHotkeyHelpOpen, setMappingHotkeyHelpOpen] = createSignal(false);
   const [mappingViewportZoom, setMappingViewportZoom] = createSignal(1);
   const [mappingViewportCenterX, setMappingViewportCenterX] = createSignal(stageViewBoxSize / 2);
   const [mappingViewportCenterZ, setMappingViewportCenterZ] = createSignal(stageViewBoxSize / 2);
@@ -11775,6 +11777,16 @@ export default function App() {
     }
 
     if (workspaceTab() === "setup" && setupSubTab() === "mapping") {
+      if (event.key === "?" || (event.code === "Slash" && event.shiftKey)) {
+        event.preventDefault();
+        setMappingHotkeyHelpOpen((open) => !open);
+        return;
+      }
+      if (event.code === "Escape" && mappingHotkeyHelpOpen()) {
+        event.preventDefault();
+        setMappingHotkeyHelpOpen(false);
+        return;
+      }
       const selectionManagementAction = mappingSelectionManagementActionFromHotkey(
         event.code,
         event.shiftKey,
@@ -12889,6 +12901,7 @@ export default function App() {
                 showProjectors={mappingShowProjectors()}
                 showStageObjects={mappingShowStageObjects()}
                 showLevels={mappingShowLevels()}
+                helpOpen={mappingHotkeyHelpOpen()}
                 onStageTool={setMappingStageTool}
                 onToggleLabels={() => setMappingShowLabels((value) => !value)}
                 onToggleBeams={() => setMappingShowBeams((value) => !value)}
@@ -12896,6 +12909,7 @@ export default function App() {
                 onToggleProjectors={() => setMappingShowProjectors((value) => !value)}
                 onToggleStageObjects={() => setMappingShowStageObjects((value) => !value)}
                 onToggleLevels={() => setMappingShowLevels((value) => !value)}
+                onToggleHelp={() => setMappingHotkeyHelpOpen((open) => !open)}
               />
               <div class="mappingStageViewport">
                 <MappingViewportControls
@@ -13115,6 +13129,9 @@ export default function App() {
                 onFitOutputToStageObject={fitVideoOutputToStageObject}
                 onSetOutputMapping={setVideoOutputMapping}
               />
+              <Show when={mappingHotkeyHelpOpen()}>
+                <MappingHotkeyHelp onClose={() => setMappingHotkeyHelpOpen(false)} />
+              </Show>
             </div>
           </div>
         </section>

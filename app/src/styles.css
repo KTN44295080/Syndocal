@@ -4040,6 +4040,7 @@ h3 {
 
 .mappingStageShell {
   display: grid;
+  position: relative;
   grid-template-columns: 38px minmax(560px, 1fr) minmax(170px, 220px);
   min-height: 420px;
   border: 1px solid #3b3530;
@@ -4103,6 +4104,128 @@ h3 {
   min-width: 0;
   min-height: 0;
   padding: 8px;
+}
+
+.mappingHotkeyHelp {
+  position: absolute;
+  inset: 8px 228px auto 46px;
+  max-height: calc(100% - 16px);
+  overflow: hidden auto;
+  border: 1px solid #5a5149;
+  border-radius: 4px;
+  background: #171410;
+  color: #d9d1c8;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.42);
+}
+
+.mappingHotkeyHelpHeader {
+  display: flex;
+  position: sticky;
+  top: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #3b3530;
+  background: #211d19;
+  padding: 8px 10px;
+}
+
+.mappingHotkeyHelpHeader > div {
+  min-width: 0;
+}
+
+.mappingHotkeyHelpHeader h3,
+.mappingHotkeyHelpHeader span {
+  overflow: hidden;
+  margin: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mappingHotkeyHelpHeader h3 {
+  color: #ffffff;
+  font-size: 13px;
+}
+
+.mappingHotkeyHelpHeader span {
+  display: block;
+  margin-top: 2px;
+  color: #9f948b;
+  font-size: 10px;
+}
+
+.mappingHotkeyHelpHeader button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  padding: 0;
+}
+
+.mappingHotkeyHelpGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 8px;
+}
+
+.mappingHotkeyHelpGrid section {
+  min-width: 0;
+  border: 1px solid #332d28;
+  background: #1d1916;
+  padding: 7px;
+}
+
+.mappingHotkeyHelpGrid h4 {
+  margin: 0 0 5px;
+  color: #ffffff;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.mappingHotkeyHelpGrid dl {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+}
+
+.mappingHotkeyHelpGrid dl > div {
+  display: grid;
+  grid-template-columns: minmax(72px, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+}
+
+.mappingHotkeyHelpGrid dt,
+.mappingHotkeyHelpGrid dd {
+  min-width: 0;
+  margin: 0;
+}
+
+.mappingHotkeyHelpGrid kbd {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid #514941;
+  border-radius: 3px;
+  background: #0f0d0b;
+  color: #f2c14e;
+  padding: 2px 5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: inherit;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mappingHotkeyHelpGrid dd {
+  overflow: hidden;
+  color: #bdb4aa;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .layoutSetup.setupMode-mapping .mappingStageViewport {
