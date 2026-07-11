@@ -412,6 +412,18 @@ async function measure(client, label) {
     const outputDiagnosticsDeskRect = outputDiagnosticsDesk?.getBoundingClientRect() ?? null;
     const lightingRuntimeDesk = document.querySelector('.setupMode-dmx .lightingRuntimeDesk');
     const lightingRuntimeDeskRect = lightingRuntimeDesk?.getBoundingClientRect() ?? null;
+    const midiMappingEditorDesk = document.querySelector('.setupMode-midi .mappingEditorDesk');
+    const midiMappingEditorDeskRect = midiMappingEditorDesk?.getBoundingClientRect() ?? null;
+    const midiMappingListDesk = document.querySelector('.setupMode-midi .mappingListDesk');
+    const midiMappingListDeskRect = midiMappingListDesk?.getBoundingClientRect() ?? null;
+    const oscMappingEditorDesk = document.querySelector('.setupMode-osc .mappingEditorDesk');
+    const oscMappingEditorDeskRect = oscMappingEditorDesk?.getBoundingClientRect() ?? null;
+    const oscMappingListDesk = document.querySelector('.setupMode-osc .mappingListDesk');
+    const oscMappingListDeskRect = oscMappingListDesk?.getBoundingClientRect() ?? null;
+    const remoteServerDesk = document.querySelector('.setupMode-remote .remoteServerDesk');
+    const remoteServerDeskRect = remoteServerDesk?.getBoundingClientRect() ?? null;
+    const remoteEndpointDesk = document.querySelector('.setupMode-remote .remoteEndpointDesk');
+    const remoteEndpointDeskRect = remoteEndpointDesk?.getBoundingClientRect() ?? null;
     window.scrollTo(9999, 9999);
     await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
     const movedX = window.scrollX;
@@ -507,6 +519,12 @@ async function measure(client, label) {
       dmxOutputConfigPanelWidth: dmxOutputConfigPanelRect ? Math.round(dmxOutputConfigPanelRect.width) : 0,
       outputDiagnosticsDeskWidth: outputDiagnosticsDeskRect ? Math.round(outputDiagnosticsDeskRect.width) : 0,
       lightingRuntimeDeskWidth: lightingRuntimeDeskRect ? Math.round(lightingRuntimeDeskRect.width) : 0,
+      midiMappingEditorDeskWidth: midiMappingEditorDeskRect ? Math.round(midiMappingEditorDeskRect.width) : 0,
+      midiMappingListDeskWidth: midiMappingListDeskRect ? Math.round(midiMappingListDeskRect.width) : 0,
+      oscMappingEditorDeskWidth: oscMappingEditorDeskRect ? Math.round(oscMappingEditorDeskRect.width) : 0,
+      oscMappingListDeskWidth: oscMappingListDeskRect ? Math.round(oscMappingListDeskRect.width) : 0,
+      remoteServerDeskWidth: remoteServerDeskRect ? Math.round(remoteServerDeskRect.width) : 0,
+      remoteEndpointDeskWidth: remoteEndpointDeskRect ? Math.round(remoteEndpointDeskRect.width) : 0,
       visibleDmxGridSummaryCount: visibleCount('.dmxGridSummary'),
       visibleFixtureSetupEditorCount: visibleCount('.fixtureSetupEditor'),
       visibleUseProfileForPatchButtonCount: [...document.querySelectorAll('.fixtureSetupEditor button')]
@@ -944,6 +962,15 @@ function hasExpectedSetupSurface(result) {
       result.outputDiagnosticsDeskWidth >= 420 &&
       result.lightingRuntimeDeskWidth >= 260
     );
+  }
+  if (result.label.startsWith("setup-midi-")) {
+    return result.midiMappingEditorDeskWidth >= 430 && result.midiMappingListDeskWidth >= 430;
+  }
+  if (result.label.startsWith("setup-osc-")) {
+    return result.oscMappingEditorDeskWidth >= 430 && result.oscMappingListDeskWidth >= 430;
+  }
+  if (result.label.startsWith("setup-remote-")) {
+    return result.remoteServerDeskWidth >= 360 && result.remoteEndpointDeskWidth >= 500;
   }
   if (result.label.startsWith("setup-patch-")) {
     return (

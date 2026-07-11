@@ -13558,6 +13558,96 @@ h3 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.layoutSetup.setupMode-midi > .setupIoPanel,
+.layoutSetup.setupMode-osc > .setupIoPanel {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.layoutSetup.setupMode-midi .midiClock,
+.layoutSetup.setupMode-osc .oscInput {
+  display: grid;
+  grid-template-columns: minmax(430px, 0.9fr) minmax(430px, 1.1fr);
+  gap: 5px;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  border-top: 0;
+  padding-top: 0;
+  overflow: hidden;
+}
+
+.mappingEditorDesk,
+.mappingListDesk {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.mappingEditorDesk {
+  border-right: 1px solid #39342f;
+  padding-right: 5px;
+}
+
+.mappingListDesk {
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.mappingListDesk > .timelineList {
+  min-height: 0;
+  overflow: auto;
+}
+
+.mappingListDesk .timelineItem {
+  min-height: 38px;
+  border: 1px solid #393530;
+  border-radius: 2px;
+  background: #181715;
+  padding: 6px 7px;
+}
+
+.layoutSetup.setupMode-remote > .setupIoPanel {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.layoutSetup.setupMode-remote .remoteControl {
+  display: grid;
+  grid-template-columns: minmax(360px, 0.75fr) minmax(500px, 1.25fr);
+  gap: 5px;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.remoteServerDesk,
+.remoteEndpointDesk {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.remoteServerDesk {
+  border-right: 1px solid #39342f;
+  padding-right: 5px;
+}
+
+.remoteEndpointDesk .remoteUrlItem {
+  min-height: 44px;
+  border-bottom: 1px solid #39342f;
+  padding: 6px 4px;
+}
+
 .videoSetupWorkbench {
   display: grid;
   grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);

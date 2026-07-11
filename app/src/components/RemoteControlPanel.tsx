@@ -16,7 +16,41 @@ interface RemoteControlPanelProps {
 export function RemoteControlPanel(props: RemoteControlPanelProps) {
   return (
     <div class="remoteControl">
-      <h3>Web Remote</h3>
+      <section class="remoteServerDesk">
+        <header class="ioDeskHeader">
+          <h2>Web Remote</h2>
+          <span>{props.running ? "Running" : "Stopped"}</span>
+        </header>
+        <div class="split">
+          <label>
+            Bind IP
+            <input value={props.bindIp} disabled={props.running} onInput={(event) => props.onBindIp(event.currentTarget.value)} />
+          </label>
+          <label>
+            Port
+            <input
+              type="number"
+              min="1"
+              value={props.port}
+              disabled={props.running}
+              onInput={(event) => props.onPort(Number(event.currentTarget.value))}
+            />
+          </label>
+        </div>
+        <div class="buttonRow">
+          <button class="primary" onClick={() => void props.onStart()} disabled={props.running}>
+            Start Remote
+          </button>
+          <button onClick={() => void props.onStop()} disabled={!props.running}>
+            Stop Remote
+          </button>
+        </div>
+      </section>
+      <section class="remoteEndpointDesk">
+        <header class="ioDeskHeader">
+          <h2>Endpoints</h2>
+          <span>{props.remoteUrls.length}</span>
+        </header>
       <div class="remoteUrlList">
         <For each={props.remoteUrls}>
           {(url) => (
@@ -32,30 +66,7 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
           )}
         </For>
       </div>
-      <div class="split">
-        <label>
-          Bind IP
-          <input value={props.bindIp} disabled={props.running} onInput={(event) => props.onBindIp(event.currentTarget.value)} />
-        </label>
-        <label>
-          Port
-          <input
-            type="number"
-            min="1"
-            value={props.port}
-            disabled={props.running}
-            onInput={(event) => props.onPort(Number(event.currentTarget.value))}
-          />
-        </label>
-      </div>
-      <div class="buttonRow">
-        <button class="primary" onClick={() => void props.onStart()} disabled={props.running}>
-          Start Remote
-        </button>
-        <button onClick={() => void props.onStop()} disabled={!props.running}>
-          Stop Remote
-        </button>
-      </div>
+      </section>
     </div>
   );
 }

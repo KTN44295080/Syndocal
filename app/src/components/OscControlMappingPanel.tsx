@@ -63,6 +63,7 @@ interface OscControlMappingPanelProps {
 export function OscControlMappingPanel(props: OscControlMappingPanelProps) {
   return (
     <div class="oscInput">
+      <div class="mappingEditorDesk">
       <h3>OSC Input</h3>
       <div class="split">
         <label>
@@ -307,6 +308,12 @@ export function OscControlMappingPanel(props: OscControlMappingPanelProps) {
           Save Mapping
         </button>
       </div>
+      </div>
+      <section class="mappingListDesk">
+        <header class="ioDeskHeader">
+          <h2>Mappings</h2>
+          <span>{props.mappings.length}</span>
+        </header>
       <div class="timelineList">
         <For each={props.mappings}>
           {(mapping, index) => (
@@ -318,6 +325,7 @@ export function OscControlMappingPanel(props: OscControlMappingPanelProps) {
           )}
         </For>
       </div>
+      </section>
     </div>
   );
 }

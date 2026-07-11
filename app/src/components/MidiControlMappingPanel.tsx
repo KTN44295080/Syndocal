@@ -80,6 +80,7 @@ interface MidiControlMappingPanelProps {
 export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
   return (
     <div class="midiClock">
+      <div class="mappingEditorDesk">
       <h3>MIDI Feedback</h3>
       <select value={props.selectedMidiOutput ?? ""} onInput={(event) => props.onSelectedMidiOutput(Number(event.currentTarget.value))}>
         <For each={props.midiOutputs}>{(output) => <option value={output.index}>{output.name}</option>}</For>
@@ -356,6 +357,12 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
           Save Mapping
         </button>
       </div>
+      </div>
+      <section class="mappingListDesk">
+        <header class="ioDeskHeader">
+          <h2>Mappings</h2>
+          <span>{props.mappings.length}</span>
+        </header>
       <div class="timelineList">
         <For each={props.mappings}>
           {(mapping, index) => (
@@ -367,6 +374,7 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
           )}
         </For>
       </div>
+      </section>
     </div>
   );
 }
