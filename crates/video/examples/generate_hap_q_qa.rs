@@ -65,12 +65,35 @@ fn write_qa_project(movie_path: &std::path::Path) -> Result<PathBuf, Box<dyn std
         serde_json::from_slice(&fs::read("samples/phase1-mini-show.sdc")?)?;
     let video = &mut project["snapshot"]["video"];
     let state = video["layers"][0]["state"].clone();
-    video["layers"]
+    let layers = video["layers"]
         .as_array_mut()
-        .ok_or("sample project video.layers is not an array")?
-        .push(json!({
-            "id": 2,
-            "label": "HAP Q QA",
+        .ok_or("sample project video.layers is not an array")?;
+    layers.clear();
+    for (index, (label, blend_mode, opacity, x, scale, hue)) in [
+        ("HAP Q Base", "Normal", 1.0, 0.0, 1.0, 0.0),
+        ("HAP Q Add", "Add", 0.35, -0.18, 0.72, 45.0),
+        ("HAP Q Screen", "Screen", 0.4, 0.2, 0.62, -55.0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut layer_state = state.clone();
+        layer_state["opacity"] = json!(opacity);
+        layer_state["playing"] = json!(true);
+        layer_state["loop_end_ms"] = json!(1000);
+        layer_state["bpm_sync"]["enabled"] = json!(false);
+        layer_state["cue_points"] = json!([
+            { "position_ms": 0, "label": "Start", "color": "#5dd64c" },
+            { "position_ms": 500, "label": "Flip", "color": "#ff2b88" }
+        ]);
+        layer_state["cue_points_ms"] = json!([0, 500]);
+        layer_state["transform"]["x"] = json!(x);
+        layer_state["transform"]["scale_x"] = json!(scale);
+        layer_state["transform"]["scale_y"] = json!(scale);
+        layer_state["color"]["hue_deg"] = json!(hue);
+        layers.push(json!({
+            "id": index + 2,
+            "label": label,
             "source": {
                 "kind": "File",
                 "path": movie_path.to_string_lossy(),
@@ -83,13 +106,22 @@ fn write_qa_project(movie_path: &std::path::Path) -> Result<PathBuf, Box<dyn std
                     "frame_rate": 2.0
                 }
             },
-            "blend_mode": "Normal",
-            "state": state
+            "blend_mode": blend_mode,
+            "state": layer_state
         }));
-    video["layers"][1]["state"]["opacity"] = json!(1.0);
-    video["layers"][1]["state"]["playing"] = json!(true);
-    video["layers"][1]["state"]["loop_end_ms"] = json!(1000);
-    video["compositions"][0]["layer_ids"] = json!([2]);
+    }
+    let cue_targets: Vec<_> = layers
+        .iter()
+        .map(|layer| {
+            json!({
+                "layer_id": layer["id"],
+                "state": layer["state"]
+            })
+        })
+        .collect();
+    video["compositions"][0]["layer_ids"] = json!([2, 3, 4]);
+    project["snapshot"]["cues"][0]["video_targets"] = json!(cue_targets);
+    project["snapshot"]["timeline"]["video_automations"][0]["layer_id"] = json!(2);
 
     let project_path = movie_path.with_extension("sdc");
     fs::write(&project_path, serde_json::to_vec_pretty(&project)?)?;

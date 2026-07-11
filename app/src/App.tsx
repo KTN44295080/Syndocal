@@ -2595,7 +2595,7 @@ export default function App() {
         detail: `${performance.last_error}${performanceDetail}`,
       };
     }
-    const stateLabel =
+    const baseStateLabel =
       openCount === 2
         ? "Live + Pattern open"
         : status.live_open
@@ -2603,6 +2603,15 @@ export default function App() {
           : status.test_pattern_open
             ? "Pattern window open"
             : "Window closed";
+    const stateLabel = performance
+      ? `${baseStateLabel} / ${performance.width}x${performance.height} / ${(performance.average_frame_us / 1000).toFixed(1)}ms / ${
+          performance.frame_budget_pass === true
+            ? "60 PASS"
+            : performance.frame_budget_pass === false
+              ? "60 FAIL"
+              : `${performance.frame_count}/120`
+        }`
+      : baseStateLabel;
     return {
       stateLabel,
       stateClass: openCount > 0 ? "open" : "closed",

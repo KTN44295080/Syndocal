@@ -117,8 +117,11 @@ CPU プレビューを wgpu 実出力に置き換える。**照明エンジン�
     - Windows実画面で640x360の再現可能なHAP Q QA素材をネイティブ出力し、補正済み非空フレームを確認。圧縮アップロード数は1394から2163へ増加し、GPU割当は`1+2`のまま再利用された。
   - [x] M3.3c: H.264/H.265/ProResをインプロセスlibavワーカーへ移し、FFmpeg CLIフレーム抽出をReference/診断用途へ降格する。(2026-07-11)
     - `syndocal`の既定featureでlibavを有効化。Windows/macOS/Linux CIにFFmpeg/Clang開発環境を追加し、共有ライブラリの配布物同梱は`bundle.active`を有効化するM6で確定する。
-- 段階 4: 既存のフレームキュー/デコード診断/テレメトリを新パスに接続。CPU プレビューは「Preview (Reference)」として残す。
-- 検証ゲート: `cargo test -p video`(ゴールデン含む)、1080p60 多レイヤーでのフレームタイム計測、既存 `video_preview*` テスト green、DMX テレメトリ予算に影響なし。
+- [x] 段階 4: 既存のフレームキュー/デコード診断/テレメトリを新パスに接続。CPU プレビューは「Preview (Reference)」として残す。(2026-07-11)
+  - Mixerの固定出力デッキに解像度・平均フレーム時間・120サンプル後の60fps判定を1行表示し、詳細診断は既存ツールチップに維持。一画面デッキの縦スクロールは増やしていない。
+- [x] 検証ゲート: `cargo test -p video --features libav --locked` 89/89、ネイティブ出力メトリクス2/2、DMX予算判定2/2、`pnpm --dir app build`、全viewportマトリクス、Windowsリリースビルドがgreen。Windows実GPUでHAP Q 3レイヤー(Normal/Add/Screen)を出力し、高DPI物理解像度2880x1620で平均0.8ms・`60 PASS`、非空補正済みフレームを確認。(2026-07-11)
+  - 同時DMX比較は映像あり514サンプルでjitter p99 1.597ms、映像なし基準でも約1.65msで、ネイティブ映像による悪化はなし。Windows上の厳格な1ms目標そのものは未達のため、リアルタイムスレッド/タイマ調整をM5の残課題とする。
+- **M3 完了 (2026-07-11)**: ネイティブwgpu出力、HAP優先+libavインプロセスデコード、圧縮テクスチャ直接アップロード、固定バッファ、UI診断、Windows実GPU性能ゲートまで完了。macOS/Linuxのネイティブ実行証跡とFFmpeg共有ライブラリ同梱はM6が所有する。
 
 ### M4 — 外部 I/O 仕上げ(1〜2 週、M3 と並行可)
 - [ ] NDI: `crates/io` に NDI SDK バインディング(feature flag `ndi` でビルド切替)。既存のプレースホルダルート/Blocked 表示をそのまま実配線に昇格。

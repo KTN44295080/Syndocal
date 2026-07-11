@@ -164,10 +164,10 @@ export function VideoOutputControlListPanel(props: VideoOutputControlListPanelPr
                     {renderPlanState().stateLabel} / {renderPlanState().layerCount} layer
                     {renderPlanState().layerCount === 1 ? "" : "s"}
                   </span>
-                  <small title={renderPlanState().detail}>{renderPlanState().detail}</small>
+                  <small class="outputRenderPlanDetail" title={renderPlanState().detail}>{renderPlanState().detail}</small>
                   <Show when={output.kind === "Display"}>
                     <span class={`outputWindowStatus state-${windowState().stateClass}`}>{windowState().stateLabel}</span>
-                    <small title={windowState().detail}>{windowState().detail}</small>
+                    <small class="outputWindowDetail" title={windowState().detail}>{windowState().detail}</small>
                   </Show>
                   <div class="outputOpacityMeter">
                     <span style={{ width: `${Math.round(output.opacity * 100)}%` }} />
