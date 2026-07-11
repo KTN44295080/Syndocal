@@ -23,8 +23,8 @@ Built locally from the v1.0.0 release executable:
 
 | Bundle | Bytes | SHA-256 | Signature |
 | --- | ---: | --- | --- |
-| `Syndocal_1.0.0_x64-setup.exe` | 71,463,799 | `6E2244E4EAB4B3377FDF826B9055924FF0C2BB325623CD1FDCE9777824EFF210` | NotSigned |
-| `Syndocal_1.0.0_x64_ja-JP.msi` | 108,032,000 | `D2A53F0457F2C49C49ADAB4E087CF019D09AE6CA83B3703B44B510D7F46C839D` | NotSigned |
+| `Syndocal_1.0.0_x64-setup.exe` | 71,443,642 | `BB7DB5126B63E42E88C363D3228E8F9A56875B1C767F98B235C6FDB7AB5231C1` | NotSigned |
+| `Syndocal_1.0.0_x64_ja-JP.msi` | 108,040,192 | `283D616F04484B00EA0215A6281261FFD08258DC6AB245FCB81311302B1E49FE` | NotSigned |
 
 The MSI uses `ja-JP` so the required publisher name can be represented by WiX without code-page loss. NSIS includes Japanese and English UI languages.
 
@@ -33,7 +33,7 @@ The MSI uses `ja-JP` so the required publisher name can be represented by WiX wi
 Result: **PASS**
 
 1. MSI administrative extraction contained `syndocal.exe` plus seven FFmpeg runtime DLLs. File metadata reported `Syndocal`, version `1.0.0`, company `Seraf()のKTN`.
-2. NSIS silent install placed `syndocal.exe`, seven FFmpeg DLLs, and `uninstall.exe` in one application directory. Its post-install hook copies staged runtime libraries beside the executable and removes the staging directory.
+2. The default-feature release executable was built with in-process libav enabled. NSIS silent install placed `syndocal.exe`, seven FFmpeg DLLs, and `uninstall.exe` in one application directory. Its post-install hook copies staged runtime libraries beside the executable and removes the staging directory.
 3. The installed executable launched successfully and rendered the complete one-screen Setup/Patch/2D Mapping workspace with the new application icon.
 4. The installer registered `.sdc` as `Syndocal Project`; the open command was `syndocal.exe "%1"` and the executable icon was registered.
 5. Silent uninstall removed the test installation and its association. No Syndocal process remained.

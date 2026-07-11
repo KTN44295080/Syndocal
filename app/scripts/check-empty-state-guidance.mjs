@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 const files = new Map(
   await Promise.all(
     [
-      "../src/App.tsx",
+      "../src/components/TouchCuePanel.tsx",
       "../src/components/CueManagementPanel.tsx",
       "../src/components/DmxPatchMapPanel.tsx",
       "../src/components/SetupFixtureListPanel.tsx",
@@ -16,7 +16,7 @@ const files = new Map(
 );
 
 const expectedGuidance = [
-  ["../src/App.tsx", "No cues. Create one in Control &gt; Live with Store Cue."],
+  ["../src/components/TouchCuePanel.tsx", "No cues. Create one in Control &gt; Live with Store Cue."],
   ["../src/components/CueManagementPanel.tsx", "No cues. Choose a scope, then Store Cue."],
   ["../src/components/DmxPatchMapPanel.tsx", "Use Setup &gt; Patch to assign one."],
   ["../src/components/SetupFixtureListPanel.tsx", "Load a profile in Library, then use Patch Fixture."],

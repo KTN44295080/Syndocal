@@ -1,197 +1,146 @@
 # Syndocal
 
-Syndocal is a Rust/Tauri prototype for unified DMX lighting and VJ control.
+Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-Current Phase 1 focus:
+- 製品名: **Syndocal 1.0.0**
+- 開発: **Seraf()のKTN**
+- プロジェクト: **`.sdc`** (可読JSON)
+- Tier 1: Windows 10+ / macOS 12+
+- Tier 2: Ubuntu 22.04+ / Arch Linux
 
-- Load a `.gdtf` fixture archive and parse `description.xml`.
-- Search GDTF Share with a temporary login, download a selected `.gdtf`, or paste a direct GDTF Share/download URL, then save, validate, and load it into the patch flow.
-- Extract fixture metadata, DMX modes, attributes, 8/16-bit channel offsets, and geometry nodes.
-- Create a simple custom 8/16-bit fixture profile from a comma-separated attribute list when no GDTF file is available, preview its DMX footprint before patching, and save/load it as a readable `.fixture` JSON file.
-- Reuse a patched fixture's summarized controls as a temporary patch profile, so loaded `.sdc` projects can still add another fixture of the same type even when the original GDTF/custom profile file is not currently loaded.
-- Patch one or many fixture instances with universe/address/label, group, position, and rotation data, then edit fixture transforms live after patching.
-- Remove patched fixtures and clean their live values, fixture-scoped effects, cue targets, and timeline automations from the running show state.
-- Assign fixtures to one or more named groups and target effects at either a selected fixture or group.
-- Select groups in Setup, filter the fixture list, and apply live group-oriented control from the Control view.
-- Use the Control view's Live Desk for operator-first GO/Back, cue fade pause/resume, timeline play/pause, DMX/video blackout, masters, BPM tap, banked cue pads with numeric hotkeys and optional active-cue following, and live system counts.
-- Show stage reference objects in the Control Live Stage so fixtures and projector surfaces can be read against the same 2D venue layout used in Setup.
-- Show the same lightweight 2D venue layout in the Touch tab for iPad-style cue, fixture, and video operation.
-- Place the selected fixture directly from the 2D stage view, and apply quick Line/Grid/Circle layouts to the current group or the whole patch.
-- Review patched fixture address occupancy with a per-universe DMX map in Setup.
-- Validate fixture footprints before patching so a fixture cannot overflow a 512-channel universe or overlap an existing fixture in the same universe.
-- Maintain a shared BPM clock with manual BPM entry, tap tempo, and MIDI Clock input.
-- Map MIDI Note/CC/Program Change messages to fixture attributes, direct cue triggers, cue-list next/previous, lighting master/group submasters, timeline play/seek, lighting/video blackout, video parameters, video play state, and video cue-point jumps.
-- Receive basic OSC control over UDP for fixture attributes, blackout, BPM, and tap tempo.
-- Control a lighting grand master that scales Dimmer/Intensity attributes without affecting movement or color channels.
-- Control group submasters that scale Dimmer/Intensity for fixtures assigned to matching patch groups.
-- Toggle fixture or group Highlight, Solo, and Park states for live focusing; Highlight forces intensity/color channels open at the DMX output stage, Solo suppresses non-soloed fixtures, and Park freezes rendered output values until cleared.
-- Receive OSC control for video layer parameters, video master opacity, and video blackout.
-- Host a lightweight browser/iPad remote endpoint that serves an installable PWA-style HTML remote page with a Live Desk, selected-fixture fader bank, group-filtered 2D Stage overview with fixture/projector selection, manifest/icon/service-worker assets, and accepts WebSocket JSON commands for faders, banked cue pads, BPM, timeline transport, blackout, and video parameters.
-- Store current fixture/video states as cues, duplicate cues as look variants, rename or retime existing cues, reorder the cue list, update cue contents from the current look, and recall them with GO/Back cue-list controls.
-- Pause and resume an active cue fade without losing its current output level.
-- Store current video layer states in the same cues, so one cue can recall lighting and video state together.
-- Place and edit lighting or video cue events on a shared timeline and play them back with transport controls.
-- Analyze PCM/float WAV files into a timeline waveform preview with beat markers and a simple BPM estimate.
-- Snap timeline event and automation time inputs to detected audio beats, bars, or a fixed millisecond grid.
-- Sync the shared timeline from incoming MIDI Time Code quarter-frame messages.
-- Add and edit lighting fixture attribute automation on the timeline with step, linear, and handle-less Bezier ease-in-out keyframes.
-- Create video layers with enabled/mute, solo, opacity, speed, play/pause, position, cue-point, BPM-sync, and A-B loop state for the VJ engine data path.
-- Add local video/still-image layers through a file picker or direct path entry, feed still-image (`PNG`/`JPEG`) decoded RGBA pixels into the CPU preview path, and extract file preview frames through the FFmpeg CLI adapter when available.
-- Add NDI, Spout, and Syphon input layers by source/sender/server name so external-video routing can be composed before native transport bindings land.
-- Refresh local video/still-image source metadata from an existing layer after `ffprobe` becomes available or the source file changes.
-- Cache decoded/resized still-image frames and invalidate them when the source file metadata changes, avoiding repeat disk decode on every preview render.
-- Keep the preview-only video runtime and still-image cache behind a `VideoPreviewRenderer` boundary in the `video` crate, so Tauri only requests a rendered preview frame.
-- BPM-sync video layers by deriving playback speed from the shared BPM clock, A-B loop length, ratio, and bar count.
-- Store and jump to video cue points in the layer state.
-- Rename, duplicate, enable/disable, solo, set video layer blend modes (`Normal`, `Add`, `Multiply`, `Screen`), reorder the layer stack, and expose a default `Main` composition snapshot for the future compositor.
-- Create additional video compositions with explicit layer membership and order, and route display/NDI/Spout/Syphon output targets to any composition in the engine snapshot.
-- Build external-video I/O plans from the video snapshot so future NDI/Spout/Syphon receiver/sender threads can start from deterministic backend/endpoint/routing data, while projects with named external routes still load on machines where those native backends are not linked.
-- Resolve each video output target into a render plan and render an output-specific CPU preview that applies output enabled state, opacity, blackout, and composition routing.
-- Open a Display output in a dedicated Tauri output window that drives the output-specific CPU preview path from a 60 Hz target render loop, using a one-frame decode warmup budget per live frame as a renderer bridge before the native wgpu output path lands.
-- Open a mapping-aware test-pattern window for Display outputs, with the same output scale, aspect mode, lens distortion, keystone, and corner warp applied as the live preview path.
-- Edit projector ratio, offset, scale, lens distortion, keystone, and corner warp from Setup with both numeric fields and a small draggable TL/TR/BR/BL visual map surface.
-- Save projector mapping presets inside the project snapshot, then apply, delete, export, or import those ratio/distortion/warp setups per output.
-- Control video master opacity and video blackout independently from DMX blackout.
-- Edit video layer transform values from the Video panel, including normalized position, scale, rotation, and crop.
-- Edit video layer color adjustment values from the Video panel, including brightness, contrast, hue, saturation, and gamma.
-- Edit lightweight video FX values from the Video panel, currently pixelate block size, blur radius, glow, edge detection, and color key, and render them in the CPU reference compositor.
-- Build renderer-facing composition plans from the current video snapshot, with ordered layers, effective opacity, transform, source, and blend mode.
-- Maintain a bounded decoded-frame queue abstraction for future FFmpeg/HAP decoder output and wgpu upload scheduling.
-- Maintain a bounded decode-request scheduler that prioritizes current playhead frames over lookahead/background jobs, deduplicates requests, and drops lower-priority work when saturated.
-- Provide a decoder worker boundary that drains scheduled decode requests into `VideoRuntime`, reports skips/errors without stopping the budget, and can later be backed by async FFmpeg/HAP workers.
-- Provide an external-video transport runtime boundary that syncs ready NDI/Spout/Syphon routes into started/kept/stopped/blocked lifecycle reports, calls fallible start/stop driver hooks, and reports driver failures before native transport workers are connected.
-- Manage per-layer frame queues through a lightweight `VideoRuntime` and select the correct frame for each composition layer by playhead position.
-- Feed preview frames through a swappable `VideoFrameProvider` trait, with the current provider handling still images, FFmpeg-backed file frame extraction with small lookahead prefetch, and deterministic placeholders for unsupported network/GPU sources.
-- Provide a `VideoFrameDecoder` boundary and FFmpeg CLI decoder-backed frame provider so future in-process FFmpeg/HAP implementations can supply decoded frames without changing Tauri or composition code.
-- Probe video file metadata with `ffprobe` when available, storing codec, duration, resolution, and frame-rate hints in the layer source snapshot.
-- Provide a CPU RGBA8 reference compositor for `Normal`, `Add`, `Multiply`, and `Screen` blend modes so future wgpu shaders have deterministic parity tests.
-- Accept RGBA, BGRA, DXT1, and DXT5 frames in the CPU reference compositor, so HAP-style compressed texture paths can be tested against deterministic CPU output before native GPU upload is connected.
-- Provide a renderer-facing `visualizer` crate that converts the current engine snapshot into 3D fixture, beam, stage-reference-object, video-surface, and stage-bounds primitives for the future wgpu visualizer.
-- Apply video layer transform basics in the CPU compositor: normalized position, scale, rotation, and source crop are all reflected in preview output.
-- Render a small CPU debug preview through Tauri using the `video` crate's preview renderer. Still images are decoded directly and file layers can extract the requested preview frame through `ffmpeg` when it is available on `PATH` or configured with `SYNDOCAL_FFMPEG`.
-- Display the CPU preview image in the SolidJS Video panel for quick visual verification of still-image layers and blend modes.
-- Show Video panel diagnostics for backend availability, frame queue readiness, effective playback speed, and planned preview prefetch positions.
-- Show Video Control I/O plans for NDI/Spout/Syphon input and output endpoints, including backend readiness, route issues, and transport sync status before native transport workers are connected.
-- Add and edit video layer opacity, speed, and playhead position automation on the same timeline transport.
-- Add and edit video layer transform automation on the same timeline, including position, scale, rotation, and crop parameters.
-- Target video layer parameters from the same LFO/position-wave effect system used by lighting, so effects can drive opacity, speed, and transform values without creating timeline automation.
-- Add LFO and position-wave effects to drive patched fixture attributes with sine/cosine/triangle/saw/square/random/perlin shapes and override/add/multiply blend modes.
-- Reorder the live effect stack from the Control UI so override/add/multiply layering can be adjusted without recreating effects.
-- Enable/disable effects without removing them, so live looks can be parked for later reuse.
-- Save and load effect definitions as human-readable `.effect` JSON files for reusable LFO and position-wave looks.
-- Create a minimal node-graph effect from the Control UI by wiring the current LFO or position-wave source through a transform node into the selected lighting/video target, then enable, disable, remove, save, or reload that graph as a `.nodegraph` preset.
-- Show a lightweight Setup 2D Mapping stage with fixture/projector surfaces, draggable stage reference objects, selected-fixture highlighting, group/type filtering, dimmer/color/Pan-aware beam wedges, and SVG/JSON export for stage plots or external visualizer handoff.
-- Save 2D stage map bounds together with stage reference objects as project/file presets for quick venue layout reuse.
-- Save and load fixture attribute snapshots as human-readable `.preset` JSON files.
-- Save and load the current show state as a human-readable `.sdc` project snapshot.
-- Adjust RGB fixture attributes together with a color picker when `ColorRed`/`ColorGreen`/`ColorBlue` style controls are present.
-- Drive a 44 Hz engine loop that renders DMX frames.
-- Send DMX frames over one or more Art-Net, sACN/E1.31 UDP, Enttec DMX USB PRO, or Enttec Open DMX compatible output routes.
-- Control fixture attributes from a SolidJS/Tauri UI.
-- Inspect the current rendered universe with a 512-channel raw DMX monitor.
-- View patched fixtures in a lightweight top-down 2D stage view using their X/Z positions and current dimmer/color state.
+## 主な機能
 
-## Development
+### 照明
 
-Prerequisites currently verified in this workspace:
+- GDTF読込、GDTF Share検索/取得、簡易カスタム`.fixture`プロファイル
+- 8/16bit属性、複数ユニバース、重複/範囲外を防ぐDMXパッチ
+- 階層グループ、複数所属、Highlight / Solo / Park、マスター/サブマスター
+- Art-Net、sACN/E1.31、Enttec USB PRO、DMXKing ultraDMX、Enttec Open DMX
+- LFOと3D位置ウェーブ、エフェクトスタック、共有ノードグラフ
+- 灯体、投影面、ステージオブジェクトを扱う実用的な2D Stage Map
 
-- Rust/Cargo 1.86.0
-- Node.js 20.19.1
-- pnpm 10.10.0
-- `curl` available on `PATH` for runtime GDTF URL downloads
+### 映像
 
-Install frontend dependencies:
+- HAP / HAP Alpha / HAP Qの直接GPU圧縮テクスチャ経路
+- H.264 / H.265 / ProResのインプロセスlibavデコード
+- PNG/JPEG、可変速、リバース、A-Bループ、キューポイント、BPM同期
+- Layer / Composition / Display Output、Normal / Add / Multiply / Screen合成
+- 変形、クロップ、色補正、pixelate / blur / glow / edge / color key
+- wgpuネイティブ出力、複数Display、投影比率/keystone/lens/corner warp補正
+- feature-gated NDI送受信。SDK未導入時は起動失敗せず`NotBuilt`を表示
+
+### 統合制御
+
+- 照明と映像が混在する共有タイムライン
+- 1キューで灯体値、映像Layer、Output、Node Graphを同時リコール
+- 1つのLFO/位置ウェーブから灯体属性と映像パラメータを同時駆動
+- Tap / MIDI Clock / MTC / LTC / Ableton Link用共有クロック境界
+- MIDI、OSC、WebSocket、iPad/Android向けPWAリモート
+- 10秒間隔の自動Recovery、Recent Project、`.sdc` OS関連付け
+
+## 画面構成
+
+- **Setup**: Lighting / Video / Mapping / I/Oを分離し、パッチ、灯体プロファイル、出力、投影補正を設定
+- **Control**: 上段のライブ/キューデスクと、左下の常設2D Stage、右下のLive Edit / Timeline / Mixer
+- **Touch**: タブレットやタッチ操作向けのキュー、灯体、映像操作
+
+アプリ本体は一画面内に固定されます。長い灯体ライブラリやリストだけが各パネル内部でスクロールします。
+
+## インストール
+
+CI/Release成果物は次の形式です。
+
+- Windows: `Syndocal_1.0.0_x64-setup.exe` (NSIS)、`Syndocal_1.0.0_x64_ja-JP.msi`
+- macOS: `.app`、DMG
+- Linux: `.deb`、AppImage
+
+### 未署名ビルド
+
+v1.0の個人配布物はコード署名されていません。
+
+- Windows SmartScreen: ファイルのプロパティに「ブロックの解除」があれば有効にし、警告画面では発行元とハッシュを確認してから「詳細情報」→「実行」を選択します。
+- macOS Gatekeeper: Finderでアプリを右クリックして「開く」、または「システム設定」→「プライバシーとセキュリティ」から対象アプリを許可します。
+
+正式な公開配布ではWindows Authenticode証明書とApple Developer ID/Notarizationが必要です。秘密鍵や署名資格情報はリポジトリに保存しません。
+
+## 最初の操作
+
+1. Project menu (`...`) から **Sample** を開きます。
+2. Setup / PatchでMini Spot 1、DMX U0 Address 1、2D Mappingを確認します。
+3. Setup / I/O / DMXでArt-Net loopback `127.0.0.1:6454` または実機出力を設定します。
+4. Controlで灯体を選択し、Dimmer/Color/Positionを操作します。
+5. TimelineまたはGOで、照明と映像が同じキューから変化することを確認します。
+6. Project menuから`.sdc`として保存します。
+
+同梱サンプルの詳細は [samples/README.md](samples/README.md)、キー操作は [HOTKEYS.md](HOTKEYS.md) を参照してください。
+
+## プロジェクトとプリセット
+
+- `.sdc`: ショー全体。灯体、埋め込みカスタムプロファイル、キュー、タイムライン、映像、出力、Stage Mapを保存
+- `.fixture`: 簡易灯体プロファイル
+- `.preset`: 灯体属性スナップショット
+- `.effect`: LFO/位置ウェーブ
+- `.nodegraph`: エフェクトノードグラフ
+- `.projmap`: プロジェクター補正
+
+`.sdc` v1は未知フィールドを読み飛ばし、後から追加された省略可能項目を既定値で補完します。将来versionは暗黙変換せず、対応外として明示的に拒否します。
+
+## 開発
+
+必要環境:
+
+- Rust 1.86.0 (リポジトリの`rust-toolchain.toml`で固定)
+- Node.js 22
+- pnpm 10.9
+- FFmpeg開発/共有ライブラリ (一般動画のlibav build)
+- 各OSのTauri 2ビルド依存
 
 ```powershell
-cd app
-pnpm install
+pnpm --dir app install --frozen-lockfile
+cargo test --workspace --locked
+pnpm --dir app build
+pnpm --dir app tauri dev
 ```
 
-Run checks:
+軽量チェック:
 
 ```powershell
-cargo test --workspace
-cd app
-pnpm build
-pnpm tauri build --debug
+pnpm --dir app run check:release
+pnpm --dir app run check:project-storage
+pnpm --dir app run check:viewport
 ```
 
-Run the desktop app:
+リリース:
 
 ```powershell
-cd app
-pnpm tauri dev
+pnpm --dir app tauri build --ci --bundles nsis,msi
 ```
 
-## MVP Workflow
+Windowsの完全libav bundleでは`FFMPEG_DIR`を共有FFmpeg SDKルートへ設定します。bundle直前にDLLがステージされ、MSI/NSISへ同梱されます。NDIを有効にする場合は別途NDI SDKを導入し、`--features ndi`とSDKのライセンス条件に従ってください。
 
-1. Start the app with `pnpm tauri dev`, or use the topbar `Load Sample` / `Run Smoke` buttons after startup for the embedded Phase 1 mini-show check.
-2. Browse for a local `.gdtf` file, enter the path manually, search GDTF Share with a temporary login, or paste a direct GDTF Share/download URL and download it into the local library. If no GDTF exists, create or load a custom 8/16-bit `.fixture` profile by entering manufacturer, name, mode, and comma-separated attributes such as `Dimmer@1:8, Pan@2:16, Tilt@4:16`. The `@` value is an optional fixture-local start channel and `:8`/`:16` sets the channel resolution.
-3. Load or create the profile and choose a DMX mode.
-4. Optionally enter comma-separated groups plus position/rotation values, then patch one fixture or a counted batch to a universe/address after confirming footprint and end address. Batch patching can use an address step plus X/Z step to spread fixtures across the patch. Use the DMX Map to confirm occupied ranges per universe. Select a patched fixture later to edit its transform live, reuse that fixture's profile as the active patch profile, click the 2D Mapping stage to place it in X/Z, or use Line/Grid/Circle layout buttons to arrange the current group or full patch.
-5. Select Art-Net, sACN/E1.31, Enttec USB PRO, or Enttec Open DMX, then set the target IP/port/universe or serial port. Add additional DMX routes when the same show should drive multiple output targets at once.
-6. Set, tap, or connect MIDI Clock if tempo-synced behavior is being tested.
-7. Start OSC input or Web Remote if network control is needed.
-8. Move attribute faders to send ArtDMX frames.
-9. Use the color picker for RGB-capable fixtures.
-10. Save or load a selected fixture's fader state with `.preset` files when reusable looks are needed.
-11. Add video file layers with the Browse Source picker or direct path entry when testing VJ state capture, add still-image layers for PNG/JPEG CPU preview, or add named NDI/Spout/Syphon input layers for external source routing placeholders. When `ffprobe` is available on `PATH` or configured via `SYNDOCAL_FFPROBE`, file layers capture codec, duration, resolution, and frame-rate metadata. When `ffmpeg` is available on `PATH` or configured via `SYNDOCAL_FFMPEG`, file layers can extract CPU preview frames at the current playhead and fill the preview decode queue; native in-process FFmpeg/HAP decode workers and live external transport bindings are still future work.
-12. Configure lighting master/blackout, group submasters, video master/blackout, create compositions, route outputs, edit output labels/kinds/resolutions/display targets, rename/duplicate/reorder video layers, reorder a custom composition's layer order, play/pause, blend mode, speed, playhead position, layer transform, color adjustment, pixelate/blur/glow/edge/color-key FX, A-B loop, cue points, and optional BPM sync ratio/bar length. Display outputs can be opened in a dedicated output window for CPU-rendered visual checks, or as a test-pattern window for projector ratio/aspect-mode/lens/keystone/corner adjustment. The Setup projector map surface can drag TL/TR/BR/BL handles for coarse corner-warp adjustment, then use the numeric fields for exact values.
-13. Store cues from the current patched fixture and video layer states, duplicate cues for look variants, edit cue labels/fade times, reorder the cue list, update existing cues after refining a look, then use GO/Back or direct cue GO to recall them together.
-14. Optionally analyze a `.wav` file in the Timeline panel to attach a waveform, beat markers, and an estimated BPM to the timeline; the estimate can be applied to the shared clock.
-15. Add stored cues to the Timeline at millisecond positions, choose Lighting or Video track, edit existing event cue/time/track values, optionally snap edit times to beat/bar/grid positions, and use Play/Pause/seek to fire them in time.
-16. Add and edit timeline automation for selected fixture attributes or video layer opacity/speed/playhead/transform parameters when continuous changes are needed.
-17. Add an LFO or position-wave effect from the selected fixture, target one or more groups, or target a video layer parameter to modulate lighting and video from the same effect engine. Use the effect list Up/Down controls when stack order matters.
-18. Save reusable effects as `.effect` files or load an existing effect preset into the current show.
-19. Save or load the current show state as a `.sdc` project snapshot when you need a readable checkpoint.
-20. Check fixture placement, projector surfaces, and simple beam state in the 2D Mapping stage.
-21. Confirm the outgoing values in the DMX Raw monitor before connecting hardware.
+## 性能・QA
 
-The default Art-Net target is `127.0.0.1:6454`, universe `0`, which is useful for loopback receivers and packet tests before connecting hardware. The Output panel can apply the current target as the primary route, build a route list so multiple Art-Net/sACN/serial outputs are sent on the same 44 Hz engine tick, and send a one-off DMX test frame either to the current output or to every enabled route. sACN/E1.31 uses port `5568` by default when selected in the UI and requires universe `1` or greater. Enttec USB PRO output writes label `6` DMX packets to a selected serial port. Enttec Open DMX output uses standard `250000` baud 8N2 serial with a software-timed break and mark-after-break before each 513-byte DMX payload, so exact break timing still depends on the OS and USB driver.
+- Engine: 44Hz、UIとは別スレッド、bounded lock-free command queue
+- Windows: Pro Audio MMCSS Critical + 1ms timer、macOS: USER_INTERACTIVE QoS
+- 1時間release soak: 108,001フレーム、drop 0、tick jitter p99 0.535ms、command-to-DMX p99 0.476ms、最大13.3MB (ハーネス構成)
+- 大規模Engine gate: 200灯体、8ユニバース、100キュー、20,000ターゲット
+- UI viewport gate: 1280x720 / 1366x768 / 2048x1129、document overflow 0
 
-The Rust test suite includes UDP loopback coverage for ArtDMX and sACN packet sending, serial packet-builder coverage for Enttec USB PRO and Open DMX payloads, plus engine-level checks that a patched fixture's fader state reaches network DMX receivers.
+検証記録:
 
-Engine telemetry exposes the latest 44 Hz tick interval plus jitter p95/p99/max values, command queue latency, command-to-DMX latency, current output route count, per-tick DMX send success/failure counts, cumulative DMX send success/failure counts, and last packet bytes. The Output panel shows live Pass/Warn/Fail budget checks, can reset the current measurement window, and can save a pretty-printed telemetry JSON report, so runtime builds can be watched against the latency and jitter targets before external packet captures are taken.
+- [qa/M4_IO_VALIDATION.md](qa/M4_IO_VALIDATION.md)
+- [qa/M5_RELIABILITY_VALIDATION.md](qa/M5_RELIABILITY_VALIDATION.md)
+- [qa/M6_RELEASE_VALIDATION.md](qa/M6_RELEASE_VALIDATION.md)
 
-MIDI Clock support listens for standard `0xF8` timing clock messages and estimates BPM from the 24 PPQN pulse stream. Start (`0xFA`), Continue (`0xFB`), and Stop (`0xFC`) messages drive the shared timeline transport. The same input connection also decodes MIDI Time Code quarter-frame messages (`0xF1`) and syncs the shared timeline position; due timeline cues are fired as the external timecode crosses their event times. The current clock source is shown in the Output panel. The MIDI Control panel can map Note On, Note Off, Control Change, or Program Change messages by optional channel and controller/note/program number. The Learn button opens a temporary 10-second listener and fills the message/channel/number fields from the next supported MIDI message. Current mapping actions are fixture attribute value, trigger cue, cue next/previous, effect enable, node-graph enable, lighting master, group submaster, cue fade pause, timeline play, timeline seek, lighting blackout, video blackout, video parameter value, video cue-point jump, video play state, and video output enable/opacity/fade/blackout/mapping-field/mapping-preset. CC values are normalized from `0..127` into each mapping's configured low/high range. MIDI mappings can be saved and loaded as pretty-printed `.midimap` JSON files. MIDI Feedback can connect to a MIDI output and send current snapshot values back through the same mappings; fixture attributes, lighting master, group submasters, timeline position, video parameters, and video output opacity/fade targets are normalized through each mapping's low/high range, trigger cues report active cue state, cue fade pause reports pause state, blackout mappings report blackout state, and timeline/video play plus video output enable report play or enabled state. Auto feedback sends this snapshot feedback periodically for controller LEDs and motorized surfaces.
+## 既知の制限
 
-OSC input defaults to `0.0.0.0:9000`. The fixed lighting routes are `/syndocal/fixture/{id}/{attribute}` with a numeric value, `/syndocal/fixture/{id}/highlight`, `/syndocal/fixture/{id}/solo`, `/syndocal/fixture/{id}/park`, `/syndocal/group/{group_id}/highlight`, `/syndocal/group/{group_id}/solo`, `/syndocal/group/{group_id}/park`, `/syndocal/submaster/{group_id}`, `/syndocal/cue/{id}`, `/syndocal/cue/{id}/go`, `/syndocal/cue/pause`, `/syndocal/cue/resume`, `/syndocal/cue/go`, `/syndocal/cue/back`, `/syndocal/effect/{id}/enabled`, `/syndocal/node_graph/{id}/enabled`, `/syndocal/timeline/play`, `/syndocal/timeline/pause`, `/syndocal/timeline/seek`, `/syndocal/blackout`, `/syndocal/master`, `/syndocal/bpm`, and `/syndocal/tap`. Video layer routes are `/syndocal/video/layer/{id}/{param}`, `/syndocal/video/master`, and `/syndocal/video/blackout`; params include `opacity`, `speed`, `position`, `transform_x`, `transform_y`, `scale_x`, `scale_y`, `rotation`, crop fields such as `crop_left`, color fields `brightness`, `contrast`, `hue`, `saturation`, and `gamma`, plus FX fields `pixelate`, `blur`, `glow`, `edge`, `key_red`, `key_green`, `key_blue`, and `key_threshold`. Playback and hot-jump routes are `/syndocal/video/layer/{id}/play` with a boolean, `/syndocal/video/layer/{id}/seek` with a millisecond value, `/syndocal/video/layer/{id}/cue/add` with an optional millisecond value, `/syndocal/video/layer/{id}/cue/remove` with a millisecond value, and `/syndocal/video/layer/{id}/cue/jump` with a cue-point index. Video output routes are `/syndocal/video/output/{id}/enabled` with a boolean, `/syndocal/video/output/{id}/opacity` with a numeric level, `/syndocal/video/output/{id}/blackout` with a boolean, `/syndocal/video/output/{id}/fade` with target opacity plus optional duration milliseconds, `/syndocal/video/output/{id}/fade_in` or `/syndocal/video/output/{id}/fade_out` with optional duration milliseconds, `/syndocal/video/output/{id}/mapping/{field}` with a numeric mapping value, and `/syndocal/video/output/{id}/mapping/preset` with a preset label. In addition to fixed routes, the OSC panel can map arbitrary addresses such as `/touchosc/fader1`, or one-segment wildcard patterns such as `/touchosc/page/*/fader/1`, to fixture attribute value, trigger cue, cue next/previous, effect enable, node-graph enable, lighting master, group submaster, cue fade pause, timeline play, timeline seek, video parameter value, video cue-point jump, video play state, video output enable/opacity/fade/blackout/mapping-field/mapping-preset, lighting blackout, or video blackout actions. The Learn button opens a temporary 10-second listener on the current Bind IP/Port and fills the address field from the next OSC message; stop the normal OSC input first because both listeners bind the same UDP port. OSC mappings can be saved and loaded as pretty-printed `.oscmap` JSON files. Float fixture attribute values in the `0.0..1.0` range are scaled to 16-bit DMX values.
+- v1.0の外部映像I/OはDisplay + feature-gated NDI。Spout/Syphonは`NotBuilt`として明示し、v1.1候補です。
+- HAP Q Alpha、HAP R/BC7、ISFシェーダーはv1.0対象外です。
+- 3Dビジュアライザは本体UIへ戻さず、`visualizer`データ境界から外部実装へ接続します。標準UIは2D Stage Mapです。
+- Enttec Open DMXはOS/USBドライバ依存のbreak timingがあるため、最終現場ではUSB PRO系を推奨します。
+- Art-Net/sACN/Serialの実機遅延は接続機材ごとに再測定してください。リポジトリの自動検証はloopback中心です。
+- NDI SDK、コード署名、macOS notarizationは配布ライセンス/資格情報が必要で、リポジトリには含みません。
 
-Web Remote defaults to `0.0.0.0:9100`. Open `http://<host>:9100/` from a tablet browser to load the built-in remote page; the page connects back to `ws://<host>:9100/ws`, requests the current `EngineSnapshot`, and fills fixture, cue, video layer, video output, and attribute selectors from live state. The endpoint also serves `/manifest.webmanifest`, `/icon.svg`, and `/remote-sw.js` so the remote can be added to a tablet home screen as a PWA-style controller where the browser permits it. It renders all controls for the selected fixture as a fader bank, includes a group-filtered 2D Stage overview of patched fixtures, projector surfaces, and stage reference objects, and lets the stage select fixtures or projector surfaces for immediate Highlight/Solo/Park or output blackout/fade/full controls. It refreshes the snapshot once per second and after commands, so the tablet view can show fixture/cue/layer counts, banked cue pads with active/next cue state, current layer state, video output state, timeline position, BPM, and blackout/master status. The WebSocket accepts one JSON command per text message. Initial command types are `getSnapshot`, `setAttribute`, `setFixtureHighlight`, `setFixtureSolo`, `setFixturePark`, `setGroupHighlight`, `setGroupSolo`, `setGroupPark`, `setGroupSubmaster`, `blackout`, `lightingMaster`, `setBpm`, `tapBpm`, `triggerCue`, `triggerNextCue`, `triggerPreviousCue`, `setCueFadePaused`, `setTimelinePlaying`, `seekTimeline`, `setEffectEnabled`, `setNodeGraphEnabled`, `setVideoParam`, `setVideoLayerEnabled`, `setVideoLayerSolo`, `setVideoPlaying`, `seekVideoLayer`, `addVideoCuePoint`, `removeVideoCuePoint`, `jumpVideoCuePoint`, `setVideoOutputEnabled`, `setVideoOutputOpacity`, `fadeVideoOutputOpacity`, `setVideoOutputMapping`, `setVideoOutputMappingField`, `applyVideoOutputMappingPreset`, `setVideoOutputBlackout`, `videoMaster`, and `videoBlackout`. The server replies with a small JSON acknowledgement or a snapshot response so the remote page can show command success or parse errors.
+## ライセンス
 
-Cues store lighting fixture attribute snapshots and video layer state snapshots. Cue recall is evaluated on the 44 Hz engine tick; a cue with `fade_ms = 0` applies lighting and video states immediately, while nonzero fades interpolate base lighting attribute values before effects are stacked and rendered. Active fades can be paused and resumed; the engine subtracts paused time from fade progress so output holds steady while paused. Video cue fades now interpolate continuous visual layer values such as opacity, speed, transform, color adjustment, and lightweight FX, while discrete playback, loop, cue-point, BPM-sync, and playhead fields are applied at trigger time.
-
-Timeline playback supports cue events on `Lighting` or `Video` tracks, fixture-attribute automation on lighting tracks, and video layer automation for opacity, speed, playhead position, and transform parameters. Timeline edit inputs can snap to detected audio beats, BPM-derived bars, or a fixed millisecond grid before commands are sent to the engine. Automation keyframes support `Step`, `Linear`, and `Bezier`; the current Bezier mode is a handle-less cubic ease-in-out curve until explicit curve handles are added to the data model.
-
-The `audio` crate provides the first timeline-audio analysis path without adding native decoder dependencies: it reads RIFF/WAVE PCM or 32-bit float files, builds a bounded peak/RMS waveform, detects simple energy peaks as beat markers, and estimates BPM from beat intervals. The Timeline panel can attach that analysis to the engine timeline snapshot, draw the waveform and beat markers from live state, clear it, and apply the estimated BPM to the shared clock.
-
-Video layers are currently an engine/UI data model: file path or external source name, source metadata, label, enabled state, solo state, stack order, blend mode, opacity, speed, playing state, playhead position, cue points, A-B loop state, BPM sync state, transform, color adjustment state, and lightweight FX state are advanced on the engine tick and can be captured by cues. Existing layers can be renamed, duplicated, soloed, or temporarily disabled without overwriting their opacity; duplication preserves source, blend mode, state, stack position, and custom composition membership so look variants can be made without rebuilding a layer from scratch. If any enabled layer in a composition is soloed, non-solo layers are omitted from the render plan. Cue points, playback, enabled state, and solo state are first-class engine commands, so the main UI and Web Remote can handle live layer operations without rewriting the whole layer state. BPM sync computes effective playback speed from the shared BPM clock, the selected loop region, ratio, and loop bar count. Video file metadata is probed through `ffprobe` when available and persists in `.sdc`; source duration contributes to the shared timeline duration, can be copied into A-B loop out points from the UI, and clamps non-looping playback so forward playback stops at the source end while reverse playback stops at 0 ms. Existing local file/still-image layers can refresh metadata without resetting playback state, which keeps imported projects usable when `ffprobe` is installed later. The snapshot exposes a default `Main` composition containing the active layer order, plus user-created compositions with explicit layer lists and derived output target IDs. Video outputs currently store routing, display/NDI/Spout/Syphon kind, resolution, enabled state, opacity, and blackout state so the future renderer can bind output surfaces without changing cue/timeline state. Output opacity can also be faded over engine ticks from Setup and the Control tab's output bank, giving projector feeds smooth fade-out/fade-in behavior without changing layer levels. The `video` crate can now build output render plans and render an output-specific CPU preview frame, including output opacity and blackout, which gives the later wgpu/display/NDI sender path a deterministic reference. Setup can render either the routed output frame or a calibration test pattern with major/minor grids, center target, safe-area frame, thirds guides, diagonals, and color-coded corner markers inside the output card while projector aspect, lens distortion, keystone, and corner warp values are being tuned. The Tauri app can open a Display output window that renders through this same CPU reference path on a 60 Hz target loop, warms at most one decode request per live frame, reports FPS/render time/drop counts, and backs off after repeated errors, so output routing can be checked on a separate screen before the native wgpu surface renderer replaces it. Still-image layers can be decoded into RGBA for the CPU preview path and are cached until the source file metadata changes. File layers can decode a preview frame at the current playhead through an FFmpeg CLI adapter (`ffmpeg` on `PATH`, or `SYNDOCAL_FFMPEG=/path/to/ffmpeg`), and NDI/Spout/Syphon input layers currently render deterministic placeholder frames until native transport receivers are connected. Project validation requires external input/output names to be present, but it does not reject `.sdc` files just because a native backend is not linked on the current machine; backend availability is reported by the Video Control I/O plans and Sync Routes diagnostics. The decoder-backed preview provider now pushes a small lookahead window into the per-layer frame queue to mimic the future jitter-absorbing decode ring, and the decode scheduler/worker boundary can enqueue current and lookahead frames for a composition or output while reporting duplicates, reprioritized work, queue pressure, and per-request errors. The Video Control panel can query backend availability and show per-layer queue readiness, effective speed, source duration, exact prefetch positions, and output decode preview plans used by that preview path. Native in-process FFmpeg/HAP moving-video workers, wgpu compositing, low-latency display output, NDI, Spout, and Syphon transport are still future VJ-phase work.
-
-The `video` crate now owns renderer-facing primitives that are intentionally independent of Tauri and the lighting engine: a bounded `FrameQueue` for decoded frames, a bounded `VideoDecodeScheduler` for current/lookahead/background decode requests, a `VideoDecodeWorker` boundary that drains scheduled work into `VideoRuntime`, `VideoRuntime` for per-layer queue management and frame selection, a swappable `VideoFrameProvider` boundary for preview/decode frame supply, a `VideoFrameDecoder` boundary with a command-backed FFmpeg adapter, `VideoPreviewRenderer` for preview-only frame submission/composition, `build_composition_plans` for turning `VideoSnapshot` data into compositor-ready layer instructions, external-video input/output route-plan builders and a transport runtime for NDI/Spout/Syphon endpoints with backend readiness, issue reporting, route lifecycle sync, and fallible start/stop driver hooks, and a CPU `composite_rgba8` reference path for blend-mode, transform, color-adjustment, pixelate, blur, glow, edge, and color-key correctness tests. Decoder-backed providers can return multiple frames per layer so the runtime queue receives current and lookahead frames before composition, while the scheduler/worker pair gives the later async FFmpeg/HAP path a deterministic way to keep playhead frames ahead of lower-priority prefetch work and continue across per-request decode failures. Tauri commands expose composition plans, external-video I/O route plans, route sync reports, and a small CPU debug preview frame; the SolidJS Video panel converts that RGBA preview frame into a browser-rendered image for visual checks until in-process FFmpeg/HAP decoders and wgpu output are connected.
-
-The `visualizer` crate is the renderer-facing boundary for the later native wgpu 3D view. It turns `EngineSnapshot` fixture state into fixture nodes, beam cones with normalized color/intensity/direction, video output surfaces, stage reference objects, model render plans, and stage bounds without depending on Tauri or GPU APIs, so the future renderer can be tested against deterministic scene data first. Tauri exposes this through `get_visualizer_scene` and render-payload commands, keeping native or external visualizer windows decoupled from engine internals.
-
-Position-wave effects use each patched fixture's `x/y/z` position. A direction vector projects fixtures along an axis; if the direction is zero, radial distance from the origin is used.
-
-Effect blend modes are evaluated in stack order, and the Control UI can move live effects up or down in that stack. For lighting attributes, `Override` replaces the current value, `Add` saturates at full scale, and `Multiply` scales by the effect value. For video parameters, the same source evaluation is applied to the snapshot state as float values, then sanitized by the video layer state rules.
-
-Effect presets are stored as pretty-printed `.effect` JSON files with a version, effect type, enabled state, and the original LFO or position-wave request body. Loading an effect preset validates the request shape and checks referenced fixture and video layer IDs before creating a new live effect, so stale presets fail visibly instead of silently targeting nothing.
-
-Fixture presets are stored as pretty-printed JSON with the fixture manufacturer, profile name, mode name, and attribute values. They are intentionally readable and suitable for Git tracking. Loading a preset checks the selected fixture's manufacturer, profile name, mode name, and available attributes before applying values, so presets made for another mode are rejected instead of silently writing mismatched channels.
-
-Project snapshots are stored as pretty-printed `.sdc` JSON files containing a version marker, app name, and the current `EngineSnapshot`. Save Project writes a readable checkpoint for patch/cue/timeline/audio/video/effect/output state, and Load Project rebuilds that snapshot into the live engine while advancing ID allocators so new fixtures, cues, timeline events, video layers, outputs, and effects do not collide with loaded IDs. Loaded fixture profiles are currently rebuilt from the snapshot's summarized controls; the original GDTF XML, meshes, geometry tree, physical data, and source audio bytes are not embedded in `.sdc` yet.
-
-Custom fixture profiles are kept in memory as `memory://custom/...` profiles after creation or load, and can be saved as pretty-printed `.fixture` JSON files containing the manufacturer, profile name, mode name, and ordered attribute list. Each listed attribute can declare an optional fixture-local start channel with `@` and an 8/16-bit resolution with `:8` or `:16`; Pan/Tilt-style attributes default to center, while other attributes default to zero. Patched fixtures can also be rebuilt into temporary `memory://patched-fixture/...` profiles from their summarized controls. This is a patching convenience, not a replacement for full GDTF physical data.
-
-GDTF Share access currently uses the system `curl` binary to keep the prototype free of a bundled HTTP client dependency. The Setup panel can open the public Share page, search the authenticated public API with a temporary user/password pair that is not persisted by Syndocal, download a selected result, or download a direct `http://`/`https://` URL. Downloaded files get a safe `.gdtf` filename, are checked for JSON/HTML API error payloads, are validated through the existing GDTF parser, and failed/invalid downloads are removed.
-
-The 2D Mapping stage is intentionally frontend-first for now: it maps patched fixture `x/z` positions, video-output `stage_x/stage_z` surfaces, and persistent stage reference objects into a top-down stage grid, uses current `Dimmer`/RGB attributes when present, highlights the selected fixture, and can place or rotate the selected fixture from the stage tools. Stage reference objects such as stages, trusses, risers, masks, and screens are stored in `.sdc`, can be moved/resized/rotated directly on the map, can pick fixtures inside their rotated bounds, can act as Line/Grid layout references for selected fixtures, and are also shown in the PositionWave stage picker where the selected object can set the wave origin or video target position. Stage map presets can store either bounds only or bounds plus these reference objects, then apply/import/export them for venue reuse without changing fixture patches. The mapping editor also provides group/type/search filtering, viewport presets that remember fixture/projector/object layer visibility, projector surface selection, projector-to-object fit, ratio/aspect/lens/keystone controls, SVG stage-plot export, visualizer render-payload JSON export, and Line/Grid/Circle layout helpers that operate on the selected group filter or the full patch. Control and Touch stages can tap/select fixtures or projector surfaces and expose immediate Highlight/Solo/Park or output blackout/fade controls. The embedded SVG/isometric 3D UI is deferred; the Rust `visualizer` crate remains as a renderer-facing boundary for later native or external visualization work.
-
-Video output mapping is currently a CPU-reference path for the future native renderer. Each output can edit its label, output kind, resolution, display fullscreen/monitor target, or network/GPU endpoint name without losing route, opacity, blackout, or mapping state. Each output can adjust projector ratio and distortion correction controls: offset, scale, rotation, aspect ratio, stretch/fit/fill aspect mode, lens distortion, horizontal/vertical keystone, and four-corner warp; in Setup -> Mapping, a selected output can also be fitted to a selected stage reference object for a quick screen/projection starting point. Those mapping values can be saved as project-level projector presets, then applied to any output, deleted from Setup, or exported/imported as pretty-printed `.projmap` JSON files for venue/projector reuse. Display outputs can open either a live CPU preview window or a mapping-aware test-pattern window with a grid, center lines, border, and colored corners for projector alignment, then sync an already-open window after resolution/fullscreen/monitor changes.
-
-The color picker appears only when the selected fixture exposes red, green, and blue controls using common GDTF-style names such as `ColorRed`, `ColorGreen`, and `ColorBlue`.
-
-## Notes
-
-- `Cargo.lock` is intentionally tracked because the local Rust toolchain is 1.86.0 and newer Tauri transitive dependencies currently require newer Rust.
-- The current build does not yet include hardware-timed Enttec Open DMX break scheduling, native low-latency wgpu video output rendering, or native volumetric wgpu 3D visualization. The Display output window is a CPU preview bridge, not the final VJ presentation pipeline.
+[MIT License](LICENSE)

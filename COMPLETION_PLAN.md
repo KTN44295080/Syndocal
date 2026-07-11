@@ -81,8 +81,8 @@ Phase 2(エフェクト/タイムライン/マッピングの操作性)を「完
 - [x] エフェクト UI の残課題洗い出し: 標準の照明+映像ドラフトは完全復元。複数映像バインディングを持つ外部プリセットは先頭を編集し、追加分がエンジン上に残ることを Use Draft 時に明示する v1.0 制限とした。
 - [x] 2D マッピングのホットキー一覧を UI 内ヘルプ(`?` キーまたはツールレール)として表示。
 - [x] Stage 2D 境界/定数を `stageGeometry.ts` に統一(`StageWorldBounds` と `stageViewBoxSize` の重複解消)。
-- [ ] App.tsx 継続削減: 目標 10,000 行未満。残る大物(Setup Mapping ビューポート/設定シェル、Output/Telemetry 診断のオーケストレーション)を各 1 スライスで抽出。新規抽出モジュールは `vite.config.ts` の `manualChunks` に振り分けてメインチャンクを 450 kB 以下に維持。
-- [ ] エラー/ステータス表示の統一: 現在パネルごとにばらつくメッセージ表示を、単一のステータス行 or トースト規約に揃える(一画面制約内で)。
+- [x] App.tsx 継続削減: 9,989行、メインチャンク280.58kB。Setup Mapping、Output/Telemetry、Touch Cue等を分割し、10,000行/450kB目標を達成。
+- [x] エラー/ステータス表示の統一: 固定高`AppStatusLine` + `statusModel`へ統一し、viewport gateが全画面で単一status lineを検証。
 - 検証ゲート: `cargo test --workspace`、`pnpm --dir app build`、`npm run check:viewport`、手動スモーク(Run Smoke + Setup/Control/Touch 一巡)。
 
 ### M2 — UI/UX 完成パス(1〜2 週)
@@ -149,7 +149,7 @@ CPU プレビューを wgpu 実出力に置き換える。**照明エンジン�
 - [x] GitHub ActionsにWindows 2022 / macOS 13 / Ubuntu 22.04マトリクスを用意し、Rust workspace/libavテスト、フロントビルド、Tauriチェック、OS別bundle、artifact保存を継続検証する。
 - [ ] Windows NSIS/MSI、macOS `.app`/DMG、Linux AppImageまたは`.deb`を生成し、製品名・`.sdc`関連付け・アイコン・発行者名(Seraf()のKTN)を確認する。
 - [x] コード署名/公証(D3): v1.0個人配布は未署名で確定。Windows SmartScreen/macOS Gatekeeperの起動手順と、正式公開前に必要な証明書/Apple notarizationをREADMEへ明記する。
-- [ ] ドキュメント一括更新: README(ユーザ向け)、samples/README.md、ホットキー一覧、既知の制限(Spout/Syphon 等)。
+- [x] ドキュメント一括更新: README(ユーザ向け)、samples/README.md、HOTKEYS.md、MIT LICENSE、既知の制限/未署名起動/QA記録をv1.0へ更新。
 - [ ] 最終 QA パス: 本計画書 §1 の Definition of Done を上から全チェック。
 - 検証ゲート: クリーンな Windows / macOS 環境でインストーラから起動 → Run Smoke green。Linux は Ubuntu 22.04 のクリーン環境でパッケージ起動 → Run Smoke green。
 

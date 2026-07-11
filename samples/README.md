@@ -1,6 +1,6 @@
 # Syndocal Samples
 
-This directory contains small local assets for repeatable handoff and smoke checks.
+This directory contains self-contained assets for repeatable Syndocal 1.0 smoke checks.
 
 ## Phase 1 Mini Spot
 
@@ -45,7 +45,7 @@ cargo test -p syndocal phase1_smoke_fixture_sample_is_valid
 
 File: `phase1-mini-show.sdc`
 
-This is a self-contained Syndocal project file using the same mini spot profile. It contains one patched fixture, one cue, one Art-Net route, one display output with a 16:9 projector mapping preset, one 2D stage map preset, and three 2D stage reference objects:
+This is a self-contained Syndocal project file using the same mini spot profile. It contains one patched fixture, one integrated lighting/video cue, two shared-timeline cue events, matching lighting/video automations, one named NDI layer, one Art-Net route, one display output with a 16:9 projector mapping preset, one 2D stage map preset, and three 2D stage reference objects:
 
 - `Main Deck` (`Stage`)
 - `Front Truss` (`Truss`)
@@ -58,6 +58,8 @@ Use it when the project loader itself needs a quick handoff smoke check:
 ```powershell
 cargo test -p syndocal phase1_smoke_project_sample_is_valid
 cargo test -p syndocal phase1_smoke_project_sample_loads_into_engine_and_renders_cue
+cargo test -p syndocal phase1_smoke_project_sample_timeline_event_triggers_light_and_video
+cargo test -p syndocal phase1_smoke_project_sample_timeline_automations_share_position
 cargo test -p syndocal phase1_smoke_project_sample_sends_cue_to_artnet_loopback
 ```
 
