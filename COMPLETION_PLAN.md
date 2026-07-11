@@ -131,7 +131,9 @@ CPU プレビューを wgpu 実出力に置き換える。**照明エンジン�
 - [x] Enttec Open DMX: FTDI ブレークタイミングの改善(専用送信スレッド + 高精度タイマ)。PRO/DMXKing 推奨の UI ヒントは維持。(2026-07-12)
   - エンジン44Hz経路はbounded latest-frame mailboxへの非ブロッキングpublishだけを行い、break/MAB/513-byte writeは専用ワーカーへ分離。波形の実機測定は下記テストマトリクス項目に残す。
 - [ ] 実機テストマトリクス作成: 手持ちのノード/インターフェースで Art-Net、sACN(マルチキャスト)、シリアルを各 1 回以上実測し、結果を記録。
-- [ ] プラットフォーム境界: Spout(Windows)、Syphon(macOS)、シリアル/優先度制御を `cfg` + feature の背後に隔離し、利用不能な機能は診断付きで無効化する。未導入SDKや未対応デバイスがアプリ起動を妨げない。
+  - `qa/M4_IO_VALIDATION.md` に自動/ローカル/物理を分離したマトリクスと再現コマンドを作成。Art-Net/sACN/Serialの物理機器測定は外部依存として未完了のまま明示する。(2026-07-12)
+- [x] プラットフォーム境界: Spout(Windows)、Syphon(macOS)、シリアル/優先度制御を `cfg` + feature の背後に隔離し、利用不能な機能は診断付きで無効化する。未導入SDKや未対応デバイスがアプリ起動を妨げない。(2026-07-12)
+  - NDI SDKは`ndi` feature、libavは`libav` feature。Spout/Syphonはv1.0でNotBuilt/UnsupportedPlatform診断を維持し、既定ビルドはSDK非依存。OS別コンパイル/配布証跡はM6 CIゲートが所有する。
 - 検証ゲート: `cargo test -p io`、実機 or ループバック計測記録、feature flag なしビルドが従来どおり green。
 
 ### M5 — 信頼性・パフォーマンス(1 週)
