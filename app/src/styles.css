@@ -13349,13 +13349,17 @@ h3 {
 }
 
 .layoutSetup.setupMode-patch .dmxAddressGrid {
+  width: min(100%, 632px);
   gap: 1px;
   max-height: none;
   padding: 4px;
+  justify-self: start;
 }
 
 .layoutSetup.setupMode-patch .dmxAddressCell {
-  min-height: 15px;
+  width: 100%;
+  min-height: 0;
+  aspect-ratio: 1;
   font-size: 8px;
 }
 
