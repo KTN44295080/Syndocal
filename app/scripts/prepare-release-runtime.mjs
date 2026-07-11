@@ -31,9 +31,6 @@ if (runtimeLibraries.length === 0) {
 }
 
 for (const releaseDir of new Set(releaseDirs)) {
-  if (!existsSync(join(releaseDir, "syndocal.exe"))) {
-    continue;
-  }
   mkdirSync(releaseDir, { recursive: true });
   for (const library of runtimeLibraries) {
     copyFileSync(join(sourceDir, library), join(releaseDir, library));
