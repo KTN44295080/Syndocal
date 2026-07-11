@@ -13404,6 +13404,98 @@ h3 {
   max-height: none;
 }
 
+.layoutSetup.setupMode-profiles > .setupPanel {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.layoutSetup.setupMode-profiles .customProfileForm {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 5px;
+  min-width: 0;
+  min-height: 0;
+  border-top: 0;
+  padding-top: 0;
+  overflow: hidden;
+}
+
+.customProfileWorkspaceHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  min-height: 30px;
+  border-bottom: 1px solid #39342f;
+  padding-bottom: 5px;
+}
+
+.customProfileWorkspaceHeader h3 {
+  margin: 0;
+}
+
+.customProfileActions {
+  grid-template-columns: repeat(3, minmax(72px, auto));
+  width: auto;
+}
+
+.customProfileMetadataGrid {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.7fr) minmax(160px, 1fr) minmax(120px, 0.6fr) minmax(280px, 1.8fr);
+  gap: 5px;
+  min-width: 0;
+}
+
+.customProfileWorkbench {
+  display: grid;
+  grid-template-columns: minmax(460px, 1.1fr) minmax(420px, 0.9fr);
+  gap: 5px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.customProfileAttributePane,
+.customProfilePreviewDesk {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.customProfileAttributePane {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  border-right: 1px solid #39342f;
+  border-radius: 0;
+  padding: 6px 6px 6px 0;
+}
+
+.customProfileAttributePane .customProfileAttributeRows {
+  min-height: 0;
+  overflow: auto;
+}
+
+.customProfilePreviewDesk {
+  padding-left: 1px;
+}
+
+.customProfilePreviewDesk .customProfileDmxGrid {
+  grid-template-columns: repeat(8, minmax(48px, 1fr));
+  max-height: none;
+}
+
+.customProfilePreviewDesk .customProfilePreview {
+  min-height: 0;
+}
+
+.customProfilePreviewDesk .customProfileChannelList {
+  max-height: none;
+}
+
 .videoSetupWorkbench {
   display: grid;
   grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);

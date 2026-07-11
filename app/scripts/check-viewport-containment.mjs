@@ -402,6 +402,10 @@ async function measure(client, label) {
     const profileLoadPanelRect = profileLoadPanel?.getBoundingClientRect() ?? null;
     const loadedProfileSummaryPanel = document.querySelector('.setupMode-library .loadedProfileSummaryPanel');
     const loadedProfileSummaryPanelRect = loadedProfileSummaryPanel?.getBoundingClientRect() ?? null;
+    const customProfileAttributePane = document.querySelector('.setupMode-profiles .customProfileAttributePane');
+    const customProfileAttributePaneRect = customProfileAttributePane?.getBoundingClientRect() ?? null;
+    const customProfilePreviewDesk = document.querySelector('.setupMode-profiles .customProfilePreviewDesk');
+    const customProfilePreviewDeskRect = customProfilePreviewDesk?.getBoundingClientRect() ?? null;
     window.scrollTo(9999, 9999);
     await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
     const movedX = window.scrollX;
@@ -486,6 +490,11 @@ async function measure(client, label) {
       visibleLoadedProfileSummaryPanelCount: visibleCount('.setupMode-library .loadedProfileSummaryPanel'),
       profileLoadPanelWidth: profileLoadPanelRect ? Math.round(profileLoadPanelRect.width) : 0,
       loadedProfileSummaryPanelWidth: loadedProfileSummaryPanelRect ? Math.round(loadedProfileSummaryPanelRect.width) : 0,
+      visibleCustomProfileWorkbenchCount: visibleCount('.setupMode-profiles .customProfileWorkbench'),
+      customProfileAttributePaneWidth: customProfileAttributePaneRect ? Math.round(customProfileAttributePaneRect.width) : 0,
+      customProfilePreviewDeskWidth: customProfilePreviewDeskRect ? Math.round(customProfilePreviewDeskRect.width) : 0,
+      visibleCustomProfileActionCount: visibleCount('.setupMode-profiles .customProfileActions button'),
+      visibleCustomProfileDmxMapCount: visibleCount('.setupMode-profiles .customProfileDmxMap'),
       visibleDmxGridSummaryCount: visibleCount('.dmxGridSummary'),
       visibleFixtureSetupEditorCount: visibleCount('.fixtureSetupEditor'),
       visibleUseProfileForPatchButtonCount: [...document.querySelectorAll('.fixtureSetupEditor button')]
@@ -903,6 +912,15 @@ function hasExpectedSetupSurface(result) {
       result.visibleLoadedProfileSummaryPanelCount >= 1 &&
       result.profileLoadPanelWidth >= 250 &&
       result.loadedProfileSummaryPanelWidth >= 760
+    );
+  }
+  if (result.label.startsWith("setup-profiles-")) {
+    return (
+      result.visibleCustomProfileWorkbenchCount >= 1 &&
+      result.customProfileAttributePaneWidth >= 460 &&
+      result.customProfilePreviewDeskWidth >= 420 &&
+      result.visibleCustomProfileActionCount >= 3 &&
+      result.visibleCustomProfileDmxMapCount >= 1
     );
   }
   if (result.label.startsWith("setup-patch-")) {

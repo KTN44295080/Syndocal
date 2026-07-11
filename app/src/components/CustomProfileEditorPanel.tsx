@@ -53,8 +53,15 @@ export function CustomProfileEditorPanel(props: CustomProfileEditorPanelProps) {
 
   return (
     <div class="customProfileForm">
-      <h3>Custom Profile</h3>
-      <div class="split">
+      <header class="customProfileWorkspaceHeader">
+        <h3>Custom Profile</h3>
+        <div class="buttonRow customProfileActions">
+          <button onClick={props.onLoad}>Load</button>
+          <button onClick={props.onSave} disabled={!canCreate()}>Save</button>
+          <button class="primary" onClick={props.onCreate} disabled={!canCreate()}>Create Profile</button>
+        </div>
+      </header>
+      <div class="customProfileMetadataGrid">
         <label>
           Maker
           <input value={props.manufacturer} onInput={(event) => props.onManufacturer(event.currentTarget.value)} />
@@ -63,20 +70,25 @@ export function CustomProfileEditorPanel(props: CustomProfileEditorPanelProps) {
           Name
           <input value={props.profileName} onInput={(event) => props.onProfileName(event.currentTarget.value)} />
         </label>
+        <label>
+          Mode
+          <input value={props.modeName} onInput={(event) => props.onModeName(event.currentTarget.value)} />
+        </label>
+        <label class="customProfileRawAttributes">
+          Raw Attributes
+          <input
+            value={props.attributesText}
+            onInput={(event) => props.onAttributesText(event.currentTarget.value)}
+            placeholder="Dimmer@1:8, Pan@2:16, Tilt@4:16, ColorRed@6:8"
+          />
+        </label>
       </div>
-      <label>
-        Mode
-        <input value={props.modeName} onInput={(event) => props.onModeName(event.currentTarget.value)} />
-      </label>
-      <label>
-        Attributes
-        <input
-          value={props.attributesText}
-          onInput={(event) => props.onAttributesText(event.currentTarget.value)}
-          placeholder="Dimmer@1:8, Pan@2:16, Tilt@4:16, ColorRed@6:8"
-        />
-      </label>
-      <div class="customProfileEditor">
+      <div class="customProfileWorkbench">
+        <section class="customProfileEditor customProfileAttributePane">
+          <div class="customProfilePreviewHeader">
+            <strong>Attributes</strong>
+            <span>{props.drafts.length} control(s)</span>
+          </div>
         <div class="customProfileTemplateGrid" aria-label="Custom profile attribute templates">
           <For each={props.templates}>
             {(template) => (
@@ -173,6 +185,8 @@ export function CustomProfileEditorPanel(props: CustomProfileEditorPanelProps) {
             Clear
           </button>
         </div>
+        </section>
+        <aside class="customProfilePreviewDesk">
         <div class="customProfileDmxMap">
           <div class="customProfilePreviewHeader">
             <strong>DMX Map</strong>
@@ -205,8 +219,7 @@ export function CustomProfileEditorPanel(props: CustomProfileEditorPanelProps) {
             </For>
           </div>
         </div>
-      </div>
-      <div class={`customProfilePreview ${props.preview.errors.length > 0 ? "bad" : ""}`}>
+        <div class={`customProfilePreview ${props.preview.errors.length > 0 ? "bad" : ""}`}>
         <div class="customProfilePreviewHeader">
           <strong>DMX Footprint</strong>
           <span>{props.preview.footprint} ch</span>
@@ -229,15 +242,8 @@ export function CustomProfileEditorPanel(props: CustomProfileEditorPanelProps) {
           </For>
         </div>
       </div>
-      <div class="buttonRow">
-        <button onClick={props.onCreate} disabled={!canCreate()}>
-          Create Custom Profile
-        </button>
-        <button onClick={props.onSave} disabled={!canCreate()}>
-          Save Custom
-        </button>
+        </aside>
       </div>
-      <button onClick={props.onLoad}>Load Custom Profile</button>
     </div>
   );
 }
