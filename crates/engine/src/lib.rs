@@ -19601,4 +19601,90 @@ mod tests {
 
         assert!((normalized - 0.125).abs() < 0.001, "{normalized}");
     }
+
+    #[test]
+    fn large_show_loads_200_fixtures_across_8_universes_and_100_cues() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let fixtures = (0..200u64)
+            .map(|index| {
+                let mut fixture = sample_patched_fixture(
+                    index + 1,
+                    &format!("Stress Fixture {}", index + 1),
+                    ((index % 25) * 4 + 1) as u16,
+                );
+                fixture.universe = (index / 25) as u16;
+                fixture.position = Vec3 {
+                    x: (index % 25) as f32 - 12.0,
+                    y: 4.0,
+                    z: (index / 25) as f32 - 3.5,
+                };
+                fixture
+            })
+            .collect::<Vec<_>>();
+        let cues = (0..100u64)
+            .map(|cue_index| CueSummary {
+                id: cue_index + 1,
+                label: format!("Stress Cue {}", cue_index + 1),
+                fade_ms: 250,
+                targets: fixtures
+                    .iter()
+                    .map(|fixture| CueFixtureTarget {
+                        fixture_id: fixture.id,
+                        values: vec![AttributeValueSummary {
+                            attribute: "Dimmer".to_string(),
+                            value: ((cue_index * 661) % 65_536) as u16,
+                        }],
+                    })
+                    .collect(),
+                video_targets: Vec::new(),
+                video_output_targets: Vec::new(),
+                node_graph_targets: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.fixtures = fixtures;
+        snapshot.cues = cues;
+        snapshot.output.enabled = false;
+        snapshot.dmx_outputs = vec![snapshot.output.clone()];
+
+        let load_started = Instant::now();
+        engine
+            .send(EngineCommand::LoadProjectSnapshot(snapshot))
+            .unwrap();
+        let mut loaded = engine.snapshot();
+        for _ in 0..100 {
+            if loaded.fixtures.len() == 200 && loaded.cues.len() == 100 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+            loaded = engine.snapshot();
+        }
+        let load_elapsed = load_started.elapsed();
+        assert_eq!(loaded.fixtures.len(), 200);
+        assert_eq!(loaded.cues.len(), 100);
+        assert!(
+            load_elapsed < Duration::from_secs(2),
+            "large show load took {load_elapsed:?}"
+        );
+
+        engine.send(EngineCommand::TriggerCue(100)).unwrap();
+        for _ in 0..100 {
+            loaded = engine.snapshot();
+            if loaded.active_cue_id == Some(100) && loaded.dmx_previews.len() >= 8 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(loaded.active_cue_id, Some(100));
+        assert_eq!(loaded.dmx_previews.len(), 8);
+        assert!(loaded
+            .dmx_previews
+            .iter()
+            .all(|preview| preview.values.len() == 512));
+        assert_eq!(loaded.telemetry.queue_push_failure_count, 0);
+        assert_eq!(loaded.telemetry.command_drain_limit_hit_count, 0);
+    }
 }
