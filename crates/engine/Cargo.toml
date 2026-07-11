@@ -10,3 +10,6 @@ io.workspace = true
 protocol.workspace = true
 thiserror.workspace = true
 video.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

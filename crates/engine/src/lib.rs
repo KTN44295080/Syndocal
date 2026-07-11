@@ -41,7 +41,91 @@ const ENGINE_QUEUE_CAPACITY: usize = 4096;
 const COMMANDS_PER_TICK_LIMIT: usize = 512;
 const DMX_TICK_INTERVAL: Duration = Duration::from_micros(22_727);
 const LOW_LATENCY_DMX_TICK_THRESHOLD: Duration = Duration::from_micros(5_000);
+const TICK_SPIN_THRESHOLD: Duration = Duration::from_millis(1);
 const JITTER_PERCENTILE_WINDOW: usize = 256;
+
+#[cfg(target_os = "windows")]
+mod realtime_thread {
+    use std::ffi::c_void;
+
+    type Handle = *mut c_void;
+    const AVRT_PRIORITY_CRITICAL: i32 = 2;
+
+    #[link(name = "Avrt")]
+    extern "system" {
+        fn AvSetMmThreadCharacteristicsW(task_name: *const u16, task_index: *mut u32) -> Handle;
+        fn AvSetMmThreadPriority(handle: Handle, priority: i32) -> i32;
+        fn AvRevertMmThreadCharacteristics(handle: Handle) -> i32;
+    }
+
+    #[link(name = "Winmm")]
+    extern "system" {
+        fn timeBeginPeriod(period: u32) -> u32;
+        fn timeEndPeriod(period: u32) -> u32;
+    }
+
+    pub struct Guard {
+        mmcss_handle: Handle,
+        timer_period_enabled: bool,
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            unsafe {
+                if !self.mmcss_handle.is_null() {
+                    AvRevertMmThreadCharacteristics(self.mmcss_handle);
+                }
+                if self.timer_period_enabled {
+                    timeEndPeriod(1);
+                }
+            }
+        }
+    }
+
+    pub fn configure() -> Guard {
+        let timer_period_enabled = unsafe { timeBeginPeriod(1) == 0 };
+        let task_name = "Pro Audio\0".encode_utf16().collect::<Vec<_>>();
+        let mut task_index = 0_u32;
+        let mmcss_handle =
+            unsafe { AvSetMmThreadCharacteristicsW(task_name.as_ptr(), &mut task_index) };
+        if !mmcss_handle.is_null() {
+            unsafe {
+                AvSetMmThreadPriority(mmcss_handle, AVRT_PRIORITY_CRITICAL);
+            }
+        }
+        Guard {
+            mmcss_handle,
+            timer_period_enabled,
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod realtime_thread {
+    pub struct Guard;
+
+    #[link(name = "System")]
+    extern "C" {
+        fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
+    }
+
+    pub fn configure() -> Guard {
+        const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
+        unsafe {
+            pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+        }
+        Guard
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+mod realtime_thread {
+    pub struct Guard;
+
+    pub fn configure() -> Guard {
+        Guard
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum EngineError {
@@ -608,6 +692,7 @@ impl EngineHandle {
         thread::Builder::new()
             .name("syndocal-engine".to_string())
             .spawn(move || {
+                let _realtime_guard = realtime_thread::configure();
                 let mut runtime =
                     EngineRuntime::new_with_shared_telemetry(output, runtime_shared_telemetry);
                 runtime.run(runtime_queue, runtime_wake, runtime_snapshot);
@@ -1044,6 +1129,7 @@ struct EngineRuntime {
     command_to_dmx_tick_latency_window_len: usize,
     command_to_dmx_tick_latency_window_index: usize,
     low_latency_dmx_tick_requested: bool,
+    low_latency_dmx_tick_advanced: bool,
     last_dmx_output_tick_at: Option<Instant>,
     last_dmx_send_interval_us: u64,
     dmx_send_interval_min_us: u64,
@@ -1169,6 +1255,7 @@ impl EngineRuntime {
             command_to_dmx_tick_latency_window_len: 0,
             command_to_dmx_tick_latency_window_index: 0,
             low_latency_dmx_tick_requested: false,
+            low_latency_dmx_tick_advanced: false,
             last_dmx_output_tick_at: None,
             last_dmx_send_interval_us: 0,
             dmx_send_interval_min_us: 0,
@@ -1353,6 +1440,8 @@ impl EngineRuntime {
         self.low_latency_dmx_tick_advance_count = 0;
         self.low_latency_dmx_tick_defer_count = 0;
         self.low_latency_dmx_tick_defer_recorded = false;
+        self.low_latency_dmx_tick_requested = false;
+        self.low_latency_dmx_tick_advanced = false;
         self.last_packet_bytes = 0;
         self.last_dmx_output_count = 0;
         self.last_dmx_send_success_count = 0;
@@ -1562,10 +1651,18 @@ impl EngineRuntime {
             }
 
             let sleep_for = next_tick.saturating_duration_since(Instant::now());
-            observed_wake_generation = wake.wait_for_command_or_timeout(
-                observed_wake_generation,
-                sleep_for.min(Duration::from_millis(1)),
-            );
+            if sleep_for > TICK_SPIN_THRESHOLD {
+                observed_wake_generation = wake.wait_for_command_or_timeout(
+                    observed_wake_generation,
+                    sleep_for
+                        .saturating_sub(TICK_SPIN_THRESHOLD)
+                        .min(Duration::from_millis(1)),
+                );
+            } else {
+                while Instant::now() < next_tick {
+                    std::hint::spin_loop();
+                }
+            }
         }
     }
 
@@ -3376,6 +3473,7 @@ impl EngineRuntime {
             self.low_latency_dmx_tick_advance_count =
                 self.low_latency_dmx_tick_advance_count.saturating_add(1);
             self.low_latency_dmx_tick_defer_recorded = false;
+            self.low_latency_dmx_tick_advanced = true;
             *next_tick = now;
         } else if !self.low_latency_dmx_tick_defer_recorded {
             self.low_latency_dmx_tick_defer_count =
@@ -3388,9 +3486,28 @@ impl EngineRuntime {
         if !self.has_enabled_dmx_output() {
             return true;
         }
+        if self.enabled_dmx_outputs_are_network_only() {
+            return true;
+        }
         self.last_dmx_output_tick_at
             .map(|last_tick| now.saturating_duration_since(last_tick) >= DMX_TICK_INTERVAL)
             .unwrap_or(true)
+    }
+
+    fn enabled_dmx_outputs_are_network_only(&self) -> bool {
+        let main_is_network = !self.output.enabled
+            || matches!(
+                self.output.protocol,
+                DmxOutputProtocol::ArtNet | DmxOutputProtocol::Sacn
+            );
+        main_is_network
+            && self.additional_dmx_outputs.iter().all(|output| {
+                !output.config.enabled
+                    || matches!(
+                        output.config.protocol,
+                        DmxOutputProtocol::ArtNet | DmxOutputProtocol::Sacn
+                    )
+            })
     }
 
     fn has_enabled_dmx_output(&self) -> bool {
@@ -3403,10 +3520,13 @@ impl EngineRuntime {
 
     fn tick(&mut self, queue_depth: usize, snapshot: &RwLock<EngineSnapshot>) {
         let now = Instant::now();
+        let intentional_early_tick = std::mem::take(&mut self.low_latency_dmx_tick_advanced);
         self.last_tick_interval = now.saturating_duration_since(self.last_tick);
         self.last_tick = now;
         self.frame_counter = self.frame_counter.wrapping_add(1);
-        self.record_tick_jitter();
+        if !intentional_early_tick {
+            self.record_tick_jitter();
+        }
         self.record_command_to_dmx_tick_latency(now);
         self.advance_timeline(now);
         self.apply_timeline_automations();
@@ -3457,7 +3577,11 @@ impl EngineRuntime {
             self.record_dmx_route_send_result(route_index, config.universe, result);
         }
         if self.last_dmx_output_count > 0 {
-            self.record_dmx_output_tick(now);
+            if intentional_early_tick {
+                self.record_dmx_output_tick_kind(now, true);
+            } else {
+                self.record_dmx_output_tick(now);
+            }
         }
 
         if let Ok(mut guard) = snapshot.write() {
@@ -3522,19 +3646,25 @@ impl EngineRuntime {
     }
 
     fn record_dmx_output_tick(&mut self, tick_at: Instant) {
+        self.record_dmx_output_tick_kind(tick_at, false);
+    }
+
+    fn record_dmx_output_tick_kind(&mut self, tick_at: Instant, intentional_early_tick: bool) {
         if let Some(previous_tick) = self.last_dmx_output_tick_at {
-            let interval_us = tick_at
-                .saturating_duration_since(previous_tick)
-                .as_micros()
-                .min(u64::MAX as u128) as u64;
-            self.last_dmx_send_interval_us = interval_us;
-            self.dmx_send_interval_min_us = if self.dmx_send_interval_samples == 0 {
-                interval_us
-            } else {
-                self.dmx_send_interval_min_us.min(interval_us)
-            };
-            self.dmx_send_interval_max_us = self.dmx_send_interval_max_us.max(interval_us);
-            self.dmx_send_interval_samples = self.dmx_send_interval_samples.saturating_add(1);
+            if !intentional_early_tick {
+                let interval_us = tick_at
+                    .saturating_duration_since(previous_tick)
+                    .as_micros()
+                    .min(u64::MAX as u128) as u64;
+                self.last_dmx_send_interval_us = interval_us;
+                self.dmx_send_interval_min_us = if self.dmx_send_interval_samples == 0 {
+                    interval_us
+                } else {
+                    self.dmx_send_interval_min_us.min(interval_us)
+                };
+                self.dmx_send_interval_max_us = self.dmx_send_interval_max_us.max(interval_us);
+                self.dmx_send_interval_samples = self.dmx_send_interval_samples.saturating_add(1);
+            }
         }
         self.last_dmx_output_tick_at = Some(tick_at);
     }
@@ -3626,6 +3756,7 @@ impl EngineRuntime {
         self.command_to_dmx_tick_latency_window_len = 0;
         self.command_to_dmx_tick_latency_window_index = 0;
         self.low_latency_dmx_tick_requested = false;
+        self.low_latency_dmx_tick_advanced = false;
         self.last_packet_bytes = 0;
         self.last_dmx_output_tick_at = None;
         self.last_dmx_send_interval_us = 0;
@@ -13136,7 +13267,7 @@ mod tests {
     }
 
     #[test]
-    fn low_latency_dmx_tick_respects_enabled_output_interval() {
+    fn low_latency_dmx_tick_flushes_network_routes_but_guards_serial_interval() {
         let mut runtime = EngineRuntime::new(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
@@ -13149,6 +13280,9 @@ mod tests {
 
         runtime.output.enabled = true;
         runtime.last_dmx_output_tick_at = Some(now);
+        assert!(runtime.can_advance_low_latency_dmx_tick(now + Duration::from_millis(1)));
+
+        runtime.output.protocol = DmxOutputProtocol::EnttecUsbPro;
         assert!(!runtime
             .can_advance_low_latency_dmx_tick(now + DMX_TICK_INTERVAL - Duration::from_micros(1)));
         assert!(runtime.can_advance_low_latency_dmx_tick(now + DMX_TICK_INTERVAL));
@@ -13157,6 +13291,7 @@ mod tests {
         runtime.additional_dmx_outputs = vec![RuntimeDmxOutput {
             config: DmxOutputConfig {
                 enabled: true,
+                protocol: DmxOutputProtocol::EnttecOpenDmx,
                 ..DmxOutputConfig::default()
             },
             sender: None,
@@ -13191,6 +13326,7 @@ mod tests {
 
         runtime.low_latency_dmx_tick_requested = true;
         runtime.output.enabled = true;
+        runtime.output.protocol = DmxOutputProtocol::EnttecUsbPro;
         runtime.last_dmx_output_tick_at = Some(now);
         let mut guarded_next_tick = now + DMX_TICK_INTERVAL;
         runtime.maybe_advance_low_latency_dmx_tick(
@@ -13244,6 +13380,23 @@ mod tests {
         let snapshot = runtime.build_snapshot(0);
         assert_eq!(snapshot.telemetry.last_dmx_send_interval_us, 30_000);
         assert_eq!(snapshot.telemetry.dmx_send_interval_samples, 2);
+    }
+
+    #[test]
+    fn intentional_network_flush_does_not_pollute_periodic_interval_telemetry() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig::default());
+        let now = Instant::now();
+
+        runtime.record_dmx_output_tick(now);
+        runtime.record_dmx_output_tick_kind(now + Duration::from_millis(2), true);
+        assert_eq!(runtime.dmx_send_interval_samples, 0);
+
+        runtime.record_dmx_output_tick(now + Duration::from_millis(2) + DMX_TICK_INTERVAL);
+        assert_eq!(runtime.dmx_send_interval_samples, 1);
+        assert_eq!(
+            runtime.last_dmx_send_interval_us,
+            DMX_TICK_INTERVAL.as_micros() as u64
+        );
     }
 
     #[test]
