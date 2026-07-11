@@ -3999,24 +3999,26 @@ export default function App() {
     return window.confirm(`Discard unsaved changes and ${actionLabel}?`);
   };
 
-  const applyEngineSnapshot = (next: EngineSnapshot) => {
+  const applyEngineSnapshot = (next: EngineSnapshot, syncProjectState = true) => {
     setSnapshot(next);
-    const signature = projectSnapshotSignature(next);
-    const cleanSignature = cleanProjectSignature();
-    if (cleanSignature === null) {
-      setCleanProjectSignature(signature);
-      setProjectDirty(false);
-    } else {
-      setProjectDirty(signature !== cleanSignature);
+    if (syncProjectState) {
+      const signature = projectSnapshotSignature(next);
+      const cleanSignature = cleanProjectSignature();
+      if (cleanSignature === null) {
+        setCleanProjectSignature(signature);
+        setProjectDirty(false);
+      } else {
+        setProjectDirty(signature !== cleanSignature);
+      }
+      setOutput(next.output);
+      setDmxOutputRoutes(next.dmx_outputs.length > 0 ? next.dmx_outputs : [next.output]);
+      setFaderValues((current) => ({ ...current, ...snapshotFaderValues(next) }));
+      syncVideoOutputConfigDrafts(next.video.outputs);
+      syncCueMetadataDrafts(next.cues);
+      syncTimelineEventDrafts(next.timeline.events);
+      syncTimelineAutomationDrafts(next.timeline.automations);
+      syncTimelineVideoAutomationDrafts(next.timeline.video_automations);
     }
-    setOutput(next.output);
-    setDmxOutputRoutes(next.dmx_outputs.length > 0 ? next.dmx_outputs : [next.output]);
-    setFaderValues((current) => ({ ...current, ...snapshotFaderValues(next) }));
-    syncVideoOutputConfigDrafts(next.video.outputs);
-    syncCueMetadataDrafts(next.cues);
-    syncTimelineEventDrafts(next.timeline.events);
-    syncTimelineAutomationDrafts(next.timeline.automations);
-    syncTimelineVideoAutomationDrafts(next.timeline.video_automations);
     const groupId = selectedFixtureGroupFilter();
     if (groupId && !next.fixtures.some((fixture) => fixture.group_ids.includes(groupId))) {
       setSelectedFixtureGroupFilter(null);
@@ -4039,10 +4041,10 @@ export default function App() {
     }
   };
 
-  const refreshSnapshot = async () => {
+  const refreshSnapshot = async (syncProjectState = true) => {
     try {
       const next = await invoke<EngineSnapshot>("get_snapshot");
-      applyEngineSnapshot(next);
+      applyEngineSnapshot(next, syncProjectState);
       return next;
     } catch (error) {
       setMessage(String(error));
@@ -4050,12 +4052,23 @@ export default function App() {
     }
   };
 
-  const timer = isTauriRuntime() ? window.setInterval(refreshSnapshot, 250) : null;
+  let snapshotPollTimer: number | null = null;
+  const scheduleSnapshotPoll = () => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+    const intervalMs = document.hidden ? 2_000 : workspaceTab() === "setup" ? 1_000 : 250;
+    snapshotPollTimer = window.setTimeout(async () => {
+      await refreshSnapshot(false);
+      scheduleSnapshotPoll();
+    }, intervalMs);
+  };
+  scheduleSnapshotPoll();
   const telemetryReportTimer = isTauriRuntime() ? window.setInterval(refreshEngineTelemetryReport, 1000) : null;
   const recoveryTimer = isTauriRuntime() ? window.setInterval(() => void saveProjectRecovery(), 10_000) : null;
   onCleanup(() => {
-    if (timer !== null) {
-      window.clearInterval(timer);
+    if (snapshotPollTimer !== null) {
+      window.clearTimeout(snapshotPollTimer);
     }
     if (telemetryReportTimer !== null) {
       window.clearInterval(telemetryReportTimer);
@@ -8088,6 +8101,7 @@ export default function App() {
       </Show>
 
       <section class={`layout ${touchLayoutClass()}`}>
+        <Show when={workspaceTab() === "control"}>
         <section class="panel liveControlPanel controlPanel">
           <div class="panelHeader">
             <h2>Live Desk</h2>
@@ -8429,6 +8443,8 @@ export default function App() {
             <button onClick={() => selectSetupMode("mapping")}>Edit Map</button>
           </div>
         </section>
+        </Show>
+        <Show when={workspaceTab() === "touch"}>
         <section class="panel touchPanel touchCuePanel">
           <div class="panelHeader">
             <h2>Touch Cues</h2>
@@ -8788,6 +8804,8 @@ export default function App() {
           onFadeOutputOpacity={fadeVideoOutputOpacity}
           onOpenOutputWindow={openVideoOutputWindow}
         />
+        </Show>
+        <Show when={workspaceTab() === "setup" && ["library", "profiles", "patch"].includes(setupSubTab())}>
         <aside
           class={setupPanelClass("panel setup setupPanel", ["library", "profiles", "patch"])}
           ref={registerSetupPanel(["library", "profiles"])}
@@ -8900,7 +8918,9 @@ export default function App() {
             )}
           </Show>
         </aside>
+        </Show>
 
+        <Show when={workspaceTab() === "setup" && ["patch", "mapping"].includes(setupSubTab())}>
         <SetupMappingWorkspace
           className={setupPanelClass("panel fixtures setupPanel", ["patch", "mapping"])}
           panelRef={registerSetupPanel(["patch"])}
@@ -9200,7 +9220,9 @@ export default function App() {
           hotkeyHelpOpen={mappingHotkeyHelpOpen()}
           onCloseHotkeyHelp={() => setMappingHotkeyHelpOpen(false)}
         />
+        </Show>
 
+        <Show when={workspaceTab() === "setup" && ["mapping", "output"].includes(setupSubTab())}>
         <SetupVideoPanel
           className={setupPanelClass("panel videoSetupPanel setupPanel", ["mapping", "output"])}
           panelRef={registerSetupPanel(["mapping"])}
@@ -9262,7 +9284,9 @@ export default function App() {
           onSyncWindow={syncVideoOutputWindow}
           onRemoveOutput={removeVideoOutput}
         />
+        </Show>
 
+        <Show when={workspaceTab() === "control"}>
         <VideoControlPanel
           mixer={controlMode() === "mixer"}
           layerCount={snapshot().video.layers.length}
@@ -9941,7 +9965,9 @@ export default function App() {
             onUniverseChange={setRawDmxUniverse}
           />
         </section>
+        </Show>
 
+        <Show when={workspaceTab() === "control" || (workspaceTab() === "setup" && setupSubTab() === "output")}>
         <aside
           class={setupPanelClass("panel output setupPanel controlPanel", ["output"])}
           ref={registerSetupPanel(["output"])}
@@ -10123,6 +10149,7 @@ export default function App() {
             onStop={stopRemoteControl}
           />
         </aside>
+        </Show>
       </section>
 
       <AppStatusLine status={appStatus()} />
