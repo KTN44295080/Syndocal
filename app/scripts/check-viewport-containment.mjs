@@ -398,6 +398,10 @@ async function measure(client, label) {
     const videoSetupSidebarRect = videoSetupSidebar?.getBoundingClientRect() ?? null;
     const videoSetupOutputDesk = document.querySelector('.videoSetupPanel .videoSetupOutputDesk');
     const videoSetupOutputDeskRect = videoSetupOutputDesk?.getBoundingClientRect() ?? null;
+    const profileLoadPanel = document.querySelector('.setupMode-library .profileLoadPanel');
+    const profileLoadPanelRect = profileLoadPanel?.getBoundingClientRect() ?? null;
+    const loadedProfileSummaryPanel = document.querySelector('.setupMode-library .loadedProfileSummaryPanel');
+    const loadedProfileSummaryPanelRect = loadedProfileSummaryPanel?.getBoundingClientRect() ?? null;
     window.scrollTo(9999, 9999);
     await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
     const movedX = window.scrollX;
@@ -478,6 +482,10 @@ async function measure(client, label) {
       compactMappingStageHeight: compactMappingStageRect ? Math.round(compactMappingStageRect.height) : 0,
       videoSetupSidebarWidth: videoSetupSidebarRect ? Math.round(videoSetupSidebarRect.width) : 0,
       videoSetupOutputDeskWidth: videoSetupOutputDeskRect ? Math.round(videoSetupOutputDeskRect.width) : 0,
+      visibleProfileLoadPanelCount: visibleCount('.setupMode-library .profileLoadPanel'),
+      visibleLoadedProfileSummaryPanelCount: visibleCount('.setupMode-library .loadedProfileSummaryPanel'),
+      profileLoadPanelWidth: profileLoadPanelRect ? Math.round(profileLoadPanelRect.width) : 0,
+      loadedProfileSummaryPanelWidth: loadedProfileSummaryPanelRect ? Math.round(loadedProfileSummaryPanelRect.width) : 0,
       visibleDmxGridSummaryCount: visibleCount('.dmxGridSummary'),
       visibleFixtureSetupEditorCount: visibleCount('.fixtureSetupEditor'),
       visibleUseProfileForPatchButtonCount: [...document.querySelectorAll('.fixtureSetupEditor button')]
@@ -889,6 +897,14 @@ function hasExpectedControlModeSurface(result) {
 }
 
 function hasExpectedSetupSurface(result) {
+  if (result.label.startsWith("setup-library-")) {
+    return (
+      result.visibleProfileLoadPanelCount >= 1 &&
+      result.visibleLoadedProfileSummaryPanelCount >= 1 &&
+      result.profileLoadPanelWidth >= 250 &&
+      result.loadedProfileSummaryPanelWidth >= 760
+    );
+  }
   if (result.label.startsWith("setup-patch-")) {
     return (
       result.visiblePatchActionRowCount >= 1 &&

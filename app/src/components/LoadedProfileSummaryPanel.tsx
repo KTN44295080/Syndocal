@@ -33,16 +33,18 @@ interface LoadedProfileSummaryPanelProps {
 
 export function LoadedProfileSummaryPanel(props: LoadedProfileSummaryPanelProps) {
   return (
-    <>
-      <strong>{props.profile.manufacturer} {props.profile.name}</strong>
-      <span>{props.profile.dmx_modes.length} mode(s), {props.profile.geometries.length} geometry node(s)</span>
+    <section class="loadedProfileSummaryPanel">
+      <header class="loadedProfileHeader">
+        <strong>{props.profile.manufacturer} {props.profile.name}</strong>
+        <span>{props.profile.dmx_modes.length} mode(s) · {props.profile.geometries.length} geometry node(s)</span>
+      </header>
       <Show when={props.profile.warnings.length > 0}>
         <div class="profileWarningBanner">
           <strong>{props.profile.warnings.length} warning{props.profile.warnings.length === 1 ? "" : "s"}</strong>
           <span>Review before patching this profile.</span>
         </div>
       </Show>
-      <label>
+      <label class="loadedProfileModeField">
         Mode
         <select value={props.selectedMode} onInput={(event) => props.onSelectedMode(event.currentTarget.value)}>
           <For each={props.profile.dmx_modes}>
@@ -52,7 +54,8 @@ export function LoadedProfileSummaryPanel(props: LoadedProfileSummaryPanelProps)
       </label>
       <Show when={props.selectedModeSummary}>
         {(mode) => (
-          <>
+          <div class="loadedProfileDetailGrid">
+            <div class="loadedProfileChannelPane">
             <div class="profileDmxSummary">
               <div class="customProfilePreviewHeader">
                 <strong>Mode DMX Map</strong>
@@ -103,6 +106,8 @@ export function LoadedProfileSummaryPanel(props: LoadedProfileSummaryPanelProps)
                 </div>
               </div>
             </Show>
+            </div>
+            <div class="loadedProfileGeometryPane">
             <div class="profileGeometrySummary">
               <div class="customProfilePreviewHeader">
                 <strong>Geometry</strong>
@@ -149,9 +154,10 @@ export function LoadedProfileSummaryPanel(props: LoadedProfileSummaryPanelProps)
                 </ul>
               </Show>
             </div>
-          </>
+            </div>
+          </div>
         )}
       </Show>
-    </>
+    </section>
   );
 }

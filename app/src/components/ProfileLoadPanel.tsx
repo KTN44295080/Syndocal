@@ -11,29 +11,38 @@ interface ProfileLoadPanelProps {
 
 export function ProfileLoadPanel(props: ProfileLoadPanelProps) {
   return (
-    <>
-      <h2>{props.title}</h2>
-      <label>
-        GDTF path
-        <input
-          value={props.gdtfPath}
-          onInput={(event) => props.onGdtfPath(event.currentTarget.value)}
-          placeholder="C:\\path\\fixture.gdtf"
-        />
-      </label>
-      <div class="buttonRow">
-        <button onClick={props.onBrowse}>Browse</button>
-        <button class="primary" onClick={props.onLoadGdtf}>Load GDTF</button>
+    <section class="profileLoadPanel">
+      <header class="profileLoadHeader">
+        <h2>{props.title}</h2>
+        <span>GDTF</span>
+      </header>
+      <div class="profileSourceBlock">
+        <strong>Local Profile</strong>
+        <label>
+          File
+          <input
+            value={props.gdtfPath}
+            onInput={(event) => props.onGdtfPath(event.currentTarget.value)}
+            placeholder="C:\\path\\fixture.gdtf"
+          />
+        </label>
+        <div class="buttonRow">
+          <button onClick={props.onBrowse}>Browse</button>
+          <button class="primary" onClick={props.onLoadGdtf}>Load</button>
+        </div>
       </div>
-      <label>
-        GDTF Share URL
-        <input
-          value={props.gdtfShareUrl}
-          onInput={(event) => props.onGdtfShareUrl(event.currentTarget.value)}
-          placeholder="https://gdtf-share.com/.../fixture.gdtf"
-        />
-      </label>
-      <button onClick={props.onDownloadGdtf}>Download GDTF URL</button>
-    </>
+      <div class="profileSourceBlock">
+        <strong>GDTF Share</strong>
+        <label>
+          Profile URL
+          <input
+            value={props.gdtfShareUrl}
+            onInput={(event) => props.onGdtfShareUrl(event.currentTarget.value)}
+            placeholder="https://gdtf-share.com/.../fixture.gdtf"
+          />
+        </label>
+        <button onClick={props.onDownloadGdtf}>Download</button>
+      </div>
+    </section>
   );
 }
