@@ -29,6 +29,36 @@ export interface DmxAddressCell {
   plannedConflict: boolean;
 }
 
+interface DmxPatchGridFragment {
+  segment: DmxPatchSegment;
+  row: number;
+  column: number;
+  span: number;
+  continuation: boolean;
+}
+
+const dmxGridColumnCount = 32;
+
+const segmentGridFragments = (segments: DmxPatchSegment[]): DmxPatchGridFragment[] =>
+  segments.flatMap((segment) => {
+    const fragments: DmxPatchGridFragment[] = [];
+    let channel = segment.start;
+    while (channel <= segment.end) {
+      const row = Math.floor((channel - 1) / dmxGridColumnCount) + 1;
+      const column = ((channel - 1) % dmxGridColumnCount) + 1;
+      const rowEnd = Math.min(segment.end, row * dmxGridColumnCount);
+      fragments.push({
+        segment,
+        row,
+        column,
+        span: rowEnd - channel + 1,
+        continuation: channel !== segment.start,
+      });
+      channel = rowEnd + 1;
+    }
+    return fragments;
+  });
+
 interface DmxPatchMapPanelProps {
   activeUniverse: number;
   universeOptions: number[];
@@ -48,6 +78,8 @@ interface DmxPatchMapPanelProps {
 }
 
 export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
+  const gridFragments = () => segmentGridFragments(props.activeMap.segments);
+
   return (
     <>
       <div class="dmxPatchMap">
@@ -127,6 +159,10 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
                           .join(" / ")
                       : `U${props.activeUniverse} A${cell.channel}`
                   }
+                  style={{
+                    "grid-column": `${((cell.channel - 1) % dmxGridColumnCount) + 1}`,
+                    "grid-row": `${Math.floor((cell.channel - 1) / dmxGridColumnCount) + 1}`,
+                  }}
                   onClick={() => props.onAddressCell(cell)}
                   aria-label={
                     cell.segment
@@ -135,6 +171,26 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
                   }
                 >
                   {cell.channel}
+                </button>
+              )}
+            </For>
+            <For each={gridFragments()}>
+              {(fragment) => (
+                <button
+                  class={`dmxPatchFixtureBlock ${fragment.segment.fixture.id === props.selectedFixtureId ? "selected" : ""} ${
+                    fragment.span <= 2 ? "tiny" : fragment.span <= 5 ? "narrow" : ""
+                  }`}
+                  style={{
+                    "grid-column": `${fragment.column} / span ${fragment.span}`,
+                    "grid-row": `${fragment.row}`,
+                  }}
+                  title={`${fragment.segment.fixture.label} / A${fragment.segment.start} / ${
+                    fragment.segment.end - fragment.segment.start + 1
+                  }ch`}
+                  onClick={() => props.onSelectFixture(fragment.segment.fixture)}
+                >
+                  <strong>{fragment.continuation ? `> ${fragment.segment.fixture.label}` : fragment.segment.fixture.label}</strong>
+                  <small>A{fragment.segment.start} / {fragment.segment.end - fragment.segment.start + 1}ch</small>
                 </button>
               )}
             </For>

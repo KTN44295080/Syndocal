@@ -13363,6 +13363,76 @@ h3 {
   font-size: 8px;
 }
 
+.dmxPatchFixtureBlock {
+  z-index: 2;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid #9a793c;
+  border-radius: 2px;
+  background: #5a5040;
+  color: #fff;
+  padding: 0 4px;
+  text-align: left;
+}
+
+.dmxPatchFixtureBlock:hover {
+  border-color: #e2bf72;
+  background: #6c604d;
+}
+
+.dmxPatchFixtureBlock.selected {
+  border-color: #ff8b38;
+  background: #704523;
+  box-shadow: inset 0 -2px 0 #ff8b38;
+}
+
+.dmxPatchFixtureBlock strong,
+.dmxPatchFixtureBlock small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dmxPatchFixtureBlock strong {
+  font-size: 8px;
+}
+
+.dmxPatchFixtureBlock small {
+  color: #ddd2c2;
+  font-size: 7px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dmxPatchFixtureBlock.narrow {
+  grid-template-columns: minmax(0, 1fr);
+  padding-inline: 2px;
+}
+
+.dmxPatchFixtureBlock.narrow small,
+.dmxPatchFixtureBlock.tiny small {
+  display: none;
+}
+
+.dmxPatchFixtureBlock.tiny {
+  display: block;
+  padding: 0 1px;
+  text-align: center;
+}
+
+.dmxPatchFixtureBlock.tiny strong {
+  font-size: 0;
+}
+
+.dmxPatchFixtureBlock.tiny strong::first-letter {
+  font-size: 7px;
+}
+
 .layoutSetup .setupIoPanel {
   overflow: auto;
 }

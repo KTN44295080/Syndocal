@@ -466,6 +466,7 @@ async function measure(client, label) {
       dmxAddressCellCount: document.querySelectorAll('.dmxAddressCell').length,
       dmxAddressOccupiedCellCount: document.querySelectorAll('.dmxAddressCell.occupied').length,
       dmxAddressPlannedCellCount: document.querySelectorAll('.dmxAddressCell.planned').length,
+      visibleDmxFixtureBlockCount: visibleCount('.dmxPatchFixtureBlock'),
       visibleDmxGridSummaryCount: visibleCount('.dmxGridSummary'),
       visibleFixtureSetupEditorCount: visibleCount('.fixtureSetupEditor'),
       visibleUseProfileForPatchButtonCount: [...document.querySelectorAll('.fixtureSetupEditor button')]
@@ -888,6 +889,7 @@ function hasExpectedSetupSurface(result) {
       result.dmxAddressCellCount === 512 &&
       result.dmxAddressOccupiedCellCount > 0 &&
       result.dmxAddressPlannedCellCount > 0 &&
+      result.visibleDmxFixtureBlockCount > 0 &&
       result.visibleDmxGridSummaryCount >= 1 &&
       result.visibleFixtureSetupEditorCount >= 1 &&
       result.visibleUseProfileForPatchButtonCount >= 1 &&
@@ -1187,7 +1189,7 @@ async function main() {
         ? ` mappingHelp=${result.visibleMappingHotkeyHelpCount}/${result.mappingHotkeyHelpKeyCount}`
         : "";
       const patchSuffix = result.label.startsWith("setup-patch-")
-        ? ` patch=${result.visiblePatchActionRowCount}/${result.visiblePatchAutoButtonCount}/${result.visiblePatchPrimaryButtonCount}/${result.visiblePatchNextFreeButtonCount}/${result.visiblePatchFootprintCount}/${result.visibleDmxAddressGridCount}/${result.dmxAddressCellCount}/${result.dmxAddressOccupiedCellCount}/${result.dmxAddressPlannedCellCount}/${result.visibleDmxGridSummaryCount}/${result.visibleFixtureSetupEditorCount}/${result.visibleUseProfileForPatchButtonCount}/${result.visibleDuplicateFixtureButtonCount}`
+        ? ` patch=${result.visiblePatchActionRowCount}/${result.visiblePatchAutoButtonCount}/${result.visiblePatchPrimaryButtonCount}/${result.visiblePatchNextFreeButtonCount}/${result.visiblePatchFootprintCount}/${result.visibleDmxAddressGridCount}/${result.dmxAddressCellCount}/${result.dmxAddressOccupiedCellCount}/${result.dmxAddressPlannedCellCount}/${result.visibleDmxFixtureBlockCount}/${result.visibleDmxGridSummaryCount}/${result.visibleFixtureSetupEditorCount}/${result.visibleUseProfileForPatchButtonCount}/${result.visibleDuplicateFixtureButtonCount}`
         : "";
       const outputSetupSuffix = result.label.startsWith("setup-video-")
         ? ` outputSetup=${result.visibleSetupVideoPanelCount}/${result.visibleSetupVideoOutputDeckCount}/${result.visibleSetupVideoOutputActiveDeckCount}/${result.visibleSetupVideoOutputDetailPaneCount}/${result.visibleVideoOutputMappingPanelCount}/${result.visibleProjectorMapEditorCount}/${result.visibleProjectorMapHandleCount}/${result.visibleProjectorKeystoneHandleCount}/${result.visibleProjectorScaleHandleCount}/${result.visibleProjectorRotateHandleCount}/${result.visibleProjectorAspectModeButtonCount}/${result.visibleProjectorAspectPresetButtonCount}/${result.visibleProjectorResetPoseButtonCount}`
