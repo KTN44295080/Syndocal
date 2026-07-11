@@ -53,8 +53,11 @@ const serialProtocolHint = (protocol: DmxOutputConfig["protocol"]) => {
 
 export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
   return (
-    <>
-      <h2>DMX Output</h2>
+    <section class="dmxOutputConfigPanel">
+      <header class="ioDeskHeader">
+        <h2>DMX Output</h2>
+        <span>{props.output.protocol}</span>
+      </header>
       <label class="checkbox">
         <input
           type="checkbox"
@@ -168,6 +171,6 @@ export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
       <button class="primary" onClick={props.onApply}>
         Apply Output
       </button>
-    </>
+    </section>
   );
 }

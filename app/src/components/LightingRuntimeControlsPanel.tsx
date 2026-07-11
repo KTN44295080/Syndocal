@@ -24,7 +24,11 @@ interface LightingRuntimeControlsPanelProps {
 
 export function LightingRuntimeControlsPanel(props: LightingRuntimeControlsPanelProps) {
   return (
-    <>
+    <section class="lightingRuntimeDesk">
+      <header class="ioDeskHeader">
+        <h2>Runtime</h2>
+        <span>{props.clock.source === "MidiClock" ? "MIDI Clock" : props.clock.source}</span>
+      </header>
       <label>
         Lighting Master
         <input
@@ -107,6 +111,6 @@ export function LightingRuntimeControlsPanel(props: LightingRuntimeControlsPanel
           </button>
         </div>
       </div>
-    </>
+    </section>
   );
 }

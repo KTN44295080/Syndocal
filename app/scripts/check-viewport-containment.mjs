@@ -406,6 +406,12 @@ async function measure(client, label) {
     const customProfileAttributePaneRect = customProfileAttributePane?.getBoundingClientRect() ?? null;
     const customProfilePreviewDesk = document.querySelector('.setupMode-profiles .customProfilePreviewDesk');
     const customProfilePreviewDeskRect = customProfilePreviewDesk?.getBoundingClientRect() ?? null;
+    const dmxOutputConfigPanel = document.querySelector('.setupMode-dmx .dmxOutputConfigPanel');
+    const dmxOutputConfigPanelRect = dmxOutputConfigPanel?.getBoundingClientRect() ?? null;
+    const outputDiagnosticsDesk = document.querySelector('.setupMode-dmx .outputDiagnosticsDesk');
+    const outputDiagnosticsDeskRect = outputDiagnosticsDesk?.getBoundingClientRect() ?? null;
+    const lightingRuntimeDesk = document.querySelector('.setupMode-dmx .lightingRuntimeDesk');
+    const lightingRuntimeDeskRect = lightingRuntimeDesk?.getBoundingClientRect() ?? null;
     window.scrollTo(9999, 9999);
     await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
     const movedX = window.scrollX;
@@ -495,6 +501,12 @@ async function measure(client, label) {
       customProfilePreviewDeskWidth: customProfilePreviewDeskRect ? Math.round(customProfilePreviewDeskRect.width) : 0,
       visibleCustomProfileActionCount: visibleCount('.setupMode-profiles .customProfileActions button'),
       visibleCustomProfileDmxMapCount: visibleCount('.setupMode-profiles .customProfileDmxMap'),
+      visibleDmxOutputConfigPanelCount: visibleCount('.setupMode-dmx .dmxOutputConfigPanel'),
+      visibleOutputDiagnosticsDeskCount: visibleCount('.setupMode-dmx .outputDiagnosticsDesk'),
+      visibleLightingRuntimeDeskCount: visibleCount('.setupMode-dmx .lightingRuntimeDesk'),
+      dmxOutputConfigPanelWidth: dmxOutputConfigPanelRect ? Math.round(dmxOutputConfigPanelRect.width) : 0,
+      outputDiagnosticsDeskWidth: outputDiagnosticsDeskRect ? Math.round(outputDiagnosticsDeskRect.width) : 0,
+      lightingRuntimeDeskWidth: lightingRuntimeDeskRect ? Math.round(lightingRuntimeDeskRect.width) : 0,
       visibleDmxGridSummaryCount: visibleCount('.dmxGridSummary'),
       visibleFixtureSetupEditorCount: visibleCount('.fixtureSetupEditor'),
       visibleUseProfileForPatchButtonCount: [...document.querySelectorAll('.fixtureSetupEditor button')]
@@ -921,6 +933,16 @@ function hasExpectedSetupSurface(result) {
       result.customProfilePreviewDeskWidth >= 420 &&
       result.visibleCustomProfileActionCount >= 3 &&
       result.visibleCustomProfileDmxMapCount >= 1
+    );
+  }
+  if (result.label.startsWith("setup-dmx-")) {
+    return (
+      result.visibleDmxOutputConfigPanelCount >= 1 &&
+      result.visibleOutputDiagnosticsDeskCount >= 1 &&
+      result.visibleLightingRuntimeDeskCount >= 1 &&
+      result.dmxOutputConfigPanelWidth >= 250 &&
+      result.outputDiagnosticsDeskWidth >= 420 &&
+      result.lightingRuntimeDeskWidth >= 260
     );
   }
   if (result.label.startsWith("setup-patch-")) {

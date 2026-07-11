@@ -30,7 +30,7 @@ interface OutputDiagnosticsPanelProps {
 
 export function OutputDiagnosticsPanel(props: OutputDiagnosticsPanelProps) {
   return (
-    <>
+    <section class="outputDiagnosticsDesk">
       <DmxTestFramePanel
         protocolLabel={props.protocolLabel}
         channel={props.testChannel}
@@ -56,6 +56,6 @@ export function OutputDiagnosticsPanel(props: OutputDiagnosticsPanelProps) {
         onReset={props.onResetTelemetry}
         onSaveReport={props.onSaveTelemetryReport}
       />
-    </>
+    </section>
   );
 }
