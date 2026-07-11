@@ -17,10 +17,12 @@ use serde::{Deserialize, Serialize};
 mod gpu_compositor;
 mod gpu_surface;
 mod hap_decoder;
+mod libav_decoder;
 
 pub use gpu_compositor::{GpuCompositeError, GpuCompositor};
 pub use gpu_surface::{GpuSurfaceBufferStats, GpuSurfaceError, GpuSurfacePresenter};
 pub use hap_decoder::{HapMovFrameDecoder, PreferredVideoFrameDecoder};
+pub use libav_decoder::LibavFrameDecoder;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum VideoPixelFormat {
@@ -1349,6 +1351,22 @@ pub fn video_runtime_status_with_binaries(
                 label: "Still image decode".to_string(),
                 state: VideoBackendState::Available,
                 detail: "PNG/JPEG decode is built in".to_string(),
+            },
+            VideoBackendStatus {
+                id: "libav".to_string(),
+                label: "In-process general video decode".to_string(),
+                state: if LibavFrameDecoder::is_built() {
+                    VideoBackendState::Available
+                } else {
+                    VideoBackendState::NotBuilt
+                },
+                detail: if LibavFrameDecoder::is_built() {
+                    "libavcodec/libavformat decode is built in for H.264, H.265, and ProRes"
+                        .to_string()
+                } else {
+                    "Build with the libav feature; FFmpeg CLI remains the compatibility path"
+                        .to_string()
+                },
             },
             command_backend_status("ffmpeg", "FFmpeg frame decode", ffmpeg_binary.as_ref()),
             command_backend_status("ffprobe", "FFprobe metadata", ffprobe_binary.as_ref()),

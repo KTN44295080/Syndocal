@@ -115,7 +115,8 @@ CPU プレビューを wgpu 実出力に置き換える。**照明エンジン�
   - [x] M3.3b: HAPのBC圧縮データをCPU RGBA展開せずwgpuテクスチャへ直接アップロードし、HAP Q変換をGPUパスへ移す。(2026-07-11)
     - v1.0 の対象は HAP (BC1)、HAP Alpha (BC3)、HAP Q (YCoCg BC3)。HAP Q Alpha と HAP R/BC7 は素材・仕様・wgpu機能の追加検証が必要なため v1.x 候補とし、未対応形式はCPU展開へ黙ってフォールバックせず明示エラーにする。
     - Windows実画面で640x360の再現可能なHAP Q QA素材をネイティブ出力し、補正済み非空フレームを確認。圧縮アップロード数は1394から2163へ増加し、GPU割当は`1+2`のまま再利用された。
-  - [ ] M3.3c: H.264/H.265/ProResをインプロセスlibavワーカーへ移し、FFmpeg CLIフレーム抽出をReference/診断用途へ降格する。
+  - [x] M3.3c: H.264/H.265/ProResをインプロセスlibavワーカーへ移し、FFmpeg CLIフレーム抽出をReference/診断用途へ降格する。(2026-07-11)
+    - `rayard`の既定featureでlibavを有効化。Windows/macOS/Linux CIにFFmpeg/Clang開発環境を追加し、共有ライブラリの配布物同梱は`bundle.active`を有効化するM6で確定する。
 - 段階 4: 既存のフレームキュー/デコード診断/テレメトリを新パスに接続。CPU プレビューは「Preview (Reference)」として残す。
 - 検証ゲート: `cargo test -p video`(ゴールデン含む)、1080p60 多レイヤーでのフレームタイム計測、既存 `video_preview*` テスト green、DMX テレメトリ予算に影響なし。
 

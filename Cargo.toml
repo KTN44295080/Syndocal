@@ -23,6 +23,7 @@ crossbeam-queue = "0.3"
 gdtf = { path = "crates/gdtf" }
 image = { version = "=0.24.9", default-features = false, features = ["jpeg", "png"] }
 hap-parser = "=0.2.0"
+ffmpeg-next = { version = "=8.1.0", default-features = false }
 io = { path = "crates/io" }
 midir = "0.11"
 mp4 = "=0.14.0"

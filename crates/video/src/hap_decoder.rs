@@ -9,12 +9,13 @@ use mp4::{Mp4Reader, TrackType};
 use protocol::{VideoLayerId, VideoSourceKind};
 
 use super::{
-    FfmpegCliFrameDecoder, StillImageSignature, VideoDecodeError, VideoFrame, VideoFrameDecoder,
-    VideoFrameRequest, VideoPixelFormat,
+    FfmpegCliFrameDecoder, LibavFrameDecoder, StillImageSignature, VideoDecodeError, VideoFrame,
+    VideoFrameDecoder, VideoFrameRequest, VideoPixelFormat,
 };
 
 pub struct PreferredVideoFrameDecoder {
     hap: HapMovFrameDecoder,
+    libav: LibavFrameDecoder,
     fallback: FfmpegCliFrameDecoder,
 }
 
@@ -60,6 +61,7 @@ impl PreferredVideoFrameDecoder {
     pub fn new(fallback: FfmpegCliFrameDecoder) -> Self {
         Self {
             hap: HapMovFrameDecoder::new(),
+            libav: LibavFrameDecoder::new(),
             fallback,
         }
     }
@@ -73,13 +75,14 @@ impl PreferredVideoFrameDecoder {
     }
 
     pub fn cache_len(&self) -> usize {
-        self.hap.frame_cache_len() + self.fallback.cache_len()
+        self.hap.frame_cache_len() + self.libav.cache_len() + self.fallback.cache_len()
     }
 }
 
 impl VideoFrameDecoder for PreferredVideoFrameDecoder {
     fn retain_layers(&mut self, layer_ids: &[VideoLayerId]) {
         self.hap.retain_layers(layer_ids);
+        self.libav.retain_layers(layer_ids);
         self.fallback.retain_layers(layer_ids);
     }
 
@@ -90,7 +93,11 @@ impl VideoFrameDecoder for PreferredVideoFrameDecoder {
         if HapMovFrameDecoder::supports_request(request) {
             self.hap.decode_frame(request)
         } else {
-            self.fallback.decode_frame(request)
+            match self.libav.decode_frame(request) {
+                Ok(Some(frame)) => Ok(Some(frame)),
+                Ok(None) => self.fallback.decode_frame(request),
+                Err(libav_error) => self.fallback.decode_frame(request).or(Err(libav_error)),
+            }
         }
     }
 }

@@ -41,11 +41,34 @@ jobs:
             build-essential \
             libasound2-dev \
             libayatana-appindicator3-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavutil-dev \
+            libclang-dev \
             libssl-dev \
+            libswscale-dev \
             libudev-dev \
             libwebkit2gtk-4.1-dev \
             libxdo-dev \
-            librsvg2-dev
+            librsvg2-dev \
+            ffmpeg
+
+      - name: Install macOS video SDK
+        if: runner.os == 'macOS'
+        run: |
+          brew install ffmpeg llvm pkg-config
+          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
+
+      - name: Install Windows video SDK
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          winget install --id Gyan.FFmpeg.Shared --exact --accept-package-agreements --accept-source-agreements --silent --disable-interactivity
+          $package = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Directory -Filter 'Gyan.FFmpeg.Shared*' | Select-Object -First 1
+          $sdk = Get-ChildItem $package.FullName -Directory -Filter 'ffmpeg-*-full_build-shared' | Select-Object -First 1 -ExpandProperty FullName
+          "FFMPEG_DIR=$sdk" >> $env:GITHUB_ENV
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+          (Join-Path $sdk 'bin') >> $env:GITHUB_PATH
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -79,8 +102,11 @@ jobs:
       - name: Test Rust workspace
         run: cargo test --workspace --locked
 
+      - name: Test in-process general video decode
+        run: cargo test -p video --features libav --locked
+
       - name: Build frontend
         run: pnpm --dir app build
 
       - name: Check Tauri application
-        run: cargo check -p rayard --locked
+        run: cargo check -p rayard --features libav --locked
