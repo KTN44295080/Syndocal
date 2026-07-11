@@ -12,8 +12,8 @@ export const setupSubTabs: { id: SetupSubTab; label: string; description: string
 ];
 
 export const controlModes: { id: ControlMode; label: string; description: string }[] = [
-  { id: "edit", label: "Edit", description: "Fixture attributes, visual controls, and presets" },
-  { id: "live", label: "Live", description: "Cue playback, timeline, and blackout controls" },
+  { id: "edit", label: "Live Edit", description: "Fixture attributes, visual controls, and presets" },
+  { id: "live", label: "Timeline", description: "Cue playback, timeline, and blackout controls" },
   { id: "mixer", label: "Mixer", description: "Video layers, compositions, and outputs" },
 ];
 

@@ -23,7 +23,11 @@ const allViewports = [
 ];
 const viewports = process.env.RAYARD_VIEWPORT_SINGLE === "1" ? [allViewports[1]] : allViewports;
 const setupTabs = ["Library", "Profiles", "Patch", "Mapping", "Output"];
-const controlTabs = ["Edit", "Live", "Mixer"];
+const controlTabs = [
+  { id: "edit", label: "Live Edit" },
+  { id: "live", label: "Timeline" },
+  { id: "mixer", label: "Mixer" },
+];
 const viewportRecentProjects = [
   "C:/shows/front-room.ry",
   "C:/shows/main-stage.ry",
@@ -329,7 +333,7 @@ async function checkKeyboardNavigation(client) {
     const activeModeAfter = (document.querySelector('.controlModeTabs button.active')?.textContent || '').trim();
     return {
       found: Boolean(input),
-      modePreserved: activeModeBefore === 'Edit' && activeModeAfter === activeModeBefore,
+      modePreserved: activeModeBefore === 'Live Edit' && activeModeAfter === activeModeBefore,
     };
   })()`);
 
@@ -455,6 +459,9 @@ async function measure(client, label) {
       visibleDuplicateFixtureButtonCount: [...document.querySelectorAll('.fixtureSetupEditor button')]
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'duplicate fixture').length,
       controlModeTabCount: document.querySelectorAll('.controlModeTabs button').length,
+      visibleLiveControlPanelCount: visibleCount('.liveControlPanel'),
+      visibleControlStagePanelCount: visibleCount('.controlStagePanel'),
+      visibleControlStageCount: visibleCount('.controlStage'),
       effectTargetValue: (() => {
         const select = [...document.querySelectorAll('.effectEditor select')]
           .find((candidate) => [...candidate.options].some((option) => option.value === 'selection'));
@@ -671,13 +678,19 @@ function hasExpectedControlModeSurface(result) {
   if (result.controlModeTabCount < 3) {
     return false;
   }
+  if (
+    result.visibleLiveControlPanelCount !== 1 ||
+    result.visibleControlStagePanelCount !== 1 ||
+    result.visibleControlStageCount !== 1
+  ) {
+    return false;
+  }
   if (result.label.startsWith("control-edit-position-")) {
     return (
       result.visiblePanTiltPadCount >= 1 &&
       result.visiblePositionReadoutCount >= 1 &&
       result.visibleAttributeTargetSummaryCount >= 1 &&
       result.visibleGroupAttributeTargetSummaryCount >= 1 &&
-      result.visibleGroupControlBannerCount >= 1 &&
       result.visibleCuePanelCount === 0 &&
       result.visibleTimelinePanelCount === 0 &&
       result.visibleVideoControlPanelCount === 0
@@ -689,7 +702,6 @@ function hasExpectedControlModeSurface(result) {
       result.visibleColorReadoutCount >= 1 &&
       result.visibleAttributeTargetSummaryCount >= 1 &&
       result.visibleGroupAttributeTargetSummaryCount >= 1 &&
-      result.visibleGroupControlBannerCount >= 1 &&
       result.visibleCuePanelCount === 0 &&
       result.visibleTimelinePanelCount === 0 &&
       result.visibleVideoControlPanelCount === 0
@@ -697,6 +709,7 @@ function hasExpectedControlModeSurface(result) {
   }
   if (result.label.startsWith("control-edit-")) {
     return (
+      result.visibleFixtureEditSurfaceCount > 0 &&
       result.visibleEffectEditorCount > 0 &&
       result.effectTargetHintCount >= 1 &&
       result.effectTargetMapSelectionOptionCount >= 1 &&
@@ -936,10 +949,10 @@ async function runViewport(client, viewport) {
   results.push(await measure(client, `mapping-wave-draft-${viewport.width}x${viewport.height}`));
   await clickByText(client, "Control");
   for (const controlTab of controlTabs) {
-    await clickByText(client, controlTab);
+    await clickByText(client, controlTab.label);
     await sleep(180);
-    results.push(await measure(client, `control-${controlTab.toLowerCase()}-${viewport.width}x${viewport.height}`));
-    if (controlTab === "Edit") {
+    results.push(await measure(client, `control-${controlTab.id}-${viewport.width}x${viewport.height}`));
+    if (controlTab.id === "edit") {
       await clickVisibleByText(client, ".attributeCategoryRail button", "Position");
       await sleep(120);
       results.push(await measure(client, `control-edit-position-${viewport.width}x${viewport.height}`));

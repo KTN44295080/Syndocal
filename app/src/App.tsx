@@ -8343,6 +8343,59 @@ export default function App() {
             </button>
           </div>
         </section>
+        <section class="panel controlPanel controlStagePanel">
+          <div class="controlStageToolbar">
+            <strong>Stage</strong>
+            <div class="controlStageGroups" aria-label="Fixture groups">
+              <button
+                class={!selectedFixtureGroupFilter() ? "active" : ""}
+                onClick={() => selectFixtureGroupFilter(null)}
+              >
+                All
+              </button>
+              <For each={fixtureGroupRows().slice(0, 8)}>
+                {(group) => (
+                  <button
+                    class={selectedFixtureGroupFilter() === group.groupId ? "active" : ""}
+                    onClick={() => selectFixtureGroupFilter(group.groupId)}
+                    title={`${group.count} fixture(s)`}
+                  >
+                    {group.groupId}
+                    <span>{group.count}</span>
+                  </button>
+                )}
+              </For>
+            </div>
+            <span>{visualizerFixtures().length} fixtures</span>
+          </div>
+          <StagePreview2D
+            className="controlStage"
+            patternId="control-stage-grid"
+            stageOrigin={stageOrigin2d()}
+            fixtures={visualizerFixtures()}
+            videoSurfaces={visualizerVideoSurfaces2d()}
+            stageObjects={visualizerStageObjects2d()}
+            selectedFixtureId={selectedFixtureId()}
+            selectedVideoOutputId={selectedVideoOutputId()}
+            selectedFixtureGroupFilter={selectedFixtureGroupFilter()}
+            selectedFixtureTypeFilter={selectedFixtureTypeFilter()}
+            stageObjectClassName="controlStageObject"
+            surfaceMinOpacity={0.22}
+            beamMinOpacity={0.08}
+            beamIntensityScale={0.55}
+            fixtureRadiusIntensityScale={1.4}
+            onSelectVideoOutput={setSelectedVideoOutputId}
+            onSelectFixture={(fixtureId) => {
+              const fixture = snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
+              if (fixture) activateFixture(fixture);
+            }}
+          />
+          <div class="controlStageSelection">
+            <strong>{selectedFixture()?.label ?? selectedFixtureGroupFilter() ?? "No selection"}</strong>
+            <span>{controlTargetDetail()}</span>
+            <button onClick={() => selectSetupMode("mapping")}>Edit Map</button>
+          </div>
+        </section>
         <section class="panel touchPanel touchCuePanel">
           <div class="panelHeader">
             <h2>Touch Cues</h2>

@@ -13458,6 +13458,292 @@ h3 {
   font-size: 9px;
 }
 
+/* Control is a fixed show desk: one primary surface above two persistent work panes. */
+.layoutControl,
+.layoutControl.controlModeEdit,
+.layoutControl.controlModeLive,
+.layoutControl.controlModeMixer {
+  grid-template-columns: minmax(340px, 0.86fr) minmax(520px, 1.34fr);
+  grid-template-rows: minmax(244px, 0.56fr) minmax(224px, 0.44fr);
+  align-items: stretch;
+}
+
+.layoutControl .liveControlPanel {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 0.82fr) minmax(420px, 1.18fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  gap: 5px;
+  overflow: hidden;
+  padding: 5px;
+}
+
+.layoutControl.controlModeEdit .liveControlPanel,
+.layoutControl.controlModeLive .liveControlPanel,
+.layoutControl.controlModeMixer .liveControlPanel {
+  display: grid;
+}
+
+.layoutControl .liveControlPanel > .panelHeader,
+.layoutControl .liveControlPanel > .liveFadeMeter,
+.layoutControl .liveControlPanel > .liveMasterGrid {
+  grid-column: 1 / -1;
+}
+
+.layoutControl .liveControlPanel > .liveStatusGrid {
+  grid-column: 1;
+  grid-row: 2 / span 3;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-content: start;
+  gap: 3px;
+  min-width: 0;
+  overflow: hidden auto;
+}
+
+.layoutControl .liveControlPanel .liveStatusItem {
+  min-height: 38px;
+  gap: 1px;
+  border-radius: 1px;
+  padding: 4px 5px;
+}
+
+.layoutControl .liveControlPanel .liveStatusItem span {
+  font-size: 9px;
+}
+
+.layoutControl .liveControlPanel .liveStatusItem strong {
+  font-size: 10px;
+}
+
+.layoutControl .liveControlPanel > .liveTransportGrid {
+  grid-column: 2;
+  grid-row: 2;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 3px;
+  min-width: 0;
+}
+
+.layoutControl .liveControlPanel .liveTransportGrid button {
+  min-width: 0;
+  min-height: 28px;
+  overflow: hidden;
+  padding: 0 5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layoutControl .liveControlPanel .liveGoButton {
+  min-height: 28px;
+  font-size: 13px;
+}
+
+.layoutControl .liveControlPanel > .liveCuePadHeader {
+  grid-column: 2;
+  grid-row: 3;
+  grid-template-columns: minmax(0, 1fr) auto auto 54px 54px;
+  gap: 3px;
+  min-width: 0;
+}
+
+.layoutControl .liveControlPanel > .liveCuePadGrid {
+  grid-column: 2;
+  grid-row: 4;
+  align-self: start;
+  grid-template-columns: repeat(5, minmax(72px, 1fr));
+  gap: 3px;
+  min-width: 0;
+  max-height: 100%;
+  overflow: hidden auto;
+}
+
+.layoutControl .liveControlPanel .liveCuePad {
+  min-height: 42px;
+  gap: 1px 5px;
+  border-radius: 1px;
+  padding: 4px 5px;
+}
+
+.layoutControl .liveControlPanel .liveCuePad small {
+  font-size: 9px;
+}
+
+.layoutControl .liveControlPanel > .liveMasterGrid {
+  grid-row: 5;
+  grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr) 100px 58px;
+  gap: 4px;
+}
+
+.layoutControl .controlStagePanel {
+  grid-column: 1;
+  grid-row: 2;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 4px;
+  overflow: hidden;
+  padding: 5px;
+}
+
+.layoutControl.controlModeEdit .faders {
+  grid-column: 2;
+  grid-row: 2;
+  display: flex;
+  overflow: hidden auto;
+}
+
+.layoutControl.controlModeLive .faders {
+  grid-column: 2;
+  grid-row: 2;
+  display: flex;
+  overflow: hidden auto;
+}
+
+.layoutControl.controlModeMixer .videoControlPanel {
+  grid-column: 2;
+  grid-row: 2;
+  display: flex;
+  overflow: hidden auto;
+}
+
+.layoutControl .liveControlPanel .liveStagePanel,
+.layoutControl .faders > .groupControlBanner,
+.layoutControl .faders > .buttonRow,
+.layoutControl .faders > .transformEditor {
+  display: none;
+}
+
+.layoutControl.controlModeEdit .faders > .cuePanel,
+.layoutControl.controlModeEdit .faders > .timelinePanel,
+.layoutControl.controlModeLive .faders > .effectEditor,
+.layoutControl.controlModeLive .faders > .rawMonitor {
+  display: none;
+}
+
+.layoutControl.controlModeEdit .fixtureEditSurface {
+  display: grid;
+  min-height: 0;
+}
+
+.layoutControl.controlModeLive .fixtureEditSurface {
+  display: none;
+}
+
+.layoutControl.controlModeLive .faders > .cuePanel,
+.layoutControl.controlModeLive .faders > .timelinePanel {
+  display: grid;
+}
+
+.layoutControl.controlModeMixer .faders {
+  display: none;
+}
+
+.controlStageToolbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  min-height: 27px;
+}
+
+.controlStageToolbar > strong {
+  color: #f4eee8;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.controlStageToolbar > span {
+  color: #8f8881;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.controlStageGroups {
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+  overflow: hidden auto;
+  scrollbar-width: thin;
+}
+
+.controlStageGroups button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: max-content;
+  min-height: 25px;
+  border-radius: 1px;
+  padding: 0 7px;
+}
+
+.controlStageGroups button span {
+  color: #8f8881;
+  font-size: 9px;
+}
+
+.controlStage {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 1px solid #35312d;
+  border-radius: 0;
+  background: #151311;
+}
+
+.controlStage .stageGrid {
+  fill: url("#control-stage-grid");
+}
+
+.controlStage .controlStageObject {
+  cursor: default;
+  pointer-events: none;
+}
+
+.controlStage .controlStageObject rect {
+  fill-opacity: 0.15;
+}
+
+.controlStageSelection {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 27px;
+  border-top: 1px solid #35312d;
+  padding-top: 4px;
+}
+
+.controlStageSelection strong,
+.controlStageSelection span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.controlStageSelection strong {
+  color: #f0ebe5;
+  font-size: 10px;
+}
+
+.controlStageSelection span {
+  color: #908880;
+  font-size: 9px;
+}
+
+.controlStageSelection button {
+  min-height: 24px;
+  padding: 0 8px;
+}
+
+@media (max-width: 1050px) {
+  .layoutControl,
+  .layoutControl.controlModeEdit,
+  .layoutControl.controlModeLive,
+  .layoutControl.controlModeMixer {
+    grid-template-columns: minmax(300px, 0.78fr) minmax(430px, 1.22fr);
+  }
+}
+
 .attributeTargetSummary strong {
   font-size: 10px;
 }
