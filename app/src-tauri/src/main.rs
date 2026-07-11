@@ -52,6 +52,7 @@ type AppVideoPreviewRenderer = video::VideoPreviewRenderer<
 >;
 
 const APP_NAME: &str = "Syndocal";
+const PROJECT_FILE_VERSION: u32 = 1;
 const PHASE1_SAMPLE_PROJECT_LABEL: &str = "samples/phase1-mini-show.sdc";
 const PHASE1_SAMPLE_PROJECT_JSON: &str = include_str!("../../../samples/phase1-mini-show.sdc");
 const SAMPLE_EFFECT_PRESET_PULSE_LABEL: &str = "samples/front-dimmer-pulse.effect";
@@ -694,7 +695,7 @@ fn save_custom_fixture_profile(
 ) -> Result<Option<String>, String> {
     validate_custom_fixture_profile_request(&request)?;
     let profile_file = CustomFixtureProfileFile {
-        version: 1,
+        version: PROJECT_FILE_VERSION,
         request,
     };
     let Some(path) = rfd::FileDialog::new()
@@ -4968,7 +4969,7 @@ fn has_extension(path: &Path, expected: &str) -> bool {
 }
 
 fn validate_project_file(project: &ProjectFile) -> Result<(), String> {
-    if project.version != 1 {
+    if project.version != PROJECT_FILE_VERSION {
         return Err(format!("Unsupported project version {}", project.version));
     }
     validate_app_name("project", &project.app)?;
@@ -13424,6 +13425,53 @@ f 1 2 3
                 .and_then(|audio| audio.estimated_bpm),
             Some(120.0)
         );
+    }
+
+    #[test]
+    fn project_file_v1_accepts_unknown_fields_and_defaults_added_fields() {
+        let mut sample_value: Value = serde_json::from_str(PHASE1_SAMPLE_PROJECT_JSON).unwrap();
+        let root = sample_value.as_object_mut().unwrap();
+        root.insert("future_top_level".to_string(), json!({ "enabled": true }));
+        let snapshot = root
+            .get_mut("snapshot")
+            .and_then(Value::as_object_mut)
+            .unwrap();
+        snapshot.insert("future_snapshot_field".to_string(), json!(42));
+        snapshot["fixtures"][0]
+            .as_object_mut()
+            .unwrap()
+            .insert("future_fixture_field".to_string(), json!("ignored"));
+        let sample_project: ProjectFile = serde_json::from_value(sample_value).unwrap();
+        validate_project_file(&sample_project).unwrap();
+
+        let mut legacy_value = serde_json::to_value(ProjectFile {
+            version: PROJECT_FILE_VERSION,
+            app: APP_NAME.to_string(),
+            custom_profiles: Vec::new(),
+            snapshot: EngineSnapshot::default(),
+        })
+        .unwrap();
+        let legacy_root = legacy_value.as_object_mut().unwrap();
+        legacy_root.remove("custom_profiles");
+        let legacy_snapshot = legacy_root["snapshot"].as_object_mut().unwrap();
+        legacy_snapshot.remove("node_graphs");
+        legacy_snapshot.remove("stage_map");
+        legacy_snapshot.remove("stage_map_presets");
+        legacy_snapshot.remove("stage_objects");
+        legacy_snapshot.remove("dmx_previews");
+
+        let project: ProjectFile = serde_json::from_value(legacy_value).unwrap();
+        validate_project_file(&project).unwrap();
+
+        assert!(project.custom_profiles.is_empty());
+        assert!(project.snapshot.node_graphs.is_empty());
+        assert_eq!(
+            project.snapshot.stage_map,
+            protocol::StageMapConfig::default()
+        );
+        assert!(project.snapshot.stage_map_presets.is_empty());
+        assert!(project.snapshot.stage_objects.is_empty());
+        assert!(project.snapshot.dmx_previews.is_empty());
     }
 
     #[test]
