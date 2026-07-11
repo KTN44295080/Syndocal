@@ -137,7 +137,7 @@ CPU プレビューを wgpu 実出力に置き換える。**照明エンジン�
 - 検証ゲート: `cargo test -p io`、実機 or ループバック計測記録、feature flag なしビルドが従来どおり green。
 
 ### M5 — 信頼性・パフォーマンス(1 週)
-- [ ] 1 時間ソークテスト: mini-show + エフェクト複数 + 動画 1 レイヤー再生で、メモリ/テレメトリ/フレームドロップを記録するスクリプト or 手順を整備。
+- [x] 1 時間ソークテスト: mini-show + LFO/位置ウェーブ + 動画1レイヤー + Art-Net loopbackをrelease単一プロセスで3600秒実行。108,001フレーム欠落0、最大13.3MB、jitter p99 0.535ms、command-to-DMX p99 0.476ms、送信失敗0。(2026-07-12、詳細は`qa/M5_RELIABILITY_VALIDATION.md`)
 - [ ] プロジェクトリカバリ(M0 の機能)をクラッシュ注入で検証: プロセス kill → 再起動 → 復元。
 - [x] 大規模プロジェクト負荷: フィクスチャ 200 台 / 8 ユニバース / キュー 100 個で UI 応答と DMX 予算を確認。(2026-07-12)
   - Engine再現テストは各キューが200灯体を持つ合計20,000ターゲットをロードし、100番キュー発火、8 x 512 DMX preview、queue failure 0、drain limit hit 0を確認。Windows debug test全体は0.06秒。UIの同規模viewport計測はM5ソークスクリプト側で扱う。
