@@ -96,7 +96,7 @@ export function createAppKeyboardController(options: AppKeyboardControllerOption
     }
     if (isEditableShortcutTarget(event.target)) return;
 
-    if (options.workspaceTab() === "setup") {
+    if (options.workspaceTab() === "setup" && event.altKey) {
       const nextSetupSubTab = setupSubTabForShortcut(event.code);
       if (nextSetupSubTab) {
         event.preventDefault();

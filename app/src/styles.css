@@ -13182,6 +13182,187 @@ h3 {
   box-shadow: inset 0 -2px 0 var(--ray-accent);
 }
 
+/* Setup keeps the DasLight-style single toolbar while separating work domains. */
+.setupNavigation {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 33px;
+  overflow: hidden;
+  border: 1px solid var(--ray-border);
+  background: #282521;
+}
+
+.setupAreaTabs,
+.setupNavigation .setupModeTabs {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  min-height: 31px;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+}
+
+.setupAreaTabs {
+  border-right: 2px solid #514a43;
+}
+
+.setupAreaTabs button,
+.setupNavigation .setupModeTabs button {
+  position: relative;
+  min-width: 88px;
+  min-height: 31px;
+  border: 0;
+  border-right: 1px solid var(--ray-border);
+  border-radius: 0;
+  background: transparent;
+  color: #a79d94;
+  padding: 0 10px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.setupAreaTabs button:hover,
+.setupNavigation .setupModeTabs button:hover {
+  background: #35302b;
+  color: #eee8e2;
+}
+
+.app .setupAreaTabs button.active,
+.app .setupAreaTabs button[aria-pressed="true"] {
+  background: #171513;
+  color: #fff;
+  box-shadow: inset 0 2px 0 var(--ray-accent);
+}
+
+.app .setupNavigation .setupModeTabs button.active,
+.app .setupNavigation .setupModeTabs button[aria-pressed="true"] {
+  background: #211e1b;
+  color: #fff;
+  box-shadow: inset 0 -2px 0 #d8d0c9;
+}
+
+.layoutSetup.setupMode-library,
+.layoutSetup.setupMode-profiles,
+.layoutSetup.setupMode-video,
+.layoutSetup.setupMode-dmx,
+.layoutSetup.setupMode-midi,
+.layoutSetup.setupMode-osc,
+.layoutSetup.setupMode-remote {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.layoutSetup.setupMode-patch {
+  grid-template-columns: minmax(270px, 0.34fr) minmax(0, 1.66fr);
+}
+
+.layoutSetup.setupMode-mapping {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.layoutSetup.setupMode-library > .setup,
+.layoutSetup.setupMode-profiles > .setup,
+.layoutSetup.setupMode-video > .videoSetupPanel,
+.layoutSetup.setupMode-dmx > .setupIoPanel,
+.layoutSetup.setupMode-midi > .setupIoPanel,
+.layoutSetup.setupMode-osc > .setupIoPanel,
+.layoutSetup.setupMode-remote > .setupIoPanel {
+  grid-column: 1;
+  width: 100%;
+  max-width: none;
+}
+
+.layoutSetup.setupMode-patch > .setup {
+  grid-column: 1;
+}
+
+.layoutSetup.setupMode-patch > .fixtures {
+  display: grid;
+  grid-column: 2;
+  grid-template-columns: minmax(0, 1.22fr) minmax(250px, 0.78fr);
+  grid-template-rows: auto auto minmax(292px, 0.58fr) minmax(190px, 0.42fr);
+  overflow: hidden;
+}
+
+.layoutSetup.setupMode-patch > .fixtures > .panelHeader,
+.layoutSetup.setupMode-patch > .fixtures > .groupOverview,
+.layoutSetup.setupMode-patch > .fixtures > .dmxPatchMap:not(.compact) {
+  grid-column: 1 / -1;
+}
+
+.layoutSetup.setupMode-patch > .fixtures > .dmxPatchMap:not(.compact) {
+  grid-row: 3;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.layoutSetup.setupMode-patch > .fixtures > .dmxPatchMap.compact,
+.layoutSetup.setupMode-patch > .fixtures > .fixtureList {
+  display: none;
+}
+
+.layoutSetup.setupMode-patch > .fixtures > .mappingVisualizer {
+  display: grid;
+  grid-column: 1;
+  grid-row: 4;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+  border-top: 0;
+  padding-top: 0;
+}
+
+.layoutSetup.setupMode-patch > .fixtures > .fixtureSetupEditor {
+  grid-column: 2;
+  grid-row: 4;
+  min-height: 0;
+  overflow: auto;
+}
+
+.layoutSetup.setupMode-patch .mappingGroupStrip,
+.layoutSetup.setupMode-patch .mappingTypeStrip,
+.layoutSetup.setupMode-patch .mappingToolRail,
+.layoutSetup.setupMode-patch .mappingViewportControls,
+.layoutSetup.setupMode-patch .mappingStageBoundsPanel,
+.layoutSetup.setupMode-patch .mappingSelectionPanel {
+  display: none;
+}
+
+.layoutSetup.setupMode-patch .mappingStageShell {
+  grid-template-columns: minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.layoutSetup.setupMode-patch .mappingStageViewport {
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+  padding: 4px;
+}
+
+.layoutSetup.setupMode-patch .mappingStageViewport .visualizerStage {
+  height: 100%;
+  min-height: 0;
+}
+
+.layoutSetup.setupMode-patch .dmxAddressGrid {
+  gap: 1px;
+  max-height: none;
+  padding: 4px;
+}
+
+.layoutSetup.setupMode-patch .dmxAddressCell {
+  min-height: 15px;
+  font-size: 8px;
+}
+
+.layoutSetup .setupIoPanel {
+  overflow: auto;
+}
+
 .app .liveGoButton.primary,
 .app .touchGoDeck button.primary {
   border-color: var(--ray-accent-strong);

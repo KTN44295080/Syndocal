@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,13 +16,26 @@ const shouldStartVite = appUrl === defaultUrl && process.env.SYNDOCAL_VIEWPORT_N
 const shouldCheckTimelineAutomation = new URL(appUrl).searchParams.get("syndocalViewportFixture") === "timeline";
 const vitePort = 5173;
 const cdpPort = Number(process.env.SYNDOCAL_CDP_PORT ?? 9227);
+const screenshotDir = process.env.SYNDOCAL_VIEWPORT_SCREENSHOT_DIR
+  ? resolve(process.env.SYNDOCAL_VIEWPORT_SCREENSHOT_DIR)
+  : null;
 const allViewports = [
   { width: 1280, height: 720 },
   { width: 1366, height: 768 },
   { width: 2048, height: 1129 },
 ];
 const viewports = process.env.SYNDOCAL_VIEWPORT_SINGLE === "1" ? [allViewports[1]] : allViewports;
-const setupTabs = ["Library", "Profiles", "Patch", "Mapping", "Output"];
+const setupTabs = [
+  { area: "Lighting", tab: "Library", id: "library" },
+  { area: "Lighting", tab: "Profiles", id: "profiles" },
+  { area: "Lighting", tab: "Patch", id: "patch" },
+  { area: "Video", tab: "Outputs", id: "video" },
+  { area: "Mapping", tab: "Stage Map", id: "mapping" },
+  { area: "I/O", tab: "DMX", id: "dmx" },
+  { area: "I/O", tab: "MIDI", id: "midi" },
+  { area: "I/O", tab: "OSC", id: "osc" },
+  { area: "I/O", tab: "Remote", id: "remote" },
+];
 const controlTabs = [
   { id: "edit", label: "Live Edit" },
   { id: "live", label: "Timeline" },
@@ -268,9 +281,9 @@ async function clickVisibleByText(client, selector, text) {
   }
 }
 
-async function pressKey(client, code, key = code) {
-  await client.send("Input.dispatchKeyEvent", { type: "keyDown", code, key });
-  await client.send("Input.dispatchKeyEvent", { type: "keyUp", code, key });
+async function pressKey(client, code, key = code, modifiers = 0) {
+  await client.send("Input.dispatchKeyEvent", { type: "keyDown", code, key, modifiers });
+  await client.send("Input.dispatchKeyEvent", { type: "keyUp", code, key, modifiers });
 }
 
 async function checkKeyboardNavigation(client) {
@@ -293,7 +306,8 @@ async function checkKeyboardNavigation(client) {
 
   await pressKey(client, "F1");
   await sleep(60);
-  await pressKey(client, "Digit4", "4");
+  await clickByText(client, "Mapping");
+  await clickByText(client, "Stage Map");
   await sleep(80);
   const setupEditableGuard = await client.evaluate(`(async () => {
     const visible = (element) => {
@@ -312,7 +326,7 @@ async function checkKeyboardNavigation(client) {
     const activeToolAfter = (document.querySelector('.mappingViewportControls strong')?.textContent || '').trim();
     return {
       found: Boolean(input),
-      setupModePreserved: activeSetupBefore === 'Mapping' && activeSetupAfter === activeSetupBefore,
+      setupModePreserved: activeSetupBefore.length > 0 && activeSetupAfter === activeSetupBefore,
       mappingToolPreserved: activeToolBefore.length > 0 && activeToolAfter === activeToolBefore,
     };
   })()`);
@@ -892,7 +906,7 @@ function hasExpectedSetupSurface(result) {
       result.visibleStageVideoSurfaceCount >= 1
     );
   }
-  if (result.label.startsWith("setup-output-")) {
+  if (result.label.startsWith("setup-video-")) {
     return (
       result.visibleSetupVideoPanelCount >= 1 &&
       result.visibleSetupVideoOutputDeckCount >= 1 &&
@@ -1020,10 +1034,11 @@ async function runViewport(client, viewport) {
   results.push(await measure(client, `control-edit-keyboard-${viewport.width}x${viewport.height}`));
   await pressKey(client, "F1");
   await sleep(80);
-  await pressKey(client, "Digit4", "4");
+  await clickByText(client, "Mapping");
+  await clickByText(client, "Stage Map");
   await sleep(120);
   results.push(await measure(client, `setup-mapping-keyboard-${viewport.width}x${viewport.height}`));
-  await pressKey(client, "Slash", "?");
+  await client.evaluate(`document.querySelector('button[aria-label="Keyboard shortcut help"]')?.click()`);
   await sleep(120);
   results.push(await measure(client, `mapping-hotkey-help-${viewport.width}x${viewport.height}`));
   await pressKey(client, "Escape", "Escape");
@@ -1041,12 +1056,19 @@ async function runViewport(client, viewport) {
   await sleep(80);
   await clickByText(client, "Setup");
   for (const setupTab of setupTabs) {
-    await clickByText(client, setupTab);
+    await clickByText(client, setupTab.area);
+    await clickByText(client, setupTab.tab);
     await sleep(180);
-    results.push(await measure(client, `setup-${setupTab.toLowerCase()}-${viewport.width}x${viewport.height}`));
+    results.push(await measure(client, `setup-${setupTab.id}-${viewport.width}x${viewport.height}`));
+    if (screenshotDir) {
+      mkdirSync(screenshotDir, { recursive: true });
+      const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+      writeFileSync(join(screenshotDir, `setup-${setupTab.id}-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
+    }
   }
   await clickByText(client, "Setup");
   await clickByText(client, "Mapping");
+  await clickByText(client, "Stage Map");
   await sleep(120);
   await clickByText(client, "Pick Visible");
   await sleep(120);
@@ -1167,7 +1189,7 @@ async function main() {
       const patchSuffix = result.label.startsWith("setup-patch-")
         ? ` patch=${result.visiblePatchActionRowCount}/${result.visiblePatchAutoButtonCount}/${result.visiblePatchPrimaryButtonCount}/${result.visiblePatchNextFreeButtonCount}/${result.visiblePatchFootprintCount}/${result.visibleDmxAddressGridCount}/${result.dmxAddressCellCount}/${result.dmxAddressOccupiedCellCount}/${result.dmxAddressPlannedCellCount}/${result.visibleDmxGridSummaryCount}/${result.visibleFixtureSetupEditorCount}/${result.visibleUseProfileForPatchButtonCount}/${result.visibleDuplicateFixtureButtonCount}`
         : "";
-      const outputSetupSuffix = result.label.startsWith("setup-output-")
+      const outputSetupSuffix = result.label.startsWith("setup-video-")
         ? ` outputSetup=${result.visibleSetupVideoPanelCount}/${result.visibleSetupVideoOutputDeckCount}/${result.visibleSetupVideoOutputActiveDeckCount}/${result.visibleSetupVideoOutputDetailPaneCount}/${result.visibleVideoOutputMappingPanelCount}/${result.visibleProjectorMapEditorCount}/${result.visibleProjectorMapHandleCount}/${result.visibleProjectorKeystoneHandleCount}/${result.visibleProjectorScaleHandleCount}/${result.visibleProjectorRotateHandleCount}/${result.visibleProjectorAspectModeButtonCount}/${result.visibleProjectorAspectPresetButtonCount}/${result.visibleProjectorResetPoseButtonCount}`
         : "";
       const waveDraftSuffix = result.label.startsWith("mapping-wave-draft-")

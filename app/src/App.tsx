@@ -5242,7 +5242,7 @@ export default function App() {
       setPhase1SmokeReport(report);
       setCurrentProjectPath(null);
       setWorkspaceTab("setup");
-      setSetupSubTab("output");
+      setSetupSubTab("video");
       setRawDmxUniverse(0);
       setDmxTestChannel(1);
       setDmxTestWidth(8);
@@ -8808,10 +8808,12 @@ export default function App() {
         <Show when={workspaceTab() === "setup" && ["library", "profiles", "patch"].includes(setupSubTab())}>
         <aside
           class={setupPanelClass("panel setup setupPanel", ["library", "profiles", "patch"])}
-          ref={registerSetupPanel(["library", "profiles"])}
+          ref={registerSetupPanel(["library", "profiles", "patch"])}
           tabIndex={-1}
         >
+          <Show when={setupSubTab() === "library" || setupSubTab() === "patch"}>
           <ProfileLoadPanel
+            title={setupSubTab() === "library" ? "Fixture Library" : "Patch Source"}
             gdtfPath={gdtfPath()}
             gdtfShareUrl={gdtfShareUrl()}
             onGdtfPath={setGdtfPath}
@@ -8820,6 +8822,8 @@ export default function App() {
             onLoadGdtf={importGdtf}
             onDownloadGdtf={downloadGdtfFromUrl}
           />
+          </Show>
+          <Show when={setupSubTab() === "profiles"}>
           <CustomProfileEditorPanel
             manufacturer={customManufacturer()}
             profileName={customProfileName()}
@@ -8847,8 +8851,9 @@ export default function App() {
             onSave={saveCustomProfile}
             onLoad={loadCustomProfile}
           />
+          </Show>
 
-          <Show when={profile()}>
+          <Show when={setupSubTab() !== "profiles" && profile()}>
             {(loaded) => (
               <div class="profile">
                 <LoadedProfileSummaryPanel
@@ -8866,6 +8871,7 @@ export default function App() {
                   functionDetail={channelFunctionDetail}
                   onSelectedMode={setSelectedMode}
                 />
+                <Show when={setupSubTab() === "patch"}>
                 <PatchFixtureFormPanel
                   label={label()}
                   universe={universe()}
@@ -8914,6 +8920,7 @@ export default function App() {
                   onPatch={patchFixture}
                   onNextFreeAddress={selectNextFreePatchAddress}
                 />
+                </Show>
               </div>
             )}
           </Show>
@@ -9222,10 +9229,10 @@ export default function App() {
         />
         </Show>
 
-        <Show when={workspaceTab() === "setup" && ["mapping", "output"].includes(setupSubTab())}>
+        <Show when={workspaceTab() === "setup" && setupSubTab() === "video"}>
         <SetupVideoPanel
-          className={setupPanelClass("panel videoSetupPanel setupPanel", ["mapping", "output"])}
-          panelRef={registerSetupPanel(["mapping"])}
+          className={setupPanelClass("panel videoSetupPanel setupPanel", ["video"])}
+          panelRef={registerSetupPanel(["video"])}
           outputs={snapshot().video.outputs}
           compositions={snapshot().video.compositions}
           layers={snapshot().video.layers}
@@ -9967,12 +9974,13 @@ export default function App() {
         </section>
         </Show>
 
-        <Show when={workspaceTab() === "control" || (workspaceTab() === "setup" && setupSubTab() === "output")}>
+        <Show when={workspaceTab() === "control" || (workspaceTab() === "setup" && ["dmx", "midi", "osc", "remote"].includes(setupSubTab()))}>
         <aside
-          class={setupPanelClass("panel output setupPanel controlPanel", ["output"])}
-          ref={registerSetupPanel(["output"])}
+          class={setupPanelClass("panel output setupIoPanel setupPanel controlPanel", ["dmx", "midi", "osc", "remote"])}
+          ref={registerSetupPanel(["dmx", "midi", "osc", "remote"])}
           tabIndex={-1}
         >
+          <Show when={workspaceTab() === "control" || setupSubTab() === "dmx"}>
           <DmxOutputConfigPanel
             output={output()}
             serialPorts={serialPorts()}
@@ -10026,6 +10034,8 @@ export default function App() {
             onSelectedMidiInput={setSelectedMidiInput}
             onConnectMidiClock={connectMidiClock}
           />
+          </Show>
+          <Show when={workspaceTab() === "control" || setupSubTab() === "midi"}>
           <MidiControlMappingPanel
             snapshot={snapshot()}
             midiOutputs={midiOutputs()}
@@ -10086,6 +10096,8 @@ export default function App() {
             onSaveMappings={saveMidiMappings}
             onRemoveMapping={removeMidiMapping}
           />
+          </Show>
+          <Show when={workspaceTab() === "control" || setupSubTab() === "osc"}>
           <OscControlMappingPanel
             snapshot={snapshot()}
             bindIp={oscBindIp()}
@@ -10136,6 +10148,8 @@ export default function App() {
             onSaveMappings={saveOscMappings}
             onRemoveMapping={removeOscMapping}
           />
+          </Show>
+          <Show when={workspaceTab() === "control" || setupSubTab() === "remote"}>
           <RemoteControlPanel
             bindIp={remoteBindIp()}
             port={remotePort()}
@@ -10148,6 +10162,7 @@ export default function App() {
             onStart={startRemoteControl}
             onStop={stopRemoteControl}
           />
+          </Show>
         </aside>
         </Show>
       </section>

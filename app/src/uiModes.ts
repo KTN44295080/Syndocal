@@ -1,15 +1,32 @@
 export type WorkspaceTab = "setup" | "control" | "touch";
-export type SetupSubTab = "library" | "profiles" | "patch" | "mapping" | "output";
+export type SetupArea = "lighting" | "video" | "mapping" | "io";
+export type SetupSubTab = "library" | "profiles" | "patch" | "video" | "mapping" | "dmx" | "midi" | "osc" | "remote";
 export type ControlMode = "edit" | "live" | "mixer";
 export type ControlCategory = "dimmer" | "color" | "position" | "gobo" | "beam" | "focus" | "other" | "fader";
 
-export const setupSubTabs: { id: SetupSubTab; label: string; description: string }[] = [
-  { id: "library", label: "Library", description: "GDTF import and share lookup" },
-  { id: "profiles", label: "Profiles", description: "Fixture profile authoring" },
-  { id: "patch", label: "Patch", description: "DMX addressing and fixture assignment" },
-  { id: "mapping", label: "Mapping", description: "2D fixture and projection surface mapping" },
-  { id: "output", label: "Output", description: "DMX and video output setup" },
+export const setupAreas: { id: SetupArea; label: string; description: string; defaultTab: SetupSubTab }[] = [
+  { id: "lighting", label: "Lighting", description: "Fixture library, profiles, and DMX patch", defaultTab: "patch" },
+  { id: "video", label: "Video", description: "Compositions, displays, and projector calibration", defaultTab: "video" },
+  { id: "mapping", label: "Mapping", description: "Shared 2D stage map for fixtures and projection surfaces", defaultTab: "mapping" },
+  { id: "io", label: "I/O", description: "DMX, MIDI, OSC, and remote connections", defaultTab: "dmx" },
 ];
+
+export const setupSubTabs: { id: SetupSubTab; area: SetupArea; label: string; description: string }[] = [
+  { id: "library", area: "lighting", label: "Library", description: "GDTF import and share lookup" },
+  { id: "profiles", area: "lighting", label: "Profiles", description: "Fixture profile authoring" },
+  { id: "patch", area: "lighting", label: "Patch", description: "DMX addressing and fixture assignment" },
+  { id: "video", area: "video", label: "Outputs", description: "Compositions, output routing, resolution, and projection calibration" },
+  { id: "mapping", area: "mapping", label: "Stage Map", description: "2D fixture and projection surface mapping" },
+  { id: "dmx", area: "io", label: "DMX", description: "Art-Net, sACN, and serial DMX routing" },
+  { id: "midi", area: "io", label: "MIDI", description: "MIDI clock, control mapping, and feedback" },
+  { id: "osc", area: "io", label: "OSC", description: "OSC listener and address mapping" },
+  { id: "remote", area: "io", label: "Remote", description: "Web remote server and access URLs" },
+];
+
+export const setupAreaForSubTab = (tab: SetupSubTab): SetupArea =>
+  setupSubTabs.find((candidate) => candidate.id === tab)?.area ?? "lighting";
+
+export const setupSubTabsForArea = (area: SetupArea) => setupSubTabs.filter((tab) => tab.area === area);
 
 export const controlModes: { id: ControlMode; label: string; description: string }[] = [
   { id: "edit", label: "Live Edit", description: "Fixture attributes, visual controls, and presets" },
@@ -55,7 +72,7 @@ export const workspaceTabForShortcut = (code: string): WorkspaceTab | null => {
 };
 
 export const setupSubTabForShortcut = (code: string): SetupSubTab | null => {
-  const digitMatch = code.match(/^(Digit|Numpad)([1-5])$/);
+  const digitMatch = code.match(/^(Digit|Numpad)([1-9])$/);
   if (!digitMatch) {
     return null;
   }

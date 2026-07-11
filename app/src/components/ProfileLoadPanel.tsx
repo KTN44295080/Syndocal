@@ -1,4 +1,5 @@
 interface ProfileLoadPanelProps {
+  title: string;
   gdtfPath: string;
   gdtfShareUrl: string;
   onGdtfPath: (value: string) => void;
@@ -11,7 +12,7 @@ interface ProfileLoadPanelProps {
 export function ProfileLoadPanel(props: ProfileLoadPanelProps) {
   return (
     <>
-      <h2>Patch</h2>
+      <h2>{props.title}</h2>
       <label>
         GDTF path
         <input

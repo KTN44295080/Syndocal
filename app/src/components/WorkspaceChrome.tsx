@@ -5,7 +5,7 @@ import {
   type ProjectRecoveryCheckpoint,
 } from "../projectRecoveryStorage";
 import { recentProjectFileName } from "../projectRecentStorage";
-import { controlModes, setupSubTabs } from "../uiModes";
+import { controlModes, setupAreaForSubTab, setupAreas, setupSubTabs, setupSubTabsForArea } from "../uiModes";
 import type { ControlMode, SetupSubTab, WorkspaceTab } from "../uiModes";
 
 type WorkspaceChromeProps = {
@@ -46,6 +46,7 @@ type WorkspaceChromeProps = {
 export function WorkspaceChrome(props: WorkspaceChromeProps) {
   let projectMenuRoot: HTMLDivElement | undefined;
   const [projectMenuOpen, setProjectMenuOpen] = createSignal(false);
+  const activeSetupArea = () => setupAreaForSubTab(props.setupSubTab);
 
   const liveLabel = () => {
     if (props.blackout && props.videoBlackout) {
@@ -242,21 +243,37 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
       </header>
 
       <Show when={props.workspaceTab === "setup"}>
-        <nav class="setupModeTabs" aria-label="Setup mode">
-          <For each={setupSubTabs}>
-            {(tab, index) => (
-              <button
-                class={props.setupSubTab === tab.id ? "active" : ""}
-                title={tab.description}
-                aria-keyshortcuts={`${index() + 1}`}
-                onClick={() => props.onSetupSubTab(tab.id)}
-                aria-pressed={props.setupSubTab === tab.id}
-              >
-                {tab.label}
-              </button>
-            )}
-          </For>
-        </nav>
+        <div class="setupNavigation">
+          <nav class="setupAreaTabs" aria-label="Setup area">
+            <For each={setupAreas}>
+              {(area) => (
+                <button
+                  class={activeSetupArea() === area.id ? "active" : ""}
+                  title={area.description}
+                  onClick={() => props.onSetupSubTab(area.defaultTab)}
+                  aria-pressed={activeSetupArea() === area.id}
+                >
+                  {area.label}
+                </button>
+              )}
+            </For>
+          </nav>
+          <nav class="setupModeTabs" aria-label={`${activeSetupArea()} setup mode`}>
+            <For each={setupSubTabsForArea(activeSetupArea())}>
+              {(tab) => (
+                <button
+                  class={props.setupSubTab === tab.id ? "active" : ""}
+                  title={tab.description}
+                  aria-keyshortcuts={`Alt+${setupSubTabs.findIndex((candidate) => candidate.id === tab.id) + 1}`}
+                  onClick={() => props.onSetupSubTab(tab.id)}
+                  aria-pressed={props.setupSubTab === tab.id}
+                >
+                  {tab.label}
+                </button>
+              )}
+            </For>
+          </nav>
+        </div>
       </Show>
       <Show when={props.workspaceTab === "control"}>
         <nav class="controlModeTabs" aria-label="Control mode">
