@@ -203,7 +203,7 @@ fn is_wav_path(path: &Path) -> bool {
 }
 
 fn ffmpeg_binary_from_env() -> PathBuf {
-    std::env::var_os("RAYARD_FFMPEG")
+    std::env::var_os("SYNDOCAL_FFMPEG")
         .map(PathBuf::from)
         .unwrap_or_else(|| "ffmpeg".into())
 }
@@ -529,7 +529,7 @@ mod tests {
     fn fake_ffmpeg_binary() -> PathBuf {
         let extension = if cfg!(windows) { "cmd" } else { "sh" };
         let path = std::env::temp_dir().join(format!(
-            "rayard-fake-audio-ffmpeg-{}.{extension}",
+            "syndocal-fake-audio-ffmpeg-{}.{extension}",
             std::process::id()
         ));
         #[cfg(windows)]

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Rayard",
+  "productName": "Syndocal",
   "version": "0.1.0",
-  "identifier": "jp.seraf.ktn.rayard",
+  "identifier": "jp.seraf.ktn.syndocal",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "beforeBuildCommand": "pnpm build",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Rayard",
+        "title": "Syndocal",
         "width": 1280,
         "height": 800,
         "minWidth": 960,
@@ -31,11 +31,11 @@
     "targets": "all",
     "fileAssociations": [
       {
-        "ext": ["ry"],
-        "name": "Rayard Project",
-        "description": "Rayard show project",
+        "ext": ["sdc"],
+        "name": "Syndocal Project",
+        "description": "Syndocal show project",
         "role": "Editor",
-        "mimeType": "application/x-rayard-project"
+        "mimeType": "application/x-syndocal-project"
       }
     ],
     "icon": []

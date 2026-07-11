@@ -6,22 +6,22 @@ import { fileURLToPath } from "node:url";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
-const viewportFixture = process.env.RAYARD_VIEWPORT_FIXTURE ?? "timeline";
+const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? "timeline";
 const defaultUrl =
   viewportFixture === "none"
     ? "http://127.0.0.1:5173/"
-    : `http://127.0.0.1:5173/?rayardViewportFixture=${encodeURIComponent(viewportFixture)}`;
-const appUrl = process.env.RAYARD_VIEWPORT_URL ?? defaultUrl;
-const shouldStartVite = appUrl === defaultUrl && process.env.RAYARD_VIEWPORT_NO_SERVER !== "1";
-const shouldCheckTimelineAutomation = new URL(appUrl).searchParams.get("rayardViewportFixture") === "timeline";
+    : `http://127.0.0.1:5173/?syndocalViewportFixture=${encodeURIComponent(viewportFixture)}`;
+const appUrl = process.env.SYNDOCAL_VIEWPORT_URL ?? defaultUrl;
+const shouldStartVite = appUrl === defaultUrl && process.env.SYNDOCAL_VIEWPORT_NO_SERVER !== "1";
+const shouldCheckTimelineAutomation = new URL(appUrl).searchParams.get("syndocalViewportFixture") === "timeline";
 const vitePort = 5173;
-const cdpPort = Number(process.env.RAYARD_CDP_PORT ?? 9227);
+const cdpPort = Number(process.env.SYNDOCAL_CDP_PORT ?? 9227);
 const allViewports = [
   { width: 1280, height: 720 },
   { width: 1366, height: 768 },
   { width: 2048, height: 1129 },
 ];
-const viewports = process.env.RAYARD_VIEWPORT_SINGLE === "1" ? [allViewports[1]] : allViewports;
+const viewports = process.env.SYNDOCAL_VIEWPORT_SINGLE === "1" ? [allViewports[1]] : allViewports;
 const setupTabs = ["Library", "Profiles", "Patch", "Mapping", "Output"];
 const controlTabs = [
   { id: "edit", label: "Live Edit" },
@@ -29,22 +29,22 @@ const controlTabs = [
   { id: "mixer", label: "Mixer" },
 ];
 const viewportRecentProjects = [
-  "C:/shows/front-room.ry",
-  "C:/shows/main-stage.ry",
-  "C:/shows/projector-map-test.ry",
-  "C:/shows/festival/live-floor.ry",
-  "C:/shows/long/path/with/a/very-long-rayard-project-name-for-menu-containment.ry",
-  "C:/shows/backup.ry",
+  "C:/shows/front-room.sdc",
+  "C:/shows/main-stage.sdc",
+  "C:/shows/projector-map-test.sdc",
+  "C:/shows/festival/live-floor.sdc",
+  "C:/shows/long/path/with/a/very-long-syndocal-project-name-for-menu-containment.sdc",
+  "C:/shows/backup.sdc",
 ];
 const viewportRecoveryCheckpoint = {
   version: 1,
-  app: "Rayard",
+  app: "Syndocal",
   saved_at: "2026-07-09T12:34:00.000Z",
-  source_path: "C:/shows/recovered-main-stage.ry",
+  source_path: "C:/shows/recovered-main-stage.sdc",
   signature: "viewport-recovery",
   project: {
     version: 1,
-    app: "Rayard",
+    app: "Syndocal",
     custom_profiles: [],
     snapshot: {
       fixtures: [],
@@ -219,13 +219,13 @@ async function waitForApp(client) {
     }
     await sleep(100);
   }
-  throw new Error("Rayard app shell did not mount.");
+  throw new Error("Syndocal app shell did not mount.");
 }
 
 async function seedViewportLocalStorage(client) {
   await client.evaluate(`(() => {
-    window.localStorage.setItem('rayard.recentProjects.v1', ${JSON.stringify(JSON.stringify(viewportRecentProjects))});
-    window.localStorage.setItem('rayard.projectRecovery.v1', ${JSON.stringify(JSON.stringify(viewportRecoveryCheckpoint))});
+    window.localStorage.setItem('syndocal.recentProjects.v1', ${JSON.stringify(JSON.stringify(viewportRecentProjects))});
+    window.localStorage.setItem('syndocal.projectRecovery.v1', ${JSON.stringify(JSON.stringify(viewportRecoveryCheckpoint))});
   })()`);
 }
 
@@ -354,7 +354,7 @@ async function checkKeyboardNavigation(client) {
     controlEditableGuard.found &&
     controlEditableGuard.modePreserved;
   await client.evaluate(`(() => {
-    window.__rayardKeyboardNavigationCheck = ${JSON.stringify(result)};
+    window.__syndocalKeyboardNavigationCheck = ${JSON.stringify(result)};
   })()`);
   return result.passed;
 }
@@ -580,10 +580,10 @@ async function measure(client, label) {
           const rect = element.getBoundingClientRect();
           return element.tagName.toLowerCase() + '.' + (element.className || '-') + ' ' + Math.round(rect.width) + 'x' + Math.round(rect.height) + ' ' + (element.textContent || element.getAttribute('aria-label') || element.getAttribute('type') || '').trim().replace(/\\s+/g, ' ').slice(0, 42);
         }),
-      touchMomentaryFlashPassed: window.__rayardTouchMomentaryCheck?.passed === true,
-      touchMomentaryFlashResult: window.__rayardTouchMomentaryCheck ?? null,
-      keyboardNavigationPassed: window.__rayardKeyboardNavigationCheck?.passed === true,
-      keyboardNavigationResult: window.__rayardKeyboardNavigationCheck ?? null,
+      touchMomentaryFlashPassed: window.__syndocalTouchMomentaryCheck?.passed === true,
+      touchMomentaryFlashResult: window.__syndocalTouchMomentaryCheck ?? null,
+      keyboardNavigationPassed: window.__syndocalKeyboardNavigationCheck?.passed === true,
+      keyboardNavigationResult: window.__syndocalKeyboardNavigationCheck ?? null,
       timelineOverviewVisible: (() => {
         const overview = document.querySelector('.timelineOverview');
         if (!overview) {
@@ -875,7 +875,7 @@ async function checkTouchMomentaryFlash(client) {
       button = findFlashButton();
     }
     if (!button) {
-      window.__rayardTouchMomentaryCheck = { passed: false, found: false, activeOnPress: false, inactiveOnRelease: false };
+      window.__syndocalTouchMomentaryCheck = { passed: false, found: false, activeOnPress: false, inactiveOnRelease: false };
       return false;
     }
     button.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, pointerType: 'touch', isPrimary: true }));
@@ -884,13 +884,13 @@ async function checkTouchMomentaryFlash(client) {
     button.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, pointerType: 'touch', isPrimary: true }));
     await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
     const inactiveOnRelease = !button.classList.contains('active');
-    window.__rayardTouchMomentaryCheck = {
+    window.__syndocalTouchMomentaryCheck = {
       passed: activeOnPress && inactiveOnRelease,
       found: true,
       activeOnPress,
       inactiveOnRelease,
     };
-    return window.__rayardTouchMomentaryCheck.passed;
+    return window.__syndocalTouchMomentaryCheck.passed;
   })()`);
 }
 
@@ -977,7 +977,7 @@ async function main() {
   let viteProcess = null;
   let browserProcess = null;
   let client = null;
-  const profileDir = mkdtempSync(join(tmpdir(), "rayard-cdp-"));
+  const profileDir = mkdtempSync(join(tmpdir(), "syndocal-cdp-"));
 
   try {
     if (shouldStartVite) {
@@ -987,7 +987,7 @@ async function main() {
         { cwd: appRoot },
       );
     }
-    await waitForHttp(appUrl, "Rayard dev server");
+    await waitForHttp(appUrl, "Syndocal dev server");
 
     browserProcess = startProcess(browser, [
       "--headless=new",

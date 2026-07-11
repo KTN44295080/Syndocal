@@ -15,7 +15,7 @@ members = [
 edition = "2021"
 license = "MIT"
 authors = ["Seraf()のKTN"]
-repository = "https://example.invalid/rayard"
+repository = "https://example.invalid/syndocal"
 
 [workspace.dependencies]
 audio = { path = "crates/audio" }

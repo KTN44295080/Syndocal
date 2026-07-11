@@ -16,7 +16,7 @@ export const browserViewportFixture = (tauriRuntime: boolean) => {
   if (tauriRuntime || typeof window === "undefined") {
     return "";
   }
-  return new URLSearchParams(window.location.search).get("rayardViewportFixture") ?? "";
+  return new URLSearchParams(window.location.search).get("syndocalViewportFixture") ?? "";
 };
 
 const viewportFixtureControls: AttributeControl[] = [
@@ -71,8 +71,8 @@ const viewportFixtureControls: AttributeControl[] = [
 ];
 
 const profile: FixtureProfileSummary = {
-  source_path: "viewport://rayard-mini-par",
-  manufacturer: "Rayard",
+  source_path: "viewport://syndocal-mini-par",
+  manufacturer: "Syndocal",
   name: "Viewport Mini Par",
   short_name: "Viewport Par",
   fixture_type_id: "viewport-mini-par",
@@ -95,9 +95,9 @@ export const viewportPatchedFixture = (
 ): PatchedFixtureSummary => ({
   id,
   label,
-  profile_source_path: "viewport://rayard-mini-par",
+  profile_source_path: "viewport://syndocal-mini-par",
   profile_name: "Viewport Mini Par",
-  manufacturer: "Rayard",
+  manufacturer: "Syndocal",
   mode_name: "Dimmer Pan Tilt RGB",
   universe: 0,
   address,

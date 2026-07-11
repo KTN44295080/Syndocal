@@ -598,7 +598,7 @@ fn parse_dmx_channel(
     let geometry = attr(&channel, "Geometry").map(str::to_string);
     if offsets.len() > 2 {
         warnings.push(format!(
-            "DMXChannel {channel_name} uses {} byte offsets; Rayard stores attributes as 16-bit values and scales them across all fixture bytes",
+            "DMXChannel {channel_name} uses {} byte offsets; Syndocal stores attributes as 16-bit values and scales them across all fixture bytes",
             offsets.len()
         ));
     }
@@ -1089,7 +1089,7 @@ mod tests {
     const SAMPLE_XML: &str = r##"
         <?xml version="1.0" encoding="UTF-8"?>
         <GDTF DataVersion="1.2">
-          <FixtureType Name="Mini Spot" ShortName="MS" Manufacturer="Rayard" FixtureTypeID="abc">
+          <FixtureType Name="Mini Spot" ShortName="MS" Manufacturer="Syndocal" FixtureTypeID="abc">
             <Geometries>
               <Geometry Name="Base" Matrix="{1,0,0,0}{0,1,0,0}{0,0,1,0}{0,0,0,1}">
                 <GeometryBeam Name="Head" Position="{1,0,0,2}{0,1,0,3}{0,0,1,4}{0,0,0,1}" />
@@ -1164,7 +1164,7 @@ mod tests {
     fn parses_modes_channels_and_geometry() {
         let profile = parse_description_xml("fixture.gdtf", SAMPLE_XML).unwrap();
 
-        assert_eq!(profile.manufacturer, "Rayard");
+        assert_eq!(profile.manufacturer, "Syndocal");
         assert_eq!(profile.name, "Mini Spot");
         assert_eq!(profile.geometries.len(), 2);
         assert_eq!(profile.dmx_modes[0].controls.len(), 3);
@@ -1250,7 +1250,7 @@ mod tests {
     fn parses_non_geometry_prefixed_gdtf_geometry_nodes() {
         let xml = r#"
             <GDTF>
-              <FixtureType Name="Moving Head" Manufacturer="Rayard">
+              <FixtureType Name="Moving Head" Manufacturer="Syndocal">
                 <Models>
                   <Model Name="LensModel" File="models/lens.glb" PrimitiveType="Cylinder"
                          Length="0.2" Width="0.12" Height="0.08" />
@@ -1321,7 +1321,7 @@ mod tests {
     fn warns_about_unresolved_and_ambiguous_geometry_references() {
         let xml = r#"
             <GDTF>
-              <FixtureType Name="Broken Geometry" Manufacturer="Rayard">
+              <FixtureType Name="Broken Geometry" Manufacturer="Syndocal">
                 <Geometries>
                   <Geometry Name="Base">
                     <Axis Name="Head" />
@@ -1410,7 +1410,7 @@ mod tests {
     fn channel_function_wheel_slot_index_resolves_slot_metadata() {
         let xml = r##"
             <GDTF>
-              <FixtureType Name="Color Wheel" Manufacturer="Rayard">
+              <FixtureType Name="Color Wheel" Manufacturer="Syndocal">
                 <Wheels>
                   <Wheel Name="ColorWheel">
                     <WheelSlot Name="Red" Color="#ff0000" FileName="red_filter" />
@@ -1509,7 +1509,7 @@ mod tests {
     fn parses_multibyte_dmx_channels_as_scaled_16bit_controls() {
         let xml = r#"
             <GDTF>
-              <FixtureType Name="Extended Resolution" Manufacturer="Rayard">
+              <FixtureType Name="Extended Resolution" Manufacturer="Syndocal">
                 <DMXModes>
                   <DMXMode Name="Standard">
                     <DMXChannels>
@@ -1542,7 +1542,7 @@ mod tests {
     fn skips_channel_functions_without_parseable_dmx_from() {
         let xml = r#"
             <GDTF>
-              <FixtureType Name="Bad Function Ranges" Manufacturer="Rayard">
+              <FixtureType Name="Bad Function Ranges" Manufacturer="Syndocal">
                 <DMXModes>
                   <DMXMode Name="Standard">
                     <DMXChannels>
@@ -1709,7 +1709,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("rayard-test-{suffix}.gdtf"));
+        let path = std::env::temp_dir().join(format!("syndocal-test-{suffix}.gdtf"));
 
         {
             let file = File::create(&path).unwrap();

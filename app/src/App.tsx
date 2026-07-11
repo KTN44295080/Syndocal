@@ -130,6 +130,7 @@ import type {
   TimelineVideoAutomationSummary,
   VideoAutomationKeyframeSummary,
   VideoBlendMode,
+  VideoDecoderDiagnostics,
   VideoFrame,
   VideoEffectTarget,
   VideoLayerSummary,
@@ -398,7 +399,7 @@ import {
   videoAutomationValueFromState,
 } from "./timelineAutomationHelpers";
 
-const tauriBackendUnavailableMessage = "Rayard desktop backend is not connected in this browser preview.";
+const tauriBackendUnavailableMessage = "Syndocal desktop backend is not connected in this browser preview.";
 
 const isTauriRuntime = () =>
   typeof window !== "undefined" && Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
@@ -417,7 +418,7 @@ const listen = <T,>(event: string, handler: (event: { payload: T }) => void) => 
   return tauriListen<T>(event, handler);
 };
 
-const isRayardProjectPath = (path: string) => path.trim().toLowerCase().endsWith(".ry");
+const isSyndocalProjectPath = (path: string) => path.trim().toLowerCase().endsWith(".sdc");
 
 const profileLoadMessage = (prefix: string, profile: FixtureProfileSummary) => {
   const warningSuffix =
@@ -478,7 +479,7 @@ export default function App() {
   const [controlMode, setControlMode] = createSignal<ControlMode>("edit");
   const [profile, setProfile] = createSignal<FixtureProfileSummary | null>(null);
   const [selectedMode, setSelectedMode] = createSignal("");
-  const [customManufacturer, setCustomManufacturer] = createSignal("Rayard");
+  const [customManufacturer, setCustomManufacturer] = createSignal("Syndocal");
   const [customProfileName, setCustomProfileName] = createSignal("Custom Fixture");
   const [customModeName, setCustomModeName] = createSignal("Default");
   const [customAttributes, setCustomAttributes] = createSignal(defaultCustomAttributesText);
@@ -2408,6 +2409,8 @@ export default function App() {
     }
     return layers[0]?.id ?? null;
   });
+  const videoDecoderDiagnosticsLabel = (diagnostics: VideoDecoderDiagnostics) =>
+    `routes HAP ${diagnostics.hap_successes}/${diagnostics.hap_requests}, libav ${diagnostics.libav_successes}/${diagnostics.libav_requests}, CLI ${diagnostics.cli_fallback_successes}/${diagnostics.cli_fallback_requests}, deferred ${diagnostics.deferred_requests}, failed ${diagnostics.decode_failures}, cache ${diagnostics.hap_cache_len}+${diagnostics.libav_cache_len}+${diagnostics.cli_cache_len}`;
   const videoPreviewDiagnosticsText = createMemo(() => {
     const diagnostics = videoPreviewDiagnostics();
     if (!diagnostics) {
@@ -2417,7 +2420,7 @@ export default function App() {
     const activeQueues = diagnostics.layer_queues.filter((row) => row.queue_len > 0).length;
     const readyQueues = diagnostics.layer_queues.filter((row) => row.ready).length;
     const bpm = diagnostics.bpm && Number.isFinite(diagnostics.bpm) ? `, bpm ${diagnostics.bpm.toFixed(1)}` : "";
-    return `queues ${activeQueues}/${diagnostics.queue_count}, ready ${readyQueues}/${diagnostics.layer_queues.length}, frames ${queuedFrames}, cap ${diagnostics.frame_queue_capacity}, still ${diagnostics.still_image_cache_len}, decode ${diagnostics.decoder_cache_len}, prefetch ${diagnostics.prefetch_count}x${diagnostics.prefetch_interval_ms}ms${bpm}`;
+    return `queues ${activeQueues}/${diagnostics.queue_count}, ready ${readyQueues}/${diagnostics.layer_queues.length}, frames ${queuedFrames}, cap ${diagnostics.frame_queue_capacity}, still ${diagnostics.still_image_cache_len}, decode ${diagnostics.decoder_cache_len}, ${videoDecoderDiagnosticsLabel(diagnostics.decoder_diagnostics)}, prefetch ${diagnostics.prefetch_count}x${diagnostics.prefetch_interval_ms}ms${bpm}`;
   });
   const videoPreviewLayerDiagnostics = createMemo(() => videoPreviewDiagnostics()?.layer_queues ?? []);
   const videoPreviewPrefetchPlanLabel = (row: VideoPreviewDiagnostics["layer_queues"][number]) => {
@@ -2564,14 +2567,24 @@ export default function App() {
     }
     const openCount = Number(status.live_open) + Number(status.test_pattern_open);
     const performance = status.performance;
+    const budgetDetail = performance
+      ? performance.frame_budget_pass === true
+        ? " / 60fps budget pass"
+        : performance.frame_budget_pass === false
+          ? " / 60fps budget fail"
+          : ` / budget sampling ${performance.frame_count}/120`
+      : "";
+    const decoderDetail = performance
+      ? ` / ${videoDecoderDiagnosticsLabel(performance.decoder_diagnostics)}`
+      : "";
     const performanceDetail = performance
       ? performance.warmup_remaining > 0
-        ? ` / ${performance.width}x${performance.height} / warming ${performance.warmup_remaining} frame(s) / GPU alloc ${performance.output_reallocations}+${performance.layer_reallocations} / BC ${performance.compressed_layer_uploads}`
+        ? ` / ${performance.width}x${performance.height} / warming ${performance.warmup_remaining} frame(s) / GPU alloc ${performance.output_reallocations}+${performance.layer_reallocations} / BC ${performance.compressed_layer_uploads}${budgetDetail}${decoderDetail}`
         : ` / ${performance.width}x${performance.height} / avg ${(performance.average_frame_us / 1000).toFixed(2)} ms / max ${(
             performance.max_frame_us / 1000
           ).toFixed(2)} ms / ${performance.deadline_miss_count} late / GPU alloc ${performance.output_reallocations}+${
             performance.layer_reallocations
-          } / BC ${performance.compressed_layer_uploads}`
+          } / BC ${performance.compressed_layer_uploads}${budgetDetail}${decoderDetail}`
       : "";
     if (performance?.last_error) {
       return {
@@ -2736,7 +2749,7 @@ export default function App() {
     const path = currentProjectPath();
     const label = (() => {
       if (!path) {
-        return "Untitled.ry";
+        return "Untitled.sdc";
       }
       const normalizedPath = path.replaceAll("\\", "/");
       return normalizedPath.split("/").pop() || path;
@@ -3246,13 +3259,13 @@ export default function App() {
     clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
     clone.setAttribute("width", "1600");
     clone.setAttribute("height", "1600");
-    clone.setAttribute("data-rayard-export", "stage-plot-v1");
-    clone.setAttribute("data-rayard-project", projectFileLabel().replace(/\s+\*$/, ""));
-    clone.setAttribute("data-rayard-view", mappingStageViewBox());
+    clone.setAttribute("data-syndocal-export", "stage-plot-v1");
+    clone.setAttribute("data-syndocal-project", projectFileLabel().replace(/\s+\*$/, ""));
+    clone.setAttribute("data-syndocal-view", mappingStageViewBox());
 
     const namespace = "http://www.w3.org/2000/svg";
     const title = document.createElementNS(namespace, "title");
-    title.textContent = `Rayard 2D Stage Plot - ${projectFileLabel().replace(/\s+\*$/, "")}`;
+    title.textContent = `Syndocal 2D Stage Plot - ${projectFileLabel().replace(/\s+\*$/, "")}`;
     const description = document.createElementNS(namespace, "desc");
     description.textContent = [
       `Exported ${new Date().toISOString()}`,
@@ -3276,7 +3289,7 @@ export default function App() {
       const projectLabel = projectFileLabel().replace(/\s+\*$/, "");
       const envelope = {
         version: 1,
-        software: "Rayard",
+        software: "Syndocal",
         kind: "visualizer-render-payload",
         project: projectLabel,
         exported_at: new Date().toISOString(),
@@ -4059,7 +4072,7 @@ export default function App() {
     let disposed = false;
     let unlistenOpenProject: (() => void) | null = null;
     let unlistenProjectDrop: (() => void) | null = null;
-    void listen<string[]>("rayard://open-project", (event) => {
+    void listen<string[]>("syndocal://open-project", (event) => {
       const paths = Array.isArray(event.payload) ? event.payload : [];
       const path = paths[paths.length - 1];
       if (path) {
@@ -4077,7 +4090,7 @@ export default function App() {
     void getCurrentWebview()
       .onDragDropEvent((event) => {
         if (event.payload.type === "enter") {
-          setProjectDropState(event.payload.paths.some(isRayardProjectPath) ? "project" : "invalid");
+          setProjectDropState(event.payload.paths.some(isSyndocalProjectPath) ? "project" : "invalid");
           return;
         }
         if (event.payload.type === "leave") {
@@ -4088,10 +4101,10 @@ export default function App() {
           return;
         }
         setProjectDropState(null);
-        const projectPath = event.payload.paths.find(isRayardProjectPath);
+        const projectPath = event.payload.paths.find(isSyndocalProjectPath);
         if (!projectPath) {
           if (event.payload.paths.length > 0) {
-            setMessage("Drop a .ry project file to open it.");
+            setMessage("Drop a .sdc project file to open it.");
           }
           return;
         }
@@ -5139,7 +5152,7 @@ export default function App() {
       );
       const next = await refreshSnapshot();
       if (next) {
-        setCleanProjectSignature("__rayard_recovered_unsaved__");
+        setCleanProjectSignature("__syndocal_recovered_unsaved__");
         setProjectDirty(true);
       }
       clearProjectRecovery();
@@ -7990,7 +8003,7 @@ export default function App() {
         if (!projectDirty()) {
           return;
         }
-        if (confirmDiscardProjectChanges("close Rayard")) {
+        if (confirmDiscardProjectChanges("close Syndocal")) {
           approveNativeCloseOnce();
           return;
         }
@@ -8051,8 +8064,8 @@ export default function App() {
       />
       <Show when={projectDropState()}>
         <div class={`projectDropOverlay ${projectDropState() === "invalid" ? "invalid" : ""}`}>
-          <strong>{projectDropState() === "project" ? "Open Rayard Project" : "Unsupported File"}</strong>
-          <span>{projectDropState() === "project" ? "Drop to load the .ry project." : "Drop a .ry project file."}</span>
+          <strong>{projectDropState() === "project" ? "Open Syndocal Project" : "Unsupported File"}</strong>
+          <span>{projectDropState() === "project" ? "Drop to load the .sdc project." : "Drop a .sdc project file."}</span>
         </div>
       </Show>
 

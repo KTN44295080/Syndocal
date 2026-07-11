@@ -1,4 +1,4 @@
-const recentProjectsStorageKey = "rayard.recentProjects.v1";
+const recentProjectsStorageKey = "syndocal.recentProjects.v1";
 const recentProjectLimit = 8;
 
 export const recentProjectFileName = (path: string) => {
@@ -11,7 +11,7 @@ const normalizeRecentProjectPath = (path: unknown) => {
     return null;
   }
   const trimmed = path.trim();
-  return trimmed.toLowerCase().endsWith(".ry") ? trimmed : null;
+  return trimmed.toLowerCase().endsWith(".sdc") ? trimmed : null;
 };
 
 export const recentProjectPathsFromUnknown = (candidate: unknown) => {

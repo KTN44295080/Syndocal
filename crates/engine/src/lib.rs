@@ -606,13 +606,13 @@ impl EngineHandle {
         let runtime_shared_telemetry = Arc::clone(&shared_telemetry);
         let runtime_snapshot = Arc::clone(&snapshot);
         thread::Builder::new()
-            .name("rayard-engine".to_string())
+            .name("syndocal-engine".to_string())
             .spawn(move || {
                 let mut runtime =
                     EngineRuntime::new_with_shared_telemetry(output, runtime_shared_telemetry);
                 runtime.run(runtime_queue, runtime_wake, runtime_snapshot);
             })
-            .expect("failed to start Rayard engine thread");
+            .expect("failed to start Syndocal engine thread");
 
         Self {
             queue,
@@ -5187,7 +5187,7 @@ fn runtime_fixture_from_snapshot(fixture: &PatchedFixtureSummary) -> RuntimeFixt
                 controls: fixture.controls.clone(),
             }],
             geometries: fixture.geometries.clone(),
-            warnings: vec!["Loaded from Rayard project snapshot".to_string()],
+            warnings: vec!["Loaded from Syndocal project snapshot".to_string()],
         },
         mode_index: 0,
         limits: normalized_fixture_limits(fixture.limits),
@@ -7516,7 +7516,7 @@ mod tests {
     fn sample_profile() -> FixtureProfileSummary {
         FixtureProfileSummary {
             source_path: "memory://fixture.gdtf".to_string(),
-            manufacturer: "Rayard".to_string(),
+            manufacturer: "Syndocal".to_string(),
             name: "Mini Spot".to_string(),
             short_name: None,
             fixture_type_id: None,
@@ -7567,7 +7567,7 @@ mod tests {
             label: label.to_string(),
             profile_source_path: "memory://fixture.gdtf".to_string(),
             profile_name: "Snapshot Fixture".to_string(),
-            manufacturer: "Rayard".to_string(),
+            manufacturer: "Syndocal".to_string(),
             mode_name: "Standard".to_string(),
             universe: 0,
             address,
@@ -8267,7 +8267,7 @@ mod tests {
                 label: "Loaded Fixture".to_string(),
                 profile_source_path: "C:/missing/profiles/snapshot-source.gdtf".to_string(),
                 profile_name: "Snapshot Fixture".to_string(),
-                manufacturer: "Rayard".to_string(),
+                manufacturer: "Syndocal".to_string(),
                 mode_name: "Default".to_string(),
                 universe: 1,
                 address: 12,
@@ -8945,7 +8945,7 @@ mod tests {
                 label: "Loaded Fixture".to_string(),
                 profile_source_path: "memory://fixture.gdtf".to_string(),
                 profile_name: "Snapshot Fixture".to_string(),
-                manufacturer: "Rayard".to_string(),
+                manufacturer: "Syndocal".to_string(),
                 mode_name: "Standard".to_string(),
                 universe: 0,
                 address: 1,

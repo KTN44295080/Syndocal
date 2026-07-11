@@ -7,16 +7,37 @@ use std::{
 use hap_parser::TextureFormat;
 use mp4::{Mp4Reader, TrackType};
 use protocol::{VideoLayerId, VideoSourceKind};
+use serde::Serialize;
 
 use super::{
     FfmpegCliFrameDecoder, LibavFrameDecoder, StillImageSignature, VideoDecodeError, VideoFrame,
     VideoFrameDecoder, VideoFrameRequest, VideoPixelFormat,
 };
 
+#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
+pub struct VideoDecoderDiagnostics {
+    pub total_requests: u64,
+    pub hap_requests: u64,
+    pub hap_successes: u64,
+    pub hap_failures: u64,
+    pub libav_requests: u64,
+    pub libav_successes: u64,
+    pub libav_failures: u64,
+    pub cli_fallback_requests: u64,
+    pub cli_fallback_successes: u64,
+    pub cli_fallback_failures: u64,
+    pub deferred_requests: u64,
+    pub decode_failures: u64,
+    pub hap_cache_len: usize,
+    pub libav_cache_len: usize,
+    pub cli_cache_len: usize,
+}
+
 pub struct PreferredVideoFrameDecoder {
     hap: HapMovFrameDecoder,
     libav: LibavFrameDecoder,
     fallback: FfmpegCliFrameDecoder,
+    diagnostics: VideoDecoderDiagnostics,
 }
 
 pub struct HapMovFrameDecoder {
@@ -63,6 +84,7 @@ impl PreferredVideoFrameDecoder {
             hap: HapMovFrameDecoder::new(),
             libav: LibavFrameDecoder::new(),
             fallback,
+            diagnostics: VideoDecoderDiagnostics::default(),
         }
     }
 
@@ -77,6 +99,43 @@ impl PreferredVideoFrameDecoder {
     pub fn cache_len(&self) -> usize {
         self.hap.frame_cache_len() + self.libav.cache_len() + self.fallback.cache_len()
     }
+
+    pub fn diagnostics(&self) -> VideoDecoderDiagnostics {
+        VideoDecoderDiagnostics {
+            hap_cache_len: self.hap.frame_cache_len(),
+            libav_cache_len: self.libav.cache_len(),
+            cli_cache_len: self.fallback.cache_len(),
+            ..self.diagnostics
+        }
+    }
+
+    fn decode_cli_fallback(
+        &mut self,
+        request: &VideoFrameRequest,
+        primary_error: Option<VideoDecodeError>,
+    ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        self.diagnostics.cli_fallback_requests =
+            self.diagnostics.cli_fallback_requests.saturating_add(1);
+        match self.fallback.decode_frame(request) {
+            Ok(Some(frame)) => {
+                self.diagnostics.cli_fallback_successes =
+                    self.diagnostics.cli_fallback_successes.saturating_add(1);
+                Ok(Some(frame))
+            }
+            Ok(None) => {
+                self.diagnostics.deferred_requests =
+                    self.diagnostics.deferred_requests.saturating_add(1);
+                Ok(None)
+            }
+            Err(fallback_error) => {
+                self.diagnostics.cli_fallback_failures =
+                    self.diagnostics.cli_fallback_failures.saturating_add(1);
+                self.diagnostics.decode_failures =
+                    self.diagnostics.decode_failures.saturating_add(1);
+                Err(primary_error.unwrap_or(fallback_error))
+            }
+        }
+    }
 }
 
 impl VideoFrameDecoder for PreferredVideoFrameDecoder {
@@ -90,13 +149,45 @@ impl VideoFrameDecoder for PreferredVideoFrameDecoder {
         &mut self,
         request: &VideoFrameRequest,
     ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        self.diagnostics.total_requests = self.diagnostics.total_requests.saturating_add(1);
         if HapMovFrameDecoder::supports_request(request) {
-            self.hap.decode_frame(request)
-        } else {
-            match self.libav.decode_frame(request) {
-                Ok(Some(frame)) => Ok(Some(frame)),
-                Ok(None) => self.fallback.decode_frame(request),
-                Err(libav_error) => self.fallback.decode_frame(request).or(Err(libav_error)),
+            self.diagnostics.hap_requests = self.diagnostics.hap_requests.saturating_add(1);
+            return match self.hap.decode_frame(request) {
+                Ok(Some(frame)) => {
+                    self.diagnostics.hap_successes =
+                        self.diagnostics.hap_successes.saturating_add(1);
+                    Ok(Some(frame))
+                }
+                Ok(None) => {
+                    self.diagnostics.deferred_requests =
+                        self.diagnostics.deferred_requests.saturating_add(1);
+                    Ok(None)
+                }
+                Err(error) => {
+                    self.diagnostics.hap_failures = self.diagnostics.hap_failures.saturating_add(1);
+                    self.diagnostics.decode_failures =
+                        self.diagnostics.decode_failures.saturating_add(1);
+                    Err(error)
+                }
+            };
+        }
+        if request.source.kind != VideoSourceKind::File {
+            self.diagnostics.deferred_requests =
+                self.diagnostics.deferred_requests.saturating_add(1);
+            return Ok(None);
+        }
+
+        self.diagnostics.libav_requests = self.diagnostics.libav_requests.saturating_add(1);
+        match self.libav.decode_frame(request) {
+            Ok(Some(frame)) => {
+                self.diagnostics.libav_successes =
+                    self.diagnostics.libav_successes.saturating_add(1);
+                Ok(Some(frame))
+            }
+            Ok(None) => self.decode_cli_fallback(request, None),
+            Err(libav_error) => {
+                self.diagnostics.libav_failures = self.diagnostics.libav_failures.saturating_add(1);
+                self.decode_cli_fallback(request, Some(libav_error))
             }
         }
     }
@@ -418,7 +509,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "rayard-hap-decoder-{}-{serial}-{}.mov",
+            "syndocal-hap-decoder-{}-{serial}-{}.mov",
             std::process::id(),
             NEXT_TEST_FILE.fetch_add(1, Ordering::Relaxed)
         ));
@@ -497,7 +588,7 @@ mod tests {
     fn preferred_decoder_routes_hap_without_invoking_ffmpeg() {
         let path = write_hap_movie(&[hap_section(0xAB, &[0; 8])], 4, 4);
         let missing_ffmpeg =
-            std::env::temp_dir().join(format!("rayard-missing-ffmpeg-{}", std::process::id()));
+            std::env::temp_dir().join(format!("syndocal-missing-ffmpeg-{}", std::process::id()));
         let mut decoder =
             PreferredVideoFrameDecoder::new(FfmpegCliFrameDecoder::new(missing_ffmpeg));
 
@@ -506,6 +597,16 @@ mod tests {
         assert_eq!(frame.format, VideoPixelFormat::Dxt1);
         assert_eq!(decoder.hap().movie_cache_len(), 1);
         assert_eq!(decoder.cache_len(), 1);
+        assert_eq!(
+            decoder.diagnostics(),
+            VideoDecoderDiagnostics {
+                total_requests: 1,
+                hap_requests: 1,
+                hap_successes: 1,
+                hap_cache_len: 1,
+                ..VideoDecoderDiagnostics::default()
+            }
+        );
         fs::remove_file(path).unwrap();
     }
 }

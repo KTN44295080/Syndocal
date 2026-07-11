@@ -1,7 +1,7 @@
-# Rayard 完成計画書 / Codex 作業指示書
+# Syndocal 完成計画書 / Codex 作業指示書
 
 作成日: 2026-07-10
-対象: Rayard — Rust/Tauri/SolidJS 製 DMX 照明 + VJ 統合コントロールアプリ
+対象: Syndocal — Rust/Tauri/SolidJS 製 DMX 照明 + VJ 統合コントロールアプリ
 運用: この文書は「完成(v1.0)」までのロードマップと、Codex/Claude セッションへの標準作業指示を兼ねる。
 日々のスライス記録は従来どおり `CLAUDE.md` に追記し、この文書はマイルストーン単位でのみ更新する。
 
@@ -9,7 +9,7 @@
 
 ## 1. 完成(v1.0)の定義 — Definition of Done
 
-以下がすべて満たされたとき、Rayard v1.0 とする。
+以下がすべて満たされたとき、Syndocal v1.0 とする。
 
 ### 機能要件
 - [ ] 照明: GDTF/カスタムプロファイルのパッチ → 2D マッピング → キュー/タイムライン/エフェクト → Art-Net / sACN / シリアル DMX 出力が、実機で安定動作する。
@@ -18,16 +18,16 @@
 - [ ] 共有エフェクト: 1 つの LFO/PositionWave ソースが照明と映像の両方を駆動する(実装済み — 回帰させない)。
 - [ ] タイムライン: キューイベント + 照明/映像オートメーションが 1 本のタイムラインで同期する(実装済み — 回帰させない)。
 - [ ] 外部 I/O: MIDI 入出力、OSC、Web リモートが動作する(実装済み)。NDI 送出は実バインディングで動作する。Spout/Syphon は v1.0 では「実装 or 明示的にロードマップ外」を決定済みであること。
-- [ ] プロジェクト: `.ry` の保存/読込/検証/自動リカバリが完結し、外部ファイル欠損時も自己完結スナップショットで復元できる。
+- [ ] プロジェクト: `.sdc` の保存/読込/検証/自動リカバリが完結し、外部ファイル欠損時も自己完結スナップショットで復元できる。
 
 ### 品質要件
 - [ ] `cargo test --workspace` が green。
 - [ ] `pnpm --dir app build`(tsc + vite)が green、メインチャンク < 500 kB。
 - [ ] `npm run check:viewport` が green(アプリ本体はスクロールしない一画面デスク)。
 - [ ] 44 Hz DMX ティックがテレメトリ予算内(budget report が pass)で、1 時間ソークでドロップ/リークなし。
-- [ ] **Tier 1: Windows 10+ / macOS 12+** でネイティブリリースビルド、起動、`.ry` 保存/読込、Art-Net/sACN、MIDI/OSC、wgpu 映像出力、1画面UIのスモークテストが通る。
-- [ ] **Tier 2: Linux (Ubuntu 22.04+)** でビルド・起動し、`.ry` 保存/読込、Art-Net/sACN、MIDI/OSC、wgpu 映像出力、1画面UIのスモークテストが通る。配布形式とデスクトップ統合の差は既知の制限として記録する。
-- [ ] Windows の NSIS/MSI、macOS の `.app`/DMG、Linux の AppImage または `.deb` を生成し、Tier 1 では `.ry` 関連付けまで確認する。
+- [ ] **Tier 1: Windows 10+ / macOS 12+** でネイティブリリースビルド、起動、`.sdc` 保存/読込、Art-Net/sACN、MIDI/OSC、wgpu 映像出力、1画面UIのスモークテストが通る。
+- [ ] **Tier 2: Linux (Ubuntu 22.04+)** でビルド・起動し、`.sdc` 保存/読込、Art-Net/sACN、MIDI/OSC、wgpu 映像出力、1画面UIのスモークテストが通る。配布形式とデスクトップ統合の差は既知の制限として記録する。
+- [ ] Windows の NSIS/MSI、macOS の `.app`/DMG、Linux の AppImage または `.deb` を生成し、Tier 1 では `.sdc` 関連付けまで確認する。
 - [ ] CI の Windows / macOS / Linux マトリクスで Rust ワークスペースとフロントエンドの非実機テストが green。OS固有機能を無効化した共通コアも全OSでコンパイルできる。
 - [ ] クラッシュ/強制終了 → 再起動 → リカバリチェックポイントから復元、が手動テストで通る。
 
@@ -48,7 +48,7 @@
 
 ### 進行中(未コミットの作業ツリー)
 - `app/src/dmxAddressing.ts` + `app/scripts/check-dmx-addressing-helpers.mjs`: DMX アドレス占有/空き判定の純粋ヘルパー抽出。
-- `app/src/projectRecoveryStorage.ts` + `app/scripts/check-project-storage-helpers.mjs`: localStorage ベースのプロジェクト自動リカバリチェックポイント(`rayard.projectRecovery.v1`)。
+- `app/src/projectRecoveryStorage.ts` + `app/scripts/check-project-storage-helpers.mjs`: localStorage ベースのプロジェクト自動リカバリチェックポイント(`syndocal.projectRecovery.v1`)。
 - App.tsx / PatchFixtureFormPanel / WorkspaceChrome / styles.css / main.rs への対応配線。
 
 **→ 最初のアクション: この進行中スライスを検証して完結させ、コミットチェックポイントを切ること(§4 M0 参照)。**
@@ -72,7 +72,7 @@
 - [x] DMX アドレッシングヘルパーのスライス完了: `node app/scripts/check-dmx-addressing-helpers.mjs` green、App.tsx/PatchFixtureFormPanel の配線確認。
 - [x] プロジェクトリカバリのスライス完了: `node app/scripts/check-project-storage-helpers.mjs` green、保存/復元/破棄の UI フロー手動確認。
 - [x] `pnpm --dir app build` + `npm run check:viewport` green。
-- [x] `cargo test -p rayard project_` green(main.rs を触っているため)。
+- [x] `cargo test -p syndocal project_` green(main.rs を触っているため)。
 - [x] **意味のあるコミットメッセージでコミット**(「s」のような無意味メッセージは今後禁止 — §6 参照)。
 - 検証ゲート: 上記すべて + `git status` がクリーン。
 
@@ -116,7 +116,7 @@ CPU プレビューを wgpu 実出力に置き換える。**照明エンジン�
     - v1.0 の対象は HAP (BC1)、HAP Alpha (BC3)、HAP Q (YCoCg BC3)。HAP Q Alpha と HAP R/BC7 は素材・仕様・wgpu機能の追加検証が必要なため v1.x 候補とし、未対応形式はCPU展開へ黙ってフォールバックせず明示エラーにする。
     - Windows実画面で640x360の再現可能なHAP Q QA素材をネイティブ出力し、補正済み非空フレームを確認。圧縮アップロード数は1394から2163へ増加し、GPU割当は`1+2`のまま再利用された。
   - [x] M3.3c: H.264/H.265/ProResをインプロセスlibavワーカーへ移し、FFmpeg CLIフレーム抽出をReference/診断用途へ降格する。(2026-07-11)
-    - `rayard`の既定featureでlibavを有効化。Windows/macOS/Linux CIにFFmpeg/Clang開発環境を追加し、共有ライブラリの配布物同梱は`bundle.active`を有効化するM6で確定する。
+    - `syndocal`の既定featureでlibavを有効化。Windows/macOS/Linux CIにFFmpeg/Clang開発環境を追加し、共有ライブラリの配布物同梱は`bundle.active`を有効化するM6で確定する。
 - 段階 4: 既存のフレームキュー/デコード診断/テレメトリを新パスに接続。CPU プレビューは「Preview (Reference)」として残す。
 - 検証ゲート: `cargo test -p video`(ゴールデン含む)、1080p60 多レイヤーでのフレームタイム計測、既存 `video_preview*` テスト green、DMX テレメトリ予算に影響なし。
 
@@ -132,13 +132,13 @@ CPU プレビューを wgpu 実出力に置き換える。**照明エンジン�
 - [ ] 1 時間ソークテスト: mini-show + エフェクト複数 + 動画 1 レイヤー再生で、メモリ/テレメトリ/フレームドロップを記録するスクリプト or 手順を整備。
 - [ ] プロジェクトリカバリ(M0 の機能)をクラッシュ注入で検証: プロセス kill → 再起動 → 復元。
 - [ ] 大規模プロジェクト負荷: フィクスチャ 200 台 / 8 ユニバース / キュー 100 個で UI 応答と DMX 予算を確認。
-- [ ] `.ry` 後方互換: 旧サンプルとバージョンフィールドの移行方針(未知フィールド許容/バージョンアップ規約)を確定しテスト化。
+- [ ] `.sdc` 後方互換: 旧サンプルとバージョンフィールドの移行方針(未知フィールド許容/バージョンアップ規約)を確定しテスト化。
 - 検証ゲート: ソーク記録、`engine_telemetry_budget_report*` green、負荷時 budget pass。
 
 ### M6 — リリース準備(1 週)
 - [ ] バージョニング確定(v1.0.0)、`tauri.conf.json` / `package.json` / Cargo メタデータ整合。
 - [ ] GitHub Actions または同等CIに `windows-latest` / `macos-latest` / `ubuntu-22.04` のマトリクスを用意し、Rustテスト、フロントエンドビルド、Tauriコンパイルを継続検証する。
-- [ ] Windows NSIS/MSI、macOS `.app`/DMG、Linux AppImageまたは`.deb`を生成し、製品名・`.ry`関連付け・アイコン・発行者名(Seraf()のKTN)を確認する。
+- [ ] Windows NSIS/MSI、macOS `.app`/DMG、Linux AppImageまたは`.deb`を生成し、製品名・`.sdc`関連付け・アイコン・発行者名(Seraf()のKTN)を確認する。
 - [ ] コード署名/公証の要否決定(D3)。未署名ならWindows SmartScreenとmacOS Gatekeeperの手順をREADMEに明記する。
 - [ ] ドキュメント一括更新: README(ユーザ向け)、samples/README.md、ホットキー一覧、既知の制限(Spout/Syphon 等)。
 - [ ] 最終 QA パス: 本計画書 §1 の Definition of Done を上から全チェック。
@@ -175,7 +175,7 @@ CPU プレビューを wgpu 実出力に置き換える。**照明エンジン�
 ## 6. Codex への標準作業指示(全セッション共通)
 
 ### スライス規律
-1. **1 スライス = 1 境界 + 1 検証**。Engine → `cargo test -p engine`、Tauri/検証/プロジェクトファイル → `cargo test -p rayard`、フロントエンド → `pnpm --dir app build`(+ UI/CSS 変更時は `npm run check:viewport`)、GDTF → `cargo test -p gdtf`。
+1. **1 スライス = 1 境界 + 1 検証**。Engine → `cargo test -p engine`、Tauri/検証/プロジェクトファイル → `cargo test -p syndocal`、フロントエンド → `pnpm --dir app build`(+ UI/CSS 変更時は `npm run check:viewport`)、GDTF → `cargo test -p gdtf`。
 2. スライス完了ごとに `CLAUDE.md` に日付付きで記録(従来形式を踏襲)。
 3. **コミット規約(新規)**: スライス完了 = コミット。メッセージは `<領域>: <変更内容>` 形式(例: `mapping: extract viewport shell into component`)。「s」のような無意味メッセージは禁止。M0 以降、未コミットの巨大ダーティツリーを再び作らない。
 
@@ -183,7 +183,7 @@ CPU プレビューを wgpu 実出力に置き換える。**照明エンジン�
 - アプリ本体(window/document/.app)をスクロールさせない。長いリストはパネル内スクロールのみ。UI/CSS を触ったら必ず `npm run check:viewport`。
 - `App.tsx` を成長させない。追加 UI は最初からコンポーネントへ。抽出前に既存 `app/src/*.ts`(特に `uiModes.ts` / `videoOutputMapping.ts` / `videoLayerDefaults.ts`)を grep して重複モジュールを作らない。
 - メインチャンク 500 kB 未満を維持。新しい重いパネルは `manualChunks` か lazy-load へ。
-- 製品名 Rayard / 拡張子 `.ry` / 開発者名 Seraf()のKTN を維持。旧名エイリアスをユーザ向けファイルに出さない。
+- 製品名 Syndocal / 拡張子 `.sdc` / 開発者名 Seraf()のKTN を維持。旧名エイリアスをユーザ向けファイルに出さない。
 - 共通コードからOS固有APIを直接呼ばない。Windows/macOS/Linux差分は専用モジュール、`cfg`、feature flagで隔離し、非対応機能は起動失敗ではなく明示的なUnavailable状態にする。
 - 3D ビジュアライザをメイン UI に戻さない(`crates/visualizer` はデータ境界のまま)。
 - README/docs の更新は M6 まで意図的にバッチする(従来方針の継続)。ただし CLAUDE.md への記録は毎スライス必須。
@@ -198,7 +198,7 @@ npm --prefix app run check:viewport
 
 # Rust(対象を絞る)
 cargo test -p engine <name>
-cargo test -p rayard <name>
+cargo test -p syndocal <name>
 cargo test -p io / -p gdtf / -p video
 
 # マイルストーン時のみ

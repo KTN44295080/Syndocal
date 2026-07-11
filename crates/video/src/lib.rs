@@ -21,7 +21,7 @@ mod libav_decoder;
 
 pub use gpu_compositor::{GpuCompositeError, GpuCompositor};
 pub use gpu_surface::{GpuSurfaceBufferStats, GpuSurfaceError, GpuSurfacePresenter};
-pub use hap_decoder::{HapMovFrameDecoder, PreferredVideoFrameDecoder};
+pub use hap_decoder::{HapMovFrameDecoder, PreferredVideoFrameDecoder, VideoDecoderDiagnostics};
 pub use libav_decoder::LibavFrameDecoder;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1315,7 +1315,7 @@ impl FfmpegCliFrameDecoder {
     }
 
     pub fn from_env() -> Self {
-        Self::new(std::env::var_os("RAYARD_FFMPEG").unwrap_or_else(|| "ffmpeg".into()))
+        Self::new(std::env::var_os("SYNDOCAL_FFMPEG").unwrap_or_else(|| "ffmpeg".into()))
     }
 
     pub fn binary(&self) -> &Path {
@@ -1598,10 +1598,10 @@ pub fn probe_video_file_metadata_with_binary(
 }
 
 fn ffprobe_binary_from_env() -> PathBuf {
-    if let Some(binary) = std::env::var_os("RAYARD_FFPROBE") {
+    if let Some(binary) = std::env::var_os("SYNDOCAL_FFPROBE") {
         return binary.into();
     }
-    if let Some(ffmpeg) = std::env::var_os("RAYARD_FFMPEG") {
+    if let Some(ffmpeg) = std::env::var_os("SYNDOCAL_FFMPEG") {
         let path = PathBuf::from(ffmpeg);
         let file_name = path
             .file_name()
@@ -4457,7 +4457,7 @@ mod tests {
         let extension = if cfg!(windows) { "cmd" } else { "sh" };
         let serial = FAKE_FFMPEG_BINARY_COUNTER.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
-            "rayard-fake-ffmpeg-{}-{serial}.{extension}",
+            "syndocal-fake-ffmpeg-{}-{serial}.{extension}",
             std::process::id(),
         ));
         #[cfg(windows)]
@@ -4797,7 +4797,7 @@ mod tests {
     #[test]
     fn video_preview_renderer_uses_still_image_pixels() {
         let path = std::env::temp_dir().join(format!(
-            "rayard-preview-still-{}-{}.png",
+            "syndocal-preview-still-{}-{}.png",
             std::process::id(),
             1
         ));
@@ -6051,7 +6051,7 @@ mod tests {
     #[test]
     fn video_runtime_status_reports_missing_cli_tools() {
         let missing =
-            std::env::temp_dir().join(format!("rayard-missing-ffmpeg-{}", std::process::id()));
+            std::env::temp_dir().join(format!("syndocal-missing-ffmpeg-{}", std::process::id()));
 
         let status = video_runtime_status_with_binaries(&missing, &missing);
 
@@ -6098,7 +6098,7 @@ mod tests {
     #[test]
     fn still_image_loader_reads_png_as_rgba_frame() {
         let path = std::env::temp_dir().join(format!(
-            "rayard-still-image-{}-{}.png",
+            "syndocal-still-image-{}-{}.png",
             std::process::id(),
             1
         ));
@@ -6121,7 +6121,7 @@ mod tests {
     #[test]
     fn still_image_metadata_probe_reads_dimensions_without_duration() {
         let path = std::env::temp_dir().join(format!(
-            "rayard-still-probe-{}-{}.png",
+            "syndocal-still-probe-{}-{}.png",
             std::process::id(),
             1
         ));
@@ -6140,7 +6140,7 @@ mod tests {
     #[test]
     fn still_image_cache_reuses_frames_and_invalidates_when_file_changes() {
         let path = std::env::temp_dir().join(format!(
-            "rayard-still-cache-{}-{}.png",
+            "syndocal-still-cache-{}-{}.png",
             std::process::id(),
             1
         ));
@@ -6170,9 +6170,9 @@ mod tests {
     #[test]
     fn still_image_cache_can_retain_active_layers() {
         let path_a =
-            std::env::temp_dir().join(format!("rayard-still-cache-{}-a.png", std::process::id()));
+            std::env::temp_dir().join(format!("syndocal-still-cache-{}-a.png", std::process::id()));
         let path_b =
-            std::env::temp_dir().join(format!("rayard-still-cache-{}-b.png", std::process::id()));
+            std::env::temp_dir().join(format!("syndocal-still-cache-{}-b.png", std::process::id()));
         let image = image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 255]));
         image.save(&path_a).unwrap();
         image.save(&path_b).unwrap();
@@ -6284,7 +6284,7 @@ mod tests {
                     monitor_id: None,
                     width: 1920,
                     height: 1080,
-                    endpoint_name: Some("Rayard Program".to_string()),
+                    endpoint_name: Some("Syndocal Program".to_string()),
                     opacity: 0.75,
                     blackout: false,
                     mapping: VideoOutputMapping::default(),
@@ -6332,7 +6332,7 @@ mod tests {
                 })
                 .collect::<Vec<_>>(),
             vec![
-                (11, "ndi", "Rayard Program", true, false),
+                (11, "ndi", "Syndocal Program", true, false),
                 (12, "syphon", "Syphon Fallback", false, true)
             ]
         );
@@ -6376,7 +6376,7 @@ mod tests {
                 monitor_id: None,
                 width: 1920,
                 height: 1080,
-                endpoint_name: Some("Rayard Stage".to_string()),
+                endpoint_name: Some("Syndocal Stage".to_string()),
                 opacity: 0.75,
                 blackout: false,
                 mapping: VideoOutputMapping::default(),
@@ -6489,7 +6489,7 @@ mod tests {
                 monitor_id: None,
                 width: 1920,
                 height: 1080,
-                endpoint_name: Some("Rayard Stage".to_string()),
+                endpoint_name: Some("Syndocal Stage".to_string()),
                 opacity: 1.0,
                 blackout: false,
                 mapping: VideoOutputMapping::default(),
@@ -6532,7 +6532,7 @@ mod tests {
         assert_eq!(first.active_count, 1);
         assert_eq!(
             driver.events,
-            vec!["start:Output:spout:Rayard Stage".to_string()]
+            vec!["start:Output:spout:Syndocal Stage".to_string()]
         );
         let first_status = runtime.status();
         assert_eq!(first_status.active_count, 1);
@@ -6561,8 +6561,8 @@ mod tests {
         assert_eq!(
             driver.events,
             vec![
-                "start:Output:spout:Rayard Stage".to_string(),
-                "stop:Output:spout:Rayard Stage".to_string()
+                "start:Output:spout:Syndocal Stage".to_string(),
+                "stop:Output:spout:Syndocal Stage".to_string()
             ]
         );
     }
@@ -6615,7 +6615,7 @@ mod tests {
                 monitor_id: None,
                 width: 1920,
                 height: 1080,
-                endpoint_name: Some("Rayard Stage".to_string()),
+                endpoint_name: Some("Syndocal Stage".to_string()),
                 opacity: 1.0,
                 blackout: false,
                 mapping: VideoOutputMapping::default(),

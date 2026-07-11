@@ -9,7 +9,7 @@ const transpiled = ts.transpileModule(source, {
 });
 const model = await import(`data:text/javascript;base64,${Buffer.from(transpiled.outputText).toString("base64")}`);
 
-assert.equal(model.appStatusTone("Saved project show.ry"), "success");
+assert.equal(model.appStatusTone("Saved project show.sdc"), "success");
 assert.equal(model.appStatusTone("No MIDI input selected."), "warning");
 assert.equal(model.appStatusTone("DMX address conflict: U0 A1"), "error");
 assert.equal(model.appStatusTone("Timeline playing."), "info");

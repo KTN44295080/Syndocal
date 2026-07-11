@@ -231,7 +231,7 @@ pub(crate) fn write_frame_texture(
 
 pub(crate) fn create_gpu_composite_pipelines(device: &wgpu::Device) -> GpuCompositePipelines {
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("Rayard video GPU compositor bind group layout"),
+        label: Some("Syndocal video GPU compositor bind group layout"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
@@ -276,16 +276,16 @@ pub(crate) fn create_gpu_composite_pipelines(device: &wgpu::Device) -> GpuCompos
         ],
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("Rayard video GPU compositor pipeline layout"),
+        label: Some("Syndocal video GPU compositor pipeline layout"),
         bind_group_layouts: &[&bind_group_layout],
         push_constant_ranges: &[],
     });
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Rayard video GPU compositor shader"),
+        label: Some("Syndocal video GPU compositor shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("gpu_compositor.wgsl").into()),
     });
     let composite = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("Rayard video GPU compositor pipeline"),
+        label: Some("Syndocal video GPU compositor pipeline"),
         layout: Some(&pipeline_layout),
         module: &shader,
         entry_point: Some("composite_layer"),
@@ -293,11 +293,11 @@ pub(crate) fn create_gpu_composite_pipelines(device: &wgpu::Device) -> GpuCompos
         cache: None,
     });
     let output_mapping_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Rayard video GPU output mapping shader"),
+        label: Some("Syndocal video GPU output mapping shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("gpu_output_mapping.wgsl").into()),
     });
     let output_mapping = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("Rayard video GPU output mapping pipeline"),
+        label: Some("Syndocal video GPU output mapping pipeline"),
         layout: Some(&pipeline_layout),
         module: &output_mapping_shader,
         entry_point: Some("map_output"),
@@ -323,7 +323,7 @@ impl GpuCompositor {
         let adapter_name = adapter.get_info().name;
         let required_features = requested_video_device_features(&adapter);
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("Rayard video GPU compositor"),
+            label: Some("Syndocal video GPU compositor"),
             required_features,
             ..Default::default()
         }))
@@ -364,7 +364,7 @@ impl GpuCompositor {
         let output_buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Rayard video GPU compositor output"),
+                label: Some("Syndocal video GPU compositor output"),
                 contents: &vec![0; buffer_size as usize],
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             });
@@ -386,13 +386,13 @@ impl GpuCompositor {
             let (source_texture, source_texture_view) = create_frame_texture(
                 &self.device,
                 texture_spec,
-                "Rayard video GPU compositor source texture",
+                "Syndocal video GPU compositor source texture",
             );
             write_frame_texture(&self.queue, &source_texture, frame, texture_spec);
             let source_buffer = self
                 .device
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Rayard video GPU compositor unused source buffer"),
+                    label: Some("Syndocal video GPU compositor unused source buffer"),
                     contents: &[0; 4],
                     usage: wgpu::BufferUsages::STORAGE,
                 });
@@ -411,12 +411,12 @@ impl GpuCompositor {
             let params_buffer = self
                 .device
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Rayard video GPU compositor params"),
+                    label: Some("Syndocal video GPU compositor params"),
                     contents: &params,
                     usage: wgpu::BufferUsages::UNIFORM,
                 });
             let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Rayard video GPU compositor bind group"),
+                label: Some("Syndocal video GPU compositor bind group"),
                 layout: &self.pipelines.bind_group_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
@@ -440,11 +440,11 @@ impl GpuCompositor {
             let mut encoder = self
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Rayard video GPU compositor encoder"),
+                    label: Some("Syndocal video GPU compositor encoder"),
                 });
             {
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("Rayard video GPU compositor pass"),
+                    label: Some("Syndocal video GPU compositor pass"),
                     timestamp_writes: None,
                 });
                 pass.set_pipeline(&self.pipelines.composite);
@@ -456,7 +456,7 @@ impl GpuCompositor {
         }
 
         let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Rayard video GPU compositor readback"),
+            label: Some("Syndocal video GPU compositor readback"),
             size: buffer_size,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
@@ -464,7 +464,7 @@ impl GpuCompositor {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Rayard video GPU compositor readback encoder"),
+                label: Some("Syndocal video GPU compositor readback encoder"),
             });
         encoder.copy_buffer_to_buffer(&output_buffer, 0, &readback, 0, buffer_size);
         self.queue.submit(Some(encoder.finish()));
@@ -522,14 +522,14 @@ impl GpuCompositor {
         let source_buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Rayard video GPU output mapping source"),
+                label: Some("Syndocal video GPU output mapping source"),
                 contents: &normalized.data,
                 usage: wgpu::BufferUsages::STORAGE,
             });
         let output_buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Rayard video GPU output mapping output"),
+                label: Some("Syndocal video GPU output mapping output"),
                 contents: &vec![0; buffer_size as usize],
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             });
@@ -537,12 +537,12 @@ impl GpuCompositor {
         let params_buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Rayard video GPU output mapping params"),
+                label: Some("Syndocal video GPU output mapping params"),
                 contents: &params,
                 usage: wgpu::BufferUsages::UNIFORM,
             });
         let dummy_texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Rayard video GPU output mapping unused texture"),
+            label: Some("Syndocal video GPU output mapping unused texture"),
             size: wgpu::Extent3d {
                 width: 1,
                 height: 1,
@@ -557,7 +557,7 @@ impl GpuCompositor {
         });
         let dummy_texture_view = dummy_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Rayard video GPU output mapping bind group"),
+            label: Some("Syndocal video GPU output mapping bind group"),
             layout: &self.pipelines.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -581,11 +581,11 @@ impl GpuCompositor {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Rayard video GPU output mapping encoder"),
+                label: Some("Syndocal video GPU output mapping encoder"),
             });
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Rayard video GPU output mapping pass"),
+                label: Some("Syndocal video GPU output mapping pass"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.pipelines.output_mapping);
@@ -610,7 +610,7 @@ impl GpuCompositor {
         buffer_size: u64,
     ) -> Result<Vec<u8>, GpuCompositeError> {
         let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Rayard video GPU readback"),
+            label: Some("Syndocal video GPU readback"),
             size: buffer_size,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
@@ -618,7 +618,7 @@ impl GpuCompositor {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Rayard video GPU readback encoder"),
+                label: Some("Syndocal video GPU readback encoder"),
             });
         encoder.copy_buffer_to_buffer(source_buffer, 0, &readback, 0, buffer_size);
         self.queue.submit(Some(encoder.finish()));

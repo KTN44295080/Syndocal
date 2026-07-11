@@ -1,10 +1,10 @@
 import type { ProjectFile } from "./types";
 
-const projectRecoveryStorageKey = "rayard.projectRecovery.v1";
+const projectRecoveryStorageKey = "syndocal.projectRecovery.v1";
 
 export interface ProjectRecoveryCheckpoint {
   version: 1;
-  app: "Rayard";
+  app: "Syndocal";
   saved_at: string;
   source_path: string | null;
   signature: string;
@@ -19,7 +19,7 @@ const isProjectFile = (candidate: unknown): candidate is ProjectFile => {
   const snapshot = source.snapshot as Partial<ProjectFile["snapshot"]> | undefined;
   return (
     source.version === 1 &&
-    source.app === "Rayard" &&
+    source.app === "Syndocal" &&
     Boolean(snapshot) &&
     Array.isArray(snapshot?.fixtures) &&
     Array.isArray(snapshot?.cues)
@@ -28,7 +28,7 @@ const isProjectFile = (candidate: unknown): candidate is ProjectFile => {
 
 export const projectRecoverySourceLabel = (checkpoint: ProjectRecoveryCheckpoint) => {
   if (!checkpoint.source_path) {
-    return "Untitled.ry";
+    return "Untitled.sdc";
   }
   const normalized = checkpoint.source_path.replaceAll("\\", "/");
   return normalized.split("/").pop()?.trim() || checkpoint.source_path;
@@ -53,7 +53,7 @@ export const createProjectRecoveryCheckpoint = (
   signature: string,
 ): ProjectRecoveryCheckpoint => ({
   version: 1,
-  app: "Rayard",
+  app: "Syndocal",
   saved_at: new Date().toISOString(),
   source_path: sourcePath,
   signature,
@@ -67,7 +67,7 @@ export const recoveryCheckpointFromUnknown = (candidate: unknown): ProjectRecove
   const source = candidate as Partial<ProjectRecoveryCheckpoint>;
   if (
     source.version !== 1 ||
-    source.app !== "Rayard" ||
+    source.app !== "Syndocal" ||
     typeof source.saved_at !== "string" ||
     typeof source.signature !== "string" ||
     !isProjectFile(source.project)
@@ -76,7 +76,7 @@ export const recoveryCheckpointFromUnknown = (candidate: unknown): ProjectRecove
   }
   return {
     version: 1,
-    app: "Rayard",
+    app: "Syndocal",
     saved_at: source.saved_at,
     source_path: typeof source.source_path === "string" && source.source_path.trim() ? source.source_path.trim() : null,
     signature: source.signature,

@@ -208,7 +208,7 @@ impl OscInput {
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
         let thread = thread::Builder::new()
-            .name("rayard-osc-input".to_string())
+            .name("syndocal-osc-input".to_string())
             .spawn(move || {
                 let mut buffer = [0u8; OSC_BUFFER_SIZE];
                 while !thread_stop.load(Ordering::Relaxed) {
@@ -338,7 +338,7 @@ fn event_from_message(message: &OscMessage) -> Option<OscInputEvent> {
     let path = message.addr.trim_matches('/');
     let segments = path.split('/').collect::<Vec<_>>();
     let segments = segments
-        .strip_prefix(&["rayard"])
+        .strip_prefix(&["syndocal"])
         .unwrap_or(segments.as_slice());
 
     match segments {
@@ -1172,19 +1172,19 @@ mod tests {
             },
             content: vec![
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/fixture/42/Dimmer".to_string(),
+                    addr: "/syndocal/fixture/42/Dimmer".to_string(),
                     args: vec![OscType::Float(0.5)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/fixture/42/highlight".to_string(),
+                    addr: "/syndocal/fixture/42/highlight".to_string(),
                     args: vec![OscType::Bool(true)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/fixture/42/solo".to_string(),
+                    addr: "/syndocal/fixture/42/solo".to_string(),
                     args: vec![OscType::Bool(false)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/fixture/42/park".to_string(),
+                    addr: "/syndocal/fixture/42/park".to_string(),
                     args: vec![OscType::Bool(true)],
                 }),
             ],
@@ -1223,11 +1223,11 @@ mod tests {
             },
             content: vec![
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/effect/9/enabled".to_string(),
+                    addr: "/syndocal/effect/9/enabled".to_string(),
                     args: vec![OscType::Bool(true)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/effect/10/enable".to_string(),
+                    addr: "/syndocal/effect/10/enable".to_string(),
                     args: vec![OscType::Int(0)],
                 }),
             ],
@@ -1257,11 +1257,11 @@ mod tests {
             },
             content: vec![
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/node/graph/12/enabled".to_string(),
+                    addr: "/syndocal/node/graph/12/enabled".to_string(),
                     args: vec![OscType::Bool(true)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/graph/13/enable".to_string(),
+                    addr: "/syndocal/graph/13/enable".to_string(),
                     args: vec![OscType::Int(0)],
                 }),
             ],
@@ -1291,98 +1291,98 @@ mod tests {
             },
             content: vec![
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/blackout".to_string(),
+                    addr: "/syndocal/blackout".to_string(),
                     args: vec![OscType::Bool(true)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/all/blackout".to_string(),
+                    addr: "/syndocal/all/blackout".to_string(),
                     args: vec![OscType::Bool(true)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/clear/fixture_flags".to_string(),
+                    addr: "/syndocal/clear/fixture_flags".to_string(),
                     args: Vec::new(),
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/fixtures/clear_flags/park".to_string(),
+                    addr: "/syndocal/fixtures/clear_flags/park".to_string(),
                     args: vec![OscType::Bool(true)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/cue/pause".to_string(),
+                    addr: "/syndocal/cue/pause".to_string(),
                     args: vec![OscType::Bool(true)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/cue/go".to_string(),
+                    addr: "/syndocal/cue/go".to_string(),
                     args: Vec::new(),
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/cue/back".to_string(),
+                    addr: "/syndocal/cue/back".to_string(),
                     args: Vec::new(),
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/cue/9".to_string(),
+                    addr: "/syndocal/cue/9".to_string(),
                     args: vec![OscType::Bool(true)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/cue/10/go".to_string(),
+                    addr: "/syndocal/cue/10/go".to_string(),
                     args: vec![OscType::Bool(false)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/timeline/play".to_string(),
+                    addr: "/syndocal/timeline/play".to_string(),
                     args: Vec::new(),
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/timeline/seek".to_string(),
+                    addr: "/syndocal/timeline/seek".to_string(),
                     args: vec![OscType::Int(24_000)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/timeline/timecode".to_string(),
+                    addr: "/syndocal/timeline/timecode".to_string(),
                     args: vec![
                         OscType::String("01:02:03:15@30".to_string()),
                         OscType::String("mtc".to_string()),
                     ],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/timeline/pause".to_string(),
+                    addr: "/syndocal/timeline/pause".to_string(),
                     args: Vec::new(),
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/timeline/beat/next".to_string(),
+                    addr: "/syndocal/timeline/beat/next".to_string(),
                     args: Vec::new(),
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/timeline/prev_beat".to_string(),
+                    addr: "/syndocal/timeline/prev_beat".to_string(),
                     args: vec![OscType::Bool(true)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/master".to_string(),
+                    addr: "/syndocal/master".to_string(),
                     args: vec![OscType::Float(0.42)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/submaster/front".to_string(),
+                    addr: "/syndocal/submaster/front".to_string(),
                     args: vec![OscType::Float(0.25)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/group/front/highlight".to_string(),
+                    addr: "/syndocal/group/front/highlight".to_string(),
                     args: vec![OscType::Bool(true)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/group/front/solo".to_string(),
+                    addr: "/syndocal/group/front/solo".to_string(),
                     args: vec![OscType::Bool(false)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/group/front/park".to_string(),
+                    addr: "/syndocal/group/front/park".to_string(),
                     args: Vec::new(),
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/bpm".to_string(),
+                    addr: "/syndocal/bpm".to_string(),
                     args: vec![OscType::Float(128.5)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/clock/link".to_string(),
+                    addr: "/syndocal/clock/link".to_string(),
                     args: vec![OscType::Float(126.0), OscType::Float(0.25)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/clock/sync".to_string(),
+                    addr: "/syndocal/clock/sync".to_string(),
                     args: vec![
                         OscType::Float(124.0),
                         OscType::Float(0.5),
@@ -1390,7 +1390,7 @@ mod tests {
                     ],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/tap".to_string(),
+                    addr: "/syndocal/tap".to_string(),
                     args: Vec::new(),
                 }),
             ],
@@ -1464,107 +1464,107 @@ mod tests {
             },
             content: vec![
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/layer/7/opacity".to_string(),
+                    addr: "/syndocal/video/layer/7/opacity".to_string(),
                     args: vec![OscType::Float(0.5)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/layer/7/transform_x".to_string(),
+                    addr: "/syndocal/video/layer/7/transform_x".to_string(),
                     args: vec![OscType::Float(-0.25)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/layer/7/enabled".to_string(),
+                    addr: "/syndocal/video/layer/7/enabled".to_string(),
                     args: vec![OscType::Bool(false)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/layer/7/solo".to_string(),
+                    addr: "/syndocal/video/layer/7/solo".to_string(),
                     args: vec![OscType::Bool(true)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/layer/7/bpm_sync".to_string(),
+                    addr: "/syndocal/video/layer/7/bpm_sync".to_string(),
                     args: vec![OscType::Float(1.0)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/layer/7/play".to_string(),
+                    addr: "/syndocal/video/layer/7/play".to_string(),
                     args: vec![OscType::Bool(true)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/layer/7/seek".to_string(),
+                    addr: "/syndocal/video/layer/7/seek".to_string(),
                     args: vec![OscType::Int(1500)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/layer/7/loop".to_string(),
+                    addr: "/syndocal/video/layer/7/loop".to_string(),
                     args: vec![OscType::Bool(true), OscType::Int(500), OscType::Int(2500)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/layer/7/fade".to_string(),
+                    addr: "/syndocal/video/layer/7/fade".to_string(),
                     args: vec![OscType::Float(0.4), OscType::Int(900)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/layer/7/fade_out".to_string(),
+                    addr: "/syndocal/video/layer/7/fade_out".to_string(),
                     args: Vec::new(),
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/layer/7/cue/add".to_string(),
+                    addr: "/syndocal/video/layer/7/cue/add".to_string(),
                     args: Vec::new(),
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/layer/7/cue/add".to_string(),
+                    addr: "/syndocal/video/layer/7/cue/add".to_string(),
                     args: vec![OscType::Float(1750.4)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/layer/7/cue/jump".to_string(),
+                    addr: "/syndocal/video/layer/7/cue/jump".to_string(),
                     args: vec![OscType::Int(1)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/layer/7/cue/previous".to_string(),
+                    addr: "/syndocal/video/layer/7/cue/previous".to_string(),
                     args: Vec::new(),
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/layer/7/cue/next".to_string(),
+                    addr: "/syndocal/video/layer/7/cue/next".to_string(),
                     args: vec![OscType::Bool(true)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/layer/7/cue/remove".to_string(),
+                    addr: "/syndocal/video/layer/7/cue/remove".to_string(),
                     args: vec![OscType::Int(1750)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/output/3/enabled".to_string(),
+                    addr: "/syndocal/video/output/3/enabled".to_string(),
                     args: vec![OscType::Bool(false)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/output/3/opacity".to_string(),
+                    addr: "/syndocal/video/output/3/opacity".to_string(),
                     args: vec![OscType::Float(0.6)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/output/3/fade".to_string(),
+                    addr: "/syndocal/video/output/3/fade".to_string(),
                     args: vec![OscType::Float(0.2), OscType::Int(750)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/output/3/fade_in".to_string(),
+                    addr: "/syndocal/video/output/3/fade_in".to_string(),
                     args: vec![OscType::Int(250)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/output/3/fade_out".to_string(),
+                    addr: "/syndocal/video/output/3/fade_out".to_string(),
                     args: Vec::new(),
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/output/3/mapping/keystone_x".to_string(),
+                    addr: "/syndocal/video/output/3/mapping/keystone_x".to_string(),
                     args: vec![OscType::Float(0.35)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/output/3/map/stage_z".to_string(),
+                    addr: "/syndocal/video/output/3/map/stage_z".to_string(),
                     args: vec![OscType::Float(12.5)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/output/3/blackout".to_string(),
+                    addr: "/syndocal/video/output/3/blackout".to_string(),
                     args: vec![OscType::Bool(true)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/master".to_string(),
+                    addr: "/syndocal/video/master".to_string(),
                     args: vec![OscType::Float(0.75)],
                 }),
                 OscPacket::Message(OscMessage {
-                    addr: "/rayard/video/blackout".to_string(),
+                    addr: "/syndocal/video/blackout".to_string(),
                     args: vec![OscType::Bool(true)],
                 }),
             ],

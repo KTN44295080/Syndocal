@@ -8,7 +8,7 @@ const isTauriRuntime = () =>
 
 const invoke = <T,>(command: string, args?: Record<string, unknown>) => {
   if (!isTauriRuntime()) {
-    return Promise.reject(new Error("Rayard desktop backend is not connected in this output window."));
+    return Promise.reject(new Error("Syndocal desktop backend is not connected in this output window."));
   }
   return tauriInvoke<T>(command, args);
 };

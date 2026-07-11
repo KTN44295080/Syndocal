@@ -714,11 +714,30 @@ export interface VideoPreviewDiagnostics {
   frame_queue_capacity: number;
   still_image_cache_len: number;
   decoder_cache_len: number;
+  decoder_diagnostics: VideoDecoderDiagnostics;
   prefetch_count: number;
   prefetch_interval_ms: number;
   bpm?: number | null;
   layer_queues: VideoPreviewQueueSummary[];
   output_decode_previews: VideoOutputDecodePreviewSummary[];
+}
+
+export interface VideoDecoderDiagnostics {
+  total_requests: number;
+  hap_requests: number;
+  hap_successes: number;
+  hap_failures: number;
+  libav_requests: number;
+  libav_successes: number;
+  libav_failures: number;
+  cli_fallback_requests: number;
+  cli_fallback_successes: number;
+  cli_fallback_failures: number;
+  deferred_requests: number;
+  decode_failures: number;
+  hap_cache_len: number;
+  libav_cache_len: number;
+  cli_cache_len: number;
 }
 
 export interface ExternalVideoInputPlan {
@@ -995,6 +1014,7 @@ export interface NativeVideoOutputPerformance {
   last_frame_us: number;
   max_frame_us: number;
   deadline_miss_count: number;
+  frame_budget_pass?: boolean | null;
   width: number;
   height: number;
   output_capacity_bytes: number;
@@ -1002,6 +1022,7 @@ export interface NativeVideoOutputPerformance {
   output_reallocations: number;
   layer_reallocations: number;
   compressed_layer_uploads: number;
+  decoder_diagnostics: VideoDecoderDiagnostics;
   last_error?: string | null;
   warmup_remaining: number;
 }

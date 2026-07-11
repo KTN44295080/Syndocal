@@ -203,7 +203,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
           class={props.projectDirty ? "topbarProject dirty" : "topbarProject"}
           title={props.currentProjectPath ?? "Unsaved project"}
         >
-          <strong>Rayard</strong>
+          <strong>Syndocal</strong>
           <span>{props.projectLabel}</span>
         </div>
 

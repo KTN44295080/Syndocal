@@ -244,7 +244,7 @@ struct MidiMessage {
 }
 
 pub fn list_midi_inputs() -> Result<Vec<MidiInputSummary>, MidiError> {
-    let input = MidiInput::new("rayard-midi-list")?;
+    let input = MidiInput::new("syndocal-midi-list")?;
     input
         .ports()
         .iter()
@@ -259,7 +259,7 @@ pub fn list_midi_inputs() -> Result<Vec<MidiInputSummary>, MidiError> {
 }
 
 pub fn list_midi_outputs() -> Result<Vec<MidiOutputSummary>, MidiError> {
-    let output = MidiOutput::new("rayard-midi-output-list")?;
+    let output = MidiOutput::new("syndocal-midi-output-list")?;
     output
         .ports()
         .iter()
@@ -274,13 +274,13 @@ pub fn list_midi_outputs() -> Result<Vec<MidiOutputSummary>, MidiError> {
 }
 
 pub fn connect_midi_feedback_output(port_index: usize) -> Result<MidiFeedbackOutput, MidiError> {
-    let output = MidiOutput::new("rayard-midi-feedback")?;
+    let output = MidiOutput::new("syndocal-midi-feedback")?;
     let ports = output.ports();
     let port = ports
         .get(port_index)
         .ok_or(MidiError::MissingPort(port_index))?;
     let connection = output
-        .connect(port, "rayard-midi-feedback-output")
+        .connect(port, "syndocal-midi-feedback-output")
         .map_err(|error| MidiError::Connect(error.to_string()))?;
     Ok(MidiFeedbackOutput { connection })
 }
@@ -292,7 +292,7 @@ pub fn connect_midi_clock<F>(
 where
     F: FnMut(MidiClockEvent) + Send + 'static,
 {
-    let mut input = MidiInput::new("rayard-midi-clock")?;
+    let mut input = MidiInput::new("syndocal-midi-clock")?;
     input.ignore(Ignore::None);
     let ports = input.ports();
     let port = ports
@@ -301,7 +301,7 @@ where
     let connection = input
         .connect(
             port,
-            "rayard-midi-clock-input",
+            "syndocal-midi-clock-input",
             {
                 let mut mtc_decoder = MtcQuarterFrameDecoder::default();
                 move |_timestamp, message, _| {
@@ -327,7 +327,7 @@ pub fn connect_midi_control<F>(
 where
     F: FnMut(MidiControlEvent) + Send + 'static,
 {
-    let mut input = MidiInput::new("rayard-midi-control")?;
+    let mut input = MidiInput::new("syndocal-midi-control")?;
     input.ignore(Ignore::None);
     let ports = input.ports();
     let port = ports
@@ -336,7 +336,7 @@ where
     let connection = input
         .connect(
             port,
-            "rayard-midi-control-input",
+            "syndocal-midi-control-input",
             move |_timestamp, message, _| {
                 for event in events_from_midi_message(message, &mappings) {
                     callback(event);
@@ -355,7 +355,7 @@ pub fn learn_midi_control(
     port_index: usize,
     timeout: Duration,
 ) -> Result<Option<LearnedMidiControl>, MidiError> {
-    let mut input = MidiInput::new("rayard-midi-learn")?;
+    let mut input = MidiInput::new("syndocal-midi-learn")?;
     input.ignore(Ignore::None);
     let ports = input.ports();
     let port = ports
@@ -365,7 +365,7 @@ pub fn learn_midi_control(
     let connection = input
         .connect(
             port,
-            "rayard-midi-learn-input",
+            "syndocal-midi-learn-input",
             move |_timestamp, message, _| {
                 if let Some(learned) = learned_control_from_midi_message(message) {
                     let _ = sender.send(learned);
@@ -1327,7 +1327,7 @@ mod tests {
             label: format!("Fixture {id}"),
             profile_source_path: "memory://fixture.gdtf".to_string(),
             profile_name: "Mini Spot".to_string(),
-            manufacturer: "Rayard".to_string(),
+            manufacturer: "Syndocal".to_string(),
             mode_name: "Standard".to_string(),
             universe: 1,
             address: 1,

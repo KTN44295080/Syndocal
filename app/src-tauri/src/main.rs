@@ -49,9 +49,9 @@ type AppVideoPreviewRenderer = video::VideoPreviewRenderer<
     video::DecoderBackedFrameProvider<video::PreferredVideoFrameDecoder>,
 >;
 
-const APP_NAME: &str = "Rayard";
-const PHASE1_SAMPLE_PROJECT_LABEL: &str = "samples/phase1-mini-show.ry";
-const PHASE1_SAMPLE_PROJECT_JSON: &str = include_str!("../../../samples/phase1-mini-show.ry");
+const APP_NAME: &str = "Syndocal";
+const PHASE1_SAMPLE_PROJECT_LABEL: &str = "samples/phase1-mini-show.sdc";
+const PHASE1_SAMPLE_PROJECT_JSON: &str = include_str!("../../../samples/phase1-mini-show.sdc");
 const SAMPLE_EFFECT_PRESET_PULSE_LABEL: &str = "samples/front-dimmer-pulse.effect";
 const SAMPLE_EFFECT_PRESET_PULSE_JSON: &str =
     include_str!("../../../samples/front-dimmer-pulse.effect");
@@ -92,7 +92,7 @@ const TELEMETRY_TICK_JITTER_P99_TARGET_US: u64 = 1_000;
 const TELEMETRY_COMMAND_QUEUE_P99_TARGET_US: u64 = 1_000;
 const TELEMETRY_COMMAND_TO_DMX_P99_TARGET_US: u64 = 5_000;
 const TELEMETRY_DMX_SEND_INTERVAL_TOLERANCE_US: u64 = 1_000;
-const OPEN_PROJECT_EVENT: &str = "rayard://open-project";
+const OPEN_PROJECT_EVENT: &str = "syndocal://open-project";
 
 fn validate_app_name(file_label: &str, app: &str) -> Result<(), String> {
     if app.trim() == APP_NAME {
@@ -262,6 +262,7 @@ struct VideoPreviewDiagnostics {
     frame_queue_capacity: usize,
     still_image_cache_len: usize,
     decoder_cache_len: usize,
+    decoder_diagnostics: video::VideoDecoderDiagnostics,
     prefetch_count: usize,
     prefetch_interval_ms: u64,
     bpm: Option<f32>,
@@ -621,7 +622,7 @@ fn search_gdtf_share(
         let fixtures = extract_gdtf_share_fixtures(&catalog);
         if fixtures.is_empty() {
             return Err(
-                "GDTF Share catalog response did not contain fixture records Rayard can read"
+                "GDTF Share catalog response did not contain fixture records Syndocal can read"
                     .to_string(),
             );
         }
@@ -691,7 +692,7 @@ fn save_custom_fixture_profile(
         request,
     };
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Rayard Fixture Profile", &["fixture"])
+        .add_filter("Syndocal Fixture Profile", &["fixture"])
         .set_file_name(format!(
             "{}.fixture",
             safe_file_stem(&profile_file.request.name)
@@ -711,7 +712,7 @@ fn load_custom_fixture_profile(
     state: State<'_, AppState>,
 ) -> Result<Option<FixtureProfileSummary>, String> {
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Rayard Fixture Profile", &["fixture"])
+        .add_filter("Syndocal Fixture Profile", &["fixture"])
         .pick_file()
     else {
         return Ok(None);
@@ -1150,8 +1151,8 @@ fn save_engine_telemetry_report(state: State<'_, AppState>) -> Result<Option<Str
     let snapshot = state.engine.snapshot();
     let report = engine_telemetry_report_from_snapshot(&snapshot, captured_at_unix_ms);
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Rayard Telemetry Report", &["json"])
-        .set_file_name(format!("rayard-telemetry-{captured_at_unix_ms}.json"))
+        .add_filter("Syndocal Telemetry Report", &["json"])
+        .set_file_name(format!("syndocal-telemetry-{captured_at_unix_ms}.json"))
         .save_file()
     else {
         return Ok(None);
@@ -1562,8 +1563,8 @@ fn learn_midi_control(input_index: usize) -> Result<Option<LearnedMidiControl>, 
 fn save_midi_mappings(mappings: Vec<MidiControlMapping>) -> Result<Option<String>, String> {
     let mappings = validate_midi_control_mappings(mappings)?;
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Rayard MIDI Mapping", &["midimap"])
-        .set_file_name("rayard.midimap")
+        .add_filter("Syndocal MIDI Mapping", &["midimap"])
+        .set_file_name("syndocal.midimap")
         .save_file()
     else {
         return Ok(None);
@@ -1580,7 +1581,7 @@ fn save_midi_mappings(mappings: Vec<MidiControlMapping>) -> Result<Option<String
 #[tauri::command]
 fn load_midi_mappings() -> Result<Option<Vec<MidiControlMapping>>, String> {
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Rayard MIDI Mapping", &["midimap"])
+        .add_filter("Syndocal MIDI Mapping", &["midimap"])
         .pick_file()
     else {
         return Ok(None);
@@ -1597,8 +1598,8 @@ fn load_midi_mappings() -> Result<Option<Vec<MidiControlMapping>>, String> {
 fn save_osc_mappings(mappings: Vec<OscControlMapping>) -> Result<Option<String>, String> {
     let mappings = validate_osc_control_mappings(mappings)?;
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Rayard OSC Mapping", &["oscmap"])
-        .set_file_name("rayard.oscmap")
+        .add_filter("Syndocal OSC Mapping", &["oscmap"])
+        .set_file_name("syndocal.oscmap")
         .save_file()
     else {
         return Ok(None);
@@ -1615,7 +1616,7 @@ fn save_osc_mappings(mappings: Vec<OscControlMapping>) -> Result<Option<String>,
 #[tauri::command]
 fn load_osc_mappings() -> Result<Option<Vec<OscControlMapping>>, String> {
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Rayard OSC Mapping", &["oscmap"])
+        .add_filter("Syndocal OSC Mapping", &["oscmap"])
         .pick_file()
     else {
         return Ok(None);
@@ -3772,7 +3773,7 @@ fn save_video_output_mapping_preset_file(
         },
     };
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Rayard Projector Map", &["projmap"])
+        .add_filter("Syndocal Projector Map", &["projmap"])
         .set_file_name(format!("{}.projmap", safe_file_stem(&label)))
         .save_file()
     else {
@@ -3788,7 +3789,7 @@ fn load_video_output_mapping_preset_file(
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Rayard Projector Map", &["projmap"])
+        .add_filter("Syndocal Projector Map", &["projmap"])
         .pick_file()
     else {
         return Ok(None);
@@ -3942,7 +3943,7 @@ fn save_node_graph_preset_file(
         graph: graph.clone(),
     };
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Rayard Node Graph", &["graph"])
+        .add_filter("Syndocal Node Graph", &["graph"])
         .set_file_name(format!("{}.graph", safe_file_stem(&graph.label)))
         .save_file()
     else {
@@ -3956,7 +3957,7 @@ fn save_node_graph_preset_file(
 #[tauri::command]
 fn load_node_graph_preset_file(state: State<'_, AppState>) -> Result<Option<NodeGraphId>, String> {
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Rayard Node Graph", &["graph"])
+        .add_filter("Syndocal Node Graph", &["graph"])
         .pick_file()
     else {
         return Ok(None);
@@ -4247,7 +4248,7 @@ fn save_effect_preset(
         .ok_or_else(|| format!("Effect {effect_id} was not found"))?;
     let preset = effect_summary_to_preset(effect)?;
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Rayard Effect", &["effect"])
+        .add_filter("Syndocal Effect", &["effect"])
         .set_file_name(format!("{}.effect", safe_file_stem(&effect.label)))
         .save_file()
     else {
@@ -4261,7 +4262,7 @@ fn save_effect_preset(
 #[tauri::command]
 fn load_effect_preset(state: State<'_, AppState>) -> Result<Option<EffectId>, String> {
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Rayard Effect", &["effect"])
+        .add_filter("Syndocal Effect", &["effect"])
         .pick_file()
     else {
         return Ok(None);
@@ -4278,7 +4279,7 @@ fn load_effect_preset_for_target(
     target_override: EffectTargetOverride,
 ) -> Result<Option<EffectId>, String> {
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Rayard Effect", &["effect"])
+        .add_filter("Syndocal Effect", &["effect"])
         .pick_file()
     else {
         return Ok(None);
@@ -4311,7 +4312,7 @@ fn save_fixture_preset(
         values: fixture.attribute_values.clone(),
     };
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Rayard Preset", &["preset"])
+        .add_filter("Syndocal Preset", &["preset"])
         .set_file_name(format!("{}.preset", safe_file_stem(&fixture.label)))
         .save_file()
     else {
@@ -4329,7 +4330,7 @@ fn load_fixture_preset(
     fixture_id: FixtureId,
 ) -> Result<Option<String>, String> {
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Rayard Preset", &["preset"])
+        .add_filter("Syndocal Preset", &["preset"])
         .pick_file()
     else {
         return Ok(None);
@@ -4369,7 +4370,7 @@ fn load_fixture_preset_for_group(
 ) -> Result<Option<FixturePresetGroupLoadResult>, String> {
     let group_id = normalize_control_group_id(group_id)?;
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Rayard Preset", &["preset"])
+        .add_filter("Syndocal Preset", &["preset"])
         .pick_file()
     else {
         return Ok(None);
@@ -4425,7 +4426,7 @@ fn load_fixture_preset_for_all_matching(
     state: State<'_, AppState>,
 ) -> Result<Option<FixturePresetGroupLoadResult>, String> {
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Rayard Preset", &["preset"])
+        .add_filter("Syndocal Preset", &["preset"])
         .pick_file()
     else {
         return Ok(None);
@@ -4503,8 +4504,8 @@ fn save_project_as(state: State<'_, AppState>) -> Result<Option<String>, String>
 
 fn save_project_with_dialog(state: &State<'_, AppState>) -> Result<Option<String>, String> {
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Rayard Project", &["ry"])
-        .set_file_name("show.ry")
+        .add_filter("Syndocal Project", &["sdc"])
+        .set_file_name("show.sdc")
         .save_file()
     else {
         return Ok(None);
@@ -4573,7 +4574,7 @@ fn project_snapshot_for_save(mut snapshot: EngineSnapshot) -> EngineSnapshot {
 #[tauri::command]
 fn load_project(state: State<'_, AppState>) -> Result<Option<ProjectLoadResult>, String> {
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Rayard Project", &["ry"])
+        .add_filter("Syndocal Project", &["sdc"])
         .pick_file()
     else {
         return Ok(None);
@@ -4787,9 +4788,9 @@ fn load_project_checkpoint(
 ) -> Result<ProjectLoadResult, String> {
     let current_path = current_path.map(PathBuf::from);
     if let Some(path) = current_path.as_deref() {
-        if !is_rayard_project_path(path) {
+        if !is_syndocal_project_path(path) {
             return Err(format!(
-                "Recovered Rayard project path must use the .ry extension: {}",
+                "Recovered Syndocal project path must use the .sdc extension: {}",
                 path.to_string_lossy()
             ));
         }
@@ -4832,23 +4833,23 @@ fn load_project_from_file(
 
 fn normalize_project_save_path(mut path: PathBuf) -> Result<PathBuf, String> {
     if path.extension().is_none() {
-        path.set_extension("ry");
+        path.set_extension("sdc");
         return Ok(path);
     }
-    if is_rayard_project_path(&path) {
+    if is_syndocal_project_path(&path) {
         Ok(path)
     } else {
         Err(format!(
-            "Rayard project files must use the .ry extension: {}",
+            "Syndocal project files must use the .sdc extension: {}",
             path.to_string_lossy()
         ))
     }
 }
 
 fn validate_project_open_path(path: &Path) -> Result<(), String> {
-    if !is_rayard_project_path(path) {
+    if !is_syndocal_project_path(path) {
         return Err(format!(
-            "Rayard project files must use the .ry extension: {}",
+            "Syndocal project files must use the .sdc extension: {}",
             path.to_string_lossy()
         ));
     }
@@ -4885,7 +4886,7 @@ fn normalize_custom_fixture_profile_save_path(mut path: PathBuf) -> Result<PathB
         Ok(path)
     } else {
         Err(format!(
-            "Rayard fixture profile files must use the .fixture extension: {}",
+            "Syndocal fixture profile files must use the .fixture extension: {}",
             path.to_string_lossy()
         ))
     }
@@ -4896,17 +4897,17 @@ fn normalize_fixture_preset_save_path(mut path: PathBuf) -> Result<PathBuf, Stri
         path.set_extension("preset");
         return Ok(path);
     }
-    if is_rayard_fixture_preset_path(&path) {
+    if is_syndocal_fixture_preset_path(&path) {
         Ok(path)
     } else {
         Err(format!(
-            "Rayard fixture preset files must use the .preset extension: {}",
+            "Syndocal fixture preset files must use the .preset extension: {}",
             path.to_string_lossy()
         ))
     }
 }
 
-fn is_rayard_fixture_preset_path(path: &Path) -> bool {
+fn is_syndocal_fixture_preset_path(path: &Path) -> bool {
     has_extension(path, "preset")
 }
 
@@ -4930,7 +4931,7 @@ fn project_paths_from_args(
         .skip(1)
         .map(PathBuf::from)
         .map(|path| resolve_project_arg_path(path, cwd))
-        .filter(|path| is_rayard_project_path(path))
+        .filter(|path| is_syndocal_project_path(path))
         .collect()
 }
 
@@ -4944,8 +4945,8 @@ fn resolve_project_arg_path(path: PathBuf, cwd: Option<&Path>) -> PathBuf {
     }
 }
 
-fn is_rayard_project_path(path: &Path) -> bool {
-    has_extension(path, "ry")
+fn is_syndocal_project_path(path: &Path) -> bool {
+    has_extension(path, "sdc")
 }
 
 fn has_extension(path: &Path, expected: &str) -> bool {
@@ -6579,7 +6580,7 @@ fn save_stage_map_preset_file(
         },
     };
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Rayard Stage Map", &["stagemap"])
+        .add_filter("Syndocal Stage Map", &["stagemap"])
         .set_file_name(format!("{}.stagemap", safe_file_stem(&label)))
         .save_file()
     else {
@@ -6593,7 +6594,7 @@ fn save_stage_map_preset_file(
 #[tauri::command]
 fn load_stage_map_preset_file(state: State<'_, AppState>) -> Result<Option<String>, String> {
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Rayard Stage Map", &["stagemap"])
+        .add_filter("Syndocal Stage Map", &["stagemap"])
         .pick_file()
     else {
         return Ok(None);
@@ -7171,6 +7172,7 @@ fn get_video_preview_diagnostics(
         frame_queue_capacity: config.frame_queue_capacity,
         still_image_cache_len: provider.still_image_cache_len(),
         decoder_cache_len: provider.decoder().cache_len(),
+        decoder_diagnostics: provider.decoder().diagnostics(),
         prefetch_count,
         prefetch_interval_ms,
         bpm,
@@ -7378,6 +7380,7 @@ struct NativeVideoOutputMetrics {
     width: u32,
     height: u32,
     buffer_stats: video::GpuSurfaceBufferStats,
+    decoder_diagnostics: video::VideoDecoderDiagnostics,
     last_error: Option<String>,
     warmup_remaining: u32,
 }
@@ -7393,6 +7396,7 @@ impl Default for NativeVideoOutputMetrics {
             width: 0,
             height: 0,
             buffer_stats: video::GpuSurfaceBufferStats::default(),
+            decoder_diagnostics: video::VideoDecoderDiagnostics::default(),
             last_error: None,
             warmup_remaining: 60,
         }
@@ -7406,6 +7410,7 @@ struct NativeVideoOutputPerformance {
     last_frame_us: u64,
     max_frame_us: u64,
     deadline_miss_count: u64,
+    frame_budget_pass: Option<bool>,
     width: u32,
     height: u32,
     output_capacity_bytes: u64,
@@ -7413,6 +7418,7 @@ struct NativeVideoOutputPerformance {
     output_reallocations: u64,
     layer_reallocations: u64,
     compressed_layer_uploads: u64,
+    decoder_diagnostics: video::VideoDecoderDiagnostics,
     last_error: Option<String>,
     warmup_remaining: u32,
 }
@@ -7424,6 +7430,7 @@ impl NativeVideoOutputMetrics {
         height: u32,
         elapsed: Duration,
         buffer_stats: video::GpuSurfaceBufferStats,
+        decoder_diagnostics: video::VideoDecoderDiagnostics,
         error: Option<String>,
     ) {
         let elapsed_us = elapsed.as_micros().min(u128::from(u64::MAX)) as u64;
@@ -7438,6 +7445,7 @@ impl NativeVideoOutputMetrics {
         self.width = width;
         self.height = height;
         self.buffer_stats = buffer_stats;
+        self.decoder_diagnostics = decoder_diagnostics;
         self.last_error = error;
         if self.last_error.is_none() {
             if self.warmup_remaining > 0 {
@@ -7455,14 +7463,22 @@ impl NativeVideoOutputMetrics {
     }
 
     fn snapshot(&self) -> NativeVideoOutputPerformance {
+        let average_frame_us = (self.frame_count > 0)
+            .then(|| (self.total_frame_us / u128::from(self.frame_count)) as u64)
+            .unwrap_or(0);
+        let frame_budget_pass = (self.frame_count >= 120).then(|| {
+            average_frame_us <= 1_000_000 / 60
+                && self.max_frame_us <= 1_000_000 / 30
+                && self.deadline_miss_count.saturating_mul(100)
+                    <= self.frame_count.saturating_mul(5)
+        });
         NativeVideoOutputPerformance {
             frame_count: self.frame_count,
-            average_frame_us: (self.frame_count > 0)
-                .then(|| (self.total_frame_us / u128::from(self.frame_count)) as u64)
-                .unwrap_or(0),
+            average_frame_us,
             last_frame_us: self.last_frame_us,
             max_frame_us: self.max_frame_us,
             deadline_miss_count: self.deadline_miss_count,
+            frame_budget_pass,
             width: self.width,
             height: self.height,
             output_capacity_bytes: self.buffer_stats.output_capacity_bytes,
@@ -7470,6 +7486,7 @@ impl NativeVideoOutputMetrics {
             output_reallocations: self.buffer_stats.output_reallocations,
             layer_reallocations: self.buffer_stats.layer_reallocations,
             compressed_layer_uploads: self.buffer_stats.compressed_layer_uploads,
+            decoder_diagnostics: self.decoder_diagnostics,
             last_error: self.last_error.clone(),
             warmup_remaining: self.warmup_remaining,
         }
@@ -7498,7 +7515,7 @@ fn apply_native_video_output_window_shell(
 ) -> Result<(), String> {
     window
         .set_title(&format!(
-            "Rayard {} - {}",
+            "Syndocal {} - {}",
             if test_pattern {
                 "Test Pattern"
             } else {
@@ -7561,7 +7578,7 @@ fn start_native_video_test_pattern(
         }
     });
     std::thread::Builder::new()
-        .name("rayard-video-test-pattern".to_string())
+        .name("syndocal-video-test-pattern".to_string())
         .spawn(move || {
             while !stop.load(Ordering::Acquire) {
                 let Ok(size) = window.inner_size() else {
@@ -7603,10 +7620,18 @@ fn record_native_video_output_metrics(
     height: u32,
     started: Instant,
     buffer_stats: video::GpuSurfaceBufferStats,
+    decoder_diagnostics: video::VideoDecoderDiagnostics,
     error: Option<String>,
 ) {
     if let Ok(mut metrics) = metrics.lock() {
-        metrics.record(width, height, started.elapsed(), buffer_stats, error);
+        metrics.record(
+            width,
+            height,
+            started.elapsed(),
+            buffer_stats,
+            decoder_diagnostics,
+            error,
+        );
     }
 }
 
@@ -7652,6 +7677,7 @@ fn start_native_video_live_output(
         initial_size.height,
         first_started,
         presenter.buffer_stats(),
+        renderer.frame_provider().decoder().diagnostics(),
         first_result.as_ref().err().cloned(),
     );
     first_result?;
@@ -7667,7 +7693,7 @@ fn start_native_video_live_output(
         }
     });
     std::thread::Builder::new()
-        .name(format!("rayard-video-output-{output_id}"))
+        .name(format!("syndocal-video-output-{output_id}"))
         .spawn(move || {
             let target_interval = Duration::from_nanos(1_000_000_000 / 60);
             while !stop.load(Ordering::Acquire) {
@@ -7697,6 +7723,7 @@ fn start_native_video_live_output(
                         size.height,
                         frame_started,
                         presenter.buffer_stats(),
+                        renderer.frame_provider().decoder().diagnostics(),
                         result.as_ref().err().map(|error| format!("{error:?}")),
                     );
                     if result.is_err() {
@@ -7920,7 +7947,7 @@ async fn open_video_output_window(
             return Ok(());
         }
         let mut builder = tauri::window::WindowBuilder::new(&app, label)
-            .title(format!("Rayard Test Pattern - {}", output.label))
+            .title(format!("Syndocal Test Pattern - {}", output.label))
             .inner_size(output.width as f64, output.height as f64)
             .resizable(true)
             .decorations(!output.fullscreen)
@@ -7955,7 +7982,7 @@ async fn open_video_output_window(
         return Ok(());
     }
     let mut builder = tauri::window::WindowBuilder::new(&app, label)
-        .title(format!("Rayard Output - {}", output.label))
+        .title(format!("Syndocal Output - {}", output.label))
         .inner_size(output.width as f64, output.height as f64)
         .resizable(true)
         .decorations(!output.fullscreen)
@@ -9741,7 +9768,7 @@ fn validate_gdtf_share_credentials(user: &str, password: &str) -> Result<(), Str
 
 fn gdtf_share_cookie_path() -> PathBuf {
     std::env::temp_dir().join(format!(
-        "rayard-gdtf-share-{}-{}.cookies",
+        "syndocal-gdtf-share-{}-{}.cookies",
         std::process::id(),
         current_unix_ms()
     ))
@@ -10476,7 +10503,7 @@ mod tests {
     fn sample_preset(values: Vec<protocol::AttributeValueSummary>) -> FixturePreset {
         FixturePreset {
             version: 1,
-            manufacturer: "Rayard".to_string(),
+            manufacturer: "Syndocal".to_string(),
             profile_name: "Mini Spot".to_string(),
             profile_source_path: None,
             mode_name: "Standard".to_string(),
@@ -10543,15 +10570,17 @@ mod tests {
     #[test]
     fn gdtf_share_download_payload_rejects_api_error_files() {
         let json_path = std::env::temp_dir().join(format!(
-            "rayard-gdtf-share-json-error-{}.gdtf",
+            "syndocal-gdtf-share-json-error-{}.gdtf",
             std::process::id()
         ));
         let html_path = std::env::temp_dir().join(format!(
-            "rayard-gdtf-share-html-error-{}.gdtf",
+            "syndocal-gdtf-share-html-error-{}.gdtf",
             std::process::id()
         ));
-        let zip_path =
-            std::env::temp_dir().join(format!("rayard-gdtf-share-zip-{}.gdtf", std::process::id()));
+        let zip_path = std::env::temp_dir().join(format!(
+            "syndocal-gdtf-share-zip-{}.gdtf",
+            std::process::id()
+        ));
 
         fs::write(&json_path, br#"{"result":false,"error":"Unauthorized."}"#).unwrap();
         fs::write(&html_path, b"<html><body>login</body></html>").unwrap();
@@ -10951,7 +10980,7 @@ f 1 2 3
     #[test]
     fn custom_fixture_profile_request_builds_8bit_controls() {
         let request = CustomFixtureProfileRequest {
-            manufacturer: "Rayard".to_string(),
+            manufacturer: "Syndocal".to_string(),
             name: "Custom Bar".to_string(),
             mode_name: "8ch".to_string(),
             attributes: vec![
@@ -10964,7 +10993,7 @@ f 1 2 3
         validate_custom_fixture_profile_request(&request).unwrap();
         let profile = custom_fixture_profile_from_request(request);
 
-        assert_eq!(profile.source_path, "memory://custom/Rayard-Custom_Bar");
+        assert_eq!(profile.source_path, "memory://custom/Syndocal-Custom_Bar");
         assert_eq!(profile.dmx_modes[0].name, "8ch");
         assert_eq!(profile.dmx_modes[0].controls[0].offsets, vec![1]);
         assert_eq!(profile.dmx_modes[0].controls[1].offsets, vec![2]);
@@ -10996,7 +11025,7 @@ f 1 2 3
     #[test]
     fn custom_fixture_profile_request_builds_mixed_resolution_controls() {
         let request = CustomFixtureProfileRequest {
-            manufacturer: "Rayard".to_string(),
+            manufacturer: "Syndocal".to_string(),
             name: "Custom Spot".to_string(),
             mode_name: "Standard".to_string(),
             attributes: vec![
@@ -11036,7 +11065,7 @@ f 1 2 3
             "memory://mvp-fixture.gdtf",
             r#"
             <GDTF>
-              <FixtureType Name="MVP Spot" Manufacturer="Rayard">
+              <FixtureType Name="MVP Spot" Manufacturer="Syndocal">
                 <DMXModes>
                   <DMXMode Name="Standard">
                     <DMXChannels>
@@ -11119,7 +11148,7 @@ f 1 2 3
     #[test]
     fn custom_fixture_profile_validation_rejects_duplicate_attributes() {
         let request = CustomFixtureProfileRequest {
-            manufacturer: "Rayard".to_string(),
+            manufacturer: "Syndocal".to_string(),
             name: "Bad".to_string(),
             mode_name: "Default".to_string(),
             attributes: vec!["Dimmer:8".to_string(), "dimmer:16".to_string()],
@@ -11133,7 +11162,7 @@ f 1 2 3
     #[test]
     fn custom_fixture_profile_validation_rejects_overlapping_offsets() {
         let request = CustomFixtureProfileRequest {
-            manufacturer: "Rayard".to_string(),
+            manufacturer: "Syndocal".to_string(),
             name: "Bad".to_string(),
             mode_name: "Default".to_string(),
             attributes: vec!["Dimmer@1:8".to_string(), "Pan@1:16".to_string()],
@@ -11147,7 +11176,7 @@ f 1 2 3
     #[test]
     fn custom_fixture_profile_validation_rejects_invalid_start_channel() {
         let request = CustomFixtureProfileRequest {
-            manufacturer: "Rayard".to_string(),
+            manufacturer: "Syndocal".to_string(),
             name: "Bad".to_string(),
             mode_name: "Default".to_string(),
             attributes: vec!["Dimmer@0:8".to_string()],
@@ -11163,7 +11192,7 @@ f 1 2 3
         let profile_file = CustomFixtureProfileFile {
             version: 1,
             request: CustomFixtureProfileRequest {
-                manufacturer: "Rayard".to_string(),
+                manufacturer: "Syndocal".to_string(),
                 name: "Tiny Bar".to_string(),
                 mode_name: "Default".to_string(),
                 attributes: vec!["Dimmer".to_string(), "ColorRed".to_string()],
@@ -11186,7 +11215,7 @@ f 1 2 3
         validate_custom_fixture_profile_file(&profile_file).unwrap();
         let profile = custom_fixture_profile_from_request(profile_file.request);
 
-        assert_eq!(profile.manufacturer, "Rayard");
+        assert_eq!(profile.manufacturer, "Syndocal");
         assert_eq!(profile.name, "Phase 1 Mini Spot");
         assert_eq!(profile.dmx_modes[0].name, "8ch");
         assert_eq!(profile.dmx_modes[0].controls.len(), 6);
@@ -11201,7 +11230,7 @@ f 1 2 3
 
         validate_project_file(&project).unwrap();
 
-        assert_eq!(PHASE1_SAMPLE_PROJECT_LABEL, "samples/phase1-mini-show.ry");
+        assert_eq!(PHASE1_SAMPLE_PROJECT_LABEL, "samples/phase1-mini-show.sdc");
         assert_eq!(project.app, APP_NAME);
         assert_eq!(project.custom_profiles.len(), 1);
         assert_eq!(project.snapshot.fixtures.len(), 1);
@@ -11336,7 +11365,7 @@ f 1 2 3
 
     #[test]
     fn phase1_smoke_project_sample_loads_into_engine_and_renders_cue() {
-        let json = include_str!("../../../samples/phase1-mini-show.ry");
+        let json = include_str!("../../../samples/phase1-mini-show.sdc");
         let project: ProjectFile = serde_json::from_str(json).unwrap();
         validate_project_file(&project).unwrap();
 
@@ -11514,7 +11543,7 @@ f 1 2 3
 
     #[test]
     fn phase1_smoke_project_sample_sends_cue_to_artnet_loopback() {
-        let json = include_str!("../../../samples/phase1-mini-show.ry");
+        let json = include_str!("../../../samples/phase1-mini-show.sdc");
         let project: ProjectFile = serde_json::from_str(json).unwrap();
         validate_project_file(&project).unwrap();
 
@@ -11825,7 +11854,7 @@ f 1 2 3
         let profile_file = CustomFixtureProfileFile {
             version: 2,
             request: CustomFixtureProfileRequest {
-                manufacturer: "Rayard".to_string(),
+                manufacturer: "Syndocal".to_string(),
                 name: "Tiny Bar".to_string(),
                 mode_name: "Default".to_string(),
                 attributes: vec!["Dimmer".to_string()],
@@ -12575,7 +12604,7 @@ f 1 2 3
     #[test]
     fn validate_existing_file_path_trims_and_rejects_missing_or_directory() {
         let file_path = std::env::temp_dir().join(format!(
-            "rayard-existing-file-path-{}.mov",
+            "syndocal-existing-file-path-{}.mov",
             std::process::id()
         ));
         fs::write(&file_path, b"test media").unwrap();
@@ -12811,10 +12840,31 @@ f 1 2 3
             frames_presented: 2,
             compressed_layer_uploads: 4,
         };
+        let decoder_diagnostics = video::VideoDecoderDiagnostics {
+            total_requests: 4,
+            libav_requests: 4,
+            libav_successes: 4,
+            libav_cache_len: 2,
+            ..video::VideoDecoderDiagnostics::default()
+        };
         let mut metrics = NativeVideoOutputMetrics::default();
         metrics.warmup_remaining = 0;
-        metrics.record(1920, 1080, Duration::from_millis(10), buffer_stats, None);
-        metrics.record(1920, 1080, Duration::from_millis(20), buffer_stats, None);
+        metrics.record(
+            1920,
+            1080,
+            Duration::from_millis(10),
+            buffer_stats,
+            decoder_diagnostics,
+            None,
+        );
+        metrics.record(
+            1920,
+            1080,
+            Duration::from_millis(20),
+            buffer_stats,
+            decoder_diagnostics,
+            None,
+        );
 
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.frame_count, 2);
@@ -12825,6 +12875,8 @@ f 1 2 3
         assert_eq!(snapshot.output_reallocations, 1);
         assert_eq!(snapshot.layer_reallocations, 3);
         assert_eq!(snapshot.compressed_layer_uploads, 4);
+        assert_eq!(snapshot.decoder_diagnostics, decoder_diagnostics);
+        assert_eq!(snapshot.frame_budget_pass, None);
         assert!(snapshot.last_error.is_none());
 
         metrics.record(
@@ -12832,6 +12884,7 @@ f 1 2 3
             1080,
             Duration::from_millis(1),
             buffer_stats,
+            decoder_diagnostics,
             Some("surface lost".to_string()),
         );
         let failed = metrics.snapshot();
@@ -12839,11 +12892,51 @@ f 1 2 3
         assert_eq!(failed.average_frame_us, 15_000);
         assert_eq!(failed.last_error.as_deref(), Some("surface lost"));
 
-        metrics.record(1280, 720, Duration::from_millis(4), buffer_stats, None);
+        metrics.record(
+            1280,
+            720,
+            Duration::from_millis(4),
+            buffer_stats,
+            decoder_diagnostics,
+            None,
+        );
         let resized = metrics.snapshot();
         assert_eq!(resized.frame_count, 0);
         assert_eq!(resized.warmup_remaining, 59);
         assert!(resized.last_error.is_none());
+    }
+
+    #[test]
+    fn native_video_output_metrics_gate_1080p60_after_120_samples() {
+        let buffer_stats = video::GpuSurfaceBufferStats::default();
+        let decoder_diagnostics = video::VideoDecoderDiagnostics::default();
+        let mut passing = NativeVideoOutputMetrics::default();
+        passing.warmup_remaining = 0;
+        for _ in 0..120 {
+            passing.record(
+                1920,
+                1080,
+                Duration::from_millis(10),
+                buffer_stats,
+                decoder_diagnostics,
+                None,
+            );
+        }
+        assert_eq!(passing.snapshot().frame_budget_pass, Some(true));
+
+        let mut failing = NativeVideoOutputMetrics::default();
+        failing.warmup_remaining = 0;
+        for _ in 0..120 {
+            failing.record(
+                1920,
+                1080,
+                Duration::from_millis(20),
+                buffer_stats,
+                decoder_diagnostics,
+                None,
+            );
+        }
+        assert_eq!(failing.snapshot().frame_budget_pass, Some(false));
     }
 
     #[test]
@@ -13268,23 +13361,23 @@ f 1 2 3
     }
 
     #[test]
-    fn startup_project_path_from_args_uses_first_ry_argument() {
+    fn startup_project_path_from_args_uses_first_sdc_argument() {
         let args = vec![
-            OsString::from("rayard.exe"),
+            OsString::from("syndocal.exe"),
             OsString::from("--ignored"),
-            OsString::from("C:/shows/opening.RY"),
-            OsString::from("C:/shows/backup.ry"),
+            OsString::from("C:/shows/opening.SDC"),
+            OsString::from("C:/shows/backup.sdc"),
         ];
 
         let path = startup_project_path_from_args(args).unwrap();
 
-        assert_eq!(path, PathBuf::from("C:/shows/opening.RY"));
+        assert_eq!(path, PathBuf::from("C:/shows/opening.SDC"));
     }
 
     #[test]
     fn startup_project_path_from_args_ignores_non_project_arguments() {
         let args = vec![
-            OsString::from("rayard.exe"),
+            OsString::from("syndocal.exe"),
             OsString::from("C:/shows/opening.json"),
             OsString::from("--profile"),
         ];
@@ -13293,45 +13386,56 @@ f 1 2 3
     }
 
     #[test]
-    fn single_instance_project_paths_collect_ry_arguments() {
+    fn single_instance_project_paths_collect_sdc_arguments() {
         let args = vec![
-            "rayard.exe".to_string(),
+            "syndocal.exe".to_string(),
             "--ignored".to_string(),
-            "C:/shows/opening.RY".to_string(),
+            "C:/shows/opening.SDC".to_string(),
             "C:/shows/notes.txt".to_string(),
-            "C:/shows/backup.ry".to_string(),
+            "C:/shows/backup.sdc".to_string(),
         ];
 
         let paths = project_paths_from_single_instance_args(args, "");
 
         assert_eq!(paths.len(), 2);
-        assert!(paths[0].ends_with("opening.RY"));
-        assert!(paths[1].ends_with("backup.ry"));
+        assert!(paths[0].ends_with("opening.SDC"));
+        assert!(paths[1].ends_with("backup.sdc"));
     }
 
     #[test]
     fn single_instance_project_paths_resolve_relative_arguments_with_cwd() {
         let cwd = PathBuf::from("C:/shows");
-        let args = vec!["rayard.exe".to_string(), "looks/strobe.ry".to_string()];
+        let args = vec!["syndocal.exe".to_string(), "looks/strobe.sdc".to_string()];
 
         let paths = project_paths_from_single_instance_args(args, &cwd.to_string_lossy());
 
-        assert_eq!(paths, vec![cwd.join("looks/strobe.ry").to_string_lossy()]);
+        assert_eq!(paths, vec![cwd.join("looks/strobe.sdc").to_string_lossy()]);
     }
 
     #[test]
-    fn normalize_project_save_path_adds_ry_extension_when_missing() {
+    fn normalize_project_save_path_adds_sdc_extension_when_missing() {
         let path = normalize_project_save_path(PathBuf::from("C:/shows/opening")).unwrap();
 
-        assert_eq!(path, PathBuf::from("C:/shows/opening.ry"));
+        assert_eq!(path, PathBuf::from("C:/shows/opening.sdc"));
     }
 
     #[test]
-    fn normalize_project_save_path_rejects_non_rayard_extension() {
+    fn normalize_project_save_path_rejects_non_syndocal_extension() {
         let error =
             normalize_project_save_path(PathBuf::from("C:/shows/opening.json")).unwrap_err();
 
-        assert!(error.contains(".ry extension"));
+        assert!(error.contains(".sdc extension"));
+    }
+
+    #[test]
+    fn normalize_project_save_path_rejects_legacy_project_extension() {
+        let legacy_extension = ["r", "y"].concat();
+        let error = normalize_project_save_path(PathBuf::from(format!(
+            "C:/shows/opening.{legacy_extension}"
+        )))
+        .unwrap_err();
+
+        assert!(error.contains(".sdc extension"));
     }
 
     #[test]
@@ -13387,7 +13491,7 @@ f 1 2 3
     fn project_file_validation_rejects_wrong_version_or_app() {
         let mut project = ProjectFile {
             version: 2,
-            app: "Rayard".to_string(),
+            app: "Syndocal".to_string(),
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot::default(),
         };
@@ -13415,7 +13519,7 @@ f 1 2 3
 
         let mut project = ProjectFile {
             version: 1,
-            app: "Rayard".to_string(),
+            app: "Syndocal".to_string(),
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot::default(),
         };
@@ -13487,8 +13591,8 @@ f 1 2 3
 
     fn project_custom_profile() -> FixtureProfileSummary {
         FixtureProfileSummary {
-            source_path: "memory://custom/Rayard-Custom_Bar".to_string(),
-            manufacturer: "Rayard".to_string(),
+            source_path: "memory://custom/Syndocal-Custom_Bar".to_string(),
+            manufacturer: "Syndocal".to_string(),
             name: "Custom Bar".to_string(),
             short_name: None,
             fixture_type_id: None,
@@ -13523,7 +13627,7 @@ f 1 2 3
     fn project_with_valid_video_graph() -> ProjectFile {
         ProjectFile {
             version: 1,
-            app: "Rayard".to_string(),
+            app: "Syndocal".to_string(),
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 video: protocol::VideoSnapshot {
@@ -13545,13 +13649,13 @@ f 1 2 3
     #[test]
     fn project_file_preserves_custom_fixture_profiles_and_reads_legacy_files() {
         let mut fixture = project_fixture(1, "Custom Bar 1", 0, 1);
-        fixture.profile_source_path = "memory://custom/Rayard-Custom_Bar".to_string();
+        fixture.profile_source_path = "memory://custom/Syndocal-Custom_Bar".to_string();
         fixture.profile_name = "Custom Bar".to_string();
         fixture.mode_name = "4ch".to_string();
         fixture.controls = project_custom_profile().dmx_modes[0].controls.clone();
         let project = ProjectFile {
             version: 1,
-            app: "Rayard".to_string(),
+            app: "Syndocal".to_string(),
             custom_profiles: vec![project_custom_profile()],
             snapshot: EngineSnapshot {
                 fixtures: vec![fixture],
@@ -13562,7 +13666,7 @@ f 1 2 3
         validate_project_file(&project).unwrap();
         let json = serde_json::to_string_pretty(&project).unwrap();
         assert!(json.contains("\"custom_profiles\""));
-        assert!(json.contains("memory://custom/Rayard-Custom_Bar"));
+        assert!(json.contains("memory://custom/Syndocal-Custom_Bar"));
         let parsed: ProjectFile = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.custom_profiles.len(), 1);
 
@@ -13583,7 +13687,7 @@ f 1 2 3
         fixture.mode_name = "Standard".to_string();
         let project = ProjectFile {
             version: 1,
-            app: "Rayard".to_string(),
+            app: "Syndocal".to_string(),
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![fixture],
@@ -13598,7 +13702,7 @@ f 1 2 3
     fn project_file_validation_rejects_missing_custom_fixture_profile_refs() {
         let mut project = ProjectFile {
             version: 1,
-            app: "Rayard".to_string(),
+            app: "Syndocal".to_string(),
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![project_fixture(1, "Custom Bar 1", 0, 1)],
@@ -13606,7 +13710,7 @@ f 1 2 3
             },
         };
         project.snapshot.fixtures[0].profile_source_path =
-            "memory://custom/Rayard-Custom_Bar".to_string();
+            "memory://custom/Syndocal-Custom_Bar".to_string();
         assert!(validate_project_file(&project)
             .unwrap_err()
             .contains("references missing custom profile"));
@@ -13810,7 +13914,7 @@ f 1 2 3
     fn project_file_validation_checks_node_graphs() {
         let mut project = ProjectFile {
             version: 1,
-            app: "Rayard".to_string(),
+            app: "Syndocal".to_string(),
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![project_fixture(1, "Fixture 1", 0, 1)],
@@ -13863,7 +13967,7 @@ f 1 2 3
         };
         let file = NodeGraphPresetFile {
             version: 1,
-            app: "Rayard".to_string(),
+            app: "Syndocal".to_string(),
             graph: project_node_graph(3, 1),
         };
 
@@ -13900,7 +14004,7 @@ f 1 2 3
             label: label.to_string(),
             profile_source_path: "memory://fixture.gdtf".to_string(),
             profile_name: "Mini Spot".to_string(),
-            manufacturer: "Rayard".to_string(),
+            manufacturer: "Syndocal".to_string(),
             mode_name: "Standard".to_string(),
             universe,
             address,
@@ -13965,7 +14069,7 @@ f 1 2 3
         fixture.controls[0].geometry = Some("Beam".to_string());
         let project = ProjectFile {
             version: 1,
-            app: "Rayard".to_string(),
+            app: "Syndocal".to_string(),
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![fixture],
@@ -13988,7 +14092,7 @@ f 1 2 3
         fixture.controls[0].geometry = Some("Body".to_string());
         let project = ProjectFile {
             version: 1,
-            app: "Rayard".to_string(),
+            app: "Syndocal".to_string(),
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![fixture],
@@ -14008,7 +14112,7 @@ f 1 2 3
         profile.dmx_modes[0].controls[0].geometry = Some("Beam".to_string());
         let project = ProjectFile {
             version: 1,
-            app: "Rayard".to_string(),
+            app: "Syndocal".to_string(),
             custom_profiles: vec![profile],
             snapshot: EngineSnapshot::default(),
         };
@@ -14122,7 +14226,7 @@ f 1 2 3
     fn project_file_validation_rejects_invalid_fixture_patches() {
         let mut project = ProjectFile {
             version: 1,
-            app: "Rayard".to_string(),
+            app: "Syndocal".to_string(),
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot::default(),
         };
@@ -14161,7 +14265,7 @@ f 1 2 3
     fn project_file_validation_rejects_invalid_fixture_attribute_values() {
         let mut project = ProjectFile {
             version: 1,
-            app: "Rayard".to_string(),
+            app: "Syndocal".to_string(),
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![project_fixture(1, "Fixture 1", 0, 1)],
@@ -14197,7 +14301,7 @@ f 1 2 3
     fn project_file_validation_rejects_broken_lighting_references() {
         let mut project = ProjectFile {
             version: 1,
-            app: "Rayard".to_string(),
+            app: "Syndocal".to_string(),
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![project_fixture(1, "Fixture 1", 0, 1)],
@@ -14275,7 +14379,7 @@ f 1 2 3
     fn project_file_validation_rejects_invalid_effect_body() {
         let mut project = ProjectFile {
             version: 1,
-            app: "Rayard".to_string(),
+            app: "Syndocal".to_string(),
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![project_fixture(1, "Fixture 1", 0, 1)],
@@ -14328,7 +14432,7 @@ f 1 2 3
     fn project_file_validation_rejects_duplicate_timeline_key_times() {
         let mut project = ProjectFile {
             version: 1,
-            app: "Rayard".to_string(),
+            app: "Syndocal".to_string(),
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![project_fixture(1, "Fixture 1", 0, 1)],
@@ -14455,7 +14559,7 @@ f 1 2 3
     fn project_file_validation_checks_dmx_output_routes() {
         let mut project = ProjectFile {
             version: 1,
-            app: "Rayard".to_string(),
+            app: "Syndocal".to_string(),
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot::default(),
         };
@@ -14545,7 +14649,7 @@ f 1 2 3
             label: "Front 1".to_string(),
             profile_source_path: String::new(),
             profile_name: "Dimmer".to_string(),
-            manufacturer: "Rayard".to_string(),
+            manufacturer: "Syndocal".to_string(),
             mode_name: "1ch".to_string(),
             universe: 0,
             address: 1,
@@ -14568,7 +14672,7 @@ f 1 2 3
             label: "Back 1".to_string(),
             profile_source_path: String::new(),
             profile_name: "Dimmer".to_string(),
-            manufacturer: "Rayard".to_string(),
+            manufacturer: "Syndocal".to_string(),
             mode_name: "1ch".to_string(),
             universe: 0,
             address: 2,
@@ -14612,7 +14716,7 @@ f 1 2 3
             label: "Front 1".to_string(),
             profile_source_path: String::new(),
             profile_name: "Dimmer".to_string(),
-            manufacturer: "Rayard".to_string(),
+            manufacturer: "Syndocal".to_string(),
             mode_name: "1ch".to_string(),
             universe: 0,
             address: 1,
@@ -14635,7 +14739,7 @@ f 1 2 3
             label: "Back 1".to_string(),
             profile_source_path: String::new(),
             profile_name: "Dimmer".to_string(),
-            manufacturer: "Rayard".to_string(),
+            manufacturer: "Syndocal".to_string(),
             mode_name: "1ch".to_string(),
             universe: 0,
             address: 2,
@@ -14792,7 +14896,7 @@ f 1 2 3
 
     fn sample_patch_profile() -> FixtureProfileSummary {
         custom_fixture_profile_from_request(CustomFixtureProfileRequest {
-            manufacturer: "Rayard".to_string(),
+            manufacturer: "Syndocal".to_string(),
             name: "Overlap Test".to_string(),
             mode_name: "Default".to_string(),
             attributes: vec![
@@ -14806,7 +14910,7 @@ f 1 2 3
 
     fn sample_patch_request(universe: u16, address: u16) -> PatchFixtureRequest {
         PatchFixtureRequest {
-            profile_path: "memory://custom/Rayard-Overlap_Test".to_string(),
+            profile_path: "memory://custom/Syndocal-Overlap_Test".to_string(),
             mode_name: Some("Default".to_string()),
             label: "New Fixture".to_string(),
             universe,
@@ -14878,7 +14982,7 @@ f 1 2 3
         let rebuilt = fixture_profile_from_patched_fixture(&fixture);
 
         assert_eq!(rebuilt.source_path, "memory://patched-fixture/7");
-        assert_eq!(rebuilt.manufacturer, "Rayard");
+        assert_eq!(rebuilt.manufacturer, "Syndocal");
         assert_eq!(rebuilt.name, "Overlap Test");
         assert_eq!(rebuilt.dmx_modes[0].name, "Default");
         assert_eq!(rebuilt.dmx_modes[0].controls, fixture.controls);
@@ -15061,7 +15165,7 @@ f 1 2 3
             attribute: "Dimmer".to_string(),
             value: 32_768,
         }]);
-        preset.profile_source_path = Some("memory://custom/Rayard-Mini_Spot".to_string());
+        preset.profile_source_path = Some("memory://custom/Syndocal-Mini_Spot".to_string());
 
         let json = serde_json::to_string_pretty(&preset).unwrap();
         let parsed: FixturePreset = serde_json::from_str(&json).unwrap();
@@ -15069,7 +15173,7 @@ f 1 2 3
         assert!(json.contains("\"profile_source_path\""));
         assert_eq!(
             parsed.profile_source_path.as_deref(),
-            Some("memory://custom/Rayard-Mini_Spot")
+            Some("memory://custom/Syndocal-Mini_Spot")
         );
 
         let mut legacy_json = serde_json::to_value(&preset).unwrap();
@@ -15093,7 +15197,7 @@ f 1 2 3
 
         assert!(validate_fixture_preset(
             &preset,
-            "Rayard",
+            "Syndocal",
             "Mini Spot",
             "Standard",
             ["Dimmer", "Pan"]
@@ -15108,7 +15212,7 @@ f 1 2 3
             value: 32_768,
         }]);
         let profile_error =
-            validate_fixture_preset(&preset, "Rayard", "Other Spot", "Standard", ["Dimmer"])
+            validate_fixture_preset(&preset, "Syndocal", "Other Spot", "Standard", ["Dimmer"])
                 .unwrap_err();
         assert!(profile_error.contains("Preset is for"));
 
@@ -15117,7 +15221,7 @@ f 1 2 3
             value: 12_000,
         }]);
         let attribute_error =
-            validate_fixture_preset(&preset, "Rayard", "Mini Spot", "Standard", ["Dimmer"])
+            validate_fixture_preset(&preset, "Syndocal", "Mini Spot", "Standard", ["Dimmer"])
                 .unwrap_err();
         assert!(attribute_error.contains("not available"));
 
@@ -15132,7 +15236,7 @@ f 1 2 3
             },
         ]);
         let duplicate_error =
-            validate_fixture_preset(&duplicate, "Rayard", "Mini Spot", "Standard", ["Dimmer"])
+            validate_fixture_preset(&duplicate, "Syndocal", "Mini Spot", "Standard", ["Dimmer"])
                 .unwrap_err();
         assert!(duplicate_error.contains("duplicate attribute"));
     }
@@ -15144,7 +15248,7 @@ f 1 2 3
             value: 32_768,
         }]);
         let profile = custom_fixture_profile_from_request(CustomFixtureProfileRequest {
-            manufacturer: "Rayard".to_string(),
+            manufacturer: "Syndocal".to_string(),
             name: "Mini Spot".to_string(),
             mode_name: "Standard".to_string(),
             attributes: vec!["Dimmer".to_string(), "Pan".to_string()],
@@ -15410,7 +15514,7 @@ f 1 2 3
     #[test]
     fn sample_effect_presets_are_valid_for_phase1_mini_show() {
         let show: ProjectFile =
-            serde_json::from_str(include_str!("../../../samples/phase1-mini-show.ry")).unwrap();
+            serde_json::from_str(include_str!("../../../samples/phase1-mini-show.sdc")).unwrap();
         validate_project_file(&show).unwrap();
         let group_ids: HashSet<&str> = show
             .snapshot
@@ -15827,7 +15931,7 @@ f 1 2 3
             ..DmxOutputConfig::default()
         });
         let profile = custom_fixture_profile_from_request(CustomFixtureProfileRequest {
-            manufacturer: "Rayard".to_string(),
+            manufacturer: "Syndocal".to_string(),
             name: "Preset Target Spot".to_string(),
             mode_name: "8ch".to_string(),
             attributes: vec!["Dimmer".to_string(), "ColorRed".to_string()],
@@ -15910,7 +16014,7 @@ f 1 2 3
             ..DmxOutputConfig::default()
         });
         let profile = custom_fixture_profile_from_request(CustomFixtureProfileRequest {
-            manufacturer: "Rayard".to_string(),
+            manufacturer: "Syndocal".to_string(),
             name: "Duplicate Target Spot".to_string(),
             mode_name: "8ch".to_string(),
             attributes: vec!["Dimmer".to_string()],
@@ -16034,7 +16138,7 @@ f 1 2 3
             ..DmxOutputConfig::default()
         });
         let profile = custom_fixture_profile_from_request(CustomFixtureProfileRequest {
-            manufacturer: "Rayard".to_string(),
+            manufacturer: "Syndocal".to_string(),
             name: "Circle Target Spot".to_string(),
             mode_name: "8ch".to_string(),
             attributes: vec!["Pan".to_string(), "Tilt".to_string()],
@@ -16371,7 +16475,7 @@ fn main() {
             open_video_output_window
         ])
         .build(tauri::generate_context!())
-        .expect("error while building Rayard")
+        .expect("error while building Syndocal")
         .run(|app_handle, event| {
             #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
             {
@@ -16387,7 +16491,7 @@ fn main() {
                             return None;
                         }
                         let path = url.to_file_path().ok()?;
-                        is_rayard_project_path(&path).then(|| path.to_string_lossy().to_string())
+                        is_syndocal_project_path(&path).then(|| path.to_string_lossy().to_string())
                     })
                     .collect::<Vec<_>>();
                 if !project_paths.is_empty() {

@@ -91,7 +91,7 @@ jobs:
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: rayard-${{ matrix.os }}
+          shared-key: syndocal-${{ matrix.os }}
 
       - name: Install frontend dependencies
         run: pnpm --dir app install --frozen-lockfile
@@ -109,4 +109,4 @@ jobs:
         run: pnpm --dir app build
 
       - name: Check Tauri application
-        run: cargo check -p rayard --features libav --locked
+        run: cargo check -p syndocal --features libav --locked

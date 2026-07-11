@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "app": "Rayard",
+  "app": "Syndocal",
   "custom_profiles": [
     {
-      "source_path": "memory://custom/Rayard-Phase_1_Mini_Spot",
-      "manufacturer": "Rayard",
+      "source_path": "memory://custom/Syndocal-Phase_1_Mini_Spot",
+      "manufacturer": "Syndocal",
       "name": "Phase 1 Mini Spot",
       "short_name": "P1 Spot",
       "fixture_type_id": null,
@@ -121,9 +121,9 @@
       {
         "id": 1,
         "label": "Mini Spot 1",
-        "profile_source_path": "memory://custom/Rayard-Phase_1_Mini_Spot",
+        "profile_source_path": "memory://custom/Syndocal-Phase_1_Mini_Spot",
         "profile_name": "Phase 1 Mini Spot",
-        "manufacturer": "Rayard",
+        "manufacturer": "Syndocal",
         "mode_name": "8ch",
         "universe": 0,
         "address": 1,

@@ -302,6 +302,7 @@ mod tests {
     use protocol::{VideoSourceKind, VideoSourceSummary};
 
     use super::*;
+    use crate::{FfmpegCliFrameDecoder, PreferredVideoFrameDecoder, VideoDecoderDiagnostics};
 
     fn request() -> VideoFrameRequest {
         VideoFrameRequest {
@@ -333,7 +334,7 @@ mod tests {
     fn decodes_h264_h265_and_prores_in_process() {
         use std::process::Command;
 
-        let ffmpeg = std::env::var_os("RAYARD_FFMPEG").unwrap_or_else(|| "ffmpeg".into());
+        let ffmpeg = std::env::var_os("SYNDOCAL_FFMPEG").unwrap_or_else(|| "ffmpeg".into());
         assert!(LibavFrameDecoder::is_built());
         for (codec, encoder, extension, pixel_format, extra_args) in [
             ("h264", "libx264", "mp4", "yuv420p", &[][..]),
@@ -347,7 +348,7 @@ mod tests {
             ("prores", "prores_ks", "mov", "yuv422p10le", &[][..]),
         ] {
             let path = std::env::temp_dir().join(format!(
-                "rayard-libav-{codec}-{}-{}.{}",
+                "syndocal-libav-{codec}-{}-{}.{}",
                 std::process::id(),
                 request().layer_id,
                 extension
@@ -397,6 +398,25 @@ mod tests {
             assert!(frame.data[2] < 40, "{codec}");
             assert_eq!(decoder.cache_len(), 1, "{codec}");
             assert_eq!(decoder.decode_frame(&request).unwrap().unwrap(), frame);
+
+            let missing_ffmpeg = std::env::temp_dir().join(format!(
+                "syndocal-missing-ffmpeg-{codec}-{}",
+                std::process::id()
+            ));
+            let mut preferred =
+                PreferredVideoFrameDecoder::new(FfmpegCliFrameDecoder::new(missing_ffmpeg));
+            assert_eq!(preferred.decode_frame(&request).unwrap().unwrap(), frame);
+            assert_eq!(
+                preferred.diagnostics(),
+                VideoDecoderDiagnostics {
+                    total_requests: 1,
+                    libav_requests: 1,
+                    libav_successes: 1,
+                    libav_cache_len: 1,
+                    ..VideoDecoderDiagnostics::default()
+                },
+                "{codec}"
+            );
             let _ = std::fs::remove_file(path);
         }
     }

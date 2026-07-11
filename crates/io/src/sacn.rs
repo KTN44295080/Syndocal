@@ -10,8 +10,8 @@ pub const SACN_PORT: u16 = 5568;
 pub const SACN_PACKET_LEN: usize = 126 + 512;
 const ACN_PACKET_IDENTIFIER: &[u8; 12] = b"ASC-E1.17\0\0\0";
 const SOURCE_NAME_LEN: usize = 64;
-// Stable Rayard sACN component identifier: 49ce4498-aa14-41f4-a889-7afa6b7b10f1.
-const RAYARD_CID: [u8; 16] = [
+// Stable Syndocal sACN component identifier: 49ce4498-aa14-41f4-a889-7afa6b7b10f1.
+const SYNDOCAL_CID: [u8; 16] = [
     0x49, 0xce, 0x44, 0x98, 0xaa, 0x14, 0x41, 0xf4, 0xa8, 0x89, 0x7a, 0xfa, 0x6b, 0x7b, 0x10, 0xf1,
 ];
 
@@ -62,8 +62,8 @@ impl SacnSender {
             socket,
             target,
             port,
-            cid: RAYARD_CID,
-            source_name: "Rayard".to_string(),
+            cid: SYNDOCAL_CID,
+            source_name: "Syndocal".to_string(),
             sequence: AtomicU8::new(1),
         })
     }
@@ -194,7 +194,7 @@ mod tests {
         frame[0] = 255;
         frame[511] = 64;
 
-        let packet = build_sacn_dmx_packet(12, 7, &RAYARD_CID, "Rayard Test", &frame);
+        let packet = build_sacn_dmx_packet(12, 7, &SYNDOCAL_CID, "Syndocal Test", &frame);
         let parsed = parse_sacn_dmx_packet(&packet).unwrap();
 
         assert_eq!(packet.len(), SACN_PACKET_LEN);
@@ -208,15 +208,15 @@ mod tests {
     }
 
     #[test]
-    fn rayard_cid_uses_dedicated_identifier() {
+    fn syndocal_cid_uses_dedicated_identifier() {
         assert_eq!(
-            RAYARD_CID,
+            SYNDOCAL_CID,
             [
                 0x49, 0xce, 0x44, 0x98, 0xaa, 0x14, 0x41, 0xf4, 0xa8, 0x89, 0x7a, 0xfa, 0x6b, 0x7b,
                 0x10, 0xf1,
             ]
         );
-        assert_ne!(&RAYARD_CID[0..4], [75, 68, 77, 88]);
+        assert_ne!(&SYNDOCAL_CID[0..4], [75, 68, 77, 88]);
     }
 
     #[test]

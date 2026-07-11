@@ -23,7 +23,7 @@ export interface MappingViewPreset {
   stageTool: MappingStageTool;
 }
 
-const mappingViewPresetStorageKey = "rayard.mappingViewPresets.v1";
+const mappingViewPresetStorageKey = "syndocal.mappingViewPresets.v1";
 
 export const normalizeMappingStageTool = (value: unknown): MappingStageTool =>
   typeof value === "string" && mappingStageTools.includes(value as MappingStageTool)

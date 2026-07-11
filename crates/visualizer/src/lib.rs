@@ -4149,7 +4149,7 @@ f -4 -3 -2 -1
             label: label.to_string(),
             profile_source_path: "memory://visualizer.fixture".to_string(),
             profile_name: "Fixture".to_string(),
-            manufacturer: "Rayard".to_string(),
+            manufacturer: "Syndocal".to_string(),
             mode_name: "Default".to_string(),
             universe: 0,
             address: 1,

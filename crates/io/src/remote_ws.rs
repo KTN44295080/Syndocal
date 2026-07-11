@@ -29,11 +29,11 @@ const REMOTE_PAGE_HTML: &str = r##"<!doctype html>
   <meta name="theme-color" content="#111419">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="Rayard">
+  <meta name="apple-mobile-web-app-title" content="Syndocal">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icon.svg">
-  <title>Rayard Remote</title>
+  <title>Syndocal Remote</title>
   <style>
     :root{color:#edf3fb;background:#111419;font:14px system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
     *{box-sizing:border-box} body{margin:0;min-height:100vh;background:#111419;color:#edf3fb}
@@ -66,7 +66,7 @@ const REMOTE_PAGE_HTML: &str = r##"<!doctype html>
 </head>
 <body>
 <main>
-  <header><h1>Rayard Remote</h1><span id="status" class="status bad">Disconnected</span></header>
+  <header><h1>Syndocal Remote</h1><span id="status" class="status bad">Disconnected</span></header>
   <section class="summary">
     <div class="tile"><span class="muted">Fixtures</span><strong id="fixtureCount">0</strong></div>
     <div class="tile"><span class="muted">Cues</span><strong id="cueCount">0</strong></div>
@@ -294,7 +294,7 @@ let sceneFilterText="";
 let remoteStageSelectedOutputId=null;
 let remoteColorAutoWhite=false;
 let remoteDimmerBumpRestore=null;
-const remotePositionFavoritesStorageKey="rayard.remote.positionFavorites.v1";
+const remotePositionFavoritesStorageKey="syndocal.remote.positionFavorites.v1";
 const remotePositionFavoriteTolerance=512;
 let remotePositionFavorites=loadRemotePositionFavorites();
 const cuePadSize=10;
@@ -2530,9 +2530,9 @@ connect();
 </body>
 </html>
 "##;
-const REMOTE_MANIFEST: &str = r##"{"name":"Rayard Remote","short_name":"Rayard","start_url":"/","scope":"/","display":"standalone","background_color":"#111419","theme_color":"#111419","icons":[{"src":"/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}"##;
+const REMOTE_MANIFEST: &str = r##"{"name":"Syndocal Remote","short_name":"Syndocal","start_url":"/","scope":"/","display":"standalone","background_color":"#111419","theme_color":"#111419","icons":[{"src":"/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}"##;
 const REMOTE_ICON_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="24" fill="#111419"/><path d="M28 88h72" stroke="#4aa8ff" stroke-width="10" stroke-linecap="round"/><path d="M36 34v42M64 24v52M92 44v32" stroke="#edf3fb" stroke-width="10" stroke-linecap="round"/><circle cx="36" cy="58" r="12" fill="#f2c14e"/><circle cx="64" cy="42" r="12" fill="#74d99f"/><circle cx="92" cy="66" r="12" fill="#4aa8ff"/></svg>"##;
-const REMOTE_SERVICE_WORKER_JS: &str = r##"const CACHE_NAME="rayard-remote-v1";const SHELL=["/","/manifest.webmanifest","/icon.svg"];self.addEventListener("install",event=>{event.waitUntil(caches.open(CACHE_NAME).then(cache=>cache.addAll(SHELL)).then(()=>self.skipWaiting()))});self.addEventListener("activate",event=>{event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key!==CACHE_NAME).map(key=>caches.delete(key)))).then(()=>self.clients.claim()))});self.addEventListener("fetch",event=>{if(event.request.method!=="GET")return;event.respondWith(fetch(event.request).then(response=>{const copy=response.clone();if(event.request.url.startsWith(self.location.origin)){caches.open(CACHE_NAME).then(cache=>cache.put(event.request,copy))}return response}).catch(()=>caches.match(event.request).then(cached=>cached||caches.match("/"))))});"##;
+const REMOTE_SERVICE_WORKER_JS: &str = r##"const CACHE_NAME="syndocal-remote-v1";const SHELL=["/","/manifest.webmanifest","/icon.svg"];self.addEventListener("install",event=>{event.waitUntil(caches.open(CACHE_NAME).then(cache=>cache.addAll(SHELL)).then(()=>self.skipWaiting()))});self.addEventListener("activate",event=>{event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key!==CACHE_NAME).map(key=>caches.delete(key)))).then(()=>self.clients.claim()))});self.addEventListener("fetch",event=>{if(event.request.method!=="GET")return;event.respondWith(fetch(event.request).then(response=>{const copy=response.clone();if(event.request.url.startsWith(self.location.origin)){caches.open(CACHE_NAME).then(cache=>cache.put(event.request,copy))}return response}).catch(()=>caches.match(event.request).then(cached=>cached||caches.match("/"))))});"##;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RemoteInputEvent {
@@ -2831,7 +2831,7 @@ impl RemoteWsServer {
         let external_video_transport_sync_provider =
             Arc::new(external_video_transport_sync_provider);
         let thread = thread::Builder::new()
-            .name("rayard-remote-ws".to_string())
+            .name("syndocal-remote-ws".to_string())
             .spawn(move || {
                 while !thread_stop.load(Ordering::Relaxed) {
                     match listener.accept() {
@@ -2850,7 +2850,7 @@ impl RemoteWsServer {
                             let client_external_video_transport_sync_provider =
                                 Arc::clone(&external_video_transport_sync_provider);
                             let _ = thread::Builder::new()
-                                .name("rayard-remote-ws-client".to_string())
+                                .name("syndocal-remote-ws-client".to_string())
                                 .spawn(move || {
                                     handle_connection(
                                         stream,
@@ -4054,7 +4054,7 @@ mod tests {
         let missing = http_response_for_path("/missing");
 
         assert!(page.starts_with("HTTP/1.1 200 OK"));
-        assert!(page.contains("Rayard Remote"));
+        assert!(page.contains("Syndocal Remote"));
         assert!(page.contains(r#"rel="manifest" href="/manifest.webmanifest""#));
         assert!(page.contains("apple-mobile-web-app-capable"));
         assert!(page.contains("serviceWorker"));
@@ -4286,7 +4286,7 @@ mod tests {
         assert!(page.contains("setFixtureHighlight"));
         assert!(page.contains("setFixtureSolo"));
         assert!(manifest.contains("application/manifest+json"));
-        assert!(manifest.contains(r#""short_name":"Rayard""#));
+        assert!(manifest.contains(r#""short_name":"Syndocal""#));
         assert!(manifest.contains(r#""icons""#));
         assert!(icon.contains("image/svg+xml"));
         assert!(icon.contains("<svg"));
@@ -4385,7 +4385,7 @@ mod tests {
                 "route_id": 4,
                 "label": "Program",
                 "backend_id": "spout",
-                "endpoint_name": "Rayard Stage"
+                "endpoint_name": "Syndocal Stage"
             }],
             "active_count": 1
         }));
@@ -4406,7 +4406,7 @@ mod tests {
                     "route_id": 4,
                     "label": "Program",
                     "backend_id": "spout",
-                    "endpoint_name": "Rayard Stage"
+                    "endpoint_name": "Syndocal Stage"
                 }],
                 "kept": [],
                 "stopped": [],
@@ -4424,9 +4424,9 @@ mod tests {
                     "route_id": 4,
                     "label": "Program",
                     "backend_id": "spout",
-                    "endpoint_name": "Rayard Stage"
+                    "endpoint_name": "Syndocal Stage"
                 },
-                "message": "Queued spout output external video route 'Rayard Stage'"
+                "message": "Queued spout output external video route 'Syndocal Stage'"
             }]
         }));
 

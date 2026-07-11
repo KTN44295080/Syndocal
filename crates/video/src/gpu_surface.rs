@@ -54,15 +54,15 @@ impl NativeGpuLayerBuffers {
         spec: GpuFrameTextureSpec,
     ) -> Self {
         let source = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Rayard native GPU unused layer source buffer"),
+            label: Some("Syndocal native GPU unused layer source buffer"),
             size: 4,
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
         let (texture, texture_view) =
-            create_frame_texture(device, spec, "Rayard native GPU layer source texture");
+            create_frame_texture(device, spec, "Syndocal native GPU layer source texture");
         let params = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Rayard native GPU layer params"),
+            label: Some("Syndocal native GPU layer params"),
             size: 128,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -136,22 +136,22 @@ impl NativeGpuFrameBuffers {
         let output_capacity = grown_buffer_capacity(0, required_output_bytes);
         let composition = create_output_buffer(
             device,
-            "Rayard native GPU composition buffer",
+            "Syndocal native GPU composition buffer",
             output_capacity,
         );
         let mapped = create_output_buffer(
             device,
-            "Rayard native GPU mapped output buffer",
+            "Syndocal native GPU mapped output buffer",
             output_capacity,
         );
         let mapping_params = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Rayard native GPU output mapping params"),
+            label: Some("Syndocal native GPU output mapping params"),
             size: 80,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let dimensions = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Rayard native GPU output dimensions"),
+            label: Some("Syndocal native GPU output dimensions"),
             size: 16,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -199,12 +199,12 @@ impl NativeGpuFrameBuffers {
         self.output_capacity = grown_buffer_capacity(self.output_capacity, required_bytes);
         self.composition = create_output_buffer(
             device,
-            "Rayard native GPU composition buffer",
+            "Syndocal native GPU composition buffer",
             self.output_capacity,
         );
         self.mapped = create_output_buffer(
             device,
-            "Rayard native GPU mapped output buffer",
+            "Syndocal native GPU mapped output buffer",
             self.output_capacity,
         );
         self.mapping_bind_group = create_mapping_bind_group(
@@ -287,7 +287,7 @@ fn create_layer_bind_group(
     params: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("Rayard native GPU layer bind group"),
+        label: Some("Syndocal native GPU layer bind group"),
         layout,
         entries: &[
             wgpu::BindGroupEntry {
@@ -319,7 +319,7 @@ fn create_mapping_bind_group(
     dummy_texture: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("Rayard native GPU output mapping bind group"),
+        label: Some("Syndocal native GPU output mapping bind group"),
         layout,
         entries: &[
             wgpu::BindGroupEntry {
@@ -344,7 +344,7 @@ fn create_mapping_bind_group(
 
 fn create_dummy_texture(device: &wgpu::Device) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("Rayard native GPU unused mapping texture"),
+        label: Some("Syndocal native GPU unused mapping texture"),
         size: wgpu::Extent3d {
             width: 1,
             height: 1,
@@ -366,7 +366,7 @@ fn create_output_bind_group(
     dimensions: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("Rayard native GPU buffer output bind group"),
+        label: Some("Syndocal native GPU buffer output bind group"),
         layout,
         entries: &[
             wgpu::BindGroupEntry {
@@ -434,7 +434,7 @@ impl GpuSurfacePresenter {
         let adapter_name = adapter.get_info().name;
         let required_features = requested_video_device_features(&adapter);
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("Rayard native video output device"),
+            label: Some("Syndocal native video output device"),
             required_features,
             ..Default::default()
         }))
@@ -446,7 +446,7 @@ impl GpuSurfacePresenter {
         surface.configure(&device, &config);
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Rayard native video output bind group layout"),
+            label: Some("Syndocal native video output bind group layout"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -467,16 +467,16 @@ impl GpuSurfacePresenter {
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Rayard native video output pipeline layout"),
+            label: Some("Syndocal native video output pipeline layout"),
             bind_group_layouts: &[&bind_group_layout],
             push_constant_ranges: &[],
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Rayard native video output shader"),
+            label: Some("Syndocal native video output shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("gpu_surface.wgsl").into()),
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Rayard native video output pipeline"),
+            label: Some("Syndocal native video output pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -501,7 +501,7 @@ impl GpuSurfacePresenter {
             cache: None,
         });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Rayard native video output sampler"),
+            label: Some("Syndocal native video output sampler"),
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
@@ -509,7 +509,7 @@ impl GpuSurfacePresenter {
         let composite_pipelines = create_gpu_composite_pipelines(&device);
         let buffer_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Rayard native GPU buffer output bind group layout"),
+                label: Some("Syndocal native GPU buffer output bind group layout"),
                 entries: &[
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
@@ -535,16 +535,16 @@ impl GpuSurfacePresenter {
             });
         let buffer_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Rayard native GPU buffer output pipeline layout"),
+                label: Some("Syndocal native GPU buffer output pipeline layout"),
                 bind_group_layouts: &[&buffer_bind_group_layout],
                 push_constant_ranges: &[],
             });
         let buffer_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Rayard native GPU buffer output shader"),
+            label: Some("Syndocal native GPU buffer output shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("gpu_surface_buffer.wgsl").into()),
         });
         let buffer_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Rayard native GPU buffer output pipeline"),
+            label: Some("Syndocal native GPU buffer output pipeline"),
             layout: Some(&buffer_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &buffer_shader,
@@ -617,7 +617,7 @@ impl GpuSurfacePresenter {
         let texture = self.device.create_texture_with_data(
             &self.queue,
             &wgpu::TextureDescriptor {
-                label: Some("Rayard native video output frame"),
+                label: Some("Syndocal native video output frame"),
                 size: wgpu::Extent3d {
                     width: frame.width,
                     height: frame.height,
@@ -635,7 +635,7 @@ impl GpuSurfacePresenter {
         );
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Rayard native video output frame bind group"),
+            label: Some("Syndocal native video output frame bind group"),
             layout: &self.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -664,11 +664,11 @@ impl GpuSurfacePresenter {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Rayard native video output encoder"),
+                label: Some("Syndocal native video output encoder"),
             });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Rayard native video output pass"),
+                label: Some("Syndocal native video output pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &output_view,
                     resolve_target: None,
@@ -762,7 +762,7 @@ impl GpuSurfacePresenter {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Rayard native GPU output encoder"),
+                label: Some("Syndocal native GPU output encoder"),
             });
         encoder.clear_buffer(&gpu_buffers.composition, 0, Some(buffer_size));
         encoder.clear_buffer(&gpu_buffers.mapped, 0, Some(buffer_size));
@@ -790,7 +790,7 @@ impl GpuSurfacePresenter {
             let layer_buffers = &gpu_buffers.layers[index];
             self.queue.write_buffer(&layer_buffers.params, 0, &params);
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Rayard native GPU layer pass"),
+                label: Some("Syndocal native GPU layer pass"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.composite_pipelines.composite);
@@ -801,7 +801,7 @@ impl GpuSurfacePresenter {
 
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Rayard native GPU output mapping pass"),
+                label: Some("Syndocal native GPU output mapping pass"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.composite_pipelines.output_mapping);
@@ -814,7 +814,7 @@ impl GpuSurfacePresenter {
             .create_view(&wgpu::TextureViewDescriptor::default());
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Rayard native GPU buffer output pass"),
+                label: Some("Syndocal native GPU buffer output pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &output_view,
                     resolve_target: None,
@@ -893,7 +893,7 @@ mod tests {
         .ok()?;
         let required_features = requested_video_device_features(&adapter);
         pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("Rayard reusable GPU buffer test"),
+            label: Some("Syndocal reusable GPU buffer test"),
             required_features,
             ..Default::default()
         }))
@@ -902,7 +902,7 @@ mod tests {
 
     fn output_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Rayard reusable GPU buffer test output layout"),
+            label: Some("Syndocal reusable GPU buffer test output layout"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,

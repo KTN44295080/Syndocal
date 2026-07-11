@@ -3,8 +3,8 @@
 import type { PositionFavorite } from "./components/PositionControlPanel";
 import { clampDmxValue, defaultColorFavorites, normalizeHexColor } from "./numericHelpers";
 
-const colorFavoritesStorageKey = "rayard.colorFavorites.v1";
-const positionFavoritesStorageKey = "rayard.positionFavorites.v1";
+const colorFavoritesStorageKey = "syndocal.colorFavorites.v1";
+const positionFavoritesStorageKey = "syndocal.positionFavorites.v1";
 
 export const loadColorFavorites = () => {
   if (typeof window === "undefined") {

@@ -10,7 +10,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output = env::args_os()
         .nth(1)
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("target/rayard-hap-q-qa.mov"));
+        .unwrap_or_else(|| PathBuf::from("target/syndocal-hap-q-qa.mov"));
     let config = Mp4Config {
         major_brand: FourCC::from(*b"isom"),
         minor_version: 512,
@@ -62,7 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn write_qa_project(movie_path: &std::path::Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let mut project: serde_json::Value =
-        serde_json::from_slice(&fs::read("samples/phase1-mini-show.ry")?)?;
+        serde_json::from_slice(&fs::read("samples/phase1-mini-show.sdc")?)?;
     let video = &mut project["snapshot"]["video"];
     let state = video["layers"][0]["state"].clone();
     video["layers"]
@@ -91,7 +91,7 @@ fn write_qa_project(movie_path: &std::path::Path) -> Result<PathBuf, Box<dyn std
     video["layers"][1]["state"]["loop_end_ms"] = json!(1000);
     video["compositions"][0]["layer_ids"] = json!([2]);
 
-    let project_path = movie_path.with_extension("ry");
+    let project_path = movie_path.with_extension("sdc");
     fs::write(&project_path, serde_json::to_vec_pretty(&project)?)?;
     Ok(project_path.canonicalize()?)
 }
