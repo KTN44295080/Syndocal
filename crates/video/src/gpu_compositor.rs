@@ -45,6 +45,190 @@ pub(crate) struct GpuCompositePipelines {
     pub output_mapping: wgpu::ComputePipeline,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct GpuFrameTextureSpec {
+    pub format: wgpu::TextureFormat,
+    pub texture_width: u32,
+    pub texture_height: u32,
+    pub bytes_per_row: u32,
+    pub rows_per_image: u32,
+    pub source_format: u32,
+    pub expected_len: usize,
+}
+
+pub(crate) fn requested_video_device_features(adapter: &wgpu::Adapter) -> wgpu::Features {
+    let supported = adapter.features();
+    if supported.contains(wgpu::Features::TEXTURE_COMPRESSION_BC) {
+        wgpu::Features::TEXTURE_COMPRESSION_BC
+    } else {
+        wgpu::Features::empty()
+    }
+}
+
+pub(crate) fn gpu_frame_texture_spec(
+    frame: &VideoFrame,
+    bc_supported: bool,
+) -> Result<GpuFrameTextureSpec, CpuCompositeError> {
+    if frame.width == 0 || frame.height == 0 {
+        return Err(CpuCompositeError::FrameSizeMismatch {
+            layer_id: frame.layer_id,
+        });
+    }
+    let rgba_expected_len = (frame.width as usize)
+        .checked_mul(frame.height as usize)
+        .and_then(|pixels| pixels.checked_mul(4));
+    let block_width = frame.width.checked_add(3).map(|width| width / 4);
+    let block_height = frame.height.checked_add(3).map(|height| height / 4);
+    let padded_width = block_width.and_then(|blocks| blocks.checked_mul(4));
+    let padded_height = block_height.and_then(|blocks| blocks.checked_mul(4));
+    let dxt1_expected_len = block_width
+        .map(|blocks| blocks as usize)
+        .and_then(|width| block_height.map(|height| (width, height as usize)))
+        .and_then(|(width, height)| width.checked_mul(height))
+        .and_then(|blocks| blocks.checked_mul(8));
+    let dxt5_expected_len = block_width
+        .map(|blocks| blocks as usize)
+        .and_then(|width| block_height.map(|height| (width, height as usize)))
+        .and_then(|(width, height)| width.checked_mul(height))
+        .and_then(|blocks| blocks.checked_mul(16));
+    let (
+        format,
+        texture_width,
+        texture_height,
+        bytes_per_row,
+        rows_per_image,
+        source_format,
+        expected_len,
+    ) = match frame.format {
+        VideoPixelFormat::Rgba8 => (
+            wgpu::TextureFormat::Rgba8Unorm,
+            Some(frame.width),
+            Some(frame.height),
+            frame.width.checked_mul(4),
+            Some(frame.height),
+            1,
+            rgba_expected_len,
+        ),
+        VideoPixelFormat::Bgra8 => (
+            wgpu::TextureFormat::Bgra8Unorm,
+            Some(frame.width),
+            Some(frame.height),
+            frame.width.checked_mul(4),
+            Some(frame.height),
+            1,
+            rgba_expected_len,
+        ),
+        VideoPixelFormat::Dxt1 => (
+            wgpu::TextureFormat::Bc1RgbaUnorm,
+            padded_width,
+            padded_height,
+            frame.width.div_ceil(4).checked_mul(8),
+            Some(frame.height.div_ceil(4)),
+            1,
+            dxt1_expected_len,
+        ),
+        VideoPixelFormat::Dxt5 => (
+            wgpu::TextureFormat::Bc3RgbaUnorm,
+            padded_width,
+            padded_height,
+            frame.width.div_ceil(4).checked_mul(16),
+            Some(frame.height.div_ceil(4)),
+            1,
+            dxt5_expected_len,
+        ),
+        VideoPixelFormat::YcoCgDxt5 => (
+            wgpu::TextureFormat::Bc3RgbaUnorm,
+            padded_width,
+            padded_height,
+            frame.width.div_ceil(4).checked_mul(16),
+            Some(frame.height.div_ceil(4)),
+            2,
+            dxt5_expected_len,
+        ),
+    };
+    if matches!(
+        frame.format,
+        VideoPixelFormat::Dxt1 | VideoPixelFormat::Dxt5 | VideoPixelFormat::YcoCgDxt5
+    ) && !bc_supported
+    {
+        return Err(CpuCompositeError::UnsupportedFrameFormat {
+            layer_id: frame.layer_id,
+            format: frame.format,
+        });
+    }
+    let (Some(texture_width), Some(texture_height), Some(bytes_per_row), Some(expected_len)) =
+        (texture_width, texture_height, bytes_per_row, expected_len)
+    else {
+        return Err(CpuCompositeError::FrameSizeMismatch {
+            layer_id: frame.layer_id,
+        });
+    };
+    if frame.data.len() != expected_len {
+        return Err(CpuCompositeError::FrameSizeMismatch {
+            layer_id: frame.layer_id,
+        });
+    }
+    Ok(GpuFrameTextureSpec {
+        format,
+        texture_width,
+        texture_height,
+        bytes_per_row,
+        rows_per_image: rows_per_image.expect("frame rows are present"),
+        source_format,
+        expected_len,
+    })
+}
+
+pub(crate) fn create_frame_texture(
+    device: &wgpu::Device,
+    spec: GpuFrameTextureSpec,
+    label: &'static str,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: spec.texture_width,
+            height: spec.texture_height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: spec.format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
+}
+
+pub(crate) fn write_frame_texture(
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    frame: &VideoFrame,
+    spec: GpuFrameTextureSpec,
+) {
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &frame.data,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(spec.bytes_per_row),
+            rows_per_image: Some(spec.rows_per_image),
+        },
+        wgpu::Extent3d {
+            width: spec.texture_width,
+            height: spec.texture_height,
+            depth_or_array_layers: 1,
+        },
+    );
+}
+
 pub(crate) fn create_gpu_composite_pipelines(device: &wgpu::Device) -> GpuCompositePipelines {
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Rayard video GPU compositor bind group layout"),
@@ -76,6 +260,16 @@ pub(crate) fn create_gpu_composite_pipelines(device: &wgpu::Device) -> GpuCompos
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
                     min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
                 },
                 count: None,
             },
@@ -127,8 +321,10 @@ impl GpuCompositor {
         }))
         .map_err(|error| GpuCompositeError::Adapter(error.to_string()))?;
         let adapter_name = adapter.get_info().name;
+        let required_features = requested_video_device_features(&adapter);
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("Rayard video GPU compositor"),
+            required_features,
             ..Default::default()
         }))
         .map_err(|error| GpuCompositeError::Device(error.to_string()))?;
@@ -145,6 +341,12 @@ impl GpuCompositor {
 
     pub fn adapter_name(&self) -> &str {
         &self.adapter_name
+    }
+
+    pub fn supports_bc_texture(&self) -> bool {
+        self.device
+            .features()
+            .contains(wgpu::Features::TEXTURE_COMPRESSION_BC)
     }
 
     pub fn composite_rgba8(
@@ -175,21 +377,33 @@ impl GpuCompositor {
                 .ok_or(CpuCompositeError::MissingFrame {
                     layer_id: layer.layer_id,
                 })?;
-            let normalized = convert_frame_to_rgba8(frame)?;
+            let texture_spec = gpu_frame_texture_spec(
+                frame,
+                self.device
+                    .features()
+                    .contains(wgpu::Features::TEXTURE_COMPRESSION_BC),
+            )?;
+            let (source_texture, source_texture_view) = create_frame_texture(
+                &self.device,
+                texture_spec,
+                "Rayard video GPU compositor source texture",
+            );
+            write_frame_texture(&self.queue, &source_texture, frame, texture_spec);
             let source_buffer = self
                 .device
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Rayard video GPU compositor source"),
-                    contents: &normalized.data,
+                    label: Some("Rayard video GPU compositor unused source buffer"),
+                    contents: &[0; 4],
                     usage: wgpu::BufferUsages::STORAGE,
                 });
             let params = compositor_params(
                 width,
                 height,
-                normalized.width,
-                normalized.height,
+                frame.width,
+                frame.height,
                 layer.opacity.clamp(0.0, 1.0),
                 blend_mode_index(&layer.blend_mode),
+                texture_spec.source_format,
                 &layer.transform,
                 &layer.color,
                 &layer.fx,
@@ -216,6 +430,10 @@ impl GpuCompositor {
                     wgpu::BindGroupEntry {
                         binding: 2,
                         resource: params_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&source_texture_view),
                     },
                 ],
             });
@@ -323,6 +541,21 @@ impl GpuCompositor {
                 contents: &params,
                 usage: wgpu::BufferUsages::UNIFORM,
             });
+        let dummy_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Rayard video GPU output mapping unused texture"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let dummy_texture_view = dummy_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Rayard video GPU output mapping bind group"),
             layout: &self.pipelines.bind_group_layout,
@@ -338,6 +571,10 @@ impl GpuCompositor {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&dummy_texture_view),
                 },
             ],
         });
@@ -421,6 +658,7 @@ pub(crate) fn compositor_params(
     source_height: u32,
     opacity: f32,
     blend_mode: u32,
+    source_format: u32,
     transform: &Transform2D,
     color: &VideoColorAdjust,
     fx: &VideoFxAdjust,
@@ -438,7 +676,7 @@ pub(crate) fn compositor_params(
         source_height,
         opacity.to_bits(),
         blend_mode,
-        0,
+        source_format,
         0,
         transform.x.to_bits(),
         transform.y.to_bits(),
@@ -683,6 +921,11 @@ mod tests {
             1,
         );
 
+        if !compositor.supports_bc_texture() {
+            eprintln!("Compressed texture checks skipped: adapter has no BC texture support");
+            return;
+        }
+
         let mut dxt1_block = Vec::new();
         dxt1_block.extend_from_slice(&0xf800u16.to_le_bytes());
         dxt1_block.extend_from_slice(&0x001fu16.to_le_bytes());
@@ -706,6 +949,20 @@ mod tests {
             &compositor,
             &plan(vec![layer_plan(4, VideoBlendMode::Normal, 1.0)]),
             &[dxt5],
+            1,
+            1,
+        );
+
+        let mut hap_q_block = vec![100, 100, 0, 0, 0, 0, 0, 0];
+        hap_q_block.extend_from_slice(&0x8400u16.to_le_bytes());
+        hap_q_block.extend_from_slice(&0x8400u16.to_le_bytes());
+        hap_q_block.extend_from_slice(&0u32.to_le_bytes());
+        let hap_q = frame(5, 1, 1, VideoPixelFormat::YcoCgDxt5, hap_q_block);
+        assert_gpu_matches_cpu_with_channel_tolerance(
+            &compositor,
+            &plan(vec![layer_plan(5, VideoBlendMode::Normal, 1.0)]),
+            &[hap_q],
+            1,
             1,
             1,
         );

@@ -1001,6 +1001,7 @@ export interface NativeVideoOutputPerformance {
   layer_slots: number;
   output_reallocations: number;
   layer_reallocations: number;
+  compressed_layer_uploads: number;
   last_error?: string | null;
   warmup_remaining: number;
 }

@@ -2566,12 +2566,12 @@ export default function App() {
     const performance = status.performance;
     const performanceDetail = performance
       ? performance.warmup_remaining > 0
-        ? ` / ${performance.width}x${performance.height} / warming ${performance.warmup_remaining} frame(s) / GPU alloc ${performance.output_reallocations}+${performance.layer_reallocations}`
+        ? ` / ${performance.width}x${performance.height} / warming ${performance.warmup_remaining} frame(s) / GPU alloc ${performance.output_reallocations}+${performance.layer_reallocations} / BC ${performance.compressed_layer_uploads}`
         : ` / ${performance.width}x${performance.height} / avg ${(performance.average_frame_us / 1000).toFixed(2)} ms / max ${(
             performance.max_frame_us / 1000
           ).toFixed(2)} ms / ${performance.deadline_miss_count} late / GPU alloc ${performance.output_reallocations}+${
             performance.layer_reallocations
-          }`
+          } / BC ${performance.compressed_layer_uploads}`
       : "";
     if (performance?.last_error) {
       return {

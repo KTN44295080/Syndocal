@@ -6,8 +6,10 @@ use wgpu::util::DeviceExt;
 use crate::{convert_frame_to_rgba8, CpuCompositeError, VideoFrame};
 use crate::{
     gpu_compositor::{
-        blend_mode_index, compositor_params, create_gpu_composite_pipelines, dispatch_dimensions,
-        output_mapping_params, GpuCompositePipelines,
+        blend_mode_index, compositor_params, create_frame_texture, create_gpu_composite_pipelines,
+        dispatch_dimensions, gpu_frame_texture_spec, output_mapping_params,
+        requested_video_device_features, write_frame_texture, GpuCompositePipelines,
+        GpuFrameTextureSpec,
     },
     PreparedVideoOutput,
 };
@@ -29,11 +31,16 @@ pub struct GpuSurfaceBufferStats {
     pub output_reallocations: u64,
     pub layer_reallocations: u64,
     pub frames_presented: u64,
+    pub compressed_layer_uploads: u64,
 }
 
 struct NativeGpuLayerBuffers {
     source: wgpu::Buffer,
-    source_capacity: u64,
+    texture: wgpu::Texture,
+    texture_view: wgpu::TextureView,
+    texture_format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
     params: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
 }
@@ -43,25 +50,38 @@ impl NativeGpuLayerBuffers {
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         composition_buffer: &wgpu::Buffer,
-        source_capacity: u64,
+        frame: &VideoFrame,
+        spec: GpuFrameTextureSpec,
     ) -> Self {
         let source = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Rayard native GPU layer source"),
-            size: source_capacity,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            label: Some("Rayard native GPU unused layer source buffer"),
+            size: 4,
+            usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
+        let (texture, texture_view) =
+            create_frame_texture(device, spec, "Rayard native GPU layer source texture");
         let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Rayard native GPU layer params"),
             size: 128,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let bind_group =
-            create_layer_bind_group(device, layout, &source, composition_buffer, &params);
+        let bind_group = create_layer_bind_group(
+            device,
+            layout,
+            &source,
+            &texture_view,
+            composition_buffer,
+            &params,
+        );
         Self {
             source,
-            source_capacity,
+            texture,
+            texture_view,
+            texture_format: spec.format,
+            width: frame.width,
+            height: frame.height,
             params,
             bind_group,
         }
@@ -77,9 +97,16 @@ impl NativeGpuLayerBuffers {
             device,
             layout,
             &self.source,
+            &self.texture_view,
             composition_buffer,
             &self.params,
         );
+    }
+
+    fn matches(&self, frame: &VideoFrame, spec: GpuFrameTextureSpec) -> bool {
+        self.width == frame.width
+            && self.height == frame.height
+            && self.texture_format == spec.format
     }
 }
 
@@ -91,10 +118,12 @@ struct NativeGpuFrameBuffers {
     dimensions: wgpu::Buffer,
     mapping_bind_group: wgpu::BindGroup,
     output_bind_group: wgpu::BindGroup,
+    mapping_dummy_texture: wgpu::Texture,
     layers: Vec<NativeGpuLayerBuffers>,
     output_reallocations: u64,
     layer_reallocations: u64,
     frames_presented: u64,
+    compressed_layer_uploads: u64,
 }
 
 impl NativeGpuFrameBuffers {
@@ -127,12 +156,16 @@ impl NativeGpuFrameBuffers {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let mapping_dummy_texture = create_dummy_texture(device);
+        let mapping_dummy_view =
+            mapping_dummy_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mapping_bind_group = create_mapping_bind_group(
             device,
             composite_layout,
             &composition,
             &mapped,
             &mapping_params,
+            &mapping_dummy_view,
         );
         let output_bind_group =
             create_output_bind_group(device, output_layout, &mapped, &dimensions);
@@ -144,10 +177,12 @@ impl NativeGpuFrameBuffers {
             dimensions,
             mapping_bind_group,
             output_bind_group,
+            mapping_dummy_texture,
             layers: Vec::new(),
             output_reallocations: 1,
             layer_reallocations: 0,
             frames_presented: 0,
+            compressed_layer_uploads: 0,
         }
     }
 
@@ -178,6 +213,9 @@ impl NativeGpuFrameBuffers {
             &self.composition,
             &self.mapped,
             &self.mapping_params,
+            &self
+                .mapping_dummy_texture
+                .create_view(&wgpu::TextureViewDescriptor::default()),
         );
         self.output_bind_group =
             create_output_bind_group(device, output_layout, &self.mapped, &self.dimensions);
@@ -187,34 +225,36 @@ impl NativeGpuFrameBuffers {
         self.output_reallocations = self.output_reallocations.saturating_add(1);
     }
 
-    fn ensure_layer_capacity(
+    fn upload_layer_frame(
         &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         composite_layout: &wgpu::BindGroupLayout,
         index: usize,
-        required_bytes: u64,
+        frame: &VideoFrame,
+        spec: GpuFrameTextureSpec,
     ) {
         while self.layers.len() <= index {
-            let source_capacity = grown_buffer_capacity(0, required_bytes);
             self.layers.push(NativeGpuLayerBuffers::new(
                 device,
                 composite_layout,
                 &self.composition,
-                source_capacity,
+                frame,
+                spec,
             ));
             self.layer_reallocations = self.layer_reallocations.saturating_add(1);
         }
-        if required_bytes > self.layers[index].source_capacity {
-            let source_capacity =
-                grown_buffer_capacity(self.layers[index].source_capacity, required_bytes);
+        if !self.layers[index].matches(frame, spec) {
             self.layers[index] = NativeGpuLayerBuffers::new(
                 device,
                 composite_layout,
                 &self.composition,
-                source_capacity,
+                frame,
+                spec,
             );
             self.layer_reallocations = self.layer_reallocations.saturating_add(1);
         }
+        write_frame_texture(queue, &self.layers[index].texture, frame, spec);
     }
 
     fn stats(&self) -> GpuSurfaceBufferStats {
@@ -224,6 +264,7 @@ impl NativeGpuFrameBuffers {
             output_reallocations: self.output_reallocations,
             layer_reallocations: self.layer_reallocations,
             frames_presented: self.frames_presented,
+            compressed_layer_uploads: self.compressed_layer_uploads,
         }
     }
 }
@@ -241,6 +282,7 @@ fn create_layer_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     source: &wgpu::Buffer,
+    source_texture: &wgpu::TextureView,
     composition: &wgpu::Buffer,
     params: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
@@ -260,6 +302,10 @@ fn create_layer_bind_group(
                 binding: 2,
                 resource: params.as_entire_binding(),
             },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(source_texture),
+            },
         ],
     })
 }
@@ -270,6 +316,7 @@ fn create_mapping_bind_group(
     composition: &wgpu::Buffer,
     mapped: &wgpu::Buffer,
     params: &wgpu::Buffer,
+    dummy_texture: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("Rayard native GPU output mapping bind group"),
@@ -287,7 +334,28 @@ fn create_mapping_bind_group(
                 binding: 2,
                 resource: params.as_entire_binding(),
             },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(dummy_texture),
+            },
         ],
+    })
+}
+
+fn create_dummy_texture(device: &wgpu::Device) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Rayard native GPU unused mapping texture"),
+        size: wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
     })
 }
 
@@ -364,8 +432,10 @@ impl GpuSurfacePresenter {
         }))
         .map_err(|error| GpuSurfaceError::Adapter(error.to_string()))?;
         let adapter_name = adapter.get_info().name;
+        let required_features = requested_video_device_features(&adapter);
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("Rayard native video output device"),
+            required_features,
             ..Default::default()
         }))
         .map_err(|error| GpuSurfaceError::Device(error.to_string()))?;
@@ -638,7 +708,11 @@ impl GpuSurfacePresenter {
             .checked_mul(height)
             .ok_or(GpuSurfaceError::InvalidSize)?;
         let buffer_size = u64::from(pixel_count) * 4;
-        let mut normalized_frames = Vec::with_capacity(prepared.plan.composition.layers.len());
+        let bc_supported = self
+            .device
+            .features()
+            .contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
+        let mut source_frames = Vec::with_capacity(prepared.plan.composition.layers.len());
         for layer in &prepared.plan.composition.layers {
             let frame = prepared
                 .frames
@@ -650,7 +724,7 @@ impl GpuSurfacePresenter {
                         layer_id: layer.layer_id,
                     })
                 })?;
-            normalized_frames.push(convert_frame_to_rgba8(frame)?);
+            source_frames.push((frame, gpu_frame_texture_spec(frame, bc_supported)?));
         }
         if self.gpu_buffers.is_none() {
             self.gpu_buffers = Some(NativeGpuFrameBuffers::new(
@@ -668,12 +742,14 @@ impl GpuSurfacePresenter {
             &self.buffer_bind_group_layout,
             buffer_size,
         );
-        for (index, frame) in normalized_frames.iter().enumerate() {
-            gpu_buffers.ensure_layer_capacity(
+        for (index, (frame, spec)) in source_frames.iter().enumerate() {
+            gpu_buffers.upload_layer_frame(
                 &self.device,
+                &self.queue,
                 &self.composite_pipelines.bind_group_layout,
                 index,
-                frame.data.len() as u64,
+                frame,
+                *spec,
             );
         }
 
@@ -691,28 +767,27 @@ impl GpuSurfacePresenter {
         encoder.clear_buffer(&gpu_buffers.composition, 0, Some(buffer_size));
         encoder.clear_buffer(&gpu_buffers.mapped, 0, Some(buffer_size));
 
-        for (index, (layer, normalized)) in prepared
+        for (index, (layer, (frame, spec))) in prepared
             .plan
             .composition
             .layers
             .iter()
-            .zip(normalized_frames.iter())
+            .zip(source_frames.iter())
             .enumerate()
         {
             let params = compositor_params(
                 width,
                 height,
-                normalized.width,
-                normalized.height,
+                frame.width,
+                frame.height,
                 layer.opacity.clamp(0.0, 1.0),
                 blend_mode_index(&layer.blend_mode),
+                spec.source_format,
                 &layer.transform,
                 &layer.color,
                 &layer.fx,
             );
             let layer_buffers = &gpu_buffers.layers[index];
-            self.queue
-                .write_buffer(&layer_buffers.source, 0, &normalized.data);
             self.queue.write_buffer(&layer_buffers.params, 0, &params);
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Rayard native GPU layer pass"),
@@ -767,6 +842,19 @@ impl GpuSurfacePresenter {
         }
         surface_texture.present();
         gpu_buffers.frames_presented = gpu_buffers.frames_presented.saturating_add(1);
+        gpu_buffers.compressed_layer_uploads = gpu_buffers.compressed_layer_uploads.saturating_add(
+            source_frames
+                .iter()
+                .filter(|(frame, _)| {
+                    matches!(
+                        frame.format,
+                        crate::VideoPixelFormat::Dxt1
+                            | crate::VideoPixelFormat::Dxt5
+                            | crate::VideoPixelFormat::YcoCgDxt5
+                    )
+                })
+                .count() as u64,
+        );
         Ok(())
     }
 
@@ -795,7 +883,7 @@ fn dimensions_uniform(width: u32, height: u32) -> [u8; 16] {
 mod tests {
     use super::*;
 
-    fn test_device() -> Option<wgpu::Device> {
+    fn test_device() -> Option<(wgpu::Device, wgpu::Queue)> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::LowPower,
@@ -803,12 +891,13 @@ mod tests {
             compatible_surface: None,
         }))
         .ok()?;
+        let required_features = requested_video_device_features(&adapter);
         pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("Rayard reusable GPU buffer test"),
+            required_features,
             ..Default::default()
         }))
         .ok()
-        .map(|(device, _)| device)
     }
 
     fn output_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
@@ -849,7 +938,7 @@ mod tests {
 
     #[test]
     fn frame_buffers_reuse_output_and_layer_allocations_until_capacity_is_exceeded() {
-        let Some(device) = test_device() else {
+        let Some((device, queue)) = test_device() else {
             eprintln!("Reusable GPU buffer test skipped: no adapter");
             return;
         };
@@ -865,13 +954,54 @@ mod tests {
         assert_eq!(buffers.stats().output_reallocations, 2);
         assert_eq!(buffers.stats().output_capacity_bytes, 1536);
 
-        buffers.ensure_layer_capacity(&device, &pipelines.bind_group_layout, 0, 1000);
+        let frame = |width, height| VideoFrame {
+            layer_id: 1,
+            width,
+            height,
+            pts_ms: 0,
+            duration_ms: 16,
+            format: crate::VideoPixelFormat::Rgba8,
+            data: vec![0; width as usize * height as usize * 4],
+        };
+        let first = frame(16, 16);
+        let first_spec = gpu_frame_texture_spec(&first, false).unwrap();
+        buffers.upload_layer_frame(
+            &device,
+            &queue,
+            &pipelines.bind_group_layout,
+            0,
+            &first,
+            first_spec,
+        );
         assert_eq!(buffers.stats().layer_reallocations, 1);
-        buffers.ensure_layer_capacity(&device, &pipelines.bind_group_layout, 0, 900);
+        buffers.upload_layer_frame(
+            &device,
+            &queue,
+            &pipelines.bind_group_layout,
+            0,
+            &first,
+            first_spec,
+        );
         assert_eq!(buffers.stats().layer_reallocations, 1);
-        buffers.ensure_layer_capacity(&device, &pipelines.bind_group_layout, 0, 1025);
+        let larger = frame(32, 16);
+        let larger_spec = gpu_frame_texture_spec(&larger, false).unwrap();
+        buffers.upload_layer_frame(
+            &device,
+            &queue,
+            &pipelines.bind_group_layout,
+            0,
+            &larger,
+            larger_spec,
+        );
         assert_eq!(buffers.stats().layer_reallocations, 2);
-        buffers.ensure_layer_capacity(&device, &pipelines.bind_group_layout, 1, 512);
+        buffers.upload_layer_frame(
+            &device,
+            &queue,
+            &pipelines.bind_group_layout,
+            1,
+            &first,
+            first_spec,
+        );
         assert_eq!(buffers.stats().layer_slots, 2);
         assert_eq!(buffers.stats().layer_reallocations, 3);
     }

@@ -5,7 +5,7 @@ struct Params {
     source_height: u32,
     opacity: f32,
     blend_mode: u32,
-    _padding_0: u32,
+    source_format: u32,
     _padding_1: u32,
     transform_a: vec4<f32>,
     transform_b: vec4<f32>,
@@ -17,6 +17,9 @@ struct Params {
 
 @group(0) @binding(0)
 var<storage, read> source_pixels: array<u32>;
+
+@group(0) @binding(3)
+var source_texture: texture_2d<f32>;
 
 @group(0) @binding(1)
 var<storage, read_write> output_pixels: array<u32>;
@@ -87,6 +90,23 @@ fn adjust_color(pixel: u32) -> vec4<f32> {
 }
 
 fn raw_pixel(x: u32, y: u32) -> vec4<f32> {
+    if (params.source_format != 0u) {
+        let sampled = textureLoad(source_texture, vec2<i32>(i32(x), i32(y)), 0);
+        if (params.source_format == 2u) {
+            let co = (sampled.r - (128.0 / 255.0)) / (sampled.b * (255.0 / 8.0) + 1.0);
+            let cg = (sampled.g - (128.0 / 255.0)) / (sampled.b * (255.0 / 8.0) + 1.0);
+            let y_channel = sampled.a;
+            return vec4<f32>(
+                clamp(vec3<f32>(
+                    y_channel + co - cg,
+                    y_channel + cg,
+                    y_channel - co - cg,
+                ), vec3<f32>(0.0), vec3<f32>(1.0)) * 255.0,
+                255.0,
+            );
+        }
+        return sampled * 255.0;
+    }
     let pixel = source_pixels[y * params.source_width + x];
     return vec4<f32>(unpack_rgb(pixel), unpack_alpha(pixel));
 }

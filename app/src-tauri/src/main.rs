@@ -7412,6 +7412,7 @@ struct NativeVideoOutputPerformance {
     layer_slots: usize,
     output_reallocations: u64,
     layer_reallocations: u64,
+    compressed_layer_uploads: u64,
     last_error: Option<String>,
     warmup_remaining: u32,
 }
@@ -7468,6 +7469,7 @@ impl NativeVideoOutputMetrics {
             layer_slots: self.buffer_stats.layer_slots,
             output_reallocations: self.buffer_stats.output_reallocations,
             layer_reallocations: self.buffer_stats.layer_reallocations,
+            compressed_layer_uploads: self.buffer_stats.compressed_layer_uploads,
             last_error: self.last_error.clone(),
             warmup_remaining: self.warmup_remaining,
         }
@@ -12807,6 +12809,7 @@ f 1 2 3
             output_reallocations: 1,
             layer_reallocations: 3,
             frames_presented: 2,
+            compressed_layer_uploads: 4,
         };
         let mut metrics = NativeVideoOutputMetrics::default();
         metrics.warmup_remaining = 0;
@@ -12821,6 +12824,7 @@ f 1 2 3
         assert_eq!(snapshot.layer_slots, 3);
         assert_eq!(snapshot.output_reallocations, 1);
         assert_eq!(snapshot.layer_reallocations, 3);
+        assert_eq!(snapshot.compressed_layer_uploads, 4);
         assert!(snapshot.last_error.is_none());
 
         metrics.record(
