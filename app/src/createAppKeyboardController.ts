@@ -29,7 +29,7 @@ interface AppKeyboardControllerOptions {
   setWorkspaceTab: Setter<WorkspaceTab>;
   setupSubTab: Accessor<SetupSubTab>;
   selectSetupMode: (tab: SetupSubTab) => void;
-  setControlMode: Setter<ControlMode>;
+  setControlMode: (mode: ControlMode) => unknown;
   setMessage: (message: string) => unknown;
   saveProject: () => MaybePromise;
   saveProjectAs: () => MaybePromise;

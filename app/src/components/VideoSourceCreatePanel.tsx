@@ -21,8 +21,8 @@ interface VideoSourceCreatePanelProps {
 export function VideoPreviewImagePanel(props: VideoPreviewImagePanelProps) {
   return (
     <div class="videoPreview">
-      <Show when={props.previewUrl} fallback={<span>{props.layerCount === 0 ? "Add a video layer" : "Render a CPU preview"}</span>}>
-        {(url) => <img src={url()} alt="CPU video preview" />}
+      <Show when={props.previewUrl} fallback={<span>{props.layerCount === 0 ? "Add a video layer" : "Preview (Reference)"}</span>}>
+        {(url) => <img src={url()} alt="Reference video preview" />}
       </Show>
     </div>
   );

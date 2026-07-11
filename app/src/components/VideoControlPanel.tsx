@@ -39,12 +39,12 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
         <ExternalVideoIoStatusPanel {...props.externalIoStatus} />
       </div>
       <VideoMasterControlsPanel {...props.masterControls} />
-      <VideoOutputControlListPanel {...props.outputControls} />
+      <VideoOutputControlListPanel {...props.outputControls} compact={props.mixer} />
       <VideoPreviewImagePanel {...props.previewImage} />
       <div class="videoMixerSetupTools">
         <VideoSourceCreatePanel {...props.sourceCreate} />
       </div>
-      <VideoLayerListPanel {...props.layerList} />
+      <VideoLayerListPanel {...props.layerList} compact={props.mixer} />
       <div class="videoMixerAutomationTools">
         <VideoTimelineAutomationPanel {...props.timelineAutomation} />
       </div>

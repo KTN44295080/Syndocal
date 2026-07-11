@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import type { CompositionSummary, VideoOutputSummary, VideoOutputWindowStatus } from "../types";
 
 export interface VideoOutputRenderPlanStateView {
@@ -23,6 +23,7 @@ interface VideoMasterControlsPanelProps {
 
 interface VideoOutputControlListPanelProps {
   outputs: VideoOutputSummary[];
+  compact?: boolean;
   compositions: CompositionSummary[];
   selectedOutputId: number | null;
   fadeMs: number;
@@ -82,12 +83,24 @@ export function VideoMasterControlsPanel(props: VideoMasterControlsPanelProps) {
 }
 
 export function VideoOutputControlListPanel(props: VideoOutputControlListPanelProps) {
+  const [page, setPage] = createSignal(0);
+  const pageSize = () => (props.compact ? 1 : Math.max(1, props.outputs.length));
+  const pageCount = createMemo(() => Math.max(1, Math.ceil(props.outputs.length / pageSize())));
+  const visibleOutputs = createMemo(() => {
+    const start = page() * pageSize();
+    return props.outputs.slice(start, start + pageSize());
+  });
+
+  createEffect(() => {
+    if (page() >= pageCount()) setPage(pageCount() - 1);
+  });
+
   const compositionLabel = (output: VideoOutputSummary) =>
     props.compositions.find((composition) => composition.id === output.composition_id)?.label ??
     `Composition ${output.composition_id}`;
 
   return (
-    <div class="videoOutputControlList">
+    <div class={`videoOutputControlList ${props.compact ? "compact" : ""}`}>
       <div class="sectionHeader">
         <h3>Video Outputs</h3>
         <label>
@@ -101,6 +114,22 @@ export function VideoOutputControlListPanel(props: VideoOutputControlListPanelPr
           />
         </label>
       </div>
+      <Show when={props.compact && props.outputs.length > 0}>
+        <div class="deckPager">
+          <strong>Output</strong>
+          <span>{page() + 1} / {props.outputs.length}</span>
+          <button onClick={() => setPage(Math.max(0, page() - 1))} disabled={page() === 0} aria-label="Previous video output">
+            Prev
+          </button>
+          <button
+            onClick={() => setPage(Math.min(pageCount() - 1, page() + 1))}
+            disabled={page() >= pageCount() - 1}
+            aria-label="Next video output"
+          >
+            Next
+          </button>
+        </div>
+      </Show>
       <div class="videoWindowStatusBar">
         <span>{props.windowSummary}</span>
         <div class="buttonRow">
@@ -112,7 +141,7 @@ export function VideoOutputControlListPanel(props: VideoOutputControlListPanelPr
         </div>
       </div>
       <Show when={props.outputs.length > 0} fallback={<span class="emptyState">No video outputs</span>}>
-        <For each={props.outputs}>
+        <For each={visibleOutputs()}>
           {(output) => {
             const renderPlanState = () => props.renderPlanState(output);
             const outputWindowStatus = () => props.windowStatusForOutput(output.id);
@@ -203,6 +232,7 @@ export function VideoOutputControlListPanel(props: VideoOutputControlListPanelPr
                       In
                     </button>
                     <button
+                      class="mixerSecondary"
                       onClick={() => {
                         selectOutput();
                         void props.onSetOutputOpacity(output.id, 1);

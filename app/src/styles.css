@@ -9167,7 +9167,7 @@ input[type="color"] {
 }
 
 .videoControlPanelMixer {
-  grid-template-columns: minmax(220px, 280px) minmax(320px, 0.8fr) minmax(420px, 1fr);
+  grid-template-columns: minmax(132px, 0.55fr) minmax(210px, 0.84fr) minmax(300px, 1.25fr);
   grid-template-rows: auto auto minmax(0, 1fr);
   align-content: stretch;
   overflow: hidden;
@@ -9196,12 +9196,48 @@ input[type="color"] {
   grid-column: 2;
   grid-row: 2 / span 2;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .videoControlPanelMixer .videoLayerList {
   grid-column: 3;
   grid-row: 2 / span 2;
+  overflow: hidden;
+}
+
+.deckPager {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 44px 44px;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  min-height: 25px;
+}
+
+.deckPager strong,
+.deckPager span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deckPager strong {
+  color: #e8e2dc;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.deckPager span {
+  color: #938b83;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.deckPager button {
+  min-height: 23px;
+  padding: 0 5px;
+  font-size: 9px;
 }
 
 .compositionList {
@@ -10184,12 +10220,33 @@ input[type="color"] {
   border: 1px solid #28313d;
   border-radius: 6px;
   background: #0f161d;
-  padding: 8px;
+  gap: 4px;
+  overflow: hidden;
+  padding: 5px;
 }
 
 .videoControlPanelMixer .videoMasterControls .buttonRow {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.videoControlPanelMixer .videoMasterControls button {
+  min-width: 0;
+  min-height: 23px;
+  overflow: hidden;
+  padding: 0 3px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 9px;
+}
+
+.videoControlPanelMixer .videoMasterFader {
+  gap: 2px;
+}
+
+.videoControlPanelMixer .videoMasterFader input {
+  min-height: 23px;
 }
 
 .videoOutputConfig,
@@ -10446,16 +10503,17 @@ input[type="color"] {
 
 .videoControlPanelMixer .videoMixerOutputDeck {
   display: grid;
-  gap: 8px;
+  gap: 4px;
   min-width: 0;
 }
 
 .videoControlPanelMixer .videoMixerOutputDeck label {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr) 44px;
+  grid-template-columns: 42px minmax(0, 1fr) 30px;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   min-width: 0;
+  font-size: 9px;
 }
 
 .videoControlPanelMixer .videoMixerOutputDeck input[type="range"] {
@@ -10464,7 +10522,82 @@ input[type="color"] {
 
 .videoControlPanelMixer .videoMixerOutputDeck .buttonRow {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.videoControlPanelMixer .videoMixerOutputDeck button {
+  min-width: 0;
+  min-height: 23px;
+  overflow: hidden;
+  padding: 0 3px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 9px;
+}
+
+.videoControlPanelMixer .videoOutputControlList.compact {
+  align-content: start;
+  gap: 3px;
+  min-width: 0;
+}
+
+.videoControlPanelMixer .videoOutputControlList.compact .sectionHeader {
+  gap: 4px;
+}
+
+.videoControlPanelMixer .videoOutputControlList.compact .sectionHeader label {
+  display: grid;
+  grid-template-columns: auto 58px;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  font-size: 9px;
+}
+
+.videoControlPanelMixer .videoOutputControlList.compact .sectionHeader input {
+  width: 58px;
+  min-width: 0;
+  min-height: 21px;
+  padding: 2px 4px;
+}
+
+.videoControlPanelMixer .videoOutputControlList.compact .deckPager {
+  min-height: 20px;
+}
+
+.videoControlPanelMixer .videoOutputControlList.compact .deckPager button {
+  min-height: 20px;
+}
+
+.videoControlPanelMixer .videoOutputControlList.compact .videoWindowStatusBar {
+  display: none;
+}
+
+.videoControlPanelMixer .videoOutputControlList.compact .videoOutputControlItem {
+  gap: 4px;
+  min-width: 0;
+  padding: 5px;
+}
+
+.videoControlPanelMixer .videoOutputControlList.compact .videoOutputControlItem small,
+.videoControlPanelMixer .videoOutputControlList.compact .outputOpacityMeter,
+.videoControlPanelMixer .videoOutputControlList.compact .mixerSecondary {
+  display: none;
+}
+
+.videoControlPanelMixer .videoOutputControlList.compact .videoOutputControlItem span {
+  font-size: 9px;
+}
+
+.videoControlPanelMixer .videoOutputControlList.compact .videoOutputControlItem .outputRenderPlanStatus,
+.videoControlPanelMixer .videoOutputControlList.compact .videoOutputControlItem .outputWindowStatus {
+  display: inline-block;
+  margin-top: 3px;
+  margin-right: 3px;
+  padding: 1px 5px;
+  border-radius: 2px;
+  font-size: 9px;
 }
 
 .videoControlPanelMixer .videoMixerOutputDeck button.active {
@@ -12470,8 +12603,11 @@ input[type="color"] {
 }
 
 .videoControlPanelMixer .videoLayerItem {
-  grid-template-columns: minmax(168px, 0.58fr) minmax(260px, 1fr);
+  grid-template-columns: minmax(104px, 0.48fr) minmax(0, 1fr);
   align-items: start;
+  gap: 4px;
+  min-width: 0;
+  padding: 4px;
 }
 
 .videoControlPanelMixer .videoLayerItem > .buttonRow,
@@ -12485,22 +12621,27 @@ input[type="color"] {
   display: none;
 }
 
+.videoControlPanelMixer .videoLayerItem > button {
+  display: none;
+}
+
 .videoControlPanelMixer .videoLayerItem > div:first-child label {
   display: none;
 }
 
 .videoControlPanelMixer .videoMixerLayerDeck {
   display: grid;
-  gap: 8px;
+  gap: 3px;
   min-width: 0;
 }
 
 .videoControlPanelMixer .videoMixerLayerDeck label {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr) 44px;
+  grid-template-columns: 42px minmax(0, 1fr) 30px;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   min-width: 0;
+  font-size: 9px;
 }
 
 .videoControlPanelMixer .videoMixerLayerDeck input[type="range"] {
@@ -12510,6 +12651,29 @@ input[type="color"] {
 .videoControlPanelMixer .videoMixerLayerDeck .buttonRow {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.videoControlPanelMixer .videoMixerLayerDeck button {
+  min-width: 0;
+  min-height: 22px;
+  overflow: hidden;
+  padding: 0 3px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 9px;
+}
+
+.videoControlPanelMixer .videoLayerList.compact {
+  align-content: start;
+  gap: 4px;
+  min-width: 0;
+}
+
+.videoControlPanelMixer .videoLayerList.compact .videoLayerItem > div:first-child strong,
+.videoControlPanelMixer .videoLayerList.compact .videoLayerItem > div:first-child span,
+.videoControlPanelMixer .videoLayerList.compact .videoLayerItem > div:first-child small {
+  font-size: 9px;
 }
 
 .videoControlPanelMixer .videoMixerLayerDeck button.active {
@@ -13587,22 +13751,24 @@ h3 {
 .layoutControl.controlModeEdit .faders {
   grid-column: 2;
   grid-row: 2;
-  display: flex;
-  overflow: hidden auto;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .layoutControl.controlModeLive .faders {
   grid-column: 2;
   grid-row: 2;
-  display: flex;
-  overflow: hidden auto;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .layoutControl.controlModeMixer .videoControlPanel {
   grid-column: 2;
   grid-row: 2;
-  display: flex;
-  overflow: hidden auto;
+  display: grid;
+  overflow: hidden;
 }
 
 .layoutControl .liveControlPanel .liveStagePanel,
@@ -13631,6 +13797,240 @@ h3 {
 .layoutControl.controlModeLive .faders > .cuePanel,
 .layoutControl.controlModeLive .faders > .timelinePanel {
   display: grid;
+}
+
+.timelineDeskTabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(70px, 1fr));
+  gap: 1px;
+  min-width: 250px;
+}
+
+.editDeskTabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(72px, 1fr));
+  gap: 1px;
+  min-width: 270px;
+}
+
+.editDeskTabs button {
+  min-width: 0;
+  min-height: 24px;
+  border-radius: 1px;
+  padding: 0 7px;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.editDeskTabs button.active {
+  border-color: #7b7169;
+  background: #342f2b;
+  color: #ffffff;
+  box-shadow: inset 0 -2px 0 var(--ray-accent);
+}
+
+.layoutControl.controlModeEdit .faders > .fixtureEditSurface,
+.layoutControl.controlModeEdit .faders > .effectEditor,
+.layoutControl.controlModeEdit .faders > .rawMonitor {
+  grid-row: 2;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.layoutControl.controlModeEdit .faders.editDesk-attributes > .effectEditor,
+.layoutControl.controlModeEdit .faders.editDesk-attributes > .rawMonitor,
+.layoutControl.controlModeEdit .faders.editDesk-effects > .fixtureEditSurface,
+.layoutControl.controlModeEdit .faders.editDesk-effects > .rawMonitor,
+.layoutControl.controlModeEdit .faders.editDesk-dmx > .fixtureEditSurface,
+.layoutControl.controlModeEdit .faders.editDesk-dmx > .effectEditor {
+  display: none;
+}
+
+.layoutControl.controlModeEdit .faders.editDesk-effects > .effectEditor,
+.layoutControl.controlModeEdit .faders.editDesk-dmx > .rawMonitor {
+  display: grid;
+  overflow: hidden auto;
+}
+
+.layoutControl.controlModeEdit .fixtureEditSurface {
+  height: 100%;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 4px;
+}
+
+.layoutControl.controlModeEdit .attributeCategoryRail {
+  overflow: hidden;
+}
+
+.layoutControl.controlModeEdit .attributeCategoryRail button {
+  min-height: 25px;
+}
+
+.layoutControl.controlModeEdit .attributeEditorBody {
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 4px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.layoutControl.controlModeEdit .attributeTargetSummary > span {
+  min-height: 24px;
+  padding: 2px 5px;
+}
+
+.layoutControl.controlModeEdit .attributeEditorBody > .visualControlPanel {
+  height: 100%;
+  gap: 4px;
+  min-height: 0;
+  overflow: hidden;
+  padding: 5px;
+}
+
+.layoutControl.controlModeEdit .attributeEditorBody:has(> .visualControlPanel) > .faderGrid {
+  display: none;
+}
+
+.layoutControl.controlModeEdit .visualControlHeader {
+  min-height: 20px;
+}
+
+.layoutControl.controlModeEdit .visualReadoutStrip > span {
+  min-height: 23px;
+  padding: 2px 5px;
+}
+
+.layoutControl.controlModeEdit .visualControlPanel:has(.positionReadoutStrip) {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.layoutControl.controlModeEdit .visualControlPanel:has(.positionReadoutStrip) > .positionNudgeGrid,
+.layoutControl.controlModeEdit .visualControlPanel:has(.positionReadoutStrip) > .positionTargetGrid,
+.layoutControl.controlModeEdit .visualControlPanel:has(.positionReadoutStrip) > .positionTransformRow,
+.layoutControl.controlModeEdit .visualControlPanel:has(.positionReadoutStrip) > .positionDirectGrid,
+.layoutControl.controlModeEdit .visualControlPanel:has(.positionReadoutStrip) > .controlLimitPanel,
+.layoutControl.controlModeEdit .visualControlPanel:has(.positionReadoutStrip) > .positionFavoritePanel {
+  display: none;
+}
+
+.layoutControl.controlModeEdit .positionPadRow {
+  grid-template-columns: minmax(150px, 1fr) minmax(104px, 0.34fr);
+  gap: 5px;
+  min-height: 0;
+}
+
+.layoutControl.controlModeEdit .panTiltPad,
+.layoutControl.controlModeEdit .axisSliderRack {
+  min-height: 0;
+  height: 100%;
+}
+
+.layoutControl.controlModeEdit .axisSliderRack {
+  gap: 4px;
+}
+
+.layoutControl.controlModeEdit .axisSlider {
+  gap: 3px;
+  padding: 4px;
+}
+
+.layoutControl.controlModeEdit .dimmerControlPanel > .controlLimitPanel,
+.layoutControl.controlModeEdit .colorControlPanel > .colorQuickLookRow,
+.layoutControl.controlModeEdit .colorControlPanel > .colorSaturationStrip,
+.layoutControl.controlModeEdit .colorControlPanel > .hsvDirectGrid,
+.layoutControl.controlModeEdit .colorControlPanel > .colorSwatchPanel {
+  display: none;
+}
+
+.layoutControl.controlModeEdit .dimmerLevelPad,
+.layoutControl.controlModeEdit .colorPlane,
+.layoutControl.controlModeEdit .rgbChannelRack {
+  min-height: 0;
+  height: 100%;
+}
+
+.timelineDeskTabs button {
+  min-width: 0;
+  min-height: 24px;
+  border-radius: 1px;
+  padding: 0 7px;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.timelineDeskTabs button.active {
+  border-color: #7b7169;
+  background: #342f2b;
+  color: #ffffff;
+  box-shadow: inset 0 -2px 0 var(--ray-accent);
+}
+
+.layoutControl.controlModeLive .faders > .cuePanel,
+.layoutControl.controlModeLive .faders > .timelinePanel {
+  grid-row: 2;
+  min-height: 0;
+  border-top: 0;
+  overflow: hidden;
+  padding-top: 0;
+}
+
+.layoutControl.controlModeLive .faders.timelineDesk-show > .cuePanel,
+.layoutControl.controlModeLive .faders.timelineDesk-automation > .cuePanel,
+.layoutControl.controlModeLive .faders.timelineDesk-cues > .timelinePanel {
+  display: none;
+}
+
+.layoutControl.controlModeLive .timelinePanel {
+  gap: 0;
+}
+
+.timelineShowSurface {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  gap: 4px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.timelineShowSurface > .audioAnalysisPanel,
+.timelineShowSurface > .timelineSnapControls,
+.timelineShowSurface > .timelineForm,
+.timelineShowSurface > .timelineList {
+  display: none;
+}
+
+.timelineShowSurface > .timelineTransport {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.timelineShowSurface > .timelineTransport button {
+  min-height: 24px;
+}
+
+.timelineShowSurface > input[type="range"] {
+  min-height: 22px;
+}
+
+.timelineShowSurface > .timelineOverview {
+  width: 100%;
+  height: 100%;
+  min-height: 92px;
+}
+
+.timelineAutomationSurface {
+  display: none;
+  min-height: 0;
+  overflow: hidden auto;
+}
+
+.layoutControl.controlModeLive .faders.timelineDesk-automation .timelineShowSurface {
+  display: none;
+}
+
+.layoutControl.controlModeLive .faders.timelineDesk-automation .timelineAutomationSurface {
+  display: grid;
+  align-content: start;
+  gap: 8px;
 }
 
 .layoutControl.controlModeMixer .faders {
@@ -13687,7 +14087,65 @@ h3 {
   min-height: 0;
   border: 1px solid #35312d;
   border-radius: 0;
-  background: #151311;
+  background: #171513;
+}
+
+.controlStage .stageFloor {
+  fill: #171513;
+}
+
+.controlStage pattern path {
+  stroke: #36312d;
+  stroke-width: 0.34;
+}
+
+.controlStage .stageAxis2d {
+  stroke: #625b54;
+  stroke-width: 0.35;
+  opacity: 0.48;
+}
+
+.controlStage .controlStageObject {
+  opacity: 0.46;
+}
+
+.controlStage .controlStageObject rect {
+  fill-opacity: 0.06;
+  stroke-width: 0.48;
+}
+
+.controlStage .controlStageObject line {
+  opacity: 0.28;
+}
+
+.controlStage .stageVideoSurface2d {
+  opacity: 0.28 !important;
+}
+
+.controlStage .stageVideoSurface2d.selected {
+  opacity: 0.42 !important;
+}
+
+.controlStage .stageVideoSurface2d .stageVideoSurfaceShape {
+  fill: rgba(34, 211, 238, 0.08);
+  stroke-width: 0.46;
+}
+
+.controlStage .stageVideoSurface2d line {
+  opacity: 0.24;
+}
+
+.controlStage .stageBeam {
+  opacity: 0.08 !important;
+}
+
+.controlStage .stageFixture {
+  stroke-width: 1.15;
+}
+
+.controlStage .stageFixture.picked {
+  stroke: #ffffff;
+  stroke-width: 1.8;
 }
 
 .controlStage .stageGrid {

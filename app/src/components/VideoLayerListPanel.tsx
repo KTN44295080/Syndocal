@@ -1,10 +1,11 @@
-import { For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import type { VideoBlendMode, VideoColorAdjust, VideoFxAdjust, VideoLayerState, VideoLayerSummary } from "../types";
 import { videoSourceMetadataLabel } from "../videoHelpers";
 import { defaultColorAdjust, defaultFxAdjust } from "../videoLayerDefaults";
 
 interface VideoLayerListPanelProps {
   layers: VideoLayerSummary[];
+  compact?: boolean;
   onSetLayerLabel: (layerId: number, label: string) => void | Promise<void>;
   onMoveLayer: (layerId: number, delta: -1 | 1) => void | Promise<void>;
   onDuplicateLayer: (layer: VideoLayerSummary) => void | Promise<void>;
@@ -29,11 +30,44 @@ interface VideoLayerListPanelProps {
 }
 
 export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
+  const pageSize = () => (props.compact ? 3 : Math.max(1, props.layers.length));
+  const [page, setPage] = createSignal(0);
+  const pageCount = createMemo(() => Math.max(1, Math.ceil(props.layers.length / pageSize())));
+  const visibleLayers = createMemo(() => {
+    const start = page() * pageSize();
+    return props.layers.slice(start, start + pageSize()).map((layer, offset) => ({ layer, index: start + offset }));
+  });
+
+  createEffect(() => {
+    if (page() >= pageCount()) setPage(pageCount() - 1);
+  });
+
   return (
-    <div class="videoLayerList">
+    <div class={`videoLayerList ${props.compact ? "compact" : ""}`}>
+      <Show when={props.compact && props.layers.length > 0}>
+        <div class="deckPager">
+          <strong>Layers</strong>
+          <span>
+            {page() * pageSize() + 1}-{Math.min((page() + 1) * pageSize(), props.layers.length)} / {props.layers.length}
+          </span>
+          <button onClick={() => setPage(Math.max(0, page() - 1))} disabled={page() === 0} aria-label="Previous layer bank">
+            Prev
+          </button>
+          <button
+            onClick={() => setPage(Math.min(pageCount() - 1, page() + 1))}
+            disabled={page() >= pageCount() - 1}
+            aria-label="Next layer bank"
+          >
+            Next
+          </button>
+        </div>
+      </Show>
       <Show when={props.layers.length > 0} fallback={<span class="emptyState">No video layers. Add a file, still, or input above.</span>}>
-        <For each={props.layers}>
-          {(layer, index) => (
+        <For each={visibleLayers()}>
+          {(entry) => {
+            const layer = entry.layer;
+            const index = () => entry.index;
+            return (
             <div class="videoLayerItem">
             <div>
               <strong class="videoLayerTitle">{layer.label}</strong>
@@ -736,7 +770,8 @@ export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
               <button onClick={() => void props.onRemoveLayer(layer.id)}>Remove</button>
             </div>
             </div>
-          )}
+            );
+          }}
         </For>
       </Show>
     </div>

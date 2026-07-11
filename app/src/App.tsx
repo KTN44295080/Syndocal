@@ -477,6 +477,8 @@ export default function App() {
   const [workspaceTab, setWorkspaceTab] = createSignal<WorkspaceTab>("setup");
   const [setupSubTab, setSetupSubTab] = createSignal<SetupSubTab>("patch");
   const [controlMode, setControlMode] = createSignal<ControlMode>("edit");
+  const [timelineDeskSurface, setTimelineDeskSurface] = createSignal<"show" | "cues" | "automation">("show");
+  const [editDeskSurface, setEditDeskSurface] = createSignal<"attributes" | "effects" | "dmx">("attributes");
   const [profile, setProfile] = createSignal<FixtureProfileSummary | null>(null);
   const [selectedMode, setSelectedMode] = createSignal("");
   const [customManufacturer, setCustomManufacturer] = createSignal("Syndocal");
@@ -3700,6 +3702,7 @@ export default function App() {
     setEffectTargetMode("selection");
     setWorkspaceTab("control");
     setControlMode("edit");
+    setEditDeskSurface("effects");
     return { center, averageY };
   };
 
@@ -7937,12 +7940,18 @@ export default function App() {
     void setMappingSelectionFlag(flag, enabled);
   };
 
+  const selectControlMode = (mode: ControlMode) => {
+    setControlMode(mode);
+    if (mode === "edit") setEditDeskSurface("attributes");
+    if (mode === "live") setTimelineDeskSurface("show");
+  };
+
   const { handleControlKeyDown } = createAppKeyboardController({
     workspaceTab,
     setWorkspaceTab,
     setupSubTab,
     selectSetupMode,
-    setControlMode,
+    setControlMode: selectControlMode,
     setMessage,
     saveProject,
     saveProjectAs,
@@ -8049,7 +8058,7 @@ export default function App() {
         nextCueLabel={nextCue()?.label ?? "No cue"}
         onWorkspaceTab={setWorkspaceTab}
         onSetupSubTab={selectSetupMode}
-        onControlMode={setControlMode}
+        onControlMode={selectControlMode}
         onGo={() => void triggerNextCue()}
         onNewProject={newProject}
         onSaveProject={saveProject}
@@ -8384,6 +8393,8 @@ export default function App() {
           <StagePreview2D
             className="controlStage"
             patternId="control-stage-grid"
+            compact
+            viewAspectRatio={2.15}
             stageOrigin={stageOrigin2d()}
             fixtures={visualizerFixtures()}
             videoSurfaces={visualizerVideoSurfaces2d()}
@@ -9382,10 +9393,28 @@ export default function App() {
           }}
         />
 
-        <section class="panel faders controlPanel">
+        <section
+          class={`panel faders controlPanel timelineDesk-${timelineDeskSurface()} editDesk-${editDeskSurface()}`}
+        >
           <div class="panelHeader">
             <h2>Faders</h2>
-            <span>{selectedFixtureGroupFilter() ? `Group ${selectedFixtureGroupFilter()}` : selectedFixture()?.label}</span>
+            <Show when={controlMode() === "live"}>
+              <nav class="timelineDeskTabs" aria-label="Timeline desk surface">
+                <button class={timelineDeskSurface() === "show" ? "active" : ""} onClick={() => setTimelineDeskSurface("show")}>Show</button>
+                <button class={timelineDeskSurface() === "cues" ? "active" : ""} onClick={() => setTimelineDeskSurface("cues")}>Cues</button>
+                <button class={timelineDeskSurface() === "automation" ? "active" : ""} onClick={() => setTimelineDeskSurface("automation")}>Automation</button>
+              </nav>
+            </Show>
+            <Show when={controlMode() === "edit"}>
+              <nav class="editDeskTabs" aria-label="Live edit desk surface">
+                <button class={editDeskSurface() === "attributes" ? "active" : ""} onClick={() => setEditDeskSurface("attributes")}>Attributes</button>
+                <button class={editDeskSurface() === "effects" ? "active" : ""} onClick={() => setEditDeskSurface("effects")}>Effects</button>
+                <button class={editDeskSurface() === "dmx" ? "active" : ""} onClick={() => setEditDeskSurface("dmx")}>DMX</button>
+              </nav>
+            </Show>
+            <Show when={controlMode() === "mixer"}>
+              <span>{selectedFixtureGroupFilter() ? `Group ${selectedFixtureGroupFilter()}` : selectedFixture()?.label}</span>
+            </Show>
           </div>
           <FaderFixtureControlPanel
             selectedGroupId={selectedFixtureGroupFilter()}
@@ -9572,6 +9601,7 @@ export default function App() {
             onRemoveTimelineEvent={removeTimelineEvent}
           />
           <div class="timelinePanel">
+            <div class="timelineShowSurface">
             <TimelineCueEventsPanel
               positionMs={snapshot().timeline.position_ms}
               durationMs={snapshot().timeline.duration_ms}
@@ -9619,6 +9649,8 @@ export default function App() {
               onSaveEvent={setTimelineCueEvent}
               onRemoveEvent={removeTimelineEvent}
             />
+            </div>
+            <div class="timelineAutomationSurface">
             <TimelineLightingAutomationPanel
               activeControls={timelineAutomationControls()}
               selectedAttribute={selectedTimelineAutomationAttribute()}
@@ -9660,6 +9692,7 @@ export default function App() {
               onSaveAutomation={setTimelineAutomation}
               onRemoveAutomation={removeTimelineAutomation}
             />
+            </div>
           </div>
           <div class="effectEditor">
             <div class="panelHeader">

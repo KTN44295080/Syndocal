@@ -22,7 +22,7 @@ export function VideoPreviewDiagnosticsPanel(props: VideoPreviewDiagnosticsPanel
   return (
     <div class="previewDebug">
       <button onClick={() => void props.onRenderPreview()} disabled={props.layerCount === 0}>
-        CPU Preview
+        Preview (Reference)
       </button>
       <button onClick={() => void props.onRefreshDiagnostics()}>Preview Status</button>
       <span>{props.info}</span>

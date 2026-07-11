@@ -462,6 +462,38 @@ async function measure(client, label) {
       visibleLiveControlPanelCount: visibleCount('.liveControlPanel'),
       visibleControlStagePanelCount: visibleCount('.controlStagePanel'),
       visibleControlStageCount: visibleCount('.controlStage'),
+      controlStageViewBoxAspect: (() => {
+        const values = (document.querySelector('.controlStage')?.getAttribute('viewBox') || '')
+          .trim()
+          .split(/\\s+/)
+          .map(Number);
+        return values.length === 4 && values[3] > 0 ? values[2] / values[3] : 0;
+      })(),
+      visibleControlStageReferenceLabelCount: visibleCount('.controlStage .controlStageObject text, .controlStage .stageVideoSurface2d text'),
+      controlWorkSurfaceOverflowCount: [...document.querySelectorAll(
+        '.layoutControl .faders, .layoutControl .videoControlPanel, .layoutControl .videoOutputControlList, .layoutControl .videoLayerList'
+      )]
+        .filter((element) => {
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+        })
+        .filter((element) => element.scrollHeight > element.clientHeight + 1 || element.scrollWidth > element.clientWidth + 1)
+        .length,
+      controlWorkSurfaceOverflows: [...document.querySelectorAll(
+        '.layoutControl .faders, .layoutControl .videoControlPanel, .layoutControl .videoOutputControlList, .layoutControl .videoLayerList'
+      )]
+        .filter((element) => {
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' &&
+            (element.scrollHeight > element.clientHeight + 1 || element.scrollWidth > element.clientWidth + 1);
+        })
+        .map((element) => ({
+          className: element.className,
+          client: [element.clientWidth, element.clientHeight],
+          scroll: [element.scrollWidth, element.scrollHeight],
+        })),
       effectTargetValue: (() => {
         const select = [...document.querySelectorAll('.effectEditor select')]
           .find((candidate) => [...candidate.options].some((option) => option.value === 'selection'));
@@ -485,6 +517,10 @@ async function measure(client, label) {
       visibleCueEditOnlyCount: visibleCount('.cueEditOnly'),
       visibleCueLiveGoCount: visibleCount('.cueLiveGo'),
       visibleTimelinePanelCount: visibleCount('.timelinePanel'),
+      visibleTimelineDeskTabCount: visibleCount('.timelineDeskTabs button'),
+      visibleTimelineShowSurfaceCount: visibleCount('.timelineShowSurface'),
+      visibleTimelineAutomationSurfaceCount: visibleCount('.timelineAutomationSurface'),
+      visibleEditDeskTabCount: visibleCount('.editDeskTabs button'),
       visibleEffectEditorCount: visibleCount('.effectEditor'),
       visiblePanTiltPadCount: visibleCount('.panTiltPad'),
       visibleColorPlaneCount: visibleCount('.colorPlane'),
@@ -514,6 +550,7 @@ async function measure(client, label) {
       visibleVideoMixerLayerDeckCount: visibleCount('.videoMixerLayerDeck'),
       visibleVideoMixerLayerFaderCount: visibleCount('.videoControlPanelMixer .videoMixerLayerDeck input[type="range"]'),
       visibleVideoMixerLayerButtonCount: visibleCount('.videoControlPanelMixer .videoMixerLayerDeck button'),
+      visibleVideoDeckPagerCount: visibleCount('.videoControlPanelMixer .deckPager'),
       visibleVideoMixerDiagnosticsCount: visibleCount('.videoMixerDiagnostics'),
       visibleVideoMixerSetupToolsCount: visibleCount('.videoMixerSetupTools'),
       visibleVideoMixerAutomationToolsCount: visibleCount('.videoMixerAutomationTools'),
@@ -601,6 +638,9 @@ async function measure(client, label) {
 }
 
 function hasTimelineAutomationVisuals(result) {
+  if (result.label.startsWith("control-live-cues-") || result.label.startsWith("control-live-automation-")) {
+    return true;
+  }
   return (
     result.timelineOverviewVisible &&
     result.timelineAutomationRangeCount >= 2 &&
@@ -681,7 +721,9 @@ function hasExpectedControlModeSurface(result) {
   if (
     result.visibleLiveControlPanelCount !== 1 ||
     result.visibleControlStagePanelCount !== 1 ||
-    result.visibleControlStageCount !== 1
+    result.visibleControlStageCount !== 1 ||
+    result.controlStageViewBoxAspect < 2 ||
+    result.visibleControlStageReferenceLabelCount > 1
   ) {
     return false;
   }
@@ -691,6 +733,8 @@ function hasExpectedControlModeSurface(result) {
       result.visiblePositionReadoutCount >= 1 &&
       result.visibleAttributeTargetSummaryCount >= 1 &&
       result.visibleGroupAttributeTargetSummaryCount >= 1 &&
+      result.visibleEditDeskTabCount === 3 &&
+      result.controlWorkSurfaceOverflowCount === 0 &&
       result.visibleCuePanelCount === 0 &&
       result.visibleTimelinePanelCount === 0 &&
       result.visibleVideoControlPanelCount === 0
@@ -702,16 +746,40 @@ function hasExpectedControlModeSurface(result) {
       result.visibleColorReadoutCount >= 1 &&
       result.visibleAttributeTargetSummaryCount >= 1 &&
       result.visibleGroupAttributeTargetSummaryCount >= 1 &&
+      result.visibleEditDeskTabCount === 3 &&
+      result.controlWorkSurfaceOverflowCount === 0 &&
       result.visibleCuePanelCount === 0 &&
       result.visibleTimelinePanelCount === 0 &&
       result.visibleVideoControlPanelCount === 0
     );
   }
   if (result.label.startsWith("control-edit-")) {
+    if (result.label.startsWith("control-edit-effects-")) {
+      return (
+        result.visibleEditDeskTabCount === 3 &&
+        result.visibleFixtureEditSurfaceCount === 0 &&
+        result.visibleEffectEditorCount === 1 &&
+        result.effectTargetHintCount >= 1 &&
+        result.visibleRawMonitorCount === 0 &&
+        result.controlWorkSurfaceOverflowCount === 0
+      );
+    }
+    if (result.label.startsWith("control-edit-dmx-")) {
+      return (
+        result.visibleEditDeskTabCount === 3 &&
+        result.visibleFixtureEditSurfaceCount === 0 &&
+        result.visibleEffectEditorCount === 0 &&
+        result.visibleRawMonitorCount === 1 &&
+        result.controlWorkSurfaceOverflowCount === 0
+      );
+    }
     return (
       result.visibleFixtureEditSurfaceCount > 0 &&
-      result.visibleEffectEditorCount > 0 &&
-      result.effectTargetHintCount >= 1 &&
+      result.visibleEffectEditorCount === 0 &&
+      result.visibleRawMonitorCount === 0 &&
+      result.visibleEditDeskTabCount === 3 &&
+      result.controlWorkSurfaceOverflowCount === 0 &&
+      result.effectTargetHintCount === 0 &&
       result.effectTargetMapSelectionOptionCount >= 1 &&
       result.visibleCuePanelCount === 0 &&
       result.visibleTimelinePanelCount === 0 &&
@@ -719,12 +787,34 @@ function hasExpectedControlModeSurface(result) {
     );
   }
   if (result.label.startsWith("control-live-")) {
+    if (result.label.startsWith("control-live-cues-")) {
+      return (
+        result.visibleTimelineDeskTabCount === 3 &&
+        result.visibleCuePanelCount === 1 &&
+        result.visibleCueLivePanelCount === 1 &&
+        result.visibleTimelinePanelCount === 0 &&
+        result.controlWorkSurfaceOverflowCount === 0
+      );
+    }
+    if (result.label.startsWith("control-live-automation-")) {
+      return (
+        result.visibleTimelineDeskTabCount === 3 &&
+        result.visibleCuePanelCount === 0 &&
+        result.visibleTimelinePanelCount === 1 &&
+        result.visibleTimelineShowSurfaceCount === 0 &&
+        result.visibleTimelineAutomationSurfaceCount === 1 &&
+        result.controlWorkSurfaceOverflowCount === 0
+      );
+    }
     return (
-      result.visibleCuePanelCount > 0 &&
-      result.visibleCueLivePanelCount > 0 &&
+      result.visibleCuePanelCount === 0 &&
+      result.visibleCueLivePanelCount === 0 &&
       result.visibleCueFormCount === 0 &&
       result.visibleCueEditOnlyCount === 0 &&
       result.visibleTimelinePanelCount > 0 &&
+      result.visibleTimelineDeskTabCount === 3 &&
+      result.visibleTimelineShowSurfaceCount === 1 &&
+      result.controlWorkSurfaceOverflowCount === 0 &&
       result.visibleFixtureEditSurfaceCount === 0 &&
       result.visibleEffectEditorCount === 0 &&
       result.visibleRawMonitorCount === 0 &&
@@ -747,6 +837,8 @@ function hasExpectedControlModeSurface(result) {
       result.visibleVideoMixerLayerDeckCount >= result.visibleVideoLayerItemCount &&
       result.visibleVideoMixerLayerFaderCount >= result.visibleVideoLayerItemCount &&
       result.visibleVideoMixerLayerButtonCount >= 5 &&
+      result.visibleVideoDeckPagerCount >= 2 &&
+      result.controlWorkSurfaceOverflowCount === 0 &&
       result.visibleVideoMixerDiagnosticsCount === 0 &&
       result.visibleVideoMixerSetupToolsCount === 0 &&
       result.visibleVideoMixerAutomationToolsCount === 0 &&
@@ -959,6 +1051,22 @@ async function runViewport(client, viewport) {
       await clickVisibleByText(client, ".attributeCategoryRail button", "Color");
       await sleep(120);
       results.push(await measure(client, `control-edit-color-${viewport.width}x${viewport.height}`));
+      await clickVisibleByText(client, ".editDeskTabs button", "Effects");
+      await sleep(120);
+      results.push(await measure(client, `control-edit-effects-${viewport.width}x${viewport.height}`));
+      await clickVisibleByText(client, ".editDeskTabs button", "DMX");
+      await sleep(120);
+      results.push(await measure(client, `control-edit-dmx-${viewport.width}x${viewport.height}`));
+      await clickVisibleByText(client, ".editDeskTabs button", "Attributes");
+    }
+    if (controlTab.id === "live") {
+      await clickVisibleByText(client, ".timelineDeskTabs button", "Cues");
+      await sleep(120);
+      results.push(await measure(client, `control-live-cues-${viewport.width}x${viewport.height}`));
+      await clickVisibleByText(client, ".timelineDeskTabs button", "Automation");
+      await sleep(120);
+      results.push(await measure(client, `control-live-automation-${viewport.width}x${viewport.height}`));
+      await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
     }
   }
   await clickByText(client, "Touch");
