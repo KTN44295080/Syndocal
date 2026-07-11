@@ -44,6 +44,7 @@ import { readVideoOutputTestPattern, readVideoOutputWindowId, VideoOutputWindow 
 import { TimelineCueEventsPanel } from "./components/TimelineCueEventsPanel";
 import { TimelineLightingAutomationPanel } from "./components/TimelineLightingAutomationPanel";
 import { TouchColorPalettePanel } from "./components/TouchColorPalettePanel";
+import { TouchCuePanel } from "./components/TouchCuePanel";
 import { TouchDimmerControlPanel } from "./components/TouchDimmerControlPanel";
 import { TouchFixturePanel } from "./components/TouchFixturePanel";
 import { TouchGenericAttributeGrid } from "./components/TouchGenericAttributeGrid";
@@ -8463,140 +8464,32 @@ export default function App() {
         </section>
         </Show>
         <Show when={workspaceTab() === "touch"}>
-        <section class="panel touchPanel touchCuePanel">
-          <div class="panelHeader">
-            <h2>Touch Cues</h2>
-            <span>{activeCue()?.label ?? "Standby"}</span>
-          </div>
-          <div class="touchGoDeck">
-            <button onClick={triggerPreviousCue} disabled={snapshot().cues.length === 0}>
-              Back
-            </button>
-            <button class="primary" onClick={triggerNextCue} disabled={snapshot().cues.length === 0}>
-              GO
-            </button>
-            <button
-              onClick={() => void setCueFadePaused(!snapshot().active_fade?.paused)}
-              disabled={!snapshot().active_fade}
-            >
-              {snapshot().active_fade?.paused ? "Resume" : "Pause"}
-            </button>
-          </div>
-          <div class="touchCueStatus">
-            <div>
-              <span>Active</span>
-              <strong>{activeCue()?.label ?? "None"}</strong>
-            </div>
-            <div>
-              <span>Next</span>
-              <strong>{nextCue()?.label ?? "None"}</strong>
-            </div>
-          </div>
-          <div class="liveCuePadHeader">
-            <h3>Cue Pads</h3>
-            <span>{cuePadRangeLabel()}</span>
-            <button
-              onClick={() => {
-                setCuePadFollowActive(false);
-                setCuePadBank(Math.max(0, cuePadBank() - 1));
-              }}
-              disabled={cuePadBank() === 0}
-            >
-              Prev
-            </button>
-            <button
-              onClick={() => {
-                setCuePadFollowActive(false);
-                setCuePadBank(Math.min(cuePadBankCount() - 1, cuePadBank() + 1));
-              }}
-              disabled={cuePadBank() >= cuePadBankCount() - 1}
-            >
-              Next
-            </button>
-          </div>
-          <div class="touchCuePadGrid">
-            <For each={liveCuePads()}>
-              {(pad) => (
-                <button
-                  class={`liveCuePad ${pad.cue?.id === snapshot().active_cue_id ? "active" : ""} ${
-                    pad.cue?.id === nextCue()?.id ? "next" : ""
-                  }`}
-                  disabled={!pad.cue}
-                  onClick={() => {
-                    if (pad.cue) {
-                      void triggerCue(pad.cue.id);
-                    }
-                  }}
-                >
-                  <span>{pad.slot}</span>
-                  <strong>{pad.cue?.label ?? "Empty"}</strong>
-                  <small>{pad.cue ? `${pad.cue.fade_ms} ms` : "-"}</small>
-                </button>
-              )}
-            </For>
-          </div>
-          <Show when={snapshot().cues.length === 0}>
-            <p class="empty">No cues. Create one in Control &gt; Live with Store Cue.</p>
-          </Show>
-          <Show when={snapshot().active_fade}>
-            {(fade) => (
-              <div class="liveFadeMeter touchFadeMeter">
-                <span>{Math.round(fade().progress * 100)}%</span>
-                <progress max="1" value={fade().progress} />
-              </div>
-            )}
-          </Show>
-          <div class="touchMasterGrid">
-            <label>
-              Lighting
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.01"
-                value={snapshot().lighting_master}
-                onInput={(event) => void setLightingMaster(Number(event.currentTarget.value))}
-              />
-              <strong>{Math.round(snapshot().lighting_master * 100)}%</strong>
-            </label>
-            <label>
-              Video
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.01"
-                value={snapshot().video.master_opacity}
-                onInput={(event) => void setVideoMasterOpacity(Number(event.currentTarget.value))}
-              />
-              <strong>{Math.round(snapshot().video.master_opacity * 100)}%</strong>
-            </label>
-          </div>
-          <div class="touchGuardRow">
-            <button class={snapshot().blackout ? "primary" : ""} onClick={() => void setBlackout(!snapshot().blackout)}>
-              {snapshot().blackout ? "Clear DMX BO" : "DMX BO"}
-            </button>
-            <button
-              class={snapshot().video.blackout ? "primary" : ""}
-              onClick={() => void setVideoBlackout(!snapshot().video.blackout)}
-            >
-              {snapshot().video.blackout ? "Clear Video BO" : "Video BO"}
-            </button>
-            <button
-              class={snapshot().blackout && snapshot().video.blackout ? "primary" : ""}
-              onClick={() => void setAllBlackout(true)}
-              disabled={snapshot().blackout && snapshot().video.blackout}
-            >
-              All BO
-            </button>
-            <button
-              onClick={() => void setAllBlackout(false)}
-              disabled={!snapshot().blackout && !snapshot().video.blackout}
-            >
-              All Clear
-            </button>
-          </div>
-        </section>
+        <TouchCuePanel
+          snapshot={snapshot()}
+          activeCue={activeCue()}
+          nextCue={nextCue()}
+          cuePads={liveCuePads()}
+          cuePadRangeLabel={cuePadRangeLabel()}
+          cuePadBank={cuePadBank()}
+          cuePadBankCount={cuePadBankCount()}
+          onPreviousBank={() => {
+            setCuePadFollowActive(false);
+            setCuePadBank(Math.max(0, cuePadBank() - 1));
+          }}
+          onNextBank={() => {
+            setCuePadFollowActive(false);
+            setCuePadBank(Math.min(cuePadBankCount() - 1, cuePadBank() + 1));
+          }}
+          onTriggerPreviousCue={triggerPreviousCue}
+          onTriggerNextCue={triggerNextCue}
+          onTriggerCue={triggerCue}
+          onSetCueFadePaused={setCueFadePaused}
+          onSetLightingMaster={setLightingMaster}
+          onSetVideoMasterOpacity={setVideoMasterOpacity}
+          onSetBlackout={setBlackout}
+          onSetVideoBlackout={setVideoBlackout}
+          onSetAllBlackout={setAllBlackout}
+        />
         <section class="panel touchPanel touchStagePanel">
           <div class="panelHeader">
             <h2>Touch Stage</h2>
