@@ -392,11 +392,14 @@ async function measure(client, label) {
     const layoutStyle = layout ? window.getComputedStyle(layout) : null;
     const appRect = app ? app.getBoundingClientRect() : null;
     const layoutRect = layout ? layout.getBoundingClientRect() : null;
+    const compactMappingStage = document.querySelector('.layoutSetup.setupMode-patch .mappingVisualizer.compact .visualizerStage');
+    const compactMappingStageRect = compactMappingStage?.getBoundingClientRect() ?? null;
     window.scrollTo(9999, 9999);
     await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
     const movedX = window.scrollX;
     const movedY = window.scrollY;
     window.scrollTo(0, 0);
+    await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
     return {
       label: ${JSON.stringify(label)},
       innerWidth,
@@ -467,6 +470,8 @@ async function measure(client, label) {
       dmxAddressOccupiedCellCount: document.querySelectorAll('.dmxAddressCell.occupied').length,
       dmxAddressPlannedCellCount: document.querySelectorAll('.dmxAddressCell.planned').length,
       visibleDmxFixtureBlockCount: visibleCount('.dmxPatchFixtureBlock'),
+      compactMappingStageWidth: compactMappingStageRect ? Math.round(compactMappingStageRect.width) : 0,
+      compactMappingStageHeight: compactMappingStageRect ? Math.round(compactMappingStageRect.height) : 0,
       visibleDmxGridSummaryCount: visibleCount('.dmxGridSummary'),
       visibleFixtureSetupEditorCount: visibleCount('.fixtureSetupEditor'),
       visibleUseProfileForPatchButtonCount: [...document.querySelectorAll('.fixtureSetupEditor button')]
@@ -890,6 +895,8 @@ function hasExpectedSetupSurface(result) {
       result.dmxAddressOccupiedCellCount > 0 &&
       result.dmxAddressPlannedCellCount > 0 &&
       result.visibleDmxFixtureBlockCount > 0 &&
+      result.compactMappingStageWidth >= 420 &&
+      result.compactMappingStageHeight >= 180 &&
       result.visibleDmxGridSummaryCount >= 1 &&
       result.visibleFixtureSetupEditorCount >= 1 &&
       result.visibleUseProfileForPatchButtonCount >= 1 &&
@@ -1189,7 +1196,7 @@ async function main() {
         ? ` mappingHelp=${result.visibleMappingHotkeyHelpCount}/${result.mappingHotkeyHelpKeyCount}`
         : "";
       const patchSuffix = result.label.startsWith("setup-patch-")
-        ? ` patch=${result.visiblePatchActionRowCount}/${result.visiblePatchAutoButtonCount}/${result.visiblePatchPrimaryButtonCount}/${result.visiblePatchNextFreeButtonCount}/${result.visiblePatchFootprintCount}/${result.visibleDmxAddressGridCount}/${result.dmxAddressCellCount}/${result.dmxAddressOccupiedCellCount}/${result.dmxAddressPlannedCellCount}/${result.visibleDmxFixtureBlockCount}/${result.visibleDmxGridSummaryCount}/${result.visibleFixtureSetupEditorCount}/${result.visibleUseProfileForPatchButtonCount}/${result.visibleDuplicateFixtureButtonCount}`
+        ? ` patch=${result.visiblePatchActionRowCount}/${result.visiblePatchAutoButtonCount}/${result.visiblePatchPrimaryButtonCount}/${result.visiblePatchNextFreeButtonCount}/${result.visiblePatchFootprintCount}/${result.visibleDmxAddressGridCount}/${result.dmxAddressCellCount}/${result.dmxAddressOccupiedCellCount}/${result.dmxAddressPlannedCellCount}/${result.visibleDmxFixtureBlockCount}/${result.compactMappingStageWidth}x${result.compactMappingStageHeight}/${result.visibleDmxGridSummaryCount}/${result.visibleFixtureSetupEditorCount}/${result.visibleUseProfileForPatchButtonCount}/${result.visibleDuplicateFixtureButtonCount}`
         : "";
       const outputSetupSuffix = result.label.startsWith("setup-video-")
         ? ` outputSetup=${result.visibleSetupVideoPanelCount}/${result.visibleSetupVideoOutputDeckCount}/${result.visibleSetupVideoOutputActiveDeckCount}/${result.visibleSetupVideoOutputDetailPaneCount}/${result.visibleVideoOutputMappingPanelCount}/${result.visibleProjectorMapEditorCount}/${result.visibleProjectorMapHandleCount}/${result.visibleProjectorKeystoneHandleCount}/${result.visibleProjectorScaleHandleCount}/${result.visibleProjectorRotateHandleCount}/${result.visibleProjectorAspectModeButtonCount}/${result.visibleProjectorAspectPresetButtonCount}/${result.visibleProjectorResetPoseButtonCount}`

@@ -16,6 +16,8 @@ type WithoutChildren<T> = Omit<T, "children">;
 interface SetupMappingWorkspaceProps {
   className: string;
   panelRef: (element: HTMLElement) => void;
+  compact?: boolean;
+  onOpenMapping?: () => void;
   fixtureList: WithoutChildren<ComponentProps<typeof SetupFixtureListPanel>>;
   patchMap: ComponentProps<typeof DmxPatchMapPanel>;
   fixtureEditor: ComponentProps<typeof SetupFixtureEditorPanel> | null;
@@ -41,23 +43,36 @@ export function SetupMappingWorkspace(props: SetupMappingWorkspaceProps) {
       <Show when={props.fixtureEditor}>
         {(fixtureEditor) => <SetupFixtureEditorPanel {...fixtureEditor()} />}
       </Show>
-      <div class="mappingVisualizer visualizer">
+      <div class={props.compact ? "mappingVisualizer visualizer compact" : "mappingVisualizer visualizer"}>
         <div class="panelHeader">
           <h2>2D Mapping</h2>
-          <span>{props.fixtureCount} fixture(s) / {props.projectorCount} projection surface(s)</span>
+          <div class="panelHeaderActions">
+            <span>{props.fixtureCount} fixture(s) / {props.projectorCount} projection surface(s)</span>
+            <Show when={props.compact && props.onOpenMapping}>
+              <button onClick={() => props.onOpenMapping?.()}>Open Stage Map</button>
+            </Show>
+          </div>
         </div>
-        <MappingFilterStrips {...props.filters} />
-        <div class="mappingStageShell">
-          <MappingToolRail {...props.toolRail} />
+        <Show when={!props.compact}>
+          <MappingFilterStrips {...props.filters} />
+        </Show>
+        <div class={props.compact ? "mappingStageShell compact" : "mappingStageShell"}>
+          <Show when={!props.compact}>
+            <MappingToolRail {...props.toolRail} />
+          </Show>
           <div class="mappingStageViewport">
-            <MappingViewportControls {...props.viewportControls} />
-            <MappingStageConfigPanel {...props.stageConfig} />
+            <Show when={!props.compact}>
+              <MappingViewportControls {...props.viewportControls} />
+              <MappingStageConfigPanel {...props.stageConfig} />
+            </Show>
             <MappingEditableStageShell {...props.editableStage}>
               <MappingStageLayersPanel {...props.stageLayers} />
             </MappingEditableStageShell>
           </div>
-          <MappingSelectionSidebarPanel {...props.selectionSidebar} />
-          <Show when={props.hotkeyHelpOpen}>
+          <Show when={!props.compact}>
+            <MappingSelectionSidebarPanel {...props.selectionSidebar} />
+          </Show>
+          <Show when={!props.compact && props.hotkeyHelpOpen}>
             <MappingHotkeyHelp onClose={props.onCloseHotkeyHelp} />
           </Show>
         </div>

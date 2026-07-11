@@ -13281,8 +13281,8 @@ h3 {
 .layoutSetup.setupMode-patch > .fixtures {
   display: grid;
   grid-column: 2;
-  grid-template-columns: minmax(0, 1.22fr) minmax(250px, 0.78fr);
-  grid-template-rows: auto auto minmax(292px, 0.58fr) minmax(190px, 0.42fr);
+  grid-template-columns: minmax(0, 1.55fr) minmax(250px, 0.45fr);
+  grid-template-rows: auto auto minmax(260px, 0.46fr) minmax(270px, 0.54fr);
   overflow: hidden;
 }
 
@@ -13340,12 +13340,26 @@ h3 {
 .layoutSetup.setupMode-patch .mappingStageViewport {
   grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
-  padding: 4px;
+  padding: 3px;
 }
 
 .layoutSetup.setupMode-patch .mappingStageViewport .visualizerStage {
   height: 100%;
   min-height: 0;
+}
+
+.layoutSetup.setupMode-patch .mappingVisualizer.compact > .panelHeader {
+  padding-inline: 3px;
+}
+
+.layoutSetup.setupMode-patch .mappingVisualizer.compact .panelHeaderActions {
+  min-width: 0;
+}
+
+.layoutSetup.setupMode-patch .mappingVisualizer.compact .panelHeaderActions span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .layoutSetup.setupMode-patch .dmxAddressGrid {

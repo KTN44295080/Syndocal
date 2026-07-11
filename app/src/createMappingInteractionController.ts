@@ -80,6 +80,14 @@ interface MappingInteractionControllerOptions {
 
 export function createMappingInteractionController(options: MappingInteractionControllerOptions) {
   const stageSvgPointFromClient = (clientX: number, clientY: number, targetSvg: SVGSVGElement) => {
+    const screenMatrix = targetSvg.getScreenCTM();
+    if (screenMatrix) {
+      const point = new DOMPoint(clientX, clientY).matrixTransform(screenMatrix.inverse());
+      return {
+        x: clampRange(point.x, 0, stageViewBoxSize),
+        z: clampRange(point.y, 0, stageViewBoxSize),
+      };
+    }
     const rect = targetSvg.getBoundingClientRect();
     const viewBox = options.mappingViewportBox();
     return {

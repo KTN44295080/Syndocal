@@ -3498,6 +3498,24 @@ export default function App() {
     const objectBounds = visualizerStageObjects2d().map(stageObjectSvgBounds);
     fitMappingViewportToSvgBounds(mergeSvgBounds([...fixtureBounds, ...surfaceBounds, ...objectBounds]), "visible stage items");
   };
+  const compactMappingStageViewBox = createMemo(() => {
+    const bounds = mergeSvgBounds([
+      ...visualizerFixtures().map(fixtureSvgBounds),
+      ...visualizerVideoSurfaces2d().map(videoSurfaceSvgBounds),
+      ...visualizerStageObjects2d().map(stageObjectSvgBounds),
+    ]);
+    if (!bounds) {
+      return `0 0 ${stageViewBoxSize} ${stageViewBoxSize}`;
+    }
+    const width = Math.max(1, bounds.maxX - bounds.minX);
+    const height = Math.max(1, bounds.maxZ - bounds.minZ);
+    const size = clampRange(Math.max(width, height) * 1.18, 18, stageViewBoxSize);
+    const centerX = (bounds.minX + bounds.maxX) / 2;
+    const centerZ = (bounds.minZ + bounds.maxZ) / 2;
+    const x = clampRange(centerX - size / 2, 0, stageViewBoxSize - size);
+    const z = clampRange(centerZ - size / 2, 0, stageViewBoxSize - size);
+    return `${x} ${z} ${size} ${size}`;
+  });
   const fitMappingViewportToSelection = () => {
     const selectedIds = selectedMappingFixtureIdSet();
     const fixtureBounds = visualizerFixtures()
@@ -8931,6 +8949,8 @@ export default function App() {
         <SetupMappingWorkspace
           className={setupPanelClass("panel fixtures setupPanel", ["patch", "mapping"])}
           panelRef={registerSetupPanel(["patch"])}
+          compact={setupSubTab() === "patch"}
+          onOpenMapping={() => selectSetupMode("mapping")}
           fixtureList={{
             fixtures: filteredFixtures(),
             totalFixtureCount: snapshot().fixtures.length,
@@ -9001,12 +9021,12 @@ export default function App() {
           }}
           toolRail={{
             stageTool: mappingStageTool(),
-            showLabels: mappingShowLabels(),
+            showLabels: setupSubTab() === "patch" ? false : mappingShowLabels(),
             showBeams: mappingShowBeams(),
             showGeometry: mappingShowGeometry(),
             showProjectors: mappingShowProjectors(),
             showStageObjects: mappingShowStageObjects(),
-            showLevels: mappingShowLevels(),
+            showLevels: setupSubTab() === "patch" ? false : mappingShowLevels(),
             helpOpen: mappingHotkeyHelpOpen(),
             onStageTool: setMappingStageTool,
             onToggleLabels: () => setMappingShowLabels((value) => !value),
@@ -9092,7 +9112,7 @@ export default function App() {
             svgRef: (element) => { mappingStageSvgElement = element; },
             dragging: Boolean(mappingDrag() || mappingViewportPanDrag()),
             stageTool: mappingStageTool(),
-            viewBox: mappingStageViewBox(),
+            viewBox: setupSubTab() === "patch" ? compactMappingStageViewBox() : mappingStageViewBox(),
             stageOrigin: stageOrigin2d(),
             cursorPoint: mappingStageCursorSvgPoint(),
             cursorLabel: mappingStageCursorLabel(),
