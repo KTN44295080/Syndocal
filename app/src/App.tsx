@@ -8394,7 +8394,7 @@ export default function App() {
             className="controlStage"
             patternId="control-stage-grid"
             compact
-            viewAspectRatio={2.15}
+            viewAspectRatio={2.4}
             stageOrigin={stageOrigin2d()}
             fixtures={visualizerFixtures()}
             videoSurfaces={visualizerVideoSurfaces2d()}

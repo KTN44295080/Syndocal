@@ -1,4 +1,4 @@
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import type { MappingFixtureVisualKind } from "../fixtureVisuals";
 import { stageViewBoxSize } from "../stageGeometry";
 import { stageObjectClass } from "../stageObjects";
@@ -72,9 +72,24 @@ type StagePreview2DProps = {
 };
 
 export function StagePreview2D(props: StagePreview2DProps) {
+  let stageElement: SVGSVGElement | undefined;
+  const [measuredAspectRatio, setMeasuredAspectRatio] = createSignal<number | null>(null);
+
+  onMount(() => {
+    if (!stageElement || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      if (width > 0 && height > 0) setMeasuredAspectRatio(width / height);
+    });
+    observer.observe(stageElement);
+    onCleanup(() => observer.disconnect());
+  });
+
   const viewBox = createMemo(() => {
-    const aspect = props.viewAspectRatio;
-    if (!aspect || aspect <= 0) return `0 0 ${stageViewBoxSize} ${stageViewBoxSize}`;
+    const aspect = measuredAspectRatio() ?? props.viewAspectRatio;
+    if (!aspect || aspect <= 0) {
+      return { x: 0, z: 0, width: stageViewBoxSize, height: stageViewBoxSize };
+    }
 
     const bounds: Array<[number, number, number, number]> = [
       ...props.fixtures.map((fixture) => {
@@ -94,7 +109,9 @@ export function StagePreview2D(props: StagePreview2DProps) {
         object.z + object.depth / 2,
       ] as [number, number, number, number]),
     ];
-    if (bounds.length === 0) return `0 0 ${stageViewBoxSize} ${stageViewBoxSize / aspect}`;
+    if (bounds.length === 0) {
+      return { x: 0, z: 0, width: stageViewBoxSize, height: stageViewBoxSize / aspect };
+    }
 
     let minX = Math.min(...bounds.map((row) => row[0])) - 6;
     let minZ = Math.min(...bounds.map((row) => row[1])) - 6;
@@ -140,18 +157,39 @@ export function StagePreview2D(props: StagePreview2DProps) {
     };
     [minX, maxX] = shiftIntoStage(minX, maxX);
     [minZ, maxZ] = shiftIntoStage(minZ, maxZ);
-    return `${minX} ${minZ} ${maxX - minX} ${maxZ - minZ}`;
+    return { x: minX, z: minZ, width: maxX - minX, height: maxZ - minZ };
+  });
+
+  const viewBoxAttribute = createMemo(() => {
+    const view = viewBox();
+    return `${view.x} ${view.z} ${view.width} ${view.height}`;
   });
 
   return (
-    <svg class={`visualizerStage ${props.className}`} viewBox={viewBox()}>
+    <svg ref={stageElement} class={`visualizerStage ${props.className}`} viewBox={viewBoxAttribute()}>
       <defs>
-        <pattern id={props.patternId} width="10" height="10" patternUnits="userSpaceOnUse">
-          <path d="M 10 0 L 0 0 0 10" />
+        <pattern id={`${props.patternId}-minor`} width="5" height="5" patternUnits="userSpaceOnUse">
+          <path class="stageGridMinor" d="M 5 0 L 0 0 0 5" />
+        </pattern>
+        <pattern id={props.patternId} width="20" height="20" patternUnits="userSpaceOnUse">
+          <rect width="20" height="20" fill={`url(#${props.patternId}-minor)`} />
+          <path class="stageGridMajor" d="M 20 0 L 0 0 0 20" />
         </pattern>
       </defs>
-      <rect class="stageFloor" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
-      <rect class="stageGrid" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
+      <rect
+        class="stageFloor"
+        x={viewBox().x}
+        y={viewBox().z}
+        width={viewBox().width}
+        height={viewBox().height}
+      />
+      <rect
+        class="stageGrid"
+        x={viewBox().x}
+        y={viewBox().z}
+        width={viewBox().width}
+        height={viewBox().height}
+      />
       <line class="stageAxis2d" x1={props.stageOrigin.x} y1="0" x2={props.stageOrigin.x} y2={stageViewBoxSize} />
       <line class="stageAxis2d" x1="0" y1={props.stageOrigin.z} x2={stageViewBoxSize} y2={props.stageOrigin.z} />
       <For each={props.stageObjects}>
@@ -237,6 +275,18 @@ export function StagePreview2D(props: StagePreview2DProps) {
                 props.onSelectFixture(fixture.id);
               }}
             >
+              <circle
+                class="stageFixtureHitTarget"
+                cx="0"
+                cy="0"
+                r={Math.max(props.compact ? 3.2 : 3.8, fixture.width / 2 + 1.5, fixture.height / 2 + 1.5)}
+              />
+              <circle
+                class="stageFixtureSelectionRing"
+                cx="0"
+                cy="0"
+                r={Math.max(props.compact ? 2.35 : 3.1, fixture.width / 2 + 0.8, fixture.height / 2 + 0.8)}
+              />
               <Show
                 when={fixture.visualKind === "bar" || fixture.visualKind === "panel"}
                 fallback={
@@ -269,8 +319,8 @@ export function StagePreview2D(props: StagePreview2DProps) {
                   fill={fixture.color}
                 />
               </Show>
-              <line class="stageFixtureCenterLine" x1="0" y1="0" x2="0" y2="-7" />
-              <circle class="stageFixtureLaserMark" cx="0" cy="-7" r="0.9" />
+              <line class="stageFixtureCenterLine" x1="0" y1="0" x2="0" y2={props.compact ? -3.6 : -7} />
+              <circle class="stageFixtureLaserMark" cx="0" cy={props.compact ? -3.6 : -7} r={props.compact ? 0.62 : 0.9} />
               <title>{`${fixture.label} / ${fixture.dmxLabel} / ${fixture.groupLabel}`}</title>
             </g>
           );

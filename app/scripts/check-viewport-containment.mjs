@@ -469,6 +469,18 @@ async function measure(client, label) {
           .map(Number);
         return values.length === 4 && values[3] > 0 ? values[2] / values[3] : 0;
       })(),
+      controlStageGridCoverage: (() => {
+        const stageRect = document.querySelector('.controlStage')?.getBoundingClientRect();
+        const gridRect = document.querySelector('.controlStage .stageGrid')?.getBoundingClientRect();
+        if (!stageRect || !gridRect || stageRect.width <= 0 || stageRect.height <= 0) return 0;
+        return Math.min(gridRect.width / stageRect.width, gridRect.height / stageRect.height);
+      })(),
+      controlStageFixtureMinSize: Math.min(
+        ...[...document.querySelectorAll('.controlStage .stageFixture')].map((fixture) => {
+          const rect = fixture.getBoundingClientRect();
+          return Math.min(rect.width, rect.height);
+        }),
+      ),
       visibleControlStageReferenceLabelCount: visibleCount('.controlStage .controlStageObject text, .controlStage .stageVideoSurface2d text'),
       controlWorkSurfaceOverflowCount: [...document.querySelectorAll(
         '.layoutControl .faders, .layoutControl .videoControlPanel, .layoutControl .videoOutputControlList, .layoutControl .videoLayerList'
@@ -723,6 +735,8 @@ function hasExpectedControlModeSurface(result) {
     result.visibleControlStagePanelCount !== 1 ||
     result.visibleControlStageCount !== 1 ||
     result.controlStageViewBoxAspect < 2 ||
+    result.controlStageGridCoverage < 0.95 ||
+    result.controlStageFixtureMinSize < 12 ||
     result.visibleControlStageReferenceLabelCount > 1
   ) {
     return false;
