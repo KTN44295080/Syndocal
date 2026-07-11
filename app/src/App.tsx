@@ -3986,7 +3986,9 @@ export default function App() {
     try {
       const project = await invoke<ProjectFile>("get_project_checkpoint");
       const checkpoint = createProjectRecoveryCheckpoint(project, currentProjectPath(), signature);
-      saveProjectRecoveryCheckpoint(checkpoint);
+      if (!saveProjectRecoveryCheckpoint(checkpoint)) {
+        throw new Error("browser storage is unavailable or full");
+      }
       lastRecoverySignature = signature;
       setProjectRecoveryCheckpoint(checkpoint);
     } catch (error) {

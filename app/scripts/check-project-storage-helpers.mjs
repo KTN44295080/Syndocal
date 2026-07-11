@@ -68,4 +68,29 @@ assert.equal(recovery.recoveryCheckpointFromUnknown({ ...checkpoint, project: { 
 assert.equal(recovery.projectRecoverySourceLabel({ ...checkpoint, source_path: null }), "Untitled.sdc");
 assert.equal(recovery.projectRecoveryTimeLabel({ ...checkpoint, saved_at: "bad-date" }), "Recovery");
 
+const storageValues = new Map();
+const localStorage = {
+  getItem: (key) => storageValues.get(key) ?? null,
+  setItem: (key, value) => storageValues.set(key, value),
+  removeItem: (key) => storageValues.delete(key),
+};
+globalThis.window = { localStorage };
+assert.equal(recovery.saveProjectRecoveryCheckpoint(checkpoint), true);
+assert.deepEqual(recovery.loadProjectRecoveryCheckpoint(), checkpoint);
+
+storageValues.set("syndocal.projectRecovery.v1", "{broken-json");
+assert.equal(recovery.loadProjectRecoveryCheckpoint(), null);
+assert.equal(storageValues.has("syndocal.projectRecovery.v1"), false);
+
+globalThis.window = {
+  localStorage: {
+    ...localStorage,
+    setItem: () => {
+      throw new Error("quota exceeded");
+    },
+  },
+};
+assert.equal(recovery.saveProjectRecoveryCheckpoint(checkpoint), false);
+delete globalThis.window;
+
 console.log("project storage helpers ok");

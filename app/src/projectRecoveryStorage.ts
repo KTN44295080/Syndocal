@@ -90,20 +90,34 @@ export const loadProjectRecoveryCheckpoint = () => {
   }
   try {
     const raw = window.localStorage.getItem(projectRecoveryStorageKey);
-    return raw ? recoveryCheckpointFromUnknown(JSON.parse(raw)) : null;
+    if (!raw) {
+      return null;
+    }
+    const checkpoint = recoveryCheckpointFromUnknown(JSON.parse(raw));
+    if (!checkpoint) {
+      window.localStorage.removeItem(projectRecoveryStorageKey);
+    }
+    return checkpoint;
   } catch {
+    try {
+      window.localStorage.removeItem(projectRecoveryStorageKey);
+    } catch {
+      // Storage can be unavailable; recovery remains absent for this session.
+    }
     return null;
   }
 };
 
 export const saveProjectRecoveryCheckpoint = (checkpoint: ProjectRecoveryCheckpoint) => {
   if (typeof window === "undefined") {
-    return;
+    return false;
   }
   try {
     window.localStorage.setItem(projectRecoveryStorageKey, JSON.stringify(checkpoint));
+    return true;
   } catch {
     // localStorage can be unavailable or full; the explicit project-save path remains authoritative.
+    return false;
   }
 };
 
