@@ -51,6 +51,7 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libxdo-dev \
             librsvg2-dev \
+            xvfb \
             ffmpeg
 
       - name: Install macOS video SDK
@@ -63,9 +64,12 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          winget install --id Gyan.FFmpeg.Shared --exact --accept-package-agreements --accept-source-agreements --silent --disable-interactivity
-          $package = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Directory -Filter 'Gyan.FFmpeg.Shared*' | Select-Object -First 1
-          $sdk = Get-ChildItem $package.FullName -Directory -Filter 'ffmpeg-*-full_build-shared' | Select-Object -First 1 -ExpandProperty FullName
+          $archive = Join-Path $env:RUNNER_TEMP 'ffmpeg-shared.7z'
+          $extract = Join-Path $env:RUNNER_TEMP 'ffmpeg-shared'
+          Invoke-WebRequest 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full-shared.7z' -OutFile $archive
+          & 7z x $archive "-o$extract" -y | Out-Null
+          $sdk = Get-ChildItem $extract -Directory -Filter 'ffmpeg-*-full_build-shared' | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $sdk) { throw 'The extracted FFmpeg SDK directory was not found.' }
           "FFMPEG_DIR=$sdk" >> $env:GITHUB_ENV
           "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
           (Join-Path $sdk 'bin') >> $env:GITHUB_PATH
@@ -84,7 +88,7 @@ jobs:
           cache-dependency-path: app/pnpm-lock.yaml
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.86.0
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
 
@@ -125,6 +129,36 @@ jobs:
       - name: Bundle Linux packages
         if: runner.os == 'Linux'
         run: pnpm --dir app tauri build --ci --bundles deb,appimage
+
+      - name: Smoke-test Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $process = Start-Process 'target/release/syndocal.exe' -PassThru
+          Start-Sleep -Seconds 8
+          if ($process.HasExited) { throw "Syndocal exited during startup with code $($process.ExitCode)." }
+          Stop-Process -Id $process.Id -Force
+
+      - name: Smoke-test macOS application
+        if: runner.os == 'macOS'
+        run: |
+          app_path=$(find target/release/bundle/macos -maxdepth 1 -name '*.app' -print -quit)
+          test -n "$app_path"
+          executable="$app_path/Contents/MacOS/syndocal"
+          test -x "$executable"
+          "$executable" & process_id=$!
+          sleep 8
+          kill -0 "$process_id"
+          kill "$process_id"
+
+      - name: Smoke-test Linux executable
+        if: runner.os == 'Linux'
+        run: |
+          set +e
+          timeout 8s xvfb-run -a target/release/syndocal
+          exit_code=$?
+          set -e
+          test "$exit_code" -eq 124
 
       - name: Upload installers
         uses: actions/upload-artifact@v4
