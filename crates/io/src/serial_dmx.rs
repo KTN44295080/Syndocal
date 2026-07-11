@@ -1,9 +1,15 @@
 use std::{
+    hint::spin_loop,
     io::{self, Write},
-    thread,
-    time::Duration,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    thread::{self, JoinHandle},
+    time::{Duration, Instant},
 };
 
+use crossbeam_queue::ArrayQueue;
 use protocol::SerialPortSummary;
 use serialport::{DataBits, Parity, SerialPort, SerialPortType, StopBits};
 use thiserror::Error;
@@ -34,6 +40,10 @@ pub enum SerialDmxError {
     },
     #[error("failed to write serial DMX packet: {0}")]
     Write(#[source] io::Error),
+    #[error("failed to start Open DMX worker: {0}")]
+    WorkerStart(#[source] io::Error),
+    #[error("Open DMX worker stopped: {0}")]
+    Worker(String),
 }
 
 pub struct EnttecUsbProSender {
@@ -41,7 +51,11 @@ pub struct EnttecUsbProSender {
 }
 
 pub struct EnttecOpenDmxSender {
-    port: Box<dyn SerialPort>,
+    frames: Arc<ArrayQueue<[u8; 512]>>,
+    running: Arc<AtomicBool>,
+    worker_failed: Arc<AtomicBool>,
+    worker_error: Arc<Mutex<Option<String>>>,
+    worker: Option<JoinHandle<()>>,
 }
 
 impl EnttecUsbProSender {
@@ -79,11 +93,52 @@ impl EnttecOpenDmxSender {
                 path: path.to_string(),
                 source,
             })?;
-        Ok(Self { port })
+        let frames = Arc::new(ArrayQueue::new(2));
+        let running = Arc::new(AtomicBool::new(true));
+        let worker_failed = Arc::new(AtomicBool::new(false));
+        let worker_error = Arc::new(Mutex::new(None));
+        let worker = thread::Builder::new()
+            .name("syndocal-open-dmx".to_string())
+            .spawn({
+                let frames = Arc::clone(&frames);
+                let running = Arc::clone(&running);
+                let worker_failed = Arc::clone(&worker_failed);
+                let worker_error = Arc::clone(&worker_error);
+                move || {
+                    run_enttec_open_dmx_worker(port, frames, running, worker_failed, worker_error)
+                }
+            })
+            .map_err(SerialDmxError::WorkerStart)?;
+        Ok(Self {
+            frames,
+            running,
+            worker_failed,
+            worker_error,
+            worker: Some(worker),
+        })
     }
 
     pub fn send_dmx_frame(&mut self, frame: &[u8; 512]) -> Result<usize, SerialDmxError> {
-        write_enttec_open_dmx_frame(&mut *self.port, frame).map_err(SerialDmxError::Write)
+        if self.worker_failed.load(Ordering::Acquire) {
+            let error = self
+                .worker_error
+                .lock()
+                .map_err(|_| SerialDmxError::Worker("worker error lock was poisoned".to_string()))?
+                .clone()
+                .unwrap_or_else(|| "worker stopped without an error message".to_string());
+            return Err(SerialDmxError::Worker(error));
+        }
+        enqueue_latest_open_dmx_frame(&self.frames, *frame);
+        Ok(ENTTEC_OPEN_DMX_PAYLOAD_LEN)
+    }
+}
+
+impl Drop for EnttecOpenDmxSender {
+    fn drop(&mut self) {
+        self.running.store(false, Ordering::Release);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
     }
 }
 
@@ -113,14 +168,57 @@ pub fn write_enttec_open_dmx_frame(
     frame: &[u8; 512],
 ) -> io::Result<usize> {
     port.set_break().map_err(serial_error_to_io)?;
-    thread::sleep(Duration::from_micros(ENTTEC_OPEN_DMX_BREAK_US));
+    precise_wait(Duration::from_micros(ENTTEC_OPEN_DMX_BREAK_US));
     port.clear_break().map_err(serial_error_to_io)?;
-    thread::sleep(Duration::from_micros(ENTTEC_OPEN_DMX_MAB_US));
+    precise_wait(Duration::from_micros(ENTTEC_OPEN_DMX_MAB_US));
 
     let payload = build_enttec_open_dmx_payload(frame);
     port.write_all(&payload)?;
     port.flush()?;
     Ok(payload.len())
+}
+
+fn enqueue_latest_open_dmx_frame(queue: &ArrayQueue<[u8; 512]>, frame: [u8; 512]) {
+    if let Err(frame) = queue.push(frame) {
+        let _ = queue.pop();
+        let _ = queue.push(frame);
+    }
+}
+
+fn run_enttec_open_dmx_worker(
+    mut port: Box<dyn SerialPort>,
+    frames: Arc<ArrayQueue<[u8; 512]>>,
+    running: Arc<AtomicBool>,
+    worker_failed: Arc<AtomicBool>,
+    worker_error: Arc<Mutex<Option<String>>>,
+) {
+    let mut current_frame = None;
+    while running.load(Ordering::Acquire) {
+        while let Some(frame) = frames.pop() {
+            current_frame = Some(frame);
+        }
+        let Some(frame) = current_frame.as_ref() else {
+            thread::sleep(Duration::from_millis(1));
+            continue;
+        };
+        if let Err(error) = write_enttec_open_dmx_frame(&mut *port, frame) {
+            if let Ok(mut slot) = worker_error.lock() {
+                *slot = Some(error.to_string());
+            }
+            worker_failed.store(true, Ordering::Release);
+            running.store(false, Ordering::Release);
+        }
+    }
+}
+
+fn precise_wait(duration: Duration) {
+    let start = Instant::now();
+    if duration > Duration::from_millis(2) {
+        thread::sleep(duration - Duration::from_millis(1));
+    }
+    while start.elapsed() < duration {
+        spin_loop();
+    }
 }
 
 pub fn build_enttec_usb_pro_dmx_packet(frame: &[u8; 512]) -> [u8; ENTTEC_PRO_SEND_PACKET_LEN] {
@@ -232,6 +330,17 @@ mod tests {
 
         assert_eq!(payload[0], ENTTEC_OPEN_DMX_START_CODE);
         assert_eq!(&payload[1..], frame);
+    }
+
+    #[test]
+    fn open_dmx_mailbox_replaces_the_oldest_frame_when_full() {
+        let queue = ArrayQueue::new(2);
+        enqueue_latest_open_dmx_frame(&queue, [1; 512]);
+        enqueue_latest_open_dmx_frame(&queue, [2; 512]);
+        enqueue_latest_open_dmx_frame(&queue, [3; 512]);
+
+        assert_eq!(queue.pop().unwrap()[0], 2);
+        assert_eq!(queue.pop().unwrap()[0], 3);
     }
 
     #[test]
