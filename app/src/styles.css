@@ -14365,8 +14365,8 @@ h3 {
 .layoutControl.controlModeEdit,
 .layoutControl.controlModeLive,
 .layoutControl.controlModeMixer {
-  grid-template-columns: minmax(340px, 0.86fr) minmax(520px, 1.34fr);
-  grid-template-rows: minmax(244px, 0.56fr) minmax(224px, 0.44fr);
+  grid-template-columns: minmax(390px, 1fr) minmax(520px, 1.2fr);
+  grid-template-rows: minmax(230px, 0.51fr) minmax(250px, 0.49fr);
   align-items: stretch;
 }
 
@@ -15001,7 +15001,7 @@ h3 {
   .layoutControl.controlModeEdit,
   .layoutControl.controlModeLive,
   .layoutControl.controlModeMixer {
-    grid-template-columns: minmax(300px, 0.78fr) minmax(430px, 1.22fr);
+    grid-template-columns: minmax(340px, 0.92fr) minmax(430px, 1.08fr);
   }
 }
 

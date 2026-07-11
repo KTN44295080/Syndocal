@@ -535,6 +535,8 @@ async function measure(client, label) {
       visibleLiveControlPanelCount: visibleCount('.liveControlPanel'),
       visibleControlStagePanelCount: visibleCount('.controlStagePanel'),
       visibleControlStageCount: visibleCount('.controlStage'),
+      controlStageWidth: Math.round(document.querySelector('.controlStage')?.getBoundingClientRect().width ?? 0),
+      controlStageHeight: Math.round(document.querySelector('.controlStage')?.getBoundingClientRect().height ?? 0),
       controlStageViewBoxAspect: (() => {
         const values = (document.querySelector('.controlStage')?.getAttribute('viewBox') || '')
           .trim()
@@ -807,6 +809,8 @@ function hasExpectedControlModeSurface(result) {
     result.visibleLiveControlPanelCount !== 1 ||
     result.visibleControlStagePanelCount !== 1 ||
     result.visibleControlStageCount !== 1 ||
+    result.controlStageWidth < 520 ||
+    result.controlStageHeight < 190 ||
     result.controlStageViewBoxAspect < 2 ||
     result.controlStageGridCoverage < 0.95 ||
     result.controlStageFixtureMinSize < 12 ||
@@ -1159,12 +1163,12 @@ async function runViewport(client, viewport) {
     await clickByText(client, setupTab.area);
     await clickByText(client, setupTab.tab);
     await sleep(180);
-    results.push(await measure(client, `setup-${setupTab.id}-${viewport.width}x${viewport.height}`));
     if (screenshotDir) {
       mkdirSync(screenshotDir, { recursive: true });
       const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
       writeFileSync(join(screenshotDir, `setup-${setupTab.id}-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
     }
+    results.push(await measure(client, `setup-${setupTab.id}-${viewport.width}x${viewport.height}`));
   }
   await clickByText(client, "Setup");
   await clickByText(client, "Mapping");
@@ -1178,7 +1182,12 @@ async function runViewport(client, viewport) {
   await clickByText(client, "Control");
   for (const controlTab of controlTabs) {
     await clickByText(client, controlTab.label);
-    await sleep(180);
+    await sleep(320);
+    if (screenshotDir) {
+      mkdirSync(screenshotDir, { recursive: true });
+      const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+      writeFileSync(join(screenshotDir, `control-${controlTab.id}-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
+    }
     results.push(await measure(client, `control-${controlTab.id}-${viewport.width}x${viewport.height}`));
     if (controlTab.id === "edit") {
       await clickVisibleByText(client, ".attributeCategoryRail button", "Position");
@@ -1208,6 +1217,11 @@ async function runViewport(client, viewport) {
   await clickByText(client, "Touch");
   await sleep(180);
   await checkTouchMomentaryFlash(client);
+  if (screenshotDir) {
+    mkdirSync(screenshotDir, { recursive: true });
+    const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+    writeFileSync(join(screenshotDir, `touch-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
+  }
   results.push(await measure(client, `touch-${viewport.width}x${viewport.height}`));
   return results;
 }
