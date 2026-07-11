@@ -1414,6 +1414,15 @@ enum PlatformSupport {
 }
 
 fn external_backend_status(id: &str, label: &str, sdk_name: &str) -> VideoBackendStatus {
+    if id == "ndi" && cfg!(feature = "ndi") {
+        return VideoBackendStatus {
+            id: id.to_string(),
+            label: label.to_string(),
+            state: VideoBackendState::Available,
+            detail: "NDI SDK transport is built in; routes initialize the runtime on demand"
+                .to_string(),
+        };
+    }
     VideoBackendStatus {
         id: id.to_string(),
         label: label.to_string(),
@@ -5987,8 +5996,15 @@ mod tests {
             .iter()
             .find(|backend| backend.id == "ndi")
             .unwrap();
-        assert_eq!(ndi.state, VideoBackendState::NotBuilt);
-        assert!(ndi.detail.contains("NDI SDK backend is not linked"));
+        if cfg!(feature = "ndi") {
+            assert_eq!(ndi.state, VideoBackendState::Available);
+            assert!(ndi
+                .detail
+                .contains("routes initialize the runtime on demand"));
+        } else {
+            assert_eq!(ndi.state, VideoBackendState::NotBuilt);
+            assert!(ndi.detail.contains("NDI SDK backend is not linked"));
+        }
 
         let spout = status
             .backends

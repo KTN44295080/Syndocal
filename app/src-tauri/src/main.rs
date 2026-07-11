@@ -45,8 +45,10 @@ use serde_json::{json, Map, Value};
 use tauri::Emitter;
 use tauri::{Manager, State};
 
+mod ndi_transport;
+
 type AppVideoPreviewRenderer = video::VideoPreviewRenderer<
-    video::DecoderBackedFrameProvider<video::PreferredVideoFrameDecoder>,
+    video::DecoderBackedFrameProvider<ndi_transport::NdiAwareVideoFrameDecoder>,
 >;
 
 const APP_NAME: &str = "Syndocal";
@@ -107,6 +109,10 @@ struct AppState {
     video_preview: Mutex<AppVideoPreviewRenderer>,
     external_video_transport: Arc<Mutex<video::ExternalVideoTransportRuntime>>,
     external_video_transport_events: Arc<Mutex<Vec<ExternalVideoTransportDriverEvent>>>,
+    #[cfg(feature = "ndi")]
+    ndi_transport: Arc<Mutex<ndi_transport::NdiTransportState>>,
+    #[cfg(feature = "ndi")]
+    ndi_inputs: ndi_transport::NdiInputRegistry,
     custom_profiles: Mutex<HashMap<String, FixtureProfileSummary>>,
     visualizer_model_assets: Mutex<HashMap<String, VisualizerModelAssetCacheEntry>>,
     midi_clock: Mutex<Option<MidiClockInput>>,
@@ -2233,6 +2239,8 @@ fn start_remote_control(
     let sync_engine = state.engine.clone();
     let sync_transport = Arc::clone(&state.external_video_transport);
     let sync_events = Arc::clone(&state.external_video_transport_events);
+    #[cfg(feature = "ndi")]
+    let sync_ndi_transport = Arc::clone(&state.ndi_transport);
     let server = RemoteWsServer::start_with_snapshot_and_video_status_providers(
         config,
         move |event| {
@@ -2519,6 +2527,10 @@ fn start_remote_control(
                 &snapshot,
                 sync_transport.as_ref(),
                 sync_events.as_ref(),
+                #[cfg(feature = "ndi")]
+                sync_ndi_transport.as_ref(),
+                #[cfg(feature = "ndi")]
+                &sync_engine,
             ) {
                 Ok(sync) => serde_json::to_value(sync).unwrap_or_else(|_| {
                     json!({
@@ -7104,6 +7116,56 @@ impl video::ExternalVideoTransportDriver for RecordingExternalVideoTransportDriv
     }
 }
 
+#[cfg(feature = "ndi")]
+struct NdiExternalVideoTransportDriver<'a> {
+    recording: RecordingExternalVideoTransportDriver<'a>,
+    ndi: &'a mut ndi_transport::NdiTransportState,
+    engine: EngineHandle,
+}
+
+#[cfg(feature = "ndi")]
+impl video::ExternalVideoTransportDriver for NdiExternalVideoTransportDriver<'_> {
+    fn start_route(
+        &mut self,
+        route: &video::ExternalVideoTransportRoute,
+    ) -> Result<(), video::ExternalVideoTransportDriverError> {
+        if route.backend_id != "ndi" {
+            return self.recording.start_route(route);
+        }
+        self.ndi.start_route(route, &self.engine)?;
+        self.recording.push_event(
+            ExternalVideoTransportDriverAction::Start,
+            route,
+            format!(
+                "Started NDI {} route '{}'",
+                external_video_transport_direction_label(route.direction),
+                route.endpoint_name
+            ),
+        );
+        Ok(())
+    }
+
+    fn stop_route(
+        &mut self,
+        route: &video::ExternalVideoTransportRoute,
+    ) -> Result<(), video::ExternalVideoTransportDriverError> {
+        if route.backend_id != "ndi" {
+            return self.recording.stop_route(route);
+        }
+        self.ndi.stop_route(route)?;
+        self.recording.push_event(
+            ExternalVideoTransportDriverAction::Stop,
+            route,
+            format!(
+                "Stopped NDI {} route '{}'",
+                external_video_transport_direction_label(route.direction),
+                route.endpoint_name
+            ),
+        );
+        Ok(())
+    }
+}
+
 fn external_video_transport_direction_label(
     direction: video::ExternalVideoTransportDirection,
 ) -> &'static str {
@@ -7117,6 +7179,8 @@ fn sync_external_video_transports_from_snapshot(
     snapshot: &EngineSnapshot,
     transport: &Mutex<video::ExternalVideoTransportRuntime>,
     event_log: &Mutex<Vec<ExternalVideoTransportDriverEvent>>,
+    #[cfg(feature = "ndi")] ndi_transport: &Mutex<ndi_transport::NdiTransportState>,
+    #[cfg(feature = "ndi")] engine: &EngineHandle,
 ) -> Result<ExternalVideoTransportSyncResponse, String> {
     let plans =
         video::build_external_video_io_route_plans(&snapshot.video, &video::video_runtime_status());
@@ -7126,8 +7190,21 @@ fn sync_external_video_transports_from_snapshot(
     let mut events = event_log
         .lock()
         .map_err(|_| "External video transport event log lock was poisoned".to_string())?;
+    #[cfg(not(feature = "ndi"))]
     let mut driver = RecordingExternalVideoTransportDriver {
         events: &mut events,
+    };
+    #[cfg(feature = "ndi")]
+    let mut ndi = ndi_transport
+        .lock()
+        .map_err(|_| "NDI transport state lock was poisoned".to_string())?;
+    #[cfg(feature = "ndi")]
+    let mut driver = NdiExternalVideoTransportDriver {
+        recording: RecordingExternalVideoTransportDriver {
+            events: &mut events,
+        },
+        ndi: &mut ndi,
+        engine: engine.clone(),
     };
     let report = transport.sync_routes_with_driver(&plans, &mut driver);
     Ok(ExternalVideoTransportSyncResponse {
@@ -7145,6 +7222,10 @@ fn sync_external_video_transports(
         &snapshot,
         state.external_video_transport.as_ref(),
         state.external_video_transport_events.as_ref(),
+        #[cfg(feature = "ndi")]
+        state.ndi_transport.as_ref(),
+        #[cfg(feature = "ndi")]
+        &state.engine,
     )
 }
 
@@ -7640,6 +7721,7 @@ fn start_native_video_live_output(
     engine: EngineHandle,
     output_id: VideoOutputId,
     metrics: Arc<Mutex<NativeVideoOutputMetrics>>,
+    #[cfg(feature = "ndi")] ndi_inputs: ndi_transport::NdiInputRegistry,
 ) -> Result<(), String> {
     let initial_size = window.inner_size().map_err(|error| error.to_string())?;
     let window = Arc::new(window);
@@ -7649,10 +7731,13 @@ fn start_native_video_live_output(
         initial_size.height.max(1),
     )
     .map_err(|error| format!("Native video output initialization failed: {error:?}"))?;
+    #[cfg(feature = "ndi")]
+    let decoder = ndi_transport::NdiAwareVideoFrameDecoder::with_ndi_inputs(ndi_inputs);
+    #[cfg(not(feature = "ndi"))]
+    let decoder = ndi_transport::NdiAwareVideoFrameDecoder::from_env();
     let mut renderer = video::VideoPreviewRenderer::with_frame_provider(
         video::VideoRuntimeConfig::default(),
-        video::DecoderBackedFrameProvider::new(video::PreferredVideoFrameDecoder::from_env())
-            .with_prefetch(0, 33),
+        video::DecoderBackedFrameProvider::new(decoder).with_prefetch(0, 33),
     );
     let first_started = Instant::now();
     let first_result = prepare_native_video_output(
@@ -8005,11 +8090,17 @@ async fn open_video_output_window(
     if let Ok(mut active_metrics) = state.native_video_output_metrics.lock() {
         active_metrics.insert(output_id, Arc::clone(&metrics));
     }
-    start_native_video_live_output(window, state.engine.clone(), output_id, metrics).inspect_err(
-        |_| {
-            let _ = cleanup_window.close();
-        },
+    start_native_video_live_output(
+        window,
+        state.engine.clone(),
+        output_id,
+        metrics,
+        #[cfg(feature = "ndi")]
+        Arc::clone(&state.ndi_inputs),
     )
+    .inspect_err(|_| {
+        let _ = cleanup_window.close();
+    })
 }
 
 fn load_patch_profile(
@@ -12719,8 +12810,10 @@ f 1 2 3
     fn video_preview_decode_budget_request_is_clamped() {
         let renderer = video::VideoPreviewRenderer::with_frame_provider(
             video::VideoRuntimeConfig::default(),
-            video::DecoderBackedFrameProvider::new(video::PreferredVideoFrameDecoder::from_env())
-                .with_prefetch(2, 33),
+            video::DecoderBackedFrameProvider::new(
+                ndi_transport::NdiAwareVideoFrameDecoder::from_env(),
+            )
+            .with_prefetch(2, 33),
         );
 
         assert_eq!(resolved_video_preview_decode_budget(&renderer, 3, None), 9);
@@ -13112,18 +13205,25 @@ f 1 2 3
         );
         assert_eq!(plans.inputs.len(), 1);
         assert_eq!(plans.outputs.len(), 1);
-        assert!(!plans.inputs[0].ready);
-        assert!(!plans.outputs[0].ready);
-        assert!(plans.inputs[0]
-            .issue
-            .as_deref()
-            .unwrap_or_default()
-            .contains("NDI"));
-        assert!(plans.outputs[0]
-            .issue
-            .as_deref()
-            .unwrap_or_default()
-            .contains("NDI"));
+        if cfg!(feature = "ndi") {
+            assert!(plans.inputs[0].ready);
+            assert!(plans.outputs[0].ready);
+            assert!(plans.inputs[0].issue.is_none());
+            assert!(plans.outputs[0].issue.is_none());
+        } else {
+            assert!(!plans.inputs[0].ready);
+            assert!(!plans.outputs[0].ready);
+            assert!(plans.inputs[0]
+                .issue
+                .as_deref()
+                .unwrap_or_default()
+                .contains("NDI"));
+            assert!(plans.outputs[0]
+                .issue
+                .as_deref()
+                .unwrap_or_default()
+                .contains("NDI"));
+        }
     }
 
     #[test]
@@ -16235,20 +16335,32 @@ f 1 2 3
 
 fn main() {
     let engine = EngineHandle::start(DmxOutputConfig::default());
+    #[cfg(feature = "ndi")]
+    let ndi_inputs = Arc::new(Mutex::new(HashMap::new()));
+    #[cfg(feature = "ndi")]
+    let ndi_transport = Arc::new(Mutex::new(ndi_transport::NdiTransportState::new(
+        Arc::clone(&ndi_inputs),
+    )));
+    #[cfg(feature = "ndi")]
+    let app_video_decoder =
+        ndi_transport::NdiAwareVideoFrameDecoder::with_ndi_inputs(Arc::clone(&ndi_inputs));
+    #[cfg(not(feature = "ndi"))]
+    let app_video_decoder = ndi_transport::NdiAwareVideoFrameDecoder::from_env();
     tauri::Builder::default()
         .manage(AppState {
             engine,
             video_preview: Mutex::new(video::VideoPreviewRenderer::with_frame_provider(
                 video::VideoRuntimeConfig::default(),
-                video::DecoderBackedFrameProvider::new(
-                    video::PreferredVideoFrameDecoder::from_env(),
-                )
-                .with_prefetch(2, 33),
+                video::DecoderBackedFrameProvider::new(app_video_decoder).with_prefetch(2, 33),
             )),
             external_video_transport: Arc::new(Mutex::new(
                 video::ExternalVideoTransportRuntime::new(),
             )),
             external_video_transport_events: Arc::new(Mutex::new(Vec::new())),
+            #[cfg(feature = "ndi")]
+            ndi_transport,
+            #[cfg(feature = "ndi")]
+            ndi_inputs: Arc::clone(&ndi_inputs),
             custom_profiles: Mutex::new(HashMap::new()),
             visualizer_model_assets: Mutex::new(HashMap::new()),
             midi_clock: Mutex::new(None),

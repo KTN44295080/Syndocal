@@ -21,6 +21,7 @@ repository = "https://example.invalid/syndocal"
 audio = { path = "crates/audio" }
 crossbeam-queue = "0.3"
 gdtf = { path = "crates/gdtf" }
+grafton-ndi = { version = "=0.11.0", default-features = false }
 image = { version = "=0.24.9", default-features = false, features = ["jpeg", "png"] }
 hap-parser = "=0.2.0"
 ffmpeg-next = { version = "=8.1.0", default-features = false }

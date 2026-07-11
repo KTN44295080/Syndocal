@@ -2,6 +2,8 @@ use protocol::ClockSource;
 
 pub mod artnet;
 pub mod midi;
+#[cfg(feature = "ndi")]
+pub mod ndi;
 pub mod osc;
 pub mod remote_ws;
 pub mod sacn;

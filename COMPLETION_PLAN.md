@@ -124,9 +124,12 @@ CPU プレビューを wgpu 実出力に置き換える。**照明エンジン�
 - **M3 完了 (2026-07-11)**: ネイティブwgpu出力、HAP優先+libavインプロセスデコード、圧縮テクスチャ直接アップロード、固定バッファ、UI診断、Windows実GPU性能ゲートまで完了。macOS/Linuxのネイティブ実行証跡とFFmpeg共有ライブラリ同梱はM6が所有する。
 
 ### M4 — 外部 I/O 仕上げ(1〜2 週、M3 と並行可)
-- [ ] NDI: `crates/io` に NDI SDK バインディング(feature flag `ndi` でビルド切替)。既存のプレースホルダルート/Blocked 表示をそのまま実配線に昇格。
-- [ ] 決定事項 D2: Spout(Windows)を v1.0 に含めるか。含めるなら wgpu の D3D11 相互運用が前提なので M3 完了後。Syphon(macOS)は任意機能とし、未搭載でも共通のDisplay/NDI出力とmacOS本体は完全動作させる。
-- [ ] Enttec Open DMX: FTDI ブレークタイミングの改善(専用送信スレッド + 高精度タイマ)。PRO/DMXKing 推奨の UI ヒントは維持。
+- [x] NDI: `crates/io` に NDI SDK バインディング(feature flag `ndi` でビルド切替)。既存のプレースホルダルート/Blocked 表示をそのまま実配線に昇格。(2026-07-12)
+  - `grafton-ndi` 0.11.0をRust 1.86互換で固定。受信は専用探索/キャプチャワーカー + 最新2フレーム、送信はCompositionの60Hz参照合成ワーカー。NDI入力は通常動画/HAPと同じFrameDecoder境界へ接続した。
+  - Windows NDI 6 SDKでfeatureビルド、I/O 67件、Tauri 148件、ローカル送信→探索→RGBA受信ループバックを確認。macOS/Linux SDKリンクはM6のホスト別リリースゲートで確認する。
+- [x] 決定事項 D2: v1.0は共通のDisplay + NDIを対象とする。D3D11/Metal固有のSpout/Syphonはv1.1候補とし、v1.0 UIでは診断付きUnavailableを維持する。(2026-07-12)
+- [x] Enttec Open DMX: FTDI ブレークタイミングの改善(専用送信スレッド + 高精度タイマ)。PRO/DMXKing 推奨の UI ヒントは維持。(2026-07-12)
+  - エンジン44Hz経路はbounded latest-frame mailboxへの非ブロッキングpublishだけを行い、break/MAB/513-byte writeは専用ワーカーへ分離。波形の実機測定は下記テストマトリクス項目に残す。
 - [ ] 実機テストマトリクス作成: 手持ちのノード/インターフェースで Art-Net、sACN(マルチキャスト)、シリアルを各 1 回以上実測し、結果を記録。
 - [ ] プラットフォーム境界: Spout(Windows)、Syphon(macOS)、シリアル/優先度制御を `cfg` + feature の背後に隔離し、利用不能な機能は診断付きで無効化する。未導入SDKや未対応デバイスがアプリ起動を妨げない。
 - 検証ゲート: `cargo test -p io`、実機 or ループバック計測記録、feature flag なしビルドが従来どおり green。
@@ -168,7 +171,7 @@ CPU プレビューを wgpu 実出力に置き換える。**照明エンジン�
 ## 5. 要決定事項(ユーザ判断待ちリスト)
 
 - **D1 — 動画デコード方式**: (a) libav バインディング / (b) HAP 優先 / (c) CLI 据え置き最適化。推奨: (b) を先行し、H.264 等は (a) を後続スライスで。
-- **D2 — Spout/Syphon の v1.0 スコープ**: 推奨: Spout は M3 完了後に判断、Syphon は scope 外。
+- **D2 — Spout/Syphon の v1.0 スコープ**: 決定済み(2026-07-12)。v1.0はDisplay + NDI。Spout/Syphonはv1.1候補。
 - **D3 — コード署名**: 証明書取得の有無。
 - **D4 — UI 言語**: 現在英語 UI。日本語化(i18n)を v1.0 に含めるか。含めるなら M2 で文字列外出しだけ先行しておくこと。
 - **D5 — Undo システム**: 破壊的操作の Undo を v1.0 に入れるか、確認ダイアログ統一で代替するか。推奨: v1.0 は確認統一、Undo は v1.1。
