@@ -145,10 +145,10 @@ CPU プレビューを wgpu 実出力に置き換える。**照明エンジン�
 - 検証ゲート: ソーク記録、`engine_telemetry_budget_report*` green、負荷時 budget pass。
 
 ### M6 — リリース準備(1 週)
-- [ ] バージョニング確定(v1.0.0)、`tauri.conf.json` / `package.json` / Cargo メタデータ整合。
-- [ ] GitHub Actions または同等CIに `windows-latest` / `macos-latest` / `ubuntu-22.04` のマトリクスを用意し、Rustテスト、フロントエンドビルド、Tauriコンパイルを継続検証する。
+- [x] バージョニング確定(v1.0.0)、`tauri.conf.json` / `package.json` / Cargo workspaceメタデータ整合。`check:release`で回帰検証。
+- [x] GitHub ActionsにWindows 2022 / macOS 13 / Ubuntu 22.04マトリクスを用意し、Rust workspace/libavテスト、フロントビルド、Tauriチェック、OS別bundle、artifact保存を継続検証する。
 - [ ] Windows NSIS/MSI、macOS `.app`/DMG、Linux AppImageまたは`.deb`を生成し、製品名・`.sdc`関連付け・アイコン・発行者名(Seraf()のKTN)を確認する。
-- [ ] コード署名/公証の要否決定(D3)。未署名ならWindows SmartScreenとmacOS Gatekeeperの手順をREADMEに明記する。
+- [x] コード署名/公証(D3): v1.0個人配布は未署名で確定。Windows SmartScreen/macOS Gatekeeperの起動手順と、正式公開前に必要な証明書/Apple notarizationをREADMEへ明記する。
 - [ ] ドキュメント一括更新: README(ユーザ向け)、samples/README.md、ホットキー一覧、既知の制限(Spout/Syphon 等)。
 - [ ] 最終 QA パス: 本計画書 §1 の Definition of Done を上から全チェック。
 - 検証ゲート: クリーンな Windows / macOS 環境でインストーラから起動 → Run Smoke green。Linux は Ubuntu 22.04 のクリーン環境でパッケージ起動 → Run Smoke green。

@@ -1,11 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Syndocal",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "identifier": "jp.seraf.ktn.syndocal",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "beforeBuildCommand": "pnpm build",
+    "beforeBundleCommand": "pnpm prepare:runtime-libs",
     "devUrl": "http://localhost:5173",
     "frontendDist": "../dist"
   },
@@ -25,9 +26,12 @@
     }
   },
   "bundle": {
-    "active": false,
+    "active": true,
     "publisher": "Seraf()のKTN",
     "copyright": "Copyright (c) 2026 Seraf()のKTN",
+    "category": "Music",
+    "shortDescription": "Unified DMX lighting and live video control",
+    "longDescription": "Syndocal drives DMX lighting and live video from a shared timeline, cue system, BPM clock, and effect engine.",
     "targets": "all",
     "fileAssociations": [
       {
@@ -38,6 +42,24 @@
         "mimeType": "application/x-syndocal-project"
       }
     ],
-    "icon": []
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["Japanese", "English"]
+      },
+      "wix": {
+        "language": "ja-JP"
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    }
   }
 }

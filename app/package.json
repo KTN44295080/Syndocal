@@ -1,7 +1,7 @@
 {
   "name": "syndocal",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "author": "Seraf()のKTN",
   "type": "module",
   "scripts": {
@@ -12,10 +12,12 @@
     "check:empty-states": "node scripts/check-empty-state-guidance.mjs",
     "check:effect-draft": "node scripts/check-effect-draft-helpers.mjs",
     "check:project-storage": "node scripts/check-project-storage-helpers.mjs",
+    "check:release": "node scripts/check-release-metadata.mjs",
     "check:status": "node scripts/check-status-model.mjs",
     "check:terminology": "node scripts/check-ui-terminology.mjs",
     "check:timeline-automation": "node scripts/check-timeline-automation-helpers.mjs",
     "check:viewport": "node scripts/check-viewport-containment.mjs",
+    "prepare:runtime-libs": "node scripts/prepare-release-runtime.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

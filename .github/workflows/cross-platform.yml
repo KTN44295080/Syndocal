@@ -110,3 +110,26 @@ jobs:
 
       - name: Check Tauri application
         run: cargo check -p syndocal --features libav --locked
+
+      - name: Check release metadata
+        run: pnpm --dir app run check:release
+
+      - name: Bundle Windows installers
+        if: runner.os == 'Windows'
+        run: pnpm --dir app tauri build --ci --bundles nsis,msi
+
+      - name: Bundle macOS application
+        if: runner.os == 'macOS'
+        run: pnpm --dir app tauri build --ci --bundles app,dmg
+
+      - name: Bundle Linux packages
+        if: runner.os == 'Linux'
+        run: pnpm --dir app tauri build --ci --bundles deb,appimage
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: syndocal-1.0.0-${{ matrix.os }}
+          path: target/release/bundle/**
+          if-no-files-found: error
+          retention-days: 14
