@@ -394,6 +394,10 @@ async function measure(client, label) {
     const layoutRect = layout ? layout.getBoundingClientRect() : null;
     const compactMappingStage = document.querySelector('.layoutSetup.setupMode-patch .mappingVisualizer.compact .visualizerStage');
     const compactMappingStageRect = compactMappingStage?.getBoundingClientRect() ?? null;
+    const videoSetupSidebar = document.querySelector('.videoSetupPanel .videoSetupSidebar');
+    const videoSetupSidebarRect = videoSetupSidebar?.getBoundingClientRect() ?? null;
+    const videoSetupOutputDesk = document.querySelector('.videoSetupPanel .videoSetupOutputDesk');
+    const videoSetupOutputDeskRect = videoSetupOutputDesk?.getBoundingClientRect() ?? null;
     window.scrollTo(9999, 9999);
     await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
     const movedX = window.scrollX;
@@ -472,6 +476,8 @@ async function measure(client, label) {
       visibleDmxFixtureBlockCount: visibleCount('.dmxPatchFixtureBlock'),
       compactMappingStageWidth: compactMappingStageRect ? Math.round(compactMappingStageRect.width) : 0,
       compactMappingStageHeight: compactMappingStageRect ? Math.round(compactMappingStageRect.height) : 0,
+      videoSetupSidebarWidth: videoSetupSidebarRect ? Math.round(videoSetupSidebarRect.width) : 0,
+      videoSetupOutputDeskWidth: videoSetupOutputDeskRect ? Math.round(videoSetupOutputDeskRect.width) : 0,
       visibleDmxGridSummaryCount: visibleCount('.dmxGridSummary'),
       visibleFixtureSetupEditorCount: visibleCount('.fixtureSetupEditor'),
       visibleUseProfileForPatchButtonCount: [...document.querySelectorAll('.fixtureSetupEditor button')]
@@ -918,6 +924,8 @@ function hasExpectedSetupSurface(result) {
   if (result.label.startsWith("setup-video-")) {
     return (
       result.visibleSetupVideoPanelCount >= 1 &&
+      result.videoSetupSidebarWidth >= 220 &&
+      result.videoSetupOutputDeskWidth >= 780 &&
       result.visibleSetupVideoOutputDeckCount >= 1 &&
       result.visibleSetupVideoOutputActiveDeckCount >= 1 &&
       result.visibleSetupVideoOutputDetailPaneCount >= 1 &&

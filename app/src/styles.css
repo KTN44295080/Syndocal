@@ -13274,6 +13274,107 @@ h3 {
   max-width: none;
 }
 
+.layoutSetup.setupMode-video > .videoSetupPanel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.videoSetupWorkbench {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 5px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.videoSetupSidebar {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  border-right: 1px solid #39342f;
+  padding-right: 5px;
+}
+
+.videoSetupOutputDesk {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.videoSetupOutputDesk > .videoOutputSetupShell {
+  grid-template-columns: minmax(180px, 0.28fr) minmax(0, 1fr);
+  height: 100%;
+  overflow: hidden;
+}
+
+.videoSetupOutputDesk .videoOutputDetailPane {
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.videoSetupDisclosure {
+  min-width: 0;
+  border: 1px solid #3b3631;
+  background: #211e1b;
+}
+
+.videoSetupDisclosure > summary {
+  min-height: 29px;
+  cursor: pointer;
+  color: #d8d0c9;
+  padding: 7px 9px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.videoSetupDisclosure[open] > summary {
+  border-bottom: 1px solid #3b3631;
+  background: #292521;
+}
+
+.videoSetupDisclosure .videoCompositionForm,
+.videoSetupDisclosure .videoOutputForm {
+  gap: 5px;
+  border-top: 0;
+  padding: 7px;
+}
+
+.videoSetupSidebar .compositionList {
+  gap: 3px;
+}
+
+.videoSetupSidebar .compositionItem {
+  gap: 4px;
+  min-height: 40px;
+  border-color: #393530;
+  border-radius: 2px;
+  background: #181715;
+  padding: 6px;
+}
+
+.videoSetupSidebar .compositionHeader {
+  display: grid;
+  gap: 2px;
+}
+
+.videoSetupSidebar .compositionHeader strong,
+.videoSetupSidebar .compositionHeader span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.videoSetupSidebar .compositionHeader span {
+  font-size: 9px;
+}
+
 .layoutSetup.setupMode-patch > .setup {
   grid-column: 1;
 }

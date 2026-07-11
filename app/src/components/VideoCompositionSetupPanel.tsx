@@ -90,8 +90,9 @@ export function VideoCompositionSetupPanel(props: VideoCompositionSetupPanelProp
           )}
         </For>
       </div>
-      <div class="videoCompositionForm">
-        <h3>Composition</h3>
+      <details class="videoSetupDisclosure">
+        <summary>New Composition</summary>
+        <div class="videoCompositionForm">
         <label>
           Name
           <input value={props.draftLabel} onInput={(event) => props.onDraftLabel(event.currentTarget.value)} />
@@ -113,7 +114,8 @@ export function VideoCompositionSetupPanel(props: VideoCompositionSetupPanelProp
         <button class="primary" onClick={() => void props.onAddComposition()}>
           Add Composition
         </button>
-      </div>
+        </div>
+      </details>
     </>
   );
 }

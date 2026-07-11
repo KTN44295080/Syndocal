@@ -25,8 +25,9 @@ type VideoOutputCreatePanelProps = {
 
 export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
   return (
-    <div class="videoOutputForm">
-      <h3>Video Output</h3>
+    <details class="videoSetupDisclosure">
+      <summary>New Output</summary>
+      <div class="videoOutputForm">
       <div class="split">
         <label>
           Output label
@@ -83,6 +84,7 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
       <button class="primary" onClick={() => void props.onAddOutput()}>
         Add Output
       </button>
-    </div>
+      </div>
+    </details>
   );
 }
