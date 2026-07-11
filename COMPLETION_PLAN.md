@@ -125,7 +125,7 @@ CPU プレビューを wgpu 実出力に置き換える。**照明エンジン�
 
 ### M4 — 外部 I/O 仕上げ(1〜2 週、M3 と並行可)
 - [x] NDI: `crates/io` に NDI SDK バインディング(feature flag `ndi` でビルド切替)。既存のプレースホルダルート/Blocked 表示をそのまま実配線に昇格。(2026-07-12)
-  - `grafton-ndi` 0.11.0をRust 1.86互換で固定。受信は専用探索/キャプチャワーカー + 最新2フレーム、送信はCompositionの60Hz参照合成ワーカー。NDI入力は通常動画/HAPと同じFrameDecoder境界へ接続した。
+  - `grafton-ndi` 0.11.0を安定版Rustで検証。受信は専用探索/キャプチャワーカー + 最新2フレーム、送信はCompositionの60Hz参照合成ワーカー。NDI入力は通常動画/HAPと同じFrameDecoder境界へ接続した。
   - Windows NDI 6 SDKでfeatureビルド、I/O 67件、Tauri 148件、ローカル送信→探索→RGBA受信ループバックを確認。macOS/Linux SDKリンクはM6のホスト別リリースゲートで確認する。
 - [x] 決定事項 D2: v1.0は共通のDisplay + NDIを対象とする。D3D11/Metal固有のSpout/Syphonはv1.1候補とし、v1.0 UIでは診断付きUnavailableを維持する。(2026-07-12)
 - [x] Enttec Open DMX: FTDI ブレークタイミングの改善(専用送信スレッド + 高精度タイマ)。PRO/DMXKing 推奨の UI ヒントは維持。(2026-07-12)

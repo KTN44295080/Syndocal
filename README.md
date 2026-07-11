@@ -89,7 +89,7 @@ v1.0の個人配布物はコード署名されていません。
 
 必要環境:
 
-- Rust 1.86.0 (リポジトリの`rust-toolchain.toml`で固定)
+- Rust stable (`rust-toolchain.toml`で安定版チャネルを指定)
 - Node.js 22
 - pnpm 10.9
 - FFmpeg開発/共有ライブラリ (一般動画のlibav build)
