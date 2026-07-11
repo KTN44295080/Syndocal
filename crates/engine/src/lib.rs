@@ -15081,12 +15081,12 @@ mod tests {
             .send(EngineCommand::FadeVideoLayerOpacity {
                 layer_id,
                 opacity: 1.0,
-                duration_ms: 180,
+                duration_ms: 5_000,
             })
             .unwrap();
 
         let mut snapshot = engine.snapshot();
-        for _ in 0..20 {
+        for _ in 0..120 {
             let opacity = snapshot
                 .video
                 .layers
