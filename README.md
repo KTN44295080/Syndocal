@@ -143,4 +143,6 @@ Windowsの完全libav bundleでは`FFMPEG_DIR`を共有FFmpeg SDKルートへ設
 
 ## ライセンス
 
-[MIT License](LICENSE)
+Syndocal本体は[MIT License](LICENSE)です。一般動画デコード用の配布物は、
+GPLコンポーネントを無効化したFFmpeg 8.1共有ライブラリを動的リンクします。
+詳細とLGPLv3本文は[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)を参照してください。

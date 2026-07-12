@@ -57,18 +57,57 @@ jobs:
       - name: Install macOS video SDK
         if: runner.os == 'macOS'
         run: |
-          brew install ffmpeg llvm pkg-config
+          brew install ffmpeg llvm pkg-config xz
           echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
+
+      - name: Cache macOS LGPL FFmpeg runtime
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: ~/ffmpeg-lgpl-8.1.2
+          key: ffmpeg-lgpl-8.1.2-macos15-arm64-v1
+
+      - name: Build macOS LGPL FFmpeg runtime
+        if: runner.os == 'macOS'
+        run: |
+          prefix="$HOME/ffmpeg-lgpl-8.1.2"
+          if [[ ! -f "$prefix/lib/libavcodec.dylib" ]]; then
+            archive="$RUNNER_TEMP/ffmpeg-8.1.2.tar.xz"
+            source_dir="$RUNNER_TEMP/ffmpeg-8.1.2"
+            curl --fail --location --retry 3 \
+              https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz \
+              --output "$archive"
+            tar -xf "$archive" -C "$RUNNER_TEMP"
+            cd "$source_dir"
+            MACOSX_DEPLOYMENT_TARGET=12.0 ./configure \
+              --prefix="$prefix" \
+              --disable-programs \
+              --disable-doc \
+              --disable-debug \
+              --disable-gpl \
+              --enable-version3 \
+              --disable-static \
+              --enable-shared \
+              --enable-pic \
+              --extra-cflags=-mmacosx-version-min=12.0 \
+              --extra-ldflags=-mmacosx-version-min=12.0
+            make -j3
+            make install
+          fi
+          echo "FFMPEG_PREFIX=$prefix" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$prefix/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "DYLD_LIBRARY_PATH=$prefix/lib" >> "$GITHUB_ENV"
+          echo "MACOSX_DEPLOYMENT_TARGET=12.0" >> "$GITHUB_ENV"
 
       - name: Install Windows video SDK
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $archive = Join-Path $env:RUNNER_TEMP 'ffmpeg-shared.7z'
+          $archive = Join-Path $env:RUNNER_TEMP 'ffmpeg-lgpl-shared.zip'
           $extract = Join-Path $env:RUNNER_TEMP 'ffmpeg-shared'
-          Invoke-WebRequest 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full-shared.7z' -OutFile $archive
-          & 7z x $archive "-o$extract" -y | Out-Null
-          $sdk = Get-ChildItem $extract -Directory -Filter 'ffmpeg-*-full_build-shared' | Select-Object -First 1 -ExpandProperty FullName
+          Invoke-WebRequest 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip' -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath $extract
+          $sdk = Get-ChildItem $extract -Directory -Filter 'ffmpeg-n8.1-*-win64-lgpl-shared*' | Select-Object -First 1 -ExpandProperty FullName
           if (-not $sdk) { throw 'The extracted FFmpeg SDK directory was not found.' }
           "FFMPEG_DIR=$sdk" >> $env:GITHUB_ENV
           "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
@@ -128,7 +167,11 @@ jobs:
 
       - name: Bundle macOS application
         if: runner.os == 'macOS'
-        run: pnpm --dir app tauri build --ci --bundles app,dmg
+        run: |
+          pnpm --dir app tauri build --ci --bundles app
+          bash app/scripts/bundle-macos-runtime.sh \
+            target/release/bundle/macos/Syndocal.app \
+            target/release/bundle/dmg
 
       - name: Bundle Linux packages
         if: runner.os == 'Linux'
@@ -150,7 +193,7 @@ jobs:
           test -n "$app_path"
           executable="$app_path/Contents/MacOS/syndocal"
           test -x "$executable"
-          "$executable" & process_id=$!
+          env -u DYLD_LIBRARY_PATH "$executable" & process_id=$!
           sleep 8
           kill -0 "$process_id"
           kill "$process_id"

@@ -33,6 +33,10 @@
     "shortDescription": "Unified DMX lighting and live video control",
     "longDescription": "Syndocal drives DMX lighting and live video from a shared timeline, cue system, BPM clock, and effect engine.",
     "targets": "all",
+    "resources": {
+      "../../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
+      "../../licenses/FFmpeg-LGPL-3.0.txt": "licenses/FFmpeg-LGPL-3.0.txt"
+    },
     "fileAssociations": [
       {
         "ext": ["sdc"],
