@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeSet, HashMap, HashSet},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Condvar, Mutex, RwLock,
+        Arc, Condvar, Mutex, RwLock, Weak,
     },
     thread,
     time::{Duration, Instant},
@@ -571,6 +571,7 @@ impl EngineCommand {
 
 #[derive(Clone)]
 pub struct EngineHandle {
+    _lifetime: Arc<EngineLifetime>,
     queue: Arc<ArrayQueue<QueuedEngineCommand>>,
     wake: Arc<EngineWake>,
     shared_telemetry: Arc<EngineSharedTelemetry>,
@@ -590,6 +591,41 @@ pub struct EngineHandle {
 struct QueuedEngineCommand {
     command: EngineCommand,
     queued_at: Instant,
+}
+
+struct EngineLifetime {
+    wake: Arc<EngineWake>,
+    thread: Mutex<Option<thread::JoinHandle<()>>>,
+}
+
+impl EngineLifetime {
+    fn new(wake: Arc<EngineWake>) -> Self {
+        Self {
+            wake,
+            thread: Mutex::new(None),
+        }
+    }
+
+    fn set_thread(&self, thread: thread::JoinHandle<()>) {
+        *self
+            .thread
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(thread);
+    }
+}
+
+impl Drop for EngineLifetime {
+    fn drop(&mut self) {
+        self.wake.notify_command();
+        if let Some(thread) = self
+            .thread
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+        {
+            let _ = thread.join();
+        }
+    }
 }
 
 struct EngineSharedTelemetry {
@@ -684,22 +720,31 @@ impl EngineHandle {
         let next_video_output_id = Arc::new(AtomicU64::new(1));
         let next_node_graph_id = Arc::new(AtomicU64::new(1));
         let next_stage_object_id = Arc::new(AtomicU64::new(1));
+        let lifetime = Arc::new(EngineLifetime::new(Arc::clone(&wake)));
 
         let runtime_queue = Arc::clone(&queue);
         let runtime_wake = Arc::clone(&wake);
         let runtime_shared_telemetry = Arc::clone(&shared_telemetry);
         let runtime_snapshot = Arc::clone(&snapshot);
-        thread::Builder::new()
+        let runtime_lifetime = Arc::downgrade(&lifetime);
+        let runtime_thread = thread::Builder::new()
             .name("syndocal-engine".to_string())
             .spawn(move || {
                 let _realtime_guard = realtime_thread::configure();
                 let mut runtime =
                     EngineRuntime::new_with_shared_telemetry(output, runtime_shared_telemetry);
-                runtime.run(runtime_queue, runtime_wake, runtime_snapshot);
+                runtime.run(
+                    runtime_queue,
+                    runtime_wake,
+                    runtime_snapshot,
+                    runtime_lifetime,
+                );
             })
             .expect("failed to start Syndocal engine thread");
+        lifetime.set_thread(runtime_thread);
 
         Self {
+            _lifetime: lifetime,
             queue,
             wake,
             shared_telemetry,
@@ -1630,10 +1675,14 @@ impl EngineRuntime {
         queue: Arc<ArrayQueue<QueuedEngineCommand>>,
         wake: Arc<EngineWake>,
         snapshot: Arc<RwLock<EngineSnapshot>>,
+        lifetime: Weak<EngineLifetime>,
     ) {
         let mut next_tick = Instant::now();
         let mut observed_wake_generation = wake.generation();
         loop {
+            if lifetime.upgrade().is_none() {
+                break;
+            }
             self.record_queue_depth(queue.len());
             self.consume_commands(&queue);
 
@@ -13246,6 +13295,24 @@ mod tests {
     }
 
     #[test]
+    fn engine_thread_stops_after_last_handle_is_dropped() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let lifetime = Arc::downgrade(&engine._lifetime);
+        let clone = engine.clone();
+
+        drop(engine);
+        assert!(lifetime.upgrade().is_some());
+
+        let started = Instant::now();
+        drop(clone);
+        assert!(lifetime.upgrade().is_none());
+        assert!(started.elapsed() < Duration::from_millis(100));
+    }
+
+    #[test]
     fn low_latency_dmx_tick_is_requested_only_for_lighting_commands() {
         assert!(EngineCommand::SetLightingMaster(0.5).requests_low_latency_dmx_tick());
         assert!(EngineCommand::Blackout(true).requests_low_latency_dmx_tick());
@@ -13484,9 +13551,11 @@ mod tests {
     #[test]
     fn queue_push_failure_telemetry_tracks_full_handle_queue() {
         let shared_telemetry = Arc::new(EngineSharedTelemetry::new());
+        let wake = Arc::new(EngineWake::new());
         let handle = EngineHandle {
+            _lifetime: Arc::new(EngineLifetime::new(Arc::clone(&wake))),
             queue: Arc::new(ArrayQueue::new(1)),
-            wake: Arc::new(EngineWake::new()),
+            wake,
             shared_telemetry: Arc::clone(&shared_telemetry),
             snapshot: Arc::new(RwLock::new(EngineSnapshot::default())),
             next_fixture_id: Arc::new(AtomicU64::new(1)),
