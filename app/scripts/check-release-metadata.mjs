@@ -9,6 +9,7 @@ const workspaceRoot = resolve(appRoot, "..");
 const read = (path) => readFileSync(resolve(workspaceRoot, path), "utf8");
 const appPackage = JSON.parse(read("app/package.json"));
 const tauri = JSON.parse(read("app/src-tauri/tauri.conf.json"));
+const updaterOverlay = JSON.parse(read("app/src-tauri/tauri.updater.conf.json"));
 
 if (appPackage.name !== "syndocal" || appPackage.version !== expectedVersion) {
   throw new Error("Frontend package metadata is not Syndocal 1.0.0.");
@@ -26,6 +27,31 @@ for (const icon of tauri.bundle.icon ?? []) {
   if (!existsSync(resolve(appRoot, "src-tauri", icon))) {
     throw new Error(`Configured bundle icon is missing: ${icon}`);
   }
+}
+
+const updaterDefaults = tauri.plugins?.updater;
+if (
+  typeof updaterDefaults !== "object" ||
+  updaterDefaults === null ||
+  updaterDefaults.pubkey !== "" ||
+  !Array.isArray(updaterDefaults.endpoints) ||
+  updaterDefaults.endpoints.length !== 0
+) {
+  throw new Error("Default updater metadata must remain disabled and contain no signing key or endpoint.");
+}
+if (updaterOverlay.bundle?.createUpdaterArtifacts !== true) {
+  throw new Error("Updater release overlay must enable signed updater artifacts.");
+}
+
+const bcdecLicenseSource = "../../licenses/bcdec_rs-MIT.txt";
+if (tauri.bundle.resources?.[bcdecLicenseSource] !== "licenses/bcdec_rs-MIT.txt") {
+  throw new Error("The bcdec_rs license is not configured as a bundle resource.");
+}
+if (!existsSync(resolve(appRoot, "src-tauri", bcdecLicenseSource))) {
+  throw new Error("The configured bcdec_rs license file is missing.");
+}
+if (!existsSync(resolve(workspaceRoot, "qa", "UPDATE_RELEASE_RUNBOOK.md"))) {
+  throw new Error("The signed updater release runbook is missing.");
 }
 
 const rootManifest = read("Cargo.toml");
@@ -47,4 +73,4 @@ for (const manifest of [
   }
 }
 
-console.log("release metadata ok: Syndocal 1.0.0 / .sdc / Seraf()のKTN");
+console.log("release metadata ok: Syndocal 1.0.0 / .sdc / signed updater overlay / Seraf()のKTN");

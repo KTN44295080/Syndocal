@@ -125,7 +125,7 @@ export function VideoTimelineAutomationPanel(props: VideoTimelineAutomationPanel
           disabled={props.layers.length === 0}
           onInput={(event) => props.onSetLayerId(Number(event.currentTarget.value))}
         >
-          <For each={props.layers}>{(layer) => <option value={layer.id}>{layer.label}</option>}</For>
+          <For each={props.layers}>{(layer) => <option data-no-localize value={layer.id}>{layer.label}</option>}</For>
         </select>
       </label>
       <div class="split">
@@ -301,7 +301,7 @@ export function VideoTimelineAutomationPanel(props: VideoTimelineAutomationPanel
                         })
                       }
                     >
-                      <For each={props.layers}>{(layer) => <option value={layer.id}>{layer.label}</option>}</For>
+                      <For each={props.layers}>{(layer) => <option data-no-localize value={layer.id}>{layer.label}</option>}</For>
                     </select>
                   </label>
                   <label>

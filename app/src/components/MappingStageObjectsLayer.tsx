@@ -40,11 +40,11 @@ export function MappingStageObjectsLayer(props: MappingStageObjectsLayerProps) {
               height={object.depth}
               fill={object.color}
             >
-              <title>{object.label} / {object.kind}</title>
+              <title data-no-localize>{object.label} / {object.kind}</title>
             </rect>
             <line x1={-object.width / 2} y1="0" x2={object.width / 2} y2="0" />
             <line x1="0" y1={-object.depth / 2} x2="0" y2={object.depth / 2} />
-            <text x={-object.width / 2 + 1} y={-object.depth / 2 - 1}>
+            <text data-no-localize x={-object.width / 2 + 1} y={-object.depth / 2 - 1}>
               {object.label}
             </text>
             <Show when={object.selected}>
@@ -62,7 +62,7 @@ export function MappingStageObjectsLayer(props: MappingStageObjectsLayerProps) {
                 r="1.8"
                 onPointerDown={(event) => props.onBeginRotate(event, object.id)}
               >
-                <title>Rotate {object.label}</title>
+                <title data-no-localize>Rotate {object.label}</title>
               </circle>
               <circle
                 class="stageObjectResizeHandle width"
@@ -71,7 +71,7 @@ export function MappingStageObjectsLayer(props: MappingStageObjectsLayerProps) {
                 r="1.7"
                 onPointerDown={(event) => props.onBeginResize(event, object.id, "width")}
               >
-                <title>Resize width of {object.label}</title>
+                <title data-no-localize>Resize width of {object.label}</title>
               </circle>
               <circle
                 class="stageObjectResizeHandle depth"
@@ -80,7 +80,7 @@ export function MappingStageObjectsLayer(props: MappingStageObjectsLayerProps) {
                 r="1.7"
                 onPointerDown={(event) => props.onBeginResize(event, object.id, "depth")}
               >
-                <title>Resize depth of {object.label}</title>
+                <title data-no-localize>Resize depth of {object.label}</title>
               </circle>
               <rect
                 class="stageObjectResizeHandle both"
@@ -90,7 +90,7 @@ export function MappingStageObjectsLayer(props: MappingStageObjectsLayerProps) {
                 height="3"
                 onPointerDown={(event) => props.onBeginResize(event, object.id, "both")}
               >
-                <title>Resize {object.label}</title>
+                <title data-no-localize>Resize {object.label}</title>
               </rect>
             </Show>
           </g>

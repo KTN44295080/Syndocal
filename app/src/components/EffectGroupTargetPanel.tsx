@@ -27,7 +27,7 @@ export function EffectGroupTargetPanel(props: EffectGroupTargetPanelProps) {
               const isActive = () => props.activeGroupIds.includes(group.groupId);
               return (
                 <button class={isActive() ? "groupChip active" : "groupChip"} onClick={() => props.onToggleGroup(group.groupId)}>
-                  {group.groupId}
+                  <span data-no-localize>{group.groupId}</span>
                   <span>{group.count}</span>
                 </button>
               );

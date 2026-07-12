@@ -189,13 +189,35 @@ export interface LearnedOscControl {
 export interface RemoteControlConfig {
   bind_ip: string;
   port: number;
+  pairing_pin: string;
+  allow_lan: boolean;
+  max_connections: number;
+  max_message_bytes: number;
+  max_messages_per_second: number;
+}
+
+export interface RemoteClientSummary {
+  id: number;
+  peer_addr: string;
+  connected_at_unix_ms: number;
+  last_activity_unix_ms: number;
+  messages_received: number;
+}
+
+export interface RemoteControlStatus {
+  running: boolean;
+  active_connections: number;
+  rejected_connections: number;
+  clients: RemoteClientSummary[];
 }
 
 export type ClockSource = "Manual" | "Tap" | "MidiClock" | "MidiTimecode" | "Ltc" | "AbletonLink";
 export type LfoShape = "Sine" | "Cosine" | "Triangle" | "Saw" | "Square" | "Random" | "Perlin";
 export type EffectKind = "Lfo" | "PositionWave";
 export type EffectBlendMode = "Override" | "Add" | "Multiply";
-export type NodeGraphNodeKind = "Lfo" | "PositionWave" | "Transform" | "Output";
+export type NodeGraphNodeKind = "Lfo" | "PositionWave" | "Audio" | "Transform" | "Output";
+export type AudioSpectrumBand = "Bass" | "Mid" | "High";
+export type AudioSpectrumSource = "Timeline" | "Live";
 export type NodeGraphTransformOp = "Scale" | "Offset" | "Clamp" | "Invert" | "Abs";
 
 export interface DmxModeSummary {
@@ -289,6 +311,13 @@ export interface AudioWaveformPoint {
   rms: number;
 }
 
+export interface AudioSpectrumPoint {
+  time_ms: number;
+  bass: number;
+  mid: number;
+  high: number;
+}
+
 export interface AudioAnalysisSummary {
   path: string;
   sample_rate: number;
@@ -296,6 +325,7 @@ export interface AudioAnalysisSummary {
   duration_ms: number;
   estimated_bpm?: number | null;
   waveform: AudioWaveformPoint[];
+  spectrum: AudioSpectrumPoint[];
   beats: number[];
 }
 
@@ -562,6 +592,7 @@ export interface NodeGraphNodeSummary {
   y: number;
   lfo?: NodeGraphLfoNode | null;
   position_wave?: NodeGraphPositionWaveNode | null;
+  audio?: NodeGraphAudioNode | null;
   transform?: NodeGraphTransformNode | null;
   output?: NodeGraphOutputNode | null;
 }
@@ -599,6 +630,65 @@ export interface ProjectLoadResult {
   profiles: FixtureProfileSummary[];
 }
 
+export interface UserTemplateLoadResult extends ProjectLoadResult {
+  label: string;
+  midi_mappings: MidiControlMapping[];
+  osc_mappings: OscControlMapping[];
+}
+
+export interface NodeGraphAudioNode {
+  source?: AudioSpectrumSource;
+  band: AudioSpectrumBand;
+  gain: number;
+  bias: number;
+}
+
+export interface ProjectBackupSummary {
+  id: number;
+  created_at_unix_ms: number;
+  source_path?: string | null;
+  reason: string;
+  bytes: number;
+}
+
+export interface ApplicationUpdateConfiguration {
+  enabled: boolean;
+  current_version: string;
+  channel: string;
+  endpoint_origin?: string | null;
+  reason?: string | null;
+}
+
+export interface ApplicationUpdateCheck {
+  available: boolean;
+  current_version: string;
+  channel: string;
+  version?: string | null;
+  date?: string | null;
+  notes?: string | null;
+}
+
+export interface ApplicationUpdateProgress {
+  phase: "downloading" | "verifying" | "verified";
+  downloaded_bytes: number;
+  total_bytes?: number | null;
+}
+
+export interface ProjectHistoryStatus {
+  can_undo: boolean;
+  can_redo: boolean;
+  undo_depth: number;
+  redo_depth: number;
+  undo_label?: string | null;
+  redo_label?: string | null;
+}
+
+export interface EngineSnapshotSyncResponse {
+  revision: number;
+  full?: EngineSnapshot | null;
+  delta?: Partial<EngineSnapshot> | null;
+}
+
 export interface Phase1SmokeReport {
   path: string;
   cue_id: number;
@@ -630,7 +720,7 @@ export interface CueFixtureTarget {
   values: AttributeValueSummary[];
 }
 
-export type VideoSourceKind = "File" | "Ndi" | "Spout" | "Syphon" | "StillImage";
+export type VideoSourceKind = "File" | "Camera" | "ScreenCapture" | "Ndi" | "Spout" | "Syphon" | "StillImage";
 
 export interface VideoSourceSummary {
   kind: VideoSourceKind;
@@ -645,6 +735,7 @@ export interface VideoMediaMetadata {
   width?: number | null;
   height?: number | null;
   frame_rate?: number | null;
+  has_audio?: boolean;
 }
 
 export type VideoBlendMode = "Normal" | "Add" | "Multiply" | "Screen";
@@ -671,6 +762,45 @@ export interface VideoBackendStatus {
 
 export interface VideoRuntimeStatus {
   backends: VideoBackendStatus[];
+}
+
+export interface VideoAudioMonitorStatus {
+  output_open: boolean;
+  device_name?: string | null;
+  active_layer_ids: number[];
+  resync_count: number;
+  last_drift_ms: number;
+  max_abs_drift_ms: number;
+  last_sync_error?: string | null;
+}
+
+export interface VideoRecordingStatus {
+  active: boolean;
+  output_id?: number | null;
+  path?: string | null;
+  width: number;
+  height: number;
+  frame_rate: number;
+  frames_written: number;
+  dropped_frames: number;
+  audio_requested: boolean;
+  audio_included: boolean;
+  audio_track_count: number;
+  started_unix_ms?: number | null;
+  last_error?: string | null;
+}
+
+export interface LiveAudioInputStatus {
+  running: boolean;
+  device_name?: string | null;
+  sample_rate: number;
+  channels: number;
+  bass: number;
+  mid: number;
+  high: number;
+  analyzed_windows: number;
+  dropped_chunks: number;
+  last_error?: string | null;
 }
 
 export interface VideoPreviewQueueSummary {
@@ -715,6 +845,8 @@ export interface VideoPreviewDiagnostics {
   still_image_cache_len: number;
   decoder_cache_len: number;
   decoder_diagnostics: VideoDecoderDiagnostics;
+  isf_pipeline_count: number;
+  last_isf_error?: string | null;
   prefetch_count: number;
   prefetch_interval_ms: number;
   bpm?: number | null;
@@ -886,12 +1018,36 @@ export interface VideoLayerState {
   fx: VideoFxAdjust;
 }
 
+export type VideoIsfControlKind = "Event" | "Bool" | "Long" | "Float" | "Point2d" | "Color";
+
+export interface VideoIsfControlSummary {
+  name: string;
+  kind: VideoIsfControlKind;
+  value: [number, number, number, number];
+  default: [number, number, number, number];
+  minimum: [number, number, number, number];
+  maximum: [number, number, number, number];
+  labels: string[];
+  values: number[];
+}
+
+export interface VideoIsfEffectSummary {
+  enabled: boolean;
+  label: string;
+  source: string;
+  source_path?: string | null;
+  description?: string | null;
+  categories: string[];
+  controls: VideoIsfControlSummary[];
+}
+
 export interface VideoLayerSummary {
   id: number;
   label: string;
   source: VideoSourceSummary;
   blend_mode: VideoBlendMode;
   state: VideoLayerState;
+  isf_effect?: VideoIsfEffectSummary | null;
 }
 
 export interface VideoLayerTarget {
@@ -909,6 +1065,11 @@ export interface VideoOutputTarget {
 export type VideoOutputKind = "Display" | "NdiSender" | "SpoutSender" | "SyphonServer";
 export type VideoOutputAspectMode = "Stretch" | "Fit" | "Fill";
 
+export interface VideoMaskPoint {
+  x: number;
+  y: number;
+}
+
 export interface VideoOutputMapping {
   stage_x: number;
   stage_y: number;
@@ -921,6 +1082,19 @@ export interface VideoOutputMapping {
   aspect_ratio: number;
   aspect_mode: VideoOutputAspectMode;
   lens_distortion: number;
+  edge_blend_left: number;
+  edge_blend_right: number;
+  edge_blend_top: number;
+  edge_blend_bottom: number;
+  edge_blend_gamma: number;
+  black_level: number;
+  mask_point_count: number;
+  mask_invert: boolean;
+  mask_softness: number;
+  mask_points: VideoMaskPoint[];
+  bitmap_mask_width: number;
+  bitmap_mask_height: number;
+  bitmap_mask_luma_words: number[];
   keystone_x: number;
   keystone_y: number;
   corner_top_left_x: number;
@@ -931,6 +1105,13 @@ export interface VideoOutputMapping {
   corner_bottom_right_y: number;
   corner_bottom_left_x: number;
   corner_bottom_left_y: number;
+}
+
+export interface VideoBitmapMaskImportResult {
+  width: number;
+  height: number;
+  luma_words: number[];
+  source_name: string;
 }
 
 export interface VideoOutputSummary {
@@ -1050,8 +1231,19 @@ export interface VideoSnapshot {
 
 export interface CueSummary {
   id: number;
+  cue_list_id: number;
+  cue_number: string;
   label: string;
   fade_ms: number;
+  pre_wait_ms: number;
+  follow_ms?: number | null;
+  ifcb_timing: CueIfcbTiming;
+  parts: CuePartSummary[];
+  mark: boolean;
+  mib_fixture_ids: number[];
+  palette_targets: CuePaletteTarget[];
+  tracking: boolean;
+  notes: string;
   targets: CueFixtureTarget[];
   video_targets: VideoLayerTarget[];
   video_output_targets: VideoOutputTarget[];
@@ -1243,6 +1435,141 @@ export interface DmxOutputConfig {
   serial_baud_rate: number;
 }
 
+export interface ProgrammerValueSummary {
+  fixture_id: number;
+  attribute: string;
+  value: number;
+}
+
+export interface ProgrammerSnapshot {
+  enabled: boolean;
+  blind: boolean;
+  values: ProgrammerValueSummary[];
+  dmx_previews: DmxUniversePreview[];
+}
+
+export interface CuePartSummary {
+  number: number;
+  label: string;
+  delay_ms: number;
+  fade_ms?: number | null;
+  fixture_ids: number[];
+  video_layer_ids: number[];
+  video_output_ids: number[];
+}
+
+export interface CueListSummary {
+  id: number;
+  label: string;
+  active_cue_id?: number | null;
+}
+
+export type PaletteKind = "Intensity" | "Position" | "Color" | "Beam" | "All";
+
+export interface ReferencePaletteSummary {
+  id: number;
+  label: string;
+  kind: PaletteKind;
+  values: AttributeValueSummary[];
+}
+
+export interface PlaybackExecutorSummary {
+  id: number;
+  label: string;
+  cue_list_id: number;
+  page: number;
+  slot: number;
+  level: number;
+}
+
+export interface CuePaletteTarget {
+  palette_id: number;
+  fixture_ids: number[];
+}
+
+export interface CueIfcbTiming {
+  intensity_fade_ms?: number | null;
+  intensity_delay_ms: number;
+  focus_fade_ms?: number | null;
+  focus_delay_ms: number;
+  color_fade_ms?: number | null;
+  color_delay_ms: number;
+  beam_fade_ms?: number | null;
+  beam_delay_ms: number;
+}
+
+export type DmxInputProtocol = "ArtNet" | "Sacn";
+export type DmxMergeMode = "Htp" | "Ltp";
+
+export interface DmxInputConfig {
+  protocol: DmxInputProtocol;
+  bind_ip: string;
+  port: number;
+  universe: number;
+  merge_mode: DmxMergeMode;
+  timeout_ms: number;
+}
+
+export interface DmxInputStatus {
+  running: boolean;
+  signal_present: boolean;
+  packets_received: number;
+  invalid_packets: number;
+  last_packet_unix_ms?: number | null;
+  source_address?: string | null;
+}
+
+export interface ArtRdmRequest {
+  gateway_ip: string;
+  port_address: number;
+  source_uid: string;
+  target_uid: string;
+  command: "Get" | "Set";
+  parameter_id: number;
+  parameter_data_hex: string;
+  timeout_ms: number;
+}
+
+export interface UsbRdmRequest {
+  serial_port: string;
+  serial_baud_rate: number;
+  source_uid: string;
+  target_uid: string;
+  command: "Get" | "Set";
+  parameter_id: number;
+  parameter_data_hex: string;
+  timeout_ms: number;
+}
+
+export interface ArtRdmDeviceInfoResponse {
+  protocol_version: number;
+  model_id: number;
+  product_category: number;
+  software_version_id: number;
+  dmx_footprint: number;
+  current_personality: number;
+  personality_count: number;
+  dmx_start_address: number;
+  sub_device_count: number;
+  sensor_count: number;
+}
+
+export interface ArtRdmResponse {
+  source_uid: string;
+  destination_uid: string;
+  command_class: string;
+  parameter_id: number;
+  parameter_data_hex: string;
+  response_type: "Ack" | "AckTimer" | "NackReason" | "AckOverflow";
+  response_blocks: number;
+  ack_timer_count: number;
+  queued_message_polls: number;
+  nack_reason?: number | null;
+  fifo_available: number;
+  fifo_max: number;
+  device_info?: ArtRdmDeviceInfoResponse | null;
+}
+
 export interface DmxTestFrameResult {
   protocol: DmxOutputProtocol;
   universe: number;
@@ -1259,6 +1586,11 @@ export interface DmxOutputRouteTelemetry {
   success: boolean;
   bytes: number;
   error?: string | null;
+  consecutive_failures: number;
+  reconnect_attempts: number;
+  reconnecting: boolean;
+  retry_in_ms?: number | null;
+  last_success_unix_ms?: number | null;
 }
 
 export type TelemetryBudgetStatus = "Pass" | "Warn" | "Fail" | "InsufficientSamples" | "Idle";
@@ -1344,8 +1676,13 @@ export interface StageMapPresetSummary {
 export interface EngineSnapshot {
   fixtures: PatchedFixtureSummary[];
   cues: CueSummary[];
+  cue_lists: CueListSummary[];
+  palettes: ReferencePaletteSummary[];
+  playback_executors: PlaybackExecutorSummary[];
+  playback_master: number;
   active_cue_id?: number | null;
   active_fade?: ActiveFadeSummary | null;
+  programmer: ProgrammerSnapshot;
   timeline: TimelineSnapshot;
   video: VideoSnapshot;
   effects: EffectSummary[];
@@ -1361,6 +1698,8 @@ export interface EngineSnapshot {
     beat_counter: number;
     tap_count: number;
     source: ClockSource;
+    external_sync_age_ms: number | null;
+    external_sync_locked: boolean;
   };
   stage_map: StageMapConfig;
   stage_map_presets: StageMapPresetSummary[];

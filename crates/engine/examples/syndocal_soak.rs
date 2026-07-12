@@ -61,6 +61,7 @@ fn run() -> Result<(), String> {
     let mut rendered_frames = 0_u64;
     let mut nonblank_frames = 0_u64;
     let mut dropped_frames = 0_u64;
+    let mut live_audio_updates = 0_u64;
     let mut render_errors = Vec::new();
 
     while started_at.elapsed() < duration {
@@ -82,6 +83,19 @@ fn run() -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             next_loop += Duration::from_millis(LOOP_MS);
         }
+
+        let live_phase = (live_audio_updates % 120) as f32 / 120.0;
+        engine
+            .send(EngineCommand::SetLiveAudioSpectrum(Some(
+                protocol::AudioSpectrumPoint {
+                    time_ms: 0,
+                    bass: (std::f32::consts::TAU * live_phase).sin().abs(),
+                    mid: (std::f32::consts::TAU * (live_phase + 0.333)).sin().abs(),
+                    high: (std::f32::consts::TAU * (live_phase + 0.666)).sin().abs(),
+                },
+            )))
+            .map_err(|e| e.to_string())?;
+        live_audio_updates = live_audio_updates.saturating_add(1);
 
         let snapshot = engine.snapshot();
         match renderer.render(&snapshot.video, 320, 180) {
@@ -133,6 +147,7 @@ fn run() -> Result<(), String> {
         "rendered_frames": rendered_frames,
         "nonblank_frames": nonblank_frames,
         "dropped_frames": dropped_frames,
+        "live_audio_updates": live_audio_updates,
         "frame_ratio": frame_ratio,
         "render_errors": render_errors,
         "telemetry_budget": {

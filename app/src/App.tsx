@@ -5,6 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { CueManagementPanel } from "./components/CueManagementPanel";
 import { AppStatusLine } from "./components/AppStatusLine";
+import { ArtRdmPanel } from "./components/ArtRdmPanel";
 import { CustomProfileEditorPanel } from "./components/CustomProfileEditorPanel";
 import {
   type DmxAddressCell,
@@ -13,6 +14,7 @@ import {
   type DmxUniverseMap,
 } from "./components/DmxPatchMapPanel";
 import { DmxOutputConfigPanel } from "./components/DmxOutputConfigPanel";
+import { DmxInputPanel } from "./components/DmxInputPanel";
 import { DmxRawMonitor } from "./components/DmxRawMonitor";
 import { EffectActionControlsPanel } from "./components/EffectActionControlsPanel";
 import { EffectGroupTargetPanel } from "./components/EffectGroupTargetPanel";
@@ -33,6 +35,9 @@ import { type OpticsControlEntry } from "./components/OpticsControlPanel";
 import { PatchFixtureFormPanel, type FixtureLayoutMode } from "./components/PatchFixtureFormPanel";
 import { type PositionFavorite } from "./components/PositionControlPanel";
 import { ProfileLoadPanel } from "./components/ProfileLoadPanel";
+import { ProgrammerPanel } from "./components/ProgrammerPanel";
+import { PlaybackExecutorPanel } from "./components/PlaybackExecutorPanel";
+import { ReferencePalettePanel } from "./components/ReferencePalettePanel";
 import { RemoteControlPanel } from "./components/RemoteControlPanel";
 import { SampleEffectPresetPanel, sampleEffectPresetSupportsTarget, type SampleEffectPreset } from "./components/SampleEffectPresetPanel";
 import { SetupMappingWorkspace } from "./components/SetupMappingWorkspace";
@@ -53,6 +58,11 @@ import { TouchRemotePanel } from "./components/TouchRemotePanel";
 import { TouchVideoPanel } from "./components/TouchVideoPanel";
 import type { TimelineOverviewAutomationRange, TimelineOverviewEvent } from "./components/TimelineOverview";
 import { WorkspaceChrome } from "./components/WorkspaceChrome";
+import {
+  defaultWorkspaceLayout,
+  loadWorkspaceLayout,
+  saveWorkspaceLayout,
+} from "./workspaceLayoutStorage";
 import { type ColorWheelFunctionEntry, type GoboSlotPattern, type GoboWheelFunctionEntry } from "./components/WheelSlotPanel";
 import {
   customProfileAttributeDraftChannelLabel,
@@ -76,19 +86,32 @@ import {
 } from "./dmxAddressing";
 import { confirmDestructiveAction } from "./destructiveActions";
 import type {
+  ApplicationUpdateCheck,
+  ApplicationUpdateConfiguration,
+  ApplicationUpdateProgress,
   AttributeControl,
   AttributeResolution,
+  ArtRdmRequest,
+  ArtRdmResponse,
   AudioAnalysisSummary,
+  AudioSpectrumBand,
+  AudioSpectrumSource,
   AutomationKeyframeSummary,
   AutomationInterpolation,
   CompositionSummary,
   CustomFixtureProfileRequest,
+  CueListSummary,
   CueSummary,
+  PaletteKind,
+  PlaybackExecutorSummary,
   DmxOutputConfig,
+  DmxInputConfig,
+  DmxInputStatus,
   EffectBlendMode,
   EffectKind,
   EffectSummary,
   EngineSnapshot,
+  EngineSnapshotSyncResponse,
   ExternalVideoIoPlans,
   ExternalVideoTransportDriverEvent,
   ExternalVideoTransportStatus,
@@ -101,6 +124,7 @@ import type {
   LearnedMidiControl,
   LearnedOscControl,
   LfoShape,
+  LiveAudioInputStatus,
   LfoEffectRequest,
   MidiControlAction,
   MidiControlMapping,
@@ -116,9 +140,14 @@ import type {
   PatchedFixtureSummary,
   Phase1SmokeReport,
   PositionWaveEffectRequest,
+  ProjectBackupSummary,
   ProjectFile,
+  ProjectHistoryStatus,
   ProjectLoadResult,
+  UserTemplateLoadResult,
+  ReferencePaletteSummary,
   RemoteControlConfig,
+  RemoteControlStatus,
   SerialPortSummary,
   StageMapConfig,
   StageMapPresetSummary,
@@ -129,8 +158,11 @@ import type {
   TimelineGroupAutomationAddResult,
   TimelineTrackKind,
   TimelineVideoAutomationSummary,
+  UsbRdmRequest,
   VideoAutomationKeyframeSummary,
+  VideoAudioMonitorStatus,
   VideoBlendMode,
+  VideoBitmapMaskImportResult,
   VideoDecoderDiagnostics,
   VideoFrame,
   VideoEffectTarget,
@@ -145,6 +177,7 @@ import type {
   VideoOutputWindowSyncSummary,
   VideoParam,
   VideoPreviewDiagnostics,
+  VideoRecordingStatus,
   VideoRuntimeStatus,
   VideoSourceKind,
   VisualizerRenderPayload,
@@ -194,6 +227,8 @@ import {
   type ControlCategory,
   type SetupSubTab,
   type WorkspaceTab,
+  type EditDeskSurface,
+  type TimelineDeskSurface,
 } from "./uiModes";
 import { projectSnapshotSignature } from "./projectSnapshot";
 import { effectDraftTargetPlan } from "./effectDraft";
@@ -362,6 +397,7 @@ import {
   videoSourceCanBrowseFile,
   videoSourceKindLabel,
 } from "./videoHelpers";
+import { clockSourceLabel, clockSyncStatusLabel, formatShowTimecode } from "./clockDisplay";
 import {
   fixtureFlagClearKinds,
   fixtureFlagMappingActions,
@@ -381,6 +417,12 @@ import {
 } from "./controlMappingActions";
 import { controlMappingTargetLabel } from "./controlMappingLabels";
 import { createControlInputController } from "./createControlInputController";
+import {
+  installUiLocalization,
+  loadUiLocale,
+  saveUiLocale,
+  type UiLocale,
+} from "./uiLocalization";
 import {
   draftRangeFromKeyframes,
   evaluateTimelineKeyframes,
@@ -405,11 +447,155 @@ const tauriBackendUnavailableMessage = "Syndocal desktop backend is not connecte
 const isTauriRuntime = () =>
   typeof window !== "undefined" && Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
 
-const invoke = <T,>(command: string, args?: Record<string, unknown>) => {
-  if (!isTauriRuntime()) {
-    return Promise.reject(new Error(tauriBackendUnavailableMessage));
+const projectHistoryChangedEvent = "syndocal:project-history-changed";
+
+const projectMutationCommands = new Set([
+  "analyze_audio_file",
+  "clear_timeline_audio",
+  "create_custom_fixture_profile",
+  "use_fixture_profile",
+  "patch_fixture",
+  "patch_fixtures",
+  "remove_fixture",
+  "set_fixture_patch",
+  "set_fixture_limits",
+  "set_group_fixture_limits",
+  "set_fixture_groups",
+  "set_attribute",
+  "set_group_attribute",
+  "commit_programmer",
+  "set_fixture_transform",
+  "set_stage_map_config",
+  "set_output_config",
+  "set_dmx_outputs",
+  "create_cue_from_current",
+  "create_cue_list",
+  "rename_cue_list",
+  "remove_cue_list",
+  "set_cue_list",
+  "create_reference_palette",
+  "update_reference_palette",
+  "remove_reference_palette",
+  "apply_reference_palette",
+  "set_cue_palette_targets",
+  "create_playback_executor",
+  "update_playback_executor",
+  "remove_playback_executor",
+  "update_cue_from_current",
+  "set_cue_metadata",
+  "move_cue",
+  "duplicate_cue",
+  "remove_cue",
+  "add_timeline_cue_event",
+  "set_timeline_cue_event",
+  "remove_timeline_event",
+  "add_timeline_automation",
+  "add_timeline_group_automation",
+  "set_timeline_automation",
+  "add_timeline_video_automation",
+  "set_timeline_video_automation",
+  "set_timeline_automation_enabled",
+  "remove_timeline_automation",
+  "add_video_file_layer",
+  "add_still_image_layer",
+  "add_local_media_layers",
+  "refresh_video_layer_metadata",
+  "add_video_input_layer",
+  "duplicate_video_layer",
+  "remove_video_layer",
+  "set_video_layer_order",
+  "set_video_layer_label",
+  "set_video_layer_state",
+  "set_video_layer_isf_effect",
+  "fade_video_layer_opacity",
+  "launch_video_clip",
+  "take_video_clip",
+  "set_video_ab_mix",
+  "stop_video_clip",
+  "add_video_cue_point",
+  "remove_video_cue_point",
+  "set_video_cue_point",
+  "set_video_layer_blend_mode",
+  "add_video_composition",
+  "remove_video_composition",
+  "set_video_composition_layers",
+  "add_video_output",
+  "remove_video_output",
+  "set_video_output_config",
+  "set_video_output_enabled",
+  "set_video_output_routing",
+  "set_video_output_opacity",
+  "fade_video_output_opacity",
+  "set_video_output_mapping",
+  "set_video_output_mapping_field",
+  "save_video_output_mapping_preset",
+  "apply_video_output_mapping_preset",
+  "remove_video_output_mapping_preset",
+  "load_video_output_mapping_preset_file",
+  "add_lfo_effect",
+  "add_position_wave_effect",
+  "update_lfo_effect",
+  "update_position_wave_effect",
+  "save_node_graph",
+  "set_node_graph_enabled",
+  "remove_node_graph",
+  "load_node_graph_preset_file",
+  "set_effect_enabled",
+  "set_effect_video_target_position",
+  "move_effect",
+  "duplicate_effect",
+  "remove_effect",
+  "load_effect_preset",
+  "load_effect_preset_for_target",
+  "load_sample_effect_preset",
+  "load_sample_effect_bundle",
+  "load_fixture_preset",
+  "load_fixture_preset_for_group",
+  "load_fixture_preset_for_all_matching",
+  "save_stage_map_preset",
+  "apply_stage_map_preset",
+  "remove_stage_map_preset",
+  "add_stage_object",
+  "set_stage_object",
+  "remove_stage_object",
+]);
+
+const projectMutationLabel = (command: string) =>
+  command
+    .split("_")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+
+const projectMutationCoalesceKey = (command: string, args?: Record<string, unknown>) => {
+  if (!/^(set|update|move|fade|refresh)_/.test(command) || !args) {
+    return "";
   }
-  return tauriInvoke<T>(command, args);
+  const targetEntries = Object.entries(args).filter(([key]) =>
+    /(id|ids|attribute|field|index|kind|scope|universe|channel|parameter)$/i.test(key),
+  );
+  return targetEntries.length > 0 ? `${command}:${JSON.stringify(Object.fromEntries(targetEntries))}` : "";
+};
+
+const invoke = async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
+  if (!isTauriRuntime()) {
+    throw new Error(tauriBackendUnavailableMessage);
+  }
+  if (!projectMutationCommands.has(command)) {
+    return tauriInvoke<T>(command, args);
+  }
+  const transactionId = await tauriInvoke<number>("begin_project_transaction", {
+    label: projectMutationLabel(command),
+    coalesceKey: projectMutationCoalesceKey(command, args),
+  });
+  try {
+    const result = await tauriInvoke<T>(command, args);
+    const status = await tauriInvoke<ProjectHistoryStatus>("commit_project_transaction", { transactionId });
+    window.dispatchEvent(new CustomEvent<ProjectHistoryStatus>(projectHistoryChangedEvent, { detail: status }));
+    return result;
+  } catch (error) {
+    await tauriInvoke("cancel_project_transaction", { transactionId }).catch(() => undefined);
+    throw error;
+  }
 };
 
 const listen = <T,>(event: string, handler: (event: { payload: T }) => void) => {
@@ -420,6 +606,16 @@ const listen = <T,>(event: string, handler: (event: { payload: T }) => void) => 
 };
 
 const isSyndocalProjectPath = (path: string) => path.trim().toLowerCase().endsWith(".sdc");
+const uiScaleStorageKey = "syndocal.uiScale.v1";
+type UiScale = 90 | 100 | 110;
+const loadUiScale = (): UiScale => {
+  try {
+    const value = Number.parseInt(localStorage.getItem(uiScaleStorageKey) ?? "100", 10);
+    return value === 90 || value === 110 ? value : 100;
+  } catch {
+    return 100;
+  }
+};
 
 const profileLoadMessage = (prefix: string, profile: FixtureProfileSummary) => {
   const warningSuffix =
@@ -465,6 +661,7 @@ export default function App() {
   }
 
   const setupPanelRefs: Partial<Record<SetupSubTab, HTMLElement>> = {};
+  const initialWorkspaceLayout = loadWorkspaceLayout();
   const [gdtfPath, setGdtfPath] = createSignal("");
   const [gdtfShareUrl, setGdtfShareUrl] = createSignal("");
   const [currentProjectPath, setCurrentProjectPath] = createSignal<string | null>(null);
@@ -474,12 +671,31 @@ export default function App() {
   const [projectRecoveryCheckpoint, setProjectRecoveryCheckpoint] = createSignal<ProjectRecoveryCheckpoint | null>(
     loadProjectRecoveryCheckpoint(),
   );
+  const [projectBackups, setProjectBackups] = createSignal<ProjectBackupSummary[]>([]);
+  const [applicationUpdateConfiguration, setApplicationUpdateConfiguration] =
+    createSignal<ApplicationUpdateConfiguration | null>(null);
+  const [applicationUpdateCheck, setApplicationUpdateCheck] = createSignal<ApplicationUpdateCheck | null>(null);
+  const [applicationUpdateProgress, setApplicationUpdateProgress] = createSignal<ApplicationUpdateProgress | null>(null);
+  const [applicationUpdateBusy, setApplicationUpdateBusy] = createSignal(false);
+  const [applicationUpdateError, setApplicationUpdateError] = createSignal<string | null>(null);
+  const [projectHistoryStatus, setProjectHistoryStatus] = createSignal<ProjectHistoryStatus>({
+    can_undo: false,
+    can_redo: false,
+    undo_depth: 0,
+    redo_depth: 0,
+    undo_label: null,
+    redo_label: null,
+  });
   const [cleanProjectSignature, setCleanProjectSignature] = createSignal<string | null>(null);
-  const [workspaceTab, setWorkspaceTab] = createSignal<WorkspaceTab>("setup");
-  const [setupSubTab, setSetupSubTab] = createSignal<SetupSubTab>("patch");
-  const [controlMode, setControlMode] = createSignal<ControlMode>("edit");
-  const [timelineDeskSurface, setTimelineDeskSurface] = createSignal<"show" | "cues" | "automation">("show");
-  const [editDeskSurface, setEditDeskSurface] = createSignal<"attributes" | "effects" | "dmx">("attributes");
+  const [workspaceTab, setWorkspaceTab] = createSignal<WorkspaceTab>(initialWorkspaceLayout.workspace_tab);
+  const [uiScale, setUiScale] = createSignal<UiScale>(loadUiScale());
+  const [uiLocale, setUiLocale] = createSignal<UiLocale>(loadUiLocale());
+  const [setupSubTab, setSetupSubTab] = createSignal<SetupSubTab>(initialWorkspaceLayout.setup_sub_tab);
+  const [controlMode, setControlMode] = createSignal<ControlMode>(initialWorkspaceLayout.control_mode);
+  const [timelineDeskSurface, setTimelineDeskSurface] = createSignal<TimelineDeskSurface>(
+    initialWorkspaceLayout.timeline_desk_surface,
+  );
+  const [editDeskSurface, setEditDeskSurface] = createSignal<EditDeskSurface>(initialWorkspaceLayout.edit_desk_surface);
   const [profile, setProfile] = createSignal<FixtureProfileSummary | null>(null);
   const [selectedMode, setSelectedMode] = createSignal("");
   const [customManufacturer, setCustomManufacturer] = createSignal("Syndocal");
@@ -546,7 +762,7 @@ export default function App() {
   const [mappingViewportPanDrag, setMappingViewportPanDrag] = createSignal<MappingViewportPanDragState | null>(null);
   const [patchGridUniverse, setPatchGridUniverse] = createSignal(0);
   const [dmxPatchViewMode, setDmxPatchViewMode] = createSignal<DmxPatchViewMode>("grid");
-  const [controlCategory, setControlCategory] = createSignal<ControlCategory>("position");
+  const [controlCategory, setControlCategory] = createSignal<ControlCategory>(initialWorkspaceLayout.control_category);
   const [panTiltNudgeAmount, setPanTiltNudgeAmount] = createSignal(2048);
   const [positionFavoriteLabel, setPositionFavoriteLabel] = createSignal("");
   const [positionFavorites, setPositionFavorites] = createSignal<PositionFavorite[]>(loadPositionFavorites());
@@ -586,6 +802,22 @@ export default function App() {
   const [midiMapLow, setMidiMapLow] = createSignal(0);
   const [midiMapHigh, setMidiMapHigh] = createSignal(65535);
   const [serialPorts, setSerialPorts] = createSignal<SerialPortSummary[]>([]);
+  const [dmxInputConfig, setDmxInputConfig] = createSignal<DmxInputConfig>({
+    protocol: "ArtNet",
+    bind_ip: "0.0.0.0",
+    port: 6454,
+    universe: 0,
+    merge_mode: "Htp",
+    timeout_ms: 2500,
+  });
+  const [dmxInputStatus, setDmxInputStatus] = createSignal<DmxInputStatus>({
+    running: false,
+    signal_present: false,
+    packets_received: 0,
+    invalid_packets: 0,
+    last_packet_unix_ms: null,
+    source_address: null,
+  });
   const [oscBindIp, setOscBindIp] = createSignal("0.0.0.0");
   const [oscPort, setOscPort] = createSignal(9000);
   const [oscRunning, setOscRunning] = createSignal(false);
@@ -606,13 +838,32 @@ export default function App() {
   const [oscMapDurationMs, setOscMapDurationMs] = createSignal(1000);
   const [oscMapLow, setOscMapLow] = createSignal(0);
   const [oscMapHigh, setOscMapHigh] = createSignal(65535);
-  const [remoteBindIp, setRemoteBindIp] = createSignal("0.0.0.0");
+  const [remoteBindIp, setRemoteBindIp] = createSignal("127.0.0.1");
   const [remotePort, setRemotePort] = createSignal(9100);
+  const createPairingPin = () => {
+    const value = globalThis.crypto
+      ? globalThis.crypto.getRandomValues(new Uint32Array(1))[0]
+      : Math.floor(Math.random() * 1_000_000);
+    return String(value % 1_000_000).padStart(6, "0");
+  };
+  const [remotePairingPin, setRemotePairingPin] = createSignal(createPairingPin());
+  const [remoteAllowLan, setRemoteAllowLan] = createSignal(false);
+  const [remoteMaxConnections, setRemoteMaxConnections] = createSignal(8);
+  const [remoteMaxMessageBytes, setRemoteMaxMessageBytes] = createSignal(64 * 1024);
+  const [remoteMaxMessagesPerSecond, setRemoteMaxMessagesPerSecond] = createSignal(60);
   const [remoteRunning, setRemoteRunning] = createSignal(false);
   const [remoteAccessUrls, setRemoteAccessUrls] = createSignal<string[]>([]);
+  const [remoteStatus, setRemoteStatus] = createSignal<RemoteControlStatus>({
+    running: false,
+    active_connections: 0,
+    rejected_connections: 0,
+    clients: [],
+  });
   const [cueLabel, setCueLabel] = createSignal("Cue 1");
   const [cueFadeMs, setCueFadeMs] = createSignal(1000);
   const [cueCaptureScope, setCueCaptureScope] = createSignal<CueCaptureScopeMode>("all");
+  const [selectedCueListId, setSelectedCueListId] = createSignal(1);
+  const [cueListLabel, setCueListLabel] = createSignal("Main");
   const [cueMetadataDrafts, setCueMetadataDrafts] = createSignal<Record<number, CueMetadataDraft>>({});
   const [cuePadBank, setCuePadBank] = createSignal(0);
   const [cuePadFollowActive, setCuePadFollowActive] = createSignal(true);
@@ -637,6 +888,51 @@ export default function App() {
   const [videoPath, setVideoPath] = createSignal("");
   const [videoPreviewInfo, setVideoPreviewInfo] = createSignal("No preview");
   const [videoPreviewUrl, setVideoPreviewUrl] = createSignal("");
+  const [videoClipThumbnails, setVideoClipThumbnails] = createSignal<Record<number, string>>({});
+  const [videoAudioMonitorStatus, setVideoAudioMonitorStatus] = createSignal<VideoAudioMonitorStatus>({
+    output_open: false,
+    active_layer_ids: [],
+    resync_count: 0,
+    last_drift_ms: 0,
+    max_abs_drift_ms: 0,
+    last_sync_error: null,
+  });
+  const [videoAudioMonitorVolume, setVideoAudioMonitorVolume] = createSignal(0.8);
+  const [videoProgramAudioEnabled, setVideoProgramAudioEnabled] = createSignal(false);
+  const [audioOutputDevices, setAudioOutputDevices] = createSignal<string[]>([]);
+  const [selectedAudioOutputDevice, setSelectedAudioOutputDevice] = createSignal("");
+  const [videoDeckALayerId, setVideoDeckALayerId] = createSignal<number | null>(null);
+  const [videoDeckBLayerId, setVideoDeckBLayerId] = createSignal<number | null>(null);
+  const [videoAbMix, setVideoAbMix] = createSignal(0);
+  const [videoRecordingStatus, setVideoRecordingStatus] = createSignal<VideoRecordingStatus>({
+    active: false,
+    output_id: null,
+    path: null,
+    width: 0,
+    height: 0,
+    frame_rate: 30,
+    frames_written: 0,
+    dropped_frames: 0,
+    audio_requested: false,
+    audio_included: false,
+    audio_track_count: 0,
+    started_unix_ms: null,
+    last_error: null,
+  });
+  const [liveAudioInputDevices, setLiveAudioInputDevices] = createSignal<string[]>([]);
+  const [selectedLiveAudioInputDevice, setSelectedLiveAudioInputDevice] = createSignal("");
+  const [liveAudioInputStatus, setLiveAudioInputStatus] = createSignal<LiveAudioInputStatus>({
+    running: false,
+    device_name: null,
+    sample_rate: 0,
+    channels: 0,
+    bass: 0,
+    mid: 0,
+    high: 0,
+    analyzed_windows: 0,
+    dropped_chunks: 0,
+    last_error: null,
+  });
   const [videoPreviewDiagnostics, setVideoPreviewDiagnostics] = createSignal<VideoPreviewDiagnostics | null>(null);
   const [videoOutputRenderPlans, setVideoOutputRenderPlans] = createSignal<VideoOutputRenderPlan[] | null>(null);
   const [videoOutputWindowStatuses, setVideoOutputWindowStatuses] = createSignal<VideoOutputWindowStatus[] | null>(null);
@@ -707,6 +1003,11 @@ export default function App() {
   const [effectBlendMode, setEffectBlendMode] = createSignal<EffectBlendMode>("Override");
   const [effectAttribute, setEffectAttribute] = createSignal("");
   const [nodeGraphLabel, setNodeGraphLabel] = createSignal("Graph 1");
+  const [nodeGraphSourceMode, setNodeGraphSourceMode] = createSignal<"Effect" | "Audio">("Effect");
+  const [nodeGraphAudioBand, setNodeGraphAudioBand] = createSignal<AudioSpectrumBand>("Bass");
+  const [nodeGraphAudioSource, setNodeGraphAudioSource] = createSignal<AudioSpectrumSource>("Timeline");
+  const [nodeGraphAudioGain, setNodeGraphAudioGain] = createSignal(1);
+  const [nodeGraphAudioBias, setNodeGraphAudioBias] = createSignal(0);
   const [nodeGraphTransformOp, setNodeGraphTransformOp] = createSignal<NodeGraphTransformOp>("Scale");
   const [nodeGraphTransformAmount, setNodeGraphTransformAmount] = createSignal(1);
   const [nodeGraphTransformMin, setNodeGraphTransformMin] = createSignal(0);
@@ -721,7 +1022,9 @@ export default function App() {
   const [waveSpeed, setWaveSpeed] = createSignal(1);
   const [waveWavelength, setWaveWavelength] = createSignal(2);
   const [snapshot, setSnapshot] = createSignal<EngineSnapshot>(createInitialEngineSnapshot());
-  if (browserViewportFixture(isTauriRuntime()) === "timeline") {
+  const [snapshotRevision, setSnapshotRevision] = createSignal<number | null>(null);
+  const viewportFixture = browserViewportFixture(isTauriRuntime());
+  if (viewportFixture === "timeline") {
     setWorkspaceTab("control");
     setSelectedFixtureGroupFilter("front");
     setProfile(viewportFixtureData.profile);
@@ -743,9 +1046,9 @@ export default function App() {
     setSnapshot((current) => ({
       ...current,
       fixtures: [
-        viewportPatchedFixture(1, "Viewport Par L", 1, -4, -2),
-        viewportPatchedFixture(2, "Viewport Par C", 9, 0, -2),
-        viewportPatchedFixture(3, "Viewport Par R", 17, 4, -2),
+        viewportPatchedFixture(1, "Video", 1, -4, -2),
+        viewportPatchedFixture(2, "Save", 9, 0, -2),
+        viewportPatchedFixture(3, "Output", 17, 4, -2),
       ],
       submasters: [{ group_id: "front", label: "front", level: 1 }],
       video: {
@@ -788,13 +1091,79 @@ export default function App() {
         ],
       },
     }));
+  } else if (viewportFixture === "large-show") {
+    const fixtures = Array.from({ length: 2_000 }, (_, index) => {
+      const id = index + 1;
+      const column = index % 40;
+      const row = Math.floor(index / 40);
+      return viewportPatchedFixture(
+        id,
+        `Large Fixture ${id.toString().padStart(4, "0")}`,
+        1 + ((index * 8) % 504),
+        column * 0.25 - 5,
+        row * 0.25 - 5,
+      );
+    });
+    setWorkspaceTab("setup");
+    setSetupSubTab("mapping");
+    setSelectedFixtureGroupFilter("front");
+    setProfile(viewportFixtureData.profile);
+    setSelectedFixtureId(1);
+    setSnapshot((current) => ({
+      ...current,
+      fixtures,
+      submasters: [{ group_id: "front", label: "front", level: 1 }],
+    }));
   }
   let lastRecoverySignature = projectRecoveryCheckpoint()?.signature ?? null;
+  let lastDesktopBackupSignature: string | null = null;
+  let lastDesktopBackupAt = 0;
+  const handleProjectHistoryChanged = (event: Event) => {
+    setProjectHistoryStatus((event as CustomEvent<ProjectHistoryStatus>).detail);
+  };
+  window.addEventListener(projectHistoryChangedEvent, handleProjectHistoryChanged);
+  onCleanup(() => window.removeEventListener(projectHistoryChangedEvent, handleProjectHistoryChanged));
+  createEffect(() => {
+    const scale = uiScale();
+    document.documentElement.style.setProperty("--ui-scale", String(scale / 100));
+    document.documentElement.style.setProperty("--ui-scale-inverse", `${10000 / scale}%`);
+    try {
+      localStorage.setItem(uiScaleStorageKey, String(scale));
+    } catch {
+      // The preference remains active for this session when storage is unavailable.
+    }
+  });
+  const uiLocalization = installUiLocalization(document.body, uiLocale);
+  onCleanup(uiLocalization.dispose);
+  createEffect(() => {
+    const locale = uiLocale();
+    saveUiLocale(locale);
+    uiLocalization.refresh();
+  });
+  createEffect(() => {
+    saveWorkspaceLayout({
+      workspace_tab: workspaceTab(),
+      setup_sub_tab: setupSubTab(),
+      control_mode: controlMode(),
+      timeline_desk_surface: timelineDeskSurface(),
+      edit_desk_surface: editDeskSurface(),
+      control_category: controlCategory(),
+    });
+  });
   const [appStatus, setAppStatus] = createSignal(appStatusFromMessage("Ready"));
   const message = () => appStatus().text;
   const setMessage = (text: string) => {
     setAppStatus(appStatusFromMessage(text));
     return text;
+  };
+  const resetWorkspaceLayout = () => {
+    setWorkspaceTab(defaultWorkspaceLayout.workspace_tab);
+    setSetupSubTab(defaultWorkspaceLayout.setup_sub_tab);
+    setControlMode(defaultWorkspaceLayout.control_mode);
+    setTimelineDeskSurface(defaultWorkspaceLayout.timeline_desk_surface);
+    setEditDeskSurface(defaultWorkspaceLayout.edit_desk_surface);
+    setControlCategory(defaultWorkspaceLayout.control_category);
+    setMessage("Workspace layout reset to the default desk.");
   };
   const {
     output,
@@ -827,6 +1196,42 @@ export default function App() {
     serialPorts,
     setSerialPorts,
   });
+  const refreshDmxInputStatus = async () => {
+    if (!isTauriRuntime()) return;
+    try {
+      setDmxInputStatus(await invoke<DmxInputStatus>("dmx_input_status"));
+    } catch (error) {
+      setMessage(`DMX input status failed: ${String(error)}`);
+    }
+  };
+  const startDmxInput = async () => {
+    try {
+      await invoke("start_dmx_input", { config: dmxInputConfig() });
+      await refreshDmxInputStatus();
+      setMessage("DMX input started.");
+    } catch (error) {
+      setMessage(`DMX input start failed: ${String(error)}`);
+    }
+  };
+  const stopDmxInput = async () => {
+    try {
+      await invoke("stop_dmx_input");
+      await refreshDmxInputStatus();
+      setMessage("DMX input stopped and the merged input frame was cleared.");
+    } catch (error) {
+      setMessage(`DMX input stop failed: ${String(error)}`);
+    }
+  };
+  const sendArtRdmRequest = (request: ArtRdmRequest) =>
+    invoke<ArtRdmResponse>("send_art_rdm_request", { request });
+  const sendUsbRdmRequest = (request: UsbRdmRequest) =>
+    invoke<ArtRdmResponse>("send_usb_rdm_request", { request });
+  const discoverUsbRdmDevices = (serialPort: string, sourceUid: string) =>
+    invoke<string[]>("discover_usb_rdm_devices", { serialPort, sourceUid, timeoutMs: 60_000 });
+  const discoverArtRdmDevices = (gatewayIp: string, portAddress: number) =>
+    invoke<string[]>("discover_art_rdm_devices", { gatewayIp, portAddress, timeoutMs: 1_000 });
+  const startArtRdmFullDiscovery = (gatewayIp: string, portAddress: number) =>
+    invoke<void>("start_art_rdm_full_discovery", { gatewayIp, portAddress });
   const audioAnalysis = createMemo<AudioAnalysisSummary | null>(() => snapshot().timeline.audio ?? null);
   const [touchDimmerRestore, setTouchDimmerRestore] = createSignal<TouchDimmerRestoreState | null>(null);
 
@@ -845,6 +1250,14 @@ export default function App() {
     const localValue = faderValues()[`${fixtureId}:${attribute}`];
     if (localValue !== undefined) {
       return localValue;
+    }
+    const stagedValue = snapshot().programmer.enabled
+      ? snapshot().programmer.values.find(
+        (value) => value.fixture_id === fixtureId && value.attribute === attribute,
+      )?.value
+      : undefined;
+    if (stagedValue !== undefined) {
+      return stagedValue;
     }
     const fixture = snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
     return fixture?.attribute_values.find((value) => value.attribute === attribute)?.value ?? defaultValue;
@@ -2007,6 +2420,30 @@ export default function App() {
       x: Math.min(100, (beat / analysis.duration_ms) * 100),
     }));
   });
+  const audioSpectrumPaths = createMemo(() => {
+    const analysis = audioAnalysis();
+    const empty = { bass: "", mid: "", high: "" };
+    if (!analysis || analysis.spectrum.length === 0 || analysis.duration_ms === 0) {
+      return empty;
+    }
+    const step = Math.max(1, Math.ceil(analysis.spectrum.length / 128));
+    const rows = [
+      { key: "bass" as const, top: 0 },
+      { key: "mid" as const, top: 12 },
+      { key: "high" as const, top: 24 },
+    ];
+    return Object.fromEntries(rows.map(({ key, top }) => [
+      key,
+      analysis.spectrum
+        .filter((_, index) => index % step === 0 || index === analysis.spectrum.length - 1)
+        .map((point) => {
+          const x = Math.min(100, (point.time_ms / analysis.duration_ms) * 100);
+          const y = top + 11 - Math.min(10, point[key] * 10);
+          return `${x.toFixed(2)},${y.toFixed(2)}`;
+        })
+        .join(" "),
+    ])) as { bass: string; mid: string; high: string };
+  });
   const audioBeatTimes = createMemo(() => audioAnalysis()?.beats ?? []);
   const beatIntervalMs = createMemo(() => {
     const bpm = audioAnalysis()?.estimated_bpm ?? snapshot().clock.bpm;
@@ -2423,7 +2860,8 @@ export default function App() {
     const activeQueues = diagnostics.layer_queues.filter((row) => row.queue_len > 0).length;
     const readyQueues = diagnostics.layer_queues.filter((row) => row.ready).length;
     const bpm = diagnostics.bpm && Number.isFinite(diagnostics.bpm) ? `, bpm ${diagnostics.bpm.toFixed(1)}` : "";
-    return `queues ${activeQueues}/${diagnostics.queue_count}, ready ${readyQueues}/${diagnostics.layer_queues.length}, frames ${queuedFrames}, cap ${diagnostics.frame_queue_capacity}, still ${diagnostics.still_image_cache_len}, decode ${diagnostics.decoder_cache_len}, ${videoDecoderDiagnosticsLabel(diagnostics.decoder_diagnostics)}, prefetch ${diagnostics.prefetch_count}x${diagnostics.prefetch_interval_ms}ms${bpm}`;
+    const isf = `, ISF pipelines ${diagnostics.isf_pipeline_count}${diagnostics.last_isf_error ? " error" : ""}`;
+    return `queues ${activeQueues}/${diagnostics.queue_count}, ready ${readyQueues}/${diagnostics.layer_queues.length}, frames ${queuedFrames}, cap ${diagnostics.frame_queue_capacity}, still ${diagnostics.still_image_cache_len}, decode ${diagnostics.decoder_cache_len}, ${videoDecoderDiagnosticsLabel(diagnostics.decoder_diagnostics)}, prefetch ${diagnostics.prefetch_count}x${diagnostics.prefetch_interval_ms}ms${bpm}${isf}`;
   });
   const videoPreviewLayerDiagnostics = createMemo(() => videoPreviewDiagnostics()?.layer_queues ?? []);
   const videoPreviewPrefetchPlanLabel = (row: VideoPreviewDiagnostics["layer_queues"][number]) => {
@@ -2890,6 +3328,19 @@ export default function App() {
   const hasCueSources = createMemo(
     () => snapshot().fixtures.length > 0 || snapshot().video.layers.length > 0 || snapshot().video.outputs.length > 0,
   );
+  const selectedCueList = createMemo<CueListSummary>(() =>
+    snapshot().cue_lists.find((cueList) => cueList.id === selectedCueListId())
+      ?? snapshot().cue_lists[0]
+      ?? { id: 1, label: "Main", active_cue_id: null },
+  );
+  const selectedCueListCues = createMemo(() =>
+    snapshot().cues.filter((cue) => cue.cue_list_id === selectedCueList().id),
+  );
+  createEffect(() => {
+    const selected = selectedCueList();
+    if (selected.id !== selectedCueListId()) setSelectedCueListId(selected.id);
+    setCueListLabel(selected.label);
+  });
   const cueCaptureScopeError = createMemo(() => {
     switch (cueCaptureScope()) {
       case "all":
@@ -3004,11 +3455,16 @@ export default function App() {
   const remoteConfig = createMemo<RemoteControlConfig>(() => ({
     bind_ip: remoteBindIp(),
     port: remotePort(),
+    pairing_pin: remotePairingPin(),
+    allow_lan: remoteAllowLan(),
+    max_connections: remoteMaxConnections(),
+    max_message_bytes: remoteMaxMessageBytes(),
+    max_messages_per_second: remoteMaxMessagesPerSecond(),
   }));
   const fallbackRemoteUrl = createMemo(() => {
     const host = remoteBindIp().trim();
     const displayHost = host === "" || host === "0.0.0.0" ? "localhost" : host;
-    return `http://${displayHost}:${remotePort()}/remote`;
+    return `http://${displayHost}:${remotePort()}/remote?token=${encodeURIComponent(remotePairingPin())}`;
   });
   const remoteUrls = createMemo(() => {
     const urls = remoteAccessUrls();
@@ -3975,22 +4431,163 @@ export default function App() {
     clearProjectRecoveryCheckpoint();
   };
 
+  const refreshProjectBackups = async () => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+    try {
+      setProjectBackups(await invoke<ProjectBackupSummary[]>("list_project_backups"));
+    } catch (error) {
+      setMessage(`Unable to list project backups: ${String(error)}`);
+    }
+  };
+
+  const checkForApplicationUpdate = async (silent = false) => {
+    const configuration = applicationUpdateConfiguration();
+    if (!configuration?.enabled || applicationUpdateBusy()) {
+      if (!silent && configuration?.reason) {
+        setMessage(configuration.reason);
+      }
+      return;
+    }
+    setApplicationUpdateBusy(true);
+    setApplicationUpdateError(null);
+    try {
+      const result = await invoke<ApplicationUpdateCheck>("check_application_update");
+      setApplicationUpdateCheck(result);
+      if (result.available && result.version) {
+        setMessage(`Syndocal ${result.version} is available on the ${result.channel} channel.`);
+      } else if (!silent) {
+        setMessage(`Syndocal ${result.current_version} is current on the ${result.channel} channel.`);
+      }
+    } catch (error) {
+      const detail = String(error);
+      setApplicationUpdateError(detail);
+      if (!silent) {
+        setMessage(`Update check failed: ${detail}`);
+      }
+    } finally {
+      setApplicationUpdateBusy(false);
+    }
+  };
+
+  const initializeApplicationUpdate = async () => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+    try {
+      const configuration = await invoke<ApplicationUpdateConfiguration>("get_application_update_configuration");
+      setApplicationUpdateConfiguration(configuration);
+      if (configuration.enabled) {
+        window.setTimeout(() => void checkForApplicationUpdate(true), 1_500);
+      }
+    } catch (error) {
+      setApplicationUpdateError(String(error));
+    }
+  };
+
+  const installAvailableApplicationUpdate = async () => {
+    const update = applicationUpdateCheck();
+    if (!update?.available || !update.version || applicationUpdateBusy()) {
+      return;
+    }
+    if (
+      !window.confirm(
+        `Install Syndocal ${update.version}?\n\nA verified project backup will be created before download. The signed installer may close and restart Syndocal.`,
+      )
+    ) {
+      return;
+    }
+    setApplicationUpdateBusy(true);
+    setApplicationUpdateError(null);
+    setApplicationUpdateProgress({ phase: "downloading", downloaded_bytes: 0, total_bytes: null });
+    setMessage(`Downloading signed Syndocal ${update.version} update...`);
+    try {
+      await invoke<ProjectBackupSummary>("install_application_update", { expectedVersion: update.version });
+      await refreshProjectBackups();
+      setMessage(`Syndocal ${update.version} was verified and handed to the platform installer.`);
+    } catch (error) {
+      const detail = String(error);
+      setApplicationUpdateError(detail);
+      setMessage(`Update install failed: ${detail}`);
+    } finally {
+      setApplicationUpdateBusy(false);
+    }
+  };
+
+  const refreshProjectHistoryStatus = async () => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+    try {
+      setProjectHistoryStatus(await invoke<ProjectHistoryStatus>("get_project_history_status"));
+    } catch (error) {
+      setMessage(`Unable to read Undo history: ${String(error)}`);
+    }
+  };
+
+  const resetProjectHistory = async () => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+    setProjectHistoryStatus(await invoke<ProjectHistoryStatus>("clear_project_history"));
+  };
+
+  const undoProject = async () => {
+    if (!projectHistoryStatus().can_undo) {
+      setMessage("Nothing to undo.");
+      return;
+    }
+    try {
+      const status = await invoke<ProjectHistoryStatus>("undo_project_transaction");
+      setProjectHistoryStatus(status);
+      await refreshSnapshot();
+      setMessage(`Undid ${status.redo_label ?? "last edit"}.`);
+    } catch (error) {
+      setMessage(`Undo failed: ${String(error)}`);
+    }
+  };
+
+  const redoProject = async () => {
+    if (!projectHistoryStatus().can_redo) {
+      setMessage("Nothing to redo.");
+      return;
+    }
+    try {
+      const status = await invoke<ProjectHistoryStatus>("redo_project_transaction");
+      setProjectHistoryStatus(status);
+      await refreshSnapshot();
+      setMessage(`Redid ${status.undo_label ?? "last edit"}.`);
+    } catch (error) {
+      setMessage(`Redo failed: ${String(error)}`);
+    }
+  };
+
   const saveProjectRecovery = async () => {
     if (!isTauriRuntime() || !projectDirty()) {
       return;
     }
     const signature = projectSnapshotSignature(snapshot());
-    if (signature === lastRecoverySignature) {
-      return;
-    }
     try {
-      const project = await invoke<ProjectFile>("get_project_checkpoint");
-      const checkpoint = createProjectRecoveryCheckpoint(project, currentProjectPath(), signature);
-      if (!saveProjectRecoveryCheckpoint(checkpoint)) {
-        throw new Error("browser storage is unavailable or full");
+      if (signature !== lastRecoverySignature) {
+        const project = await invoke<ProjectFile>("get_project_checkpoint");
+        const checkpoint = createProjectRecoveryCheckpoint(project, currentProjectPath(), signature);
+        if (!saveProjectRecoveryCheckpoint(checkpoint)) {
+          throw new Error("browser storage is unavailable or full");
+        }
+        lastRecoverySignature = signature;
+        setProjectRecoveryCheckpoint(checkpoint);
       }
-      lastRecoverySignature = signature;
-      setProjectRecoveryCheckpoint(checkpoint);
+      const now = Date.now();
+      if (signature !== lastDesktopBackupSignature && now - lastDesktopBackupAt >= 60_000) {
+        await invoke<ProjectBackupSummary>("save_project_backup", {
+          sourcePath: currentProjectPath(),
+          reason: "autosave",
+        });
+        lastDesktopBackupSignature = signature;
+        lastDesktopBackupAt = now;
+        await refreshProjectBackups();
+      }
     } catch (error) {
       setMessage(`Recovery checkpoint failed: ${String(error)}`);
     }
@@ -4073,6 +4670,22 @@ export default function App() {
     }
   };
 
+  const refreshSnapshotDelta = async () => {
+    try {
+      const response = await invoke<EngineSnapshotSyncResponse>("get_snapshot_delta", {
+        clientRevision: snapshotRevision(),
+      });
+      const next = response.full ?? ({ ...snapshot(), ...(response.delta ?? {}) } as EngineSnapshot);
+      setSnapshotRevision(response.revision);
+      applyEngineSnapshot(next, false);
+      return next;
+    } catch (error) {
+      setSnapshotRevision(null);
+      setMessage(String(error));
+      return null;
+    }
+  };
+
   let snapshotPollTimer: number | null = null;
   const scheduleSnapshotPoll = () => {
     if (!isTauriRuntime()) {
@@ -4080,12 +4693,13 @@ export default function App() {
     }
     const intervalMs = document.hidden ? 2_000 : workspaceTab() === "setup" ? 1_000 : 250;
     snapshotPollTimer = window.setTimeout(async () => {
-      await refreshSnapshot(false);
+      await refreshSnapshotDelta();
       scheduleSnapshotPoll();
     }, intervalMs);
   };
   scheduleSnapshotPoll();
   const telemetryReportTimer = isTauriRuntime() ? window.setInterval(refreshEngineTelemetryReport, 1000) : null;
+  const dmxInputStatusTimer = isTauriRuntime() ? window.setInterval(refreshDmxInputStatus, 1000) : null;
   const recoveryTimer = isTauriRuntime() ? window.setInterval(() => void saveProjectRecovery(), 10_000) : null;
   onCleanup(() => {
     if (snapshotPollTimer !== null) {
@@ -4093,6 +4707,9 @@ export default function App() {
     }
     if (telemetryReportTimer !== null) {
       window.clearInterval(telemetryReportTimer);
+    }
+    if (dmxInputStatusTimer !== null) {
+      window.clearInterval(dmxInputStatusTimer);
     }
     if (recoveryTimer !== null) {
       window.clearInterval(recoveryTimer);
@@ -4108,6 +4725,32 @@ export default function App() {
     void refreshMidiInputs();
     void refreshMidiOutputs();
     void refreshSerialPorts();
+    void refreshDmxInputStatus();
+    void refreshProjectBackups();
+    void refreshProjectHistoryStatus();
+    void initializeApplicationUpdate();
+  });
+  createEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+    let disposed = false;
+    let unlistenUpdateProgress: (() => void) | null = null;
+    void listen<ApplicationUpdateProgress>("syndocal://application-update-progress", (event) => {
+      setApplicationUpdateProgress(event.payload);
+    })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+        } else {
+          unlistenUpdateProgress = unlisten;
+        }
+      })
+      .catch((error) => setApplicationUpdateError(String(error)));
+    onCleanup(() => {
+      disposed = true;
+      unlistenUpdateProgress?.();
+    });
   });
   createEffect(() => {
     if (!isTauriRuntime()) {
@@ -4708,7 +5351,7 @@ export default function App() {
   const setAttribute = async (fixtureId: number, attribute: string, value: number) => {
     setFaderValues((current) => ({ ...current, [`${fixtureId}:${attribute}`]: value }));
     try {
-      await invoke("set_attribute", {
+      await invoke(snapshot().programmer.enabled ? "set_programmer_attribute" : "set_attribute", {
         fixtureId,
         attribute,
         value,
@@ -4731,11 +5374,140 @@ export default function App() {
       return next;
     });
     try {
-      await invoke("set_group_attribute", {
+      await invoke(snapshot().programmer.enabled ? "set_programmer_group_attribute" : "set_group_attribute", {
         groupId,
         attribute,
         value,
       });
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const paletteKindIncludesAttribute = (kind: PaletteKind, attribute: string) => {
+    if (kind === "All") return true;
+    const category = controlCategoryForAttribute(attribute);
+    if (kind === "Intensity") return category === "dimmer";
+    if (kind === "Position") return category === "position";
+    if (kind === "Color") return category === "color";
+    return category === "beam" || category === "focus" || category === "gobo";
+  };
+
+  const referencePaletteValuesFromFixture = (fixture: PatchedFixtureSummary, kind: PaletteKind) => {
+    const values = new Map<string, number>();
+    for (const control of fixture.controls) {
+      if (paletteKindIncludesAttribute(kind, control.attribute)) {
+        values.set(
+          control.attribute,
+          faderValue(fixture.id, control.attribute, control.default_value),
+        );
+      }
+    }
+    return [...values].map(([attribute, value]) => ({ attribute, value }));
+  };
+
+  const createReferencePalette = async (label: string, kind: PaletteKind) => {
+    const fixture = selectedFixture();
+    if (!fixture) {
+      setMessage("Select a fixture before capturing a palette.");
+      return;
+    }
+    const values = referencePaletteValuesFromFixture(fixture, kind);
+    if (values.length === 0) {
+      setMessage(`${fixture.label} has no ${kind.toLowerCase()} attributes to capture.`);
+      return;
+    }
+    try {
+      const paletteId = await invoke<number>("create_reference_palette", { label, kind, values });
+      setMessage(`Captured palette ${paletteId} from ${fixture.label}.`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const updateReferencePalette = async (palette: ReferencePaletteSummary) => {
+    const fixture = selectedFixture();
+    if (!fixture) {
+      setMessage("Select a fixture before recapturing a palette.");
+      return;
+    }
+    const values = referencePaletteValuesFromFixture(fixture, palette.kind);
+    if (values.length === 0) {
+      setMessage(`${fixture.label} has no ${palette.kind.toLowerCase()} attributes to capture.`);
+      return;
+    }
+    try {
+      await invoke("update_reference_palette", {
+        paletteId: palette.id,
+        label: palette.label,
+        kind: palette.kind,
+        values,
+      });
+      setMessage(`Recaptured ${palette.label} from ${fixture.label}; linked Cues will use it on their next GO.`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const applyReferencePalette = async (palette: ReferencePaletteSummary) => {
+    const fixtures = selectedControlTargetFixtures();
+    if (fixtures.length === 0) {
+      setMessage("Select a fixture or group before applying a palette.");
+      return;
+    }
+    try {
+      await invoke("apply_reference_palette", {
+        paletteId: palette.id,
+        fixtureIds: fixtures.map((fixture) => fixture.id),
+        programmer: snapshot().programmer.enabled,
+      });
+      setMessage(`Applied ${palette.label} to ${controlTargetLabel()}.`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const removeReferencePalette = async (palette: ReferencePaletteSummary) => {
+    if (!confirmDestructiveAction("palette", palette.label)) return;
+    try {
+      await invoke("remove_reference_palette", { paletteId: palette.id });
+      setMessage(`Removed ${palette.label} and its Cue references.`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const setProgrammerMode = async (enabled: boolean, blind: boolean) => {
+    try {
+      await invoke("set_programmer_mode", { enabled, blind });
+      if (!enabled) setFaderValues({});
+      setMessage(!enabled ? "Direct live editing enabled." : blind ? "Programmer Blind enabled." : "Programmer Live Preview enabled.");
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const clearProgrammer = async () => {
+    try {
+      await invoke("clear_programmer");
+      setFaderValues({});
+      setMessage("Cleared staged Programmer values.");
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const commitProgrammer = async () => {
+    try {
+      await invoke("commit_programmer");
+      setMessage("Committed Programmer values to the live base state. Undo is available.");
+      await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
     }
@@ -5076,6 +5848,7 @@ export default function App() {
     }
     try {
       await invoke("new_project");
+      await resetProjectHistory();
       setCurrentProjectPath(null);
       setWorkspaceTab("setup");
       setSetupSubTab("patch");
@@ -5087,6 +5860,57 @@ export default function App() {
       clearProjectRecovery();
     } catch (error) {
       setMessage(String(error));
+    }
+  };
+
+  const saveUserTemplate = async () => {
+    try {
+      const path = await invoke<string | null>("save_user_template", {
+        midiMappings: midiMappings(),
+        oscMappings: oscMappings(),
+      });
+      setMessage(path ? `Saved user template ${path}` : "Template save canceled.");
+    } catch (error) {
+      setMessage(`Template save failed: ${String(error)}`);
+    }
+  };
+
+  const loadUserTemplate = async () => {
+    if (!confirmDiscardProjectChanges("create a project from a user template")) {
+      setMessage("Template load canceled.");
+      return;
+    }
+    try {
+      const result = await invoke<UserTemplateLoadResult | null>("load_user_template");
+      if (!result) {
+        setMessage("Template load canceled.");
+        return;
+      }
+      if (midiControlConnected()) {
+        await invoke("disconnect_midi_control");
+        setMidiControlConnected(false);
+      }
+      if (oscRunning()) {
+        await invoke("stop_osc_input");
+        setOscRunning(false);
+      }
+      setMidiMappings(result.midi_mappings);
+      setOscMappings(result.osc_mappings);
+      await resetProjectHistory();
+      setCurrentProjectPath(null);
+      setWorkspaceTab("setup");
+      setSetupSubTab("patch");
+      const next = await refreshSnapshot();
+      if (next) {
+        setCleanProjectSignature("__syndocal_template_unsaved__");
+        setProjectDirty(true);
+      }
+      clearProjectRecovery();
+      setMessage(
+        `Created an unsaved project from ${result.label} (${result.profiles.length} embedded profiles, ${result.midi_mappings.length} MIDI, ${result.osc_mappings.length} OSC mappings). All DMX and video outputs are disabled and blacked out.`,
+      );
+    } catch (error) {
+      setMessage(`Template load failed: ${String(error)}`);
     }
   };
 
@@ -5132,6 +5956,7 @@ export default function App() {
   };
 
   const applyLoadedProjectResult = async (result: ProjectLoadResult, currentPath: string | null) => {
+    await resetProjectHistory();
     setCurrentProjectPath(currentPath);
     rememberRecentProjectPath(currentPath);
     setMessage(loadedProjectMessage(result));
@@ -5192,6 +6017,7 @@ export default function App() {
         label: `Recovery ${checkpoint.saved_at}`,
         currentPath: checkpoint.source_path,
       });
+      await resetProjectHistory();
       setCurrentProjectPath(checkpoint.source_path);
       setMessage(
         `Recovered ${projectRecoverySourceLabel(checkpoint)} from ${projectRecoveryTimeLabel(checkpoint)} (${result.profiles.length} embedded profiles). Save to keep it.`,
@@ -5210,6 +6036,56 @@ export default function App() {
   const discardProjectRecovery = () => {
     clearProjectRecovery();
     setMessage("Recovery checkpoint discarded.");
+  };
+
+  const loadProjectBackup = async (backup: ProjectBackupSummary) => {
+    if (!confirmDiscardProjectChanges("restore a project backup")) {
+      setMessage("Project backup restore canceled.");
+      return;
+    }
+    try {
+      const result = await invoke<ProjectLoadResult>("load_project_backup", { backupId: backup.id });
+      await resetProjectHistory();
+      setCurrentProjectPath(backup.source_path ?? null);
+      setMessage(
+        `Restored backup from ${new Date(backup.created_at_unix_ms).toLocaleString()}. Save the project to keep it.`,
+      );
+      const next = await refreshSnapshot();
+      if (next) {
+        setCleanProjectSignature("__syndocal_backup_recovered_unsaved__");
+        setProjectDirty(true);
+      }
+      clearProjectRecovery();
+      if (result.profiles.length > 0) {
+        setMessage(
+          `Restored backup from ${new Date(backup.created_at_unix_ms).toLocaleString()} (${result.profiles.length} embedded profiles). Save to keep it.`,
+        );
+      }
+    } catch (error) {
+      setMessage(`Project backup restore failed: ${String(error)}`);
+    }
+  };
+
+  const deleteProjectBackup = async (backup: ProjectBackupSummary) => {
+    if (!window.confirm(`Delete the backup from ${new Date(backup.created_at_unix_ms).toLocaleString()}?`)) {
+      return;
+    }
+    try {
+      await invoke("delete_project_backup", { backupId: backup.id });
+      await refreshProjectBackups();
+      setMessage("Project backup deleted.");
+    } catch (error) {
+      setMessage(`Unable to delete project backup: ${String(error)}`);
+    }
+  };
+
+  const exportDiagnosticPackage = async () => {
+    try {
+      const path = await invoke<string | null>("export_diagnostic_package");
+      setMessage(path ? `Exported diagnostic package ${path}` : "Diagnostic export canceled.");
+    } catch (error) {
+      setMessage(`Diagnostic export failed: ${String(error)}`);
+    }
   };
 
   const loadStartupProject = async () => {
@@ -5242,6 +6118,7 @@ export default function App() {
     }
     try {
       const result = await invoke<ProjectLoadResult>("load_phase1_sample_project");
+      await resetProjectHistory();
       setPhase1SmokeReport(null);
       setCurrentProjectPath(null);
       setWorkspaceTab("setup");
@@ -5260,6 +6137,7 @@ export default function App() {
   const runPhase1Smoke = async () => {
     try {
       const report = await invoke<Phase1SmokeReport>("run_phase1_smoke");
+      await resetProjectHistory();
       setPhase1SmokeReport(report);
       setCurrentProjectPath(null);
       setWorkspaceTab("setup");
@@ -6106,7 +6984,32 @@ export default function App() {
     await invoke("start_remote_control", { config });
     const urls = await refreshRemoteAccessUrls(config);
     setRemoteRunning(true);
+    await refreshRemoteControlStatus();
     return urls;
+  };
+
+  const refreshRemoteControlStatus = async () => {
+    if (!isTauriRuntime()) {
+      return remoteStatus();
+    }
+    try {
+      const status = await invoke<RemoteControlStatus>("remote_control_status");
+      setRemoteStatus(status);
+      setRemoteRunning(status.running);
+      return status;
+    } catch {
+      return remoteStatus();
+    }
+  };
+
+  const disconnectRemoteClient = async (clientId: number) => {
+    try {
+      await invoke("disconnect_remote_client", { clientId });
+      await refreshRemoteControlStatus();
+      setMessage(`Disconnected remote client #${clientId}.`);
+    } catch (error) {
+      setMessage(String(error));
+    }
   };
 
   const openRemoteUrl = async (url: string) => {
@@ -6134,6 +7037,10 @@ export default function App() {
 
   const startRemoteControl = async () => {
     try {
+      if (!/^\d{6}$/.test(remotePairingPin())) {
+        setMessage("Remote pairing PIN must contain exactly 6 digits.");
+        return;
+      }
       const urls = await startRemoteServer();
       setMessage(`Remote listening: ${(urls[0] ?? fallbackRemoteUrl())}`);
     } catch (error) {
@@ -6145,12 +7052,26 @@ export default function App() {
     try {
       await invoke("stop_remote_control");
       setRemoteRunning(false);
+      setRemoteStatus({ running: false, active_connections: 0, rejected_connections: 0, clients: [] });
       void refreshRemoteAccessUrls();
       setMessage("Remote WebSocket stopped.");
     } catch (error) {
       setMessage(String(error));
     }
   };
+
+  const remoteStatusTimer = isTauriRuntime()
+    ? window.setInterval(() => {
+        if (remoteRunning()) {
+          void refreshRemoteControlStatus();
+        }
+      }, 1_000)
+    : null;
+  onCleanup(() => {
+    if (remoteStatusTimer !== null) {
+      window.clearInterval(remoteStatusTimer);
+    }
+  });
 
   const createCue = async () => {
     const scopeError = cueCaptureScopeError();
@@ -6168,9 +7089,156 @@ export default function App() {
         label: cueLabel(),
         fadeMs: cueFadeMs(),
         captureScope,
+        cueListId: selectedCueList().id,
       });
       setCueLabel(`Cue ${snapshot().cues.length + 2}`);
       setMessage(`Created cue ${cueId}`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const createCueList = async () => {
+    const label = cueListLabel().trim();
+    if (!label) {
+      setMessage("Cue List label is required.");
+      return;
+    }
+    try {
+      const cueListId = await invoke<number>("create_cue_list", { label });
+      await refreshSnapshot();
+      setSelectedCueListId(cueListId);
+      setCueListLabel(label);
+      setMessage(`Created Cue List ${label}`);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const renameCueList = async () => {
+    try {
+      await invoke("rename_cue_list", { cueListId: selectedCueList().id, label: cueListLabel() });
+      setMessage(`Renamed Cue List ${selectedCueList().id}`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const removeCueList = async () => {
+    const cueList = selectedCueList();
+    if (cueList.id === 1 || !confirmDestructiveAction("cue list", cueList.label)) return;
+    try {
+      await invoke("remove_cue_list", { cueListId: cueList.id });
+      await refreshSnapshot();
+      setSelectedCueListId(1);
+      setMessage(`Removed Cue List ${cueList.label}; its cues moved to Main.`);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const setCueList = async (cueId: number, cueListId: number) => {
+    try {
+      await invoke("set_cue_list", { cueId, cueListId });
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const setCuePalette = async (cue: CueSummary, paletteId: number, enabled: boolean) => {
+    const withoutPalette = cue.palette_targets.filter((target) => target.palette_id !== paletteId);
+    const fixtureIds = [...new Set(cue.targets.map((target) => target.fixture_id))].sort((left, right) => left - right);
+    if (enabled && fixtureIds.length === 0) {
+      setMessage("Store lighting fixture targets in this Cue before linking a palette.");
+      return;
+    }
+    const paletteTargets = enabled
+      ? [...withoutPalette, { palette_id: paletteId, fixture_ids: fixtureIds }]
+      : withoutPalette;
+    try {
+      await invoke("set_cue_palette_targets", { cueId: cue.id, paletteTargets });
+      setMessage(`${enabled ? "Linked" : "Unlinked"} palette ${paletteId} ${enabled ? "to" : "from"} Cue ${cue.cue_number || cue.id}.`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const triggerCueList = async (cueListId: number, direction: "next" | "previous") => {
+    try {
+      await invoke(direction === "next" ? "trigger_cue_list_next" : "trigger_cue_list_previous", { cueListId });
+      setMessage(direction === "next" ? `GO List ${cueListId}` : `Back List ${cueListId}`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const createPlaybackExecutor = async (label: string, cueListId: number, page: number, slot: number) => {
+    try {
+      const executorId = await invoke<number>("create_playback_executor", { label, cueListId, page, slot });
+      setMessage(`Created Playback Executor ${executorId} on page ${page}, slot ${slot}.`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const updatePlaybackExecutor = async (
+    executor: PlaybackExecutorSummary,
+    patch: Partial<PlaybackExecutorSummary>,
+  ) => {
+    const next = { ...executor, ...patch };
+    try {
+      await invoke("update_playback_executor", {
+        executorId: next.id,
+        label: next.label,
+        cueListId: next.cue_list_id,
+        page: next.page,
+        slot: next.slot,
+      });
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const removePlaybackExecutor = async (executor: PlaybackExecutorSummary) => {
+    if (!confirmDestructiveAction("playback executor", executor.label)) return;
+    try {
+      await invoke("remove_playback_executor", { executorId: executor.id });
+      setMessage(`Removed Playback Executor ${executor.label}.`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const setPlaybackExecutorLevel = async (executorId: number, level: number) => {
+    try {
+      await invoke("set_playback_executor_level", { executorId, level });
+      await refreshSnapshot(false);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const setPlaybackMaster = async (level: number) => {
+    try {
+      await invoke("set_playback_master", { level });
+      await refreshSnapshot(false);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const triggerPlaybackExecutor = async (executorId: number, direction: "next" | "previous") => {
+    try {
+      await invoke("trigger_playback_executor", { executorId, direction });
+      setMessage(`${direction === "next" ? "GO" : "Back"} Playback Executor ${executorId}.`);
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
@@ -6211,17 +7279,66 @@ export default function App() {
   const setCueMetadata = async (cue: CueSummary) => {
     const draft = cueMetadataDraft(cue);
     const fadeMs = Math.max(0, Math.round(Number.isFinite(draft.fade_ms) ? draft.fade_ms : cue.fade_ms));
+    const preWaitMs = Math.max(0, Math.round(Number.isFinite(draft.pre_wait_ms) ? draft.pre_wait_ms : 0));
+    const followMs = draft.follow_ms === null || !Number.isFinite(draft.follow_ms)
+      ? null
+      : Math.max(0, Math.round(draft.follow_ms));
+    const normalizeOptionalTiming = (value: number | null | undefined) =>
+      value === null || value === undefined || !Number.isFinite(value)
+        ? null
+        : Math.max(0, Math.round(value));
+    const normalizeTiming = (value: number) => Math.max(0, Math.round(Number.isFinite(value) ? value : 0));
+    const ifcbTiming = {
+      intensity_fade_ms: normalizeOptionalTiming(draft.ifcb_timing.intensity_fade_ms),
+      intensity_delay_ms: normalizeTiming(draft.ifcb_timing.intensity_delay_ms),
+      focus_fade_ms: normalizeOptionalTiming(draft.ifcb_timing.focus_fade_ms),
+      focus_delay_ms: normalizeTiming(draft.ifcb_timing.focus_delay_ms),
+      color_fade_ms: normalizeOptionalTiming(draft.ifcb_timing.color_fade_ms),
+      color_delay_ms: normalizeTiming(draft.ifcb_timing.color_delay_ms),
+      beam_fade_ms: normalizeOptionalTiming(draft.ifcb_timing.beam_fade_ms),
+      beam_delay_ms: normalizeTiming(draft.ifcb_timing.beam_delay_ms),
+    };
+    const parts = draft.parts.map((part) => ({
+      number: Math.max(1, Math.min(999, Math.round(part.number))),
+      label: part.label.trim(),
+      delay_ms: Math.max(0, Math.round(Number.isFinite(part.delay_ms) ? part.delay_ms : 0)),
+      fade_ms: part.fade_ms === null || part.fade_ms === undefined || !Number.isFinite(part.fade_ms)
+        ? null
+        : Math.max(0, Math.round(part.fade_ms)),
+      fixture_ids: [...new Set(part.fixture_ids)].sort((left, right) => left - right),
+      video_layer_ids: [...new Set(part.video_layer_ids)].sort((left, right) => left - right),
+      video_output_ids: [...new Set(part.video_output_ids)].sort((left, right) => left - right),
+    }));
+    const mibFixtureIds = [...new Set(draft.mib_fixture_ids)].sort((left, right) => left - right);
     try {
       await invoke("set_cue_metadata", {
         cueId: cue.id,
+        cueNumber: draft.cue_number,
         label: draft.label,
         fadeMs,
+        preWaitMs,
+        followMs,
+        ifcbTiming,
+        parts,
+        mark: draft.mark,
+        mibFixtureIds,
+        tracking: draft.tracking,
+        notes: draft.notes,
       });
       setCueMetadataDrafts((current) => ({
         ...current,
         [cue.id]: {
+          cue_number: draft.cue_number,
           label: draft.label,
           fade_ms: fadeMs,
+          pre_wait_ms: preWaitMs,
+          follow_ms: followMs,
+          ifcb_timing: ifcbTiming,
+          parts,
+          mark: draft.mark,
+          mib_fixture_ids: mibFixtureIds,
+          tracking: draft.tracking,
+          notes: draft.notes,
         },
       }));
       setMessage(`Saved cue ${cue.id}`);
@@ -6642,12 +7759,27 @@ export default function App() {
 
   const {
     addVideoLayer,
+    importMediaFiles,
+    launchVideoClip,
+    takeVideoClip,
+    stopVideoClip,
+    playVideoLayerAudioMonitor,
+    stopVideoLayerAudioMonitor,
+    setVideoLayerAudioMonitorVolume,
+    refreshVideoAudioMonitorStatus,
+    refreshAudioOutputDevices,
+    startVideoOutputRecording,
+    stopVideoOutputRecording,
+    refreshVideoRecordingStatus,
     removeVideoLayer,
     duplicateVideoLayer,
     moveVideoLayer,
     setVideoLayerLabel,
     refreshVideoLayerMetadata,
+    importVideoLayerIsf,
+    setVideoLayerIsfEffect,
     renderDebugVideoPreview,
+    loadVideoLayerThumbnail,
     refreshVideoPreviewDiagnostics,
     refreshVideoOutputRenderPlans,
     refreshVideoOutputWindowStatuses,
@@ -6684,6 +7816,9 @@ export default function App() {
     setVideoOutputRenderPlans,
     setVideoOutputWindowStatuses,
     setVideoRuntimeStatus,
+    setVideoAudioMonitorStatus,
+    setAudioOutputDevices,
+    setVideoRecordingStatus,
     setExternalVideoIoPlans,
     setExternalVideoTransportStatus,
     setExternalVideoTransportReport,
@@ -6693,10 +7828,178 @@ export default function App() {
     setVideoOutputPreviewId,
     setVideoOutputPreviewMode,
   });
+  const videoThumbnailSourceSignature = createMemo(() => JSON.stringify(
+    snapshot().video.layers.map((layer) => ({
+      id: layer.id,
+      kind: layer.source.kind,
+      path: layer.source.path ?? null,
+      name: layer.source.name ?? null,
+    })),
+  ));
+  let videoThumbnailGeneration = 0;
+  let videoThumbnailUrlCache: Record<number, string> = {};
+  const videoThumbnailSignatures = new Map<number, string>();
+  createEffect(() => {
+    const sources = JSON.parse(videoThumbnailSourceSignature()) as Array<{
+      id: number;
+      kind: VideoSourceKind;
+      path: string | null;
+      name: string | null;
+    }>;
+    const generation = ++videoThumbnailGeneration;
+    const activeIds = new Set(sources.map((source) => source.id));
+    for (const layerId of videoThumbnailSignatures.keys()) {
+      if (!activeIds.has(layerId)) videoThumbnailSignatures.delete(layerId);
+    }
+    videoThumbnailUrlCache = Object.fromEntries(
+      Object.entries(videoThumbnailUrlCache).filter(([layerId]) => activeIds.has(Number(layerId))),
+    );
+    if (!isTauriRuntime()) {
+      setVideoClipThumbnails(videoThumbnailUrlCache);
+      return;
+    }
+    void (async () => {
+      const nextUrls = { ...videoThumbnailUrlCache };
+      const nextSignatures = new Map(videoThumbnailSignatures);
+      for (const source of sources) {
+        const signature = JSON.stringify(source);
+        if (nextSignatures.get(source.id) === signature && nextUrls[source.id]) continue;
+        try {
+          nextUrls[source.id] = await loadVideoLayerThumbnail(source.id);
+          nextSignatures.set(source.id, signature);
+        } catch {
+          delete nextUrls[source.id];
+          nextSignatures.delete(source.id);
+        }
+        if (generation !== videoThumbnailGeneration) return;
+      }
+      if (generation !== videoThumbnailGeneration) return;
+      videoThumbnailUrlCache = nextUrls;
+      videoThumbnailSignatures.clear();
+      for (const [layerId, signature] of nextSignatures) {
+        videoThumbnailSignatures.set(layerId, signature);
+      }
+      setVideoClipThumbnails(nextUrls);
+    })();
+  });
+  const videoLayerHasMonitorableAudio = (layerId: number) => {
+    const layer = snapshot().video.layers.find((candidate) => candidate.id === layerId);
+    return layer?.source.kind === "File" && layer.source.metadata?.has_audio !== false;
+  };
+  const launchVideoClipFromGrid = async (layerId: number, fadeMs: number) => {
+    const launched = await launchVideoClip(layerId, fadeMs);
+    if (launched && videoProgramAudioEnabled() && videoLayerHasMonitorableAudio(layerId)) {
+      await playVideoLayerAudioMonitor(layerId, videoAudioMonitorVolume(), selectedAudioOutputDevice());
+    }
+  };
+  const takeVideoClipFromGrid = async (layerId: number, fadeMs: number) => {
+    const taken = await takeVideoClip(layerId, fadeMs);
+    if (taken && videoProgramAudioEnabled()) {
+      for (const activeLayerId of videoAudioMonitorStatus().active_layer_ids) {
+        if (activeLayerId !== layerId) await stopVideoLayerAudioMonitor(activeLayerId);
+      }
+      if (videoLayerHasMonitorableAudio(layerId)) {
+        await playVideoLayerAudioMonitor(layerId, videoAudioMonitorVolume(), selectedAudioOutputDevice());
+      } else if (videoAudioMonitorStatus().active_layer_ids.includes(layerId)) {
+        await stopVideoLayerAudioMonitor(layerId);
+      }
+    }
+  };
+  const stopVideoClipFromGrid = async (layerId: number, fadeMs: number) => {
+    const stopped = await stopVideoClip(layerId, fadeMs);
+    if (stopped && videoAudioMonitorStatus().active_layer_ids.includes(layerId)) {
+      await stopVideoLayerAudioMonitor(layerId);
+    }
+  };
+  const assignVideoDeck = (deck: "A" | "B", layerId: number) => {
+    if (deck === "A") {
+      setVideoDeckALayerId(layerId);
+      if (videoDeckBLayerId() === layerId) setVideoDeckBLayerId(null);
+    } else {
+      setVideoDeckBLayerId(layerId);
+      if (videoDeckALayerId() === layerId) setVideoDeckALayerId(null);
+    }
+  };
+  const applyVideoAbMix = async (mix: number, refresh = false) => {
+    const normalized = Math.max(0, Math.min(1, mix));
+    setVideoAbMix(normalized);
+    try {
+      await invoke("set_video_ab_mix", {
+        layerAId: videoDeckALayerId(),
+        layerBId: videoDeckBLayerId(),
+        mix: normalized,
+      });
+      const baseGain = videoAudioMonitorVolume();
+      const audioA = baseGain * Math.sqrt(1 - normalized);
+      const audioB = baseGain * Math.sqrt(normalized);
+      if (videoDeckALayerId() !== null && videoAudioMonitorStatus().active_layer_ids.includes(videoDeckALayerId()!)) {
+        await setVideoLayerAudioMonitorVolume(videoDeckALayerId()!, audioA);
+      }
+      if (videoDeckBLayerId() !== null && videoAudioMonitorStatus().active_layer_ids.includes(videoDeckBLayerId()!)) {
+        await setVideoLayerAudioMonitorVolume(videoDeckBLayerId()!, audioB);
+      }
+      if (refresh) await refreshSnapshot();
+    } catch (error) { setMessage(String(error)); }
+  };
+  const launchVideoDeck = async (deck: "A" | "B") => {
+    const layerId = deck === "A" ? videoDeckALayerId() : videoDeckBLayerId();
+    if (layerId === null) return;
+    const launched = await launchVideoClip(layerId, 0);
+    if (!launched) return;
+    if (videoProgramAudioEnabled() && videoLayerHasMonitorableAudio(layerId)) {
+      const deckGain = deck === "A" ? Math.sqrt(1 - videoAbMix()) : Math.sqrt(videoAbMix());
+      await playVideoLayerAudioMonitor(
+        layerId,
+        videoAudioMonitorVolume() * deckGain,
+        selectedAudioOutputDevice(),
+      );
+    }
+    await applyVideoAbMix(videoAbMix(), true);
+  };
+  createEffect(() => {
+    const ids = new Set(snapshot().video.layers.map((layer) => layer.id));
+    if (videoDeckALayerId() !== null && !ids.has(videoDeckALayerId()!)) setVideoDeckALayerId(null);
+    if (videoDeckBLayerId() !== null && !ids.has(videoDeckBLayerId()!)) setVideoDeckBLayerId(null);
+  });
+  const refreshLiveAudioInputDevices = async () => {
+    try {
+      const devices = await invoke<string[]>("list_audio_input_devices");
+      setLiveAudioInputDevices(devices);
+      setMessage(`Found ${devices.length} audio input device(s).`);
+    } catch (error) { setMessage(String(error)); }
+  };
+  const startLiveAudioInput = async () => {
+    try {
+      setLiveAudioInputStatus(await invoke<LiveAudioInputStatus>("start_live_audio_input", {
+        deviceName: selectedLiveAudioInputDevice().trim() || null,
+      }));
+      setMessage("Live audio FFT input started.");
+    } catch (error) { setMessage(String(error)); }
+  };
+  const stopLiveAudioInput = async () => {
+    try {
+      setLiveAudioInputStatus(await invoke<LiveAudioInputStatus>("stop_live_audio_input"));
+      setMessage("Live audio FFT input stopped.");
+    } catch (error) { setMessage(String(error)); }
+  };
+  const refreshLiveAudioInputStatus = async () => {
+    try {
+      setLiveAudioInputStatus(await invoke<LiveAudioInputStatus>("live_audio_input_status"));
+    } catch { /* Background meter polling is best-effort. */ }
+  };
   const videoOutputMetricsTimer = isTauriRuntime()
     ? window.setInterval(() => {
         if (videoOutputWindowStatuses()?.some((status) => status.live_open)) {
           void refreshVideoOutputWindowStatuses(true);
+        }
+        if (videoAudioMonitorStatus().active_layer_ids.length > 0) {
+          void refreshVideoAudioMonitorStatus(true);
+        }
+        if (videoRecordingStatus().active) {
+          void refreshVideoRecordingStatus();
+        }
+        if (liveAudioInputStatus().running) {
+          void refreshLiveAudioInputStatus();
         }
       }, 1000)
     : null;
@@ -6890,6 +8193,45 @@ export default function App() {
       setMessage(String(error));
       return false;
     }
+  };
+
+  const importVideoOutputBitmapMask = async (output: VideoOutputSummary) => {
+    try {
+      const imported = await invoke<VideoBitmapMaskImportResult | null>("import_video_output_bitmap_mask");
+      if (!imported) {
+        setMessage("Luma mask import canceled.");
+        return false;
+      }
+      const words = Array.from({ length: 32 }, (_, index) => imported.luma_words[index] ?? 0);
+      const updated = await setVideoOutputMapping(output.id, {
+        ...output.mapping,
+        bitmap_mask_width: imported.width,
+        bitmap_mask_height: imported.height,
+        bitmap_mask_luma_words: words,
+      });
+      if (updated) {
+        setMessage(
+          `Imported ${imported.source_name} as an embedded ${imported.width}x${imported.height} luma mask.`,
+        );
+      }
+      return updated;
+    } catch (error) {
+      setMessage(String(error));
+      return false;
+    }
+  };
+
+  const clearVideoOutputBitmapMask = async (output: VideoOutputSummary) => {
+    const updated = await setVideoOutputMapping(output.id, {
+      ...output.mapping,
+      bitmap_mask_width: 0,
+      bitmap_mask_height: 0,
+      bitmap_mask_luma_words: Array(32).fill(0),
+    });
+    if (updated) {
+      setMessage(`Cleared the embedded luma mask from ${output.label}.`);
+    }
+    return updated;
   };
 
   const {
@@ -7538,7 +8880,12 @@ export default function App() {
     return outputs.length > 0 ? outputs.join(" / ") : "no target";
   };
 
-  const nodeGraphSourceLabel = () => (effectType() === "PositionWave" ? "Position Wave" : "LFO");
+  const nodeGraphSourceLabel = () =>
+    nodeGraphSourceMode() === "Audio"
+      ? `${nodeGraphAudioSource() === "Live" ? "Live" : "Timeline"} Audio ${nodeGraphAudioBand()}`
+      : effectType() === "PositionWave"
+        ? "Position Wave"
+        : "LFO";
 
   const nodeGraphTransformLabel = () => {
     const op = nodeGraphTransformOp();
@@ -7557,6 +8904,12 @@ export default function App() {
   };
 
   const nodeGraphSourceDetail = () => {
+    if (nodeGraphSourceMode() === "Audio") {
+      const availability = nodeGraphAudioSource() === "Live"
+        ? liveAudioInputStatus().running ? "Live input" : "Live stopped"
+        : audioAnalysis()?.spectrum.length ? "FFT ready" : "No FFT";
+      return `${nodeGraphAudioGain().toFixed(1)}x ${nodeGraphAudioBias() >= 0 ? "+" : ""}${nodeGraphAudioBias().toFixed(2)} / ${availability}`;
+    }
     const sync = nodeGraphClockSync();
     return sync ? `${effectShape()} / ${sync.beats}b` : effectShape();
   };
@@ -7573,7 +8926,25 @@ export default function App() {
       `${effectTargetMode() === "video" ? effectVideoParam() : selectedEffectAttribute()} ${nodeGraphSourceLabel()}`;
     const clockSync = nodeGraphClockSync();
     const sourceNode =
-      effectType() === "PositionWave"
+      nodeGraphSourceMode() === "Audio"
+        ? {
+            id: 1,
+            label: `Audio ${nodeGraphAudioBand()}`,
+            kind: "Audio" as const,
+            x: 18,
+            y: 26,
+            lfo: null,
+            position_wave: null,
+            audio: {
+              source: nodeGraphAudioSource(),
+              band: nodeGraphAudioBand(),
+              gain: nodeGraphAudioGain(),
+              bias: nodeGraphAudioBias(),
+            },
+            transform: null,
+            output: null,
+          }
+        : effectType() === "PositionWave"
         ? {
             id: 1,
             label: "Wave",
@@ -7590,6 +8961,7 @@ export default function App() {
               clock_sync: clockSync,
               phase: effectPhase(),
             },
+            audio: null,
             transform: null,
             output: null,
           }
@@ -7608,6 +8980,7 @@ export default function App() {
               bias: 0,
             },
             position_wave: null,
+            audio: null,
             transform: null,
             output: null,
           };
@@ -7625,6 +8998,7 @@ export default function App() {
           y: 26,
           lfo: null,
           position_wave: null,
+          audio: null,
           transform: {
             op: nodeGraphTransformOp(),
             amount: nodeGraphTransformAmount(),
@@ -7641,6 +9015,7 @@ export default function App() {
           y: 26,
           lfo: null,
           position_wave: null,
+          audio: null,
           transform: null,
           output: {
             fixture_ids: target.fixture_ids,
@@ -8000,6 +9375,8 @@ export default function App() {
     saveProjectAs,
     loadProject,
     newProject,
+    undoProject,
+    redoProject,
     mappingHotkeyHelpOpen,
     setMappingHotkeyHelpOpen,
     applyMappingSelectionManagementAction,
@@ -8097,6 +9474,15 @@ export default function App() {
         currentProjectPath={currentProjectPath()}
         recentProjectPaths={recentProjectPaths()}
         recoveryCheckpoint={projectRecoveryCheckpoint()}
+        projectBackups={projectBackups()}
+        historyStatus={projectHistoryStatus()}
+        applicationUpdateConfiguration={applicationUpdateConfiguration()}
+        applicationUpdateCheck={applicationUpdateCheck()}
+        applicationUpdateProgress={applicationUpdateProgress()}
+        applicationUpdateBusy={applicationUpdateBusy()}
+        applicationUpdateError={applicationUpdateError()}
+        uiScale={uiScale()}
+        uiLocale={uiLocale()}
         canGo={snapshot().cues.length > 0}
         nextCueLabel={nextCue()?.label ?? "No cue"}
         onWorkspaceTab={setWorkspaceTab}
@@ -8104,6 +9490,8 @@ export default function App() {
         onControlMode={selectControlMode}
         onGo={() => void triggerNextCue()}
         onNewProject={newProject}
+        onSaveUserTemplate={() => void saveUserTemplate()}
+        onLoadUserTemplate={() => void loadUserTemplate()}
         onSaveProject={saveProject}
         onSaveProjectAs={saveProjectAs}
         onLoadProject={loadProject}
@@ -8111,6 +9499,16 @@ export default function App() {
         onClearRecentProjects={clearRecentProjects}
         onLoadRecovery={loadProjectRecovery}
         onDiscardRecovery={discardProjectRecovery}
+        onLoadBackup={(backup) => void loadProjectBackup(backup)}
+        onDeleteBackup={(backup) => void deleteProjectBackup(backup)}
+        onExportDiagnostics={() => void exportDiagnosticPackage()}
+        onCheckForUpdates={() => void checkForApplicationUpdate(false)}
+        onInstallUpdate={() => void installAvailableApplicationUpdate()}
+        onUiLocale={setUiLocale}
+        onUndo={() => void undoProject()}
+        onRedo={() => void redoProject()}
+        onUiScale={(scale) => setUiScale(scale)}
+        onResetWorkspaceLayout={resetWorkspaceLayout}
         onLoadSample={loadPhase1SampleProject}
         onRunSmoke={runPhase1Smoke}
       />
@@ -8160,6 +9558,20 @@ export default function App() {
             <div class="liveStatusItem">
               <span>BPM</span>
               <strong>{snapshot().clock.bpm.toFixed(1)}</strong>
+            </div>
+            <div class="liveStatusItem">
+              <span>Clock</span>
+              <strong>{clockSourceLabel(snapshot().clock.source)}</strong>
+            </div>
+            <div class="liveStatusItem">
+              <span>Sync</span>
+              <strong class={`clockSyncLabel ${snapshot().clock.external_sync_locked ? "locked" : ""}`}>
+                {clockSyncStatusLabel(snapshot().clock)}
+              </strong>
+            </div>
+            <div class="liveStatusItem">
+              <span>Timecode</span>
+              <strong class="tabularNums" data-no-localize>{formatShowTimecode(snapshot().timeline.position_ms)}</strong>
             </div>
           </div>
           <div class="liveTransportGrid">
@@ -8327,7 +9739,7 @@ export default function App() {
                     onClick={() => selectFixtureGroupFilter(group.groupId)}
                     title={`${group.count} fixture(s)`}
                   >
-                    {group.groupId}
+                    <span data-no-localize>{group.groupId}</span>
                     <span>{group.count}</span>
                   </button>
                 )}
@@ -8516,7 +9928,7 @@ export default function App() {
                   class={selectedFixtureGroupFilter() === group.groupId ? "active" : ""}
                   onClick={() => selectFixtureGroupFilter(group.groupId)}
                 >
-                  {group.groupId}
+                  <span data-no-localize>{group.groupId}</span>
                 </button>
               )}
             </For>
@@ -8591,10 +10003,19 @@ export default function App() {
           remoteUrls={remoteUrls()}
           bindIp={remoteBindIp()}
           port={remotePort()}
+          pairingPin={remotePairingPin()}
+          allowLan={remoteAllowLan()}
+          status={remoteStatus()}
           bpmDraft={bpmDraft()}
           submasters={snapshot().submasters}
           onBindIp={setRemoteBindIp}
           onPort={setRemotePort}
+          onPairingPin={setRemotePairingPin}
+          onRegeneratePairingPin={() => setRemotePairingPin(createPairingPin())}
+          onAllowLan={(value) => {
+            setRemoteAllowLan(value);
+            setRemoteBindIp(value ? "0.0.0.0" : "127.0.0.1");
+          }}
           onCopyRemoteUrl={copyRemoteUrl}
           onOpenRemoteUrl={openRemoteUrl}
           onStart={startRemoteControl}
@@ -9098,6 +10519,8 @@ export default function App() {
           onApplyMappingPreset={applyVideoOutputMappingPreset}
           onRemoveMappingPreset={removeVideoOutputMappingPreset}
           onSetMapping={setVideoOutputMapping}
+          onImportBitmapMask={importVideoOutputBitmapMask}
+          onClearBitmapMask={clearVideoOutputBitmapMask}
           onSetEnabled={setVideoOutputEnabled}
           onSetBlackout={setVideoOutputBlackout}
           onSetOpacity={setVideoOutputOpacity}
@@ -9192,10 +10615,51 @@ export default function App() {
             onSetLabel: setVideoLabel,
             onSetPath: setVideoPath,
             onBrowseSource: selectVideoSourceFile,
+            onImportMultiple: importMediaFiles,
             onAddLayer: addVideoLayer,
+          }}
+          clipGrid={{
+            get layers() { return snapshot().video.layers; },
+            get thumbnails() { return videoClipThumbnails(); },
+            get fadeMs() { return videoOutputFadeMs(); },
+            get audioMonitorVolume() { return videoAudioMonitorVolume(); },
+            get audioMonitorLayerIds() { return videoAudioMonitorStatus().active_layer_ids; },
+            get audioMonitorStatus() { return videoAudioMonitorStatus(); },
+            get programAudioEnabled() { return videoProgramAudioEnabled(); },
+            get audioOutputDevices() { return audioOutputDevices(); },
+            get selectedAudioOutputDevice() { return selectedAudioOutputDevice(); },
+            get deckALayerId() { return videoDeckALayerId(); },
+            get deckBLayerId() { return videoDeckBLayerId(); },
+            get abMix() { return videoAbMix(); },
+            get selectedOutputId() { return selectedVideoOutputId(); },
+            get recordingStatus() { return videoRecordingStatus(); },
+            get liveAudioInputDevices() { return liveAudioInputDevices(); },
+            get selectedLiveAudioInputDevice() { return selectedLiveAudioInputDevice(); },
+            get liveAudioInputStatus() { return liveAudioInputStatus(); },
+            onSetFadeMs: setVideoOutputFadeMs,
+            onSetAudioMonitorVolume: setVideoAudioMonitorVolume,
+            onSetProgramAudioEnabled: setVideoProgramAudioEnabled,
+            onSetAudioOutputDevice: setSelectedAudioOutputDevice,
+            onRefreshAudioOutputDevices: refreshAudioOutputDevices,
+            onAssignDeck: assignVideoDeck,
+            onSetAbMix: applyVideoAbMix,
+            onCommitAbMix: (mix) => applyVideoAbMix(mix, true),
+            onLaunchDeck: launchVideoDeck,
+            onStartRecording: startVideoOutputRecording,
+            onStopRecording: stopVideoOutputRecording,
+            onSetLiveAudioInputDevice: setSelectedLiveAudioInputDevice,
+            onRefreshLiveAudioInputDevices: refreshLiveAudioInputDevices,
+            onStartLiveAudioInput: startLiveAudioInput,
+            onStopLiveAudioInput: stopLiveAudioInput,
+            onLaunch: launchVideoClipFromGrid,
+            onTake: takeVideoClipFromGrid,
+            onStop: stopVideoClipFromGrid,
+            onMonitorAudio: (layerId, volume) => playVideoLayerAudioMonitor(layerId, volume, selectedAudioOutputDevice()),
+            onStopAudio: stopVideoLayerAudioMonitor,
           }}
           layerList={{
             get layers() { return snapshot().video.layers; },
+            get isfRuntimeError() { return videoPreviewDiagnostics()?.last_isf_error; },
             onSetLayerLabel: setVideoLayerLabel,
             onMoveLayer: moveVideoLayer,
             onDuplicateLayer: duplicateVideoLayer,
@@ -9205,6 +10669,8 @@ export default function App() {
             onSetLayerTransform: setVideoLayerTransform,
             onSetLayerColor: setVideoLayerColor,
             onSetLayerFx: setVideoLayerFx,
+            onImportIsf: importVideoLayerIsf,
+            onSetIsfEffect: setVideoLayerIsfEffect,
             onAddCuePoint: addVideoCuePoint,
             onJumpCuePoint: jumpVideoCuePoint,
             onRemoveCuePoint: removeVideoCuePoint,
@@ -9259,6 +10725,7 @@ export default function App() {
                 <button class={timelineDeskSurface() === "show" ? "active" : ""} onClick={() => setTimelineDeskSurface("show")}>Show</button>
                 <button class={timelineDeskSurface() === "cues" ? "active" : ""} onClick={() => setTimelineDeskSurface("cues")}>Cues</button>
                 <button class={timelineDeskSurface() === "automation" ? "active" : ""} onClick={() => setTimelineDeskSurface("automation")}>Automation</button>
+                <button class={timelineDeskSurface() === "playback" ? "active" : ""} onClick={() => setTimelineDeskSurface("playback")}>Playback</button>
               </nav>
             </Show>
             <Show when={controlMode() === "edit"}>
@@ -9296,6 +10763,36 @@ export default function App() {
             onClearFixtureFlags={() => clearFixtureFlags("all")}
             onSetFixtureTransform={setFixtureTransform}
           />
+          <div class="playbackDeskSurface">
+            <ProgrammerPanel
+              programmer={snapshot().programmer}
+              onSetMode={setProgrammerMode}
+              onCommit={commitProgrammer}
+              onClear={clearProgrammer}
+            />
+            <ReferencePalettePanel
+              palettes={snapshot().palettes}
+              captureFixtureLabel={selectedFixture()?.label ?? null}
+              targetLabel={controlTargetLabel()}
+              targetFixtureCount={selectedControlTargetFixtures().length}
+              onCreate={createReferencePalette}
+              onUpdate={updateReferencePalette}
+              onApply={applyReferencePalette}
+              onRemove={removeReferencePalette}
+            />
+            <PlaybackExecutorPanel
+              executors={snapshot().playback_executors}
+              cueLists={snapshot().cue_lists}
+              cues={snapshot().cues}
+              playbackMaster={snapshot().playback_master}
+              onCreate={createPlaybackExecutor}
+              onUpdate={updatePlaybackExecutor}
+              onRemove={removePlaybackExecutor}
+              onSetLevel={setPlaybackExecutorLevel}
+              onSetMaster={setPlaybackMaster}
+              onTrigger={triggerPlaybackExecutor}
+            />
+          </div>
           <FaderAttributeEditorPanel
             categories={controlCategoryRows()}
             activeCategory={activeControlCategory()}
@@ -9419,7 +10916,12 @@ export default function App() {
           </FaderAttributeEditorPanel>
           <CueManagementPanel
             mode={controlMode() === "live" ? "live" : "edit"}
-            cues={snapshot().cues}
+            cues={selectedCueListCues()}
+            allCues={snapshot().cues}
+            cueLists={snapshot().cue_lists}
+            palettes={snapshot().palettes}
+            selectedCueListId={selectedCueList().id}
+            cueListLabel={cueListLabel()}
             activeCueId={snapshot().active_cue_id}
             activeFade={snapshot().active_fade}
             timelinePositionMs={snapshot().timeline.position_ms}
@@ -9439,10 +10941,18 @@ export default function App() {
             onCueLabel={setCueLabel}
             onCueFadeMs={setCueFadeMs}
             onCueCaptureScope={setCueCaptureScope}
+            onSelectCueList={setSelectedCueListId}
+            onCueListLabel={setCueListLabel}
+            onCreateCueList={createCueList}
+            onRenameCueList={renameCueList}
+            onRemoveCueList={removeCueList}
+            onSetCueList={setCueList}
+            onSetCuePalette={setCuePalette}
+            onTriggerCueList={triggerCueList}
             onCreateCue={createCue}
             onSelectFixture={setSelectedFixtureId}
-            onTriggerPreviousCue={triggerPreviousCue}
-            onTriggerNextCue={triggerNextCue}
+            onTriggerPreviousCue={() => triggerCueList(selectedCueList().id, "previous")}
+            onTriggerNextCue={() => triggerCueList(selectedCueList().id, "next")}
             onSetCueFadePaused={setCueFadePaused}
             onUpdateCueMetadataDraft={updateCueMetadataDraft}
             onMoveCue={moveCue}
@@ -9471,6 +10981,7 @@ export default function App() {
               overviewPlayheadX={timelineOverviewPlayheadX()}
               audioAnalysis={audioAnalysis()}
               audioWaveformPoints={audioWaveformPoints()}
+              audioSpectrumPaths={audioSpectrumPaths()}
               audioBeatMarkers={audioBeatMarkers()}
               snapMode={timelineSnapMode()}
               gridMs={timelineGridMs()}
@@ -9572,7 +11083,7 @@ export default function App() {
               <div class="effectTargetHint">
                 <strong>{effectTargetMode() === "selection" ? "Map selection" : effectTargetMode()}</strong>
                 <span title={`${effectTargetSummary()} / ${effectDraftSummary()}`}>
-                  {effectTargetSummary()} / {effectDraftSummary()}
+                  <span data-no-localize>{effectTargetSummary()}</span> / {effectDraftSummary()}
                 </span>
               </div>
               <Show when={effectTargetMode() !== "video"}>
@@ -9745,6 +11256,11 @@ export default function App() {
               transformMin={nodeGraphTransformMin()}
               transformMax={nodeGraphTransformMax()}
               effectType={effectType()}
+              sourceMode={nodeGraphSourceMode()}
+              audioBand={nodeGraphAudioBand()}
+              audioSource={nodeGraphAudioSource()}
+              audioGain={nodeGraphAudioGain()}
+              audioBias={nodeGraphAudioBias()}
               sourceLabel={nodeGraphSourceLabel()}
               sourceDetail={nodeGraphSourceDetail()}
               transformLabel={nodeGraphTransformLabel()}
@@ -9754,6 +11270,11 @@ export default function App() {
               targetLabel={nodeGraphTargetLabel}
               onLoadPreset={loadNodeGraphPreset}
               onLabel={setNodeGraphLabel}
+              onSourceMode={setNodeGraphSourceMode}
+              onAudioBand={setNodeGraphAudioBand}
+              onAudioSource={setNodeGraphAudioSource}
+              onAudioGain={setNodeGraphAudioGain}
+              onAudioBias={setNodeGraphAudioBias}
               onTransformOp={setNodeGraphTransformOp}
               onTransformAmount={setNodeGraphTransformAmount}
               onTransformMin={setNodeGraphTransformMin}
@@ -9797,6 +11318,7 @@ export default function App() {
           tabIndex={-1}
         >
           <Show when={workspaceTab() === "control" || setupSubTab() === "dmx"}>
+          <div class="dmxEndpointDesk">
           <DmxOutputConfigPanel
             output={output()}
             serialPorts={serialPorts()}
@@ -9806,6 +11328,25 @@ export default function App() {
             onRefreshSerialPorts={refreshSerialPorts}
             onApply={applyOutput}
           />
+          <DmxInputPanel
+            config={dmxInputConfig()}
+            status={dmxInputStatus()}
+            onConfig={setDmxInputConfig}
+            onStart={startDmxInput}
+            onStop={stopDmxInput}
+          />
+          <ArtRdmPanel
+            gatewayIp={output().target_ip}
+            portAddress={output().universe}
+            serialPorts={serialPorts()}
+            onRequest={sendArtRdmRequest}
+            onUsbRequest={sendUsbRdmRequest}
+            onUsbDiscover={discoverUsbRdmDevices}
+            onRefreshSerialPorts={refreshSerialPorts}
+            onDiscover={discoverArtRdmDevices}
+            onStartFullDiscovery={startArtRdmFullDiscovery}
+          />
+          </div>
           <OutputDiagnosticsPanel
             protocolLabel={outputProtocolLabel(output().protocol)}
             testChannel={dmxTestChannel()}
@@ -9969,14 +11510,30 @@ export default function App() {
           <RemoteControlPanel
             bindIp={remoteBindIp()}
             port={remotePort()}
+            pairingPin={remotePairingPin()}
+            allowLan={remoteAllowLan()}
+            maxConnections={remoteMaxConnections()}
+            maxMessageBytes={remoteMaxMessageBytes()}
+            maxMessagesPerSecond={remoteMaxMessagesPerSecond()}
             running={remoteRunning()}
             remoteUrls={remoteUrls()}
+            status={remoteStatus()}
             onBindIp={setRemoteBindIp}
             onPort={setRemotePort}
+            onPairingPin={setRemotePairingPin}
+            onRegeneratePairingPin={() => setRemotePairingPin(createPairingPin())}
+            onAllowLan={(value) => {
+              setRemoteAllowLan(value);
+              setRemoteBindIp(value ? "0.0.0.0" : "127.0.0.1");
+            }}
+            onMaxConnections={setRemoteMaxConnections}
+            onMaxMessageBytes={setRemoteMaxMessageBytes}
+            onMaxMessagesPerSecond={setRemoteMaxMessagesPerSecond}
             onCopyRemoteUrl={copyRemoteUrl}
             onOpenRemoteUrl={openRemoteUrl}
             onStart={startRemoteControl}
             onStop={stopRemoteControl}
+            onDisconnectClient={disconnectRemoteClient}
           />
           </Show>
         </aside>

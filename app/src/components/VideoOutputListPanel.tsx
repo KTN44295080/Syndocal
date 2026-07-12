@@ -38,6 +38,8 @@ type VideoOutputListPanelProps = {
   onApplyMappingPreset: (outputId: number, label: string) => MaybePromise;
   onRemoveMappingPreset: (label: string) => MaybePromise;
   onSetMapping: (outputId: number, mapping: VideoOutputMapping) => MaybePromise;
+  onImportBitmapMask: (output: VideoOutputSummary) => MaybePromise;
+  onClearBitmapMask: (output: VideoOutputSummary) => MaybePromise;
   onSetEnabled: (outputId: number, enabled: boolean) => MaybePromise;
   onSetBlackout: (outputId: number, blackout: boolean) => MaybePromise;
   onSetOpacity: (outputId: number, opacity: number) => MaybePromise;
@@ -72,7 +74,7 @@ export function VideoOutputListPanel(props: VideoOutputListPanelProps) {
                   aria-pressed={active()}
                   onClick={() => props.onSelectOutput(output.id)}
                 >
-                  <strong>{output.label}</strong>
+                  <strong data-no-localize>{output.label}</strong>
                   <span>
                     {output.kind} / {output.width}x{output.height} / {Math.round(output.opacity * 100)}%
                   </span>
@@ -92,7 +94,7 @@ export function VideoOutputListPanel(props: VideoOutputListPanelProps) {
             <div class="videoOutputDetailPane">
               <div class="videoOutputDetailHeader">
                 <div>
-                  <h3>{output().label}</h3>
+                  <h3 data-no-localize>{output().label}</h3>
                   <span>
                     {output().kind} / {output().width}x{output().height} / {compositionLabel(output())}
                   </span>
@@ -112,7 +114,7 @@ export function VideoOutputListPanel(props: VideoOutputListPanelProps) {
                   onInput={(event) => void props.onSetRouting(output().id, Number(event.currentTarget.value))}
                 >
                   <For each={props.compositions}>
-                    {(composition) => <option value={composition.id}>{composition.label}</option>}
+                    {(composition) => <option data-no-localize value={composition.id}>{composition.label}</option>}
                   </For>
                 </select>
               </label>
@@ -133,6 +135,8 @@ export function VideoOutputListPanel(props: VideoOutputListPanelProps) {
                 onApplyPreset={props.onApplyMappingPreset}
                 onRemovePreset={props.onRemoveMappingPreset}
                 onSetMapping={props.onSetMapping}
+                onImportBitmapMask={props.onImportBitmapMask}
+                onClearBitmapMask={props.onClearBitmapMask}
               />
               <VideoOutputActionsPanel
                 output={output()}

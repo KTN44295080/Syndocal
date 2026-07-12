@@ -11,7 +11,7 @@ const actions = await import(`data:text/javascript;base64,${Buffer.from(transpil
 
 assert.equal(
   actions.destructiveActionPrompt("fixture", "Front Spot 1"),
-  'Remove fixture "Front Spot 1"?\n\nThis action cannot be undone.',
+  'Remove fixture "Front Spot 1"?\n\nYou can undo this action from the Project menu or with Ctrl/Cmd+Z.',
 );
 
 let prompt = "";
@@ -22,6 +22,6 @@ assert.equal(
   }),
   false,
 );
-assert.equal(prompt, 'Remove cue "Opening"?\n\nThis action cannot be undone.');
+assert.equal(prompt, 'Remove cue "Opening"?\n\nYou can undo this action from the Project menu or with Ctrl/Cmd+Z.');
 
 console.log("destructive action helpers ok");

@@ -104,7 +104,7 @@ export function CueCapturePreviewPanel(props: CueCapturePreviewPanelProps) {
                   onClick={() => props.onSelectFixture(fixture.id)}
                 >
                   <i style={{ background: fixture.color }} />
-                  <span>{fixture.label}</span>
+                  <span data-no-localize>{fixture.label}</span>
                   <small>
                     {fixture.dmxLabel} / {fixture.groupLabel} / {fixture.attributes} attr
                   </small>

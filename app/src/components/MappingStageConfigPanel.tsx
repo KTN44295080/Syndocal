@@ -122,7 +122,7 @@ export function MappingStageConfigPanel(props: MappingStageConfigPanelProps) {
             <option value="">Select preset</option>
             <For each={props.stageMapPresets}>
               {(preset) => (
-                <option value={preset.label}>
+                <option data-no-localize value={preset.label}>
                   {preset.label} ({props.stageMapPresetLabelFor(preset)})
                 </option>
               )}
@@ -172,7 +172,7 @@ export function MappingStageConfigPanel(props: MappingStageConfigPanelProps) {
             <option value="">Select view</option>
             <For each={props.mappingViewPresets}>
               {(preset) => (
-                <option value={preset.id}>
+                <option data-no-localize value={preset.id}>
                   {preset.label} ({props.mappingViewPresetLabelFor(preset)})
                 </option>
               )}

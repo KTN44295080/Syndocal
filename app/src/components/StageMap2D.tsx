@@ -319,9 +319,7 @@ export const StageMap2D = (props: StageMap2DProps) => (
               onPointerCancel={(event) => void props.endStageVideoSurfaceDrag(event, surface.id)}
             >
               <polygon class="stageVideoSurfaceShape" points={props.stageVideoSurfaceCornerPointList(surface, mapping())}>
-                <title>
-                  {surface.label} / Projection surface
-                </title>
+                <title data-no-localize>{surface.label} / Projection surface</title>
               </polygon>
               <line x1={0} y1={-surface.height / 2} x2={0} y2={surface.height / 2} />
               <Show when={surface.id === props.selectedVideoOutputId()}>
@@ -359,7 +357,7 @@ export const StageMap2D = (props: StageMap2DProps) => (
                   onPointerUp={(event) => void props.endStageVideoSurfaceRotationDrag(event, surface.id)}
                   onPointerCancel={(event) => void props.endStageVideoSurfaceRotationDrag(event, surface.id)}
                 >
-                  <title>Rotate {surface.label}</title>
+                  <title data-no-localize>Rotate {surface.label}</title>
                 </circle>
                 <rect
                   class="stageVideoSurfaceScaleHandle"
@@ -372,12 +370,12 @@ export const StageMap2D = (props: StageMap2DProps) => (
                   onPointerUp={(event) => void props.endStageVideoSurfaceScaleDrag(event, surface.id)}
                   onPointerCancel={(event) => void props.endStageVideoSurfaceScaleDrag(event, surface.id)}
                 >
-                  <title>Resize {surface.label}</title>
+                  <title data-no-localize>Resize {surface.label}</title>
                 </rect>
               </Show>
               <Show when={props.mappingShowLabels()}>
                 <text x={surface.width / 2 + 1.5} y={-surface.height / 2 - 1}>
-                  {surface.label}
+                  <tspan data-no-localize>{surface.label}</tspan>
                 </text>
               </Show>
             </g>
@@ -480,7 +478,7 @@ export const StageMap2D = (props: StageMap2DProps) => (
                 onPointerUp={(event) => void props.endStageFixtureYawDrag(event, fixture.id)}
                 onPointerCancel={(event) => void props.endStageFixtureYawDrag(event, fixture.id)}
               >
-                <title>{fixture.label} yaw {fixture.yaw} deg</title>
+                <title data-no-localize>{fixture.label} yaw {fixture.yaw} deg</title>
               </circle>
             </Show>
             <Show
@@ -515,7 +513,7 @@ export const StageMap2D = (props: StageMap2DProps) => (
                     props.openControlForFixtureId(fixture.id);
                   }}
                 >
-                  <title>{fixture.label} / {fixture.dmxLabel} / {fixture.groupLabel} / {fixture.visualKind}</title>
+                  <title data-no-localize>{fixture.label} / {fixture.dmxLabel} / {fixture.groupLabel} / {fixture.visualKind}</title>
                 </circle>
               }
             >
@@ -556,7 +554,7 @@ export const StageMap2D = (props: StageMap2DProps) => (
                   fill={fixture.color}
                   opacity={Math.max(0.78, 0.46 + fixture.intensity * 0.54)}
                 >
-                  <title>{fixture.label} / {fixture.dmxLabel} / {fixture.groupLabel} / {fixture.visualKind}</title>
+                  <title data-no-localize>{fixture.label} / {fixture.dmxLabel} / {fixture.groupLabel} / {fixture.visualKind}</title>
                 </rect>
                 <Show when={fixture.visualKind === "bar"}>
                   <line

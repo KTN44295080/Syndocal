@@ -33,7 +33,7 @@ export function VideoPreviewDiagnosticsPanel(props: VideoPreviewDiagnosticsPanel
             {(row) => (
               <div class={props.layerClass(row)}>
                 <strong>{row.ready ? "Ready" : row.queue_len > 0 ? "Warm" : "Wait"}</strong>
-                <span>{row.label}</span>
+                <span data-no-localize>{row.label}</span>
                 <small title={props.layerLabel(row)}>{props.layerLabel(row)}</small>
               </div>
             )}
@@ -46,7 +46,7 @@ export function VideoPreviewDiagnosticsPanel(props: VideoPreviewDiagnosticsPanel
             {(row) => (
               <div class={props.outputClass(row)}>
                 <strong>{row.error ? "Error" : row.report?.rejected_full ? "Full" : "Plan"}</strong>
-                <span>{row.label}</span>
+                <span data-no-localize>{row.label}</span>
                 <small title={props.outputLabel(row)}>{props.outputLabel(row)}</small>
               </div>
             )}

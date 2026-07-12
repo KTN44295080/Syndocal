@@ -12,7 +12,9 @@ import {
   mappingReadout,
   outputAspectRatio,
   resetVideoOutputCornerOffsets,
+  resetVideoOutputBlend,
   resetVideoOutputLensKeystone,
+  resetVideoOutputMask,
   resetVideoOutputPose,
   resetVideoOutputWarp,
   videoOutputAspectPresets,
@@ -40,6 +42,8 @@ type VideoOutputMappingPanelProps = {
   onApplyPreset: (outputId: number, label: string) => MaybePromise;
   onRemovePreset: (label: string) => MaybePromise;
   onSetMapping: (outputId: number, mapping: VideoOutputMapping) => MaybePromise;
+  onImportBitmapMask: (output: VideoOutputSummary) => MaybePromise;
+  onClearBitmapMask: (output: VideoOutputSummary) => MaybePromise;
 };
 
 export function VideoOutputMappingPanel(props: VideoOutputMappingPanelProps) {
@@ -58,6 +62,23 @@ export function VideoOutputMappingPanel(props: VideoOutputMappingPanelProps) {
       : "No preview";
 
   const nativeAspectLabel = () => aspectRatioLabel(outputAspectRatio(props.output.width, props.output.height));
+
+  const regularMaskPoints = (count: number) => Array.from({ length: 8 }, (_, index) => {
+    if (index >= count) return { x: 0, y: 0 };
+    const angle = -Math.PI / 2 + (index / count) * Math.PI * 2;
+    return { x: 0.5 + Math.cos(angle) * 0.46, y: 0.5 + Math.sin(angle) * 0.46 };
+  });
+
+  const setMaskPointCount = (count: number) => patchMapping({
+    mask_point_count: count,
+    mask_points: count >= 3 ? regularMaskPoints(count) : regularMaskPoints(0),
+  });
+
+  const patchMaskPoint = (index: number, coordinate: "x" | "y", value: number) => {
+    const points = props.output.mapping.mask_points.map((point) => ({ ...point }));
+    points[index] = { ...points[index], [coordinate]: Math.max(0, Math.min(1, value)) };
+    return patchMapping({ mask_points: points });
+  };
 
   return (
     <div class="videoOutputMapping">
@@ -86,7 +107,7 @@ export function VideoOutputMappingPanel(props: VideoOutputMappingPanelProps) {
           >
             <option value="">Select preset</option>
             <For each={props.mappingPresets}>
-              {(preset) => <option value={preset.label}>{preset.label}</option>}
+              {(preset) => <option data-no-localize value={preset.label}>{preset.label}</option>}
             </For>
           </select>
         </label>
@@ -128,13 +149,19 @@ export function VideoOutputMappingPanel(props: VideoOutputMappingPanelProps) {
         <button onClick={() => void props.onSetMapping(props.output.id, resetVideoOutputCornerOffsets(props.output.mapping))}>
           Clear Corners
         </button>
+        <button onClick={() => void props.onSetMapping(props.output.id, resetVideoOutputBlend(props.output.mapping))}>
+          Clear Blend
+        </button>
+        <button onClick={() => void props.onSetMapping(props.output.id, resetVideoOutputMask(props.output.mapping))}>
+          Clear Mask
+        </button>
         <button onClick={() => void setAspectPreset(outputAspectRatio(props.output.width, props.output.height))}>
           Output Ratio
         </button>
         <For each={videoOutputAspectPresets}>
           {(preset) => (
             <button onClick={() => void setAspectPreset(preset.ratio)}>
-              {preset.label}
+              <span data-no-localize>{preset.label}</span>
             </button>
           )}
         </For>
@@ -218,6 +245,73 @@ export function VideoOutputMappingPanel(props: VideoOutputMappingPanelProps) {
           />
         </label>
       </div>
+      <div class="videoOutputMaskControls">
+        <div class="sectionHeader">
+          <h4>Output Mask</h4>
+          <span>Polygon + embedded luma bitmap · CPU/GPU parity</span>
+        </div>
+        <div class="presetRow">
+          <button type="button" onClick={() => void props.onImportBitmapMask(props.output)}>
+            Import Luma Mask
+          </button>
+          <button
+            type="button"
+            disabled={props.output.mapping.bitmap_mask_width === 0}
+            onClick={() => void props.onClearBitmapMask(props.output)}
+          >
+            Clear Bitmap
+          </button>
+          <span class="videoBitmapMaskStatus" role="status">
+            {props.output.mapping.bitmap_mask_width > 0
+              ? `${props.output.mapping.bitmap_mask_width}x${props.output.mapping.bitmap_mask_height} embedded`
+              : "No bitmap mask"}
+          </span>
+        </div>
+        <div class="triple">
+          <label>
+            Shape
+            <select
+              value={props.output.mapping.mask_point_count}
+              onInput={(event) => void setMaskPointCount(Number(event.currentTarget.value))}
+            >
+              <option value="0">Disabled</option>
+              <For each={[3, 4, 5, 6, 7, 8]}>{(count) => <option value={count}>{count} points</option>}</For>
+            </select>
+          </label>
+          <label>
+            Feather
+            <input
+              type="number"
+              min="0"
+              max="0.5"
+              step="0.005"
+              value={props.output.mapping.mask_softness}
+              onChange={(event) => void patchMapping({ mask_softness: Number(event.currentTarget.value) })}
+            />
+          </label>
+          <label class="videoMaskInvertToggle">
+            <input
+              type="checkbox"
+              checked={props.output.mapping.mask_invert}
+              onChange={(event) => void patchMapping({ mask_invert: event.currentTarget.checked })}
+            />
+            Invert mask
+          </label>
+        </div>
+        <Show when={props.output.mapping.mask_point_count >= 3}>
+          <div class="videoMaskPointGrid tabularNums">
+            <For each={props.output.mapping.mask_points.slice(0, props.output.mapping.mask_point_count)}>
+              {(point, index) => (
+                <fieldset>
+                  <legend>Point {index() + 1}</legend>
+                  <label>X<input type="number" min="0" max="1" step="0.005" value={point.x} onChange={(event) => void patchMaskPoint(index(), "x", Number(event.currentTarget.value))} /></label>
+                  <label>Y<input type="number" min="0" max="1" step="0.005" value={point.y} onChange={(event) => void patchMaskPoint(index(), "y", Number(event.currentTarget.value))} /></label>
+                </fieldset>
+              )}
+            </For>
+          </div>
+        </Show>
+      </div>
       <div class="split">
         <label>
           Aspect Mode
@@ -241,6 +335,40 @@ export function VideoOutputMappingPanel(props: VideoOutputMappingPanelProps) {
             onChange={(event) => void patchMapping({ lens_distortion: Number(event.currentTarget.value) })}
           />
         </label>
+      </div>
+      <div class="videoOutputBlendControls">
+        <div class="sectionHeader">
+          <h4>Edge Blend / Black Level</h4>
+          <span>Normalized projector edge width</span>
+        </div>
+        <div class="quad">
+          <label>
+            Left
+            <input type="number" min="0" max="1" step="0.01" value={props.output.mapping.edge_blend_left} onChange={(event) => void patchMapping({ edge_blend_left: Number(event.currentTarget.value) })} />
+          </label>
+          <label>
+            Right
+            <input type="number" min="0" max="1" step="0.01" value={props.output.mapping.edge_blend_right} onChange={(event) => void patchMapping({ edge_blend_right: Number(event.currentTarget.value) })} />
+          </label>
+          <label>
+            Top
+            <input type="number" min="0" max="1" step="0.01" value={props.output.mapping.edge_blend_top} onChange={(event) => void patchMapping({ edge_blend_top: Number(event.currentTarget.value) })} />
+          </label>
+          <label>
+            Bottom
+            <input type="number" min="0" max="1" step="0.01" value={props.output.mapping.edge_blend_bottom} onChange={(event) => void patchMapping({ edge_blend_bottom: Number(event.currentTarget.value) })} />
+          </label>
+        </div>
+        <div class="split">
+          <label>
+            Blend Gamma
+            <input type="number" min="0.1" max="8" step="0.1" value={props.output.mapping.edge_blend_gamma} onChange={(event) => void patchMapping({ edge_blend_gamma: Number(event.currentTarget.value) })} />
+          </label>
+          <label>
+            Black Level
+            <input type="number" min="0" max="1" step="0.01" value={props.output.mapping.black_level} onChange={(event) => void patchMapping({ black_level: Number(event.currentTarget.value) })} />
+          </label>
+        </div>
       </div>
       <div class="split">
         <label>

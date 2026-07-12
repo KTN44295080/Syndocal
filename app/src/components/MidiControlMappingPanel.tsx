@@ -83,7 +83,7 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
       <div class="mappingEditorDesk">
       <h3>MIDI Feedback</h3>
       <select value={props.selectedMidiOutput ?? ""} onInput={(event) => props.onSelectedMidiOutput(Number(event.currentTarget.value))}>
-        <For each={props.midiOutputs}>{(output) => <option value={output.index}>{output.name}</option>}</For>
+        <For each={props.midiOutputs}>{(output) => <option data-no-localize value={output.index}>{output.name}</option>}</For>
       </select>
       <div class="buttonRow">
         <button
@@ -198,7 +198,7 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
         <label>
           Cue
           <select value={props.selectedCueId ?? ""} onInput={(event) => props.onMapCueId(Number(event.currentTarget.value))}>
-            <For each={props.snapshot.cues}>{(cue) => <option value={cue.id}>{cue.id}: {cue.label}</option>}</For>
+            <For each={props.snapshot.cues}>{(cue) => <option data-no-localize value={cue.id}>{cue.id}: {cue.label}</option>}</For>
           </select>
         </label>
       </Show>
@@ -228,7 +228,7 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
         <label>
           Layer
           <select value={props.selectedLayerId ?? ""} onInput={(event) => props.onMapLayerId(Number(event.currentTarget.value))}>
-            <For each={props.snapshot.video.layers}>{(layer) => <option value={layer.id}>{layer.id}: {layer.label}</option>}</For>
+            <For each={props.snapshot.video.layers}>{(layer) => <option data-no-localize value={layer.id}>{layer.id}: {layer.label}</option>}</For>
           </select>
         </label>
       </Show>
@@ -236,7 +236,7 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
         <label>
           Output
           <select value={props.selectedOutputId ?? ""} onInput={(event) => props.onMapOutputId(Number(event.currentTarget.value))}>
-            <For each={props.snapshot.video.outputs}>{(output) => <option value={output.id}>{output.id}: {output.label}</option>}</For>
+            <For each={props.snapshot.video.outputs}>{(output) => <option data-no-localize value={output.id}>{output.id}: {output.label}</option>}</For>
           </select>
         </label>
       </Show>
@@ -259,7 +259,7 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
             <Show when={props.snapshot.video.mapping_presets.length === 0}>
               <option value="">No presets</option>
             </Show>
-            <For each={props.snapshot.video.mapping_presets}>{(preset) => <option value={preset.label}>{preset.label}</option>}</For>
+            <For each={props.snapshot.video.mapping_presets}>{(preset) => <option data-no-localize value={preset.label}>{preset.label}</option>}</For>
           </select>
         </label>
       </Show>

@@ -229,7 +229,7 @@ export function VideoPlaybackTimeline(props: VideoPlaybackTimelineProps) {
                   onPointerCancel={(event) => event.currentTarget.releasePointerCapture(event.pointerId)}
                   onDblClick={() => props.onJumpCuePoint(index())}
                 >
-                  <title>{cuePoint.label} {formatTimelineTime(cuePoint.position_ms)}</title>
+                  <title data-no-localize>{cuePoint.label} {formatTimelineTime(cuePoint.position_ms)}</title>
                 </polygon>
               </>
             );

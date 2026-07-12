@@ -32,7 +32,7 @@ export function VideoCompositionSetupPanel(props: VideoCompositionSetupPanelProp
           {(composition) => (
             <div class="compositionItem">
               <div class="compositionHeader">
-                <strong>{composition.label}</strong>
+                <strong data-no-localize>{composition.label}</strong>
                 <span>{composition.layer_ids.length} video layer(s) / {composition.output_ids.length} video output(s)</span>
               </div>
               <Show when={composition.id !== 1}>
@@ -79,7 +79,7 @@ export function VideoCompositionSetupPanel(props: VideoCompositionSetupPanelProp
                             void props.onSetCompositionLayers(composition.id, layerIds);
                           }}
                         />
-                        {layer.label}
+                        <span data-no-localize>{layer.label}</span>
                       </label>
                     )}
                   </For>
@@ -106,7 +106,7 @@ export function VideoCompositionSetupPanel(props: VideoCompositionSetupPanelProp
                   checked={props.draftLayerIds.includes(layer.id)}
                   onChange={(event) => props.onToggleDraftLayer(layer.id, event.currentTarget.checked)}
                 />
-                {layer.label}
+                <span data-no-localize>{layer.label}</span>
               </label>
             )}
           </For>

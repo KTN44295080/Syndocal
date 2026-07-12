@@ -290,7 +290,7 @@ export function EffectSourceControlsPanel(props: EffectSourceControlsPanelProps)
                     <line x1={-object.width / 2} y1="0" x2={object.width / 2} y2="0" />
                     <line x1="0" y1={-object.depth / 2} x2="0" y2={object.depth / 2} />
                     <text x={-object.width / 2 + 1} y={-object.depth / 2 - 1}>
-                      {object.label}
+                      <tspan data-no-localize>{object.label}</tspan>
                     </text>
                   </g>
                 )}

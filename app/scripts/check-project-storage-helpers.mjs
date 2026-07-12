@@ -17,6 +17,7 @@ async function importTsModule(path) {
 
 const recent = await importTsModule("../src/projectRecentStorage.ts");
 const recovery = await importTsModule("../src/projectRecoveryStorage.ts");
+const workspaceLayout = await importTsModule("../src/workspaceLayoutStorage.ts");
 
 assert.equal(recent.recentProjectFileName("C:\\shows\\main.sdc"), "main.sdc");
 assert.equal(recent.recentProjectFileName("/shows/main.sdc"), "main.sdc");
@@ -75,6 +76,56 @@ const localStorage = {
   removeItem: (key) => storageValues.delete(key),
 };
 globalThis.window = { localStorage };
+
+assert.deepEqual(workspaceLayout.workspaceLayoutFromUnknown(null), workspaceLayout.defaultWorkspaceLayout);
+assert.deepEqual(
+  workspaceLayout.workspaceLayoutFromUnknown({
+    workspace_tab: "control",
+    setup_sub_tab: "video",
+    control_mode: "live",
+    timeline_desk_surface: "playback",
+    edit_desk_surface: "effects",
+    control_category: "color",
+    future_field: true,
+  }),
+  {
+    workspace_tab: "control",
+    setup_sub_tab: "video",
+    control_mode: "live",
+    timeline_desk_surface: "playback",
+    edit_desk_surface: "effects",
+    control_category: "color",
+  },
+);
+assert.deepEqual(
+  workspaceLayout.workspaceLayoutFromUnknown({
+    workspace_tab: "invalid",
+    setup_sub_tab: "remote",
+    control_mode: 4,
+    timeline_desk_surface: "future",
+    edit_desk_surface: "dmx",
+    control_category: "beam",
+  }),
+  {
+    ...workspaceLayout.defaultWorkspaceLayout,
+    setup_sub_tab: "remote",
+    edit_desk_surface: "dmx",
+    control_category: "beam",
+  },
+);
+const savedWorkspaceLayout = {
+  ...workspaceLayout.defaultWorkspaceLayout,
+  workspace_tab: "control",
+  control_mode: "live",
+  timeline_desk_surface: "playback",
+};
+assert.equal(workspaceLayout.saveWorkspaceLayout(savedWorkspaceLayout), true);
+assert.deepEqual(workspaceLayout.loadWorkspaceLayout(), savedWorkspaceLayout);
+
+storageValues.set(workspaceLayout.workspaceLayoutStorageKey, "{broken-json");
+assert.deepEqual(workspaceLayout.loadWorkspaceLayout(), workspaceLayout.defaultWorkspaceLayout);
+assert.equal(storageValues.has(workspaceLayout.workspaceLayoutStorageKey), false);
+
 assert.equal(recovery.saveProjectRecoveryCheckpoint(checkpoint), true);
 assert.deepEqual(recovery.loadProjectRecoveryCheckpoint(), checkpoint);
 
@@ -90,6 +141,7 @@ globalThis.window = {
     },
   },
 };
+assert.equal(workspaceLayout.saveWorkspaceLayout(savedWorkspaceLayout), false);
 assert.equal(recovery.saveProjectRecoveryCheckpoint(checkpoint), false);
 delete globalThis.window;
 

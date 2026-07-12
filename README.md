@@ -72,6 +72,8 @@ v1.0の個人配布物はコード署名されていません。
 5. TimelineまたはGOで、照明と映像が同じキューから変化することを確認します。
 6. Project menuから`.sdc`として保存します。
 
+Project menuの`UI language`からEnglish／Japaneseを切り替えられます。選択は端末設定として保存され、`.sdc`には混在しません。
+
 同梱サンプルの詳細は [samples/README.md](samples/README.md)、キー操作は [HOTKEYS.md](HOTKEYS.md) を参照してください。
 
 ## プロジェクトとプリセット
@@ -82,6 +84,8 @@ v1.0の個人配布物はコード署名されていません。
 - `.effect`: LFO/位置ウェーブ
 - `.nodegraph`: エフェクトノードグラフ
 - `.projmap`: プロジェクター補正
+- `.midimap` / `.oscmap`: MIDI / OSCコントロールマッピング共有
+- `.sdctemplate`: ショー構成、埋め込みプロファイル、MIDI / OSCマッピングをまとめたユーザーテンプレート。読込時は全出力を無効化
 
 `.sdc` v1は未知フィールドを読み飛ばし、後から追加された省略可能項目を既定値で補完します。将来versionは暗黙変換せず、対応外として明示的に拒否します。
 
@@ -135,8 +139,8 @@ Windowsの完全libav bundleでは`FFMPEG_DIR`を共有FFmpeg SDKルートへ設
 
 ## 既知の制限
 
-- v1.0の外部映像I/OはDisplay + feature-gated NDI。Spout/Syphonは`NotBuilt`として明示し、v1.1候補です。
-- HAP Q Alpha、HAP R/BC7、ISFシェーダーはv1.0対象外です。
+- v1.0以降の外部映像I/OはDisplay、feature-gated NDI、Windows x86_64のSpoutに対応しています。Syphonはwgpu世代差とmacOS実装環境が必要なため未実装です。
+- HAP Q Alpha、HAP R/BC7のGPU直接sampling + CPU fallback、安全境界付きsingle-pass ISFは実装済みです。ISF multipass／persistent buffer／imported resource／audio inputは未対応です。
 - 3Dビジュアライザは本体UIへ戻さず、`visualizer`データ境界から外部実装へ接続します。標準UIは2D Stage Mapです。
 - Enttec Open DMXはOS/USBドライバ依存のbreak timingがあるため、最終現場ではUSB PRO系を推奨します。
 - Art-Net/sACN/Serialの実機遅延は接続機材ごとに再測定してください。リポジトリの自動検証はloopback中心です。

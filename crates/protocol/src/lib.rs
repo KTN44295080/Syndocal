@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 pub type FixtureId = u64;
 pub type EffectId = u64;
 pub type CueId = u64;
+pub type CueListId = u64;
+pub type PaletteId = u64;
+pub type ExecutorId = u64;
 pub type TimelineEventId = u64;
 pub type AutomationId = u64;
 pub type VideoLayerId = u64;
@@ -190,6 +193,14 @@ pub struct AudioWaveformPoint {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AudioSpectrumPoint {
+    pub time_ms: u64,
+    pub bass: f32,
+    pub mid: f32,
+    pub high: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AudioAnalysisSummary {
     pub path: String,
     pub sample_rate: u32,
@@ -197,6 +208,8 @@ pub struct AudioAnalysisSummary {
     pub duration_ms: u64,
     pub estimated_bpm: Option<f32>,
     pub waveform: Vec<AudioWaveformPoint>,
+    #[serde(default)]
+    pub spectrum: Vec<AudioSpectrumPoint>,
     pub beats: Vec<u64>,
 }
 
@@ -260,6 +273,8 @@ pub struct CueFixtureTarget {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum VideoSourceKind {
     File,
+    Camera,
+    ScreenCapture,
     Ndi,
     Spout,
     Syphon,
@@ -306,6 +321,8 @@ pub struct VideoMediaMetadata {
     pub height: Option<u32>,
     #[serde(default)]
     pub frame_rate: Option<f32>,
+    #[serde(default)]
+    pub has_audio: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -460,6 +477,45 @@ pub struct VideoLayerState {
     pub fx: VideoFxAdjust,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VideoIsfControlKind {
+    Event,
+    Bool,
+    Long,
+    Float,
+    Point2d,
+    Color,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VideoIsfControlSummary {
+    pub name: String,
+    pub kind: VideoIsfControlKind,
+    pub value: [f32; 4],
+    pub default: [f32; 4],
+    pub minimum: [f32; 4],
+    pub maximum: [f32; 4],
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub values: Vec<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VideoIsfEffectSummary {
+    pub enabled: bool,
+    pub label: String,
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub categories: Vec<String>,
+    #[serde(default)]
+    pub controls: Vec<VideoIsfControlSummary>,
+}
+
 impl Default for VideoLayerState {
     fn default() -> Self {
         Self {
@@ -493,6 +549,8 @@ pub struct VideoLayerSummary {
     pub source: VideoSourceSummary,
     pub blend_mode: VideoBlendMode,
     pub state: VideoLayerState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isf_effect: Option<VideoIsfEffectSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -524,6 +582,16 @@ pub enum VideoOutputAspectMode {
     Fill,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
+pub struct VideoMaskPoint {
+    pub x: f32,
+    pub y: f32,
+}
+
+pub const VIDEO_OUTPUT_MASK_POINT_CAPACITY: usize = 8;
+pub const VIDEO_OUTPUT_BITMAP_MASK_WORD_CAPACITY: usize = 32;
+pub const VIDEO_OUTPUT_BITMAP_MASK_MAX_DIMENSION: u8 = 16;
+
 impl Default for VideoOutputAspectMode {
     fn default() -> Self {
         Self::Stretch
@@ -548,6 +616,32 @@ pub struct VideoOutputMapping {
     pub aspect_mode: VideoOutputAspectMode,
     #[serde(default)]
     pub lens_distortion: f32,
+    #[serde(default)]
+    pub edge_blend_left: f32,
+    #[serde(default)]
+    pub edge_blend_right: f32,
+    #[serde(default)]
+    pub edge_blend_top: f32,
+    #[serde(default)]
+    pub edge_blend_bottom: f32,
+    #[serde(default = "default_edge_blend_gamma")]
+    pub edge_blend_gamma: f32,
+    #[serde(default)]
+    pub black_level: f32,
+    #[serde(default)]
+    pub mask_point_count: u8,
+    #[serde(default)]
+    pub mask_invert: bool,
+    #[serde(default)]
+    pub mask_softness: f32,
+    #[serde(default = "default_video_mask_points")]
+    pub mask_points: [VideoMaskPoint; VIDEO_OUTPUT_MASK_POINT_CAPACITY],
+    #[serde(default)]
+    pub bitmap_mask_width: u8,
+    #[serde(default)]
+    pub bitmap_mask_height: u8,
+    #[serde(default)]
+    pub bitmap_mask_luma_words: [u32; VIDEO_OUTPUT_BITMAP_MASK_WORD_CAPACITY],
     pub keystone_x: f32,
     pub keystone_y: f32,
     pub corner_top_left_x: f32,
@@ -574,6 +668,19 @@ impl Default for VideoOutputMapping {
             aspect_ratio: 1.0,
             aspect_mode: VideoOutputAspectMode::Stretch,
             lens_distortion: 0.0,
+            edge_blend_left: 0.0,
+            edge_blend_right: 0.0,
+            edge_blend_top: 0.0,
+            edge_blend_bottom: 0.0,
+            edge_blend_gamma: default_edge_blend_gamma(),
+            black_level: 0.0,
+            mask_point_count: 0,
+            mask_invert: false,
+            mask_softness: 0.0,
+            mask_points: default_video_mask_points(),
+            bitmap_mask_width: 0,
+            bitmap_mask_height: 0,
+            bitmap_mask_luma_words: [0; VIDEO_OUTPUT_BITMAP_MASK_WORD_CAPACITY],
             keystone_x: 0.0,
             keystone_y: 0.0,
             corner_top_left_x: 0.0,
@@ -586,6 +693,14 @@ impl Default for VideoOutputMapping {
             corner_bottom_left_y: 0.0,
         }
     }
+}
+
+const fn default_video_mask_points() -> [VideoMaskPoint; VIDEO_OUTPUT_MASK_POINT_CAPACITY] {
+    [VideoMaskPoint { x: 0.0, y: 0.0 }; VIDEO_OUTPUT_MASK_POINT_CAPACITY]
+}
+
+const fn default_edge_blend_gamma() -> f32 {
+    2.2
 }
 
 pub fn canonical_video_output_mapping_field(field: &str) -> Option<&'static str> {
@@ -624,6 +739,20 @@ pub fn canonical_video_output_mapping_field(field: &str) -> Option<&'static str>
         | "pincushiondistortion"
         | "lenswarp"
         | "warplens" => Some("lens_distortion"),
+        "edgeblendleft" | "blendleft" | "featherleft" | "leftblend" | "leftfeather" => {
+            Some("edge_blend_left")
+        }
+        "edgeblendright" | "blendright" | "featherright" | "rightblend" | "rightfeather" => {
+            Some("edge_blend_right")
+        }
+        "edgeblendtop" | "blendtop" | "feathertop" | "topblend" | "topfeather" => {
+            Some("edge_blend_top")
+        }
+        "edgeblendbottom" | "blendbottom" | "featherbottom" | "bottomblend" | "bottomfeather" => {
+            Some("edge_blend_bottom")
+        }
+        "edgeblendgamma" | "blendgamma" | "feathergamma" => Some("edge_blend_gamma"),
+        "blacklevel" | "blacklift" | "projectorblack" => Some("black_level"),
         "keystonex"
         | "keystoneh"
         | "keyx"
@@ -684,6 +813,12 @@ pub fn video_output_mapping_field_value(mapping: &VideoOutputMapping, field: &st
         "rotation_deg" => Some(mapping.rotation_deg),
         "aspect_ratio" => Some(mapping.aspect_ratio),
         "lens_distortion" => Some(mapping.lens_distortion),
+        "edge_blend_left" => Some(mapping.edge_blend_left),
+        "edge_blend_right" => Some(mapping.edge_blend_right),
+        "edge_blend_top" => Some(mapping.edge_blend_top),
+        "edge_blend_bottom" => Some(mapping.edge_blend_bottom),
+        "edge_blend_gamma" => Some(mapping.edge_blend_gamma),
+        "black_level" => Some(mapping.black_level),
         "keystone_x" => Some(mapping.keystone_x),
         "keystone_y" => Some(mapping.keystone_y),
         "corner_top_left_x" => Some(mapping.corner_top_left_x),
@@ -714,6 +849,12 @@ pub fn set_video_output_mapping_field_value(
         Some("rotation_deg") => mapping.rotation_deg = value,
         Some("aspect_ratio") => mapping.aspect_ratio = value,
         Some("lens_distortion") => mapping.lens_distortion = value,
+        Some("edge_blend_left") => mapping.edge_blend_left = value,
+        Some("edge_blend_right") => mapping.edge_blend_right = value,
+        Some("edge_blend_top") => mapping.edge_blend_top = value,
+        Some("edge_blend_bottom") => mapping.edge_blend_bottom = value,
+        Some("edge_blend_gamma") => mapping.edge_blend_gamma = value,
+        Some("black_level") => mapping.black_level = value,
         Some("keystone_x") => mapping.keystone_x = value,
         Some("keystone_y") => mapping.keystone_y = value,
         Some("corner_top_left_x") => mapping.corner_top_left_x = value,
@@ -808,14 +949,179 @@ impl Default for VideoSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CueSummary {
     pub id: CueId,
+    #[serde(default = "default_cue_list_id")]
+    pub cue_list_id: CueListId,
+    #[serde(default)]
+    pub cue_number: String,
     pub label: String,
     pub fade_ms: u64,
+    #[serde(default)]
+    pub pre_wait_ms: u64,
+    #[serde(default)]
+    pub follow_ms: Option<u64>,
+    #[serde(default)]
+    pub ifcb_timing: CueIfcbTiming,
+    #[serde(default)]
+    pub parts: Vec<CuePartSummary>,
+    #[serde(default)]
+    pub mark: bool,
+    #[serde(default)]
+    pub mib_fixture_ids: Vec<FixtureId>,
+    #[serde(default)]
+    pub palette_targets: Vec<CuePaletteTarget>,
+    #[serde(default = "default_cue_tracking")]
+    pub tracking: bool,
+    #[serde(default)]
+    pub notes: String,
     pub targets: Vec<CueFixtureTarget>,
     pub video_targets: Vec<VideoLayerTarget>,
     #[serde(default)]
     pub video_output_targets: Vec<VideoOutputTarget>,
     #[serde(default)]
     pub node_graph_targets: Vec<CueNodeGraphTarget>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CueIfcbTiming {
+    #[serde(default)]
+    pub intensity_fade_ms: Option<u64>,
+    #[serde(default)]
+    pub intensity_delay_ms: u64,
+    #[serde(default)]
+    pub focus_fade_ms: Option<u64>,
+    #[serde(default)]
+    pub focus_delay_ms: u64,
+    #[serde(default)]
+    pub color_fade_ms: Option<u64>,
+    #[serde(default)]
+    pub color_delay_ms: u64,
+    #[serde(default)]
+    pub beam_fade_ms: Option<u64>,
+    #[serde(default)]
+    pub beam_delay_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CuePartSummary {
+    pub number: u16,
+    pub label: String,
+    #[serde(default)]
+    pub delay_ms: u64,
+    #[serde(default)]
+    pub fade_ms: Option<u64>,
+    #[serde(default)]
+    pub fixture_ids: Vec<FixtureId>,
+    #[serde(default)]
+    pub video_layer_ids: Vec<VideoLayerId>,
+    #[serde(default)]
+    pub video_output_ids: Vec<VideoOutputId>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PaletteKind {
+    Intensity,
+    Position,
+    Color,
+    Beam,
+    All,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ReferencePaletteSummary {
+    pub id: PaletteId,
+    pub label: String,
+    pub kind: PaletteKind,
+    pub values: Vec<AttributeValueSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CuePaletteTarget {
+    pub palette_id: PaletteId,
+    pub fixture_ids: Vec<FixtureId>,
+}
+
+fn default_cue_tracking() -> bool {
+    true
+}
+
+pub const DEFAULT_CUE_LIST_ID: CueListId = 1;
+
+fn default_cue_list_id() -> CueListId {
+    DEFAULT_CUE_LIST_ID
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CueListSummary {
+    pub id: CueListId,
+    pub label: String,
+    #[serde(default)]
+    pub active_cue_id: Option<CueId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PlaybackExecutorSummary {
+    pub id: ExecutorId,
+    pub label: String,
+    pub cue_list_id: CueListId,
+    pub page: u16,
+    pub slot: u16,
+    pub level: f32,
+}
+
+impl Default for PlaybackExecutorSummary {
+    fn default() -> Self {
+        Self {
+            id: 1,
+            label: "Main".to_string(),
+            cue_list_id: DEFAULT_CUE_LIST_ID,
+            page: 1,
+            slot: 1,
+            level: 1.0,
+        }
+    }
+}
+
+fn default_playback_executors() -> Vec<PlaybackExecutorSummary> {
+    vec![PlaybackExecutorSummary::default()]
+}
+
+fn default_level() -> f32 {
+    1.0
+}
+
+impl Default for CueListSummary {
+    fn default() -> Self {
+        Self {
+            id: DEFAULT_CUE_LIST_ID,
+            label: "Main".to_string(),
+            active_cue_id: None,
+        }
+    }
+}
+
+impl Default for CueSummary {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            cue_list_id: DEFAULT_CUE_LIST_ID,
+            cue_number: String::new(),
+            label: String::new(),
+            fade_ms: 0,
+            pre_wait_ms: 0,
+            follow_ms: None,
+            ifcb_timing: CueIfcbTiming::default(),
+            parts: Vec::new(),
+            mark: false,
+            mib_fixture_ids: Vec::new(),
+            palette_targets: Vec::new(),
+            tracking: true,
+            notes: String::new(),
+            targets: Vec::new(),
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -830,6 +1136,25 @@ pub struct ActiveFadeSummary {
     pub progress: f32,
     pub remaining_ms: u64,
     pub paused: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProgrammerValueSummary {
+    pub fixture_id: FixtureId,
+    pub attribute: String,
+    pub value: u16,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProgrammerSnapshot {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub blind: bool,
+    #[serde(default)]
+    pub values: Vec<ProgrammerValueSummary>,
+    #[serde(default)]
+    pub dmx_previews: Vec<DmxUniversePreview>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -982,8 +1307,32 @@ pub struct EffectClockSync {
 pub enum NodeGraphNodeKind {
     Lfo,
     PositionWave,
+    Audio,
     Transform,
     Output,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AudioSpectrumBand {
+    Bass,
+    Mid,
+    High,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum AudioSpectrumSource {
+    #[default]
+    Timeline,
+    Live,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NodeGraphAudioNode {
+    #[serde(default)]
+    pub source: AudioSpectrumSource,
+    pub band: AudioSpectrumBand,
+    pub gain: f32,
+    pub bias: f32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1048,6 +1397,8 @@ pub struct NodeGraphNodeSummary {
     pub lfo: Option<NodeGraphLfoNode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position_wave: Option<NodeGraphPositionWaveNode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<NodeGraphAudioNode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transform: Option<NodeGraphTransformNode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1169,6 +1520,51 @@ impl Default for DmxOutputProtocol {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DmxInputProtocol {
+    ArtNet,
+    Sacn,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DmxMergeMode {
+    Htp,
+    Ltp,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DmxInputConfig {
+    pub protocol: DmxInputProtocol,
+    pub bind_ip: String,
+    pub port: u16,
+    pub universe: u16,
+    pub merge_mode: DmxMergeMode,
+    pub timeout_ms: u64,
+}
+
+impl Default for DmxInputConfig {
+    fn default() -> Self {
+        Self {
+            protocol: DmxInputProtocol::ArtNet,
+            bind_ip: "0.0.0.0".to_string(),
+            port: 6454,
+            universe: 0,
+            merge_mode: DmxMergeMode::Htp,
+            timeout_ms: 2_500,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DmxInputStatus {
+    pub running: bool,
+    pub signal_present: bool,
+    pub packets_received: u64,
+    pub invalid_packets: u64,
+    pub last_packet_unix_ms: Option<u64>,
+    pub source_address: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DmxOutputConfig {
     pub enabled: bool,
@@ -1208,6 +1604,16 @@ pub struct DmxOutputRouteTelemetry {
     pub bytes: usize,
     #[serde(default)]
     pub error: Option<String>,
+    #[serde(default)]
+    pub consecutive_failures: u32,
+    #[serde(default)]
+    pub reconnect_attempts: u64,
+    #[serde(default)]
+    pub reconnecting: bool,
+    #[serde(default)]
+    pub retry_in_ms: Option<u64>,
+    #[serde(default)]
+    pub last_success_unix_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1543,15 +1949,59 @@ impl Default for ClockSource {
 pub struct RemoteControlConfig {
     pub bind_ip: String,
     pub port: u16,
+    #[serde(default)]
+    pub pairing_pin: String,
+    #[serde(default)]
+    pub allow_lan: bool,
+    #[serde(default = "default_remote_max_connections")]
+    pub max_connections: u16,
+    #[serde(default = "default_remote_max_message_bytes")]
+    pub max_message_bytes: usize,
+    #[serde(default = "default_remote_max_messages_per_second")]
+    pub max_messages_per_second: u16,
+}
+
+fn default_remote_max_connections() -> u16 {
+    8
+}
+
+fn default_remote_max_message_bytes() -> usize {
+    64 * 1024
+}
+
+fn default_remote_max_messages_per_second() -> u16 {
+    60
 }
 
 impl Default for RemoteControlConfig {
     fn default() -> Self {
         Self {
-            bind_ip: "0.0.0.0".to_string(),
+            bind_ip: "127.0.0.1".to_string(),
             port: 9_100,
+            pairing_pin: String::new(),
+            allow_lan: false,
+            max_connections: default_remote_max_connections(),
+            max_message_bytes: default_remote_max_message_bytes(),
+            max_messages_per_second: default_remote_max_messages_per_second(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RemoteClientSummary {
+    pub id: u64,
+    pub peer_addr: String,
+    pub connected_at_unix_ms: u64,
+    pub last_activity_unix_ms: u64,
+    pub messages_received: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RemoteControlStatus {
+    pub running: bool,
+    pub active_connections: usize,
+    pub rejected_connections: u64,
+    pub clients: Vec<RemoteClientSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1561,6 +2011,10 @@ pub struct ClockSnapshot {
     pub beat_counter: u64,
     pub tap_count: usize,
     pub source: ClockSource,
+    #[serde(default)]
+    pub external_sync_age_ms: Option<u64>,
+    #[serde(default)]
+    pub external_sync_locked: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1643,6 +2097,8 @@ impl Default for ClockSnapshot {
             beat_counter: 0,
             tap_count: 0,
             source: ClockSource::Manual,
+            external_sync_age_ms: None,
+            external_sync_locked: false,
         }
     }
 }
@@ -1651,8 +2107,18 @@ impl Default for ClockSnapshot {
 pub struct EngineSnapshot {
     pub fixtures: Vec<PatchedFixtureSummary>,
     pub cues: Vec<CueSummary>,
+    #[serde(default = "default_cue_lists")]
+    pub cue_lists: Vec<CueListSummary>,
+    #[serde(default)]
+    pub palettes: Vec<ReferencePaletteSummary>,
+    #[serde(default = "default_playback_executors")]
+    pub playback_executors: Vec<PlaybackExecutorSummary>,
+    #[serde(default = "default_level")]
+    pub playback_master: f32,
     pub active_cue_id: Option<CueId>,
     pub active_fade: Option<ActiveFadeSummary>,
+    #[serde(default)]
+    pub programmer: ProgrammerSnapshot,
     pub timeline: TimelineSnapshot,
     pub video: VideoSnapshot,
     pub effects: Vec<EffectSummary>,
@@ -1681,8 +2147,13 @@ impl Default for EngineSnapshot {
         Self {
             fixtures: Vec::new(),
             cues: Vec::new(),
+            cue_lists: default_cue_lists(),
+            palettes: Vec::new(),
+            playback_executors: default_playback_executors(),
+            playback_master: 1.0,
             active_cue_id: None,
             active_fade: None,
+            programmer: ProgrammerSnapshot::default(),
             timeline: TimelineSnapshot::default(),
             video: VideoSnapshot::default(),
             effects: Vec::new(),
@@ -1706,11 +2177,16 @@ impl Default for EngineSnapshot {
     }
 }
 
+fn default_cue_lists() -> Vec<CueListSummary> {
+    vec![CueListSummary::default()]
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         canonical_video_output_mapping_field, set_video_output_mapping_field_value,
-        video_output_mapping_field_value, VideoOutputMapping,
+        video_output_mapping_field_value, AudioSpectrumBand, AudioSpectrumSource,
+        NodeGraphAudioNode, VideoOutputMapping,
     };
 
     #[test]
@@ -1734,6 +2210,14 @@ mod tests {
         assert_eq!(
             canonical_video_output_mapping_field("barrel distortion"),
             Some("lens_distortion")
+        );
+        assert_eq!(
+            canonical_video_output_mapping_field("left feather"),
+            Some("edge_blend_left")
+        );
+        assert_eq!(
+            canonical_video_output_mapping_field("black lift"),
+            Some("black_level")
         );
         assert_eq!(
             canonical_video_output_mapping_field("rotate"),
@@ -1766,6 +2250,8 @@ mod tests {
         set_video_output_mapping_field_value(&mut mapping, "screen x", 0.125).unwrap();
         set_video_output_mapping_field_value(&mut mapping, "projector ratio", 16.0 / 9.0).unwrap();
         set_video_output_mapping_field_value(&mut mapping, "barrel", -0.1).unwrap();
+        set_video_output_mapping_field_value(&mut mapping, "blend right", 0.25).unwrap();
+        set_video_output_mapping_field_value(&mut mapping, "blend gamma", 1.8).unwrap();
 
         assert_eq!(
             video_output_mapping_field_value(&mapping, "keystone_y"),
@@ -1784,6 +2270,128 @@ mod tests {
             video_output_mapping_field_value(&mapping, "lens distortion"),
             Some(-0.1)
         );
+        assert_eq!(
+            video_output_mapping_field_value(&mapping, "edge_blend_right"),
+            Some(0.25)
+        );
+        assert_eq!(
+            video_output_mapping_field_value(&mapping, "edge_blend_gamma"),
+            Some(1.8)
+        );
         assert!(set_video_output_mapping_field_value(&mut mapping, "not a field", 1.0).is_err());
+    }
+
+    #[test]
+    fn legacy_audio_node_defaults_to_timeline_source() {
+        let node: NodeGraphAudioNode =
+            serde_json::from_str(r#"{"band":"Bass","gain":1.0,"bias":0.0}"#).unwrap();
+        assert_eq!(node.source, AudioSpectrumSource::Timeline);
+        let live = NodeGraphAudioNode {
+            source: AudioSpectrumSource::Live,
+            band: AudioSpectrumBand::High,
+            gain: 2.0,
+            bias: -0.1,
+        };
+        let roundtrip: NodeGraphAudioNode =
+            serde_json::from_str(&serde_json::to_string(&live).unwrap()).unwrap();
+        assert_eq!(roundtrip, live);
+    }
+
+    #[test]
+    fn legacy_cue_defaults_to_inherited_ifcb_timing() {
+        let cue = super::CueSummary::default();
+        let mut value = serde_json::to_value(cue).unwrap();
+        value.as_object_mut().unwrap().remove("ifcb_timing");
+        value.as_object_mut().unwrap().remove("cue_list_id");
+        value.as_object_mut().unwrap().remove("parts");
+        value.as_object_mut().unwrap().remove("mark");
+        value.as_object_mut().unwrap().remove("mib_fixture_ids");
+        value.as_object_mut().unwrap().remove("palette_targets");
+
+        let parsed: super::CueSummary = serde_json::from_value(value).unwrap();
+
+        assert_eq!(parsed.ifcb_timing, super::CueIfcbTiming::default());
+        assert_eq!(parsed.ifcb_timing.intensity_fade_ms, None);
+        assert_eq!(parsed.ifcb_timing.focus_delay_ms, 0);
+        assert_eq!(parsed.cue_list_id, super::DEFAULT_CUE_LIST_ID);
+        assert!(parsed.parts.is_empty());
+        assert!(!parsed.mark);
+        assert!(parsed.mib_fixture_ids.is_empty());
+        assert!(parsed.palette_targets.is_empty());
+    }
+
+    #[test]
+    fn legacy_engine_snapshot_defaults_reference_palettes_to_empty() {
+        let mut value = serde_json::to_value(super::EngineSnapshot::default()).unwrap();
+        value.as_object_mut().unwrap().remove("palettes");
+        value.as_object_mut().unwrap().remove("playback_executors");
+        value.as_object_mut().unwrap().remove("playback_master");
+
+        let parsed: super::EngineSnapshot = serde_json::from_value(value).unwrap();
+
+        assert!(parsed.palettes.is_empty());
+        assert_eq!(
+            parsed.playback_executors,
+            vec![super::PlaybackExecutorSummary::default()]
+        );
+        assert_eq!(parsed.playback_master, 1.0);
+    }
+
+    #[test]
+    fn legacy_clock_snapshot_defaults_external_sync_health() {
+        let mut value = serde_json::to_value(super::ClockSnapshot::default()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("external_sync_age_ms");
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("external_sync_locked");
+
+        let parsed: super::ClockSnapshot = serde_json::from_value(value).unwrap();
+
+        assert_eq!(parsed.external_sync_age_ms, None);
+        assert!(!parsed.external_sync_locked);
+    }
+
+    #[test]
+    fn legacy_cue_part_defaults_video_assignments_to_empty() {
+        let mut value = serde_json::to_value(super::CuePartSummary {
+            number: 1,
+            label: "Lighting".to_string(),
+            delay_ms: 100,
+            fade_ms: Some(250),
+            fixture_ids: vec![7],
+            video_layer_ids: vec![3],
+            video_output_ids: vec![4],
+        })
+        .unwrap();
+        value.as_object_mut().unwrap().remove("video_layer_ids");
+        value.as_object_mut().unwrap().remove("video_output_ids");
+
+        let parsed: super::CuePartSummary = serde_json::from_value(value).unwrap();
+
+        assert_eq!(parsed.fixture_ids, vec![7]);
+        assert!(parsed.video_layer_ids.is_empty());
+        assert!(parsed.video_output_ids.is_empty());
+    }
+
+    #[test]
+    fn legacy_video_output_mapping_defaults_bitmap_mask_to_disabled() {
+        let mapping = super::VideoOutputMapping::default();
+        let mut value = serde_json::to_value(mapping).unwrap();
+        value.as_object_mut().unwrap().remove("bitmap_mask_width");
+        value.as_object_mut().unwrap().remove("bitmap_mask_height");
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("bitmap_mask_luma_words");
+
+        let parsed: super::VideoOutputMapping = serde_json::from_value(value).unwrap();
+
+        assert_eq!(parsed.bitmap_mask_width, 0);
+        assert_eq!(parsed.bitmap_mask_height, 0);
+        assert_eq!(parsed.bitmap_mask_luma_words, [0; 32]);
     }
 }

@@ -33,7 +33,7 @@ export function TouchFixturePickerPanel(props: TouchFixturePickerPanelProps) {
               class={props.selectedGroupId === group.groupId ? "groupChip active" : "groupChip"}
               onClick={() => props.onSelectGroup(group.groupId)}
             >
-              {group.groupId}
+              <span data-no-localize>{group.groupId}</span>
               <span>{group.count}</span>
             </button>
           )}
@@ -46,11 +46,11 @@ export function TouchFixturePickerPanel(props: TouchFixturePickerPanelProps) {
               class={fixture.id === props.selectedFixtureId ? "fixture selected" : "fixture"}
               onClick={() => props.onSelectFixture(fixture)}
             >
-              <strong>{fixture.label}</strong>
+              <strong data-no-localize>{fixture.label}</strong>
               <span>
                 U{fixture.universe} A{fixture.address}
               </span>
-              <small>{fixture.group_ids.join(", ") || fixture.mode_name}</small>
+              <small data-no-localize>{fixture.group_ids.join(", ") || fixture.mode_name}</small>
             </button>
           )}
         </For>

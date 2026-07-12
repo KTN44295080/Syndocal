@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
-const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? "timeline";
+const largeShowMode = process.argv.includes("--large-show");
+const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (largeShowMode ? "large-show" : "timeline");
 const defaultUrl =
   viewportFixture === "none"
     ? "http://127.0.0.1:5173/"
@@ -24,7 +25,7 @@ const allViewports = [
   { width: 1366, height: 768 },
   { width: 2048, height: 1129 },
 ];
-const viewports = process.env.SYNDOCAL_VIEWPORT_SINGLE === "1" ? [allViewports[1]] : allViewports;
+const viewports = largeShowMode || process.env.SYNDOCAL_VIEWPORT_SINGLE === "1" ? [allViewports[1]] : allViewports;
 const setupTabs = [
   { area: "Lighting", tab: "Library", id: "library" },
   { area: "Lighting", tab: "Profiles", id: "profiles" },
@@ -239,6 +240,14 @@ async function seedViewportLocalStorage(client) {
   await client.evaluate(`(() => {
     window.localStorage.setItem('syndocal.recentProjects.v1', ${JSON.stringify(JSON.stringify(viewportRecentProjects))});
     window.localStorage.setItem('syndocal.projectRecovery.v1', ${JSON.stringify(JSON.stringify(viewportRecoveryCheckpoint))});
+    window.localStorage.setItem('syndocal.workspaceLayout.v1', JSON.stringify({
+      workspace_tab: 'setup',
+      setup_sub_tab: 'patch',
+      control_mode: 'edit',
+      timeline_desk_surface: 'show',
+      edit_desk_surface: 'attributes',
+      control_category: 'position',
+    }));
   })()`);
 }
 
@@ -284,6 +293,45 @@ async function clickVisibleByText(client, selector, text) {
 async function pressKey(client, code, key = code, modifiers = 0) {
   await client.send("Input.dispatchKeyEvent", { type: "keyDown", code, key, modifiers });
   await client.send("Input.dispatchKeyEvent", { type: "keyUp", code, key, modifiers });
+}
+
+async function checkWorkspaceLayoutPersistence(client) {
+  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await clickVisibleByText(client, ".timelineDeskTabs button", "Playback");
+  await sleep(100);
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  const restored = await client.evaluate(`(() => ({
+    workspace: (document.querySelector('.workspaceTabs button.active')?.textContent || '').trim(),
+    controlMode: (document.querySelector('.controlModeTabs button.active')?.textContent || '').trim(),
+    desk: (document.querySelector('.timelineDeskTabs button.active')?.textContent || '').trim(),
+  }))()`);
+  if (restored.workspace !== "Control" || restored.controlMode !== "Timeline" || restored.desk !== "Playback") {
+    throw new Error(`Workspace layout did not restore: ${JSON.stringify(restored)}`);
+  }
+
+  await clickVisibleByText(client, ".appMenuButton", "...");
+  await clickVisibleByText(client, ".appProjectMenu button", "Reset Layout");
+  await sleep(100);
+  const reset = await client.evaluate(`(() => {
+    const stored = JSON.parse(window.localStorage.getItem('syndocal.workspaceLayout.v1') || '{}');
+    return {
+      workspace: (document.querySelector('.workspaceTabs button.active')?.textContent || '').trim(),
+      setupTab: (document.querySelector('.setupModeTabs button.active')?.textContent || '').trim(),
+      stored,
+    };
+  })()`);
+  if (
+    reset.workspace !== "Setup" ||
+    reset.setupTab !== "Patch" ||
+    reset.stored.workspace_tab !== "setup" ||
+    reset.stored.setup_sub_tab !== "patch" ||
+    reset.stored.control_mode !== "edit"
+  ) {
+    throw new Error(`Workspace layout reset failed: ${JSON.stringify(reset)}`);
+  }
+  console.log("pass workspace-layout-persistence");
 }
 
 async function checkKeyboardNavigation(client) {
@@ -468,6 +516,23 @@ async function measure(client, label) {
       visibleProjectMenuShortcutCount: document.querySelectorAll('.appProjectMenu button[aria-keyshortcuts]').length,
       visibleRecentProjectMenuItemCount: visibleCount('.appProjectMenu .recentProjectMenuItem'),
       visibleRecoveryProjectMenuItemCount: visibleCount('.appProjectMenu .recoveryProjectMenuItem'),
+      visibleUpdateMenuLabelCount: [...document.querySelectorAll('.appProjectMenu .appProjectMenuLabel span')]
+        .filter((node) => (node.textContent || '').trim() === 'Application Updates').length,
+      visibleUpdateCheckButtonCount: [...document.querySelectorAll('.appProjectMenu button[role="menuitem"]')]
+        .filter((button) => (button.textContent || '').includes('Check for Updates')).length,
+      visibleUserTemplateMenuLabelCount: [...document.querySelectorAll('.appProjectMenu .appProjectMenuLabel span')]
+        .filter((node) => (node.textContent || '').trim() === 'User Templates').length,
+      visibleUserTemplateActionCount: [...document.querySelectorAll('.appProjectMenu button[role="menuitem"]')]
+        .filter((button) => /(?:New from|Save as) Template/.test(button.textContent || '')).length,
+      documentLanguage: document.documentElement.lang,
+      visibleJapaneseLanguageLabelCount: [...document.querySelectorAll('.appProjectMenu .appProjectMenuLabel span')]
+        .filter((node) => (node.textContent || '').trim() === 'UI言語').length,
+      visibleJapaneseSaveButtonCount: [...document.querySelectorAll('.appProjectMenu button[role="menuitem"] span')]
+        .filter((node) => (node.textContent || '').trim() === '保存').length,
+      preservedUserFixtureLabelCount: [...document.querySelectorAll('.fixtureList .fixture strong')]
+        .filter((node) => ['Video', 'Save', 'Output'].includes((node.textContent || '').trim())).length,
+      translatedUserFixtureCollisionCount: [...document.querySelectorAll('.fixtureList .fixture strong')]
+        .filter((node) => ['映像', '保存', '出力'].includes((node.textContent || '').trim())).length,
       timelineAutomationRangeCount: document.querySelectorAll('.timelineOverview .timelineAutomationRange').length,
       timelineAutomationHandleCount: document.querySelectorAll('.timelineOverview .timelineAutomationHandle').length,
       timelineAutomationKeyframeCount: document.querySelectorAll('.timelineOverview .timelineAutomationKeyframe').length,
@@ -514,6 +579,7 @@ async function measure(client, label) {
       visibleCustomProfileActionCount: visibleCount('.setupMode-profiles .customProfileActions button'),
       visibleCustomProfileDmxMapCount: visibleCount('.setupMode-profiles .customProfileDmxMap'),
       visibleDmxOutputConfigPanelCount: visibleCount('.setupMode-dmx .dmxOutputConfigPanel'),
+      visibleArtRdmPanelCount: visibleCount('.setupMode-dmx .artRdmPanel'),
       visibleOutputDiagnosticsDeskCount: visibleCount('.setupMode-dmx .outputDiagnosticsDesk'),
       visibleLightingRuntimeDeskCount: visibleCount('.setupMode-dmx .lightingRuntimeDesk'),
       dmxOutputConfigPanelWidth: dmxOutputConfigPanelRect ? Math.round(dmxOutputConfigPanelRect.width) : 0,
@@ -525,6 +591,9 @@ async function measure(client, label) {
       oscMappingListDeskWidth: oscMappingListDeskRect ? Math.round(oscMappingListDeskRect.width) : 0,
       remoteServerDeskWidth: remoteServerDeskRect ? Math.round(remoteServerDeskRect.width) : 0,
       remoteEndpointDeskWidth: remoteEndpointDeskRect ? Math.round(remoteEndpointDeskRect.width) : 0,
+      visibleStandbySyncDeskCount: visibleCount('.setupMode-remote .standbySyncDesk'),
+      visibleStandbyRoleOptionCount: document.querySelectorAll('.setupMode-remote .standbySyncDesk select option').length,
+      visibleStandbyActionButtonCount: visibleCount('.setupMode-remote .standbySyncDesk > .buttonRow button'),
       visibleDmxGridSummaryCount: visibleCount('.dmxGridSummary'),
       visibleFixtureSetupEditorCount: visibleCount('.fixtureSetupEditor'),
       visibleUseProfileForPatchButtonCount: [...document.querySelectorAll('.fixtureSetupEditor button')]
@@ -567,6 +636,21 @@ async function measure(client, label) {
         })
         .filter((element) => element.scrollHeight > element.clientHeight + 1 || element.scrollWidth > element.clientWidth + 1)
         .length,
+      controlWorkSurfaceUnsafeOverflowCount: [...document.querySelectorAll(
+        '.layoutControl .faders, .layoutControl .videoControlPanel, .layoutControl .videoOutputControlList, .layoutControl .videoLayerList'
+      )]
+        .filter((element) => {
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+        })
+        .filter((element) => {
+          const style = window.getComputedStyle(element);
+          const verticalOverflow = element.scrollHeight > element.clientHeight + 1 && !['auto', 'scroll'].includes(style.overflowY);
+          const horizontalOverflow = element.scrollWidth > element.clientWidth + 1 && !['auto', 'scroll'].includes(style.overflowX);
+          return verticalOverflow || horizontalOverflow;
+        })
+        .length,
       controlWorkSurfaceOverflows: [...document.querySelectorAll(
         '.layoutControl .faders, .layoutControl .videoControlPanel, .layoutControl .videoOutputControlList, .layoutControl .videoLayerList'
       )]
@@ -603,12 +687,22 @@ async function measure(client, label) {
       visibleCueFormCount: visibleCount('.cueForm'),
       visibleCueEditOnlyCount: visibleCount('.cueEditOnly'),
       visibleCueLiveGoCount: visibleCount('.cueLiveGo'),
+      visiblePlaybackDeskSurfaceCount: visibleCount('.playbackDeskSurface'),
+      visibleProgrammerPanelCount: visibleCount('.programmerPanel'),
+      visibleReferencePalettePanelCount: visibleCount('.referencePalettePanel'),
+      visiblePlaybackExecutorPanelCount: visibleCount('.playbackExecutorPanel'),
+      visiblePlaybackMasterCount: visibleCount('.playbackMasterControl input[type="range"]'),
       visibleTimelinePanelCount: visibleCount('.timelinePanel'),
       visibleTimelineDeskTabCount: visibleCount('.timelineDeskTabs button'),
       visibleTimelineShowSurfaceCount: visibleCount('.timelineShowSurface'),
       visibleTimelineAutomationSurfaceCount: visibleCount('.timelineAutomationSurface'),
       visibleEditDeskTabCount: visibleCount('.editDeskTabs button'),
       visibleEffectEditorCount: visibleCount('.effectEditor'),
+      visibleNodeGraphPanelCount: visibleCount('.nodeGraphPanel'),
+      nodeGraphAudioSourceOptionCount: [...document.querySelectorAll('.nodeGraphPanel option')]
+        .filter((option) => (option.textContent || '').trim().toLowerCase() === 'audio fft').length,
+      nodeGraphLiveAudioOptionCount: [...document.querySelectorAll('.nodeGraphPanel option')]
+        .filter((option) => (option.textContent || '').trim().toLowerCase() === 'live input').length,
       visiblePanTiltPadCount: visibleCount('.panTiltPad'),
       visibleColorPlaneCount: visibleCount('.colorPlane'),
       visiblePositionReadoutCount: visibleCount('.positionReadoutStrip'),
@@ -625,6 +719,16 @@ async function measure(client, label) {
       visibleVideoControlPanelCount: visibleCount('.videoControlPanel'),
       visibleVideoMasterControlCount: visibleCount('.videoMasterControls'),
       visibleVideoMasterFaderCount: visibleCount('.videoMasterFader input[type="range"]'),
+      visibleVideoClipGridCount: visibleCount('.videoClipGridPanel'),
+      visibleVideoClipPadCount: visibleCount('.videoClipPad'),
+      visibleVideoClipTakeButtonCount: [...document.querySelectorAll('.videoClipPreviewBar button')]
+        .filter((button) => (button.textContent || '').trim().toLowerCase() === 'take').length,
+      visibleVideoClipAudioButtonCount: visibleCount('.videoClipAudio'),
+      visibleVideoProgramAudioToggleCount: visibleCount('.videoProgramAudioToggle input[type="checkbox"]'),
+      visibleVideoAbDeckCount: visibleCount('.videoAbDeck'),
+      visibleVideoDeckLoadButtonCount: visibleCount('.videoClipDeckLoad button'),
+      visibleVideoRecordingBarCount: visibleCount('.videoRecordingBar'),
+      visibleLiveAudioInputBarCount: visibleCount('.liveAudioInputBar'),
       visibleVideoOutputControlListCount: visibleCount('.videoOutputControlList'),
       visibleVideoOutputItemCount: visibleCount('.videoOutputControlItem'),
       visibleVideoOutputSelectedItemCount: visibleCount('.videoOutputControlItem.selected'),
@@ -647,6 +751,7 @@ async function measure(client, label) {
       visibleSetupVideoOutputActiveDeckCount: visibleCount('.videoSetupPanel .videoOutputDeck.active'),
       visibleSetupVideoOutputDetailPaneCount: visibleCount('.videoSetupPanel .videoOutputDetailPane'),
       visibleVideoOutputMappingPanelCount: visibleCount('.videoSetupPanel .videoOutputMapping'),
+      visibleVideoOutputBlendControlsCount: visibleCount('.videoSetupPanel .videoOutputBlendControls'),
       visibleProjectorMapEditorCount: visibleCount('.videoSetupPanel .projectorMapEditor'),
       visibleProjectorMapHandleCount: visibleCount('.videoSetupPanel .projectorMapEditor .projectorMapHandle'),
       visibleProjectorKeystoneHandleCount: visibleCount('.videoSetupPanel .projectorMapEditor .projectorMapKeystoneHandle'),
@@ -725,7 +830,11 @@ async function measure(client, label) {
 }
 
 function hasTimelineAutomationVisuals(result) {
-  if (result.label.startsWith("control-live-cues-") || result.label.startsWith("control-live-automation-")) {
+  if (
+    result.label.startsWith("control-live-cues-") ||
+    result.label.startsWith("control-live-automation-") ||
+    result.label.startsWith("control-live-playback-")
+  ) {
     return true;
   }
   return (
@@ -754,7 +863,25 @@ function hasExpectedProjectMenu(result) {
     result.visibleProjectMenuItemCount >= 6 &&
     result.visibleProjectMenuShortcutCount >= 4 &&
     result.visibleRecentProjectMenuItemCount >= 5 &&
-    result.visibleRecoveryProjectMenuItemCount >= 1
+    result.visibleRecoveryProjectMenuItemCount >= 1 &&
+    result.visibleUpdateMenuLabelCount === 1 &&
+    result.visibleUpdateCheckButtonCount === 1 &&
+    result.visibleUserTemplateMenuLabelCount === 1 &&
+    result.visibleUserTemplateActionCount === 2
+  );
+}
+
+function hasExpectedLocalization(result) {
+  if (!result.label.startsWith("localization-ja-")) {
+    return true;
+  }
+  return (
+    result.documentLanguage === "ja" &&
+    result.visibleProjectMenuCount === 1 &&
+    result.visibleJapaneseLanguageLabelCount === 1 &&
+    result.visibleJapaneseSaveButtonCount === 1 &&
+    result.preservedUserFixtureLabelCount === 3 &&
+    result.translatedUserFixtureCollisionCount === 0
   );
 }
 
@@ -825,7 +952,7 @@ function hasExpectedControlModeSurface(result) {
       result.visibleAttributeTargetSummaryCount >= 1 &&
       result.visibleGroupAttributeTargetSummaryCount >= 1 &&
       result.visibleEditDeskTabCount === 3 &&
-      result.controlWorkSurfaceOverflowCount === 0 &&
+      result.controlWorkSurfaceUnsafeOverflowCount === 0 &&
       result.visibleCuePanelCount === 0 &&
       result.visibleTimelinePanelCount === 0 &&
       result.visibleVideoControlPanelCount === 0
@@ -838,7 +965,7 @@ function hasExpectedControlModeSurface(result) {
       result.visibleAttributeTargetSummaryCount >= 1 &&
       result.visibleGroupAttributeTargetSummaryCount >= 1 &&
       result.visibleEditDeskTabCount === 3 &&
-      result.controlWorkSurfaceOverflowCount === 0 &&
+      result.controlWorkSurfaceUnsafeOverflowCount === 0 &&
       result.visibleCuePanelCount === 0 &&
       result.visibleTimelinePanelCount === 0 &&
       result.visibleVideoControlPanelCount === 0
@@ -850,9 +977,12 @@ function hasExpectedControlModeSurface(result) {
         result.visibleEditDeskTabCount === 3 &&
         result.visibleFixtureEditSurfaceCount === 0 &&
         result.visibleEffectEditorCount === 1 &&
+        result.visibleNodeGraphPanelCount === 1 &&
+        result.nodeGraphAudioSourceOptionCount === 1 &&
+        result.nodeGraphLiveAudioOptionCount === 1 &&
         result.effectTargetHintCount >= 1 &&
         result.visibleRawMonitorCount === 0 &&
-        result.controlWorkSurfaceOverflowCount === 0
+        result.controlWorkSurfaceUnsafeOverflowCount === 0
       );
     }
     if (result.label.startsWith("control-edit-dmx-")) {
@@ -861,7 +991,7 @@ function hasExpectedControlModeSurface(result) {
         result.visibleFixtureEditSurfaceCount === 0 &&
         result.visibleEffectEditorCount === 0 &&
         result.visibleRawMonitorCount === 1 &&
-        result.controlWorkSurfaceOverflowCount === 0
+        result.controlWorkSurfaceUnsafeOverflowCount === 0
       );
     }
     return (
@@ -869,7 +999,7 @@ function hasExpectedControlModeSurface(result) {
       result.visibleEffectEditorCount === 0 &&
       result.visibleRawMonitorCount === 0 &&
       result.visibleEditDeskTabCount === 3 &&
-      result.controlWorkSurfaceOverflowCount === 0 &&
+      result.controlWorkSurfaceUnsafeOverflowCount === 0 &&
       result.effectTargetHintCount === 0 &&
       result.effectTargetMapSelectionOptionCount >= 1 &&
       result.visibleCuePanelCount === 0 &&
@@ -878,23 +1008,36 @@ function hasExpectedControlModeSurface(result) {
     );
   }
   if (result.label.startsWith("control-live-")) {
+    if (result.label.startsWith("control-live-playback-")) {
+      return (
+        result.visibleTimelineDeskTabCount === 4 &&
+        result.visiblePlaybackDeskSurfaceCount === 1 &&
+        result.visibleProgrammerPanelCount === 1 &&
+        result.visibleReferencePalettePanelCount === 1 &&
+        result.visiblePlaybackExecutorPanelCount === 1 &&
+        result.visiblePlaybackMasterCount === 1 &&
+        result.visibleCuePanelCount === 0 &&
+        result.visibleTimelinePanelCount === 0 &&
+        result.controlWorkSurfaceUnsafeOverflowCount === 0
+      );
+    }
     if (result.label.startsWith("control-live-cues-")) {
       return (
-        result.visibleTimelineDeskTabCount === 3 &&
+        result.visibleTimelineDeskTabCount === 4 &&
         result.visibleCuePanelCount === 1 &&
         result.visibleCueLivePanelCount === 1 &&
         result.visibleTimelinePanelCount === 0 &&
-        result.controlWorkSurfaceOverflowCount === 0
+        result.controlWorkSurfaceUnsafeOverflowCount === 0
       );
     }
     if (result.label.startsWith("control-live-automation-")) {
       return (
-        result.visibleTimelineDeskTabCount === 3 &&
+        result.visibleTimelineDeskTabCount === 4 &&
         result.visibleCuePanelCount === 0 &&
         result.visibleTimelinePanelCount === 1 &&
         result.visibleTimelineShowSurfaceCount === 0 &&
         result.visibleTimelineAutomationSurfaceCount === 1 &&
-        result.controlWorkSurfaceOverflowCount === 0
+        result.controlWorkSurfaceUnsafeOverflowCount === 0
       );
     }
     return (
@@ -903,9 +1046,9 @@ function hasExpectedControlModeSurface(result) {
       result.visibleCueFormCount === 0 &&
       result.visibleCueEditOnlyCount === 0 &&
       result.visibleTimelinePanelCount > 0 &&
-      result.visibleTimelineDeskTabCount === 3 &&
+      result.visibleTimelineDeskTabCount === 4 &&
       result.visibleTimelineShowSurfaceCount === 1 &&
-      result.controlWorkSurfaceOverflowCount === 0 &&
+      result.controlWorkSurfaceUnsafeOverflowCount === 0 &&
       result.visibleFixtureEditSurfaceCount === 0 &&
       result.visibleEffectEditorCount === 0 &&
       result.visibleRawMonitorCount === 0 &&
@@ -917,6 +1060,15 @@ function hasExpectedControlModeSurface(result) {
       result.visibleVideoControlPanelCount > 0 &&
       result.visibleVideoMasterControlCount > 0 &&
       result.visibleVideoMasterFaderCount > 0 &&
+      result.visibleVideoClipGridCount > 0 &&
+      result.visibleVideoClipPadCount > 0 &&
+      result.visibleVideoClipTakeButtonCount > 0 &&
+      result.visibleVideoClipAudioButtonCount > 0 &&
+      result.visibleVideoProgramAudioToggleCount > 0 &&
+      result.visibleVideoAbDeckCount > 0 &&
+      result.visibleVideoDeckLoadButtonCount >= 2 &&
+      result.visibleVideoRecordingBarCount > 0 &&
+      result.visibleLiveAudioInputBarCount > 0 &&
       result.visibleVideoOutputControlListCount > 0 &&
       result.visibleVideoOutputItemCount > 0 &&
       result.visibleVideoOutputSelectedItemCount > 0 &&
@@ -929,7 +1081,7 @@ function hasExpectedControlModeSurface(result) {
       result.visibleVideoMixerLayerFaderCount >= result.visibleVideoLayerItemCount &&
       result.visibleVideoMixerLayerButtonCount >= 5 &&
       result.visibleVideoDeckPagerCount >= 2 &&
-      result.controlWorkSurfaceOverflowCount === 0 &&
+      result.controlWorkSurfaceUnsafeOverflowCount === 0 &&
       result.visibleVideoMixerDiagnosticsCount === 0 &&
       result.visibleVideoMixerSetupToolsCount === 0 &&
       result.visibleVideoMixerAutomationToolsCount === 0 &&
@@ -960,6 +1112,7 @@ function hasExpectedSetupSurface(result) {
   if (result.label.startsWith("setup-dmx-")) {
     return (
       result.visibleDmxOutputConfigPanelCount >= 1 &&
+      result.visibleArtRdmPanelCount >= 1 &&
       result.visibleOutputDiagnosticsDeskCount >= 1 &&
       result.visibleLightingRuntimeDeskCount >= 1 &&
       result.dmxOutputConfigPanelWidth >= 250 &&
@@ -974,7 +1127,13 @@ function hasExpectedSetupSurface(result) {
     return result.oscMappingEditorDeskWidth >= 430 && result.oscMappingListDeskWidth >= 430;
   }
   if (result.label.startsWith("setup-remote-")) {
-    return result.remoteServerDeskWidth >= 360 && result.remoteEndpointDeskWidth >= 500;
+    return (
+      result.remoteServerDeskWidth >= 360 &&
+      result.remoteEndpointDeskWidth >= 500 &&
+      result.visibleStandbySyncDeskCount === 1 &&
+      result.visibleStandbyRoleOptionCount === 2 &&
+      result.visibleStandbyActionButtonCount === 3
+    );
   }
   if (result.label.startsWith("setup-patch-")) {
     return (
@@ -984,7 +1143,7 @@ function hasExpectedSetupSurface(result) {
       result.visiblePatchNextFreeButtonCount >= 1 &&
       result.visiblePatchFootprintCount >= 1 &&
       result.visibleDmxAddressGridCount >= 1 &&
-      result.dmxAddressCellCount === 512 &&
+      result.dmxAddressCellCount === 128 &&
       result.dmxAddressOccupiedCellCount > 0 &&
       result.dmxAddressPlannedCellCount > 0 &&
       result.visibleDmxFixtureBlockCount > 0 &&
@@ -1017,6 +1176,7 @@ function hasExpectedSetupSurface(result) {
       result.visibleSetupVideoOutputActiveDeckCount >= 1 &&
       result.visibleSetupVideoOutputDetailPaneCount >= 1 &&
       result.visibleVideoOutputMappingPanelCount >= 1 &&
+      result.visibleVideoOutputBlendControlsCount >= 1 &&
       result.visibleProjectorMapEditorCount >= 1 &&
       result.visibleProjectorMapHandleCount >= 4 &&
       result.visibleProjectorKeystoneHandleCount >= 2 &&
@@ -1131,6 +1291,10 @@ async function runViewport(client, viewport) {
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
 
+  if (viewport.width === 1280) {
+    await checkWorkspaceLayoutPersistence(client);
+  }
+
   const results = [];
   await pressKey(client, "F2");
   await sleep(120);
@@ -1158,6 +1322,28 @@ async function runViewport(client, viewport) {
   results.push(await measure(client, `project-menu-${viewport.width}x${viewport.height}`));
   await clickVisibleByText(client, ".appMenuButton", "...");
   await sleep(80);
+  if (viewport.width === 1366) {
+    await client.evaluate(`window.localStorage.setItem('syndocal.uiScale.v1', '110')`);
+    await client.send("Page.navigate", { url: appUrl });
+    await waitForApp(client);
+    await pressKey(client, "F2");
+    await sleep(120);
+    results.push(await measure(client, `interface-scale-110-${viewport.width}x${viewport.height}`));
+    await client.evaluate(`window.localStorage.setItem('syndocal.uiScale.v1', '100')`);
+    await client.send("Page.navigate", { url: appUrl });
+    await waitForApp(client);
+    await client.evaluate(`window.localStorage.setItem('syndocal.uiLocale.v1', 'ja')`);
+    await client.send("Page.navigate", { url: appUrl });
+    await waitForApp(client);
+    await pressKey(client, "F1");
+    await sleep(120);
+    await clickVisibleByText(client, ".appMenuButton", "...");
+    await sleep(120);
+    results.push(await measure(client, `localization-ja-${viewport.width}x${viewport.height}`));
+    await client.evaluate(`window.localStorage.setItem('syndocal.uiLocale.v1', 'en')`);
+    await client.send("Page.navigate", { url: appUrl });
+    await waitForApp(client);
+  }
   await clickByText(client, "Setup");
   for (const setupTab of setupTabs) {
     await clickByText(client, setupTab.area);
@@ -1211,6 +1397,9 @@ async function runViewport(client, viewport) {
       await clickVisibleByText(client, ".timelineDeskTabs button", "Automation");
       await sleep(120);
       results.push(await measure(client, `control-live-automation-${viewport.width}x${viewport.height}`));
+      await clickVisibleByText(client, ".timelineDeskTabs button", "Playback");
+      await sleep(120);
+      results.push(await measure(client, `control-live-playback-${viewport.width}x${viewport.height}`));
       await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
     }
   }
@@ -1224,6 +1413,45 @@ async function runViewport(client, viewport) {
   }
   results.push(await measure(client, `touch-${viewport.width}x${viewport.height}`));
   return results;
+}
+
+async function runLargeShowViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await pressKey(client, "F1");
+  await sleep(120);
+  await clickByText(client, "Mapping");
+  await clickByText(client, "Stage Map");
+  await sleep(250);
+
+  const stats = await client.evaluate(`(async () => {
+    const list = document.querySelector('.virtualizedMappingFixtureList');
+    if (!(list instanceof HTMLElement)) return null;
+    const beforeCount = list.querySelectorAll('.mappingFixtureRowButton').length;
+    const total = Number(list.getAttribute('aria-rowcount'));
+    const viewportHeight = list.clientHeight;
+    const scrollHeight = list.scrollHeight;
+    list.scrollTop = list.scrollHeight;
+    list.dispatchEvent(new Event('scroll', { bubbles: true }));
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const afterRows = [...list.querySelectorAll('.mappingFixtureRowButton')];
+    return {
+      total,
+      beforeCount,
+      afterCount: afterRows.length,
+      viewportHeight,
+      scrollHeight,
+      reachedLastFixture: afterRows.some((row) => (row.textContent || '').includes('Large Fixture 2000')),
+    };
+  })()`);
+  const containment = await measure(client, `large-show-${viewport.width}x${viewport.height}`);
+  return { stats, containment };
 }
 
 async function main() {
@@ -1261,6 +1489,23 @@ async function main() {
     await waitForHttp(`http://127.0.0.1:${cdpPort}/json/version`, "Chrome DevTools Protocol");
 
     client = await createCdpClient();
+    if (largeShowMode) {
+      const result = await runLargeShowViewport(client, viewports[0]);
+      const passed = Boolean(
+        result.stats &&
+        result.stats.total === 2_000 &&
+        result.stats.beforeCount <= 20 &&
+        result.stats.afterCount <= 20 &&
+        result.stats.viewportHeight > 0 &&
+        result.stats.scrollHeight > result.stats.viewportHeight &&
+        result.stats.reachedLastFixture &&
+        isContained(result.containment)
+      );
+      console.log(`${passed ? "pass" : "fail"} large-show virtualization ${JSON.stringify(result.stats)}`);
+      if (!passed) throw new Error(`Large-show UI virtualization failed: ${JSON.stringify(result)}`);
+      return;
+    }
+
     const results = [];
     for (const viewport of viewports) {
       results.push(...(await runViewport(client, viewport)));
@@ -1269,6 +1514,7 @@ async function main() {
     const failures = results.filter((result) => !isContained(result));
     const setupSurfaceFailures = results.filter((result) => !hasExpectedSetupSurface(result));
     const projectMenuFailures = results.filter((result) => !hasExpectedProjectMenu(result));
+    const localizationFailures = results.filter((result) => !hasExpectedLocalization(result));
     const keyboardNavigationFailures = results.filter((result) => !hasExpectedKeyboardNavigation(result));
     const mappingHotkeyHelpFailures = results.filter((result) => !hasExpectedMappingHotkeyHelp(result));
     const mappingWaveDraftFailures = results.filter((result) => !hasExpectedMappingWaveDraft(result));
@@ -1286,7 +1532,7 @@ async function main() {
         ? ` timelineAutomation=${result.timelineAutomationRangeCount}/${result.timelineAutomationHandleCount}/${result.timelineAutomationKeyframeCount}/${result.timelineAutomationChipCount}/${result.timelineAutomationCurveCount}/${result.timelineAutomationValueInputCount}/${result.timelineAutomationEnabledToggleCount}/${result.timelineAutomationScopeCount}/${result.timelineAutomationBatchButtonCount}/${result.timelineAutomationGroupButtonCount}`
         : "";
       const projectMenuSuffix = result.label.startsWith("project-menu-")
-        ? ` projectMenu=${result.visibleProjectMenuCount}/${result.visibleProjectMenuItemCount}/${result.visibleProjectMenuShortcutCount}/${result.visibleRecentProjectMenuItemCount}/${result.visibleRecoveryProjectMenuItemCount}`
+        ? ` projectMenu=${result.visibleProjectMenuCount}/${result.visibleProjectMenuItemCount}/${result.visibleProjectMenuShortcutCount}/${result.visibleRecentProjectMenuItemCount}/${result.visibleRecoveryProjectMenuItemCount}/${result.visibleUpdateMenuLabelCount}/${result.visibleUpdateCheckButtonCount}/${result.visibleUserTemplateMenuLabelCount}/${result.visibleUserTemplateActionCount}`
         : "";
       const keyboardSuffix = result.label.startsWith("control-edit-keyboard-")
         ? ` keyboard=${result.keyboardNavigationPassed ? 'pass' : 'fail'}`
@@ -1304,7 +1550,7 @@ async function main() {
         ? ` patch=${result.visiblePatchActionRowCount}/${result.visiblePatchAutoButtonCount}/${result.visiblePatchPrimaryButtonCount}/${result.visiblePatchNextFreeButtonCount}/${result.visiblePatchFootprintCount}/${result.visibleDmxAddressGridCount}/${result.dmxAddressCellCount}/${result.dmxAddressOccupiedCellCount}/${result.dmxAddressPlannedCellCount}/${result.visibleDmxFixtureBlockCount}/${result.compactMappingStageWidth}x${result.compactMappingStageHeight}/${result.visibleDmxGridSummaryCount}/${result.visibleFixtureSetupEditorCount}/${result.visibleUseProfileForPatchButtonCount}/${result.visibleDuplicateFixtureButtonCount}`
         : "";
       const outputSetupSuffix = result.label.startsWith("setup-video-")
-        ? ` outputSetup=${result.visibleSetupVideoPanelCount}/${result.visibleSetupVideoOutputDeckCount}/${result.visibleSetupVideoOutputActiveDeckCount}/${result.visibleSetupVideoOutputDetailPaneCount}/${result.visibleVideoOutputMappingPanelCount}/${result.visibleProjectorMapEditorCount}/${result.visibleProjectorMapHandleCount}/${result.visibleProjectorKeystoneHandleCount}/${result.visibleProjectorScaleHandleCount}/${result.visibleProjectorRotateHandleCount}/${result.visibleProjectorAspectModeButtonCount}/${result.visibleProjectorAspectPresetButtonCount}/${result.visibleProjectorResetPoseButtonCount}`
+        ? ` outputSetup=${result.visibleSetupVideoPanelCount}/${result.visibleSetupVideoOutputDeckCount}/${result.visibleSetupVideoOutputActiveDeckCount}/${result.visibleSetupVideoOutputDetailPaneCount}/${result.visibleVideoOutputMappingPanelCount}/${result.visibleVideoOutputBlendControlsCount}/${result.visibleProjectorMapEditorCount}/${result.visibleProjectorMapHandleCount}/${result.visibleProjectorKeystoneHandleCount}/${result.visibleProjectorScaleHandleCount}/${result.visibleProjectorRotateHandleCount}/${result.visibleProjectorAspectModeButtonCount}/${result.visibleProjectorAspectPresetButtonCount}/${result.visibleProjectorResetPoseButtonCount}`
         : "";
       const waveDraftSuffix = result.label.startsWith("mapping-wave-draft-")
         ? ` waveDraft=${result.effectTargetValue}/${result.effectTypeValue}/${result.effectCommonAttributeValue || 'none'}`
@@ -1324,6 +1570,7 @@ async function main() {
       keyboardNavigationFailures.length > 0 ||
       setupSurfaceFailures.length > 0 ||
       projectMenuFailures.length > 0 ||
+      localizationFailures.length > 0 ||
       mappingHotkeyHelpFailures.length > 0 ||
       mappingWaveDraftFailures.length > 0 ||
       controlModeFailures.length > 0 ||
@@ -1338,6 +1585,7 @@ async function main() {
             keyboardNavigation: keyboardNavigationFailures,
             setupSurface: setupSurfaceFailures,
             projectMenu: projectMenuFailures,
+            localization: localizationFailures,
             mappingHotkeyHelp: mappingHotkeyHelpFailures,
             mappingWaveDraft: mappingWaveDraftFailures,
             controlMode: controlModeFailures,
@@ -1350,7 +1598,7 @@ async function main() {
         ),
       );
       throw new Error(
-        `${failures.length} viewport containment check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${projectMenuFailures.length} project menu check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${statusLineFailures.length} status line check(s) failed.`,
+        `${failures.length} viewport containment check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${statusLineFailures.length} status line check(s) failed.`,
       );
     }
   } finally {

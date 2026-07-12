@@ -47,7 +47,7 @@ export function SetupFixtureEditorPanel(props: SetupFixtureEditorPanelProps) {
     <div class="fixtureSetupEditor">
       <div class="panelHeader">
         <h3>Fixture Setup</h3>
-        <span>{props.fixture.label}</span>
+        <span data-no-localize>{props.fixture.label}</span>
       </div>
       <button onClick={() => void props.onUseProfileForPatch(props.fixture)}>
         Use Profile for Patch

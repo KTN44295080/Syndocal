@@ -262,7 +262,7 @@ export function TimelineLightingAutomationPanel(props: TimelineLightingAutomatio
                         })
                       }
                     >
-                      <For each={props.fixtureOptions}>{(fixture) => <option value={fixture.id}>{fixture.label}</option>}</For>
+                      <For each={props.fixtureOptions}>{(fixture) => <option data-no-localize value={fixture.id}>{fixture.label}</option>}</For>
                     </select>
                   </label>
                   <label>

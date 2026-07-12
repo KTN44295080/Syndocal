@@ -114,7 +114,7 @@ export function MappingStageObjectPanel(props: MappingStageObjectPanelProps) {
               class={props.selectedObjectId === object.id ? "stageObjectListItem active" : "stageObjectListItem"}
               onClick={() => props.onSelectObject(object.id)}
             >
-              <strong>{object.label}</strong>
+              <strong data-no-localize>{object.label}</strong>
               <span>
                 {object.kind} / {fixtureCountForObject(object.id)} fixture(s)
               </span>

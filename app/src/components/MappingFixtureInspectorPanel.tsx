@@ -111,7 +111,7 @@ export function MappingFixtureInspectorPanel(props: MappingFixtureInspectorPanel
                 <For each={props.geometryRows}>
                   {(row) => (
                     <div class="mappingGeometryRow">
-                      <strong title={row.geometry.name}>{row.geometry.name}</strong>
+                      <strong data-no-localize title={row.geometry.name}>{row.geometry.name}</strong>
                       <span>{row.geometry.kind}</span>
                       <small title={row.positionLabel}>{row.positionLabel}</small>
                       <b>{row.controlCount} ctl</b>

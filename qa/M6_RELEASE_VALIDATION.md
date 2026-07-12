@@ -59,3 +59,57 @@ The v1.0 software release gate is complete. Physical Art-Net/sACN/serial wavefor
 ## Signing decision
 
 v1.0 personal distribution is intentionally unsigned. Windows SmartScreen and macOS Gatekeeper instructions must remain in the user README. A public trusted release requires an Authenticode certificate and an Apple Developer ID/notarization secret; neither credential is stored in this repository.
+
+## Signed updater readiness (v1.1)
+
+The application now embeds Tauri's minisign-verified updater and supports
+compile-time `stable`, `beta`, and `nightly` channels. Builds without both an
+HTTPS endpoint and a valid public key remain safely disabled. The Project menu
+checks in the background, reports available/current/error state, rechecks the
+selected version before install, and creates a verified project backup before
+downloading. Updater artifact generation is isolated in
+`app/src-tauri/tauri.updater.conf.json`; key custody, manifest publication, and
+tamper acceptance are documented in `qa/UPDATE_RELEASE_RUNBOOK.md`.
+
+Software configuration validation and disabled-build UI pass locally. A real
+N to N+1 install cannot be accepted until release operations supplies the
+public HTTPS endpoint, minisign private key secret, and platform signing
+credentials. This external gate is not represented as a completed signed
+release.
+
+## User template portability (v1.1)
+
+Project menu export/import uses `.sdctemplate` v1 to carry the validated
+Syndocal project, embedded fixture profiles, and MIDI/OSC control mappings.
+Imports are bounded to 64 MiB, reject the wrong application/version or invalid
+project references and mappings, and create an unsaved project. Every legacy
+and routed DMX output plus every video output is disabled, with lighting and
+video blackout enabled, before the template reaches the engine. Existing
+`.midimap` and `.oscmap` sharing remains available independently.
+
+Rust tests cover round-trip mappings, omitted legacy mapping fields, identity
+and extension rejection, and complete output disarming. The project menu and
+its template actions remain part of the multi-viewport containment check.
+
+## UI locale validation (v1.1)
+
+English remains the default source locale and Japanese can be selected from
+the Project menu. The device-local preference is independent from `.sdc` and
+workspace layout state. Static operator labels, dynamic project/template/update
+status, and title/ARIA/placeholder attributes share one reversible translation
+boundary; unknown text falls back to English. Mutation handling is scoped to
+changed nodes rather than rescanning the application for every telemetry tick.
+
+`pnpm --dir app run check:localization` covers locale normalization, whitespace,
+dynamic patterns, English fallback, persistence, storage denial, and an AST
+inventory of static TSX labels/attributes. The Japanese static coverage is
+1913/1913 (100%), including explicitly classified shared units, protocol names,
+coordinates, and input examples; any new unclassified static text fails the
+check. A second AST gate requires user-authored labels to opt out of translation;
+the browser fixture names `Video`, `Save`, and `Output` remain unchanged in the
+Japanese locale to prove dictionary collisions cannot rename show data. The real
+browser viewport gate switches to Japanese, verifies `html[lang=ja]` and
+translated Project menu controls, then checks 1366x768 containment before
+returning to English.
+
+The current inventory is 1913/1913 static labels and attributes (100%).

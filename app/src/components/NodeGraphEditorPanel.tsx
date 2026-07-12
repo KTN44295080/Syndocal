@@ -1,4 +1,4 @@
-import type { EffectKind, NodeGraphSummary, NodeGraphTransformOp } from "../types";
+import type { AudioSpectrumBand, AudioSpectrumSource, EffectKind, NodeGraphSummary, NodeGraphTransformOp } from "../types";
 import { NodeGraphListPanel } from "./NodeGraphListPanel";
 
 interface NodeGraphEditorPanelProps {
@@ -9,6 +9,11 @@ interface NodeGraphEditorPanelProps {
   transformMin: number;
   transformMax: number;
   effectType: EffectKind;
+  sourceMode: "Effect" | "Audio";
+  audioBand: AudioSpectrumBand;
+  audioSource: AudioSpectrumSource;
+  audioGain: number;
+  audioBias: number;
   sourceLabel: string;
   sourceDetail: string;
   transformLabel: string;
@@ -18,6 +23,11 @@ interface NodeGraphEditorPanelProps {
   targetLabel: (graph: NodeGraphSummary) => string;
   onLoadPreset: () => void | Promise<void>;
   onLabel: (label: string) => void;
+  onSourceMode: (mode: "Effect" | "Audio") => void;
+  onAudioBand: (band: AudioSpectrumBand) => void;
+  onAudioSource: (source: AudioSpectrumSource) => void;
+  onAudioGain: (gain: number) => void;
+  onAudioBias: (bias: number) => void;
   onTransformOp: (op: NodeGraphTransformOp) => void;
   onTransformAmount: (amount: number) => void;
   onTransformMin: (min: number) => void;
@@ -45,6 +55,15 @@ export function NodeGraphEditorPanel(props: NodeGraphEditorPanelProps) {
           <input value={props.label} onInput={(event) => props.onLabel(event.currentTarget.value)} />
         </label>
         <label>
+          Source
+          <select value={props.sourceMode} onInput={(event) => props.onSourceMode(event.currentTarget.value as "Effect" | "Audio")}>
+            <option value="Effect">Current Effect</option>
+            <option value="Audio">Audio FFT</option>
+          </select>
+        </label>
+      </div>
+      <div class="quad">
+        <label>
           Transform
           <select value={props.transformOp} onInput={(event) => props.onTransformOp(event.currentTarget.value as NodeGraphTransformOp)}>
             <option value="Scale">Scale</option>
@@ -53,6 +72,29 @@ export function NodeGraphEditorPanel(props: NodeGraphEditorPanelProps) {
             <option value="Invert">Invert</option>
             <option value="Abs">Abs</option>
           </select>
+        </label>
+        <label>
+          Audio Input
+          <select disabled={props.sourceMode !== "Audio"} value={props.audioSource} onInput={(event) => props.onAudioSource(event.currentTarget.value as AudioSpectrumSource)}>
+            <option value="Timeline">Timeline Analysis</option>
+            <option value="Live">Live Input</option>
+          </select>
+        </label>
+        <label>
+          Audio Band
+          <select disabled={props.sourceMode !== "Audio"} value={props.audioBand} onInput={(event) => props.onAudioBand(event.currentTarget.value as AudioSpectrumBand)}>
+            <option value="Bass">Bass</option>
+            <option value="Mid">Mid</option>
+            <option value="High">High</option>
+          </select>
+        </label>
+        <label>
+          Audio Gain
+          <input type="number" step="0.1" disabled={props.sourceMode !== "Audio"} value={props.audioGain} onInput={(event) => props.onAudioGain(Number(event.currentTarget.value))} />
+        </label>
+        <label>
+          Audio Bias
+          <input type="number" step="0.05" disabled={props.sourceMode !== "Audio"} value={props.audioBias} onInput={(event) => props.onAudioBias(Number(event.currentTarget.value))} />
         </label>
       </div>
       <div class="triple">
@@ -99,7 +141,7 @@ export function NodeGraphEditorPanel(props: NodeGraphEditorPanelProps) {
         <rect class="nodeGraphCanvasBg" x="0" y="0" width="100" height="44" />
         <line class="nodeGraphEdge" x1="31" y1="22" x2="39" y2="22" />
         <line class="nodeGraphEdge" x1="63" y1="22" x2="71" y2="22" />
-        <g class={props.effectType === "PositionWave" ? "nodeGraphNode wave" : "nodeGraphNode lfo"} transform="translate(6 10)">
+        <g class={props.sourceMode === "Audio" ? "nodeGraphNode audio" : props.effectType === "PositionWave" ? "nodeGraphNode wave" : "nodeGraphNode lfo"} transform="translate(6 10)">
           <rect x="0" y="0" width="25" height="24" rx="2" />
           <text class="nodeGraphNodeLabel" x="12.5" y="10">
             {props.sourceLabel}

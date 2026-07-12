@@ -35,6 +35,8 @@ interface AppKeyboardControllerOptions {
   saveProjectAs: () => MaybePromise;
   loadProject: () => MaybePromise;
   newProject: () => MaybePromise;
+  undoProject: () => MaybePromise;
+  redoProject: () => MaybePromise;
   mappingHotkeyHelpOpen: Accessor<boolean>;
   setMappingHotkeyHelpOpen: Setter<boolean>;
   applyMappingSelectionManagementAction: (action: NonNullable<ReturnType<typeof mappingSelectionManagementActionFromHotkey>>) => void;
@@ -83,6 +85,16 @@ export function createAppKeyboardController(options: AppKeyboardControllerOption
       if (!event.shiftKey && event.code === "KeyN") {
         event.preventDefault();
         void options.newProject();
+        return;
+      }
+      if (!isEditableShortcutTarget(event.target) && event.code === "KeyZ") {
+        event.preventDefault();
+        void (event.shiftKey ? options.redoProject() : options.undoProject());
+        return;
+      }
+      if (!isEditableShortcutTarget(event.target) && !event.shiftKey && event.code === "KeyY") {
+        event.preventDefault();
+        void options.redoProject();
         return;
       }
     }

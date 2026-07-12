@@ -3,6 +3,8 @@ export type SetupArea = "lighting" | "video" | "mapping" | "io";
 export type SetupSubTab = "library" | "profiles" | "patch" | "video" | "mapping" | "dmx" | "midi" | "osc" | "remote";
 export type ControlMode = "edit" | "live" | "mixer";
 export type ControlCategory = "dimmer" | "color" | "position" | "gobo" | "beam" | "focus" | "other" | "fader";
+export type TimelineDeskSurface = "show" | "cues" | "automation" | "playback";
+export type EditDeskSurface = "attributes" | "effects" | "dmx";
 
 export const setupAreas: { id: SetupArea; label: string; description: string; defaultTab: SetupSubTab }[] = [
   { id: "lighting", label: "Lighting", description: "Fixture library, profiles, and DMX patch", defaultTab: "patch" },

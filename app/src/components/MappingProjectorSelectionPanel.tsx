@@ -31,7 +31,7 @@ export function MappingProjectorSelectionPanel(props: MappingProjectorSelectionP
             class={`projector ${props.selectedOutputId === output.id ? "active" : ""}`}
             onClick={() => props.onSelectOutput(output.id)}
           >
-            <strong>{output.label}</strong>
+            <strong data-no-localize>{output.label}</strong>
             <span>{output.width}x{output.height}</span>
             <small>{output.kind} / {output.enabled ? "Enabled" : "Disabled"} / {output.blackout ? "Blackout" : "Live"}</small>
           </button>

@@ -71,6 +71,8 @@ type SetupVideoPanelProps = {
   onApplyMappingPreset: (outputId: number, label: string) => MaybePromise;
   onRemoveMappingPreset: (label: string) => MaybePromise;
   onSetMapping: (outputId: number, mapping: VideoOutputMapping) => MaybePromise;
+  onImportBitmapMask: (output: VideoOutputSummary) => MaybePromise;
+  onClearBitmapMask: (output: VideoOutputSummary) => MaybePromise;
   onSetEnabled: (outputId: number, enabled: boolean) => MaybePromise;
   onSetBlackout: (outputId: number, blackout: boolean) => MaybePromise;
   onSetOpacity: (outputId: number, opacity: number) => MaybePromise;
@@ -147,6 +149,8 @@ export function SetupVideoPanel(props: SetupVideoPanelProps) {
             onApplyMappingPreset={props.onApplyMappingPreset}
             onRemoveMappingPreset={props.onRemoveMappingPreset}
             onSetMapping={props.onSetMapping}
+            onImportBitmapMask={props.onImportBitmapMask}
+            onClearBitmapMask={props.onClearBitmapMask}
             onSetEnabled={props.onSetEnabled}
             onSetBlackout={props.onSetBlackout}
             onSetOpacity={props.onSetOpacity}

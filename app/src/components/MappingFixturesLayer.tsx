@@ -121,11 +121,11 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
                   r="2.3"
                   onPointerDown={(event) => props.onBeginYawDrag(event, fixture.id)}
                 >
-                  <title>{fixture.label} yaw {fixture.yaw} deg</title>
+                  <title data-no-localize>{fixture.label} yaw {fixture.yaw} deg</title>
                 </circle>
               </Show>
               <Show when={props.showLabels}>
-                <text class="stageLabel" x={fixture.x + 3.5} y={fixture.z - 3.5}>
+                <text data-no-localize class="stageLabel" x={fixture.x + 3.5} y={fixture.z - 3.5}>
                   {fixture.label}
                 </text>
               </Show>

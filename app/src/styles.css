@@ -1,4 +1,6 @@
 :root {
+  --ui-scale: 1;
+  --ui-scale-inverse: 100%;
   color: #f3f5f7;
   background: #111419;
   font-family:
@@ -45,7 +47,8 @@ body.outputBody {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -92,7 +95,8 @@ button.primary {
 }
 
 input,
-select {
+select,
+textarea {
   min-height: 34px;
   width: 100%;
   border: 1px solid #323b48;
@@ -116,6 +120,27 @@ label {
   display: grid;
   gap: 6px;
   color: #aab6c6;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  text-wrap: balance;
+}
+
+p {
+  text-wrap: pretty;
+}
+
+.metric,
+.bpmReadout,
+input[type="number"],
+input[type="range"],
+time {
+  font-variant-numeric: tabular-nums;
 }
 
 h1,
@@ -147,12 +172,17 @@ h3 {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 6px;
-  width: auto;
-  height: auto;
-  max-height: 100dvh;
+  width: 100%;
+  height: 100%;
+  max-height: none;
   min-height: 0;
   overflow: hidden;
-  padding: 6px;
+  padding:
+    max(6px, env(safe-area-inset-top))
+    max(6px, env(safe-area-inset-right))
+    max(6px, env(safe-area-inset-bottom))
+    max(6px, env(safe-area-inset-left));
+  zoom: var(--ui-scale);
 }
 
 .projectDropOverlay {
@@ -349,6 +379,40 @@ h3 {
   background: #302a25;
 }
 
+.appProjectMenu button:disabled {
+  color: #6f7478;
+  cursor: default;
+  opacity: 0.62;
+}
+
+.appProjectMenu button:disabled:hover {
+  background: transparent;
+}
+
+.uiScaleMenu {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.uiLocaleMenu {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.appProjectMenu .uiScaleMenu button {
+  min-height: 32px;
+  justify-items: center;
+  padding: 0 4px;
+  color: #b8c1ca;
+  font-variant-numeric: tabular-nums;
+}
+
+.appProjectMenu .uiScaleMenu button.active {
+  background: #234968;
+  color: #ffffff;
+  box-shadow: inset 0 -2px 0 #79b8ff;
+}
+
 .appProjectMenu .recentProjectMenuItem {
   min-height: 36px;
   gap: 1px;
@@ -361,8 +425,54 @@ h3 {
   box-shadow: inset 2px 0 0 #f2c14e;
 }
 
+.appProjectMenuLabel.backupLabel {
+  color: #79b8ff;
+}
+
+.backupProjectMenuItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  min-height: 38px;
+  border-radius: 3px;
+  background: #171d23;
+  box-shadow: inset 2px 0 0 #4f9ee8;
+}
+
+.appProjectMenu .backupProjectMenuItem > button:first-child {
+  min-width: 0;
+  gap: 1px;
+}
+
+.appProjectMenu .backupProjectMenuItem .deleteBackupMenuItem {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: #9da7b0;
+  font-size: 17px;
+}
+
+.appProjectMenu .backupProjectMenuItem .deleteBackupMenuItem:hover {
+  color: #ffffff;
+  background: #653535;
+}
+
 .appProjectMenu .mutedMenuItem {
   color: #aeb6bf;
+}
+
+.appProjectMenu .updateAvailableMenuItem {
+  background: #17271f;
+  box-shadow: inset 2px 0 0 #55b77b;
+}
+
+.appProjectMenu .updateAvailableMenuItem:hover {
+  background: #203a2b;
+}
+
+.appProjectMenu > .inlineError {
+  margin: 2px 4px;
 }
 
 .appProjectMenu span {
@@ -381,7 +491,7 @@ h3 {
   min-width: 0;
   overflow: hidden;
   color: #8f989f;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -398,13 +508,84 @@ h3 {
 }
 
 .appProjectMenuLabel span {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 900;
   text-transform: uppercase;
 }
 
 .appProjectMenuLabel.recoveryLabel {
   color: #d7b85e;
+}
+
+.fieldHint {
+  margin: 0;
+  color: #8f989f;
+  font-size: 11px;
+  line-height: 1.35;
+  text-wrap: pretty;
+}
+
+.inlineError {
+  margin: 0;
+  border-left: 2px solid #d05a5a;
+  background: #2b1718;
+  color: #ffb4b4;
+  padding: 6px 8px;
+  font-size: 11px;
+  line-height: 1.35;
+  text-wrap: pretty;
+}
+
+.videoIsfPanel {
+  border: 1px solid #3b434d;
+  border-radius: 4px;
+  background: #151b21;
+}
+
+.videoIsfPanel > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 8px;
+  color: #dce5ee;
+  cursor: pointer;
+}
+
+.videoIsfPanel > summary span {
+  overflow: hidden;
+  color: #8f9caf;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.videoIsfBody {
+  display: grid;
+  gap: 7px;
+  border-top: 1px solid #303944;
+  padding: 8px;
+}
+
+.videoIsfControl {
+  display: grid;
+  grid-template-columns: minmax(76px, 1fr) repeat(4, minmax(54px, 72px));
+  gap: 5px;
+  align-items: center;
+}
+
+.videoIsfControl > span {
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.videoIsfControl input[type="number"] {
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .topbarProject {
@@ -492,7 +673,7 @@ h3 {
 
 .bpmReadout small {
   color: #ffffff;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
 }
@@ -575,7 +756,7 @@ h3 {
   min-width: 0;
   overflow: hidden;
   color: #8f9caf;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2900,13 +3081,13 @@ h3 {
 .profileDmxCell small,
 .profileDmxCell span {
   color: #8f9caf;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1;
 }
 
 .profileDmxCell strong {
   color: #edf3fb;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.15;
 }
 
@@ -3561,6 +3742,42 @@ h3 {
   overflow: auto;
 }
 
+.fixtureList > [role="listitem"] {
+  min-width: 0;
+}
+
+.fixtureList > [role="listitem"] > .fixture,
+.virtualFixtureRow > .fixture {
+  width: 100%;
+}
+
+.virtualizedFixtureList {
+  display: block;
+  position: relative;
+  contain: strict;
+  overflow-anchor: none;
+}
+
+.virtualFixtureSpacer {
+  position: relative;
+  width: 100%;
+}
+
+.virtualFixtureWindow {
+  position: absolute;
+  inset: 0 0 auto;
+}
+
+.virtualFixtureRow {
+  height: 104px;
+  padding-bottom: 8px;
+}
+
+.virtualFixtureRow > .fixture {
+  height: 96px;
+  overflow: hidden;
+}
+
 .dmxPatchMap {
   display: grid;
   gap: 8px;
@@ -3657,7 +3874,7 @@ h3 {
   background: #221e1a;
   color: #736b64;
   padding: 0;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1;
 }
 
@@ -4161,7 +4378,7 @@ h3 {
   display: block;
   margin-top: 2px;
   color: #9f948b;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .mappingHotkeyHelpHeader button {
@@ -4226,14 +4443,14 @@ h3 {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: inherit;
-  font-size: 10px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
 .mappingHotkeyHelpGrid dd {
   overflow: hidden;
   color: #bdb4aa;
-  font-size: 10px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4461,7 +4678,7 @@ h3 {
   gap: 4px;
   min-width: 0;
   color: #9f948b;
-  font-size: 10px;
+  font-size: 11px;
   text-transform: uppercase;
 }
 
@@ -4482,7 +4699,7 @@ h3 {
   gap: 4px;
   min-width: 0;
   color: #9f948b;
-  font-size: 10px;
+  font-size: 11px;
   text-transform: uppercase;
 }
 
@@ -4722,6 +4939,43 @@ h3 {
   background: #29241f;
 }
 
+.mappingFixtureList {
+  max-height: min(36vh, 420px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.mappingFixtureList > [role="listitem"] {
+  min-width: 0;
+}
+
+.virtualizedMappingFixtureList {
+  position: relative;
+  height: min(36vh, 420px);
+  min-height: 180px;
+  contain: strict;
+  overflow-anchor: none;
+}
+
+.virtualMappingFixtureSpacer {
+  position: relative;
+  width: 100%;
+}
+
+.virtualMappingFixtureWindow {
+  position: absolute;
+  inset: 0 0 auto;
+}
+
+.virtualMappingFixtureRow {
+  height: 64px;
+  overflow: hidden;
+}
+
+.mappingSelectionPanel .virtualMappingFixtureRow > button.mappingFixtureRowButton {
+  height: 64px;
+}
+
 .mappingSearchPanel {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 58px;
@@ -4955,7 +5209,7 @@ h3 {
 
 .mappingGeometryRow span {
   color: #ffdd74;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -4963,7 +5217,7 @@ h3 {
 .mappingGeometryRow small {
   grid-column: 1 / -1;
   color: #9f948b;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .mappingGeometryRow b,
@@ -4974,7 +5228,7 @@ h3 {
   background: #211d19;
   color: #cfc7be;
   padding: 1px 5px;
-  font-size: 10px;
+  font-size: 11px;
   font-style: normal;
   font-weight: 700;
   line-height: 1.35;
@@ -4984,7 +5238,7 @@ h3 {
   margin: 0;
   padding-left: 16px;
   color: #f2c14e;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .mappingTransformActions {
@@ -5317,7 +5571,7 @@ h3 {
 .mappingTypeCount small {
   max-width: 64px;
   color: #bca398;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .mappingSelectionPanel .mappingSelectionAssign button {
@@ -6329,7 +6583,7 @@ h3 {
 
 .attributeTargetSummary small {
   color: #8f857c;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
 }
@@ -6410,7 +6664,7 @@ h3 {
 
 .visualReadoutStrip small {
   color: #8d9aaa;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -7973,6 +8227,227 @@ input[type="color"] {
   padding-top: 10px;
 }
 
+.programmerPanel {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.8fr) auto minmax(180px, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  border: 1px solid #303947;
+  border-radius: 5px;
+  background: #101720;
+  padding: 5px 7px;
+}
+
+.programmerPanel.enabled {
+  border-color: #39765c;
+}
+
+.programmerPanel.blind {
+  border-color: #9a6e2e;
+  background: #211b12;
+}
+
+.programmerSummary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.programmerSummary > span:not(.status) {
+  overflow: hidden;
+  color: #8d9aaa;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.programmerActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.programmerPanel > .hint {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.programmerClearDialog {
+  width: min(430px, calc(100vw - 32px));
+  border: 1px solid #465467;
+  border-radius: 7px;
+  background: #111820;
+  padding: 14px;
+  color: #d6dfeb;
+}
+
+.programmerClearDialog::backdrop {
+  background: rgba(3, 7, 12, 0.72);
+}
+
+.programmerClearDialog form {
+  display: grid;
+  gap: 10px;
+}
+
+.referencePalettePanel {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  border: 1px solid #303947;
+  border-radius: 5px;
+  background: #101720;
+  padding: 7px;
+}
+
+.referencePaletteCreate {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(110px, 0.45fr) auto;
+  align-items: end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.referencePaletteCreate label {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.referencePalettePanel > .hint {
+  margin: 0;
+  color: #8d9aaa;
+  font-size: 12px;
+  text-wrap: pretty;
+}
+
+.referencePaletteList {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.referencePaletteItem {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  border: 1px solid #2d3947;
+  border-radius: 4px;
+  background: #0d141c;
+  padding: 7px;
+}
+
+.referencePaletteItem > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.referencePaletteItem > div:first-child span {
+  color: #8d9aaa;
+  white-space: nowrap;
+}
+
+.playbackExecutorPanel {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  border: 1px solid #303947;
+  border-radius: 5px;
+  background: #101720;
+  padding: 7px;
+}
+
+.playbackMasterControl,
+.playbackExecutorCreate {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto minmax(90px, 0.35fr);
+  align-items: end;
+  gap: 7px;
+  min-width: 0;
+}
+
+.playbackExecutorCreate {
+  grid-template-columns: minmax(140px, 0.8fr) minmax(140px, 1fr) auto;
+}
+
+.playbackMasterControl label,
+.playbackExecutorCreate label {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.playbackMasterControl output {
+  min-width: 48px;
+  text-align: right;
+}
+
+.playbackExecutorGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 205px), 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.playbackExecutorStrip {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  border: 1px solid #2d3947;
+  border-radius: 4px;
+  background: #0d141c;
+  padding: 7px;
+}
+
+.playbackExecutorHeading {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+}
+
+.playbackExecutorHeading b {
+  display: grid;
+  place-items: center;
+  min-height: 28px;
+  border-radius: 3px;
+  background: #263343;
+}
+
+.playbackExecutorNow {
+  min-height: 18px;
+  overflow: hidden;
+  color: #8d9aaa;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.playbackExecutorFader {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 48px;
+  align-items: center;
+  gap: 6px;
+}
+
+.playbackExecutorFader output {
+  text-align: right;
+}
+
+.playbackExecutorPanel > .hint {
+  margin: 0;
+  color: #8d9aaa;
+  font-size: 12px;
+  text-wrap: pretty;
+}
+
 .cuePanelLive {
   grid-template-rows: auto auto auto minmax(0, 1fr);
   min-height: 0;
@@ -7983,6 +8458,68 @@ input[type="color"] {
 .cuePanelLive .cueEditRow,
 .cuePanelLive .cueEditOnly {
   display: none;
+}
+
+.cueListManager {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.8fr) minmax(140px, 1fr) auto auto auto;
+  align-items: end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cueListManager label {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  color: #93a1b2;
+  font-size: 11px;
+}
+
+.cueListManager input,
+.cueListManager select {
+  min-width: 0;
+}
+
+.cueExecutorBank {
+  display: grid;
+  grid-auto-columns: minmax(190px, 250px);
+  grid-auto-flow: column;
+  gap: 5px;
+  min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.cueExecutor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 3px;
+  border: 1px solid #2d3947;
+  border-radius: 5px;
+  background: #101720;
+  padding: 3px;
+}
+
+.cueExecutor.selected {
+  border-color: #4e8dc5;
+}
+
+.cueExecutorSelect {
+  display: grid;
+  min-width: 0;
+  text-align: left;
+}
+
+.cueExecutorSelect strong,
+.cueExecutorSelect small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cueExecutorSelect small {
+  color: #8d9aaa;
 }
 
 .cueSearchRow {
@@ -8091,7 +8628,7 @@ input[type="color"] {
 
 .cuePreviewStats small {
   color: #718093;
-  font-size: 10px;
+  font-size: 11px;
   text-transform: uppercase;
 }
 
@@ -8243,6 +8780,19 @@ input[type="color"] {
   gap: 6px;
 }
 
+.cuePager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cuePager span {
+  color: #8d9aaa;
+  font-size: 12px;
+}
+
 .cuePanelLive .cueList {
   grid-template-columns: repeat(auto-fill, minmax(156px, 1fr));
   align-content: start;
@@ -8325,7 +8875,7 @@ input[type="color"] {
 
 .cueDeltaBadge b {
   color: #d6dfeb;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .cueDeltaBadge small {
@@ -8427,7 +8977,7 @@ input[type="color"] {
   border-radius: 999px;
   background: #f2c14e;
   color: #111820;
-  font-size: 8px;
+  font-size: 11px;
   line-height: 11px;
   text-align: center;
 }
@@ -8458,7 +9008,7 @@ input[type="color"] {
 
 .cueTargetChip b {
   color: #8f9caf;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .cueTargetChip small {
@@ -8562,7 +9112,7 @@ input[type="color"] {
 
 .cueTimelinePlacements b {
   color: #d6dfeb;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .cueTimelinePlacements small {
@@ -8581,13 +9131,207 @@ input[type="color"] {
 
 .cueEditRow {
   display: grid;
-  grid-template-columns: minmax(86px, 1fr) 70px;
-  align-items: center;
+  grid-template-columns: 70px minmax(90px, 0.7fr) minmax(110px, 1fr) repeat(3, 78px) auto auto;
+  align-items: end;
   gap: 6px;
 }
 
-.cueEditRow input {
+.cueEditRow input,
+.cueEditRow textarea {
   min-width: 0;
+}
+
+.cueEditRow label {
+  gap: 3px;
+  min-width: 0;
+  font-size: 11px;
+}
+
+.cueEditRow .cueTrackingToggle {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.cueEditRow .cueTrackingToggle input {
+  width: auto;
+  min-height: 0;
+}
+
+.cueEditRow .cueNotesField {
+  grid-column: 1 / -1;
+}
+
+.cueEditRow textarea {
+  min-height: 44px;
+  resize: vertical;
+}
+
+.cueIfcbTiming {
+  min-width: 0;
+  border: 1px solid #303947;
+  border-radius: 4px;
+  background: #0d141c;
+  padding: 5px 7px;
+}
+
+.cueIfcbTiming summary {
+  cursor: pointer;
+  color: #c7d0dc;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.cueIfcbTiming > p {
+  margin: 5px 0;
+  color: #8d9aaa;
+  font-size: 11px;
+  text-wrap: pretty;
+}
+
+.cueIfcbTimingGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.cuePartsEditor {
+  min-width: 0;
+  border: 1px solid #303947;
+  border-radius: 4px;
+  background: #0d141c;
+  padding: 5px 7px;
+}
+
+.cuePartsEditor > summary {
+  cursor: pointer;
+  color: #c7d0dc;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.cuePartsEditor > p {
+  margin: 5px 0;
+  color: #8d9aaa;
+  font-size: 11px;
+  text-wrap: pretty;
+}
+
+.cuePaletteEditor,
+.cueMibEditor {
+  min-width: 0;
+  border: 1px solid #303947;
+  border-radius: 4px;
+  background: #0d141c;
+  padding: 5px 7px;
+}
+
+.cuePaletteEditor > summary,
+.cueMibEditor > summary {
+  cursor: pointer;
+  color: #c7d0dc;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.cuePaletteEditor > p,
+.cueMibEditor > p {
+  margin: 5px 0;
+  color: #8d9aaa;
+  font-size: 12px;
+  text-wrap: pretty;
+}
+
+.cuePaletteTargets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 12px;
+}
+
+.cuePaletteTargets label {
+  font-size: 12px;
+}
+
+.cuePaletteTargets label span {
+  color: #8d9aaa;
+}
+
+.cueMibTargets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 12px;
+  margin-top: 5px;
+}
+
+.cueMibTargets label {
+  font-size: 12px;
+}
+
+.cuePartRow {
+  display: grid;
+  gap: 5px;
+  margin-top: 6px;
+  border: 1px solid #2d3947;
+  border-radius: 4px;
+  padding: 5px;
+}
+
+.cuePartFields {
+  display: grid;
+  grid-template-columns: 64px minmax(100px, 1fr) 80px 80px auto;
+  align-items: end;
+  gap: 5px;
+}
+
+.cuePartFields label {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  color: #93a1b2;
+  font-size: 11px;
+}
+
+.cuePartFields input {
+  min-width: 0;
+}
+
+.cuePartTargets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.cuePartTargets label {
+  font-size: 11px;
+}
+
+.cueIfcbTimingGrid fieldset {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  border: 1px solid #303947;
+  border-radius: 4px;
+  padding: 4px;
+}
+
+.cueIfcbTimingGrid legend {
+  color: #d6dfeb;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.cueIfcbTimingGrid label,
+.cueIfcbTimingGrid input {
+  min-width: 0;
+}
+
+.cueIfcbTimingGrid label {
+  gap: 2px;
+  font-size: 11px;
 }
 
 .cueActionRow {
@@ -8680,7 +9424,7 @@ input[type="color"] {
 
 .timelineHeaderMeta small {
   color: #8997a8;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -9152,6 +9896,47 @@ input[type="color"] {
   gap: 8px;
 }
 
+.audioSpectrumView {
+  width: 100%;
+  min-height: 54px;
+  border: 1px solid #28313d;
+  border-radius: 4px;
+  background: #0b1117;
+}
+
+.audioSpectrumView rect {
+  fill: #0b1117;
+}
+
+.audioSpectrumView line {
+  stroke: #25313d;
+  stroke-width: 0.35;
+}
+
+.audioSpectrumView polyline {
+  fill: none;
+  stroke-width: 0.8;
+  vector-effect: non-scaling-stroke;
+}
+
+.audioSpectrumView polyline.bass {
+  stroke: #ff755e;
+}
+
+.audioSpectrumView polyline.mid {
+  stroke: #f2c14e;
+}
+
+.audioSpectrumView polyline.high {
+  stroke: #62b7ff;
+}
+
+.audioSpectrumView text {
+  fill: #7e8d9c;
+  font-size: 3px;
+  font-weight: 800;
+}
+
 .timelineForm {
   display: grid;
   grid-template-columns: minmax(96px, 1fr) 86px 92px 92px 104px;
@@ -9167,7 +9952,7 @@ input[type="color"] {
 }
 
 .videoControlPanelMixer {
-  grid-template-columns: minmax(132px, 0.55fr) minmax(210px, 0.84fr) minmax(300px, 1.25fr);
+  grid-template-columns: minmax(160px, 0.76fr) minmax(180px, 0.8fr) minmax(260px, 1.1fr);
   grid-template-rows: auto auto minmax(0, 1fr);
   align-content: stretch;
   overflow: hidden;
@@ -9185,11 +9970,35 @@ input[type="color"] {
 
 .videoControlPanelMixer .videoMasterControls {
   grid-column: 1;
+  grid-row: 2;
 }
 
 .videoControlPanelMixer .videoPreview {
+  display: none;
+}
+
+.videoControlPanelMixer .videoClipGridPanel {
   grid-column: 1;
+  grid-row: 3;
   min-height: 0;
+  overflow: hidden;
+}
+
+.videoControlPanelMixer .liveAudioInputBar {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.videoControlPanelMixer .liveAudioInputControls {
+  grid-template-columns: minmax(0, 1fr) 24px;
+  min-width: 0;
+}
+
+.videoControlPanelMixer .liveAudioInputControls > button:last-child {
+  grid-column: 1 / -1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .videoControlPanelMixer .videoOutputControlList {
@@ -9224,20 +10033,416 @@ input[type="color"] {
 
 .deckPager strong {
   color: #e8e2dc;
-  font-size: 10px;
+  font-size: 11px;
   text-transform: uppercase;
 }
 
 .deckPager span {
   color: #938b83;
-  font-size: 9px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
 .deckPager button {
   min-height: 23px;
   padding: 0 5px;
+  font-size: 11px;
+}
+
+.videoClipGridPanel {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  border: 1px solid #28313d;
+  border-radius: 6px;
+  background: #0f161d;
+  padding: 6px;
+}
+
+.videoClipGridHeader,
+.videoClipGridHeader > div {
+  min-width: 0;
+}
+
+.videoClipGridHeader > div {
+  display: grid;
+  gap: 1px;
+}
+
+.videoClipGridHeader label {
+  display: grid;
+  grid-template-columns: auto 70px;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+}
+
+.videoClipGridHeader input {
+  min-width: 0;
+  height: 24px;
+}
+
+.videoClipGridSettings {
+  display: grid;
+  gap: 3px;
+}
+
+.videoAudioDeviceField {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px;
+  align-items: end;
+  gap: 3px;
+}
+
+.videoAudioDeviceField label {
+  grid-template-columns: auto minmax(70px, 1fr);
+}
+
+.videoAudioDeviceField button {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+}
+
+.videoAudioSyncStatus {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 8px;
+  min-width: 0;
+  border: 1px solid #31475a;
+  border-radius: 4px;
+  background: #101a23;
+  padding: 3px 5px;
+  color: #9eb4c7;
+  font-size: 10px;
+}
+
+.videoAudioSyncStatus.error {
+  border-color: #8d3f48;
+  color: #ff9aa5;
+}
+
+.videoAudioSyncStatus strong {
+  overflow-wrap: anywhere;
+}
+
+.videoClipPreviewBar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  border: 1px solid #36506b;
+  border-radius: 5px;
+  background: #111d28;
+  padding: 5px;
+}
+
+.videoClipPreviewBar > div:first-child {
+  display: grid;
+  min-width: 0;
+}
+
+.videoClipPreviewBar small {
+  color: #61b7ff;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.videoClipPreviewBar strong,
+.videoClipPreviewBar span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.videoAbDeck {
+  display: grid;
+  grid-template-columns: minmax(72px, 0.7fr) minmax(120px, 1fr) minmax(72px, 0.7fr);
+  align-items: stretch;
+  gap: 5px;
+}
+
+.videoAbDeck > button {
+  display: grid;
+  min-width: 0;
+  text-align: left;
+}
+
+.videoAbDeck > button:last-child {
+  text-align: right;
+}
+
+.videoAbDeck small,
+.videoAbDeck strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.videoAbDeck label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.videoAbDeck input {
+  min-width: 0;
+}
+
+.videoRecordingBar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  border: 1px solid #343c47;
+  border-radius: 4px;
+  background: #11171e;
+  padding: 4px 5px;
+}
+
+.videoRecordingBar > div {
+  display: grid;
+  min-width: 0;
+}
+
+.videoRecordingBar small {
+  color: #8593a2;
+  font-weight: 800;
+}
+
+.videoRecordingBar span {
+  overflow: hidden;
+  color: #96a3b1;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.videoRecordingBar.active {
+  border-color: #ce4454;
+  background: rgba(92, 24, 32, 0.35);
+}
+
+.videoRecordingBar.active small {
+  color: #ff7180;
+}
+
+.liveAudioInputBar {
+  display: grid;
+  grid-template-columns: minmax(230px, 1fr) minmax(180px, 0.8fr);
+  gap: 6px;
+  min-width: 0;
+  border: 1px solid #343c47;
+  border-radius: 4px;
+  background: #10171d;
+  padding: 5px;
+}
+
+.liveAudioInputBar.active {
+  border-color: #3e8b6b;
+}
+
+.liveAudioInputControls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px auto;
+  align-items: end;
+  gap: 4px;
+}
+
+.liveAudioInputControls button {
+  min-height: 24px;
+}
+
+.liveAudioMeters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-content: center;
+  gap: 3px;
+  min-width: 0;
+}
+
+.liveAudioMeters span {
+  position: relative;
+  overflow: hidden;
+  min-height: 15px;
+  border: 1px solid #354451;
+  border-radius: 2px;
+  background: #0a1015;
+  color: #c4d2dd;
   font-size: 9px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.liveAudioMeters i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: 0;
+  background: linear-gradient(90deg, #2c9d69, #d3a43a);
+  opacity: 0.65;
+}
+
+.liveAudioMeters span::first-letter {
+  position: relative;
+  z-index: 1;
+}
+
+.liveAudioMeters small {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: #81909f;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.videoClipPreviewBar span {
+  color: #8b9aaa;
+  font-size: 11px;
+}
+
+.videoClipGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.videoClipPad {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 66px;
+}
+
+.videoClipLaunch {
+  display: grid;
+  align-content: start;
+  gap: 1px;
+  min-width: 0;
+  min-height: 66px;
+  border-color: #334152;
+  background: linear-gradient(180deg, #17212b, #10161d);
+  padding: 5px 25px 5px 6px;
+  text-align: left;
+}
+
+.videoClipThumbnail {
+  width: calc(100% + 19px);
+  height: 54px;
+  margin: -2px -19px 3px 0;
+  border-radius: 3px;
+  background: #070b10;
+  object-fit: cover;
+  pointer-events: none;
+}
+
+.videoClipLaunch small,
+.videoClipLaunch strong,
+.videoClipLaunch span,
+.videoClipLaunch em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.videoClipLaunch small {
+  color: #73869a;
+  font-size: 11px;
+}
+
+.videoClipLaunch strong {
+  color: #e8eef5;
+}
+
+.videoClipLaunch span {
+  color: #91a0af;
+  font-size: 11px;
+}
+
+.videoClipLaunch em {
+  color: #80b7df;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.videoClipPad.live .videoClipLaunch {
+  border-color: #25c878;
+  background: linear-gradient(180deg, rgba(26, 112, 72, 0.7), rgba(14, 50, 35, 0.88));
+  box-shadow: inset 0 0 0 1px rgba(71, 233, 143, 0.18);
+}
+
+.videoClipPad.live .videoClipLaunch em {
+  color: #7af0ad;
+}
+
+.videoClipPad.previewed .videoClipLaunch {
+  outline: 2px solid #47a9ff;
+  outline-offset: -2px;
+}
+
+.videoClipPreview,
+.videoClipStop,
+.videoClipAudio {
+  position: absolute;
+  right: 3px;
+  z-index: 1;
+  width: 20px;
+  min-width: 20px;
+  min-height: 20px;
+  padding: 0;
+  font-size: 11px;
+}
+
+.videoClipPreview {
+  top: 3px;
+}
+
+.videoClipStop {
+  bottom: 3px;
+}
+
+.videoClipAudio {
+  bottom: 3px;
+  left: 3px;
+  right: auto;
+}
+
+.videoClipAudio.active {
+  border-color: #e6a23c;
+  background: #6d4514;
+  color: #ffe1a8;
+}
+
+.videoClipDeckLoad {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  z-index: 2;
+  display: flex;
+  gap: 2px;
+}
+
+.videoClipDeckLoad button {
+  width: 20px;
+  min-width: 20px;
+  min-height: 20px;
+  padding: 0;
+  font-size: 10px;
+}
+
+.videoClipPreview[aria-pressed="true"] {
+  border-color: #47a9ff;
+  background: #174a74;
+  color: #dcedff;
 }
 
 .compositionList {
@@ -10238,7 +11443,7 @@ input[type="color"] {
   padding: 0 3px;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .videoControlPanelMixer .videoMasterFader {
@@ -10257,6 +11462,71 @@ input[type="color"] {
   border-radius: 6px;
   background: #0f161d;
   padding: 8px;
+}
+
+.videoOutputBlendControls {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #314457;
+  border-radius: 5px;
+  background: #101923;
+  padding: 8px;
+}
+
+.videoOutputMaskControls {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid #4b4931;
+  border-radius: 5px;
+  background: #1b1a12;
+  padding: 8px;
+}
+
+.videoMaskInvertToggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+}
+
+.videoMaskInvertToggle input {
+  width: 18px;
+  min-height: 18px;
+}
+
+.videoMaskPointGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.videoMaskPointGrid fieldset {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  border: 1px solid #4b4931;
+  border-radius: 4px;
+  padding: 4px;
+}
+
+.videoMaskPointGrid legend,
+.videoMaskPointGrid label,
+.videoMaskPointGrid input {
+  min-width: 0;
+}
+
+.videoMaskPointGrid legend {
+  color: #d8d4b0;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.videoMaskPointGrid label {
+  gap: 2px;
+  font-size: 11px;
 }
 
 .videoOutputSetupShell {
@@ -10315,7 +11585,7 @@ input[type="color"] {
 
 .videoOutputDeck small {
   color: #728197;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .videoOutputDetailPane {
@@ -10513,7 +11783,7 @@ input[type="color"] {
   align-items: center;
   gap: 4px;
   min-width: 0;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .videoControlPanelMixer .videoMixerOutputDeck input[type="range"] {
@@ -10533,7 +11803,7 @@ input[type="color"] {
   padding: 0 3px;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .videoControlPanelMixer .videoOutputControlList.compact {
@@ -10552,7 +11822,7 @@ input[type="color"] {
   align-items: center;
   gap: 4px;
   min-width: 0;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .videoControlPanelMixer .videoOutputControlList.compact .sectionHeader input {
@@ -10587,7 +11857,7 @@ input[type="color"] {
 }
 
 .videoControlPanelMixer .videoOutputControlList.compact .videoOutputControlItem span {
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .videoControlPanelMixer .videoOutputControlList.compact .videoOutputControlItem .outputRenderPlanStatus,
@@ -10597,7 +11867,7 @@ input[type="color"] {
   margin-right: 3px;
   padding: 1px 5px;
   border-radius: 2px;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .videoControlPanelMixer .videoMixerOutputDeck button.active {
@@ -11203,7 +12473,7 @@ input[type="color"] {
   gap: 4px;
   min-width: max-content;
   color: #b7c2d0;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -11257,7 +12527,7 @@ input[type="color"] {
   background: #101822;
   color: #91c9ff;
   padding: 0 4px;
-  font-size: 10px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
   font-weight: 700;
 }
@@ -11271,7 +12541,7 @@ input[type="color"] {
   background: #121a24;
   color: #c8d2df;
   padding: 0 4px;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .timelineKeyframeDelete {
@@ -11285,7 +12555,7 @@ input[type="color"] {
   background: #141d28;
   color: #aeb9c7;
   padding: 0;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
 }
 
@@ -11301,7 +12571,7 @@ input[type="color"] {
 
 .timelineKeyframeStrip strong,
 .timelineKeyframeStrip span {
-  font-size: 10px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
   line-height: 1;
 }
@@ -11589,6 +12859,10 @@ input[type="color"] {
 
 .nodeGraphNode.wave rect {
   stroke: #6bd4ff;
+}
+
+.nodeGraphNode.audio rect {
+  stroke: #d08cff;
 }
 
 .nodeGraphNode.transform rect {
@@ -12322,7 +13596,7 @@ input[type="color"] {
   min-width: 0;
   overflow: hidden;
   color: #8997a8;
-  font-size: 10px;
+  font-size: 11px;
   text-overflow: ellipsis;
   text-transform: uppercase;
   white-space: nowrap;
@@ -12362,7 +13636,7 @@ input[type="color"] {
 
 .phase1SmokeBytes em {
   color: #8997a8;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .dmxOutputDiagnosticsHeader {
@@ -12500,6 +13774,50 @@ input[type="color"] {
 
 .clockSource strong {
   color: #edf3fb;
+}
+
+.clockSyncHealth {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid #39434f;
+  border-radius: 5px;
+  background: #151c24;
+  padding: 6px 8px;
+}
+
+.clockSyncHealth span {
+  color: #aab6c6;
+  font-weight: 800;
+}
+
+.clockSyncHealth small {
+  min-width: 0;
+  overflow: hidden;
+  color: #8d9aaa;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.clockSyncHealth.locked {
+  border-color: #315c3b;
+  background: #17251a;
+}
+
+.clockSyncHealth.locked span,
+.clockSyncLabel.locked {
+  color: #9ef08d;
+}
+
+.clockSyncHealth.stale {
+  border-color: #715f39;
+  background: #2b2418;
+}
+
+.clockSyncHealth.stale span {
+  color: #ffd98a;
 }
 
 .inputStatusGrid {
@@ -12641,7 +13959,7 @@ input[type="color"] {
   align-items: center;
   gap: 4px;
   min-width: 0;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .videoControlPanelMixer .videoMixerLayerDeck input[type="range"] {
@@ -12661,7 +13979,7 @@ input[type="color"] {
   padding: 0 3px;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .videoControlPanelMixer .videoLayerList.compact {
@@ -12673,7 +13991,7 @@ input[type="color"] {
 .videoControlPanelMixer .videoLayerList.compact .videoLayerItem > div:first-child strong,
 .videoControlPanelMixer .videoLayerList.compact .videoLayerItem > div:first-child span,
 .videoControlPanelMixer .videoLayerList.compact .videoLayerItem > div:first-child small {
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .videoControlPanelMixer .videoMixerLayerDeck button.active {
@@ -12786,7 +14104,7 @@ input[type="color"] {
 .telemetryGrid small {
   overflow: hidden;
   color: #718093;
-  font-size: 10px;
+  font-size: 11px;
   text-overflow: ellipsis;
   text-transform: uppercase;
   white-space: nowrap;
@@ -13075,7 +14393,7 @@ h3 {
   min-height: 27px;
   border-radius: 3px;
   padding: 0 8px;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .goButton {
@@ -13111,7 +14429,7 @@ h3 {
   background: #1a1816;
   color: #a79e96;
   padding: 0 6px;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .pill.ok {
@@ -13132,7 +14450,7 @@ h3 {
 
 .outputMetric small {
   color: #827a73;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .outputMetric strong {
@@ -13162,7 +14480,7 @@ h3 {
   border-right-color: var(--ray-border);
   background: transparent;
   color: #a79d94;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
 }
 
@@ -13219,7 +14537,7 @@ h3 {
   background: transparent;
   color: #a79d94;
   padding: 0 10px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -13328,7 +14646,7 @@ h3 {
 .profileLoadHeader span,
 .loadedProfileHeader span {
   color: #8f8780;
-  font-size: 9px;
+  font-size: 11px;
   white-space: nowrap;
 }
 
@@ -13342,7 +14660,7 @@ h3 {
 
 .profileSourceBlock > strong {
   color: #d8d0c9;
-  font-size: 10px;
+  font-size: 11px;
   text-transform: uppercase;
 }
 
@@ -13505,7 +14823,10 @@ h3 {
   overflow: hidden;
 }
 
+.dmxEndpointDesk,
 .dmxOutputConfigPanel,
+.dmxInputPanel,
+.artRdmPanel,
 .outputDiagnosticsDesk,
 .lightingRuntimeDesk {
   display: grid;
@@ -13515,7 +14836,74 @@ h3 {
   min-height: 0;
 }
 
-.layoutSetup.setupMode-dmx .dmxOutputConfigPanel,
+.dmxEndpointDesk {
+  overflow: auto;
+  border-right: 1px solid #39342f;
+  padding-right: 5px;
+}
+
+.dmxInputPanel {
+  margin-top: 8px;
+  border-top: 1px solid #39342f;
+  padding-top: 8px;
+}
+
+.artRdmPanel {
+  margin-top: 8px;
+  border-top: 1px solid #39342f;
+  padding-top: 8px;
+}
+
+.artRdmGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.rdmSerialPortField {
+  align-self: end;
+}
+
+.artRdmResponse {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  border: 1px solid #315f4b;
+  border-radius: 5px;
+  background: #102119;
+  padding: 6px;
+  color: #b8d6c6;
+  font-size: 11px;
+}
+
+.artRdmResponse code {
+  overflow-wrap: anywhere;
+  color: #e3f5ea;
+}
+
+.dmxInputFields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.dmxInputActions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+  align-items: center;
+}
+
+.dmxInputActions span {
+  min-width: 0;
+  overflow: hidden;
+  color: #aeb7c2;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layoutSetup.setupMode-dmx .dmxEndpointDesk,
 .layoutSetup.setupMode-dmx .outputDiagnosticsDesk {
   border-right: 1px solid #39342f;
   padding-right: 5px;
@@ -13543,7 +14931,7 @@ h3 {
 
 .ioDeskHeader span {
   color: #8f8780;
-  font-size: 9px;
+  font-size: 11px;
   white-space: nowrap;
 }
 
@@ -13620,6 +15008,7 @@ h3 {
 .layoutSetup.setupMode-remote .remoteControl {
   display: grid;
   grid-template-columns: minmax(360px, 0.75fr) minmax(500px, 1.25fr);
+  grid-template-rows: minmax(0, 0.75fr) minmax(0, 1.25fr);
   gap: 5px;
   min-width: 0;
   min-height: 0;
@@ -13628,7 +15017,8 @@ h3 {
 }
 
 .remoteServerDesk,
-.remoteEndpointDesk {
+.remoteEndpointDesk,
+.standbySyncDesk {
   display: grid;
   align-content: start;
   gap: 6px;
@@ -13638,8 +15028,218 @@ h3 {
 }
 
 .remoteServerDesk {
+  grid-column: 1;
+  grid-row: 1;
   border-right: 1px solid #39342f;
   padding-right: 5px;
+}
+
+.standbySyncDesk {
+  grid-column: 1;
+  grid-row: 2;
+  border-top: 1px solid #39342f;
+  border-right: 1px solid #39342f;
+  padding-top: 6px;
+  padding-right: 5px;
+}
+
+.remoteControl > .remoteEndpointDesk:not(.remoteClientDesk) {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.remoteControl > .remoteClientDesk {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.standbyIntro {
+  margin: 0;
+  color: #aab4c2;
+  font-size: 11px;
+}
+
+.standbyDirectoryRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px;
+}
+
+.standbyDirectoryRow input {
+  min-width: 0;
+}
+
+.standbyModeSummary {
+  display: grid;
+  align-content: end;
+  gap: 3px;
+  min-width: 0;
+  min-height: 40px;
+  border: 1px solid #39342f;
+  border-radius: 4px;
+  background: #181715;
+  padding: 5px 7px;
+}
+
+.standbyModeSummary small,
+.standbyStatusGrid dt {
+  color: #8f9caf;
+  font-size: 10px;
+}
+
+.standbyModeSummary strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.standbyStatusGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  margin: 0;
+}
+
+.standbyStatusGrid > div {
+  min-width: 0;
+  border: 1px solid #39342f;
+  border-radius: 4px;
+  background: #181715;
+  padding: 5px;
+}
+
+.standbyStatusGrid dt,
+.standbyStatusGrid dd {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.standbyStatusGrid dd {
+  margin-top: 2px;
+  color: #edf3fb;
+  font-weight: 700;
+}
+
+.standbySyncDesk button.danger,
+.standbyTakeoverDialog button.danger,
+.rdmConfirmationDialog button.danger {
+  border-color: #8c4039;
+  background: #572722;
+  color: #ffe1dc;
+}
+
+.standbySyncDesk button.danger:hover:not(:disabled),
+.standbyTakeoverDialog button.danger:hover:not(:disabled),
+.rdmConfirmationDialog button.danger:hover:not(:disabled) {
+  background: #6c302a;
+}
+
+.standbySyncDesk .fieldError,
+.standbyTakeoverDialog .fieldError {
+  margin: 0;
+  border: 1px solid #8c4039;
+  border-radius: 4px;
+  background: #311b19;
+  color: #ffbdb5;
+  padding: 6px 8px;
+  font-size: 11px;
+}
+
+.standbyTakeoverDialog,
+.rdmConfirmationDialog {
+  width: min(480px, calc(100vw - 32px));
+  border: 1px solid #5a5148;
+  border-radius: 6px;
+  background: #1b1a18;
+  color: #edf3fb;
+  padding: 0;
+  box-shadow: 0 12px 28px rgb(0 0 0 / 45%);
+}
+
+.standbyTakeoverDialog::backdrop,
+.rdmConfirmationDialog::backdrop {
+  background: rgb(0 0 0 / 68%);
+}
+
+.standbyTakeoverDialog form,
+.rdmConfirmationDialog form {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+}
+
+.standbyTakeoverDialog h2,
+.standbyTakeoverDialog p,
+.rdmConfirmationDialog h2,
+.rdmConfirmationDialog p {
+  margin: 0;
+}
+
+.standbyTakeoverDialog p,
+.rdmConfirmationDialog p {
+  color: #b9c2ce;
+}
+
+.standbyFenceConfirmation {
+  border: 1px solid #6b5d2f;
+  border-radius: 4px;
+  background: #2b2418;
+  color: #ffe1a1;
+  padding: 8px;
+}
+
+.textBalance {
+  text-wrap: balance;
+}
+
+.textPretty {
+  text-wrap: pretty;
+}
+
+.tabularNums {
+  font-variant-numeric: tabular-nums;
+}
+
+.remoteLimitGrid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.remoteLanToggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+}
+
+.remoteLanToggle input {
+  width: 18px;
+  min-height: 18px;
+  margin: 0;
+}
+
+.inlineWarning,
+.inlineSuccess {
+  margin: 0;
+  border: 1px solid #6b5d2f;
+  border-radius: 4px;
+  background: #2b2418;
+  color: #ffe1a1;
+  padding: 6px 8px;
+  font-size: 11px;
+}
+
+.inlineSuccess {
+  border-color: #285e3f;
+  background: #15271d;
+  color: #bce8c9;
+}
+
+.remoteClientItem small {
+  display: block;
+  margin-top: 2px;
+  color: #8f9caf;
 }
 
 .remoteEndpointDesk .remoteUrlItem {
@@ -13697,7 +15297,7 @@ h3 {
   cursor: pointer;
   color: #d8d0c9;
   padding: 7px 9px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -13740,7 +15340,7 @@ h3 {
 }
 
 .videoSetupSidebar .compositionHeader span {
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .layoutSetup.setupMode-patch > .setup {
@@ -13843,7 +15443,7 @@ h3 {
   width: 100%;
   min-height: 0;
   aspect-ratio: 1;
-  font-size: 8px;
+  font-size: 11px;
 }
 
 .dmxPatchFixtureBlock {
@@ -13883,7 +15483,7 @@ h3 {
 }
 
 .dmxPatchFixtureBlock strong {
-  font-size: 8px;
+  font-size: 11px;
 }
 
 .dmxPatchFixtureBlock small {
@@ -13989,7 +15589,7 @@ h3 {
 .viewToggle button {
   min-height: 24px;
   color: #938a82;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .viewToggle button.active {
@@ -14109,13 +15709,13 @@ h3 {
 
 .sampleEffectPresetHeader strong {
   color: #e9e3dc;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .sampleEffectPresetHeader span,
 .sampleEffectPresetHint {
   color: #8c837b;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .sampleEffectPresetGrid {
@@ -14153,7 +15753,7 @@ h3 {
 
 .sampleEffectPresetPick span {
   color: #87c97e;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .sampleEffectPresetPick small {
@@ -14171,7 +15771,7 @@ h3 {
   border-radius: 0;
   background: #282521;
   padding: 0 5px;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .sampleEffectPresetActions button:last-child {
@@ -14330,7 +15930,7 @@ h3 {
   border-radius: 1px;
   color: #aaa198;
   padding: 0 7px;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .attributeCategoryRail button.active {
@@ -14357,7 +15957,7 @@ h3 {
 }
 
 .attributeTargetSummary small {
-  font-size: 9px;
+  font-size: 11px;
 }
 
 /* Control is a fixed show desk: one primary surface above two persistent work panes. */
@@ -14411,11 +16011,11 @@ h3 {
 }
 
 .layoutControl .liveControlPanel .liveStatusItem span {
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .layoutControl .liveControlPanel .liveStatusItem strong {
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .layoutControl .liveControlPanel > .liveTransportGrid {
@@ -14467,7 +16067,7 @@ h3 {
 }
 
 .layoutControl .liveControlPanel .liveCuePad small {
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .layoutControl .liveControlPanel > .liveMasterGrid {
@@ -14539,7 +16139,7 @@ h3 {
 
 .timelineDeskTabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(70px, 1fr));
+  grid-template-columns: repeat(4, minmax(70px, 1fr));
   gap: 1px;
   min-width: 250px;
 }
@@ -14556,7 +16156,7 @@ h3 {
   min-height: 24px;
   border-radius: 1px;
   padding: 0 7px;
-  font-size: 9px;
+  font-size: 11px;
   text-transform: uppercase;
 }
 
@@ -14691,7 +16291,7 @@ h3 {
   min-height: 24px;
   border-radius: 1px;
   padding: 0 7px;
-  font-size: 9px;
+  font-size: 11px;
   text-transform: uppercase;
 }
 
@@ -14711,9 +16311,25 @@ h3 {
   padding-top: 0;
 }
 
+.layoutControl .faders > .playbackDeskSurface {
+  display: none;
+  grid-row: 2;
+  min-height: 0;
+  overflow: hidden auto;
+  align-content: start;
+  gap: 6px;
+  padding: 1px;
+}
+
+.layoutControl.controlModeLive .faders.timelineDesk-playback > .playbackDeskSurface {
+  display: grid;
+}
+
 .layoutControl.controlModeLive .faders.timelineDesk-show > .cuePanel,
 .layoutControl.controlModeLive .faders.timelineDesk-automation > .cuePanel,
-.layoutControl.controlModeLive .faders.timelineDesk-cues > .timelinePanel {
+.layoutControl.controlModeLive .faders.timelineDesk-cues > .timelinePanel,
+.layoutControl.controlModeLive .faders.timelineDesk-playback > .cuePanel,
+.layoutControl.controlModeLive .faders.timelineDesk-playback > .timelinePanel {
   display: none;
 }
 
@@ -14792,7 +16408,7 @@ h3 {
 
 .controlStageToolbar > span {
   color: #8f8881;
-  font-size: 9px;
+  font-size: 11px;
   white-space: nowrap;
 }
 
@@ -14816,7 +16432,7 @@ h3 {
 
 .controlStageGroups button span {
   color: #8f8881;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .controlStage {
@@ -14983,12 +16599,12 @@ h3 {
 
 .controlStageSelection strong {
   color: #f0ebe5;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .controlStageSelection span {
   color: #908880;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .controlStageSelection button {
@@ -15006,7 +16622,7 @@ h3 {
 }
 
 .attributeTargetSummary strong {
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .visualControlPanel,
@@ -15025,7 +16641,7 @@ h3 {
   background: #191715;
   color: #9b928a;
   padding: 1px 7px 0;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 17px;
 }
 

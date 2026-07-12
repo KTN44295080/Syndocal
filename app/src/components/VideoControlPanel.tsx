@@ -9,6 +9,7 @@ import {
 } from "./VideoRuntimeStatusPanels";
 import { VideoPreviewImagePanel, VideoSourceCreatePanel } from "./VideoSourceCreatePanel";
 import { VideoTimelineAutomationPanel } from "./VideoTimelineAutomationPanel";
+import { VideoClipGridPanel } from "./VideoClipGridPanel";
 
 interface VideoControlPanelProps {
   mixer: boolean;
@@ -21,6 +22,7 @@ interface VideoControlPanelProps {
   outputControls: ComponentProps<typeof VideoOutputControlListPanel>;
   previewImage: ComponentProps<typeof VideoPreviewImagePanel>;
   sourceCreate: ComponentProps<typeof VideoSourceCreatePanel>;
+  clipGrid: ComponentProps<typeof VideoClipGridPanel>;
   layerList: ComponentProps<typeof VideoLayerListPanel>;
   timelineAutomation: ComponentProps<typeof VideoTimelineAutomationPanel>;
 }
@@ -39,6 +41,7 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
         <ExternalVideoIoStatusPanel {...props.externalIoStatus} />
       </div>
       <VideoMasterControlsPanel {...props.masterControls} />
+      <VideoClipGridPanel {...props.clipGrid} />
       <VideoOutputControlListPanel {...props.outputControls} compact={props.mixer} />
       <VideoPreviewImagePanel {...props.previewImage} />
       <div class="videoMixerSetupTools">

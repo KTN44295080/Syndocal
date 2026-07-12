@@ -1,18 +1,19 @@
 use std::{
+    collections::HashMap,
     io::{Read, Write},
     net::{TcpListener, TcpStream},
     sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex,
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use protocol::{
     canonical_video_output_mapping_field, ClockSource, CueId, EffectId, EngineSnapshot, FixtureId,
-    NodeGraphId, RemoteControlConfig, VideoLayerId, VideoOutputId, VideoOutputMapping, VideoParam,
-    VideoRuntimeStatus,
+    NodeGraphId, RemoteClientSummary, RemoteControlConfig, RemoteControlStatus, VideoLayerId,
+    VideoOutputId, VideoOutputMapping, VideoParam, VideoRuntimeStatus,
 };
 use serde_json::{json, Value};
 use thiserror::Error;
@@ -322,7 +323,9 @@ function remoteJsString(value){return escapeHtml(JSON.stringify(String(value)))}
 function setStatus(ok){statusEl.textContent=ok?"Connected":"Disconnected";statusEl.className=ok?"status ok":"status bad"}
 function connect(){
   if(snapshotTimer)clearInterval(snapshotTimer);
-  ws=new WebSocket(`ws://${location.host}/ws`);
+  const token=new URLSearchParams(location.search).get("token")||"";
+  const wsScheme=location.protocol==="https:"?"wss":"ws";
+  ws=new WebSocket(`${wsScheme}://${location.host}/ws?token=${encodeURIComponent(token)}`);
   ws.onopen=()=>{setStatus(true);requestSnapshot();requestVideoRuntimeStatus();requestVideoOutputRenderPlans();requestExternalVideoIoPlans();requestExternalVideoTransportStatus();snapshotTimer=setInterval(requestSnapshot,1000)};
   ws.onclose=()=>{setStatus(false);if(snapshotTimer)clearInterval(snapshotTimer);setTimeout(connect,1000)};
   ws.onerror=()=>setStatus(false);
@@ -2532,7 +2535,7 @@ connect();
 "##;
 const REMOTE_MANIFEST: &str = r##"{"name":"Syndocal Remote","short_name":"Syndocal","start_url":"/","scope":"/","display":"standalone","background_color":"#111419","theme_color":"#111419","icons":[{"src":"/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}"##;
 const REMOTE_ICON_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="24" fill="#111419"/><path d="M28 88h72" stroke="#4aa8ff" stroke-width="10" stroke-linecap="round"/><path d="M36 34v42M64 24v52M92 44v32" stroke="#edf3fb" stroke-width="10" stroke-linecap="round"/><circle cx="36" cy="58" r="12" fill="#f2c14e"/><circle cx="64" cy="42" r="12" fill="#74d99f"/><circle cx="92" cy="66" r="12" fill="#4aa8ff"/></svg>"##;
-const REMOTE_SERVICE_WORKER_JS: &str = r##"const CACHE_NAME="syndocal-remote-v1";const SHELL=["/","/manifest.webmanifest","/icon.svg"];self.addEventListener("install",event=>{event.waitUntil(caches.open(CACHE_NAME).then(cache=>cache.addAll(SHELL)).then(()=>self.skipWaiting()))});self.addEventListener("activate",event=>{event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key!==CACHE_NAME).map(key=>caches.delete(key)))).then(()=>self.clients.claim()))});self.addEventListener("fetch",event=>{if(event.request.method!=="GET")return;event.respondWith(fetch(event.request).then(response=>{const copy=response.clone();if(event.request.url.startsWith(self.location.origin)){caches.open(CACHE_NAME).then(cache=>cache.put(event.request,copy))}return response}).catch(()=>caches.match(event.request).then(cached=>cached||caches.match("/"))))});"##;
+const REMOTE_SERVICE_WORKER_JS: &str = r##"const CACHE_NAME="syndocal-remote-v2";const SHELL=["/manifest.webmanifest","/icon.svg"];self.addEventListener("install",event=>{event.waitUntil(caches.open(CACHE_NAME).then(cache=>cache.addAll(SHELL)).then(()=>self.skipWaiting()))});self.addEventListener("activate",event=>{event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key!==CACHE_NAME).map(key=>caches.delete(key)))).then(()=>self.clients.claim()))});self.addEventListener("fetch",event=>{if(event.request.method!=="GET")return;const url=new URL(event.request.url);if(url.pathname==="/"||url.pathname==="/remote"||url.pathname==="/index.html"||url.pathname==="/ws"||url.searchParams.has("token"))return;event.respondWith(fetch(event.request).then(response=>{const copy=response.clone();if(event.request.url.startsWith(self.location.origin)){caches.open(CACHE_NAME).then(cache=>cache.put(event.request,copy))}return response}).catch(()=>caches.match(event.request)))});"##;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RemoteInputEvent {
@@ -2717,6 +2720,16 @@ pub enum RemoteWsError {
     MissingBindAddress,
     #[error("remote port must be greater than 0")]
     InvalidPort,
+    #[error("remote pairing PIN must contain exactly 6 digits")]
+    InvalidPairingPin,
+    #[error("remote LAN access must be enabled before binding to a non-loopback address")]
+    LanAccessDisabled,
+    #[error("remote connection limit must be between 1 and 64")]
+    InvalidConnectionLimit,
+    #[error("remote message size limit must be between 1024 and 1048576 bytes")]
+    InvalidMessageSizeLimit,
+    #[error("remote message rate limit must be between 1 and 1000 messages per second")]
+    InvalidMessageRateLimit,
     #[error("failed to bind remote WebSocket server {bind}: {source}")]
     Bind {
         bind: String,
@@ -2737,6 +2750,13 @@ pub enum RemoteParseError {
 pub struct RemoteWsServer {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    clients: Arc<Mutex<HashMap<u64, RemoteClientState>>>,
+    rejected_connections: Arc<AtomicU64>,
+}
+
+struct RemoteClientState {
+    summary: RemoteClientSummary,
+    disconnect: Arc<AtomicBool>,
 }
 
 impl RemoteWsServer {
@@ -2812,6 +2832,30 @@ impl RemoteWsServer {
         if config.port == 0 {
             return Err(RemoteWsError::InvalidPort);
         }
+        if config.pairing_pin.len() != 6
+            || !config.pairing_pin.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(RemoteWsError::InvalidPairingPin);
+        }
+        if !config.allow_lan
+            && config
+                .bind_ip
+                .trim()
+                .parse::<std::net::IpAddr>()
+                .map(|ip| !ip.is_loopback())
+                .unwrap_or(true)
+        {
+            return Err(RemoteWsError::LanAccessDisabled);
+        }
+        if !(1..=64).contains(&config.max_connections) {
+            return Err(RemoteWsError::InvalidConnectionLimit);
+        }
+        if !(1_024..=1_048_576).contains(&config.max_message_bytes) {
+            return Err(RemoteWsError::InvalidMessageSizeLimit);
+        }
+        if !(1..=1_000).contains(&config.max_messages_per_second) {
+            return Err(RemoteWsError::InvalidMessageRateLimit);
+        }
 
         let bind = format!("{}:{}", config.bind_ip, config.port);
         let listener = TcpListener::bind(&bind).map_err(|source| RemoteWsError::Bind {
@@ -2830,6 +2874,13 @@ impl RemoteWsServer {
             Arc::new(external_video_transport_status_provider);
         let external_video_transport_sync_provider =
             Arc::new(external_video_transport_sync_provider);
+        let config = Arc::new(config);
+        let clients = Arc::new(Mutex::new(HashMap::new()));
+        let next_client_id = Arc::new(AtomicU64::new(1));
+        let rejected_connections = Arc::new(AtomicU64::new(0));
+        let thread_clients = Arc::clone(&clients);
+        let thread_next_client_id = Arc::clone(&next_client_id);
+        let thread_rejected_connections = Arc::clone(&rejected_connections);
         let thread = thread::Builder::new()
             .name("syndocal-remote-ws".to_string())
             .spawn(move || {
@@ -2849,6 +2900,11 @@ impl RemoteWsServer {
                                 Arc::clone(&external_video_transport_status_provider);
                             let client_external_video_transport_sync_provider =
                                 Arc::clone(&external_video_transport_sync_provider);
+                            let client_config = Arc::clone(&config);
+                            let client_registry = Arc::clone(&thread_clients);
+                            let client_next_id = Arc::clone(&thread_next_client_id);
+                            let client_rejected_connections =
+                                Arc::clone(&thread_rejected_connections);
                             let _ = thread::Builder::new()
                                 .name("syndocal-remote-ws-client".to_string())
                                 .spawn(move || {
@@ -2862,6 +2918,10 @@ impl RemoteWsServer {
                                         client_external_video_io_plans_provider.as_ref(),
                                         client_external_video_transport_status_provider.as_ref(),
                                         client_external_video_transport_sync_provider.as_ref(),
+                                        client_config.as_ref(),
+                                        client_registry,
+                                        client_next_id,
+                                        client_rejected_connections,
                                     );
                                 });
                         }
@@ -2879,7 +2939,41 @@ impl RemoteWsServer {
         Ok(Self {
             stop,
             thread: Some(thread),
+            clients,
+            rejected_connections,
         })
+    }
+
+    pub fn status(&self) -> RemoteControlStatus {
+        let mut clients = self
+            .clients
+            .lock()
+            .map(|clients| {
+                clients
+                    .values()
+                    .map(|client| client.summary.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        clients.sort_by_key(|client| client.id);
+        RemoteControlStatus {
+            running: true,
+            active_connections: clients.len(),
+            rejected_connections: self.rejected_connections.load(Ordering::Relaxed),
+            clients,
+        }
+    }
+
+    pub fn disconnect_client(&self, client_id: u64) -> bool {
+        self.clients
+            .lock()
+            .ok()
+            .and_then(|clients| {
+                clients.get(&client_id).map(|client| {
+                    client.disconnect.store(true, Ordering::Relaxed);
+                })
+            })
+            .is_some()
     }
 }
 
@@ -3200,6 +3294,10 @@ fn handle_connection<F, S>(
     external_video_io_plans_provider: &impl Fn() -> Value,
     external_video_transport_status_provider: &impl Fn() -> Value,
     external_video_transport_sync_provider: &impl Fn() -> Value,
+    config: &RemoteControlConfig,
+    clients: Arc<Mutex<HashMap<u64, RemoteClientState>>>,
+    next_client_id: Arc<AtomicU64>,
+    rejected_connections: Arc<AtomicU64>,
 ) where
     F: Fn(RemoteInputEvent) + ?Sized,
     S: Fn() -> EngineSnapshot + ?Sized,
@@ -3208,6 +3306,53 @@ fn handle_connection<F, S>(
     let mut peek_buffer = [0u8; HTTP_PEEK_SIZE];
     match stream.peek(&mut peek_buffer) {
         Ok(size) if is_websocket_request(&peek_buffer[..size]) => {
+            let request = String::from_utf8_lossy(&peek_buffer[..size]);
+            if !request_host_is_allowed(&request, &stream, config) {
+                reject_http_client(stream, "403 Forbidden", "Invalid Host or Origin");
+                return;
+            }
+            if !request_has_pairing_token(&request, &config.pairing_pin) {
+                reject_http_client(stream, "401 Unauthorized", "Pairing PIN required");
+                return;
+            }
+            let peer_addr = stream
+                .peer_addr()
+                .map(|address| address.to_string())
+                .unwrap_or_else(|_| "unknown".to_string());
+            let client_id = next_client_id.fetch_add(1, Ordering::Relaxed);
+            let disconnect = Arc::new(AtomicBool::new(false));
+            let connected_at_unix_ms = unix_time_ms();
+            let registered = clients
+                .lock()
+                .map(|mut registry| {
+                    if registry.len() >= usize::from(config.max_connections) {
+                        return false;
+                    }
+                    registry.insert(
+                        client_id,
+                        RemoteClientState {
+                            summary: RemoteClientSummary {
+                                id: client_id,
+                                peer_addr,
+                                connected_at_unix_ms,
+                                last_activity_unix_ms: connected_at_unix_ms,
+                                messages_received: 0,
+                            },
+                            disconnect: Arc::clone(&disconnect),
+                        },
+                    );
+                    true
+                })
+                .unwrap_or(false);
+            if !registered {
+                rejected_connections.fetch_add(1, Ordering::Relaxed);
+                reject_http_client(
+                    stream,
+                    "503 Service Unavailable",
+                    "Remote connection limit reached",
+                );
+                return;
+            }
             handle_websocket_client(
                 stream,
                 stop,
@@ -3218,12 +3363,27 @@ fn handle_connection<F, S>(
                 external_video_io_plans_provider,
                 external_video_transport_status_provider,
                 external_video_transport_sync_provider,
+                config,
+                client_id,
+                disconnect,
+                Arc::clone(&clients),
             );
+            if let Ok(mut registry) = clients.lock() {
+                registry.remove(&client_id);
+            }
         }
         Ok(size) => {
             let request = String::from_utf8_lossy(&peek_buffer[..size]);
             let path = request_path(&request).unwrap_or("/");
-            serve_http_client(stream, path);
+            if !request_host_is_allowed(&request, &stream, config) {
+                reject_http_client(stream, "403 Forbidden", "Invalid Host or Origin");
+            } else if matches!(path, "/" | "/remote" | "/index.html")
+                && !request_has_pairing_token(&request, &config.pairing_pin)
+            {
+                reject_http_client(stream, "401 Unauthorized", "Pairing PIN required");
+            } else {
+                serve_http_client(stream, path);
+            }
         }
         Err(_) => {}
     }
@@ -3239,6 +3399,10 @@ fn handle_websocket_client<F, S>(
     external_video_io_plans_provider: &impl Fn() -> Value,
     external_video_transport_status_provider: &impl Fn() -> Value,
     external_video_transport_sync_provider: &impl Fn() -> Value,
+    config: &RemoteControlConfig,
+    client_id: u64,
+    disconnect: Arc<AtomicBool>,
+    clients: Arc<Mutex<HashMap<u64, RemoteClientState>>>,
 ) where
     F: Fn(RemoteInputEvent) + ?Sized,
     S: Fn() -> EngineSnapshot + ?Sized,
@@ -3246,53 +3410,81 @@ fn handle_websocket_client<F, S>(
     let Ok(mut websocket) = accept(stream) else {
         return;
     };
-    while !stop.load(Ordering::Relaxed) {
+    let mut rate_window_started = Instant::now();
+    let mut rate_window_messages = 0u16;
+    while !stop.load(Ordering::Relaxed) && !disconnect.load(Ordering::Relaxed) {
         match websocket.read() {
-            Ok(Message::Text(text)) => match request_from_text(&text) {
-                Ok(RemoteClientRequest::Event(event)) => {
-                    callback(event);
-                    let _ =
-                        websocket.send(Message::Text(r#"{"ok":true,"type":"ack"}"#.to_string()));
+            Ok(Message::Text(text)) => {
+                if text.len() > config.max_message_bytes {
+                    let _ = websocket.send(Message::Text(
+                        r#"{"ok":false,"error":"message size limit exceeded"}"#.to_string(),
+                    ));
+                    break;
                 }
-                Ok(RemoteClientRequest::GetSnapshot) => {
-                    let response = snapshot_response_json(&(snapshot_provider)());
-                    let _ = websocket.send(Message::Text(response));
+                if rate_window_started.elapsed() >= Duration::from_secs(1) {
+                    rate_window_started = Instant::now();
+                    rate_window_messages = 0;
                 }
-                Ok(RemoteClientRequest::GetVideoRuntimeStatus) => {
-                    let response =
-                        video_runtime_status_response_json(&(video_runtime_status_provider)());
-                    let _ = websocket.send(Message::Text(response));
+                rate_window_messages = rate_window_messages.saturating_add(1);
+                if rate_window_messages > config.max_messages_per_second {
+                    let _ = websocket.send(Message::Text(
+                        r#"{"ok":false,"error":"message rate limit exceeded"}"#.to_string(),
+                    ));
+                    break;
                 }
-                Ok(RemoteClientRequest::GetVideoOutputRenderPlans) => {
-                    let response = video_output_render_plans_response_json(
-                        &(video_output_render_plans_provider)(),
-                    );
-                    let _ = websocket.send(Message::Text(response));
+                update_remote_client_activity(&clients, client_id);
+                match request_from_text(&text) {
+                    Ok(RemoteClientRequest::Event(event)) => {
+                        callback(event);
+                        let _ = websocket
+                            .send(Message::Text(r#"{"ok":true,"type":"ack"}"#.to_string()));
+                    }
+                    Ok(RemoteClientRequest::GetSnapshot) => {
+                        let response = snapshot_response_json(&(snapshot_provider)());
+                        let _ = websocket.send(Message::Text(response));
+                    }
+                    Ok(RemoteClientRequest::GetVideoRuntimeStatus) => {
+                        let response =
+                            video_runtime_status_response_json(&(video_runtime_status_provider)());
+                        let _ = websocket.send(Message::Text(response));
+                    }
+                    Ok(RemoteClientRequest::GetVideoOutputRenderPlans) => {
+                        let response = video_output_render_plans_response_json(
+                            &(video_output_render_plans_provider)(),
+                        );
+                        let _ = websocket.send(Message::Text(response));
+                    }
+                    Ok(RemoteClientRequest::GetExternalVideoIoPlans) => {
+                        let response = external_video_io_plans_response_json(
+                            &(external_video_io_plans_provider)(),
+                        );
+                        let _ = websocket.send(Message::Text(response));
+                    }
+                    Ok(RemoteClientRequest::GetExternalVideoTransportStatus) => {
+                        let response = external_video_transport_status_response_json(
+                            &(external_video_transport_status_provider)(),
+                        );
+                        let _ = websocket.send(Message::Text(response));
+                    }
+                    Ok(RemoteClientRequest::SyncExternalVideoTransports) => {
+                        let response = external_video_transport_sync_response_json(
+                            &(external_video_transport_sync_provider)(),
+                        );
+                        let _ = websocket.send(Message::Text(response));
+                    }
+                    Err(error) => {
+                        let _ = websocket.send(Message::Text(format!(
+                            r#"{{"ok":false,"error":"{error:?}"}}"#
+                        )));
+                    }
                 }
-                Ok(RemoteClientRequest::GetExternalVideoIoPlans) => {
-                    let response = external_video_io_plans_response_json(
-                        &(external_video_io_plans_provider)(),
-                    );
-                    let _ = websocket.send(Message::Text(response));
-                }
-                Ok(RemoteClientRequest::GetExternalVideoTransportStatus) => {
-                    let response = external_video_transport_status_response_json(
-                        &(external_video_transport_status_provider)(),
-                    );
-                    let _ = websocket.send(Message::Text(response));
-                }
-                Ok(RemoteClientRequest::SyncExternalVideoTransports) => {
-                    let response = external_video_transport_sync_response_json(
-                        &(external_video_transport_sync_provider)(),
-                    );
-                    let _ = websocket.send(Message::Text(response));
-                }
-                Err(error) => {
-                    let _ = websocket.send(Message::Text(format!(
-                        r#"{{"ok":false,"error":"{error:?}"}}"#
-                    )));
-                }
-            },
+            }
+            Ok(Message::Binary(data)) if data.len() > config.max_message_bytes => {
+                let _ = websocket.send(Message::Text(
+                    r#"{"ok":false,"error":"message size limit exceeded"}"#.to_string(),
+                ));
+                break;
+            }
             Ok(Message::Close(_)) => break,
             Ok(_) => {}
             Err(tungstenite::Error::Io(error))
@@ -3390,6 +3582,34 @@ fn serve_http_client(mut stream: TcpStream, path: &str) {
     let _ = stream.flush();
 }
 
+fn reject_http_client(mut stream: TcpStream, status: &str, message: &str) {
+    let mut discard = [0u8; HTTP_PEEK_SIZE];
+    let _ = stream.read(&mut discard);
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{message}",
+        message.len()
+    );
+    let _ = stream.write_all(response.as_bytes());
+    let _ = stream.flush();
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
+}
+
+fn update_remote_client_activity(clients: &Mutex<HashMap<u64, RemoteClientState>>, client_id: u64) {
+    if let Ok(mut clients) = clients.lock() {
+        if let Some(client) = clients.get_mut(&client_id) {
+            client.summary.last_activity_unix_ms = unix_time_ms();
+            client.summary.messages_received = client.summary.messages_received.saturating_add(1);
+        }
+    }
+}
+
 fn is_websocket_request(bytes: &[u8]) -> bool {
     let text = String::from_utf8_lossy(bytes).to_ascii_lowercase();
     text.contains("upgrade: websocket")
@@ -3401,7 +3621,83 @@ fn request_path(request: &str) -> Option<&str> {
     if method != "GET" {
         return None;
     }
-    parts.next()
+    parts.next()?.split('?').next()
+}
+
+fn request_target(request: &str) -> Option<&str> {
+    let mut parts = request.lines().next()?.split_whitespace();
+    (parts.next()? == "GET").then_some(parts.next()?)
+}
+
+fn request_header<'a>(request: &'a str, name: &str) -> Option<&'a str> {
+    request.lines().skip(1).find_map(|line| {
+        let (header_name, value) = line.split_once(':')?;
+        header_name
+            .eq_ignore_ascii_case(name)
+            .then_some(value.trim())
+    })
+}
+
+fn request_has_pairing_token(request: &str, expected: &str) -> bool {
+    let Some((_, query)) = request_target(request).and_then(|target| target.split_once('?')) else {
+        return false;
+    };
+    query.split('&').any(|pair| {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        key == "token" && value == expected
+    })
+}
+
+fn request_host_is_allowed(
+    request: &str,
+    stream: &TcpStream,
+    config: &RemoteControlConfig,
+) -> bool {
+    request_authority_is_allowed(
+        request,
+        stream.local_addr().ok().map(|address| address.ip()),
+        config,
+    )
+}
+
+fn request_authority_is_allowed(
+    request: &str,
+    local_ip: Option<std::net::IpAddr>,
+    config: &RemoteControlConfig,
+) -> bool {
+    let Some(host) = request_header(request, "Host") else {
+        return false;
+    };
+    let port = config.port;
+    let mut allowed = vec![
+        format!("localhost:{port}"),
+        format!("127.0.0.1:{port}"),
+        format!("[::1]:{port}"),
+    ];
+    if let Some(local_ip) = local_ip {
+        allowed.push(match local_ip {
+            std::net::IpAddr::V4(ip) => format!("{ip}:{port}"),
+            std::net::IpAddr::V6(ip) => format!("[{ip}]:{port}"),
+        });
+    }
+    if let Ok(ip) = config.bind_ip.trim().parse::<std::net::IpAddr>() {
+        if !ip.is_unspecified() {
+            allowed.push(match ip {
+                std::net::IpAddr::V4(ip) => format!("{ip}:{port}"),
+                std::net::IpAddr::V6(ip) => format!("[{ip}]:{port}"),
+            });
+        }
+    }
+    if !allowed
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(host))
+    {
+        return false;
+    }
+    request_header(request, "Origin").is_none_or(|origin| {
+        origin.eq_ignore_ascii_case(&format!("http://{host}"))
+            || origin.eq_ignore_ascii_case(&format!("https://{host}"))
+    })
 }
 
 fn http_response_for_path(path: &str) -> String {
@@ -4058,6 +4354,8 @@ mod tests {
         assert!(page.contains(r#"rel="manifest" href="/manifest.webmanifest""#));
         assert!(page.contains("apple-mobile-web-app-capable"));
         assert!(page.contains("serviceWorker"));
+        assert!(page.contains("token=new URLSearchParams"));
+        assert!(page.contains("/ws?token="));
         assert!(page.contains("remoteActiveCue"));
         assert!(page.contains("remoteRtState"));
         assert!(page.contains("remoteDmxState"));
@@ -4292,6 +4590,8 @@ mod tests {
         assert!(icon.contains("<svg"));
         assert!(service_worker.contains("application/javascript"));
         assert!(service_worker.contains("CACHE_NAME"));
+        assert!(service_worker.contains("syndocal-remote-v2"));
+        assert!(service_worker.contains("url.searchParams.has(\"token\")"));
         assert!(missing.starts_with("HTTP/1.1 404 Not Found"));
     }
 
@@ -4435,5 +4735,150 @@ mod tests {
         assert!(response.contains(r#""external_video_transport_sync""#));
         assert!(response.contains(r#""action":"Start""#));
         assert!(response.contains(r#""active_count":1"#));
+    }
+
+    #[test]
+    fn remote_server_rejects_missing_or_malformed_pairing_pin() {
+        let missing = RemoteWsServer::start(RemoteControlConfig::default(), |_| {});
+        assert!(matches!(missing, Err(RemoteWsError::InvalidPairingPin)));
+
+        let malformed = RemoteWsServer::start(
+            RemoteControlConfig {
+                pairing_pin: "12ab56".to_string(),
+                ..RemoteControlConfig::default()
+            },
+            |_| {},
+        );
+        assert!(matches!(malformed, Err(RemoteWsError::InvalidPairingPin)));
+
+        let lan_without_opt_in = RemoteWsServer::start(
+            RemoteControlConfig {
+                bind_ip: "0.0.0.0".to_string(),
+                pairing_pin: "123456".to_string(),
+                ..RemoteControlConfig::default()
+            },
+            |_| {},
+        );
+        assert!(matches!(
+            lan_without_opt_in,
+            Err(RemoteWsError::LanAccessDisabled)
+        ));
+
+        let invalid_connections = RemoteWsServer::start(
+            RemoteControlConfig {
+                pairing_pin: "123456".to_string(),
+                max_connections: 0,
+                ..RemoteControlConfig::default()
+            },
+            |_| {},
+        );
+        assert!(matches!(
+            invalid_connections,
+            Err(RemoteWsError::InvalidConnectionLimit)
+        ));
+
+        let invalid_size = RemoteWsServer::start(
+            RemoteControlConfig {
+                pairing_pin: "123456".to_string(),
+                max_message_bytes: 128,
+                ..RemoteControlConfig::default()
+            },
+            |_| {},
+        );
+        assert!(matches!(
+            invalid_size,
+            Err(RemoteWsError::InvalidMessageSizeLimit)
+        ));
+
+        let invalid_rate = RemoteWsServer::start(
+            RemoteControlConfig {
+                pairing_pin: "123456".to_string(),
+                max_messages_per_second: 0,
+                ..RemoteControlConfig::default()
+            },
+            |_| {},
+        );
+        assert!(matches!(
+            invalid_rate,
+            Err(RemoteWsError::InvalidMessageRateLimit)
+        ));
+    }
+
+    #[test]
+    fn tracks_limits_and_disconnects_remote_clients() {
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let server = RemoteWsServer::start(
+            RemoteControlConfig {
+                bind_ip: "127.0.0.1".to_string(),
+                port,
+                pairing_pin: "123456".to_string(),
+                max_connections: 1,
+                ..RemoteControlConfig::default()
+            },
+            |_| {},
+        )
+        .unwrap();
+
+        let url = format!("ws://127.0.0.1:{port}/ws?token=123456");
+        let (mut client, _) = tungstenite::connect(url.as_str()).unwrap();
+        for _ in 0..20 {
+            if server.status().active_connections == 1 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let status = server.status();
+        assert_eq!(status.active_connections, 1);
+        assert_eq!(status.clients.len(), 1);
+        let client_id = status.clients[0].id;
+
+        let second = tungstenite::connect(url.as_str());
+        assert!(second.is_err());
+        for _ in 0..20 {
+            if server.status().rejected_connections == 1 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(server.status().rejected_connections, 1);
+        assert!(server.disconnect_client(client_id));
+        for _ in 0..30 {
+            if server.status().active_connections == 0 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(server.status().active_connections, 0);
+        let _ = client.close(None);
+    }
+
+    #[test]
+    fn pairing_token_is_required_and_must_match_exactly() {
+        let valid = "GET /ws?token=123456 HTTP/1.1\r\nHost: localhost:9100\r\n\r\n";
+        let missing = "GET /ws HTTP/1.1\r\nHost: localhost:9100\r\n\r\n";
+        let wrong = "GET /ws?token=654321 HTTP/1.1\r\nHost: localhost:9100\r\n\r\n";
+
+        assert!(request_has_pairing_token(valid, "123456"));
+        assert!(!request_has_pairing_token(missing, "123456"));
+        assert!(!request_has_pairing_token(wrong, "123456"));
+        assert_eq!(request_path(valid), Some("/ws"));
+    }
+
+    #[test]
+    fn host_and_origin_must_match_the_remote_endpoint() {
+        let config = RemoteControlConfig {
+            pairing_pin: "123456".to_string(),
+            ..RemoteControlConfig::default()
+        };
+        let local_ip = Some("192.168.1.24".parse().unwrap());
+        let valid = "GET /ws?token=123456 HTTP/1.1\r\nHost: 192.168.1.24:9100\r\nOrigin: http://192.168.1.24:9100\r\n\r\n";
+        let bad_host = "GET /ws?token=123456 HTTP/1.1\r\nHost: attacker.example:9100\r\nOrigin: http://attacker.example:9100\r\n\r\n";
+        let bad_origin = "GET /ws?token=123456 HTTP/1.1\r\nHost: 192.168.1.24:9100\r\nOrigin: https://attacker.example\r\n\r\n";
+
+        assert!(request_authority_is_allowed(valid, local_ip, &config));
+        assert!(!request_authority_is_allowed(bad_host, local_ip, &config));
+        assert!(!request_authority_is_allowed(bad_origin, local_ip, &config));
     }
 }

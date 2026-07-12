@@ -5,7 +5,10 @@ import type {
   VideoOutputSummary,
 } from "./types";
 
-export type NumericVideoOutputMappingField = Exclude<keyof VideoOutputMapping, "aspect_mode">;
+export type NumericVideoOutputMappingField = Exclude<
+  keyof VideoOutputMapping,
+  "aspect_mode" | "mask_invert" | "mask_points" | "bitmap_mask_luma_words"
+>;
 
 export const defaultVideoOutputMapping: VideoOutputMapping = {
   stage_x: 0,
@@ -19,6 +22,19 @@ export const defaultVideoOutputMapping: VideoOutputMapping = {
   aspect_ratio: 1,
   aspect_mode: "Stretch",
   lens_distortion: 0,
+  edge_blend_left: 0,
+  edge_blend_right: 0,
+  edge_blend_top: 0,
+  edge_blend_bottom: 0,
+  edge_blend_gamma: 2.2,
+  black_level: 0,
+  mask_point_count: 0,
+  mask_invert: false,
+  mask_softness: 0,
+  mask_points: Array.from({ length: 8 }, () => ({ x: 0, y: 0 })),
+  bitmap_mask_width: 0,
+  bitmap_mask_height: 0,
+  bitmap_mask_luma_words: Array.from({ length: 32 }, () => 0),
   keystone_x: 0,
   keystone_y: 0,
   corner_top_left_x: 0,
@@ -108,6 +124,27 @@ export const resetVideoOutputWarp = (mapping: VideoOutputMapping): VideoOutputMa
   keystone_y: 0,
 });
 
+export const resetVideoOutputBlend = (mapping: VideoOutputMapping): VideoOutputMapping => ({
+  ...mapping,
+  edge_blend_left: 0,
+  edge_blend_right: 0,
+  edge_blend_top: 0,
+  edge_blend_bottom: 0,
+  edge_blend_gamma: 2.2,
+  black_level: 0,
+});
+
+export const resetVideoOutputMask = (mapping: VideoOutputMapping): VideoOutputMapping => ({
+  ...mapping,
+  mask_point_count: 0,
+  mask_invert: false,
+  mask_softness: 0,
+  mask_points: Array.from({ length: 8 }, () => ({ x: 0, y: 0 })),
+  bitmap_mask_width: 0,
+  bitmap_mask_height: 0,
+  bitmap_mask_luma_words: Array.from({ length: 32 }, () => 0),
+});
+
 export const resetVideoOutputLensKeystone = (mapping: VideoOutputMapping): VideoOutputMapping => ({
   ...mapping,
   lens_distortion: 0,
@@ -178,7 +215,12 @@ export const mappingCorrectionReadout = (mapping: VideoOutputMapping) =>
     mapping,
     "keystone_y",
     0,
-  ).toFixed(2)} / Corners ${cornerWarpAmount(mapping).toFixed(2)}`;
+  ).toFixed(2)} / Corners ${cornerWarpAmount(mapping).toFixed(2)} / Blend ${[
+    mappingNumber(mapping, "edge_blend_left", 0),
+    mappingNumber(mapping, "edge_blend_right", 0),
+    mappingNumber(mapping, "edge_blend_top", 0),
+    mappingNumber(mapping, "edge_blend_bottom", 0),
+  ].some((value) => value > 0) ? "On" : "Off"} / Black ${mappingNumber(mapping, "black_level", 0).toFixed(2)} / Mask ${mapping.mask_point_count >= 3 ? `${mapping.mask_point_count}pt` : "Off"}`;
 
 export const mappingFieldRange = (field: NumericVideoOutputMappingField): [number, number] => {
   if (field === "stage_x" || field === "stage_y" || field === "stage_z") {
@@ -189,6 +231,24 @@ export const mappingFieldRange = (field: NumericVideoOutputMappingField): [numbe
   }
   if (field === "aspect_ratio") {
     return [0.1, 10];
+  }
+  if (field === "edge_blend_gamma") {
+    return [0.1, 8];
+  }
+  if (field === "mask_point_count") {
+    return [0, 8];
+  }
+  if (field === "mask_softness") {
+    return [0, 0.5];
+  }
+  if (
+    field === "edge_blend_left" ||
+    field === "edge_blend_right" ||
+    field === "edge_blend_top" ||
+    field === "edge_blend_bottom" ||
+    field === "black_level"
+  ) {
+    return [0, 1];
   }
   if (field === "rotation_deg") {
     return [-180, 180];

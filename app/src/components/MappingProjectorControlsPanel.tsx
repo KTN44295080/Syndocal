@@ -51,7 +51,7 @@ export function MappingProjectorControlsPanel(props: MappingProjectorControlsPan
           class="projectorMapSurface outputMappingMiniSurface"
         />
         <div>
-          <strong>{props.output.label}</strong>
+          <strong data-no-localize>{props.output.label}</strong>
           <span>{mappingCorrectionReadout(props.output.mapping)}</span>
         </div>
       </div>

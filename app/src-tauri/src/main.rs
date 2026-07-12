@@ -1,19 +1,20 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     env,
     ffi::{OsStr, OsString},
     fs,
-    io::Read,
+    io::{Read, Seek, Write},
     net::{IpAddr, UdpSocket},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
         Arc, Mutex,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use base64::Engine as _;
 use engine::{EngineCommand, EngineHandle, FixtureFlagClearKind};
 use io::midi::{
     MidiClockEvent, MidiClockInput, MidiControlEvent, MidiControlInput, MidiFeedbackOutput,
@@ -21,31 +22,37 @@ use io::midi::{
 use io::osc::{OscInput, OscInputEvent};
 use io::remote_ws::{RemoteInputEvent, RemoteWsServer};
 use io::sacn::is_sacn_multicast_target;
+use minisign_verify::PublicKey;
 use protocol::{
     canonical_video_output_mapping_field, AttributeControl, AttributeResolution,
     AudioAnalysisSummary, AutomationId, AutomationKeyframeSummary, ClockSnapshot, CompositionId,
     CompositionSummary, CueFixtureTarget, CueId, CueNodeGraphTarget, CustomFixtureProfileFile,
-    CustomFixtureProfileRequest, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, EffectId,
-    EffectKind, EffectPreset, EffectSummary, EngineSnapshot, EngineTelemetry, FixtureId,
-    FixtureLimits, FixturePreset, FixtureProfileSummary, GeometrySummary, LearnedMidiControl,
-    LearnedOscControl, LfoEffectRequest, MidiControlAction, MidiControlMapping, MidiInputSummary,
-    MidiOutputSummary, NodeGraphId, NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary,
-    NodeGraphTransformOp, OscControlAction, OscControlMapping, OscInputConfig, PatchFixtureRequest,
-    PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RemoteControlConfig, Rotation3,
-    SerialPortSummary, StageMapConfig, StageMapPresetFile, StageMapPresetSummary, StageObjectId,
-    StageObjectKind, StageObjectSummary, TimelineEventId, TimelineTrackKind, Vec3,
-    VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode, VideoEffectTarget,
-    VideoLayerId, VideoLayerState, VideoLayerTarget, VideoOutputId, VideoOutputKind,
-    VideoOutputMapping, VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary,
-    VideoOutputSummary, VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind,
-    VideoSourceSummary,
+    CustomFixtureProfileRequest, DmxInputConfig, DmxInputProtocol, DmxInputStatus, DmxModeSummary,
+    DmxOutputConfig, DmxOutputProtocol, EffectId, EffectKind, EffectPreset, EffectSummary,
+    EngineSnapshot, EngineTelemetry, FixtureId, FixtureLimits, FixturePreset,
+    FixtureProfileSummary, GeometrySummary, LearnedMidiControl, LearnedOscControl,
+    LfoEffectRequest, MidiControlAction, MidiControlMapping, MidiInputSummary, MidiOutputSummary,
+    NodeGraphId, NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp,
+    OscControlAction, OscControlMapping, OscInputConfig, PatchFixtureRequest,
+    PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RemoteControlConfig,
+    RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile,
+    StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary, TimelineEventId,
+    TimelineTrackKind, Vec3, VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode,
+    VideoEffectTarget, VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerTarget,
+    VideoOutputId, VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetFile,
+    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
+    VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use tauri::Emitter;
 use tauri::{Manager, State};
+use tauri_plugin_updater::UpdaterExt;
 
+mod capture_transport;
 mod ndi_transport;
+#[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+mod spout_transport;
 
 type AppVideoPreviewRenderer = video::VideoPreviewRenderer<
     video::DecoderBackedFrameProvider<ndi_transport::NdiAwareVideoFrameDecoder>,
@@ -96,6 +103,22 @@ const TELEMETRY_COMMAND_QUEUE_P99_TARGET_US: u64 = 1_000;
 const TELEMETRY_COMMAND_TO_DMX_P99_TARGET_US: u64 = 5_000;
 const TELEMETRY_DMX_SEND_INTERVAL_TOLERANCE_US: u64 = 1_000;
 const OPEN_PROJECT_EVENT: &str = "syndocal://open-project";
+const PROJECT_BACKUP_VERSION: u32 = 1;
+const PROJECT_BACKUP_RETENTION: usize = 30;
+const PROJECT_HISTORY_RETENTION: usize = 100;
+const PROJECT_HISTORY_COALESCE_MS: u64 = 750;
+const PROJECT_BACKUP_DIRECTORY: &str = "project-backups";
+const CRASH_REPORT_DIRECTORY: &str = "crash-reports";
+const APPLICATION_UPDATE_PROGRESS_EVENT: &str = "syndocal://application-update-progress";
+const APPLICATION_UPDATE_ENDPOINT: Option<&str> = option_env!("SYNDOCAL_UPDATE_ENDPOINT");
+const APPLICATION_UPDATE_PUBKEY: Option<&str> = option_env!("SYNDOCAL_UPDATE_PUBKEY");
+const APPLICATION_UPDATE_CHANNEL: Option<&str> = option_env!("SYNDOCAL_UPDATE_CHANNEL");
+const STANDBY_SYNC_VERSION: u32 = 1;
+const STANDBY_SYNC_INTERVAL_MS: u64 = 2_000;
+const STANDBY_SYNC_POLL_MS: u64 = 500;
+const STANDBY_SYNC_STALE_MS: u64 = 5_000;
+const STANDBY_SYNC_RETENTION: usize = 5;
+static RDM_TRANSACTION_NUMBER: AtomicU8 = AtomicU8::new(1);
 
 fn validate_app_name(file_label: &str, app: &str) -> Result<(), String> {
     if app.trim() == APP_NAME {
@@ -107,13 +130,23 @@ fn validate_app_name(file_label: &str, app: &str) -> Result<(), String> {
 
 struct AppState {
     engine: EngineHandle,
-    video_preview: Mutex<AppVideoPreviewRenderer>,
+    media_audio: Arc<Mutex<MediaAudioPlayback>>,
+    _media_audio_sync: MediaAudioSyncRuntime,
+    live_audio_input: Mutex<Option<LiveAudioInput>>,
+    video_preview: Arc<Mutex<AppVideoPreviewRenderer>>,
+    video_recording: Mutex<VideoRecordingRuntime>,
     external_video_transport: Arc<Mutex<video::ExternalVideoTransportRuntime>>,
     external_video_transport_events: Arc<Mutex<Vec<ExternalVideoTransportDriverEvent>>>,
+    capture_transport: Arc<Mutex<capture_transport::CaptureTransportState>>,
+    capture_inputs: capture_transport::CaptureInputRegistry,
     #[cfg(feature = "ndi")]
     ndi_transport: Arc<Mutex<ndi_transport::NdiTransportState>>,
     #[cfg(feature = "ndi")]
     ndi_inputs: ndi_transport::NdiInputRegistry,
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    spout_transport: Arc<Mutex<spout_transport::SpoutTransportState>>,
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    spout_inputs: spout_transport::SpoutInputRegistry,
     custom_profiles: Mutex<HashMap<String, FixtureProfileSummary>>,
     visualizer_model_assets: Mutex<HashMap<String, VisualizerModelAssetCacheEntry>>,
     midi_clock: Mutex<Option<MidiClockInput>>,
@@ -121,10 +154,407 @@ struct AppState {
     midi_feedback: Mutex<Option<MidiFeedbackOutput>>,
     osc_input: Mutex<Option<OscInput>>,
     remote_control: Mutex<Option<RemoteWsServer>>,
+    dmx_input: Mutex<Option<io::dmx_input::DmxInput>>,
     pending_project_open_paths: Mutex<Vec<String>>,
     current_project_path: Mutex<Option<PathBuf>>,
+    project_history: Mutex<ProjectHistory>,
+    snapshot_sync: Mutex<SnapshotSyncState>,
+    standby_sync: Mutex<StandbySyncRuntime>,
     native_video_output_metrics:
         Mutex<HashMap<VideoOutputId, Arc<Mutex<NativeVideoOutputMetrics>>>>,
+}
+
+#[derive(Default)]
+struct MediaAudioPlayback {
+    stream: Option<rodio::OutputStream>,
+    device_name: Option<String>,
+    requested_device_name: Option<String>,
+    sinks: HashMap<VideoLayerId, rodio::Sink>,
+    sources: HashMap<VideoLayerId, MediaAudioSourceConfig>,
+    last_resync_at: HashMap<VideoLayerId, Instant>,
+    resync_count: u64,
+    last_drift_ms: i64,
+    max_abs_drift_ms: u64,
+    last_sync_error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct MediaAudioSourceConfig {
+    path: PathBuf,
+    volume: f32,
+    requested_device_name: Option<String>,
+}
+
+const MEDIA_AUDIO_RESYNC_THRESHOLD_MS: u64 = 75;
+const MEDIA_AUDIO_RESYNC_COOLDOWN: Duration = Duration::from_millis(250);
+const MEDIA_AUDIO_SYNC_INTERVAL: Duration = Duration::from_millis(25);
+const MEDIA_AUDIO_SYNC_IDLE_INTERVAL: Duration = Duration::from_millis(250);
+
+fn media_audio_resync_required(drift_ms: i64, cooldown_elapsed: Duration) -> bool {
+    drift_ms.unsigned_abs() > MEDIA_AUDIO_RESYNC_THRESHOLD_MS
+        && cooldown_elapsed >= MEDIA_AUDIO_RESYNC_COOLDOWN
+}
+
+struct MediaAudioSyncRuntime {
+    stop: Arc<AtomicBool>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl MediaAudioSyncRuntime {
+    fn start(engine: EngineHandle, audio: Arc<Mutex<MediaAudioPlayback>>) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let worker = std::thread::Builder::new()
+            .name("syndocal-media-audio-sync".to_string())
+            .spawn(move || {
+                while !worker_stop.load(Ordering::Acquire) {
+                    let active = audio
+                        .lock()
+                        .map(|audio| !audio.sinks.is_empty())
+                        .unwrap_or(false);
+                    if active {
+                        let layers = engine.snapshot().video.layers;
+                        if let Ok(mut audio) = audio.lock() {
+                            audio.sync_to_video_layers(&layers);
+                        }
+                    }
+                    std::thread::sleep(if active {
+                        MEDIA_AUDIO_SYNC_INTERVAL
+                    } else {
+                        MEDIA_AUDIO_SYNC_IDLE_INTERVAL
+                    });
+                }
+            })
+            .expect("failed to start media audio sync worker");
+        Self {
+            stop,
+            worker: Some(worker),
+        }
+    }
+}
+
+impl Drop for MediaAudioSyncRuntime {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct VideoRecordingStatus {
+    active: bool,
+    output_id: Option<VideoOutputId>,
+    path: Option<String>,
+    width: u32,
+    height: u32,
+    frame_rate: u32,
+    frames_written: u64,
+    dropped_frames: u64,
+    audio_requested: bool,
+    audio_included: bool,
+    audio_track_count: usize,
+    started_unix_ms: Option<u64>,
+    last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct VideoBitmapMaskImportResult {
+    width: u8,
+    height: u8,
+    luma_words: Vec<u32>,
+    source_name: String,
+}
+
+impl Default for VideoRecordingStatus {
+    fn default() -> Self {
+        Self {
+            active: false,
+            output_id: None,
+            path: None,
+            width: 0,
+            height: 0,
+            frame_rate: 30,
+            frames_written: 0,
+            dropped_frames: 0,
+            audio_requested: false,
+            audio_included: false,
+            audio_track_count: 0,
+            started_unix_ms: None,
+            last_error: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct RecordingAudioInput {
+    path: PathBuf,
+    position_ms: u64,
+    volume: f32,
+    speed: f32,
+    loop_enabled: bool,
+}
+
+#[derive(Default)]
+struct VideoRecordingRuntime {
+    stop: Option<Arc<AtomicBool>>,
+    worker: Option<std::thread::JoinHandle<()>>,
+    status: Arc<Mutex<VideoRecordingStatus>>,
+}
+
+impl Drop for VideoRecordingRuntime {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            stop.store(true, Ordering::Relaxed);
+        }
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct VideoAudioMonitorStatus {
+    output_open: bool,
+    device_name: Option<String>,
+    active_layer_ids: Vec<VideoLayerId>,
+    resync_count: u64,
+    last_drift_ms: i64,
+    max_abs_drift_ms: u64,
+    last_sync_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+struct LiveAudioInputStatus {
+    running: bool,
+    device_name: Option<String>,
+    sample_rate: u32,
+    channels: u16,
+    bass: f32,
+    mid: f32,
+    high: f32,
+    analyzed_windows: u64,
+    dropped_chunks: u64,
+    last_error: Option<String>,
+}
+
+struct LiveAudioInput {
+    stream: Option<rodio::cpal::Stream>,
+    stop: Arc<AtomicBool>,
+    worker: Option<std::thread::JoinHandle<()>>,
+    status: Arc<Mutex<LiveAudioInputStatus>>,
+    engine: EngineHandle,
+}
+
+impl Drop for LiveAudioInput {
+    fn drop(&mut self) {
+        self.stream.take();
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+        let _ = self.engine.send(EngineCommand::SetLiveAudioSpectrum(None));
+        if let Ok(mut status) = self.status.lock() {
+            status.running = false;
+            status.bass = 0.0;
+            status.mid = 0.0;
+            status.high = 0.0;
+        }
+    }
+}
+
+impl MediaAudioPlayback {
+    fn play(
+        &mut self,
+        layer_id: VideoLayerId,
+        path: &Path,
+        position_ms: u64,
+        speed: f32,
+        volume: f32,
+        requested_device_name: Option<&str>,
+    ) -> Result<(), String> {
+        use rodio::cpal::traits::{DeviceTrait, HostTrait};
+
+        if let Some(previous) = self.sinks.remove(&layer_id) {
+            previous.stop();
+        }
+        let requested_device_name = requested_device_name
+            .map(str::trim)
+            .filter(|name| !name.is_empty());
+        if self.stream.is_none() || self.requested_device_name.as_deref() != requested_device_name {
+            for (_, sink) in self.sinks.drain() {
+                sink.stop();
+            }
+            self.sources.clear();
+            self.last_resync_at.clear();
+            self.stream = None;
+            let host = rodio::cpal::default_host();
+            let device = match requested_device_name {
+                Some(name) => host
+                    .output_devices()
+                    .map_err(|error| format!("Failed to list audio output devices: {error}"))?
+                    .find(|device| device.name().ok().as_deref() == Some(name))
+                    .ok_or_else(|| format!("Audio output device '{name}' was not found"))?,
+                None => host
+                    .default_output_device()
+                    .ok_or_else(|| "No default audio output device is available".to_string())?,
+            };
+            let resolved_name = device.name().ok();
+            self.stream = Some(
+                rodio::OutputStreamBuilder::from_device(device)
+                    .and_then(|builder| builder.open_stream_or_fallback())
+                    .map_err(|error| format!("Failed to open audio output: {error}"))?,
+            );
+            self.device_name = requested_device_name.map(str::to_string).or(resolved_name);
+            self.requested_device_name = requested_device_name.map(str::to_string);
+        }
+        let file = fs::File::open(path)
+            .map_err(|error| format!("Failed to open media audio '{}': {error}", path.display()))?;
+        let decoder = rodio::Decoder::try_from(file).map_err(|error| {
+            format!("Failed to decode media audio '{}': {error}", path.display())
+        })?;
+        let stream = self
+            .stream
+            .as_ref()
+            .ok_or_else(|| "Audio output stream was not initialized".to_string())?;
+        let sink = rodio::Sink::connect_new(stream.mixer());
+        sink.append(decoder);
+        sink.set_volume(volume.clamp(0.0, 2.0));
+        sink.set_speed(if speed > f32::EPSILON {
+            speed.clamp(0.25, 4.0)
+        } else {
+            1.0
+        });
+        if position_ms > 0 {
+            sink.try_seek(Duration::from_millis(position_ms))
+                .map_err(|error| format!("Failed to seek media audio: {error}"))?;
+        }
+        self.sinks.insert(layer_id, sink);
+        self.sources.insert(
+            layer_id,
+            MediaAudioSourceConfig {
+                path: path.to_path_buf(),
+                volume: volume.clamp(0.0, 2.0),
+                requested_device_name: requested_device_name.map(str::to_string),
+            },
+        );
+        self.last_resync_at.insert(layer_id, Instant::now());
+        Ok(())
+    }
+
+    fn stop(&mut self, layer_id: VideoLayerId) {
+        if let Some(sink) = self.sinks.remove(&layer_id) {
+            sink.stop();
+        }
+        self.sources.remove(&layer_id);
+        self.last_resync_at.remove(&layer_id);
+    }
+
+    fn set_volume(&mut self, layer_id: VideoLayerId, volume: f32) -> Result<(), String> {
+        let sink = self
+            .sinks
+            .get(&layer_id)
+            .ok_or_else(|| format!("Video layer {layer_id} audio monitor is not active"))?;
+        sink.set_volume(volume.clamp(0.0, 2.0));
+        if let Some(source) = self.sources.get_mut(&layer_id) {
+            source.volume = volume.clamp(0.0, 2.0);
+        }
+        Ok(())
+    }
+
+    fn sync_to_video_layers(&mut self, layers: &[protocol::VideoLayerSummary]) {
+        let now = Instant::now();
+        let mut remove = Vec::new();
+        let mut restart = Vec::new();
+        for (layer_id, sink) in &self.sinks {
+            let Some(layer) = layers.iter().find(|layer| layer.id == *layer_id) else {
+                remove.push(*layer_id);
+                continue;
+            };
+            let speed = if layer.state.speed > f32::EPSILON {
+                layer.state.speed.clamp(0.25, 4.0)
+            } else {
+                1.0
+            };
+            sink.set_speed(speed);
+            if layer.state.playing {
+                sink.play();
+            } else {
+                sink.pause();
+            }
+            if sink.empty() {
+                if layer.state.playing && layer.state.loop_enabled {
+                    if let Some(source) = self.sources.get(layer_id).cloned() {
+                        restart.push((*layer_id, source, layer.state.position_ms, speed));
+                    }
+                }
+                continue;
+            }
+            let actual_ms = sink.get_pos().as_millis().min(i64::MAX as u128) as i64;
+            let desired_ms = layer.state.position_ms.min(i64::MAX as u64) as i64;
+            let drift_ms = actual_ms.saturating_sub(desired_ms);
+            self.last_drift_ms = drift_ms;
+            self.max_abs_drift_ms = self.max_abs_drift_ms.max(drift_ms.unsigned_abs());
+            let cooldown_elapsed = self
+                .last_resync_at
+                .get(layer_id)
+                .map(|last| now.saturating_duration_since(*last))
+                .unwrap_or(Duration::MAX);
+            if media_audio_resync_required(drift_ms, cooldown_elapsed) {
+                match sink.try_seek(Duration::from_millis(layer.state.position_ms)) {
+                    Ok(()) => {
+                        self.resync_count = self.resync_count.saturating_add(1);
+                        self.last_resync_at.insert(*layer_id, now);
+                        self.last_sync_error = None;
+                    }
+                    Err(error) => {
+                        self.last_sync_error = Some(format!(
+                            "Audio resync failed for video layer {layer_id}: {error}"
+                        ));
+                    }
+                }
+            }
+        }
+        for layer_id in remove {
+            self.stop(layer_id);
+        }
+        for (layer_id, source, position_ms, speed) in restart {
+            match self.play(
+                layer_id,
+                &source.path,
+                position_ms,
+                speed,
+                source.volume,
+                source.requested_device_name.as_deref(),
+            ) {
+                Ok(()) => {
+                    self.resync_count = self.resync_count.saturating_add(1);
+                    self.last_sync_error = None;
+                }
+                Err(error) => self.last_sync_error = Some(error),
+            }
+        }
+    }
+
+    fn status(&mut self) -> VideoAudioMonitorStatus {
+        self.sinks.retain(|_, sink| !sink.empty());
+        self.sources
+            .retain(|layer_id, _| self.sinks.contains_key(layer_id));
+        self.last_resync_at
+            .retain(|layer_id, _| self.sinks.contains_key(layer_id));
+        let mut active_layer_ids = self.sinks.keys().copied().collect::<Vec<_>>();
+        active_layer_ids.sort_unstable();
+        VideoAudioMonitorStatus {
+            output_open: self.stream.is_some(),
+            device_name: self.device_name.clone(),
+            active_layer_ids,
+            resync_count: self.resync_count,
+            last_drift_ms: self.last_drift_ms,
+            max_abs_drift_ms: self.max_abs_drift_ms,
+            last_sync_error: self.last_sync_error.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -270,6 +700,8 @@ struct VideoPreviewDiagnostics {
     still_image_cache_len: usize,
     decoder_cache_len: usize,
     decoder_diagnostics: video::VideoDecoderDiagnostics,
+    isf_pipeline_count: usize,
+    last_isf_error: Option<String>,
     prefetch_count: usize,
     prefetch_interval_ms: u64,
     bpm: Option<f32>,
@@ -351,6 +783,252 @@ struct PreparedFixturePatch {
 struct ProjectLoadResult {
     path: String,
     profiles: Vec<FixtureProfileSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct UserTemplateLoadResult {
+    path: String,
+    label: String,
+    profiles: Vec<FixtureProfileSummary>,
+    midi_mappings: Vec<MidiControlMapping>,
+    osc_mappings: Vec<OscControlMapping>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProjectBackupEnvelope {
+    version: u32,
+    app: String,
+    id: u64,
+    created_at_unix_ms: u64,
+    source_path: Option<String>,
+    reason: String,
+    project: ProjectFile,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct ProjectBackupSummary {
+    id: u64,
+    created_at_unix_ms: u64,
+    source_path: Option<String>,
+    reason: String,
+    bytes: u64,
+}
+
+#[derive(Debug, Clone)]
+struct ApplicationUpdateSettings {
+    endpoint: tauri::Url,
+    pubkey: String,
+    channel: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct ApplicationUpdateConfiguration {
+    enabled: bool,
+    current_version: String,
+    channel: String,
+    endpoint_origin: Option<String>,
+    reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct ApplicationUpdateCheck {
+    available: bool,
+    current_version: String,
+    channel: String,
+    version: Option<String>,
+    date: Option<String>,
+    notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct ApplicationUpdateProgress {
+    phase: String,
+    downloaded_bytes: u64,
+    total_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum StandbySyncRole {
+    Primary,
+    Standby,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct StandbySyncManifest {
+    version: u32,
+    app: String,
+    session_id: String,
+    generation: u64,
+    written_at_unix_ms: u64,
+    project_file: String,
+    project_bytes: u64,
+    project_checksum: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct StandbySyncStatus {
+    running: bool,
+    role: Option<StandbySyncRole>,
+    directory: Option<String>,
+    session_id: Option<String>,
+    generation: Option<u64>,
+    written_at_unix_ms: Option<u64>,
+    heartbeat_age_ms: Option<u64>,
+    heartbeat_stale: bool,
+    takeover_ready: bool,
+    split_brain: bool,
+    active_primary_sessions: Vec<String>,
+    project_bytes: u64,
+    last_applied_generation: Option<u64>,
+    last_error: Option<String>,
+}
+
+impl Default for StandbySyncStatus {
+    fn default() -> Self {
+        Self {
+            running: false,
+            role: None,
+            directory: None,
+            session_id: None,
+            generation: None,
+            written_at_unix_ms: None,
+            heartbeat_age_ms: None,
+            heartbeat_stale: true,
+            takeover_ready: false,
+            split_brain: false,
+            active_primary_sessions: Vec::new(),
+            project_bytes: 0,
+            last_applied_generation: None,
+            last_error: None,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct StandbySyncRuntime {
+    stop: Option<Arc<AtomicBool>>,
+    worker: Option<std::thread::JoinHandle<()>>,
+    status: Arc<Mutex<StandbySyncStatus>>,
+}
+
+impl Default for StandbySyncRuntime {
+    fn default() -> Self {
+        Self {
+            stop: None,
+            worker: None,
+            status: Arc::new(Mutex::new(StandbySyncStatus::default())),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct StandbyCheckpoint {
+    manifest: StandbySyncManifest,
+    project: ProjectFile,
+}
+
+#[derive(Debug, Clone)]
+struct ProjectHistoryEntry {
+    label: String,
+    coalesce_key: String,
+    committed_at_unix_ms: u64,
+    before: ProjectFile,
+    after: ProjectFile,
+}
+
+#[derive(Debug, Clone)]
+struct PendingProjectTransaction {
+    label: String,
+    coalesce_key: String,
+    before: ProjectFile,
+}
+
+#[derive(Debug, Default)]
+struct ProjectHistory {
+    next_transaction_id: u64,
+    pending: HashMap<u64, PendingProjectTransaction>,
+    undo: Vec<ProjectHistoryEntry>,
+    redo: Vec<ProjectHistoryEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct ProjectHistoryStatus {
+    can_undo: bool,
+    can_redo: bool,
+    undo_depth: usize,
+    redo_depth: usize,
+    undo_label: Option<String>,
+    redo_label: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct SnapshotSyncState {
+    revision: u64,
+    last_snapshot: Option<EngineSnapshot>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+struct EngineSnapshotDelta {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fixtures: Option<Vec<PatchedFixtureSummary>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cues: Option<Vec<protocol::CueSummary>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cue_lists: Option<Vec<protocol::CueListSummary>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    palettes: Option<Vec<protocol::ReferencePaletteSummary>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    playback_executors: Option<Vec<protocol::PlaybackExecutorSummary>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    playback_master: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_cue_id: Option<Option<CueId>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_fade: Option<Option<protocol::ActiveFadeSummary>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    programmer: Option<protocol::ProgrammerSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timeline: Option<protocol::TimelineSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    video: Option<protocol::VideoSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effects: Option<Vec<EffectSummary>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    node_graphs: Option<Vec<NodeGraphSummary>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output: Option<DmxOutputConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dmx_outputs: Option<Vec<DmxOutputConfig>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lighting_master: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    submasters: Option<Vec<protocol::SubmasterSummary>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    blackout: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    clock: Option<ClockSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stage_map: Option<StageMapConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stage_map_presets: Option<Vec<StageMapPresetSummary>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stage_objects: Option<Vec<StageObjectSummary>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dmx_preview: Option<Vec<u8>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dmx_previews: Option<Vec<protocol::DmxUniversePreview>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    telemetry: Option<EngineTelemetry>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+struct EngineSnapshotSyncResponse {
+    revision: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    full: Option<EngineSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delta: Option<EngineSnapshotDelta>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -499,14 +1177,29 @@ struct OscMappingFile {
     mappings: Vec<OscControlMapping>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UserTemplateFile {
+    version: u32,
+    app: String,
+    label: String,
+    project: ProjectFile,
+    #[serde(default)]
+    midi_mappings: Vec<MidiControlMapping>,
+    #[serde(default)]
+    osc_mappings: Vec<OscControlMapping>,
+}
+
 const VIDEO_FILE_EXTENSIONS: &[&str] = &["mp4", "m4v", "mov", "mkv", "avi", "webm", "hap", "hapq"];
 const STILL_IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg"];
+const ISF_FILE_EXTENSIONS: &[&str] = &["fs", "frag", "glsl", "isf"];
 const VISUALIZER_MODEL_ASSET_CACHE_LIMIT: usize = 64;
 const AUDIO_FILE_EXTENSIONS: &[&str] = &[
     "wav", "mp3", "m4a", "aac", "flac", "aiff", "aif", "ogg", "opus",
 ];
 const ARTNET_MAX_UNIVERSE: u16 = 32_767;
 const SACN_MAX_UNIVERSE: u16 = 63_999;
+const USER_TEMPLATE_VERSION: u32 = 1;
+const USER_TEMPLATE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
 #[tauri::command]
 fn select_gdtf_file() -> Option<String> {
@@ -523,6 +1216,70 @@ fn select_video_source_file(kind: VideoSourceKind) -> Result<Option<String>, Str
         .add_filter(label, extensions)
         .pick_file()
         .map(|path| path.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+fn select_video_source_files(kind: VideoSourceKind) -> Result<Vec<String>, String> {
+    let (label, extensions) = video_source_file_dialog_filter(&kind)?;
+    Ok(rfd::FileDialog::new()
+        .add_filter(label, extensions)
+        .pick_files()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|path| path.to_string_lossy().to_string())
+        .collect())
+}
+
+#[tauri::command]
+fn select_video_isf_file() -> Result<Option<VideoIsfEffectSummary>, String> {
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("Interactive Shader Format", ISF_FILE_EXTENSIONS)
+        .pick_file()
+    else {
+        return Ok(None);
+    };
+    load_video_isf_effect_from_path(&path).map(Some)
+}
+
+fn load_video_isf_effect_from_path(path: &Path) -> Result<VideoIsfEffectSummary, String> {
+    let source = fs::read_to_string(path)
+        .map_err(|error| format!("Failed to read ISF shader '{}': {error}", path.display()))?;
+    let prepared = video::prepare_isf_shader(&source).map_err(|error| error.to_string())?;
+    let label = path
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .unwrap_or("ISF Filter")
+        .to_string();
+    Ok(video::isf_effect_from_prepared(
+        label,
+        source,
+        Some(path.to_string_lossy().to_string()),
+        &prepared,
+    ))
+}
+
+#[tauri::command]
+fn import_video_output_bitmap_mask() -> Result<Option<VideoBitmapMaskImportResult>, String> {
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("Luma Mask Image", &["png", "jpg", "jpeg"])
+        .pick_file()
+    else {
+        return Ok(None);
+    };
+    let (width, height, words) =
+        video::load_video_bitmap_mask(&path).map_err(|error| format!("{error:?}"))?;
+    Ok(Some(VideoBitmapMaskImportResult {
+        width,
+        height,
+        luma_words: words.to_vec(),
+        source_name: path
+            .file_name()
+            .and_then(OsStr::to_str)
+            .unwrap_or("mask image")
+            .to_string(),
+    }))
 }
 
 #[tauri::command]
@@ -930,6 +1687,71 @@ fn set_group_attribute(
             attribute,
             value,
         })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_programmer_mode(
+    state: State<'_, AppState>,
+    enabled: bool,
+    blind: bool,
+) -> Result<(), String> {
+    state
+        .engine
+        .send(EngineCommand::SetProgrammerMode { enabled, blind })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_programmer_attribute(
+    state: State<'_, AppState>,
+    fixture_id: FixtureId,
+    attribute: String,
+    value: u16,
+) -> Result<(), String> {
+    let attribute = normalize_attribute_name(attribute)?;
+    state
+        .engine
+        .send(EngineCommand::SetProgrammerAttribute {
+            fixture_id,
+            attribute,
+            value,
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_programmer_group_attribute(
+    state: State<'_, AppState>,
+    group_id: String,
+    attribute: String,
+    value: u16,
+) -> Result<(), String> {
+    let group_id = normalize_control_group_id(group_id)?;
+    let attribute = normalize_attribute_name(attribute)?;
+    state
+        .engine
+        .send(EngineCommand::SetProgrammerGroupAttribute {
+            group_id,
+            attribute,
+            value,
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn clear_programmer(state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .engine
+        .send(EngineCommand::ClearProgrammer)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn commit_programmer(state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .engine
+        .send(EngineCommand::CommitProgrammer)
         .map_err(|error| error.to_string())
 }
 
@@ -2194,29 +3016,35 @@ fn build_remote_access_urls(config: &RemoteControlConfig, lan_ip: Option<IpAddr>
     let port = config.port;
     let bind_ip = config.bind_ip.trim();
     let mut hosts = Vec::new();
-    match bind_ip.parse::<IpAddr>() {
-        Ok(ip) if ip.is_unspecified() => {
-            hosts.push("localhost".to_string());
-            if let Some(lan_ip) = lan_ip.filter(|ip| !ip.is_loopback() && !ip.is_unspecified()) {
-                hosts.push(format_url_host(lan_ip));
+    if !config.allow_lan {
+        hosts.push("localhost".to_string());
+    } else {
+        match bind_ip.parse::<IpAddr>() {
+            Ok(ip) if ip.is_unspecified() => {
+                hosts.push("localhost".to_string());
+                if let Some(lan_ip) = lan_ip.filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
+                {
+                    hosts.push(format_url_host(lan_ip));
+                }
             }
-        }
-        Ok(ip) if ip.is_loopback() => hosts.push("localhost".to_string()),
-        Ok(ip) => hosts.push(format_url_host(ip)),
-        Err(_) if bind_ip.is_empty() => {
-            hosts.push("localhost".to_string());
-            if let Some(lan_ip) = lan_ip.filter(|ip| !ip.is_loopback() && !ip.is_unspecified()) {
-                hosts.push(format_url_host(lan_ip));
+            Ok(ip) if ip.is_loopback() => hosts.push("localhost".to_string()),
+            Ok(ip) => hosts.push(format_url_host(ip)),
+            Err(_) if bind_ip.is_empty() => {
+                hosts.push("localhost".to_string());
+                if let Some(lan_ip) = lan_ip.filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
+                {
+                    hosts.push(format_url_host(lan_ip));
+                }
             }
+            Err(_) => hosts.push(bind_ip.to_string()),
         }
-        Err(_) => hosts.push(bind_ip.to_string()),
     }
 
     hosts.sort();
     hosts.dedup();
     hosts
         .into_iter()
-        .map(|host| format!("http://{host}:{port}/remote"))
+        .map(|host| format!("http://{host}:{port}/remote?token={}", config.pairing_pin))
         .collect()
 }
 
@@ -2240,8 +3068,11 @@ fn start_remote_control(
     let sync_engine = state.engine.clone();
     let sync_transport = Arc::clone(&state.external_video_transport);
     let sync_events = Arc::clone(&state.external_video_transport_events);
+    let sync_capture_transport = Arc::clone(&state.capture_transport);
     #[cfg(feature = "ndi")]
     let sync_ndi_transport = Arc::clone(&state.ndi_transport);
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    let sync_spout_transport = Arc::clone(&state.spout_transport);
     let server = RemoteWsServer::start_with_snapshot_and_video_status_providers(
         config,
         move |event| {
@@ -2528,9 +3359,15 @@ fn start_remote_control(
                 &snapshot,
                 sync_transport.as_ref(),
                 sync_events.as_ref(),
+                sync_capture_transport.as_ref(),
                 #[cfg(feature = "ndi")]
                 sync_ndi_transport.as_ref(),
-                #[cfg(feature = "ndi")]
+                #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+                sync_spout_transport.as_ref(),
+                #[cfg(any(
+                    feature = "ndi",
+                    all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+                ))]
                 &sync_engine,
             ) {
                 Ok(sync) => serde_json::to_value(sync).unwrap_or_else(|_| {
@@ -2558,6 +3395,33 @@ fn start_remote_control(
 }
 
 #[tauri::command]
+fn remote_control_status(state: State<'_, AppState>) -> Result<RemoteControlStatus, String> {
+    let guard = state
+        .remote_control
+        .lock()
+        .map_err(|_| "Remote control state lock was poisoned".to_string())?;
+    Ok(guard
+        .as_ref()
+        .map(RemoteWsServer::status)
+        .unwrap_or_default())
+}
+
+#[tauri::command]
+fn disconnect_remote_client(state: State<'_, AppState>, client_id: u64) -> Result<(), String> {
+    let guard = state
+        .remote_control
+        .lock()
+        .map_err(|_| "Remote control state lock was poisoned".to_string())?;
+    let Some(server) = guard.as_ref() else {
+        return Err("Remote control server is not running".to_string());
+    };
+    server
+        .disconnect_client(client_id)
+        .then_some(())
+        .ok_or_else(|| format!("Remote client {client_id} is no longer connected"))
+}
+
+#[tauri::command]
 fn stop_remote_control(state: State<'_, AppState>) -> Result<(), String> {
     let mut guard = state
         .remote_control
@@ -2567,18 +3431,470 @@ fn stop_remote_control(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_dmx_input_config(config: &DmxInputConfig) -> Result<(), String> {
+    config
+        .bind_ip
+        .trim()
+        .parse::<std::net::Ipv4Addr>()
+        .map_err(|_| "DMX input bind IP must be an IPv4 address".to_string())?;
+    if config.port == 0 {
+        return Err("DMX input port must be between 1 and 65535".to_string());
+    }
+    if config.protocol == DmxInputProtocol::Sacn && config.universe == 0 {
+        return Err("sACN input universe must be 1 or greater".to_string());
+    }
+    if !(100..=60_000).contains(&config.timeout_ms) {
+        return Err("DMX input timeout must be between 100 and 60000 ms".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn start_dmx_input(state: State<'_, AppState>, config: DmxInputConfig) -> Result<(), String> {
+    validate_dmx_input_config(&config)?;
+    let engine = state.engine.clone();
+    let input = io::dmx_input::DmxInput::start(config, move |event| match event {
+        io::dmx_input::DmxInputEvent::Frame {
+            universe,
+            values,
+            merge_mode,
+        } => {
+            let _ = engine.send(EngineCommand::SetDmxInputFrame {
+                universe,
+                values,
+                merge_mode,
+            });
+        }
+        io::dmx_input::DmxInputEvent::SignalLost { universe } => {
+            let _ = engine.send(EngineCommand::ClearDmxInput(universe));
+        }
+    })
+    .map_err(|error| error.to_string())?;
+    let mut active = state
+        .dmx_input
+        .lock()
+        .map_err(|_| "DMX input state lock was poisoned".to_string())?;
+    *active = Some(input);
+    Ok(())
+}
+
+#[tauri::command]
+fn dmx_input_status(state: State<'_, AppState>) -> Result<DmxInputStatus, String> {
+    let active = state
+        .dmx_input
+        .lock()
+        .map_err(|_| "DMX input state lock was poisoned".to_string())?;
+    Ok(active
+        .as_ref()
+        .map(io::dmx_input::DmxInput::status)
+        .unwrap_or_default())
+}
+
+#[tauri::command]
+fn stop_dmx_input(state: State<'_, AppState>) -> Result<(), String> {
+    let mut active = state
+        .dmx_input
+        .lock()
+        .map_err(|_| "DMX input state lock was poisoned".to_string())?;
+    *active = None;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ArtRdmRequest {
+    gateway_ip: String,
+    port_address: u16,
+    source_uid: String,
+    target_uid: String,
+    command: String,
+    parameter_id: u16,
+    #[serde(default)]
+    parameter_data_hex: String,
+    #[serde(default = "default_rdm_timeout_ms")]
+    timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct UsbRdmRequest {
+    serial_port: String,
+    #[serde(default = "default_serial_rdm_baud_rate")]
+    serial_baud_rate: u32,
+    source_uid: String,
+    target_uid: String,
+    command: String,
+    parameter_id: u16,
+    #[serde(default)]
+    parameter_data_hex: String,
+    #[serde(default = "default_rdm_timeout_ms")]
+    timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ArtRdmResponse {
+    source_uid: String,
+    destination_uid: String,
+    command_class: String,
+    parameter_id: u16,
+    parameter_data_hex: String,
+    response_type: String,
+    response_blocks: u16,
+    ack_timer_count: u16,
+    queued_message_polls: u16,
+    nack_reason: Option<u16>,
+    fifo_available: u8,
+    fifo_max: u8,
+    device_info: Option<ArtRdmDeviceInfoResponse>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ArtRdmDeviceInfoResponse {
+    protocol_version: u16,
+    model_id: u16,
+    product_category: u16,
+    software_version_id: u32,
+    dmx_footprint: u16,
+    current_personality: u8,
+    personality_count: u8,
+    dmx_start_address: u16,
+    sub_device_count: u16,
+    sensor_count: u8,
+}
+
+fn default_rdm_timeout_ms() -> u64 {
+    10_000
+}
+
+fn default_serial_rdm_baud_rate() -> u32 {
+    57_600
+}
+
+fn build_rdm_request_message(
+    source_uid: &str,
+    target_uid: &str,
+    command: &str,
+    parameter_id: u16,
+    parameter_data_hex: &str,
+) -> Result<io::rdm::RdmMessage, String> {
+    let source = parse_rdm_uid(source_uid)?;
+    let destination = parse_rdm_uid(target_uid)?;
+    let parameter_data = parse_hex_bytes(parameter_data_hex)?;
+    let command_class = match command.trim().to_ascii_lowercase().as_str() {
+        "get" => {
+            if !parameter_data.is_empty() {
+                return Err("RDM GET parameter data must be empty".to_string());
+            }
+            io::rdm::RdmCommandClass::GetCommand
+        }
+        "set" => io::rdm::RdmCommandClass::SetCommand,
+        _ => return Err("RDM command must be Get or Set".to_string()),
+    };
+    Ok(io::rdm::RdmMessage {
+        destination,
+        source,
+        transaction_number: next_rdm_transaction_number(),
+        port_id_or_response_type: 1,
+        message_count: 0,
+        sub_device: 0,
+        command_class,
+        parameter_id,
+        parameter_data,
+    })
+}
+
+fn rdm_response_summary(
+    message: io::rdm::RdmMessage,
+    response_blocks: u16,
+    ack_timer_count: u16,
+    queued_message_polls: u16,
+    fifo_available: u8,
+    fifo_max: u8,
+) -> Result<ArtRdmResponse, String> {
+    let response_type = message.response_type().map_err(|error| error.to_string())?;
+    let nack_reason = (response_type == io::rdm::RdmResponseType::NackReason)
+        .then(|| message.nack_reason())
+        .transpose()
+        .map_err(|error| error.to_string())?;
+    let device_info = if response_type == io::rdm::RdmResponseType::Ack
+        && message.parameter_id == io::rdm::pid::DEVICE_INFO
+    {
+        io::rdm::RdmDeviceInfo::decode(&message.parameter_data)
+            .ok()
+            .map(|info| ArtRdmDeviceInfoResponse {
+                protocol_version: info.protocol_version,
+                model_id: info.model_id,
+                product_category: info.product_category,
+                software_version_id: info.software_version_id,
+                dmx_footprint: info.dmx_footprint,
+                current_personality: info.current_personality,
+                personality_count: info.personality_count,
+                dmx_start_address: info.dmx_start_address,
+                sub_device_count: info.sub_device_count,
+                sensor_count: info.sensor_count,
+            })
+    } else {
+        None
+    };
+    Ok(ArtRdmResponse {
+        source_uid: format_rdm_uid(message.source),
+        destination_uid: format_rdm_uid(message.destination),
+        command_class: format!("{:?}", message.command_class),
+        parameter_id: message.parameter_id,
+        parameter_data_hex: format_hex_bytes(&message.parameter_data),
+        response_type: format!("{response_type:?}"),
+        response_blocks,
+        ack_timer_count,
+        queued_message_polls,
+        nack_reason,
+        fifo_available,
+        fifo_max,
+        device_info,
+    })
+}
+
+#[tauri::command]
+async fn send_art_rdm_request(request: ArtRdmRequest) -> Result<ArtRdmResponse, String> {
+    let gateway_ip = request.gateway_ip.trim().to_string();
+    if gateway_ip.is_empty() {
+        return Err("Art-Net gateway IP is required".to_string());
+    }
+    if request.port_address > 0x7fff {
+        return Err("ArtRdm Port-Address must be between 0 and 32767".to_string());
+    }
+    let message = build_rdm_request_message(
+        &request.source_uid,
+        &request.target_uid,
+        &request.command,
+        request.parameter_id,
+        &request.parameter_data_hex,
+    )?;
+    let port_address = request.port_address;
+    let timeout = Duration::from_millis(request.timeout_ms.clamp(50, 120_000));
+    let transaction = tauri::async_runtime::spawn_blocking(move || {
+        io::artnet::ArtNetSender::new(&gateway_ip, io::artnet::ARTNET_PORT)
+            .and_then(|sender| sender.transact_rdm_complete(port_address, &message, timeout))
+    })
+    .await
+    .map_err(|error| format!("ArtRdm worker failed: {error}"))?
+    .map_err(|error| error.to_string())?;
+    rdm_response_summary(
+        transaction.packet.message,
+        transaction.response_blocks,
+        transaction.ack_timer_count,
+        transaction.queued_message_polls,
+        transaction.packet.fifo_available,
+        transaction.packet.fifo_max,
+    )
+}
+
+#[tauri::command]
+async fn send_usb_rdm_request(
+    state: State<'_, AppState>,
+    request: UsbRdmRequest,
+) -> Result<ArtRdmResponse, String> {
+    let serial_port = request.serial_port.trim().to_string();
+    if serial_port.is_empty() {
+        return Err("ENTTEC USB Pro serial port is required".to_string());
+    }
+    ensure_serial_rdm_port_available(&state.engine.snapshot(), &serial_port)?;
+    let message = build_rdm_request_message(
+        &request.source_uid,
+        &request.target_uid,
+        &request.command,
+        request.parameter_id,
+        &request.parameter_data_hex,
+    )?;
+    let timeout = Duration::from_millis(request.timeout_ms.clamp(50, 120_000));
+    let baud_rate = request.serial_baud_rate.max(1);
+    let transaction = tauri::async_runtime::spawn_blocking(move || {
+        let mut controller =
+            io::serial_rdm::EnttecUsbProRdmController::new(&serial_port, baud_rate)?;
+        controller.transact_rdm_complete(&message, timeout)
+    })
+    .await
+    .map_err(|error| format!("USB RDM worker failed: {error}"))?
+    .map_err(|error| error.to_string())?;
+    rdm_response_summary(
+        transaction.message,
+        transaction.response_blocks,
+        transaction.ack_timer_count,
+        transaction.queued_message_polls,
+        0,
+        0,
+    )
+}
+
+fn ensure_serial_rdm_port_available(
+    snapshot: &EngineSnapshot,
+    serial_port: &str,
+) -> Result<(), String> {
+    let conflicts = std::iter::once(&snapshot.output)
+        .chain(snapshot.dmx_outputs.iter())
+        .any(|output| {
+            output.enabled
+                && matches!(
+                    output.protocol,
+                    DmxOutputProtocol::EnttecUsbPro | DmxOutputProtocol::DmxKingUltraDmx
+                )
+                && output.serial_port.eq_ignore_ascii_case(serial_port)
+        });
+    if conflicts {
+        Err(format!(
+            "Disable DMX output on {serial_port} before opening it for RDM; one USB Pro port cannot be owned by both transports"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+#[tauri::command]
+async fn discover_usb_rdm_devices(
+    state: State<'_, AppState>,
+    serial_port: String,
+    source_uid: String,
+    timeout_ms: Option<u64>,
+) -> Result<Vec<String>, String> {
+    let serial_port = serial_port.trim().to_string();
+    if serial_port.is_empty() {
+        return Err("ENTTEC USB Pro serial port is required".to_string());
+    }
+    ensure_serial_rdm_port_available(&state.engine.snapshot(), &serial_port)?;
+    let source_uid = parse_rdm_uid(&source_uid)?;
+    let timeout = Duration::from_millis(timeout_ms.unwrap_or(60_000).clamp(1_000, 120_000));
+    let devices = tauri::async_runtime::spawn_blocking(move || {
+        let mut controller = io::serial_rdm::EnttecUsbProRdmController::new(&serial_port, 57_600)?;
+        controller.discover_devices(source_uid, timeout)
+    })
+    .await
+    .map_err(|error| format!("USB RDM discovery worker failed: {error}"))?
+    .map_err(|error| error.to_string())?;
+    Ok(devices.into_iter().map(format_rdm_uid).collect())
+}
+
+#[tauri::command]
+async fn discover_art_rdm_devices(
+    gateway_ip: String,
+    port_address: u16,
+    timeout_ms: Option<u64>,
+) -> Result<Vec<String>, String> {
+    let gateway_ip = gateway_ip.trim().to_string();
+    if gateway_ip.is_empty() {
+        return Err("Art-Net gateway IP is required".to_string());
+    }
+    if port_address > 0x7fff {
+        return Err("ArtRdm Port-Address must be between 0 and 32767".to_string());
+    }
+    let timeout = Duration::from_millis(timeout_ms.unwrap_or(1_000).clamp(50, 10_000));
+    let uids = tauri::async_runtime::spawn_blocking(move || {
+        io::artnet::ArtNetSender::new(&gateway_ip, io::artnet::ARTNET_PORT)
+            .and_then(|sender| sender.request_tod(port_address, timeout))
+    })
+    .await
+    .map_err(|error| format!("ArtTod worker failed: {error}"))?
+    .map_err(|error| error.to_string())?;
+    Ok(uids.into_iter().map(format_rdm_uid).collect())
+}
+
+#[tauri::command]
+async fn start_art_rdm_full_discovery(gateway_ip: String, port_address: u16) -> Result<(), String> {
+    let gateway_ip = gateway_ip.trim().to_string();
+    if gateway_ip.is_empty() {
+        return Err("Art-Net gateway IP is required".to_string());
+    }
+    if port_address > 0x7fff {
+        return Err("ArtRdm Port-Address must be between 0 and 32767".to_string());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        io::artnet::ArtNetSender::new(&gateway_ip, io::artnet::ARTNET_PORT).and_then(|sender| {
+            sender
+                .send_tod_control(
+                    port_address,
+                    io::artnet::ArtTodControlCommand::FlushAndDiscover,
+                )
+                .map(|_| ())
+        })
+    })
+    .await
+    .map_err(|error| format!("ArtTodControl worker failed: {error}"))?
+    .map_err(|error| error.to_string())
+}
+
+fn next_rdm_transaction_number() -> u8 {
+    RDM_TRANSACTION_NUMBER
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            Some(if current == u8::MAX { 1 } else { current + 1 })
+        })
+        .unwrap_or(1)
+}
+
+fn parse_rdm_uid(value: &str) -> Result<io::rdm::RdmUid, String> {
+    let bytes = parse_hex_bytes(value)?;
+    if bytes.len() != 6 {
+        return Err("RDM UID must contain exactly 12 hexadecimal digits".to_string());
+    }
+    let mut uid = [0_u8; 6];
+    uid.copy_from_slice(&bytes);
+    Ok(io::rdm::RdmUid(uid))
+}
+
+fn format_rdm_uid(uid: io::rdm::RdmUid) -> String {
+    format!(
+        "{:02X}{:02X}:{:02X}{:02X}{:02X}{:02X}",
+        uid.0[0], uid.0[1], uid.0[2], uid.0[3], uid.0[4], uid.0[5]
+    )
+}
+
+fn parse_hex_bytes(value: &str) -> Result<Vec<u8>, String> {
+    let compact = value
+        .chars()
+        .filter(|character| {
+            !character.is_ascii_whitespace() && *character != ':' && *character != '-'
+        })
+        .collect::<String>();
+    if compact.len() % 2 != 0
+        || !compact
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err("Hex data must contain complete hexadecimal byte pairs".to_string());
+    }
+    (0..compact.len())
+        .step_by(2)
+        .map(|index| {
+            u8::from_str_radix(&compact[index..index + 2], 16).map_err(|error| error.to_string())
+        })
+        .collect()
+}
+
+fn format_hex_bytes(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[tauri::command]
 fn create_cue_from_current(
     state: State<'_, AppState>,
     label: String,
     fade_ms: u64,
     capture_scope: Option<CueCaptureScope>,
+    cue_list_id: Option<protocol::CueListId>,
 ) -> Result<CueId, String> {
     let label = label.trim().to_string();
     if label.is_empty() {
         return Err("Cue label is required".to_string());
     }
-    let snapshot = state.engine.snapshot();
+    let mut snapshot = state.engine.snapshot();
+    apply_programmer_preview_to_snapshot(&mut snapshot);
+    let cue_list_id = cue_list_id.unwrap_or(protocol::DEFAULT_CUE_LIST_ID);
+    if !snapshot
+        .cue_lists
+        .iter()
+        .any(|cue_list| cue_list.id == cue_list_id)
+    {
+        return Err(format!("Cue List {cue_list_id} was not found"));
+    }
     let scope = capture_scope.unwrap_or_default();
     let (targets, video_targets, video_output_targets, node_graph_targets) =
         cue_targets_from_snapshot_with_scope(&snapshot, &scope)?;
@@ -2602,7 +3918,433 @@ fn create_cue_from_current(
             node_graph_targets,
         })
         .map_err(|error| error.to_string())?;
+    if cue_list_id != protocol::DEFAULT_CUE_LIST_ID {
+        state
+            .engine
+            .send(EngineCommand::SetCueList {
+                cue_id,
+                cue_list_id,
+            })
+            .map_err(|error| error.to_string())?;
+    }
     Ok(cue_id)
+}
+
+#[tauri::command]
+fn create_cue_list(
+    state: State<'_, AppState>,
+    label: String,
+) -> Result<protocol::CueListId, String> {
+    let label = label.trim().to_string();
+    if label.is_empty() {
+        return Err("Cue List label is required".to_string());
+    }
+    let cue_list_id = state.engine.allocate_cue_list_id();
+    state
+        .engine
+        .send(EngineCommand::UpsertCueList { cue_list_id, label })
+        .map_err(|error| error.to_string())?;
+    Ok(cue_list_id)
+}
+
+fn validate_reference_palette_values(
+    values: &mut Vec<protocol::AttributeValueSummary>,
+) -> Result<(), String> {
+    if values.is_empty() || values.len() > 128 {
+        return Err("A palette must contain from 1 to 128 attribute values".to_string());
+    }
+    let mut attributes = HashSet::new();
+    for value in values {
+        value.attribute = value.attribute.trim().chars().take(128).collect();
+        if value.attribute.is_empty() || !attributes.insert(value.attribute.to_ascii_lowercase()) {
+            return Err("Palette attributes must be non-empty and unique".to_string());
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn create_reference_palette(
+    state: State<'_, AppState>,
+    label: String,
+    kind: protocol::PaletteKind,
+    mut values: Vec<protocol::AttributeValueSummary>,
+) -> Result<protocol::PaletteId, String> {
+    let label = label.trim().chars().take(64).collect::<String>();
+    if label.is_empty() {
+        return Err("Palette label is required".to_string());
+    }
+    validate_reference_palette_values(&mut values)?;
+    let palette_id = state.engine.allocate_palette_id();
+    state
+        .engine
+        .send(EngineCommand::UpsertPalette(
+            protocol::ReferencePaletteSummary {
+                id: palette_id,
+                label,
+                kind,
+                values,
+            },
+        ))
+        .map_err(|error| error.to_string())?;
+    Ok(palette_id)
+}
+
+#[tauri::command]
+fn update_reference_palette(
+    state: State<'_, AppState>,
+    palette_id: protocol::PaletteId,
+    label: String,
+    kind: protocol::PaletteKind,
+    mut values: Vec<protocol::AttributeValueSummary>,
+) -> Result<(), String> {
+    let label = label.trim().chars().take(64).collect::<String>();
+    if label.is_empty() {
+        return Err("Palette label is required".to_string());
+    }
+    if !state
+        .engine
+        .snapshot()
+        .palettes
+        .iter()
+        .any(|palette| palette.id == palette_id)
+    {
+        return Err(format!("Palette {palette_id} was not found"));
+    }
+    validate_reference_palette_values(&mut values)?;
+    state
+        .engine
+        .send(EngineCommand::UpsertPalette(
+            protocol::ReferencePaletteSummary {
+                id: palette_id,
+                label,
+                kind,
+                values,
+            },
+        ))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn remove_reference_palette(
+    state: State<'_, AppState>,
+    palette_id: protocol::PaletteId,
+) -> Result<(), String> {
+    state
+        .engine
+        .send(EngineCommand::RemovePalette(palette_id))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn apply_reference_palette(
+    state: State<'_, AppState>,
+    palette_id: protocol::PaletteId,
+    fixture_ids: Vec<FixtureId>,
+    programmer: bool,
+) -> Result<(), String> {
+    let snapshot = state.engine.snapshot();
+    if !snapshot
+        .palettes
+        .iter()
+        .any(|palette| palette.id == palette_id)
+    {
+        return Err(format!("Palette {palette_id} was not found"));
+    }
+    if fixture_ids.is_empty() {
+        return Err("Select at least one fixture".to_string());
+    }
+    if let Some(fixture_id) = fixture_ids.iter().find(|fixture_id| {
+        !snapshot
+            .fixtures
+            .iter()
+            .any(|fixture| fixture.id == **fixture_id)
+    }) {
+        return Err(format!("Fixture {fixture_id} was not found"));
+    }
+    state
+        .engine
+        .send(EngineCommand::ApplyPalette {
+            palette_id,
+            fixture_ids,
+            programmer,
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_cue_palette_targets(
+    state: State<'_, AppState>,
+    cue_id: CueId,
+    palette_targets: Vec<protocol::CuePaletteTarget>,
+) -> Result<(), String> {
+    let snapshot = state.engine.snapshot();
+    if !snapshot.cues.iter().any(|cue| cue.id == cue_id) {
+        return Err(format!("Cue {cue_id} was not found"));
+    }
+    if palette_targets.len() > 128 {
+        return Err("A cue can reference at most 128 palettes".to_string());
+    }
+    let palette_ids = snapshot
+        .palettes
+        .iter()
+        .map(|palette| palette.id)
+        .collect::<HashSet<_>>();
+    let fixture_ids = snapshot
+        .fixtures
+        .iter()
+        .map(|fixture| fixture.id)
+        .collect::<HashSet<_>>();
+    let mut seen = HashSet::new();
+    for target in &palette_targets {
+        if !palette_ids.contains(&target.palette_id) {
+            return Err(format!("Palette {} was not found", target.palette_id));
+        }
+        if !seen.insert(target.palette_id) {
+            return Err(format!(
+                "Palette {} can only be referenced once per cue",
+                target.palette_id
+            ));
+        }
+        if target.fixture_ids.is_empty() {
+            return Err(format!(
+                "Palette {} must target at least one fixture",
+                target.palette_id
+            ));
+        }
+        if let Some(fixture_id) = target
+            .fixture_ids
+            .iter()
+            .find(|fixture_id| !fixture_ids.contains(fixture_id))
+        {
+            return Err(format!("Fixture {fixture_id} was not found"));
+        }
+    }
+    state
+        .engine
+        .send(EngineCommand::SetCuePaletteTargets {
+            cue_id,
+            palette_targets,
+        })
+        .map_err(|error| error.to_string())
+}
+
+fn validate_playback_executor_request(
+    snapshot: &EngineSnapshot,
+    executor_id: protocol::ExecutorId,
+    label: &str,
+    cue_list_id: protocol::CueListId,
+    page: u16,
+    slot: u16,
+    level: f32,
+) -> Result<(), String> {
+    if executor_id == 0 || label.trim().is_empty() {
+        return Err("Playback Executor requires a valid ID and label".to_string());
+    }
+    if !snapshot
+        .cue_lists
+        .iter()
+        .any(|cue_list| cue_list.id == cue_list_id)
+    {
+        return Err(format!("Cue List {cue_list_id} was not found"));
+    }
+    if page == 0 || page > 99 || slot == 0 || slot > 16 {
+        return Err("Playback Executor page must be 1-99 and slot must be 1-16".to_string());
+    }
+    if !level.is_finite() {
+        return Err("Playback Executor level must be finite".to_string());
+    }
+    if snapshot.playback_executors.iter().any(|executor| {
+        executor.id != executor_id && executor.page == page && executor.slot == slot
+    }) {
+        return Err(format!(
+            "Playback Executor page {page} slot {slot} is already in use"
+        ));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn create_playback_executor(
+    state: State<'_, AppState>,
+    label: String,
+    cue_list_id: protocol::CueListId,
+    page: u16,
+    slot: u16,
+) -> Result<protocol::ExecutorId, String> {
+    let executor_id = state.engine.allocate_executor_id();
+    let snapshot = state.engine.snapshot();
+    validate_playback_executor_request(
+        &snapshot,
+        executor_id,
+        &label,
+        cue_list_id,
+        page,
+        slot,
+        1.0,
+    )?;
+    state
+        .engine
+        .send(EngineCommand::UpsertPlaybackExecutor(
+            protocol::PlaybackExecutorSummary {
+                id: executor_id,
+                label,
+                cue_list_id,
+                page,
+                slot,
+                level: 1.0,
+            },
+        ))
+        .map_err(|error| error.to_string())?;
+    Ok(executor_id)
+}
+
+#[tauri::command]
+fn update_playback_executor(
+    state: State<'_, AppState>,
+    executor_id: protocol::ExecutorId,
+    label: String,
+    cue_list_id: protocol::CueListId,
+    page: u16,
+    slot: u16,
+) -> Result<(), String> {
+    let snapshot = state.engine.snapshot();
+    let level = snapshot
+        .playback_executors
+        .iter()
+        .find(|executor| executor.id == executor_id)
+        .map(|executor| executor.level)
+        .ok_or_else(|| format!("Playback Executor {executor_id} was not found"))?;
+    validate_playback_executor_request(
+        &snapshot,
+        executor_id,
+        &label,
+        cue_list_id,
+        page,
+        slot,
+        level,
+    )?;
+    state
+        .engine
+        .send(EngineCommand::UpsertPlaybackExecutor(
+            protocol::PlaybackExecutorSummary {
+                id: executor_id,
+                label,
+                cue_list_id,
+                page,
+                slot,
+                level,
+            },
+        ))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn remove_playback_executor(
+    state: State<'_, AppState>,
+    executor_id: protocol::ExecutorId,
+) -> Result<(), String> {
+    state
+        .engine
+        .send(EngineCommand::RemovePlaybackExecutor(executor_id))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_playback_executor_level(
+    state: State<'_, AppState>,
+    executor_id: protocol::ExecutorId,
+    level: f32,
+) -> Result<(), String> {
+    state
+        .engine
+        .send(EngineCommand::SetPlaybackExecutorLevel { executor_id, level })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_playback_master(state: State<'_, AppState>, level: f32) -> Result<(), String> {
+    state
+        .engine
+        .send(EngineCommand::SetPlaybackMaster(level))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn trigger_playback_executor(
+    state: State<'_, AppState>,
+    executor_id: protocol::ExecutorId,
+    direction: String,
+) -> Result<(), String> {
+    let command = match direction.as_str() {
+        "next" => EngineCommand::TriggerPlaybackExecutorNext(executor_id),
+        "previous" => EngineCommand::TriggerPlaybackExecutorPrevious(executor_id),
+        _ => return Err("Playback Executor direction must be next or previous".to_string()),
+    };
+    state
+        .engine
+        .send(command)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn rename_cue_list(
+    state: State<'_, AppState>,
+    cue_list_id: protocol::CueListId,
+    label: String,
+) -> Result<(), String> {
+    state
+        .engine
+        .send(EngineCommand::UpsertCueList { cue_list_id, label })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn remove_cue_list(
+    state: State<'_, AppState>,
+    cue_list_id: protocol::CueListId,
+) -> Result<(), String> {
+    state
+        .engine
+        .send(EngineCommand::RemoveCueList(cue_list_id))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_cue_list(
+    state: State<'_, AppState>,
+    cue_id: CueId,
+    cue_list_id: protocol::CueListId,
+) -> Result<(), String> {
+    state
+        .engine
+        .send(EngineCommand::SetCueList {
+            cue_id,
+            cue_list_id,
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn trigger_cue_list_next(
+    state: State<'_, AppState>,
+    cue_list_id: protocol::CueListId,
+) -> Result<(), String> {
+    state
+        .engine
+        .send(EngineCommand::TriggerCueListNext(cue_list_id))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn trigger_cue_list_previous(
+    state: State<'_, AppState>,
+    cue_list_id: protocol::CueListId,
+) -> Result<(), String> {
+    state
+        .engine
+        .send(EngineCommand::TriggerCueListPrevious(cue_list_id))
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -2617,7 +4359,8 @@ fn update_cue_from_current(
     if label.is_empty() {
         return Err("Cue label is required".to_string());
     }
-    let snapshot = state.engine.snapshot();
+    let mut snapshot = state.engine.snapshot();
+    apply_programmer_preview_to_snapshot(&mut snapshot);
     if !snapshot.cues.iter().any(|cue| cue.id == cue_id) {
         return Err(format!("Cue {cue_id} was not found"));
     }
@@ -2646,34 +4389,210 @@ fn update_cue_from_current(
         .map_err(|error| error.to_string())
 }
 
+fn apply_programmer_preview_to_snapshot(snapshot: &mut EngineSnapshot) {
+    for staged in &snapshot.programmer.values {
+        if let Some(fixture) = snapshot
+            .fixtures
+            .iter_mut()
+            .find(|fixture| fixture.id == staged.fixture_id)
+        {
+            if let Some(value) = fixture
+                .attribute_values
+                .iter_mut()
+                .find(|value| value.attribute == staged.attribute)
+            {
+                value.value = staged.value;
+            }
+        }
+    }
+}
+
 #[tauri::command]
 fn set_cue_metadata(
     state: State<'_, AppState>,
     cue_id: CueId,
+    cue_number: String,
     label: String,
     fade_ms: u64,
+    pre_wait_ms: u64,
+    follow_ms: Option<u64>,
+    ifcb_timing: protocol::CueIfcbTiming,
+    parts: Vec<protocol::CuePartSummary>,
+    mark: bool,
+    mib_fixture_ids: Vec<FixtureId>,
+    tracking: bool,
+    notes: String,
 ) -> Result<(), String> {
+    let cue_number = cue_number.trim().to_string();
+    if cue_number.is_empty() {
+        return Err("Cue number is required".to_string());
+    }
     let label = label.trim().to_string();
     if label.is_empty() {
         return Err("Cue label is required".to_string());
     }
-    if !state
-        .engine
-        .snapshot()
-        .cues
-        .iter()
-        .any(|cue| cue.id == cue_id)
-    {
+    let snapshot = state.engine.snapshot();
+    if !snapshot.cues.iter().any(|cue| cue.id == cue_id) {
         return Err(format!("Cue {cue_id} was not found"));
     }
+    if snapshot.cues.iter().any(|cue| {
+        cue.id != cue_id
+            && snapshot
+                .cues
+                .iter()
+                .find(|candidate| candidate.id == cue_id)
+                .map(|current| current.cue_list_id == cue.cue_list_id)
+                .unwrap_or(false)
+            && cue.cue_number == cue_number
+    }) {
+        return Err(format!("Cue number '{cue_number}' is already in use"));
+    }
+    let cue = snapshot
+        .cues
+        .iter()
+        .find(|cue| cue.id == cue_id)
+        .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
+    validate_cue_parts_for_summary(cue, &parts)?;
+    validate_cue_mib_fixture_ids(cue, &mib_fixture_ids)?;
     state
         .engine
         .send(EngineCommand::SetCueMetadata {
             cue_id,
+            cue_number,
             label,
             fade_ms,
+            pre_wait_ms,
+            follow_ms,
+            ifcb_timing,
+            tracking,
+            notes,
+        })
+        .map_err(|error| error.to_string())?;
+    state
+        .engine
+        .send(EngineCommand::SetCueParts { cue_id, parts })
+        .map_err(|error| error.to_string())?;
+    state
+        .engine
+        .send(EngineCommand::SetCueMark { cue_id, mark })
+        .map_err(|error| error.to_string())?;
+    state
+        .engine
+        .send(EngineCommand::SetCueMibFixtureIds {
+            cue_id,
+            fixture_ids: mib_fixture_ids,
         })
         .map_err(|error| error.to_string())
+}
+
+fn validate_cue_mib_fixture_ids(
+    cue: &protocol::CueSummary,
+    fixture_ids: &[FixtureId],
+) -> Result<(), String> {
+    if fixture_ids.len() > 256 {
+        return Err("A Cue MIB filter can contain at most 256 fixtures".to_string());
+    }
+    let target_ids = cue
+        .targets
+        .iter()
+        .map(|target| target.fixture_id)
+        .chain(
+            cue.palette_targets
+                .iter()
+                .flat_map(|target| target.fixture_ids.iter().copied()),
+        )
+        .collect::<HashSet<_>>();
+    let mut seen = HashSet::new();
+    for fixture_id in fixture_ids {
+        if !seen.insert(*fixture_id) {
+            return Err(format!("MIB fixture {fixture_id} is duplicated"));
+        }
+        if !target_ids.contains(fixture_id) {
+            return Err(format!(
+                "MIB fixture {fixture_id} is not targeted by this Cue"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_cue_parts_for_summary(
+    cue: &protocol::CueSummary,
+    parts: &[protocol::CuePartSummary],
+) -> Result<(), String> {
+    if parts.len() > 16 {
+        return Err("A cue can contain at most 16 parts".to_string());
+    }
+    let target_ids = cue
+        .targets
+        .iter()
+        .map(|target| target.fixture_id)
+        .collect::<HashSet<_>>();
+    let video_layer_ids = cue
+        .video_targets
+        .iter()
+        .map(|target| target.layer_id)
+        .collect::<HashSet<_>>();
+    let video_output_ids = cue
+        .video_output_targets
+        .iter()
+        .map(|target| target.output_id)
+        .collect::<HashSet<_>>();
+    let mut numbers = HashSet::new();
+    let mut assigned = HashSet::new();
+    let mut assigned_video_layers = HashSet::new();
+    let mut assigned_video_outputs = HashSet::new();
+    for part in parts {
+        if part.number == 0 || part.number > 999 || !numbers.insert(part.number) {
+            return Err("Cue Part numbers must be unique values from 1 to 999".to_string());
+        }
+        if part.label.trim().is_empty() {
+            return Err(format!("Cue Part {} label is required", part.number));
+        }
+        for fixture_id in &part.fixture_ids {
+            if !target_ids.contains(fixture_id) {
+                return Err(format!(
+                    "Cue Part {} references fixture {} outside this cue",
+                    part.number, fixture_id
+                ));
+            }
+            if !assigned.insert(*fixture_id) {
+                return Err(format!(
+                    "Fixture {} is assigned to more than one Cue Part",
+                    fixture_id
+                ));
+            }
+        }
+        for layer_id in &part.video_layer_ids {
+            if !video_layer_ids.contains(layer_id) {
+                return Err(format!(
+                    "Cue Part {} references video layer {} outside this cue",
+                    part.number, layer_id
+                ));
+            }
+            if !assigned_video_layers.insert(*layer_id) {
+                return Err(format!(
+                    "Video layer {} is assigned to more than one Cue Part",
+                    layer_id
+                ));
+            }
+        }
+        for output_id in &part.video_output_ids {
+            if !video_output_ids.contains(output_id) {
+                return Err(format!(
+                    "Cue Part {} references video output {} outside this cue",
+                    part.number, output_id
+                ));
+            }
+            if !assigned_video_outputs.insert(*output_id) {
+                return Err(format!(
+                    "Video output {} is assigned to more than one Cue Part",
+                    output_id
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -3081,6 +5000,91 @@ fn add_video_file_layer(
 }
 
 #[tauri::command]
+fn add_local_media_layers(
+    state: State<'_, AppState>,
+    kind: VideoSourceKind,
+    paths: Vec<String>,
+) -> Result<Vec<VideoLayerId>, String> {
+    const MAX_BATCH_MEDIA_FILES: usize = 64;
+    if !matches!(kind, VideoSourceKind::File | VideoSourceKind::StillImage) {
+        return Err("Batch media import supports video files and still images only".to_string());
+    }
+    if paths.is_empty() {
+        return Err("Select at least one media file".to_string());
+    }
+    if paths.len() > MAX_BATCH_MEDIA_FILES {
+        return Err(format!(
+            "Batch media import is limited to {MAX_BATCH_MEDIA_FILES} files at a time"
+        ));
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    let mut prepared = Vec::new();
+    for path in paths {
+        let context = if kind == VideoSourceKind::File {
+            "Video file"
+        } else {
+            "Still image"
+        };
+        let path = validate_existing_file_path(path, context)?;
+        let dedupe_key = if cfg!(windows) {
+            path.to_ascii_lowercase()
+        } else {
+            path.clone()
+        };
+        if !seen.insert(dedupe_key) {
+            continue;
+        }
+        let label = std::path::Path::new(&path)
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("Media")
+            .to_string();
+        let source = if kind == VideoSourceKind::File {
+            let probe = video::probe_video_file_metadata(&path).ok();
+            VideoSourceSummary {
+                kind: VideoSourceKind::File,
+                codec: probe
+                    .as_ref()
+                    .and_then(|probe| probe.codec.clone())
+                    .or_else(|| video::infer_video_codec_from_path(&path)),
+                metadata: probe.and_then(|probe| probe.metadata),
+                path: Some(path),
+                name: None,
+            }
+        } else {
+            VideoSourceSummary {
+                kind: VideoSourceKind::StillImage,
+                metadata: video::probe_still_image_metadata(&path).ok(),
+                path: Some(path),
+                name: None,
+                codec: None,
+            }
+        };
+        prepared.push((normalize_video_layer_label(label)?, source));
+    }
+    if prepared.is_empty() {
+        return Err("No unique media files were selected".to_string());
+    }
+
+    let mut layer_ids = Vec::with_capacity(prepared.len());
+    for (label, source) in prepared {
+        let layer_id = state.engine.allocate_video_layer_id();
+        state
+            .engine
+            .send(EngineCommand::AddVideoLayer {
+                layer_id,
+                label,
+                source,
+            })
+            .map_err(|error| error.to_string())?;
+        layer_ids.push(layer_id);
+    }
+    Ok(layer_ids)
+}
+
+#[tauri::command]
 fn add_still_image_layer(
     state: State<'_, AppState>,
     label: String,
@@ -3133,8 +5137,12 @@ fn refresh_video_source_metadata(
     match source.kind {
         VideoSourceKind::File => refresh_file_video_source_metadata(source),
         VideoSourceKind::StillImage => refresh_still_image_source_metadata(source),
-        VideoSourceKind::Ndi | VideoSourceKind::Spout | VideoSourceKind::Syphon => {
-            Err("External video inputs do not expose local file metadata in this build".to_string())
+        VideoSourceKind::Camera
+        | VideoSourceKind::ScreenCapture
+        | VideoSourceKind::Ndi
+        | VideoSourceKind::Spout
+        | VideoSourceKind::Syphon => {
+            Err("Live video inputs do not expose local file metadata".to_string())
         }
     }
 }
@@ -3211,15 +5219,18 @@ fn add_video_input_layer(
     name: String,
 ) -> Result<VideoLayerId, String> {
     let label = normalize_video_layer_label(label)?;
-    let name = name.trim().to_string();
-    if name.is_empty() {
-        return Err("Video input source name is required".to_string());
-    }
+    let name = normalize_video_input_source_name(&kind, name)?;
     if !matches!(
         kind,
-        VideoSourceKind::Ndi | VideoSourceKind::Spout | VideoSourceKind::Syphon
+        VideoSourceKind::Camera
+            | VideoSourceKind::ScreenCapture
+            | VideoSourceKind::Ndi
+            | VideoSourceKind::Spout
+            | VideoSourceKind::Syphon
     ) {
-        return Err("Video input kind must be NDI, Spout, or Syphon".to_string());
+        return Err(
+            "Video input kind must be Camera, Screen Capture, NDI, Spout, or Syphon".to_string(),
+        );
     }
     ensure_video_input_backend_available(&kind)?;
     let layer_id = state.engine.allocate_video_layer_id();
@@ -3238,6 +5249,20 @@ fn add_video_input_layer(
         })
         .map_err(|error| error.to_string())?;
     Ok(layer_id)
+}
+
+fn normalize_video_input_source_name(
+    kind: &VideoSourceKind,
+    name: String,
+) -> Result<String, String> {
+    let name = name.trim();
+    if kind == &VideoSourceKind::ScreenCapture && name.is_empty() {
+        return Ok(capture_transport::default_capture_endpoint("screen_capture").to_string());
+    }
+    if name.is_empty() {
+        return Err("Video input source name is required".to_string());
+    }
+    Ok(name.to_string())
 }
 
 #[tauri::command]
@@ -3318,6 +5343,42 @@ fn set_video_layer_state(
 }
 
 #[tauri::command]
+fn set_video_layer_isf_effect(
+    state: State<'_, AppState>,
+    layer_id: VideoLayerId,
+    effect: Option<VideoIsfEffectSummary>,
+) -> Result<(), String> {
+    validate_video_layer_ids(&state.engine.snapshot(), &[layer_id])?;
+    let effect = effect.map(sanitize_video_isf_effect).transpose()?;
+    state
+        .engine
+        .send(EngineCommand::SetVideoLayerIsfEffect { layer_id, effect })
+        .map_err(|error| error.to_string())
+}
+
+fn sanitize_video_isf_effect(
+    effect: VideoIsfEffectSummary,
+) -> Result<VideoIsfEffectSummary, String> {
+    let label = effect.label.trim();
+    if label.is_empty() || label.chars().count() > 128 {
+        return Err("ISF effect label must contain 1-128 characters".to_string());
+    }
+    let prepared = video::prepare_isf_shader(&effect.source).map_err(|error| error.to_string())?;
+    let resolved = video::resolved_isf_control_values(&prepared, &effect);
+    let source_path = effect.source_path.and_then(|path| {
+        let path = path.trim().to_string();
+        (!path.is_empty()).then_some(path)
+    });
+    let mut canonical =
+        video::isf_effect_from_prepared(label.to_string(), effect.source, source_path, &prepared);
+    canonical.enabled = effect.enabled;
+    for (control, value) in canonical.controls.iter_mut().zip(resolved) {
+        control.value = value;
+    }
+    Ok(canonical)
+}
+
+#[tauri::command]
 fn fade_video_layer_opacity(
     state: State<'_, AppState>,
     layer_id: VideoLayerId,
@@ -3335,6 +5396,534 @@ fn fade_video_layer_opacity(
             duration_ms,
         })
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn launch_video_clip(
+    state: State<'_, AppState>,
+    layer_id: VideoLayerId,
+    fade_ms: u64,
+) -> Result<(), String> {
+    let snapshot = state.engine.snapshot();
+    let layer = snapshot
+        .video
+        .layers
+        .iter()
+        .find(|layer| layer.id == layer_id)
+        .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
+    let next = launched_video_clip_state(&layer.state, fade_ms);
+    state
+        .engine
+        .send(EngineCommand::SetVideoLayerState {
+            layer_id,
+            state: next,
+        })
+        .map_err(|error| error.to_string())?;
+    if fade_ms > 0 {
+        state
+            .engine
+            .send(EngineCommand::FadeVideoLayerOpacity {
+                layer_id,
+                opacity: 1.0,
+                duration_ms: fade_ms,
+            })
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn take_video_clip(
+    state: State<'_, AppState>,
+    layer_id: VideoLayerId,
+    fade_ms: u64,
+) -> Result<(), String> {
+    let snapshot = state.engine.snapshot();
+    let states = exclusive_video_take_states(&snapshot.video.layers, layer_id, fade_ms)?;
+    for (candidate_id, next) in states {
+        state
+            .engine
+            .send(EngineCommand::SetVideoLayerState {
+                layer_id: candidate_id,
+                state: next,
+            })
+            .map_err(|error| error.to_string())?;
+        if fade_ms > 0 {
+            state
+                .engine
+                .send(EngineCommand::FadeVideoLayerOpacity {
+                    layer_id: candidate_id,
+                    opacity: if candidate_id == layer_id { 1.0 } else { 0.0 },
+                    duration_ms: fade_ms,
+                })
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_video_ab_mix(
+    state: State<'_, AppState>,
+    layer_a_id: Option<VideoLayerId>,
+    layer_b_id: Option<VideoLayerId>,
+    mix: f32,
+) -> Result<(), String> {
+    if !mix.is_finite() {
+        return Err("Video A/B mix must be finite".to_string());
+    }
+    if layer_a_id.is_some() && layer_a_id == layer_b_id {
+        return Err("Video Deck A and Deck B must use different layers".to_string());
+    }
+    let snapshot = state.engine.snapshot();
+    let updates = [
+        (layer_a_id, 1.0 - mix.clamp(0.0, 1.0)),
+        (layer_b_id, mix.clamp(0.0, 1.0)),
+    ]
+    .into_iter()
+    .filter_map(|(layer_id, opacity)| layer_id.map(|layer_id| (layer_id, opacity)))
+    .map(|(layer_id, opacity)| {
+        let layer = snapshot
+            .video
+            .layers
+            .iter()
+            .find(|layer| layer.id == layer_id)
+            .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
+        let mut next = layer.state.clone();
+        next.opacity = opacity;
+        Ok((layer_id, next))
+    })
+    .collect::<Result<Vec<_>, String>>()?;
+    for (layer_id, next) in updates {
+        state
+            .engine
+            .send(EngineCommand::SetVideoLayerState {
+                layer_id,
+                state: next,
+            })
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn stop_video_clip(
+    state: State<'_, AppState>,
+    layer_id: VideoLayerId,
+    fade_ms: u64,
+) -> Result<(), String> {
+    let snapshot = state.engine.snapshot();
+    let layer = snapshot
+        .video
+        .layers
+        .iter()
+        .find(|layer| layer.id == layer_id)
+        .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
+    let next = stopped_video_clip_state(&layer.state, fade_ms);
+    state
+        .engine
+        .send(EngineCommand::SetVideoLayerState {
+            layer_id,
+            state: next,
+        })
+        .map_err(|error| error.to_string())?;
+    if fade_ms > 0 {
+        state
+            .engine
+            .send(EngineCommand::FadeVideoLayerOpacity {
+                layer_id,
+                opacity: 0.0,
+                duration_ms: fade_ms,
+            })
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn play_video_layer_audio_monitor(
+    state: State<'_, AppState>,
+    layer_id: VideoLayerId,
+    volume: f32,
+    device_name: Option<String>,
+) -> Result<VideoAudioMonitorStatus, String> {
+    if !volume.is_finite() {
+        return Err("Audio monitor volume must be finite".to_string());
+    }
+    let snapshot = state.engine.snapshot();
+    let layer = snapshot
+        .video
+        .layers
+        .iter()
+        .find(|layer| layer.id == layer_id)
+        .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
+    if layer.state.speed < 0.0 {
+        return Err("Reverse video audio monitoring is not supported".to_string());
+    }
+    let path = layer
+        .source
+        .path
+        .as_deref()
+        .filter(|_| layer.source.kind == VideoSourceKind::File)
+        .ok_or_else(|| "Audio monitoring requires a local video file layer".to_string())?;
+    let mut audio = state
+        .media_audio
+        .lock()
+        .map_err(|_| "Media audio monitor lock was poisoned".to_string())?;
+    audio.play(
+        layer_id,
+        Path::new(path),
+        layer.state.position_ms,
+        layer.state.speed,
+        volume,
+        device_name.as_deref(),
+    )?;
+    Ok(audio.status())
+}
+
+#[tauri::command]
+fn list_audio_output_devices() -> Result<Vec<String>, String> {
+    use rodio::cpal::traits::{DeviceTrait, HostTrait};
+
+    let mut names = rodio::cpal::default_host()
+        .output_devices()
+        .map_err(|error| format!("Failed to list audio output devices: {error}"))?
+        .filter_map(|device| device.name().ok())
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
+#[tauri::command]
+fn list_audio_input_devices() -> Result<Vec<String>, String> {
+    use rodio::cpal::traits::{DeviceTrait, HostTrait};
+
+    let mut names = rodio::cpal::default_host()
+        .input_devices()
+        .map_err(|error| format!("Failed to list audio input devices: {error}"))?
+        .filter_map(|device| device.name().ok())
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
+#[tauri::command]
+fn start_live_audio_input(
+    state: State<'_, AppState>,
+    device_name: Option<String>,
+) -> Result<LiveAudioInputStatus, String> {
+    use rodio::cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+    let requested_name = device_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty());
+    let host = rodio::cpal::default_host();
+    let device = match requested_name {
+        Some(name) => host
+            .input_devices()
+            .map_err(|error| format!("Failed to list audio input devices: {error}"))?
+            .find(|device| device.name().ok().as_deref() == Some(name))
+            .ok_or_else(|| format!("Audio input device '{name}' was not found"))?,
+        None => host
+            .default_input_device()
+            .ok_or_else(|| "No default audio input device is available".to_string())?,
+    };
+    let resolved_name = device.name().ok();
+    let supported = device
+        .default_input_config()
+        .map_err(|error| format!("Failed to read audio input configuration: {error}"))?;
+    let sample_format = supported.sample_format();
+    let config: rodio::cpal::StreamConfig = supported.into();
+    let channels = config.channels.max(1);
+    let sample_rate = config.sample_rate.0;
+    let status = Arc::new(Mutex::new(LiveAudioInputStatus {
+        running: true,
+        device_name: resolved_name,
+        sample_rate,
+        channels,
+        ..LiveAudioInputStatus::default()
+    }));
+    let stop = Arc::new(AtomicBool::new(false));
+    let (sender, receiver) = std::sync::mpsc::sync_channel::<Vec<f32>>(8);
+    let error_status = Arc::clone(&status);
+    let error_callback = move |error: rodio::cpal::StreamError| {
+        if let Ok(mut status) = error_status.lock() {
+            status.last_error = Some(error.to_string());
+        }
+    };
+    let stream = match sample_format {
+        rodio::cpal::SampleFormat::F32 => {
+            let sender = sender.clone();
+            let status = Arc::clone(&status);
+            device.build_input_stream(
+                &config,
+                move |data: &[f32], _| {
+                    send_live_audio_chunk(data, channels, &sender, &status, |value| value)
+                },
+                error_callback,
+                None,
+            )
+        }
+        rodio::cpal::SampleFormat::I16 => {
+            let sender = sender.clone();
+            let status = Arc::clone(&status);
+            device.build_input_stream(
+                &config,
+                move |data: &[i16], _| {
+                    send_live_audio_chunk(data, channels, &sender, &status, |value| {
+                        value as f32 / i16::MAX as f32
+                    })
+                },
+                error_callback,
+                None,
+            )
+        }
+        rodio::cpal::SampleFormat::U16 => {
+            let status = Arc::clone(&status);
+            device.build_input_stream(
+                &config,
+                move |data: &[u16], _| {
+                    send_live_audio_chunk(data, channels, &sender, &status, |value| {
+                        value as f32 / 32767.5 - 1.0
+                    })
+                },
+                error_callback,
+                None,
+            )
+        }
+        format => return Err(format!("Unsupported audio input sample format {format:?}")),
+    }
+    .map_err(|error| format!("Failed to build audio input stream: {error}"))?;
+    stream
+        .play()
+        .map_err(|error| format!("Failed to start audio input stream: {error}"))?;
+    let worker_stop = Arc::clone(&stop);
+    let worker_status = Arc::clone(&status);
+    let engine = state.engine.clone();
+    let worker_engine = engine.clone();
+    let worker = std::thread::Builder::new()
+        .name("syndocal-live-audio-fft".to_string())
+        .spawn(move || {
+            run_live_audio_fft(
+                receiver,
+                sample_rate,
+                worker_engine,
+                worker_stop,
+                worker_status,
+            )
+        })
+        .map_err(|error| format!("Failed to start live audio FFT worker: {error}"))?;
+    let mut active = state
+        .live_audio_input
+        .lock()
+        .map_err(|_| "Live audio input state lock was poisoned".to_string())?;
+    *active = None;
+    *active = Some(LiveAudioInput {
+        stream: Some(stream),
+        stop,
+        worker: Some(worker),
+        status: Arc::clone(&status),
+        engine,
+    });
+    status
+        .lock()
+        .map_err(|_| "Live audio input status lock was poisoned".to_string())
+        .map(|status| status.clone())
+}
+
+fn send_live_audio_chunk<T: Copy>(
+    data: &[T],
+    channels: u16,
+    sender: &std::sync::mpsc::SyncSender<Vec<f32>>,
+    status: &Mutex<LiveAudioInputStatus>,
+    convert: impl Fn(T) -> f32,
+) {
+    let channels = channels.max(1) as usize;
+    let mono = data
+        .chunks(channels)
+        .map(|frame| frame.iter().copied().map(&convert).sum::<f32>() / frame.len().max(1) as f32)
+        .collect::<Vec<_>>();
+    if sender.try_send(mono).is_err() {
+        if let Ok(mut status) = status.lock() {
+            status.dropped_chunks = status.dropped_chunks.saturating_add(1);
+        }
+    }
+}
+
+fn run_live_audio_fft(
+    receiver: std::sync::mpsc::Receiver<Vec<f32>>,
+    sample_rate: u32,
+    engine: EngineHandle,
+    stop: Arc<AtomicBool>,
+    status: Arc<Mutex<LiveAudioInputStatus>>,
+) {
+    let mut samples = VecDeque::<f32>::with_capacity(4_096);
+    let mut last_analysis = Instant::now() - Duration::from_millis(34);
+    let mut smoothed = protocol::AudioSpectrumPoint {
+        time_ms: 0,
+        bass: 0.0,
+        mid: 0.0,
+        high: 0.0,
+    };
+    while !stop.load(Ordering::Relaxed) {
+        let chunk = match receiver.recv_timeout(Duration::from_millis(50)) {
+            Ok(chunk) => chunk,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        };
+        samples.extend(chunk);
+        while samples.len() > 4_096 {
+            samples.pop_front();
+        }
+        if samples.len() < 1_024 || last_analysis.elapsed() < Duration::from_millis(33) {
+            continue;
+        }
+        let window = samples
+            .iter()
+            .rev()
+            .take(1_024)
+            .copied()
+            .collect::<Vec<_>>();
+        let window = window.into_iter().rev().collect::<Vec<_>>();
+        let measured = audio::analyze_live_spectrum(&window, sample_rate);
+        let smooth = |previous: f32, next: f32| previous * 0.65 + next * 0.35;
+        smoothed.bass = smooth(smoothed.bass, measured.bass);
+        smoothed.mid = smooth(smoothed.mid, measured.mid);
+        smoothed.high = smooth(smoothed.high, measured.high);
+        if let Err(error) = engine.send(EngineCommand::SetLiveAudioSpectrum(Some(smoothed.clone())))
+        {
+            if let Ok(mut status) = status.lock() {
+                status.last_error = Some(error.to_string());
+            }
+            break;
+        }
+        if let Ok(mut status) = status.lock() {
+            status.bass = smoothed.bass;
+            status.mid = smoothed.mid;
+            status.high = smoothed.high;
+            status.analyzed_windows = status.analyzed_windows.saturating_add(1);
+        }
+        last_analysis = Instant::now();
+    }
+}
+
+#[tauri::command]
+fn stop_live_audio_input(state: State<'_, AppState>) -> Result<LiveAudioInputStatus, String> {
+    let input = state
+        .live_audio_input
+        .lock()
+        .map_err(|_| "Live audio input state lock was poisoned".to_string())?
+        .take();
+    let status = input.as_ref().map(|input| Arc::clone(&input.status));
+    drop(input);
+    status
+        .and_then(|status| status.lock().ok().map(|status| status.clone()))
+        .map(Ok)
+        .unwrap_or_else(|| Ok(LiveAudioInputStatus::default()))
+}
+
+#[tauri::command]
+fn live_audio_input_status(state: State<'_, AppState>) -> Result<LiveAudioInputStatus, String> {
+    let active = state
+        .live_audio_input
+        .lock()
+        .map_err(|_| "Live audio input state lock was poisoned".to_string())?;
+    active
+        .as_ref()
+        .and_then(|input| input.status.lock().ok().map(|status| status.clone()))
+        .map(Ok)
+        .unwrap_or_else(|| Ok(LiveAudioInputStatus::default()))
+}
+
+#[tauri::command]
+fn stop_video_layer_audio_monitor(
+    state: State<'_, AppState>,
+    layer_id: VideoLayerId,
+) -> Result<VideoAudioMonitorStatus, String> {
+    let mut audio = state
+        .media_audio
+        .lock()
+        .map_err(|_| "Media audio monitor lock was poisoned".to_string())?;
+    audio.stop(layer_id);
+    Ok(audio.status())
+}
+
+#[tauri::command]
+fn set_video_layer_audio_monitor_volume(
+    state: State<'_, AppState>,
+    layer_id: VideoLayerId,
+    volume: f32,
+) -> Result<VideoAudioMonitorStatus, String> {
+    if !volume.is_finite() {
+        return Err("Audio monitor volume must be finite".to_string());
+    }
+    let mut audio = state
+        .media_audio
+        .lock()
+        .map_err(|_| "Media audio monitor lock was poisoned".to_string())?;
+    audio.set_volume(layer_id, volume)?;
+    Ok(audio.status())
+}
+
+#[tauri::command]
+fn video_audio_monitor_status(
+    state: State<'_, AppState>,
+) -> Result<VideoAudioMonitorStatus, String> {
+    state
+        .media_audio
+        .lock()
+        .map_err(|_| "Media audio monitor lock was poisoned".to_string())
+        .map(|mut audio| audio.status())
+}
+
+fn launched_video_clip_state(current: &VideoLayerState, fade_ms: u64) -> VideoLayerState {
+    let mut next = current.clone();
+    next.enabled = true;
+    next.playing = true;
+    next.position_ms = if next.loop_enabled {
+        next.loop_start_ms
+    } else {
+        0
+    };
+    next.opacity = if fade_ms == 0 { 1.0 } else { 0.0 };
+    next
+}
+
+fn stopped_video_clip_state(current: &VideoLayerState, fade_ms: u64) -> VideoLayerState {
+    let mut next = current.clone();
+    next.playing = false;
+    if fade_ms == 0 {
+        next.opacity = 0.0;
+    }
+    next
+}
+
+fn exclusive_video_take_states(
+    layers: &[protocol::VideoLayerSummary],
+    target_layer_id: VideoLayerId,
+    fade_ms: u64,
+) -> Result<Vec<(VideoLayerId, VideoLayerState)>, String> {
+    let target = layers
+        .iter()
+        .find(|layer| layer.id == target_layer_id)
+        .ok_or_else(|| format!("Video layer {target_layer_id} was not found"))?;
+    let mut states = layers
+        .iter()
+        .filter(|layer| {
+            layer.id != target_layer_id
+                && layer.state.enabled
+                && (layer.state.playing || layer.state.opacity > 0.0)
+        })
+        .map(|layer| (layer.id, stopped_video_clip_state(&layer.state, fade_ms)))
+        .collect::<Vec<_>>();
+    states.push((
+        target_layer_id,
+        launched_video_clip_state(&target.state, fade_ms),
+    ));
+    Ok(states)
 }
 
 #[tauri::command]
@@ -4497,6 +7086,91 @@ fn new_project(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn save_user_template(
+    state: State<'_, AppState>,
+    midi_mappings: Vec<MidiControlMapping>,
+    osc_mappings: Vec<OscControlMapping>,
+) -> Result<Option<String>, String> {
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("Syndocal User Template", &["sdctemplate"])
+        .set_file_name("show.sdctemplate")
+        .save_file()
+    else {
+        return Ok(None);
+    };
+    let path = normalize_user_template_save_path(path)?;
+    let label = path
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .unwrap_or("Show Template")
+        .trim()
+        .chars()
+        .take(80)
+        .collect::<String>();
+    let template = normalize_user_template_file(UserTemplateFile {
+        version: USER_TEMPLATE_VERSION,
+        app: APP_NAME.to_string(),
+        label,
+        project: project_file_for_save(&state)?,
+        midi_mappings,
+        osc_mappings,
+    })?;
+    let bytes = serde_json::to_vec_pretty(&template).map_err(|error| error.to_string())?;
+    if bytes.len() as u64 > USER_TEMPLATE_MAX_BYTES {
+        return Err(format!(
+            "User template is larger than the {} MiB safety limit",
+            USER_TEMPLATE_MAX_BYTES / 1024 / 1024
+        ));
+    }
+    fs::write(&path, bytes).map_err(|error| error.to_string())?;
+    Ok(Some(path.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+fn load_user_template(
+    state: State<'_, AppState>,
+) -> Result<Option<UserTemplateLoadResult>, String> {
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("Syndocal User Template", &["sdctemplate"])
+        .pick_file()
+    else {
+        return Ok(None);
+    };
+    validate_user_template_open_path(&path)?;
+    let metadata = fs::metadata(&path).map_err(|error| error.to_string())?;
+    if metadata.len() > USER_TEMPLATE_MAX_BYTES {
+        return Err(format!(
+            "User template is larger than the {} MiB safety limit",
+            USER_TEMPLATE_MAX_BYTES / 1024 / 1024
+        ));
+    }
+    let bytes = fs::read(&path).map_err(|error| error.to_string())?;
+    let template: UserTemplateFile =
+        serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+    let template = normalize_user_template_file(template)?;
+    let UserTemplateFile {
+        label,
+        project,
+        midi_mappings,
+        osc_mappings,
+        ..
+    } = template;
+    let loaded = load_project_from_file(
+        &state,
+        project_for_warm_standby(project),
+        format!("Template {label}"),
+        None,
+    )?;
+    Ok(Some(UserTemplateLoadResult {
+        path: path.to_string_lossy().to_string(),
+        label,
+        profiles: loaded.profiles,
+        midi_mappings,
+        osc_mappings,
+    }))
+}
+
+#[tauri::command]
 fn save_project(state: State<'_, AppState>) -> Result<Option<String>, String> {
     let current_path = state
         .current_project_path
@@ -4555,6 +7229,1363 @@ fn project_file_for_save(state: &State<'_, AppState>) -> Result<ProjectFile, Str
 #[tauri::command]
 fn get_project_checkpoint(state: State<'_, AppState>) -> Result<ProjectFile, String> {
     project_file_for_save(&state)
+}
+
+fn project_history_status(history: &ProjectHistory) -> ProjectHistoryStatus {
+    ProjectHistoryStatus {
+        can_undo: !history.undo.is_empty(),
+        can_redo: !history.redo.is_empty(),
+        undo_depth: history.undo.len(),
+        redo_depth: history.redo.len(),
+        undo_label: history.undo.last().map(|entry| entry.label.clone()),
+        redo_label: history.redo.last().map(|entry| entry.label.clone()),
+    }
+}
+
+#[tauri::command]
+fn get_project_history_status(state: State<'_, AppState>) -> Result<ProjectHistoryStatus, String> {
+    let history = state
+        .project_history
+        .lock()
+        .map_err(|_| "Project history lock was poisoned".to_string())?;
+    Ok(project_history_status(&history))
+}
+
+#[tauri::command]
+fn begin_project_transaction(
+    state: State<'_, AppState>,
+    label: String,
+    coalesce_key: String,
+) -> Result<u64, String> {
+    let before = project_file_for_save(&state)?;
+    let mut history = state
+        .project_history
+        .lock()
+        .map_err(|_| "Project history lock was poisoned".to_string())?;
+    history.next_transaction_id = history.next_transaction_id.saturating_add(1).max(1);
+    let transaction_id = history.next_transaction_id;
+    history.pending.insert(
+        transaction_id,
+        PendingProjectTransaction {
+            label: label.trim().chars().take(80).collect(),
+            coalesce_key: coalesce_key.trim().chars().take(240).collect(),
+            before,
+        },
+    );
+    Ok(transaction_id)
+}
+
+#[tauri::command]
+fn commit_project_transaction(
+    state: State<'_, AppState>,
+    transaction_id: u64,
+) -> Result<ProjectHistoryStatus, String> {
+    let after = project_file_for_save(&state)?;
+    let mut history = state
+        .project_history
+        .lock()
+        .map_err(|_| "Project history lock was poisoned".to_string())?;
+    let Some(pending) = history.pending.remove(&transaction_id) else {
+        return Err(format!("Unknown project transaction {transaction_id}"));
+    };
+    commit_project_history_entry(
+        &mut history,
+        pending,
+        after,
+        current_unix_ms().min(u64::MAX as u128) as u64,
+    )
+}
+
+fn commit_project_history_entry(
+    history: &mut ProjectHistory,
+    pending: PendingProjectTransaction,
+    after: ProjectFile,
+    committed_at_unix_ms: u64,
+) -> Result<ProjectHistoryStatus, String> {
+    let before_json = serde_json::to_vec(&pending.before).map_err(|error| error.to_string())?;
+    let after_json = serde_json::to_vec(&after).map_err(|error| error.to_string())?;
+    if before_json == after_json {
+        return Ok(project_history_status(&history));
+    }
+    let can_coalesce = history.undo.last().is_some_and(|entry| {
+        !pending.coalesce_key.is_empty()
+            && entry.coalesce_key == pending.coalesce_key
+            && committed_at_unix_ms.saturating_sub(entry.committed_at_unix_ms)
+                <= PROJECT_HISTORY_COALESCE_MS
+    });
+    if can_coalesce {
+        if let Some(entry) = history.undo.last_mut() {
+            entry.after = after;
+            entry.committed_at_unix_ms = committed_at_unix_ms;
+            entry.label = pending.label;
+        }
+    } else {
+        history.undo.push(ProjectHistoryEntry {
+            label: pending.label,
+            coalesce_key: pending.coalesce_key,
+            committed_at_unix_ms,
+            before: pending.before,
+            after,
+        });
+        if history.undo.len() > PROJECT_HISTORY_RETENTION {
+            let expired = history.undo.len() - PROJECT_HISTORY_RETENTION;
+            history.undo.drain(0..expired);
+        }
+    }
+    history.redo.clear();
+    Ok(project_history_status(&history))
+}
+
+#[tauri::command]
+fn cancel_project_transaction(
+    state: State<'_, AppState>,
+    transaction_id: u64,
+) -> Result<(), String> {
+    let mut history = state
+        .project_history
+        .lock()
+        .map_err(|_| "Project history lock was poisoned".to_string())?;
+    history.pending.remove(&transaction_id);
+    Ok(())
+}
+
+#[tauri::command]
+fn clear_project_history(state: State<'_, AppState>) -> Result<ProjectHistoryStatus, String> {
+    let mut history = state
+        .project_history
+        .lock()
+        .map_err(|_| "Project history lock was poisoned".to_string())?;
+    history.pending.clear();
+    history.undo.clear();
+    history.redo.clear();
+    Ok(project_history_status(&history))
+}
+
+fn current_project_path(state: &State<'_, AppState>) -> Result<Option<PathBuf>, String> {
+    state
+        .current_project_path
+        .lock()
+        .map_err(|_| "Current project path lock was poisoned".to_string())
+        .map(|path| path.clone())
+}
+
+#[tauri::command]
+fn undo_project_transaction(state: State<'_, AppState>) -> Result<ProjectHistoryStatus, String> {
+    let entry = {
+        let mut history = state
+            .project_history
+            .lock()
+            .map_err(|_| "Project history lock was poisoned".to_string())?;
+        history.pending.clear();
+        history.undo.pop()
+    };
+    let Some(entry) = entry else {
+        return get_project_history_status(state);
+    };
+    let path = current_project_path(&state)?;
+    if let Err(error) = load_project_from_file(
+        &state,
+        entry.before.clone(),
+        format!("Undo {}", entry.label),
+        path.as_deref(),
+    ) {
+        if let Ok(mut history) = state.project_history.lock() {
+            history.undo.push(entry);
+        }
+        return Err(error);
+    }
+    let mut history = state
+        .project_history
+        .lock()
+        .map_err(|_| "Project history lock was poisoned".to_string())?;
+    history.redo.push(entry);
+    Ok(project_history_status(&history))
+}
+
+#[tauri::command]
+fn redo_project_transaction(state: State<'_, AppState>) -> Result<ProjectHistoryStatus, String> {
+    let entry = {
+        let mut history = state
+            .project_history
+            .lock()
+            .map_err(|_| "Project history lock was poisoned".to_string())?;
+        history.pending.clear();
+        history.redo.pop()
+    };
+    let Some(entry) = entry else {
+        return get_project_history_status(state);
+    };
+    let path = current_project_path(&state)?;
+    if let Err(error) = load_project_from_file(
+        &state,
+        entry.after.clone(),
+        format!("Redo {}", entry.label),
+        path.as_deref(),
+    ) {
+        if let Ok(mut history) = state.project_history.lock() {
+            history.redo.push(entry);
+        }
+        return Err(error);
+    }
+    let mut history = state
+        .project_history
+        .lock()
+        .map_err(|_| "Project history lock was poisoned".to_string())?;
+    history.undo.push(entry);
+    Ok(project_history_status(&history))
+}
+
+fn app_data_subdirectory(app: &tauri::AppHandle, name: &str) -> Result<PathBuf, String> {
+    let directory = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|error| format!("Unable to resolve Syndocal application data: {error}"))?
+        .join(name);
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("Unable to create {}: {error}", directory.display()))?;
+    Ok(directory)
+}
+
+fn project_backup_path(directory: &Path, id: u64) -> PathBuf {
+    directory.join(format!("backup-{id}.json"))
+}
+
+fn application_update_settings_from(
+    endpoint: Option<&str>,
+    pubkey: Option<&str>,
+    channel: Option<&str>,
+) -> Result<Option<ApplicationUpdateSettings>, String> {
+    let endpoint = endpoint.map(str::trim).filter(|value| !value.is_empty());
+    let pubkey = pubkey.map(str::trim).filter(|value| !value.is_empty());
+    if endpoint.is_none() && pubkey.is_none() {
+        return Ok(None);
+    }
+    let endpoint = endpoint.ok_or_else(|| {
+        "Update signing public key is configured but the HTTPS endpoint is missing".to_string()
+    })?;
+    let pubkey = pubkey.ok_or_else(|| {
+        "Update endpoint is configured but the signing public key is missing".to_string()
+    })?;
+    if endpoint.len() > 2_048 {
+        return Err("Update endpoint is longer than 2048 bytes".to_string());
+    }
+    if pubkey.len() > 8_192 {
+        return Err("Update signing public key is longer than 8192 bytes".to_string());
+    }
+    let decoded_pubkey = base64::engine::general_purpose::STANDARD
+        .decode(pubkey)
+        .map_err(|error| format!("Update signing public key is not valid base64: {error}"))?;
+    let decoded_pubkey = std::str::from_utf8(&decoded_pubkey)
+        .map_err(|_| "Update signing public key does not decode to UTF-8".to_string())?;
+    PublicKey::decode(decoded_pubkey)
+        .map_err(|error| format!("Update signing public key is invalid: {error}"))?;
+    let endpoint = tauri::Url::parse(endpoint)
+        .map_err(|error| format!("Update endpoint is invalid: {error}"))?;
+    if endpoint.scheme() != "https" {
+        return Err("Update endpoint must use HTTPS".to_string());
+    }
+    if endpoint.host_str().is_none()
+        || !endpoint.username().is_empty()
+        || endpoint.password().is_some()
+        || endpoint.fragment().is_some()
+    {
+        return Err(
+            "Update endpoint must have a host and must not contain credentials or a fragment"
+                .to_string(),
+        );
+    }
+    let channel = channel
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("stable")
+        .to_ascii_lowercase();
+    if !matches!(channel.as_str(), "stable" | "beta" | "nightly") {
+        return Err("Update channel must be stable, beta, or nightly".to_string());
+    }
+    Ok(Some(ApplicationUpdateSettings {
+        endpoint,
+        pubkey: pubkey.to_string(),
+        channel,
+    }))
+}
+
+fn application_update_settings() -> Result<Option<ApplicationUpdateSettings>, String> {
+    application_update_settings_from(
+        APPLICATION_UPDATE_ENDPOINT,
+        APPLICATION_UPDATE_PUBKEY,
+        APPLICATION_UPDATE_CHANNEL,
+    )
+}
+
+fn application_update_configuration_for_version(
+    current_version: impl Into<String>,
+) -> ApplicationUpdateConfiguration {
+    let current_version = current_version.into();
+    match application_update_settings() {
+        Ok(Some(settings)) => ApplicationUpdateConfiguration {
+            enabled: true,
+            current_version,
+            channel: settings.channel,
+            endpoint_origin: Some(settings.endpoint.origin().ascii_serialization()),
+            reason: None,
+        },
+        Ok(None) => ApplicationUpdateConfiguration {
+            enabled: false,
+            current_version,
+            channel: APPLICATION_UPDATE_CHANNEL
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("stable")
+                .to_ascii_lowercase(),
+            endpoint_origin: None,
+            reason: Some(
+                "This build has no signed update endpoint. Install releases manually until the release pipeline embeds one."
+                    .to_string(),
+            ),
+        },
+        Err(error) => ApplicationUpdateConfiguration {
+            enabled: false,
+            current_version,
+            channel: "invalid".to_string(),
+            endpoint_origin: None,
+            reason: Some(error),
+        },
+    }
+}
+
+fn configured_application_updater(
+    app: &tauri::AppHandle,
+) -> Result<(tauri_plugin_updater::Updater, ApplicationUpdateSettings), String> {
+    let settings = application_update_settings()?.ok_or_else(|| {
+        "Signed application updates are not configured for this build".to_string()
+    })?;
+    let updater = app
+        .updater_builder()
+        .pubkey(settings.pubkey.clone())
+        .endpoints(vec![settings.endpoint.clone()])
+        .map_err(|error| error.to_string())?
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|error| error.to_string())?;
+    Ok((updater, settings))
+}
+
+#[tauri::command]
+fn get_application_update_configuration(app: tauri::AppHandle) -> ApplicationUpdateConfiguration {
+    application_update_configuration_for_version(app.package_info().version.to_string())
+}
+
+#[tauri::command]
+async fn check_application_update(app: tauri::AppHandle) -> Result<ApplicationUpdateCheck, String> {
+    let current_version = app.package_info().version.to_string();
+    let (updater, settings) = configured_application_updater(&app)?;
+    let update = updater.check().await.map_err(|error| error.to_string())?;
+    Ok(match update {
+        Some(update) => ApplicationUpdateCheck {
+            available: true,
+            current_version,
+            channel: settings.channel,
+            version: Some(update.version),
+            date: update.date.map(|date| date.to_string()),
+            notes: update
+                .body
+                .map(|body| body.trim().chars().take(2_000).collect())
+                .filter(|body: &String| !body.is_empty()),
+        },
+        None => ApplicationUpdateCheck {
+            available: false,
+            current_version,
+            channel: settings.channel,
+            version: None,
+            date: None,
+            notes: None,
+        },
+    })
+}
+
+#[tauri::command]
+async fn install_application_update(
+    app: tauri::AppHandle,
+    expected_version: String,
+) -> Result<ProjectBackupSummary, String> {
+    let expected_version = expected_version.trim();
+    if expected_version.is_empty() || expected_version.chars().count() > 64 {
+        return Err("Expected update version must contain 1-64 characters".to_string());
+    }
+    let (updater, _) = configured_application_updater(&app)?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "The selected update is no longer available".to_string())?;
+    if update.version != expected_version {
+        return Err(format!(
+            "The available update changed from {expected_version} to {}; check again before installing",
+            update.version
+        ));
+    }
+
+    let backup = {
+        let state = app.state::<AppState>();
+        let source_path = state
+            .current_project_path
+            .lock()
+            .map_err(|_| "Current project path lock was poisoned".to_string())?
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string());
+        let directory = app_data_subdirectory(&app, PROJECT_BACKUP_DIRECTORY)?;
+        write_project_backup_in(
+            &directory,
+            project_file_for_save(&state)?,
+            source_path,
+            format!("before update {expected_version}"),
+        )?
+    };
+
+    let progress_app = app.clone();
+    let mut downloaded_bytes = 0_u64;
+    let finish_app = app.clone();
+    update
+        .download_and_install(
+            move |chunk_bytes, total_bytes| {
+                downloaded_bytes = downloaded_bytes.saturating_add(chunk_bytes as u64);
+                let _ = progress_app.emit(
+                    APPLICATION_UPDATE_PROGRESS_EVENT,
+                    ApplicationUpdateProgress {
+                        phase: "downloading".to_string(),
+                        downloaded_bytes,
+                        total_bytes,
+                    },
+                );
+            },
+            move || {
+                let _ = finish_app.emit(
+                    APPLICATION_UPDATE_PROGRESS_EVENT,
+                    ApplicationUpdateProgress {
+                        phase: "verifying".to_string(),
+                        downloaded_bytes: 0,
+                        total_bytes: None,
+                    },
+                );
+            },
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let _ = app.emit(
+        APPLICATION_UPDATE_PROGRESS_EVENT,
+        ApplicationUpdateProgress {
+            phase: "verified".to_string(),
+            downloaded_bytes: 0,
+            total_bytes: None,
+        },
+    );
+    Ok(backup)
+}
+
+fn read_project_backup(path: &Path) -> Result<ProjectBackupEnvelope, String> {
+    let json = fs::read_to_string(path)
+        .map_err(|error| format!("Unable to read project backup {}: {error}", path.display()))?;
+    let backup: ProjectBackupEnvelope = serde_json::from_str(&json)
+        .map_err(|error| format!("Invalid project backup {}: {error}", path.display()))?;
+    if backup.version != PROJECT_BACKUP_VERSION {
+        return Err(format!(
+            "Unsupported project backup version {} in {}",
+            backup.version,
+            path.display()
+        ));
+    }
+    validate_app_name("project backup", &backup.app)?;
+    validate_project_file(&backup.project)?;
+    Ok(backup)
+}
+
+fn list_project_backups_in(directory: &Path) -> Result<Vec<ProjectBackupSummary>, String> {
+    if !directory.exists() {
+        return Ok(Vec::new());
+    }
+    let mut backups = Vec::new();
+    for entry in fs::read_dir(directory)
+        .map_err(|error| format!("Unable to list project backups: {error}"))?
+    {
+        let entry = entry.map_err(|error| format!("Unable to inspect project backup: {error}"))?;
+        let path = entry.path();
+        if !entry.file_name().to_string_lossy().starts_with("backup-")
+            || path.extension() != Some(OsStr::new("json"))
+        {
+            continue;
+        }
+        let Ok(backup) = read_project_backup(&path) else {
+            continue;
+        };
+        let bytes = entry.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+        backups.push(ProjectBackupSummary {
+            id: backup.id,
+            created_at_unix_ms: backup.created_at_unix_ms,
+            source_path: backup.source_path,
+            reason: backup.reason,
+            bytes,
+        });
+    }
+    backups.sort_by(|left, right| right.id.cmp(&left.id));
+    Ok(backups)
+}
+
+fn write_project_backup_in(
+    directory: &Path,
+    project: ProjectFile,
+    source_path: Option<String>,
+    reason: String,
+) -> Result<ProjectBackupSummary, String> {
+    fs::create_dir_all(directory)
+        .map_err(|error| format!("Unable to create project backup directory: {error}"))?;
+    let mut id = current_unix_ms().min(u64::MAX as u128) as u64;
+    while project_backup_path(directory, id).exists() {
+        id = id.saturating_add(1);
+    }
+    let envelope = ProjectBackupEnvelope {
+        version: PROJECT_BACKUP_VERSION,
+        app: APP_NAME.to_string(),
+        id,
+        created_at_unix_ms: id,
+        source_path,
+        reason: reason.trim().chars().take(80).collect(),
+        project,
+    };
+    let bytes = serde_json::to_vec_pretty(&envelope).map_err(|error| error.to_string())?;
+    let path = project_backup_path(directory, id);
+    let temporary_path = directory.join(format!(".backup-{id}.tmp"));
+    {
+        let mut file = fs::File::create(&temporary_path)
+            .map_err(|error| format!("Unable to create project backup: {error}"))?;
+        file.write_all(&bytes)
+            .and_then(|_| file.sync_all())
+            .map_err(|error| format!("Unable to write project backup: {error}"))?;
+    }
+    if let Err(error) = fs::rename(&temporary_path, &path) {
+        let _ = fs::remove_file(&temporary_path);
+        return Err(format!("Unable to commit project backup: {error}"));
+    }
+
+    let mut backups = list_project_backups_in(directory)?;
+    for expired in backups.iter().skip(PROJECT_BACKUP_RETENTION) {
+        let _ = fs::remove_file(project_backup_path(directory, expired.id));
+    }
+    backups = list_project_backups_in(directory)?;
+    backups
+        .into_iter()
+        .find(|backup| backup.id == id)
+        .ok_or_else(|| "Project backup was written but could not be verified".to_string())
+}
+
+#[tauri::command]
+fn save_project_backup(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    source_path: Option<String>,
+    reason: String,
+) -> Result<ProjectBackupSummary, String> {
+    if let Some(path) = source_path.as_deref() {
+        if !is_syndocal_project_path(Path::new(path)) {
+            return Err("Project backup source path must use the .sdc extension".to_string());
+        }
+    }
+    let directory = app_data_subdirectory(&app, PROJECT_BACKUP_DIRECTORY)?;
+    write_project_backup_in(
+        &directory,
+        project_file_for_save(&state)?,
+        source_path,
+        reason,
+    )
+}
+
+#[tauri::command]
+fn list_project_backups(app: tauri::AppHandle) -> Result<Vec<ProjectBackupSummary>, String> {
+    let directory = app_data_subdirectory(&app, PROJECT_BACKUP_DIRECTORY)?;
+    list_project_backups_in(&directory)
+}
+
+#[tauri::command]
+fn load_project_backup(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    backup_id: u64,
+) -> Result<ProjectLoadResult, String> {
+    let directory = app_data_subdirectory(&app, PROJECT_BACKUP_DIRECTORY)?;
+    let backup = read_project_backup(&project_backup_path(&directory, backup_id))?;
+    let current_path = backup
+        .source_path
+        .as_deref()
+        .map(Path::new)
+        .filter(|path| is_syndocal_project_path(path));
+    load_project_from_file(
+        &state,
+        backup.project,
+        format!("Backup {}", backup.created_at_unix_ms),
+        current_path,
+    )
+}
+
+#[tauri::command]
+fn delete_project_backup(app: tauri::AppHandle, backup_id: u64) -> Result<(), String> {
+    let directory = app_data_subdirectory(&app, PROJECT_BACKUP_DIRECTORY)?;
+    let path = project_backup_path(&directory, backup_id);
+    if !path.exists() {
+        return Ok(());
+    }
+    fs::remove_file(&path).map_err(|error| {
+        format!(
+            "Unable to delete project backup {}: {error}",
+            path.display()
+        )
+    })
+}
+
+fn standby_checksum(bytes: &[u8]) -> String {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
+fn standby_session_id() -> String {
+    format!(
+        "{}-{}",
+        std::process::id(),
+        current_unix_ms().min(u64::MAX as u128)
+    )
+}
+
+fn validate_standby_sync_directory(directory: &str) -> Result<PathBuf, String> {
+    let trimmed = directory.trim();
+    if trimmed.is_empty() {
+        return Err("Select a shared standby synchronization directory".to_string());
+    }
+    let path = PathBuf::from(trimmed);
+    if !path.is_dir() {
+        return Err(format!(
+            "Standby synchronization directory was not found: {}",
+            path.display()
+        ));
+    }
+    Ok(path)
+}
+
+fn standby_manifest_file_name(session_id: &str, generation: u64) -> String {
+    format!("syndocal-standby-{session_id}-{generation}.json")
+}
+
+fn standby_project_file_name(session_id: &str, generation: u64) -> String {
+    format!("syndocal-standby-{session_id}-{generation}.sdc")
+}
+
+fn write_immutable_sync_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    if path.exists() {
+        return Err(format!(
+            "Standby synchronization generation already exists: {}",
+            path.display()
+        ));
+    }
+    let file_name = path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| "Invalid standby synchronization file name".to_string())?;
+    let temporary_path = path.with_file_name(format!(".{file_name}.tmp"));
+    {
+        let mut file = fs::File::create(&temporary_path).map_err(|error| {
+            format!(
+                "Unable to create standby synchronization file {}: {error}",
+                temporary_path.display()
+            )
+        })?;
+        file.write_all(bytes)
+            .and_then(|_| file.sync_all())
+            .map_err(|error| {
+                format!(
+                    "Unable to write standby synchronization file {}: {error}",
+                    temporary_path.display()
+                )
+            })?;
+    }
+    if let Err(error) = fs::rename(&temporary_path, path) {
+        let _ = fs::remove_file(&temporary_path);
+        return Err(format!(
+            "Unable to commit standby synchronization file {}: {error}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn read_standby_manifest(path: &Path) -> Result<StandbySyncManifest, String> {
+    let bytes = fs::read(path).map_err(|error| {
+        format!(
+            "Unable to read standby manifest {}: {error}",
+            path.display()
+        )
+    })?;
+    let manifest: StandbySyncManifest = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("Invalid standby manifest {}: {error}", path.display()))?;
+    if manifest.version != STANDBY_SYNC_VERSION {
+        return Err(format!(
+            "Unsupported standby manifest version {} in {}",
+            manifest.version,
+            path.display()
+        ));
+    }
+    validate_app_name("standby manifest", &manifest.app)?;
+    if manifest.project_file.is_empty()
+        || Path::new(&manifest.project_file).file_name() != Some(OsStr::new(&manifest.project_file))
+        || !has_extension(Path::new(&manifest.project_file), "sdc")
+    {
+        return Err(format!(
+            "Invalid standby project file reference in {}",
+            path.display()
+        ));
+    }
+    Ok(manifest)
+}
+
+fn list_standby_manifests(directory: &Path) -> Result<Vec<StandbySyncManifest>, String> {
+    let mut manifests = Vec::new();
+    for entry in fs::read_dir(directory).map_err(|error| {
+        format!(
+            "Unable to list standby synchronization directory {}: {error}",
+            directory.display()
+        )
+    })? {
+        let entry = entry
+            .map_err(|error| format!("Unable to inspect standby synchronization entry: {error}"))?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("syndocal-standby-") || !has_extension(&path, "json") {
+            continue;
+        }
+        if let Ok(manifest) = read_standby_manifest(&path) {
+            manifests.push(manifest);
+        }
+    }
+    manifests.sort_by(|left, right| {
+        right
+            .written_at_unix_ms
+            .cmp(&left.written_at_unix_ms)
+            .then_with(|| right.generation.cmp(&left.generation))
+    });
+    Ok(manifests)
+}
+
+fn cleanup_standby_generations(directory: &Path, session_id: &str) -> Result<(), String> {
+    let manifests = list_standby_manifests(directory)?;
+    for manifest in manifests
+        .into_iter()
+        .filter(|manifest| manifest.session_id == session_id)
+        .skip(STANDBY_SYNC_RETENTION)
+    {
+        let _ = fs::remove_file(directory.join(&manifest.project_file));
+        let _ = fs::remove_file(directory.join(standby_manifest_file_name(
+            &manifest.session_id,
+            manifest.generation,
+        )));
+    }
+    Ok(())
+}
+
+fn write_standby_checkpoint_in(
+    directory: &Path,
+    project: &ProjectFile,
+    session_id: &str,
+    generation: u64,
+    written_at_unix_ms: u64,
+) -> Result<StandbySyncManifest, String> {
+    validate_project_file(project)?;
+    let project_bytes = serde_json::to_vec_pretty(project).map_err(|error| error.to_string())?;
+    let project_file = standby_project_file_name(session_id, generation);
+    write_immutable_sync_file(&directory.join(&project_file), &project_bytes)?;
+
+    let manifest = StandbySyncManifest {
+        version: STANDBY_SYNC_VERSION,
+        app: APP_NAME.to_string(),
+        session_id: session_id.to_string(),
+        generation,
+        written_at_unix_ms,
+        project_file,
+        project_bytes: project_bytes.len() as u64,
+        project_checksum: standby_checksum(&project_bytes),
+    };
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?;
+    write_immutable_sync_file(
+        &directory.join(standby_manifest_file_name(session_id, generation)),
+        &manifest_bytes,
+    )?;
+    cleanup_standby_generations(directory, session_id)?;
+    Ok(manifest)
+}
+
+fn read_standby_checkpoint_for_session(
+    directory: &Path,
+    session_id: Option<&str>,
+) -> Result<Option<StandbyCheckpoint>, String> {
+    let mut manifests = list_standby_manifests(directory)?;
+    if let Some(session_id) = session_id {
+        manifests.retain(|manifest| manifest.session_id == session_id);
+        manifests.sort_by(|left, right| right.generation.cmp(&left.generation));
+    }
+    let mut last_error = None;
+    for manifest in manifests {
+        let path = directory.join(&manifest.project_file);
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                last_error = Some(format!(
+                    "Unable to read standby project {}: {error}",
+                    path.display()
+                ));
+                continue;
+            }
+        };
+        if bytes.len() as u64 != manifest.project_bytes
+            || standby_checksum(&bytes) != manifest.project_checksum
+        {
+            last_error = Some(format!(
+                "Standby project integrity check failed: {}",
+                path.display()
+            ));
+            continue;
+        }
+        let project: ProjectFile = match serde_json::from_slice(&bytes) {
+            Ok(project) => project,
+            Err(error) => {
+                last_error = Some(format!(
+                    "Invalid standby project {}: {error}",
+                    path.display()
+                ));
+                continue;
+            }
+        };
+        if let Err(error) = validate_project_file(&project) {
+            last_error = Some(format!(
+                "Invalid standby project {}: {error}",
+                path.display()
+            ));
+            continue;
+        }
+        return Ok(Some(StandbyCheckpoint { manifest, project }));
+    }
+    Err(last_error
+        .unwrap_or_else(|| "No valid standby synchronization checkpoint was found".to_string()))
+}
+
+#[cfg(test)]
+fn read_standby_checkpoint_in(directory: &Path) -> Result<Option<StandbyCheckpoint>, String> {
+    read_standby_checkpoint_for_session(directory, None)
+}
+
+fn observe_active_primary_sessions(
+    manifests: &[StandbySyncManifest],
+    activity: &mut HashMap<String, (u64, Instant)>,
+) -> Vec<String> {
+    let now = Instant::now();
+    let mut latest_by_session = HashMap::<String, u64>::new();
+    for manifest in manifests {
+        latest_by_session
+            .entry(manifest.session_id.clone())
+            .and_modify(|generation| *generation = (*generation).max(manifest.generation))
+            .or_insert(manifest.generation);
+    }
+    activity.retain(|session_id, _| latest_by_session.contains_key(session_id));
+    for (session_id, generation) in latest_by_session {
+        match activity.get_mut(&session_id) {
+            Some((observed_generation, observed_at)) if *observed_generation != generation => {
+                *observed_generation = generation;
+                *observed_at = now;
+            }
+            None => {
+                activity.insert(session_id, (generation, now));
+            }
+            _ => {}
+        }
+    }
+    let mut active = activity
+        .iter()
+        .filter(|(_, (_, observed_at))| {
+            observed_at.elapsed() < Duration::from_millis(STANDBY_SYNC_STALE_MS)
+        })
+        .map(|(session_id, _)| session_id.clone())
+        .collect::<Vec<_>>();
+    active.sort();
+    active
+}
+
+fn project_for_warm_standby(mut project: ProjectFile) -> ProjectFile {
+    project.snapshot.output.enabled = false;
+    for output in &mut project.snapshot.dmx_outputs {
+        output.enabled = false;
+    }
+    project.snapshot.blackout = true;
+    project.snapshot.video.blackout = true;
+    for output in &mut project.snapshot.video.outputs {
+        output.enabled = false;
+        output.blackout = true;
+    }
+    project
+}
+
+fn update_standby_status(
+    status: &Arc<Mutex<StandbySyncStatus>>,
+    update: impl FnOnce(&mut StandbySyncStatus),
+) {
+    if let Ok(mut status) = status.lock() {
+        update(&mut status);
+    }
+}
+
+fn sleep_until_standby_tick(stop: &AtomicBool, duration_ms: u64) {
+    let deadline = Instant::now() + Duration::from_millis(duration_ms);
+    while !stop.load(Ordering::Relaxed) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn stop_standby_sync_runtime(runtime: &mut StandbySyncRuntime) {
+    if let Some(stop) = runtime.stop.take() {
+        stop.store(true, Ordering::Relaxed);
+    }
+    if let Some(worker) = runtime.worker.take() {
+        let _ = worker.join();
+    }
+    update_standby_status(&runtime.status, |status| {
+        status.running = false;
+    });
+}
+
+#[tauri::command]
+fn select_standby_sync_directory() -> Option<String> {
+    rfd::FileDialog::new()
+        .pick_folder()
+        .map(|path| path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn start_standby_sync(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    directory: String,
+    role: StandbySyncRole,
+) -> Result<StandbySyncStatus, String> {
+    let directory = validate_standby_sync_directory(&directory)?;
+    {
+        let mut runtime = state
+            .standby_sync
+            .lock()
+            .map_err(|_| "Standby synchronization lock was poisoned".to_string())?;
+        stop_standby_sync_runtime(&mut runtime);
+    }
+    if role == StandbySyncRole::Standby {
+        let safe_project = project_for_warm_standby(project_file_for_save(&state)?);
+        load_project_from_file(&state, safe_project, "Warm standby".to_string(), None)?;
+    }
+
+    let mut runtime = state
+        .standby_sync
+        .lock()
+        .map_err(|_| "Standby synchronization lock was poisoned".to_string())?;
+    let session_id = standby_session_id();
+    let stop = Arc::new(AtomicBool::new(false));
+    let status = Arc::new(Mutex::new(StandbySyncStatus {
+        running: true,
+        role: Some(role),
+        directory: Some(directory.to_string_lossy().to_string()),
+        session_id: (role == StandbySyncRole::Primary).then(|| session_id.clone()),
+        ..StandbySyncStatus::default()
+    }));
+    runtime.stop = Some(stop.clone());
+    runtime.status = status.clone();
+
+    let worker_directory = directory.clone();
+    runtime.worker = Some(std::thread::spawn(move || match role {
+        StandbySyncRole::Primary => {
+            let mut generation = current_unix_ms().min(u64::MAX as u128) as u64;
+            let mut session_activity = HashMap::new();
+            while !stop.load(Ordering::Relaxed) {
+                let written_at_unix_ms = current_unix_ms().min(u64::MAX as u128) as u64;
+                let result = {
+                    let state = app.state::<AppState>();
+                    project_file_for_save(&state).and_then(|project| {
+                        while worker_directory
+                            .join(standby_manifest_file_name(&session_id, generation))
+                            .exists()
+                        {
+                            generation = generation.saturating_add(1);
+                        }
+                        write_standby_checkpoint_in(
+                            &worker_directory,
+                            &project,
+                            &session_id,
+                            generation,
+                            written_at_unix_ms,
+                        )
+                    })
+                };
+                match result {
+                    Ok(manifest) => {
+                        let active_primary_sessions = list_standby_manifests(&worker_directory)
+                            .map(|manifests| {
+                                observe_active_primary_sessions(&manifests, &mut session_activity)
+                            })
+                            .unwrap_or_else(|_| vec![manifest.session_id.clone()]);
+                        let split_brain = active_primary_sessions.len() > 1;
+                        update_standby_status(&status, |status| {
+                            status.generation = Some(manifest.generation);
+                            status.written_at_unix_ms = Some(manifest.written_at_unix_ms);
+                            status.heartbeat_age_ms = Some(0);
+                            status.heartbeat_stale = false;
+                            status.takeover_ready = false;
+                            status.split_brain = split_brain;
+                            status.active_primary_sessions = active_primary_sessions;
+                            status.project_bytes = manifest.project_bytes;
+                            status.last_error = split_brain.then(|| {
+                                "Multiple active Primary sessions detected in this synchronization folder"
+                                    .to_string()
+                            });
+                        });
+                        generation = generation.saturating_add(1);
+                    }
+                    Err(error) => update_standby_status(&status, |status| {
+                        status.last_error = Some(error);
+                    }),
+                }
+                sleep_until_standby_tick(&stop, STANDBY_SYNC_INTERVAL_MS);
+            }
+        }
+        StandbySyncRole::Standby => {
+            let mut session_activity = HashMap::new();
+            let mut selected_session: Option<String> = None;
+            let mut observed_checkpoint: Option<(String, u64)> = None;
+            let mut applied_checkpoint: Option<(String, u64)> = None;
+            let mut last_progress_at = Instant::now();
+            while !stop.load(Ordering::Relaxed) {
+                let manifests = match list_standby_manifests(&worker_directory) {
+                    Ok(manifests) => manifests,
+                    Err(error) => {
+                        update_standby_status(&status, |status| {
+                            status.last_error = Some(error);
+                        });
+                        sleep_until_standby_tick(&stop, STANDBY_SYNC_POLL_MS);
+                        continue;
+                    }
+                };
+                let active_primary_sessions =
+                    observe_active_primary_sessions(&manifests, &mut session_activity);
+                let split_brain = active_primary_sessions.len() > 1;
+                if active_primary_sessions.len() == 1 {
+                    selected_session = active_primary_sessions.first().cloned();
+                } else if selected_session.is_none() && !split_brain {
+                    selected_session = manifests
+                        .first()
+                        .map(|manifest| manifest.session_id.clone());
+                }
+                match read_standby_checkpoint_for_session(
+                    &worker_directory,
+                    selected_session.as_deref(),
+                ) {
+                    Ok(Some(checkpoint)) => {
+                        let checkpoint_identity = (
+                            checkpoint.manifest.session_id.clone(),
+                            checkpoint.manifest.generation,
+                        );
+                        let generation_changed = observed_checkpoint
+                            .as_ref()
+                            .map_or(true, |observed| observed != &checkpoint_identity);
+                        if generation_changed {
+                            observed_checkpoint = Some(checkpoint_identity.clone());
+                            last_progress_at = Instant::now();
+                        }
+                        let heartbeat_age_ms =
+                            last_progress_at.elapsed().as_millis().min(u64::MAX as u128) as u64;
+                        let heartbeat_stale = heartbeat_age_ms >= STANDBY_SYNC_STALE_MS;
+                        let mut apply_error = None;
+                        let should_apply = applied_checkpoint.as_ref()
+                            != Some(&checkpoint_identity)
+                            && !split_brain;
+                        if should_apply {
+                            let safe_project = project_for_warm_standby(checkpoint.project.clone());
+                            let state = app.state::<AppState>();
+                            if let Err(error) = load_project_from_file(
+                                &state,
+                                safe_project,
+                                format!(
+                                    "Warm standby generation {}",
+                                    checkpoint.manifest.generation
+                                ),
+                                None,
+                            ) {
+                                apply_error = Some(error);
+                            } else {
+                                applied_checkpoint = Some(checkpoint_identity);
+                            }
+                        }
+                        update_standby_status(&status, |status| {
+                            status.session_id = Some(checkpoint.manifest.session_id.clone());
+                            status.generation = Some(checkpoint.manifest.generation);
+                            status.written_at_unix_ms =
+                                Some(checkpoint.manifest.written_at_unix_ms);
+                            status.heartbeat_age_ms = Some(heartbeat_age_ms);
+                            status.heartbeat_stale = heartbeat_stale;
+                            status.takeover_ready = heartbeat_stale && !split_brain;
+                            status.split_brain = split_brain;
+                            status.active_primary_sessions = active_primary_sessions.clone();
+                            status.project_bytes = checkpoint.manifest.project_bytes;
+                            status.last_applied_generation = applied_checkpoint
+                                .as_ref()
+                                .map(|(_, generation)| *generation);
+                            status.last_error = apply_error.or_else(|| {
+                                split_brain.then(|| {
+                                    "Multiple active Primary sessions detected; warm synchronization is fenced"
+                                        .to_string()
+                                })
+                            });
+                        });
+                    }
+                    Ok(None) => update_standby_status(&status, |status| {
+                        status.heartbeat_age_ms = None;
+                        status.heartbeat_stale = true;
+                        status.takeover_ready = false;
+                        status.split_brain = split_brain;
+                        status.active_primary_sessions = active_primary_sessions;
+                        status.last_error = split_brain.then(|| {
+                            "Multiple active Primary sessions detected; warm synchronization is fenced"
+                                .to_string()
+                        });
+                    }),
+                    Err(error) => update_standby_status(&status, |status| {
+                        status.last_error = Some(error);
+                    }),
+                }
+                sleep_until_standby_tick(&stop, STANDBY_SYNC_POLL_MS);
+            }
+        }
+    }));
+
+    runtime
+        .status
+        .lock()
+        .map(|status| status.clone())
+        .map_err(|_| "Standby synchronization status lock was poisoned".to_string())
+}
+
+#[tauri::command]
+fn stop_standby_sync(state: State<'_, AppState>) -> Result<StandbySyncStatus, String> {
+    let mut runtime = state
+        .standby_sync
+        .lock()
+        .map_err(|_| "Standby synchronization lock was poisoned".to_string())?;
+    stop_standby_sync_runtime(&mut runtime);
+    runtime
+        .status
+        .lock()
+        .map(|status| status.clone())
+        .map_err(|_| "Standby synchronization status lock was poisoned".to_string())
+}
+
+#[tauri::command]
+fn standby_sync_status(state: State<'_, AppState>) -> Result<StandbySyncStatus, String> {
+    let status = state
+        .standby_sync
+        .lock()
+        .map_err(|_| "Standby synchronization lock was poisoned".to_string())?
+        .status
+        .clone();
+    status
+        .lock()
+        .map(|status| status.clone())
+        .map_err(|_| "Standby synchronization status lock was poisoned".to_string())
+}
+
+#[tauri::command]
+fn take_over_standby(state: State<'_, AppState>, force: bool) -> Result<ProjectLoadResult, String> {
+    let (directory, status_snapshot) = {
+        let runtime = state
+            .standby_sync
+            .lock()
+            .map_err(|_| "Standby synchronization lock was poisoned".to_string())?;
+        let status = runtime
+            .status
+            .lock()
+            .map_err(|_| "Standby synchronization status lock was poisoned".to_string())?
+            .clone();
+        let directory = status
+            .directory
+            .as_deref()
+            .map(validate_standby_sync_directory)
+            .transpose()?
+            .ok_or_else(|| "Standby synchronization is not configured".to_string())?;
+        (directory, status)
+    };
+    if status_snapshot.role != Some(StandbySyncRole::Standby) {
+        return Err("Take Over is only available while running as Standby".to_string());
+    }
+    if status_snapshot.split_brain && !force {
+        return Err(
+            "Multiple active Primary sessions are present; confirm forced Take Over to continue"
+                .to_string(),
+        );
+    }
+    if !status_snapshot.heartbeat_stale && !force {
+        return Err(
+            "Primary heartbeat is still active; confirm forced Take Over to continue".to_string(),
+        );
+    }
+
+    let checkpoint =
+        read_standby_checkpoint_for_session(&directory, status_snapshot.session_id.as_deref())?
+            .ok_or_else(|| "No standby checkpoint is available for Take Over".to_string())?;
+    {
+        let mut runtime = state
+            .standby_sync
+            .lock()
+            .map_err(|_| "Standby synchronization lock was poisoned".to_string())?;
+        stop_standby_sync_runtime(&mut runtime);
+    }
+    load_project_from_file(
+        &state,
+        checkpoint.project,
+        format!(
+            "Standby Take Over generation {}",
+            checkpoint.manifest.generation
+        ),
+        None,
+    )
+}
+
+fn diagnostic_zip_file_name(path: PathBuf) -> PathBuf {
+    if path.extension().is_none() {
+        path.with_extension("zip")
+    } else {
+        path
+    }
+}
+
+fn write_diagnostic_archive<W: Write + Seek>(
+    writer: W,
+    entries: &[(&str, Vec<u8>)],
+    crash_directory: &Path,
+) -> Result<(), String> {
+    let mut archive = zip::ZipWriter::new(writer);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    for (name, contents) in entries {
+        archive
+            .start_file(*name, options)
+            .map_err(|error| error.to_string())?;
+        archive
+            .write_all(contents)
+            .map_err(|error| error.to_string())?;
+    }
+    archive
+        .start_file("README.txt", options)
+        .map_err(|error| error.to_string())?;
+    archive
+        .write_all(b"This package contains runtime diagnostics and may include the local project path. Review it before sharing. It does not include the project file or media contents.\n")
+        .map_err(|error| error.to_string())?;
+    if crash_directory.exists() {
+        for entry in fs::read_dir(crash_directory)
+            .map_err(|error| format!("Unable to list crash reports: {error}"))?
+            .flatten()
+        {
+            let crash_path = entry.path();
+            if !crash_path.is_file() {
+                continue;
+            }
+            let Ok(contents) = fs::read(&crash_path) else {
+                continue;
+            };
+            let Some(file_name) = crash_path.file_name().and_then(OsStr::to_str) else {
+                continue;
+            };
+            archive
+                .start_file(format!("crash-reports/{file_name}"), options)
+                .map_err(|error| error.to_string())?;
+            archive
+                .write_all(&contents)
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    archive.finish().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn export_diagnostic_package(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let captured_at_unix_ms = current_unix_ms();
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("Syndocal Diagnostic Package", &["zip"])
+        .set_file_name(format!("syndocal-diagnostics-{captured_at_unix_ms}.zip"))
+        .save_file()
+    else {
+        return Ok(None);
+    };
+    let path = diagnostic_zip_file_name(path);
+    let file = fs::File::create(&path)
+        .map_err(|error| format!("Unable to create diagnostic package: {error}"))?;
+    let snapshot = state.engine.snapshot();
+    let current_project_path = state
+        .current_project_path
+        .lock()
+        .map_err(|_| "Current project path lock was poisoned".to_string())?
+        .as_ref()
+        .map(|path| path.to_string_lossy().to_string());
+    let application_update =
+        application_update_configuration_for_version(app.package_info().version.to_string());
+    let manifest = json!({
+        "version": 1,
+        "app": APP_NAME,
+        "app_version": env!("CARGO_PKG_VERSION"),
+        "captured_at_unix_ms": captured_at_unix_ms,
+        "os": env::consts::OS,
+        "arch": env::consts::ARCH,
+        "current_project_path": current_project_path,
+        "application_update": application_update,
+    });
+    let project_summary = json!({
+        "fixtures": snapshot.fixtures.len(),
+        "cues": snapshot.cues.len(),
+        "effects": snapshot.effects.len(),
+        "node_graphs": snapshot.node_graphs.len(),
+        "timeline_events": snapshot.timeline.events.len(),
+        "timeline_automations": snapshot.timeline.automations.len(),
+        "timeline_video_automations": snapshot.timeline.video_automations.len(),
+        "video_layers": snapshot.video.layers.len(),
+        "video_outputs": snapshot.video.outputs.len(),
+        "dmx_outputs": snapshot.dmx_outputs.len(),
+    });
+    let telemetry = engine_telemetry_report_from_snapshot(&snapshot, captured_at_unix_ms);
+    let runtime = video::video_runtime_status();
+    let entries = vec![
+        (
+            "manifest.json",
+            serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?,
+        ),
+        (
+            "project-summary.json",
+            serde_json::to_vec_pretty(&project_summary).map_err(|error| error.to_string())?,
+        ),
+        (
+            "engine-telemetry.json",
+            serde_json::to_vec_pretty(&telemetry).map_err(|error| error.to_string())?,
+        ),
+        (
+            "video-runtime.json",
+            serde_json::to_vec_pretty(&runtime).map_err(|error| error.to_string())?,
+        ),
+    ];
+    let crash_directory = app_data_subdirectory(&app, CRASH_REPORT_DIRECTORY)?;
+    write_diagnostic_archive(file, &entries, &crash_directory)?;
+    Ok(Some(path.to_string_lossy().to_string()))
 }
 
 fn set_current_project_path(state: &State<'_, AppState>, path: &Path) -> Result<(), String> {
@@ -4859,6 +8890,58 @@ fn normalize_project_save_path(mut path: PathBuf) -> Result<PathBuf, String> {
     }
 }
 
+fn is_user_template_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("sdctemplate"))
+}
+
+fn normalize_user_template_save_path(mut path: PathBuf) -> Result<PathBuf, String> {
+    if path.extension().is_none() {
+        path.set_extension("sdctemplate");
+        return Ok(path);
+    }
+    if is_user_template_path(&path) {
+        Ok(path)
+    } else {
+        Err(format!(
+            "Syndocal user templates must use the .sdctemplate extension: {}",
+            path.to_string_lossy()
+        ))
+    }
+}
+
+fn validate_user_template_open_path(path: &Path) -> Result<(), String> {
+    if is_user_template_path(path) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Syndocal user templates must use the .sdctemplate extension: {}",
+            path.to_string_lossy()
+        ))
+    }
+}
+
+fn normalize_user_template_file(
+    mut template: UserTemplateFile,
+) -> Result<UserTemplateFile, String> {
+    if template.version != USER_TEMPLATE_VERSION {
+        return Err(format!(
+            "Unsupported Syndocal user template version {}",
+            template.version
+        ));
+    }
+    validate_app_name("user template", &template.app)?;
+    template.label = template.label.trim().to_string();
+    if template.label.is_empty() || template.label.chars().count() > 80 {
+        return Err("User template label must contain 1 to 80 characters".to_string());
+    }
+    validate_project_file(&template.project)?;
+    template.midi_mappings = validate_midi_control_mappings(template.midi_mappings)?;
+    template.osc_mappings = validate_osc_control_mappings(template.osc_mappings)?;
+    Ok(template)
+}
+
 fn validate_project_open_path(path: &Path) -> Result<(), String> {
     if !is_syndocal_project_path(path) {
         return Err(format!(
@@ -4979,6 +9062,128 @@ fn validate_project_file(project: &ProjectFile) -> Result<(), String> {
         project.snapshot.fixtures.iter().map(|fixture| fixture.id),
     )?;
     validate_unique_ids("cue", project.snapshot.cues.iter().map(|cue| cue.id))?;
+    validate_unique_ids(
+        "cue list",
+        project
+            .snapshot
+            .cue_lists
+            .iter()
+            .map(|cue_list| cue_list.id),
+    )?;
+    validate_unique_ids(
+        "palette",
+        project.snapshot.palettes.iter().map(|palette| palette.id),
+    )?;
+    if project.snapshot.palettes.len() > 128 {
+        return Err("Project contains more than 128 reference palettes".to_string());
+    }
+    for palette in &project.snapshot.palettes {
+        if palette.id == 0 || palette.label.trim().is_empty() {
+            return Err(format!(
+                "Project palette {} has an invalid ID or label",
+                palette.id
+            ));
+        }
+        let mut values = palette.values.clone();
+        validate_reference_palette_values(&mut values).map_err(|error| {
+            format!(
+                "Project palette {} '{}' is invalid: {error}",
+                palette.id, palette.label
+            )
+        })?;
+    }
+    validate_unique_ids(
+        "playback executor",
+        project
+            .snapshot
+            .playback_executors
+            .iter()
+            .map(|executor| executor.id),
+    )?;
+    if project.snapshot.playback_executors.len() > 64 {
+        return Err("Project contains more than 64 playback executors".to_string());
+    }
+    if !project.snapshot.playback_master.is_finite()
+        || !(0.0..=1.0).contains(&project.snapshot.playback_master)
+    {
+        return Err("Project Playback Master must be from 0 to 1".to_string());
+    }
+    let mut executor_slots = HashSet::new();
+    for executor in &project.snapshot.playback_executors {
+        if executor.id == 0
+            || executor.label.trim().is_empty()
+            || executor.page == 0
+            || executor.page > 99
+            || executor.slot == 0
+            || executor.slot > 16
+            || !executor.level.is_finite()
+            || !(0.0..=1.0).contains(&executor.level)
+        {
+            return Err(format!(
+                "Project Playback Executor {} has invalid metadata",
+                executor.id
+            ));
+        }
+        if !project
+            .snapshot
+            .cue_lists
+            .iter()
+            .any(|cue_list| cue_list.id == executor.cue_list_id)
+        {
+            return Err(format!(
+                "Project Playback Executor {} references missing Cue List {}",
+                executor.id, executor.cue_list_id
+            ));
+        }
+        if !executor_slots.insert((executor.page, executor.slot)) {
+            return Err(format!(
+                "Project contains duplicate Playback Executor page {} slot {}",
+                executor.page, executor.slot
+            ));
+        }
+    }
+    if !project
+        .snapshot
+        .cue_lists
+        .iter()
+        .any(|cue_list| cue_list.id == protocol::DEFAULT_CUE_LIST_ID)
+    {
+        return Err("Project is missing the Main Cue List".to_string());
+    }
+    for cue_list in &project.snapshot.cue_lists {
+        if cue_list.id == 0 || cue_list.label.trim().is_empty() {
+            return Err(format!(
+                "Project Cue List {} has an invalid ID or label",
+                cue_list.id
+            ));
+        }
+        if let Some(active_cue_id) = cue_list.active_cue_id {
+            if !project
+                .snapshot
+                .cues
+                .iter()
+                .any(|cue| cue.id == active_cue_id && cue.cue_list_id == cue_list.id)
+            {
+                return Err(format!(
+                    "Project Cue List {} references missing active cue {}",
+                    cue_list.id, active_cue_id
+                ));
+            }
+        }
+    }
+    for cue in &project.snapshot.cues {
+        if !project
+            .snapshot
+            .cue_lists
+            .iter()
+            .any(|cue_list| cue_list.id == cue.cue_list_id)
+        {
+            return Err(format!(
+                "Project cue {} references missing Cue List {}",
+                cue.id, cue.cue_list_id
+            ));
+        }
+    }
     validate_unique_ids(
         "timeline event",
         project
@@ -5295,11 +9500,18 @@ fn validate_project_lighting_references(snapshot: &EngineSnapshot) -> Result<(),
         .iter()
         .map(|fixture| (fixture.id, fixture))
         .collect::<HashMap<_, _>>();
+    let palette_ids = snapshot
+        .palettes
+        .iter()
+        .map(|palette| palette.id)
+        .collect::<HashSet<_>>();
 
     for cue in &snapshot.cues {
         if cue.label.trim().is_empty() {
             return Err(format!("Project cue {} has an empty label", cue.id));
         }
+        validate_cue_parts_for_summary(cue, &cue.parts)?;
+        validate_cue_mib_fixture_ids(cue, &cue.mib_fixture_ids)?;
         validate_project_unique_refs(
             &format!("cue {} fixture target", cue.id),
             &cue.targets
@@ -5315,6 +9527,51 @@ fn validate_project_lighting_references(snapshot: &EngineSnapshot) -> Result<(),
                 &format!("cue {}", cue.id),
             )?;
         }
+        validate_project_unique_refs(
+            &format!("cue {} palette", cue.id),
+            &cue.palette_targets
+                .iter()
+                .map(|target| target.palette_id)
+                .collect::<Vec<_>>(),
+        )?;
+        for target in &cue.palette_targets {
+            if !palette_ids.contains(&target.palette_id) {
+                return Err(format!(
+                    "Project cue {} references missing palette {}",
+                    cue.id, target.palette_id
+                ));
+            }
+            if target.fixture_ids.is_empty() {
+                return Err(format!(
+                    "Project cue {} palette {} has no fixture targets",
+                    cue.id, target.palette_id
+                ));
+            }
+            validate_project_unique_refs(
+                &format!("cue {} palette {} fixture", cue.id, target.palette_id),
+                &target.fixture_ids,
+            )?;
+            for fixture_id in &target.fixture_ids {
+                if !fixtures_by_id.contains_key(fixture_id) {
+                    return Err(format!(
+                        "Project cue {} palette {} references missing fixture {}",
+                        cue.id, target.palette_id, fixture_id
+                    ));
+                }
+            }
+        }
+    }
+
+    for value in &snapshot.programmer.values {
+        validate_project_fixture_attribute_values_for_target(
+            &fixtures_by_id,
+            value.fixture_id,
+            &[protocol::AttributeValueSummary {
+                attribute: value.attribute.clone(),
+                value: value.value,
+            }],
+            "programmer",
+        )?;
     }
 
     for event in &snapshot.timeline.events {
@@ -5589,6 +9846,14 @@ fn validate_project_video_graph(snapshot: &EngineSnapshot) -> Result<(), String>
             &format!("video layer {} '{}'", layer.id, layer.label),
         )?;
         validate_project_video_layer_state(&layer.state, &format!("video layer {}", layer.id))?;
+        if let Some(effect) = &layer.isf_effect {
+            sanitize_video_isf_effect(effect.clone()).map_err(|error| {
+                format!(
+                    "Project video layer {} ISF effect is invalid: {error}",
+                    layer.id
+                )
+            })?;
+        }
     }
 
     for composition in &snapshot.video.compositions {
@@ -5779,7 +10044,11 @@ fn validate_project_video_source(source: &VideoSourceSummary, label: &str) -> Re
                 ));
             }
         }
-        VideoSourceKind::Ndi | VideoSourceKind::Spout | VideoSourceKind::Syphon => {
+        VideoSourceKind::Camera
+        | VideoSourceKind::ScreenCapture
+        | VideoSourceKind::Ndi
+        | VideoSourceKind::Spout
+        | VideoSourceKind::Syphon => {
             let (_, feature_label) =
                 video_input_backend(&source.kind).expect("external source kind must have backend");
             if source.name.as_deref().unwrap_or_default().trim().is_empty() {
@@ -6160,7 +10429,10 @@ fn validate_node_graph_summary(
 
         match node.kind {
             NodeGraphNodeKind::Lfo => {
-                if node.position_wave.is_some() || node.transform.is_some() || node.output.is_some()
+                if node.position_wave.is_some()
+                    || node.audio.is_some()
+                    || node.transform.is_some()
+                    || node.output.is_some()
                 {
                     return Err(format!(
                         "Node graph '{}' LFO node {} contains a non-LFO body",
@@ -6195,7 +10467,11 @@ fn validate_node_graph_summary(
                 }
             }
             NodeGraphNodeKind::PositionWave => {
-                if node.lfo.is_some() || node.transform.is_some() || node.output.is_some() {
+                if node.lfo.is_some()
+                    || node.audio.is_some()
+                    || node.transform.is_some()
+                    || node.output.is_some()
+                {
                     return Err(format!(
                         "Node graph '{}' position wave node {} contains a non-position-wave body",
                         graph.label, node.id
@@ -6237,8 +10513,36 @@ fn validate_node_graph_summary(
                     }
                 }
             }
+            NodeGraphNodeKind::Audio => {
+                if node.lfo.is_some()
+                    || node.position_wave.is_some()
+                    || node.transform.is_some()
+                    || node.output.is_some()
+                {
+                    return Err(format!(
+                        "Node graph '{}' audio node {} contains a non-audio body",
+                        graph.label, node.id
+                    ));
+                }
+                let Some(audio) = &node.audio else {
+                    return Err(format!(
+                        "Node graph '{}' audio node {} is missing its body",
+                        graph.label, node.id
+                    ));
+                };
+                if !audio.gain.is_finite() || !audio.bias.is_finite() {
+                    return Err(format!(
+                        "Node graph '{}' audio node {} has non-finite values",
+                        graph.label, node.id
+                    ));
+                }
+            }
             NodeGraphNodeKind::Transform => {
-                if node.lfo.is_some() || node.position_wave.is_some() || node.output.is_some() {
+                if node.lfo.is_some()
+                    || node.position_wave.is_some()
+                    || node.audio.is_some()
+                    || node.output.is_some()
+                {
                     return Err(format!(
                         "Node graph '{}' transform node {} contains a non-transform body",
                         graph.label, node.id
@@ -6269,7 +10573,11 @@ fn validate_node_graph_summary(
                 }
             }
             NodeGraphNodeKind::Output => {
-                if node.lfo.is_some() || node.position_wave.is_some() || node.transform.is_some() {
+                if node.lfo.is_some()
+                    || node.position_wave.is_some()
+                    || node.audio.is_some()
+                    || node.transform.is_some()
+                {
                     return Err(format!(
                         "Node graph '{}' output node {} contains a non-output body",
                         graph.label, node.id
@@ -6479,6 +10787,76 @@ fn compatible_fixture_preset_targets(
 #[tauri::command]
 fn get_snapshot(state: State<'_, AppState>) -> EngineSnapshot {
     state.engine.snapshot()
+}
+
+fn engine_snapshot_delta(before: &EngineSnapshot, after: &EngineSnapshot) -> EngineSnapshotDelta {
+    macro_rules! changed {
+        ($field:ident) => {
+            (before.$field != after.$field).then(|| after.$field.clone())
+        };
+    }
+    EngineSnapshotDelta {
+        fixtures: changed!(fixtures),
+        cues: changed!(cues),
+        cue_lists: changed!(cue_lists),
+        palettes: changed!(palettes),
+        playback_executors: changed!(playback_executors),
+        playback_master: (before.playback_master != after.playback_master)
+            .then_some(after.playback_master),
+        active_cue_id: (before.active_cue_id != after.active_cue_id).then_some(after.active_cue_id),
+        active_fade: (before.active_fade != after.active_fade).then(|| after.active_fade.clone()),
+        programmer: changed!(programmer),
+        timeline: changed!(timeline),
+        video: changed!(video),
+        effects: changed!(effects),
+        node_graphs: changed!(node_graphs),
+        output: changed!(output),
+        dmx_outputs: changed!(dmx_outputs),
+        lighting_master: (before.lighting_master != after.lighting_master)
+            .then_some(after.lighting_master),
+        submasters: changed!(submasters),
+        blackout: (before.blackout != after.blackout).then_some(after.blackout),
+        clock: changed!(clock),
+        stage_map: changed!(stage_map),
+        stage_map_presets: changed!(stage_map_presets),
+        stage_objects: changed!(stage_objects),
+        dmx_preview: changed!(dmx_preview),
+        dmx_previews: changed!(dmx_previews),
+        telemetry: changed!(telemetry),
+    }
+}
+
+#[tauri::command]
+fn get_snapshot_delta(
+    state: State<'_, AppState>,
+    client_revision: Option<u64>,
+) -> Result<EngineSnapshotSyncResponse, String> {
+    let current = state.engine.snapshot();
+    let mut sync = state
+        .snapshot_sync
+        .lock()
+        .map_err(|_| "Snapshot synchronization lock was poisoned".to_string())?;
+    let can_send_delta = client_revision == Some(sync.revision) && sync.last_snapshot.is_some();
+    sync.revision = sync.revision.wrapping_add(1).max(1);
+    let revision = sync.revision;
+    let response = if can_send_delta {
+        EngineSnapshotSyncResponse {
+            revision,
+            full: None,
+            delta: sync
+                .last_snapshot
+                .as_ref()
+                .map(|before| engine_snapshot_delta(before, &current)),
+        }
+    } else {
+        EngineSnapshotSyncResponse {
+            revision,
+            full: Some(current.clone()),
+            delta: None,
+        }
+    };
+    sync.last_snapshot = Some(current);
+    Ok(response)
 }
 
 #[tauri::command]
@@ -7117,53 +11495,113 @@ impl video::ExternalVideoTransportDriver for RecordingExternalVideoTransportDriv
     }
 }
 
-#[cfg(feature = "ndi")]
-struct NdiExternalVideoTransportDriver<'a> {
+struct AppExternalVideoTransportDriver<'a> {
     recording: RecordingExternalVideoTransportDriver<'a>,
+    capture: &'a mut capture_transport::CaptureTransportState,
+    #[cfg(feature = "ndi")]
     ndi: &'a mut ndi_transport::NdiTransportState,
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    spout: &'a mut spout_transport::SpoutTransportState,
+    #[cfg(any(
+        feature = "ndi",
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+    ))]
     engine: EngineHandle,
 }
 
-#[cfg(feature = "ndi")]
-impl video::ExternalVideoTransportDriver for NdiExternalVideoTransportDriver<'_> {
+impl video::ExternalVideoTransportDriver for AppExternalVideoTransportDriver<'_> {
     fn start_route(
         &mut self,
         route: &video::ExternalVideoTransportRoute,
     ) -> Result<(), video::ExternalVideoTransportDriverError> {
-        if route.backend_id != "ndi" {
-            return self.recording.start_route(route);
+        if route.backend_id == "camera" || route.backend_id == "screen_capture" {
+            self.capture.start_route(route)?;
+            self.recording.push_event(
+                ExternalVideoTransportDriverAction::Start,
+                route,
+                format!(
+                    "Started {} input route '{}'",
+                    route.backend_id, route.endpoint_name
+                ),
+            );
+            return Ok(());
         }
-        self.ndi.start_route(route, &self.engine)?;
-        self.recording.push_event(
-            ExternalVideoTransportDriverAction::Start,
-            route,
-            format!(
-                "Started NDI {} route '{}'",
-                external_video_transport_direction_label(route.direction),
-                route.endpoint_name
-            ),
-        );
-        Ok(())
+        #[cfg(feature = "ndi")]
+        if route.backend_id == "ndi" {
+            self.ndi.start_route(route, &self.engine)?;
+            self.recording.push_event(
+                ExternalVideoTransportDriverAction::Start,
+                route,
+                format!(
+                    "Started NDI {} route '{}'",
+                    external_video_transport_direction_label(route.direction),
+                    route.endpoint_name
+                ),
+            );
+            return Ok(());
+        }
+        #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+        if route.backend_id == "spout" {
+            self.spout.start_route(route, &self.engine)?;
+            self.recording.push_event(
+                ExternalVideoTransportDriverAction::Start,
+                route,
+                format!(
+                    "Started Spout {} route '{}'",
+                    external_video_transport_direction_label(route.direction),
+                    route.endpoint_name
+                ),
+            );
+            return Ok(());
+        }
+        self.recording.start_route(route)
     }
 
     fn stop_route(
         &mut self,
         route: &video::ExternalVideoTransportRoute,
     ) -> Result<(), video::ExternalVideoTransportDriverError> {
-        if route.backend_id != "ndi" {
-            return self.recording.stop_route(route);
+        if route.backend_id == "camera" || route.backend_id == "screen_capture" {
+            self.capture.stop_route(route)?;
+            self.recording.push_event(
+                ExternalVideoTransportDriverAction::Stop,
+                route,
+                format!(
+                    "Stopped {} input route '{}'",
+                    route.backend_id, route.endpoint_name
+                ),
+            );
+            return Ok(());
         }
-        self.ndi.stop_route(route)?;
-        self.recording.push_event(
-            ExternalVideoTransportDriverAction::Stop,
-            route,
-            format!(
-                "Stopped NDI {} route '{}'",
-                external_video_transport_direction_label(route.direction),
-                route.endpoint_name
-            ),
-        );
-        Ok(())
+        #[cfg(feature = "ndi")]
+        if route.backend_id == "ndi" {
+            self.ndi.stop_route(route)?;
+            self.recording.push_event(
+                ExternalVideoTransportDriverAction::Stop,
+                route,
+                format!(
+                    "Stopped NDI {} route '{}'",
+                    external_video_transport_direction_label(route.direction),
+                    route.endpoint_name
+                ),
+            );
+            return Ok(());
+        }
+        #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+        if route.backend_id == "spout" {
+            self.spout.stop_route(route)?;
+            self.recording.push_event(
+                ExternalVideoTransportDriverAction::Stop,
+                route,
+                format!(
+                    "Stopped Spout {} route '{}'",
+                    external_video_transport_direction_label(route.direction),
+                    route.endpoint_name
+                ),
+            );
+            return Ok(());
+        }
+        self.recording.stop_route(route)
     }
 }
 
@@ -7180,8 +11618,15 @@ fn sync_external_video_transports_from_snapshot(
     snapshot: &EngineSnapshot,
     transport: &Mutex<video::ExternalVideoTransportRuntime>,
     event_log: &Mutex<Vec<ExternalVideoTransportDriverEvent>>,
+    capture_transport: &Mutex<capture_transport::CaptureTransportState>,
     #[cfg(feature = "ndi")] ndi_transport: &Mutex<ndi_transport::NdiTransportState>,
-    #[cfg(feature = "ndi")] engine: &EngineHandle,
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    spout_transport: &Mutex<spout_transport::SpoutTransportState>,
+    #[cfg(any(
+        feature = "ndi",
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+    ))]
+    engine: &EngineHandle,
 ) -> Result<ExternalVideoTransportSyncResponse, String> {
     let plans =
         video::build_external_video_io_route_plans(&snapshot.video, &video::video_runtime_status());
@@ -7191,20 +11636,30 @@ fn sync_external_video_transports_from_snapshot(
     let mut events = event_log
         .lock()
         .map_err(|_| "External video transport event log lock was poisoned".to_string())?;
-    #[cfg(not(feature = "ndi"))]
-    let mut driver = RecordingExternalVideoTransportDriver {
-        events: &mut events,
-    };
+    let mut capture = capture_transport
+        .lock()
+        .map_err(|_| "Capture transport state lock was poisoned".to_string())?;
     #[cfg(feature = "ndi")]
     let mut ndi = ndi_transport
         .lock()
         .map_err(|_| "NDI transport state lock was poisoned".to_string())?;
-    #[cfg(feature = "ndi")]
-    let mut driver = NdiExternalVideoTransportDriver {
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    let mut spout = spout_transport
+        .lock()
+        .map_err(|_| "Spout transport state lock was poisoned".to_string())?;
+    let mut driver = AppExternalVideoTransportDriver {
         recording: RecordingExternalVideoTransportDriver {
             events: &mut events,
         },
+        capture: &mut capture,
+        #[cfg(feature = "ndi")]
         ndi: &mut ndi,
+        #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+        spout: &mut spout,
+        #[cfg(any(
+            feature = "ndi",
+            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        ))]
         engine: engine.clone(),
     };
     let report = transport.sync_routes_with_driver(&plans, &mut driver);
@@ -7223,9 +11678,15 @@ fn sync_external_video_transports(
         &snapshot,
         state.external_video_transport.as_ref(),
         state.external_video_transport_events.as_ref(),
+        state.capture_transport.as_ref(),
         #[cfg(feature = "ndi")]
         state.ndi_transport.as_ref(),
-        #[cfg(feature = "ndi")]
+        #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+        state.spout_transport.as_ref(),
+        #[cfg(any(
+            feature = "ndi",
+            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        ))]
         &state.engine,
     )
 }
@@ -7255,6 +11716,8 @@ fn get_video_preview_diagnostics(
         still_image_cache_len: provider.still_image_cache_len(),
         decoder_cache_len: provider.decoder().cache_len(),
         decoder_diagnostics: provider.decoder().diagnostics(),
+        isf_pipeline_count: renderer.isf_pipeline_count(),
+        last_isf_error: renderer.last_isf_error().map(str::to_string),
         prefetch_count,
         prefetch_interval_ms,
         bpm,
@@ -7356,6 +11819,440 @@ fn expected_video_preview_queue_len(
     } else {
         prefetch_count.saturating_add(1)
     }
+}
+
+#[tauri::command]
+fn start_video_output_recording(
+    state: State<'_, AppState>,
+    output_id: VideoOutputId,
+    frame_rate: Option<u32>,
+    include_audio: Option<bool>,
+) -> Result<Option<VideoRecordingStatus>, String> {
+    let snapshot = state.engine.snapshot();
+    let output = snapshot
+        .video
+        .outputs
+        .iter()
+        .find(|output| output.id == output_id)
+        .ok_or_else(|| format!("Video output {output_id} was not found"))?;
+    if output.width == 0 || output.height == 0 || output.width > 4096 || output.height > 4096 {
+        return Err("Recording output dimensions must be between 1 and 4096 pixels".to_string());
+    }
+    let frame_rate = frame_rate.unwrap_or(30).clamp(1, 60);
+    let audio_requested = include_audio.unwrap_or(false);
+    let audio_inputs = if audio_requested {
+        let media_audio = state
+            .media_audio
+            .lock()
+            .map_err(|_| "Media audio state lock was poisoned".to_string())?;
+        recording_audio_inputs(&snapshot, output_id, &media_audio.sources)
+    } else {
+        Vec::new()
+    };
+    let default_name = format!(
+        "{}-{}.mp4",
+        sanitize_file_name_component(&output.label),
+        current_unix_ms()
+    );
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("MP4 video", &["mp4"])
+        .set_file_name(&default_name)
+        .save_file()
+    else {
+        return Ok(None);
+    };
+    let mut runtime = state
+        .video_recording
+        .lock()
+        .map_err(|_| "Video recording state lock was poisoned".to_string())?;
+    if runtime
+        .status
+        .lock()
+        .map(|status| status.active)
+        .unwrap_or(false)
+    {
+        return Err("A video output recording is already active".to_string());
+    }
+    if let Some(worker) = runtime.worker.take() {
+        let _ = worker.join();
+    }
+    let stop = Arc::new(AtomicBool::new(false));
+    let status = Arc::new(Mutex::new(VideoRecordingStatus {
+        active: true,
+        output_id: Some(output_id),
+        path: Some(path.to_string_lossy().to_string()),
+        width: output.width,
+        height: output.height,
+        frame_rate,
+        frames_written: 0,
+        dropped_frames: 0,
+        audio_requested,
+        audio_included: !audio_inputs.is_empty(),
+        audio_track_count: audio_inputs.len(),
+        started_unix_ms: Some(current_unix_ms().min(u64::MAX as u128) as u64),
+        last_error: None,
+    }));
+    let worker_stop = Arc::clone(&stop);
+    let worker_status = Arc::clone(&status);
+    let renderer = Arc::clone(&state.video_preview);
+    let engine = state.engine.clone();
+    let width = output.width;
+    let height = output.height;
+    let worker = std::thread::Builder::new()
+        .name("syndocal-video-recorder".to_string())
+        .spawn(move || {
+            run_video_output_recording(
+                engine,
+                renderer,
+                output_id,
+                path,
+                width,
+                height,
+                frame_rate,
+                audio_inputs,
+                worker_stop,
+                worker_status,
+            );
+        })
+        .map_err(|error| format!("Failed to start video recording worker: {error}"))?;
+    runtime.stop = Some(stop);
+    runtime.worker = Some(worker);
+    runtime.status = status;
+    Ok(runtime.status.lock().ok().map(|status| status.clone()))
+}
+
+fn recording_audio_inputs(
+    snapshot: &EngineSnapshot,
+    output_id: VideoOutputId,
+    sources: &HashMap<VideoLayerId, MediaAudioSourceConfig>,
+) -> Vec<RecordingAudioInput> {
+    let Some(output) = snapshot
+        .video
+        .outputs
+        .iter()
+        .find(|output| output.id == output_id)
+    else {
+        return Vec::new();
+    };
+    let layer_ids = snapshot
+        .video
+        .compositions
+        .iter()
+        .find(|composition| composition.id == output.composition_id)
+        .map(|composition| {
+            composition
+                .layer_ids
+                .iter()
+                .copied()
+                .collect::<HashSet<_>>()
+        })
+        .unwrap_or_default();
+    let mut inputs = sources
+        .iter()
+        .filter_map(|(layer_id, source)| {
+            if !layer_ids.contains(layer_id) || source.volume <= 0.0 {
+                return None;
+            }
+            let layer = snapshot
+                .video
+                .layers
+                .iter()
+                .find(|layer| layer.id == *layer_id)?;
+            if !layer.state.enabled || !layer.state.playing {
+                return None;
+            }
+            Some((
+                *layer_id,
+                RecordingAudioInput {
+                    path: source.path.clone(),
+                    position_ms: layer.state.position_ms,
+                    volume: source.volume.clamp(0.0, 2.0),
+                    speed: layer.state.speed.abs().clamp(0.25, 4.0),
+                    loop_enabled: layer.state.loop_enabled,
+                },
+            ))
+        })
+        .collect::<Vec<_>>();
+    inputs.sort_by_key(|(layer_id, _)| *layer_id);
+    inputs.into_iter().map(|(_, input)| input).collect()
+}
+
+fn sanitize_file_name_component(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let sanitized = sanitized.trim_matches('_');
+    if sanitized.is_empty() {
+        "syndocal-output".to_string()
+    } else {
+        sanitized.to_string()
+    }
+}
+
+fn video_recording_ffmpeg_command(
+    ffmpeg: impl AsRef<OsStr>,
+    path: &Path,
+    width: u32,
+    height: u32,
+    frame_rate: u32,
+    audio_inputs: &[RecordingAudioInput],
+) -> Command {
+    let dimensions = format!("{width}x{height}");
+    let rate = frame_rate.to_string();
+    let mut command = Command::new(ffmpeg);
+    command
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo"])
+        .args([
+            "-pix_fmt",
+            "rgba",
+            "-s",
+            &dimensions,
+            "-r",
+            &rate,
+            "-i",
+            "pipe:0",
+        ]);
+    let audio_filter = configure_recording_audio_inputs(&mut command, audio_inputs);
+    command.args(["-map", "0:v:0"]);
+    if let Some(audio_filter) = audio_filter {
+        command
+            .args(["-filter_complex", &audio_filter, "-map", "[aout]"])
+            .args(["-c:a", "aac", "-b:a", "192k", "-shortest"]);
+    } else {
+        command.arg("-an");
+    }
+    command
+        .args([
+            "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+        ])
+        .arg(path)
+        .stdin(Stdio::piped())
+        .stderr(Stdio::piped());
+    command
+}
+
+fn run_video_output_recording(
+    engine: EngineHandle,
+    renderer: Arc<Mutex<AppVideoPreviewRenderer>>,
+    output_id: VideoOutputId,
+    path: PathBuf,
+    width: u32,
+    height: u32,
+    frame_rate: u32,
+    audio_inputs: Vec<RecordingAudioInput>,
+    stop: Arc<AtomicBool>,
+    status: Arc<Mutex<VideoRecordingStatus>>,
+) {
+    let ffmpeg = env::var_os("SYNDOCAL_FFMPEG").unwrap_or_else(|| "ffmpeg".into());
+    let mut command =
+        video_recording_ffmpeg_command(ffmpeg, &path, width, height, frame_rate, &audio_inputs);
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            finish_video_recording_status(
+                &status,
+                Some(format!("Failed to start FFmpeg: {error}")),
+            );
+            return;
+        }
+    };
+    let Some(mut stdin) = child.stdin.take() else {
+        finish_video_recording_status(&status, Some("FFmpeg stdin was unavailable".to_string()));
+        let _ = child.kill();
+        return;
+    };
+    let frame_interval = Duration::from_secs_f64(1.0 / frame_rate as f64);
+    let mut next_frame_at = Instant::now();
+    while !stop.load(Ordering::Relaxed) {
+        let snapshot = engine.snapshot();
+        let frame = renderer.lock().ok().and_then(|mut renderer| {
+            renderer
+                .frame_provider_mut()
+                .set_bpm(Some(snapshot.clock.bpm));
+            renderer
+                .render_output_preview(&snapshot.video, output_id, width, height)
+                .ok()
+        });
+        match frame {
+            Some(frame) if frame.format == video::VideoPixelFormat::Rgba8 => {
+                if let Err(error) = stdin.write_all(&frame.data) {
+                    finish_video_recording_status(
+                        &status,
+                        Some(format!("FFmpeg pipe failed: {error}")),
+                    );
+                    let _ = child.kill();
+                    return;
+                }
+                if let Ok(mut current) = status.lock() {
+                    current.frames_written = current.frames_written.saturating_add(1);
+                }
+            }
+            _ => {
+                if let Ok(mut current) = status.lock() {
+                    current.dropped_frames = current.dropped_frames.saturating_add(1);
+                }
+            }
+        }
+        next_frame_at += frame_interval;
+        let now = Instant::now();
+        if next_frame_at > now {
+            std::thread::sleep(next_frame_at - now);
+        } else if now.duration_since(next_frame_at) > frame_interval {
+            let missed = (now.duration_since(next_frame_at).as_secs_f64()
+                / frame_interval.as_secs_f64()) as u64;
+            if let Ok(mut current) = status.lock() {
+                current.dropped_frames = current.dropped_frames.saturating_add(missed);
+            }
+            next_frame_at = now;
+        }
+    }
+    drop(stdin);
+    match child.wait_with_output() {
+        Ok(output) if output.status.success() => finish_video_recording_status(&status, None),
+        Ok(output) => finish_video_recording_status(
+            &status,
+            Some(format!(
+                "FFmpeg exited with {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )),
+        ),
+        Err(error) => {
+            finish_video_recording_status(&status, Some(format!("FFmpeg wait failed: {error}")))
+        }
+    }
+}
+
+fn configure_recording_audio_inputs(
+    command: &mut Command,
+    inputs: &[RecordingAudioInput],
+) -> Option<String> {
+    if inputs.is_empty() {
+        return None;
+    }
+    let mut chains = Vec::with_capacity(inputs.len() + 1);
+    for (index, input) in inputs.iter().enumerate() {
+        if input.loop_enabled {
+            command.args(["-stream_loop", "-1"]);
+        }
+        command
+            .args(["-ss", &format!("{:.6}", input.position_ms as f64 / 1_000.0)])
+            .arg("-i")
+            .arg(&input.path);
+        let output_label = if inputs.len() == 1 {
+            "aout".to_string()
+        } else {
+            format!("a{index}")
+        };
+        chains.push(format!(
+            "[{}:a]volume={:.6},{},apad[{}]",
+            index + 1,
+            input.volume,
+            ffmpeg_atempo_filter(input.speed),
+            output_label
+        ));
+    }
+    if inputs.len() > 1 {
+        let labels = (0..inputs.len())
+            .map(|index| format!("[a{index}]"))
+            .collect::<String>();
+        chains.push(format!(
+            "{labels}amix=inputs={}:duration=longest:dropout_transition=0[aout]",
+            inputs.len()
+        ));
+    }
+    Some(chains.join(";"))
+}
+
+fn ffmpeg_atempo_filter(speed: f32) -> String {
+    let mut remaining = if speed.is_finite() {
+        speed.abs().clamp(0.25, 4.0)
+    } else {
+        1.0
+    };
+    let mut filters = Vec::new();
+    while remaining < 0.5 - f32::EPSILON {
+        filters.push("atempo=0.5".to_string());
+        remaining /= 0.5;
+    }
+    while remaining > 2.0 + f32::EPSILON {
+        filters.push("atempo=2".to_string());
+        remaining /= 2.0;
+    }
+    filters.push(format!("atempo={remaining:.6}"));
+    filters.join(",")
+}
+
+fn finish_video_recording_status(status: &Mutex<VideoRecordingStatus>, error: Option<String>) {
+    if let Ok(mut current) = status.lock() {
+        current.active = false;
+        current.last_error = error;
+    }
+}
+
+#[tauri::command]
+fn stop_video_output_recording(state: State<'_, AppState>) -> Result<VideoRecordingStatus, String> {
+    let worker = {
+        let mut runtime = state
+            .video_recording
+            .lock()
+            .map_err(|_| "Video recording state lock was poisoned".to_string())?;
+        if let Some(stop) = runtime.stop.take() {
+            stop.store(true, Ordering::Relaxed);
+        }
+        runtime.worker.take()
+    };
+    if let Some(worker) = worker {
+        worker
+            .join()
+            .map_err(|_| "Video recording worker panicked".to_string())?;
+    }
+    video_output_recording_status(state)
+}
+
+#[tauri::command]
+fn video_output_recording_status(
+    state: State<'_, AppState>,
+) -> Result<VideoRecordingStatus, String> {
+    let runtime = state
+        .video_recording
+        .lock()
+        .map_err(|_| "Video recording state lock was poisoned".to_string())?;
+    runtime
+        .status
+        .lock()
+        .map_err(|_| "Video recording status lock was poisoned".to_string())
+        .map(|status| status.clone())
+}
+
+#[tauri::command]
+fn get_video_layer_thumbnail(
+    state: State<'_, AppState>,
+    layer_id: VideoLayerId,
+    width: u32,
+    height: u32,
+) -> Result<video::VideoFrame, String> {
+    if width == 0 || height == 0 || width > 512 || height > 512 {
+        return Err("Video thumbnail dimensions must be between 1 and 512 pixels".to_string());
+    }
+    let snapshot = state.engine.snapshot();
+    let mut renderer = state
+        .video_preview
+        .lock()
+        .map_err(|_| "Video preview renderer lock was poisoned".to_string())?;
+    renderer
+        .frame_provider_mut()
+        .set_bpm(Some(snapshot.clock.bpm));
+    renderer
+        .render_layer_preview(&snapshot.video, layer_id, width, height)
+        .map_err(|error| format!("{error:?}"))
 }
 
 #[tauri::command]
@@ -7723,6 +12620,9 @@ fn start_native_video_live_output(
     output_id: VideoOutputId,
     metrics: Arc<Mutex<NativeVideoOutputMetrics>>,
     #[cfg(feature = "ndi")] ndi_inputs: ndi_transport::NdiInputRegistry,
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    spout_inputs: spout_transport::SpoutInputRegistry,
+    capture_inputs: capture_transport::CaptureInputRegistry,
 ) -> Result<(), String> {
     let initial_size = window.inner_size().map_err(|error| error.to_string())?;
     let window = Arc::new(window);
@@ -7732,10 +12632,12 @@ fn start_native_video_live_output(
         initial_size.height.max(1),
     )
     .map_err(|error| format!("Native video output initialization failed: {error:?}"))?;
+    let decoder =
+        ndi_transport::NdiAwareVideoFrameDecoder::from_env().with_capture_inputs(capture_inputs);
     #[cfg(feature = "ndi")]
-    let decoder = ndi_transport::NdiAwareVideoFrameDecoder::with_ndi_inputs(ndi_inputs);
-    #[cfg(not(feature = "ndi"))]
-    let decoder = ndi_transport::NdiAwareVideoFrameDecoder::from_env();
+    let decoder = decoder.with_ndi_inputs(ndi_inputs);
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    let decoder = decoder.with_spout_inputs(spout_inputs);
     let mut renderer = video::VideoPreviewRenderer::with_frame_provider(
         video::VideoRuntimeConfig::default(),
         video::DecoderBackedFrameProvider::new(decoder).with_prefetch(0, 33),
@@ -8098,6 +13000,9 @@ async fn open_video_output_window(
         metrics,
         #[cfg(feature = "ndi")]
         Arc::clone(&state.ndi_inputs),
+        #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+        Arc::clone(&state.spout_inputs),
+        Arc::clone(&state.capture_inputs),
     )
     .inspect_err(|_| {
         let _ = cleanup_window.close();
@@ -9647,6 +14552,8 @@ fn ensure_video_output_backend_available(kind: &VideoOutputKind) -> Result<(), S
 
 fn video_input_backend(kind: &VideoSourceKind) -> Option<(&'static str, &'static str)> {
     match kind {
+        VideoSourceKind::Camera => Some(("camera", "Camera input")),
+        VideoSourceKind::ScreenCapture => Some(("screen_capture", "Screen capture input")),
         VideoSourceKind::Ndi => Some(("ndi", "NDI input")),
         VideoSourceKind::Spout => Some(("spout", "Spout input")),
         VideoSourceKind::Syphon => Some(("syphon", "Syphon input")),
@@ -9694,6 +14601,13 @@ fn validate_video_output_mapping(mapping: &VideoOutputMapping) -> Result<(), Str
         mapping.rotation_deg,
         mapping.aspect_ratio,
         mapping.lens_distortion,
+        mapping.edge_blend_left,
+        mapping.edge_blend_right,
+        mapping.edge_blend_top,
+        mapping.edge_blend_bottom,
+        mapping.edge_blend_gamma,
+        mapping.black_level,
+        mapping.mask_softness,
         mapping.keystone_x,
         mapping.keystone_y,
         mapping.corner_top_left_x,
@@ -9713,6 +14627,51 @@ fn validate_video_output_mapping(mapping: &VideoOutputMapping) -> Result<(), Str
     }
     if mapping.aspect_ratio <= 0.0 {
         return Err("Video output mapping aspect ratio must be greater than 0".to_string());
+    }
+    if !(0.1..=8.0).contains(&mapping.edge_blend_gamma) {
+        return Err("Video output edge blend gamma must be between 0.1 and 8".to_string());
+    }
+    if [
+        mapping.edge_blend_left,
+        mapping.edge_blend_right,
+        mapping.edge_blend_top,
+        mapping.edge_blend_bottom,
+        mapping.black_level,
+    ]
+    .iter()
+    .any(|value| !(0.0..=1.0).contains(value))
+    {
+        return Err(
+            "Video output edge blend and black level values must be between 0 and 1".to_string(),
+        );
+    }
+    if !(0.0..=0.5).contains(&mapping.mask_softness) {
+        return Err("Video output mask softness must be between 0 and 0.5".to_string());
+    }
+    if usize::from(mapping.mask_point_count) > mapping.mask_points.len() {
+        return Err("Video output mask supports at most 8 points".to_string());
+    }
+    if mapping.mask_points[..usize::from(mapping.mask_point_count)]
+        .iter()
+        .any(|point| {
+            !point.x.is_finite()
+                || !point.y.is_finite()
+                || !(0.0..=1.0).contains(&point.x)
+                || !(0.0..=1.0).contains(&point.y)
+        })
+    {
+        return Err("Video output mask points must be finite values between 0 and 1".to_string());
+    }
+    let bitmap_disabled = mapping.bitmap_mask_width == 0 && mapping.bitmap_mask_height == 0;
+    let bitmap_valid = mapping.bitmap_mask_width > 0
+        && mapping.bitmap_mask_width <= protocol::VIDEO_OUTPUT_BITMAP_MASK_MAX_DIMENSION
+        && mapping.bitmap_mask_height > 0
+        && mapping.bitmap_mask_height <= protocol::VIDEO_OUTPUT_BITMAP_MASK_MAX_DIMENSION
+        && usize::from(mapping.bitmap_mask_width)
+            .saturating_mul(usize::from(mapping.bitmap_mask_height))
+            <= protocol::VIDEO_OUTPUT_BITMAP_MASK_WORD_CAPACITY * 8;
+    if !bitmap_disabled && !bitmap_valid {
+        return Err("Video output bitmap mask dimensions are invalid".to_string());
     }
     Ok(())
 }
@@ -9805,7 +14764,11 @@ fn video_source_file_dialog_filter(
     match kind {
         VideoSourceKind::File => Ok(("Video Files", VIDEO_FILE_EXTENSIONS)),
         VideoSourceKind::StillImage => Ok(("Still Images", STILL_IMAGE_EXTENSIONS)),
-        VideoSourceKind::Ndi | VideoSourceKind::Spout | VideoSourceKind::Syphon => {
+        VideoSourceKind::Camera
+        | VideoSourceKind::ScreenCapture
+        | VideoSourceKind::Ndi
+        | VideoSourceKind::Spout
+        | VideoSourceKind::Syphon => {
             Err("Only file and still-image sources can browse local media".to_string())
         }
     }
@@ -10338,6 +15301,30 @@ fn current_unix_ms() -> u128 {
         .unwrap_or_default()
 }
 
+fn install_crash_report_hook(crash_directory: Arc<Mutex<Option<PathBuf>>>) {
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        let directory = crash_directory
+            .lock()
+            .ok()
+            .and_then(|path| path.clone())
+            .unwrap_or_else(|| env::temp_dir().join(APP_NAME).join(CRASH_REPORT_DIRECTORY));
+        let _ = fs::create_dir_all(&directory);
+        let timestamp = current_unix_ms();
+        let thread = std::thread::current();
+        let thread_name = thread.name().unwrap_or("unnamed");
+        let report = format!(
+            "app={APP_NAME}\nversion={}\ntimestamp_unix_ms={timestamp}\nos={}\narch={}\nthread={thread_name}\npanic={panic_info}\nbacktrace=\n{}\n",
+            env!("CARGO_PKG_VERSION"),
+            env::consts::OS,
+            env::consts::ARCH,
+            std::backtrace::Backtrace::force_capture(),
+        );
+        let _ = fs::write(directory.join(format!("crash-{timestamp}.log")), report);
+        previous_hook(panic_info);
+    }));
+}
+
 fn engine_telemetry_report_from_snapshot(
     snapshot: &EngineSnapshot,
     captured_at_unix_ms: u128,
@@ -10592,6 +15579,81 @@ mod tests {
     use super::*;
     use protocol::{ClockSource, VideoLayerSummary};
 
+    const TEST_UPDATE_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVBQTZGNUI4MkEzRDkzQjEKUldTeGt6MHF1UFdtV3FzQUs5OEZubTdXcGNIeTQycmZEQmdseEVub3BHeGtyMUdVVU1Rb3Q3SEIK";
+
+    fn unique_test_directory(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        env::temp_dir().join(format!("syndocal-{label}-{}-{nonce}", std::process::id()))
+    }
+
+    #[test]
+    fn application_update_settings_require_https_key_pair_and_known_channel() {
+        assert!(application_update_settings_from(None, None, Some("beta"))
+            .unwrap()
+            .is_none());
+        assert!(application_update_settings_from(
+            Some("https://updates.example.test/latest.json"),
+            None,
+            None,
+        )
+        .unwrap_err()
+        .contains("public key is missing"));
+        assert!(application_update_settings_from(
+            Some("http://updates.example.test/latest.json"),
+            Some(TEST_UPDATE_PUBLIC_KEY),
+            None,
+        )
+        .unwrap_err()
+        .contains("HTTPS"));
+        assert!(application_update_settings_from(
+            Some("https://user:secret@updates.example.test/latest.json"),
+            Some(TEST_UPDATE_PUBLIC_KEY),
+            None,
+        )
+        .unwrap_err()
+        .contains("credentials"));
+        assert!(application_update_settings_from(
+            Some("https://updates.example.test/latest.json"),
+            Some("not-base64"),
+            None,
+        )
+        .unwrap_err()
+        .contains("base64"));
+        assert!(application_update_settings_from(
+            Some("https://updates.example.test/latest.json"),
+            Some(TEST_UPDATE_PUBLIC_KEY),
+            Some("canary"),
+        )
+        .unwrap_err()
+        .contains("stable, beta, or nightly"));
+
+        let settings = application_update_settings_from(
+            Some("https://updates.example.test/stable/{{target}}/{{arch}}/{{current_version}}"),
+            Some(TEST_UPDATE_PUBLIC_KEY),
+            Some(" Beta "),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(settings.channel, "beta");
+        assert_eq!(
+            settings.endpoint.as_str(),
+            "https://updates.example.test/stable/%7B%7Btarget%7D%7D/%7B%7Barch%7D%7D/%7B%7Bcurrent_version%7D%7D"
+        );
+        assert_eq!(settings.pubkey, TEST_UPDATE_PUBLIC_KEY);
+    }
+
+    fn empty_project_file() -> ProjectFile {
+        ProjectFile {
+            version: PROJECT_FILE_VERSION,
+            app: APP_NAME.to_string(),
+            custom_profiles: Vec::new(),
+            snapshot: EngineSnapshot::default(),
+        }
+    }
+
     fn sample_preset(values: Vec<protocol::AttributeValueSummary>) -> FixturePreset {
         FixturePreset {
             version: 1,
@@ -10601,6 +15663,276 @@ mod tests {
             mode_name: "Standard".to_string(),
             values,
         }
+    }
+
+    #[test]
+    fn project_backups_are_verified_sorted_and_pruned_to_retention() {
+        let directory = unique_test_directory("backup-retention");
+        for index in 0..(PROJECT_BACKUP_RETENTION + 3) {
+            write_project_backup_in(
+                &directory,
+                empty_project_file(),
+                Some("C:/shows/main.sdc".to_string()),
+                format!("autosave-{index}"),
+            )
+            .unwrap();
+        }
+        fs::write(directory.join("backup-corrupt.json"), b"not-json").unwrap();
+
+        let backups = list_project_backups_in(&directory).unwrap();
+        assert_eq!(backups.len(), PROJECT_BACKUP_RETENTION);
+        assert!(backups.windows(2).all(|pair| pair[0].id > pair[1].id));
+        assert_eq!(
+            backups[0].reason,
+            format!("autosave-{}", PROJECT_BACKUP_RETENTION + 2)
+        );
+        let loaded = read_project_backup(&project_backup_path(&directory, backups[0].id)).unwrap();
+        assert_eq!(loaded.source_path.as_deref(), Some("C:/shows/main.sdc"));
+        validate_project_file(&loaded.project).unwrap();
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn standby_checkpoints_are_integrity_checked_and_pruned_by_session() {
+        let directory = unique_test_directory("standby-checkpoints");
+        fs::create_dir_all(&directory).unwrap();
+        let project = empty_project_file();
+        for generation in 1..=(STANDBY_SYNC_RETENTION as u64 + 2) {
+            write_standby_checkpoint_in(
+                &directory,
+                &project,
+                "primary-a",
+                generation,
+                1_000 + generation,
+            )
+            .unwrap();
+        }
+
+        let manifests = list_standby_manifests(&directory).unwrap();
+        assert_eq!(
+            manifests
+                .iter()
+                .filter(|manifest| manifest.session_id == "primary-a")
+                .count(),
+            STANDBY_SYNC_RETENTION
+        );
+        let checkpoint = read_standby_checkpoint_in(&directory).unwrap().unwrap();
+        assert_eq!(
+            checkpoint.manifest.generation,
+            STANDBY_SYNC_RETENTION as u64 + 2
+        );
+        assert_eq!(checkpoint.project, project);
+        assert!(fs::read_dir(&directory).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        }));
+
+        fs::write(
+            directory.join(&checkpoint.manifest.project_file),
+            b"corrupt",
+        )
+        .unwrap();
+        let fallback = read_standby_checkpoint_in(&directory).unwrap().unwrap();
+        assert_eq!(
+            fallback.manifest.generation,
+            STANDBY_SYNC_RETENTION as u64 + 1
+        );
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn warm_standby_project_disarms_every_output_without_mutating_source() {
+        let mut project = empty_project_file();
+        project.snapshot.output.enabled = true;
+        project.snapshot.dmx_outputs = vec![DmxOutputConfig::default(), DmxOutputConfig::default()];
+        project.snapshot.video.outputs =
+            vec![project_video_output(1, 1), project_video_output(2, 1)];
+        project.snapshot.blackout = false;
+        project.snapshot.video.blackout = false;
+
+        let safe = project_for_warm_standby(project.clone());
+
+        assert!(project.snapshot.output.enabled);
+        assert!(project
+            .snapshot
+            .dmx_outputs
+            .iter()
+            .all(|output| output.enabled));
+        assert!(project
+            .snapshot
+            .video
+            .outputs
+            .iter()
+            .all(|output| output.enabled));
+        assert!(!safe.snapshot.output.enabled);
+        assert!(safe
+            .snapshot
+            .dmx_outputs
+            .iter()
+            .all(|output| !output.enabled));
+        assert!(safe
+            .snapshot
+            .video
+            .outputs
+            .iter()
+            .all(|output| !output.enabled && output.blackout));
+        assert!(safe.snapshot.blackout);
+        assert!(safe.snapshot.video.blackout);
+    }
+
+    #[test]
+    fn standby_activity_tracks_each_primary_by_local_monotonic_progress() {
+        let directory = unique_test_directory("standby-split-brain");
+        fs::create_dir_all(&directory).unwrap();
+        let project = empty_project_file();
+        write_standby_checkpoint_in(&directory, &project, "primary-a", 1, 10_000).unwrap();
+        write_standby_checkpoint_in(&directory, &project, "primary-b", 1, 10_250).unwrap();
+
+        let manifests = list_standby_manifests(&directory).unwrap();
+        let mut activity = HashMap::new();
+        let active = observe_active_primary_sessions(&manifests, &mut activity);
+        assert_eq!(
+            active,
+            vec!["primary-a".to_string(), "primary-b".to_string()]
+        );
+
+        for (_, observed_at) in activity.values_mut() {
+            *observed_at = Instant::now() - Duration::from_millis(STANDBY_SYNC_STALE_MS + 1);
+        }
+        assert!(observe_active_primary_sessions(&manifests, &mut activity).is_empty());
+
+        write_standby_checkpoint_in(&directory, &project, "primary-b", 2, 1).unwrap();
+        let manifests = list_standby_manifests(&directory).unwrap();
+        assert_eq!(
+            observe_active_primary_sessions(&manifests, &mut activity),
+            vec!["primary-b".to_string()]
+        );
+        let selected = read_standby_checkpoint_for_session(&directory, Some("primary-b"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(selected.manifest.generation, 2);
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn diagnostic_archive_contains_required_entries_and_crash_reports() {
+        let crash_directory = unique_test_directory("diagnostic-crashes");
+        fs::create_dir_all(&crash_directory).unwrap();
+        fs::write(crash_directory.join("crash-1.log"), b"panic report").unwrap();
+        let entries = vec![
+            ("manifest.json", br#"{"app":"Syndocal"}"#.to_vec()),
+            ("engine-telemetry.json", br#"{"version":1}"#.to_vec()),
+            ("video-runtime.json", br#"{}"#.to_vec()),
+            ("project-summary.json", br#"{}"#.to_vec()),
+        ];
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        write_diagnostic_archive(&mut bytes, &entries, &crash_directory).unwrap();
+        bytes.set_position(0);
+        let mut archive = zip::ZipArchive::new(bytes).unwrap();
+
+        for name in [
+            "manifest.json",
+            "engine-telemetry.json",
+            "video-runtime.json",
+            "project-summary.json",
+            "README.txt",
+            "crash-reports/crash-1.log",
+        ] {
+            assert!(archive.by_name(name).is_ok(), "missing {name}");
+        }
+        drop(archive);
+        fs::remove_dir_all(crash_directory).unwrap();
+    }
+
+    #[test]
+    fn project_history_skips_noops_and_coalesces_continuous_edits_by_target() {
+        let mut history = ProjectHistory::default();
+        let original = empty_project_file();
+        let noop = PendingProjectTransaction {
+            label: "Set Attribute".to_string(),
+            coalesce_key: "fixture:1:Dimmer".to_string(),
+            before: original.clone(),
+        };
+        commit_project_history_entry(&mut history, noop, original.clone(), 10).unwrap();
+        assert!(history.undo.is_empty());
+
+        let mut first_after = original.clone();
+        first_after.snapshot.lighting_master = 0.8;
+        commit_project_history_entry(
+            &mut history,
+            PendingProjectTransaction {
+                label: "Set Lighting Master".to_string(),
+                coalesce_key: "master:lighting".to_string(),
+                before: original.clone(),
+            },
+            first_after.clone(),
+            100,
+        )
+        .unwrap();
+        let mut second_after = first_after.clone();
+        second_after.snapshot.lighting_master = 0.6;
+        commit_project_history_entry(
+            &mut history,
+            PendingProjectTransaction {
+                label: "Set Lighting Master".to_string(),
+                coalesce_key: "master:lighting".to_string(),
+                before: first_after,
+            },
+            second_after.clone(),
+            500,
+        )
+        .unwrap();
+
+        assert_eq!(history.undo.len(), 1);
+        assert_eq!(history.undo[0].before.snapshot.lighting_master, 1.0);
+        assert_eq!(history.undo[0].after.snapshot.lighting_master, 0.6);
+
+        let mut third_after = second_after.clone();
+        third_after.snapshot.lighting_master = 0.4;
+        commit_project_history_entry(
+            &mut history,
+            PendingProjectTransaction {
+                label: "Set Other Target".to_string(),
+                coalesce_key: "master:other".to_string(),
+                before: second_after,
+            },
+            third_after,
+            600,
+        )
+        .unwrap();
+        assert_eq!(history.undo.len(), 2);
+    }
+
+    #[test]
+    fn engine_snapshot_delta_contains_only_changed_top_level_sections() {
+        let before = EngineSnapshot::default();
+        let mut after = before.clone();
+        after.blackout = true;
+        after.clock.bpm = 127.0;
+        after.stage_map.max_x = 24.0;
+
+        let delta = engine_snapshot_delta(&before, &after);
+        assert_eq!(delta.blackout, Some(true));
+        assert_eq!(delta.clock.as_ref().map(|clock| clock.bpm), Some(127.0));
+        assert_eq!(delta.stage_map.as_ref().map(|map| map.max_x), Some(24.0));
+        assert!(delta.fixtures.is_none());
+        assert!(delta.cues.is_none());
+        assert!(delta.video.is_none());
+        assert!(delta.dmx_previews.is_none());
+        assert!(delta.telemetry.is_none());
+
+        let json = serde_json::to_value(delta).unwrap();
+        let object = json.as_object().unwrap();
+        assert_eq!(object.len(), 3);
+        assert!(object.contains_key("blackout"));
+        assert!(object.contains_key("clock"));
+        assert!(object.contains_key("stage_map"));
     }
 
     #[test]
@@ -11763,6 +17095,122 @@ f 1 2 3
     }
 
     #[test]
+    fn user_templates_round_trip_shared_mappings_and_open_with_outputs_disarmed() {
+        let mut project = project_with_valid_video_graph();
+        project.snapshot.output.enabled = true;
+        project.snapshot.dmx_outputs = vec![DmxOutputConfig {
+            enabled: true,
+            ..DmxOutputConfig::default()
+        }];
+        project.snapshot.blackout = false;
+        project.snapshot.video.blackout = false;
+        project.snapshot.video.outputs[0].enabled = true;
+        project.snapshot.video.outputs[0].blackout = false;
+        let template = UserTemplateFile {
+            version: USER_TEMPLATE_VERSION,
+            app: APP_NAME.to_string(),
+            label: "  Festival Base  ".to_string(),
+            project,
+            midi_mappings: vec![MidiControlMapping {
+                channel: Some(0),
+                message: protocol::MidiControlMessage::ControlChange,
+                number: 24,
+                action: protocol::MidiControlAction::SetBpm,
+                fixture_id: None,
+                attribute: None,
+                group_id: None,
+                cue_id: None,
+                layer_id: None,
+                output_id: None,
+                video_param: None,
+                cue_point_index: None,
+                duration_ms: None,
+                low: 20.0,
+                high: 300.0,
+            }],
+            osc_mappings: vec![OscControlMapping {
+                address: "/touchosc/tap".to_string(),
+                action: protocol::OscControlAction::TapBpm,
+                fixture_id: None,
+                attribute: None,
+                group_id: None,
+                cue_id: None,
+                layer_id: None,
+                output_id: None,
+                video_param: None,
+                cue_point_index: None,
+                duration_ms: None,
+                low: 0.0,
+                high: 1.0,
+            }],
+        };
+
+        let json = serde_json::to_string_pretty(&template).unwrap();
+        let parsed: UserTemplateFile = serde_json::from_str(&json).unwrap();
+        let normalized = normalize_user_template_file(parsed).unwrap();
+        assert_eq!(normalized.label, "Festival Base");
+        assert_eq!(normalized.midi_mappings.len(), 1);
+        assert_eq!(normalized.osc_mappings.len(), 1);
+
+        let safe = project_for_warm_standby(normalized.project);
+        assert!(!safe.snapshot.output.enabled);
+        assert!(safe
+            .snapshot
+            .dmx_outputs
+            .iter()
+            .all(|output| !output.enabled));
+        assert!(safe.snapshot.blackout);
+        assert!(safe.snapshot.video.blackout);
+        assert!(safe
+            .snapshot
+            .video
+            .outputs
+            .iter()
+            .all(|output| !output.enabled && output.blackout));
+
+        let mut legacy = serde_json::to_value(&template).unwrap();
+        legacy.as_object_mut().unwrap().remove("midi_mappings");
+        legacy.as_object_mut().unwrap().remove("osc_mappings");
+        let legacy: UserTemplateFile = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.midi_mappings.is_empty());
+        assert!(legacy.osc_mappings.is_empty());
+    }
+
+    #[test]
+    fn user_template_validation_rejects_wrong_identity_label_and_extension() {
+        let valid = UserTemplateFile {
+            version: USER_TEMPLATE_VERSION,
+            app: APP_NAME.to_string(),
+            label: "Base".to_string(),
+            project: empty_project_file(),
+            midi_mappings: Vec::new(),
+            osc_mappings: Vec::new(),
+        };
+        let mut wrong_version = valid.clone();
+        wrong_version.version += 1;
+        assert!(normalize_user_template_file(wrong_version)
+            .unwrap_err()
+            .contains("version"));
+        let mut wrong_app = valid.clone();
+        wrong_app.app = "Other".to_string();
+        assert!(normalize_user_template_file(wrong_app)
+            .unwrap_err()
+            .contains("app"));
+        let mut empty_label = valid;
+        empty_label.label = "  ".to_string();
+        assert!(normalize_user_template_file(empty_label)
+            .unwrap_err()
+            .contains("label"));
+        assert_eq!(
+            normalize_user_template_save_path(PathBuf::from("festival"))
+                .unwrap()
+                .extension(),
+            Some(OsStr::new("sdctemplate"))
+        );
+        assert!(validate_user_template_open_path(Path::new("festival.sdc")).is_err());
+    }
+
+    #[test]
     fn control_mapping_validation_normalizes_external_midi_files() {
         let mappings = validate_midi_control_mappings(vec![
             MidiControlMapping {
@@ -12656,6 +18104,9 @@ f 1 2 3
             &RemoteControlConfig {
                 bind_ip: "0.0.0.0".to_string(),
                 port: 9_100,
+                pairing_pin: "123456".to_string(),
+                allow_lan: true,
+                ..RemoteControlConfig::default()
             },
             Some("192.168.1.24".parse().unwrap()),
         );
@@ -12663,9 +18114,28 @@ f 1 2 3
         assert_eq!(
             urls,
             vec![
-                "http://192.168.1.24:9100/remote".to_string(),
-                "http://localhost:9100/remote".to_string()
+                "http://192.168.1.24:9100/remote?token=123456".to_string(),
+                "http://localhost:9100/remote?token=123456".to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn remote_access_urls_stay_local_without_lan_opt_in() {
+        let urls = build_remote_access_urls(
+            &RemoteControlConfig {
+                bind_ip: "0.0.0.0".to_string(),
+                port: 9_100,
+                pairing_pin: "123456".to_string(),
+                allow_lan: false,
+                ..RemoteControlConfig::default()
+            },
+            Some("192.168.1.24".parse().unwrap()),
+        );
+
+        assert_eq!(
+            urls,
+            vec!["http://localhost:9100/remote?token=123456".to_string()]
         );
     }
 
@@ -12675,11 +18145,17 @@ f 1 2 3
             &RemoteControlConfig {
                 bind_ip: "fe80::1".to_string(),
                 port: 9_101,
+                pairing_pin: "654321".to_string(),
+                allow_lan: true,
+                ..RemoteControlConfig::default()
             },
             None,
         );
 
-        assert_eq!(urls, vec!["http://[fe80::1]:9101/remote".to_string()]);
+        assert_eq!(
+            urls,
+            vec!["http://[fe80::1]:9101/remote?token=654321".to_string()]
+        );
     }
 
     #[test]
@@ -12789,6 +18265,7 @@ f 1 2 3
             },
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState::default(),
+            isf_effect: None,
         };
 
         assert_eq!(expected_video_preview_queue_len(&layer, 0), 1);
@@ -12852,6 +18329,7 @@ f 1 2 3
                         playing: true,
                         ..VideoLayerState::default()
                     },
+                    isf_effect: None,
                 },
                 VideoLayerSummary {
                     id: 3,
@@ -12865,6 +18343,7 @@ f 1 2 3
                     },
                     blend_mode: VideoBlendMode::Normal,
                     state: VideoLayerState::default(),
+                    isf_effect: None,
                 },
             ],
             compositions: vec![CompositionSummary {
@@ -13130,6 +18609,33 @@ f 1 2 3
     }
 
     #[test]
+    fn capture_input_names_trim_and_screen_capture_has_a_platform_default() {
+        assert_eq!(
+            normalize_video_input_source_name(&VideoSourceKind::Camera, "  Camera A  ".to_string())
+                .unwrap(),
+            "Camera A"
+        );
+        assert!(
+            normalize_video_input_source_name(&VideoSourceKind::Camera, "  ".to_string())
+                .unwrap_err()
+                .contains("required")
+        );
+        assert_eq!(
+            normalize_video_input_source_name(&VideoSourceKind::ScreenCapture, "  ".to_string())
+                .unwrap(),
+            capture_transport::default_capture_endpoint("screen_capture")
+        );
+        assert_eq!(
+            video_input_backend(&VideoSourceKind::Camera),
+            Some(("camera", "Camera input"))
+        );
+        assert_eq!(
+            video_input_backend(&VideoSourceKind::ScreenCapture),
+            Some(("screen_capture", "Screen capture input"))
+        );
+    }
+
+    #[test]
     fn external_video_transport_driver_events_are_bounded_and_sequenced() {
         let route = video::ExternalVideoTransportRoute {
             route_id: 42,
@@ -13308,6 +18814,63 @@ f 1 2 3
         assert!(validate_video_output_mapping(&invalid)
             .unwrap_err()
             .contains("aspect ratio"));
+
+        let invalid_blend = VideoOutputMapping {
+            edge_blend_left: 1.1,
+            ..Default::default()
+        };
+        assert!(validate_video_output_mapping(&invalid_blend)
+            .unwrap_err()
+            .contains("between 0 and 1"));
+
+        let invalid_gamma = VideoOutputMapping {
+            edge_blend_gamma: 0.0,
+            ..Default::default()
+        };
+        assert!(validate_video_output_mapping(&invalid_gamma)
+            .unwrap_err()
+            .contains("gamma"));
+
+        let invalid_mask_count = VideoOutputMapping {
+            mask_point_count: 9,
+            ..Default::default()
+        };
+        assert!(validate_video_output_mapping(&invalid_mask_count)
+            .unwrap_err()
+            .contains("at most 8"));
+
+        let mut invalid_mask_point = VideoOutputMapping {
+            mask_point_count: 3,
+            ..Default::default()
+        };
+        invalid_mask_point.mask_points[0].x = 1.5;
+        assert!(validate_video_output_mapping(&invalid_mask_point)
+            .unwrap_err()
+            .contains("between 0 and 1"));
+
+        let valid_bitmap = VideoOutputMapping {
+            bitmap_mask_width: 16,
+            bitmap_mask_height: 16,
+            ..Default::default()
+        };
+        validate_video_output_mapping(&valid_bitmap).unwrap();
+
+        for invalid_bitmap in [
+            VideoOutputMapping {
+                bitmap_mask_width: 16,
+                bitmap_mask_height: 0,
+                ..Default::default()
+            },
+            VideoOutputMapping {
+                bitmap_mask_width: 17,
+                bitmap_mask_height: 16,
+                ..Default::default()
+            },
+        ] {
+            assert!(validate_video_output_mapping(&invalid_bitmap)
+                .unwrap_err()
+                .contains("bitmap mask dimensions"));
+        }
     }
 
     #[test]
@@ -13351,6 +18914,21 @@ f 1 2 3
                     stage_z: -1.0,
                     aspect_ratio: 16.0 / 9.0,
                     lens_distortion: 0.25,
+                    edge_blend_left: 0.2,
+                    edge_blend_gamma: 1.8,
+                    black_level: 0.05,
+                    mask_point_count: 3,
+                    mask_softness: 0.02,
+                    mask_points: [
+                        protocol::VideoMaskPoint { x: 0.5, y: 0.05 },
+                        protocol::VideoMaskPoint { x: 0.95, y: 0.95 },
+                        protocol::VideoMaskPoint { x: 0.05, y: 0.95 },
+                        protocol::VideoMaskPoint::default(),
+                        protocol::VideoMaskPoint::default(),
+                        protocol::VideoMaskPoint::default(),
+                        protocol::VideoMaskPoint::default(),
+                        protocol::VideoMaskPoint::default(),
+                    ],
                     ..Default::default()
                 },
             },
@@ -13363,6 +18941,36 @@ f 1 2 3
         assert!((parsed.preset.mapping.stage_x - 2.5).abs() < f32::EPSILON);
         assert!((parsed.preset.mapping.stage_z + 1.0).abs() < f32::EPSILON);
         assert!((parsed.preset.mapping.aspect_ratio - 16.0 / 9.0).abs() < f32::EPSILON);
+        assert!((parsed.preset.mapping.edge_blend_left - 0.2).abs() < f32::EPSILON);
+        assert!((parsed.preset.mapping.black_level - 0.05).abs() < f32::EPSILON);
+        assert_eq!(parsed.preset.mapping.mask_point_count, 3);
+
+        let mut legacy = serde_json::to_value(&file).unwrap();
+        let mapping = legacy["preset"]["mapping"].as_object_mut().unwrap();
+        for field in [
+            "edge_blend_left",
+            "edge_blend_right",
+            "edge_blend_top",
+            "edge_blend_bottom",
+            "edge_blend_gamma",
+            "black_level",
+            "mask_point_count",
+            "mask_invert",
+            "mask_softness",
+            "mask_points",
+            "bitmap_mask_width",
+            "bitmap_mask_height",
+            "bitmap_mask_luma_words",
+        ] {
+            mapping.remove(field);
+        }
+        let legacy: VideoOutputMappingPresetFile = serde_json::from_value(legacy).unwrap();
+        assert_eq!(legacy.preset.mapping.edge_blend_left, 0.0);
+        assert_eq!(legacy.preset.mapping.edge_blend_gamma, 2.2);
+        assert_eq!(legacy.preset.mapping.mask_point_count, 0);
+        assert_eq!(legacy.preset.mapping.bitmap_mask_width, 0);
+        assert_eq!(legacy.preset.mapping.bitmap_mask_height, 0);
+        assert_eq!(legacy.preset.mapping.bitmap_mask_luma_words, [0; 32]);
 
         let unsupported = VideoOutputMappingPresetFile {
             version: 2,
@@ -13401,6 +19009,7 @@ f 1 2 3
                             peak: 0.5,
                             rms: 0.25,
                         }],
+                        spectrum: Vec::new(),
                         beats: vec![0, 500, 1_000],
                     }),
                     ..protocol::TimelineSnapshot::default()
@@ -13416,6 +19025,13 @@ f 1 2 3
         assert_eq!(parsed.app, APP_NAME);
         assert!(parsed.snapshot.blackout);
         assert_eq!(parsed.snapshot.dmx_outputs.len(), 1);
+        let mut legacy = serde_json::to_value(&project).unwrap();
+        legacy["snapshot"]["timeline"]["audio"]
+            .as_object_mut()
+            .unwrap()
+            .remove("spectrum");
+        let legacy: ProjectFile = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.snapshot.timeline.audio.unwrap().spectrum.is_empty());
         assert_eq!(
             parsed
                 .snapshot
@@ -13459,6 +19075,9 @@ f 1 2 3
         legacy_snapshot.remove("stage_map_presets");
         legacy_snapshot.remove("stage_objects");
         legacy_snapshot.remove("dmx_previews");
+        legacy_snapshot.remove("palettes");
+        legacy_snapshot.remove("playback_executors");
+        legacy_snapshot.remove("playback_master");
 
         let project: ProjectFile = serde_json::from_value(legacy_value).unwrap();
         validate_project_file(&project).unwrap();
@@ -13472,6 +19091,12 @@ f 1 2 3
         assert!(project.snapshot.stage_map_presets.is_empty());
         assert!(project.snapshot.stage_objects.is_empty());
         assert!(project.snapshot.dmx_previews.is_empty());
+        assert!(project.snapshot.palettes.is_empty());
+        assert_eq!(
+            project.snapshot.playback_executors,
+            vec![protocol::PlaybackExecutorSummary::default()]
+        );
+        assert_eq!(project.snapshot.playback_master, 1.0);
     }
 
     #[test]
@@ -13681,6 +19306,7 @@ f 1 2 3
                 video_output_targets: Vec::new(),
 
                 node_graph_targets: Vec::new(),
+                ..protocol::CueSummary::default()
             },
             protocol::CueSummary {
                 id: 7,
@@ -13691,6 +19317,7 @@ f 1 2 3
                 video_output_targets: Vec::new(),
 
                 node_graph_targets: Vec::new(),
+                ..protocol::CueSummary::default()
             },
         ];
 
@@ -13713,6 +19340,7 @@ f 1 2 3
             },
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState::default(),
+            isf_effect: None,
         }
     }
 
@@ -13792,6 +19420,94 @@ f 1 2 3
                 ..EngineSnapshot::default()
             },
         }
+    }
+
+    const TEST_ISF_SOURCE: &str = r#"/*{
+      "DESCRIPTION": "Threshold",
+      "INPUTS": [
+        {"NAME":"inputImage","TYPE":"image"},
+        {"NAME":"level","TYPE":"float","DEFAULT":0.5,"MIN":0.0,"MAX":1.0}
+      ]
+    }*/
+    void main() {
+      vec4 pixel = IMG_THIS_PIXEL(inputImage);
+      gl_FragColor = pixel.r > level ? pixel : vec4(0.0, 0.0, 0.0, 1.0);
+    }"#;
+
+    fn test_isf_effect() -> VideoIsfEffectSummary {
+        let prepared = video::prepare_isf_shader(TEST_ISF_SOURCE).unwrap();
+        video::isf_effect_from_prepared(
+            "Threshold".to_string(),
+            TEST_ISF_SOURCE.to_string(),
+            Some("filters/threshold.fs".to_string()),
+            &prepared,
+        )
+    }
+
+    #[test]
+    fn video_isf_import_and_sanitizer_canonicalize_controls() {
+        let directory = unique_test_directory("isf-import");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("stage-threshold.fs");
+        fs::write(&path, TEST_ISF_SOURCE).unwrap();
+
+        let mut effect = load_video_isf_effect_from_path(&path).unwrap();
+        assert_eq!(effect.label, "stage-threshold");
+        assert_eq!(
+            effect.source_path.as_deref(),
+            Some(path.to_string_lossy().as_ref())
+        );
+        effect.label = "  Threshold Canonical  ".to_string();
+        effect.controls[0].value = [4.0, 0.0, 0.0, 0.0];
+
+        let canonical = sanitize_video_isf_effect(effect).unwrap();
+        assert_eq!(canonical.label, "Threshold Canonical");
+        assert_eq!(canonical.controls[0].value[0], 1.0);
+        assert_eq!(canonical.controls[0].minimum[0], 0.0);
+        assert_eq!(canonical.controls[0].maximum[0], 1.0);
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn project_file_v1_preserves_isf_and_defaults_legacy_layers() {
+        let mut project = project_with_valid_video_graph();
+        project.snapshot.video.layers[0].isf_effect = Some(test_isf_effect());
+        validate_project_file(&project).unwrap();
+
+        let encoded = serde_json::to_value(&project).unwrap();
+        let decoded: ProjectFile = serde_json::from_value(encoded.clone()).unwrap();
+        assert_eq!(
+            decoded.snapshot.video.layers[0]
+                .isf_effect
+                .as_ref()
+                .map(|effect| effect.label.as_str()),
+            Some("Threshold")
+        );
+
+        let mut legacy = encoded;
+        legacy["snapshot"]["video"]["layers"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("isf_effect");
+        let legacy: ProjectFile = serde_json::from_value(legacy).unwrap();
+        validate_project_file(&legacy).unwrap();
+        assert!(legacy.snapshot.video.layers[0].isf_effect.is_none());
+    }
+
+    #[test]
+    fn project_file_validation_rejects_unsafe_isf() {
+        let mut project = project_with_valid_video_graph();
+        let mut effect = test_isf_effect();
+        effect.source = effect.source.replace(
+            "\"INPUTS\"",
+            "\"PASSES\":[{\"TARGET\":\"buffer\"}],\"INPUTS\"",
+        );
+        project.snapshot.video.layers[0].isf_effect = Some(effect);
+
+        let error = validate_project_file(&project).unwrap_err();
+        assert!(error.contains("ISF effect is invalid"));
+        assert!(error.contains("target-buffer"));
     }
 
     #[test]
@@ -13890,6 +19606,7 @@ f 1 2 3
                         bias: 0.0,
                     }),
                     position_wave: None,
+                    audio: None,
                     transform: None,
                     output: None,
                 },
@@ -13901,6 +19618,7 @@ f 1 2 3
                     y: 32.0,
                     lfo: None,
                     position_wave: None,
+                    audio: None,
                     transform: Some(protocol::NodeGraphTransformNode {
                         op: NodeGraphTransformOp::Scale,
                         amount: 1.0,
@@ -13917,6 +19635,7 @@ f 1 2 3
                     y: 32.0,
                     lfo: None,
                     position_wave: None,
+                    audio: None,
                     transform: None,
                     output: Some(protocol::NodeGraphOutputNode {
                         fixture_ids: vec![fixture_id],
@@ -13976,6 +19695,7 @@ f 1 2 3
             video_output_targets: Vec::new(),
 
             node_graph_targets: Vec::new(),
+            ..protocol::CueSummary::default()
         });
         assert!(validate_project_file(&project)
             .unwrap_err()
@@ -14033,6 +19753,7 @@ f 1 2 3
             height: Some(1080),
             frame_rate: Some(60.0),
             duration_ms: Some(1_000),
+            has_audio: false,
         });
         assert!(validate_project_file(&project)
             .unwrap_err()
@@ -14044,6 +19765,7 @@ f 1 2 3
             height: Some(1080),
             frame_rate: Some(f32::NAN),
             duration_ms: Some(1_000),
+            has_audio: false,
         });
         assert!(validate_project_file(&project)
             .unwrap_err()
@@ -14083,6 +19805,7 @@ f 1 2 3
                 graph_id: 99,
                 enabled: true,
             }],
+            ..protocol::CueSummary::default()
         });
         assert!(validate_project_file(&project)
             .unwrap_err()
@@ -14105,6 +19828,23 @@ f 1 2 3
         assert!(validate_project_file(&project)
             .unwrap_err()
             .contains("missing node reference"));
+
+        let mut audio_graph = project_node_graph(6, 1);
+        audio_graph.nodes[0].kind = NodeGraphNodeKind::Audio;
+        audio_graph.nodes[0].lfo = None;
+        audio_graph.nodes[0].audio = Some(protocol::NodeGraphAudioNode {
+            source: protocol::AudioSpectrumSource::Timeline,
+            band: protocol::AudioSpectrumBand::Mid,
+            gain: 1.5,
+            bias: -0.1,
+        });
+        project.snapshot.node_graphs = vec![audio_graph.clone()];
+        validate_project_file(&project).unwrap();
+        audio_graph.nodes[0].audio.as_mut().unwrap().gain = f32::NAN;
+        project.snapshot.node_graphs = vec![audio_graph];
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("audio node"));
     }
 
     #[test]
@@ -14470,12 +20210,45 @@ f 1 2 3
             video_targets: Vec::new(),
             video_output_targets: Vec::new(),
             node_graph_targets: Vec::new(),
+            ..protocol::CueSummary::default()
         });
         assert!(validate_project_file(&project)
             .unwrap_err()
             .contains("references missing fixture 99"));
 
         project.snapshot.cues.clear();
+        project.snapshot.palettes = vec![protocol::ReferencePaletteSummary {
+            id: 7,
+            label: "Color".to_string(),
+            kind: protocol::PaletteKind::Color,
+            values: vec![protocol::AttributeValueSummary {
+                attribute: "Dimmer".to_string(),
+                value: 32_768,
+            }],
+        }];
+        project.snapshot.cues.push(protocol::CueSummary {
+            id: 2,
+            label: "Palette Look".to_string(),
+            palette_targets: vec![protocol::CuePaletteTarget {
+                palette_id: 99,
+                fixture_ids: vec![1],
+            }],
+            ..protocol::CueSummary::default()
+        });
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("references missing palette 99"));
+
+        project.snapshot.cues[0].palette_targets[0] = protocol::CuePaletteTarget {
+            palette_id: 7,
+            fixture_ids: vec![99],
+        };
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("palette 7 references missing fixture 99"));
+
+        project.snapshot.cues.clear();
+        project.snapshot.palettes.clear();
         project.snapshot.timeline.automations = vec![protocol::TimelineAutomationSummary {
             id: 7,
             fixture_id: 1,
@@ -14939,6 +20712,7 @@ f 1 2 3
                 blackout: false,
             }],
             node_graph_targets: Vec::new(),
+            ..protocol::CueSummary::default()
         });
 
         let scope = CueCaptureScope::SelectedGroup {
@@ -16388,34 +22162,443 @@ f 1 2 3
     }
 }
 
+#[cfg(test)]
+mod video_clip_state_tests {
+    use super::*;
+
+    #[test]
+    fn clip_launch_rewinds_to_in_point_and_prepares_cut_or_fade() {
+        let mut current = VideoLayerState::default();
+        current.enabled = false;
+        current.playing = false;
+        current.position_ms = 9_000;
+        current.loop_enabled = true;
+        current.loop_start_ms = 1_250;
+        current.opacity = 0.4;
+
+        let cut = launched_video_clip_state(&current, 0);
+        assert!(cut.enabled);
+        assert!(cut.playing);
+        assert_eq!(cut.position_ms, 1_250);
+        assert_eq!(cut.opacity, 1.0);
+
+        let fade = launched_video_clip_state(&current, 500);
+        assert_eq!(fade.position_ms, 1_250);
+        assert_eq!(fade.opacity, 0.0);
+    }
+
+    #[test]
+    fn clip_stop_holds_frame_for_fade_but_cut_goes_immediately_to_black() {
+        let mut current = VideoLayerState::default();
+        current.playing = true;
+        current.opacity = 0.8;
+
+        let fade = stopped_video_clip_state(&current, 500);
+        assert!(!fade.playing);
+        assert_eq!(fade.opacity, 0.8);
+
+        let cut = stopped_video_clip_state(&current, 0);
+        assert!(!cut.playing);
+        assert_eq!(cut.opacity, 0.0);
+    }
+
+    #[test]
+    fn exclusive_take_retires_live_layers_and_launches_only_the_target() {
+        let layer = |id, enabled, playing, opacity| protocol::VideoLayerSummary {
+            id,
+            label: format!("Clip {id}"),
+            source: protocol::VideoSourceSummary {
+                kind: VideoSourceKind::File,
+                path: Some(format!("clip-{id}.mp4")),
+                name: None,
+                codec: None,
+                metadata: None,
+            },
+            blend_mode: protocol::VideoBlendMode::Normal,
+            state: VideoLayerState {
+                enabled,
+                playing,
+                opacity,
+                position_ms: 900,
+                ..VideoLayerState::default()
+            },
+            isf_effect: None,
+        };
+        let layers = vec![
+            layer(1, true, true, 1.0),
+            layer(2, true, false, 0.0),
+            layer(3, false, true, 1.0),
+        ];
+
+        let states = exclusive_video_take_states(&layers, 2, 400).unwrap();
+
+        assert_eq!(
+            states.iter().map(|entry| entry.0).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert!(!states[0].1.playing);
+        assert_eq!(states[0].1.opacity, 1.0);
+        assert!(states[1].1.playing);
+        assert_eq!(states[1].1.position_ms, 0);
+        assert_eq!(states[1].1.opacity, 0.0);
+        assert!(exclusive_video_take_states(&layers, 99, 0).is_err());
+    }
+}
+
+#[cfg(test)]
+mod art_rdm_request_tests {
+    use super::*;
+
+    #[test]
+    fn parses_and_formats_rdm_uid_and_hex_parameter_data() {
+        let uid = parse_rdm_uid("1234:56789ABC").unwrap();
+        assert_eq!(uid, io::rdm::RdmUid::new(0x1234, 0x5678_9abc));
+        assert_eq!(format_rdm_uid(uid), "1234:56789ABC");
+        assert_eq!(parse_hex_bytes("01 7f-CC").unwrap(), vec![1, 0x7f, 0xcc]);
+        assert_eq!(format_hex_bytes(&[1, 0x7f, 0xcc]), "01 7F CC");
+        assert!(parse_rdm_uid("1234:01").is_err());
+        assert!(parse_rdm_uid("ZZZZ:56789ABC").is_err());
+        assert!(parse_hex_bytes("ABC").is_err());
+        assert!(parse_hex_bytes("GG").is_err());
+    }
+
+    #[test]
+    fn rdm_transaction_number_wraps_without_zero() {
+        RDM_TRANSACTION_NUMBER.store(u8::MAX, Ordering::Relaxed);
+        assert_eq!(next_rdm_transaction_number(), u8::MAX);
+        assert_eq!(next_rdm_transaction_number(), 1);
+    }
+}
+
+#[cfg(test)]
+mod media_audio_playback_tests {
+    use super::*;
+
+    #[test]
+    fn empty_audio_monitor_status_does_not_open_an_output_device() {
+        let mut playback = MediaAudioPlayback::default();
+        playback.stop(99);
+
+        let status = playback.status();
+
+        assert!(!status.output_open);
+        assert!(status.active_layer_ids.is_empty());
+    }
+
+    #[test]
+    fn audio_resync_threshold_and_cooldown_prevent_seek_thrash() {
+        assert!(MEDIA_AUDIO_SYNC_INTERVAL < Duration::from_millis(MEDIA_AUDIO_RESYNC_THRESHOLD_MS));
+        assert!(MEDIA_AUDIO_SYNC_IDLE_INTERVAL >= MEDIA_AUDIO_SYNC_INTERVAL);
+        assert!(!media_audio_resync_required(
+            MEDIA_AUDIO_RESYNC_THRESHOLD_MS as i64,
+            MEDIA_AUDIO_RESYNC_COOLDOWN
+        ));
+        assert!(!media_audio_resync_required(
+            -(MEDIA_AUDIO_RESYNC_THRESHOLD_MS as i64 + 1),
+            MEDIA_AUDIO_RESYNC_COOLDOWN - Duration::from_millis(1)
+        ));
+        assert!(media_audio_resync_required(
+            MEDIA_AUDIO_RESYNC_THRESHOLD_MS as i64 + 1,
+            MEDIA_AUDIO_RESYNC_COOLDOWN
+        ));
+        assert!(media_audio_resync_required(
+            -(MEDIA_AUDIO_RESYNC_THRESHOLD_MS as i64 + 1),
+            Duration::MAX
+        ));
+    }
+}
+
+#[cfg(test)]
+mod live_audio_input_tests {
+    use super::*;
+
+    #[test]
+    fn live_audio_callback_downmixes_interleaved_channels_without_blocking() {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let status = Mutex::new(LiveAudioInputStatus::default());
+        send_live_audio_chunk(&[1.0_f32, -1.0, 0.5, 0.25], 2, &sender, &status, |value| {
+            value
+        });
+        assert_eq!(receiver.recv().unwrap(), vec![0.0, 0.375]);
+
+        sender.try_send(vec![0.0]).unwrap();
+        send_live_audio_chunk(&[1.0_f32, 1.0], 2, &sender, &status, |value| value);
+        assert_eq!(status.lock().unwrap().dropped_chunks, 1);
+    }
+}
+
+#[cfg(test)]
+mod video_recording_runtime_tests {
+    use super::*;
+
+    fn write_test_tone_wav(path: &Path) {
+        let sample_rate = 48_000_u32;
+        let sample_count = sample_rate;
+        let data_bytes = sample_count * 2;
+        let mut wav = Vec::with_capacity((44 + data_bytes) as usize);
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_bytes).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16_u32.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&sample_rate.to_le_bytes());
+        wav.extend_from_slice(&(sample_rate * 2).to_le_bytes());
+        wav.extend_from_slice(&2_u16.to_le_bytes());
+        wav.extend_from_slice(&16_u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_bytes.to_le_bytes());
+        for index in 0..sample_count {
+            let phase = index as f32 * 440.0 * std::f32::consts::TAU / sample_rate as f32;
+            let sample = (phase.sin() * i16::MAX as f32 * 0.2) as i16;
+            wav.extend_from_slice(&sample.to_le_bytes());
+        }
+        fs::write(path, wav).unwrap();
+    }
+
+    #[test]
+    fn recording_file_name_and_terminal_status_are_safe() {
+        assert_eq!(sanitize_file_name_component("Main / LED:1"), "Main___LED_1");
+        assert_eq!(sanitize_file_name_component("***"), "syndocal-output");
+        let status = Mutex::new(VideoRecordingStatus {
+            active: true,
+            frames_written: 42,
+            ..VideoRecordingStatus::default()
+        });
+
+        finish_video_recording_status(&status, Some("encoder failed".to_string()));
+
+        let status = status.lock().unwrap();
+        assert!(!status.active);
+        assert_eq!(status.frames_written, 42);
+        assert_eq!(status.last_error.as_deref(), Some("encoder failed"));
+    }
+
+    #[test]
+    fn recording_audio_filter_supports_seek_loop_gain_speed_and_mix() {
+        assert_eq!(ffmpeg_atempo_filter(0.25), "atempo=0.5,atempo=0.500000");
+        assert_eq!(ffmpeg_atempo_filter(4.0), "atempo=2,atempo=2.000000");
+        let inputs = vec![
+            RecordingAudioInput {
+                path: PathBuf::from("a.mp4"),
+                position_ms: 1_250,
+                volume: 0.8,
+                speed: 1.0,
+                loop_enabled: true,
+            },
+            RecordingAudioInput {
+                path: PathBuf::from("b.mov"),
+                position_ms: 500,
+                volume: 0.4,
+                speed: 2.0,
+                loop_enabled: false,
+            },
+        ];
+        let mut command = Command::new("ffmpeg");
+        let filter = configure_recording_audio_inputs(&mut command, &inputs).unwrap();
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+
+        assert!(args.windows(2).any(|pair| pair == ["-stream_loop", "-1"]));
+        assert!(args.windows(2).any(|pair| pair == ["-ss", "1.250000"]));
+        assert!(filter.contains("[1:a]volume=0.800000,atempo=1.000000,apad[a0]"));
+        assert!(filter.contains("[2:a]volume=0.400000,atempo=2.000000,apad[a1]"));
+        assert!(filter.contains("[a0][a1]amix=inputs=2:duration=longest"));
+    }
+
+    #[test]
+    fn recording_audio_inputs_select_only_playing_monitored_layers_on_output() {
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.video.layers = vec![protocol::VideoLayerSummary {
+            id: 7,
+            label: "Program".to_string(),
+            source: VideoSourceSummary {
+                kind: VideoSourceKind::File,
+                path: Some("program.mp4".to_string()),
+                name: None,
+                codec: Some("H264".to_string()),
+                metadata: None,
+            },
+            blend_mode: VideoBlendMode::Normal,
+            state: VideoLayerState {
+                enabled: true,
+                playing: true,
+                position_ms: 2_500,
+                speed: 1.5,
+                loop_enabled: true,
+                ..VideoLayerState::default()
+            },
+            isf_effect: None,
+        }];
+        snapshot.video.compositions = vec![CompositionSummary {
+            id: 3,
+            label: "Program".to_string(),
+            layer_ids: vec![7],
+            output_ids: vec![9],
+        }];
+        snapshot.video.outputs = vec![VideoOutputSummary {
+            id: 9,
+            label: "Record".to_string(),
+            kind: VideoOutputKind::Display,
+            enabled: true,
+            composition_id: 3,
+            fullscreen: false,
+            monitor_id: None,
+            width: 1280,
+            height: 720,
+            endpoint_name: None,
+            opacity: 1.0,
+            blackout: false,
+            mapping: VideoOutputMapping::default(),
+        }];
+        let sources = HashMap::from([(
+            7,
+            MediaAudioSourceConfig {
+                path: PathBuf::from("program.mp4"),
+                volume: 0.75,
+                requested_device_name: None,
+            },
+        )]);
+
+        let inputs = recording_audio_inputs(&snapshot, 9, &sources);
+
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].position_ms, 2_500);
+        assert_eq!(inputs[0].speed, 1.5);
+        assert!(inputs[0].loop_enabled);
+    }
+
+    #[test]
+    #[ignore = "requires FFmpeg and FFprobe with H.264/AAC support"]
+    fn recording_command_writes_a_real_video_and_audio_mp4() {
+        let suffix = format!("{}-{}", std::process::id(), current_unix_ms());
+        let audio_path = std::env::temp_dir().join(format!("syndocal-recording-{suffix}.wav"));
+        let output_path = std::env::temp_dir().join(format!("syndocal-recording-{suffix}.mp4"));
+        write_test_tone_wav(&audio_path);
+        let ffmpeg = env::var_os("SYNDOCAL_FFMPEG").unwrap_or_else(|| "ffmpeg".into());
+        let mut command = video_recording_ffmpeg_command(
+            ffmpeg,
+            &output_path,
+            16,
+            16,
+            30,
+            &[RecordingAudioInput {
+                path: audio_path.clone(),
+                position_ms: 0,
+                volume: 0.5,
+                speed: 1.0,
+                loop_enabled: false,
+            }],
+        );
+        let mut child = command.spawn().unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let mut frame = vec![0_u8; 16 * 16 * 4];
+        for pixel in frame.chunks_exact_mut(4) {
+            pixel.copy_from_slice(&[220, 30, 10, 255]);
+        }
+        for _ in 0..30 {
+            stdin.write_all(&frame).unwrap();
+        }
+        drop(stdin);
+        let encoded = child.wait_with_output().unwrap();
+        assert!(
+            encoded.status.success(),
+            "FFmpeg failed: {}",
+            String::from_utf8_lossy(&encoded.stderr)
+        );
+
+        let ffprobe = env::var_os("SYNDOCAL_FFPROBE").unwrap_or_else(|| "ffprobe".into());
+        let probed = Command::new(ffprobe)
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=codec_type",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(&output_path)
+            .output()
+            .unwrap();
+        let streams = String::from_utf8_lossy(&probed.stdout);
+        let _ = fs::remove_file(&audio_path);
+        let _ = fs::remove_file(&output_path);
+
+        assert!(probed.status.success());
+        assert!(streams.lines().any(|line| line.trim() == "video"));
+        assert!(streams.lines().any(|line| line.trim() == "audio"));
+    }
+}
+
 fn main() {
+    let crash_directory = Arc::new(Mutex::new(None));
+    install_crash_report_hook(Arc::clone(&crash_directory));
     let engine = EngineHandle::start(DmxOutputConfig::default());
+    let capture_inputs = Arc::new(Mutex::new(HashMap::new()));
+    let capture_transport = Arc::new(Mutex::new(capture_transport::CaptureTransportState::new(
+        Arc::clone(&capture_inputs),
+    )));
     #[cfg(feature = "ndi")]
     let ndi_inputs = Arc::new(Mutex::new(HashMap::new()));
     #[cfg(feature = "ndi")]
     let ndi_transport = Arc::new(Mutex::new(ndi_transport::NdiTransportState::new(
         Arc::clone(&ndi_inputs),
+        Arc::clone(&capture_inputs),
     )));
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    let spout_inputs = Arc::new(Mutex::new(HashMap::new()));
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    let spout_transport = Arc::new(Mutex::new(spout_transport::SpoutTransportState::new(
+        Arc::clone(&spout_inputs),
+        #[cfg(feature = "ndi")]
+        Arc::clone(&ndi_inputs),
+        Arc::clone(&capture_inputs),
+    )));
+    let app_video_decoder = ndi_transport::NdiAwareVideoFrameDecoder::from_env()
+        .with_capture_inputs(Arc::clone(&capture_inputs));
     #[cfg(feature = "ndi")]
-    let app_video_decoder =
-        ndi_transport::NdiAwareVideoFrameDecoder::with_ndi_inputs(Arc::clone(&ndi_inputs));
-    #[cfg(not(feature = "ndi"))]
-    let app_video_decoder = ndi_transport::NdiAwareVideoFrameDecoder::from_env();
+    let app_video_decoder = app_video_decoder.with_ndi_inputs(Arc::clone(&ndi_inputs));
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    let app_video_decoder = app_video_decoder.with_spout_inputs(Arc::clone(&spout_inputs));
+    let media_audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+    let media_audio_sync = MediaAudioSyncRuntime::start(engine.clone(), Arc::clone(&media_audio));
     tauri::Builder::default()
+        .setup(move |app| {
+            let directory = app_data_subdirectory(app.handle(), CRASH_REPORT_DIRECTORY)?;
+            app_data_subdirectory(app.handle(), PROJECT_BACKUP_DIRECTORY)?;
+            if let Ok(mut configured_directory) = crash_directory.lock() {
+                *configured_directory = Some(directory);
+            }
+            Ok(())
+        })
         .manage(AppState {
             engine,
-            video_preview: Mutex::new(video::VideoPreviewRenderer::with_frame_provider(
-                video::VideoRuntimeConfig::default(),
-                video::DecoderBackedFrameProvider::new(app_video_decoder).with_prefetch(2, 33),
+            media_audio,
+            _media_audio_sync: media_audio_sync,
+            live_audio_input: Mutex::new(None),
+            video_preview: Arc::new(Mutex::new(
+                video::VideoPreviewRenderer::with_frame_provider(
+                    video::VideoRuntimeConfig::default(),
+                    video::DecoderBackedFrameProvider::new(app_video_decoder).with_prefetch(2, 33),
+                ),
             )),
+            video_recording: Mutex::new(VideoRecordingRuntime::default()),
             external_video_transport: Arc::new(Mutex::new(
                 video::ExternalVideoTransportRuntime::new(),
             )),
             external_video_transport_events: Arc::new(Mutex::new(Vec::new())),
+            capture_transport,
+            capture_inputs: Arc::clone(&capture_inputs),
             #[cfg(feature = "ndi")]
             ndi_transport,
             #[cfg(feature = "ndi")]
             ndi_inputs: Arc::clone(&ndi_inputs),
+            #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+            spout_transport,
+            #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+            spout_inputs: Arc::clone(&spout_inputs),
             custom_profiles: Mutex::new(HashMap::new()),
             visualizer_model_assets: Mutex::new(HashMap::new()),
             midi_clock: Mutex::new(None),
@@ -16423,10 +22606,15 @@ fn main() {
             midi_feedback: Mutex::new(None),
             osc_input: Mutex::new(None),
             remote_control: Mutex::new(None),
+            dmx_input: Mutex::new(None),
             pending_project_open_paths: Mutex::new(Vec::new()),
             current_project_path: Mutex::new(None),
+            project_history: Mutex::new(ProjectHistory::default()),
+            snapshot_sync: Mutex::new(SnapshotSyncState::default()),
+            standby_sync: Mutex::new(StandbySyncRuntime::default()),
             native_video_output_metrics: Mutex::new(HashMap::new()),
         })
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(
             |app_handle, args, cwd| {
                 let project_paths = project_paths_from_single_instance_args(args, &cwd);
@@ -16448,8 +22636,14 @@ fn main() {
             },
         ))
         .invoke_handler(tauri::generate_handler![
+            get_application_update_configuration,
+            check_application_update,
+            install_application_update,
             select_gdtf_file,
             select_video_source_file,
+            select_video_source_files,
+            select_video_isf_file,
+            import_video_output_bitmap_mask,
             import_gdtf,
             load_gdtf_wheel_media,
             load_gdtf_model_file,
@@ -16469,6 +22663,11 @@ fn main() {
             set_fixture_groups,
             set_attribute,
             set_group_attribute,
+            set_programmer_mode,
+            set_programmer_attribute,
+            set_programmer_group_attribute,
+            clear_programmer,
+            commit_programmer,
             set_group_highlight,
             set_group_solo,
             set_group_park,
@@ -16514,8 +22713,35 @@ fn main() {
             stop_osc_input,
             remote_access_urls,
             start_remote_control,
+            remote_control_status,
+            disconnect_remote_client,
             stop_remote_control,
+            start_dmx_input,
+            dmx_input_status,
+            stop_dmx_input,
+            send_art_rdm_request,
+            send_usb_rdm_request,
+            discover_usb_rdm_devices,
+            discover_art_rdm_devices,
+            start_art_rdm_full_discovery,
             create_cue_from_current,
+            create_cue_list,
+            create_reference_palette,
+            update_reference_palette,
+            remove_reference_palette,
+            apply_reference_palette,
+            set_cue_palette_targets,
+            create_playback_executor,
+            update_playback_executor,
+            remove_playback_executor,
+            set_playback_executor_level,
+            set_playback_master,
+            trigger_playback_executor,
+            rename_cue_list,
+            remove_cue_list,
+            set_cue_list,
+            trigger_cue_list_next,
+            trigger_cue_list_previous,
             update_cue_from_current,
             set_cue_metadata,
             move_cue,
@@ -16541,6 +22767,7 @@ fn main() {
             sync_ltc_timecode,
             add_video_file_layer,
             add_still_image_layer,
+            add_local_media_layers,
             refresh_video_layer_metadata,
             add_video_input_layer,
             duplicate_video_layer,
@@ -16548,7 +22775,21 @@ fn main() {
             set_video_layer_order,
             set_video_layer_label,
             set_video_layer_state,
+            set_video_layer_isf_effect,
             fade_video_layer_opacity,
+            launch_video_clip,
+            take_video_clip,
+            set_video_ab_mix,
+            stop_video_clip,
+            play_video_layer_audio_monitor,
+            list_audio_output_devices,
+            list_audio_input_devices,
+            start_live_audio_input,
+            stop_live_audio_input,
+            live_audio_input_status,
+            stop_video_layer_audio_monitor,
+            set_video_layer_audio_monitor_volume,
+            video_audio_monitor_status,
             add_video_cue_point,
             remove_video_cue_point,
             set_video_cue_point,
@@ -16599,17 +22840,37 @@ fn main() {
             load_fixture_preset_for_group,
             load_fixture_preset_for_all_matching,
             new_project,
+            save_user_template,
+            load_user_template,
             save_project,
             save_project_as,
             load_project,
             load_project_path,
             get_project_checkpoint,
             load_project_checkpoint,
+            get_project_history_status,
+            begin_project_transaction,
+            commit_project_transaction,
+            cancel_project_transaction,
+            clear_project_history,
+            undo_project_transaction,
+            redo_project_transaction,
+            save_project_backup,
+            list_project_backups,
+            load_project_backup,
+            delete_project_backup,
+            select_standby_sync_directory,
+            start_standby_sync,
+            stop_standby_sync,
+            standby_sync_status,
+            take_over_standby,
+            export_diagnostic_package,
             load_startup_project,
             load_phase1_sample_project,
             run_phase1_smoke,
             take_open_project_paths,
             get_snapshot,
+            get_snapshot_delta,
             get_visualizer_scene,
             save_stage_map_preset,
             apply_stage_map_preset,
@@ -16631,6 +22892,10 @@ fn main() {
             sync_external_video_transports,
             get_video_runtime_status,
             get_video_preview_diagnostics,
+            start_video_output_recording,
+            stop_video_output_recording,
+            video_output_recording_status,
+            get_video_layer_thumbnail,
             get_debug_video_preview,
             get_debug_video_output_preview,
             get_debug_video_output_test_pattern,

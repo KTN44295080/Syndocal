@@ -2,7 +2,10 @@ import { For } from "solid-js";
 import type { VideoOutputMapping } from "../types";
 import { videoOutputAspectPresets } from "../videoOutputMapping";
 
-type NumericVideoOutputMappingField = Exclude<keyof VideoOutputMapping, "aspect_mode">;
+type NumericVideoOutputMappingField = Exclude<
+  keyof VideoOutputMapping,
+  "aspect_mode" | "mask_invert" | "mask_points" | "bitmap_mask_luma_words"
+>;
 
 export const projectorMapViewBoxSize = 100;
 

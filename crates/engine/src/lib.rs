@@ -5,7 +5,7 @@ use std::{
         Arc, Condvar, Mutex, RwLock, Weak,
     },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use crossbeam_queue::ArrayQueue;
@@ -18,22 +18,25 @@ use io::{
 use protocol::StageObjectKind;
 use protocol::{
     set_video_output_mapping_field_value, ActiveFadeSummary, AttributeControl, AttributeResolution,
-    AttributeValueSummary, AudioAnalysisSummary, AutomationId, AutomationInterpolation,
-    AutomationKeyframeSummary, ClockSnapshot, ClockSource, CompositionId, CompositionSummary,
-    CueFixtureTarget, CueId, CueNodeGraphTarget, CueSummary, DmxModeSummary, DmxOutputConfig,
-    DmxOutputProtocol, DmxOutputRouteTelemetry, DmxUniversePreview, EffectBlendMode, EffectId,
-    EffectKind, EffectSummary, EngineSnapshot, EngineTelemetry, FixtureId, FixtureLimits,
+    AttributeValueSummary, AudioAnalysisSummary, AudioSpectrumBand, AudioSpectrumPoint,
+    AudioSpectrumSource, AutomationId, AutomationInterpolation, AutomationKeyframeSummary,
+    ClockSnapshot, ClockSource, CompositionId, CompositionSummary, CueFixtureTarget, CueId,
+    CueIfcbTiming, CueListId, CueListSummary, CueNodeGraphTarget, CuePaletteTarget, CuePartSummary,
+    CueSummary, DmxMergeMode, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol,
+    DmxOutputRouteTelemetry, DmxUniversePreview, EffectBlendMode, EffectId, EffectKind,
+    EffectSummary, EngineSnapshot, EngineTelemetry, ExecutorId, FixtureId, FixtureLimits,
     FixtureProfileSummary, LfoEffectRequest, LfoShape, NodeGraphId, NodeGraphNodeKind,
-    NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PatchFixtureRequest,
-    PatchedFixtureSummary, PositionWaveEffectRequest, Rotation3, StageMapConfig,
+    NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId, PatchFixtureRequest,
+    PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot,
+    ProgrammerValueSummary, ReferencePaletteSummary, Rotation3, StageMapConfig,
     StageMapPresetSummary, StageObjectId, StageObjectSummary, SubmasterSummary,
     TimelineAutomationSummary, TimelineCueEventSummary, TimelineEventId, TimelineSnapshot,
     TimelineTrackKind, TimelineVideoAutomationSummary, Transform2D, Vec3,
     VideoAutomationKeyframeSummary, VideoBlendMode, VideoColorAdjust, VideoCuePointSummary,
-    VideoEffectTarget, VideoFxAdjust, VideoLayerId, VideoLayerState, VideoLayerSummary,
-    VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
+    VideoEffectTarget, VideoFxAdjust, VideoIsfEffectSummary, VideoLayerId, VideoLayerState,
+    VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
     VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
-    VideoSnapshot, VideoSourceSummary,
+    VideoSnapshot, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
 };
 use thiserror::Error;
 
@@ -43,6 +46,8 @@ const DMX_TICK_INTERVAL: Duration = Duration::from_micros(22_727);
 const LOW_LATENCY_DMX_TICK_THRESHOLD: Duration = Duration::from_micros(5_000);
 const TICK_SPIN_THRESHOLD: Duration = Duration::from_millis(1);
 const JITTER_PERCENTILE_WINDOW: usize = 256;
+const DMX_RECONNECT_BASE_DELAY: Duration = Duration::from_millis(250);
+const DMX_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(10);
 
 #[cfg(target_os = "windows")]
 mod realtime_thread {
@@ -159,6 +164,22 @@ pub enum EngineCommand {
         attribute: String,
         value: u16,
     },
+    SetProgrammerMode {
+        enabled: bool,
+        blind: bool,
+    },
+    SetProgrammerAttribute {
+        fixture_id: FixtureId,
+        attribute: String,
+        value: u16,
+    },
+    SetProgrammerGroupAttribute {
+        group_id: String,
+        attribute: String,
+        value: u16,
+    },
+    ClearProgrammer,
+    CommitProgrammer,
     SetGroupHighlight {
         group_id: String,
         enabled: bool,
@@ -228,6 +249,12 @@ pub enum EngineCommand {
     RemoveStageObject(StageObjectId),
     SetOutput(DmxOutputConfig),
     SetDmxOutputs(Vec<DmxOutputConfig>),
+    SetDmxInputFrame {
+        universe: u16,
+        values: Box<[u8; 512]>,
+        merge_mode: DmxMergeMode,
+    },
+    ClearDmxInput(u16),
     Blackout(bool),
     SetAllBlackout(bool),
     SetLightingMaster(f32),
@@ -301,8 +328,37 @@ pub enum EngineCommand {
     },
     SetCueMetadata {
         cue_id: CueId,
+        cue_number: String,
         label: String,
         fade_ms: u64,
+        pre_wait_ms: u64,
+        follow_ms: Option<u64>,
+        ifcb_timing: CueIfcbTiming,
+        tracking: bool,
+        notes: String,
+    },
+    SetCueParts {
+        cue_id: CueId,
+        parts: Vec<CuePartSummary>,
+    },
+    SetCueMark {
+        cue_id: CueId,
+        mark: bool,
+    },
+    SetCueMibFixtureIds {
+        cue_id: CueId,
+        fixture_ids: Vec<FixtureId>,
+    },
+    UpsertPalette(ReferencePaletteSummary),
+    RemovePalette(PaletteId),
+    ApplyPalette {
+        palette_id: PaletteId,
+        fixture_ids: Vec<FixtureId>,
+        programmer: bool,
+    },
+    SetCuePaletteTargets {
+        cue_id: CueId,
+        palette_targets: Vec<CuePaletteTarget>,
     },
     MoveCue {
         cue_id: CueId,
@@ -313,9 +369,29 @@ pub enum EngineCommand {
         cue_id: CueId,
         label: String,
     },
+    UpsertCueList {
+        cue_list_id: CueListId,
+        label: String,
+    },
+    RemoveCueList(CueListId),
+    SetCueList {
+        cue_id: CueId,
+        cue_list_id: CueListId,
+    },
+    UpsertPlaybackExecutor(PlaybackExecutorSummary),
+    RemovePlaybackExecutor(ExecutorId),
+    SetPlaybackExecutorLevel {
+        executor_id: ExecutorId,
+        level: f32,
+    },
+    SetPlaybackMaster(f32),
+    TriggerPlaybackExecutorNext(ExecutorId),
+    TriggerPlaybackExecutorPrevious(ExecutorId),
     TriggerCue(CueId),
     TriggerNextCue,
     TriggerPreviousCue,
+    TriggerCueListNext(CueListId),
+    TriggerCueListPrevious(CueListId),
     SetCueFadePaused(bool),
     RemoveCue(CueId),
     AddTimelineCueEvent {
@@ -361,6 +437,7 @@ pub enum EngineCommand {
     },
     RemoveTimelineAutomation(AutomationId),
     SetTimelineAudio(Option<AudioAnalysisSummary>),
+    SetLiveAudioSpectrum(Option<AudioSpectrumPoint>),
     SetTimelinePlaying(bool),
     SeekTimeline(u64),
     SeekTimelineBeat {
@@ -389,6 +466,10 @@ pub enum EngineCommand {
     SetVideoLayerSource {
         layer_id: VideoLayerId,
         source: VideoSourceSummary,
+    },
+    SetVideoLayerIsfEffect {
+        layer_id: VideoLayerId,
+        effect: Option<VideoIsfEffectSummary>,
     },
     SetVideoLayerState {
         layer_id: VideoLayerId,
@@ -520,6 +601,11 @@ impl EngineCommand {
                 | EngineCommand::RemoveFixture(_)
                 | EngineCommand::SetAttribute { .. }
                 | EngineCommand::SetGroupAttribute { .. }
+                | EngineCommand::SetProgrammerMode { .. }
+                | EngineCommand::SetProgrammerAttribute { .. }
+                | EngineCommand::SetProgrammerGroupAttribute { .. }
+                | EngineCommand::ClearProgrammer
+                | EngineCommand::CommitProgrammer
                 | EngineCommand::SetGroupHighlight { .. }
                 | EngineCommand::SetGroupSolo { .. }
                 | EngineCommand::SetGroupPark { .. }
@@ -536,6 +622,8 @@ impl EngineCommand {
                 | EngineCommand::LoadProjectSnapshot(_)
                 | EngineCommand::SetOutput(_)
                 | EngineCommand::SetDmxOutputs(_)
+                | EngineCommand::SetDmxInputFrame { .. }
+                | EngineCommand::ClearDmxInput(_)
                 | EngineCommand::Blackout(_)
                 | EngineCommand::SetAllBlackout(_)
                 | EngineCommand::SetLightingMaster(_)
@@ -554,14 +642,33 @@ impl EngineCommand {
                 | EngineCommand::CreateCue { .. }
                 | EngineCommand::UpdateCue { .. }
                 | EngineCommand::SetCueMetadata { .. }
+                | EngineCommand::SetCueParts { .. }
+                | EngineCommand::SetCueMark { .. }
+                | EngineCommand::SetCueMibFixtureIds { .. }
+                | EngineCommand::UpsertPalette(_)
+                | EngineCommand::RemovePalette(_)
+                | EngineCommand::ApplyPalette { .. }
+                | EngineCommand::SetCuePaletteTargets { .. }
                 | EngineCommand::MoveCue { .. }
                 | EngineCommand::DuplicateCue { .. }
+                | EngineCommand::UpsertCueList { .. }
+                | EngineCommand::RemoveCueList(_)
+                | EngineCommand::SetCueList { .. }
+                | EngineCommand::UpsertPlaybackExecutor(_)
+                | EngineCommand::RemovePlaybackExecutor(_)
+                | EngineCommand::SetPlaybackExecutorLevel { .. }
+                | EngineCommand::SetPlaybackMaster(_)
+                | EngineCommand::TriggerPlaybackExecutorNext(_)
+                | EngineCommand::TriggerPlaybackExecutorPrevious(_)
                 | EngineCommand::TriggerCue(_)
                 | EngineCommand::TriggerNextCue
                 | EngineCommand::TriggerPreviousCue
+                | EngineCommand::TriggerCueListNext(_)
+                | EngineCommand::TriggerCueListPrevious(_)
                 | EngineCommand::SetCueFadePaused(_)
                 | EngineCommand::RemoveCue(_)
                 | EngineCommand::SetTimelinePlaying(_)
+                | EngineCommand::SetLiveAudioSpectrum(_)
                 | EngineCommand::SeekTimeline(_)
                 | EngineCommand::SeekTimelineBeat { .. }
                 | EngineCommand::SyncTimelineTimecode { .. }
@@ -579,6 +686,9 @@ pub struct EngineHandle {
     next_fixture_id: Arc<AtomicU64>,
     next_effect_id: Arc<AtomicU64>,
     next_cue_id: Arc<AtomicU64>,
+    next_cue_list_id: Arc<AtomicU64>,
+    next_palette_id: Arc<AtomicU64>,
+    next_executor_id: Arc<AtomicU64>,
     next_timeline_event_id: Arc<AtomicU64>,
     next_automation_id: Arc<AtomicU64>,
     next_video_layer_id: Arc<AtomicU64>,
@@ -713,6 +823,9 @@ impl EngineHandle {
         let next_fixture_id = Arc::new(AtomicU64::new(1));
         let next_effect_id = Arc::new(AtomicU64::new(1));
         let next_cue_id = Arc::new(AtomicU64::new(1));
+        let next_cue_list_id = Arc::new(AtomicU64::new(2));
+        let next_palette_id = Arc::new(AtomicU64::new(1));
+        let next_executor_id = Arc::new(AtomicU64::new(2));
         let next_timeline_event_id = Arc::new(AtomicU64::new(1));
         let next_automation_id = Arc::new(AtomicU64::new(1));
         let next_video_layer_id = Arc::new(AtomicU64::new(1));
@@ -752,6 +865,9 @@ impl EngineHandle {
             next_fixture_id,
             next_effect_id,
             next_cue_id,
+            next_cue_list_id,
+            next_palette_id,
+            next_executor_id,
             next_timeline_event_id,
             next_automation_id,
             next_video_layer_id,
@@ -772,6 +888,18 @@ impl EngineHandle {
 
     pub fn allocate_cue_id(&self) -> CueId {
         self.next_cue_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    pub fn allocate_cue_list_id(&self) -> CueListId {
+        self.next_cue_list_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    pub fn allocate_palette_id(&self) -> PaletteId {
+        self.next_palette_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    pub fn allocate_executor_id(&self) -> ExecutorId {
+        self.next_executor_id.fetch_add(1, Ordering::Relaxed)
     }
 
     pub fn allocate_timeline_event_id(&self) -> TimelineEventId {
@@ -863,6 +991,36 @@ impl EngineHandle {
                 .saturating_add(1),
         );
         store_next_id(
+            &self.next_cue_list_id,
+            snapshot
+                .cue_lists
+                .iter()
+                .map(|cue_list| cue_list.id)
+                .max()
+                .unwrap_or(DEFAULT_CUE_LIST_ID)
+                .saturating_add(1),
+        );
+        store_next_id(
+            &self.next_palette_id,
+            snapshot
+                .palettes
+                .iter()
+                .map(|palette| palette.id)
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1),
+        );
+        store_next_id(
+            &self.next_executor_id,
+            snapshot
+                .playback_executors
+                .iter()
+                .map(|executor| executor.id)
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1),
+        );
+        store_next_id(
             &self.next_timeline_event_id,
             snapshot
                 .timeline
@@ -949,6 +1107,15 @@ impl EngineHandle {
     fn sync_allocator_counters_for_command(&self, command: &EngineCommand) {
         match command {
             EngineCommand::LoadProjectSnapshot(snapshot) => self.sync_allocator_counters(snapshot),
+            EngineCommand::UpsertCueList { cue_list_id, .. } => {
+                store_next_id(&self.next_cue_list_id, cue_list_id.saturating_add(1));
+            }
+            EngineCommand::UpsertPalette(palette) => {
+                store_next_id(&self.next_palette_id, palette.id.saturating_add(1));
+            }
+            EngineCommand::UpsertPlaybackExecutor(executor) => {
+                store_next_id(&self.next_executor_id, executor.id.saturating_add(1));
+            }
             EngineCommand::UpsertStageObject(object) => {
                 self.sync_stage_object_allocator(std::slice::from_ref(object));
             }
@@ -1018,8 +1185,19 @@ enum RuntimeEffectKind {
 #[derive(Clone)]
 struct RuntimeCue {
     id: CueId,
+    cue_list_id: CueListId,
+    cue_number: String,
     label: String,
     fade_ms: u64,
+    pre_wait_ms: u64,
+    follow_ms: Option<u64>,
+    ifcb_timing: CueIfcbTiming,
+    parts: Vec<CuePartSummary>,
+    mark: bool,
+    mib_fixture_ids: Vec<FixtureId>,
+    palette_targets: Vec<CuePaletteTarget>,
+    tracking: bool,
+    notes: String,
     targets: Vec<CueFixtureTarget>,
     video_targets: Vec<VideoLayerTarget>,
     video_output_targets: Vec<VideoOutputTarget>,
@@ -1030,14 +1208,24 @@ struct RuntimeFade {
     cue_id: CueId,
     started_at: Instant,
     duration: Duration,
+    video_duration: Duration,
     paused_at: Option<Instant>,
     paused_duration: Duration,
     start_values: HashMap<(FixtureId, String), u16>,
     target_values: HashMap<(FixtureId, String), u16>,
+    attribute_timings: HashMap<(FixtureId, String), (Duration, Duration)>,
     video_start_states: HashMap<VideoLayerId, VideoLayerState>,
     video_target_states: HashMap<VideoLayerId, VideoLayerState>,
+    video_layer_timings: HashMap<VideoLayerId, (Duration, Duration)>,
     video_output_start_opacities: HashMap<VideoOutputId, f32>,
     video_output_target_opacities: HashMap<VideoOutputId, f32>,
+    video_output_targets: HashMap<VideoOutputId, VideoOutputTarget>,
+    video_output_timings: HashMap<VideoOutputId, (Duration, Duration)>,
+}
+
+struct PendingCueTrigger {
+    cue_id: CueId,
+    due_at: Instant,
 }
 
 #[derive(Clone)]
@@ -1075,6 +1263,7 @@ struct RuntimeVideoLayer {
     source: VideoSourceSummary,
     blend_mode: VideoBlendMode,
     state: VideoLayerState,
+    isf_effect: Option<VideoIsfEffectSummary>,
 }
 
 #[derive(Clone)]
@@ -1108,6 +1297,26 @@ struct RuntimeVideoOutputFade {
 struct RuntimeDmxOutput {
     config: DmxOutputConfig,
     sender: Option<DmxSender>,
+    recovery: DmxRouteRecovery,
+}
+
+#[derive(Debug, Clone, Default)]
+struct DmxRouteRecovery {
+    consecutive_failures: u32,
+    reconnect_attempts: u64,
+    next_retry_at: Option<Instant>,
+    last_error: Option<String>,
+    last_success_unix_ms: Option<u64>,
+}
+
+struct DmxRouteSendOutcome {
+    attempted: bool,
+    result: Result<usize, String>,
+}
+
+struct RuntimeDmxInputFrame {
+    values: Box<[u8; 512]>,
+    merge_mode: DmxMergeMode,
 }
 
 struct EngineRuntime {
@@ -1116,10 +1325,15 @@ struct EngineRuntime {
     effects: Vec<RuntimeEffect>,
     node_graphs: Vec<RuntimeNodeGraph>,
     cues: Vec<RuntimeCue>,
+    cue_lists: Vec<CueListSummary>,
+    palettes: Vec<ReferencePaletteSummary>,
+    playback_executors: Vec<PlaybackExecutorSummary>,
+    playback_master: f32,
     timeline_events: Vec<RuntimeTimelineEvent>,
     timeline_automations: Vec<RuntimeTimelineAutomation>,
     timeline_video_automations: Vec<RuntimeTimelineVideoAutomation>,
     timeline_audio: Option<AudioAnalysisSummary>,
+    live_audio_spectrum: Option<AudioSpectrumPoint>,
     timeline_playing: bool,
     timeline_position_ms: u64,
     video_layers: Vec<RuntimeVideoLayer>,
@@ -1136,13 +1350,19 @@ struct EngineRuntime {
     soloed_fixtures: HashSet<FixtureId>,
     parked_fixture_values: HashMap<FixtureId, HashMap<String, u16>>,
     values: HashMap<(FixtureId, String), u16>,
+    cue_value_origins: HashMap<(FixtureId, String), CueListId>,
+    programmer_enabled: bool,
+    programmer_blind: bool,
+    programmer_values: HashMap<(FixtureId, String), u16>,
     stage_map: StageMapConfig,
     stage_map_presets: Vec<StageMapPresetSummary>,
     stage_objects: Vec<StageObjectSummary>,
     active_cue_id: Option<CueId>,
     active_fade: Option<RuntimeFade>,
+    pending_cue: Option<PendingCueTrigger>,
     output: DmxOutputConfig,
     additional_dmx_outputs: Vec<RuntimeDmxOutput>,
+    dmx_input_frames: HashMap<u16, RuntimeDmxInputFrame>,
     blackout: bool,
     clock: BpmClock,
     frame_counter: u64,
@@ -1195,6 +1415,7 @@ struct EngineRuntime {
     last_frame: [u8; 512],
     last_frames_by_universe: HashMap<u16, [u8; 512]>,
     dmx_sender: Option<DmxSender>,
+    dmx_sender_recovery: DmxRouteRecovery,
 }
 
 enum DmxSender {
@@ -1206,8 +1427,16 @@ enum DmxSender {
 
 impl RuntimeDmxOutput {
     fn new(config: DmxOutputConfig) -> Self {
-        let sender = create_enabled_dmx_sender(&config).ok().flatten();
-        Self { config, sender }
+        let sender_result = create_enabled_dmx_sender(&config);
+        let mut recovery = DmxRouteRecovery::default();
+        if let Err(error) = &sender_result {
+            recovery.record_failure(error.clone(), Instant::now());
+        }
+        Self {
+            config,
+            sender: sender_result.ok().flatten(),
+            recovery,
+        }
     }
 
     fn new_with_error(config: DmxOutputConfig) -> (Self, Option<String>) {
@@ -1217,6 +1446,13 @@ impl RuntimeDmxOutput {
             Self {
                 config,
                 sender: sender_result.ok().flatten(),
+                recovery: {
+                    let mut recovery = DmxRouteRecovery::default();
+                    if let Some(error) = &error {
+                        recovery.record_failure(error.clone(), Instant::now());
+                    }
+                    recovery
+                },
             },
             error,
         )
@@ -1242,10 +1478,15 @@ impl EngineRuntime {
             effects: Vec::new(),
             node_graphs: Vec::new(),
             cues: Vec::new(),
+            cue_lists: vec![CueListSummary::default()],
+            palettes: Vec::new(),
+            playback_executors: vec![PlaybackExecutorSummary::default()],
+            playback_master: 1.0,
             timeline_events: Vec::new(),
             timeline_automations: Vec::new(),
             timeline_video_automations: Vec::new(),
             timeline_audio: None,
+            live_audio_spectrum: None,
             timeline_playing: false,
             timeline_position_ms: 0,
             video_layers: Vec::new(),
@@ -1262,13 +1503,19 @@ impl EngineRuntime {
             soloed_fixtures: HashSet::new(),
             parked_fixture_values: HashMap::new(),
             values: HashMap::new(),
+            cue_value_origins: HashMap::new(),
+            programmer_enabled: false,
+            programmer_blind: false,
+            programmer_values: HashMap::new(),
             stage_map: StageMapConfig::default(),
             stage_map_presets: Vec::new(),
             stage_objects: Vec::new(),
             active_cue_id: None,
             active_fade: None,
+            pending_cue: None,
             output,
             additional_dmx_outputs: Vec::new(),
+            dmx_input_frames: HashMap::new(),
             blackout: false,
             clock: BpmClock::new(120.0, Instant::now()),
             frame_counter: 0,
@@ -1317,10 +1564,17 @@ impl EngineRuntime {
             last_dmx_route_results: Vec::new(),
             total_dmx_send_success_count: 0,
             total_dmx_send_failure_count: 0,
-            last_error,
+            last_error: last_error.clone(),
             last_frame: [0u8; 512],
             last_frames_by_universe: HashMap::new(),
             dmx_sender,
+            dmx_sender_recovery: {
+                let mut recovery = DmxRouteRecovery::default();
+                if let Some(error) = &last_error {
+                    recovery.record_failure(error.clone(), Instant::now());
+                }
+                recovery
+            },
         }
     }
 
@@ -1330,12 +1584,29 @@ impl EngineRuntime {
             runtime_fixtures_from_snapshot(&snapshot.fixtures);
         self.fixtures = loaded_fixtures;
         self.values.clear();
+        self.cue_value_origins.clear();
         for fixture in &loaded_fixture_summaries {
             for value in &fixture.attribute_values {
                 self.values
                     .insert((fixture.id, value.attribute.clone()), value.value);
             }
         }
+        self.programmer_values = snapshot
+            .programmer
+            .values
+            .iter()
+            .filter_map(|entry| {
+                self.resolve_fixture_attribute(entry.fixture_id, &entry.attribute)
+                    .ok()
+                    .map(|attribute| ((entry.fixture_id, attribute), entry.value))
+            })
+            .collect();
+        self.programmer_enabled = snapshot.programmer.enabled;
+        self.programmer_blind = if self.programmer_values.is_empty() {
+            snapshot.programmer.blind
+        } else {
+            true
+        };
 
         self.highlighted_fixtures = loaded_fixture_summaries
             .iter()
@@ -1360,7 +1631,16 @@ impl EngineRuntime {
             })
             .collect();
 
+        self.palettes = sanitize_loaded_palettes(&snapshot.palettes);
         self.cues = snapshot.cues.iter().map(runtime_cue_from_summary).collect();
+        self.cue_lists = sanitize_cue_lists(&snapshot.cue_lists, &self.cues);
+        self.playback_executors =
+            sanitize_playback_executors(&snapshot.playback_executors, &self.cue_lists);
+        self.playback_master = if snapshot.playback_master.is_finite() {
+            snapshot.playback_master.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
         self.timeline_events = snapshot
             .timeline
             .events
@@ -1381,6 +1661,7 @@ impl EngineRuntime {
             .map(runtime_timeline_video_automation_from_summary)
             .collect();
         self.timeline_audio = snapshot.timeline.audio.clone();
+        self.live_audio_spectrum = None;
         self.timeline_playing = snapshot.timeline.playing;
 
         self.video_layers = sanitize_loaded_video_layers(&snapshot.video.layers);
@@ -1417,14 +1698,22 @@ impl EngineRuntime {
             })
             .collect();
         self.sanitize_loaded_show_references(now);
+        self.cue_lists = sanitize_cue_lists(&self.cue_lists, &self.cues);
         let mut outputs = if snapshot.dmx_outputs.is_empty() {
             vec![snapshot.output.clone()]
         } else {
             snapshot.dmx_outputs.clone()
         };
         self.output = outputs.remove(0);
-        self.dmx_sender = create_enabled_dmx_sender(&self.output).ok().flatten();
+        let primary_sender_result = create_enabled_dmx_sender(&self.output);
+        self.dmx_sender_recovery = DmxRouteRecovery::default();
+        if let Err(error) = &primary_sender_result {
+            self.dmx_sender_recovery
+                .record_failure(error.clone(), Instant::now());
+        }
+        self.dmx_sender = primary_sender_result.ok().flatten();
         self.additional_dmx_outputs = outputs.into_iter().map(RuntimeDmxOutput::new).collect();
+        self.dmx_input_frames.clear();
         self.lighting_master = if snapshot.lighting_master.is_finite() {
             snapshot.lighting_master.clamp(0.0, 1.0)
         } else {
@@ -1453,7 +1742,25 @@ impl EngineRuntime {
         self.active_cue_id = snapshot
             .active_cue_id
             .filter(|cue_id| self.cues.iter().any(|cue| cue.id == *cue_id));
+        if let Some(active_cue_id) = self.active_cue_id {
+            if let Some(cue_list_id) = self
+                .cues
+                .iter()
+                .find(|cue| cue.id == active_cue_id)
+                .map(|cue| cue.cue_list_id)
+            {
+                if let Some(cue_list) = self
+                    .cue_lists
+                    .iter_mut()
+                    .find(|cue_list| cue_list.id == cue_list_id)
+                {
+                    cue_list.active_cue_id = Some(active_cue_id);
+                }
+            }
+        }
+        self.rebuild_cue_value_origins();
         self.active_fade = None;
+        self.pending_cue = None;
         self.shared_telemetry.reset();
         self.frame_counter = 0;
         self.queue_depth_abs_max = 0;
@@ -1520,10 +1827,33 @@ impl EngineRuntime {
                         cue.node_graph_targets,
                     )
                     .ok()?;
+                let palette_targets = sanitize_loaded_cue_palette_targets(
+                    cue.palette_targets,
+                    &self.palettes,
+                    &self.fixtures,
+                );
+                let mib_fixture_ids =
+                    reconcile_mib_fixture_ids(cue.mib_fixture_ids, &targets, &palette_targets);
                 Some(RuntimeCue {
                     id: cue.id,
+                    cue_list_id: cue.cue_list_id,
+                    cue_number: cue.cue_number,
                     label: cue.label,
                     fade_ms: cue.fade_ms,
+                    pre_wait_ms: cue.pre_wait_ms,
+                    follow_ms: cue.follow_ms,
+                    ifcb_timing: cue.ifcb_timing,
+                    parts: reconcile_cue_parts(
+                        cue.parts,
+                        &targets,
+                        &video_targets,
+                        &video_output_targets,
+                    ),
+                    mark: cue.mark,
+                    mib_fixture_ids,
+                    palette_targets,
+                    tracking: cue.tracking,
+                    notes: cue.notes,
                     targets,
                     video_targets,
                     video_output_targets,
@@ -1815,7 +2145,9 @@ impl EngineRuntime {
                 Ok(attribute) => {
                     self.active_cue_id = None;
                     self.active_fade = None;
-                    self.values.insert((fixture_id, attribute), value);
+                    let key = (fixture_id, attribute);
+                    self.cue_value_origins.remove(&key);
+                    self.values.insert(key, value);
                     self.last_error = None;
                 }
                 Err(error) => self.last_error = Some(error),
@@ -1829,12 +2161,58 @@ impl EngineRuntime {
                     self.active_cue_id = None;
                     self.active_fade = None;
                     for (fixture_id, attribute) in targets {
-                        self.values.insert((fixture_id, attribute), value);
+                        let key = (fixture_id, attribute);
+                        self.cue_value_origins.remove(&key);
+                        self.values.insert(key, value);
                     }
                     self.last_error = None;
                 }
                 Err(error) => self.last_error = Some(error),
             },
+            EngineCommand::SetProgrammerMode { enabled, blind } => {
+                self.programmer_enabled = enabled;
+                self.programmer_blind = enabled && blind;
+                self.last_error = None;
+            }
+            EngineCommand::SetProgrammerAttribute {
+                fixture_id,
+                attribute,
+                value,
+            } => match self.resolve_fixture_attribute(fixture_id, &attribute) {
+                Ok(attribute) => {
+                    self.programmer_values
+                        .insert((fixture_id, attribute), value);
+                    self.last_error = None;
+                }
+                Err(error) => self.last_error = Some(error),
+            },
+            EngineCommand::SetProgrammerGroupAttribute {
+                group_id,
+                attribute,
+                value,
+            } => match self.resolve_group_attribute_targets(&group_id, &attribute) {
+                Ok(targets) => {
+                    for (fixture_id, attribute) in targets {
+                        self.programmer_values
+                            .insert((fixture_id, attribute), value);
+                    }
+                    self.last_error = None;
+                }
+                Err(error) => self.last_error = Some(error),
+            },
+            EngineCommand::ClearProgrammer => {
+                self.programmer_values.clear();
+                self.last_error = None;
+            }
+            EngineCommand::CommitProgrammer => {
+                self.active_cue_id = None;
+                self.active_fade = None;
+                for (key, value) in self.programmer_values.drain() {
+                    self.cue_value_origins.remove(&key);
+                    self.values.insert(key, value);
+                }
+                self.last_error = None;
+            }
             EngineCommand::SetGroupHighlight { group_id, enabled } => {
                 let fixture_ids = self.fixture_ids_in_group(&group_id);
                 if fixture_ids.is_empty() {
@@ -2064,7 +2442,9 @@ impl EngineRuntime {
                 self.active_cue_id = None;
                 self.active_fade = None;
                 for (attribute, value) in values {
-                    self.values.insert((fixture_id, attribute), value);
+                    let key = (fixture_id, attribute);
+                    self.cue_value_origins.remove(&key);
+                    self.values.insert(key, value);
                 }
                 self.last_error = None;
             }
@@ -2150,6 +2530,7 @@ impl EngineRuntime {
             }
             EngineCommand::SetOutput(output) => {
                 self.output = output;
+                self.dmx_sender_recovery = DmxRouteRecovery::default();
                 match create_enabled_dmx_sender(&self.output) {
                     Ok(sender) => {
                         self.dmx_sender = sender;
@@ -2157,6 +2538,8 @@ impl EngineRuntime {
                     }
                     Err(error) => {
                         self.dmx_sender = None;
+                        self.dmx_sender_recovery
+                            .record_failure(error.clone(), Instant::now());
                         self.last_error = Some(error);
                     }
                 }
@@ -2174,6 +2557,11 @@ impl EngineRuntime {
                     .as_ref()
                     .err()
                     .map(|error| format!("DMX output route 0: {error}"));
+                self.dmx_sender_recovery = DmxRouteRecovery::default();
+                if let Err(error) = &primary_sender_result {
+                    self.dmx_sender_recovery
+                        .record_failure(error.clone(), Instant::now());
+                }
                 self.dmx_sender = primary_sender_result.ok().flatten();
                 self.additional_dmx_outputs = outputs
                     .into_iter()
@@ -2188,6 +2576,19 @@ impl EngineRuntime {
                     })
                     .collect();
                 self.last_error = first_error;
+            }
+            EngineCommand::SetDmxInputFrame {
+                universe,
+                values,
+                merge_mode,
+            } => {
+                self.dmx_input_frames
+                    .insert(universe, RuntimeDmxInputFrame { values, merge_mode });
+                self.last_error = None;
+            }
+            EngineCommand::ClearDmxInput(universe) => {
+                self.dmx_input_frames.remove(&universe);
+                self.last_error = None;
             }
             EngineCommand::Blackout(enabled) => {
                 self.blackout = enabled;
@@ -2240,9 +2641,10 @@ impl EngineRuntime {
                 self.last_error = None;
             }
             EngineCommand::MidiSongPositionPointer(sixteenth_notes) => {
+                let now = Instant::now();
                 let position_ms = self.clock.midi_song_position_ms(sixteenth_notes);
-                self.sync_timeline_position(position_ms, Instant::now());
-                self.clock.mark_timecode_sync(ClockSource::MidiClock);
+                self.sync_timeline_position(position_ms, now);
+                self.clock.mark_timecode_sync(ClockSource::MidiClock, now);
                 self.apply_timeline_automations();
                 self.apply_timeline_video_automations();
             }
@@ -2471,8 +2873,19 @@ impl EngineRuntime {
                 self.cues.retain(|cue| cue.id != cue_id);
                 self.cues.push(RuntimeCue {
                     id: cue_id,
+                    cue_list_id: DEFAULT_CUE_LIST_ID,
+                    cue_number: cue_id.to_string(),
                     label,
                     fade_ms,
+                    pre_wait_ms: 0,
+                    follow_ms: None,
+                    ifcb_timing: CueIfcbTiming::default(),
+                    parts: Vec::new(),
+                    mark: false,
+                    mib_fixture_ids: Vec::new(),
+                    palette_targets: Vec::new(),
+                    tracking: true,
+                    notes: String::new(),
                     targets,
                     video_targets,
                     video_output_targets,
@@ -2507,25 +2920,225 @@ impl EngineRuntime {
                     }
                 };
                 if let Some(cue) = self.cues.get_mut(cue_index) {
+                    let parts = reconcile_cue_parts(
+                        std::mem::take(&mut cue.parts),
+                        &targets,
+                        &video_targets,
+                        &video_output_targets,
+                    );
+                    let mib_fixture_ids = reconcile_mib_fixture_ids(
+                        std::mem::take(&mut cue.mib_fixture_ids),
+                        &targets,
+                        &cue.palette_targets,
+                    );
                     cue.label = label;
                     cue.fade_ms = fade_ms;
                     cue.targets = targets;
                     cue.video_targets = video_targets;
                     cue.video_output_targets = video_output_targets;
                     cue.node_graph_targets = node_graph_targets;
+                    cue.parts = parts;
+                    cue.mib_fixture_ids = mib_fixture_ids;
                     self.last_error = None;
+                }
+            }
+            EngineCommand::SetCueParts { cue_id, parts } => {
+                let Some(cue) = self.cues.iter_mut().find(|cue| cue.id == cue_id) else {
+                    self.last_error = Some(format!("Cue {cue_id} was not found"));
+                    return;
+                };
+                match validate_and_sanitize_cue_parts(
+                    parts,
+                    &cue.targets,
+                    &cue.video_targets,
+                    &cue.video_output_targets,
+                ) {
+                    Ok(parts) => {
+                        cue.parts = parts;
+                        self.last_error = None;
+                    }
+                    Err(error) => self.last_error = Some(error),
+                }
+            }
+            EngineCommand::SetCueMark { cue_id, mark } => {
+                if let Some(cue) = self.cues.iter_mut().find(|cue| cue.id == cue_id) {
+                    cue.mark = mark;
+                    self.last_error = None;
+                } else {
+                    self.last_error = Some(format!("Cue {cue_id} was not found"));
+                }
+            }
+            EngineCommand::SetCueMibFixtureIds {
+                cue_id,
+                fixture_ids,
+            } => {
+                let Some(cue) = self.cues.iter_mut().find(|cue| cue.id == cue_id) else {
+                    self.last_error = Some(format!("Cue {cue_id} was not found"));
+                    return;
+                };
+                match validate_and_sanitize_mib_fixture_ids(
+                    fixture_ids,
+                    &cue.targets,
+                    &cue.palette_targets,
+                ) {
+                    Ok(fixture_ids) => {
+                        cue.mib_fixture_ids = fixture_ids;
+                        self.last_error = None;
+                    }
+                    Err(error) => self.last_error = Some(error),
+                }
+            }
+            EngineCommand::UpsertPalette(palette) => match validate_and_sanitize_palette(palette) {
+                Ok(palette) => {
+                    if let Some(existing) = self
+                        .palettes
+                        .iter_mut()
+                        .find(|candidate| candidate.id == palette.id)
+                    {
+                        *existing = palette;
+                    } else if self.palettes.len() >= 128 {
+                        self.last_error = Some(
+                            "A project can contain at most 128 reference palettes".to_string(),
+                        );
+                        return;
+                    } else {
+                        self.palettes.push(palette);
+                        self.palettes.sort_by_key(|candidate| candidate.id);
+                    }
+                    self.last_error = None;
+                }
+                Err(error) => self.last_error = Some(error),
+            },
+            EngineCommand::RemovePalette(palette_id) => {
+                let before = self.palettes.len();
+                self.palettes.retain(|palette| palette.id != palette_id);
+                if self.palettes.len() == before {
+                    self.last_error = Some(format!("Palette {palette_id} was not found"));
+                } else {
+                    for cue in &mut self.cues {
+                        cue.palette_targets
+                            .retain(|target| target.palette_id != palette_id);
+                        cue.mib_fixture_ids = reconcile_mib_fixture_ids(
+                            std::mem::take(&mut cue.mib_fixture_ids),
+                            &cue.targets,
+                            &cue.palette_targets,
+                        );
+                    }
+                    self.last_error = None;
+                }
+            }
+            EngineCommand::ApplyPalette {
+                palette_id,
+                mut fixture_ids,
+                programmer,
+            } => {
+                fixture_ids.sort_unstable();
+                fixture_ids.dedup();
+                if fixture_ids.is_empty() {
+                    self.last_error = Some("Select at least one fixture".to_string());
+                    return;
+                }
+                if !self.palettes.iter().any(|palette| palette.id == palette_id) {
+                    self.last_error = Some(format!("Palette {palette_id} was not found"));
+                    return;
+                }
+                if let Some(fixture_id) = fixture_ids.iter().find(|fixture_id| {
+                    !self
+                        .fixtures
+                        .iter()
+                        .any(|fixture| fixture.id == **fixture_id)
+                }) {
+                    self.last_error = Some(format!("Fixture {fixture_id} was not found"));
+                    return;
+                }
+                let values = self.cue_palette_target_values(&[CuePaletteTarget {
+                    palette_id,
+                    fixture_ids,
+                }]);
+                if values.is_empty() {
+                    self.last_error = Some(
+                        "The selected fixtures do not expose any attributes from this palette"
+                            .to_string(),
+                    );
+                    return;
+                }
+                if programmer {
+                    self.programmer_values.extend(values);
+                } else {
+                    self.active_cue_id = None;
+                    self.active_fade = None;
+                    for key in values.keys() {
+                        self.cue_value_origins.remove(key);
+                    }
+                    self.values.extend(values);
+                }
+                self.last_error = None;
+            }
+            EngineCommand::SetCuePaletteTargets {
+                cue_id,
+                palette_targets,
+            } => {
+                let palette_targets = match validate_and_sanitize_cue_palette_targets(
+                    palette_targets,
+                    &self.palettes,
+                    &self.fixtures,
+                ) {
+                    Ok(targets) => targets,
+                    Err(error) => {
+                        self.last_error = Some(error);
+                        return;
+                    }
+                };
+                if let Some(cue) = self.cues.iter_mut().find(|cue| cue.id == cue_id) {
+                    cue.palette_targets = palette_targets;
+                    cue.mib_fixture_ids = reconcile_mib_fixture_ids(
+                        std::mem::take(&mut cue.mib_fixture_ids),
+                        &cue.targets,
+                        &cue.palette_targets,
+                    );
+                    self.last_error = None;
+                } else {
+                    self.last_error = Some(format!("Cue {cue_id} was not found"));
                 }
             }
             EngineCommand::SetCueMetadata {
                 cue_id,
+                cue_number,
                 label,
                 fade_ms,
+                pre_wait_ms,
+                follow_ms,
+                ifcb_timing,
+                tracking,
+                notes,
             } => {
-                if label.trim().is_empty() {
+                if cue_number.trim().is_empty() {
+                    self.last_error = Some("Cue number is required".to_string());
+                } else if label.trim().is_empty() {
                     self.last_error = Some("Cue label is required".to_string());
+                } else if self.cues.iter().any(|cue| {
+                    cue.id != cue_id
+                        && self
+                            .cues
+                            .iter()
+                            .find(|candidate| candidate.id == cue_id)
+                            .map(|current| current.cue_list_id == cue.cue_list_id)
+                            .unwrap_or(false)
+                        && cue.cue_number == cue_number.trim()
+                }) {
+                    self.last_error = Some(format!(
+                        "Cue number '{}' is already in use",
+                        cue_number.trim()
+                    ));
                 } else if let Some(cue) = self.cues.iter_mut().find(|cue| cue.id == cue_id) {
+                    cue.cue_number = cue_number.trim().to_string();
                     cue.label = label.trim().to_string();
                     cue.fade_ms = fade_ms;
+                    cue.pre_wait_ms = pre_wait_ms;
+                    cue.follow_ms = follow_ms;
+                    cue.ifcb_timing = ifcb_timing;
+                    cue.tracking = tracking;
+                    cue.notes = notes.trim().chars().take(500).collect();
                     self.last_error = None;
                 } else {
                     self.last_error = Some(format!("Cue {cue_id} was not found"));
@@ -2533,11 +3146,18 @@ impl EngineRuntime {
             }
             EngineCommand::MoveCue { cue_id, delta } => {
                 if let Some(index) = self.cues.iter().position(|cue| cue.id == cue_id) {
-                    let last_index = self.cues.len().saturating_sub(1);
+                    let cue_list_id = self.cues[index].cue_list_id;
                     let next_index = if delta < 0 {
-                        index.saturating_sub(1)
+                        self.cues[..index]
+                            .iter()
+                            .rposition(|cue| cue.cue_list_id == cue_list_id)
+                            .unwrap_or(index)
                     } else if delta > 0 {
-                        (index + 1).min(last_index)
+                        self.cues[index + 1..]
+                            .iter()
+                            .position(|cue| cue.cue_list_id == cue_list_id)
+                            .map(|offset| index + 1 + offset)
+                            .unwrap_or(index)
                     } else {
                         index
                     };
@@ -2561,6 +3181,7 @@ impl EngineRuntime {
                 {
                     let mut cue = self.cues[source_index].clone();
                     cue.id = cue_id;
+                    cue.cue_number = cue_id.to_string();
                     cue.label = label.trim().to_string();
                     self.cues.retain(|existing| existing.id != cue_id);
                     let insert_index = self
@@ -2575,17 +3196,229 @@ impl EngineRuntime {
                     self.last_error = Some(format!("Cue {source_cue_id} was not found"));
                 }
             }
+            EngineCommand::UpsertCueList { cue_list_id, label } => {
+                let label = label.trim().chars().take(64).collect::<String>();
+                if cue_list_id == 0 {
+                    self.last_error = Some("Cue List ID must be greater than zero".to_string());
+                } else if label.is_empty() {
+                    self.last_error = Some("Cue List label is required".to_string());
+                } else if let Some(cue_list) = self
+                    .cue_lists
+                    .iter_mut()
+                    .find(|cue_list| cue_list.id == cue_list_id)
+                {
+                    cue_list.label = label;
+                    self.last_error = None;
+                } else {
+                    self.cue_lists.push(CueListSummary {
+                        id: cue_list_id,
+                        label,
+                        active_cue_id: None,
+                    });
+                    self.last_error = None;
+                }
+            }
+            EngineCommand::RemoveCueList(cue_list_id) => {
+                if cue_list_id == DEFAULT_CUE_LIST_ID {
+                    self.last_error = Some("The Main Cue List cannot be removed".to_string());
+                } else if !self
+                    .cue_lists
+                    .iter()
+                    .any(|cue_list| cue_list.id == cue_list_id)
+                {
+                    self.last_error = Some(format!("Cue List {cue_list_id} was not found"));
+                } else {
+                    let active_moved = self.active_cue_id.is_some_and(|active_cue_id| {
+                        self.cues
+                            .iter()
+                            .any(|cue| cue.id == active_cue_id && cue.cue_list_id == cue_list_id)
+                    });
+                    self.cue_lists.retain(|cue_list| cue_list.id != cue_list_id);
+                    for cue in &mut self.cues {
+                        if cue.cue_list_id == cue_list_id {
+                            cue.cue_list_id = DEFAULT_CUE_LIST_ID;
+                        }
+                    }
+                    for executor in &mut self.playback_executors {
+                        if executor.cue_list_id == cue_list_id {
+                            executor.cue_list_id = DEFAULT_CUE_LIST_ID;
+                        }
+                    }
+                    for origin in self.cue_value_origins.values_mut() {
+                        if *origin == cue_list_id {
+                            *origin = DEFAULT_CUE_LIST_ID;
+                        }
+                    }
+                    if let Some(active_cue_id) = self.active_cue_id.filter(|_| active_moved) {
+                        if let Some(main) = self
+                            .cue_lists
+                            .iter_mut()
+                            .find(|cue_list| cue_list.id == DEFAULT_CUE_LIST_ID)
+                        {
+                            main.active_cue_id = Some(active_cue_id);
+                        }
+                    }
+                    self.last_error = None;
+                }
+            }
+            EngineCommand::SetCueList {
+                cue_id,
+                cue_list_id,
+            } => {
+                if !self
+                    .cue_lists
+                    .iter()
+                    .any(|cue_list| cue_list.id == cue_list_id)
+                {
+                    self.last_error = Some(format!("Cue List {cue_list_id} was not found"));
+                } else if let Some(cue) = self.cues.iter_mut().find(|cue| cue.id == cue_id) {
+                    for cue_list in &mut self.cue_lists {
+                        if cue_list.active_cue_id == Some(cue_id) {
+                            cue_list.active_cue_id = None;
+                        }
+                    }
+                    cue.cue_list_id = cue_list_id;
+                    if self.active_cue_id == Some(cue_id) {
+                        if let Some(cue_list) = self
+                            .cue_lists
+                            .iter_mut()
+                            .find(|cue_list| cue_list.id == cue_list_id)
+                        {
+                            cue_list.active_cue_id = Some(cue_id);
+                        }
+                    }
+                    self.rebuild_cue_value_origins();
+                    self.last_error = None;
+                } else {
+                    self.last_error = Some(format!("Cue {cue_id} was not found"));
+                }
+            }
+            EngineCommand::UpsertPlaybackExecutor(executor) => {
+                let executor = match validate_and_sanitize_playback_executor(
+                    executor,
+                    &self.cue_lists,
+                    &self.playback_executors,
+                ) {
+                    Ok(executor) => executor,
+                    Err(error) => {
+                        self.last_error = Some(error);
+                        return;
+                    }
+                };
+                if let Some(existing) = self
+                    .playback_executors
+                    .iter_mut()
+                    .find(|candidate| candidate.id == executor.id)
+                {
+                    *existing = executor;
+                } else if self.playback_executors.len() >= 64 {
+                    self.last_error =
+                        Some("A project can contain at most 64 playback executors".to_string());
+                    return;
+                } else {
+                    self.playback_executors.push(executor);
+                }
+                self.playback_executors
+                    .sort_by_key(|executor| (executor.page, executor.slot, executor.id));
+                self.last_error = None;
+            }
+            EngineCommand::RemovePlaybackExecutor(executor_id) => {
+                let before = self.playback_executors.len();
+                self.playback_executors
+                    .retain(|executor| executor.id != executor_id);
+                if self.playback_executors.len() == before {
+                    self.last_error =
+                        Some(format!("Playback Executor {executor_id} was not found"));
+                } else {
+                    self.last_error = None;
+                }
+            }
+            EngineCommand::SetPlaybackExecutorLevel { executor_id, level } => {
+                if !level.is_finite() {
+                    self.last_error = Some("Playback Executor level must be finite".to_string());
+                } else if let Some(executor) = self
+                    .playback_executors
+                    .iter_mut()
+                    .find(|executor| executor.id == executor_id)
+                {
+                    executor.level = level.clamp(0.0, 1.0);
+                    self.last_error = None;
+                } else {
+                    self.last_error =
+                        Some(format!("Playback Executor {executor_id} was not found"));
+                }
+            }
+            EngineCommand::SetPlaybackMaster(level) => {
+                if level.is_finite() {
+                    self.playback_master = level.clamp(0.0, 1.0);
+                    self.last_error = None;
+                } else {
+                    self.last_error = Some("Playback Master level must be finite".to_string());
+                }
+            }
+            EngineCommand::TriggerPlaybackExecutorNext(executor_id) => {
+                let Some(cue_list_id) = self
+                    .playback_executors
+                    .iter()
+                    .find(|executor| executor.id == executor_id)
+                    .map(|executor| executor.cue_list_id)
+                else {
+                    self.last_error =
+                        Some(format!("Playback Executor {executor_id} was not found"));
+                    return;
+                };
+                if let Some(cue_id) = self.relative_cue_id_for_list(cue_list_id, 1) {
+                    self.request_cue(cue_id, Instant::now());
+                } else {
+                    self.last_error = Some(format!("Cue List {cue_list_id} has no cues"));
+                }
+            }
+            EngineCommand::TriggerPlaybackExecutorPrevious(executor_id) => {
+                let Some(cue_list_id) = self
+                    .playback_executors
+                    .iter()
+                    .find(|executor| executor.id == executor_id)
+                    .map(|executor| executor.cue_list_id)
+                else {
+                    self.last_error =
+                        Some(format!("Playback Executor {executor_id} was not found"));
+                    return;
+                };
+                if let Some(cue_id) = self.relative_cue_id_for_list(cue_list_id, -1) {
+                    self.request_cue(cue_id, Instant::now());
+                } else {
+                    self.last_error = Some(format!("Cue List {cue_list_id} has no cues"));
+                }
+            }
             EngineCommand::TriggerCue(cue_id) => {
-                self.start_cue(cue_id, Instant::now());
+                self.request_cue(cue_id, Instant::now());
             }
             EngineCommand::TriggerNextCue => {
-                if let Some(cue_id) = self.relative_cue_id(1) {
-                    self.start_cue(cue_id, Instant::now());
+                if let Some(cue_id) = self.relative_cue_id_for_list(DEFAULT_CUE_LIST_ID, 1) {
+                    self.request_cue(cue_id, Instant::now());
                 }
             }
             EngineCommand::TriggerPreviousCue => {
-                if let Some(cue_id) = self.relative_cue_id(-1) {
-                    self.start_cue(cue_id, Instant::now());
+                if let Some(cue_id) = self.relative_cue_id_for_list(DEFAULT_CUE_LIST_ID, -1) {
+                    self.request_cue(cue_id, Instant::now());
+                }
+            }
+            EngineCommand::TriggerCueListNext(cue_list_id) => {
+                if !self.cue_lists.iter().any(|list| list.id == cue_list_id) {
+                    self.last_error = Some(format!("Cue List {cue_list_id} was not found"));
+                } else if let Some(cue_id) = self.relative_cue_id_for_list(cue_list_id, 1) {
+                    self.request_cue(cue_id, Instant::now());
+                } else {
+                    self.last_error = Some(format!("Cue List {cue_list_id} has no cues"));
+                }
+            }
+            EngineCommand::TriggerCueListPrevious(cue_list_id) => {
+                if !self.cue_lists.iter().any(|list| list.id == cue_list_id) {
+                    self.last_error = Some(format!("Cue List {cue_list_id} was not found"));
+                } else if let Some(cue_id) = self.relative_cue_id_for_list(cue_list_id, -1) {
+                    self.request_cue(cue_id, Instant::now());
+                } else {
+                    self.last_error = Some(format!("Cue List {cue_list_id} has no cues"));
                 }
             }
             EngineCommand::SetCueFadePaused(paused) => {
@@ -2602,6 +3435,14 @@ impl EngineRuntime {
                 if self.active_cue_id == Some(cue_id) {
                     self.active_cue_id = None;
                     self.active_fade = None;
+                }
+                for cue_list in &mut self.cue_lists {
+                    if cue_list.active_cue_id == Some(cue_id) {
+                        cue_list.active_cue_id = None;
+                    }
+                }
+                if self.pending_cue.as_ref().map(|pending| pending.cue_id) == Some(cue_id) {
+                    self.pending_cue = None;
                 }
                 self.last_error = None;
             }
@@ -2808,6 +3649,16 @@ impl EngineRuntime {
                     self.timeline_position_ms.min(self.timeline_duration_ms());
                 self.last_error = None;
             }
+            EngineCommand::SetLiveAudioSpectrum(spectrum) => {
+                self.live_audio_spectrum = spectrum.map(|mut point| {
+                    point.time_ms = 0;
+                    point.bass = finite_or(point.bass, 0.0).clamp(0.0, 1.0);
+                    point.mid = finite_or(point.mid, 0.0).clamp(0.0, 1.0);
+                    point.high = finite_or(point.high, 0.0).clamp(0.0, 1.0);
+                    point
+                });
+                self.last_error = None;
+            }
             EngineCommand::SetTimelinePlaying(playing) => {
                 self.timeline_playing = playing;
             }
@@ -2823,8 +3674,9 @@ impl EngineRuntime {
                 position_ms,
                 source,
             } => {
-                self.sync_timeline_position(position_ms, Instant::now());
-                self.clock.mark_timecode_sync(source);
+                let now = Instant::now();
+                self.sync_timeline_position(position_ms, now);
+                self.clock.mark_timecode_sync(source, now);
                 self.apply_timeline_automations();
                 self.apply_timeline_video_automations();
             }
@@ -2842,6 +3694,7 @@ impl EngineRuntime {
                     source,
                     blend_mode: VideoBlendMode::Normal,
                     state: VideoLayerState::default(),
+                    isf_effect: None,
                 });
                 self.last_error = None;
             }
@@ -2880,6 +3733,18 @@ impl EngineRuntime {
                     .find(|layer| layer.id == layer_id)
                 {
                     layer.source = source;
+                    self.last_error = None;
+                } else {
+                    self.last_error = Some(format!("Video layer {layer_id} was not found"));
+                }
+            }
+            EngineCommand::SetVideoLayerIsfEffect { layer_id, effect } => {
+                if let Some(layer) = self
+                    .video_layers
+                    .iter_mut()
+                    .find(|layer| layer.id == layer_id)
+                {
+                    layer.isf_effect = effect;
                     self.last_error = None;
                 } else {
                     self.last_error = Some(format!("Video layer {layer_id} was not found"));
@@ -3411,6 +4276,10 @@ impl EngineRuntime {
 
         self.values
             .retain(|(candidate_id, _), _| *candidate_id != fixture_id);
+        self.cue_value_origins
+            .retain(|(candidate_id, _), _| *candidate_id != fixture_id);
+        self.programmer_values
+            .retain(|(candidate_id, _), _| *candidate_id != fixture_id);
         self.highlighted_fixtures.remove(&fixture_id);
         self.soloed_fixtures.remove(&fixture_id);
         self.parked_fixture_values.remove(&fixture_id);
@@ -3418,6 +4287,15 @@ impl EngineRuntime {
             .retain(|automation| automation.fixture_id != fixture_id);
         for cue in &mut self.cues {
             cue.targets.retain(|target| target.fixture_id != fixture_id);
+            for part in &mut cue.parts {
+                part.fixture_ids.retain(|id| *id != fixture_id);
+            }
+            for target in &mut cue.palette_targets {
+                target.fixture_ids.retain(|id| *id != fixture_id);
+            }
+            cue.palette_targets
+                .retain(|target| !target.fixture_ids.is_empty());
+            cue.mib_fixture_ids.retain(|id| *id != fixture_id);
         }
         if let Some(fade) = &mut self.active_fade {
             fade.start_values
@@ -3450,6 +4328,9 @@ impl EngineRuntime {
         for cue in &mut self.cues {
             cue.video_targets
                 .retain(|target| target.layer_id != layer_id);
+            for part in &mut cue.parts {
+                part.video_layer_ids.retain(|id| *id != layer_id);
+            }
         }
         for composition in &mut self.video_compositions {
             composition
@@ -3462,6 +4343,7 @@ impl EngineRuntime {
         if let Some(fade) = &mut self.active_fade {
             fade.video_start_states.remove(&layer_id);
             fade.video_target_states.remove(&layer_id);
+            fade.video_layer_timings.remove(&layer_id);
         }
         self.effects.retain_mut(|effect| match &mut effect.kind {
             RuntimeEffectKind::Lfo(request) => {
@@ -3487,10 +4369,15 @@ impl EngineRuntime {
         for cue in &mut self.cues {
             cue.video_output_targets
                 .retain(|target| target.output_id != output_id);
+            for part in &mut cue.parts {
+                part.video_output_ids.retain(|id| *id != output_id);
+            }
         }
         if let Some(fade) = &mut self.active_fade {
             fade.video_output_start_opacities.remove(&output_id);
             fade.video_output_target_opacities.remove(&output_id);
+            fade.video_output_targets.remove(&output_id);
+            fade.video_output_timings.remove(&output_id);
         }
         self.clear_empty_active_fade();
     }
@@ -3578,6 +4465,7 @@ impl EngineRuntime {
         }
         self.record_command_to_dmx_tick_latency(now);
         self.advance_timeline(now);
+        self.advance_pending_cue(now);
         self.apply_timeline_automations();
         self.apply_timeline_video_automations();
         self.apply_active_fade(now);
@@ -3600,15 +4488,23 @@ impl EngineRuntime {
         self.last_dmx_route_results.clear();
         let main_output = self.output.clone();
         if main_output.enabled {
-            let result = send_output_frame(
+            let outcome = send_output_frame_with_recovery(
                 &mut self.dmx_sender,
+                &mut self.dmx_sender_recovery,
                 &main_output,
                 main_output.universe,
                 &frame,
+                now,
             );
-            self.record_dmx_route_send_result(0, main_output.universe, result);
+            let recovery = self.dmx_sender_recovery.clone();
+            self.record_dmx_route_send_outcome(0, main_output.universe, outcome, &recovery, now);
         } else {
-            self.record_dmx_route_skipped(0, main_output.universe);
+            self.record_dmx_route_skipped(
+                0,
+                main_output.universe,
+                &DmxRouteRecovery::default(),
+                now,
+            );
         }
         for index in 0..self.additional_dmx_outputs.len() {
             let config = self.additional_dmx_outputs[index].config.clone();
@@ -3617,13 +4513,27 @@ impl EngineRuntime {
                 .unwrap_or_else(|| self.render_dmx_frame_for_universe(config.universe, now));
             let route_index = index + 1;
             if !config.enabled {
-                self.record_dmx_route_skipped(route_index, config.universe);
+                let recovery = self.additional_dmx_outputs[index].recovery.clone();
+                self.record_dmx_route_skipped(route_index, config.universe, &recovery, now);
                 continue;
             }
             let output = &mut self.additional_dmx_outputs[index];
-            let result =
-                send_output_frame(&mut output.sender, &output.config, config.universe, &frame);
-            self.record_dmx_route_send_result(route_index, config.universe, result);
+            let outcome = send_output_frame_with_recovery(
+                &mut output.sender,
+                &mut output.recovery,
+                &output.config,
+                config.universe,
+                &frame,
+                now,
+            );
+            let recovery = output.recovery.clone();
+            self.record_dmx_route_send_outcome(
+                route_index,
+                config.universe,
+                outcome,
+                &recovery,
+                now,
+            );
         }
         if self.last_dmx_output_count > 0 {
             if intentional_early_tick {
@@ -3638,7 +4548,13 @@ impl EngineRuntime {
         }
     }
 
-    fn record_dmx_route_skipped(&mut self, index: usize, universe: u16) {
+    fn record_dmx_route_skipped(
+        &mut self,
+        index: usize,
+        universe: u16,
+        recovery: &DmxRouteRecovery,
+        now: Instant,
+    ) {
         self.last_dmx_route_results.push(DmxOutputRouteTelemetry {
             index,
             universe,
@@ -3646,17 +4562,24 @@ impl EngineRuntime {
             success: false,
             bytes: 0,
             error: None,
+            consecutive_failures: recovery.consecutive_failures,
+            reconnect_attempts: recovery.reconnect_attempts,
+            reconnecting: recovery.next_retry_at.is_some(),
+            retry_in_ms: recovery.retry_in_ms(now),
+            last_success_unix_ms: recovery.last_success_unix_ms,
         });
     }
 
-    fn record_dmx_route_send_result(
+    fn record_dmx_route_send_outcome(
         &mut self,
         index: usize,
         universe: u16,
-        result: Result<usize, String>,
+        outcome: DmxRouteSendOutcome,
+        recovery: &DmxRouteRecovery,
+        now: Instant,
     ) {
         self.last_dmx_output_count = self.last_dmx_output_count.saturating_add(1);
-        match result {
+        match outcome.result {
             Ok(bytes) => {
                 self.record_dmx_send_success(bytes);
                 self.last_dmx_route_results.push(DmxOutputRouteTelemetry {
@@ -3666,17 +4589,29 @@ impl EngineRuntime {
                     success: true,
                     bytes,
                     error: None,
+                    consecutive_failures: recovery.consecutive_failures,
+                    reconnect_attempts: recovery.reconnect_attempts,
+                    reconnecting: false,
+                    retry_in_ms: None,
+                    last_success_unix_ms: recovery.last_success_unix_ms,
                 });
             }
             Err(error) => {
-                self.record_dmx_send_failure(error.clone());
+                if outcome.attempted {
+                    self.record_dmx_send_failure(error.clone());
+                }
                 self.last_dmx_route_results.push(DmxOutputRouteTelemetry {
                     index,
                     universe,
-                    attempted: true,
+                    attempted: outcome.attempted,
                     success: false,
                     bytes: 0,
                     error: Some(error),
+                    consecutive_failures: recovery.consecutive_failures,
+                    reconnect_attempts: recovery.reconnect_attempts,
+                    reconnecting: recovery.next_retry_at.is_some(),
+                    retry_in_ms: recovery.retry_in_ms(now),
+                    last_success_unix_ms: recovery.last_success_unix_ms,
                 });
             }
         }
@@ -3854,6 +4789,16 @@ impl EngineRuntime {
         let mut frame = [0u8; 512];
         if !self.blackout {
             self.render_dmx_frame(&mut frame, universe, now);
+            if let Some(input) = self.dmx_input_frames.get(&universe) {
+                match input.merge_mode {
+                    DmxMergeMode::Htp => {
+                        for (output, input) in frame.iter_mut().zip(input.values.iter()) {
+                            *output = (*output).max(*input);
+                        }
+                    }
+                    DmxMergeMode::Ltp => frame.copy_from_slice(input.values.as_ref()),
+                }
+            }
         }
         frame
     }
@@ -3874,6 +4819,7 @@ impl EngineRuntime {
         for fixture in &self.fixtures {
             universes.insert(fixture.request.universe);
         }
+        universes.extend(self.dmx_input_frames.keys().copied());
         universes
     }
 
@@ -3898,6 +4844,7 @@ impl EngineRuntime {
                     control,
                     now,
                     parked_values,
+                    false,
                 );
                 write_control_value(frame, fixture.request.address, control, value);
             }
@@ -3911,8 +4858,10 @@ impl EngineRuntime {
         control: &AttributeControl,
         now: Instant,
         parked_values: Option<&HashMap<String, u16>>,
+        use_programmer_preview: bool,
     ) -> u16 {
-        let raw_value = self.raw_control_value(fixture, control, now, parked_values);
+        let raw_value =
+            self.raw_control_value(fixture, control, now, parked_values, use_programmer_preview);
         apply_fixture_limits(
             &fixture.limits,
             &control.attribute,
@@ -3920,7 +4869,13 @@ impl EngineRuntime {
             |attribute| {
                 control_for_attribute(controls, attribute)
                     .map(|source_control| {
-                        self.raw_control_value(fixture, source_control, now, parked_values)
+                        self.raw_control_value(
+                            fixture,
+                            source_control,
+                            now,
+                            parked_values,
+                            use_programmer_preview,
+                        )
                     })
                     .unwrap_or(raw_value)
             },
@@ -3933,11 +4888,14 @@ impl EngineRuntime {
         control: &AttributeControl,
         now: Instant,
         parked_values: Option<&HashMap<String, u16>>,
+        use_programmer_preview: bool,
     ) -> u16 {
         parked_values
             .and_then(|values| values.get(&control.attribute))
             .copied()
-            .unwrap_or_else(|| self.render_unlimited_control_value(fixture, control, now))
+            .unwrap_or_else(|| {
+                self.render_unlimited_control_value(fixture, control, now, use_programmer_preview)
+            })
     }
 
     fn render_unlimited_control_value(
@@ -3945,12 +4903,27 @@ impl EngineRuntime {
         fixture: &RuntimeFixture,
         control: &AttributeControl,
         now: Instant,
+        use_programmer_preview: bool,
     ) -> u16 {
-        let value = self
-            .values
+        let programmer_value = self
+            .programmer_values
             .get(&(fixture.id, control.attribute.clone()))
             .copied()
+            .filter(|_| {
+                use_programmer_preview || (self.programmer_enabled && !self.programmer_blind)
+            });
+        let value = programmer_value
+            .or_else(|| {
+                self.values
+                    .get(&(fixture.id, control.attribute.clone()))
+                    .copied()
+            })
             .unwrap_or(control.default_value);
+        let value = if programmer_value.is_some() {
+            value
+        } else {
+            self.apply_playback_level(fixture.id, &control.attribute, value)
+        };
         let value = self.apply_effects(fixture, &control.attribute, value, now);
         let value = apply_highlight(
             &control.attribute,
@@ -3964,6 +4937,30 @@ impl EngineRuntime {
             &self.group_submaster_levels,
         );
         apply_lighting_master(&control.attribute, value, self.lighting_master)
+    }
+
+    fn apply_playback_level(&self, fixture_id: FixtureId, attribute: &str, value: u16) -> u16 {
+        let Some(cue_list_id) = self
+            .cue_value_origins
+            .get(&(fixture_id, attribute.to_string()))
+            .copied()
+        else {
+            return value;
+        };
+        let mut levels = self
+            .playback_executors
+            .iter()
+            .filter(|executor| executor.cue_list_id == cue_list_id)
+            .map(|executor| executor.level.clamp(0.0, 1.0));
+        let executor_level = levels
+            .next()
+            .map(|first| levels.fold(first, f32::max))
+            .unwrap_or(1.0);
+        apply_lighting_master(
+            attribute,
+            value,
+            executor_level * self.playback_master.clamp(0.0, 1.0),
+        )
     }
 
     fn capture_park_values(
@@ -3982,7 +4979,7 @@ impl EngineRuntime {
             .map(|control| {
                 (
                     control.attribute.clone(),
-                    self.render_unlimited_control_value(fixture, control, now),
+                    self.render_unlimited_control_value(fixture, control, now, false),
                 )
             })
             .collect::<HashMap<_, _>>();
@@ -4396,6 +5393,9 @@ impl EngineRuntime {
                     graph.created_at,
                     now,
                     &clock,
+                    self.timeline_audio.as_ref(),
+                    self.live_audio_spectrum.as_ref(),
+                    self.timeline_position_ms,
                 ) else {
                     continue;
                 };
@@ -4409,6 +5409,35 @@ impl EngineRuntime {
         value
     }
 
+    fn request_cue(&mut self, cue_id: CueId, now: Instant) {
+        let Some(cue) = self.cues.iter().find(|cue| cue.id == cue_id) else {
+            self.last_error = Some(format!("Cue {cue_id} was not found"));
+            return;
+        };
+        self.pending_cue = None;
+        if cue.pre_wait_ms == 0 {
+            self.start_cue(cue_id, now);
+        } else {
+            self.pending_cue = Some(PendingCueTrigger {
+                cue_id,
+                due_at: now + Duration::from_millis(cue.pre_wait_ms),
+            });
+            self.last_error = None;
+        }
+    }
+
+    fn advance_pending_cue(&mut self, now: Instant) {
+        let due_cue_id = self
+            .pending_cue
+            .as_ref()
+            .filter(|pending| now >= pending.due_at)
+            .map(|pending| pending.cue_id);
+        if let Some(cue_id) = due_cue_id {
+            self.pending_cue = None;
+            self.start_cue(cue_id, now);
+        }
+    }
+
     fn start_cue(&mut self, cue_id: CueId, now: Instant) {
         let Some(cue) = self.cues.iter().find(|cue| cue.id == cue_id).cloned() else {
             self.last_error = Some(format!("Cue {cue_id} was not found"));
@@ -4416,7 +5445,49 @@ impl EngineRuntime {
         };
 
         self.active_cue_id = Some(cue_id);
-        let target_values = cue_target_values(&cue.targets);
+        if let Some(cue_list) = self
+            .cue_lists
+            .iter_mut()
+            .find(|cue_list| cue_list.id == cue.cue_list_id)
+        {
+            cue_list.active_cue_id = Some(cue_id);
+        }
+        self.pending_cue = cue.follow_ms.and_then(|follow_ms| {
+            let cue_index = self
+                .cues
+                .iter()
+                .position(|candidate| candidate.id == cue_id)?;
+            let next_cue = self.cues[cue_index + 1..]
+                .iter()
+                .find(|candidate| candidate.cue_list_id == cue.cue_list_id)?;
+            Some(PendingCueTrigger {
+                cue_id: next_cue.id,
+                due_at: now + Duration::from_millis(follow_ms),
+            })
+        });
+        let mut target_values = if cue.tracking {
+            HashMap::new()
+        } else {
+            self.fixtures
+                .iter()
+                .flat_map(|fixture| {
+                    fixture.profile.dmx_modes[fixture.mode_index]
+                        .controls
+                        .iter()
+                        .map(|control| {
+                            (
+                                (fixture.id, control.attribute.clone()),
+                                control.default_value,
+                            )
+                        })
+                })
+                .collect::<HashMap<_, _>>()
+        };
+        target_values.extend(self.cue_palette_target_values(&cue.palette_targets));
+        target_values.extend(cue_target_values(&cue.targets));
+        for key in target_values.keys() {
+            self.cue_value_origins.insert(key.clone(), cue.cue_list_id);
+        }
         let video_target_states = cue_video_target_states(&cue.video_targets, &self.video_layers);
         let video_output_targets =
             cue_video_output_targets(&cue.video_output_targets, &self.video_outputs);
@@ -4427,6 +5498,7 @@ impl EngineRuntime {
             && node_graph_targets.is_empty()
         {
             self.active_fade = None;
+            self.apply_mib_for_next_cue(cue_id);
             self.last_error = None;
             return;
         }
@@ -4444,6 +5516,21 @@ impl EngineRuntime {
             .keys()
             .map(|key| (key.clone(), self.values.get(key).copied().unwrap_or(0)))
             .collect::<HashMap<_, _>>();
+        let attribute_timings = target_values
+            .keys()
+            .map(|key| {
+                (
+                    key.clone(),
+                    cue_part_attribute_timing(
+                        &cue.parts,
+                        key.0,
+                        &cue.ifcb_timing,
+                        cue.fade_ms,
+                        &key.1,
+                    ),
+                )
+            })
+            .collect::<HashMap<_, _>>();
         let video_output_start_opacities = video_output_targets
             .iter()
             .filter_map(|(output_id, _)| {
@@ -4457,7 +5544,34 @@ impl EngineRuntime {
             .iter()
             .map(|(output_id, target)| (*output_id, target.opacity.clamp(0.0, 1.0)))
             .collect::<HashMap<_, _>>();
-        let duration = Duration::from_millis(cue.fade_ms);
+        let video_layer_timings = video_target_states
+            .keys()
+            .map(|layer_id| {
+                (
+                    *layer_id,
+                    cue_part_video_layer_timing(&cue.parts, *layer_id, cue.fade_ms),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let video_output_timings = video_output_targets
+            .keys()
+            .map(|output_id| {
+                (
+                    *output_id,
+                    cue_part_video_output_timing(&cue.parts, *output_id, cue.fade_ms),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let video_duration = video_layer_timings
+            .values()
+            .chain(video_output_timings.values())
+            .map(|(delay, fade)| delay.saturating_add(*fade))
+            .max()
+            .unwrap_or(Duration::ZERO);
+        let duration = attribute_timings
+            .values()
+            .map(|(delay, fade)| delay.saturating_add(*fade))
+            .fold(video_duration, Duration::max);
         if duration.is_zero() {
             for (key, value) in target_values {
                 self.values.insert(key, value);
@@ -4469,8 +5583,15 @@ impl EngineRuntime {
                 self.apply_video_output_target(target, true);
             }
             self.active_fade = None;
+            self.apply_mib_for_next_cue(cue_id);
         } else {
             for (layer_id, target_state) in &video_target_states {
+                if video_layer_timings
+                    .get(layer_id)
+                    .is_some_and(|(delay, _)| !delay.is_zero())
+                {
+                    continue;
+                }
                 if let Some(layer) = self
                     .video_layers
                     .iter_mut()
@@ -4480,23 +5601,176 @@ impl EngineRuntime {
                 }
             }
             for (_, target) in &video_output_targets {
-                self.apply_video_output_target(target.clone(), false);
+                if video_output_timings
+                    .get(&target.output_id)
+                    .is_some_and(|(delay, _)| delay.is_zero())
+                {
+                    self.apply_video_output_target(target.clone(), false);
+                }
             }
             self.active_fade = Some(RuntimeFade {
                 cue_id,
                 started_at: now,
                 duration,
+                video_duration,
                 paused_at: None,
                 paused_duration: Duration::ZERO,
                 start_values,
                 target_values,
+                attribute_timings,
                 video_start_states,
                 video_target_states,
+                video_layer_timings,
                 video_output_start_opacities,
                 video_output_target_opacities,
+                video_output_targets,
+                video_output_timings,
             });
         }
         self.last_error = None;
+    }
+
+    fn apply_mib_for_next_cue(&mut self, current_cue_id: CueId) {
+        let Some(current_index) = self.cues.iter().position(|cue| cue.id == current_cue_id) else {
+            return;
+        };
+        let cue_list_id = self.cues[current_index].cue_list_id;
+        let Some(next_cue) = self.cues[current_index + 1..]
+            .iter()
+            .find(|cue| cue.cue_list_id == cue_list_id)
+            .cloned()
+        else {
+            return;
+        };
+        if !next_cue.mark {
+            return;
+        }
+        let mut next_values = self.cue_palette_target_values(&next_cue.palette_targets);
+        next_values.extend(cue_target_values(&next_cue.targets));
+        let fixture_ids = next_values
+            .keys()
+            .map(|(fixture_id, _)| *fixture_id)
+            .collect::<HashSet<_>>();
+        for fixture_id in fixture_ids {
+            if !next_cue.mib_fixture_ids.is_empty()
+                && !next_cue.mib_fixture_ids.contains(&fixture_id)
+            {
+                continue;
+            }
+            let Some(fixture) = self
+                .fixtures
+                .iter()
+                .find(|fixture| fixture.id == fixture_id)
+            else {
+                continue;
+            };
+            let controls = &fixture.profile.dmx_modes[fixture.mode_index].controls;
+            let intensity_attributes = controls
+                .iter()
+                .filter(|control| is_mastered_intensity_attribute(&control.attribute))
+                .collect::<Vec<_>>();
+            if intensity_attributes.is_empty()
+                || intensity_attributes.iter().any(|control| {
+                    self.values
+                        .get(&(fixture.id, control.attribute.clone()))
+                        .copied()
+                        .unwrap_or(control.default_value)
+                        != 0
+                })
+            {
+                continue;
+            }
+            for ((target_fixture_id, attribute), value) in &next_values {
+                if *target_fixture_id == fixture_id && !is_mastered_intensity_attribute(attribute) {
+                    let key = (fixture_id, attribute.clone());
+                    self.cue_value_origins
+                        .insert(key.clone(), next_cue.cue_list_id);
+                    self.values.insert(key, *value);
+                }
+            }
+        }
+    }
+
+    fn cue_palette_target_values(
+        &self,
+        targets: &[CuePaletteTarget],
+    ) -> HashMap<(FixtureId, String), u16> {
+        let mut values = HashMap::new();
+        for target in targets {
+            let Some(palette) = self
+                .palettes
+                .iter()
+                .find(|palette| palette.id == target.palette_id)
+            else {
+                continue;
+            };
+            for fixture_id in &target.fixture_ids {
+                let Some(fixture) = self
+                    .fixtures
+                    .iter()
+                    .find(|fixture| fixture.id == *fixture_id)
+                else {
+                    continue;
+                };
+                let controls = &fixture.profile.dmx_modes[fixture.mode_index].controls;
+                for palette_value in &palette.values {
+                    let Some(control) = controls.iter().find(|control| {
+                        control
+                            .attribute
+                            .eq_ignore_ascii_case(&palette_value.attribute)
+                    }) else {
+                        continue;
+                    };
+                    values.insert(
+                        (*fixture_id, control.attribute.clone()),
+                        palette_value.value,
+                    );
+                }
+            }
+        }
+        values
+    }
+
+    fn rebuild_cue_value_origins(&mut self) {
+        self.cue_value_origins.clear();
+        let mut active_ids = self
+            .cue_lists
+            .iter()
+            .filter_map(|cue_list| cue_list.active_cue_id)
+            .filter(|cue_id| Some(*cue_id) != self.active_cue_id)
+            .collect::<Vec<_>>();
+        if let Some(active_cue_id) = self.active_cue_id {
+            active_ids.push(active_cue_id);
+        }
+        let active_cues = active_ids
+            .into_iter()
+            .filter_map(|cue_id| self.cues.iter().find(|cue| cue.id == cue_id).cloned())
+            .collect::<Vec<_>>();
+        for cue in active_cues {
+            let mut keys = if cue.tracking {
+                HashSet::new()
+            } else {
+                self.fixtures
+                    .iter()
+                    .flat_map(|fixture| {
+                        fixture.profile.dmx_modes[fixture.mode_index]
+                            .controls
+                            .iter()
+                            .map(|control| (fixture.id, control.attribute.clone()))
+                    })
+                    .collect::<HashSet<_>>()
+            };
+            keys.extend(
+                self.cue_palette_target_values(&cue.palette_targets)
+                    .into_keys(),
+            );
+            keys.extend(cue_target_values(&cue.targets).into_keys());
+            for key in keys {
+                if self.values.contains_key(&key) {
+                    self.cue_value_origins.insert(key, cue.cue_list_id);
+                }
+            }
+        }
     }
 
     fn apply_node_graph_targets(&mut self, targets: &HashMap<NodeGraphId, bool>) {
@@ -4615,9 +5889,15 @@ impl EngineRuntime {
         if fade.paused_at.is_some() {
             return;
         }
-        let progress = fade_progress(fade, now);
+        let elapsed = fade_elapsed(fade, now);
         for (key, target) in &fade.target_values {
             let start = fade.start_values.get(key).copied().unwrap_or(0);
+            let (delay, duration) = fade
+                .attribute_timings
+                .get(key)
+                .copied()
+                .unwrap_or((Duration::ZERO, fade.duration));
+            let progress = delayed_fade_progress(elapsed, delay, duration);
             let value = interpolate_u16(start, *target, progress);
             self.values.insert(key.clone(), value);
         }
@@ -4626,6 +5906,15 @@ impl EngineRuntime {
             .iter()
             .filter_map(|(layer_id, target_state)| {
                 let start_state = fade.video_start_states.get(layer_id)?;
+                let (delay, duration) = fade
+                    .video_layer_timings
+                    .get(layer_id)
+                    .copied()
+                    .unwrap_or((Duration::ZERO, fade.video_duration));
+                if elapsed < delay {
+                    return None;
+                }
+                let progress = delayed_fade_progress(elapsed, delay, duration);
                 Some((
                     *layer_id,
                     interpolate_video_layer_state(start_state, target_state, progress),
@@ -4642,6 +5931,15 @@ impl EngineRuntime {
             }
         }
         for (output_id, target_opacity) in &fade.video_output_target_opacities {
+            let (delay, duration) = fade
+                .video_output_timings
+                .get(output_id)
+                .copied()
+                .unwrap_or((Duration::ZERO, fade.video_duration));
+            if elapsed < delay {
+                continue;
+            }
+            let progress = delayed_fade_progress(elapsed, delay, duration);
             let start_opacity = fade
                 .video_output_start_opacities
                 .get(output_id)
@@ -4652,12 +5950,18 @@ impl EngineRuntime {
                 .iter_mut()
                 .find(|output| output.summary.id == *output_id)
             {
+                if let Some(target) = fade.video_output_targets.get(output_id) {
+                    output.summary.enabled = target.enabled;
+                    output.summary.blackout = target.blackout;
+                }
                 output.summary.opacity =
                     (start_opacity + (target_opacity - start_opacity) * progress).clamp(0.0, 1.0);
             }
         }
-        if progress >= 1.0 {
+        if elapsed >= fade.duration {
+            let cue_id = fade.cue_id;
             self.active_fade = None;
+            self.apply_mib_for_next_cue(cue_id);
         }
     }
 
@@ -4732,7 +6036,7 @@ impl EngineRuntime {
             .map(|event| event.cue_id)
             .collect::<Vec<_>>();
         for cue_id in due_cues {
-            self.start_cue(cue_id, now);
+            self.request_cue(cue_id, now);
         }
     }
 
@@ -4750,8 +6054,9 @@ impl EngineRuntime {
             else {
                 continue;
             };
-            self.values
-                .insert((automation.fixture_id, automation.attribute.clone()), value);
+            let key = (automation.fixture_id, automation.attribute.clone());
+            self.cue_value_origins.remove(&key);
+            self.values.insert(key, value);
         }
     }
 
@@ -4781,19 +6086,28 @@ impl EngineRuntime {
         }
     }
 
-    fn relative_cue_id(&self, offset: isize) -> Option<CueId> {
-        if self.cues.is_empty() {
+    fn relative_cue_id_for_list(&self, cue_list_id: CueListId, offset: isize) -> Option<CueId> {
+        let cues = self
+            .cues
+            .iter()
+            .filter(|cue| cue.cue_list_id == cue_list_id)
+            .collect::<Vec<_>>();
+        if cues.is_empty() {
             return None;
         }
-        let current_index = self
-            .active_cue_id
-            .and_then(|cue_id| self.cues.iter().position(|cue| cue.id == cue_id));
+        let current_cue_id = self
+            .cue_lists
+            .iter()
+            .find(|cue_list| cue_list.id == cue_list_id)
+            .and_then(|cue_list| cue_list.active_cue_id);
+        let current_index =
+            current_cue_id.and_then(|cue_id| cues.iter().position(|cue| cue.id == cue_id));
         let index = match current_index {
-            Some(index) => (index as isize + offset).rem_euclid(self.cues.len() as isize) as usize,
-            None if offset < 0 => self.cues.len() - 1,
+            Some(index) => (index as isize + offset).rem_euclid(cues.len() as isize) as usize,
+            None if offset < 0 => cues.len() - 1,
             None => 0,
         };
-        self.cues.get(index).map(|cue| cue.id)
+        cues.get(index).map(|cue| cue.id)
     }
 
     fn timeline_duration_ms(&self) -> u64 {
@@ -5078,6 +6392,9 @@ impl EngineRuntime {
                         graph.created_at,
                         now,
                         &clock,
+                        self.timeline_audio.as_ref(),
+                        self.live_audio_spectrum.as_ref(),
+                        self.timeline_position_ms,
                     ) else {
                         continue;
                     };
@@ -5141,8 +6458,13 @@ impl EngineRuntime {
         EngineSnapshot {
             fixtures,
             cues: self.cues.iter().map(cue_summary).collect(),
+            cue_lists: self.cue_lists.clone(),
+            palettes: self.palettes.clone(),
+            playback_executors: self.playback_executors.clone(),
+            playback_master: self.playback_master,
             active_cue_id: self.active_cue_id,
             active_fade: self.active_fade_summary(self.last_tick),
+            programmer: self.programmer_snapshot(),
             timeline: self.timeline_snapshot(),
             video: self.video_snapshot(),
             effects: self.effects.iter().map(effect_summary).collect(),
@@ -5303,6 +6625,70 @@ impl EngineRuntime {
             })
             .collect()
     }
+
+    fn programmer_snapshot(&self) -> ProgrammerSnapshot {
+        let mut values = self
+            .programmer_values
+            .iter()
+            .map(|((fixture_id, attribute), value)| ProgrammerValueSummary {
+                fixture_id: *fixture_id,
+                attribute: attribute.clone(),
+                value: *value,
+            })
+            .collect::<Vec<_>>();
+        values.sort_by(|left, right| {
+            left.fixture_id
+                .cmp(&right.fixture_id)
+                .then_with(|| left.attribute.cmp(&right.attribute))
+        });
+        ProgrammerSnapshot {
+            enabled: self.programmer_enabled,
+            blind: self.programmer_blind,
+            values,
+            dmx_previews: self.programmer_dmx_preview_snapshot(),
+        }
+    }
+
+    fn programmer_dmx_preview_snapshot(&self) -> Vec<DmxUniversePreview> {
+        if self.programmer_values.is_empty() {
+            return Vec::new();
+        }
+        let universes = self
+            .fixtures
+            .iter()
+            .map(|fixture| fixture.request.universe)
+            .collect::<BTreeSet<_>>();
+        universes
+            .into_iter()
+            .map(|universe| {
+                let mut frame = [0_u8; 512];
+                for fixture in self
+                    .fixtures
+                    .iter()
+                    .filter(|fixture| fixture.request.universe == universe)
+                {
+                    let Some(mode) = fixture.profile.dmx_modes.get(fixture.mode_index) else {
+                        continue;
+                    };
+                    for control in &mode.controls {
+                        let value = self.render_control_value(
+                            fixture,
+                            mode.controls.as_slice(),
+                            control,
+                            self.last_tick,
+                            None,
+                            true,
+                        );
+                        write_control_value(&mut frame, fixture.request.address, control, value);
+                    }
+                }
+                DmxUniversePreview {
+                    universe,
+                    values: frame.to_vec(),
+                }
+            })
+            .collect()
+    }
 }
 
 fn record_percentile_window_sample(
@@ -5334,8 +6720,19 @@ fn percentile_window_value(
 fn cue_summary(cue: &RuntimeCue) -> CueSummary {
     CueSummary {
         id: cue.id,
+        cue_list_id: cue.cue_list_id,
+        cue_number: cue.cue_number.clone(),
         label: cue.label.clone(),
         fade_ms: cue.fade_ms,
+        pre_wait_ms: cue.pre_wait_ms,
+        follow_ms: cue.follow_ms,
+        ifcb_timing: cue.ifcb_timing,
+        parts: cue.parts.clone(),
+        mark: cue.mark,
+        mib_fixture_ids: cue.mib_fixture_ids.clone(),
+        palette_targets: cue.palette_targets.clone(),
+        tracking: cue.tracking,
+        notes: cue.notes.clone(),
         targets: cue.targets.clone(),
         video_targets: cue.video_targets.clone(),
         video_output_targets: cue.video_output_targets.clone(),
@@ -5442,13 +6839,445 @@ fn runtime_fixtures_from_snapshot(
 fn runtime_cue_from_summary(cue: &CueSummary) -> RuntimeCue {
     RuntimeCue {
         id: cue.id,
+        cue_list_id: if cue.cue_list_id == 0 {
+            DEFAULT_CUE_LIST_ID
+        } else {
+            cue.cue_list_id
+        },
+        cue_number: if cue.cue_number.trim().is_empty() {
+            cue.id.to_string()
+        } else {
+            cue.cue_number.trim().to_string()
+        },
         label: cue.label.clone(),
         fade_ms: cue.fade_ms,
+        pre_wait_ms: cue.pre_wait_ms,
+        follow_ms: cue.follow_ms,
+        ifcb_timing: cue.ifcb_timing,
+        parts: reconcile_cue_parts(
+            cue.parts.clone(),
+            &cue.targets,
+            &cue.video_targets,
+            &cue.video_output_targets,
+        ),
+        mark: cue.mark,
+        mib_fixture_ids: cue.mib_fixture_ids.clone(),
+        palette_targets: cue.palette_targets.clone(),
+        tracking: cue.tracking,
+        notes: cue.notes.clone(),
         targets: cue.targets.clone(),
         video_targets: cue.video_targets.clone(),
         video_output_targets: cue.video_output_targets.clone(),
         node_graph_targets: cue.node_graph_targets.clone(),
     }
+}
+
+fn validate_and_sanitize_palette(
+    mut palette: ReferencePaletteSummary,
+) -> Result<ReferencePaletteSummary, String> {
+    if palette.id == 0 {
+        return Err("Palette ID must be greater than zero".to_string());
+    }
+    palette.label = palette.label.trim().chars().take(64).collect();
+    if palette.label.is_empty() {
+        return Err("Palette label is required".to_string());
+    }
+    if palette.values.is_empty() || palette.values.len() > 128 {
+        return Err("A palette must contain from 1 to 128 attribute values".to_string());
+    }
+    let mut attributes = HashSet::new();
+    for value in &mut palette.values {
+        value.attribute = value.attribute.trim().chars().take(128).collect();
+        if value.attribute.is_empty() || !attributes.insert(value.attribute.to_ascii_lowercase()) {
+            return Err("Palette attributes must be non-empty and unique".to_string());
+        }
+    }
+    Ok(palette)
+}
+
+fn sanitize_loaded_palettes(palettes: &[ReferencePaletteSummary]) -> Vec<ReferencePaletteSummary> {
+    let mut ids = HashSet::new();
+    let mut sanitized = palettes
+        .iter()
+        .take(128)
+        .cloned()
+        .filter_map(|palette| validate_and_sanitize_palette(palette).ok())
+        .filter(|palette| ids.insert(palette.id))
+        .collect::<Vec<_>>();
+    sanitized.sort_by_key(|palette| palette.id);
+    sanitized
+}
+
+fn validate_and_sanitize_cue_palette_targets(
+    targets: Vec<CuePaletteTarget>,
+    palettes: &[ReferencePaletteSummary],
+    fixtures: &[RuntimeFixture],
+) -> Result<Vec<CuePaletteTarget>, String> {
+    if targets.len() > 128 {
+        return Err("A cue can reference at most 128 palettes".to_string());
+    }
+    let palette_ids = palettes
+        .iter()
+        .map(|palette| palette.id)
+        .collect::<HashSet<_>>();
+    let fixture_ids = fixtures
+        .iter()
+        .map(|fixture| fixture.id)
+        .collect::<HashSet<_>>();
+    let mut seen_palettes = HashSet::new();
+    let mut sanitized = Vec::with_capacity(targets.len());
+    for mut target in targets {
+        if !palette_ids.contains(&target.palette_id) {
+            return Err(format!("Palette {} was not found", target.palette_id));
+        }
+        if !seen_palettes.insert(target.palette_id) {
+            return Err(format!(
+                "Palette {} can only be referenced once per cue",
+                target.palette_id
+            ));
+        }
+        target.fixture_ids.sort_unstable();
+        target.fixture_ids.dedup();
+        if target.fixture_ids.is_empty() {
+            return Err(format!(
+                "Palette {} must target at least one fixture",
+                target.palette_id
+            ));
+        }
+        if let Some(fixture_id) = target
+            .fixture_ids
+            .iter()
+            .find(|fixture_id| !fixture_ids.contains(fixture_id))
+        {
+            return Err(format!("Fixture {fixture_id} was not found"));
+        }
+        sanitized.push(target);
+    }
+    sanitized.sort_by_key(|target| target.palette_id);
+    Ok(sanitized)
+}
+
+fn sanitize_loaded_cue_palette_targets(
+    targets: Vec<CuePaletteTarget>,
+    palettes: &[ReferencePaletteSummary],
+    fixtures: &[RuntimeFixture],
+) -> Vec<CuePaletteTarget> {
+    let palette_ids = palettes
+        .iter()
+        .map(|palette| palette.id)
+        .collect::<HashSet<_>>();
+    let fixture_ids = fixtures
+        .iter()
+        .map(|fixture| fixture.id)
+        .collect::<HashSet<_>>();
+    let mut seen_palettes = HashSet::new();
+    let mut sanitized = Vec::new();
+    for mut target in targets.into_iter().take(128) {
+        if !palette_ids.contains(&target.palette_id) || !seen_palettes.insert(target.palette_id) {
+            continue;
+        }
+        target
+            .fixture_ids
+            .retain(|fixture_id| fixture_ids.contains(fixture_id));
+        target.fixture_ids.sort_unstable();
+        target.fixture_ids.dedup();
+        if !target.fixture_ids.is_empty() {
+            sanitized.push(target);
+        }
+    }
+    sanitized.sort_by_key(|target| target.palette_id);
+    sanitized
+}
+
+fn cue_fixture_target_ids(
+    targets: &[CueFixtureTarget],
+    palette_targets: &[CuePaletteTarget],
+) -> HashSet<FixtureId> {
+    targets
+        .iter()
+        .map(|target| target.fixture_id)
+        .chain(
+            palette_targets
+                .iter()
+                .flat_map(|target| target.fixture_ids.iter().copied()),
+        )
+        .collect()
+}
+
+fn validate_and_sanitize_mib_fixture_ids(
+    mut fixture_ids: Vec<FixtureId>,
+    targets: &[CueFixtureTarget],
+    palette_targets: &[CuePaletteTarget],
+) -> Result<Vec<FixtureId>, String> {
+    if fixture_ids.len() > 256 {
+        return Err("A Cue MIB filter can contain at most 256 fixtures".to_string());
+    }
+    fixture_ids.sort_unstable();
+    fixture_ids.dedup();
+    let target_ids = cue_fixture_target_ids(targets, palette_targets);
+    if let Some(fixture_id) = fixture_ids
+        .iter()
+        .find(|fixture_id| !target_ids.contains(fixture_id))
+    {
+        return Err(format!(
+            "MIB fixture {fixture_id} is not targeted by this Cue"
+        ));
+    }
+    Ok(fixture_ids)
+}
+
+fn reconcile_mib_fixture_ids(
+    fixture_ids: Vec<FixtureId>,
+    targets: &[CueFixtureTarget],
+    palette_targets: &[CuePaletteTarget],
+) -> Vec<FixtureId> {
+    let target_ids = cue_fixture_target_ids(targets, palette_targets);
+    let mut reconciled = fixture_ids
+        .into_iter()
+        .filter(|fixture_id| target_ids.contains(fixture_id))
+        .collect::<Vec<_>>();
+    reconciled.sort_unstable();
+    reconciled.dedup();
+    reconciled.truncate(256);
+    reconciled
+}
+
+fn validate_and_sanitize_cue_parts(
+    parts: Vec<CuePartSummary>,
+    targets: &[CueFixtureTarget],
+    video_targets: &[VideoLayerTarget],
+    video_output_targets: &[VideoOutputTarget],
+) -> Result<Vec<CuePartSummary>, String> {
+    if parts.len() > 16 {
+        return Err("A cue can contain at most 16 parts".to_string());
+    }
+    let target_ids = targets
+        .iter()
+        .map(|target| target.fixture_id)
+        .collect::<HashSet<_>>();
+    let video_layer_ids = video_targets
+        .iter()
+        .map(|target| target.layer_id)
+        .collect::<HashSet<_>>();
+    let video_output_ids = video_output_targets
+        .iter()
+        .map(|target| target.output_id)
+        .collect::<HashSet<_>>();
+    let mut numbers = HashSet::new();
+    let mut assigned_fixture_ids = HashSet::new();
+    let mut assigned_video_layer_ids = HashSet::new();
+    let mut assigned_video_output_ids = HashSet::new();
+    let mut sanitized = Vec::with_capacity(parts.len());
+    for mut part in parts {
+        if part.number == 0 || part.number > 999 || !numbers.insert(part.number) {
+            return Err("Cue Part numbers must be unique values from 1 to 999".to_string());
+        }
+        part.label = part.label.trim().chars().take(64).collect();
+        if part.label.is_empty() {
+            return Err(format!("Cue Part {} label is required", part.number));
+        }
+        part.fixture_ids.sort_unstable();
+        part.fixture_ids.dedup();
+        for fixture_id in &part.fixture_ids {
+            if !target_ids.contains(fixture_id) {
+                return Err(format!(
+                    "Cue Part {} references fixture {} outside this cue",
+                    part.number, fixture_id
+                ));
+            }
+            if !assigned_fixture_ids.insert(*fixture_id) {
+                return Err(format!(
+                    "Fixture {} is assigned to more than one Cue Part",
+                    fixture_id
+                ));
+            }
+        }
+        part.video_layer_ids.sort_unstable();
+        part.video_layer_ids.dedup();
+        for layer_id in &part.video_layer_ids {
+            if !video_layer_ids.contains(layer_id) {
+                return Err(format!(
+                    "Cue Part {} references video layer {} outside this cue",
+                    part.number, layer_id
+                ));
+            }
+            if !assigned_video_layer_ids.insert(*layer_id) {
+                return Err(format!(
+                    "Video layer {} is assigned to more than one Cue Part",
+                    layer_id
+                ));
+            }
+        }
+        part.video_output_ids.sort_unstable();
+        part.video_output_ids.dedup();
+        for output_id in &part.video_output_ids {
+            if !video_output_ids.contains(output_id) {
+                return Err(format!(
+                    "Cue Part {} references video output {} outside this cue",
+                    part.number, output_id
+                ));
+            }
+            if !assigned_video_output_ids.insert(*output_id) {
+                return Err(format!(
+                    "Video output {} is assigned to more than one Cue Part",
+                    output_id
+                ));
+            }
+        }
+        sanitized.push(part);
+    }
+    sanitized.sort_by_key(|part| part.number);
+    Ok(sanitized)
+}
+
+fn reconcile_cue_parts(
+    parts: Vec<CuePartSummary>,
+    targets: &[CueFixtureTarget],
+    video_targets: &[VideoLayerTarget],
+    video_output_targets: &[VideoOutputTarget],
+) -> Vec<CuePartSummary> {
+    let target_ids = targets
+        .iter()
+        .map(|target| target.fixture_id)
+        .collect::<HashSet<_>>();
+    let video_layer_ids = video_targets
+        .iter()
+        .map(|target| target.layer_id)
+        .collect::<HashSet<_>>();
+    let video_output_ids = video_output_targets
+        .iter()
+        .map(|target| target.output_id)
+        .collect::<HashSet<_>>();
+    let mut numbers = HashSet::new();
+    let mut assigned_fixture_ids = HashSet::new();
+    let mut assigned_video_layer_ids = HashSet::new();
+    let mut assigned_video_output_ids = HashSet::new();
+    let mut reconciled = parts
+        .into_iter()
+        .take(16)
+        .filter_map(|mut part| {
+            if part.number == 0 || part.number > 999 || !numbers.insert(part.number) {
+                return None;
+            }
+            part.label = part.label.trim().chars().take(64).collect();
+            if part.label.is_empty() {
+                part.label = format!("Part {}", part.number);
+            }
+            part.fixture_ids.retain(|fixture_id| {
+                target_ids.contains(fixture_id) && assigned_fixture_ids.insert(*fixture_id)
+            });
+            part.fixture_ids.sort_unstable();
+            part.fixture_ids.dedup();
+            part.video_layer_ids.retain(|layer_id| {
+                video_layer_ids.contains(layer_id) && assigned_video_layer_ids.insert(*layer_id)
+            });
+            part.video_layer_ids.sort_unstable();
+            part.video_layer_ids.dedup();
+            part.video_output_ids.retain(|output_id| {
+                video_output_ids.contains(output_id) && assigned_video_output_ids.insert(*output_id)
+            });
+            part.video_output_ids.sort_unstable();
+            part.video_output_ids.dedup();
+            Some(part)
+        })
+        .collect::<Vec<_>>();
+    reconciled.sort_by_key(|part| part.number);
+    reconciled
+}
+
+fn sanitize_cue_lists(cue_lists: &[CueListSummary], cues: &[RuntimeCue]) -> Vec<CueListSummary> {
+    let mut sanitized = Vec::new();
+    let mut seen = HashSet::new();
+    for cue_list in cue_lists {
+        if cue_list.id == 0 || !seen.insert(cue_list.id) {
+            continue;
+        }
+        let label = cue_list.label.trim().chars().take(64).collect::<String>();
+        sanitized.push(CueListSummary {
+            id: cue_list.id,
+            label: if label.is_empty() {
+                format!("Cue List {}", cue_list.id)
+            } else {
+                label
+            },
+            active_cue_id: cue_list.active_cue_id.filter(|cue_id| {
+                cues.iter()
+                    .any(|cue| cue.id == *cue_id && cue.cue_list_id == cue_list.id)
+            }),
+        });
+    }
+    if !seen.contains(&DEFAULT_CUE_LIST_ID) {
+        sanitized.insert(0, CueListSummary::default());
+        seen.insert(DEFAULT_CUE_LIST_ID);
+    }
+    for cue in cues {
+        if seen.insert(cue.cue_list_id) {
+            sanitized.push(CueListSummary {
+                id: cue.cue_list_id,
+                label: format!("Cue List {}", cue.cue_list_id),
+                active_cue_id: None,
+            });
+        }
+    }
+    sanitized.sort_by_key(|cue_list| (cue_list.id != DEFAULT_CUE_LIST_ID, cue_list.id));
+    sanitized
+}
+
+fn validate_and_sanitize_playback_executor(
+    mut executor: PlaybackExecutorSummary,
+    cue_lists: &[CueListSummary],
+    existing: &[PlaybackExecutorSummary],
+) -> Result<PlaybackExecutorSummary, String> {
+    if executor.id == 0 {
+        return Err("Playback Executor ID must be greater than zero".to_string());
+    }
+    executor.label = executor.label.trim().chars().take(64).collect();
+    if executor.label.is_empty() {
+        return Err("Playback Executor label is required".to_string());
+    }
+    if !cue_lists
+        .iter()
+        .any(|cue_list| cue_list.id == executor.cue_list_id)
+    {
+        return Err(format!("Cue List {} was not found", executor.cue_list_id));
+    }
+    if executor.page == 0 || executor.page > 99 || executor.slot == 0 || executor.slot > 16 {
+        return Err("Playback Executor page must be 1-99 and slot must be 1-16".to_string());
+    }
+    if !executor.level.is_finite() {
+        return Err("Playback Executor level must be finite".to_string());
+    }
+    if existing.iter().any(|candidate| {
+        candidate.id != executor.id
+            && candidate.page == executor.page
+            && candidate.slot == executor.slot
+    }) {
+        return Err(format!(
+            "Playback Executor page {} slot {} is already in use",
+            executor.page, executor.slot
+        ));
+    }
+    executor.level = executor.level.clamp(0.0, 1.0);
+    Ok(executor)
+}
+
+fn sanitize_playback_executors(
+    executors: &[PlaybackExecutorSummary],
+    cue_lists: &[CueListSummary],
+) -> Vec<PlaybackExecutorSummary> {
+    let mut sanitized = Vec::new();
+    for executor in executors.iter().take(64).cloned() {
+        if let Ok(executor) =
+            validate_and_sanitize_playback_executor(executor, cue_lists, &sanitized)
+        {
+            sanitized.push(executor);
+        }
+    }
+    if sanitized.is_empty() {
+        sanitized.push(PlaybackExecutorSummary::default());
+    }
+    sanitized.sort_by_key(|executor| (executor.page, executor.slot, executor.id));
+    sanitized
 }
 
 fn video_layer_summary(layer: &RuntimeVideoLayer) -> VideoLayerSummary {
@@ -5458,6 +7287,7 @@ fn video_layer_summary(layer: &RuntimeVideoLayer) -> VideoLayerSummary {
         source: layer.source.clone(),
         blend_mode: layer.blend_mode.clone(),
         state: layer.state.clone(),
+        isf_effect: layer.isf_effect.clone(),
     }
 }
 
@@ -5468,6 +7298,7 @@ fn runtime_video_layer_from_summary(layer: &VideoLayerSummary) -> RuntimeVideoLa
         source: layer.source.clone(),
         blend_mode: layer.blend_mode.clone(),
         state: video::sanitize_layer_state(layer.state.clone()),
+        isf_effect: layer.isf_effect.clone(),
     }
 }
 
@@ -5676,6 +7507,114 @@ fn fade_progress(fade: &RuntimeFade, now: Instant) -> f32 {
         return 1.0;
     }
     (fade_elapsed(fade, now).as_secs_f32() / fade.duration.as_secs_f32()).clamp(0.0, 1.0)
+}
+
+fn delayed_fade_progress(elapsed: Duration, delay: Duration, duration: Duration) -> f32 {
+    if elapsed < delay {
+        return 0.0;
+    }
+    if duration.is_zero() {
+        return 1.0;
+    }
+    (elapsed.saturating_sub(delay).as_secs_f32() / duration.as_secs_f32()).clamp(0.0, 1.0)
+}
+
+fn cue_attribute_timing(
+    timing: &CueIfcbTiming,
+    base_fade_ms: u64,
+    attribute: &str,
+) -> (Duration, Duration) {
+    let normalized = attribute.to_ascii_lowercase();
+    let (delay_ms, fade_ms) = if is_mastered_intensity_attribute(attribute) {
+        (timing.intensity_delay_ms, timing.intensity_fade_ms)
+    } else if normalized.contains("pan")
+        || normalized.contains("tilt")
+        || normalized.contains("position")
+    {
+        (timing.focus_delay_ms, timing.focus_fade_ms)
+    } else if is_cue_color_attribute(attribute) {
+        (timing.color_delay_ms, timing.color_fade_ms)
+    } else {
+        (timing.beam_delay_ms, timing.beam_fade_ms)
+    };
+    (
+        Duration::from_millis(delay_ms),
+        Duration::from_millis(fade_ms.unwrap_or(base_fade_ms)),
+    )
+}
+
+fn cue_part_attribute_timing(
+    parts: &[CuePartSummary],
+    fixture_id: FixtureId,
+    timing: &CueIfcbTiming,
+    base_fade_ms: u64,
+    attribute: &str,
+) -> (Duration, Duration) {
+    let part = parts
+        .iter()
+        .find(|part| part.fixture_ids.contains(&fixture_id));
+    let part_fade_ms = part.and_then(|part| part.fade_ms).unwrap_or(base_fade_ms);
+    let (family_delay, family_fade) = cue_attribute_timing(timing, part_fade_ms, attribute);
+    (
+        family_delay.saturating_add(Duration::from_millis(
+            part.map(|part| part.delay_ms).unwrap_or(0),
+        )),
+        family_fade,
+    )
+}
+
+fn cue_part_base_timing(part: Option<&CuePartSummary>, base_fade_ms: u64) -> (Duration, Duration) {
+    (
+        Duration::from_millis(part.map(|part| part.delay_ms).unwrap_or(0)),
+        Duration::from_millis(part.and_then(|part| part.fade_ms).unwrap_or(base_fade_ms)),
+    )
+}
+
+fn cue_part_video_layer_timing(
+    parts: &[CuePartSummary],
+    layer_id: VideoLayerId,
+    base_fade_ms: u64,
+) -> (Duration, Duration) {
+    cue_part_base_timing(
+        parts
+            .iter()
+            .find(|part| part.video_layer_ids.contains(&layer_id)),
+        base_fade_ms,
+    )
+}
+
+fn cue_part_video_output_timing(
+    parts: &[CuePartSummary],
+    output_id: VideoOutputId,
+    base_fade_ms: u64,
+) -> (Duration, Duration) {
+    cue_part_base_timing(
+        parts
+            .iter()
+            .find(|part| part.video_output_ids.contains(&output_id)),
+        base_fade_ms,
+    )
+}
+
+fn is_cue_color_attribute(attribute: &str) -> bool {
+    let normalized = attribute.to_ascii_lowercase();
+    [
+        "color",
+        "red",
+        "green",
+        "blue",
+        "white",
+        "amber",
+        "cyan",
+        "magenta",
+        "yellow",
+        "hue",
+        "saturation",
+        "cto",
+        "ctb",
+    ]
+    .iter()
+    .any(|token| normalized.contains(token))
 }
 
 fn fade_elapsed(fade: &RuntimeFade, now: Instant) -> Duration {
@@ -6025,6 +7964,7 @@ fn sanitize_node_graph(graph: &NodeGraphSummary) -> Result<NodeGraphSummary, Str
         match node.kind {
             NodeGraphNodeKind::Lfo => validate_node_graph_lfo_node(graph, node)?,
             NodeGraphNodeKind::PositionWave => validate_node_graph_position_wave_node(graph, node)?,
+            NodeGraphNodeKind::Audio => validate_node_graph_audio_node(graph, node)?,
             NodeGraphNodeKind::Transform => validate_node_graph_transform_node(graph, node)?,
             NodeGraphNodeKind::Output => validate_node_graph_output_node(graph, node)?,
         }
@@ -6052,7 +7992,11 @@ fn validate_node_graph_lfo_node(
     graph: &NodeGraphSummary,
     node: &NodeGraphNodeSummary,
 ) -> Result<(), String> {
-    if node.position_wave.is_some() || node.transform.is_some() || node.output.is_some() {
+    if node.position_wave.is_some()
+        || node.audio.is_some()
+        || node.transform.is_some()
+        || node.output.is_some()
+    {
         return Err(format!(
             "Node graph '{}' LFO node {} contains a non-LFO body",
             graph.label, node.id
@@ -6091,7 +8035,11 @@ fn validate_node_graph_position_wave_node(
     graph: &NodeGraphSummary,
     node: &NodeGraphNodeSummary,
 ) -> Result<(), String> {
-    if node.lfo.is_some() || node.transform.is_some() || node.output.is_some() {
+    if node.lfo.is_some()
+        || node.audio.is_some()
+        || node.transform.is_some()
+        || node.output.is_some()
+    {
         return Err(format!(
             "Node graph '{}' position wave node {} contains a non-position-wave body",
             graph.label, node.id
@@ -6135,11 +8083,44 @@ fn validate_node_graph_position_wave_node(
     Ok(())
 }
 
+fn validate_node_graph_audio_node(
+    graph: &NodeGraphSummary,
+    node: &NodeGraphNodeSummary,
+) -> Result<(), String> {
+    if node.lfo.is_some()
+        || node.position_wave.is_some()
+        || node.transform.is_some()
+        || node.output.is_some()
+    {
+        return Err(format!(
+            "Node graph '{}' audio node {} contains a non-audio body",
+            graph.label, node.id
+        ));
+    }
+    let Some(audio) = &node.audio else {
+        return Err(format!(
+            "Node graph '{}' audio node {} is missing its body",
+            graph.label, node.id
+        ));
+    };
+    if !audio.gain.is_finite() || !audio.bias.is_finite() {
+        return Err(format!(
+            "Node graph '{}' audio node {} has non-finite values",
+            graph.label, node.id
+        ));
+    }
+    Ok(())
+}
+
 fn validate_node_graph_transform_node(
     graph: &NodeGraphSummary,
     node: &NodeGraphNodeSummary,
 ) -> Result<(), String> {
-    if node.lfo.is_some() || node.position_wave.is_some() || node.output.is_some() {
+    if node.lfo.is_some()
+        || node.position_wave.is_some()
+        || node.audio.is_some()
+        || node.output.is_some()
+    {
         return Err(format!(
             "Node graph '{}' transform node {} contains a non-transform body",
             graph.label, node.id
@@ -6170,7 +8151,11 @@ fn validate_node_graph_output_node(
     graph: &NodeGraphSummary,
     node: &NodeGraphNodeSummary,
 ) -> Result<(), String> {
-    if node.lfo.is_some() || node.position_wave.is_some() || node.transform.is_some() {
+    if node.lfo.is_some()
+        || node.position_wave.is_some()
+        || node.audio.is_some()
+        || node.transform.is_some()
+    {
         return Err(format!(
             "Node graph '{}' output node {} contains a non-output body",
             graph.label, node.id
@@ -6444,8 +8429,22 @@ fn evaluate_node_graph_output_normalized(
     created_at: Instant,
     now: Instant,
     clock: &ClockSnapshot,
+    audio: Option<&AudioAnalysisSummary>,
+    live_audio: Option<&AudioSpectrumPoint>,
+    timeline_position_ms: u64,
 ) -> Option<f32> {
-    evaluate_node_graph_input_value(graph, output_node_id, position, created_at, now, clock, 0)
+    evaluate_node_graph_input_value(
+        graph,
+        output_node_id,
+        position,
+        created_at,
+        now,
+        clock,
+        audio,
+        live_audio,
+        timeline_position_ms,
+        0,
+    )
 }
 
 fn evaluate_node_graph_node_value(
@@ -6455,6 +8454,9 @@ fn evaluate_node_graph_node_value(
     created_at: Instant,
     now: Instant,
     clock: &ClockSnapshot,
+    audio: Option<&AudioAnalysisSummary>,
+    live_audio: Option<&AudioSpectrumPoint>,
+    timeline_position_ms: u64,
     depth: usize,
 ) -> Option<f32> {
     if depth > graph.nodes.len() {
@@ -6492,6 +8494,16 @@ fn evaluate_node_graph_node_value(
             let phase = (wave.phase + time_phase - distance_phase).rem_euclid(1.0);
             Some(evaluate_lfo_shape(&wave.shape, phase))
         }
+        NodeGraphNodeKind::Audio => {
+            let source = node.audio.as_ref()?;
+            let value = match source.source {
+                AudioSpectrumSource::Timeline => {
+                    sample_audio_spectrum(audio?, timeline_position_ms, source.band)
+                }
+                AudioSpectrumSource::Live => sample_live_audio_spectrum(live_audio?, source.band),
+            };
+            Some((value * source.gain + source.bias).clamp(0.0, 1.0))
+        }
         NodeGraphNodeKind::Transform => {
             let transform = node.transform.as_ref()?;
             let input = evaluate_node_graph_input_value(
@@ -6501,6 +8513,9 @@ fn evaluate_node_graph_node_value(
                 created_at,
                 now,
                 clock,
+                audio,
+                live_audio,
+                timeline_position_ms,
                 depth + 1,
             )?;
             Some(match transform.op {
@@ -6518,6 +8533,9 @@ fn evaluate_node_graph_node_value(
             created_at,
             now,
             clock,
+            audio,
+            live_audio,
+            timeline_position_ms,
             depth + 1,
         ),
     }
@@ -6530,6 +8548,9 @@ fn evaluate_node_graph_input_value(
     created_at: Instant,
     now: Instant,
     clock: &ClockSnapshot,
+    audio: Option<&AudioAnalysisSummary>,
+    live_audio: Option<&AudioSpectrumPoint>,
+    timeline_position_ms: u64,
     depth: usize,
 ) -> Option<f32> {
     let edge = graph
@@ -6544,8 +8565,47 @@ fn evaluate_node_graph_input_value(
         created_at,
         now,
         clock,
+        audio,
+        live_audio,
+        timeline_position_ms,
         depth + 1,
     )
+}
+
+fn sample_live_audio_spectrum(point: &AudioSpectrumPoint, band: AudioSpectrumBand) -> f32 {
+    match band {
+        AudioSpectrumBand::Bass => point.bass,
+        AudioSpectrumBand::Mid => point.mid,
+        AudioSpectrumBand::High => point.high,
+    }
+    .clamp(0.0, 1.0)
+}
+
+fn sample_audio_spectrum(
+    audio: &AudioAnalysisSummary,
+    position_ms: u64,
+    band: AudioSpectrumBand,
+) -> f32 {
+    let Some(first) = audio.spectrum.first() else {
+        return 0.0;
+    };
+    let value = |point: &protocol::AudioSpectrumPoint| match band {
+        AudioSpectrumBand::Bass => point.bass,
+        AudioSpectrumBand::Mid => point.mid,
+        AudioSpectrumBand::High => point.high,
+    };
+    if position_ms <= first.time_ms {
+        return value(first).clamp(0.0, 1.0);
+    }
+    for pair in audio.spectrum.windows(2) {
+        if position_ms <= pair[1].time_ms {
+            let span = pair[1].time_ms.saturating_sub(pair[0].time_ms).max(1);
+            let progress = position_ms.saturating_sub(pair[0].time_ms) as f32 / span as f32;
+            return (value(&pair[0]) + (value(&pair[1]) - value(&pair[0])) * progress)
+                .clamp(0.0, 1.0);
+        }
+    }
+    value(audio.spectrum.last().expect("audio spectrum is non-empty")).clamp(0.0, 1.0)
 }
 
 fn scale_effect_u16(low: u16, high: u16, normalized: f32) -> u16 {
@@ -6760,6 +8820,7 @@ struct BpmClock {
     midi_cursor: usize,
     midi_count: usize,
     source: ClockSource,
+    last_external_sync: Option<Instant>,
 }
 
 impl BpmClock {
@@ -6774,6 +8835,7 @@ impl BpmClock {
             midi_cursor: 0,
             midi_count: 0,
             source: ClockSource::Manual,
+            last_external_sync: None,
         }
     }
 
@@ -6785,9 +8847,11 @@ impl BpmClock {
         self.taps = [None; 4];
         self.reset_midi_clock();
         self.source = ClockSource::Manual;
+        self.last_external_sync = None;
     }
 
     fn tap(&mut self, now: Instant) {
+        self.last_external_sync = None;
         let previous = self.latest_tap();
         if previous
             .map(|tap| now.saturating_duration_since(tap) > Duration::from_secs(2))
@@ -6818,6 +8882,7 @@ impl BpmClock {
     }
 
     fn midi_clock_pulse(&mut self, now: Instant) {
+        self.last_external_sync = Some(now);
         let previous = self.latest_midi_pulse();
         if previous
             .map(|pulse| now.saturating_duration_since(pulse) > Duration::from_millis(500))
@@ -6865,10 +8930,12 @@ impl BpmClock {
         self.taps = [None; 4];
         self.reset_midi_clock();
         self.source = source;
+        self.last_external_sync = Some(now);
     }
 
-    fn mark_timecode_sync(&mut self, source: ClockSource) {
+    fn mark_timecode_sync(&mut self, source: ClockSource, now: Instant) {
         self.source = source;
+        self.last_external_sync = Some(now);
     }
 
     fn midi_song_position_ms(&self, sixteenth_notes: u16) -> u64 {
@@ -6879,12 +8946,26 @@ impl BpmClock {
     fn snapshot(&self, now: Instant) -> ClockSnapshot {
         let elapsed_beats =
             now.saturating_duration_since(self.anchor).as_secs_f32() * self.bpm / 60.0;
+        let external_sync_age_ms = self.last_external_sync.map(|last_sync| {
+            now.saturating_duration_since(last_sync)
+                .as_millis()
+                .min(u128::from(u64::MAX)) as u64
+        });
+        let external_sync_timeout_ms = match self.source {
+            ClockSource::MidiClock => 500,
+            ClockSource::MidiTimecode | ClockSource::Ltc | ClockSource::AbletonLink => 1_000,
+            ClockSource::Manual | ClockSource::Tap => 0,
+        };
+        let external_sync_locked = external_sync_timeout_ms > 0
+            && external_sync_age_ms.is_some_and(|age| age <= external_sync_timeout_ms);
         ClockSnapshot {
             bpm: self.bpm,
             beat_phase: elapsed_beats.fract(),
             beat_counter: elapsed_beats.floor() as u64,
             tap_count: self.tap_count,
             source: self.source.clone(),
+            external_sync_age_ms,
+            external_sync_locked,
         }
     }
 
@@ -7030,6 +9111,32 @@ fn sanitize_video_output_mapping(mut mapping: VideoOutputMapping) -> VideoOutput
     mapping.rotation_deg = finite_or(mapping.rotation_deg, 0.0).clamp(-180.0, 180.0);
     mapping.aspect_ratio = finite_or(mapping.aspect_ratio, 1.0).clamp(0.1, 10.0);
     mapping.lens_distortion = finite_or(mapping.lens_distortion, 0.0).clamp(-1.0, 1.0);
+    mapping.edge_blend_left = finite_or(mapping.edge_blend_left, 0.0).clamp(0.0, 1.0);
+    mapping.edge_blend_right = finite_or(mapping.edge_blend_right, 0.0).clamp(0.0, 1.0);
+    mapping.edge_blend_top = finite_or(mapping.edge_blend_top, 0.0).clamp(0.0, 1.0);
+    mapping.edge_blend_bottom = finite_or(mapping.edge_blend_bottom, 0.0).clamp(0.0, 1.0);
+    mapping.edge_blend_gamma = finite_or(mapping.edge_blend_gamma, 2.2).clamp(0.1, 8.0);
+    mapping.black_level = finite_or(mapping.black_level, 0.0).clamp(0.0, 1.0);
+    mapping.mask_point_count = mapping
+        .mask_point_count
+        .min(mapping.mask_points.len() as u8);
+    mapping.mask_softness = finite_or(mapping.mask_softness, 0.0).clamp(0.0, 0.5);
+    for point in &mut mapping.mask_points {
+        point.x = finite_or(point.x, 0.0).clamp(0.0, 1.0);
+        point.y = finite_or(point.y, 0.0).clamp(0.0, 1.0);
+    }
+    let bitmap_valid = mapping.bitmap_mask_width > 0
+        && mapping.bitmap_mask_width <= protocol::VIDEO_OUTPUT_BITMAP_MASK_MAX_DIMENSION
+        && mapping.bitmap_mask_height > 0
+        && mapping.bitmap_mask_height <= protocol::VIDEO_OUTPUT_BITMAP_MASK_MAX_DIMENSION
+        && usize::from(mapping.bitmap_mask_width)
+            .saturating_mul(usize::from(mapping.bitmap_mask_height))
+            <= protocol::VIDEO_OUTPUT_BITMAP_MASK_WORD_CAPACITY * 8;
+    if !bitmap_valid {
+        mapping.bitmap_mask_width = 0;
+        mapping.bitmap_mask_height = 0;
+        mapping.bitmap_mask_luma_words = [0; protocol::VIDEO_OUTPUT_BITMAP_MASK_WORD_CAPACITY];
+    }
     mapping.keystone_x = finite_or(mapping.keystone_x, 0.0).clamp(-1.0, 1.0);
     mapping.keystone_y = finite_or(mapping.keystone_y, 0.0).clamp(-1.0, 1.0);
     mapping.corner_top_left_x = finite_or(mapping.corner_top_left_x, 0.0).clamp(-1.0, 1.0);
@@ -7135,19 +9242,99 @@ fn output_ids_for_composition(
         .collect()
 }
 
-fn send_output_frame(
+impl DmxRouteRecovery {
+    fn retry_delay(&self) -> Duration {
+        let exponent = self.consecutive_failures.saturating_sub(1).min(6);
+        DMX_RECONNECT_BASE_DELAY
+            .saturating_mul(1_u32 << exponent)
+            .min(DMX_RECONNECT_MAX_DELAY)
+    }
+
+    fn record_failure(&mut self, error: String, now: Instant) {
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        self.last_error = Some(error);
+        self.next_retry_at = Some(now + self.retry_delay());
+    }
+
+    fn record_success(&mut self) {
+        self.consecutive_failures = 0;
+        self.next_retry_at = None;
+        self.last_error = None;
+        self.last_success_unix_ms = Some(unix_time_ms());
+    }
+
+    fn retry_in_ms(&self, now: Instant) -> Option<u64> {
+        self.next_retry_at.map(|retry_at| {
+            retry_at
+                .saturating_duration_since(now)
+                .as_millis()
+                .min(u64::MAX as u128) as u64
+        })
+    }
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u64::MAX as u128) as u64
+}
+
+fn send_output_frame_with_recovery(
     sender: &mut Option<DmxSender>,
+    recovery: &mut DmxRouteRecovery,
     config: &DmxOutputConfig,
     universe: u16,
     frame: &[u8; 512],
-) -> Result<usize, String> {
-    if sender.is_none() {
-        *sender = Some(create_dmx_sender(config)?);
+    now: Instant,
+) -> DmxRouteSendOutcome {
+    if recovery
+        .next_retry_at
+        .is_some_and(|retry_at| now < retry_at)
+    {
+        return DmxRouteSendOutcome {
+            attempted: false,
+            result: Err(recovery
+                .last_error
+                .clone()
+                .unwrap_or_else(|| "DMX route is waiting to reconnect".to_string())),
+        };
     }
-    sender
-        .as_mut()
-        .ok_or_else(|| "DMX sender is not initialized".to_string())?
-        .send_dmx_frame(universe, frame)
+    if sender.is_none() {
+        recovery.reconnect_attempts = recovery.reconnect_attempts.saturating_add(1);
+        match create_dmx_sender(config) {
+            Ok(created) => *sender = Some(created),
+            Err(error) => {
+                recovery.record_failure(error.clone(), now);
+                return DmxRouteSendOutcome {
+                    attempted: true,
+                    result: Err(error),
+                };
+            }
+        }
+    }
+    let result = match sender.as_mut() {
+        Some(sender) => sender.send_dmx_frame(universe, frame),
+        None => Err("DMX sender is not initialized".to_string()),
+    };
+    match result {
+        Ok(bytes) => {
+            recovery.record_success();
+            DmxRouteSendOutcome {
+                attempted: true,
+                result: Ok(bytes),
+            }
+        }
+        Err(error) => {
+            *sender = None;
+            recovery.record_failure(error.clone(), now);
+            DmxRouteSendOutcome {
+                attempted: true,
+                result: Err(error),
+            }
+        }
+    }
 }
 
 fn create_enabled_dmx_sender(output: &DmxOutputConfig) -> Result<Option<DmxSender>, String> {
@@ -7788,6 +9975,7 @@ mod tests {
                         bias: 0.0,
                     }),
                     position_wave: None,
+                    audio: None,
                     transform: None,
                     output: None,
                 },
@@ -7799,6 +9987,7 @@ mod tests {
                     y: 30.0,
                     lfo: None,
                     position_wave: None,
+                    audio: None,
                     transform: Some(protocol::NodeGraphTransformNode {
                         op: NodeGraphTransformOp::Scale,
                         amount: 1.0,
@@ -7815,6 +10004,7 @@ mod tests {
                     y: 30.0,
                     lfo: None,
                     position_wave: None,
+                    audio: None,
                     transform: None,
                     output: Some(protocol::NodeGraphOutputNode {
                         fixture_ids: vec![fixture_id],
@@ -8484,6 +10674,7 @@ mod tests {
                 video_output_targets: Vec::new(),
 
                 node_graph_targets: Vec::new(),
+                ..CueSummary::default()
             }],
             active_cue_id: Some(41),
             timeline: TimelineSnapshot {
@@ -8524,6 +10715,7 @@ mod tests {
                         peak: 0.5,
                         rms: 0.25,
                     }],
+                    spectrum: Vec::new(),
                     beats: vec![0, 500, 1_000],
                 }),
                 playing: false,
@@ -8546,6 +10738,7 @@ mod tests {
                         opacity: 0.5,
                         ..VideoLayerState::default()
                     },
+                    isf_effect: None,
                 }],
                 compositions: vec![CompositionSummary {
                     id: 45,
@@ -8909,6 +11102,131 @@ mod tests {
     }
 
     #[test]
+    fn audio_node_graph_interpolates_fft_band_at_timeline_position() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let fixture_id = engine.allocate_fixture_id();
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id,
+                request: sample_patch_request("Audio Fixture", 1),
+                profile: sample_profile(),
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SetTimelineAudio(Some(
+                AudioAnalysisSummary {
+                    path: "memory://fft.wav".to_string(),
+                    sample_rate: 48_000,
+                    channels: 1,
+                    duration_ms: 1_000,
+                    estimated_bpm: None,
+                    waveform: Vec::new(),
+                    spectrum: vec![
+                        protocol::AudioSpectrumPoint {
+                            time_ms: 0,
+                            bass: 0.2,
+                            mid: 0.0,
+                            high: 0.0,
+                        },
+                        protocol::AudioSpectrumPoint {
+                            time_ms: 1_000,
+                            bass: 0.8,
+                            mid: 0.0,
+                            high: 0.0,
+                        },
+                    ],
+                    beats: Vec::new(),
+                },
+            )))
+            .unwrap();
+        engine.send(EngineCommand::SeekTimeline(500)).unwrap();
+
+        let mut graph = sample_node_graph(engine.allocate_node_graph_id(), fixture_id);
+        graph.nodes[0].kind = NodeGraphNodeKind::Audio;
+        graph.nodes[0].label = "Audio Bass".to_string();
+        graph.nodes[0].lfo = None;
+        graph.nodes[0].audio = Some(protocol::NodeGraphAudioNode {
+            source: protocol::AudioSpectrumSource::Timeline,
+            band: AudioSpectrumBand::Bass,
+            gain: 1.0,
+            bias: 0.0,
+        });
+        engine.send(EngineCommand::UpsertNodeGraph(graph)).unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if snapshot.dmx_preview[0] == 128 {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+        }
+        assert_eq!(snapshot.dmx_preview[0], 128);
+    }
+
+    #[test]
+    fn live_audio_node_graph_uses_ephemeral_spectrum_without_timeline_audio() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let fixture_id = engine.allocate_fixture_id();
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id,
+                request: sample_patch_request("Live Audio Fixture", 1),
+                profile: sample_profile(),
+            })
+            .unwrap();
+        let mut graph = sample_node_graph(engine.allocate_node_graph_id(), fixture_id);
+        graph.nodes[0].kind = NodeGraphNodeKind::Audio;
+        graph.nodes[0].label = "Live Mid".to_string();
+        graph.nodes[0].lfo = None;
+        graph.nodes[0].audio = Some(protocol::NodeGraphAudioNode {
+            source: protocol::AudioSpectrumSource::Live,
+            band: AudioSpectrumBand::Mid,
+            gain: 1.0,
+            bias: 0.0,
+        });
+        engine.send(EngineCommand::UpsertNodeGraph(graph)).unwrap();
+        engine
+            .send(EngineCommand::SetLiveAudioSpectrum(Some(
+                AudioSpectrumPoint {
+                    time_ms: 99,
+                    bass: 0.1,
+                    mid: 0.75,
+                    high: 0.2,
+                },
+            )))
+            .unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if snapshot.dmx_preview[0] == 191 {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+        }
+        assert_eq!(snapshot.dmx_preview[0], 191);
+
+        engine
+            .send(EngineCommand::SetLiveAudioSpectrum(None))
+            .unwrap();
+        for _ in 0..20 {
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+            if snapshot.dmx_preview[0] == 0 {
+                break;
+            }
+        }
+        assert_eq!(snapshot.dmx_preview[0], 0);
+    }
+
+    #[test]
     fn node_graph_position_wave_uses_fixture_and_video_positions() {
         let engine = EngineHandle::start(DmxOutputConfig {
             enabled: false,
@@ -9038,6 +11356,7 @@ mod tests {
                         source: source.clone(),
                         blend_mode: VideoBlendMode::Normal,
                         state: VideoLayerState::default(),
+                        isf_effect: None,
                     },
                     VideoLayerSummary {
                         id: 2,
@@ -9045,6 +11364,7 @@ mod tests {
                         source: source.clone(),
                         blend_mode: VideoBlendMode::Add,
                         state: VideoLayerState::default(),
+                        isf_effect: None,
                     },
                     VideoLayerSummary {
                         id: 0,
@@ -9052,6 +11372,7 @@ mod tests {
                         source,
                         blend_mode: VideoBlendMode::Normal,
                         state: VideoLayerState::default(),
+                        isf_effect: None,
                     },
                 ],
                 compositions: vec![
@@ -9166,6 +11487,7 @@ mod tests {
                         blackout: false,
                     }],
                     node_graph_targets: Vec::new(),
+                    ..CueSummary::default()
                 },
                 CueSummary {
                     id: 11,
@@ -9182,6 +11504,7 @@ mod tests {
                     video_output_targets: Vec::new(),
 
                     node_graph_targets: Vec::new(),
+                    ..CueSummary::default()
                 },
                 CueSummary {
                     id: 12,
@@ -9195,6 +11518,7 @@ mod tests {
                     video_output_targets: Vec::new(),
 
                     node_graph_targets: Vec::new(),
+                    ..CueSummary::default()
                 },
             ],
             active_cue_id: Some(11),
@@ -9309,6 +11633,7 @@ mod tests {
                     },
                     blend_mode: VideoBlendMode::Normal,
                     state: VideoLayerState::default(),
+                    isf_effect: None,
                 }],
                 outputs: vec![VideoOutputSummary {
                     id: 3,
@@ -9468,6 +11793,7 @@ mod tests {
                     video_output_targets: Vec::new(),
 
                     node_graph_targets: Vec::new(),
+                    ..CueSummary::default()
                 },
                 CueSummary {
                     id: 11,
@@ -9484,6 +11810,7 @@ mod tests {
                     video_output_targets: Vec::new(),
 
                     node_graph_targets: Vec::new(),
+                    ..CueSummary::default()
                 },
             ],
             active_cue_id: Some(11),
@@ -9658,6 +11985,7 @@ mod tests {
                 peak: 0.8,
                 rms: 0.4,
             }],
+            spectrum: Vec::new(),
             beats: vec![0, 469, 938],
         };
 
@@ -9703,6 +12031,7 @@ mod tests {
             duration_ms: 3_000,
             estimated_bpm: Some(120.0),
             waveform: Vec::new(),
+            spectrum: Vec::new(),
             beats: vec![0, 500, 1_000, 1_500, 2_000],
         };
 
@@ -9746,6 +12075,7 @@ mod tests {
                     duration_ms: 2_000,
                     estimated_bpm: Some(120.0),
                     waveform: Vec::new(),
+                    spectrum: Vec::new(),
                     beats: Vec::new(),
                 },
             )))
@@ -9789,6 +12119,7 @@ mod tests {
                         width: Some(1920),
                         height: Some(1080),
                         frame_rate: Some(29.97),
+                        has_audio: false,
                     }),
                 },
             })
@@ -10775,6 +13106,239 @@ mod tests {
     }
 
     #[test]
+    fn reference_palette_resolves_latest_values_on_go_and_explicit_cue_values_win() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let fixture_id = engine.allocate_fixture_id();
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id,
+                request: sample_patch_request("Palette Fixture", 1),
+                profile: sample_profile(),
+            })
+            .unwrap();
+        let palette_id = engine.allocate_palette_id();
+        engine
+            .send(EngineCommand::UpsertPalette(ReferencePaletteSummary {
+                id: palette_id,
+                label: "Look".to_string(),
+                kind: protocol::PaletteKind::All,
+                values: vec![
+                    AttributeValueSummary {
+                        attribute: "Dimmer".to_string(),
+                        value: 10_000,
+                    },
+                    AttributeValueSummary {
+                        attribute: "Pan".to_string(),
+                        value: 1_000,
+                    },
+                ],
+            }))
+            .unwrap();
+        let cue_id = engine.allocate_cue_id();
+        engine
+            .send(EngineCommand::CreateCue {
+                cue_id,
+                label: "Palette Cue".to_string(),
+                fade_ms: 0,
+                targets: vec![CueFixtureTarget {
+                    fixture_id,
+                    values: vec![AttributeValueSummary {
+                        attribute: "Pan".to_string(),
+                        value: 40_000,
+                    }],
+                }],
+                video_targets: Vec::new(),
+                video_output_targets: Vec::new(),
+                node_graph_targets: Vec::new(),
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SetCuePaletteTargets {
+                cue_id,
+                palette_targets: vec![CuePaletteTarget {
+                    palette_id,
+                    fixture_ids: vec![fixture_id],
+                }],
+            })
+            .unwrap();
+
+        engine
+            .send(EngineCommand::UpsertPalette(ReferencePaletteSummary {
+                id: palette_id,
+                label: "Look".to_string(),
+                kind: protocol::PaletteKind::All,
+                values: vec![
+                    AttributeValueSummary {
+                        attribute: "Dimmer".to_string(),
+                        value: 50_000,
+                    },
+                    AttributeValueSummary {
+                        attribute: "Pan".to_string(),
+                        value: 2_000,
+                    },
+                ],
+            }))
+            .unwrap();
+        engine.send(EngineCommand::TriggerCue(cue_id)).unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            let fixture = snapshot
+                .fixtures
+                .iter()
+                .find(|fixture| fixture.id == fixture_id);
+            let dimmer = fixture.and_then(|fixture| {
+                fixture
+                    .attribute_values
+                    .iter()
+                    .find(|value| value.attribute == "Dimmer")
+                    .map(|value| value.value)
+            });
+            let pan = fixture.and_then(|fixture| {
+                fixture
+                    .attribute_values
+                    .iter()
+                    .find(|value| value.attribute == "Pan")
+                    .map(|value| value.value)
+            });
+            if dimmer == Some(50_000) && pan == Some(40_000) {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+        }
+
+        let fixture = snapshot
+            .fixtures
+            .iter()
+            .find(|fixture| fixture.id == fixture_id)
+            .unwrap();
+        assert_eq!(
+            fixture
+                .attribute_values
+                .iter()
+                .find(|value| value.attribute == "Dimmer")
+                .map(|value| value.value),
+            Some(50_000)
+        );
+        assert_eq!(
+            fixture
+                .attribute_values
+                .iter()
+                .find(|value| value.attribute == "Pan")
+                .map(|value| value.value),
+            Some(40_000)
+        );
+        assert_eq!(snapshot.cues[0].palette_targets[0].palette_id, palette_id);
+    }
+
+    #[test]
+    fn playback_executors_share_list_position_merge_levels_and_spare_programmer() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let fixture_id = engine.allocate_fixture_id();
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id,
+                request: sample_patch_request("Playback Fixture", 1),
+                profile: sample_profile(),
+            })
+            .unwrap();
+        let cue_id = engine.allocate_cue_id();
+        engine
+            .send(EngineCommand::CreateCue {
+                cue_id,
+                label: "Full".to_string(),
+                fade_ms: 0,
+                targets: vec![CueFixtureTarget {
+                    fixture_id,
+                    values: vec![
+                        AttributeValueSummary {
+                            attribute: "Dimmer".to_string(),
+                            value: 65_535,
+                        },
+                        AttributeValueSummary {
+                            attribute: "Pan".to_string(),
+                            value: 65_535,
+                        },
+                    ],
+                }],
+                video_targets: Vec::new(),
+                video_output_targets: Vec::new(),
+                node_graph_targets: Vec::new(),
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SetPlaybackExecutorLevel {
+                executor_id: 1,
+                level: 0.2,
+            })
+            .unwrap();
+        let duplicate_executor_id = engine.allocate_executor_id();
+        engine
+            .send(EngineCommand::UpsertPlaybackExecutor(
+                PlaybackExecutorSummary {
+                    id: duplicate_executor_id,
+                    label: "Main Duplicate".to_string(),
+                    cue_list_id: DEFAULT_CUE_LIST_ID,
+                    page: 1,
+                    slot: 2,
+                    level: 0.8,
+                },
+            ))
+            .unwrap();
+        engine.send(EngineCommand::SetPlaybackMaster(0.5)).unwrap();
+        engine
+            .send(EngineCommand::TriggerPlaybackExecutorNext(
+                duplicate_executor_id,
+            ))
+            .unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if snapshot.active_cue_id == Some(cue_id)
+                && snapshot.dmx_preview.first().copied() == Some(102)
+            {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+        }
+        assert_eq!(snapshot.cue_lists[0].active_cue_id, Some(cue_id));
+        assert_eq!(snapshot.dmx_preview[0], 102);
+        assert_eq!(snapshot.dmx_preview[1], 255);
+        assert_eq!(snapshot.playback_executors.len(), 2);
+
+        engine
+            .send(EngineCommand::SetProgrammerMode {
+                enabled: true,
+                blind: false,
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SetProgrammerAttribute {
+                fixture_id,
+                attribute: "Dimmer".to_string(),
+                value: 65_535,
+            })
+            .unwrap();
+        for _ in 0..20 {
+            snapshot = engine.snapshot();
+            if snapshot.dmx_preview.first().copied() == Some(255) {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+        }
+        assert_eq!(snapshot.dmx_preview[0], 255);
+        assert_eq!(snapshot.playback_master, 0.5);
+    }
+
+    #[test]
     fn set_cue_metadata_preserves_stored_targets() {
         let engine = EngineHandle::start(DmxOutputConfig {
             enabled: false,
@@ -10819,8 +13383,14 @@ mod tests {
         engine
             .send(EngineCommand::SetCueMetadata {
                 cue_id,
+                cue_number: "1.5".to_string(),
                 label: "  Renamed  ".to_string(),
                 fade_ms: 750,
+                pre_wait_ms: 125,
+                follow_ms: Some(2_000),
+                ifcb_timing: CueIfcbTiming::default(),
+                tracking: false,
+                notes: "Stand by".to_string(),
             })
             .unwrap();
 
@@ -10839,8 +13409,622 @@ mod tests {
         }
 
         assert_eq!(snapshot.cues[0].label, "Renamed");
+        assert_eq!(snapshot.cues[0].cue_number, "1.5");
         assert_eq!(snapshot.cues[0].fade_ms, 750);
+        assert_eq!(snapshot.cues[0].pre_wait_ms, 125);
+        assert_eq!(snapshot.cues[0].follow_ms, Some(2_000));
+        assert!(!snapshot.cues[0].tracking);
+        assert_eq!(snapshot.cues[0].notes, "Stand by");
         assert_eq!(snapshot.cues[0].targets[0].values[0].value, 12_345);
+    }
+
+    #[test]
+    fn cue_ifcb_timing_delays_focus_without_holding_intensity() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let fixture_id = engine.allocate_fixture_id();
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id,
+                request: sample_patch_request("Fixture 1", 1),
+                profile: sample_profile(),
+            })
+            .unwrap();
+        let cue_id = engine.allocate_cue_id();
+        engine
+            .send(EngineCommand::CreateCue {
+                cue_id,
+                label: "IFCB".to_string(),
+                fade_ms: 500,
+                targets: vec![CueFixtureTarget {
+                    fixture_id,
+                    values: vec![
+                        AttributeValueSummary {
+                            attribute: "Dimmer".to_string(),
+                            value: 65_535,
+                        },
+                        AttributeValueSummary {
+                            attribute: "Pan".to_string(),
+                            value: 65_535,
+                        },
+                    ],
+                }],
+                video_targets: Vec::new(),
+                video_output_targets: Vec::new(),
+                node_graph_targets: Vec::new(),
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SetCueMetadata {
+                cue_id,
+                cue_number: "1".to_string(),
+                label: "IFCB".to_string(),
+                fade_ms: 500,
+                pre_wait_ms: 0,
+                follow_ms: None,
+                ifcb_timing: CueIfcbTiming {
+                    intensity_fade_ms: Some(50),
+                    focus_fade_ms: Some(50),
+                    focus_delay_ms: 250,
+                    ..CueIfcbTiming::default()
+                },
+                tracking: true,
+                notes: String::new(),
+            })
+            .unwrap();
+        engine.send(EngineCommand::TriggerCue(cue_id)).unwrap();
+
+        std::thread::sleep(Duration::from_millis(140));
+        let snapshot = engine.snapshot();
+        let values = &snapshot.fixtures[0].attribute_values;
+        let value = |attribute: &str| {
+            values
+                .iter()
+                .find(|value| value.attribute == attribute)
+                .map(|value| value.value)
+                .unwrap_or(0)
+        };
+        assert_eq!(value("Dimmer"), 65_535);
+        assert_eq!(value("Pan"), 0);
+
+        std::thread::sleep(Duration::from_millis(190));
+        let snapshot = engine.snapshot();
+        let pan = snapshot.fixtures[0]
+            .attribute_values
+            .iter()
+            .find(|value| value.attribute == "Pan")
+            .map(|value| value.value)
+            .unwrap_or(0);
+        assert_eq!(pan, 65_535);
+        assert!(snapshot.active_fade.is_none());
+    }
+
+    #[test]
+    fn cue_part_delay_and_fade_compose_with_ifcb_timing() {
+        let parts = vec![CuePartSummary {
+            number: 1,
+            label: "Upstage".to_string(),
+            delay_ms: 200,
+            fade_ms: Some(400),
+            fixture_ids: vec![2],
+            video_layer_ids: Vec::new(),
+            video_output_ids: Vec::new(),
+        }];
+        let timing = CueIfcbTiming {
+            intensity_delay_ms: 50,
+            focus_fade_ms: Some(75),
+            ..CueIfcbTiming::default()
+        };
+
+        assert_eq!(
+            cue_part_attribute_timing(&parts, 2, &timing, 1_000, "Dimmer"),
+            (Duration::from_millis(250), Duration::from_millis(400))
+        );
+        assert_eq!(
+            cue_part_attribute_timing(&parts, 2, &timing, 1_000, "Pan"),
+            (Duration::from_millis(200), Duration::from_millis(75))
+        );
+        assert_eq!(
+            cue_part_attribute_timing(&parts, 1, &timing, 1_000, "Dimmer"),
+            (Duration::from_millis(50), Duration::from_millis(1_000))
+        );
+
+        let targets = vec![CueFixtureTarget {
+            fixture_id: 2,
+            values: Vec::new(),
+        }];
+        assert!(validate_and_sanitize_cue_parts(parts.clone(), &targets, &[], &[]).is_ok());
+        let mut duplicate = parts;
+        duplicate.push(CuePartSummary {
+            number: 2,
+            label: "Duplicate".to_string(),
+            delay_ms: 0,
+            fade_ms: None,
+            fixture_ids: vec![2],
+            video_layer_ids: Vec::new(),
+            video_output_ids: Vec::new(),
+        });
+        assert!(validate_and_sanitize_cue_parts(duplicate, &targets, &[], &[]).is_err());
+    }
+
+    #[test]
+    fn mib_marks_non_intensity_attributes_only_while_fixture_is_dark() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let fixture_id = engine.allocate_fixture_id();
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id,
+                request: sample_patch_request("Fixture 1", 1),
+                profile: sample_profile(),
+            })
+            .unwrap();
+        for (cue_id, dimmer, pan) in [(1, 0, 0), (2, 65_535, 50_000)] {
+            engine
+                .send(EngineCommand::CreateCue {
+                    cue_id,
+                    label: format!("Cue {cue_id}"),
+                    fade_ms: 0,
+                    targets: vec![CueFixtureTarget {
+                        fixture_id,
+                        values: vec![
+                            AttributeValueSummary {
+                                attribute: "Dimmer".to_string(),
+                                value: dimmer,
+                            },
+                            AttributeValueSummary {
+                                attribute: "Pan".to_string(),
+                                value: pan,
+                            },
+                        ],
+                    }],
+                    video_targets: Vec::new(),
+                    video_output_targets: Vec::new(),
+                    node_graph_targets: Vec::new(),
+                })
+                .unwrap();
+        }
+        engine
+            .send(EngineCommand::SetCueMark {
+                cue_id: 2,
+                mark: true,
+            })
+            .unwrap();
+        engine.send(EngineCommand::TriggerCue(1)).unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            let Some(fixture) = snapshot.fixtures.first() else {
+                std::thread::sleep(DMX_TICK_INTERVAL);
+                snapshot = engine.snapshot();
+                continue;
+            };
+            let values = &fixture.attribute_values;
+            let dimmer = values
+                .iter()
+                .find(|value| value.attribute == "Dimmer")
+                .map(|value| value.value);
+            let pan = values
+                .iter()
+                .find(|value| value.attribute == "Pan")
+                .map(|value| value.value);
+            if snapshot.active_cue_id == Some(1) && dimmer == Some(0) && pan == Some(50_000) {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+        }
+        let values = &snapshot.fixtures[0].attribute_values;
+        assert_eq!(snapshot.active_cue_id, Some(1));
+        assert_eq!(
+            values
+                .iter()
+                .find(|value| value.attribute == "Dimmer")
+                .map(|value| value.value),
+            Some(0)
+        );
+        assert_eq!(
+            values
+                .iter()
+                .find(|value| value.attribute == "Pan")
+                .map(|value| value.value),
+            Some(50_000)
+        );
+    }
+
+    #[test]
+    fn mib_manual_fixture_filter_limits_marking_but_keeps_dark_safety() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let first_fixture = engine.allocate_fixture_id();
+        let second_fixture = engine.allocate_fixture_id();
+        for (fixture_id, label, address) in [
+            (first_fixture, "Fixture 1", 1),
+            (second_fixture, "Fixture 2", 4),
+        ] {
+            engine
+                .send(EngineCommand::PatchFixture {
+                    fixture_id,
+                    request: sample_patch_request(label, address),
+                    profile: sample_profile(),
+                })
+                .unwrap();
+        }
+        for (cue_id, dimmer, pan) in [(1, 0, 0), (2, 65_535, 48_000)] {
+            engine
+                .send(EngineCommand::CreateCue {
+                    cue_id,
+                    label: format!("Cue {cue_id}"),
+                    fade_ms: 0,
+                    targets: vec![first_fixture, second_fixture]
+                        .into_iter()
+                        .map(|fixture_id| CueFixtureTarget {
+                            fixture_id,
+                            values: vec![
+                                AttributeValueSummary {
+                                    attribute: "Dimmer".to_string(),
+                                    value: dimmer,
+                                },
+                                AttributeValueSummary {
+                                    attribute: "Pan".to_string(),
+                                    value: pan,
+                                },
+                            ],
+                        })
+                        .collect(),
+                    video_targets: Vec::new(),
+                    video_output_targets: Vec::new(),
+                    node_graph_targets: Vec::new(),
+                })
+                .unwrap();
+        }
+        engine
+            .send(EngineCommand::SetCueMark {
+                cue_id: 2,
+                mark: true,
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SetCueMibFixtureIds {
+                cue_id: 2,
+                fixture_ids: vec![second_fixture],
+            })
+            .unwrap();
+        engine.send(EngineCommand::TriggerCue(1)).unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            let pan = |fixture_id| {
+                snapshot
+                    .fixtures
+                    .iter()
+                    .find(|fixture| fixture.id == fixture_id)
+                    .and_then(|fixture| {
+                        fixture
+                            .attribute_values
+                            .iter()
+                            .find(|value| value.attribute == "Pan")
+                            .map(|value| value.value)
+                    })
+            };
+            if snapshot.active_cue_id == Some(1)
+                && pan(first_fixture) == Some(0)
+                && pan(second_fixture) == Some(48_000)
+            {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+        }
+        let pan = |fixture_id| {
+            snapshot
+                .fixtures
+                .iter()
+                .find(|fixture| fixture.id == fixture_id)
+                .and_then(|fixture| {
+                    fixture
+                        .attribute_values
+                        .iter()
+                        .find(|value| value.attribute == "Pan")
+                        .map(|value| value.value)
+                })
+        };
+        assert_eq!(pan(first_fixture), Some(0));
+        assert_eq!(pan(second_fixture), Some(48_000));
+        assert_eq!(snapshot.cues[1].mib_fixture_ids, vec![second_fixture]);
+    }
+
+    #[test]
+    fn non_tracking_cue_blocks_unspecified_attributes_to_fixture_defaults() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let fixture_id = engine.allocate_fixture_id();
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id,
+                request: sample_patch_request("Fixture 1", 1),
+                profile: sample_profile(),
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SetAttribute {
+                fixture_id,
+                attribute: "Pan".to_string(),
+                value: 50_000,
+            })
+            .unwrap();
+        let cue_id = engine.allocate_cue_id();
+        engine
+            .send(EngineCommand::CreateCue {
+                cue_id,
+                label: "Block".to_string(),
+                fade_ms: 0,
+                targets: vec![CueFixtureTarget {
+                    fixture_id,
+                    values: vec![AttributeValueSummary {
+                        attribute: "Dimmer".to_string(),
+                        value: 25_000,
+                    }],
+                }],
+                video_targets: Vec::new(),
+                video_output_targets: Vec::new(),
+                node_graph_targets: Vec::new(),
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SetCueMetadata {
+                cue_id,
+                cue_number: "1".to_string(),
+                label: "Block".to_string(),
+                fade_ms: 0,
+                pre_wait_ms: 0,
+                follow_ms: None,
+                ifcb_timing: CueIfcbTiming::default(),
+                tracking: false,
+                notes: String::new(),
+            })
+            .unwrap();
+        engine.send(EngineCommand::TriggerCue(cue_id)).unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..30 {
+            let pan = snapshot.fixtures.first().and_then(|fixture| {
+                fixture
+                    .attribute_values
+                    .iter()
+                    .find(|value| value.attribute == "Pan")
+                    .map(|value| value.value)
+            });
+            if snapshot.active_cue_id == Some(cue_id) && pan == Some(0) {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+        }
+        let fixture = snapshot.fixtures.first().unwrap();
+        assert_eq!(
+            fixture
+                .attribute_values
+                .iter()
+                .find(|value| value.attribute == "Pan")
+                .map(|value| value.value),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn cue_pre_wait_and_follow_schedule_the_next_cue() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let first_id = engine.allocate_cue_id();
+        let second_id = engine.allocate_cue_id();
+        for (cue_id, label) in [(first_id, "First"), (second_id, "Second")] {
+            engine
+                .send(EngineCommand::CreateCue {
+                    cue_id,
+                    label: label.to_string(),
+                    fade_ms: 0,
+                    targets: Vec::new(),
+                    video_targets: Vec::new(),
+                    video_output_targets: Vec::new(),
+                    node_graph_targets: Vec::new(),
+                })
+                .unwrap();
+        }
+        engine
+            .send(EngineCommand::SetCueMetadata {
+                cue_id: first_id,
+                cue_number: "1".to_string(),
+                label: "First".to_string(),
+                fade_ms: 0,
+                pre_wait_ms: 90,
+                follow_ms: Some(120),
+                ifcb_timing: CueIfcbTiming::default(),
+                tracking: true,
+                notes: String::new(),
+            })
+            .unwrap();
+        std::thread::sleep(DMX_TICK_INTERVAL * 2);
+        engine.send(EngineCommand::TriggerCue(first_id)).unwrap();
+        std::thread::sleep(Duration::from_millis(35));
+        assert_ne!(engine.snapshot().active_cue_id, Some(first_id));
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if snapshot.active_cue_id == Some(first_id) {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+        }
+        assert_eq!(snapshot.active_cue_id, Some(first_id));
+
+        for _ in 0..20 {
+            if snapshot.active_cue_id == Some(second_id) {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+        }
+        assert_eq!(snapshot.active_cue_id, Some(second_id));
+    }
+
+    #[test]
+    fn dmx_input_supports_htp_ltp_signal_clear_and_blackout() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            universe: 0,
+            ..DmxOutputConfig::default()
+        });
+        let fixture_id = engine.allocate_fixture_id();
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id,
+                request: sample_patch_request("Fixture 1", 1),
+                profile: sample_profile(),
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SetAttribute {
+                fixture_id,
+                attribute: "Dimmer".to_string(),
+                value: 32_768,
+            })
+            .unwrap();
+        let mut input = Box::new([0u8; 512]);
+        input[0] = 200;
+        engine
+            .send(EngineCommand::SetDmxInputFrame {
+                universe: 0,
+                values: input,
+                merge_mode: DmxMergeMode::Htp,
+            })
+            .unwrap();
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if snapshot.dmx_preview.first() == Some(&200) {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+        }
+        assert_eq!(snapshot.dmx_preview[0], 200);
+
+        let mut input = Box::new([0u8; 512]);
+        input[0] = 25;
+        engine
+            .send(EngineCommand::SetDmxInputFrame {
+                universe: 0,
+                values: input,
+                merge_mode: DmxMergeMode::Ltp,
+            })
+            .unwrap();
+        std::thread::sleep(DMX_TICK_INTERVAL * 2);
+        assert_eq!(engine.snapshot().dmx_preview[0], 25);
+
+        engine.send(EngineCommand::ClearDmxInput(0)).unwrap();
+        std::thread::sleep(DMX_TICK_INTERVAL * 2);
+        assert_eq!(engine.snapshot().dmx_preview[0], 128);
+
+        engine
+            .send(EngineCommand::SetDmxInputFrame {
+                universe: 0,
+                values: Box::new([255u8; 512]),
+                merge_mode: DmxMergeMode::Htp,
+            })
+            .unwrap();
+        engine.send(EngineCommand::Blackout(true)).unwrap();
+        std::thread::sleep(DMX_TICK_INTERVAL * 2);
+        assert_eq!(engine.snapshot().dmx_preview[0], 0);
+    }
+
+    #[test]
+    fn programmer_blind_previews_without_output_then_commits_live() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let fixture_id = engine.allocate_fixture_id();
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id,
+                request: sample_patch_request("Fixture 1", 1),
+                profile: sample_profile(),
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SetAttribute {
+                fixture_id,
+                attribute: "Dimmer".to_string(),
+                value: 1_000,
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SetProgrammerMode {
+                enabled: true,
+                blind: true,
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SetProgrammerAttribute {
+                fixture_id,
+                attribute: "Dimmer".to_string(),
+                value: 50_000,
+            })
+            .unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if snapshot.programmer.values.len() == 1 && !snapshot.fixtures.is_empty() {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+        }
+        assert!(snapshot.programmer.enabled);
+        assert!(snapshot.programmer.blind);
+        assert_eq!(snapshot.fixtures[0].attribute_values[0].value, 1_000);
+        assert_eq!(snapshot.programmer.values[0].value, 50_000);
+        assert!(snapshot.programmer.dmx_previews[0].values[0] >= 194);
+        assert!(snapshot.dmx_preview[0] <= 5);
+
+        engine
+            .send(EngineCommand::SetProgrammerMode {
+                enabled: true,
+                blind: false,
+            })
+            .unwrap();
+        for _ in 0..20 {
+            snapshot = engine.snapshot();
+            if snapshot.dmx_preview[0] >= 194 {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+        }
+        assert!(!snapshot.programmer.blind);
+        assert!(snapshot.dmx_preview[0] >= 194);
+
+        engine.send(EngineCommand::CommitProgrammer).unwrap();
+        for _ in 0..20 {
+            snapshot = engine.snapshot();
+            if snapshot.programmer.values.is_empty() {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+        }
+        assert!(snapshot.programmer.values.is_empty());
+        assert_eq!(snapshot.fixtures[0].attribute_values[0].value, 50_000);
+        assert!(snapshot.dmx_preview[0] >= 194);
     }
 
     #[test]
@@ -11410,6 +14594,104 @@ mod tests {
             snapshot.telemetry.last_error.as_deref(),
             Some("Timeline event 41 was not found")
         );
+    }
+
+    #[test]
+    fn cue_lists_keep_independent_executor_positions_and_migrate_on_remove() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine
+            .send(EngineCommand::UpsertCueList {
+                cue_list_id: 2,
+                label: "Video".to_string(),
+            })
+            .unwrap();
+        for cue_id in 1..=3 {
+            engine
+                .send(EngineCommand::CreateCue {
+                    cue_id,
+                    label: format!("Cue {cue_id}"),
+                    fade_ms: 0,
+                    targets: Vec::new(),
+                    video_targets: Vec::new(),
+                    video_output_targets: Vec::new(),
+                    node_graph_targets: Vec::new(),
+                })
+                .unwrap();
+        }
+        for cue_id in [2, 3] {
+            engine
+                .send(EngineCommand::SetCueList {
+                    cue_id,
+                    cue_list_id: 2,
+                })
+                .unwrap();
+        }
+        engine
+            .send(EngineCommand::TriggerCueListNext(DEFAULT_CUE_LIST_ID))
+            .unwrap();
+        engine.send(EngineCommand::TriggerCueListNext(2)).unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            let main = snapshot.cue_lists.iter().find(|list| list.id == 1);
+            let video = snapshot.cue_lists.iter().find(|list| list.id == 2);
+            if main.and_then(|list| list.active_cue_id) == Some(1)
+                && video.and_then(|list| list.active_cue_id) == Some(2)
+            {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+        }
+        assert_eq!(
+            snapshot
+                .cue_lists
+                .iter()
+                .find(|list| list.id == 1)
+                .and_then(|list| list.active_cue_id),
+            Some(1)
+        );
+        assert_eq!(
+            snapshot
+                .cue_lists
+                .iter()
+                .find(|list| list.id == 2)
+                .and_then(|list| list.active_cue_id),
+            Some(2)
+        );
+
+        engine.send(EngineCommand::TriggerCueListNext(2)).unwrap();
+        for _ in 0..20 {
+            snapshot = engine.snapshot();
+            if snapshot
+                .cue_lists
+                .iter()
+                .find(|list| list.id == 2)
+                .and_then(|list| list.active_cue_id)
+                == Some(3)
+            {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+        }
+        assert_eq!(snapshot.active_cue_id, Some(3));
+
+        engine.send(EngineCommand::RemoveCueList(2)).unwrap();
+        for _ in 0..20 {
+            snapshot = engine.snapshot();
+            if snapshot.cue_lists.len() == 1 && snapshot.cues.iter().all(|cue| cue.cue_list_id == 1)
+            {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+        }
+        assert_eq!(snapshot.cue_lists.len(), 1);
+        assert_eq!(snapshot.cue_lists[0].id, DEFAULT_CUE_LIST_ID);
+        assert_eq!(snapshot.cue_lists[0].active_cue_id, Some(3));
+        assert!(snapshot.cues.iter().all(|cue| cue.cue_list_id == 1));
     }
 
     #[test]
@@ -13363,6 +16645,7 @@ mod tests {
                 ..DmxOutputConfig::default()
             },
             sender: None,
+            recovery: DmxRouteRecovery::default(),
         }];
         runtime.last_dmx_output_tick_at = Some(now);
         assert!(!runtime.can_advance_low_latency_dmx_tick(now + Duration::from_millis(1)));
@@ -13561,6 +16844,9 @@ mod tests {
             next_fixture_id: Arc::new(AtomicU64::new(1)),
             next_effect_id: Arc::new(AtomicU64::new(1)),
             next_cue_id: Arc::new(AtomicU64::new(1)),
+            next_cue_list_id: Arc::new(AtomicU64::new(2)),
+            next_palette_id: Arc::new(AtomicU64::new(1)),
+            next_executor_id: Arc::new(AtomicU64::new(2)),
             next_timeline_event_id: Arc::new(AtomicU64::new(1)),
             next_automation_id: Arc::new(AtomicU64::new(1)),
             next_video_layer_id: Arc::new(AtomicU64::new(1)),
@@ -13682,6 +16968,71 @@ mod tests {
             Ok(_) => panic!("DMXKing ultraDMX without a serial port should not create a sender"),
             Err(error) => assert!(error.contains("serial port path is required")),
         }
+    }
+
+    #[test]
+    fn dmx_route_recovery_uses_bounded_exponential_backoff_and_resets_on_success() {
+        let now = Instant::now();
+        let mut recovery = DmxRouteRecovery::default();
+
+        recovery.record_failure("offline".to_string(), now);
+        assert_eq!(recovery.consecutive_failures, 1);
+        assert_eq!(recovery.retry_in_ms(now), Some(250));
+
+        for failure in 2..=12 {
+            recovery.record_failure(format!("offline {failure}"), now);
+        }
+        assert_eq!(recovery.retry_in_ms(now), Some(10_000));
+
+        recovery.record_success();
+        assert_eq!(recovery.consecutive_failures, 0);
+        assert!(recovery.next_retry_at.is_none());
+        assert!(recovery.last_error.is_none());
+        assert!(recovery.last_success_unix_ms.is_some());
+    }
+
+    #[test]
+    fn failed_dmx_route_waits_for_backoff_then_retries_without_blocking_other_ticks() {
+        let config = DmxOutputConfig {
+            enabled: true,
+            protocol: DmxOutputProtocol::EnttecUsbPro,
+            serial_port: String::new(),
+            ..DmxOutputConfig::default()
+        };
+        let mut sender = None;
+        let mut recovery = DmxRouteRecovery::default();
+        let now = Instant::now();
+        let frame = [0_u8; 512];
+
+        let first =
+            send_output_frame_with_recovery(&mut sender, &mut recovery, &config, 0, &frame, now);
+        assert!(first.attempted);
+        assert!(first.result.is_err());
+        assert_eq!(recovery.reconnect_attempts, 1);
+
+        let waiting = send_output_frame_with_recovery(
+            &mut sender,
+            &mut recovery,
+            &config,
+            0,
+            &frame,
+            now + Duration::from_millis(100),
+        );
+        assert!(!waiting.attempted);
+        assert_eq!(recovery.reconnect_attempts, 1);
+
+        let retry = send_output_frame_with_recovery(
+            &mut sender,
+            &mut recovery,
+            &config,
+            0,
+            &frame,
+            now + Duration::from_millis(251),
+        );
+        assert!(retry.attempted);
+        assert!(retry.result.is_err());
+        assert_eq!(recovery.reconnect_attempts, 2);
+        assert_eq!(recovery.consecutive_failures, 2);
     }
 
     #[test]
@@ -14488,6 +17839,7 @@ mod tests {
                     duration_ms: 120_000,
                     estimated_bpm: None,
                     waveform: Vec::new(),
+                    spectrum: Vec::new(),
                     beats: Vec::new(),
                 },
             )))
@@ -14561,6 +17913,7 @@ mod tests {
                         width: Some(1920),
                         height: Some(1080),
                         frame_rate: Some(60.0),
+                        has_audio: false,
                     }),
                 },
             })
@@ -14634,6 +17987,7 @@ mod tests {
                     duration_ms: 4_000,
                     estimated_bpm: Some(120.0),
                     waveform: Vec::new(),
+                    spectrum: Vec::new(),
                     beats: Vec::new(),
                 },
             )))
@@ -14900,6 +18254,21 @@ mod tests {
                 },
             })
             .unwrap();
+        let isf_effect = VideoIsfEffectSummary {
+            enabled: true,
+            label: "Threshold".to_string(),
+            source: "/*{\"INPUTS\":[{\"NAME\":\"inputImage\",\"TYPE\":\"image\"}]}*/ void main(){ gl_FragColor = IMG_THIS_PIXEL(inputImage); }".to_string(),
+            source_path: Some("filters/threshold.fs".to_string()),
+            description: Some("Test filter".to_string()),
+            categories: vec!["Test".to_string()],
+            controls: Vec::new(),
+        };
+        engine
+            .send(EngineCommand::SetVideoLayerIsfEffect {
+                layer_id: source_layer_id,
+                effect: Some(isf_effect.clone()),
+            })
+            .unwrap();
         engine
             .send(EngineCommand::AddVideoComposition(CompositionSummary {
                 id: 2,
@@ -14961,6 +18330,7 @@ mod tests {
         assert_eq!(duplicate.state.opacity, 0.42);
         assert_eq!(duplicate.state.speed, 2.0);
         assert!(duplicate.state.playing);
+        assert_eq!(duplicate.isf_effect, Some(isf_effect));
         let aux = snapshot
             .video
             .compositions
@@ -15014,6 +18384,7 @@ mod tests {
                         width: Some(1920),
                         height: Some(1080),
                         frame_rate: Some(30.0),
+                        has_audio: false,
                     }),
                 },
             })
@@ -15320,6 +18691,169 @@ mod tests {
     }
 
     #[test]
+    fn cue_part_delays_and_fades_video_layer_and_output_targets() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let layer_id = engine.allocate_video_layer_id();
+        engine
+            .send(EngineCommand::AddVideoLayer {
+                layer_id,
+                label: "Part Layer".to_string(),
+                source: VideoSourceSummary {
+                    kind: protocol::VideoSourceKind::File,
+                    path: Some("memory://part.mp4".to_string()),
+                    name: None,
+                    codec: Some("H264".to_string()),
+                    metadata: None,
+                },
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SetVideoLayerState {
+                layer_id,
+                state: VideoLayerState {
+                    opacity: 0.0,
+                    playing: false,
+                    ..VideoLayerState::default()
+                },
+            })
+            .unwrap();
+        let output_id = engine.allocate_video_output_id();
+        engine
+            .send(EngineCommand::AddVideoOutput(VideoOutputSummary {
+                id: output_id,
+                label: "Part Output".to_string(),
+                kind: VideoOutputKind::Display,
+                enabled: false,
+                composition_id: 1,
+                fullscreen: false,
+                monitor_id: Some(0),
+                width: 1280,
+                height: 720,
+                endpoint_name: None,
+                opacity: 0.0,
+                blackout: true,
+                mapping: VideoOutputMapping::default(),
+            }))
+            .unwrap();
+        let cue_id = engine.allocate_cue_id();
+        engine
+            .send(EngineCommand::CreateCue {
+                cue_id,
+                label: "Delayed Video Part".to_string(),
+                fade_ms: 1_000,
+                targets: Vec::new(),
+                video_targets: vec![VideoLayerTarget {
+                    layer_id,
+                    state: VideoLayerState {
+                        opacity: 1.0,
+                        playing: true,
+                        ..VideoLayerState::default()
+                    },
+                }],
+                video_output_targets: vec![VideoOutputTarget {
+                    output_id,
+                    enabled: true,
+                    opacity: 1.0,
+                    blackout: false,
+                }],
+                node_graph_targets: Vec::new(),
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SetCueParts {
+                cue_id,
+                parts: vec![CuePartSummary {
+                    number: 1,
+                    label: "Delayed Video".to_string(),
+                    delay_ms: 120,
+                    fade_ms: Some(100),
+                    fixture_ids: Vec::new(),
+                    video_layer_ids: vec![layer_id],
+                    video_output_ids: vec![output_id],
+                }],
+            })
+            .unwrap();
+        engine.send(EngineCommand::TriggerCue(cue_id)).unwrap();
+
+        std::thread::sleep(Duration::from_millis(70));
+        let mut snapshot = engine.snapshot();
+        let layer = snapshot
+            .video
+            .layers
+            .iter()
+            .find(|layer| layer.id == layer_id)
+            .unwrap();
+        let output = snapshot
+            .video
+            .outputs
+            .iter()
+            .find(|output| output.id == output_id)
+            .unwrap();
+        assert!(!layer.state.playing);
+        assert!(layer.state.opacity < 0.01);
+        assert!(!output.enabled);
+        assert!(output.blackout);
+        assert!(output.opacity < 0.01);
+
+        for _ in 0..8 {
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+            let layer = snapshot
+                .video
+                .layers
+                .iter()
+                .find(|layer| layer.id == layer_id)
+                .unwrap();
+            if layer.state.playing && (0.05..0.95).contains(&layer.state.opacity) {
+                break;
+            }
+        }
+        let layer = snapshot
+            .video
+            .layers
+            .iter()
+            .find(|layer| layer.id == layer_id)
+            .unwrap();
+        let output = snapshot
+            .video
+            .outputs
+            .iter()
+            .find(|output| output.id == output_id)
+            .unwrap();
+        assert!(layer.state.playing);
+        assert!((0.05..0.95).contains(&layer.state.opacity));
+        assert!(output.enabled);
+        assert!(!output.blackout);
+        assert!((0.05..0.95).contains(&output.opacity));
+
+        for _ in 0..8 {
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+            if snapshot.active_fade.is_none() {
+                break;
+            }
+        }
+        let layer = snapshot
+            .video
+            .layers
+            .iter()
+            .find(|layer| layer.id == layer_id)
+            .unwrap();
+        let output = snapshot
+            .video
+            .outputs
+            .iter()
+            .find(|output| output.id == output_id)
+            .unwrap();
+        assert!(snapshot.active_fade.is_none());
+        assert!((layer.state.opacity - 1.0).abs() < 0.01);
+        assert!((output.opacity - 1.0).abs() < 0.01);
+    }
+
+    #[test]
     fn playing_video_layer_position_advances_on_engine_tick() {
         let engine = EngineHandle::start(DmxOutputConfig {
             enabled: false,
@@ -15392,6 +18926,7 @@ mod tests {
                         width: None,
                         height: None,
                         frame_rate: None,
+                        has_audio: false,
                     }),
                 },
             })
@@ -15449,6 +18984,7 @@ mod tests {
                         width: None,
                         height: None,
                         frame_rate: None,
+                        has_audio: false,
                     }),
                 },
             })
@@ -16168,6 +19704,12 @@ mod tests {
                     aspect_ratio: 0.0,
                     aspect_mode: protocol::VideoOutputAspectMode::Fit,
                     lens_distortion: -9.0,
+                    edge_blend_left: -1.0,
+                    edge_blend_right: 2.0,
+                    edge_blend_top: f32::NAN,
+                    edge_blend_bottom: 0.3,
+                    edge_blend_gamma: 99.0,
+                    black_level: f32::INFINITY,
                     keystone_x: 9.0,
                     keystone_y: f32::INFINITY,
                     corner_top_left_x: -9.0,
@@ -16178,6 +19720,7 @@ mod tests {
                     corner_bottom_right_y: f32::INFINITY,
                     corner_bottom_left_x: 9.0,
                     corner_bottom_left_y: -9.0,
+                    ..VideoOutputMapping::default()
                 },
             })
             .unwrap();
@@ -16209,6 +19752,12 @@ mod tests {
         assert_eq!(mapping.aspect_ratio, 0.1);
         assert_eq!(mapping.aspect_mode, protocol::VideoOutputAspectMode::Fit);
         assert_eq!(mapping.lens_distortion, -1.0);
+        assert_eq!(mapping.edge_blend_left, 0.0);
+        assert_eq!(mapping.edge_blend_right, 1.0);
+        assert_eq!(mapping.edge_blend_top, 0.0);
+        assert_eq!(mapping.edge_blend_bottom, 0.3);
+        assert_eq!(mapping.edge_blend_gamma, 8.0);
+        assert_eq!(mapping.black_level, 0.0);
         assert_eq!(mapping.keystone_x, 1.0);
         assert_eq!(mapping.keystone_y, 0.0);
         assert_eq!(mapping.corner_top_left_x, -1.0);
@@ -19719,6 +23268,8 @@ mod tests {
 
         assert!((snapshot.bpm - 120.0).abs() < 0.05);
         assert_eq!(snapshot.source, ClockSource::MidiClock);
+        assert!(snapshot.external_sync_locked);
+        assert_eq!(snapshot.external_sync_age_ms, Some(20));
     }
 
     #[test]
@@ -19733,6 +23284,12 @@ mod tests {
         assert_eq!(snapshot.source, ClockSource::AbletonLink);
         assert!(snapshot.beat_phase > 0.249 && snapshot.beat_phase < 0.251);
         assert_eq!(snapshot.tap_count, 0);
+        assert!(snapshot.external_sync_locked);
+        assert_eq!(snapshot.external_sync_age_ms, Some(0));
+
+        let stale = clock.snapshot(now + Duration::from_millis(1_001));
+        assert!(!stale.external_sync_locked);
+        assert_eq!(stale.external_sync_age_ms, Some(1_001));
     }
 
     #[test]
@@ -19764,6 +23321,7 @@ mod tests {
             beat_counter: 1,
             tap_count: 0,
             source: ClockSource::Manual,
+            ..ClockSnapshot::default()
         };
 
         let normalized =
@@ -19802,6 +23360,7 @@ mod tests {
             beat_counter: 1,
             tap_count: 0,
             source: ClockSource::Manual,
+            ..ClockSnapshot::default()
         };
 
         let normalized = evaluate_position_wave_effect_normalized(
@@ -19859,6 +23418,7 @@ mod tests {
                 video_targets: Vec::new(),
                 video_output_targets: Vec::new(),
                 node_graph_targets: Vec::new(),
+                ..CueSummary::default()
             })
             .collect::<Vec<_>>();
         let mut snapshot = EngineSnapshot::default();

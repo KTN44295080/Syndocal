@@ -1,4 +1,5 @@
 import { For, Show } from "solid-js";
+import { clockSourceLabel, clockSyncStatusLabel, isExternalClockSource } from "../clockDisplay";
 import type { EngineSnapshot, MidiInputSummary, SubmasterSummary } from "../types";
 
 interface LightingRuntimeControlsPanelProps {
@@ -27,7 +28,7 @@ export function LightingRuntimeControlsPanel(props: LightingRuntimeControlsPanel
     <section class="lightingRuntimeDesk">
       <header class="ioDeskHeader">
         <h2>Runtime</h2>
-        <span>{props.clock.source === "MidiClock" ? "MIDI Clock" : props.clock.source}</span>
+        <span>{clockSourceLabel(props.clock.source)}</span>
       </header>
       <label>
         Lighting Master
@@ -46,7 +47,7 @@ export function LightingRuntimeControlsPanel(props: LightingRuntimeControlsPanel
           <For each={props.submasters}>
             {(submaster) => (
               <label class="submasterControl">
-                <span>{submaster.label}</span>
+                <span data-no-localize>{submaster.label}</span>
                 <input
                   type="range"
                   min="0"
@@ -71,7 +72,21 @@ export function LightingRuntimeControlsPanel(props: LightingRuntimeControlsPanel
         <h3>Clock</h3>
         <div class="clockSource">
           <span>Source</span>
-          <strong>{props.clock.source === "MidiClock" ? "MIDI Clock" : props.clock.source}</strong>
+          <strong>{clockSourceLabel(props.clock.source)}</strong>
+        </div>
+        <div
+          class={`clockSyncHealth ${props.clock.external_sync_locked ? "locked" : isExternalClockSource(props.clock.source) ? "stale" : "internal"}`}
+          role="status"
+        >
+          <span>{clockSyncStatusLabel(props.clock)}</span>
+          <small>
+            <Show
+              when={props.clock.external_sync_age_ms !== null}
+              fallback={isExternalClockSource(props.clock.source) ? "Awaiting external sync" : "Local clock"}
+            >
+              {props.clock.external_sync_age_ms} ms since sync
+            </Show>
+          </small>
         </div>
         <div class="split">
           <label>

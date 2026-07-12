@@ -40,9 +40,37 @@ Result: **PASS**
 
 The raw JSON is generated under `target/qa/` and intentionally remains a local build artifact. Re-run the command above for machine-specific evidence.
 
+### Live FFT command-pressure extension
+
+After adding CPAL live FFT input, the soak workload was extended to publish a changing three-band `SetLiveAudioSpectrum` command at every 30fps render iteration. The full one-hour release run passed on 2026-07-12:
+
+- 108,001 rendered/nonblank frames, zero dropped frames and zero render errors
+- 108,001 live-audio updates and 108,001 low-latency DMX advances
+- command queue p99 22us; command-to-DMX p99 28us; tick jitter p99 823us
+- queue depth absolute maximum 3; command drain absolute maximum 3
+- zero queue push failures, drain-limit hits, reconnect attempts, or DMX send failures
+- 216,003 successful Art-Net sends; peak working set 14,024,704 bytes (13.4MB)
+- process CPU time 335.17 seconds; telemetry budget PASS
+
+Command:
+
+```powershell
+./qa/run-soak.ps1 -DurationSeconds 3600 -SampleIntervalSeconds 5 -Configuration Release -ReportPath target/qa/m5-soak-live-audio-3600.json
+```
+
+The original one-hour evidence remains valid for the base workload, and the live-audio command-pressure extension now has equal-duration evidence. The raw JSON is `target/qa/m5-soak-live-audio-3600.json` and remains a local build artifact.
+
 ## Large show
 
-`large_show_loads_200_fixtures_across_8_universes_and_100_cues` covers 200 fixtures, eight complete 512-slot previews, 100 cues, and 20,000 cue targets. The focused test completed in 0.06 seconds with no queue failures or drain-limit hits.
+`large_show_loads_200_fixtures_across_8_universes_and_100_cues` covers 200 fixtures, eight complete 512-slot previews, 100 cues, and 20,000 cue targets. The focused test remains subsecond with no queue failures or drain-limit hits.
+
+The operator UI has a separate real-browser large-show gate:
+
+```powershell
+npm --prefix app run check:large-show-ui
+```
+
+It injects 2,000 patched fixtures into the 1366x768 Stage Map workspace. The visible Mapping Fixture list reports `aria-rowcount=2000`, holds only nine fixture rows in the DOM at both the top and bottom of the scroll range, reaches `Large Fixture 2000`, and preserves full-window containment. Fixture lists use fixed-row windowing above their thresholds; Cue editing is bounded to 12 rows per page, while Clip Grid, video layers/outputs, and DMX addresses retain their existing banks/pages.
 
 ## Project recovery crash injection
 
@@ -58,6 +86,46 @@ Result: **PASS**
 
 Storage corruption, invalid payload removal, successful persistence/readback, and quota failure remain covered by `pnpm --dir app run check:project-storage`.
 
+## Active / Standby failover
+
+Software safety gates: **PASS**
+
+- Primary publishes a complete ProjectFile every two seconds as an immutable `.sdc` generation, then atomically commits its manifest.
+- Byte length, FNV-1a checksum, project version/app validation, five-generation retention, and fallback from a corrupt newest generation are covered by Rust tests.
+- Standby applies every checkpoint with legacy DMX output, every DMX route, and every video output disabled, plus lighting/video blackout asserted.
+- Primary activity is observed per session from generation progress on the receiving machine's monotonic clock. Wall-clock skew between show computers is not used for heartbeat expiry.
+- Two progressing Primary sessions fence warm loading. A live heartbeat or split-brain state requires an explicit operator confirmation that every previous Primary has been disconnected before Take Over.
+- Promotion is manual. There is no automatic network fencing, quorum, or distributed consensus.
+
+Focused test:
+
+```powershell
+cargo test -p syndocal standby_ --locked
+```
+
+Two-computer acceptance remains required before release sign-off:
+
+1. Put the shared folder on the dedicated show-control LAN; verify both computers can create, rename, flush, and read files in it.
+2. Start computer A as Primary and computer B as Standby. Confirm B advances `Generation` and `Applied`, while all B-side DMX/video routes remain disabled and blacked out.
+3. Change a cue, lighting value, video layer, and output mapping on A. Confirm B receives each within one checkpoint interval without transmitting.
+4. Disconnect A's DMX/video network interfaces or power A off. Do not use application shutdown as the only fencing evidence.
+5. Measure from the last A output frame to `Primary lost` on B, then perform Take Over. Gate: heartbeat stale at approximately five seconds, no overlapping DMX/video frames, and latest confirmed generation restored.
+6. Restore A while it is still configured as Primary. Confirm split-brain is reported and B fences further warm loads; do not force promotion until A is physically/network fenced.
+7. Interrupt the shared-folder connection for at least 30 seconds, restore it, and confirm generation publication/resumption without application restart or corrupted-generation load.
+8. Record share type, switch topology, clock-sync source, measured failover gap, duplicate-frame count, checkpoint size, and operator name below.
+
+Acceptance capture:
+
+| Item | Result |
+| --- | --- |
+| Primary / Standby hosts | Pending physical acceptance |
+| Shared storage / path | Pending |
+| Failover gap | Pending |
+| Overlapping DMX/video frames | Pending |
+| Share disconnect recovery | Pending |
+| Split-brain fencing | Pending |
+| Evidence files / operator | Pending |
+
 ## M5 conclusion
 
-The one-hour soak, large-show load, `.sdc` compatibility contract, storage edge cases, and real process-kill recovery all pass. Physical DMX timing remains an external M4 hardware evidence item rather than an M5 software blocker.
+The one-hour soak, large-show load, `.sdc` compatibility contract, storage edge cases, real process-kill recovery, and software-only standby safety gates pass. Physical DMX timing and the two-computer failover capture remain external acceptance items rather than software-only claims.

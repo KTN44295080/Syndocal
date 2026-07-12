@@ -154,7 +154,7 @@ export function VideoOutputControlListPanel(props: VideoOutputControlListPanelPr
                 class={`videoOutputControlItem ${outputLive() ? "active" : ""} ${selected() ? "selected" : ""}`}
               >
                 <div>
-                  <strong>{output.label}</strong>
+                  <strong data-no-localize>{output.label}</strong>
                   <span>
                     {output.kind} / {compositionLabel(output)} / {Math.round(output.opacity * 100)}%
                     {!output.enabled ? " / Disabled" : ""}

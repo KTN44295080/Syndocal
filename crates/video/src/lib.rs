@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -10,18 +11,25 @@ use protocol::{
     VideoBackendStatus, VideoBlendMode, VideoColorAdjust, VideoCuePointSummary, VideoFxAdjust,
     VideoLayerId, VideoLayerState, VideoLayerSummary, VideoMediaMetadata, VideoOutputAspectMode,
     VideoOutputId, VideoOutputKind, VideoOutputMapping, VideoOutputSummary, VideoRuntimeStatus,
-    VideoSnapshot, VideoSourceKind, VideoSourceSummary,
+    VideoSnapshot, VideoSourceKind, VideoSourceSummary, VIDEO_OUTPUT_BITMAP_MASK_MAX_DIMENSION,
+    VIDEO_OUTPUT_BITMAP_MASK_WORD_CAPACITY,
 };
 use serde::{Deserialize, Serialize};
 
 mod gpu_compositor;
 mod gpu_surface;
 mod hap_decoder;
+mod isf_runtime;
 mod libav_decoder;
 
 pub use gpu_compositor::{GpuCompositeError, GpuCompositor};
 pub use gpu_surface::{GpuSurfaceBufferStats, GpuSurfaceError, GpuSurfacePresenter};
 pub use hap_decoder::{HapMovFrameDecoder, PreferredVideoFrameDecoder, VideoDecoderDiagnostics};
+pub use isf_runtime::{
+    isf_effect_from_prepared, prepare_isf_shader, resolved_isf_control_values,
+    IsfControlDefinition, IsfControlKind, IsfGpuRuntime, IsfPrepareError, IsfRuntimeError,
+    PreparedIsfShader, ISF_MAX_CONTROL_INPUTS, ISF_MAX_SOURCE_BYTES,
+};
 pub use libav_decoder::LibavFrameDecoder;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -31,6 +39,7 @@ pub enum VideoPixelFormat {
     Dxt1,
     Dxt5,
     YcoCgDxt5,
+    Bc7,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -298,6 +307,9 @@ pub enum VideoRuntimeError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VideoPreviewError {
     InvalidSize,
+    MissingLayer {
+        layer_id: VideoLayerId,
+    },
     Output(VideoOutputRenderError),
     MissingStillImagePath {
         layer_id: VideoLayerId,
@@ -992,7 +1004,12 @@ pub struct DecoderBackedFrameProvider<D = NullVideoDecoder> {
 pub struct VideoPreviewRenderer<P = PreviewFrameProvider> {
     runtime: VideoRuntime,
     frame_provider: P,
+    isf_shader_cache: HashMap<String, Result<PreparedIsfShader, IsfPrepareError>>,
+    isf_runtime: Option<Result<IsfGpuRuntime, IsfRuntimeError>>,
+    last_isf_error: Option<String>,
 }
+
+const ISF_SHADER_CACHE_CAPACITY: usize = 64;
 
 #[derive(Default)]
 pub struct StillImageFrameCache {
@@ -1369,6 +1386,8 @@ pub fn video_runtime_status_with_binaries(
                 },
             },
             command_backend_status("ffmpeg", "FFmpeg frame decode", ffmpeg_binary.as_ref()),
+            capture_backend_status("camera", "Camera capture", ffmpeg_binary.as_ref()),
+            capture_backend_status("screen_capture", "Screen capture", ffmpeg_binary.as_ref()),
             command_backend_status("ffprobe", "FFprobe metadata", ffprobe_binary.as_ref()),
             ffmpeg_decoder_backend_status(
                 "hap_ffmpeg",
@@ -1387,7 +1406,7 @@ pub fn video_runtime_status_with_binaries(
                 id: "hap_gpu".to_string(),
                 label: "HAP in-process decode".to_string(),
                 state: VideoBackendState::Available,
-                detail: "Pure Rust MOV demux and HAP/HAP Q BC1/BC3 frame decode are built in; HAP Q Alpha and BC7 are staged separately"
+                detail: "Pure Rust MOV demux and HAP/HAP Q BC1/BC3 decode are built in; HAP Q Alpha merges its BC4 plane to RGBA, while HAP R BC7 remains staged separately"
                     .to_string(),
             },
             external_backend_status("ndi", "NDI input/output", "NDI SDK"),
@@ -1421,6 +1440,20 @@ fn external_backend_status(id: &str, label: &str, sdk_name: &str) -> VideoBacken
             state: VideoBackendState::Available,
             detail: "NDI SDK transport is built in; routes initialize the runtime on demand"
                 .to_string(),
+        };
+    }
+    if id == "spout"
+        && cfg!(all(
+            feature = "spout",
+            target_os = "windows",
+            target_arch = "x86_64"
+        ))
+    {
+        return VideoBackendStatus {
+            id: id.to_string(),
+            label: label.to_string(),
+            state: VideoBackendState::Available,
+            detail: "Spout2 2.007.017 DirectX 11 CPU-pixel transport is built in; routes initialize senders and receivers on demand".to_string(),
         };
     }
     VideoBackendStatus {
@@ -1457,6 +1490,22 @@ fn platform_backend_is_supported(support: PlatformSupport) -> bool {
         PlatformSupport::WindowsOnly => cfg!(target_os = "windows"),
         PlatformSupport::MacosOnly => cfg!(target_os = "macos"),
     }
+}
+
+fn capture_backend_status(id: &str, label: &str, binary: &Path) -> VideoBackendStatus {
+    let mut status = command_backend_status(id, label, binary);
+    if status.state == VideoBackendState::Available {
+        let input = if id == "camera" {
+            "camera device"
+        } else {
+            "desktop/display"
+        };
+        status.detail = format!(
+            "FFmpeg persistent {input} capture is available on {}; routes start on demand",
+            std::env::consts::OS
+        );
+    }
+    status
 }
 
 fn command_backend_status(id: &str, label: &str, binary: &Path) -> VideoBackendStatus {
@@ -1579,10 +1628,10 @@ pub fn probe_video_file_metadata_with_binary(
     let output = Command::new(binary.as_ref())
         .arg("-v")
         .arg("error")
-        .arg("-select_streams")
-        .arg("v:0")
         .arg("-show_entries")
-        .arg("stream=codec_name,width,height,avg_frame_rate,r_frame_rate:format=duration")
+        .arg(
+            "stream=codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate:format=duration",
+        )
         .arg("-of")
         .arg("json")
         .arg(path)
@@ -1632,7 +1681,15 @@ fn ffprobe_binary_from_env() -> PathBuf {
 fn parse_ffprobe_metadata_json(json: &str) -> Result<VideoProbeSummary, VideoProbeError> {
     let parsed: FfprobeOutput = serde_json::from_str(json)
         .map_err(|error| VideoProbeError::InvalidJson(error.to_string()))?;
-    let stream = parsed.streams.into_iter().next();
+    let has_audio = parsed
+        .streams
+        .iter()
+        .any(|stream| stream.codec_type.as_deref() == Some("audio"));
+    let stream = parsed
+        .streams
+        .iter()
+        .find(|stream| stream.codec_type.as_deref() == Some("video"))
+        .or_else(|| parsed.streams.iter().find(|stream| stream.width.is_some()));
     let duration_ms = parsed
         .format
         .and_then(|format| format.duration)
@@ -1662,6 +1719,7 @@ fn parse_ffprobe_metadata_json(json: &str) -> Result<VideoProbeSummary, VideoPro
         width,
         height,
         frame_rate,
+        has_audio,
     };
     let metadata = if metadata.duration_ms.is_some()
         || metadata.width.is_some()
@@ -1684,6 +1742,7 @@ struct FfprobeOutput {
 
 #[derive(Debug, Deserialize)]
 struct FfprobeStream {
+    codec_type: Option<String>,
     codec_name: Option<String>,
     width: Option<u32>,
     height: Option<u32>,
@@ -2097,6 +2156,9 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         Self {
             runtime: VideoRuntime::new(config),
             frame_provider,
+            isf_shader_cache: HashMap::new(),
+            isf_runtime: None,
+            last_isf_error: None,
         }
     }
 
@@ -2119,6 +2181,54 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             .map(|layer| layer.layer_id)
             .collect::<Vec<_>>();
         self.prepare_frames(snapshot, &layer_ids, width, height)?;
+        self.runtime
+            .compose_plan(&plan, width, height)
+            .map_err(VideoPreviewError::Runtime)
+    }
+
+    /// Renders one layer independently from its live enable, opacity, solo, master, and
+    /// blackout state. This is intended for media-bin and clip-grid thumbnails, where an
+    /// operator must be able to identify a source before taking it live.
+    pub fn render_layer_preview(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        layer_id: VideoLayerId,
+        width: u32,
+        height: u32,
+    ) -> Result<VideoFrame, VideoPreviewError> {
+        if width == 0 || height == 0 {
+            return Err(VideoPreviewError::InvalidSize);
+        }
+        let layer = snapshot
+            .layers
+            .iter()
+            .find(|layer| layer.id == layer_id)
+            .ok_or(VideoPreviewError::MissingLayer { layer_id })?;
+        let state = sanitize_layer_state(layer.state.clone());
+        let position_ms = if state.position_ms > 0 {
+            state.position_ms
+        } else {
+            state.loop_start_ms
+        };
+        let plan = CompositionPlan {
+            composition_id: 0,
+            label: format!("{} Thumbnail", layer.label),
+            output_ids: Vec::new(),
+            master_opacity: 1.0,
+            blackout: false,
+            layers: vec![CompositionLayerPlan {
+                layer_id,
+                label: layer.label.clone(),
+                source: layer.source.clone(),
+                blend_mode: VideoBlendMode::Normal,
+                opacity: 1.0,
+                position_ms,
+                transform: state.transform,
+                color: state.color,
+                fx: state.fx,
+            }],
+        };
+        self.prepare_frames(snapshot, &[layer_id], width, height)?;
         self.runtime
             .compose_plan(&plan, width, height)
             .map_err(VideoPreviewError::Runtime)
@@ -2232,10 +2342,83 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 .frames_for_layer(layer, width, height)
                 .map_err(VideoPreviewError::from)?;
             for frame in frames {
+                let frame = self.apply_isf_effect_to_frame(layer, frame);
                 self.runtime.push_frame(frame);
             }
         }
         Ok(())
+    }
+
+    fn apply_isf_effect_to_frame(
+        &mut self,
+        layer: &VideoLayerSummary,
+        frame: VideoFrame,
+    ) -> VideoFrame {
+        let Some(effect) = layer.isf_effect.as_ref().filter(|effect| effect.enabled) else {
+            return frame;
+        };
+        if !self.isf_shader_cache.contains_key(&effect.source) {
+            if self.isf_shader_cache.len() >= ISF_SHADER_CACHE_CAPACITY {
+                self.isf_shader_cache.clear();
+            }
+            self.isf_shader_cache
+                .insert(effect.source.clone(), prepare_isf_shader(&effect.source));
+        }
+        let shader = match self
+            .isf_shader_cache
+            .get(&effect.source)
+            .expect("ISF shader cache entry inserted")
+            .clone()
+        {
+            Ok(shader) => shader,
+            Err(error) => {
+                self.last_isf_error = Some(format!("{}: {error}", layer.label));
+                return frame;
+            }
+        };
+        if self.isf_runtime.is_none() {
+            self.isf_runtime = Some(IsfGpuRuntime::new());
+        }
+        let controls = resolved_isf_control_values(&shader, effect);
+        let runtime = match self.isf_runtime.as_mut().expect("ISF runtime initialized") {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                self.last_isf_error = Some(format!("{}: {error}", layer.label));
+                return frame;
+            }
+        };
+        match runtime.apply(
+            &frame,
+            &shader,
+            &controls,
+            frame.pts_ms as f32 / 1_000.0,
+            frame.duration_ms as f32 / 1_000.0,
+        ) {
+            Ok(frame) => {
+                self.last_isf_error = None;
+                frame
+            }
+            Err(error) => {
+                self.last_isf_error = Some(format!("{}: {error}", layer.label));
+                frame
+            }
+        }
+    }
+
+    pub fn isf_pipeline_count(&self) -> usize {
+        self.isf_runtime
+            .as_ref()
+            .and_then(|runtime| runtime.as_ref().ok())
+            .map(IsfGpuRuntime::pipeline_count)
+            .unwrap_or(0)
+    }
+
+    pub fn isf_shader_cache_count(&self) -> usize {
+        self.isf_shader_cache.len()
+    }
+
+    pub fn last_isf_error(&self) -> Option<&str> {
+        self.last_isf_error.as_deref()
     }
 
     pub fn queue_count(&self) -> usize {
@@ -2433,6 +2616,7 @@ pub(crate) fn convert_frame_to_rgba8(frame: &VideoFrame) -> Result<VideoFrame, C
         VideoPixelFormat::Dxt1 => decode_dxt1_rgba8(frame)?,
         VideoPixelFormat::Dxt5 => decode_dxt5_rgba8(frame)?,
         VideoPixelFormat::YcoCgDxt5 => decode_ycocg_dxt5_rgba8(frame)?,
+        VideoPixelFormat::Bc7 => decode_bc7_rgba8(frame)?,
     };
     Ok(VideoFrame {
         layer_id: frame.layer_id,
@@ -2499,6 +2683,53 @@ fn decode_dxt1_rgba8(frame: &VideoFrame) -> Result<Vec<u8>, CpuCompositeError> {
             true,
             None,
         );
+    }
+    Ok(output)
+}
+
+fn decode_bc7_rgba8(frame: &VideoFrame) -> Result<Vec<u8>, CpuCompositeError> {
+    let Some(block_count) = dxt_block_count(frame.width, frame.height) else {
+        return Err(CpuCompositeError::FrameSizeMismatch {
+            layer_id: frame.layer_id,
+        });
+    };
+    let expected_len = block_count
+        .checked_mul(16)
+        .ok_or(CpuCompositeError::FrameSizeMismatch {
+            layer_id: frame.layer_id,
+        })?;
+    if frame.data.len() != expected_len {
+        return Err(CpuCompositeError::FrameSizeMismatch {
+            layer_id: frame.layer_id,
+        });
+    }
+    let Some(output_len) = rgba_frame_len(frame.width, frame.height) else {
+        return Err(CpuCompositeError::FrameSizeMismatch {
+            layer_id: frame.layer_id,
+        });
+    };
+    let mut output = vec![0_u8; output_len];
+    let blocks_x = frame.width.div_ceil(4) as usize;
+    for (block_index, block) in frame.data.chunks_exact(16).enumerate() {
+        let block_x = block_index % blocks_x;
+        let block_y = block_index / blocks_x;
+        let mut decoded = [0_u8; 4 * 4 * 4];
+        bcdec_rs::bc7(block, &mut decoded, 4 * 4);
+        for local_y in 0..4_usize {
+            let y = block_y * 4 + local_y;
+            if y >= frame.height as usize {
+                continue;
+            }
+            for local_x in 0..4_usize {
+                let x = block_x * 4 + local_x;
+                if x >= frame.width as usize {
+                    continue;
+                }
+                let source = (local_y * 4 + local_x) * 4;
+                let target = (y * frame.width as usize + x) * 4;
+                output[target..target + 4].copy_from_slice(&decoded[source..source + 4]);
+            }
+        }
     }
     Ok(output)
 }
@@ -2732,6 +2963,7 @@ pub fn probe_still_image_metadata(
         width: Some(width),
         height: Some(height),
         frame_rate: None,
+        has_audio: false,
     })
 }
 
@@ -3276,6 +3508,8 @@ fn push_unique_transport_route(
 
 pub fn external_video_source_backend_id(kind: &VideoSourceKind) -> Option<&'static str> {
     match kind {
+        VideoSourceKind::Camera => Some("camera"),
+        VideoSourceKind::ScreenCapture => Some("screen_capture"),
         VideoSourceKind::Ndi => Some("ndi"),
         VideoSourceKind::Spout => Some("spout"),
         VideoSourceKind::Syphon => Some("syphon"),
@@ -3590,10 +3824,173 @@ fn apply_video_output_mapping(frame: VideoFrame, mapping: &VideoOutputMapping) -
             let src_index = ((source_y * frame.width + source_x) * 4) as usize;
             let dst_index = ((y * frame.width + x) * 4) as usize;
             data[dst_index..dst_index + 4].copy_from_slice(&frame.data[src_index..src_index + 4]);
+            apply_output_blend_correction(
+                &mut data[dst_index..dst_index + 4],
+                (x as f32 + 0.5) / frame.width as f32,
+                (y as f32 + 0.5) / frame.height as f32,
+                mapping,
+            );
         }
     }
 
     VideoFrame { data, ..frame }
+}
+
+fn apply_output_blend_correction(rgba: &mut [u8], u: f32, v: f32, mapping: &VideoOutputMapping) {
+    let edge = |value: f32, width: f32| {
+        let width = finite_or(width, 0.0).clamp(0.0, 1.0);
+        if width <= 0.0001 {
+            return 1.0;
+        }
+        let t = (value / width).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
+    let mask = edge(u, mapping.edge_blend_left)
+        * edge(1.0 - u, mapping.edge_blend_right)
+        * edge(v, mapping.edge_blend_top)
+        * edge(1.0 - v, mapping.edge_blend_bottom);
+    let gamma = finite_or(mapping.edge_blend_gamma, 2.2).clamp(0.1, 8.0);
+    let factor = mask.clamp(0.0, 1.0).powf(gamma) * combined_output_mask_factor(u, v, mapping);
+    let black_level = finite_or(mapping.black_level, 0.0).clamp(0.0, 1.0);
+    for channel in &mut rgba[..3] {
+        let normalized = *channel as f32 / 255.0;
+        *channel = ((black_level + normalized * (1.0 - black_level)) * factor * 255.0)
+            .round()
+            .clamp(0.0, 255.0) as u8;
+    }
+    rgba[3] = (rgba[3] as f32 * factor).round().clamp(0.0, 255.0) as u8;
+}
+
+fn polygon_mask_factor(u: f32, v: f32, mapping: &VideoOutputMapping) -> f32 {
+    let count = usize::from(mapping.mask_point_count).min(mapping.mask_points.len());
+    if count < 3 {
+        return 1.0;
+    }
+    let point = (u.clamp(0.0, 1.0), v.clamp(0.0, 1.0));
+    let points = &mapping.mask_points[..count];
+    let mut inside = false;
+    let mut minimum_distance = f32::MAX;
+    let mut previous = points[count - 1];
+    for current in points {
+        let crosses = (current.y > point.1) != (previous.y > point.1)
+            && point.0
+                < (previous.x - current.x) * (point.1 - current.y) / (previous.y - current.y)
+                    + current.x;
+        if crosses {
+            inside = !inside;
+        }
+        minimum_distance = minimum_distance.min(point_segment_distance(
+            point,
+            (previous.x, previous.y),
+            (current.x, current.y),
+        ));
+        previous = *current;
+    }
+    let softness = finite_or(mapping.mask_softness, 0.0).clamp(0.0, 0.5);
+    let base = if !inside {
+        0.0
+    } else if softness <= 0.0001 {
+        1.0
+    } else {
+        let t = (minimum_distance / softness).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
+    base
+}
+
+fn combined_output_mask_factor(u: f32, v: f32, mapping: &VideoOutputMapping) -> f32 {
+    let polygon_enabled = mapping.mask_point_count >= 3;
+    let bitmap_enabled = video_bitmap_mask_dimensions(mapping).is_some();
+    if !polygon_enabled && !bitmap_enabled {
+        return 1.0;
+    }
+    let base = polygon_mask_factor(u, v, mapping) * bitmap_mask_factor(u, v, mapping);
+    if mapping.mask_invert {
+        1.0 - base.clamp(0.0, 1.0)
+    } else {
+        base.clamp(0.0, 1.0)
+    }
+}
+
+fn video_bitmap_mask_dimensions(mapping: &VideoOutputMapping) -> Option<(usize, usize)> {
+    let width = usize::from(
+        mapping
+            .bitmap_mask_width
+            .min(VIDEO_OUTPUT_BITMAP_MASK_MAX_DIMENSION),
+    );
+    let height = usize::from(
+        mapping
+            .bitmap_mask_height
+            .min(VIDEO_OUTPUT_BITMAP_MASK_MAX_DIMENSION),
+    );
+    (width > 0
+        && height > 0
+        && width.saturating_mul(height) <= VIDEO_OUTPUT_BITMAP_MASK_WORD_CAPACITY * 8)
+        .then_some((width, height))
+}
+
+pub fn video_bitmap_mask_luma(mapping: &VideoOutputMapping, x: usize, y: usize) -> u8 {
+    let Some((width, height)) = video_bitmap_mask_dimensions(mapping) else {
+        return 255;
+    };
+    let index = y.min(height - 1) * width + x.min(width - 1);
+    let word = mapping.bitmap_mask_luma_words[index / 8];
+    let nibble = ((word >> ((index % 8) * 4)) & 0x0f) as u8;
+    nibble * 17
+}
+
+fn bitmap_mask_factor(u: f32, v: f32, mapping: &VideoOutputMapping) -> f32 {
+    let Some((width, height)) = video_bitmap_mask_dimensions(mapping) else {
+        return 1.0;
+    };
+    let x = u.clamp(0.0, 1.0) * (width.saturating_sub(1)) as f32;
+    let y = v.clamp(0.0, 1.0) * (height.saturating_sub(1)) as f32;
+    let x0 = x.floor() as usize;
+    let y0 = y.floor() as usize;
+    let x1 = (x0 + 1).min(width - 1);
+    let y1 = (y0 + 1).min(height - 1);
+    let tx = x - x0 as f32;
+    let ty = y - y0 as f32;
+    let sample =
+        |sample_x, sample_y| video_bitmap_mask_luma(mapping, sample_x, sample_y) as f32 / 255.0;
+    let top = sample(x0, y0) + (sample(x1, y0) - sample(x0, y0)) * tx;
+    let bottom = sample(x0, y1) + (sample(x1, y1) - sample(x0, y1)) * tx;
+    top + (bottom - top) * ty
+}
+
+pub fn load_video_bitmap_mask(
+    path: impl AsRef<Path>,
+) -> Result<(u8, u8, [u32; VIDEO_OUTPUT_BITMAP_MASK_WORD_CAPACITY]), StillImageError> {
+    let image = image::open(path.as_ref())
+        .map_err(|error| StillImageError::Decode(error.to_string()))?
+        .resize_exact(
+            u32::from(VIDEO_OUTPUT_BITMAP_MASK_MAX_DIMENSION),
+            u32::from(VIDEO_OUTPUT_BITMAP_MASK_MAX_DIMENSION),
+            image::imageops::FilterType::Triangle,
+        )
+        .to_luma8();
+    let mut words = [0_u32; VIDEO_OUTPUT_BITMAP_MASK_WORD_CAPACITY];
+    for (index, pixel) in image.pixels().enumerate() {
+        let nibble = ((u16::from(pixel.0[0]) + 8) / 17).min(15) as u32;
+        words[index / 8] |= nibble << ((index % 8) * 4);
+    }
+    Ok((
+        VIDEO_OUTPUT_BITMAP_MASK_MAX_DIMENSION,
+        VIDEO_OUTPUT_BITMAP_MASK_MAX_DIMENSION,
+        words,
+    ))
+}
+
+fn point_segment_distance(point: (f32, f32), start: (f32, f32), end: (f32, f32)) -> f32 {
+    let edge = (end.0 - start.0, end.1 - start.1);
+    let length_squared = edge.0 * edge.0 + edge.1 * edge.1;
+    if length_squared <= f32::EPSILON {
+        return ((point.0 - start.0).powi(2) + (point.1 - start.1).powi(2)).sqrt();
+    }
+    let t = (((point.0 - start.0) * edge.0 + (point.1 - start.1) * edge.1) / length_squared)
+        .clamp(0.0, 1.0);
+    let nearest = (start.0 + edge.0 * t, start.1 + edge.1 * t);
+    ((point.0 - nearest.0).powi(2) + (point.1 - nearest.1).powi(2)).sqrt()
 }
 
 fn inverse_video_output_mapping(
@@ -3707,6 +4104,15 @@ fn video_output_mapping_is_identity(mapping: &VideoOutputMapping) -> bool {
         && (mapping.aspect_ratio - 1.0).abs() < EPSILON
         && mapping.aspect_mode == VideoOutputAspectMode::Stretch
         && mapping.lens_distortion.abs() < EPSILON
+        && mapping.edge_blend_left.abs() < EPSILON
+        && mapping.edge_blend_right.abs() < EPSILON
+        && mapping.edge_blend_top.abs() < EPSILON
+        && mapping.edge_blend_bottom.abs() < EPSILON
+        && (mapping.edge_blend_gamma - 2.2).abs() < EPSILON
+        && mapping.black_level.abs() < EPSILON
+        && mapping.mask_point_count < 3
+        && mapping.bitmap_mask_width == 0
+        && mapping.bitmap_mask_height == 0
         && mapping.keystone_x.abs() < EPSILON
         && mapping.keystone_y.abs() < EPSILON
         && mapping.corner_top_left_x.abs() < EPSILON
@@ -4288,8 +4694,8 @@ fn finite_or(value: f32, fallback: f32) -> f32 {
 mod tests {
     use super::*;
     use protocol::{
-        CompositionSummary, Transform2D, VideoBlendMode, VideoLayerSummary, VideoOutputKind,
-        VideoOutputSummary, VideoSourceKind, VideoSourceSummary,
+        CompositionSummary, Transform2D, VideoBlendMode, VideoLayerSummary, VideoMaskPoint,
+        VideoOutputKind, VideoOutputSummary, VideoSourceKind, VideoSourceSummary,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -4378,11 +4784,16 @@ mod tests {
             r#"{
                 "streams": [
                     {
+                        "codec_type": "video",
                         "codec_name": "h264",
                         "width": 1920,
                         "height": 1080,
                         "avg_frame_rate": "30000/1001",
                         "r_frame_rate": "30/1"
+                    },
+                    {
+                        "codec_type": "audio",
+                        "codec_name": "aac"
                     }
                 ],
                 "format": {
@@ -4398,6 +4809,7 @@ mod tests {
         assert_eq!(metadata.width, Some(1920));
         assert_eq!(metadata.height, Some(1080));
         assert!((metadata.frame_rate.unwrap() - 29.97).abs() < 0.01);
+        assert!(metadata.has_audio);
     }
 
     #[test]
@@ -4406,6 +4818,7 @@ mod tests {
             r#"{
                 "streams": [
                     {
+                        "codec_type": "video",
                         "codec_name": "hap",
                         "width": 1280,
                         "height": 720,
@@ -4425,6 +4838,7 @@ mod tests {
         assert_eq!(metadata.width, Some(1280));
         assert_eq!(metadata.height, Some(720));
         assert_eq!(metadata.frame_rate, None);
+        assert!(!metadata.has_audio);
     }
 
     fn layer_plan(
@@ -4706,6 +5120,7 @@ mod tests {
             beat_counter: 1,
             tap_count: 0,
             source: protocol::ClockSource::AbletonLink,
+            ..ClockSnapshot::default()
         };
 
         let advanced =
@@ -4825,6 +5240,7 @@ mod tests {
                 },
                 blend_mode: VideoBlendMode::Normal,
                 state: VideoLayerState::default(),
+                isf_effect: None,
             }],
             compositions: Vec::new(),
             outputs: Vec::new(),
@@ -4865,6 +5281,7 @@ mod tests {
                     position_ms: 160,
                     ..VideoLayerState::default()
                 },
+                isf_effect: None,
             }],
             compositions: Vec::new(),
             outputs: Vec::new(),
@@ -4908,6 +5325,7 @@ mod tests {
                 },
                 blend_mode: VideoBlendMode::Normal,
                 state: VideoLayerState::default(),
+                isf_effect: None,
             }],
             compositions: Vec::new(),
             outputs: Vec::new(),
@@ -4971,6 +5389,7 @@ mod tests {
                 },
                 blend_mode: VideoBlendMode::Normal,
                 state: VideoLayerState::default(),
+                isf_effect: None,
             }],
             compositions: Vec::new(),
             outputs: Vec::new(),
@@ -4991,6 +5410,152 @@ mod tests {
         assert_eq!(output.data, vec![9, 2, 1, 255, 9, 2, 1, 255]);
         assert_eq!(renderer.frame_provider().retained, vec![vec![9]]);
         assert_eq!(renderer.frame_provider().requested, vec![(9, 2, 1)]);
+    }
+
+    #[test]
+    fn video_preview_renderer_applies_and_caches_isf_shader() {
+        if IsfGpuRuntime::new().is_err() {
+            eprintln!("ISF renderer integration test skipped: no GPU adapter");
+            return;
+        }
+        const SOURCE: &str = r#"/*{
+          "INPUTS": [
+            {"NAME":"inputImage","TYPE":"image"},
+            {"NAME":"level","TYPE":"float","DEFAULT":0.5,"MIN":0.0,"MAX":1.0}
+          ]
+        }*/
+        void main() {
+          vec4 pixel = IMG_THIS_PIXEL(inputImage);
+          float luma = (pixel.r + pixel.g + pixel.b) / 3.0;
+          gl_FragColor = (luma > level) ? pixel : vec4(0.0, 0.0, 0.0, 1.0);
+        }"#;
+
+        struct IsfFrameProvider;
+        impl VideoFrameProvider for IsfFrameProvider {
+            fn retain_layers(&mut self, _layer_ids: &[VideoLayerId]) {}
+
+            fn frame_for_layer(
+                &mut self,
+                layer: &VideoLayerSummary,
+                _width: u32,
+                _height: u32,
+            ) -> Result<VideoFrame, VideoFrameProviderError> {
+                Ok(VideoFrame {
+                    layer_id: layer.id,
+                    width: 2,
+                    height: 1,
+                    pts_ms: 1_000,
+                    duration_ms: 33,
+                    format: VideoPixelFormat::Rgba8,
+                    data: vec![64, 64, 64, 255, 200, 200, 200, 255],
+                })
+            }
+        }
+
+        let prepared = prepare_isf_shader(SOURCE).unwrap();
+        let effect =
+            isf_effect_from_prepared("Threshold".to_string(), SOURCE.to_string(), None, &prepared);
+        let snapshot = VideoSnapshot {
+            layers: vec![VideoLayerSummary {
+                id: 44,
+                label: "ISF Layer".to_string(),
+                source: VideoSourceSummary {
+                    kind: VideoSourceKind::File,
+                    path: Some("isf-test.mp4".to_string()),
+                    name: None,
+                    codec: None,
+                    metadata: None,
+                },
+                blend_mode: VideoBlendMode::Normal,
+                state: VideoLayerState::default(),
+                isf_effect: Some(effect),
+            }],
+            compositions: Vec::new(),
+            outputs: Vec::new(),
+            mapping_presets: Vec::new(),
+            master_opacity: 1.0,
+            blackout: false,
+        };
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig {
+                frame_queue_capacity: 2,
+                preview_width: 2,
+                preview_height: 1,
+            },
+            IsfFrameProvider,
+        );
+
+        let first = renderer.render(&snapshot, 2, 1).unwrap();
+        let second = renderer.render(&snapshot, 2, 1).unwrap();
+
+        assert_eq!(first.data, vec![0, 0, 0, 255, 200, 200, 200, 255]);
+        assert_eq!(second.data, first.data);
+        assert_eq!(renderer.isf_shader_cache_count(), 1);
+        assert_eq!(renderer.isf_pipeline_count(), 1);
+        assert_eq!(renderer.last_isf_error(), None);
+    }
+
+    #[test]
+    fn video_preview_renderer_fails_open_for_invalid_isf_shader() {
+        struct SolidFrameProvider;
+        impl VideoFrameProvider for SolidFrameProvider {
+            fn retain_layers(&mut self, _layer_ids: &[VideoLayerId]) {}
+
+            fn frame_for_layer(
+                &mut self,
+                layer: &VideoLayerSummary,
+                _width: u32,
+                _height: u32,
+            ) -> Result<VideoFrame, VideoFrameProviderError> {
+                Ok(rgba_frame(layer.id, [24, 96, 180, 255]))
+            }
+        }
+
+        let snapshot = VideoSnapshot {
+            layers: vec![VideoLayerSummary {
+                id: 45,
+                label: "Broken ISF".to_string(),
+                source: VideoSourceSummary {
+                    kind: VideoSourceKind::File,
+                    path: Some("broken-isf.mp4".to_string()),
+                    name: None,
+                    codec: None,
+                    metadata: None,
+                },
+                blend_mode: VideoBlendMode::Normal,
+                state: VideoLayerState::default(),
+                isf_effect: Some(protocol::VideoIsfEffectSummary {
+                    enabled: true,
+                    label: "Invalid".to_string(),
+                    source: "not an ISF shader".to_string(),
+                    source_path: None,
+                    description: None,
+                    categories: Vec::new(),
+                    controls: Vec::new(),
+                }),
+            }],
+            compositions: Vec::new(),
+            outputs: Vec::new(),
+            mapping_presets: Vec::new(),
+            master_opacity: 1.0,
+            blackout: false,
+        };
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig {
+                frame_queue_capacity: 2,
+                preview_width: 1,
+                preview_height: 1,
+            },
+            SolidFrameProvider,
+        );
+
+        let output = renderer.render(&snapshot, 1, 1).unwrap();
+
+        assert_eq!(output.data, vec![24, 96, 180, 255]);
+        assert_eq!(renderer.isf_shader_cache_count(), 1);
+        assert!(renderer
+            .last_isf_error()
+            .is_some_and(|error| error.contains("Broken ISF")));
     }
 
     #[test]
@@ -5031,6 +5596,7 @@ mod tests {
                     position_ms: 250,
                     ..VideoLayerState::default()
                 },
+                isf_effect: None,
             }],
             compositions: Vec::new(),
             outputs: Vec::new(),
@@ -5102,6 +5668,7 @@ mod tests {
                     position_ms: 100,
                     ..VideoLayerState::default()
                 },
+                isf_effect: None,
             }],
             compositions: Vec::new(),
             outputs: Vec::new(),
@@ -5178,6 +5745,7 @@ mod tests {
                         width: Some(1920),
                         height: Some(1080),
                         frame_rate: Some(60.0),
+                        has_audio: false,
                     }),
                 },
                 blend_mode: VideoBlendMode::Normal,
@@ -5189,6 +5757,7 @@ mod tests {
                     loop_end_ms: 200,
                     ..VideoLayerState::default()
                 },
+                isf_effect: None,
             }],
             compositions: Vec::new(),
             outputs: Vec::new(),
@@ -5263,6 +5832,7 @@ mod tests {
                         width: Some(1920),
                         height: Some(1080),
                         frame_rate: Some(60.0),
+                        has_audio: false,
                     }),
                 },
                 blend_mode: VideoBlendMode::Normal,
@@ -5279,6 +5849,7 @@ mod tests {
                     },
                     ..VideoLayerState::default()
                 },
+                isf_effect: None,
             }],
             compositions: Vec::new(),
             outputs: Vec::new(),
@@ -5329,6 +5900,7 @@ mod tests {
                     width: Some(1920),
                     height: Some(1080),
                     frame_rate: Some(60.0),
+                    has_audio: false,
                 }),
             },
             blend_mode: VideoBlendMode::Normal,
@@ -5340,6 +5912,7 @@ mod tests {
                 loop_end_ms: 200,
                 ..VideoLayerState::default()
             },
+            isf_effect: None,
         };
 
         assert_eq!(
@@ -5454,6 +6027,7 @@ mod tests {
                 playing: true,
                 ..VideoLayerState::default()
             },
+            isf_effect: None,
         };
         let mut scheduler = VideoDecodeScheduler::new(5);
 
@@ -5498,6 +6072,7 @@ mod tests {
                     width: Some(1920),
                     height: Some(1080),
                     frame_rate: Some(60.0),
+                    has_audio: false,
                 }),
             },
             blend_mode: VideoBlendMode::Normal,
@@ -5506,6 +6081,7 @@ mod tests {
                 playing: true,
                 ..VideoLayerState::default()
             },
+            isf_effect: None,
         }
     }
 
@@ -5522,6 +6098,7 @@ mod tests {
             },
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState::default(),
+            isf_effect: None,
         }
     }
 
@@ -5868,6 +6445,7 @@ mod tests {
                 },
                 blend_mode: VideoBlendMode::Normal,
                 state: VideoLayerState::default(),
+                isf_effect: None,
             }],
             compositions: Vec::new(),
             outputs: Vec::new(),
@@ -6011,10 +6589,18 @@ mod tests {
             .iter()
             .find(|backend| backend.id == "spout")
             .unwrap();
-        assert_eq!(spout.state, VideoBackendState::NotBuilt);
-        if cfg!(target_os = "windows") {
+        if cfg!(all(
+            feature = "spout",
+            target_os = "windows",
+            target_arch = "x86_64"
+        )) {
+            assert_eq!(spout.state, VideoBackendState::Available);
+            assert!(spout.detail.contains("routes initialize"));
+        } else if cfg!(target_os = "windows") {
+            assert_eq!(spout.state, VideoBackendState::NotBuilt);
             assert!(spout.detail.contains("not linked"));
         } else {
+            assert_eq!(spout.state, VideoBackendState::NotBuilt);
             assert!(spout.detail.contains("Windows-only"));
         }
 
@@ -6242,6 +6828,7 @@ mod tests {
                     },
                     blend_mode: VideoBlendMode::Normal,
                     state: VideoLayerState::default(),
+                    isf_effect: None,
                 },
                 VideoLayerSummary {
                     id: 2,
@@ -6258,6 +6845,7 @@ mod tests {
                         enabled: true,
                         ..VideoLayerState::default()
                     },
+                    isf_effect: None,
                 },
                 VideoLayerSummary {
                     id: 3,
@@ -6271,6 +6859,7 @@ mod tests {
                     },
                     blend_mode: VideoBlendMode::Normal,
                     state: VideoLayerState::default(),
+                    isf_effect: None,
                 },
             ],
             compositions: Vec::new(),
@@ -6357,6 +6946,14 @@ mod tests {
             None
         );
         assert_eq!(
+            external_video_source_backend_id(&VideoSourceKind::Camera),
+            Some("camera")
+        );
+        assert_eq!(
+            external_video_source_backend_id(&VideoSourceKind::ScreenCapture),
+            Some("screen_capture")
+        );
+        assert_eq!(
             external_video_output_backend_id(&VideoOutputKind::SpoutSender),
             Some("spout")
         );
@@ -6380,6 +6977,7 @@ mod tests {
                     enabled: true,
                     ..VideoLayerState::default()
                 },
+                isf_effect: None,
             }],
             compositions: Vec::new(),
             outputs: vec![VideoOutputSummary {
@@ -6493,6 +7091,7 @@ mod tests {
                     enabled: true,
                     ..VideoLayerState::default()
                 },
+                isf_effect: None,
             }],
             compositions: Vec::new(),
             outputs: vec![VideoOutputSummary {
@@ -6710,6 +7309,7 @@ mod tests {
                         position_ms: 100,
                         ..VideoLayerState::default()
                     },
+                    isf_effect: None,
                 },
                 VideoLayerSummary {
                     id: 2,
@@ -6727,6 +7327,7 @@ mod tests {
                         position_ms: 200,
                         ..VideoLayerState::default()
                     },
+                    isf_effect: None,
                 },
             ],
             compositions: vec![CompositionSummary {
@@ -6768,6 +7369,7 @@ mod tests {
                 },
                 blend_mode: VideoBlendMode::Normal,
                 state: VideoLayerState::default(),
+                isf_effect: None,
             }],
             compositions: Vec::new(),
             outputs: Vec::new(),
@@ -6803,6 +7405,7 @@ mod tests {
                         opacity: 0.8,
                         ..VideoLayerState::default()
                     },
+                    isf_effect: None,
                 },
                 VideoLayerSummary {
                     id: 2,
@@ -6820,6 +7423,7 @@ mod tests {
                         opacity: 0.6,
                         ..VideoLayerState::default()
                     },
+                    isf_effect: None,
                 },
             ],
             compositions: Vec::new(),
@@ -6856,6 +7460,7 @@ mod tests {
                         opacity: 1.0,
                         ..VideoLayerState::default()
                     },
+                    isf_effect: None,
                 },
                 VideoLayerSummary {
                     id: 2,
@@ -6873,6 +7478,7 @@ mod tests {
                         opacity: 0.75,
                         ..VideoLayerState::default()
                     },
+                    isf_effect: None,
                 },
                 VideoLayerSummary {
                     id: 3,
@@ -6891,6 +7497,7 @@ mod tests {
                         opacity: 1.0,
                         ..VideoLayerState::default()
                     },
+                    isf_effect: None,
                 },
             ],
             compositions: Vec::new(),
@@ -6932,6 +7539,7 @@ mod tests {
                     opacity: 0.8,
                     ..VideoLayerState::default()
                 },
+                isf_effect: None,
             }],
             compositions: vec![CompositionSummary {
                 id: 1,
@@ -6988,6 +7596,7 @@ mod tests {
             },
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState::default(),
+            isf_effect: None,
         };
         let snapshot = VideoSnapshot {
             layers: vec![layer(1, "Back"), layer(2, "Middle"), layer(3, "Front")],
@@ -7082,6 +7691,7 @@ mod tests {
                 },
                 blend_mode: VideoBlendMode::Normal,
                 state: VideoLayerState::default(),
+                isf_effect: None,
             }],
             compositions: vec![CompositionSummary {
                 id: 1,
@@ -7122,6 +7732,74 @@ mod tests {
         assert_eq!(frame.width, 2);
         assert_eq!(frame.height, 1);
         assert_eq!(frame.data, vec![100, 0, 0, 128, 100, 0, 0, 128]);
+    }
+
+    #[test]
+    fn layer_preview_renderer_ignores_live_visibility_and_blackout() {
+        #[derive(Default)]
+        struct TestFrameProvider;
+
+        impl VideoFrameProvider for TestFrameProvider {
+            fn retain_layers(&mut self, _layer_ids: &[VideoLayerId]) {}
+
+            fn frame_for_layer(
+                &mut self,
+                layer: &VideoLayerSummary,
+                width: u32,
+                height: u32,
+            ) -> Result<VideoFrame, VideoFrameProviderError> {
+                Ok(VideoFrame {
+                    layer_id: layer.id,
+                    width,
+                    height,
+                    pts_ms: layer.state.position_ms,
+                    duration_ms: 16,
+                    format: VideoPixelFormat::Rgba8,
+                    data: [24, 96, 180, 255].repeat(width as usize * height as usize),
+                })
+            }
+        }
+
+        let mut state = VideoLayerState::default();
+        state.enabled = false;
+        state.opacity = 0.0;
+        let snapshot = VideoSnapshot {
+            layers: vec![VideoLayerSummary {
+                id: 7,
+                label: "Hidden Clip".to_string(),
+                source: VideoSourceSummary {
+                    kind: VideoSourceKind::File,
+                    path: Some("hidden.mp4".to_string()),
+                    name: None,
+                    codec: None,
+                    metadata: None,
+                },
+                blend_mode: VideoBlendMode::Add,
+                state,
+                isf_effect: None,
+            }],
+            compositions: Vec::new(),
+            outputs: Vec::new(),
+            mapping_presets: Vec::new(),
+            master_opacity: 0.0,
+            blackout: true,
+        };
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig {
+                frame_queue_capacity: 2,
+                preview_width: 2,
+                preview_height: 1,
+            },
+            TestFrameProvider,
+        );
+
+        let frame = renderer.render_layer_preview(&snapshot, 7, 2, 1).unwrap();
+
+        assert_eq!(frame.data, vec![24, 96, 180, 255, 24, 96, 180, 255]);
+        assert_eq!(
+            renderer.render_layer_preview(&snapshot, 99, 2, 1),
+            Err(VideoPreviewError::MissingLayer { layer_id: 99 })
+        );
     }
 
     #[test]
@@ -7168,6 +7846,7 @@ mod tests {
             },
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState::default(),
+            isf_effect: None,
         };
         let mut snapshot = VideoSnapshot {
             layers: vec![layer(1), layer(2)],
@@ -7285,6 +7964,7 @@ mod tests {
                 },
                 blend_mode: VideoBlendMode::Normal,
                 state: VideoLayerState::default(),
+                isf_effect: None,
             }],
             compositions: vec![CompositionSummary {
                 id: 1,
@@ -7370,6 +8050,114 @@ mod tests {
 
         assert!(x > 0.4);
         assert!(y.abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn output_mapping_applies_edge_blend_gamma_and_black_level() {
+        let mut edge_pixel = [255_u8, 255, 255, 255];
+        apply_output_blend_correction(
+            &mut edge_pixel,
+            0.05,
+            0.5,
+            &VideoOutputMapping {
+                edge_blend_left: 0.5,
+                edge_blend_gamma: 1.0,
+                ..Default::default()
+            },
+        );
+        assert!(edge_pixel[0] < 16);
+        assert_eq!(edge_pixel[0], edge_pixel[1]);
+        assert_eq!(edge_pixel[1], edge_pixel[2]);
+        assert!(edge_pixel[3] < 16);
+
+        let mut black_pixel = [0_u8, 0, 0, 255];
+        apply_output_blend_correction(
+            &mut black_pixel,
+            0.5,
+            0.5,
+            &VideoOutputMapping {
+                black_level: 0.2,
+                ..Default::default()
+            },
+        );
+        assert_eq!(black_pixel, [51, 51, 51, 255]);
+    }
+
+    #[test]
+    fn output_polygon_mask_supports_feather_and_inversion() {
+        let mut points = [VideoMaskPoint::default(); 8];
+        points[..4].copy_from_slice(&[
+            VideoMaskPoint { x: 0.25, y: 0.25 },
+            VideoMaskPoint { x: 0.75, y: 0.25 },
+            VideoMaskPoint { x: 0.75, y: 0.75 },
+            VideoMaskPoint { x: 0.25, y: 0.75 },
+        ]);
+        let mapping = VideoOutputMapping {
+            mask_point_count: 4,
+            mask_softness: 0.1,
+            mask_points: points,
+            ..VideoOutputMapping::default()
+        };
+
+        assert!((polygon_mask_factor(0.5, 0.5, &mapping) - 1.0).abs() < f32::EPSILON);
+        assert_eq!(polygon_mask_factor(0.1, 0.5, &mapping), 0.0);
+        let feathered = polygon_mask_factor(0.27, 0.5, &mapping);
+        assert!(feathered > 0.0 && feathered < 1.0);
+
+        let inverted = VideoOutputMapping {
+            mask_invert: true,
+            ..mapping
+        };
+        assert_eq!(combined_output_mask_factor(0.5, 0.5, &inverted), 0.0);
+        assert_eq!(combined_output_mask_factor(0.1, 0.5, &inverted), 1.0);
+    }
+
+    #[test]
+    fn output_bitmap_mask_is_embedded_bilinear_and_invertible() {
+        let mut words = [0_u32; VIDEO_OUTPUT_BITMAP_MASK_WORD_CAPACITY];
+        words[0] = 0x0000_00f0;
+        let mapping = VideoOutputMapping {
+            bitmap_mask_width: 2,
+            bitmap_mask_height: 1,
+            bitmap_mask_luma_words: words,
+            ..VideoOutputMapping::default()
+        };
+
+        assert_eq!(video_bitmap_mask_luma(&mapping, 0, 0), 0);
+        assert_eq!(video_bitmap_mask_luma(&mapping, 1, 0), 255);
+        assert_eq!(combined_output_mask_factor(0.0, 0.5, &mapping), 0.0);
+        assert_eq!(combined_output_mask_factor(1.0, 0.5, &mapping), 1.0);
+        assert!((combined_output_mask_factor(0.5, 0.5, &mapping) - 0.5).abs() < 0.001);
+
+        let inverted = VideoOutputMapping {
+            mask_invert: true,
+            ..mapping
+        };
+        assert_eq!(combined_output_mask_factor(0.0, 0.5, &inverted), 1.0);
+        assert_eq!(combined_output_mask_factor(1.0, 0.5, &inverted), 0.0);
+    }
+
+    #[test]
+    fn bitmap_mask_import_resizes_and_quantizes_luma() {
+        let path =
+            std::env::temp_dir().join(format!("syndocal-bitmap-mask-{}.png", std::process::id()));
+        let source =
+            image::GrayImage::from_fn(2, 1, |x, _| image::Luma([if x == 0 { 0 } else { 255 }]));
+        source.save(&path).unwrap();
+
+        let (width, height, words) = load_video_bitmap_mask(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let mapping = VideoOutputMapping {
+            bitmap_mask_width: width,
+            bitmap_mask_height: height,
+            bitmap_mask_luma_words: words,
+            ..VideoOutputMapping::default()
+        };
+
+        assert_eq!(width, VIDEO_OUTPUT_BITMAP_MASK_MAX_DIMENSION);
+        assert_eq!(height, VIDEO_OUTPUT_BITMAP_MASK_MAX_DIMENSION);
+        assert_eq!(video_bitmap_mask_luma(&mapping, 0, 8), 0);
+        assert_eq!(video_bitmap_mask_luma(&mapping, 15, 8), 255);
     }
 
     #[test]

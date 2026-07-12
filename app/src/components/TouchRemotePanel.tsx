@@ -1,15 +1,21 @@
 import { For, Show } from "solid-js";
-import type { SubmasterSummary } from "../types";
+import type { RemoteControlStatus, SubmasterSummary } from "../types";
 
 interface TouchRemotePanelProps {
   running: boolean;
   remoteUrls: string[];
   bindIp: string;
   port: number;
+  pairingPin: string;
+  allowLan: boolean;
+  status: RemoteControlStatus;
   bpmDraft: string;
   submasters: SubmasterSummary[];
   onBindIp: (value: string) => void;
   onPort: (value: number) => void;
+  onPairingPin: (value: string) => void;
+  onRegeneratePairingPin: () => void;
+  onAllowLan: (value: boolean) => void;
   onCopyRemoteUrl: (url: string) => void | Promise<void>;
   onOpenRemoteUrl: (url: string) => void | Promise<void>;
   onStart: () => void | Promise<void>;
@@ -25,7 +31,7 @@ export function TouchRemotePanel(props: TouchRemotePanelProps) {
     <section class="panel touchPanel touchRemotePanel">
       <div class="panelHeader">
         <h2>Touch Remote</h2>
-        <span>{props.running ? "Running" : "Stopped"}</span>
+        <span>{props.running ? `Running · ${props.status.active_connections} client(s)` : "Stopped"}</span>
       </div>
       <div class="touchRemoteUrl">
         <span>Remote URLs</span>
@@ -48,7 +54,7 @@ export function TouchRemotePanel(props: TouchRemotePanelProps) {
       <div class="split">
         <label>
           Bind IP
-          <input value={props.bindIp} disabled={props.running} onInput={(event) => props.onBindIp(event.currentTarget.value)} />
+          <input value={props.bindIp} disabled={props.running || !props.allowLan} onInput={(event) => props.onBindIp(event.currentTarget.value)} />
         </label>
         <label>
           Port
@@ -61,6 +67,29 @@ export function TouchRemotePanel(props: TouchRemotePanelProps) {
           />
         </label>
       </div>
+      <label class="remoteLanToggle">
+        <input
+          type="checkbox"
+          checked={props.allowLan}
+          disabled={props.running}
+          onChange={(event) => props.onAllowLan(event.currentTarget.checked)}
+        />
+        Trusted LAN access (unencrypted HTTP)
+      </label>
+      <label>
+        Pairing PIN
+        <div class="remoteUrlActions">
+          <input
+            inputmode="numeric"
+            maxlength="6"
+            pattern="[0-9]{6}"
+            value={props.pairingPin}
+            disabled={props.running}
+            onInput={(event) => props.onPairingPin(event.currentTarget.value.replace(/\D/g, "").slice(0, 6))}
+          />
+          <button onClick={props.onRegeneratePairingPin} disabled={props.running}>New PIN</button>
+        </div>
+      </label>
       <div class="touchGuardRow">
         <button class="primary" onClick={() => void props.onStart()} disabled={props.running}>
           Start Remote
@@ -92,7 +121,7 @@ export function TouchRemotePanel(props: TouchRemotePanelProps) {
           <For each={props.submasters}>
             {(submaster) => (
               <label class="submasterControl">
-                <span>{submaster.label}</span>
+                <span data-no-localize>{submaster.label}</span>
                 <input
                   type="range"
                   min="0"

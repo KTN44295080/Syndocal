@@ -302,6 +302,7 @@ mod tests {
     use protocol::{VideoSourceKind, VideoSourceSummary};
 
     use super::*;
+    #[cfg(feature = "libav")]
     use crate::{FfmpegCliFrameDecoder, PreferredVideoFrameDecoder, VideoDecoderDiagnostics};
 
     fn request() -> VideoFrameRequest {
@@ -405,6 +406,7 @@ mod tests {
                 width: Some(16),
                 height: Some(16),
                 frame_rate: Some(2.0),
+                has_audio: false,
             });
             let mut decoder = LibavFrameDecoder::new();
 

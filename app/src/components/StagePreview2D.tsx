@@ -208,7 +208,7 @@ export function StagePreview2D(props: StagePreview2DProps) {
             <line x1={-object.width / 2} y1="0" x2={object.width / 2} y2="0" />
             <line x1="0" y1={-object.depth / 2} x2="0" y2={object.depth / 2} />
             <Show when={!props.compact}>
-              <text x={-object.width / 2 + 1} y={-object.depth / 2 - 1}>{object.label}</text>
+              <text data-no-localize x={-object.width / 2 + 1} y={-object.depth / 2 - 1}>{object.label}</text>
             </Show>
           </g>
         )}
@@ -238,7 +238,7 @@ export function StagePreview2D(props: StagePreview2DProps) {
             <line x1={-surface.width / 2} y1="0" x2={surface.width / 2} y2="0" />
             <line x1="0" y1={-surface.height / 2} x2="0" y2={surface.height / 2} />
             <Show when={!props.compact}>
-              <text x={-surface.width / 2 + 1.2} y={-surface.height / 2 - 1.6}>{surface.label}</text>
+              <text data-no-localize x={-surface.width / 2 + 1.2} y={-surface.height / 2 - 1.6}>{surface.label}</text>
             </Show>
           </g>
         )}

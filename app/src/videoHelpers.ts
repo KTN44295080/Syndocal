@@ -7,6 +7,10 @@ export const videoSourceInputLabel = (kind: VideoSourceKind) => {
     case "File":
     case "StillImage":
       return "Source path";
+    case "Camera":
+      return "Camera device";
+    case "ScreenCapture":
+      return "Display source";
     case "Ndi":
       return "NDI source";
     case "Spout":
@@ -22,6 +26,10 @@ export const videoSourceInputPlaceholder = (kind: VideoSourceKind) => {
       return "C:\\path\\clip.mp4";
     case "StillImage":
       return "C:\\path\\image.png";
+    case "Camera":
+      return "Camera device name (Windows) or device/index";
+    case "ScreenCapture":
+      return "Primary desktop (optional display/index)";
     case "Ndi":
       return "OBS / Program";
     case "Spout":
@@ -39,6 +47,10 @@ export const videoSourceKindLabel = (kind: VideoSourceKind) => {
       return "File";
     case "StillImage":
       return "Still";
+    case "Camera":
+      return "Camera";
+    case "ScreenCapture":
+      return "Screen";
     case "Ndi":
       return "NDI";
     case "Spout":
@@ -76,13 +88,14 @@ export const formatVideoTime = (positionMs: number, durationMs?: number | null) 
 
 export const videoSourceMetadataLabel = (source: {
   codec?: string | null;
-  metadata?: { duration_ms?: number | null; width?: number | null; height?: number | null; frame_rate?: number | null } | null;
+  metadata?: { duration_ms?: number | null; width?: number | null; height?: number | null; frame_rate?: number | null; has_audio?: boolean } | null;
 }) => {
   const metadata = source.metadata;
   const parts = [
     source.codec,
     metadata?.width && metadata?.height ? `${metadata.width}x${metadata.height}` : null,
     metadata?.frame_rate ? `${metadata.frame_rate.toFixed(2)} fps` : null,
+    metadata?.has_audio === true ? "audio" : metadata?.has_audio === false ? "silent" : null,
     formatDuration(metadata?.duration_ms),
   ].filter((part): part is string => Boolean(part));
   return parts.join(" / ");

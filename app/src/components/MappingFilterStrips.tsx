@@ -43,7 +43,7 @@ export function MappingFilterStrips(props: MappingFilterStripsProps) {
               class={props.selectedGroupId === group.groupId ? "active" : ""}
               onClick={() => props.onSelectGroup(group.groupId)}
             >
-              {group.groupId}
+              <span data-no-localize>{group.groupId}</span>
               <small>{group.count}</small>
             </button>
           )}
@@ -67,7 +67,7 @@ export function MappingFilterStrips(props: MappingFilterStripsProps) {
               title={`${row.manufacturer} ${row.label}`}
             >
               <span class={mappingTypeGlyphClass(row.visualKind)} />
-              {row.label}
+              <span data-no-localize>{row.label}</span>
               <small>{row.count}</small>
             </button>
           )}

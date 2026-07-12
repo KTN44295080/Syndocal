@@ -1,9 +1,9 @@
-export type DestructiveActionKind = "fixture" | "cue" | "video output" | "effect";
+export type DestructiveActionKind = "fixture" | "cue" | "cue list" | "palette" | "playback executor" | "video output" | "effect";
 
 type ConfirmAction = (message: string) => boolean;
 
 export function destructiveActionPrompt(kind: DestructiveActionKind, label: string): string {
-  return `Remove ${kind} "${label}"?\n\nThis action cannot be undone.`;
+  return `Remove ${kind} "${label}"?\n\nYou can undo this action from the Project menu or with Ctrl/Cmd+Z.`;
 }
 
 export function confirmDestructiveAction(

@@ -1893,6 +1893,7 @@ mod tests {
                         },
                         ..VideoLayerState::default()
                     },
+                    isf_effect: None,
                 }],
                 ..protocol::VideoSnapshot::default()
             },

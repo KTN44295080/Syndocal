@@ -44,7 +44,7 @@ export function TouchVideoPanel(props: TouchVideoPanelProps) {
                 <div class={outputDeckClass()}>
                   <div class="touchVideoHeader">
                     <div>
-                      <strong>{output.label}</strong>
+                      <strong data-no-localize>{output.label}</strong>
                       <span>
                         {output.kind} / {output.width}x{output.height}
                       </span>
@@ -148,7 +148,7 @@ export function TouchVideoPanel(props: TouchVideoPanelProps) {
                 <div class={layer.state.enabled ? "touchVideoDeck active" : "touchVideoDeck"}>
                   <div class="touchVideoHeader">
                     <div>
-                      <strong>{layer.label}</strong>
+                      <strong data-no-localize>{layer.label}</strong>
                       <span>{layer.source.path ?? layer.source.name ?? layer.source.kind}</span>
                     </div>
                     <small>{formatVideoTime(layer.state.position_ms, durationMs())}</small>

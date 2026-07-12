@@ -159,7 +159,7 @@ export function ExternalVideoIoStatusPanel(props: ExternalVideoIoStatusPanelProp
             <span class={props.transportClass(event.stateClass)} title={`${event.detail} / ${event.endpoint}`}>
               <strong>Driver {event.stateLabel}</strong>
               <small>
-                {event.direction} {event.backend} / {event.label}
+                <span data-no-localize>{event.direction} {event.backend} / {event.label}</span>
               </small>
               <small>{event.endpoint}</small>
             </span>

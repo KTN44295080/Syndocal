@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { createEffect, createSignal, For, Show } from "solid-js";
 import type { PatchedFixtureSummary } from "../types";
 
 export type DmxPatchViewMode = "grid" | "list";
@@ -38,15 +38,22 @@ interface DmxPatchGridFragment {
 }
 
 const dmxGridColumnCount = 32;
+const dmxAddressPageSize = 128;
+const dmxAddressPageCount = 512 / dmxAddressPageSize;
 
-const segmentGridFragments = (segments: DmxPatchSegment[]): DmxPatchGridFragment[] =>
+const segmentGridFragments = (segments: DmxPatchSegment[], page: number): DmxPatchGridFragment[] => {
+  const pageStart = page * dmxAddressPageSize + 1;
+  const pageEnd = pageStart + dmxAddressPageSize - 1;
+  return (
   segments.flatMap((segment) => {
     const fragments: DmxPatchGridFragment[] = [];
-    let channel = segment.start;
-    while (channel <= segment.end) {
-      const row = Math.floor((channel - 1) / dmxGridColumnCount) + 1;
-      const column = ((channel - 1) % dmxGridColumnCount) + 1;
-      const rowEnd = Math.min(segment.end, row * dmxGridColumnCount);
+    let channel = Math.max(segment.start, pageStart);
+    const clippedEnd = Math.min(segment.end, pageEnd);
+    while (channel <= clippedEnd) {
+      const localChannel = channel - pageStart;
+      const row = Math.floor(localChannel / dmxGridColumnCount) + 1;
+      const column = (localChannel % dmxGridColumnCount) + 1;
+      const rowEnd = Math.min(clippedEnd, pageStart + row * dmxGridColumnCount - 1);
       fragments.push({
         segment,
         row,
@@ -57,7 +64,9 @@ const segmentGridFragments = (segments: DmxPatchSegment[]): DmxPatchGridFragment
       channel = rowEnd + 1;
     }
     return fragments;
-  });
+  })
+  );
+};
 
 interface DmxPatchMapPanelProps {
   activeUniverse: number;
@@ -78,7 +87,26 @@ interface DmxPatchMapPanelProps {
 }
 
 export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
-  const gridFragments = () => segmentGridFragments(props.activeMap.segments);
+  const [addressPage, setAddressPage] = createSignal(0);
+  const pageStart = () => addressPage() * dmxAddressPageSize + 1;
+  const pageEnd = () => pageStart() + dmxAddressPageSize - 1;
+  const visibleAddressCells = () => props.addressCells.slice(addressPage() * dmxAddressPageSize, (addressPage() + 1) * dmxAddressPageSize);
+  const gridFragments = () => segmentGridFragments(props.activeMap.segments, addressPage());
+
+  createEffect(() => {
+    const selectedId = props.selectedFixtureId;
+    const selectedSegment = props.activeMap.segments.find((segment) => segment.fixture.id === selectedId);
+    if (selectedSegment) {
+      setAddressPage(Math.floor((selectedSegment.start - 1) / dmxAddressPageSize));
+    }
+  });
+
+  const useNextFreeAddress = () => {
+    if (props.nextFreeAddress !== null) {
+      setAddressPage(Math.floor((props.nextFreeAddress - 1) / dmxAddressPageSize));
+    }
+    props.onNextFreeAddress();
+  };
 
   return (
     <>
@@ -86,15 +114,31 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
         <div class="panelHeader">
           <h3>DMX Patch Grid</h3>
           <div class="panelHeaderActions">
-            <button onClick={props.onNextFreeAddress} disabled={props.nextFreeAddress === null}>
+            <button onClick={useNextFreeAddress} disabled={props.nextFreeAddress === null}>
               Next Free
             </button>
             <select
               value={props.activeUniverse}
-              onInput={(event) => props.onUniverse(Number(event.currentTarget.value))}
+              onInput={(event) => {
+                setAddressPage(0);
+                props.onUniverse(Number(event.currentTarget.value));
+              }}
             >
               <For each={props.universeOptions}>
                 {(universeId) => <option value={universeId}>Universe {universeId}</option>}
+              </For>
+            </select>
+            <select
+              aria-label="DMX address page"
+              value={addressPage()}
+              onInput={(event) => setAddressPage(Number(event.currentTarget.value))}
+            >
+              <For each={Array.from({ length: dmxAddressPageCount }, (_, page) => page)}>
+                {(page) => (
+                  <option value={page}>
+                    A{page * dmxAddressPageSize + 1}-{(page + 1) * dmxAddressPageSize}
+                  </option>
+                )}
               </For>
             </select>
             <div class="viewToggle" aria-label="DMX map view">
@@ -125,11 +169,11 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
                     class={segment.fixture.id === props.selectedFixtureId ? "dmxPatchListItem selected" : "dmxPatchListItem"}
                     onClick={() => props.onSelectFixture(segment.fixture)}
                   >
-                    <strong>{segment.fixture.label}</strong>
+                    <strong data-no-localize>{segment.fixture.label}</strong>
                     <span>
                       U{props.activeUniverse} A{segment.start}-{segment.end} / {segment.end - segment.start + 1}ch
                     </span>
-                    <small>{segment.fixture.manufacturer} {segment.fixture.profile_name}</small>
+                    <small data-no-localize>{segment.fixture.manufacturer} {segment.fixture.profile_name}</small>
                   </button>
                 )}
               </For>
@@ -139,8 +183,8 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
             </div>
           }
         >
-          <div class="dmxAddressGrid" role="grid" aria-label={`Universe ${props.activeUniverse} DMX addresses`}>
-            <For each={props.addressCells}>
+          <div class="dmxAddressGrid" role="grid" aria-label={`Universe ${props.activeUniverse} DMX addresses ${pageStart()} to ${pageEnd()}`}>
+            <For each={visibleAddressCells()}>
               {(cell) => (
                 <button
                   class={`dmxAddressCell ${cell.segment ? "occupied" : ""} ${cell.isStart ? "start" : ""} ${
@@ -160,8 +204,8 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
                       : `U${props.activeUniverse} A${cell.channel}`
                   }
                   style={{
-                    "grid-column": `${((cell.channel - 1) % dmxGridColumnCount) + 1}`,
-                    "grid-row": `${Math.floor((cell.channel - 1) / dmxGridColumnCount) + 1}`,
+                    "grid-column": `${((cell.channel - pageStart()) % dmxGridColumnCount) + 1}`,
+                    "grid-row": `${Math.floor((cell.channel - pageStart()) / dmxGridColumnCount) + 1}`,
                   }}
                   onClick={() => props.onAddressCell(cell)}
                   aria-label={
@@ -189,7 +233,7 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
                   }ch`}
                   onClick={() => props.onSelectFixture(fragment.segment.fixture)}
                 >
-                  <strong>{fragment.continuation ? `> ${fragment.segment.fixture.label}` : fragment.segment.fixture.label}</strong>
+                  <strong data-no-localize>{fragment.continuation ? `> ${fragment.segment.fixture.label}` : fragment.segment.fixture.label}</strong>
                   <small>A{fragment.segment.start} / {fragment.segment.end - fragment.segment.start + 1}ch</small>
                 </button>
               )}
@@ -235,7 +279,7 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
                 <For each={map.segments.slice(0, 6)}>
                   {(segment) => (
                     <button onClick={() => props.onSelectFixture(segment.fixture)}>
-                      A{segment.start}-{segment.end} {segment.fixture.label}
+                      <span data-no-localize>A{segment.start}-{segment.end} {segment.fixture.label}</span>
                     </button>
                   )}
                 </For>

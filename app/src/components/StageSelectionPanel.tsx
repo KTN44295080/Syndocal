@@ -423,7 +423,7 @@ export const StageSelectionPanel = (props: StageSelectionPanelProps) => (
         >
           <span class={`mappingTypeGlyph kind-${row.visualKind}`} aria-hidden="true" />
           <span class="mappingTypeCopy">
-            <strong>{row.label}</strong>
+            <strong data-no-localize>{row.label}</strong>
             <small>{row.manufacturer}</small>
             <small>{row.mode}</small>
           </span>
@@ -450,7 +450,7 @@ export const StageSelectionPanel = (props: StageSelectionPanelProps) => (
           title={`${row.output.label} / ${row.stageLabel} / ${row.compositionLabel}`}
           onClick={() => props.setSelectedVideoOutputId(row.output.id)}
         >
-          <strong>{row.output.label}</strong>
+          <strong data-no-localize>{row.output.label}</strong>
           <span>{row.stateLabel}</span>
           <small>{row.compositionLabel}</small>
           <small>Stage {row.stageLabel}</small>
@@ -625,7 +625,7 @@ export const StageSelectionPanel = (props: StageSelectionPanelProps) => (
               >
                 <option value="">Select</option>
                 <For each={videoOutputAspectPresets}>
-                  {(preset) => <option value={preset.label}>{preset.label}</option>}
+                  {(preset) => <option data-no-localize value={preset.label}>{preset.label}</option>}
                 </For>
               </select>
             </label>

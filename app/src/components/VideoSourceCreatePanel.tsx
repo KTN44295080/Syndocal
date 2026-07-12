@@ -15,6 +15,7 @@ interface VideoSourceCreatePanelProps {
   onSetLabel: (label: string) => void;
   onSetPath: (path: string) => void;
   onBrowseSource: () => void | Promise<void>;
+  onImportMultiple: () => void | Promise<void>;
   onAddLayer: () => void | Promise<void>;
 }
 
@@ -36,6 +37,8 @@ export function VideoSourceCreatePanel(props: VideoSourceCreatePanelProps) {
         <select value={props.sourceKind} onInput={(event) => props.onSetSourceKind(event.currentTarget.value as VideoSourceKind)}>
           <option value="File">Video file</option>
           <option value="StillImage">Still image</option>
+          <option value="Camera">Camera input</option>
+          <option value="ScreenCapture">Screen capture</option>
           <option value="Ndi">NDI input</option>
           <option value="Spout">Spout input</option>
           <option value="Syphon">Syphon input</option>
@@ -53,8 +56,16 @@ export function VideoSourceCreatePanel(props: VideoSourceCreatePanelProps) {
           onInput={(event) => props.onSetPath(event.currentTarget.value)}
         />
       </label>
+      <Show when={props.sourceKind === "Camera" || props.sourceKind === "ScreenCapture"}>
+        <p class="fieldHint">
+          FFmpeg capture runs continuously at 1280x720 / 30fps. Use a camera device name, or leave screen capture blank for the primary desktop.
+        </p>
+      </Show>
       <button onClick={() => void props.onBrowseSource()} disabled={!videoSourceCanBrowseFile(props.sourceKind)}>
         Browse Source
+      </button>
+      <button onClick={() => void props.onImportMultiple()} disabled={!videoSourceCanBrowseFile(props.sourceKind)}>
+        Import Multiple
       </button>
       <button class="primary" onClick={() => void props.onAddLayer()}>
         Add Video Layer

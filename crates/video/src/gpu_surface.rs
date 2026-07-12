@@ -8,8 +8,8 @@ use crate::{
     gpu_compositor::{
         blend_mode_index, compositor_params, create_frame_texture, create_gpu_composite_pipelines,
         dispatch_dimensions, gpu_frame_texture_spec, output_mapping_params,
-        requested_video_device_features, write_frame_texture, GpuCompositePipelines,
-        GpuFrameTextureSpec,
+        requested_video_device_features, write_frame_texture, write_mapping_mask_texture,
+        GpuCompositePipelines, GpuFrameTextureSpec,
     },
     PreparedVideoOutput,
 };
@@ -146,7 +146,7 @@ impl NativeGpuFrameBuffers {
         );
         let mapping_params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Syndocal native GPU output mapping params"),
-            size: 80,
+            size: 256,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -346,15 +346,15 @@ fn create_dummy_texture(device: &wgpu::Device) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("Syndocal native GPU unused mapping texture"),
         size: wgpu::Extent3d {
-            width: 1,
-            height: 1,
+            width: 16,
+            height: 16,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     })
 }
@@ -755,6 +755,11 @@ impl GpuSurfacePresenter {
 
         let mapping_params = output_mapping_params(width, height, &prepared.plan.mapping);
         let dimensions = dimensions_uniform(width, height);
+        write_mapping_mask_texture(
+            &self.queue,
+            &gpu_buffers.mapping_dummy_texture,
+            &prepared.plan.mapping,
+        );
         self.queue
             .write_buffer(&gpu_buffers.mapping_params, 0, &mapping_params);
         self.queue

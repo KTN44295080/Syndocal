@@ -8,12 +8,15 @@ license.workspace = true
 default = []
 libav = ["dep:ffmpeg-next"]
 ndi = []
+spout = []
 
 [dependencies]
+bcdec_rs.workspace = true
 ffmpeg-next = { workspace = true, optional = true, default-features = false, features = ["format", "software-scaling"] }
 hap-parser.workspace = true
 image.workspace = true
 mp4.workspace = true
+naga.workspace = true
 pollster.workspace = true
 protocol.workspace = true
 raw-window-handle.workspace = true

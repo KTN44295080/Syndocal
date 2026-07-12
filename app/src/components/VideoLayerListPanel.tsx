@@ -1,7 +1,8 @@
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
-import type { VideoBlendMode, VideoColorAdjust, VideoFxAdjust, VideoLayerState, VideoLayerSummary } from "../types";
+import type { VideoBlendMode, VideoColorAdjust, VideoFxAdjust, VideoIsfEffectSummary, VideoLayerState, VideoLayerSummary } from "../types";
 import { videoSourceMetadataLabel } from "../videoHelpers";
 import { defaultColorAdjust, defaultFxAdjust } from "../videoLayerDefaults";
+import { VideoIsfEffectPanel } from "./VideoIsfEffectPanel";
 
 interface VideoLayerListPanelProps {
   layers: VideoLayerSummary[];
@@ -23,6 +24,9 @@ interface VideoLayerListPanelProps {
     colorPatch: Partial<VideoColorAdjust>,
   ) => void | Promise<void>;
   onSetLayerFx: (layerId: number, state: VideoLayerState, fxPatch: Partial<VideoFxAdjust>) => void | Promise<void>;
+  isfRuntimeError?: string | null;
+  onImportIsf: (layerId: number) => void | Promise<void>;
+  onSetIsfEffect: (layerId: number, effect: VideoIsfEffectSummary | null) => void | Promise<void>;
   onAddCuePoint: (layerId: number) => void | Promise<void>;
   onJumpCuePoint: (layerId: number, cuePointIndex: number) => void | Promise<void>;
   onRemoveCuePoint: (layerId: number, positionMs: number) => void | Promise<void>;
@@ -70,7 +74,7 @@ export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
             return (
             <div class="videoLayerItem">
             <div>
-              <strong class="videoLayerTitle">{layer.label}</strong>
+              <strong class="videoLayerTitle" data-no-localize>{layer.label}</strong>
               <label>
                 Video Layer name
                 <input value={layer.label} onChange={(event) => void props.onSetLayerLabel(layer.id, event.currentTarget.value)} />
@@ -205,6 +209,13 @@ export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
               />
               Solo layer
             </label>
+            <VideoIsfEffectPanel
+              layerId={layer.id}
+              effect={layer.isf_effect}
+              runtimeError={props.isfRuntimeError?.startsWith(`${layer.label}:`) ? props.isfRuntimeError : null}
+              onImport={props.onImportIsf}
+              onSetEffect={props.onSetIsfEffect}
+            />
             <div class="split">
               <label>
                 Opacity

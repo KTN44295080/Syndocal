@@ -114,9 +114,23 @@ export function EngineTelemetryPanel(props: EngineTelemetryPanelProps) {
             {(route) => (
               <div class="timelineItem">
                 <strong>Route {route.index}</strong>
-                <span>{route.attempted ? (route.success ? "OK" : "Failed") : "Idle"}</span>
+                <span>
+                  {route.success
+                    ? "OK"
+                    : route.reconnecting
+                      ? `Reconnecting${route.retry_in_ms != null ? ` ${route.retry_in_ms}ms` : ""}`
+                      : route.attempted
+                        ? "Failed"
+                        : "Idle"}
+                </span>
                 <small>U{route.universe}</small>
                 <small>{route.bytes} bytes</small>
+                <Show when={route.consecutive_failures > 0}>
+                  <small>{route.consecutive_failures} consecutive failure(s)</small>
+                </Show>
+                <Show when={route.reconnect_attempts > 0}>
+                  <small>{route.reconnect_attempts} reconnect attempt(s)</small>
+                </Show>
                 <Show when={route.error}>
                   {(error) => <small class="telemetryError">{error()}</small>}
                 </Show>

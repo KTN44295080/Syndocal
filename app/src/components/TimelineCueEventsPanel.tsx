@@ -32,6 +32,7 @@ interface TimelineCueEventsPanelProps {
   overviewPlayheadX: number;
   audioAnalysis: AudioAnalysisSummary | null;
   audioWaveformPoints: string;
+  audioSpectrumPaths: { bass: string; mid: string; high: string };
   audioBeatMarkers: AudioBeatMarker[];
   snapMode: TimelineSnapMode;
   gridMs: number;
@@ -134,7 +135,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         <div class="panelHeader">
           <h3>Audio</h3>
           <div class="buttonRow">
-            <button onClick={() => void props.onAnalyzeAudio()}>Analyze WAV</button>
+            <button onClick={() => void props.onAnalyzeAudio()}>Analyze Audio</button>
             <button onClick={() => void props.onClearAudio()} disabled={!props.audioAnalysis}>
               Clear
             </button>
@@ -159,6 +160,19 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
                   {(beat) => <line class="beatMarker" x1={beat.x} x2={beat.x} y1="0" y2="36" />}
                 </For>
               </svg>
+              <Show when={analysis().spectrum.length > 0}>
+                <svg class="audioSpectrumView" viewBox="0 0 100 36" role="img" aria-label="Audio FFT bass mid high over time">
+                  <rect x="0" y="0" width="100" height="36" />
+                  <line x1="0" x2="100" y1="12" y2="12" />
+                  <line x1="0" x2="100" y1="24" y2="24" />
+                  <polyline class="bass" points={props.audioSpectrumPaths.bass} />
+                  <polyline class="mid" points={props.audioSpectrumPaths.mid} />
+                  <polyline class="high" points={props.audioSpectrumPaths.high} />
+                  <text x="1" y="5">BASS</text>
+                  <text x="1" y="17">MID</text>
+                  <text x="1" y="29">HIGH</text>
+                </svg>
+              </Show>
               <small>{analysis().path}</small>
             </>
           )}
@@ -201,7 +215,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         <label>
           Cue
           <select value={props.selectedCueId ?? ""} onInput={(event) => props.onSelectedCueId(Number(event.currentTarget.value))} disabled={props.cuesCount === 0}>
-            <For each={props.cueOptions}>{(cue) => <option value={cue.id}>{cue.label}</option>}</For>
+            <For each={props.cueOptions}>{(cue) => <option data-no-localize value={cue.id}>{cue.label}</option>}</For>
           </select>
         </label>
         <label>
@@ -230,7 +244,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
               <div class="timelineItem timelineEventItem">
                 <div>
                   <strong>{event.time_ms} ms</strong>
-                  <span>{event.cue_label} / {event.track}</span>
+                  <span data-no-localize>{event.cue_label} / {event.track}</span>
                 </div>
                 <label>
                   Cue
@@ -242,7 +256,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
                       })
                     }
                   >
-                    <For each={props.cueOptions}>{(cue) => <option value={cue.id}>{cue.label}</option>}</For>
+                    <For each={props.cueOptions}>{(cue) => <option data-no-localize value={cue.id}>{cue.label}</option>}</For>
                   </select>
                 </label>
                 <label>

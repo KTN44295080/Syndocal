@@ -35,7 +35,7 @@ export function LoadedProfileSummaryPanel(props: LoadedProfileSummaryPanelProps)
   return (
     <section class="loadedProfileSummaryPanel">
       <header class="loadedProfileHeader">
-        <strong>{props.profile.manufacturer} {props.profile.name}</strong>
+        <strong data-no-localize>{props.profile.manufacturer} {props.profile.name}</strong>
         <span>{props.profile.dmx_modes.length} mode(s) · {props.profile.geometries.length} geometry node(s)</span>
       </header>
       <Show when={props.profile.warnings.length > 0}>
@@ -119,6 +119,7 @@ export function LoadedProfileSummaryPanel(props: LoadedProfileSummaryPanelProps)
                     {(row) => (
                       <div class="profileGeometryRow">
                         <strong
+                          data-no-localize
                           style={{ "padding-left": `${Math.min(row.depth, 8) * 12}px` }}
                           title={row.geometry.name}
                         >

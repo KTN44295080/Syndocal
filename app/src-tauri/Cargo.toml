@@ -5,23 +5,32 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = ["libav"]
+default = ["libav", "spout"]
 libav = ["video/libav"]
 ndi = ["io/ndi", "video/ndi"]
+spout = ["dep:spout2-rs", "video/spout"]
 
 [build-dependencies]
 tauri-build.workspace = true
 
 [dependencies]
 audio = { path = "../../crates/audio" }
+base64.workspace = true
 engine = { path = "../../crates/engine" }
 gdtf = { path = "../../crates/gdtf" }
 io = { path = "../../crates/io" }
+minisign-verify.workspace = true
 protocol = { path = "../../crates/protocol" }
 rfd.workspace = true
+rodio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri.workspace = true
 tauri-plugin-single-instance.workspace = true
+tauri-plugin-updater.workspace = true
 video.workspace = true
 visualizer.workspace = true
+zip.workspace = true
+
+[target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
+spout2-rs = { workspace = true, optional = true }

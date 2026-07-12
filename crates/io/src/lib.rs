@@ -1,13 +1,16 @@
 use protocol::ClockSource;
 
 pub mod artnet;
+pub mod dmx_input;
 pub mod midi;
 #[cfg(feature = "ndi")]
 pub mod ndi;
 pub mod osc;
+pub mod rdm;
 pub mod remote_ws;
 pub mod sacn;
 pub mod serial_dmx;
+pub mod serial_rdm;
 
 pub(crate) fn parse_clock_source_label(source: &str) -> Option<ClockSource> {
     match source.trim().to_ascii_lowercase().as_str() {

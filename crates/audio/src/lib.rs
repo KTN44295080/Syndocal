@@ -4,7 +4,7 @@ use std::{
     process::Command,
 };
 
-use protocol::{AudioAnalysisSummary, AudioWaveformPoint};
+use protocol::{AudioAnalysisSummary, AudioSpectrumPoint, AudioWaveformPoint};
 use thiserror::Error;
 
 const DEFAULT_WAVEFORM_POINTS: usize = 512;
@@ -12,6 +12,10 @@ const DEFAULT_FFMPEG_SAMPLE_RATE: u32 = 44_100;
 const ONSET_WINDOW_MS: u64 = 50;
 const MIN_BPM: f32 = 60.0;
 const MAX_BPM: f32 = 200.0;
+const SPECTRUM_FFT_SIZE: usize = 1_024;
+const BASS_MAX_HZ: f32 = 250.0;
+const MID_MAX_HZ: f32 = 2_000.0;
+const HIGH_MAX_HZ: f32 = 10_000.0;
 
 #[derive(Debug, Error)]
 pub enum AudioError {
@@ -148,6 +152,7 @@ fn analyze_mono_samples(
     max_points: usize,
 ) -> AudioAnalysisSummary {
     let waveform = build_waveform(&samples, sample_rate, max_points.max(1));
+    let spectrum = build_spectrum(&samples, sample_rate, max_points.max(1));
     let beats = detect_beats(&samples, sample_rate);
     let estimated_bpm = estimate_bpm(&beats);
 
@@ -158,6 +163,7 @@ fn analyze_mono_samples(
         duration_ms,
         estimated_bpm,
         waveform,
+        spectrum,
         beats,
     }
 }
@@ -340,6 +346,162 @@ fn build_waveform(samples: &[f32], sample_rate: u32, max_points: usize) -> Vec<A
         .collect()
 }
 
+fn build_spectrum(samples: &[f32], sample_rate: u32, max_points: usize) -> Vec<AudioSpectrumPoint> {
+    if samples.is_empty() || sample_rate == 0 || max_points == 0 {
+        return Vec::new();
+    }
+    let hop = samples.len().div_ceil(max_points).max(1);
+    let mut points = Vec::with_capacity(samples.len().div_ceil(hop).min(max_points));
+    let mut real = vec![0.0_f32; SPECTRUM_FFT_SIZE];
+    let mut imaginary = vec![0.0_f32; SPECTRUM_FFT_SIZE];
+    for start in (0..samples.len()).step_by(hop).take(max_points) {
+        real.fill(0.0);
+        imaginary.fill(0.0);
+        let available = (samples.len() - start).min(SPECTRUM_FFT_SIZE);
+        for index in 0..available {
+            let phase =
+                std::f32::consts::TAU * index as f32 / (SPECTRUM_FFT_SIZE.saturating_sub(1)) as f32;
+            let hann = 0.5 - 0.5 * phase.cos();
+            real[index] = samples[start + index] * hann;
+        }
+        fft_in_place(&mut real, &mut imaginary);
+        let (bass, mid, high) = spectrum_band_levels(&real, &imaginary, sample_rate);
+        points.push(AudioSpectrumPoint {
+            time_ms: frames_to_ms(start, sample_rate),
+            bass,
+            mid,
+            high,
+        });
+    }
+    let peak = points.iter().fold(0.0_f32, |peak, point| {
+        peak.max(point.bass).max(point.mid).max(point.high)
+    });
+    if peak > f32::EPSILON {
+        for point in &mut points {
+            point.bass = (point.bass / peak).clamp(0.0, 1.0);
+            point.mid = (point.mid / peak).clamp(0.0, 1.0);
+            point.high = (point.high / peak).clamp(0.0, 1.0);
+        }
+    }
+    points
+}
+
+pub fn analyze_live_spectrum(samples: &[f32], sample_rate: u32) -> AudioSpectrumPoint {
+    if samples.is_empty() || sample_rate == 0 {
+        return AudioSpectrumPoint {
+            time_ms: 0,
+            bass: 0.0,
+            mid: 0.0,
+            high: 0.0,
+        };
+    }
+    let mut real = vec![0.0_f32; SPECTRUM_FFT_SIZE];
+    let mut imaginary = vec![0.0_f32; SPECTRUM_FFT_SIZE];
+    let available = samples.len().min(SPECTRUM_FFT_SIZE);
+    let source_start = samples.len().saturating_sub(available);
+    for index in 0..available {
+        let phase =
+            std::f32::consts::TAU * index as f32 / (SPECTRUM_FFT_SIZE.saturating_sub(1)) as f32;
+        let hann = 0.5 - 0.5 * phase.cos();
+        real[index] = samples[source_start + index] * hann;
+    }
+    fft_in_place(&mut real, &mut imaginary);
+    let (bass, mid, high) = spectrum_band_levels(&real, &imaginary, sample_rate);
+    let peak = bass.max(mid).max(high);
+    let rms = (samples[source_start..]
+        .iter()
+        .map(|sample| sample * sample)
+        .sum::<f32>()
+        / available.max(1) as f32)
+        .sqrt();
+    let envelope = (rms * 6.0).clamp(0.0, 1.0);
+    let normalize = |level: f32| {
+        if peak <= f32::EPSILON {
+            0.0
+        } else {
+            (level / peak * envelope).clamp(0.0, 1.0)
+        }
+    };
+    AudioSpectrumPoint {
+        time_ms: 0,
+        bass: normalize(bass),
+        mid: normalize(mid),
+        high: normalize(high),
+    }
+}
+
+fn fft_in_place(real: &mut [f32], imaginary: &mut [f32]) {
+    assert_eq!(real.len(), imaginary.len());
+    assert!(real.len().is_power_of_two());
+    let size = real.len();
+    let mut reverse = 0_usize;
+    for index in 1..size {
+        let mut bit = size >> 1;
+        while reverse & bit != 0 {
+            reverse ^= bit;
+            bit >>= 1;
+        }
+        reverse ^= bit;
+        if index < reverse {
+            real.swap(index, reverse);
+            imaginary.swap(index, reverse);
+        }
+    }
+    let mut length = 2;
+    while length <= size {
+        let angle = -std::f32::consts::TAU / length as f32;
+        let step_real = angle.cos();
+        let step_imaginary = angle.sin();
+        for block in (0..size).step_by(length) {
+            let mut twiddle_real = 1.0_f32;
+            let mut twiddle_imaginary = 0.0_f32;
+            for offset in 0..length / 2 {
+                let even = block + offset;
+                let odd = even + length / 2;
+                let odd_real = real[odd] * twiddle_real - imaginary[odd] * twiddle_imaginary;
+                let odd_imaginary = real[odd] * twiddle_imaginary + imaginary[odd] * twiddle_real;
+                real[odd] = real[even] - odd_real;
+                imaginary[odd] = imaginary[even] - odd_imaginary;
+                real[even] += odd_real;
+                imaginary[even] += odd_imaginary;
+                let next_real = twiddle_real * step_real - twiddle_imaginary * step_imaginary;
+                twiddle_imaginary = twiddle_real * step_imaginary + twiddle_imaginary * step_real;
+                twiddle_real = next_real;
+            }
+        }
+        length *= 2;
+    }
+}
+
+fn spectrum_band_levels(real: &[f32], imaginary: &[f32], sample_rate: u32) -> (f32, f32, f32) {
+    let mut sums = [0.0_f32; 3];
+    let mut counts = [0_u32; 3];
+    for bin in 1..real.len() / 2 {
+        let frequency = bin as f32 * sample_rate as f32 / real.len() as f32;
+        let band = if frequency <= BASS_MAX_HZ {
+            Some(0)
+        } else if frequency <= MID_MAX_HZ {
+            Some(1)
+        } else if frequency <= HIGH_MAX_HZ {
+            Some(2)
+        } else {
+            None
+        };
+        if let Some(band) = band {
+            sums[band] += real[bin] * real[bin] + imaginary[bin] * imaginary[bin];
+            counts[band] += 1;
+        }
+    }
+    let level = |band: usize| {
+        if counts[band] == 0 {
+            0.0
+        } else {
+            (sums[band] / counts[band] as f32).sqrt()
+        }
+    };
+    (level(0), level(1), level(2))
+}
+
 fn detect_beats(samples: &[f32], sample_rate: u32) -> Vec<u64> {
     if samples.is_empty() || sample_rate == 0 {
         return Vec::new();
@@ -482,6 +644,50 @@ mod tests {
             decode_f32le_mono_samples(b"abc"),
             Err(AudioError::InvalidDecodedAudio)
         ));
+    }
+
+    #[test]
+    fn fft_spectrum_separates_bass_mid_and_high_frequency_energy() {
+        let sample_rate = 44_100;
+        let tone = |frequency: f32| {
+            (0..sample_rate as usize)
+                .map(|index| {
+                    (std::f32::consts::TAU * frequency * index as f32 / sample_rate as f32).sin()
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let bass = build_spectrum(&tone(100.0), sample_rate, 8);
+        let mid = build_spectrum(&tone(1_000.0), sample_rate, 8);
+        let high = build_spectrum(&tone(5_000.0), sample_rate, 8);
+
+        assert!(bass
+            .iter()
+            .all(|point| point.bass > point.mid && point.bass > point.high));
+        assert!(mid
+            .iter()
+            .all(|point| point.mid > point.bass && point.mid > point.high));
+        assert!(high
+            .iter()
+            .all(|point| point.high > point.bass && point.high > point.mid));
+        assert!(bass.iter().chain(&mid).chain(&high).all(|point| {
+            [point.bass, point.mid, point.high]
+                .into_iter()
+                .all(|level| level.is_finite() && (0.0..=1.0).contains(&level))
+        }));
+    }
+
+    #[test]
+    fn live_spectrum_is_silence_gated_and_separates_a_mid_tone() {
+        let silence = analyze_live_spectrum(&vec![0.0; SPECTRUM_FFT_SIZE], 48_000);
+        assert_eq!((silence.bass, silence.mid, silence.high), (0.0, 0.0, 0.0));
+        let tone = (0..SPECTRUM_FFT_SIZE)
+            .map(|index| (std::f32::consts::TAU * 1_000.0 * index as f32 / 48_000.0).sin() * 0.5)
+            .collect::<Vec<_>>();
+        let spectrum = analyze_live_spectrum(&tone, 48_000);
+        assert!(spectrum.mid > 0.9);
+        assert!(spectrum.mid > spectrum.bass * 4.0);
+        assert!(spectrum.mid > spectrum.high * 4.0);
     }
 
     fn test_wav_with_clicks(bpm: f32, duration_ms: u64, beats: usize) -> Vec<u8> {

@@ -3,6 +3,8 @@
 import type {
   AutomationInterpolation,
   CueSummary,
+  CueIfcbTiming,
+  CuePartSummary,
   TimelineAutomationSummary,
   TimelineCueEventSummary,
   TimelineTrackKind,
@@ -23,8 +25,17 @@ export interface VideoOutputConfigDraft {
 }
 
 export interface CueMetadataDraft {
+  cue_number: string;
   label: string;
   fade_ms: number;
+  pre_wait_ms: number;
+  follow_ms: number | null;
+  ifcb_timing: CueIfcbTiming;
+  parts: CuePartSummary[];
+  mark: boolean;
+  mib_fixture_ids: number[];
+  tracking: boolean;
+  notes: string;
 }
 
 export interface TimelineEventDraft {
@@ -64,8 +75,31 @@ export const videoOutputConfigDraftFromSummary = (output: VideoOutputSummary): V
 });
 
 export const cueMetadataDraftFromSummary = (cue: CueSummary): CueMetadataDraft => ({
+  cue_number: cue.cue_number || String(cue.id),
   label: cue.label,
   fade_ms: cue.fade_ms,
+  pre_wait_ms: cue.pre_wait_ms ?? 0,
+  follow_ms: cue.follow_ms ?? null,
+  ifcb_timing: {
+    intensity_fade_ms: cue.ifcb_timing?.intensity_fade_ms ?? null,
+    intensity_delay_ms: cue.ifcb_timing?.intensity_delay_ms ?? 0,
+    focus_fade_ms: cue.ifcb_timing?.focus_fade_ms ?? null,
+    focus_delay_ms: cue.ifcb_timing?.focus_delay_ms ?? 0,
+    color_fade_ms: cue.ifcb_timing?.color_fade_ms ?? null,
+    color_delay_ms: cue.ifcb_timing?.color_delay_ms ?? 0,
+    beam_fade_ms: cue.ifcb_timing?.beam_fade_ms ?? null,
+    beam_delay_ms: cue.ifcb_timing?.beam_delay_ms ?? 0,
+  },
+  parts: (cue.parts ?? []).map((part) => ({
+    ...part,
+    fixture_ids: [...part.fixture_ids],
+    video_layer_ids: [...(part.video_layer_ids ?? [])],
+    video_output_ids: [...(part.video_output_ids ?? [])],
+  })),
+  mark: cue.mark ?? false,
+  mib_fixture_ids: [...(cue.mib_fixture_ids ?? [])],
+  tracking: cue.tracking ?? true,
+  notes: cue.notes ?? "",
 });
 
 export const timelineEventDraftFromSummary = (event: TimelineCueEventSummary): TimelineEventDraft => ({

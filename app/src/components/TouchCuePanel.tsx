@@ -35,7 +35,9 @@ export function TouchCuePanel(props: TouchCuePanelProps) {
     <section class="panel touchPanel touchCuePanel">
       <div class="panelHeader">
         <h2>Touch Cues</h2>
-        <span>{props.activeCue?.label ?? "Standby"}</span>
+        <Show when={props.activeCue} fallback={<span>Standby</span>}>
+          {(cue) => <span data-no-localize>{cue().label}</span>}
+        </Show>
       </div>
       <div class="touchGoDeck">
         <button onClick={() => void props.onTriggerPreviousCue()} disabled={props.snapshot.cues.length === 0}>
@@ -54,11 +56,15 @@ export function TouchCuePanel(props: TouchCuePanelProps) {
       <div class="touchCueStatus">
         <div>
           <span>Active</span>
-          <strong>{props.activeCue?.label ?? "None"}</strong>
+          <Show when={props.activeCue} fallback={<strong>None</strong>}>
+            {(cue) => <strong data-no-localize>{cue().label}</strong>}
+          </Show>
         </div>
         <div>
           <span>Next</span>
-          <strong>{props.nextCue?.label ?? "None"}</strong>
+          <Show when={props.nextCue} fallback={<strong>None</strong>}>
+            {(cue) => <strong data-no-localize>{cue().label}</strong>}
+          </Show>
         </div>
       </div>
       <div class="liveCuePadHeader">
@@ -80,7 +86,9 @@ export function TouchCuePanel(props: TouchCuePanelProps) {
               }}
             >
               <span>{pad.slot}</span>
-              <strong>{pad.cue?.label ?? "Empty"}</strong>
+              <Show when={pad.cue} fallback={<strong>Empty</strong>}>
+                {(cue) => <strong data-no-localize>{cue().label}</strong>}
+              </Show>
               <small>{pad.cue ? `${pad.cue.fade_ms} ms` : "-"}</small>
             </button>
           )}

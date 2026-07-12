@@ -136,6 +136,34 @@ impl PreferredVideoFrameDecoder {
             }
         }
     }
+
+    fn decode_general_file(
+        &mut self,
+        request: &VideoFrameRequest,
+        primary_error: Option<VideoDecodeError>,
+    ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        if request.source.kind != VideoSourceKind::File {
+            self.diagnostics.deferred_requests =
+                self.diagnostics.deferred_requests.saturating_add(1);
+            return match primary_error {
+                Some(error) => Err(error),
+                None => Ok(None),
+            };
+        }
+        self.diagnostics.libav_requests = self.diagnostics.libav_requests.saturating_add(1);
+        match self.libav.decode_frame(request) {
+            Ok(Some(frame)) => {
+                self.diagnostics.libav_successes =
+                    self.diagnostics.libav_successes.saturating_add(1);
+                Ok(Some(frame))
+            }
+            Ok(None) => self.decode_cli_fallback(request, primary_error),
+            Err(libav_error) => {
+                self.diagnostics.libav_failures = self.diagnostics.libav_failures.saturating_add(1);
+                self.decode_cli_fallback(request, primary_error.or(Some(libav_error)))
+            }
+        }
+    }
 }
 
 impl VideoFrameDecoder for PreferredVideoFrameDecoder {
@@ -165,31 +193,11 @@ impl VideoFrameDecoder for PreferredVideoFrameDecoder {
                 }
                 Err(error) => {
                     self.diagnostics.hap_failures = self.diagnostics.hap_failures.saturating_add(1);
-                    self.diagnostics.decode_failures =
-                        self.diagnostics.decode_failures.saturating_add(1);
-                    Err(error)
+                    self.decode_general_file(request, Some(error))
                 }
             };
         }
-        if request.source.kind != VideoSourceKind::File {
-            self.diagnostics.deferred_requests =
-                self.diagnostics.deferred_requests.saturating_add(1);
-            return Ok(None);
-        }
-
-        self.diagnostics.libav_requests = self.diagnostics.libav_requests.saturating_add(1);
-        match self.libav.decode_frame(request) {
-            Ok(Some(frame)) => {
-                self.diagnostics.libav_successes =
-                    self.diagnostics.libav_successes.saturating_add(1);
-                Ok(Some(frame))
-            }
-            Ok(None) => self.decode_cli_fallback(request, None),
-            Err(libav_error) => {
-                self.diagnostics.libav_failures = self.diagnostics.libav_failures.saturating_add(1);
-                self.decode_cli_fallback(request, Some(libav_error))
-            }
-        }
+        self.decode_general_file(request, None)
     }
 }
 
@@ -335,29 +343,51 @@ impl HapMovFrameDecoder {
 
         let parsed = hap_parser::parse_frame(&sample.bytes)
             .map_err(|error| decode_error(request, format!("invalid HAP frame: {error}")))?;
-        if parsed.alpha.is_some() {
-            return Err(decode_error(
+        let pts_ms = sample.start_time.saturating_mul(1000) / u64::from(movie.timescale);
+        let duration_ms =
+            (u64::from(sample.duration).saturating_mul(1000) / u64::from(movie.timescale)).max(1);
+        if let Some(alpha) = parsed.alpha {
+            if parsed.format != TextureFormat::YcoCgDxt5
+                || alpha.format != TextureFormat::AlphaRgtc1
+            {
+                return Err(decode_error(
+                    request,
+                    "HAP dual-plane frame must contain YCoCg DXT5 color and RGTC1 alpha",
+                ));
+            }
+            let expected_color_len = parsed.format.frame_size(movie.width, movie.height);
+            let expected_alpha_len = alpha.format.frame_size(movie.width, movie.height);
+            if parsed.data.len() != expected_color_len || alpha.data.len() != expected_alpha_len {
+                return Err(decode_error(
+                    request,
+                    format!(
+                        "HAP Q Alpha planes have color/alpha lengths {}/{}, expected {expected_color_len}/{expected_alpha_len}",
+                        parsed.data.len(),
+                        alpha.data.len()
+                    ),
+                ));
+            }
+            let compressed = VideoFrame {
+                layer_id: request.layer_id,
+                width: movie.width,
+                height: movie.height,
+                pts_ms,
+                duration_ms,
+                format: VideoPixelFormat::YcoCgDxt5,
+                data: parsed.data,
+            };
+            let mut rgba = super::convert_frame_to_rgba8(&compressed).map_err(|error| {
+                decode_error(request, format!("HAP Q decode failed: {error:?}"))
+            })?;
+            apply_rgtc1_alpha(
+                &mut rgba.data,
+                &alpha.data,
+                movie.width,
+                movie.height,
                 request,
-                "HAP Q Alpha dual-plane frames are not supported by this decoder stage",
-            ));
+            )?;
+            return Ok(rgba);
         }
-        let format = match parsed.format {
-            TextureFormat::RgbDxt1 => VideoPixelFormat::Dxt1,
-            TextureFormat::RgbaDxt5 => VideoPixelFormat::Dxt5,
-            TextureFormat::YcoCgDxt5 => VideoPixelFormat::YcoCgDxt5,
-            TextureFormat::AlphaRgtc1 => {
-                return Err(decode_error(
-                    request,
-                    "HAP alpha-only BC4 frames are not supported by this decoder stage",
-                ));
-            }
-            TextureFormat::RgbaBc7 => {
-                return Err(decode_error(
-                    request,
-                    "HAP R BC7 frames are not supported by this decoder stage",
-                ));
-            }
-        };
         let expected_len = parsed.format.frame_size(movie.width, movie.height);
         if parsed.data.len() != expected_len {
             return Err(decode_error(
@@ -370,19 +400,90 @@ impl HapMovFrameDecoder {
                 ),
             ));
         }
+        if parsed.format == TextureFormat::RgbaBc7 {
+            return Ok(VideoFrame {
+                layer_id: request.layer_id,
+                width: movie.width,
+                height: movie.height,
+                pts_ms,
+                duration_ms,
+                format: VideoPixelFormat::Bc7,
+                data: parsed.data,
+            });
+        }
+        let format = match parsed.format {
+            TextureFormat::RgbDxt1 => VideoPixelFormat::Dxt1,
+            TextureFormat::RgbaDxt5 => VideoPixelFormat::Dxt5,
+            TextureFormat::YcoCgDxt5 => VideoPixelFormat::YcoCgDxt5,
+            TextureFormat::AlphaRgtc1 => {
+                return Err(decode_error(
+                    request,
+                    "HAP alpha-only BC4 frames are not supported by this decoder stage",
+                ));
+            }
+            TextureFormat::RgbaBc7 => unreachable!("BC7 returned as RGBA8 above"),
+        };
 
         Ok(VideoFrame {
             layer_id: request.layer_id,
             width: movie.width,
             height: movie.height,
-            pts_ms: sample.start_time.saturating_mul(1000) / u64::from(movie.timescale),
-            duration_ms: (u64::from(sample.duration).saturating_mul(1000)
-                / u64::from(movie.timescale))
-            .max(1),
+            pts_ms,
+            duration_ms,
             format,
             data: parsed.data,
         })
     }
+}
+
+fn apply_rgtc1_alpha(
+    rgba: &mut [u8],
+    blocks: &[u8],
+    width: u32,
+    height: u32,
+    request: &VideoFrameRequest,
+) -> Result<(), VideoDecodeError> {
+    let blocks_x = width.div_ceil(4) as usize;
+    let blocks_y = height.div_ceil(4) as usize;
+    let expected_len = blocks_x
+        .checked_mul(blocks_y)
+        .and_then(|count| count.checked_mul(8))
+        .ok_or_else(|| decode_error(request, "HAP Q Alpha dimensions overflow"))?;
+    if width == 0
+        || height == 0
+        || blocks.len() != expected_len
+        || rgba.len() != width as usize * height as usize * 4
+    {
+        return Err(decode_error(
+            request,
+            "HAP Q Alpha BC4 plane size does not match the color frame",
+        ));
+    }
+    for (block_index, block) in blocks.chunks_exact(8).enumerate() {
+        let block_x = block_index % blocks_x;
+        let block_y = block_index / blocks_x;
+        let palette = super::dxt5_alpha_palette(block[0], block[1]);
+        let mut indices = 0_u64;
+        for (index, byte) in block[2..8].iter().enumerate() {
+            indices |= u64::from(*byte) << (index * 8);
+        }
+        for local_y in 0..4_usize {
+            let y = block_y * 4 + local_y;
+            if y >= height as usize {
+                continue;
+            }
+            for local_x in 0..4_usize {
+                let x = block_x * 4 + local_x;
+                if x >= width as usize {
+                    continue;
+                }
+                let pixel_index = local_y * 4 + local_x;
+                let alpha_index = ((indices >> (pixel_index * 3)) & 0x07) as usize;
+                rgba[(y * width as usize + x) * 4 + 3] = palette[alpha_index];
+            }
+        }
+    }
+    Ok(())
 }
 
 impl VideoFrameDecoder for HapMovFrameDecoder {
@@ -464,7 +565,12 @@ mod tests {
         bytes
     }
 
-    fn write_hap_movie(frames: &[Vec<u8>], width: u16, height: u16) -> PathBuf {
+    fn write_hap_movie_with_fourcc(
+        frames: &[Vec<u8>],
+        width: u16,
+        height: u16,
+        sample_entry: [u8; 4],
+    ) -> PathBuf {
         let config = Mp4Config {
             major_brand: FourCC::from(*b"isom"),
             minor_version: 512,
@@ -499,7 +605,7 @@ mod tests {
         let mut replacements = 0;
         for index in 0..bytes.len().saturating_sub(3) {
             if bytes[index..index + 4] == *b"avc1" {
-                bytes[index..index + 4].copy_from_slice(b"Hap1");
+                bytes[index..index + 4].copy_from_slice(&sample_entry);
                 replacements += 1;
             }
         }
@@ -517,6 +623,38 @@ mod tests {
         path
     }
 
+    fn write_hap_movie(frames: &[Vec<u8>], width: u16, height: u16) -> PathBuf {
+        write_hap_movie_with_fourcc(frames, width, height, *b"Hap1")
+    }
+
+    fn write_bits(block: &mut [u8; 16], cursor: &mut usize, value: u32, bit_count: usize) {
+        for bit in 0..bit_count {
+            if value & (1 << bit) != 0 {
+                block[*cursor / 8] |= 1 << (*cursor % 8);
+            }
+            *cursor += 1;
+        }
+    }
+
+    fn solid_bc7_mode6(rgba: [u8; 4]) -> [u8; 16] {
+        assert!(rgba.iter().all(|channel| channel & 1 == rgba[0] & 1));
+        let mut block = [0_u8; 16];
+        let mut cursor = 0;
+        write_bits(&mut block, &mut cursor, 1 << 6, 7);
+        for channel in rgba {
+            write_bits(&mut block, &mut cursor, u32::from(channel >> 1), 7);
+            write_bits(&mut block, &mut cursor, u32::from(channel >> 1), 7);
+        }
+        write_bits(&mut block, &mut cursor, u32::from(rgba[0] & 1), 1);
+        write_bits(&mut block, &mut cursor, u32::from(rgba[0] & 1), 1);
+        write_bits(&mut block, &mut cursor, 0, 3);
+        for _ in 1..16 {
+            write_bits(&mut block, &mut cursor, 0, 4);
+        }
+        assert_eq!(cursor, 128);
+        block
+    }
+
     fn request(path: &Path, position_ms: u64) -> VideoFrameRequest {
         VideoFrameRequest {
             layer_id: 7,
@@ -531,6 +669,7 @@ mod tests {
                     width: Some(4),
                     height: Some(4),
                     frame_rate: Some(25.0),
+                    has_audio: false,
                 }),
             },
             position_ms,
@@ -576,6 +715,68 @@ mod tests {
     }
 
     #[test]
+    fn decodes_hap_q_alpha_color_and_bc4_plane_to_rgba() {
+        let color = hap_section(0xAF, &[0; 16]);
+        let alpha = hap_section(0xA1, &[64, 0, 0, 0, 0, 0, 0, 0]);
+        let mut planes = color;
+        planes.extend_from_slice(&alpha);
+        let path = write_hap_movie(&[hap_section(0x0D, &planes)], 4, 4);
+        let mut decoder = HapMovFrameDecoder::new();
+
+        let frame = decoder.decode_frame(&request(&path, 0)).unwrap().unwrap();
+
+        assert_eq!(frame.format, VideoPixelFormat::Rgba8);
+        assert_eq!(frame.data.len(), 4 * 4 * 4);
+        assert!(frame.data.chunks_exact(4).all(|pixel| pixel[3] == 64));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn decodes_bc7_blocks_to_cropped_rgba8() {
+        let color = [200, 100, 50, 128];
+        let blocks = solid_bc7_mode6(color).repeat(2);
+        let frame = VideoFrame {
+            layer_id: 7,
+            width: 5,
+            height: 3,
+            pts_ms: 0,
+            duration_ms: 40,
+            format: VideoPixelFormat::Bc7,
+            data: blocks.clone(),
+        };
+
+        let rgba = super::super::convert_frame_to_rgba8(&frame).unwrap();
+
+        assert_eq!(rgba.data.len(), 5 * 3 * 4);
+        assert!(rgba.data.chunks_exact(4).all(|pixel| pixel == color));
+        let invalid = VideoFrame {
+            data: blocks[..16].to_vec(),
+            ..frame
+        };
+        assert!(super::super::convert_frame_to_rgba8(&invalid).is_err());
+    }
+
+    #[test]
+    fn decodes_hap_r_bc7_movie_in_process_with_alpha() {
+        let color = [200, 100, 50, 128];
+        let path = write_hap_movie_with_fourcc(
+            &[hap_section(0xAC, &solid_bc7_mode6(color))],
+            4,
+            4,
+            *b"Hap7",
+        );
+        let mut decoder = HapMovFrameDecoder::new();
+
+        let frame = decoder.decode_frame(&request(&path, 0)).unwrap().unwrap();
+
+        assert_eq!(frame.format, VideoPixelFormat::Bc7);
+        assert_eq!(frame.data.len(), 16);
+        let rgba = super::super::convert_frame_to_rgba8(&frame).unwrap();
+        assert!(rgba.data.chunks_exact(4).all(|pixel| pixel == color));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn ignores_non_hap_sources() {
         let mut request = request(Path::new("clip.mp4"), 0);
         request.source.codec = Some("h264".to_string());
@@ -608,5 +809,25 @@ mod tests {
             }
         );
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn preferred_decoder_falls_back_when_in_process_hap_decode_fails() {
+        let missing_media =
+            std::env::temp_dir().join(format!("syndocal-missing-hap-media-{}", std::process::id()));
+        let missing_ffmpeg =
+            std::env::temp_dir().join(format!("syndocal-missing-ffmpeg-{}", std::process::id()));
+        let mut decoder =
+            PreferredVideoFrameDecoder::new(FfmpegCliFrameDecoder::new(missing_ffmpeg));
+
+        assert!(decoder.decode_frame(&request(&missing_media, 0)).is_err());
+
+        let diagnostics = decoder.diagnostics();
+        assert_eq!(diagnostics.hap_requests, 1);
+        assert_eq!(diagnostics.hap_failures, 1);
+        assert_eq!(diagnostics.libav_requests, 1);
+        assert_eq!(diagnostics.cli_fallback_requests, 1);
+        assert_eq!(diagnostics.cli_fallback_failures, 1);
+        assert_eq!(diagnostics.decode_failures, 1);
     }
 }

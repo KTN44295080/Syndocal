@@ -5,7 +5,8 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     convert_frame_to_rgba8, finite_or, sanitize_color_adjust, sanitize_fx_adjust,
-    video_output_mapping_scale, CompositionPlan, CpuCompositeError, VideoFrame, VideoPixelFormat,
+    video_bitmap_mask_luma, video_output_mapping_scale, CompositionPlan, CpuCompositeError,
+    VideoFrame, VideoPixelFormat,
 };
 
 const WORKGROUP_WIDTH: u32 = 8;
@@ -145,10 +146,22 @@ pub(crate) fn gpu_frame_texture_spec(
             2,
             dxt5_expected_len,
         ),
+        VideoPixelFormat::Bc7 => (
+            wgpu::TextureFormat::Bc7RgbaUnorm,
+            padded_width,
+            padded_height,
+            frame.width.div_ceil(4).checked_mul(16),
+            Some(frame.height.div_ceil(4)),
+            1,
+            dxt5_expected_len,
+        ),
     };
     if matches!(
         frame.format,
-        VideoPixelFormat::Dxt1 | VideoPixelFormat::Dxt5 | VideoPixelFormat::YcoCgDxt5
+        VideoPixelFormat::Dxt1
+            | VideoPixelFormat::Dxt5
+            | VideoPixelFormat::YcoCgDxt5
+            | VideoPixelFormat::Bc7
     ) && !bc_supported
     {
         return Err(CpuCompositeError::UnsupportedFrameFormat {
@@ -200,6 +213,72 @@ pub(crate) fn create_frame_texture(
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     (texture, view)
+}
+
+pub(crate) fn create_mapping_mask_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    mapping: &VideoOutputMapping,
+    label: &'static str,
+) -> wgpu::Texture {
+    const DIMENSION: u32 = 16;
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: DIMENSION,
+            height: DIMENSION,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    write_mapping_mask_texture(queue, &texture, mapping);
+    texture
+}
+
+pub(crate) fn write_mapping_mask_texture(
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    mapping: &VideoOutputMapping,
+) {
+    const DIMENSION: usize = 16;
+    const PADDED_BYTES_PER_ROW: usize = 256;
+    let enabled = mapping.bitmap_mask_width > 0 && mapping.bitmap_mask_height > 0;
+    let mut data = vec![255_u8; PADDED_BYTES_PER_ROW * DIMENSION];
+    for y in 0..DIMENSION {
+        for x in 0..DIMENSION {
+            let luma = if enabled {
+                video_bitmap_mask_luma(mapping, x, y)
+            } else {
+                255
+            };
+            let offset = y * PADDED_BYTES_PER_ROW + x * 4;
+            data[offset..offset + 4].copy_from_slice(&[luma, luma, luma, 255]);
+        }
+    }
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &data,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(PADDED_BYTES_PER_ROW as u32),
+            rows_per_image: Some(DIMENSION as u32),
+        },
+        wgpu::Extent3d {
+            width: DIMENSION as u32,
+            height: DIMENSION as u32,
+            depth_or_array_layers: 1,
+        },
+    );
 }
 
 pub(crate) fn write_frame_texture(
@@ -541,21 +620,13 @@ impl GpuCompositor {
                 contents: &params,
                 usage: wgpu::BufferUsages::UNIFORM,
             });
-        let dummy_texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Syndocal video GPU output mapping unused texture"),
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let dummy_texture_view = dummy_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mask_texture = create_mapping_mask_texture(
+            &self.device,
+            &self.queue,
+            mapping,
+            "Syndocal video GPU output bitmap mask",
+        );
+        let mask_texture_view = mask_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Syndocal video GPU output mapping bind group"),
             layout: &self.pipelines.bind_group_layout,
@@ -574,7 +645,7 @@ impl GpuCompositor {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&dummy_texture_view),
+                    resource: wgpu::BindingResource::TextureView(&mask_texture_view),
                 },
             ],
         });
@@ -715,10 +786,10 @@ pub(crate) fn output_mapping_params(
     width: u32,
     height: u32,
     mapping: &VideoOutputMapping,
-) -> [u8; 80] {
+) -> [u8; 256] {
     let output_aspect = (width as f32 / height as f32).max(0.001);
     let (scale_x, scale_y) = video_output_mapping_scale(mapping, output_aspect);
-    let values = [
+    let mut values = vec![
         width,
         height,
         0,
@@ -745,8 +816,44 @@ pub(crate) fn output_mapping_params(
         finite_or(mapping.corner_bottom_left_y, 0.0).to_bits(),
         finite_or(mapping.corner_bottom_right_x, 0.0).to_bits(),
         finite_or(mapping.corner_bottom_right_y, 0.0).to_bits(),
+        finite_or(mapping.edge_blend_left, 0.0)
+            .clamp(0.0, 1.0)
+            .to_bits(),
+        finite_or(mapping.edge_blend_right, 0.0)
+            .clamp(0.0, 1.0)
+            .to_bits(),
+        finite_or(mapping.edge_blend_top, 0.0)
+            .clamp(0.0, 1.0)
+            .to_bits(),
+        finite_or(mapping.edge_blend_bottom, 0.0)
+            .clamp(0.0, 1.0)
+            .to_bits(),
+        finite_or(mapping.edge_blend_gamma, 2.2)
+            .clamp(0.1, 8.0)
+            .to_bits(),
+        finite_or(mapping.black_level, 0.0)
+            .clamp(0.0, 1.0)
+            .to_bits(),
+        f32::from(mapping.bitmap_mask_width.min(16)).to_bits(),
+        f32::from(mapping.bitmap_mask_height.min(16)).to_bits(),
     ];
-    let mut bytes = [0; 80];
+    values.extend_from_slice(&[
+        f32::from(mapping.mask_point_count.min(8)).to_bits(),
+        (if mapping.mask_invert { 1.0_f32 } else { 0.0 }).to_bits(),
+        finite_or(mapping.mask_softness, 0.0)
+            .clamp(0.0, 0.5)
+            .to_bits(),
+        0,
+    ]);
+    for point in mapping.mask_points {
+        values.extend_from_slice(&[
+            finite_or(point.x, 0.0).clamp(0.0, 1.0).to_bits(),
+            finite_or(point.y, 0.0).clamp(0.0, 1.0).to_bits(),
+            0,
+            0,
+        ]);
+    }
+    let mut bytes = [0; 256];
     for (index, value) in values.into_iter().enumerate() {
         let start = index * 4;
         bytes[start..start + 4].copy_from_slice(&value.to_le_bytes());
@@ -757,7 +864,7 @@ pub(crate) fn output_mapping_params(
 #[cfg(test)]
 mod tests {
     use protocol::{
-        VideoLayerId, VideoOutputAspectMode, VideoOutputMapping, VideoSourceKind,
+        VideoLayerId, VideoMaskPoint, VideoOutputAspectMode, VideoOutputMapping, VideoSourceKind,
         VideoSourceSummary,
     };
 
@@ -838,6 +945,34 @@ mod tests {
         }
     }
 
+    fn write_bits(block: &mut [u8; 16], cursor: &mut usize, value: u32, bit_count: usize) {
+        for bit in 0..bit_count {
+            if value & (1 << bit) != 0 {
+                block[*cursor / 8] |= 1 << (*cursor % 8);
+            }
+            *cursor += 1;
+        }
+    }
+
+    fn solid_bc7_mode6(rgba: [u8; 4]) -> [u8; 16] {
+        assert!(rgba.iter().all(|channel| channel & 1 == rgba[0] & 1));
+        let mut block = [0_u8; 16];
+        let mut cursor = 0;
+        write_bits(&mut block, &mut cursor, 1 << 6, 7);
+        for channel in rgba {
+            write_bits(&mut block, &mut cursor, u32::from(channel >> 1), 7);
+            write_bits(&mut block, &mut cursor, u32::from(channel >> 1), 7);
+        }
+        write_bits(&mut block, &mut cursor, u32::from(rgba[0] & 1), 1);
+        write_bits(&mut block, &mut cursor, u32::from(rgba[0] & 1), 1);
+        write_bits(&mut block, &mut cursor, 0, 3);
+        for _ in 1..16 {
+            write_bits(&mut block, &mut cursor, 0, 4);
+        }
+        assert_eq!(cursor, 128);
+        block
+    }
+
     fn assert_gpu_matches_cpu(
         compositor: &GpuCompositor,
         plan: &CompositionPlan,
@@ -898,7 +1033,7 @@ mod tests {
     }
 
     #[test]
-    fn gpu_compositor_matches_cpu_for_rgba_bgra_dxt1_and_dxt5() {
+    fn gpu_compositor_matches_cpu_for_rgba_bgra_bc1_bc3_and_bc7() {
         let Some(compositor) = compositor() else {
             return;
         };
@@ -966,6 +1101,57 @@ mod tests {
             1,
             1,
         );
+
+        let hap_r = frame(
+            6,
+            4,
+            4,
+            VideoPixelFormat::Bc7,
+            solid_bc7_mode6([200, 100, 50, 128]).to_vec(),
+        );
+        assert_gpu_matches_cpu_with_channel_tolerance(
+            &compositor,
+            &plan(vec![layer_plan(6, VideoBlendMode::Normal, 1.0)]),
+            &[hap_r],
+            4,
+            4,
+            1,
+        );
+    }
+
+    #[test]
+    #[ignore = "allocates and reads back a full 4K BC7 frame on a real GPU"]
+    fn gpu_compositor_renders_4k_hap_r_bc7_frame() {
+        let Some(compositor) = compositor() else {
+            return;
+        };
+        if !compositor.supports_bc_texture() {
+            eprintln!("4K HAP R check skipped: adapter has no BC texture support");
+            return;
+        }
+        let color = [200, 100, 50, 128];
+        let block_count = 3840_u32.div_ceil(4) as usize * 2160_u32.div_ceil(4) as usize;
+        let hap_r = frame(
+            7,
+            3840,
+            2160,
+            VideoPixelFormat::Bc7,
+            solid_bc7_mode6(color).repeat(block_count),
+        );
+
+        let output = compositor
+            .composite_rgba8(
+                &plan(vec![layer_plan(7, VideoBlendMode::Normal, 1.0)]),
+                &[hap_r],
+                3840,
+                2160,
+            )
+            .unwrap();
+
+        assert_eq!(output.data.len(), 3840 * 2160 * 4);
+        let composited = [100, 50, 25, 128];
+        assert_eq!(&output.data[..4], &composited);
+        assert_eq!(&output.data[output.data.len() - 4..], &composited);
     }
 
     #[test]
@@ -1181,6 +1367,13 @@ mod tests {
                 })
                 .collect(),
         );
+        let mut bitmap_mask_luma_words = [0_u32; 32];
+        for index in 0..256 {
+            let x = index % 16;
+            let y = index / 16;
+            let nibble = ((x + y) % 16) as u32;
+            bitmap_mask_luma_words[index / 8] |= nibble << ((index % 8) * 4);
+        }
         let mapping = VideoOutputMapping {
             offset_x: 0.04,
             offset_y: -0.03,
@@ -1190,6 +1383,27 @@ mod tests {
             aspect_ratio: 4.0 / 3.0,
             aspect_mode: VideoOutputAspectMode::Fit,
             lens_distortion: 0.12,
+            edge_blend_left: 0.18,
+            edge_blend_right: 0.12,
+            edge_blend_top: 0.08,
+            edge_blend_bottom: 0.16,
+            edge_blend_gamma: 2.0,
+            black_level: 0.04,
+            mask_point_count: 4,
+            mask_softness: 0.04,
+            mask_points: [
+                VideoMaskPoint { x: 0.08, y: 0.12 },
+                VideoMaskPoint { x: 0.92, y: 0.08 },
+                VideoMaskPoint { x: 0.85, y: 0.9 },
+                VideoMaskPoint { x: 0.15, y: 0.86 },
+                VideoMaskPoint { x: 0.0, y: 0.0 },
+                VideoMaskPoint { x: 0.0, y: 0.0 },
+                VideoMaskPoint { x: 0.0, y: 0.0 },
+                VideoMaskPoint { x: 0.0, y: 0.0 },
+            ],
+            bitmap_mask_width: 16,
+            bitmap_mask_height: 16,
+            bitmap_mask_luma_words,
             keystone_x: 0.06,
             keystone_y: -0.04,
             corner_top_left_x: -0.02,
