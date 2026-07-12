@@ -177,14 +177,41 @@ jobs:
         if: runner.os == 'Linux'
         run: pnpm --dir app tauri build --ci --bundles deb,appimage
 
-      - name: Smoke-test Windows executable
+      - name: Smoke-test Windows installers
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $process = Start-Process 'target/release/syndocal.exe' -PassThru
+          $nsis = Get-ChildItem 'target/release/bundle/nsis/*.exe' | Select-Object -First 1
+          $msi = Get-ChildItem 'target/release/bundle/msi/*.msi' | Select-Object -First 1
+          if (-not $nsis -or -not $msi) { throw 'Expected NSIS and MSI installers.' }
+
+          $installDir = Join-Path $env:RUNNER_TEMP 'SyndocalSmoke'
+          $extractDir = Join-Path $env:RUNNER_TEMP 'SyndocalMsiExtract'
+          $installer = Start-Process $nsis.FullName -ArgumentList '/S', "/D=$installDir" -Wait -PassThru
+          if ($installer.ExitCode -ne 0) { throw "NSIS install failed with code $($installer.ExitCode)." }
+          if (-not (Test-Path "$installDir/syndocal.exe")) { throw 'NSIS did not install syndocal.exe.' }
+          if (-not (Get-ChildItem "$installDir/avcodec-*.dll" -ErrorAction SilentlyContinue)) {
+            throw 'NSIS did not install FFmpeg DLLs beside syndocal.exe.'
+          }
+
+          $process = Start-Process "$installDir/syndocal.exe" -PassThru
           Start-Sleep -Seconds 8
-          if ($process.HasExited) { throw "Syndocal exited during startup with code $($process.ExitCode)." }
+          if ($process.HasExited) { throw "Installed Syndocal exited during startup with code $($process.ExitCode)." }
           Stop-Process -Id $process.Id -Force
+
+          $adminInstall = Start-Process msiexec.exe -ArgumentList '/a', $msi.FullName, '/qn', "TARGETDIR=$extractDir" -Wait -PassThru
+          if ($adminInstall.ExitCode -ne 0) { throw "MSI extraction failed with code $($adminInstall.ExitCode)." }
+          $msiExe = Get-ChildItem $extractDir -Filter syndocal.exe -Recurse | Select-Object -First 1
+          if (-not $msiExe) { throw 'MSI did not contain syndocal.exe.' }
+          if (-not (Get-ChildItem $msiExe.DirectoryName -Filter 'avcodec-*.dll')) {
+            throw 'MSI did not place FFmpeg DLLs beside syndocal.exe.'
+          }
+
+          $uninstaller = Join-Path $installDir 'uninstall.exe'
+          if (Test-Path $uninstaller) {
+            $uninstall = Start-Process $uninstaller -ArgumentList '/S' -Wait -PassThru
+            if ($uninstall.ExitCode -ne 0) { throw "NSIS uninstall failed with code $($uninstall.ExitCode)." }
+          }
 
       - name: Smoke-test macOS application
         if: runner.os == 'macOS'
@@ -198,11 +225,14 @@ jobs:
           kill -0 "$process_id"
           kill "$process_id"
 
-      - name: Smoke-test Linux executable
+      - name: Smoke-test Linux AppImage
         if: runner.os == 'Linux'
         run: |
+          appimage=$(find target/release/bundle/appimage -maxdepth 1 -name '*.AppImage' -print -quit)
+          test -n "$appimage"
+          chmod +x "$appimage"
           set +e
-          timeout 8s xvfb-run -a target/release/syndocal
+          timeout 8s xvfb-run -a "$appimage" --appimage-extract-and-run
           exit_code=$?
           set -e
           test "$exit_code" -eq 124

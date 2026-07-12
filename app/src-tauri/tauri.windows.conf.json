@@ -1,12 +1,7 @@
 {
   "bundle": {
     "resources": {
-      "../../target/release/*.dll": "runtime-libs/"
-    },
-    "windows": {
-      "nsis": {
-        "installerHooks": "windows/installer-hooks.nsh"
-      }
+      "../../target/release/*.dll": ""
     }
   }
 }
