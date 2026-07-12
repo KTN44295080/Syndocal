@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -eo pipefail
 
 app_path=${1:?usage: bundle-macos-runtime.sh APP_PATH DMG_DIR}
 dmg_dir=${2:?usage: bundle-macos-runtime.sh APP_PATH DMG_DIR}
@@ -9,6 +9,7 @@ frameworks_dir="$app_path/Contents/Frameworks"
 
 test -x "$executable"
 mkdir -p "$frameworks_dir"
+echo "Bundling FFmpeg runtime from $ffmpeg_prefix into $app_path"
 
 runtime_libraries=()
 append_runtime_library() {

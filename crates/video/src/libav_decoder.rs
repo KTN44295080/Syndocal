@@ -335,18 +335,36 @@ mod tests {
         use std::process::Command;
 
         let ffmpeg = std::env::var_os("SYNDOCAL_FFMPEG").unwrap_or_else(|| "ffmpeg".into());
+        let encoder_output = Command::new(&ffmpeg)
+            .args(["-hide_banner", "-encoders"])
+            .output()
+            .expect("FFmpeg encoder inventory must be available");
+        assert!(encoder_output.status.success());
+        let encoder_inventory = String::from_utf8_lossy(&encoder_output.stdout);
+        let available_encoders = encoder_inventory
+            .lines()
+            .filter_map(|line| line.split_whitespace().nth(1))
+            .collect::<std::collections::HashSet<_>>();
         assert!(LibavFrameDecoder::is_built());
-        for (codec, encoder, extension, pixel_format, extra_args) in [
-            ("h264", "libx264", "mp4", "yuv420p", &[][..]),
+        for (codec, encoder_candidates, extension, pixel_format) in [
             (
-                "hevc",
-                "libx265",
+                "h264",
+                &["libx264", "libopenh264"] as &[&str],
                 "mp4",
                 "yuv420p",
-                &["-x265-params", "pools=1:frame-threads=1"] as &[&str],
             ),
-            ("prores", "prores_ks", "mov", "yuv422p10le", &[][..]),
+            (
+                "hevc",
+                &["libx265", "libkvazaar"] as &[&str],
+                "mp4",
+                "yuv420p",
+            ),
+            ("prores", &["prores_ks"] as &[&str], "mov", "yuv422p10le"),
         ] {
+            let encoder = encoder_candidates
+                .iter()
+                .find(|candidate| available_encoders.contains(**candidate))
+                .unwrap_or_else(|| panic!("no QA encoder is available for {codec}"));
             let path = std::env::temp_dir().join(format!(
                 "syndocal-libav-{codec}-{}-{}.{}",
                 std::process::id(),
@@ -366,7 +384,10 @@ mod tests {
                 "-pix_fmt",
                 pixel_format,
             ]);
-            command.args(extra_args).arg("-y").arg(&path);
+            if *encoder == "libx265" {
+                command.args(["-x265-params", "pools=1:frame-threads=1"]);
+            }
+            command.arg("-y").arg(&path);
             let output = command
                 .output()
                 .expect("FFmpeg QA fixture generator must be available");
