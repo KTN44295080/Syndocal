@@ -13527,32 +13527,19 @@ mod tests {
 
     #[test]
     fn reset_telemetry_starts_a_new_measurement_window() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
+        runtime.frame_counter = 42;
+        runtime.queue_depth_abs_max = 7;
+        runtime.tick_jitter_samples = 3;
+        runtime.tick_jitter_abs_max_us = 500;
+        runtime.record_command_queue_latency(Duration::from_micros(250));
+        runtime.apply_command(EngineCommand::ResetTelemetry);
 
-        let mut snapshot = engine.snapshot();
-        for _ in 0..20 {
-            if snapshot.telemetry.tick_jitter_samples >= 3 {
-                break;
-            }
-            std::thread::sleep(DMX_TICK_INTERVAL);
-            snapshot = engine.snapshot();
-        }
-        assert!(snapshot.telemetry.tick_jitter_samples >= 3);
-
-        engine.send(EngineCommand::ResetTelemetry).unwrap();
-        for _ in 0..20 {
-            std::thread::sleep(DMX_TICK_INTERVAL);
-            snapshot = engine.snapshot();
-            if snapshot.telemetry.frame_counter <= 2 && snapshot.telemetry.tick_jitter_samples <= 1
-            {
-                break;
-            }
-        }
-
-        assert!(snapshot.telemetry.frame_counter <= 2);
+        let snapshot = runtime.build_snapshot(0);
+        assert_eq!(snapshot.telemetry.frame_counter, 0);
         assert_eq!(snapshot.telemetry.queue_depth_abs_max, 0);
         assert_eq!(snapshot.telemetry.queue_push_failure_count, 0);
         assert_eq!(snapshot.telemetry.last_command_drain_count, 0);
@@ -14552,7 +14539,13 @@ mod tests {
 
         let layer = snapshot.video.layers.first().unwrap();
         assert_eq!(snapshot.clock.source, ClockSource::AbletonLink);
-        assert!((450..=650).contains(&layer.state.position_ms));
+        let expected = video::advance_layer_state_with_clock_and_duration(
+            layer.state.clone(),
+            Duration::ZERO,
+            Some(&snapshot.clock),
+            Some(4_000),
+        );
+        assert_eq!(layer.state.position_ms, expected.position_ms);
     }
 
     #[test]

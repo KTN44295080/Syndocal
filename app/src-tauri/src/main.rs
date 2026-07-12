@@ -16230,13 +16230,20 @@ f 1 2 3
 
         snapshot = engine.snapshot();
         for _ in 0..20 {
-            if snapshot.effects.iter().any(|effect| effect.id == source_id) {
+            if snapshot
+                .effects
+                .iter()
+                .any(|effect| effect.id == source_id && !effect.enabled)
+            {
                 break;
             }
             std::thread::sleep(Duration::from_millis(25));
             snapshot = engine.snapshot();
         }
-        assert!(snapshot.effects.iter().any(|effect| effect.id == source_id));
+        assert!(snapshot
+            .effects
+            .iter()
+            .any(|effect| effect.id == source_id && !effect.enabled));
 
         let duplicate_id = duplicate_effect_in_engine(&engine, source_id).unwrap();
         assert_ne!(duplicate_id, source_id);
@@ -16246,7 +16253,7 @@ f 1 2 3
             if snapshot
                 .effects
                 .iter()
-                .any(|effect| effect.id == duplicate_id)
+                .any(|effect| effect.id == duplicate_id && !effect.enabled)
             {
                 break;
             }
