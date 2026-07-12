@@ -412,4 +412,239 @@ mod tests {
         assert_eq!((width, height), (16, 16));
         assert_eq!(pixels.len(), 16 * 16 * 4);
     }
+
+    #[test]
+    #[ignore = "requires an external Spout receiver application and operator confirmation"]
+    fn output_worker_publishes_to_an_external_spout_application_and_survives_resize() {
+        let sender_name = std::env::var("SYNDOCAL_TEST_SPOUT_OUTPUT")
+            .unwrap_or_else(|_| "Syndocal External QA".to_string());
+        let confirmation_path = std::env::var("SYNDOCAL_TEST_SPOUT_CONFIRM_FILE")
+            .expect("set SYNDOCAL_TEST_SPOUT_CONFIRM_FILE to an operator-controlled file");
+        let engine = EngineHandle::start(protocol::DmxOutputConfig::default());
+        let layer_id = engine.allocate_video_layer_id();
+        engine
+            .send(engine::EngineCommand::AddVideoLayer {
+                layer_id,
+                label: "External Spout QA".to_string(),
+                source: protocol::VideoSourceSummary {
+                    kind: protocol::VideoSourceKind::Spout,
+                    path: None,
+                    name: Some("External Spout QA Frame".to_string()),
+                    codec: None,
+                    metadata: None,
+                },
+            })
+            .unwrap();
+        let output_id = engine.allocate_video_output_id();
+        engine
+            .send(engine::EngineCommand::AddVideoOutput(
+                protocol::VideoOutputSummary {
+                    id: output_id,
+                    label: "External Spout QA".to_string(),
+                    kind: protocol::VideoOutputKind::SpoutSender,
+                    enabled: true,
+                    composition_id: 1,
+                    fullscreen: false,
+                    monitor_id: None,
+                    width: 640,
+                    height: 360,
+                    endpoint_name: Some(sender_name.clone()),
+                    opacity: 1.0,
+                    blackout: false,
+                    mapping: protocol::VideoOutputMapping::default(),
+                },
+            ))
+            .unwrap();
+        let spout_inputs = Arc::new(Mutex::new(HashMap::from([(
+            layer_id,
+            external_qa_spout_frame(layer_id, 640, 360),
+        )])));
+        let worker = SpoutRouteWorker::start_output(
+            output_id,
+            sender_name.clone(),
+            engine.clone(),
+            Arc::clone(&spout_inputs),
+            #[cfg(feature = "ndi")]
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(Mutex::new(HashMap::new())),
+        )
+        .unwrap();
+
+        eprintln!("SPOUT_EXTERNAL_OUTPUT_READY {sender_name} 640x360");
+        wait_for_spout_operator_confirmation(&confirmation_path, "connected");
+        engine
+            .send(engine::EngineCommand::SetVideoOutputConfig {
+                output_id,
+                label: "External Spout QA".to_string(),
+                kind: protocol::VideoOutputKind::SpoutSender,
+                fullscreen: false,
+                monitor_id: None,
+                width: 1280,
+                height: 720,
+                endpoint_name: Some(sender_name),
+            })
+            .unwrap();
+        eprintln!("SPOUT_EXTERNAL_OUTPUT_RESIZED 1280x720");
+        wait_for_spout_operator_confirmation(&confirmation_path, "resized");
+        worker.stop();
+        eprintln!("SPOUT_EXTERNAL_OUTPUT_COMPLETE");
+    }
+
+    fn wait_for_spout_operator_confirmation(path: &str, expected: &str) {
+        let deadline = Instant::now() + Duration::from_secs(90);
+        loop {
+            let confirmation = std::fs::read_to_string(path).unwrap_or_default();
+            if confirmation.lines().any(|line| line.trim() == expected) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "external Spout receiver did not confirm '{expected}' within 90 seconds"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    fn external_qa_spout_frame(
+        layer_id: VideoLayerId,
+        width: u32,
+        height: u32,
+    ) -> video::VideoFrame {
+        let mut data = vec![0; (width * height * 4) as usize];
+        for y in 0..height {
+            for x in 0..width {
+                let offset = ((y * width + x) * 4) as usize;
+                let band = (x * 6 / width).min(5);
+                let (red, green, blue) = match band {
+                    0 => (255, 32, 32),
+                    1 => (255, 220, 32),
+                    2 => (32, 255, 64),
+                    3 => (32, 220, 255),
+                    4 => (64, 64, 255),
+                    _ => (220, 32, 255),
+                };
+                data[offset..offset + 4].copy_from_slice(&[red, green, blue, 255]);
+            }
+        }
+        video::VideoFrame {
+            layer_id,
+            width,
+            height,
+            pts_ms: 0,
+            duration_ms: 33,
+            format: video::VideoPixelFormat::Rgba8,
+            data,
+        }
+    }
+
+    #[test]
+    #[ignore = "requires an external Spout sender application and a Windows GPU"]
+    fn input_worker_receives_from_an_external_spout_application() {
+        let sender_match = std::env::var("SYNDOCAL_TEST_SPOUT_SENDER").unwrap_or_default();
+        let probe = spout2::dx::Receiver::new(None).unwrap();
+        let senders = probe.sender_list();
+        eprintln!("external Spout senders: {senders:?}");
+        let sender_name = senders
+            .iter()
+            .find(|name| {
+                sender_match.is_empty()
+                    || name.to_lowercase().contains(&sender_match.to_lowercase())
+            })
+            .cloned()
+            .unwrap_or_else(|| panic!("no external Spout sender matched '{sender_match}'"));
+        let sender_info = probe.sender_info(&sender_name).unwrap();
+        eprintln!("selected external Spout sender '{sender_name}': {sender_info:?}");
+        let mut rate_receiver = spout2::dx::Receiver::new(Some(&sender_name)).unwrap();
+        let (mut rate_width, mut rate_height) = (sender_info.width, sender_info.height);
+        let mut rate_pixels = vec![0_u8; (rate_width * rate_height * 4) as usize];
+        let rate_started = Instant::now();
+        let rate_deadline = rate_started + Duration::from_secs(2);
+        let mut new_frames = 0_u64;
+        while Instant::now() < rate_deadline {
+            let connected = rate_receiver
+                .receive_image(&mut rate_pixels, rate_width, rate_height, false, false)
+                .unwrap();
+            if rate_receiver.is_updated() {
+                (rate_width, rate_height) = rate_receiver.sender_size();
+                rate_pixels.resize((rate_width * rate_height * 4) as usize, 0);
+                continue;
+            }
+            if connected && rate_receiver.is_frame_new() {
+                new_frames += 1;
+            }
+            std::thread::sleep(Duration::from_millis(4));
+        }
+        let observed_fps = new_frames as f64 / rate_started.elapsed().as_secs_f64();
+        eprintln!("external Spout observed frame rate: {observed_fps:.1} fps");
+        assert!(
+            observed_fps >= 30.0,
+            "external Spout sender delivered only {observed_fps:.1} fps"
+        );
+        drop(rate_receiver);
+        let frames = Arc::new(Mutex::new(HashMap::new()));
+        let worker = SpoutRouteWorker::start_input(91, sender_name, Arc::clone(&frames)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let received = loop {
+            if let Some(frame) = frames.lock().unwrap().get(&91).cloned() {
+                break frame;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Syndocal input worker did not receive an external Spout frame"
+            );
+            std::thread::sleep(Duration::from_millis(16));
+        };
+        worker.stop();
+
+        assert_eq!(
+            (received.width, received.height),
+            (sender_info.width, sender_info.height)
+        );
+        assert_eq!(
+            received.data.len(),
+            (received.width * received.height * 4) as usize
+        );
+    }
+
+    #[test]
+    #[ignore = "requires an external Spout sender that the test operator restarts"]
+    fn input_worker_recovers_when_external_spout_sender_restarts() {
+        let sender_name = std::env::var("SYNDOCAL_TEST_SPOUT_SENDER")
+            .expect("set SYNDOCAL_TEST_SPOUT_SENDER to the external sender name");
+        let frames = Arc::new(Mutex::new(HashMap::new()));
+        let worker =
+            SpoutRouteWorker::start_input(92, sender_name.clone(), Arc::clone(&frames)).unwrap();
+        let first_deadline = Instant::now() + Duration::from_secs(8);
+        while !frames.lock().unwrap().contains_key(&92) {
+            assert!(
+                Instant::now() < first_deadline,
+                "initial external frame timed out"
+            );
+            std::thread::sleep(Duration::from_millis(16));
+        }
+        eprintln!("SPOUT_RECONNECT_READY");
+
+        let probe = spout2::dx::Receiver::new(None).unwrap();
+        let disconnect_deadline = Instant::now() + Duration::from_secs(30);
+        while probe.sender_list().iter().any(|name| name == &sender_name) {
+            assert!(
+                Instant::now() < disconnect_deadline,
+                "external sender was not stopped within 30 seconds"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        frames.lock().unwrap().remove(&92);
+        eprintln!("SPOUT_RECONNECT_DISCONNECTED");
+
+        let reconnect_deadline = Instant::now() + Duration::from_secs(30);
+        while !frames.lock().unwrap().contains_key(&92) {
+            assert!(
+                Instant::now() < reconnect_deadline,
+                "Syndocal input worker did not recover after the sender restarted"
+            );
+            std::thread::sleep(Duration::from_millis(16));
+        }
+        worker.stop();
+        eprintln!("SPOUT_RECONNECT_RECOVERED");
+    }
 }

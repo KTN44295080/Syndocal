@@ -445,4 +445,151 @@ mod tests {
         drop(output);
         eprintln!("ndi-loopback: output dropped");
     }
+
+    #[test]
+    #[ignore = "requires an external NDI sender and the NDI runtime"]
+    fn receives_rgba_from_an_external_ndi_application() {
+        let source_match = std::env::var("SYNDOCAL_TEST_NDI_SOURCE").unwrap_or_default();
+        let ndi = NDI::new().unwrap();
+        let finder = Finder::new(
+            &ndi,
+            &FinderOptions::builder().show_local_sources(true).build(),
+        )
+        .unwrap();
+        let discovery_deadline = std::time::Instant::now() + Duration::from_secs(8);
+        let source_name = loop {
+            finder.wait_for_sources(DISCOVERY_POLL_INTERVAL).unwrap();
+            let sources = finder.sources(Duration::ZERO).unwrap();
+            eprintln!(
+                "external NDI sources: {:?}",
+                sources
+                    .iter()
+                    .map(|source| &source.name)
+                    .collect::<Vec<_>>()
+            );
+            if let Some(source) = sources.into_iter().find(|source| {
+                source_match.is_empty()
+                    || source
+                        .name
+                        .to_lowercase()
+                        .contains(&source_match.to_lowercase())
+            }) {
+                break source.name;
+            }
+            assert!(
+                std::time::Instant::now() < discovery_deadline,
+                "no external NDI source matched '{source_match}'"
+            );
+        };
+        let input = NdiInput::new(source_name.clone()).unwrap();
+        let frame_deadline = std::time::Instant::now() + Duration::from_secs(8);
+        let received = loop {
+            if let Some(frame) = input.take_latest().unwrap() {
+                break frame;
+            }
+            assert!(
+                std::time::Instant::now() < frame_deadline,
+                "external NDI source '{source_name}' produced no RGBA frame"
+            );
+            thread::sleep(Duration::from_millis(16));
+        };
+        eprintln!(
+            "received external NDI source '{source_name}': {}x{} @ {}/{}",
+            received.width, received.height, received.frame_rate_n, received.frame_rate_d
+        );
+        assert!(received.width > 0 && received.height > 0);
+        assert_eq!(
+            received.rgba.len(),
+            (received.width * received.height * 4) as usize
+        );
+    }
+
+    #[test]
+    #[ignore = "requires an external NDI receiver and the NDI runtime"]
+    fn publishes_rgba_to_an_external_ndi_application_and_survives_resize() {
+        let endpoint = std::env::var("SYNDOCAL_TEST_NDI_OUTPUT")
+            .unwrap_or_else(|_| "Syndocal External QA".to_string());
+        let output = NdiOutput::new(endpoint.clone()).unwrap();
+        let started = std::time::Instant::now();
+        let deadline = started + Duration::from_secs(90);
+        let mut connected_at = None;
+        let mut resized_at = None;
+        let mut frame_index = 0u64;
+
+        eprintln!("NDI_EXTERNAL_OUTPUT_READY {endpoint}");
+        loop {
+            let now = std::time::Instant::now();
+            assert!(
+                now < deadline,
+                "external NDI receiver did not connect and remain connected through resize"
+            );
+            let connected = output
+                .sender
+                .as_ref()
+                .unwrap()
+                .connection_count(Duration::from_millis(10))
+                .unwrap_or(0);
+            if connected > 0 && connected_at.is_none() {
+                connected_at = Some(now);
+                eprintln!("NDI_EXTERNAL_OUTPUT_CONNECTED clients={connected}");
+            }
+
+            let should_resize = connected_at.is_some_and(|connected| {
+                now.saturating_duration_since(connected) >= Duration::from_secs(8)
+            });
+            let (width, height) = if should_resize {
+                if resized_at.is_none() {
+                    resized_at = Some(now);
+                    eprintln!("NDI_EXTERNAL_OUTPUT_RESIZED 1280x720");
+                }
+                (1280, 720)
+            } else {
+                (640, 360)
+            };
+            output
+                .send_rgba(&external_qa_frame(width, height, frame_index))
+                .unwrap();
+            frame_index += 1;
+
+            if resized_at.is_some_and(|resized| {
+                connected > 0 && now.saturating_duration_since(resized) >= Duration::from_secs(8)
+            }) {
+                eprintln!("NDI_EXTERNAL_OUTPUT_COMPLETE frames={frame_index} clients={connected}");
+                break;
+            }
+            thread::sleep(Duration::from_millis(33));
+        }
+    }
+
+    fn external_qa_frame(width: u32, height: u32, frame_index: u64) -> NdiRgbaFrame {
+        let mut rgba = vec![0; (width * height * 4) as usize];
+        let moving_bar = (frame_index as u32 * 7) % width;
+        for y in 0..height {
+            for x in 0..width {
+                let offset = ((y * width + x) * 4) as usize;
+                let band = (x * 6 / width).min(5);
+                let (mut red, mut green, mut blue) = match band {
+                    0 => (255, 32, 32),
+                    1 => (255, 220, 32),
+                    2 => (32, 255, 64),
+                    3 => (32, 220, 255),
+                    4 => (64, 64, 255),
+                    _ => (220, 32, 255),
+                };
+                if x.abs_diff(moving_bar) < 12 || y == height / 2 {
+                    red = 255;
+                    green = 255;
+                    blue = 255;
+                }
+                rgba[offset..offset + 4].copy_from_slice(&[red, green, blue, 255]);
+            }
+        }
+        NdiRgbaFrame {
+            width,
+            height,
+            frame_rate_n: 30,
+            frame_rate_d: 1,
+            rgba,
+        }
+    }
 }

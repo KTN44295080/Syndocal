@@ -370,4 +370,30 @@ mod tests {
         );
         worker.stop();
     }
+
+    #[test]
+    #[ignore = "requires FFmpeg and SYNDOCAL_TEST_CAMERA_ENDPOINT naming a physical camera"]
+    fn camera_worker_captures_a_real_frame_and_restarts_cleanly() {
+        let endpoint = std::env::var("SYNDOCAL_TEST_CAMERA_ENDPOINT")
+            .expect("set SYNDOCAL_TEST_CAMERA_ENDPOINT to a physical camera name");
+        let frames = Arc::new(Mutex::new(HashMap::new()));
+
+        for attempt in 0..2 {
+            let layer_id = 80 + attempt;
+            let worker =
+                CaptureRouteWorker::start(layer_id, "camera", &endpoint, Arc::clone(&frames))
+                    .unwrap();
+            let frame = frames.lock().unwrap().get(&layer_id).cloned().unwrap();
+            assert_eq!((frame.width, frame.height), (CAPTURE_WIDTH, CAPTURE_HEIGHT));
+            assert_eq!(
+                frame.data.len(),
+                (CAPTURE_WIDTH * CAPTURE_HEIGHT * 4) as usize
+            );
+            assert!(
+                frame.data.chunks_exact(4).any(|pixel| pixel[3] != 0),
+                "physical camera returned a fully transparent frame"
+            );
+            worker.stop();
+        }
+    }
 }

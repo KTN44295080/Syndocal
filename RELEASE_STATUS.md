@@ -2,8 +2,8 @@
 
 Updated: 2026-07-13
 Branch: `codex/syndocal-v1.0`  
-Completion commit: `6c3de12`  
-Final implementation commit: `1f04fd3`  
+Original completion commit: `6c3de12`
+Production-quality baseline commit: `edfc93c`
 Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/actions/runs/29179218727)
 
 ## 結論
@@ -25,8 +25,11 @@ Syndocal v1.0は、`COMPLETION_PLAN.md`で定義した**ソフトウェア完成
 - [ ] sACNマルチキャスト対応ノードで、ユニバースルーティングとネットワークスイッチ越しの安定性を確認する。
 - [ ] Enttec USB PRO / DMXKingで長時間送信を確認する。
 - [ ] Enttec Open DMXはロジックアナライザでBreak 176us、MAB 16us、フレーム周期を測定する。重要現場ではPRO系を優先する。
-- [ ] MIDIコントローラ、TouchOSC、iPad/Android Webリモートを実端末で往復確認し、Wi-Fi遅延を記録する。
-- [ ] NDI 6をOBS/Resolume等と送受信し、探索、色、フレームレート、終了処理を確認する。
+- [ ] MIDIコントローラを実操作してnote/CC/clock/MTCとfeedbackを往復確認する。`SMC-Mixer-bt`の物理input/output列挙・open・All Notes Off送信までは2026-07-13に通過した。
+- [ ] TouchOSC、iPad/Android Webリモートを実端末で往復確認し、Wi-Fi遅延を記録する。
+- [x] NDI 6 Test Patterns/Studio Monitorと送受信し、探索、RGBA色、30000/1001入力、30fps出力、640x360→1280x720、接続維持を2026-07-13に確認した。
+- [x] SpoutはURL To Spout/Syphon→Syndocal入力と再接続、Syndocal→TouchDesigner出力、RGBA、640x360→1280x720、送信再起動後の自動再接続を2026-07-13に確認した。
+- [ ] 物理cameraのunplug/replugを確認する。`nuroum Webcam V15AF`の1280x720 RGBA取得、format negotiation、2回のstart/stopは2026-07-13に通過した。
 - [ ] macOS実機とLinux実機で、複数ディスプレイ、フルスクリーン、音声/動画素材、`.sdc`保存再読込を操作確認する。CIはパッケージ起動までである。
 
 結果は `qa/M4_IO_VALIDATION.md` の Acceptance Capture に追記する。loopback結果を実機合格へ読み替えない。
@@ -143,9 +146,11 @@ ffprobeでvideo/audio streamを分けて素材metadataへ保存し、silent素�
 
 選択video outputは1-60fps、最大4096角でbackground rendererからFFmpeg raw RGBA pipeへ送り、H.264/yuv420p MP4として記録できる。Program audio toggleが有効なら、選択outputのcompositionに属し、再生中／有効／monitor中のlocal audio sourceだけを開始位置、loop、gain、0.25-4x speed付きでFFmpegへ入力し、AAC 192kbpsへmixしてMP4へmuxする。対象音声がなければ明示的にsilent recordingへfallbackする。UIはaudio requested／included／track countとwritten／dropped frameを表示し、停止時にencoder結果を確定する。FFmpeg入力選別、seek／loop／volume／atempo／amix graphとsilent fallbackの自動テストに加え、実際のraw RGBA + PCM toneからH.264/AAC MP4を生成し、FFprobeでvideo/audio両streamを確認するlocal runtime testも通過した。ただし映像decoder、monitor audio device、recording encoderを単一のsample clockで駆動するsample-accurate同期は未実装であり、長時間素材の実会場受入に残る。
 
-Windows x86_64のSpout input/outputは標準featureとしてSpout2 2.007.017を静的リンクした。外部映像route起動時に専用DirectX 11 workerを生成し、入力は送信元の解像度とRGBA/BGRA format変更を追従してlatest frameだけをdecoderへ渡す。出力は選択compositionを60fpsで合成し、R8G8B8A8 senderとして公開する。通常previewとnative outputもSpout input frameを利用でき、停止時はworkerとframe registryを解放する。実GPU上でsender→Syndocal input worker、Syndocal composition output worker→receiverの両loopbackが通過した。Syphonはschema／route／Unavailable診断を維持するが、現行`syphon-wgpu 0.3`がwgpu 29を要求し、本体のwgpu 25と同一graphへ安全に導入できない。macOSの`Syphon.framework`と対応Metal integrationを揃えたhostでの実装・受入を外部残件とする。
+Windows x86_64のSpout input/outputは標準featureとしてSpout2 2.007.017を静的リンクした。外部映像route起動時に専用DirectX 11 workerを生成し、入力は送信元の解像度とRGBA/BGRA format変更を追従してlatest frameだけをdecoderへ渡す。出力は選択compositionを60fpsで合成し、R8G8B8A8 senderとして公開する。通常previewとnative outputもSpout input frameを利用でき、停止時はworkerとframe registryを解放する。実GPU loopbackに加え、2026-07-13にURL To Spout/Syphonの1920x1080 DXGI 28入力、外部sender停止／再起動後の同一worker復帰、TouchDesigner 2023.12000への8-bit RGBA出力、640x360→1280x720変更追従、sender再起動後の自動再接続が通過した。Syphonはschema／route／Unavailable診断を維持するが、現行`syphon-wgpu 0.3`がwgpu 29を要求し、本体のwgpu 25と同一graphへ安全に導入できない。macOSの`Syphon.framework`と対応Metal integrationを揃えたhostでの実装・受入を外部残件とする。
 
-Camera inputとScreen Captureをlive video sourceへ追加した。レイヤー有効時だけFFmpegを持続起動し、WindowsはDirectShow／gdigrab、macOSはAVFoundation、LinuxはV4L2／X11Grabから1280x720・30fps RGBAを読み取る。フレームごとのprocess起動は行わず、workerとdecoder間でlatest frame bufferを交換・再利用する。Preview、native display、NDI／Spout outputも同じcapture registryを参照し、route停止時はFFmpegをkill／waitしてframeを破棄する。endpointは単一Command argumentとして渡しshell展開しない。command構築、未知backend拒否、project source名正規化、Camera／Screen decoder経路を自動テストし、Windows実desktopを取得して最初の完全frameと停止処理を確認するlocal runtime testも通過した。物理cameraのformat選択・切断復帰、macOS／Linux実hostはM4受入へ残る。
+NDI 6はlocal loopbackに加え、2026-07-13にNDI Test Patternsからproduction `NdiInput`へ1920x1080 RGBA・30000/1001を受信し、production `NdiOutput`からStudio MonitorへQA color barsを送信した。SDK senderの接続数1-2を確認し、640x360から1280x720への変更後も接続を維持した。このhostはmachine-wideの.NET 7 WindowsDesktop runtimeconfigが破損しているため、`qa/harnesses`のlauncherが子processだけ`DOTNET_ROLL_FORWARD=LatestMajor`を設定し、Program Filesは変更していない。
+
+Camera inputとScreen Captureをlive video sourceへ追加した。レイヤー有効時だけFFmpegを持続起動し、WindowsはDirectShow／gdigrab、macOSはAVFoundation、LinuxはV4L2／X11Grabから1280x720・30fps RGBAを読み取る。フレームごとのprocess起動は行わず、workerとdecoder間でlatest frame bufferを交換・再利用する。Preview、native display、NDI／Spout outputも同じcapture registryを参照し、route停止時はFFmpegをkill／waitしてframeを破棄する。endpointは単一Command argumentとして渡しshell展開しない。command構築、未知backend拒否、project source名正規化、Camera／Screen decoder経路を自動テストし、Windows実desktopを取得して最初の完全frameと停止処理を確認するlocal runtime testも通過した。2026-07-13には物理`nuroum Webcam V15AF`をproduction workerで2回start/stopし、各回1280x720 RGBAを取得、MJPEG 1280x720／1920x1080／2560x1440の30-60fpsとYUYV modeのformat列挙も確認した。物理unplug/replugとmacOS／Linux実hostはM4受入へ残る。
 
 HAP Q Alphaはin-process MOV parserが分離したYCoCg DXT5色面とBC4 alpha面を検証し、既存YCoCg変換とBC4 endpoint／3bit index補間でRGBA8へ合成するようにした。HAP Rは公式仕様の`Hap7`／RGBA BC7 frameをin-processで保持し、BC texture対応GPUでは圧縮blockを`Bc7RgbaUnorm` textureへ直接uploadしてhardware samplingする。Preview、ISF、またはBC非対応GPUではsafe pure-Rust `bcdec_rs`でRGBA8へ展開し、4の倍数でない端blockもcropする。HAP in-process経路が未対応formatや破損frameを返した場合はlibav、続いてFFmpeg CLIへfallbackする。HAP Q Alpha dual-plane、Hap7 MOV、BC7 alpha、CPU fallback、GPU/CPU parityと実GPU 4K BC7 frameを自動テスト済み。実エンコーダー由来HAP R素材の長時間multi-layer再生はM4受入へ残る。
 

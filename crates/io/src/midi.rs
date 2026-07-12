@@ -2946,4 +2946,42 @@ mod tests {
             vec![vec![0x90, 20, 127], vec![0xb0, 21, 32]]
         );
     }
+
+    #[test]
+    #[ignore = "requires physical MIDI ports named by SYNDOCAL_TEST_MIDI_INPUT/OUTPUT"]
+    fn physical_midi_ports_enumerate_open_and_send_feedback() {
+        let input_match = std::env::var("SYNDOCAL_TEST_MIDI_INPUT")
+            .expect("set SYNDOCAL_TEST_MIDI_INPUT to part of a physical input port name");
+        let output_match = std::env::var("SYNDOCAL_TEST_MIDI_OUTPUT")
+            .expect("set SYNDOCAL_TEST_MIDI_OUTPUT to part of a physical output port name");
+        let inputs = list_midi_inputs().unwrap();
+        let outputs = list_midi_outputs().unwrap();
+        println!("MIDI inputs: {inputs:?}");
+        println!("MIDI outputs: {outputs:?}");
+        let input = inputs
+            .iter()
+            .find(|port| {
+                port.name
+                    .to_lowercase()
+                    .contains(&input_match.to_lowercase())
+            })
+            .unwrap_or_else(|| panic!("no MIDI input matched '{input_match}'"));
+        let output = outputs
+            .iter()
+            .find(|port| {
+                port.name
+                    .to_lowercase()
+                    .contains(&output_match.to_lowercase())
+            })
+            .unwrap_or_else(|| panic!("no MIDI output matched '{output_match}'"));
+
+        let _clock_input = connect_midi_clock(input.index, |_| {}).unwrap();
+        let mut feedback = connect_midi_feedback_output(output.index).unwrap();
+        assert_eq!(
+            feedback
+                .send_feedback_messages(&[vec![0xB0, 123, 0]])
+                .unwrap(),
+            1
+        );
+    }
 }

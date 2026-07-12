@@ -10,12 +10,12 @@ This is an engineering evidence record, not user documentation. README and relea
 | sACN / E1.31 output | Packet, multicast address derivation, and UDP loopback tests pass | Multicast-capable node -> fixture output capture required | Software pass; hardware pending |
 | Enttec USB Pro / DMXKing | Packet framing and serial route validation tests pass | USB interface + DMX receiver capture required | Software pass; hardware pending |
 | Enttec Open DMX | Dedicated worker, bounded latest-frame mailbox, 176 us break, 16 us MAB, and payload tests pass | Logic-analyzer break/MAB/frame-period capture required | Software pass; waveform pending |
-| MIDI input/output | Decode, clock, MTC, mapping, and feedback tests pass | Controller note/CC/clock/feedback round trip required | Software pass; hardware pending |
+| MIDI input/output | Decode, clock, MTC, mapping, and feedback tests pass | `SMC-Mixer-bt` input/output enumerated and opened through the production `midir` path; a safe All Notes Off feedback message was sent. Physical note/CC/clock movement and visible feedback confirmation remain | Partial physical pass; operator interaction pending |
 | OSC input | Mapping, wildcard, clock, effect, video, and bundle tests pass | TouchOSC or equivalent LAN round trip recommended | Software pass; device pending |
 | Web remote | HTTP/WebSocket protocol and snapshot/status tests pass | iPad/Android Wi-Fi interaction and latency capture required | Software pass; device pending |
-| NDI input/output | Official Windows NDI 6 SDK feature build; local sender -> discovery -> RGBA receiver loopback passes in 0.20 s | OBS/Resolume cross-application send and receive required | Local runtime pass; external app pending |
-| Spout input/output | Default Windows x86_64 build statically links Spout2 2.007.017. Real DirectX sender -> Syndocal input worker and Syndocal composition output worker -> receiver loopbacks pass on the development GPU | OBS/Resolume/TouchDesigner cross-application RGBA/BGRA, resize, reconnect, and 60fps capture required | Local GPU runtime pass; external app pending |
-| Camera / screen capture | Persistent FFmpeg worker uses DirectShow/gdigrab on Windows, AVFoundation on macOS, and V4L2/X11Grab on Linux; latest 1280x720 RGBA frame is exchanged without per-frame process creation. A real Windows desktop capture reached the decoder registry and stopped cleanly | USB/HDMI capture camera selection, unplug/replug, format negotiation, and macOS/Linux device/display capture required | Windows desktop runtime pass; camera and other hosts pending |
+| NDI input/output | Official Windows NDI 6 SDK feature build; local sender -> discovery -> RGBA receiver loopback passes. External NDI Test Patterns -> Syndocal input received 1920x1080 RGBA at 30000/1001. Syndocal output -> NDI Studio Monitor displayed the QA bars, reported 1-2 SDK clients, and stayed connected across 640x360 -> 1280x720 | Representative OBS/Resolume material and macOS/Linux host coverage remain recommended | Windows NDI 6 cross-application pass |
+| Spout input/output | Default Windows x86_64 build statically links Spout2 2.007.017. `URL To SpoutSyphon` -> Syndocal input passed at 1920x1080 DXGI format 28 and recovered after the external sender was closed/relaunched. Syndocal output -> TouchDesigner 2023.12000 displayed RGBA bars, auto-reconnected after sender restart, and updated from 640x360 to 1280x720 | Representative show material and a sustained dropped-frame capture remain recommended | Windows cross-application input/output, reconnect, and resize pass |
+| Camera / screen capture | Persistent FFmpeg worker uses DirectShow/gdigrab on Windows, AVFoundation on macOS, and V4L2/X11Grab on Linux. Physical `nuroum Webcam V15AF` produced two clean 1280x720 RGBA start/stop cycles through the production worker. DirectShow reported MJPEG up to 2560x1440/60 and YUYV modes | Physical unplug/replug and macOS/Linux device/display capture remain | Windows physical camera selection/format/restart pass; unplug and other hosts pending |
 | Syphon input/output | Route/schema/platform diagnostics exist; current `syphon-wgpu 0.3` requires wgpu 29 while Syndocal is pinned to wgpu 25, and `Syphon.framework` is unavailable on the Windows development host | macOS host with matching Syphon.framework and Metal/wgpu integration required | Explicitly unavailable; macOS implementation pending |
 | RDM Art-Net / USB Pro | E1.20, ArtRdm/TOD, USB Pro Label 5/7/11, ACK_OVERFLOW, ACK_TIMER, queued message, discovery splitting, timeout and collision-safe parser tests pass | Art-Net gateway and USB Pro with at least two RDM fixtures, including collision discovery and inventory churn, required | Software pass; hardware pending |
 | VJ recording A/V | Command graph tests cover output-scoped source selection, seek, loop, gain, 0.25-4x `atempo`, `amix`, AAC mux, and silent fallback. A real raw-RGBA + PCM tone run produces an H.264/AAC MP4 and passes FFprobe stream verification | 30+ minute clip with visible clap/flash reference and first/last drift measurement required | Local encoder runtime pass; long material pending |
@@ -35,9 +35,29 @@ cargo test -p io --features ndi --locked
 cargo test -p io --features ndi --locked sends_and_receives_rgba_over_local_ndi -- --ignored
 cargo test -p syndocal --no-default-features --features ndi --locked
 
+# External NDI sender/receiver applications.
+$env:SYNDOCAL_TEST_NDI_SOURCE = "Test Pattern"
+cargo test -p io --features ndi --locked receives_rgba_from_an_external_ndi_application -- --ignored --nocapture
+$env:SYNDOCAL_TEST_NDI_OUTPUT = "Syndocal External QA"
+cargo test -p io --features ndi --locked publishes_rgba_to_an_external_ndi_application_and_survives_resize -- --ignored --nocapture
+
 # Windows x86_64 Spout2: the two tests below use the real GPU transport.
 cargo test -p syndocal --locked input_worker_receives_a_real_spout_frame -- --ignored --nocapture
 cargo test -p syndocal --locked output_worker_publishes_the_engine_composition -- --ignored --nocapture
+$env:SYNDOCAL_TEST_SPOUT_SENDER = "0UtS-Spout"
+cargo test -p syndocal --locked input_worker_receives_from_an_external_spout_application -- --ignored --nocapture
+cargo test -p syndocal --locked input_worker_recovers_when_external_spout_sender_restarts -- --ignored --nocapture
+$env:SYNDOCAL_TEST_SPOUT_OUTPUT = "Syndocal External QA"
+$env:SYNDOCAL_TEST_SPOUT_CONFIRM_FILE = "C:\path\to\operator-confirm.txt"
+cargo test -p syndocal --locked output_worker_publishes_to_an_external_spout_application_and_survives_resize -- --ignored --nocapture
+
+# Physical DirectShow camera and physical MIDI ports.
+$env:SYNDOCAL_FFMPEG = "C:\path\to\ffmpeg.exe"
+$env:SYNDOCAL_TEST_CAMERA_ENDPOINT = "nuroum Webcam V15AF"
+cargo test -p syndocal --locked camera_worker_captures_a_real_frame_and_restarts_cleanly -- --ignored --nocapture
+$env:SYNDOCAL_TEST_MIDI_INPUT = "SMC-Mixer"
+$env:SYNDOCAL_TEST_MIDI_OUTPUT = "SMC-Mixer"
+cargo test -p io --locked physical_midi_ports_enumerate_open_and_send_feedback -- --ignored --nocapture
 
 # Local FFmpeg/FFprobe H.264 + AAC recording/mux runtime.
 cargo test -p syndocal --locked recording_command_writes_a_real_video_and_audio_mp4 -- --ignored --nocapture
@@ -54,6 +74,20 @@ cargo test -p video --locked gpu_compositor_renders_4k_hap_r_bc7_frame -- --igno
 
 ## Acceptance Capture
 
-For each pending physical row, record the date, OS, device/software version, project file, measured latency or waveform, and pass/fail result here. Do not convert a software loopback into a physical pass.
+### 2026-07-13 Windows development host
+
+| Path | Device/application | Capture | Result |
+|---|---|---|---|
+| Camera | `nuroum Webcam V15AF`, FFmpeg DirectShow | Production capture worker received 1280x720 RGBA and stopped cleanly twice in 8.28 s. Advertised MJPEG modes include 1280x720, 1920x1080, and 2560x1440 at 30-60 fps; YUYV 640 modes advertise 30 fps | Pass for selection, negotiation, restart, and cleanup; physical unplug/replug not performed |
+| MIDI | `SMC-Mixer-bt` physical input/output | Production `midir` enumeration and open succeeded; one safe channel-1 All Notes Off (`B0 7B 00`) feedback message sent in 0.12 s | Partial pass; no operator knob/button/clock/MTC movement was available |
+| NDI input | NDI 6 Test Patterns `DESKTOP-FT3CSEN (Test Pattern)` | Production `NdiInput` discovered and received 1920x1080 RGBA at 30000/1001 in 0.52 s | Pass |
+| NDI output | NDI 6 Studio Monitor | QA bars visibly received; SDK sender reported 1-2 connected clients; Studio Monitor remained connected across 640x360 -> 1280x720 at 30 fps; automated test passed in 16.50 s | Pass |
+| Spout input | URL To Spout/Syphon sender `0UtS-Spout` | Production input received 1920x1080, DXGI format 28. New-frame polling was 171.7 polls/s, comfortably above the 30 fps gate but not asserted as the sender's true frame rate | Pass |
+| Spout input reconnect | URL To Spout/Syphon | Sender was closed, disappearance observed, relaunched, and the same Syndocal worker resumed frames; test completed in 42.85 s | Pass |
+| Spout output/resize | TouchDesigner 2023.12000 `Syphon Spout In TOP` | Syndocal composition bars visibly received as 8-bit fixed RGBA. TouchDesigner reported 640x360, then 1280x720 after live output reconfiguration; the node retained the sender name and auto-reconnected after sender restart | Pass |
+
+The NDI 6 Test Patterns and Studio Monitor executables could not directly start on this host because the machine-wide .NET 7 WindowsDesktop runtimeconfig is corrupt. The source-controlled launchers in `qa/harnesses` apply `DOTNET_ROLL_FORWARD=LatestMajor` only to their child process and do not modify Program Files.
+
+For each still-pending physical row, record the date, OS, device/software version, project file, measured latency or waveform, and pass/fail result here. Do not convert a software loopback into a physical pass.
 
 For RDM, also record transport, gateway/interface firmware, fixture UID/PID, discovery duration, collision fixture count, ACK/NACK/timeout behavior, and inventory add/remove time. For A/V recording, attach the `ffprobe -show_streams -show_format` output and measured first/last sync error. For projection, attach the source mask, projector model, overlap width/gamma/black-level values, and before/after capture. For Spout, record sender/receiver applications, texture format, dimensions, frame rate, resize/reconnect result, and dropped-frame observation.
