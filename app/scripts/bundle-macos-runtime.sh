@@ -67,8 +67,8 @@ for target in "${targets[@]}"; do
 done
 
 if otool -L "${targets[@]}" | grep -F "$ffmpeg_prefix" \
-  || otool -L "${targets[@]}" | grep -E '/opt/homebrew/(opt|Cellar)/ffmpeg'; then
-  echo 'The packaged application still contains build-machine FFmpeg paths.' >&2
+  || otool -L "${targets[@]}" | grep -E '/opt/homebrew/|/Users/runner/'; then
+  echo 'The packaged application still contains a build-machine library path.' >&2
   exit 1
 fi
 

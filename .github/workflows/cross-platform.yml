@@ -65,7 +65,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/ffmpeg-lgpl-8.1.2
-          key: ffmpeg-lgpl-8.1.2-macos15-arm64-v1
+          key: ffmpeg-lgpl-8.1.2-macos15-arm64-v2
 
       - name: Build macOS LGPL FFmpeg runtime
         if: runner.os == 'macOS'
@@ -85,6 +85,7 @@ jobs:
               --disable-doc \
               --disable-debug \
               --disable-gpl \
+              --disable-autodetect \
               --enable-version3 \
               --disable-static \
               --enable-shared \
