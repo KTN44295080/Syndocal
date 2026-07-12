@@ -10627,6 +10627,7 @@ mod tests {
             if snapshot.telemetry.frame_counter > start_frame
                 && snapshot.telemetry.queue_depth == 0
                 && snapshot.fixtures.is_empty()
+                && snapshot.cues.len() == 1
             {
                 break;
             }
