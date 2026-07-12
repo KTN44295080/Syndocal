@@ -14,10 +14,14 @@ echo "Bundling FFmpeg runtime from $ffmpeg_prefix into $app_path"
 runtime_libraries=()
 append_runtime_library() {
   local candidate=$1
-  [[ "$candidate" == "$ffmpeg_prefix"/lib/* ]] || return
+  if [[ "$candidate" != "$ffmpeg_prefix"/lib/* ]]; then
+    return 0
+  fi
   local existing
   for existing in "${runtime_libraries[@]}"; do
-    [[ "$existing" == "$candidate" ]] && return
+    if [[ "$existing" == "$candidate" ]]; then
+      return 0
+    fi
   done
   runtime_libraries+=("$candidate")
 }
