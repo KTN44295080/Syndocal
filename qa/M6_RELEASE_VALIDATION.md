@@ -23,8 +23,8 @@ Built locally from the v1.0.0 release executable:
 
 | Bundle | Bytes | SHA-256 | Signature |
 | --- | ---: | --- | --- |
-| `Syndocal_1.0.0_x64-setup.exe` | 71,443,642 | `BB7DB5126B63E42E88C363D3228E8F9A56875B1C767F98B235C6FDB7AB5231C1` | NotSigned |
-| `Syndocal_1.0.0_x64_ja-JP.msi` | 108,040,192 | `283D616F04484B00EA0215A6281261FFD08258DC6AB245FCB81311302B1E49FE` | NotSigned |
+| `Syndocal_1.0.0_x64-setup.exe` | 49,704,383 | `DC0FED347732305ADFFC7374F453A0D05FAA20EA4C802EA1674EB2989430F29D` | NotSigned |
+| `Syndocal_1.0.0_x64_ja-JP.msi` | 66,654,208 | `BD8DB78B306609D15E21A250DA9A4C74E2D303128F1399B6D0E73CD62597A77F` | NotSigned |
 
 The MSI uses `ja-JP` so the required publisher name can be represented by WiX without code-page loss. NSIS includes Japanese and English UI languages.
 
@@ -33,22 +33,28 @@ The MSI uses `ja-JP` so the required publisher name can be represented by WiX wi
 Result: **PASS**
 
 1. MSI administrative extraction contained `syndocal.exe` plus seven FFmpeg runtime DLLs. File metadata reported `Syndocal`, version `1.0.0`, company `Seraf()のKTN`.
-2. The default-feature release executable was built with in-process libav enabled. NSIS silent install placed `syndocal.exe`, seven FFmpeg DLLs, and `uninstall.exe` in one application directory. Its post-install hook copies staged runtime libraries beside the executable and removes the staging directory.
+2. The default-feature release executable was built with in-process libav enabled. Both installers place seven FFmpeg DLLs directly beside `syndocal.exe`; neither format depends on PATH or an installer-specific copy hook.
 3. The installed executable launched successfully and rendered the complete one-screen Setup/Patch/2D Mapping workspace with the new application icon.
 4. The installer registered `.sdc` as `Syndocal Project`; the open command was `syndocal.exe "%1"` and the executable icon was registered.
 5. Silent uninstall removed the test installation and its association. No Syndocal process remained.
 
 ## Cross-platform release CI
 
-`.github/workflows/cross-platform.yml` builds and uploads:
+Final workflow: [Cross-platform run 29179218727](https://github.com/Seraf0-org/Rayard/actions/runs/29179218727), commit `1f04fd3`, result: **PASS** on all three jobs.
+
+`.github/workflows/cross-platform.yml` builds, package-smokes, and uploads:
 
 - Windows: NSIS + MSI
 - macOS: `.app` + DMG
 - Ubuntu 22.04: `.deb` + AppImage
 
-The matrix installs FFmpeg development/runtime dependencies and tests the default in-process libav path. On Windows, `prepare-release-runtime.mjs` stages the shared FFmpeg DLLs immediately before Tauri bundling. The Windows platform config packages those DLLs for both MSI and NSIS.
+The matrix installs LGPL FFmpeg development/runtime dependencies and tests the default in-process libav path. On Windows, CI silently installs NSIS, starts the installed app for eight seconds, verifies the local DLL set, uninstalls it, then administratively extracts MSI and verifies the same executable-adjacent DLL layout. On macOS it starts the bundled `.app` without `DYLD_LIBRARY_PATH`. On Ubuntu it starts the generated AppImage with `--appimage-extract-and-run` under Xvfb.
 
-Hosted macOS/Linux artifact execution remains external CI evidence; it cannot be produced on the Windows workstation. The workflow fails when an expected bundle directory is missing, so absent artifacts are not silently accepted.
+The macOS bundle contains five FFmpeg dylibs addressed through `@rpath`, declares macOS 12.0 as its minimum version, and has no Homebrew or runner-home dependency. All platform artifacts include `THIRD_PARTY_NOTICES.md` and the LGPLv3 text. The workflow fails when a bundle is absent or its packaged application does not remain alive for the smoke interval.
+
+## Release disposition
+
+The v1.0 software release gate is complete. Physical Art-Net/sACN/serial waveform checks remain an external rig acceptance activity documented in `qa/M4_IO_VALIDATION.md`; unavailable hardware is not represented as a software implementation pass.
 
 ## Signing decision
 

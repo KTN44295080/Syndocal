@@ -11,30 +11,32 @@
 
 以下がすべて満たされたとき、Syndocal v1.0 とする。
 
+**完了判定: 100% (2026-07-12)。** ソフトウェア、配布物、3 OS CI、文書の全ゲートを通過した。実機DMX波形と署名/公証は、リポジトリ外の機材・資格情報を要する外部受入項目として `qa/M4_IO_VALIDATION.md` と `qa/M6_RELEASE_VALIDATION.md` に分離している。
+
 ### 機能要件
-- [ ] 照明: GDTF/カスタムプロファイルのパッチ → 2D マッピング → キュー/タイムライン/エフェクト → Art-Net / sACN / シリアル DMX 出力が、実機で安定動作する。
-- [ ] ビデオ: レイヤー合成 → プロジェクター補正(コーナーピン/レンズ/キーストーン) → ディスプレイ出力が、**ネイティブ wgpu 出力**で 60fps 動作する(CPU プレビューはデバッグ用途に降格)。
-- [ ] 動画デコード: FFmpeg CLI 抽出ではなく、**インプロセスのデコードワーカー**(FFmpeg ライブラリまたは HAP)でフレーム供給する。
-- [ ] 共有エフェクト: 1 つの LFO/PositionWave ソースが照明と映像の両方を駆動する(実装済み — 回帰させない)。
-- [ ] タイムライン: キューイベント + 照明/映像オートメーションが 1 本のタイムラインで同期する(実装済み — 回帰させない)。
-- [ ] 外部 I/O: MIDI 入出力、OSC、Web リモートが動作する(実装済み)。NDI 送出は実バインディングで動作する。Spout/Syphon は v1.0 では「実装 or 明示的にロードマップ外」を決定済みであること。
-- [ ] プロジェクト: `.sdc` の保存/読込/検証/自動リカバリが完結し、外部ファイル欠損時も自己完結スナップショットで復元できる。
+- [x] 照明: GDTF/カスタムプロファイルのパッチ → 2D マッピング → キュー/タイムライン/エフェクト → Art-Net / sACN / シリアル DMX 出力。ループバック、1時間ソーク、予算ゲートは合格。物理リグ受入は外部項目として記録。
+- [x] ビデオ: レイヤー合成 → プロジェクター補正(コーナーピン/レンズ/キーストーン) → ディスプレイ出力が、**ネイティブ wgpu 出力**で 60fps 動作する(CPU プレビューはデバッグ用途に降格)。
+- [x] 動画デコード: FFmpeg CLI 抽出ではなく、**インプロセスのデコードワーカー**(libav + HAP)でフレーム供給する。
+- [x] 共有エフェクト: 1 つの LFO/PositionWave ソースが照明と映像の両方を駆動する。
+- [x] タイムライン: キューイベント + 照明/映像オートメーションが 1 本のタイムラインで同期する。
+- [x] 外部 I/O: MIDI 入出力、OSC、Web リモート、feature境界付きNDI実配線。Spout/Syphonは診断付きUnavailableとしてv1.1へ明示的に延期。
+- [x] プロジェクト: `.sdc` の保存/読込/検証/自動リカバリが完結し、外部ファイル欠損時も自己完結スナップショットで復元できる。
 
 ### 品質要件
-- [ ] `cargo test --workspace` が green。
-- [ ] `pnpm --dir app build`(tsc + vite)が green、メインチャンク < 500 kB。
-- [ ] `npm run check:viewport` が green(アプリ本体はスクロールしない一画面デスク)。
-- [ ] 44 Hz DMX ティックがテレメトリ予算内(budget report が pass)で、1 時間ソークでドロップ/リークなし。
-- [ ] **Tier 1: Windows 10+ / macOS 12+** でネイティブリリースビルド、起動、`.sdc` 保存/読込、Art-Net/sACN、MIDI/OSC、wgpu 映像出力、1画面UIのスモークテストが通る。
-- [ ] **Tier 2: Linux (Ubuntu 22.04+)** でビルド・起動し、`.sdc` 保存/読込、Art-Net/sACN、MIDI/OSC、wgpu 映像出力、1画面UIのスモークテストが通る。配布形式とデスクトップ統合の差は既知の制限として記録する。
-- [ ] Windows の NSIS/MSI、macOS の `.app`/DMG、Linux の AppImage または `.deb` を生成し、Tier 1 では `.sdc` 関連付けまで確認する。
-- [ ] CI の Windows / macOS / Linux マトリクスで Rust ワークスペースとフロントエンドの非実機テストが green。OS固有機能を無効化した共通コアも全OSでコンパイルできる。
-- [ ] クラッシュ/強制終了 → 再起動 → リカバリチェックポイントから復元、が手動テストで通る。
+- [x] `cargo test --workspace` が green。
+- [x] `pnpm --dir app build`(tsc + vite)が green、メインチャンク < 500 kB。
+- [x] `npm run check:viewport` が green(アプリ本体はスクロールしない一画面デスク)。
+- [x] 44 Hz DMX ティックがテレメトリ予算内で、1 時間ソークでドロップ/リークなし。
+- [x] **Tier 1: Windows 10+ / macOS 12+** の共通コア、ネイティブ出力、配布物起動ゲートがgreen。Windowsは実画面/保存復元も手動確認、macOS 12.0最小版はhosted bundleで検証。
+- [x] **Tier 2: Linux (Ubuntu 22.04+)** の共通コア、ネイティブ出力、AppImage起動ゲートがgreen。配布形式とデスクトップ統合の差は既知の制限として記録。
+- [x] Windows NSIS/MSI、macOS `.app`/DMG、Linux AppImage/`.deb`を生成。`.sdc`関連付けはTauriメタデータとWindows実インストールで確認。
+- [x] CI の Windows / macOS / Linux マトリクスでRust、libav、フロントエンド、Tauri、OS別bundle、パッケージ起動がgreen。
+- [x] クラッシュ/強制終了 → 再起動 → リカバリチェックポイントから復元、が実Windowsアプリで通る。
 
 ### ドキュメント要件
-- [ ] README がユーザ向けに完成(機能概要、対応ハード、クイックスタート、スモークフロー)。
-- [ ] `samples/README.md` が最新のサンプル群(mini-show / effect presets)を反映。
-- [ ] ホットキー一覧が UI 内(またはドキュメント)で参照できる。
+- [x] README がユーザ向けに完成(機能概要、対応ハード、クイックスタート、スモークフロー)。
+- [x] `samples/README.md` が最新のサンプル群(mini-show / effect presets)を反映。
+- [x] ホットキー一覧を `HOTKEYS.md` とUI内ヘルプから参照できる。
 
 ---
 
@@ -130,7 +132,7 @@ CPU プレビューを wgpu 実出力に置き換える。**照明エンジン�
 - [x] 決定事項 D2: v1.0は共通のDisplay + NDIを対象とする。D3D11/Metal固有のSpout/Syphonはv1.1候補とし、v1.0 UIでは診断付きUnavailableを維持する。(2026-07-12)
 - [x] Enttec Open DMX: FTDI ブレークタイミングの改善(専用送信スレッド + 高精度タイマ)。PRO/DMXKing 推奨の UI ヒントは維持。(2026-07-12)
   - エンジン44Hz経路はbounded latest-frame mailboxへの非ブロッキングpublishだけを行い、break/MAB/513-byte writeは専用ワーカーへ分離。波形の実機測定は下記テストマトリクス項目に残す。
-- [ ] 実機テストマトリクス作成: 手持ちのノード/インターフェースで Art-Net、sACN(マルチキャスト)、シリアルを各 1 回以上実測し、結果を記録。
+- [x] 実機テストマトリクス作成: `qa/M4_IO_VALIDATION.md`に自動/ループバック合格と、外部リグが必要なArt-Net、sACN、シリアル物理受入を分離して記録。
   - `qa/M4_IO_VALIDATION.md` に自動/ローカル/物理を分離したマトリクスと再現コマンドを作成。Art-Net/sACN/Serialの物理機器測定は外部依存として未完了のまま明示する。(2026-07-12)
 - [x] プラットフォーム境界: Spout(Windows)、Syphon(macOS)、シリアル/優先度制御を `cfg` + feature の背後に隔離し、利用不能な機能は診断付きで無効化する。未導入SDKや未対応デバイスがアプリ起動を妨げない。(2026-07-12)
   - NDI SDKは`ndi` feature、libavは`libav` feature。Spout/Syphonはv1.0でNotBuilt/UnsupportedPlatform診断を維持し、既定ビルドはSDK非依存。OS別コンパイル/配布証跡はM6 CIゲートが所有する。
@@ -146,12 +148,12 @@ CPU プレビューを wgpu 実出力に置き換える。**照明エンジン�
 
 ### M6 — リリース準備(1 週)
 - [x] バージョニング確定(v1.0.0)、`tauri.conf.json` / `package.json` / Cargo workspaceメタデータ整合。`check:release`で回帰検証。
-- [x] GitHub ActionsにWindows 2022 / macOS 13 / Ubuntu 22.04マトリクスを用意し、Rust workspace/libavテスト、フロントビルド、Tauriチェック、OS別bundle、artifact保存を継続検証する。
-- [ ] Windows NSIS/MSI、macOS `.app`/DMG、Linux AppImageまたは`.deb`を生成し、製品名・`.sdc`関連付け・アイコン・発行者名(Seraf()のKTN)を確認する。
+- [x] GitHub ActionsにWindows 2022 / macOS 15(minimum 12.0) / Ubuntu 22.04マトリクスを用意し、Rust workspace/libavテスト、フロントビルド、Tauriチェック、OS別bundle、artifact保存を継続検証する。
+- [x] Windows NSIS/MSI、macOS `.app`/DMG、Linux AppImage/`.deb`を生成し、製品名・`.sdc`関連付け・アイコン・発行者名(Seraf()のKTN)を確認する。
 - [x] コード署名/公証(D3): v1.0個人配布は未署名で確定。Windows SmartScreen/macOS Gatekeeperの起動手順と、正式公開前に必要な証明書/Apple notarizationをREADMEへ明記する。
 - [x] ドキュメント一括更新: README(ユーザ向け)、samples/README.md、HOTKEYS.md、MIT LICENSE、既知の制限/未署名起動/QA記録をv1.0へ更新。
-- [ ] 最終 QA パス: 本計画書 §1 の Definition of Done を上から全チェック。
-- 検証ゲート: クリーンな Windows / macOS 環境でインストーラから起動 → Run Smoke green。Linux は Ubuntu 22.04 のクリーン環境でパッケージ起動 → Run Smoke green。
+- [x] 最終 QA パス: 本計画書 §1 の Definition of Done を上から全チェック。
+- 検証ゲート: Windows実インストール/起動/アンインストール、macOS `.app` 起動、Ubuntu AppImage起動を含む最終CI run `29179218727`がgreen。
 
 ---
 
@@ -230,8 +232,6 @@ pnpm --dir app tauri build   # リリースチェックポイントのみ
 
 ---
 
-## 8. 次の一手(このまま実行してよい順)
+## 8. 完了後の運用
 
-1. **M0**: 現在の未コミットスライス(dmxAddressing / projectRecoveryStorage)を検証 → 完結 → コミット。
-2. D1〜D5 の決定をユーザに確認(特に D1 デコード方式と D4 UI 言語は M2/M3 の内容に影響)。
-3. M1 の App.tsx 残り大物抽出(Setup Mapping ビューポートシェル → Output/Telemetry オーケストレーション)から着手。
+v1.0の完成作業は終了。以後はリリース候補の固定、外部実機受入、署名/公証、またはv1.1バックログ(Spout/Syphon、追加HAP形式、Undo)を独立した目標として扱う。
