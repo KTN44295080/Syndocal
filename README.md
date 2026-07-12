@@ -131,6 +131,7 @@ Windowsの完全libav bundleでは`FFMPEG_DIR`を共有FFmpeg SDKルートへ設
 - [qa/M4_IO_VALIDATION.md](qa/M4_IO_VALIDATION.md)
 - [qa/M5_RELIABILITY_VALIDATION.md](qa/M5_RELIABILITY_VALIDATION.md)
 - [qa/M6_RELEASE_VALIDATION.md](qa/M6_RELEASE_VALIDATION.md)
+- [RELEASE_STATUS.md](RELEASE_STATUS.md) - v1.0完成判定、外部受入、次スレッド向けバックログ
 
 ## 既知の制限
 

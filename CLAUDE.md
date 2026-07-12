@@ -1,5 +1,7 @@
 # Syndocal Claude Code Handoff
 
+Start with `RELEASE_STATUS.md`. It is the concise, current v1.0 release disposition and supersedes stale future-work statements preserved in this historical log.
+
 This workspace contains the completed Syndocal 1.0.0 release candidate, a Rust/Tauri/SolidJS DMX lighting + VJ control app. Historical implementation notes remain below for traceability.
 
 ## Product Decisions To Preserve
