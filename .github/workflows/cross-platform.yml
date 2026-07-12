@@ -96,7 +96,6 @@ jobs:
           fi
           echo "FFMPEG_PREFIX=$prefix" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=$prefix/lib/pkgconfig" >> "$GITHUB_ENV"
-          echo "DYLD_LIBRARY_PATH=$prefix/lib" >> "$GITHUB_ENV"
           echo "MACOSX_DEPLOYMENT_TARGET=12.0" >> "$GITHUB_ENV"
 
       - name: Install Windows video SDK
@@ -134,7 +133,7 @@ jobs:
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: syndocal-${{ matrix.os }}
+          shared-key: syndocal-lgpl-v1-${{ matrix.os }}
 
       - name: Install frontend dependencies
         run: pnpm --dir app install --frozen-lockfile
