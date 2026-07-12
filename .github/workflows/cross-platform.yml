@@ -17,7 +17,7 @@ jobs:
   test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -25,7 +25,7 @@ jobs:
           - name: Windows 10+
             os: windows-2022
           - name: macOS 12+
-            os: macos-13
+            os: macos-15
           - name: Ubuntu 22.04
             os: ubuntu-22.04
 
