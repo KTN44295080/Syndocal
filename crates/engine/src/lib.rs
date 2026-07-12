@@ -14792,10 +14792,7 @@ mod tests {
 
         let layer = snapshot.video.layers.first().unwrap();
         assert_eq!(snapshot.cues[0].video_targets.len(), 1);
-        assert_eq!(
-            snapshot.cues[0].video_targets[0].state.position_ms,
-            1_000
-        );
+        assert_eq!(snapshot.cues[0].video_targets[0].state.position_ms, 1_000);
         assert_eq!(layer.id, layer_id);
         assert_eq!(layer.state.opacity, 0.5);
         assert_eq!(layer.state.speed, 2.0);
