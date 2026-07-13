@@ -151,6 +151,7 @@ struct AppState {
     media_audio: Arc<Mutex<MediaAudioPlayback>>,
     _media_audio_sync: MediaAudioSyncRuntime,
     live_audio_input_lifecycle: Mutex<()>,
+    live_audio_input_devices: Mutex<LiveAudioInputDeviceCatalog>,
     live_audio_input: Mutex<Option<LiveAudioInput>>,
     video_preview: Arc<Mutex<AppVideoPreviewRenderer>>,
     video_recording: Mutex<VideoRecordingRuntime>,
@@ -825,7 +826,12 @@ struct LiveAudioInputStatus {
     running: bool,
     stale: bool,
     safety_clear_pending: bool,
+    device_id: Option<String>,
     device_name: Option<String>,
+    backend: Option<String>,
+    sample_format: Option<String>,
+    configured_buffer_frames: Option<u32>,
+    channel_mix: LiveAudioChannelMix,
     sample_rate: u32,
     channels: u16,
     bass: f32,
@@ -835,16 +841,20 @@ struct LiveAudioInputStatus {
     dropped_chunks: u64,
     dropped_frames: u64,
     callback_count: u64,
+    last_callback_frames: u64,
+    min_callback_frames: u64,
     max_callback_frames: u64,
     capture_to_worker_us: u64,
     max_capture_to_worker_us: u64,
     queue_depth: usize,
     queue_capacity: usize,
+    queue_depth_high_water: usize,
     last_error: Option<String>,
 }
 
 const LIVE_AUDIO_STALE_AFTER: Duration = Duration::from_millis(250);
 const LIVE_AUDIO_RECEIVE_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const LIVE_AUDIO_MAX_CONFIGURED_BUFFER_AGE: Duration = Duration::from_millis(200);
 const LIVE_AUDIO_STOP_CLEAR_RETRY: Duration = Duration::from_millis(100);
 const LIVE_AUDIO_STOP_CLEAR_RETRY_INTERVAL: Duration = Duration::from_millis(2);
 const LIVE_AUDIO_CAPTURE_SLOT_COUNT: usize = 4;
@@ -853,15 +863,146 @@ const LIVE_AUDIO_STALE_ERROR: &str = "Live audio input is stale: no samples rece
 const LIVE_AUDIO_WORKER_STALE_ERROR: &str =
     "Live audio input is stale: FFT worker heartbeat exceeded 250 ms";
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+enum LiveAudioChannelMix {
+    #[default]
+    AverageAll,
+    Single {
+        channel_index: u16,
+    },
+    StereoPair {
+        left_channel_index: u16,
+        right_channel_index: u16,
+    },
+}
+
+impl LiveAudioChannelMix {
+    fn validate(self, channels: u16) -> Result<(), String> {
+        if channels == 0 {
+            return Err("Live audio stream must expose at least one channel".to_string());
+        }
+        let validate_index = |index: u16, label: &str| {
+            if index < channels {
+                Ok(())
+            } else {
+                Err(format!(
+                    "Live audio {label} channel index {index} is outside the configured {channels}-channel stream"
+                ))
+            }
+        };
+        match self {
+            Self::AverageAll => Ok(()),
+            Self::Single { channel_index } => validate_index(channel_index, "single"),
+            Self::StereoPair {
+                left_channel_index,
+                right_channel_index,
+            } => {
+                validate_index(left_channel_index, "left")?;
+                validate_index(right_channel_index, "right")?;
+                if left_channel_index == right_channel_index {
+                    return Err(
+                        "Live audio stereo-pair channels must use two different indices"
+                            .to_string(),
+                    );
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
+#[serde(default)]
+struct LiveAudioInputStartRequest {
+    device_id: Option<String>,
+    sample_rate: Option<u32>,
+    stream_channels: Option<u16>,
+    buffer_frames: Option<u32>,
+    channel_mix: LiveAudioChannelMix,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct LiveAudioInputDeviceSummary {
+    id: String,
+    name: String,
+    label: String,
+    backend: String,
+}
+
+#[derive(Clone)]
+struct LiveAudioInputDeviceEntry {
+    summary: LiveAudioInputDeviceSummary,
+    device: rodio::cpal::Device,
+}
+
+#[derive(Default)]
+struct LiveAudioInputDeviceCatalog {
+    generation: u64,
+    entries: HashMap<String, LiveAudioInputDeviceEntry>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum LiveAudioBufferCapability {
+    Range { min_frames: u32, max_frames: u32 },
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct LiveAudioInputConfig {
+    channels: u16,
+    sample_rate: u32,
+    sample_format: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+struct LiveAudioInputConfigRange {
+    channels: u16,
+    min_sample_rate: u32,
+    max_sample_rate: u32,
+    sample_format: String,
+    buffer_size: LiveAudioBufferCapability,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct LiveAudioInputCapabilities {
+    device_id: Option<String>,
+    device_name: String,
+    backend: String,
+    default_config: LiveAudioInputConfig,
+    supported_configs: Vec<LiveAudioInputConfigRange>,
+    max_capture_frames: usize,
+}
+
+#[derive(Clone)]
+struct ResolvedLiveAudioInputDevice {
+    device_id: Option<String>,
+    device_name: String,
+    backend: String,
+    device: rodio::cpal::Device,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SelectedLiveAudioInputConfig {
+    stream_config: rodio::cpal::StreamConfig,
+    sample_format: rodio::cpal::SampleFormat,
+    configured_buffer_frames: Option<u32>,
+    channel_mix: LiveAudioChannelMix,
+}
+
 #[derive(Debug)]
 struct LiveAudioInputCaptureTelemetry {
     started_at: Instant,
     dropped_chunks: AtomicU64,
     dropped_frames: AtomicU64,
     callback_count: AtomicU64,
+    last_callback_frames: AtomicU64,
+    min_callback_frames: AtomicU64,
     max_callback_frames: AtomicU64,
     capture_to_worker_us: AtomicU64,
     max_capture_to_worker_us: AtomicU64,
+    queue_depth_high_water: AtomicU64,
     worker_heartbeat_us: AtomicU64,
 }
 
@@ -872,9 +1013,12 @@ impl Default for LiveAudioInputCaptureTelemetry {
             dropped_chunks: AtomicU64::new(0),
             dropped_frames: AtomicU64::new(0),
             callback_count: AtomicU64::new(0),
+            last_callback_frames: AtomicU64::new(0),
+            min_callback_frames: AtomicU64::new(u64::MAX),
             max_callback_frames: AtomicU64::new(0),
             capture_to_worker_us: AtomicU64::new(0),
             max_capture_to_worker_us: AtomicU64::new(0),
+            queue_depth_high_water: AtomicU64::new(0),
             worker_heartbeat_us: AtomicU64::new(0),
         }
     }
@@ -6563,25 +6707,439 @@ fn list_audio_output_devices() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-fn list_audio_input_devices() -> Result<Vec<String>, String> {
+fn list_audio_input_devices(
+    state: State<'_, AppState>,
+) -> Result<Vec<LiveAudioInputDeviceSummary>, String> {
     use rodio::cpal::traits::{DeviceTrait, HostTrait};
 
-    let mut names = rodio::cpal::default_host()
+    let host = rodio::cpal::default_host();
+    let backend = host.id().name().to_string();
+    let mut devices = host
         .input_devices()
         .map_err(|error| format!("Failed to list audio input devices: {error}"))?
-        .filter_map(|device| device.name().ok())
+        .enumerate()
+        .map(|(ordinal, device)| {
+            let name = device
+                .name()
+                .unwrap_or_else(|_| format!("Unnamed audio input {}", ordinal + 1));
+            (ordinal, name, device)
+        })
         .collect::<Vec<_>>();
-    names.sort();
-    names.dedup();
-    Ok(names)
+    devices.sort_by(|left, right| {
+        left.1
+            .to_lowercase()
+            .cmp(&right.1.to_lowercase())
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    let names = devices
+        .iter()
+        .map(|(_, name, _)| name.clone())
+        .collect::<Vec<_>>();
+    let labels = disambiguate_live_audio_input_labels(&names);
+    let mut catalog = state
+        .live_audio_input_devices
+        .lock()
+        .map_err(|_| "Live audio input device catalog lock was poisoned".to_string())?;
+    catalog.generation = catalog.generation.wrapping_add(1).max(1);
+    let generation = catalog.generation;
+    catalog.entries.clear();
+    let summaries = devices
+        .into_iter()
+        .zip(labels)
+        .enumerate()
+        .map(|(index, ((_, name, device), label))| {
+            let id = live_audio_input_device_id(&backend, generation, index);
+            let summary = LiveAudioInputDeviceSummary {
+                id: id.clone(),
+                name,
+                label,
+                backend: backend.clone(),
+            };
+            catalog.entries.insert(
+                id,
+                LiveAudioInputDeviceEntry {
+                    summary: summary.clone(),
+                    device,
+                },
+            );
+            summary
+        })
+        .collect();
+    Ok(summaries)
+}
+
+fn live_audio_input_device_id(backend: &str, generation: u64, index: usize) -> String {
+    format!("{}:{generation}:{index}", backend.to_ascii_lowercase())
+}
+
+fn disambiguate_live_audio_input_labels(names: &[String]) -> Vec<String> {
+    let mut occurrences = HashMap::<&str, usize>::new();
+    let mut used = HashSet::<String>::new();
+    names
+        .iter()
+        .map(|name| {
+            let occurrence = occurrences.entry(name.as_str()).or_default();
+            *occurrence += 1;
+            let mut suffix = *occurrence;
+            let mut candidate = if suffix == 1 {
+                name.clone()
+            } else {
+                format!("{name} ({suffix})")
+            };
+            while used.contains(&candidate) {
+                suffix += 1;
+                candidate = format!("{name} ({suffix})");
+            }
+            used.insert(candidate.clone());
+            candidate
+        })
+        .collect()
+}
+
+fn resolve_live_audio_input_device(
+    state: &AppState,
+    device_id: Option<&str>,
+) -> Result<ResolvedLiveAudioInputDevice, String> {
+    use rodio::cpal::traits::{DeviceTrait, HostTrait};
+
+    if let Some(device_id) = device_id.map(str::trim).filter(|id| !id.is_empty()) {
+        let catalog = state
+            .live_audio_input_devices
+            .lock()
+            .map_err(|_| "Live audio input device catalog lock was poisoned".to_string())?;
+        let entry = catalog.entries.get(device_id).ok_or_else(|| {
+            "Audio input device selection is stale or unknown; refresh the device list".to_string()
+        })?;
+        return Ok(ResolvedLiveAudioInputDevice {
+            device_id: Some(entry.summary.id.clone()),
+            device_name: entry.summary.name.clone(),
+            backend: entry.summary.backend.clone(),
+            device: entry.device.clone(),
+        });
+    }
+
+    let host = rodio::cpal::default_host();
+    let device = host
+        .default_input_device()
+        .ok_or_else(|| "No default audio input device is available".to_string())?;
+    let device_name = device
+        .name()
+        .unwrap_or_else(|_| "System default audio input".to_string());
+    Ok(ResolvedLiveAudioInputDevice {
+        device_id: None,
+        device_name,
+        backend: host.id().name().to_string(),
+        device,
+    })
+}
+
+fn live_audio_buffer_capability(
+    buffer_size: &rodio::cpal::SupportedBufferSize,
+) -> LiveAudioBufferCapability {
+    match *buffer_size {
+        rodio::cpal::SupportedBufferSize::Range { min, max } => LiveAudioBufferCapability::Range {
+            min_frames: min,
+            max_frames: max,
+        },
+        rodio::cpal::SupportedBufferSize::Unknown => LiveAudioBufferCapability::Unknown,
+    }
+}
+
+fn live_audio_input_config(config: &rodio::cpal::SupportedStreamConfig) -> LiveAudioInputConfig {
+    LiveAudioInputConfig {
+        channels: config.channels(),
+        sample_rate: config.sample_rate().0,
+        sample_format: config.sample_format().to_string(),
+    }
+}
+
+fn live_audio_input_config_range(
+    range: &rodio::cpal::SupportedStreamConfigRange,
+) -> LiveAudioInputConfigRange {
+    LiveAudioInputConfigRange {
+        channels: range.channels(),
+        min_sample_rate: range.min_sample_rate().0,
+        max_sample_rate: range.max_sample_rate().0,
+        sample_format: range.sample_format().to_string(),
+        buffer_size: live_audio_buffer_capability(range.buffer_size()),
+    }
+}
+
+#[tauri::command]
+fn get_live_audio_input_capabilities(
+    state: State<'_, AppState>,
+    device_id: Option<String>,
+) -> Result<LiveAudioInputCapabilities, String> {
+    use rodio::cpal::traits::DeviceTrait;
+
+    let resolved = resolve_live_audio_input_device(&state, device_id.as_deref())?;
+    let default_config = resolved
+        .device
+        .default_input_config()
+        .map_err(|error| format!("Failed to read default audio input configuration: {error}"))?;
+    let mut supported_configs = resolved
+        .device
+        .supported_input_configs()
+        .map_err(|error| format!("Failed to read supported audio input configurations: {error}"))?
+        .map(|range| live_audio_input_config_range(&range))
+        .collect::<Vec<_>>();
+    supported_configs.sort();
+    supported_configs.dedup();
+    Ok(LiveAudioInputCapabilities {
+        device_id: resolved.device_id,
+        device_name: resolved.device_name,
+        backend: resolved.backend,
+        default_config: live_audio_input_config(&default_config),
+        supported_configs,
+        max_capture_frames: LIVE_AUDIO_CAPTURE_SLOT_COUNT * LIVE_AUDIO_CAPTURE_SLOT_FRAMES,
+    })
+}
+
+fn live_audio_buffer_accepts(capability: LiveAudioBufferCapability, buffer_frames: u32) -> bool {
+    match capability {
+        LiveAudioBufferCapability::Range {
+            min_frames,
+            max_frames,
+        } => (min_frames..=max_frames).contains(&buffer_frames),
+        LiveAudioBufferCapability::Unknown => true,
+    }
+}
+
+fn live_audio_sample_format_rank(
+    format: rodio::cpal::SampleFormat,
+    default_format: rodio::cpal::SampleFormat,
+) -> u8 {
+    if format == default_format {
+        return 0;
+    }
+    match format {
+        rodio::cpal::SampleFormat::F32 => 1,
+        rodio::cpal::SampleFormat::I16 => 2,
+        rodio::cpal::SampleFormat::U16 => 3,
+        rodio::cpal::SampleFormat::F64 => 4,
+        rodio::cpal::SampleFormat::I32 => 5,
+        rodio::cpal::SampleFormat::I24 => 6,
+        rodio::cpal::SampleFormat::I8 => 7,
+        rodio::cpal::SampleFormat::U8 => 8,
+        rodio::cpal::SampleFormat::I64 => 9,
+        rodio::cpal::SampleFormat::U32 => 10,
+        rodio::cpal::SampleFormat::U64 => 11,
+        _ => u8::MAX,
+    }
+}
+
+fn live_audio_channel_rank(channels: u16, default_channels: u16) -> (u8, u16) {
+    if channels == default_channels {
+        (0, channels)
+    } else if channels == 2 {
+        (1, channels)
+    } else if channels == 1 {
+        (2, channels)
+    } else {
+        (3, channels)
+    }
+}
+
+fn validate_live_audio_configured_buffer(
+    buffer_frames: u32,
+    sample_rate: u32,
+) -> Result<(), String> {
+    if buffer_frames == 0 {
+        return Err("Live audio buffer size must be greater than zero frames".to_string());
+    }
+    let max_capture_frames = LIVE_AUDIO_CAPTURE_SLOT_COUNT * LIVE_AUDIO_CAPTURE_SLOT_FRAMES;
+    if buffer_frames as usize > max_capture_frames {
+        return Err(format!(
+            "Requested live audio buffer {buffer_frames} frames exceeds the {max_capture_frames}-frame capture pool"
+        ));
+    }
+    let buffer_age = live_audio_frame_duration(buffer_frames as usize, sample_rate);
+    if buffer_age > LIVE_AUDIO_MAX_CONFIGURED_BUFFER_AGE {
+        return Err(format!(
+            "Requested live audio buffer {buffer_frames} frames at {sample_rate} Hz spans {:.1} ms, above the {:.0} ms watchdog-safe limit",
+            buffer_age.as_secs_f64() * 1_000.0,
+            LIVE_AUDIO_MAX_CONFIGURED_BUFFER_AGE.as_secs_f64() * 1_000.0,
+        ));
+    }
+    Ok(())
+}
+
+fn select_live_audio_stream_config(
+    default_config: &rodio::cpal::SupportedStreamConfig,
+    supported_configs: &[rodio::cpal::SupportedStreamConfigRange],
+    request: &LiveAudioInputStartRequest,
+) -> Result<SelectedLiveAudioInputConfig, String> {
+    let default_channels = default_config.channels();
+    let default_sample_rate = default_config.sample_rate().0;
+    let default_sample_format = default_config.sample_format();
+    if request.sample_rate == Some(0) {
+        return Err("Live audio sample rate must be greater than zero".to_string());
+    }
+    if request.stream_channels == Some(0) {
+        return Err("Live audio stream channel count must be greater than zero".to_string());
+    }
+
+    let target_sample_rate = request.sample_rate.unwrap_or(default_sample_rate);
+    if let Some(buffer_frames) = request.buffer_frames {
+        validate_live_audio_configured_buffer(buffer_frames, target_sample_rate)?;
+    }
+    let use_default_stream = request.sample_rate.is_none() && request.stream_channels.is_none();
+    let (channels, sample_format, buffer_capability) = if use_default_stream {
+        (
+            default_channels,
+            default_sample_format,
+            live_audio_buffer_capability(default_config.buffer_size()),
+        )
+    } else {
+        let candidate = supported_configs
+            .iter()
+            .filter(|range| {
+                (range.min_sample_rate().0..=range.max_sample_rate().0)
+                    .contains(&target_sample_rate)
+                    && request
+                        .stream_channels
+                        .map(|channels| channels == range.channels())
+                        .unwrap_or(true)
+                    && request
+                        .buffer_frames
+                        .map(|frames| {
+                            live_audio_buffer_accepts(
+                                live_audio_buffer_capability(range.buffer_size()),
+                                frames,
+                            )
+                        })
+                        .unwrap_or(true)
+            })
+            .min_by_key(|range| {
+                let channel_rank = if request.stream_channels.is_some() {
+                    (0, range.channels())
+                } else {
+                    live_audio_channel_rank(range.channels(), default_channels)
+                };
+                let buffer_rank = match live_audio_buffer_capability(range.buffer_size()) {
+                    LiveAudioBufferCapability::Range { .. } => 0_u8,
+                    LiveAudioBufferCapability::Unknown => 1_u8,
+                };
+                (
+                    channel_rank,
+                    request.buffer_frames.map(|_| buffer_rank).unwrap_or(0),
+                    live_audio_sample_format_rank(range.sample_format(), default_sample_format),
+                    range.min_sample_rate().0,
+                    range.max_sample_rate().0,
+                )
+            })
+            .ok_or_else(|| {
+                format!(
+                    "No supported live audio input configuration matches sample_rate={target_sample_rate}, channels={}, buffer_frames={}",
+                    request
+                        .stream_channels
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "auto".to_string()),
+                    request
+                        .buffer_frames
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "default".to_string()),
+                )
+            })?;
+        (
+            candidate.channels(),
+            candidate.sample_format(),
+            live_audio_buffer_capability(candidate.buffer_size()),
+        )
+    };
+
+    request.channel_mix.validate(channels)?;
+    if let Some(buffer_frames) = request.buffer_frames {
+        if !live_audio_buffer_accepts(buffer_capability, buffer_frames) {
+            return Err(format!(
+                "Requested live audio buffer {buffer_frames} frames is outside the selected device range {buffer_capability:?}"
+            ));
+        }
+    }
+    Ok(SelectedLiveAudioInputConfig {
+        stream_config: rodio::cpal::StreamConfig {
+            channels,
+            sample_rate: rodio::cpal::SampleRate(target_sample_rate),
+            buffer_size: request
+                .buffer_frames
+                .map(rodio::cpal::BufferSize::Fixed)
+                .unwrap_or(rodio::cpal::BufferSize::Default),
+        },
+        sample_format,
+        configured_buffer_frames: request.buffer_frames,
+        channel_mix: request.channel_mix,
+    })
+}
+
+#[derive(Clone)]
+struct LiveAudioCaptureCallbackContext {
+    channels: u16,
+    sample_rate: u32,
+    channel_mix: LiveAudioChannelMix,
+    free_capture_slots: Arc<crossbeam_queue::ArrayQueue<LiveAudioSampleChunk>>,
+    ready_capture_chunks: Arc<crossbeam_queue::ArrayQueue<LiveAudioSampleChunk>>,
+    capture_telemetry: Arc<LiveAudioInputCaptureTelemetry>,
+    safety: Arc<LiveAudioInputSafety>,
+    worker_wake: std::thread::Thread,
+}
+
+#[derive(Clone)]
+struct LiveAudioStreamErrorContext {
+    engine: EngineHandle,
+    status: Arc<Mutex<LiveAudioInputStatus>>,
+    safety: Arc<LiveAudioInputSafety>,
+    worker_wake: std::thread::Thread,
+}
+
+fn build_live_audio_input_stream<T>(
+    device: &rodio::cpal::Device,
+    config: &rodio::cpal::StreamConfig,
+    capture: LiveAudioCaptureCallbackContext,
+    errors: LiveAudioStreamErrorContext,
+) -> Result<rodio::cpal::Stream, rodio::cpal::BuildStreamError>
+where
+    T: rodio::cpal::SizedSample + Copy + Send + 'static,
+    f32: rodio::cpal::FromSample<T>,
+{
+    use rodio::cpal::traits::DeviceTrait;
+
+    device.build_input_stream(
+        config,
+        move |data: &[T], callback_info| {
+            queue_live_audio_samples(
+                data,
+                capture.channels,
+                capture.sample_rate,
+                capture.channel_mix,
+                callback_info,
+                &capture.free_capture_slots,
+                &capture.ready_capture_chunks,
+                &capture.capture_telemetry,
+                &capture.safety,
+                &capture.worker_wake,
+                |value| <f32 as rodio::cpal::Sample>::from_sample(value),
+            )
+        },
+        move |error| {
+            fail_closed_live_audio(
+                &errors.engine,
+                &errors.status,
+                &errors.safety,
+                true,
+                format!("Live audio input stream failed: {error}"),
+            );
+            errors.worker_wake.unpark();
+        },
+        None,
+    )
 }
 
 #[tauri::command]
 fn start_live_audio_input(
     state: State<'_, AppState>,
-    device_name: Option<String>,
+    request: LiveAudioInputStartRequest,
 ) -> Result<LiveAudioInputStatus, String> {
-    use rodio::cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+    use rodio::cpal::traits::{DeviceTrait, StreamTrait};
 
     let _lifecycle = state
         .live_audio_input_lifecycle
@@ -6597,37 +7155,41 @@ fn start_live_audio_input(
         );
     }
 
-    let requested_name = device_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|name| !name.is_empty());
-    let host = rodio::cpal::default_host();
-    let device = match requested_name {
-        Some(name) => host
-            .input_devices()
-            .map_err(|error| format!("Failed to list audio input devices: {error}"))?
-            .find(|device| device.name().ok().as_deref() == Some(name))
-            .ok_or_else(|| format!("Audio input device '{name}' was not found"))?,
-        None => host
-            .default_input_device()
-            .ok_or_else(|| "No default audio input device is available".to_string())?,
-    };
-    let resolved_name = device.name().ok();
-    let supported = device
+    let resolved = resolve_live_audio_input_device(&state, request.device_id.as_deref())?;
+    let default_config = resolved
+        .device
         .default_input_config()
         .map_err(|error| format!("Failed to read audio input configuration: {error}"))?;
-    let sample_format = supported.sample_format();
-    let config: rodio::cpal::StreamConfig = supported.into();
+    let supported_configs = if request.sample_rate.is_some() || request.stream_channels.is_some() {
+        resolved
+            .device
+            .supported_input_configs()
+            .map_err(|error| {
+                format!("Failed to read supported audio input configurations: {error}")
+            })?
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let selected = select_live_audio_stream_config(&default_config, &supported_configs, &request)?;
+    let sample_format = selected.sample_format;
+    let config = selected.stream_config.clone();
     let channels = config.channels.max(1);
     let sample_rate = config.sample_rate.0;
     let status = Arc::new(Mutex::new(LiveAudioInputStatus {
         running: true,
-        device_name: resolved_name,
+        device_id: resolved.device_id.clone(),
+        device_name: Some(resolved.device_name.clone()),
+        backend: Some(resolved.backend.clone()),
+        sample_format: Some(sample_format.to_string()),
+        configured_buffer_frames: selected.configured_buffer_frames,
+        channel_mix: selected.channel_mix,
         sample_rate,
         channels,
         queue_capacity: LIVE_AUDIO_CAPTURE_SLOT_COUNT,
         ..LiveAudioInputStatus::default()
     }));
+    let device = resolved.device;
     let stop = Arc::new(AtomicBool::new(false));
     let capture_started = Arc::new(AtomicBool::new(false));
     let safety = Arc::new(LiveAudioInputSafety::default());
@@ -6680,98 +7242,85 @@ fn start_live_audio_input(
         })
         .map_err(|error| format!("Failed to start live audio FFT worker: {error}"))?;
     let worker_wake = worker.thread().clone();
-    let error_status = Arc::clone(&status);
-    let error_safety = Arc::clone(&safety);
-    let error_engine = engine.clone();
-    let error_worker_wake = worker_wake.clone();
-    let error_callback = move |error: rodio::cpal::StreamError| {
-        fail_closed_live_audio(
-            &error_engine,
-            &error_status,
-            &error_safety,
-            true,
-            format!("Live audio input stream failed: {error}"),
-        );
-        error_worker_wake.unpark();
+    let capture_context = LiveAudioCaptureCallbackContext {
+        channels,
+        sample_rate,
+        channel_mix: selected.channel_mix,
+        free_capture_slots: Arc::clone(&free_capture_slots),
+        ready_capture_chunks: Arc::clone(&ready_capture_chunks),
+        capture_telemetry: Arc::clone(&capture_telemetry),
+        safety: Arc::clone(&safety),
+        worker_wake: worker_wake.clone(),
+    };
+    let error_context = LiveAudioStreamErrorContext {
+        engine: engine.clone(),
+        status: Arc::clone(&status),
+        safety: Arc::clone(&safety),
+        worker_wake: worker_wake.clone(),
     };
     let stream_result = match sample_format {
-        rodio::cpal::SampleFormat::F32 => {
-            let free_capture_slots = Arc::clone(&free_capture_slots);
-            let ready_capture_chunks = Arc::clone(&ready_capture_chunks);
-            let capture_telemetry = Arc::clone(&capture_telemetry);
-            let safety = Arc::clone(&safety);
-            let worker_wake = worker_wake.clone();
-            device.build_input_stream(
-                &config,
-                move |data: &[f32], callback_info| {
-                    queue_live_audio_samples(
-                        data,
-                        channels,
-                        sample_rate,
-                        callback_info,
-                        &free_capture_slots,
-                        &ready_capture_chunks,
-                        &capture_telemetry,
-                        &safety,
-                        &worker_wake,
-                        |value| value,
-                    )
-                },
-                error_callback,
-                None,
-            )
-        }
-        rodio::cpal::SampleFormat::I16 => {
-            let free_capture_slots = Arc::clone(&free_capture_slots);
-            let ready_capture_chunks = Arc::clone(&ready_capture_chunks);
-            let capture_telemetry = Arc::clone(&capture_telemetry);
-            let safety = Arc::clone(&safety);
-            let worker_wake = worker_wake.clone();
-            device.build_input_stream(
-                &config,
-                move |data: &[i16], callback_info| {
-                    queue_live_audio_samples(
-                        data,
-                        channels,
-                        sample_rate,
-                        callback_info,
-                        &free_capture_slots,
-                        &ready_capture_chunks,
-                        &capture_telemetry,
-                        &safety,
-                        &worker_wake,
-                        |value| value as f32 / i16::MAX as f32,
-                    )
-                },
-                error_callback,
-                None,
-            )
-        }
-        rodio::cpal::SampleFormat::U16 => {
-            let free_capture_slots = Arc::clone(&free_capture_slots);
-            let ready_capture_chunks = Arc::clone(&ready_capture_chunks);
-            let capture_telemetry = Arc::clone(&capture_telemetry);
-            let safety = Arc::clone(&safety);
-            let worker_wake = worker_wake.clone();
-            device.build_input_stream(
-                &config,
-                move |data: &[u16], callback_info| {
-                    queue_live_audio_samples(
-                        data,
-                        channels,
-                        sample_rate,
-                        callback_info,
-                        &free_capture_slots,
-                        &ready_capture_chunks,
-                        &capture_telemetry,
-                        &safety,
-                        &worker_wake,
-                        |value| value as f32 / 32767.5 - 1.0,
-                    )
-                },
-                error_callback,
-                None,
-            )
+        rodio::cpal::SampleFormat::I8 => build_live_audio_input_stream::<i8>(
+            &device,
+            &config,
+            capture_context.clone(),
+            error_context.clone(),
+        ),
+        rodio::cpal::SampleFormat::I16 => build_live_audio_input_stream::<i16>(
+            &device,
+            &config,
+            capture_context.clone(),
+            error_context.clone(),
+        ),
+        rodio::cpal::SampleFormat::I24 => build_live_audio_input_stream::<rodio::cpal::I24>(
+            &device,
+            &config,
+            capture_context.clone(),
+            error_context.clone(),
+        ),
+        rodio::cpal::SampleFormat::I32 => build_live_audio_input_stream::<i32>(
+            &device,
+            &config,
+            capture_context.clone(),
+            error_context.clone(),
+        ),
+        rodio::cpal::SampleFormat::I64 => build_live_audio_input_stream::<i64>(
+            &device,
+            &config,
+            capture_context.clone(),
+            error_context.clone(),
+        ),
+        rodio::cpal::SampleFormat::U8 => build_live_audio_input_stream::<u8>(
+            &device,
+            &config,
+            capture_context.clone(),
+            error_context.clone(),
+        ),
+        rodio::cpal::SampleFormat::U16 => build_live_audio_input_stream::<u16>(
+            &device,
+            &config,
+            capture_context.clone(),
+            error_context.clone(),
+        ),
+        rodio::cpal::SampleFormat::U32 => build_live_audio_input_stream::<u32>(
+            &device,
+            &config,
+            capture_context.clone(),
+            error_context.clone(),
+        ),
+        rodio::cpal::SampleFormat::U64 => build_live_audio_input_stream::<u64>(
+            &device,
+            &config,
+            capture_context.clone(),
+            error_context.clone(),
+        ),
+        rodio::cpal::SampleFormat::F32 => build_live_audio_input_stream::<f32>(
+            &device,
+            &config,
+            capture_context.clone(),
+            error_context.clone(),
+        ),
+        rodio::cpal::SampleFormat::F64 => {
+            build_live_audio_input_stream::<f64>(&device, &config, capture_context, error_context)
         }
         format => {
             stop.store(true, Ordering::Release);
@@ -6826,10 +7375,50 @@ fn live_audio_frame_duration(frames: usize, sample_rate: u32) -> Duration {
     Duration::from_nanos(nanos)
 }
 
+fn mix_live_audio_frame<T: Copy>(
+    frame: &[T],
+    channel_mix: LiveAudioChannelMix,
+    convert: &impl Fn(T) -> f32,
+) -> f32 {
+    let finite = |value: T| {
+        let converted = convert(value);
+        if converted.is_finite() {
+            converted
+        } else {
+            0.0
+        }
+    };
+    match channel_mix {
+        LiveAudioChannelMix::AverageAll => {
+            if frame.is_empty() {
+                0.0
+            } else {
+                frame.iter().copied().map(finite).sum::<f32>() / frame.len() as f32
+            }
+        }
+        LiveAudioChannelMix::Single { channel_index } => frame
+            .get(channel_index as usize)
+            .copied()
+            .map(finite)
+            .unwrap_or(0.0),
+        LiveAudioChannelMix::StereoPair {
+            left_channel_index,
+            right_channel_index,
+        } => match (
+            frame.get(left_channel_index as usize),
+            frame.get(right_channel_index as usize),
+        ) {
+            (Some(left), Some(right)) => (finite(*left) + finite(*right)) * 0.5,
+            _ => 0.0,
+        },
+    }
+}
+
 fn queue_live_audio_samples<T: Copy>(
     data: &[T],
     channels: u16,
     sample_rate: u32,
+    channel_mix: LiveAudioChannelMix,
     callback_info: &rodio::cpal::InputCallbackInfo,
     free_capture_slots: &crossbeam_queue::ArrayQueue<LiveAudioSampleChunk>,
     ready_capture_chunks: &crossbeam_queue::ArrayQueue<LiveAudioSampleChunk>,
@@ -6846,6 +7435,12 @@ fn queue_live_audio_samples<T: Copy>(
     capture_telemetry
         .callback_count
         .fetch_add(1, Ordering::Relaxed);
+    capture_telemetry
+        .last_callback_frames
+        .store(callback_frames as u64, Ordering::Relaxed);
+    capture_telemetry
+        .min_callback_frames
+        .fetch_min(callback_frames as u64, Ordering::Relaxed);
     capture_telemetry
         .max_callback_frames
         .fetch_max(callback_frames as u64, Ordering::Relaxed);
@@ -6899,14 +7494,7 @@ fn queue_live_audio_samples<T: Copy>(
             }
             let sample_start = (frame_offset + local_frame) * channels;
             let sample_end = (sample_start + channels).min(data.len());
-            let mut mixed = 0.0_f32;
-            for sample in &data[sample_start..sample_end] {
-                let converted = convert(*sample);
-                if converted.is_finite() {
-                    mixed += converted;
-                }
-            }
-            let mono = mixed / (sample_end - sample_start).max(1) as f32;
+            let mono = mix_live_audio_frame(&data[sample_start..sample_end], channel_mix, &convert);
             chunk.samples[local_frame] = if mono.is_finite() { mono } else { 0.0 };
         }
         chunk.len = chunk_frames;
@@ -6924,6 +7512,9 @@ fn queue_live_audio_samples<T: Copy>(
             let _ = free_capture_slots.push(chunk);
             break;
         }
+        capture_telemetry
+            .queue_depth_high_water
+            .fetch_max(ready_capture_chunks.len() as u64, Ordering::Relaxed);
         frame_offset += chunk_frames;
     }
     worker_wake.unpark();
@@ -6938,6 +7529,17 @@ fn sync_live_audio_capture_telemetry(
         status.dropped_chunks = capture_telemetry.dropped_chunks.load(Ordering::Relaxed);
         status.dropped_frames = capture_telemetry.dropped_frames.load(Ordering::Relaxed);
         status.callback_count = capture_telemetry.callback_count.load(Ordering::Relaxed);
+        status.last_callback_frames = capture_telemetry
+            .last_callback_frames
+            .load(Ordering::Relaxed);
+        let min_callback_frames = capture_telemetry
+            .min_callback_frames
+            .load(Ordering::Relaxed);
+        status.min_callback_frames = if min_callback_frames == u64::MAX {
+            0
+        } else {
+            min_callback_frames
+        };
         status.max_callback_frames = capture_telemetry
             .max_callback_frames
             .load(Ordering::Relaxed);
@@ -6949,6 +7551,10 @@ fn sync_live_audio_capture_telemetry(
             .load(Ordering::Relaxed);
         status.queue_depth = ready_capture_chunks.len();
         status.queue_capacity = ready_capture_chunks.capacity();
+        status.queue_depth_high_water = capture_telemetry
+            .queue_depth_high_water
+            .load(Ordering::Relaxed)
+            .min(usize::MAX as u64) as usize;
     }
 }
 
@@ -28388,6 +28994,356 @@ mod live_audio_input_tests {
         (free, ready)
     }
 
+    fn supported_config(
+        channels: u16,
+        sample_rate: u32,
+        sample_format: rodio::cpal::SampleFormat,
+        buffer_size: rodio::cpal::SupportedBufferSize,
+    ) -> rodio::cpal::SupportedStreamConfig {
+        rodio::cpal::SupportedStreamConfig::new(
+            channels,
+            rodio::cpal::SampleRate(sample_rate),
+            buffer_size,
+            sample_format,
+        )
+    }
+
+    fn supported_range(
+        channels: u16,
+        min_sample_rate: u32,
+        max_sample_rate: u32,
+        sample_format: rodio::cpal::SampleFormat,
+        buffer_size: rodio::cpal::SupportedBufferSize,
+    ) -> rodio::cpal::SupportedStreamConfigRange {
+        rodio::cpal::SupportedStreamConfigRange::new(
+            channels,
+            rodio::cpal::SampleRate(min_sample_rate),
+            rodio::cpal::SampleRate(max_sample_rate),
+            buffer_size,
+            sample_format,
+        )
+    }
+
+    #[test]
+    fn live_audio_device_labels_and_opaque_ids_remain_unambiguous() {
+        let labels = disambiguate_live_audio_input_labels(&[
+            "Microphone".to_string(),
+            "Microphone".to_string(),
+            "Microphone (2)".to_string(),
+        ]);
+        assert_eq!(labels[0], "Microphone");
+        assert_eq!(labels[1], "Microphone (2)");
+        assert_eq!(labels[2], "Microphone (2) (2)");
+        assert_eq!(labels.iter().collect::<HashSet<_>>().len(), labels.len());
+
+        let first = live_audio_input_device_id("WASAPI", 7, 0);
+        assert_ne!(first, live_audio_input_device_id("WASAPI", 7, 1));
+        assert_ne!(first, live_audio_input_device_id("WASAPI", 8, 0));
+        assert_eq!(first, "wasapi:7:0");
+    }
+
+    #[test]
+    fn live_audio_command_json_contract_uses_tagged_channel_mix_and_snake_case_fields() {
+        let request: LiveAudioInputStartRequest = serde_json::from_value(json!({
+            "device_id": "wasapi:7:0",
+            "sample_rate": 48_000,
+            "stream_channels": 2,
+            "buffer_frames": 128,
+            "channel_mix": {
+                "mode": "stereo_pair",
+                "left_channel_index": 0,
+                "right_channel_index": 1
+            }
+        }))
+        .unwrap();
+        assert_eq!(request.device_id.as_deref(), Some("wasapi:7:0"));
+        assert_eq!(request.sample_rate, Some(48_000));
+        assert_eq!(request.stream_channels, Some(2));
+        assert_eq!(request.buffer_frames, Some(128));
+        assert_eq!(
+            request.channel_mix,
+            LiveAudioChannelMix::StereoPair {
+                left_channel_index: 0,
+                right_channel_index: 1,
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(LiveAudioChannelMix::Single { channel_index: 3 }).unwrap(),
+            json!({ "mode": "single", "channel_index": 3 })
+        );
+        assert_eq!(
+            serde_json::to_value(LiveAudioBufferCapability::Range {
+                min_frames: 64,
+                max_frames: 512,
+            })
+            .unwrap(),
+            json!({ "kind": "range", "min_frames": 64, "max_frames": 512 })
+        );
+    }
+
+    #[test]
+    fn live_audio_config_selection_preserves_the_default_when_auto() {
+        let default = supported_config(
+            2,
+            48_000,
+            rodio::cpal::SampleFormat::F32,
+            rodio::cpal::SupportedBufferSize::Range {
+                min: 64,
+                max: 2_048,
+            },
+        );
+        let selected =
+            select_live_audio_stream_config(&default, &[], &LiveAudioInputStartRequest::default())
+                .unwrap();
+        assert_eq!(selected.stream_config.channels, 2);
+        assert_eq!(selected.stream_config.sample_rate.0, 48_000);
+        assert_eq!(
+            selected.stream_config.buffer_size,
+            rodio::cpal::BufferSize::Default
+        );
+        assert_eq!(selected.sample_format, rodio::cpal::SampleFormat::F32);
+        assert_eq!(selected.configured_buffer_frames, None);
+        assert_eq!(selected.channel_mix, LiveAudioChannelMix::AverageAll);
+    }
+
+    #[test]
+    fn live_audio_config_selection_is_exact_and_prefers_the_default_sample_format() {
+        let default = supported_config(
+            2,
+            44_100,
+            rodio::cpal::SampleFormat::I16,
+            rodio::cpal::SupportedBufferSize::Range {
+                min: 64,
+                max: 1_024,
+            },
+        );
+        let supported = vec![
+            supported_range(
+                2,
+                48_000,
+                48_000,
+                rodio::cpal::SampleFormat::F32,
+                rodio::cpal::SupportedBufferSize::Range {
+                    min: 64,
+                    max: 1_024,
+                },
+            ),
+            supported_range(
+                2,
+                48_000,
+                48_000,
+                rodio::cpal::SampleFormat::I16,
+                rodio::cpal::SupportedBufferSize::Range {
+                    min: 64,
+                    max: 1_024,
+                },
+            ),
+        ];
+        let request = LiveAudioInputStartRequest {
+            sample_rate: Some(48_000),
+            stream_channels: Some(2),
+            buffer_frames: Some(128),
+            channel_mix: LiveAudioChannelMix::Single { channel_index: 1 },
+            ..LiveAudioInputStartRequest::default()
+        };
+        let selected = select_live_audio_stream_config(&default, &supported, &request).unwrap();
+        assert_eq!(selected.sample_format, rodio::cpal::SampleFormat::I16);
+        assert_eq!(selected.stream_config.sample_rate.0, 48_000);
+        assert_eq!(selected.stream_config.channels, 2);
+        assert_eq!(
+            selected.stream_config.buffer_size,
+            rodio::cpal::BufferSize::Fixed(128)
+        );
+        assert_eq!(selected.configured_buffer_frames, Some(128));
+
+        let known_buffer_supported = vec![
+            supported_range(
+                2,
+                48_000,
+                48_000,
+                rodio::cpal::SampleFormat::I16,
+                rodio::cpal::SupportedBufferSize::Unknown,
+            ),
+            supported_range(
+                2,
+                48_000,
+                48_000,
+                rodio::cpal::SampleFormat::F32,
+                rodio::cpal::SupportedBufferSize::Range {
+                    min: 64,
+                    max: 1_024,
+                },
+            ),
+        ];
+        assert_eq!(
+            select_live_audio_stream_config(&default, &known_buffer_supported, &request)
+                .unwrap()
+                .sample_format,
+            rodio::cpal::SampleFormat::F32,
+            "a verified fixed-buffer range must outrank an unknown default-format range"
+        );
+
+        let unsupported = LiveAudioInputStartRequest {
+            sample_rate: Some(96_000),
+            ..LiveAudioInputStartRequest::default()
+        };
+        assert!(select_live_audio_stream_config(&default, &supported, &unsupported).is_err());
+    }
+
+    #[test]
+    fn live_audio_config_selection_rejects_unsafe_or_out_of_range_buffers() {
+        let default = supported_config(
+            1,
+            8_000,
+            rodio::cpal::SampleFormat::F32,
+            rodio::cpal::SupportedBufferSize::Range {
+                min: 64,
+                max: 10_000,
+            },
+        );
+        for frames in [0, 1_601, 8_193] {
+            let request = LiveAudioInputStartRequest {
+                buffer_frames: Some(frames),
+                ..LiveAudioInputStartRequest::default()
+            };
+            assert!(
+                select_live_audio_stream_config(&default, &[], &request).is_err(),
+                "buffer {frames} should be rejected"
+            );
+        }
+
+        let narrow = supported_config(
+            2,
+            48_000,
+            rodio::cpal::SampleFormat::F32,
+            rodio::cpal::SupportedBufferSize::Range { min: 64, max: 512 },
+        );
+        let out_of_range = LiveAudioInputStartRequest {
+            buffer_frames: Some(32),
+            ..LiveAudioInputStartRequest::default()
+        };
+        assert!(select_live_audio_stream_config(&narrow, &[], &out_of_range).is_err());
+
+        let unknown = supported_config(
+            2,
+            48_000,
+            rodio::cpal::SampleFormat::F32,
+            rodio::cpal::SupportedBufferSize::Unknown,
+        );
+        let exact_attempt = LiveAudioInputStartRequest {
+            buffer_frames: Some(256),
+            ..LiveAudioInputStartRequest::default()
+        };
+        assert_eq!(
+            select_live_audio_stream_config(&unknown, &[], &exact_attempt)
+                .unwrap()
+                .stream_config
+                .buffer_size,
+            rodio::cpal::BufferSize::Fixed(256)
+        );
+    }
+
+    #[test]
+    fn live_audio_channel_mix_validates_and_selects_channels_without_allocation() {
+        assert_eq!(
+            mix_live_audio_frame(
+                &[1.0_f32, -1.0, 0.5],
+                LiveAudioChannelMix::AverageAll,
+                &|value| value,
+            ),
+            1.0 / 6.0
+        );
+        assert_eq!(
+            mix_live_audio_frame(
+                &[1.0_f32, -1.0, 0.5],
+                LiveAudioChannelMix::Single { channel_index: 1 },
+                &|value| value,
+            ),
+            -1.0
+        );
+        assert_eq!(
+            mix_live_audio_frame(
+                &[1.0_f32, -1.0, 0.5],
+                LiveAudioChannelMix::StereoPair {
+                    left_channel_index: 0,
+                    right_channel_index: 2,
+                },
+                &|value| value,
+            ),
+            0.75
+        );
+        assert!(LiveAudioChannelMix::Single { channel_index: 3 }
+            .validate(3)
+            .is_err());
+        assert!(LiveAudioChannelMix::StereoPair {
+            left_channel_index: 1,
+            right_channel_index: 1,
+        }
+        .validate(2)
+        .is_err());
+    }
+
+    #[test]
+    fn every_cpal_input_sample_format_normalizes_to_f32() {
+        fn normalized<T>(value: T) -> f32
+        where
+            T: rodio::cpal::Sample,
+            f32: rodio::cpal::FromSample<T>,
+        {
+            <f32 as rodio::cpal::Sample>::from_sample(value)
+        }
+        fn assert_signed<T>(min: T, equilibrium: T, max: T)
+        where
+            T: rodio::cpal::Sample + std::fmt::Debug,
+            f32: rodio::cpal::FromSample<T>,
+        {
+            assert!(normalized(min) <= -0.99);
+            assert!(normalized(equilibrium).abs() <= f32::EPSILON);
+            assert!(normalized(max) >= 0.98);
+        }
+        fn assert_unsigned<T>(min: T, equilibrium: T, max: T)
+        where
+            T: rodio::cpal::Sample + std::fmt::Debug,
+            f32: rodio::cpal::FromSample<T>,
+        {
+            assert!(normalized(min) <= -0.99);
+            assert!(normalized(equilibrium).abs() <= f32::EPSILON);
+            assert!(normalized(max) >= 0.98);
+        }
+
+        assert_signed(i8::MIN, 0_i8, i8::MAX);
+        assert_signed(i16::MIN, 0_i16, i16::MAX);
+        assert_signed(
+            rodio::cpal::I24::new(-(1 << 23)).unwrap(),
+            rodio::cpal::I24::new(0).unwrap(),
+            rodio::cpal::I24::new((1 << 23) - 1).unwrap(),
+        );
+        assert_signed(i32::MIN, 0_i32, i32::MAX);
+        assert_signed(i64::MIN, 0_i64, i64::MAX);
+        assert_unsigned(u8::MIN, <u8 as rodio::cpal::Sample>::EQUILIBRIUM, u8::MAX);
+        assert_unsigned(
+            u16::MIN,
+            <u16 as rodio::cpal::Sample>::EQUILIBRIUM,
+            u16::MAX,
+        );
+        assert_unsigned(
+            u32::MIN,
+            <u32 as rodio::cpal::Sample>::EQUILIBRIUM,
+            u32::MAX,
+        );
+        assert_unsigned(
+            u64::MIN,
+            <u64 as rodio::cpal::Sample>::EQUILIBRIUM,
+            u64::MAX,
+        );
+        assert_eq!(normalized(-1.0_f32), -1.0);
+        assert_eq!(normalized(0.0_f32), 0.0);
+        assert_eq!(normalized(1.0_f32), 1.0);
+        assert_eq!(normalized(-1.0_f64), -1.0);
+        assert_eq!(normalized(0.0_f64), 0.0);
+        assert_eq!(normalized(1.0_f64), 1.0);
+    }
+
     #[test]
     fn live_audio_callback_downmixes_interleaved_channels_without_blocking() {
         let (free_capture_slots, ready_capture_chunks) = capture_slot_pool(1);
@@ -28398,6 +29354,7 @@ mod live_audio_input_tests {
             &[1.0_f32, -1.0, 0.5, 0.25],
             2,
             48_000,
+            LiveAudioChannelMix::AverageAll,
             &callback_info(Duration::from_millis(3)),
             &free_capture_slots,
             &ready_capture_chunks,
@@ -28416,6 +29373,7 @@ mod live_audio_input_tests {
             &[1.0_f32, 1.0],
             2,
             48_000,
+            LiveAudioChannelMix::AverageAll,
             &callback_info(Duration::ZERO),
             &free_capture_slots,
             &ready_capture_chunks,
@@ -28431,10 +29389,36 @@ mod live_audio_input_tests {
         assert_eq!(capture_telemetry.callback_count.load(Ordering::Relaxed), 2);
         assert_eq!(
             capture_telemetry
+                .last_callback_frames
+                .load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            capture_telemetry
+                .min_callback_frames
+                .load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            capture_telemetry
                 .max_callback_frames
                 .load(Ordering::Relaxed),
             2
         );
+        assert_eq!(
+            capture_telemetry
+                .queue_depth_high_water
+                .load(Ordering::Relaxed),
+            1
+        );
+        let status = Mutex::new(LiveAudioInputStatus::default());
+        sync_live_audio_capture_telemetry(&status, &ready_capture_chunks, &capture_telemetry);
+        let status = status.lock().unwrap();
+        assert_eq!(status.callback_count, 2);
+        assert_eq!(status.last_callback_frames, 1);
+        assert_eq!(status.min_callback_frames, 1);
+        assert_eq!(status.max_callback_frames, 2);
+        assert_eq!(status.queue_depth_high_water, 1);
     }
 
     #[test]
@@ -28448,6 +29432,7 @@ mod live_audio_input_tests {
             &[0.0_f32, 0.5],
             1,
             48_000,
+            LiveAudioChannelMix::AverageAll,
             &callback_info(Duration::ZERO),
             &free_capture_slots,
             &ready_capture_chunks,
@@ -28460,6 +29445,7 @@ mod live_audio_input_tests {
             &[1.0_f32],
             1,
             48_000,
+            LiveAudioChannelMix::AverageAll,
             &callback_info(Duration::ZERO),
             &free_capture_slots,
             &ready_capture_chunks,
@@ -28495,6 +29481,7 @@ mod live_audio_input_tests {
             &input,
             1,
             48_000,
+            LiveAudioChannelMix::AverageAll,
             &callback_info(Duration::from_millis(100)),
             &free_capture_slots,
             &ready_capture_chunks,
@@ -28544,6 +29531,7 @@ mod live_audio_input_tests {
             &input,
             1,
             48_000,
+            LiveAudioChannelMix::AverageAll,
             &callback_info(Duration::from_millis(200)),
             &free_capture_slots,
             &ready_capture_chunks,
@@ -28577,6 +29565,7 @@ mod live_audio_input_tests {
             &[f32::NAN, 1.0, f32::INFINITY, f32::NEG_INFINITY],
             2,
             48_000,
+            LiveAudioChannelMix::AverageAll,
             &callback_info(Duration::ZERO),
             &free_capture_slots,
             &ready_capture_chunks,
@@ -28594,6 +29583,7 @@ mod live_audio_input_tests {
             &[0.25_f32, 0.75],
             2,
             48_000,
+            LiveAudioChannelMix::AverageAll,
             &callback_info(Duration::ZERO),
             &free_capture_slots,
             &ready_capture_chunks,
@@ -28702,6 +29692,7 @@ mod live_audio_input_tests {
             &[1.0_f32, 1.0],
             2,
             48_000,
+            LiveAudioChannelMix::AverageAll,
             &callback_info(Duration::ZERO),
             &free_capture_slots,
             &ready_capture_chunks,
@@ -29535,6 +30526,7 @@ fn main() {
             media_audio,
             _media_audio_sync: media_audio_sync,
             live_audio_input_lifecycle: Mutex::new(()),
+            live_audio_input_devices: Mutex::new(LiveAudioInputDeviceCatalog::default()),
             live_audio_input: Mutex::new(None),
             video_preview: Arc::new(Mutex::new(
                 video::VideoPreviewRenderer::with_frame_provider(
@@ -29749,6 +30741,7 @@ fn main() {
             play_video_layer_audio_monitor,
             list_audio_output_devices,
             list_audio_input_devices,
+            get_live_audio_input_capabilities,
             start_live_audio_input,
             stop_live_audio_input,
             live_audio_input_status,

@@ -11,6 +11,10 @@ const clipGrid = await readFile(
   new URL("../src/components/VideoClipGridPanel.tsx", import.meta.url),
   "utf8",
 );
+const inputRail = await readFile(
+  new URL("../src/components/LiveAudioInputRail.tsx", import.meta.url),
+  "utf8",
+);
 const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
 
 const transpiled = ts.transpileModule(source, {
@@ -32,9 +36,14 @@ const status = (overrides = {}) => ({
   running: false,
   stale: false,
   safety_clear_pending: false,
+  device_id: null,
   device_name: null,
+  backend: null,
+  sample_format: null,
   sample_rate: 0,
   channels: 0,
+  configured_buffer_frames: null,
+  channel_mix: { mode: "average_all" },
   bass: 0,
   mid: 0,
   high: 0,
@@ -42,11 +51,14 @@ const status = (overrides = {}) => ({
   dropped_chunks: 0,
   dropped_frames: 0,
   callback_count: 0,
+  last_callback_frames: 0,
+  min_callback_frames: 0,
   max_callback_frames: 0,
   capture_to_worker_us: 0,
   max_capture_to_worker_us: 0,
   queue_depth: 0,
   queue_capacity: 0,
+  queue_depth_high_water: 0,
   last_error: null,
   ...overrides,
 });
@@ -59,9 +71,16 @@ assert.equal(
 );
 assert.equal(
   presentation.liveAudioInputDetail(
-    status({ running: true, sample_rate: 48_000, channels: 2, analyzed_windows: 42 }),
+    status({
+      running: true,
+      backend: "WASAPI",
+      sample_format: "f32",
+      sample_rate: 48_000,
+      channels: 2,
+      analyzed_windows: 42,
+    }),
   ),
-  "OVR 0/0f · 48.0kHz · 2→M · FFT 42 · C→W EST 0.0/0.0ms · Q 0/0",
+  "OVR 0/0f · WASAPI shared · f32 48.0kHz · 2→M · REQ BUF default · CB 0/0/0f · FFT 42 · C→W EST 0.0/0.0ms · Q 0/0/0",
 );
 const stale = status({ running: true, stale: true, last_error: "Input timed out." });
 assert.equal(presentation.liveAudioInputHealth(stale), "stale");
@@ -113,9 +132,14 @@ assert.ok(
   app.includes("nextStatus.safety_clear_pending || nextStatus.running"),
   "Stop feedback must not claim completion while the backend retains the runtime",
 );
-assert.ok(clipGrid.includes("data-health={liveAudioHealth()}"));
-assert.ok(clipGrid.includes('class="liveAudioHealthAnnouncement" aria-live="polite"'));
-assert.ok(!clipGrid.includes('<small aria-live="polite">'));
+assert.ok(inputRail.includes("data-health={health()}"));
+assert.ok(inputRail.includes('class="liveAudioHealthAnnouncement"'));
+assert.ok(inputRail.includes('role="status"'));
+assert.ok(inputRail.includes('aria-live="polite"'));
+assert.ok(inputRail.includes('role="meter"'));
+assert.ok(inputRail.includes('aria-valuenow={percent()}'));
+assert.ok(!inputRail.includes('<small aria-live="polite">'));
+assert.ok(clipGrid.includes("<Show when={!props.compact}>") && clipGrid.includes("<LiveAudioInputRail"));
 assert.ok(styles.includes(".liveAudioInputBar.stale"));
 assert.ok(styles.includes(".liveAudioInputBar.clearing"));
 assert.ok(!styles.includes(".videoClipGridPanel.empty > .liveAudioInputBar"));

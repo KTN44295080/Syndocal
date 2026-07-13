@@ -171,6 +171,10 @@ import type {
   LearnedMidiControl,
   LearnedOscControl,
   LfoShape,
+  LiveAudioChannelMix,
+  LiveAudioInputCapabilities,
+  LiveAudioInputDeviceSummary,
+  LiveAudioInputStartRequest,
   LiveAudioInputStatus,
   LfoEffectRequest,
   MidiControlAction,
@@ -1051,15 +1055,28 @@ export default function App() {
     started_unix_ms: null,
     last_error: null,
   });
-  const [liveAudioInputDevices, setLiveAudioInputDevices] = createSignal<string[]>([]);
+  const [liveAudioInputDevices, setLiveAudioInputDevices] = createSignal<LiveAudioInputDeviceSummary[]>([]);
   const [selectedLiveAudioInputDevice, setSelectedLiveAudioInputDevice] = createSignal("");
+  const [liveAudioInputCapabilities, setLiveAudioInputCapabilities] =
+    createSignal<LiveAudioInputCapabilities | null>(null);
+  const [liveAudioInputCapabilitiesBusy, setLiveAudioInputCapabilitiesBusy] = createSignal(false);
+  const [liveAudioInputSampleRate, setLiveAudioInputSampleRate] = createSignal<number | null>(null);
+  const [liveAudioInputBufferFrames, setLiveAudioInputBufferFrames] = createSignal<number | null>(null);
+  const [liveAudioInputChannelMix, setLiveAudioInputChannelMix] = createSignal<LiveAudioChannelMix>({
+    mode: "average_all",
+  });
   const [liveAudioInputStatus, setLiveAudioInputStatus] = createSignal<LiveAudioInputStatus>({
     running: false,
     stale: false,
     safety_clear_pending: false,
+    device_id: null,
     device_name: null,
+    backend: null,
+    sample_format: null,
     sample_rate: 0,
     channels: 0,
+    configured_buffer_frames: null,
+    channel_mix: { mode: "average_all" },
     bass: 0,
     mid: 0,
     high: 0,
@@ -1067,11 +1084,14 @@ export default function App() {
     dropped_chunks: 0,
     dropped_frames: 0,
     callback_count: 0,
+    last_callback_frames: 0,
+    min_callback_frames: 0,
     max_callback_frames: 0,
     capture_to_worker_us: 0,
     max_capture_to_worker_us: 0,
     queue_depth: 0,
     queue_capacity: 0,
+    queue_depth_high_water: 0,
     last_error: null,
   });
   const [liveAudioInputStatusKnown, setLiveAudioInputStatusKnown] = createSignal(!isTauriRuntime());
@@ -8970,12 +8990,63 @@ export default function App() {
     if (videoDeckALayerId() !== null && !ids.has(videoDeckALayerId()!)) setVideoDeckALayerId(null);
     if (videoDeckBLayerId() !== null && !ids.has(videoDeckBLayerId()!)) setVideoDeckBLayerId(null);
   });
-  const refreshLiveAudioInputDevices = async () => {
+  let liveAudioInputCapabilitiesEpoch = 0;
+  const refreshLiveAudioInputCapabilities = async (
+    deviceId = selectedLiveAudioInputDevice(),
+    announce = true,
+  ) => {
+    const epoch = ++liveAudioInputCapabilitiesEpoch;
+    setLiveAudioInputCapabilitiesBusy(true);
     try {
-      const devices = await invoke<string[]>("list_audio_input_devices");
+      const capabilities = await invoke<LiveAudioInputCapabilities>(
+        "get_live_audio_input_capabilities",
+        { deviceId: deviceId || null },
+      );
+      if (epoch === liveAudioInputCapabilitiesEpoch) {
+        setLiveAudioInputCapabilities(capabilities);
+      }
+    } catch (error) {
+      if (epoch === liveAudioInputCapabilitiesEpoch) {
+        setLiveAudioInputCapabilities(null);
+        if (announce) setMessage(String(error));
+      }
+    } finally {
+      if (epoch === liveAudioInputCapabilitiesEpoch) {
+        setLiveAudioInputCapabilitiesBusy(false);
+      }
+    }
+  };
+  const selectLiveAudioInputDevice = (deviceId: string) => {
+    setSelectedLiveAudioInputDevice(deviceId);
+    setLiveAudioInputSampleRate(null);
+    setLiveAudioInputBufferFrames(null);
+    setLiveAudioInputChannelMix({ mode: "average_all" });
+    void refreshLiveAudioInputCapabilities(deviceId);
+  };
+  const selectLiveAudioInputSampleRate = (sampleRate: number | null) => {
+    setLiveAudioInputSampleRate(sampleRate);
+    setLiveAudioInputBufferFrames(null);
+  };
+  const refreshLiveAudioInputDevices = async (announce = true) => {
+    try {
+      const devices = await invoke<LiveAudioInputDeviceSummary[]>("list_audio_input_devices");
       setLiveAudioInputDevices(devices);
-      setMessage(`Found ${devices.length} audio input device(s).`);
-    } catch (error) { setMessage(String(error)); }
+      const selectedDeviceId = devices.some((device) => device.id === selectedLiveAudioInputDevice())
+        ? selectedLiveAudioInputDevice()
+        : "";
+      if (selectedDeviceId !== selectedLiveAudioInputDevice()) {
+        setSelectedLiveAudioInputDevice(selectedDeviceId);
+        setLiveAudioInputSampleRate(null);
+        setLiveAudioInputBufferFrames(null);
+        setLiveAudioInputChannelMix({ mode: "average_all" });
+      }
+      await refreshLiveAudioInputCapabilities(selectedDeviceId, announce);
+      if (announce) setMessage(`Found ${devices.length} audio input device(s).`);
+    } catch (error) {
+      setLiveAudioInputDevices([]);
+      setLiveAudioInputCapabilities(null);
+      if (announce) setMessage(String(error));
+    }
   };
   const startLiveAudioInput = async () => {
     if (liveAudioInputBusy()) return;
@@ -8983,9 +9054,14 @@ export default function App() {
     setLiveAudioInputBusy(true);
     setLiveAudioInputStatusKnown(false);
     try {
-      const nextStatus = await invoke<LiveAudioInputStatus>("start_live_audio_input", {
-        deviceName: selectedLiveAudioInputDevice().trim() || null,
-      });
+      const request: LiveAudioInputStartRequest = {
+        device_id: selectedLiveAudioInputDevice().trim() || null,
+        sample_rate: liveAudioInputSampleRate(),
+        stream_channels: null,
+        buffer_frames: liveAudioInputBufferFrames(),
+        channel_mix: liveAudioInputChannelMix(),
+      };
+      const nextStatus = await invoke<LiveAudioInputStatus>("start_live_audio_input", { request });
       if (liveAudioStatusRequests.accepts(requestEpoch)) {
         setLiveAudioInputStatus(nextStatus);
         setLiveAudioInputStatusKnown(true);
@@ -9059,6 +9135,7 @@ export default function App() {
   };
   if (isTauriRuntime()) {
     void refreshLiveAudioInputStatus();
+    void refreshLiveAudioInputDevices(false);
   }
   const videoOutputMetricsTimer = isTauriRuntime()
     ? window.setInterval(() => {
@@ -12004,6 +12081,11 @@ export default function App() {
             get recordingStatus() { return videoRecordingStatus(); },
             get liveAudioInputDevices() { return liveAudioInputDevices(); },
             get selectedLiveAudioInputDevice() { return selectedLiveAudioInputDevice(); },
+            get liveAudioInputCapabilities() { return liveAudioInputCapabilities(); },
+            get liveAudioInputCapabilitiesBusy() { return liveAudioInputCapabilitiesBusy(); },
+            get liveAudioInputSampleRate() { return liveAudioInputSampleRate(); },
+            get liveAudioInputBufferFrames() { return liveAudioInputBufferFrames(); },
+            get liveAudioInputChannelMix() { return liveAudioInputChannelMix(); },
             get liveAudioInputStatus() { return liveAudioInputStatus(); },
             get liveAudioInputStatusKnown() { return liveAudioInputStatusKnown(); },
             get liveAudioInputBusy() { return liveAudioInputBusy(); },
@@ -12026,7 +12108,10 @@ export default function App() {
             onLaunchDeck: launchVideoDeck,
             onStartRecording: startVideoOutputRecording,
             onStopRecording: stopVideoOutputRecording,
-            onSetLiveAudioInputDevice: setSelectedLiveAudioInputDevice,
+            onSetLiveAudioInputDevice: selectLiveAudioInputDevice,
+            onSetLiveAudioInputSampleRate: selectLiveAudioInputSampleRate,
+            onSetLiveAudioInputBufferFrames: setLiveAudioInputBufferFrames,
+            onSetLiveAudioInputChannelMix: setLiveAudioInputChannelMix,
             onRefreshLiveAudioInputDevices: refreshLiveAudioInputDevices,
             onStartLiveAudioInput: startLiveAudioInput,
             onStopLiveAudioInput: stopLiveAudioInput,

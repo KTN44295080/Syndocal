@@ -1,17 +1,12 @@
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import type {
-  LiveAudioInputStatus,
   VideoAudioMonitorStatus,
   VideoLayerSummary,
   VideoRecordingStatus,
 } from "../types";
-import {
-  liveAudioInputAnnouncement,
-  liveAudioInputDetail,
-  liveAudioInputHealth,
-} from "../liveAudioInputPresentation";
+import { LiveAudioInputRail, type LiveAudioInputRailProps } from "./LiveAudioInputRail";
 
-interface VideoClipGridPanelProps {
+export interface VideoClipGridPanelProps extends LiveAudioInputRailProps {
   compact?: boolean;
   layers: VideoLayerSummary[];
   thumbnails: Record<number, string>;
@@ -27,11 +22,6 @@ interface VideoClipGridPanelProps {
   abMix: number;
   selectedOutputId: number | null;
   recordingStatus: VideoRecordingStatus;
-  liveAudioInputDevices: string[];
-  selectedLiveAudioInputDevice: string;
-  liveAudioInputStatus: LiveAudioInputStatus;
-  liveAudioInputStatusKnown: boolean;
-  liveAudioInputBusy: boolean;
   previewLayerId: number | null;
   previewBusy: boolean;
   previewError: string | null;
@@ -51,10 +41,6 @@ interface VideoClipGridPanelProps {
   onLaunchDeck: (deck: "A" | "B") => void | Promise<void>;
   onStartRecording: (outputId: number, includeAudio: boolean) => void | Promise<void>;
   onStopRecording: () => void | Promise<void>;
-  onSetLiveAudioInputDevice: (deviceName: string) => void;
-  onRefreshLiveAudioInputDevices: () => void | Promise<void>;
-  onStartLiveAudioInput: () => void | Promise<void>;
-  onStopLiveAudioInput: () => void | Promise<void>;
   onStagePreview: (layerId: number) => void | Promise<unknown>;
   onImportMedia: () => void | Promise<void>;
   onCreateFirstRunShow: () => void | Promise<void>;
@@ -87,9 +73,6 @@ export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
   );
   const deckALayer = createMemo(() => props.layers.find((layer) => layer.id === props.deckALayerId) ?? null);
   const deckBLayer = createMemo(() => props.layers.find((layer) => layer.id === props.deckBLayerId) ?? null);
-  const liveAudioHealth = createMemo(() =>
-    liveAudioInputHealth(props.liveAudioInputStatus, props.liveAudioInputStatusKnown),
-  );
 
   createEffect(() => {
     const layerCount = props.layers.length;
@@ -244,60 +227,9 @@ export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
           {props.recordingStatus.active ? "Stop Recording" : "Record Output"}
         </button>
       </div>
-      <div
-        class={`liveAudioInputBar ${props.liveAudioInputStatus.running ? "active" : ""} ${liveAudioHealth()}`}
-        data-health={liveAudioHealth()}
-      >
-        <div class="liveAudioInputControls">
-          <label>
-            Live FFT input
-            <select
-              disabled={
-                props.liveAudioInputBusy ||
-                !props.liveAudioInputStatusKnown ||
-                props.liveAudioInputStatus.running ||
-                props.liveAudioInputStatus.safety_clear_pending
-              }
-              value={props.selectedLiveAudioInputDevice}
-              onInput={(event) => props.onSetLiveAudioInputDevice(event.currentTarget.value)}
-            >
-              <option value="">System default</option>
-              <For each={props.liveAudioInputDevices}>{(device) => <option value={device}>{device}</option>}</For>
-            </select>
-          </label>
-          <button disabled={props.liveAudioInputBusy || props.liveAudioInputStatus.running} aria-label="Refresh audio input devices" onClick={() => void props.onRefreshLiveAudioInputDevices()}>↻</button>
-          <button
-            class={props.liveAudioInputStatus.running ? "danger" : "primary"}
-            disabled={
-              props.liveAudioInputBusy ||
-              (!props.liveAudioInputStatusKnown && !props.liveAudioInputStatus.running) ||
-              (!props.liveAudioInputStatus.running && props.liveAudioInputStatus.safety_clear_pending)
-            }
-            onClick={() => props.liveAudioInputStatus.running ? void props.onStopLiveAudioInput() : void props.onStartLiveAudioInput()}
-          >
-            {props.liveAudioInputBusy
-              ? "Checking Live FFT"
-              : props.liveAudioInputStatus.running
-                ? "Stop Live FFT"
-                : props.liveAudioInputStatus.safety_clear_pending
-                  ? "Safety Clear Pending"
-                : props.liveAudioInputStatusKnown ? "Start Live FFT" : "Checking Live FFT"}
-          </button>
-        </div>
-        <div class="liveAudioMeters" aria-label="Live audio FFT levels">
-          <For each={[
-            ["B", props.liveAudioInputStatus.bass],
-            ["M", props.liveAudioInputStatus.mid],
-            ["H", props.liveAudioInputStatus.high],
-          ] as const}>
-            {([label, level]) => <span title={`${label} ${Math.round(level * 100)}%`}><i style={{ width: `${Math.round(level * 100)}%` }} />{label}</span>}
-          </For>
-          <small>{liveAudioInputDetail(props.liveAudioInputStatus, props.liveAudioInputStatusKnown)}</small>
-          <output class="liveAudioHealthAnnouncement" aria-live="polite" aria-atomic="true">
-            {liveAudioInputAnnouncement(props.liveAudioInputStatus, props.liveAudioInputStatusKnown)}
-          </output>
-        </div>
-      </div>
+      <Show when={!props.compact}>
+        <LiveAudioInputRail {...props} />
+      </Show>
       <Show
         when={props.layers.length > 0}
         fallback={

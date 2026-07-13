@@ -3007,7 +3007,7 @@ progress {
 .videoMixerClipPane {
   grid-column: 1;
   grid-row: 2;
-  grid-template-rows: 40px auto minmax(0, 1fr);
+  grid-template-rows: 40px auto minmax(56px, 64px) minmax(0, 1fr);
 }
 
 .videoMixerProgramPane {
@@ -3110,8 +3110,7 @@ progress {
 }
 
 .videoControlPanelMixer .videoMixerClipPane .videoClipPreviewBar,
-.videoControlPanelMixer .videoMixerClipPane .videoRecordingBar,
-.videoControlPanelMixer .videoMixerClipPane .liveAudioInputBar {
+.videoControlPanelMixer .videoMixerClipPane .videoRecordingBar {
   border-color: #343a3f;
   border-radius: 2px;
   background: #181c1f;
@@ -11752,20 +11751,80 @@ input[type="color"] {
 }
 
 .videoControlPanelMixer .liveAudioInputBar {
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(108px, 0.42fr);
+  grid-template-rows: 26px 20px;
+  gap: 3px 5px;
+  max-height: 64px;
+  border-width: 0 0 1px;
+  border-radius: 0;
+  padding: 5px 6px 4px;
+  container-type: inline-size;
 }
 
 .videoControlPanelMixer .liveAudioInputControls {
-  grid-template-columns: minmax(0, 1fr) 24px;
+  grid-template-columns: minmax(0, 1fr) 24px minmax(48px, 62px);
+  align-items: stretch;
   min-width: 0;
 }
 
 .videoControlPanelMixer .liveAudioInputControls > button:last-child {
-  grid-column: 1 / -1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.videoControlPanelMixer .liveAudioInputControls label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.videoControlPanelMixer .liveAudioInputControls select {
+  min-width: 0;
+  height: 24px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.videoControlPanelMixer .liveAudioInputLabel {
+  color: #aeb6bc;
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.videoControlPanelMixer .liveAudioMeters {
+  grid-template-columns: repeat(3, minmax(28px, 1fr));
+  align-self: stretch;
+}
+
+.videoControlPanelMixer .liveAudioTelemetry {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  align-self: stretch;
+}
+
+.videoControlPanelMixer .liveAudioConfigControls {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+@container (max-width: 410px) {
+  .videoControlPanelMixer .liveAudioInputLabel {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .videoControlPanelMixer .liveAudioInputControls label {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .videoControlPanelMixer .videoOutputControlList {
@@ -12085,6 +12144,10 @@ input[type="color"] {
   min-height: 24px;
 }
 
+.liveAudioInputLabel {
+  display: block;
+}
+
 .liveAudioMeters {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -12106,11 +12169,17 @@ input[type="color"] {
   text-align: center;
 }
 
+.liveAudioMeters b {
+  position: relative;
+  z-index: 1;
+  font: inherit;
+}
+
 .liveAudioMeters i {
   position: absolute;
   inset: 0 auto 0 0;
   z-index: 0;
-  background: linear-gradient(90deg, #2c9d69, #d3a43a);
+  background: var(--ray-accent);
   opacity: 0.65;
 }
 
@@ -12119,13 +12188,86 @@ input[type="color"] {
   z-index: 1;
 }
 
-.liveAudioMeters small {
+.liveAudioTelemetry {
   grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
   overflow: hidden;
   color: #81909f;
   font-size: 9px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.liveAudioTelemetry > span {
+  flex: 0 0 auto;
+  min-width: 0;
+  border: 1px solid #303a42;
+  border-radius: 2px;
+  background: #11171c;
+  padding: 1px 4px;
+}
+
+.liveAudioTelemetry > .liveAudioTelemetryIo {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.liveAudioConfigControls {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(70px, 1fr)) minmax(70px, auto);
+  align-items: stretch;
+  gap: 3px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.liveAudioConfigControls label {
+  min-width: 0;
+}
+
+.liveAudioConfigControls label > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.liveAudioConfigControls select {
+  width: 100%;
+  min-width: 0;
+  height: 20px;
+  min-height: 20px;
+  padding: 0 3px;
+  font-size: 9px;
+  text-overflow: ellipsis;
+}
+
+.liveAudioConfigFormat {
+  overflow: hidden;
+  border: 1px solid #303a42;
+  border-radius: 2px;
+  background: #11171c;
+  padding: 2px 4px;
+  color: #8e9aa3;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.liveAudioTelemetry > span.warning {
+  border-color: #9d633c;
+  color: #ffb184;
+}
+
+.liveAudioSafetyMessage {
+  display: block;
+  text-overflow: ellipsis;
 }
 
 .liveAudioHealthAnnouncement {

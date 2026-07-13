@@ -806,9 +806,14 @@ export interface LiveAudioInputStatus {
   running: boolean;
   stale: boolean;
   safety_clear_pending: boolean;
+  device_id?: string | null;
   device_name?: string | null;
+  backend?: string | null;
+  sample_format?: string | null;
   sample_rate: number;
   channels: number;
+  configured_buffer_frames?: number | null;
+  channel_mix: LiveAudioChannelMix;
   bass: number;
   mid: number;
   high: number;
@@ -816,12 +821,62 @@ export interface LiveAudioInputStatus {
   dropped_chunks: number;
   dropped_frames: number;
   callback_count: number;
+  last_callback_frames: number;
+  min_callback_frames: number;
   max_callback_frames: number;
   capture_to_worker_us: number;
   max_capture_to_worker_us: number;
   queue_depth: number;
   queue_capacity: number;
+  queue_depth_high_water: number;
   last_error?: string | null;
+}
+
+export interface LiveAudioInputDeviceSummary {
+  id: string;
+  name: string;
+  label: string;
+  backend: string;
+}
+
+export type LiveAudioChannelMix =
+  | { mode: "average_all" }
+  | { mode: "single"; channel_index: number }
+  | { mode: "stereo_pair"; left_channel_index: number; right_channel_index: number };
+
+export interface LiveAudioInputConfig {
+  channels: number;
+  sample_rate: number;
+  sample_format: string;
+}
+
+export type LiveAudioBufferCapability =
+  | { kind: "range"; min_frames: number; max_frames: number }
+  | { kind: "unknown" };
+
+export interface LiveAudioInputConfigRange {
+  channels: number;
+  min_sample_rate: number;
+  max_sample_rate: number;
+  sample_format: string;
+  buffer_size: LiveAudioBufferCapability;
+}
+
+export interface LiveAudioInputCapabilities {
+  device_id?: string | null;
+  device_name: string;
+  backend: string;
+  default_config: LiveAudioInputConfig;
+  supported_configs: LiveAudioInputConfigRange[];
+  max_capture_frames: number;
+}
+
+export interface LiveAudioInputStartRequest {
+  device_id?: string | null;
+  sample_rate?: number | null;
+  stream_channels?: number | null;
+  buffer_frames?: number | null;
+  channel_mix: LiveAudioChannelMix;
 }
 
 export interface VideoPreviewQueueSummary {

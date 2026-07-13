@@ -1696,6 +1696,41 @@ async function measure(client, label) {
       visibleVideoDeckLoadButtonCount: visibleCount('.videoClipDeckLoad button'),
       visibleVideoRecordingBarCount: visibleCount('.videoRecordingBar'),
       visibleLiveAudioInputBarCount: visibleCount('.liveAudioInputBar'),
+      liveAudioInputBarDomCount: document.querySelectorAll('.liveAudioInputBar').length,
+      visibleLiveAudioRailCount: visibleCount('.videoMixerClipPane > .liveAudioInputBar'),
+      visibleEmbeddedLiveAudioCount: visibleCount('.videoClipGridPanel > .liveAudioInputBar'),
+      liveAudioRailHeight: (() => {
+        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+        return rail ? rail.getBoundingClientRect().height : 0;
+      })(),
+      liveAudioRailBelowMaster: (() => {
+        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar')?.getBoundingClientRect();
+        const master = document.querySelector('.videoMixerClipPane > .videoMasterControls')?.getBoundingClientRect();
+        return Boolean(rail && master && rail.top >= master.bottom - 1);
+      })(),
+      liveAudioRailAboveClipGrid: (() => {
+        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar')?.getBoundingClientRect();
+        const grid = document.querySelector('.videoMixerClipPane > .videoClipGridPanel')?.getBoundingClientRect();
+        return Boolean(rail && grid && rail.bottom <= grid.top + 1);
+      })(),
+      liveAudioRailOverflowX: (() => {
+        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+        return rail ? Math.max(0, rail.scrollWidth - rail.clientWidth) : 0;
+      })(),
+      liveAudioRailOverflowY: (() => {
+        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+        return rail ? Math.max(0, rail.scrollHeight - rail.clientHeight) : 0;
+      })(),
+      liveAudioRailMeterCount: visibleCount('.videoMixerClipPane > .liveAudioInputBar [role="meter"]'),
+      liveAudioRailPoliteRegionCount: visibleCount('.videoMixerClipPane > .liveAudioInputBar [aria-live="polite"]'),
+      fullyVisibleVideoClipPadCount: (() => {
+        const grid = document.querySelector('.videoMixerClipPane > .videoClipGridPanel')?.getBoundingClientRect();
+        if (!grid) return 0;
+        return [...document.querySelectorAll('.videoMixerClipPane .videoClipPad')].filter((element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0 && rect.top >= grid.top - 1 && rect.bottom <= grid.bottom + 1;
+        }).length;
+      })(),
       visibleVideoOutputControlListCount: visibleCount('.videoOutputControlList'),
       visibleVideoOutputItemCount: visibleCount('.videoOutputControlItem'),
       visibleVideoOutputSelectedItemCount: visibleCount('.videoOutputControlItem.selected'),
@@ -2349,7 +2384,19 @@ function hasExpectedControlModeSurface(result) {
       result.visibleVideoAbDeckCount > 0 &&
       result.visibleVideoDeckLoadButtonCount >= 2 &&
       result.visibleVideoRecordingBarCount > 0 &&
-      result.visibleLiveAudioInputBarCount > 0 &&
+      result.visibleLiveAudioInputBarCount === 1 &&
+      result.liveAudioInputBarDomCount === 1 &&
+      result.visibleLiveAudioRailCount === 1 &&
+      result.visibleEmbeddedLiveAudioCount === 0 &&
+      result.liveAudioRailHeight > 0 &&
+      result.liveAudioRailHeight <= 70 &&
+      result.liveAudioRailBelowMaster === true &&
+      result.liveAudioRailAboveClipGrid === true &&
+      result.liveAudioRailOverflowX <= 1 &&
+      result.liveAudioRailOverflowY <= 1 &&
+      result.liveAudioRailMeterCount === 3 &&
+      result.liveAudioRailPoliteRegionCount === 1 &&
+      result.fullyVisibleVideoClipPadCount >= 1 &&
       result.visibleVideoOutputControlListCount > 0 &&
       result.visibleVideoOutputItemCount > 0 &&
       result.visibleVideoOutputSelectedItemCount > 0 &&

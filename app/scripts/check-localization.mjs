@@ -212,6 +212,7 @@ const localeInvariantText = new Set([
   "Art-Net", "sACN", "sACN / E1.31", "sACN E1.31", "Enttec USB PRO", "Syphon Server", "Spout Sender",
   "NDI Sender", "Perlin", "Bezier", "Linear", "Full", "Half", "Scale X", "Scale Y",
   "ms", "x", "U", "ch", "CH", "deg", "m", "Hz", "P", "S", "O", "V", "D", "H", "L",
+  "f", "· CB", "C→W", "I/O", "k ·", "kHz", "OVR", "Q",
   "Key R", "Key G", "Key B", "Key Threshold", "Pan +", "Pan -", "Tilt +", "Tilt -",
   "ms /", "/ Z", "/512 used", "ch max free", "label, U1 A24, group", ", Y", ", Z", "· PID 0x",
   "· subdevices", "/ D", "/ native", "/ Tilt", "/ U", "/ V", "/ X", "/touchosc/page/*/fader/1",

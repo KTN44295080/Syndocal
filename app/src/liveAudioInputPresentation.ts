@@ -2,6 +2,17 @@ import type { LiveAudioInputStatus } from "./types";
 
 export type LiveAudioInputHealth = "unknown" | "stopped" | "live" | "clearing" | "stale";
 
+export const liveAudioChannelMixLabel = (status: LiveAudioInputStatus): string => {
+  switch (status.channel_mix.mode) {
+    case "average_all":
+      return `${status.channels}→M`;
+    case "single":
+      return `CH${status.channel_mix.channel_index + 1}→M`;
+    case "stereo_pair":
+      return `CH${status.channel_mix.left_channel_index + 1}+${status.channel_mix.right_channel_index + 1}→M`;
+  }
+};
+
 export const liveAudioInputHealth = (
   status: LiveAudioInputStatus,
   statusKnown = true,
@@ -31,7 +42,7 @@ export const liveAudioInputDetail = (
         ? `SAFETY CLEAR ACCEPTED · ${status.last_error} Stop then Start to reconnect.`
         : "SAFETY CLEAR ACCEPTED · Live audio is stale; the engine is draining the zero-source request.";
     case "live":
-      return `OVR ${status.dropped_chunks}/${status.dropped_frames}f · ${(status.sample_rate / 1_000).toFixed(1)}kHz · ${status.channels}→M · FFT ${status.analyzed_windows} · C→W EST ${(status.capture_to_worker_us / 1_000).toFixed(1)}/${(status.max_capture_to_worker_us / 1_000).toFixed(1)}ms · Q ${status.queue_depth}/${status.queue_capacity}`;
+      return `OVR ${status.dropped_chunks}/${status.dropped_frames}f · ${status.backend ?? "Audio"} shared · ${status.sample_format ?? "unknown"} ${(status.sample_rate / 1_000).toFixed(1)}kHz · ${liveAudioChannelMixLabel(status)} · REQ BUF ${status.configured_buffer_frames === null || status.configured_buffer_frames === undefined ? "default" : `${status.configured_buffer_frames}f`} · CB ${status.last_callback_frames}/${status.min_callback_frames}/${status.max_callback_frames}f · FFT ${status.analyzed_windows} · C→W EST ${(status.capture_to_worker_us / 1_000).toFixed(1)}/${(status.max_capture_to_worker_us / 1_000).toFixed(1)}ms · Q ${status.queue_depth}/${status.queue_depth_high_water}/${status.queue_capacity}`;
     case "stopped":
       return status.last_error?.trim() || "Live bands can drive Node Graph Audio sources.";
   }

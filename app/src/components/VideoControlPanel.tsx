@@ -1,4 +1,4 @@
-import type { ComponentProps } from "solid-js";
+import { Show, type ComponentProps } from "solid-js";
 import { VideoLayerListPanel } from "./VideoLayerListPanel";
 import { VideoMasterControlsPanel, VideoOutputControlListPanel } from "./VideoControlOutputsPanel";
 import { VideoPreviewDiagnosticsPanel } from "./VideoPreviewDiagnosticsPanel";
@@ -11,6 +11,7 @@ import { VideoSourceCreatePanel } from "./VideoSourceCreatePanel";
 import { VideoTimelineAutomationPanel } from "./VideoTimelineAutomationPanel";
 import { VideoClipGridPanel } from "./VideoClipGridPanel";
 import { LiveVideoMonitorPanel } from "./LiveVideoMonitorPanel";
+import { LiveAudioInputRail } from "./LiveAudioInputRail";
 
 interface VideoControlPanelProps {
   mixer: boolean;
@@ -50,6 +51,9 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
           <span>LIVE TAKE</span>
         </header>
         <VideoMasterControlsPanel {...props.masterControls} />
+        <Show when={props.mixer}>
+          <LiveAudioInputRail {...props.clipGrid} compact />
+        </Show>
         <VideoClipGridPanel {...props.clipGrid} compact={props.mixer} />
       </section>
       <section class="videoMixerProgramPane" aria-label="Program monitor and outputs">
