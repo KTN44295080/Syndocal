@@ -28,7 +28,7 @@ interface SampleEffectPresetOption {
   value: SampleEffectPreset;
   label: string;
   family: EffectLibraryFamily;
-  engine: "LFO" | "Wave" | "Color" | "Chaser" | "Bundle";
+  engine: "LFO" | "Wave" | "Color" | "Chaser" | "Move";
   target: string;
   description: string;
   supportsTarget: boolean;
@@ -132,10 +132,11 @@ export const sampleEffectPresetOptions: SampleEffectPresetOption[] = [
     value: "circle",
     label: "Circle",
     family: "Move",
-    engine: "Bundle",
+    engine: "Move",
     target: "Pan/Tilt",
-    description: "Paired pan and tilt effects for circular movement.",
-    supportsTarget: false,
+    description: "Independent paired-axis path with smooth, beat-synced circular movement.",
+    supportsTarget: true,
+    requiresTarget: true,
   },
   {
     value: "curve",

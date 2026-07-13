@@ -27,8 +27,8 @@ The Preview bus now has an ephemeral transport that is separate from project and
 - `cargo test -p syndocal live_video_monitor -- --nocapture`: 3 passed. The packet layout, request bounds and JPEG decodability are covered.
 - `pnpm build`: TypeScript and production Vite build passed.
 - `pnpm check:localization`: static UI coverage remains 100%, including the Preview transport and Program-transfer labels.
-- `pnpm check:viewport`: all Control, Setup and Touch surfaces passed at 1280x720, 1366x768 and 2048x1129. VJ acceptance requires exactly one Preview bus, one Program bus, one independent Preview transport and zero normal Refresh buttons.
-- A 1366x768 screenshot review confirmed that both 16:9 buses remain visible beside Clips, Outputs and Layers without document scrolling.
+- `pnpm check:viewport`: all Control, Setup and Touch surfaces use 1920x1080 as the primary operational/visual gate, 2048x1152 as the extended ceiling, and 1366x768 plus 1280x720 as compact containment fallbacks. VJ acceptance requires exactly one Preview bus, one Program bus, one independent Preview transport and zero normal Refresh buttons at every size.
+- The sign-off screenshot is the maximized 1920x1080 VJ Desk, where both 16:9 buses must remain visible beside Clips, Outputs and Layers without document scrolling. Compact screenshots are diagnostic-only and do not substitute for this density review.
 - Focused backend tests cover explicit staging, Program-state independence, pause/seek, forward and reverse looping, speed sanitization, unsupported sources, source replacement/removal, in-point rewind and stale-frame generation checks.
 
 ## Claim boundary and remaining performance work

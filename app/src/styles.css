@@ -19373,6 +19373,11 @@ h3 {
   color: #ffc477;
 }
 
+.effectMetaChip.move {
+  border-color: #6b4e73;
+  color: #e4b8ef;
+}
+
 .effectListRows {
   display: grid;
   align-content: start;
@@ -19860,6 +19865,748 @@ h3 {
   .chaserDirectionGrid button,
   .chaserClockPresets button {
     min-height: 34px;
+  }
+}
+
+@media (min-width: 1500px) {
+  .effectWorkbench.moveEffectWorkbench {
+    grid-template-columns: minmax(220px, 0.55fr) minmax(860px, 1.9fr) minmax(300px, 0.75fr);
+  }
+}
+
+@media (max-width: 1499px) {
+  .effectWorkbench.moveEffectWorkbench .moveEffectEditorPanel {
+    grid-template-rows: auto auto;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .effectWorkbench.moveEffectWorkbench .moveEffectEditorSurface {
+    grid-template-rows: 390px 520px;
+    min-height: 910px;
+    overflow: visible;
+  }
+
+  .effectWorkbench.moveEffectWorkbench .moveEffectPathDesk {
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    min-height: 390px;
+  }
+
+  .effectWorkbench.moveEffectWorkbench .moveEffectInspector {
+    min-height: 520px;
+    overflow: hidden;
+  }
+}
+
+.moveEffectRecipeBar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  border: 1px solid #343a3f;
+  background: #181c1f;
+  padding: 5px 7px;
+}
+
+.moveEffectRecipeBar > span,
+.moveEffectRecipeBar > small {
+  color: #9ca5ab;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.moveEffectRecipeButtons {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 2px;
+  min-width: 0;
+}
+
+.moveEffectRecipeButtons button {
+  min-width: 0;
+  min-height: 29px;
+  border-radius: 1px;
+  padding: 2px 5px;
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.moveEffectRecipeButtons button.active,
+.app .moveEffectRecipeButtons button[aria-pressed="true"] {
+  border-color: #686f75;
+  background: #30363b;
+  color: #fff;
+  box-shadow: inset 0 -2px 0 var(--ray-accent);
+}
+
+.moveEffectDraftError {
+  margin: 0;
+  border-left: 2px solid #bf6b62;
+  background: #241b1b;
+  color: #e5aaa4;
+  padding: 5px 7px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+@media (max-width: 1320px) {
+  .moveEffectRecipeBar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .moveEffectRecipeButtons {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.moveEffectEditorPanel {
+  container-name: move-effect-editor;
+  container-type: inline-size;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 480px;
+  overflow: hidden;
+  border: 1px solid #343a3f;
+  border-radius: 1px;
+  background: #15181b;
+}
+
+.moveEffectEditorHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  min-height: 48px;
+  border-bottom: 1px solid #343a3f;
+  background: #191d20;
+  padding: 5px 8px;
+}
+
+.moveEffectEditorHeader > div:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 150px;
+}
+
+.moveEffectEditorHeader > div:first-child strong {
+  color: #f1f3f5;
+  font-size: 13px;
+}
+
+.moveEffectEditorHeader > div:first-child span {
+  min-width: 0;
+  overflow: hidden;
+  color: #8f999f;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.moveEffectStatusStrip {
+  display: grid;
+  grid-template-columns: minmax(128px, 1.15fr) minmax(92px, 0.8fr) minmax(126px, 1fr);
+  min-width: min(560px, 62%);
+  border-left: 1px solid #343a3f;
+}
+
+.moveEffectStatusStrip > span {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  border-right: 1px solid #343a3f;
+  padding: 1px 8px;
+}
+
+.moveEffectStatusStrip small,
+.moveEffectStatusStrip strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.moveEffectStatusStrip small {
+  color: #7f8990;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.moveEffectStatusStrip strong {
+  color: #dce0e3;
+  font-size: 11px;
+}
+
+.moveEffectEditorSurface {
+  display: grid;
+  grid-template-columns: minmax(360px, 1.08fr) minmax(420px, 0.92fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.moveEffectPathDesk {
+  display: grid;
+  grid-template-rows: auto minmax(300px, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid #343a3f;
+  background: #14171a;
+}
+
+.moveEffectPathToolbar {
+  display: grid;
+  grid-template-columns: minmax(112px, 1fr) auto auto auto;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  border-bottom: 1px solid #30363b;
+  padding: 4px 6px;
+}
+
+.moveEffectPathToolbar > div {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+
+.moveEffectPathToolbar > div strong,
+.moveEffectPathToolbar > div span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.moveEffectPathToolbar > div strong {
+  color: #dce0e3;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.moveEffectPathToolbar > div span {
+  color: #8f999f;
+  font-size: 10px;
+}
+
+.moveEffectPathToolbar button {
+  min-height: 29px;
+  border-radius: 1px;
+  padding: 0 8px;
+  font-size: 10px;
+}
+
+.moveEffectClosedToggle {
+  min-height: 29px;
+  padding: 0 5px;
+  white-space: nowrap;
+}
+
+.moveEffectPathViewport {
+  position: relative;
+  min-width: 0;
+  min-height: 300px;
+  margin: 6px;
+  overflow: hidden;
+}
+
+.moveEffectPathCanvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 300px;
+  overflow: hidden;
+  border: 1px solid #454d53;
+  background: #101315;
+  touch-action: none;
+  user-select: none;
+}
+
+.moveEffectCanvasBackground {
+  fill: #101315;
+}
+
+.moveEffectCanvasGrid line {
+  stroke: #30373c;
+  stroke-width: 0.35;
+  vector-effect: non-scaling-stroke;
+}
+
+.moveEffectCanvasGrid line:nth-child(2),
+.moveEffectCanvasGrid line:nth-child(5) {
+  stroke: #566068;
+  stroke-width: 0.55;
+}
+
+.moveEffectPathGuide,
+.moveEffectPathOutput {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.moveEffectPathGuide {
+  stroke: #7e8a92;
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+}
+
+.moveEffectPathOutput {
+  stroke: var(--ray-accent);
+  stroke-width: 2;
+}
+
+.moveEffectPathOutput.closed {
+  fill: rgb(217 140 71 / 0.08);
+}
+
+.moveEffectOutputCenter line,
+.moveEffectOutputCenter circle {
+  fill: #111416;
+  stroke: #d98c47;
+  stroke-width: 0.8;
+  vector-effect: non-scaling-stroke;
+}
+
+.moveEffectPointHandle {
+  cursor: grab;
+  outline: none;
+}
+
+.moveEffectPointHandle:active {
+  cursor: grabbing;
+}
+
+.moveEffectPointHandle circle {
+  fill: #1b2024;
+  stroke: #cbd1d5;
+  stroke-width: 1.25;
+  vector-effect: non-scaling-stroke;
+}
+
+.moveEffectPointHandle text {
+  fill: #e8ebed;
+  font-size: 3px;
+  font-weight: 700;
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+.moveEffectPointHandle.active circle,
+.moveEffectPointHandle:focus-visible circle {
+  fill: #33271c;
+  stroke: var(--ray-accent);
+  stroke-width: 2.25;
+}
+
+.moveEffectEmptyPathAction {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  min-height: 34px;
+  border-color: #806039;
+  border-radius: 1px;
+  background: #30261b;
+  padding: 0 14px;
+  transform: translate(-50%, -50%);
+}
+
+.moveEffectPathFooter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  border-top: 1px solid #30363b;
+  padding: 4px 7px;
+  color: #8f999f;
+  font-size: 10px;
+}
+
+.moveEffectPathFooter > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.moveEffectPathFooter i {
+  display: block;
+  width: 16px;
+  height: 0;
+  border-top: 2px solid;
+}
+
+.moveEffectPathFooter i.control {
+  border-top-color: #7e8a92;
+  border-top-style: dashed;
+}
+
+.moveEffectPathFooter i.output {
+  border-top-color: var(--ray-accent);
+}
+
+.moveEffectPathFooter small {
+  min-width: 0;
+  overflow: hidden;
+  margin-left: auto;
+  color: #717b82;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.moveEffectInspector {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(148px, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #181c1f;
+}
+
+.moveEffectInspector > section {
+  min-width: 0;
+  border-bottom: 1px solid #343a3f;
+  padding: 6px;
+}
+
+.moveEffectSectionHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 5px;
+}
+
+.moveEffectSectionHeader strong,
+.moveEffectSectionHeader span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.moveEffectSectionHeader strong {
+  color: #dce0e3;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.moveEffectSectionHeader span {
+  color: #8f999f;
+  font-size: 10px;
+}
+
+.moveEffectTransportPanel {
+  display: grid;
+  gap: 5px;
+}
+
+.moveEffectDirectionGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.moveEffectDirectionGrid button,
+.moveEffectClockPresets button,
+.moveEffectSegmented button {
+  min-width: 0;
+  min-height: 29px;
+  border-radius: 1px;
+  padding: 0 5px;
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.moveEffectDirectionGrid button.active,
+.moveEffectClockPresets button.active,
+.moveEffectSegmented button.active,
+.app .moveEffectDirectionGrid button[aria-pressed="true"],
+.app .moveEffectClockPresets button[aria-pressed="true"],
+.app .moveEffectSegmented button[aria-pressed="true"] {
+  border-color: #806039;
+  background: #30261b;
+  color: #ffffff;
+  box-shadow: inset 0 -2px 0 var(--ray-accent);
+}
+
+.moveEffectClockRow {
+  display: grid;
+  grid-template-columns: 108px minmax(0, 1fr);
+  align-items: end;
+  gap: 5px;
+  min-width: 0;
+}
+
+.moveEffectClockRow > label,
+.moveEffectTransformGrid label,
+.moveEffectPointRow label {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  color: #879198;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.moveEffectClockRow input,
+.moveEffectTransformGrid input,
+.moveEffectPointRow input {
+  width: 100%;
+  min-width: 0;
+}
+
+.moveEffectClockPresets {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 2px;
+}
+
+.moveEffectPhaseGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.moveEffectPhaseGrid label {
+  display: grid;
+  grid-template-columns: 48px minmax(64px, 1fr) 52px;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  color: #9aa3a9;
+  font-size: 10px;
+}
+
+.moveEffectPhaseGrid input[type="range"] {
+  min-width: 0;
+  min-height: 24px;
+  accent-color: var(--ray-accent);
+}
+
+.moveEffectTransformPanel {
+  display: grid;
+  gap: 2px;
+}
+
+.moveEffectTransformGrid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(66px, 1fr));
+  gap: 4px;
+  min-width: 0;
+}
+
+.moveEffectModePanel {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.moveEffectModeGroup {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.moveEffectModeGroup > span {
+  min-width: 0;
+  overflow: hidden;
+  color: #879198;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.moveEffectSegmented {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  min-width: 0;
+}
+
+.moveEffectPointPanel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.moveEffectPointList {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+}
+
+.moveEffectPointRow {
+  display: grid;
+  grid-template-columns: minmax(68px, 0.8fr) repeat(2, minmax(58px, 1fr)) repeat(3, 29px);
+  align-items: end;
+  gap: 3px;
+  min-width: 0;
+  border-bottom: 1px solid #30363b;
+  padding: 3px 0;
+}
+
+.moveEffectPointRow.active {
+  border-bottom-color: #806039;
+  background: #211d19;
+}
+
+.moveEffectPointSelect {
+  min-width: 0;
+  min-height: 30px;
+  border-radius: 1px;
+  overflow: hidden;
+  padding: 0 5px;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.moveEffectPointSelect[aria-pressed="true"] {
+  border-color: #806039;
+  color: #f4d4ad;
+  box-shadow: inset 2px 0 0 var(--ray-accent);
+}
+
+.moveEffectPointAction {
+  width: 29px;
+  min-width: 29px;
+  min-height: 30px;
+  border-radius: 1px;
+  padding: 0;
+}
+
+.moveEffectPointAction.remove:not(:disabled) {
+  color: #ed8585;
+}
+
+.moveEffectPointEmpty {
+  margin: 0;
+  border: 1px dashed #3c4348;
+  padding: 14px;
+  color: #8f999f;
+  font-size: 11px;
+  text-align: center;
+}
+
+@container move-effect-editor (max-width: 860px) {
+  .moveEffectEditorPanel {
+    grid-template-rows: auto auto;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .moveEffectEditorHeader {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .moveEffectStatusStrip {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .moveEffectEditorSurface {
+    grid-template-columns: 1fr;
+    overflow: visible;
+  }
+
+  .moveEffectPathDesk {
+    grid-template-rows: auto minmax(320px, 52vh) auto;
+    border-right: 0;
+    border-bottom: 1px solid #343a3f;
+  }
+
+  .moveEffectInspector {
+    grid-template-rows: auto auto auto minmax(180px, 32vh);
+    overflow: visible;
+  }
+}
+
+@container move-effect-editor (max-width: 560px) {
+  .moveEffectPathToolbar {
+    grid-template-columns: minmax(100px, 1fr) auto auto;
+  }
+
+  .moveEffectClosedToggle {
+    grid-column: 1 / -1;
+  }
+
+  .moveEffectStatusStrip {
+    grid-template-columns: 1fr;
+    border-top: 1px solid #343a3f;
+  }
+
+  .moveEffectStatusStrip > span {
+    grid-template-columns: 82px minmax(0, 1fr);
+    align-items: baseline;
+    border-bottom: 1px solid #30363b;
+  }
+
+  .moveEffectClockRow,
+  .moveEffectModePanel {
+    grid-template-columns: 1fr;
+  }
+
+  .moveEffectPhaseGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .moveEffectTransformGrid {
+    grid-template-columns: repeat(3, minmax(66px, 1fr));
+  }
+
+  .moveEffectPathFooter small {
+    display: none;
+  }
+}
+
+@media (max-height: 760px) {
+  .moveEffectEditorPanel {
+    min-height: 420px;
+  }
+
+  .moveEffectPathDesk {
+    grid-template-rows: auto minmax(250px, 1fr) auto;
+  }
+
+  .moveEffectPathViewport,
+  .moveEffectPathCanvas {
+    min-height: 250px;
+  }
+
+  .moveEffectInspector > section {
+    padding: 4px 5px;
+  }
+
+  .moveEffectTransportPanel {
+    gap: 3px;
   }
 }
 

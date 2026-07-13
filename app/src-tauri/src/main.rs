@@ -16,7 +16,8 @@ use std::{
 
 use base64::Engine as _;
 use engine::{
-    validate_chaser_effect_request as validate_engine_chaser_effect_request, EngineCommand,
+    validate_chaser_effect_request as validate_engine_chaser_effect_request,
+    validate_move_effect_request as validate_engine_move_effect_request, EngineCommand,
     EngineHandle, FixtureFlagClearKind,
 };
 use io::midi::{
@@ -36,8 +37,8 @@ use protocol::{
     EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, FixtureId, FixtureLimits,
     FixturePreset, FixtureProfileSummary, GeometrySummary, LearnedMidiControl, LearnedOscControl,
     LfoEffectRequest, MidiControlAction, MidiControlMapping, MidiInputSummary, MidiOutputSummary,
-    NodeGraphId, NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp,
-    OscControlAction, OscControlMapping, OscInputConfig, PatchFixtureRequest,
+    MoveEffectRequest, NodeGraphId, NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary,
+    NodeGraphTransformOp, OscControlAction, OscControlMapping, OscInputConfig, PatchFixtureRequest,
     PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RemoteControlConfig,
     RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile,
     StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary, TimelineEventId,
@@ -92,12 +93,9 @@ const SAMPLE_EFFECT_PRESET_BALL_JSON: &str =
     include_str!("../../../samples/front-dimmer-ball.effect");
 const SAMPLE_EFFECT_PRESET_FAN_LABEL: &str = "samples/front-pan-fan.effect";
 const SAMPLE_EFFECT_PRESET_FAN_JSON: &str = include_str!("../../../samples/front-pan-fan.effect");
-const SAMPLE_EFFECT_PRESET_CIRCLE_PAN_LABEL: &str = "samples/front-circle-pan.effect";
-const SAMPLE_EFFECT_PRESET_CIRCLE_PAN_JSON: &str =
-    include_str!("../../../samples/front-circle-pan.effect");
-const SAMPLE_EFFECT_PRESET_CIRCLE_TILT_LABEL: &str = "samples/front-circle-tilt.effect";
-const SAMPLE_EFFECT_PRESET_CIRCLE_TILT_JSON: &str =
-    include_str!("../../../samples/front-circle-tilt.effect");
+const SAMPLE_EFFECT_PRESET_CIRCLE_LABEL: &str = "samples/front-move-circle.effect";
+const SAMPLE_EFFECT_PRESET_CIRCLE_JSON: &str =
+    include_str!("../../../samples/front-move-circle.effect");
 const SAMPLE_EFFECT_PRESET_CURVE_SAW_LABEL: &str = "samples/front-curve-saw.effect";
 const SAMPLE_EFFECT_PRESET_CURVE_SAW_JSON: &str =
     include_str!("../../../samples/front-curve-saw.effect");
@@ -7082,6 +7080,17 @@ fn add_chaser_effect(
 }
 
 #[tauri::command]
+fn add_move_effect(
+    state: State<'_, AppState>,
+    request: MoveEffectRequest,
+) -> Result<EffectId, String> {
+    validate_move_effect_request(&request)?;
+    let effect_id = state.engine.allocate_effect_id();
+    state.engine.add_move_effect(effect_id, request, true)?;
+    Ok(effect_id)
+}
+
+#[tauri::command]
 fn update_lfo_effect(
     state: State<'_, AppState>,
     effect_id: EffectId,
@@ -7133,6 +7142,17 @@ fn update_chaser_effect(
     validate_chaser_effect_request(&request)?;
     validate_effect_update_kind(&state.engine.snapshot(), effect_id, EffectKind::Chaser)?;
     state.engine.update_chaser_effect(effect_id, request)
+}
+
+#[tauri::command]
+fn update_move_effect(
+    state: State<'_, AppState>,
+    effect_id: EffectId,
+    request: MoveEffectRequest,
+) -> Result<(), String> {
+    validate_move_effect_request(&request)?;
+    validate_effect_update_kind(&state.engine.snapshot(), effect_id, EffectKind::Move)?;
+    state.engine.update_move_effect(effect_id, request)
 }
 
 fn validate_effect_update_kind(
@@ -7328,6 +7348,11 @@ fn relabel_effect_preset(mut preset: EffectPreset, label: String) -> EffectPrese
                 request.label = label;
             }
         }
+        EffectKind::Move => {
+            if let Some(request) = &mut preset.move_effect {
+                request.label = label;
+            }
+        }
     }
     preset
 }
@@ -7397,6 +7422,11 @@ fn sample_effect_preset_json(preset: &str) -> Result<(&'static str, &'static str
         "fan" | "front-pan-fan" | "front_pan_fan" => {
             Ok((SAMPLE_EFFECT_PRESET_FAN_LABEL, SAMPLE_EFFECT_PRESET_FAN_JSON))
         }
+        "circle" | "front-circle" | "front_circle" | "front-move-circle"
+        | "front_move_circle" => Ok((
+            SAMPLE_EFFECT_PRESET_CIRCLE_LABEL,
+            SAMPLE_EFFECT_PRESET_CIRCLE_JSON,
+        )),
         "curve" | "curve-saw" | "front-curve-saw" | "front_curve_saw" => Ok((
             SAMPLE_EFFECT_PRESET_CURVE_SAW_LABEL,
             SAMPLE_EFFECT_PRESET_CURVE_SAW_JSON,
@@ -7410,23 +7440,17 @@ fn sample_effect_preset_json(preset: &str) -> Result<(&'static str, &'static str
             SAMPLE_EFFECT_PRESET_COLOUR_CHASE_JSON,
         )),
         value => Err(format!(
-            "Unknown sample effect preset '{value}'. Expected 'pulse', 'shared', 'wave', 'flash', 'random', 'perlin', 'chase', 'ball', 'fan', 'curve', 'spectrum', or 'colour-chase'."
+            "Unknown sample effect preset '{value}'. Expected 'pulse', 'shared', 'wave', 'flash', 'random', 'perlin', 'chase', 'ball', 'fan', 'circle', 'curve', 'spectrum', or 'colour-chase'."
         )),
     }
 }
 
 fn sample_effect_bundle_jsons(preset: &str) -> Result<Vec<(&'static str, &'static str)>, String> {
     match preset.trim().to_ascii_lowercase().as_str() {
-        "circle" | "front-circle" | "front_circle" => Ok(vec![
-            (
-                SAMPLE_EFFECT_PRESET_CIRCLE_PAN_LABEL,
-                SAMPLE_EFFECT_PRESET_CIRCLE_PAN_JSON,
-            ),
-            (
-                SAMPLE_EFFECT_PRESET_CIRCLE_TILT_LABEL,
-                SAMPLE_EFFECT_PRESET_CIRCLE_TILT_JSON,
-            ),
-        ]),
+        "circle" | "front-circle" | "front_circle" => Ok(vec![(
+            SAMPLE_EFFECT_PRESET_CIRCLE_LABEL,
+            SAMPLE_EFFECT_PRESET_CIRCLE_JSON,
+        )]),
         value => Err(format!(
             "Unknown sample effect bundle '{value}'. Expected 'circle'."
         )),
@@ -7446,6 +7470,11 @@ fn sample_effect_requires_target(preset: &str) -> bool {
             | "color-chase"
             | "colour-mapping"
             | "color-mapping"
+            | "circle"
+            | "front-circle"
+            | "front_circle"
+            | "front-move-circle"
+            | "front_move_circle"
     )
 }
 
@@ -7529,8 +7558,28 @@ fn add_effect_preset_to_engine(
             validate_chaser_effect_request(&request)?;
             engine.add_chaser_effect(effect_id, request, enabled)?;
         }
+        EffectKind::Move => {
+            let request = preset
+                .move_effect
+                .ok_or_else(|| "Move effect preset is missing its request body".to_string())?;
+            let request = match target_override {
+                Some(target_override) => {
+                    let request = apply_move_effect_target_override(request, target_override)?;
+                    validate_move_effect_request(&request)?;
+                    request
+                }
+                None => request,
+            };
+            validate_effect_target_references(&snapshot, &request.fixture_ids, &[])?;
+            engine.add_move_effect(effect_id, request, enabled)?;
+        }
     }
-    if !enabled && !matches!(preset.effect_type, EffectKind::Color | EffectKind::Chaser) {
+    if !enabled
+        && !matches!(
+            preset.effect_type,
+            EffectKind::Color | EffectKind::Chaser | EffectKind::Move
+        )
+    {
         engine
             .send(EngineCommand::SetEffectEnabled {
                 effect_id,
@@ -10449,6 +10498,37 @@ fn validate_project_lighting_references(snapshot: &EngineSnapshot) -> Result<(),
             }
             continue;
         }
+        if matches!(effect.effect_type, EffectKind::Move) {
+            let request = effect.move_effect.as_ref().ok_or_else(|| {
+                format!(
+                    "Project effect {} is missing its Move request body",
+                    effect.id
+                )
+            })?;
+            if !effect.video_targets.is_empty() {
+                return Err(format!(
+                    "Project Move effect {} cannot target video layers",
+                    effect.id
+                ));
+            }
+            validate_group_ids(&request.target_group_ids)?;
+            validate_project_move_effect_targets(
+                snapshot,
+                &fixtures_by_id,
+                &request.fixture_ids,
+                &request.target_group_ids,
+                &format!("Move effect {}", effect.id),
+            )?;
+            if effect.fixture_ids != request.fixture_ids
+                || effect.target_group_ids != request.target_group_ids
+            {
+                return Err(format!(
+                    "Project Move effect {} target summary does not match its request body",
+                    effect.id
+                ));
+            }
+            continue;
+        }
         let has_light_targets =
             !effect.fixture_ids.is_empty() || !effect.target_group_ids.is_empty();
         let has_video_targets = !effect.video_targets.is_empty();
@@ -10636,6 +10716,53 @@ fn validate_project_color_effect_targets(
     Ok(())
 }
 
+fn validate_project_move_effect_targets(
+    snapshot: &EngineSnapshot,
+    fixtures_by_id: &HashMap<FixtureId, &PatchedFixtureSummary>,
+    fixture_ids: &[FixtureId],
+    target_group_ids: &[String],
+    owner_label: &str,
+) -> Result<(), String> {
+    validate_project_unique_refs(owner_label, fixture_ids)?;
+    let mut target_ids = HashSet::new();
+    for fixture_id in fixture_ids {
+        if !fixtures_by_id.contains_key(fixture_id) {
+            return Err(format!(
+                "Project {owner_label} references missing fixture {fixture_id}"
+            ));
+        }
+        target_ids.insert(*fixture_id);
+    }
+    for group_id in target_group_ids {
+        let mut matched = false;
+        for fixture in &snapshot.fixtures {
+            if fixture
+                .group_ids
+                .iter()
+                .any(|candidate| group_matches(candidate, group_id))
+            {
+                matched = true;
+                target_ids.insert(fixture.id);
+            }
+        }
+        if !matched {
+            return Err(format!(
+                "Project {owner_label} references missing fixture group '{group_id}'"
+            ));
+        }
+    }
+    if !target_ids.iter().any(|fixture_id| {
+        fixtures_by_id
+            .get(fixture_id)
+            .is_some_and(|fixture| fixture_supports_move_effect(fixture))
+    }) {
+        return Err(format!(
+            "Project {owner_label} has no fixtures with paired Pan and Tilt controls"
+        ));
+    }
+    Ok(())
+}
+
 fn validate_project_chaser_effect_targets(
     snapshot: &EngineSnapshot,
     fixtures_by_id: &HashMap<FixtureId, &PatchedFixtureSummary>,
@@ -10708,6 +10835,17 @@ fn validate_project_chaser_effect_targets(
     }
 
     Ok((fixture_ids, target_group_ids))
+}
+
+fn fixture_supports_move_effect(fixture: &PatchedFixtureSummary) -> bool {
+    let mut has_pan = false;
+    let mut has_tilt = false;
+    for control in &fixture.controls {
+        let normalized = normalize_custom_attribute_name(&control.attribute);
+        has_pan |= normalized.contains("pan") && !normalized.contains("tilt");
+        has_tilt |= normalized.contains("tilt");
+    }
+    has_pan && has_tilt
 }
 
 fn fixture_supports_color_effect(fixture: &PatchedFixtureSummary) -> bool {
@@ -11325,7 +11463,7 @@ fn validate_project_video_keyframes(
 fn validate_project_effect_body(effect: &EffectSummary) -> Result<(), String> {
     match effect.effect_type {
         EffectKind::Lfo | EffectKind::PositionWave => {
-            if effect.color.is_some() || effect.chaser.is_some() {
+            if effect.color.is_some() || effect.chaser.is_some() || effect.move_effect.is_some() {
                 return Err(format!(
                     "Project effect {} contains a body for another effect kind",
                     effect.id
@@ -11339,11 +11477,23 @@ fn validate_project_effect_body(effect: &EffectSummary) -> Result<(), String> {
                     effect.id
                 ));
             }
+            if effect.move_effect.is_some() {
+                return Err(format!(
+                    "Project Color effect {} contains a Move body",
+                    effect.id
+                ));
+            }
         }
         EffectKind::Chaser => {
             if effect.color.is_some() {
                 return Err(format!(
                     "Project Chaser effect {} contains a Color body",
+                    effect.id
+                ));
+            }
+            if effect.move_effect.is_some() {
+                return Err(format!(
+                    "Project Chaser effect {} contains a Move body",
                     effect.id
                 ));
             }
@@ -11373,6 +11523,48 @@ fn validate_project_effect_body(effect: &EffectSummary) -> Result<(), String> {
             if !scalar_body_matches {
                 return Err(format!(
                     "Project Chaser effect {} summary fields do not match its request body",
+                    effect.id
+                ));
+            }
+        }
+        EffectKind::Move => {
+            if effect.color.is_some() {
+                return Err(format!(
+                    "Project Move effect {} contains a Color body",
+                    effect.id
+                ));
+            }
+            if effect.chaser.is_some() {
+                return Err(format!(
+                    "Project Move effect {} contains a Chaser body",
+                    effect.id
+                ));
+            }
+            let request = effect.move_effect.as_ref().ok_or_else(|| {
+                format!(
+                    "Project Move effect {} is missing its request body",
+                    effect.id
+                )
+            })?;
+            let scalar_body_matches = effect.label == request.label
+                && effect.fixture_ids == request.fixture_ids
+                && effect.target_group_ids == request.target_group_ids
+                && effect.attribute == "Pan/Tilt"
+                && effect.video_targets.is_empty()
+                && effect.shape == protocol::LfoShape::Sine
+                && effect.period_ms == Some(request.period_ms)
+                && effect.clock_sync == request.clock_sync
+                && effect.low == 0
+                && effect.high == u16::MAX
+                && effect.phase == request.phase
+                && effect.blend_mode == request.blend_mode
+                && effect.origin.is_none()
+                && effect.direction.is_none()
+                && effect.speed.is_none()
+                && effect.wavelength.is_none();
+            if !scalar_body_matches {
+                return Err(format!(
+                    "Project Move effect {} summary fields do not match its request body",
                     effect.id
                 ));
             }
@@ -11506,6 +11698,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 position_wave: None,
                 color: None,
                 chaser: None,
+                move_effect: None,
             })
         }
         EffectKind::PositionWave => {
@@ -11545,6 +11738,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 }),
                 color: None,
                 chaser: None,
+                move_effect: None,
             })
         }
         EffectKind::Color => {
@@ -11560,6 +11754,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 position_wave: None,
                 color: Some(request),
                 chaser: None,
+                move_effect: None,
             })
         }
         EffectKind::Chaser => {
@@ -11575,6 +11770,23 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 position_wave: None,
                 color: None,
                 chaser: Some(request),
+                move_effect: None,
+            })
+        }
+        EffectKind::Move => {
+            let request = effect
+                .move_effect
+                .clone()
+                .ok_or_else(|| "Move effect summary is missing its request body".to_string())?;
+            Ok(EffectPreset {
+                version: 1,
+                effect_type: EffectKind::Move,
+                enabled: effect.enabled,
+                lfo: None,
+                position_wave: None,
+                color: None,
+                chaser: None,
+                move_effect: Some(request),
             })
         }
     }
@@ -11651,6 +11863,16 @@ fn apply_chaser_effect_target_override(
     if request.features.len() == 1 && !target_override.attribute.trim().is_empty() {
         request.features[0].attribute = overridden_light_attribute(target_override);
     }
+    Ok(request)
+}
+
+fn apply_move_effect_target_override(
+    mut request: MoveEffectRequest,
+    target_override: &EffectTargetOverride,
+) -> Result<MoveEffectRequest, String> {
+    validate_move_effect_target_override(target_override)?;
+    request.fixture_ids = target_override.fixture_ids.clone();
+    request.target_group_ids = target_override.target_group_ids.clone();
     Ok(request)
 }
 
@@ -11764,6 +11986,18 @@ fn validate_chaser_effect_target_override(
     validate_group_ids(&target_override.target_group_ids)
 }
 
+fn validate_move_effect_target_override(
+    target_override: &EffectTargetOverride,
+) -> Result<(), String> {
+    if !target_override.video_targets.is_empty() {
+        return Err("Move effects cannot target video parameters".to_string());
+    }
+    if target_override.fixture_ids.is_empty() && target_override.target_group_ids.is_empty() {
+        return Err("Move effects require a fixture, selection, or group target".to_string());
+    }
+    validate_group_ids(&target_override.target_group_ids)
+}
+
 fn overridden_light_attribute(target_override: &EffectTargetOverride) -> String {
     if target_override.fixture_ids.is_empty() && target_override.target_group_ids.is_empty() {
         String::new()
@@ -11799,6 +12033,13 @@ fn validate_effect_target_override_for_preset(
                 .as_ref()
                 .ok_or_else(|| "Chaser effect preset is missing its request body".to_string())?;
             validate_chaser_effect_target_override(target_override)
+        }
+        EffectKind::Move => {
+            preset
+                .move_effect
+                .as_ref()
+                .ok_or_else(|| "Move effect preset is missing its request body".to_string())?;
+            validate_move_effect_target_override(target_override)
         }
         EffectKind::Lfo | EffectKind::PositionWave => {
             validate_effect_target_override(target_override)
@@ -12085,7 +12326,11 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
     }
     match preset.effect_type {
         EffectKind::Lfo => {
-            if preset.position_wave.is_some() || preset.color.is_some() || preset.chaser.is_some() {
+            if preset.position_wave.is_some()
+                || preset.color.is_some()
+                || preset.chaser.is_some()
+                || preset.move_effect.is_some()
+            {
                 return Err("LFO effect preset must not contain another effect body".to_string());
             }
             let request = preset
@@ -12095,7 +12340,11 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
             validate_lfo_effect_request(request)?;
         }
         EffectKind::PositionWave => {
-            if preset.lfo.is_some() || preset.color.is_some() || preset.chaser.is_some() {
+            if preset.lfo.is_some()
+                || preset.color.is_some()
+                || preset.chaser.is_some()
+                || preset.move_effect.is_some()
+            {
                 return Err(
                     "Position wave effect preset must not contain another effect body".to_string(),
                 );
@@ -12106,7 +12355,11 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
             validate_position_wave_effect_request(request)?;
         }
         EffectKind::Color => {
-            if preset.lfo.is_some() || preset.position_wave.is_some() || preset.chaser.is_some() {
+            if preset.lfo.is_some()
+                || preset.position_wave.is_some()
+                || preset.chaser.is_some()
+                || preset.move_effect.is_some()
+            {
                 return Err("Color effect preset must not contain another effect body".to_string());
             }
             let request = preset
@@ -12116,7 +12369,11 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
             validate_color_effect_request(request)?;
         }
         EffectKind::Chaser => {
-            if preset.lfo.is_some() || preset.position_wave.is_some() || preset.color.is_some() {
+            if preset.lfo.is_some()
+                || preset.position_wave.is_some()
+                || preset.color.is_some()
+                || preset.move_effect.is_some()
+            {
                 return Err("Chaser effect preset must not contain another effect body".to_string());
             }
             let request = preset
@@ -12124,6 +12381,20 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 .as_ref()
                 .ok_or_else(|| "Chaser effect preset is missing its request body".to_string())?;
             validate_chaser_effect_request(request)?;
+        }
+        EffectKind::Move => {
+            if preset.lfo.is_some()
+                || preset.position_wave.is_some()
+                || preset.color.is_some()
+                || preset.chaser.is_some()
+            {
+                return Err("Move effect preset must not contain another effect body".to_string());
+            }
+            let request = preset
+                .move_effect
+                .as_ref()
+                .ok_or_else(|| "Move effect preset is missing its request body".to_string())?;
+            validate_move_effect_request(request)?;
         }
     }
     Ok(())
@@ -16930,6 +17201,11 @@ fn validate_chaser_effect_request(request: &ChaserEffectRequest) -> Result<(), S
         validate_group_ids(&step.target_group_ids)?;
     }
     Ok(())
+}
+
+fn validate_move_effect_request(request: &MoveEffectRequest) -> Result<(), String> {
+    validate_engine_move_effect_request(request)?;
+    validate_group_ids(&request.target_group_ids)
 }
 
 fn vec3_is_finite(value: Vec3) -> bool {
@@ -22773,6 +23049,7 @@ f 1 2 3
             enabled: true,
             color: None,
             chaser: None,
+            move_effect: None,
         }
     }
 
@@ -22836,6 +23113,7 @@ f 1 2 3
             enabled: true,
             color: Some(request),
             chaser: None,
+            move_effect: None,
         }
     }
 
@@ -23073,6 +23351,7 @@ f 1 2 3
             enabled: true,
             color: None,
             chaser: None,
+            move_effect: None,
         }];
         assert!(validate_project_file(&project)
             .unwrap_err()
@@ -23136,6 +23415,7 @@ f 1 2 3
             enabled: true,
             color: None,
             chaser: None,
+            move_effect: None,
         }];
         assert!(validate_project_file(&project)
             .unwrap_err()
@@ -23275,6 +23555,7 @@ f 1 2 3
             enabled: true,
             color: None,
             chaser: Some(request.clone()),
+            move_effect: None,
         };
         let mut project = ProjectFile {
             version: 1,
@@ -24864,6 +25145,61 @@ f 1 2 3
         }
     }
 
+    fn sample_move_effect_request() -> MoveEffectRequest {
+        MoveEffectRequest {
+            label: "Front circle Move".to_string(),
+            fixture_ids: vec![1],
+            target_group_ids: Vec::new(),
+            points: vec![
+                protocol::MovePathPoint { x: 0.5, y: 0.0 },
+                protocol::MovePathPoint { x: 1.0, y: 0.5 },
+                protocol::MovePathPoint { x: 0.5, y: 1.0 },
+                protocol::MovePathPoint { x: 0.0, y: 0.5 },
+            ],
+            closed: true,
+            interpolation: protocol::MoveInterpolation::Smooth,
+            coordinate_mode: protocol::MoveCoordinateMode::Absolute,
+            center_x: 0.5,
+            center_y: 0.5,
+            size_x: 0.75,
+            size_y: 0.5,
+            rotation_degrees: 15.0,
+            period_ms: 2_000,
+            clock_sync: Some(protocol::EffectClockSync { beats: 4.0 }),
+            direction: protocol::MoveDirection::Forward,
+            phase: 0.125,
+            fixture_spread: 1.0,
+            blend_mode: protocol::EffectBlendMode::Override,
+        }
+    }
+
+    fn move_effect_summary_for_test(id: EffectId, request: MoveEffectRequest) -> EffectSummary {
+        EffectSummary {
+            id,
+            label: request.label.clone(),
+            effect_type: EffectKind::Move,
+            fixture_ids: request.fixture_ids.clone(),
+            target_group_ids: request.target_group_ids.clone(),
+            attribute: "Pan/Tilt".to_string(),
+            video_targets: Vec::new(),
+            shape: protocol::LfoShape::Sine,
+            period_ms: Some(request.period_ms),
+            clock_sync: request.clock_sync,
+            low: 0,
+            high: u16::MAX,
+            phase: request.phase,
+            blend_mode: request.blend_mode.clone(),
+            origin: None,
+            direction: None,
+            speed: None,
+            wavelength: None,
+            enabled: true,
+            color: None,
+            chaser: None,
+            move_effect: Some(request),
+        }
+    }
+
     fn chaser_effect_summary_for_test(id: EffectId, request: ChaserEffectRequest) -> EffectSummary {
         let mut fixture_ids = Vec::new();
         let mut target_group_ids = Vec::new();
@@ -24904,6 +25240,7 @@ f 1 2 3
             enabled: true,
             color: None,
             chaser: Some(request),
+            move_effect: None,
         }
     }
 
@@ -24997,6 +25334,74 @@ f 1 2 3
     }
 
     #[test]
+    fn move_effect_project_and_preset_roundtrip_require_paired_pan_tilt() {
+        let request = sample_move_effect_request();
+        validate_move_effect_request(&request).unwrap();
+        let effect = move_effect_summary_for_test(19, request.clone());
+        let preset = effect_summary_to_preset(&effect).unwrap();
+        validate_effect_preset(&preset).unwrap();
+        assert_eq!(preset.effect_type, EffectKind::Move);
+        assert_eq!(preset.move_effect, Some(request.clone()));
+        assert!(preset.lfo.is_none());
+        assert!(preset.position_wave.is_none());
+        assert!(preset.color.is_none());
+        assert!(preset.chaser.is_none());
+
+        let mut mover = project_fixture(1, "Mover", 0, 1);
+        mover.controls.push(AttributeControl {
+            attribute: "Tilt".to_string(),
+            channel_name: "Tilt".to_string(),
+            geometry: None,
+            offsets: vec![4, 5],
+            resolution: AttributeResolution::SixteenBit,
+            default_value: 0,
+            functions: Vec::new(),
+        });
+        let mut project = ProjectFile {
+            version: PROJECT_FILE_VERSION,
+            app: APP_NAME.to_string(),
+            custom_profiles: Vec::new(),
+            snapshot: EngineSnapshot {
+                fixtures: vec![mover],
+                effects: vec![effect],
+                ..EngineSnapshot::default()
+            },
+        };
+        validate_project_file(&project).unwrap();
+
+        project.snapshot.fixtures[0]
+            .controls
+            .retain(|control| control.attribute != "Tilt");
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("paired Pan and Tilt"));
+    }
+
+    #[test]
+    fn move_effect_target_override_preserves_path_and_rejects_video() {
+        let request = sample_move_effect_request();
+        let target_override = EffectTargetOverride {
+            fixture_ids: vec![2, 3],
+            target_group_ids: vec!["Moving".to_string()],
+            attribute: "Dimmer".to_string(),
+            video_targets: Vec::new(),
+        };
+        let retargeted =
+            apply_move_effect_target_override(request.clone(), &target_override).unwrap();
+        assert_eq!(retargeted.fixture_ids, vec![2, 3]);
+        assert_eq!(retargeted.target_group_ids, vec!["Moving"]);
+        assert_eq!(retargeted.points, request.points);
+        assert_eq!(retargeted.center_x, request.center_x);
+        assert_eq!(retargeted.rotation_degrees, request.rotation_degrees);
+
+        let mut video_override = target_override;
+        video_override.video_targets = vec![sample_video_effect_target(7)];
+        assert!(apply_move_effect_target_override(request, &video_override)
+            .unwrap_err()
+            .contains("cannot target video"));
+    }
+
+    #[test]
     fn effect_summary_serializes_to_lfo_preset() {
         let effect = EffectSummary {
             id: 7,
@@ -25020,6 +25425,7 @@ f 1 2 3
             enabled: false,
             color: None,
             chaser: None,
+            move_effect: None,
         };
 
         let preset = effect_summary_to_preset(&effect).unwrap();
@@ -25082,6 +25488,7 @@ f 1 2 3
             enabled: false,
             color: None,
             chaser: None,
+            move_effect: None,
         };
 
         let preset = effect_summary_to_preset(&effect).unwrap();
@@ -25138,6 +25545,7 @@ f 1 2 3
             enabled: false,
             color: Some(request.clone()),
             chaser: None,
+            move_effect: None,
         };
 
         let preset = effect_summary_to_preset(&effect).unwrap();
@@ -25177,6 +25585,7 @@ f 1 2 3
             enabled: false,
             color: None,
             chaser: Some(request.clone()),
+            move_effect: None,
         };
 
         let preset = effect_summary_to_preset(&effect).unwrap();
@@ -25411,6 +25820,7 @@ f 1 2 3
             position_wave: Some(sample_position_wave_request()),
             color: None,
             chaser: None,
+            move_effect: None,
         };
 
         let error = validate_effect_preset(&preset).unwrap_err();
@@ -25425,6 +25835,7 @@ f 1 2 3
             position_wave: None,
             color: Some(sample_color_effect_request()),
             chaser: None,
+            move_effect: None,
         };
         assert!(validate_effect_preset(&color_with_scalar_body)
             .unwrap_err()
@@ -25438,6 +25849,7 @@ f 1 2 3
             position_wave: None,
             color: Some(sample_color_effect_request()),
             chaser: Some(sample_chaser_effect_request()),
+            move_effect: None,
         };
         assert!(validate_effect_preset(&chaser_with_color_body)
             .unwrap_err()
@@ -25660,40 +26072,37 @@ f 1 2 3
         assert_eq!(fan_wave.high, 40960);
         assert_eq!(fan_wave.clock_sync, None);
 
+        let (circle_label, circle_json) = sample_effect_preset_json("circle").unwrap();
+        assert_eq!(circle_label, SAMPLE_EFFECT_PRESET_CIRCLE_LABEL);
+        assert_eq!(circle_json, SAMPLE_EFFECT_PRESET_CIRCLE_JSON);
+        let circle: EffectPreset = serde_json::from_str(circle_json).unwrap();
+        validate_effect_preset(&circle).unwrap();
+        assert_eq!(circle.effect_type, EffectKind::Move);
+        let circle_move = circle.move_effect.as_ref().unwrap();
+        assert_eq!(circle_move.target_group_ids, vec!["Front".to_string()]);
+        assert_eq!(circle_move.points.len(), 12);
+        assert!(circle_move.closed);
+        assert_eq!(
+            circle_move.interpolation,
+            protocol::MoveInterpolation::Smooth
+        );
+        assert_eq!(
+            circle_move.coordinate_mode,
+            protocol::MoveCoordinateMode::Absolute
+        );
+        assert_eq!(circle_move.center_x, 0.5);
+        assert_eq!(circle_move.center_y, 0.5);
+        assert_eq!(circle_move.size_x, 0.25);
+        assert_eq!(circle_move.size_y, 0.25);
+        assert_eq!(circle_move.period_ms, 2000);
+        assert_eq!(
+            circle_move.clock_sync,
+            Some(protocol::EffectClockSync { beats: 4.0 })
+        );
+        assert_eq!(circle_move.direction, protocol::MoveDirection::Forward);
+        assert_eq!(circle_move.blend_mode, protocol::EffectBlendMode::Override);
         let circle_bundle = sample_effect_bundle_jsons("circle").unwrap();
-        assert_eq!(circle_bundle.len(), 2);
-        assert_eq!(circle_bundle[0].0, SAMPLE_EFFECT_PRESET_CIRCLE_PAN_LABEL);
-        assert_eq!(circle_bundle[0].1, SAMPLE_EFFECT_PRESET_CIRCLE_PAN_JSON);
-        assert_eq!(circle_bundle[1].0, SAMPLE_EFFECT_PRESET_CIRCLE_TILT_LABEL);
-        assert_eq!(circle_bundle[1].1, SAMPLE_EFFECT_PRESET_CIRCLE_TILT_JSON);
-        let circle_pan: EffectPreset = serde_json::from_str(circle_bundle[0].1).unwrap();
-        let circle_tilt: EffectPreset = serde_json::from_str(circle_bundle[1].1).unwrap();
-        validate_effect_preset(&circle_pan).unwrap();
-        validate_effect_preset(&circle_tilt).unwrap();
-        let circle_pan_lfo = circle_pan.lfo.as_ref().unwrap();
-        let circle_tilt_lfo = circle_tilt.lfo.as_ref().unwrap();
-        assert_eq!(circle_pan.effect_type, EffectKind::Lfo);
-        assert_eq!(circle_tilt.effect_type, EffectKind::Lfo);
-        assert_eq!(circle_pan_lfo.target_group_ids, vec!["Front".to_string()]);
-        assert_eq!(circle_tilt_lfo.target_group_ids, vec!["Front".to_string()]);
-        assert_eq!(circle_pan_lfo.attribute, "Pan");
-        assert_eq!(circle_tilt_lfo.attribute, "Tilt");
-        assert_eq!(circle_pan_lfo.shape, protocol::LfoShape::Sine);
-        assert_eq!(circle_tilt_lfo.shape, protocol::LfoShape::Cosine);
-        assert_eq!(circle_pan_lfo.period_ms, 2000);
-        assert_eq!(circle_tilt_lfo.period_ms, 2000);
-        assert_eq!(
-            circle_pan_lfo.clock_sync,
-            Some(protocol::EffectClockSync { beats: 4.0 })
-        );
-        assert_eq!(
-            circle_tilt_lfo.clock_sync,
-            Some(protocol::EffectClockSync { beats: 4.0 })
-        );
-        assert_eq!(circle_pan_lfo.low, 24576);
-        assert_eq!(circle_pan_lfo.high, 40960);
-        assert_eq!(circle_tilt_lfo.low, 24576);
-        assert_eq!(circle_tilt_lfo.high, 40960);
+        assert_eq!(circle_bundle, vec![(circle_label, circle_json)]);
         assert!(sample_effect_preset_json("missing").is_err());
         assert!(sample_effect_bundle_jsons("missing").is_err());
     }
@@ -25732,6 +26141,8 @@ f 1 2 3
         assert!(sample_effect_requires_target("color-spectrum"));
         assert!(sample_effect_requires_target("colour-chase"));
         assert!(sample_effect_requires_target("color-mapping"));
+        assert!(sample_effect_requires_target("circle"));
+        assert!(sample_effect_requires_target("front_move_circle"));
 
         let target_override = EffectTargetOverride {
             fixture_ids: vec![42],
@@ -26452,6 +26863,7 @@ f 1 2 3
                 position_wave: None,
                 color: None,
                 chaser: None,
+                move_effect: None,
             },
             None,
         )
@@ -26516,7 +26928,7 @@ f 1 2 3
     }
 
     #[test]
-    fn embedded_sample_effect_bundle_adds_circle_pair_to_engine() {
+    fn embedded_sample_move_circle_adds_one_atomic_pair_effect_to_engine() {
         let engine = EngineHandle::start(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
@@ -26562,58 +26974,42 @@ f 1 2 3
             .iter()
             .any(|fixture| fixture.id == fixture_id));
 
-        let mut effect_ids = Vec::new();
-        for (_, json) in sample_effect_bundle_jsons("front_circle").unwrap() {
-            let preset: EffectPreset = serde_json::from_str(json).unwrap();
-            let effect_id = add_effect_preset_to_engine(&engine, preset, None).unwrap();
-            effect_ids.push(effect_id);
-        }
-        assert_eq!(effect_ids.len(), 2);
+        let (_, json) = sample_effect_preset_json("front_circle").unwrap();
+        let preset: EffectPreset = serde_json::from_str(json).unwrap();
+        let effect_id = add_effect_preset_to_engine(&engine, preset, None).unwrap();
 
         snapshot = engine.snapshot();
         for _ in 0..20 {
-            if effect_ids.iter().all(|effect_id| {
-                snapshot
-                    .effects
-                    .iter()
-                    .any(|effect| effect.id == *effect_id)
-            }) {
+            if snapshot.effects.iter().any(|effect| effect.id == effect_id) {
                 break;
             }
             std::thread::sleep(Duration::from_millis(25));
             snapshot = engine.snapshot();
         }
 
-        let circle_effects: Vec<&EffectSummary> = effect_ids
+        let circle = snapshot
+            .effects
             .iter()
-            .map(|effect_id| {
-                snapshot
-                    .effects
-                    .iter()
-                    .find(|effect| effect.id == *effect_id)
-                    .expect("circle bundle effect should be in the engine snapshot")
-            })
-            .collect();
-        assert_eq!(circle_effects[0].effect_type, EffectKind::Lfo);
-        assert_eq!(circle_effects[1].effect_type, EffectKind::Lfo);
-        assert_eq!(circle_effects[0].attribute, "Pan");
-        assert_eq!(circle_effects[1].attribute, "Tilt");
-        assert_eq!(circle_effects[0].shape, protocol::LfoShape::Sine);
-        assert_eq!(circle_effects[1].shape, protocol::LfoShape::Cosine);
-        assert_eq!(circle_effects[0].period_ms, Some(2000));
-        assert_eq!(circle_effects[1].period_ms, Some(2000));
+            .find(|effect| effect.id == effect_id)
+            .expect("circle Move effect should be in the engine snapshot");
+        assert_eq!(circle.effect_type, EffectKind::Move);
+        assert!(circle.fixture_ids.is_empty());
+        assert_eq!(circle.target_group_ids, vec!["Front".to_string()]);
+        assert_eq!(circle.attribute, "Pan/Tilt");
+        assert_eq!(circle.period_ms, Some(2000));
         assert_eq!(
-            circle_effects[0].clock_sync,
+            circle.clock_sync,
             Some(protocol::EffectClockSync { beats: 4.0 })
         );
-        assert_eq!(
-            circle_effects[1].clock_sync,
-            Some(protocol::EffectClockSync { beats: 4.0 })
-        );
-        assert_eq!(circle_effects[0].low, 24576);
-        assert_eq!(circle_effects[0].high, 40960);
-        assert_eq!(circle_effects[1].low, 24576);
-        assert_eq!(circle_effects[1].high, 40960);
+        let request = circle
+            .move_effect
+            .as_ref()
+            .expect("Move summary should retain its atomic path body");
+        assert_eq!(request.points.len(), 12);
+        assert!(request.closed);
+        assert_eq!(request.direction, protocol::MoveDirection::Forward);
+        assert_eq!(request.size_x, 0.25);
+        assert_eq!(request.size_y, 0.25);
     }
 }
 
@@ -27516,10 +27912,12 @@ fn main() {
             add_position_wave_effect,
             add_color_effect,
             add_chaser_effect,
+            add_move_effect,
             update_lfo_effect,
             update_position_wave_effect,
             update_color_effect,
             update_chaser_effect,
+            update_move_effect,
             save_node_graph,
             set_node_graph_enabled,
             remove_node_graph,

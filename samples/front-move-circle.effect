@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "effect_type": "Move",
+  "enabled": true,
+  "lfo": null,
+  "position_wave": null,
+  "color": null,
+  "chaser": null,
+  "move_effect": {
+    "label": "Front Move Circle",
+    "fixture_ids": [],
+    "target_group_ids": ["Front"],
+    "points": [
+      { "x": 1.0, "y": 0.5 },
+      { "x": 0.933013, "y": 0.75 },
+      { "x": 0.75, "y": 0.933013 },
+      { "x": 0.5, "y": 1.0 },
+      { "x": 0.25, "y": 0.933013 },
+      { "x": 0.066987, "y": 0.75 },
+      { "x": 0.0, "y": 0.5 },
+      { "x": 0.066987, "y": 0.25 },
+      { "x": 0.25, "y": 0.066987 },
+      { "x": 0.5, "y": 0.0 },
+      { "x": 0.75, "y": 0.066987 },
+      { "x": 0.933013, "y": 0.25 }
+    ],
+    "closed": true,
+    "interpolation": "Smooth",
+    "coordinate_mode": "Absolute",
+    "center_x": 0.5,
+    "center_y": 0.5,
+    "size_x": 0.25,
+    "size_y": 0.25,
+    "rotation_degrees": 0.0,
+    "period_ms": 2000,
+    "clock_sync": {
+      "beats": 4.0
+    },
+    "direction": "Forward",
+    "phase": 0.0,
+    "fixture_spread": 0.0,
+    "blend_mode": "Override"
+  }
+}

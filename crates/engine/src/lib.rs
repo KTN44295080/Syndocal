@@ -9,6 +9,10 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+mod move_path;
+
+use move_path::{move_rotation, transform_move_delta, CompiledMovePath};
+
 use crossbeam_queue::ArrayQueue;
 use io::{
     artnet::ArtNetSender,
@@ -28,18 +32,18 @@ use protocol::{
     DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, DmxOutputRouteTelemetry,
     DmxUniversePreview, EffectBlendMode, EffectId, EffectKind, EffectSummary, EngineSnapshot,
     EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId, FixtureId, FixtureLimits,
-    FixtureProfileSummary, LfoEffectRequest, LfoShape, NodeGraphId, NodeGraphNodeKind,
-    NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId, PatchFixtureRequest,
-    PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot,
-    ProgrammerValueSummary, ReferencePaletteSummary, Rotation3, StageMapConfig,
-    StageMapPresetSummary, StageObjectId, StageObjectSummary, SubmasterSummary,
-    TimelineAutomationSummary, TimelineCueEventSummary, TimelineEventId, TimelineSnapshot,
-    TimelineTrackKind, TimelineVideoAutomationSummary, Transform2D, Vec3,
-    VideoAutomationKeyframeSummary, VideoBlendMode, VideoColorAdjust, VideoCuePointSummary,
-    VideoEffectTarget, VideoFxAdjust, VideoIsfEffectSummary, VideoLayerId, VideoLayerState,
-    VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
-    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
-    VideoSnapshot, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
+    FixtureProfileSummary, LfoEffectRequest, LfoShape, MoveCoordinateMode, MoveDirection,
+    MoveEffectRequest, MovePathPoint, NodeGraphId, NodeGraphNodeKind, NodeGraphNodeSummary,
+    NodeGraphSummary, NodeGraphTransformOp, PaletteId, PatchFixtureRequest, PatchedFixtureSummary,
+    PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot, ProgrammerValueSummary,
+    ReferencePaletteSummary, Rotation3, StageMapConfig, StageMapPresetSummary, StageObjectId,
+    StageObjectSummary, SubmasterSummary, TimelineAutomationSummary, TimelineCueEventSummary,
+    TimelineEventId, TimelineSnapshot, TimelineTrackKind, TimelineVideoAutomationSummary,
+    Transform2D, Vec3, VideoAutomationKeyframeSummary, VideoBlendMode, VideoColorAdjust,
+    VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust, VideoIsfEffectSummary, VideoLayerId,
+    VideoLayerState, VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind,
+    VideoOutputMapping, VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget,
+    VideoParam, VideoSnapshot, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
 };
 use thiserror::Error;
 
@@ -297,6 +301,13 @@ pub enum EngineCommand {
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
+    AddMoveEffect {
+        effect_id: EffectId,
+        request: MoveEffectRequest,
+        enabled: bool,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     UpdateLfoEffect {
         effect_id: EffectId,
         request: LfoEffectRequest,
@@ -314,6 +325,12 @@ pub enum EngineCommand {
     UpdateChaserEffect {
         effect_id: EffectId,
         request: ChaserEffectRequest,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    UpdateMoveEffect {
+        effect_id: EffectId,
+        request: MoveEffectRequest,
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
@@ -727,10 +744,12 @@ impl EngineCommand {
                 | EngineCommand::AddPositionWaveEffect { .. }
                 | EngineCommand::AddColorEffect { .. }
                 | EngineCommand::AddChaserEffect { .. }
+                | EngineCommand::AddMoveEffect { .. }
                 | EngineCommand::UpdateLfoEffect { .. }
                 | EngineCommand::UpdatePositionWaveEffect { .. }
                 | EngineCommand::UpdateColorEffect { .. }
                 | EngineCommand::UpdateChaserEffect { .. }
+                | EngineCommand::UpdateMoveEffect { .. }
                 | EngineCommand::SetEffectEnabled { .. }
                 | EngineCommand::SetEffectEnabledPublished { .. }
                 | EngineCommand::SetEffectVideoTargetPosition { .. }
@@ -1125,6 +1144,44 @@ impl EngineHandle {
         receiver
             .recv_timeout(Duration::from_secs(3))
             .map_err(|error| format!("Chaser effect update acknowledgement failed: {error}"))?
+    }
+
+    pub fn add_move_effect(
+        &self,
+        effect_id: EffectId,
+        request: MoveEffectRequest,
+        enabled: bool,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::AddMoveEffect {
+            effect_id,
+            request,
+            enabled,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Move effect add acknowledgement failed: {error}"))?
+    }
+
+    pub fn update_move_effect(
+        &self,
+        effect_id: EffectId,
+        request: MoveEffectRequest,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::UpdateMoveEffect {
+            effect_id,
+            request,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Move effect update acknowledgement failed: {error}"))?
     }
 
     pub fn set_effect_enabled_published(
@@ -1536,6 +1593,7 @@ enum RuntimeEffectKind {
     PositionWave(PositionWaveEffectRequest),
     Color(RuntimeColorEffect),
     Chaser(RuntimeChaserEffect),
+    Move(RuntimeMoveEffect),
 }
 
 #[derive(Clone)]
@@ -1543,6 +1601,31 @@ struct RuntimeColorEffect {
     request: ColorEffectRequest,
     targets: Vec<RuntimeColorTarget>,
     target_indices: HashMap<FixtureId, usize>,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeMoveEffect {
+    request: MoveEffectRequest,
+    path: CompiledMovePath,
+    targets: Vec<RuntimeMoveTarget>,
+    target_indices: HashMap<FixtureId, usize>,
+    rotation_cosine: f32,
+    rotation_sine: f32,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeMoveTarget {
+    fixture_id: FixtureId,
+    pan_attribute: String,
+    tilt_attribute: String,
+    phase_offset: f32,
+    cached: Cell<Option<RuntimeMoveEvaluation>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct RuntimeMoveEvaluation {
+    at: Instant,
+    delta: MovePathPoint,
 }
 
 #[derive(Debug, Clone)]
@@ -2497,6 +2580,15 @@ impl EngineRuntime {
                         created_at: now,
                     })
                 }
+                RuntimeEffectKind::Move(runtime) => {
+                    let runtime = self.restore_move_effect_request(runtime.request).ok()?;
+                    Some(RuntimeEffect {
+                        id: effect.id,
+                        kind: RuntimeEffectKind::Move(runtime),
+                        enabled: effect.enabled,
+                        created_at: now,
+                    })
+                }
             })
             .collect();
         self.sanitize_cue_effect_targets();
@@ -2646,6 +2738,8 @@ impl EngineRuntime {
                     | EngineCommand::UpdateColorEffect { .. }
                     | EngineCommand::AddChaserEffect { .. }
                     | EngineCommand::UpdateChaserEffect { .. }
+                    | EngineCommand::AddMoveEffect { .. }
+                    | EngineCommand::UpdateMoveEffect { .. }
                     | EngineCommand::SetEffectEnabledPublished { .. }
                     | EngineCommand::CreateCuePublished { .. }
                     | EngineCommand::UpdateCuePublished { .. }
@@ -2739,6 +2833,7 @@ impl EngineRuntime {
                 });
                 self.rebuild_color_effect_targets();
                 self.rebuild_chaser_effect_targets();
+                self.rebuild_move_effect_targets();
                 self.last_error = None;
             }
             EngineCommand::RemoveFixture(fixture_id) => {
@@ -2982,6 +3077,7 @@ impl EngineRuntime {
                     fixture.request.group_ids = group_ids;
                     self.rebuild_color_effect_targets();
                     self.rebuild_chaser_effect_targets();
+                    self.rebuild_move_effect_targets();
                     self.last_error = None;
                 } else {
                     self.last_error = Some(format!("Fixture {fixture_id} was not found"));
@@ -3371,6 +3467,45 @@ impl EngineRuntime {
                         "Engine snapshot was busy; Chaser effect add was rolled back",
                 });
             }
+            EngineCommand::AddMoveEffect {
+                effect_id,
+                request,
+                enabled,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RemoveAddedEffect {
+                    effect_id,
+                    last_error: previous_last_error.clone(),
+                };
+                let expired = Instant::now() > expires_at;
+                let result = if expired {
+                    Err("Move effect add expired before engine execution".to_string())
+                } else if self.effects.iter().any(|effect| effect.id == effect_id) {
+                    Err(format!("Effect {effect_id} already exists"))
+                } else {
+                    self.resolve_move_effect_request(request).map(|request| {
+                        self.effects.push(RuntimeEffect {
+                            id: effect_id,
+                            kind: RuntimeEffectKind::Move(request),
+                            enabled,
+                            created_at: Instant::now(),
+                        });
+                    })
+                };
+                self.last_error = if expired {
+                    previous_last_error
+                } else {
+                    result.as_ref().err().cloned()
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error: "Engine snapshot was busy; Move effect add was rolled back",
+                });
+            }
             EngineCommand::UpdateLfoEffect { effect_id, request } => {
                 let request = match self.resolve_lfo_effect_request(request) {
                     Ok(request) => request,
@@ -3516,6 +3651,54 @@ impl EngineRuntime {
                         "Engine snapshot was busy; Chaser effect update was rolled back",
                 });
             }
+            EngineCommand::UpdateMoveEffect {
+                effect_id,
+                request,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let previous_index = self
+                    .effects
+                    .iter()
+                    .position(|effect| effect.id == effect_id);
+                let rollback = PendingCommandRollback::RestoreEffect {
+                    index: previous_index,
+                    effect: previous_index.map(|index| self.effects[index].clone()),
+                    last_error: previous_last_error.clone(),
+                };
+                let expired = Instant::now() > expires_at;
+                let result = if expired {
+                    Err("Move effect update expired before engine execution".to_string())
+                } else {
+                    self.resolve_move_effect_request(request)
+                        .and_then(|request| {
+                            let effect = self
+                                .effects
+                                .iter_mut()
+                                .find(|effect| effect.id == effect_id)
+                                .ok_or_else(|| format!("Effect {effect_id} was not found"))?;
+                            if !matches!(&effect.kind, RuntimeEffectKind::Move(_)) {
+                                return Err(format!("Effect {effect_id} is not a Move effect"));
+                            }
+                            effect.kind = RuntimeEffectKind::Move(request);
+                            effect.created_at = Instant::now();
+                            Ok(())
+                        })
+                };
+                self.last_error = if expired {
+                    previous_last_error
+                } else {
+                    result.as_ref().err().cloned()
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Move effect update was rolled back",
+                });
+            }
             EngineCommand::SetEffectEnabled { effect_id, enabled } => {
                 if let Some(effect) = self
                     .effects
@@ -3596,7 +3779,9 @@ impl EngineRuntime {
                 let video_targets = match &mut effect.kind {
                     RuntimeEffectKind::Lfo(request) => &mut request.video_targets,
                     RuntimeEffectKind::PositionWave(request) => &mut request.video_targets,
-                    RuntimeEffectKind::Color(_) | RuntimeEffectKind::Chaser(_) => {
+                    RuntimeEffectKind::Color(_)
+                    | RuntimeEffectKind::Chaser(_)
+                    | RuntimeEffectKind::Move(_) => {
                         self.last_error = Some(format!(
                             "Lighting-only effect {effect_id} cannot target video layers"
                         ));
@@ -5535,9 +5720,15 @@ impl EngineRuntime {
                     .iter()
                     .any(|step| !step.fixture_ids.is_empty() || !step.target_group_ids.is_empty())
             }
+            RuntimeEffectKind::Move(runtime) => {
+                runtime.request.fixture_ids.retain(|id| *id != fixture_id);
+                !runtime.request.fixture_ids.is_empty()
+                    || !runtime.request.target_group_ids.is_empty()
+            }
         });
         self.rebuild_color_effect_targets();
         self.rebuild_chaser_effect_targets();
+        self.rebuild_move_effect_targets();
         self.sanitize_node_graph_references();
         self.clear_empty_active_fade();
         self.last_error = None;
@@ -5579,7 +5770,9 @@ impl EngineRuntime {
                     || !request.target_group_ids.is_empty()
                     || !request.video_targets.is_empty()
             }
-            RuntimeEffectKind::Color(_) | RuntimeEffectKind::Chaser(_) => true,
+            RuntimeEffectKind::Color(_)
+            | RuntimeEffectKind::Chaser(_)
+            | RuntimeEffectKind::Move(_) => true,
         });
         self.sanitize_cue_effect_targets();
         self.sanitize_node_graph_references();
@@ -6784,6 +6977,48 @@ impl EngineRuntime {
         )
     }
 
+    fn resolve_move_effect_request(
+        &self,
+        request: MoveEffectRequest,
+    ) -> Result<RuntimeMoveEffect, String> {
+        self.resolve_move_effect_request_with_policy(request, false)
+    }
+
+    fn restore_move_effect_request(
+        &self,
+        request: MoveEffectRequest,
+    ) -> Result<RuntimeMoveEffect, String> {
+        self.resolve_move_effect_request_with_policy(request, true)
+    }
+
+    fn resolve_move_effect_request_with_policy(
+        &self,
+        mut request: MoveEffectRequest,
+        allow_unresolved_groups: bool,
+    ) -> Result<RuntimeMoveEffect, String> {
+        validate_move_effect_request(&request)?;
+        request.fixture_ids = self.normalize_effect_fixture_ids(request.fixture_ids)?;
+        request.target_group_ids = normalize_runtime_group_ids(request.target_group_ids)?;
+
+        let has_group_reference = !request.target_group_ids.is_empty();
+        for group_id in &request.target_group_ids {
+            let fixture_ids = self.fixture_ids_in_group(group_id);
+            if fixture_ids.is_empty() {
+                if allow_unresolved_groups {
+                    continue;
+                }
+                return Err(format!(
+                    "Group '{group_id}' was not found or has no fixtures"
+                ));
+            }
+        }
+        runtime_move_effect_from_request(
+            request,
+            &self.fixtures,
+            !(allow_unresolved_groups && has_group_reference),
+        )
+    }
+
     fn rebuild_color_effect_targets(&mut self) {
         let fixtures = &self.fixtures;
         self.effects.retain_mut(|effect| {
@@ -6813,6 +7048,24 @@ impl EngineRuntime {
                 Ok(rebuilt) => {
                     *runtime = rebuilt;
                     !runtime.target_phase_offsets.is_empty() || has_group_reference
+                }
+                Err(_) => has_group_reference,
+            }
+        });
+        self.sanitize_cue_effect_targets();
+    }
+
+    fn rebuild_move_effect_targets(&mut self) {
+        let fixtures = &self.fixtures;
+        self.effects.retain_mut(|effect| {
+            let RuntimeEffectKind::Move(runtime) = &mut effect.kind else {
+                return true;
+            };
+            let has_group_reference = !runtime.request.target_group_ids.is_empty();
+            match runtime_move_effect_from_request(runtime.request.clone(), fixtures, false) {
+                Ok(rebuilt) => {
+                    *runtime = rebuilt;
+                    !runtime.targets.is_empty() || has_group_reference
                 }
                 Err(_) => has_group_reference,
             }
@@ -7044,6 +7297,19 @@ impl EngineRuntime {
                             ),
                             &runtime.request.blend_mode,
                         );
+                    }
+                }
+                RuntimeEffectKind::Move(runtime) => {
+                    if let Some(next) = evaluate_runtime_move_attribute(
+                        runtime,
+                        fixture.id,
+                        attribute,
+                        value,
+                        effect.created_at,
+                        now,
+                        &clock,
+                    ) {
+                        value = next;
                     }
                 }
             }
@@ -8148,7 +8414,9 @@ impl EngineRuntime {
                         apply_video_effect_param(state, &target.param, value, &request.blend_mode);
                     }
                 }
-                RuntimeEffectKind::Color(_) | RuntimeEffectKind::Chaser(_) => {}
+                RuntimeEffectKind::Color(_)
+                | RuntimeEffectKind::Chaser(_)
+                | RuntimeEffectKind::Move(_) => {}
             }
         }
         for graph in &self.node_graphs {
@@ -9682,7 +9950,9 @@ fn effect_targets_fixture_attribute(
                     fixture,
                 )
         }
-        RuntimeEffectKind::Color(_) | RuntimeEffectKind::Chaser(_) => false,
+        RuntimeEffectKind::Color(_) | RuntimeEffectKind::Chaser(_) | RuntimeEffectKind::Move(_) => {
+            false
+        }
     }
 }
 
@@ -10020,6 +10290,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             enabled: effect.enabled,
             color: None,
             chaser: None,
+            move_effect: None,
         },
         RuntimeEffectKind::PositionWave(request) => EffectSummary {
             id: effect.id,
@@ -10043,6 +10314,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             enabled: effect.enabled,
             color: None,
             chaser: None,
+            move_effect: None,
         },
         RuntimeEffectKind::Color(runtime) => EffectSummary {
             id: effect.id,
@@ -10066,6 +10338,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             enabled: effect.enabled,
             color: Some(runtime.request.clone()),
             chaser: None,
+            move_effect: None,
         },
         RuntimeEffectKind::Chaser(runtime) => {
             let mut fixture_ids = Vec::new();
@@ -10109,8 +10382,33 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
                 enabled: effect.enabled,
                 color: None,
                 chaser: Some(runtime.request.clone()),
+                move_effect: None,
             }
         }
+        RuntimeEffectKind::Move(runtime) => EffectSummary {
+            id: effect.id,
+            label: runtime.request.label.clone(),
+            effect_type: EffectKind::Move,
+            fixture_ids: runtime.request.fixture_ids.clone(),
+            target_group_ids: runtime.request.target_group_ids.clone(),
+            attribute: "Pan/Tilt".to_string(),
+            video_targets: Vec::new(),
+            shape: LfoShape::Sine,
+            period_ms: Some(runtime.request.period_ms),
+            clock_sync: runtime.request.clock_sync,
+            low: 0,
+            high: u16::MAX,
+            phase: runtime.request.phase,
+            blend_mode: runtime.request.blend_mode.clone(),
+            origin: None,
+            direction: None,
+            speed: None,
+            wavelength: None,
+            enabled: effect.enabled,
+            color: None,
+            chaser: None,
+            move_effect: Some(runtime.request.clone()),
+        },
     }
 }
 
@@ -10161,6 +10459,19 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
             feature_indices: HashMap::new(),
             feature_fixture_ids: Vec::new(),
         }),
+        EffectKind::Move => {
+            let request = effect.move_effect.clone()?;
+            let path = CompiledMovePath::compile(&request).ok()?;
+            let (rotation_cosine, rotation_sine) = move_rotation(request.rotation_degrees);
+            RuntimeEffectKind::Move(RuntimeMoveEffect {
+                request,
+                path,
+                targets: Vec::new(),
+                target_indices: HashMap::new(),
+                rotation_cosine,
+                rotation_sine,
+            })
+        }
     };
     Some(RuntimeEffect {
         id: effect.id,
@@ -10207,6 +10518,252 @@ fn validate_runtime_color_effect_request(request: &ColorEffectRequest) -> Result
         return Err("Color effect fixture spread must be within 0..1".to_string());
     }
     Ok(())
+}
+
+pub fn validate_move_effect_request(request: &MoveEffectRequest) -> Result<(), String> {
+    if request.label.trim().is_empty() {
+        return Err("Move effect label is required".to_string());
+    }
+    if request.fixture_ids.is_empty() && request.target_group_ids.is_empty() {
+        return Err("Move effect must target at least one fixture or group".to_string());
+    }
+    if !(2..=256).contains(&request.points.len()) {
+        return Err("Move effect requires between 2 and 256 path points".to_string());
+    }
+    if request.points.iter().any(|point| {
+        !point.x.is_finite()
+            || !point.y.is_finite()
+            || !(0.0..=1.0).contains(&point.x)
+            || !(0.0..=1.0).contains(&point.y)
+    }) {
+        return Err("Move effect path points must be finite and within 0..1".to_string());
+    }
+    let first_point = request.points[0];
+    if !request
+        .points
+        .iter()
+        .skip(1)
+        .any(|point| (point.x - first_point.x).hypot(point.y - first_point.y) > 1.0e-6)
+    {
+        return Err("Move effect path must contain at least two distinct points".to_string());
+    }
+    if !request.center_x.is_finite()
+        || !request.center_y.is_finite()
+        || !(0.0..=1.0).contains(&request.center_x)
+        || !(0.0..=1.0).contains(&request.center_y)
+    {
+        return Err("Move effect center must be finite and within 0..1".to_string());
+    }
+    if !request.size_x.is_finite()
+        || !request.size_y.is_finite()
+        || !(0.0..=2.0).contains(&request.size_x)
+        || !(0.0..=2.0).contains(&request.size_y)
+        || request.size_x == 0.0
+        || request.size_y == 0.0
+    {
+        return Err("Move effect size must be finite, greater than 0, and at most 2".to_string());
+    }
+    if !request.rotation_degrees.is_finite() {
+        return Err("Move effect rotation must be finite".to_string());
+    }
+    if request.period_ms < 10 {
+        return Err("Move effect period must be at least 10 ms".to_string());
+    }
+    if let Some(clock_sync) = request.clock_sync {
+        if !clock_sync.beats.is_finite() || clock_sync.beats <= 0.0 {
+            return Err(
+                "Move effect clock sync beats must be finite and greater than 0".to_string(),
+            );
+        }
+    }
+    if !request.phase.is_finite() || !(0.0..=1.0).contains(&request.phase) {
+        return Err("Move effect phase must be finite and within 0..1".to_string());
+    }
+    if !request.fixture_spread.is_finite() || !(0.0..=1.0).contains(&request.fixture_spread) {
+        return Err("Move effect fixture spread must be finite and within 0..1".to_string());
+    }
+    if request.blend_mode != EffectBlendMode::Override {
+        return Err(
+            "Move effects use Override semantics; Relative mode applies a signed offset"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn runtime_move_effect_from_request(
+    request: MoveEffectRequest,
+    fixtures: &[RuntimeFixture],
+    require_resolved_target: bool,
+) -> Result<RuntimeMoveEffect, String> {
+    validate_move_effect_request(&request)?;
+    let path = CompiledMovePath::compile(&request)?;
+    let mut fixture_ids = Vec::new();
+    let mut seen = HashSet::new();
+    for fixture_id in &request.fixture_ids {
+        if fixtures.iter().any(|fixture| fixture.id == *fixture_id) && seen.insert(*fixture_id) {
+            fixture_ids.push(*fixture_id);
+        }
+    }
+    for group_id in &request.target_group_ids {
+        for fixture in fixtures.iter().filter(|fixture| {
+            fixture
+                .request
+                .group_ids
+                .iter()
+                .any(|fixture_group| group_matches(fixture_group, group_id))
+        }) {
+            if seen.insert(fixture.id) {
+                fixture_ids.push(fixture.id);
+            }
+        }
+    }
+
+    let compatible = fixture_ids
+        .into_iter()
+        .filter_map(|fixture_id| {
+            let fixture = fixtures.iter().find(|fixture| fixture.id == fixture_id)?;
+            let (pan_attribute, tilt_attribute) = runtime_move_attribute_pair(fixture)?;
+            Some((
+                fixture_id,
+                pan_attribute.to_string(),
+                tilt_attribute.to_string(),
+            ))
+        })
+        .collect::<Vec<_>>();
+    if require_resolved_target && compatible.is_empty() {
+        return Err(
+            "Move effect must resolve at least one fixture with one paired Pan and Tilt control"
+                .to_string(),
+        );
+    }
+
+    let count = compatible.len().max(1) as f32;
+    let targets = compatible
+        .into_iter()
+        .enumerate()
+        .map(
+            |(index, (fixture_id, pan_attribute, tilt_attribute))| RuntimeMoveTarget {
+                fixture_id,
+                pan_attribute,
+                tilt_attribute,
+                phase_offset: index as f32 / count * request.fixture_spread,
+                cached: Cell::new(None),
+            },
+        )
+        .collect::<Vec<_>>();
+    let target_indices = targets
+        .iter()
+        .enumerate()
+        .map(|(index, target)| (target.fixture_id, index))
+        .collect();
+    let (rotation_cosine, rotation_sine) = move_rotation(request.rotation_degrees);
+    Ok(RuntimeMoveEffect {
+        request,
+        path,
+        targets,
+        target_indices,
+        rotation_cosine,
+        rotation_sine,
+    })
+}
+
+fn evaluate_runtime_move_attribute(
+    runtime: &RuntimeMoveEffect,
+    fixture_id: FixtureId,
+    attribute: &str,
+    base_value: u16,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+) -> Option<u16> {
+    let target = runtime
+        .target_indices
+        .get(&fixture_id)
+        .and_then(|index| runtime.targets.get(*index))?;
+    let axis = if target.pan_attribute.eq_ignore_ascii_case(attribute) {
+        MovementAxis::Pan
+    } else if target.tilt_attribute.eq_ignore_ascii_case(attribute) {
+        MovementAxis::Tilt
+    } else {
+        return None;
+    };
+    let evaluation = target
+        .cached
+        .get()
+        .filter(|evaluation| evaluation.at == now)
+        .unwrap_or_else(|| {
+            let progress = move_effect_progress(
+                &runtime.request,
+                target.phase_offset,
+                created_at,
+                now,
+                clock,
+            );
+            let point = runtime.path.sample(progress);
+            let evaluation = RuntimeMoveEvaluation {
+                at: now,
+                delta: transform_move_delta(
+                    &runtime.request,
+                    point,
+                    runtime.rotation_cosine,
+                    runtime.rotation_sine,
+                ),
+            };
+            target.cached.set(Some(evaluation));
+            evaluation
+        });
+    let delta = match axis {
+        MovementAxis::Pan => evaluation.delta.x,
+        MovementAxis::Tilt => evaluation.delta.y,
+    };
+    let normalized = match runtime.request.coordinate_mode {
+        MoveCoordinateMode::Absolute => {
+            let center = match axis {
+                MovementAxis::Pan => runtime.request.center_x,
+                MovementAxis::Tilt => runtime.request.center_y,
+            };
+            center + delta
+        }
+        MoveCoordinateMode::Relative => {
+            let center_offset = match axis {
+                MovementAxis::Pan => runtime.request.center_x - 0.5,
+                MovementAxis::Tilt => runtime.request.center_y - 0.5,
+            };
+            base_value as f32 / u16::MAX as f32 + center_offset + delta
+        }
+    }
+    .clamp(0.0, 1.0);
+    Some((normalized * u16::MAX as f32).round() as u16)
+}
+
+fn move_effect_progress(
+    request: &MoveEffectRequest,
+    fixture_phase_offset: f32,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+) -> f32 {
+    let cycle = if let Some(clock_sync) = request.clock_sync {
+        let beat_position = clock.beat_counter as f32 + clock.beat_phase;
+        beat_position / clock_sync.beats.max(0.000_1)
+    } else {
+        let period = request.period_ms.max(10) as f32 / 1_000.0;
+        now.saturating_duration_since(created_at).as_secs_f32() / period
+    };
+    let phase = (cycle + request.phase + fixture_phase_offset).rem_euclid(1.0);
+    match request.direction {
+        MoveDirection::Forward => phase,
+        MoveDirection::Reverse => 1.0 - phase,
+        MoveDirection::Bounce => {
+            let doubled = phase * 2.0;
+            if doubled <= 1.0 {
+                doubled
+            } else {
+                2.0 - doubled
+            }
+        }
+    }
 }
 
 pub fn validate_chaser_effect_request(request: &ChaserEffectRequest) -> Result<(), String> {
@@ -12865,6 +13422,27 @@ fn control_for_attribute<'a>(
         .find(|control| movement_axis(&control.attribute) == Some(axis))
 }
 
+fn runtime_move_attribute_pair(fixture: &RuntimeFixture) -> Option<(&str, &str)> {
+    let mode = fixture.profile.dmx_modes.get(fixture.mode_index)?;
+    let mut pan_controls = mode
+        .controls
+        .iter()
+        .filter(|control| movement_axis(&control.attribute) == Some(MovementAxis::Pan));
+    let pan = pan_controls.next()?;
+    if pan_controls.next().is_some() {
+        return None;
+    }
+    let mut tilt_controls = mode
+        .controls
+        .iter()
+        .filter(|control| movement_axis(&control.attribute) == Some(MovementAxis::Tilt));
+    let tilt = tilt_controls.next()?;
+    if tilt_controls.next().is_some() {
+        return None;
+    }
+    Some((pan.attribute.as_str(), tilt.attribute.as_str()))
+}
+
 fn clamp_to_range(value: u16, min: u16, max: u16, invert: bool) -> u16 {
     let range_min = min.min(max);
     let range_max = min.max(max);
@@ -14110,6 +14688,7 @@ mod tests {
                 enabled: false,
                 color: None,
                 chaser: None,
+                move_effect: None,
             }],
             node_graphs: vec![sample_node_graph(48, 40)],
             output: DmxOutputConfig {
@@ -15001,6 +15580,7 @@ mod tests {
                     enabled: true,
                     color: None,
                     chaser: None,
+                    move_effect: None,
                 },
                 EffectSummary {
                     id: 51,
@@ -15024,6 +15604,7 @@ mod tests {
                     enabled: true,
                     color: None,
                     chaser: None,
+                    move_effect: None,
                 },
                 EffectSummary {
                     id: 52,
@@ -15047,6 +15628,7 @@ mod tests {
                     enabled: true,
                     color: None,
                     chaser: None,
+                    move_effect: None,
                 },
             ],
             ..EngineSnapshot::default()
@@ -15206,6 +15788,7 @@ mod tests {
                     enabled: true,
                     color: None,
                     chaser: None,
+                    move_effect: None,
                 },
                 EffectSummary {
                     id: 41,
@@ -15229,6 +15812,7 @@ mod tests {
                     enabled: true,
                     color: None,
                     chaser: None,
+                    move_effect: None,
                 },
             ],
             ..EngineSnapshot::default()
@@ -29419,6 +30003,447 @@ mod tests {
                 .all(|target| target.cached.get().is_some_and(|cached| cached.at == now)),
             _ => true,
         }));
+    }
+
+    fn runtime_with_move_fixtures(count: u64) -> EngineRuntime {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut profile = sample_profile();
+        profile.dmx_modes[0].controls.push(AttributeControl {
+            attribute: "Tilt".to_string(),
+            channel_name: "Tilt".to_string(),
+            geometry: None,
+            offsets: vec![4, 5],
+            resolution: AttributeResolution::SixteenBit,
+            default_value: 0,
+            functions: Vec::new(),
+        });
+        for fixture_id in 1..=count {
+            let zero_based = fixture_id - 1;
+            let mut request = sample_patch_request(
+                &format!("Mover {fixture_id}"),
+                1 + ((zero_based % 64) as u16) * 8,
+            );
+            request.universe = (zero_based / 64) as u16;
+            request.group_ids = vec!["Moving".to_string()];
+            runtime.apply_command(EngineCommand::PatchFixture {
+                fixture_id,
+                request,
+                profile: profile.clone(),
+            });
+        }
+        assert_eq!(runtime.last_error, None);
+        runtime
+    }
+
+    fn test_move_request(fixture_ids: &[FixtureId]) -> MoveEffectRequest {
+        MoveEffectRequest {
+            label: "Production Move".to_string(),
+            fixture_ids: fixture_ids.to_vec(),
+            target_group_ids: Vec::new(),
+            points: vec![
+                protocol::MovePathPoint { x: 0.5, y: 0.0 },
+                protocol::MovePathPoint { x: 1.0, y: 0.5 },
+                protocol::MovePathPoint { x: 0.5, y: 1.0 },
+                protocol::MovePathPoint { x: 0.0, y: 0.5 },
+            ],
+            closed: true,
+            interpolation: protocol::MoveInterpolation::Smooth,
+            coordinate_mode: protocol::MoveCoordinateMode::Absolute,
+            center_x: 0.5,
+            center_y: 0.5,
+            size_x: 0.75,
+            size_y: 0.5,
+            rotation_degrees: 0.0,
+            period_ms: 2_000,
+            clock_sync: None,
+            direction: protocol::MoveDirection::Forward,
+            phase: 0.0,
+            fixture_spread: 1.0,
+            blend_mode: EffectBlendMode::Override,
+        }
+    }
+
+    #[test]
+    fn move_validation_and_resolution_require_normalized_path_and_paired_axes() {
+        let valid = test_move_request(&[1]);
+        validate_move_effect_request(&valid).unwrap();
+
+        let mut too_short = valid.clone();
+        too_short.points.truncate(1);
+        assert!(validate_move_effect_request(&too_short)
+            .unwrap_err()
+            .contains("between 2 and 256"));
+
+        let mut outside_path = valid.clone();
+        outside_path.points[0].x = 1.1;
+        assert!(validate_move_effect_request(&outside_path)
+            .unwrap_err()
+            .contains("within 0..1"));
+
+        let mut invalid_center = valid.clone();
+        invalid_center.center_y = -0.1;
+        assert!(validate_move_effect_request(&invalid_center)
+            .unwrap_err()
+            .contains("center"));
+
+        let mut invalid_size = valid.clone();
+        invalid_size.size_x = 0.0;
+        assert!(validate_move_effect_request(&invalid_size)
+            .unwrap_err()
+            .contains("greater than 0"));
+
+        let paired = runtime_with_move_fixtures(1);
+        assert_eq!(
+            paired
+                .resolve_move_effect_request(valid.clone())
+                .unwrap()
+                .request,
+            valid
+        );
+
+        let mut pan_only = runtime_with_move_fixtures(1);
+        pan_only.fixtures[0].profile.dmx_modes[0]
+            .controls
+            .retain(|control| control.attribute != "Tilt");
+        assert!(pan_only
+            .resolve_move_effect_request(valid)
+            .unwrap_err()
+            .contains("paired Pan and Tilt"));
+    }
+
+    #[test]
+    fn move_published_add_update_roundtrip_and_busy_rollback_are_atomic() {
+        let mut runtime = runtime_with_move_fixtures(2);
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let request = test_move_request(&[1, 2]);
+        let (add_ack, add_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::AddMoveEffect {
+            effect_id: 200,
+            request: request.clone(),
+            enabled: false,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: add_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(add_receiver.recv().unwrap(), Ok(()));
+        let snapshot = published.read().unwrap().clone();
+        assert_eq!(snapshot.effects[0].effect_type, EffectKind::Move);
+        assert!(!snapshot.effects[0].enabled);
+        assert_eq!(snapshot.effects[0].move_effect, Some(request.clone()));
+
+        let mut updated = request.clone();
+        updated.rotation_degrees = 45.0;
+        updated.direction = protocol::MoveDirection::Bounce;
+        let (update_ack, update_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::UpdateMoveEffect {
+            effect_id: 200,
+            request: updated.clone(),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: update_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(update_receiver.recv().unwrap(), Ok(()));
+        assert_eq!(
+            published.read().unwrap().effects[0].move_effect,
+            Some(updated.clone())
+        );
+
+        let before_busy = effect_summary(&runtime.effects[0]);
+        let guard = published.write().unwrap();
+        let mut rejected = updated;
+        rejected.center_x = 0.25;
+        let (busy_ack, busy_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::UpdateMoveEffect {
+            effect_id: 200,
+            request: rejected,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: busy_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(busy_receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("rolled back"));
+        assert_eq!(effect_summary(&runtime.effects[0]), before_busy);
+        drop(guard);
+
+        let roundtrip = runtime.build_snapshot(0);
+        let mut loaded = runtime_with_move_fixtures(2);
+        loaded.load_project_snapshot(roundtrip.clone());
+        assert_eq!(loaded.build_snapshot(0).effects, roundtrip.effects);
+    }
+
+    #[test]
+    fn move_group_reference_survives_dormancy_and_rebinds_a_replacement_fixture() {
+        let mut runtime = runtime_with_move_fixtures(1);
+        let replacement_profile = runtime.fixtures[0].profile.clone();
+        let mut replacement_request = runtime.fixtures[0].request.clone();
+        replacement_request.label = "Replacement Mover".to_string();
+        replacement_request.address = 17;
+
+        let mut request = test_move_request(&[]);
+        request.target_group_ids = vec!["Moving".to_string()];
+        let resolved = runtime.resolve_move_effect_request(request).unwrap();
+        assert_eq!(resolved.targets.len(), 1);
+        assert_eq!(resolved.targets[0].fixture_id, 1);
+        runtime.effects.push(RuntimeEffect {
+            id: 220,
+            kind: RuntimeEffectKind::Move(resolved),
+            enabled: true,
+            created_at: Instant::now(),
+        });
+
+        runtime.remove_fixture(1);
+        assert_eq!(runtime.effects.len(), 1);
+        let RuntimeEffectKind::Move(dormant) = &runtime.effects[0].kind else {
+            panic!("effect should remain a Move while its group is dormant");
+        };
+        assert!(dormant.targets.is_empty());
+        assert_eq!(dormant.request.target_group_ids, vec!["Moving".to_string()]);
+
+        runtime.apply_command(EngineCommand::PatchFixture {
+            fixture_id: 2,
+            request: replacement_request,
+            profile: replacement_profile,
+        });
+        assert_eq!(runtime.last_error, None);
+        let RuntimeEffectKind::Move(rebound) = &runtime.effects[0].kind else {
+            panic!("effect should remain a Move after rebinding");
+        };
+        assert_eq!(rebound.targets.len(), 1);
+        assert_eq!(rebound.targets[0].fixture_id, 2);
+        assert_eq!(rebound.request.target_group_ids, vec!["Moving".to_string()]);
+    }
+
+    #[test]
+    fn move_evaluates_atomic_pair_direction_clock_spread_and_relative_offsets() {
+        let runtime = runtime_with_move_fixtures(2);
+        let mut request = test_move_request(&[1, 2]);
+        request.points = vec![
+            MovePathPoint { x: 0.0, y: 0.0 },
+            MovePathPoint { x: 1.0, y: 1.0 },
+        ];
+        request.closed = false;
+        request.interpolation = protocol::MoveInterpolation::Line;
+        request.size_x = 1.0;
+        request.size_y = 1.0;
+        request.fixture_spread = 1.0;
+        request.period_ms = 1_000;
+        let created_at = Instant::now();
+        let clock = ClockSnapshot::default();
+        let absolute = runtime
+            .resolve_move_effect_request(request.clone())
+            .unwrap();
+
+        let halfway = created_at + Duration::from_millis(500);
+        let pan =
+            evaluate_runtime_move_attribute(&absolute, 1, "Pan", 0, created_at, halfway, &clock)
+                .unwrap();
+        let cached = absolute.targets[0]
+            .cached
+            .get()
+            .expect("Pan must cache the paired Move sample");
+        let tilt =
+            evaluate_runtime_move_attribute(&absolute, 1, "Tilt", 0, created_at, halfway, &clock)
+                .unwrap();
+        assert!((32_767..=32_768).contains(&pan));
+        assert!((32_767..=32_768).contains(&tilt));
+        assert_eq!(absolute.targets[0].cached.get(), Some(cached));
+
+        // The second target receives a half-cycle spread at the same tick.
+        let second_pan =
+            evaluate_runtime_move_attribute(&absolute, 2, "Pan", 0, created_at, created_at, &clock)
+                .unwrap();
+        assert!((32_767..=32_768).contains(&second_pan));
+
+        let mut reverse_request = request.clone();
+        reverse_request.fixture_spread = 0.0;
+        reverse_request.direction = MoveDirection::Reverse;
+        let reverse = runtime
+            .resolve_move_effect_request(reverse_request)
+            .unwrap();
+        assert_eq!(
+            evaluate_runtime_move_attribute(&reverse, 1, "Pan", 0, created_at, created_at, &clock,),
+            Some(u16::MAX)
+        );
+
+        let mut bounce_request = request.clone();
+        bounce_request.fixture_ids = vec![1];
+        bounce_request.fixture_spread = 0.0;
+        bounce_request.direction = MoveDirection::Bounce;
+        let bounce = runtime.resolve_move_effect_request(bounce_request).unwrap();
+        assert_eq!(
+            evaluate_runtime_move_attribute(
+                &bounce,
+                1,
+                "Pan",
+                0,
+                created_at,
+                created_at + Duration::from_millis(500),
+                &clock,
+            ),
+            Some(u16::MAX)
+        );
+
+        let mut beat_request = request.clone();
+        beat_request.fixture_ids = vec![1];
+        beat_request.fixture_spread = 0.0;
+        beat_request.clock_sync = Some(protocol::EffectClockSync { beats: 2.0 });
+        let beat = runtime.resolve_move_effect_request(beat_request).unwrap();
+        let mut beat_clock = ClockSnapshot::default();
+        beat_clock.beat_counter = 1;
+        let beat_pan = evaluate_runtime_move_attribute(
+            &beat,
+            1,
+            "Pan",
+            0,
+            created_at,
+            created_at,
+            &beat_clock,
+        )
+        .unwrap();
+        assert!((32_767..=32_768).contains(&beat_pan));
+
+        let mut relative_request = request;
+        relative_request.fixture_ids = vec![1];
+        relative_request.fixture_spread = 0.0;
+        relative_request.points = vec![
+            MovePathPoint { x: 0.25, y: 0.5 },
+            MovePathPoint { x: 0.75, y: 0.5 },
+        ];
+        relative_request.coordinate_mode = MoveCoordinateMode::Relative;
+        relative_request.center_x = 0.9;
+        relative_request.center_y = 0.1;
+        let relative = runtime
+            .resolve_move_effect_request(relative_request)
+            .unwrap();
+        let relative_pan = evaluate_runtime_move_attribute(
+            &relative, 1, "Pan", 32_768, created_at, created_at, &clock,
+        )
+        .unwrap();
+        let relative_tilt = evaluate_runtime_move_attribute(
+            &relative, 1, "Tilt", 32_768, created_at, created_at, &clock,
+        )
+        .unwrap();
+        assert!((42_596..=42_600).contains(&relative_pan));
+        assert!((6_552..=6_555).contains(&relative_tilt));
+    }
+
+    #[test]
+    fn move_output_is_limited_swapped_and_inverted_after_pair_evaluation() {
+        let runtime = runtime_with_move_fixtures(1);
+        let mut request = test_move_request(&[1]);
+        request.points = vec![
+            MovePathPoint { x: 0.2, y: 0.8 },
+            MovePathPoint { x: 0.8, y: 0.2 },
+        ];
+        request.closed = false;
+        request.interpolation = protocol::MoveInterpolation::Line;
+        request.size_x = 1.0;
+        request.size_y = 1.0;
+        request.fixture_spread = 0.0;
+        let effect = runtime.resolve_move_effect_request(request).unwrap();
+        let at = Instant::now();
+        let clock = ClockSnapshot::default();
+        let raw_pan =
+            evaluate_runtime_move_attribute(&effect, 1, "Pan", 0, at, at, &clock).unwrap();
+        let raw_tilt =
+            evaluate_runtime_move_attribute(&effect, 1, "Tilt", 0, at, at, &clock).unwrap();
+        let limits = FixtureLimits {
+            dimmer_min: 0,
+            dimmer_max: u16::MAX,
+            pan_min: 10_000,
+            pan_max: 50_000,
+            tilt_min: 5_000,
+            tilt_max: 55_000,
+            invert_pan: true,
+            invert_tilt: false,
+            swap_pan_tilt: true,
+        };
+
+        let limited_pan = apply_fixture_limits(&limits, "Pan", raw_pan, |axis| match axis {
+            MovementAxis::Pan => raw_pan,
+            MovementAxis::Tilt => raw_tilt,
+        });
+        let limited_tilt = apply_fixture_limits(&limits, "Tilt", raw_tilt, |axis| match axis {
+            MovementAxis::Pan => raw_pan,
+            MovementAxis::Tilt => raw_tilt,
+        });
+
+        assert_eq!(limited_pan, 10_000);
+        assert!((13_106..=13_108).contains(&limited_tilt));
+    }
+
+    #[test]
+    fn move_venue_stack_200_fixtures_64_effects_reuses_pair_cache_and_stays_bounded() {
+        let runtime = runtime_with_move_fixtures(200);
+        let fixture_ids = (1..=200).collect::<Vec<_>>();
+        let base = test_move_request(&fixture_ids);
+        let stack = (0..64)
+            .map(|index| {
+                let mut request = base.clone();
+                request.phase = index as f32 / 64.0;
+                runtime.resolve_move_effect_request(request).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let created_at = Instant::now();
+        let clock = ClockSnapshot::default();
+        let started = Instant::now();
+        let mut checksum = 0_u64;
+
+        for frame in 0..10 {
+            let at = created_at + Duration::from_millis(frame * 10);
+            for effect in &stack {
+                for fixture_id in &fixture_ids {
+                    checksum = checksum.wrapping_add(
+                        evaluate_runtime_move_attribute(
+                            effect,
+                            *fixture_id,
+                            "Pan",
+                            32_768,
+                            created_at,
+                            at,
+                            &clock,
+                        )
+                        .unwrap() as u64,
+                    );
+                    let target_index = effect.target_indices[fixture_id];
+                    let cached = effect.targets[target_index]
+                        .cached
+                        .get()
+                        .expect("Pan must populate the Move pair cache");
+                    checksum = checksum.wrapping_add(
+                        evaluate_runtime_move_attribute(
+                            effect,
+                            *fixture_id,
+                            "Tilt",
+                            32_768,
+                            created_at,
+                            at,
+                            &clock,
+                        )
+                        .unwrap() as u64,
+                    );
+                    assert_eq!(effect.targets[target_index].cached.get(), Some(cached));
+                }
+            }
+        }
+
+        let elapsed = started.elapsed();
+        eprintln!(
+            "Move venue benchmark: 200 fixtures x 64 effects x 10 frames in {:?}",
+            elapsed
+        );
+        assert_ne!(checksum, 0);
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "200-fixture, 64-effect Move venue regression took {:?}",
+            elapsed
+        );
     }
 
     fn runtime_with_chaser_fixtures(count: u64) -> EngineRuntime {

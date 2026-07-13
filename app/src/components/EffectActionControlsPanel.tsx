@@ -3,6 +3,8 @@ import type { EffectBlendMode } from "../types";
 
 interface EffectActionControlsPanelProps {
   showLightRange: boolean;
+  showPhase?: boolean;
+  lockBlendMode?: boolean;
   low: number;
   high: number;
   phase: number;
@@ -34,6 +36,7 @@ export function EffectActionControlsPanel(props: EffectActionControlsPanelProps)
           </label>
         </div>
       </Show>
+      <Show when={props.showPhase !== false}>
       <label>
         Phase
         <input
@@ -45,9 +48,15 @@ export function EffectActionControlsPanel(props: EffectActionControlsPanelProps)
           onInput={(event) => props.onPhase(Number(event.currentTarget.value))}
         />
       </label>
+      </Show>
       <label>
         Blend
-        <select value={props.blendMode} onInput={(event) => props.onBlendMode(event.currentTarget.value as EffectBlendMode)}>
+        <select
+          value={props.blendMode}
+          disabled={props.lockBlendMode}
+          title={props.lockBlendMode ? "Move effects use Override blend" : undefined}
+          onInput={(event) => props.onBlendMode(event.currentTarget.value as EffectBlendMode)}
+        >
           <option value="Override">Override</option>
           <option value="Add">Add</option>
           <option value="Multiply">Multiply</option>

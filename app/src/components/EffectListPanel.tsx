@@ -23,11 +23,13 @@ export function EffectListPanel(props: EffectListPanelProps) {
   const effectKindLabel = (effect: EffectSummary) => {
     if (effect.effect_type === "Color") return "Color";
     if (effect.effect_type === "Chaser") return "Chaser";
+    if (effect.effect_type === "Move") return "Move";
     return effect.effect_type === "PositionWave" ? "Wave" : "LFO";
   };
   const effectKindClass = (effect: EffectSummary) => {
     if (effect.effect_type === "Color") return "color";
     if (effect.effect_type === "Chaser") return "chaser";
+    if (effect.effect_type === "Move") return "move";
     return effect.effect_type === "PositionWave" ? "wave" : "lfo";
   };
   const timingLabel = (effect: EffectSummary) => {
@@ -35,6 +37,8 @@ export function EffectListPanel(props: EffectListPanelProps) {
       ? effect.color?.clock_sync
       : effect.effect_type === "Chaser"
         ? effect.chaser?.clock_sync
+        : effect.effect_type === "Move"
+          ? effect.move_effect?.clock_sync
         : effect.clock_sync;
     if (clockSync) {
       return `sync ${clockSync.beats} beat`;
@@ -43,6 +47,8 @@ export function EffectListPanel(props: EffectListPanelProps) {
       ? effect.color?.period_ms
       : effect.effect_type === "Chaser"
         ? effect.chaser?.step_duration_ms
+        : effect.effect_type === "Move"
+          ? effect.move_effect?.period_ms
         : effect.period_ms;
     if (periodMs) {
       return effect.effect_type === "Chaser" ? `${periodMs}ms/step` : `${periodMs}ms`;
@@ -148,12 +154,25 @@ export function EffectListPanel(props: EffectListPanelProps) {
                       </>
                     )}
                   </Show>
+                  <Show when={effect.effect_type === "Move" ? effect.move_effect : null}>
+                    {(move) => (
+                      <>
+                        <span class="effectMetaChip tabularNums">{move().points.length} points</span>
+                        <span class="effectMetaChip">{move().interpolation}</span>
+                        <span class="effectMetaChip">{move().direction}</span>
+                        <span class="effectMetaChip">{move().coordinate_mode}</span>
+                        <span class="effectMetaChip tabularNums">spread {Math.round(move().fixture_spread * 100)}%</span>
+                      </>
+                    )}
+                  </Show>
                   <span
                     class={(
                       effect.effect_type === "Color"
                         ? effect.color?.clock_sync
                         : effect.effect_type === "Chaser"
                           ? effect.chaser?.clock_sync
+                          : effect.effect_type === "Move"
+                            ? effect.move_effect?.clock_sync
                           : effect.clock_sync
                     ) ? "effectMetaChip sync" : "effectMetaChip"}
                   >
@@ -162,11 +181,11 @@ export function EffectListPanel(props: EffectListPanelProps) {
                   <Show when={effect.wavelength}>
                     {(wavelength) => <span class="effectMetaChip">wl {wavelength().toFixed(1)}</span>}
                   </Show>
-                  <Show when={effect.effect_type !== "Color"}>
+                  <Show when={effect.effect_type !== "Color" && effect.effect_type !== "Move"}>
                     <span class="effectMetaChip range">{rangeLabel(effect)}</span>
                   </Show>
                   <span class="effectMetaChip target">{targetLabel(effect)}</span>
-                  <span class="effectMetaChip blend">{effect.color?.blend_mode ?? effect.chaser?.blend_mode ?? effect.blend_mode}</span>
+                  <span class="effectMetaChip blend">{effect.color?.blend_mode ?? effect.chaser?.blend_mode ?? effect.move_effect?.blend_mode ?? effect.blend_mode}</span>
                 </div>
               </button>
               <div class="effectItemActions">

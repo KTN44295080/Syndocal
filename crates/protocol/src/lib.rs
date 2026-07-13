@@ -1581,12 +1581,61 @@ pub struct ChaserEffectRequest {
     pub blend_mode: EffectBlendMode,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct MovePathPoint {
+    pub x: f32,
+    pub y: f32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MoveInterpolation {
+    Line,
+    Smooth,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MoveCoordinateMode {
+    Absolute,
+    Relative,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MoveDirection {
+    Forward,
+    Reverse,
+    Bounce,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MoveEffectRequest {
+    pub label: String,
+    pub fixture_ids: Vec<FixtureId>,
+    pub target_group_ids: Vec<String>,
+    pub points: Vec<MovePathPoint>,
+    pub closed: bool,
+    pub interpolation: MoveInterpolation,
+    pub coordinate_mode: MoveCoordinateMode,
+    pub center_x: f32,
+    pub center_y: f32,
+    pub size_x: f32,
+    pub size_y: f32,
+    pub rotation_degrees: f32,
+    pub period_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_sync: Option<EffectClockSync>,
+    pub direction: MoveDirection,
+    pub phase: f32,
+    pub fixture_spread: f32,
+    pub blend_mode: EffectBlendMode,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum EffectKind {
     Lfo,
     PositionWave,
     Color,
     Chaser,
+    Move,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1615,6 +1664,8 @@ pub struct EffectSummary {
     pub color: Option<ColorEffectRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chaser: Option<ChaserEffectRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub move_effect: Option<MoveEffectRequest>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1628,6 +1679,8 @@ pub struct EffectPreset {
     pub color: Option<ColorEffectRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chaser: Option<ChaserEffectRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub move_effect: Option<MoveEffectRequest>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -2585,6 +2638,7 @@ mod tests {
         assert_eq!(parsed.effect_type, super::EffectKind::Lfo);
         assert!(parsed.color.is_none());
         assert!(parsed.chaser.is_none());
+        assert!(parsed.move_effect.is_none());
     }
 
     #[test]
@@ -2627,6 +2681,7 @@ mod tests {
             position_wave: None,
             color: Some(request),
             chaser: None,
+            move_effect: None,
         };
 
         let json = serde_json::to_string(&preset).unwrap();
@@ -2683,6 +2738,51 @@ mod tests {
             position_wave: None,
             color: None,
             chaser: Some(request),
+            move_effect: None,
+        };
+
+        let json = serde_json::to_string(&preset).unwrap();
+        let parsed: super::EffectPreset = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed, preset);
+    }
+
+    #[test]
+    fn move_effect_request_and_preset_roundtrip() {
+        let request = super::MoveEffectRequest {
+            label: "Front circle".to_string(),
+            fixture_ids: vec![1, 2],
+            target_group_ids: vec!["Moving".to_string()],
+            points: vec![
+                super::MovePathPoint { x: 0.5, y: 0.0 },
+                super::MovePathPoint { x: 1.0, y: 0.5 },
+                super::MovePathPoint { x: 0.5, y: 1.0 },
+                super::MovePathPoint { x: 0.0, y: 0.5 },
+            ],
+            closed: true,
+            interpolation: super::MoveInterpolation::Smooth,
+            coordinate_mode: super::MoveCoordinateMode::Absolute,
+            center_x: 0.5,
+            center_y: 0.5,
+            size_x: 0.75,
+            size_y: 0.5,
+            rotation_degrees: 30.0,
+            period_ms: 2_000,
+            clock_sync: Some(super::EffectClockSync { beats: 4.0 }),
+            direction: super::MoveDirection::Bounce,
+            phase: 0.125,
+            fixture_spread: 1.0,
+            blend_mode: super::EffectBlendMode::Override,
+        };
+        let preset = super::EffectPreset {
+            version: 1,
+            effect_type: super::EffectKind::Move,
+            enabled: false,
+            lfo: None,
+            position_wave: None,
+            color: None,
+            chaser: None,
+            move_effect: Some(request),
         };
 
         let json = serde_json::to_string(&preset).unwrap();

@@ -30,6 +30,7 @@ import { FaderPrimaryAttributePanels } from "./components/FaderPrimaryAttributeP
 import { LightingRuntimeControlsPanel } from "./components/LightingRuntimeControlsPanel";
 import { LoadedProfileSummaryPanel } from "./components/LoadedProfileSummaryPanel";
 import { MidiControlMappingPanel } from "./components/MidiControlMappingPanel";
+import { MoveEffectEditorPanel } from "./components/MoveEffectEditorPanel";
 import { NodeGraphEditorPanel } from "./components/NodeGraphEditorPanel";
 import { OscControlMappingPanel } from "./components/OscControlMappingPanel";
 import { OutputDiagnosticsPanel } from "./components/OutputDiagnosticsPanel";
@@ -142,6 +143,11 @@ import type {
   MidiControlMessage,
   MidiInputSummary,
   MidiOutputSummary,
+  MoveCoordinateMode,
+  MoveDirection,
+  MoveEffectRequest,
+  MoveInterpolation,
+  MovePathPoint,
   NodeGraphSummary,
   NodeGraphTransformOp,
   OscControlAction,
@@ -195,6 +201,14 @@ import type {
   VisualizerRenderPayload,
 } from "./types";
 import { videoFrameToDataUrl } from "./videoFrameCanvas";
+import {
+  defaultMovePathPoints,
+  moveEffectDraftError,
+  movePathRecipes,
+  movePathRecipePoints,
+  type MovePathRecipe,
+  type MovePathPreset,
+} from "./moveEffect";
 import { browserViewportFixture, viewportFixtureData, viewportPatchedFixture } from "./viewportFixtureData";
 import { defaultColorAdjust, defaultFxAdjust, defaultTransform } from "./videoLayerDefaults";
 import {
@@ -583,10 +597,12 @@ const projectMutationCommands = new Set([
   "add_position_wave_effect",
   "add_color_effect",
   "add_chaser_effect",
+  "add_move_effect",
   "update_lfo_effect",
   "update_position_wave_effect",
   "update_color_effect",
   "update_chaser_effect",
+  "update_move_effect",
   "save_node_graph",
   "set_node_graph_enabled",
   "remove_node_graph",
@@ -1089,6 +1105,18 @@ export default function App() {
   const [chaserOverlap, setChaserOverlap] = createSignal(0);
   const [chaserFixtureSpread, setChaserFixtureSpread] = createSignal(0);
   const [chaserRandomSeed, setChaserRandomSeed] = createSignal(chaserDefaultSeed);
+  const [movePathPoints, setMovePathPoints] = createSignal<MovePathPoint[]>(defaultMovePathPoints());
+  const [movePathClosed, setMovePathClosed] = createSignal(true);
+  const [moveInterpolation, setMoveInterpolation] = createSignal<MoveInterpolation>("Smooth");
+  const [moveCoordinateMode, setMoveCoordinateMode] = createSignal<MoveCoordinateMode>("Absolute");
+  const [moveCenterX, setMoveCenterX] = createSignal(0.5);
+  const [moveCenterY, setMoveCenterY] = createSignal(0.5);
+  const [moveSizeX, setMoveSizeX] = createSignal(1);
+  const [moveSizeY, setMoveSizeY] = createSignal(1);
+  const [moveRotationDegrees, setMoveRotationDegrees] = createSignal(0);
+  const [moveDirection, setMoveDirection] = createSignal<MoveDirection>("Forward");
+  const [moveFixtureSpread, setMoveFixtureSpread] = createSignal(0);
+  const [movePathRecipe, setMovePathRecipe] = createSignal<MovePathRecipe>("Circle");
   const [effectLow, setEffectLow] = createSignal(0);
   const [effectHigh, setEffectHigh] = createSignal(65535);
   const [effectPhase, setEffectPhase] = createSignal(0);
@@ -2539,6 +2567,15 @@ export default function App() {
     const current = canonicalChaserAttribute(effectAttribute());
     return attributes.find((attribute) => canonicalChaserAttribute(attribute) === current) ?? attributes[0] ?? "";
   });
+  const moveCompatibleTargetFixtures = createMemo(() => effectTargetFixtures().filter((fixture) => {
+    const axes = fixture.controls.reduce((counts, control) => {
+      const normalized = control.attribute.toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (normalized.includes("tilt")) counts.tilt += 1;
+      else if (normalized.includes("pan")) counts.pan += 1;
+      return counts;
+    }, { pan: 0, tilt: 0 });
+    return axes.pan === 1 && axes.tilt === 1;
+  }));
   const chaserCurrentTargetSteps = createMemo(() =>
     chaserStepsFromTargets(
       effectTargetMode() === "video" ? [] : effectTargetFixtures().map((fixture) => fixture.id),
@@ -2565,12 +2602,40 @@ export default function App() {
     setChaserActiveStepCount((current) => forceReset ? 1 : Math.max(1, Math.min(current, maxActiveSteps)));
     setChaserWings((current) => forceReset ? 1 : Math.max(1, Math.min(current, maxWings)));
   };
+  const applyMovePathRecipe = (recipe: MovePathPreset) => {
+    setMovePathRecipe(recipe);
+    setMovePathPoints(movePathRecipePoints(recipe));
+    setMovePathClosed(recipe !== "Line");
+    setMoveInterpolation(recipe === "Line" || recipe === "Triangle" || recipe === "Square" ? "Line" : "Smooth");
+  };
+  const prepareMoveDraft = (forceReset = false) => {
+    setEffectVideoTargetLinked(false);
+    if (effectTargetMode() === "video") setEffectTargetMode(selectedFixture() ? "fixture" : "selection");
+    setEffectBlendMode("Override");
+    if (forceReset) {
+      applyMovePathRecipe("Circle");
+      setMoveCoordinateMode("Absolute");
+      setMoveCenterX(0.5);
+      setMoveCenterY(0.5);
+      setMoveSizeX(1);
+      setMoveSizeY(1);
+      setMoveRotationDegrees(0);
+      setMoveDirection("Forward");
+      setMoveFixtureSpread(0);
+    }
+  };
   const effectTargetSummary = createMemo(() => {
     const fixtureCount = effectTargetFixtures().length;
     const attributeCount = effectType() === "Chaser" ? chaserAttributeOptions().length : effectTargetControls().length;
     const wholeFixtureColor = effectType() === "Color";
+    const moveEffect = effectType() === "Move";
+    const moveCompatibleCount = moveCompatibleTargetFixtures().length;
+    const moveCompatibility = `${moveCompatibleCount}/${fixtureCount} paired Pan/Tilt`;
     switch (effectTargetMode()) {
       case "selection":
+        if (moveEffect) {
+          return `${fixtureCount} mapped fixture${fixtureCount === 1 ? "" : "s"} / ${moveCompatibility}`;
+        }
         if (wholeFixtureColor) {
           return `${fixtureCount} mapped fixture${fixtureCount === 1 ? "" : "s"} / whole-fixture colour`;
         }
@@ -2578,7 +2643,9 @@ export default function App() {
       case "group": {
         const groups = parseGroupIds(effectTargetGroups());
         return groups.length > 0
-          ? wholeFixtureColor
+          ? moveEffect
+            ? `${groups.join(", ")} / ${moveCompatibility}`
+            : wholeFixtureColor
             ? `${groups.join(", ")} / ${fixtureCount} fixture${fixtureCount === 1 ? "" : "s"} / whole-fixture colour`
             : `${groups.join(", ")} / ${fixtureCount} fixture${fixtureCount === 1 ? "" : "s"} / ${attributeCount} common attribute${attributeCount === 1 ? "" : "s"}`
           : "No group target";
@@ -2590,7 +2657,7 @@ export default function App() {
       case "fixture":
       default:
         return selectedFixture()
-          ? `${selectedFixture()!.label}${wholeFixtureColor ? " / whole-fixture colour" : ""}`
+          ? `${selectedFixture()!.label}${wholeFixtureColor ? " / whole-fixture colour" : moveEffect ? ` / ${moveCompatibility}` : ""}`
           : "No fixture selected";
     }
   });
@@ -2606,6 +2673,10 @@ export default function App() {
     if (effectType() === "Chaser") {
       const clock = sync === null ? `${chaserStepDuration()}ms` : `${sync} beat`;
       return `Chaser ${chaserSteps().length} steps / ${chaserFeatures().length} features / ${chaserDirection()} / ${chaserActiveStepCount()} pixels on / ${clock}`;
+    }
+    if (effectType() === "Move") {
+      const clock = sync === null ? `${effectPeriod()}ms` : `${sync} beat`;
+      return `Move ${movePathPoints().length} points / ${moveInterpolation()} / ${moveDirection()} / ${clock}`;
     }
     return sync === null ? `LFO ${effectShape()} / ${effectPeriod()}ms` : `LFO ${effectShape()} / ${sync} beat`;
   });
@@ -9175,8 +9246,49 @@ export default function App() {
     fixtureSpread: chaserFixtureSpread(),
     randomSeed: chaserRandomSeed(),
   }));
+  const moveDraftFixtureIds = () => {
+    if (effectTargetMode() === "selection") {
+      return selectedMappingFixtures().map((fixture) => fixture.id);
+    }
+    if (effectTargetMode() === "fixture") {
+      const fixture = selectedFixture();
+      return fixture ? [fixture.id] : [];
+    }
+    return [];
+  };
+  const moveDraftTargetGroupIds = () =>
+    effectTargetMode() === "group" ? parseGroupIds(effectTargetGroups()) : [];
+  const currentMoveDraftError = createMemo(() => {
+    if (effectTargetMode() === "video" || effectVideoTargetLinked()) {
+      return "Move effects target paired Pan/Tilt fixture controls and cannot link a video parameter.";
+    }
+    const error = moveEffectDraftError({
+      fixtureIds: moveDraftFixtureIds(),
+      targetGroupIds: moveDraftTargetGroupIds(),
+      points: movePathPoints(),
+      centerX: moveCenterX(),
+      centerY: moveCenterY(),
+      sizeX: moveSizeX(),
+      sizeY: moveSizeY(),
+      rotationDegrees: moveRotationDegrees(),
+      periodMs: effectPeriod(),
+      clockSyncBeats: effectClockSyncBeats(),
+      phase: effectPhase(),
+      fixtureSpread: moveFixtureSpread(),
+      coordinateMode: moveCoordinateMode(),
+      blendMode: effectBlendMode(),
+    });
+    if (error) return error;
+    if (moveCompatibleTargetFixtures().length === 0) {
+      return "The current target has no fixture with exactly one paired Pan and Tilt control.";
+    }
+    return "";
+  });
   const effectSubmitDisabled = createMemo(() => {
     const linkedVideoMissing = effectVideoTargetLinked() && selectedEffectVideoLayerId() === null;
+    if (effectType() === "Move") {
+      return Boolean(currentMoveDraftError());
+    }
     if (effectType() === "Chaser") {
       return Boolean(currentChaserDraftError()) || effectVideoTargetLinked() || effectTargetMode() === "video";
     }
@@ -9210,7 +9322,8 @@ export default function App() {
     | { effectType: "Lfo"; request: LfoEffectRequest }
     | { effectType: "PositionWave"; request: PositionWaveEffectRequest }
     | { effectType: "Color"; request: ColorEffectRequest }
-    | { effectType: "Chaser"; request: ChaserEffectRequest };
+    | { effectType: "Chaser"; request: ChaserEffectRequest }
+    | { effectType: "Move"; request: MoveEffectRequest };
 
   const buildEffectRequestFromForm = (): EffectRequestDraft | null => {
     const fixture = selectedFixture();
@@ -9219,6 +9332,37 @@ export default function App() {
     const isVideoTarget = targetMode === "video";
     const colorEffect = effectType() === "Color";
     const chaserEffect = effectType() === "Chaser";
+    const moveEffect = effectType() === "Move";
+    if (moveEffect) {
+      const error = currentMoveDraftError();
+      if (error) {
+        setMessage(error);
+        return null;
+      }
+      return {
+        effectType: "Move",
+        request: {
+          label: editingEffectSummary()?.label ?? "Pan/Tilt Move",
+          fixture_ids: moveDraftFixtureIds(),
+          target_group_ids: moveDraftTargetGroupIds(),
+          points: movePathPoints().map((point) => ({ ...point })),
+          closed: movePathClosed(),
+          interpolation: moveInterpolation(),
+          coordinate_mode: moveCoordinateMode(),
+          center_x: moveCenterX(),
+          center_y: moveCenterY(),
+          size_x: moveSizeX(),
+          size_y: moveSizeY(),
+          rotation_degrees: moveRotationDegrees(),
+          period_ms: Math.round(effectPeriod()),
+          clock_sync: effectClockSyncBeats() === null ? null : { beats: effectClockSyncBeats()! },
+          direction: moveDirection(),
+          phase: effectPhase(),
+          fixture_spread: moveFixtureSpread(),
+          blend_mode: effectBlendMode(),
+        },
+      };
+    }
     if (chaserEffect) {
       const error = currentChaserDraftError();
       if (error) {
@@ -9363,9 +9507,11 @@ export default function App() {
           ? await invoke<number>("add_position_wave_effect", { request: draft.request })
           : draft.effectType === "Color"
             ? await invoke<number>("add_color_effect", { request: draft.request })
-            : await invoke<number>("add_chaser_effect", { request: draft.request });
+            : draft.effectType === "Chaser"
+              ? await invoke<number>("add_chaser_effect", { request: draft.request })
+              : await invoke<number>("add_move_effect", { request: draft.request });
       setEditingEffectId(null);
-      setMessage(`Added ${draft.effectType === "PositionWave" ? "position wave" : draft.effectType === "Color" ? "color" : draft.effectType === "Chaser" ? "Chaser" : "LFO"} effect ${effectId}`);
+      setMessage(`Added ${draft.effectType === "PositionWave" ? "position wave" : draft.effectType === "Color" ? "color" : draft.effectType === "Chaser" ? "Chaser" : draft.effectType === "Move" ? "Move" : "LFO"} effect ${effectId}`);
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
@@ -9389,8 +9535,10 @@ export default function App() {
         await invoke("update_position_wave_effect", { effectId, request: draft.request });
       } else if (draft.effectType === "Color") {
         await invoke("update_color_effect", { effectId, request: draft.request });
-      } else {
+      } else if (draft.effectType === "Chaser") {
         await invoke("update_chaser_effect", { effectId, request: draft.request });
+      } else {
+        await invoke("update_move_effect", { effectId, request: draft.request });
       }
       setMessage(`Updated effect ${effectId}`);
       await refreshSnapshot();
@@ -9479,6 +9627,31 @@ export default function App() {
       setEffectBlendMode(color.blend_mode);
       setEffectVideoTargetLinked(false);
     }
+    if (effect.effect_type === "Move") {
+      const move = effect.move_effect;
+      if (!move) {
+        setEditingEffectId(null);
+        setMessage(`Move effect ${effect.id} is missing its editor body.`);
+        return;
+      }
+      setMovePathPoints(move.points.map((point) => ({ ...point })));
+      setMovePathClosed(move.closed);
+      setMoveInterpolation(move.interpolation);
+      setMoveCoordinateMode(move.coordinate_mode);
+      setMoveCenterX(move.center_x);
+      setMoveCenterY(move.center_y);
+      setMoveSizeX(move.size_x);
+      setMoveSizeY(move.size_y);
+      setMoveRotationDegrees(move.rotation_degrees);
+      setEffectPeriod(move.period_ms);
+      setEffectClockSyncBeats(move.clock_sync?.beats ?? null);
+      setMoveDirection(move.direction);
+      setEffectPhase(move.phase);
+      setMoveFixtureSpread(move.fixture_spread);
+      setEffectBlendMode(move.blend_mode);
+      setMovePathRecipe("Custom");
+      setEffectVideoTargetLinked(false);
+    }
     setEffectShape(effect.shape);
     setEffectClockSyncBeats(effect.clock_sync?.beats ?? null);
     if (effect.period_ms) {
@@ -9533,7 +9706,9 @@ export default function App() {
     setMessage(
       effect.effect_type === "Chaser"
         ? `Loaded Chaser effect ${effect.id} with ${effect.chaser?.steps.length ?? 0} ordered steps and ${effect.chaser?.features.length ?? 0} features.`
-        : targetPlan.message,
+        : effect.effect_type === "Move"
+          ? `Loaded Move effect ${effect.id} with ${effect.move_effect?.points.length ?? 0} path points into the paired Pan/Tilt editor.`
+          : targetPlan.message,
     );
   };
 
@@ -9550,6 +9725,7 @@ export default function App() {
     forceVideoTarget?: boolean;
     requireLightTarget?: boolean;
     wholeFixtureColor?: boolean;
+    wholeFixtureMove?: boolean;
     allowPartialLightAttribute?: boolean;
     deferLightAttributeValidation?: boolean;
   };
@@ -9565,6 +9741,8 @@ export default function App() {
         ? { requireLightTarget: true, allowPartialLightAttribute: true }
       : preset === "spectrum" || preset === "colour-chase"
         ? { requireLightTarget: true, wholeFixtureColor: true }
+      : preset === "circle"
+        ? { requireLightTarget: true, wholeFixtureMove: true }
         : {};
 
   const effectTargetOverrideError = (options: EffectTargetOverrideOptions = {}) => {
@@ -9577,7 +9755,11 @@ export default function App() {
     if (options.wholeFixtureColor && effectVideoTargetLinked()) {
       return "Whole-fixture colour effects cannot link a video parameter.";
     }
-    const requiresLightAttribute = !options.wholeFixtureColor && !options.deferLightAttributeValidation;
+    if (options.wholeFixtureMove && (targetMode === "video" || effectVideoTargetLinked())) {
+      return "Move effects target paired Pan/Tilt fixture controls and cannot link a video parameter.";
+    }
+    const wholeFixtureTarget = options.wholeFixtureColor || options.wholeFixtureMove;
+    const requiresLightAttribute = !wholeFixtureTarget && !options.deferLightAttributeValidation;
     if (targetMode === "fixture" && (!fixture || (requiresLightAttribute && !attribute))) {
       return "Select a fixture and attribute first.";
     }
@@ -9597,7 +9779,10 @@ export default function App() {
         return "Select a fixture profile attribute before targeting a group.";
       }
     }
-    if (!options.wholeFixtureColor && (targetMode === "video" || effectVideoTargetLinked() || options.forceVideoTarget) && selectedEffectVideoLayerId() === null) {
+    if (options.wholeFixtureMove && moveCompatibleTargetFixtures().length === 0) {
+      return "The current target has no fixture with exactly one paired Pan and Tilt control.";
+    }
+    if (!wholeFixtureTarget && (targetMode === "video" || effectVideoTargetLinked() || options.forceVideoTarget) && selectedEffectVideoLayerId() === null) {
       return targetMode === "video"
         ? "Add a video layer before loading a video effect preset."
         : "Add a video layer before loading this lighting + video preset.";
@@ -9618,7 +9803,8 @@ export default function App() {
     const targetMode = effectTargetMode();
     const fixture = selectedFixture();
     const attribute = options.allowPartialLightAttribute ? selectedChaserAttribute() : selectedEffectAttribute();
-    const videoTargets = options.wholeFixtureColor
+    const wholeFixtureTarget = options.wholeFixtureColor || options.wholeFixtureMove;
+    const videoTargets = wholeFixtureTarget
       ? []
       : buildEffectVideoTargets(true, Boolean(options.forceVideoTarget));
     return {
@@ -9629,7 +9815,7 @@ export default function App() {
             ? [fixture.id]
             : [],
       target_group_ids: targetMode === "group" ? parseGroupIds(effectTargetGroups()) : [],
-      attribute: targetMode === "video" || options.wholeFixtureColor ? "" : attribute,
+      attribute: targetMode === "video" || wholeFixtureTarget ? "" : attribute,
       video_targets: videoTargets,
     };
   };
@@ -9880,7 +10066,7 @@ export default function App() {
 
   const loadSampleEffectPreset = async (preset: SampleEffectPreset, useCurrentTarget = false) => {
     if (useCurrentTarget && !sampleEffectPresetSupportsTarget(preset)) {
-      setMessage("Circle sample creates a Pan/Tilt pair and cannot be retargeted to one current attribute.");
+      setMessage("This sample cannot be retargeted to the current effect target.");
       return;
     }
     const targetOverrideOptions = sampleEffectTargetOverrideOptions(preset);
@@ -9890,12 +10076,6 @@ export default function App() {
       return;
     }
     try {
-      if (preset === "circle") {
-        const effectIds = await invoke<number[]>("load_sample_effect_bundle", { preset });
-        setMessage(`Loaded sample circle bundle as effects ${effectIds.join(", ")}`);
-        await refreshSnapshot();
-        return;
-      }
       const effectId = await invoke<number>("load_sample_effect_preset", {
         preset,
         targetOverride,
@@ -11873,7 +12053,7 @@ export default function App() {
                 </button>
               </div>
             </div>
-            <div class="effectWorkbench">
+            <div class={`effectWorkbench ${effectType() === "Move" ? "moveEffectWorkbench" : ""}`}>
             <section class="effectLibraryPane" aria-label="Effect Library">
             <SampleEffectPresetPanel
               selectedPreset={sampleEffectPreset()}
@@ -11889,7 +12069,7 @@ export default function App() {
                 <strong>Inspector</strong>
                 <span>{editingEffectId() === null ? "New effect" : `Editing #${editingEffectId()}`}</span>
               </div>
-              <span>{effectType() === "PositionWave" ? "SPATIAL" : effectType() === "Color" ? "MULTI-COLOR" : effectType() === "Chaser" ? "CHASE" : "MODULATOR"}</span>
+              <span>{effectType() === "PositionWave" ? "SPATIAL" : effectType() === "Color" ? "MULTI-COLOR" : effectType() === "Chaser" ? "CHASE" : effectType() === "Move" ? "PAN/TILT PATH" : "MODULATOR"}</span>
             </header>
             <div class="effectForm">
               <div class="effectTargetHint">
@@ -11898,7 +12078,7 @@ export default function App() {
                   <span data-no-localize>{effectTargetSummary()}</span> / {effectDraftSummary()}
                 </span>
               </div>
-              <Show when={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "Chaser"}>
+              <Show when={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "Chaser" && effectType() !== "Move"}>
                 <label>
                   Attribute
                   <select
@@ -11928,7 +12108,7 @@ export default function App() {
                     <option value="fixture">Selected fixture</option>
                     <option value="selection">Map selection ({selectedMappingFixtures().length})</option>
                     <option value="group">Group</option>
-                    <option value="video" disabled={effectType() === "Color" || effectType() === "Chaser"}>Video layer</option>
+                    <option value="video" disabled={effectType() === "Color" || effectType() === "Chaser" || effectType() === "Move"}>Video layer</option>
                   </select>
                 </label>
                 <label>
@@ -11954,6 +12134,9 @@ export default function App() {
                         if (effectTargetMode() === "video") setEffectTargetMode("fixture");
                         prepareChaserDraftFromCurrentTarget(nextType !== previousType);
                         if (!startsNewEffect) setMessage("Prepared an ordered fixture-index Chaser draft from the current target.");
+                      } else if (nextType === "Move") {
+                        prepareMoveDraft(nextType !== previousType);
+                        if (!startsNewEffect) setMessage("Prepared an independent paired Pan/Tilt Move path from the current target.");
                       }
                     }}
                   >
@@ -11961,10 +12144,11 @@ export default function App() {
                     <option value="PositionWave">Position Wave</option>
                     <option value="Color">Multi-color</option>
                     <option value="Chaser">Chaser</option>
+                    <option value="Move">Move (Pan/Tilt path)</option>
                   </select>
                 </label>
               </div>
-              <Show when={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "Chaser"}>
+              <Show when={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "Chaser" && effectType() !== "Move"}>
                 <label class="checkbox inlineCheckbox effectLinkedVideoToggle">
                   <input
                     type="checkbox"
@@ -11984,7 +12168,7 @@ export default function App() {
                   onToggleGroup={toggleEffectTargetGroup}
                 />
               </Show>
-              <Show when={effectType() !== "Color" && effectType() !== "Chaser" && (effectTargetMode() === "video" || effectVideoTargetLinked())}>
+              <Show when={effectType() !== "Color" && effectType() !== "Chaser" && effectType() !== "Move" && (effectTargetMode() === "video" || effectVideoTargetLinked())}>
                 <VideoEffectTargetPanel
                   layers={snapshot().video.layers}
                   outputsCount={snapshot().video.outputs.length}
@@ -12120,9 +12304,75 @@ export default function App() {
                   onRandomSeed={setChaserRandomSeed}
                 />
               </Show>
+              <Show when={effectType() === "Move"}>
+                <div class="moveEffectRecipeBar" aria-label="Move path recipes">
+                  <span>Path recipe</span>
+                  <div class="moveEffectRecipeButtons" role="group" aria-label="Move path recipe presets">
+                    <For each={movePathRecipes}>
+                      {(recipe) => (
+                        <button
+                          type="button"
+                          class={movePathRecipe() === recipe ? "active" : ""}
+                          aria-pressed={movePathRecipe() === recipe}
+                          onClick={() => applyMovePathRecipe(recipe)}
+                        >
+                          {recipe}
+                        </button>
+                      )}
+                    </For>
+                  </div>
+                  <Show when={movePathRecipe() === "Custom"}>
+                    <small>Custom path loaded</small>
+                  </Show>
+                </div>
+                <Show when={currentMoveDraftError()}>
+                  {(error) => <p class="moveEffectDraftError" role="status">{error()}</p>}
+                </Show>
+                <MoveEffectEditorPanel
+                  points={movePathPoints()}
+                  closed={movePathClosed()}
+                  interpolation={moveInterpolation()}
+                  coordinateMode={moveCoordinateMode()}
+                  center={{ x: moveCenterX(), y: moveCenterY() }}
+                  size={{ x: moveSizeX(), y: moveSizeY() }}
+                  rotation={moveRotationDegrees()}
+                  periodMs={effectPeriod()}
+                  bpm={snapshot().clock.bpm}
+                  clockSyncBeats={effectClockSyncBeats()}
+                  direction={moveDirection()}
+                  phase={effectPhase()}
+                  spread={moveFixtureSpread()}
+                  onPoints={(points) => {
+                    setMovePathRecipe("Custom");
+                    setMovePathPoints(points);
+                  }}
+                  onClosed={(closed) => {
+                    setMovePathRecipe("Custom");
+                    setMovePathClosed(closed);
+                  }}
+                  onInterpolation={setMoveInterpolation}
+                  onCoordinateMode={setMoveCoordinateMode}
+                  onCenter={(center) => {
+                    setMoveCenterX(center.x);
+                    setMoveCenterY(center.y);
+                  }}
+                  onSize={(size) => {
+                    setMoveSizeX(size.x);
+                    setMoveSizeY(size.y);
+                  }}
+                  onRotation={setMoveRotationDegrees}
+                  onPeriodMs={setEffectPeriod}
+                  onClockSyncBeats={setEffectClockSyncPreset}
+                  onDirection={setMoveDirection}
+                  onPhase={setEffectPhase}
+                  onSpread={setMoveFixtureSpread}
+                />
+              </Show>
             </div>
             <EffectActionControlsPanel
-              showLightRange={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "Chaser"}
+              showLightRange={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "Chaser" && effectType() !== "Move"}
+              showPhase={effectType() !== "Move"}
+              lockBlendMode={effectType() === "Move"}
               low={effectLow()}
               high={effectHigh()}
               phase={effectPhase()}

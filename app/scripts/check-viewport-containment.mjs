@@ -26,19 +26,39 @@ const cdpPort = Number(process.env.SYNDOCAL_CDP_PORT ?? 9227);
 const screenshotDir = process.env.SYNDOCAL_VIEWPORT_SCREENSHOT_DIR
   ? resolve(process.env.SYNDOCAL_VIEWPORT_SCREENSHOT_DIR)
   : null;
-const compactValidationViewport = { width: 1366, height: 768 };
 const primaryOperationalViewport = { width: 1920, height: 1080 };
-const allViewports = [
+const extendedCeilingViewport = { width: 2048, height: 1152 };
+const compactFallbackViewports = [
+  { width: 1366, height: 768 },
   { width: 1280, height: 720 },
-  compactValidationViewport,
-  primaryOperationalViewport,
-  { width: 2048, height: 1152 },
 ];
-const viewports = largeShowMode
-  ? [compactValidationViewport]
+const allViewports = [
+  primaryOperationalViewport,
+  extendedCeilingViewport,
+  ...compactFallbackViewports,
+];
+const requestedViewportMatch = process.env.SYNDOCAL_VIEWPORT_ONLY?.match(/^(\d+)x(\d+)$/);
+const requestedViewport = requestedViewportMatch
+  ? { width: Number(requestedViewportMatch[1]), height: Number(requestedViewportMatch[2]) }
+  : null;
+const viewports = requestedViewport
+  ? [requestedViewport]
+  : largeShowMode
+  ? [primaryOperationalViewport]
   : process.env.SYNDOCAL_VIEWPORT_SINGLE === "1"
     ? [primaryOperationalViewport]
     : allViewports;
+const captureAllViewportScreenshots = process.env.SYNDOCAL_VIEWPORT_CAPTURE_ALL === "1";
+const matchesViewport = (candidate, reference) =>
+  candidate.width === reference.width && candidate.height === reference.height;
+const isPrimaryOperationalViewport = (viewport) => matchesViewport(viewport, primaryOperationalViewport);
+const shouldCaptureViewport = (viewport) =>
+  Boolean(screenshotDir) && (isPrimaryOperationalViewport(viewport) || captureAllViewportScreenshots);
+const viewportRole = ({ width, height }) => {
+  if (matchesViewport({ width, height }, primaryOperationalViewport)) return "primary-maximized";
+  if (matchesViewport({ width, height }, extendedCeilingViewport)) return "extended-ceiling";
+  return "compact-fallback";
+};
 const setupTabs = [
   { area: "Lighting", tab: "Library", id: "library" },
   { area: "Lighting", tab: "Profiles", id: "profiles" },
@@ -579,6 +599,13 @@ async function measure(client, label) {
     const cuePanel = document.querySelector('.cuePanel');
     const cueEditToggle = document.querySelector('.cuePanelEditToggle');
     const cueHost = document.querySelector('.layoutControl.controlModeLive .faders');
+    const moveEffectForm = document.querySelector('.effectInspectorPane > .effectForm');
+    const moveEffectEditorPanel = document.querySelector('.moveEffectEditorPanel');
+    const moveEffectEditorSurface = document.querySelector('.moveEffectEditorSurface');
+    const moveEffectPathDesk = document.querySelector('.moveEffectPathDesk');
+    const moveEffectInspector = document.querySelector('.moveEffectInspector');
+    const moveEffectPathCanvas = document.querySelector('.moveEffectPathCanvas');
+    const moveEffectPointList = document.querySelector('.moveEffectPointList');
     const positionToolPane = document.querySelector('.positionToolPane');
     let positionToolPaneLastControlReachable = false;
     if (positionToolPane) {
@@ -597,6 +624,48 @@ async function measure(client, label) {
       positionToolPane.scrollTop = initialScrollTop;
       await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
     }
+    let moveEffectLastControlReachable = false;
+    if (moveEffectForm && moveEffectEditorPanel) {
+      const initialScrollTop = moveEffectForm.scrollTop;
+      const controls = [...moveEffectEditorPanel.querySelectorAll('button, input, select')]
+        .filter((element) => !element.disabled && !element.closest('.moveEffectPointList'))
+        .filter((element) => {
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+        });
+      const lastControl = controls.at(-1);
+      moveEffectForm.scrollTop = moveEffectForm.scrollHeight;
+      await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
+      if (lastControl) {
+        const formRect = moveEffectForm.getBoundingClientRect();
+        const controlRect = lastControl.getBoundingClientRect();
+        moveEffectLastControlReachable =
+          controlRect.top >= formRect.top - 1 && controlRect.bottom <= formRect.bottom + 1;
+      }
+      moveEffectForm.scrollTop = initialScrollTop;
+      await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
+    }
+    let moveEffectLastPointReachable = false;
+    if (moveEffectPointList) {
+      const initialScrollTop = moveEffectPointList.scrollTop;
+      const lastRow = [...moveEffectPointList.querySelectorAll('.moveEffectPointRow')].at(-1);
+      moveEffectPointList.scrollTop = moveEffectPointList.scrollHeight;
+      await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
+      if (lastRow) {
+        const listRect = moveEffectPointList.getBoundingClientRect();
+        const rowRect = lastRow.getBoundingClientRect();
+        moveEffectLastPointReachable = rowRect.top >= listRect.top - 1 && rowRect.bottom <= listRect.bottom + 1;
+      }
+      moveEffectPointList.scrollTop = initialScrollTop;
+      await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
+    }
+    const moveEffectFormRect = moveEffectForm?.getBoundingClientRect() ?? null;
+    const moveEffectEditorPanelRect = moveEffectEditorPanel?.getBoundingClientRect() ?? null;
+    const moveEffectEditorSurfaceRect = moveEffectEditorSurface?.getBoundingClientRect() ?? null;
+    const moveEffectPathDeskRect = moveEffectPathDesk?.getBoundingClientRect() ?? null;
+    const moveEffectInspectorRect = moveEffectInspector?.getBoundingClientRect() ?? null;
+    const moveEffectPathCanvasRect = moveEffectPathCanvas?.getBoundingClientRect() ?? null;
     window.scrollTo(9999, 9999);
     await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
     const movedX = window.scrollX;
@@ -1051,6 +1120,84 @@ async function measure(client, label) {
         const formRect = form.getBoundingClientRect();
         return editorRect.left >= formRect.left - 1 && editorRect.right <= formRect.right + 1;
       })(),
+      visibleMoveEffectEditorCount: visibleCount('.moveEffectEditorPanel'),
+      visibleMoveEffectPathDeskCount: visibleCount('.moveEffectPathDesk'),
+      visibleMoveEffectInspectorCount: visibleCount('.moveEffectInspector'),
+      visibleMoveEffectPathCanvasCount: visibleCount('.moveEffectPathCanvas'),
+      visibleMoveEffectDirectionButtonCount: visibleCount('.moveEffectDirectionGrid button'),
+      visibleMoveEffectTransformInputCount: visibleCount('.moveEffectTransformGrid input'),
+      visibleMoveEffectCoordinateButtonCount: visibleCount('.moveEffectSegmented[aria-label="Move coordinate mode"] button'),
+      visibleMoveEffectInterpolationButtonCount: visibleCount('.moveEffectSegmented[aria-label="Move interpolation"] button'),
+      visibleMoveEffectClosedToggleCount: visibleCount('.moveEffectClosedToggle input[type="checkbox"]'),
+      visibleMoveEffectPointRowCount: visibleCount('.moveEffectPointRow'),
+      moveEffectEditorWidth: moveEffectEditorPanelRect ? Math.round(moveEffectEditorPanelRect.width) : 0,
+      moveEffectEditorHeight: moveEffectEditorPanelRect ? Math.round(moveEffectEditorPanelRect.height) : 0,
+      moveEffectSurfaceWidth: moveEffectEditorSurfaceRect ? Math.round(moveEffectEditorSurfaceRect.width) : 0,
+      moveEffectSurfaceHeight: moveEffectEditorSurfaceRect ? Math.round(moveEffectEditorSurfaceRect.height) : 0,
+      moveEffectPathDeskWidth: moveEffectPathDeskRect ? Math.round(moveEffectPathDeskRect.width) : 0,
+      moveEffectInspectorWidth: moveEffectInspectorRect ? Math.round(moveEffectInspectorRect.width) : 0,
+      moveEffectPathCanvasWidth: moveEffectPathCanvasRect ? Math.round(moveEffectPathCanvasRect.width) : 0,
+      moveEffectPathCanvasHeight: moveEffectPathCanvasRect ? Math.round(moveEffectPathCanvasRect.height) : 0,
+      moveEffectEditorHorizontalOverflowPx: moveEffectEditorPanel
+        ? Math.max(0, moveEffectEditorPanel.scrollWidth - moveEffectEditorPanel.clientWidth)
+        : -1,
+      moveEffectSurfaceHorizontalOverflowPx: moveEffectEditorSurface
+        ? Math.max(0, moveEffectEditorSurface.scrollWidth - moveEffectEditorSurface.clientWidth)
+        : -1,
+      moveEffectPathDeskHorizontalOverflowPx: moveEffectPathDesk
+        ? Math.max(0, moveEffectPathDesk.scrollWidth - moveEffectPathDesk.clientWidth)
+        : -1,
+      moveEffectInspectorHorizontalOverflowPx: moveEffectInspector
+        ? Math.max(0, moveEffectInspector.scrollWidth - moveEffectInspector.clientWidth)
+        : -1,
+      moveEffectFormHorizontalOverflowPx: moveEffectForm
+        ? Math.max(0, moveEffectForm.scrollWidth - moveEffectForm.clientWidth)
+        : -1,
+      moveEffectFormVerticalOverflowPx: moveEffectForm
+        ? Math.max(0, moveEffectForm.scrollHeight - moveEffectForm.clientHeight)
+        : -1,
+      moveEffectFormOverflowY: moveEffectForm ? window.getComputedStyle(moveEffectForm).overflowY : '',
+      moveEffectPointListVerticalOverflowPx: moveEffectPointList
+        ? Math.max(0, moveEffectPointList.scrollHeight - moveEffectPointList.clientHeight)
+        : -1,
+      moveEffectPointListOverflowY: moveEffectPointList ? window.getComputedStyle(moveEffectPointList).overflowY : '',
+      moveEffectLastControlReachable,
+      moveEffectLastPointReachable,
+      moveEffectEditorContained: Boolean(
+        moveEffectEditorPanelRect &&
+        moveEffectFormRect &&
+        moveEffectEditorPanelRect.left >= moveEffectFormRect.left - 1 &&
+        moveEffectEditorPanelRect.right <= moveEffectFormRect.right + 1
+      ),
+      moveEffectCanvasContained: Boolean(
+        moveEffectPathCanvasRect &&
+        moveEffectPathDeskRect &&
+        moveEffectPathCanvasRect.left >= moveEffectPathDeskRect.left - 1 &&
+        moveEffectPathCanvasRect.right <= moveEffectPathDeskRect.right + 1 &&
+        moveEffectPathCanvasRect.top >= moveEffectPathDeskRect.top - 1 &&
+        moveEffectPathCanvasRect.bottom <= moveEffectPathDeskRect.bottom + 1
+      ),
+      moveEffectColumnsSideBySide: Boolean(
+        moveEffectPathDeskRect &&
+        moveEffectInspectorRect &&
+        moveEffectInspectorRect.left >= moveEffectPathDeskRect.right - 1 &&
+        Math.abs(moveEffectPathDeskRect.top - moveEffectInspectorRect.top) <= 2
+      ),
+      moveEffectSurfaceWidthCoverage: moveEffectEditorPanelRect && moveEffectEditorSurfaceRect
+        ? Number((moveEffectEditorSurfaceRect.width / Math.max(1, moveEffectEditorPanelRect.width)).toFixed(3))
+        : 0,
+      moveEffectColumnAreaCoverage: moveEffectEditorSurfaceRect && moveEffectPathDeskRect && moveEffectInspectorRect
+        ? Number((
+            (moveEffectPathDeskRect.width * moveEffectPathDeskRect.height + moveEffectInspectorRect.width * moveEffectInspectorRect.height) /
+            Math.max(1, moveEffectEditorSurfaceRect.width * moveEffectEditorSurfaceRect.height)
+          ).toFixed(3))
+        : 0,
+      moveEffectUnusedRightPx: moveEffectEditorSurfaceRect && moveEffectPathDeskRect && moveEffectInspectorRect
+        ? Math.round(Math.max(0, moveEffectEditorSurfaceRect.right - Math.max(moveEffectPathDeskRect.right, moveEffectInspectorRect.right)))
+        : -1,
+      moveEffectUnusedBottomPx: moveEffectEditorSurfaceRect && moveEffectPathDeskRect && moveEffectInspectorRect
+        ? Math.round(Math.max(0, moveEffectEditorSurfaceRect.bottom - Math.max(moveEffectPathDeskRect.bottom, moveEffectInspectorRect.bottom)))
+        : -1,
       visibleNodeGraphPanelCount: visibleCount('.nodeGraphPanel'),
       nodeGraphAudioSourceOptionCount: [...document.querySelectorAll('.nodeGraphPanel option')]
         .filter((option) => (option.textContent || '').trim().toLowerCase() === 'audio fft').length,
@@ -1511,6 +1658,53 @@ function hasExpectedControlModeSurface(result) {
       if (result.label.startsWith("control-edit-effects-graphs-")) {
         return hasFxDesk && result.visibleNodeGraphPanelCount === 1 && result.controlWorkSurfaceUnsafeOverflowCount === 0;
       }
+      if (result.label.startsWith("control-edit-effects-move-editor-")) {
+        const hasMoveEditor =
+          hasFxDesk &&
+          result.effectTypeValue === "Move" &&
+          result.visibleMoveEffectEditorCount === 1 &&
+          result.visibleMoveEffectPathDeskCount === 1 &&
+          result.visibleMoveEffectInspectorCount === 1 &&
+          result.visibleMoveEffectPathCanvasCount === 1 &&
+          result.visibleMoveEffectDirectionButtonCount === 3 &&
+          result.visibleMoveEffectTransformInputCount === 5 &&
+          result.visibleMoveEffectCoordinateButtonCount === 2 &&
+          result.visibleMoveEffectInterpolationButtonCount === 2 &&
+          result.visibleMoveEffectClosedToggleCount === 1 &&
+          result.visibleMoveEffectPointRowCount >= 2 &&
+          result.visibleLegacyEffectAttributeCount === 0 &&
+          result.visibleLegacyEffectWaveformCount === 0 &&
+          result.visibleLegacyEffectVideoTargetCount === 0 &&
+          result.moveEffectEditorHorizontalOverflowPx <= 1 &&
+          result.moveEffectSurfaceHorizontalOverflowPx <= 1 &&
+          result.moveEffectPathDeskHorizontalOverflowPx <= 1 &&
+          result.moveEffectInspectorHorizontalOverflowPx <= 1 &&
+          result.moveEffectFormHorizontalOverflowPx <= 1 &&
+          ["auto", "scroll"].includes(result.moveEffectFormOverflowY) &&
+          ["auto", "scroll"].includes(result.moveEffectPointListOverflowY) &&
+          result.moveEffectLastControlReachable &&
+          result.moveEffectLastPointReachable &&
+          result.moveEffectEditorContained &&
+          result.controlWorkSurfaceUnsafeOverflowCount === 0;
+        const hasPrimaryOperationalDensity =
+          viewportRole({ width: result.innerWidth, height: result.innerHeight }) !== "primary-maximized" ||
+          (
+            result.moveEffectEditorWidth >= 780 &&
+            result.moveEffectSurfaceWidth >= 780 &&
+            result.moveEffectPathDeskWidth >= 360 &&
+            result.moveEffectInspectorWidth >= 380 &&
+            result.moveEffectPathCanvasWidth >= 320 &&
+            result.moveEffectPathCanvasHeight >= 300 &&
+            result.moveEffectCanvasContained &&
+            result.moveEffectColumnsSideBySide &&
+            result.moveEffectSurfaceWidthCoverage >= 0.98 &&
+            result.moveEffectColumnAreaCoverage >= 0.98 &&
+            result.moveEffectColumnAreaCoverage <= 1.02 &&
+            result.moveEffectUnusedRightPx <= 2 &&
+            result.moveEffectUnusedBottomPx <= 2
+          );
+        return hasMoveEditor && hasPrimaryOperationalDensity;
+      }
       if (result.label.startsWith("control-edit-effects-color-editor-")) {
         return (
           hasFxDesk &&
@@ -1582,7 +1776,7 @@ function hasExpectedControlModeSurface(result) {
         result.visibleEffectFamilyButtonCount === 8 &&
         result.visibleActiveEffectFamilyButtonCount === 1 &&
         result.visibleEffectLibraryCardCount === 13 &&
-        result.visibleTargetRequiredEffectCardCount === 3 &&
+        result.visibleTargetRequiredEffectCardCount === 4 &&
         result.visibleNodeGraphPanelCount === 0 &&
         result.effectTargetHintCount >= 1 &&
         result.visibleRawMonitorCount === 0 &&
@@ -2058,7 +2252,7 @@ async function runViewport(client, viewport) {
       })()`);
     }
     await sleep(180);
-    if (screenshotDir) {
+    if (shouldCaptureViewport(viewport)) {
       mkdirSync(screenshotDir, { recursive: true });
       const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
       writeFileSync(join(screenshotDir, `setup-${setupTab.id}-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
@@ -2078,7 +2272,7 @@ async function runViewport(client, viewport) {
   for (const controlTab of controlTabs) {
     await clickByText(client, controlTab.label);
     await sleep(320);
-    if (screenshotDir) {
+    if (shouldCaptureViewport(viewport)) {
       mkdirSync(screenshotDir, { recursive: true });
       const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
       writeFileSync(join(screenshotDir, `control-${controlTab.id}-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
@@ -2087,7 +2281,7 @@ async function runViewport(client, viewport) {
     if (controlTab.id === "edit") {
       await clickVisibleByText(client, ".attributeCategoryRail button", "Position");
       await sleep(120);
-      if (screenshotDir) {
+      if (shouldCaptureViewport(viewport)) {
         const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
         writeFileSync(
           join(screenshotDir, `control-edit-static-position-${viewport.width}x${viewport.height}.png`),
@@ -2099,7 +2293,7 @@ async function runViewport(client, viewport) {
       await client.evaluate("document.querySelector('#position-tool-tab-position')?.focus()");
       await pressKey(client, "ArrowRight");
       await sleep(120);
-      if (screenshotDir && viewport.width === primaryOperationalViewport.width) {
+      if (shouldCaptureViewport(viewport)) {
         const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
         writeFileSync(
           join(screenshotDir, `control-edit-static-position-limits-${viewport.width}x${viewport.height}.png`),
@@ -2115,7 +2309,7 @@ async function runViewport(client, viewport) {
       results.push(await measure(client, `control-edit-color-${viewport.width}x${viewport.height}`));
       await clickVisibleByText(client, ".editDeskTabs button", "Effects");
       await sleep(120);
-      if (screenshotDir) {
+      if (shouldCaptureViewport(viewport)) {
         const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
         writeFileSync(join(screenshotDir, `control-edit-effects-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
       }
@@ -2156,7 +2350,7 @@ async function runViewport(client, viewport) {
       await selectVisibleOption(client, ".colorEffectModeGrid select", "Random");
       await selectVisibleOption(client, ".colorEffectModeGrid select", "HsvLongest");
       await sleep(240);
-      if (screenshotDir) {
+      if (shouldCaptureViewport(viewport)) {
         const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
         writeFileSync(join(screenshotDir, `control-edit-effects-color-editor-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
       }
@@ -2184,11 +2378,19 @@ async function runViewport(client, viewport) {
       await clickVisibleByText(client, ".chaserFeatureFooter button", "Add feature");
       await clickVisibleByText(client, ".chaserTargetDock button", "Append current");
       await sleep(180);
-      if (screenshotDir) {
+      if (shouldCaptureViewport(viewport)) {
         const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
         writeFileSync(join(screenshotDir, `control-edit-effects-chaser-editor-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
       }
       results.push(await measure(client, `control-edit-effects-chaser-editor-${viewport.width}x${viewport.height}`));
+      await selectVisibleOption(client, ".effectEditor select", "Move");
+      await sleep(180);
+      if (shouldCaptureViewport(viewport)) {
+        mkdirSync(screenshotDir, { recursive: true });
+        const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+        writeFileSync(join(screenshotDir, `control-edit-effects-move-editor-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
+      }
+      results.push(await measure(client, `control-edit-effects-move-editor-${viewport.width}x${viewport.height}`));
       await clickVisibleByText(client, ".editDeskTabs button", "DMX");
       await sleep(120);
       results.push(await measure(client, `control-edit-dmx-${viewport.width}x${viewport.height}`));
@@ -2204,7 +2406,7 @@ async function runViewport(client, viewport) {
       await selectVisibleOption(client, "#cue-store-form select", "effects");
       await sleep(120);
       results.push(await measure(client, `control-live-cues-effects-only-${viewport.width}x${viewport.height}`));
-      if (screenshotDir) {
+      if (shouldCaptureViewport(viewport)) {
         const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
         writeFileSync(join(screenshotDir, `control-live-cues-effects-only-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
       }
@@ -2225,7 +2427,7 @@ async function runViewport(client, viewport) {
   await clickByText(client, "Touch");
   await sleep(180);
   await checkTouchMomentaryFlash(client);
-  if (screenshotDir) {
+  if (shouldCaptureViewport(viewport)) {
     mkdirSync(screenshotDir, { recursive: true });
     const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
     writeFileSync(join(screenshotDir, `touch-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
@@ -2298,10 +2500,14 @@ async function runCueRecallViewport(client, viewport) {
       fullyVisibleActionCount: actions.filter(fullyVisible).length,
     };
   })()`);
-  if (screenshotDir && viewport.width === 1366) {
+  if (shouldCaptureViewport(viewport)) {
     mkdirSync(screenshotDir, { recursive: true });
     const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
-    writeFileSync(join(screenshotDir, "cue-recall-open-1366x768.png"), screenshot.data, "base64");
+    writeFileSync(
+      join(screenshotDir, `cue-recall-open-${viewport.width}x${viewport.height}.png`),
+      screenshot.data,
+      "base64",
+    );
   }
   const passed = Boolean(
     actionReached &&
@@ -2488,7 +2694,7 @@ async function runEmptyVjViewport(client, viewport) {
   await clickByText(client, "Control");
   await clickByText(client, "VJ Desk");
   await sleep(180);
-  if (screenshotDir) {
+  if (shouldCaptureViewport(viewport)) {
     mkdirSync(screenshotDir, { recursive: true });
     const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
     writeFileSync(join(screenshotDir, `vj-empty-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
@@ -2525,12 +2731,15 @@ async function main() {
       "--disable-crashpad",
       `--remote-debugging-port=${cdpPort}`,
       `--user-data-dir=${profileDir}`,
-      "--window-size=1366,768",
+      `--window-size=${primaryOperationalViewport.width},${primaryOperationalViewport.height}`,
       "about:blank",
     ]);
     await waitForHttp(`http://127.0.0.1:${cdpPort}/json/version`, "Chrome DevTools Protocol");
 
     client = await createCdpClient();
+    console.log(
+      `viewport contract primary=${primaryOperationalViewport.width}x${primaryOperationalViewport.height} extended=${extendedCeilingViewport.width}x${extendedCeilingViewport.height} fallbacks=${compactFallbackViewports.map((viewport) => `${viewport.width}x${viewport.height}`).join(",")} screenshots=${captureAllViewportScreenshots ? "all" : "primary-only"}`,
+    );
     if (largeShowMode) {
       const result = await runLargeShowViewport(client, viewports[0]);
       const passed = Boolean(
@@ -2651,11 +2860,14 @@ async function main() {
       const chaserEffectSuffix = result.label.startsWith("control-edit-effects-chaser-editor-")
         ? ` chaserFx=${result.effectTypeValue}/${result.visibleChaserStepCount}/${result.visibleChaserFeatureCount}/${result.chaserDirectionValue}/${result.chaserActiveStepCount}/${result.chaserSizePercent}/${result.chaserPhasePercent} active=${result.visibleActiveChaserPreviewCellCount} replace=${result.visibleChaserReplaceButtonCount} fading=${result.chaserFadingEnabled ? 1 : 0} legacy=${result.visibleLegacyEffectAttributeCount}/${result.visibleLegacyEffectWaveformCount}/${result.visibleLegacyEffectVideoTargetCount} overflow=${result.chaserHorizontalOverflowPx}`
         : "";
+      const moveEffectSuffix = result.label.startsWith("control-edit-effects-move-editor-")
+        ? ` moveFx=${result.effectTypeValue}/${result.visibleMoveEffectPointRowCount} editor=${result.moveEffectEditorWidth}x${result.moveEffectEditorHeight} path=${result.moveEffectPathDeskWidth}w canvas=${result.moveEffectPathCanvasWidth}x${result.moveEffectPathCanvasHeight} inspector=${result.moveEffectInspectorWidth}w columns=${result.moveEffectColumnsSideBySide ? 2 : 1} coverage=${result.moveEffectSurfaceWidthCoverage}/${result.moveEffectColumnAreaCoverage} unused=${result.moveEffectUnusedRightPx}/${result.moveEffectUnusedBottomPx} scroll=${result.moveEffectFormVerticalOverflowPx}/${result.moveEffectPointListVerticalOverflowPx} reachable=${result.moveEffectLastControlReachable ? 1 : 0}/${result.moveEffectLastPointReachable ? 1 : 0} contained=${result.moveEffectEditorContained ? 1 : 0}/${result.moveEffectCanvasContained ? 1 : 0} overflow=${result.moveEffectEditorHorizontalOverflowPx}/${result.moveEffectFormHorizontalOverflowPx}`
+        : "";
       const mixerSuffix = result.label.startsWith("control-mixer-")
         ? ` mixer=${result.visibleVideoOutputItemCount}/${result.visibleVideoOutputSelectedItemCount}/${result.visibleVideoMixerOutputDeckCount}/${result.visibleVideoMixerOutputFaderCount}/${result.visibleVideoMixerOutputSelectButtonCount}/${result.visibleVideoLayerItemCount}/${result.visibleBuiltinVideoFxSelectCount}/${result.visibleVideoMixerLayerDeckCount}/${result.visibleVideoMixerLayerFaderCount}/${result.visibleVideoMixerLayerButtonCount}`
         : "";
       console.log(
-        `${status} ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${keyboardSuffix}${timelineSuffix}${touchSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${positionVisualSuffix}${colorEffectSuffix}${chaserEffectSuffix}${mixerSuffix}`,
+        `${status} [${viewportRole({ width: result.innerWidth, height: result.innerHeight })}] ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${keyboardSuffix}${timelineSuffix}${touchSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${positionVisualSuffix}${colorEffectSuffix}${chaserEffectSuffix}${moveEffectSuffix}${mixerSuffix}`,
       );
     }
     for (const result of cueRecallResults) {

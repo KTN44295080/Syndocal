@@ -100,9 +100,11 @@ export default defineConfig({
             normalizedId.includes("/src/components/EffectActionControlsPanel") ||
             normalizedId.includes("/src/components/EffectGroupTargetPanel") ||
             normalizedId.includes("/src/components/EffectListPanel") ||
+            normalizedId.includes("/src/components/MoveEffectEditorPanel") ||
             normalizedId.includes("/src/components/EffectSourceControlsPanel") ||
             normalizedId.includes("/src/components/SampleEffectPresetPanel") ||
-            normalizedId.includes("/src/components/VideoEffectTargetPanel")
+            normalizedId.includes("/src/components/VideoEffectTargetPanel") ||
+            normalizedId.includes("/src/moveEffect")
           ) {
             return "effect-panels";
           }

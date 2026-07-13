@@ -219,11 +219,14 @@ export interface RemoteControlStatus {
 
 export type ClockSource = "Manual" | "Tap" | "MidiClock" | "MidiTimecode" | "Ltc" | "AbletonLink";
 export type LfoShape = "Sine" | "Cosine" | "Triangle" | "Saw" | "Square" | "Random" | "Perlin";
-export type EffectKind = "Lfo" | "PositionWave" | "Color" | "Chaser";
+export type EffectKind = "Lfo" | "PositionWave" | "Color" | "Chaser" | "Move";
 export type EffectBlendMode = "Override" | "Add" | "Multiply";
 export type ColorEffectAlgorithm = "Cycle" | "Bounce" | "Sequence" | "Random";
 export type ColorEffectInterpolation = "Rgb" | "HsvShortest" | "HsvLongest";
 export type ChaserDirection = "Forward" | "Reverse" | "Bounce" | "Random";
+export type MoveInterpolation = "Line" | "Smooth";
+export type MoveCoordinateMode = "Absolute" | "Relative";
+export type MoveDirection = "Forward" | "Reverse" | "Bounce";
 export type NodeGraphNodeKind = "Lfo" | "PositionWave" | "Audio" | "Transform" | "Output";
 export type AudioSpectrumBand = "Bass" | "Mid" | "High";
 export type AudioSpectrumSource = "Timeline" | "Live";
@@ -1475,6 +1478,32 @@ export interface ChaserEffectRequest {
   blend_mode: EffectBlendMode;
 }
 
+export interface MovePathPoint {
+  x: number;
+  y: number;
+}
+
+export interface MoveEffectRequest {
+  label: string;
+  fixture_ids: number[];
+  target_group_ids: string[];
+  points: MovePathPoint[];
+  closed: boolean;
+  interpolation: MoveInterpolation;
+  coordinate_mode: MoveCoordinateMode;
+  center_x: number;
+  center_y: number;
+  size_x: number;
+  size_y: number;
+  rotation_degrees: number;
+  period_ms: number;
+  clock_sync?: EffectClockSync | null;
+  direction: MoveDirection;
+  phase: number;
+  fixture_spread: number;
+  blend_mode: EffectBlendMode;
+}
+
 export interface VideoEffectTarget {
   layer_ids: number[];
   param: VideoParam;
@@ -1505,6 +1534,7 @@ export interface EffectSummary {
   enabled: boolean;
   color?: ColorEffectRequest | null;
   chaser?: ChaserEffectRequest | null;
+  move_effect?: MoveEffectRequest | null;
 }
 
 export interface EffectPreset {
@@ -1515,6 +1545,7 @@ export interface EffectPreset {
   position_wave?: PositionWaveEffectRequest | null;
   color?: ColorEffectRequest | null;
   chaser?: ChaserEffectRequest | null;
+  move_effect?: MoveEffectRequest | null;
 }
 
 export type DmxOutputProtocol =
