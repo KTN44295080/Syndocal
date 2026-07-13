@@ -243,6 +243,19 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       options.setMessage(`ISF import failed: ${String(error)}`);
     }
   };
+  const applyBuiltinVideoIsfEffect = async (layerId: number, presetId: string) => {
+    try {
+      const effect = await options.invoke<VideoIsfEffectSummary>("apply_builtin_video_isf_effect", {
+        layerId,
+        presetId,
+      });
+      options.setMessage(`Applied built-in FX ${effect.label} on layer ${layerId}.`);
+      await options.refreshSnapshot();
+      await refreshVideoPreviewDiagnostics(false);
+    } catch (error) {
+      options.setMessage(`Built-in FX failed: ${String(error)}`);
+    }
+  };
 
   const refreshVideoPreviewDiagnostics = async (silent = false) => {
     try {
@@ -457,7 +470,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     refreshAudioOutputDevices,
     startVideoOutputRecording, stopVideoOutputRecording, refreshVideoRecordingStatus,
     removeVideoLayer, duplicateVideoLayer, moveVideoLayer, setVideoLayerLabel,
-    refreshVideoLayerMetadata, importVideoLayerIsf, setVideoLayerIsfEffect, renderDebugVideoPreview, loadVideoLayerThumbnail, refreshVideoPreviewDiagnostics,
+    refreshVideoLayerMetadata, importVideoLayerIsf, applyBuiltinVideoIsfEffect, setVideoLayerIsfEffect, renderDebugVideoPreview, loadVideoLayerThumbnail, refreshVideoPreviewDiagnostics,
     refreshVideoOutputRenderPlans, refreshVideoOutputWindowStatuses, refreshSnapshotAndVideoOutputRenderPlans,
     syncOpenVideoOutputWindows, closeOpenVideoOutputWindows, openAllVideoOutputWindows,
     refreshVideoRuntimeStatus, refreshExternalVideoIoPlans, syncExternalVideoTransports,

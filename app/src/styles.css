@@ -568,6 +568,26 @@ h3 {
   padding: 8px;
 }
 
+.builtinIsfLibrary {
+  display: grid;
+  grid-template-columns: minmax(80px, auto) minmax(150px, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.builtinIsfLibrary > span {
+  color: #aeb9c7;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.builtinIsfLibrary > select {
+  min-width: 0;
+  border-color: #4a6680;
+  background: linear-gradient(180deg, #202d39, #17212a);
+}
+
 .videoIsfControl {
   display: grid;
   grid-template-columns: minmax(76px, 1fr) repeat(4, minmax(54px, 72px));

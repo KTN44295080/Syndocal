@@ -16,12 +16,14 @@ use protocol::{
 };
 use serde::{Deserialize, Serialize};
 
+mod builtin_isf;
 mod gpu_compositor;
 mod gpu_surface;
 mod hap_decoder;
 mod isf_runtime;
 mod libav_decoder;
 
+pub use builtin_isf::{builtin_isf_effect, BuiltinIsfPreset, BUILTIN_ISF_PRESETS};
 pub use gpu_compositor::{GpuCompositeError, GpuCompositor};
 pub use gpu_surface::{GpuSurfaceBufferStats, GpuSurfaceError, GpuSurfacePresenter};
 pub use hap_decoder::{HapMovFrameDecoder, PreferredVideoFrameDecoder, VideoDecoderDiagnostics};

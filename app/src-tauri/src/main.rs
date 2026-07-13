@@ -5356,6 +5356,27 @@ fn set_video_layer_isf_effect(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn apply_builtin_video_isf_effect(
+    state: State<'_, AppState>,
+    layer_id: VideoLayerId,
+    preset_id: String,
+) -> Result<VideoIsfEffectSummary, String> {
+    validate_video_layer_ids(&state.engine.snapshot(), &[layer_id])?;
+    let preset_id = preset_id.trim();
+    let effect = video::builtin_isf_effect(preset_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("Unknown built-in VJ effect '{preset_id}'"))?;
+    state
+        .engine
+        .send(EngineCommand::SetVideoLayerIsfEffect {
+            layer_id,
+            effect: Some(effect.clone()),
+        })
+        .map_err(|error| error.to_string())?;
+    Ok(effect)
+}
+
 fn sanitize_video_isf_effect(
     effect: VideoIsfEffectSummary,
 ) -> Result<VideoIsfEffectSummary, String> {
@@ -23052,6 +23073,7 @@ fn main() {
             set_video_layer_label,
             set_video_layer_state,
             set_video_layer_isf_effect,
+            apply_builtin_video_isf_effect,
             fade_video_layer_opacity,
             launch_video_clip,
             take_video_clip,

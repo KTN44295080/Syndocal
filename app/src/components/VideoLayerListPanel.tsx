@@ -26,6 +26,7 @@ interface VideoLayerListPanelProps {
   onSetLayerFx: (layerId: number, state: VideoLayerState, fxPatch: Partial<VideoFxAdjust>) => void | Promise<void>;
   isfRuntimeError?: string | null;
   onImportIsf: (layerId: number) => void | Promise<void>;
+  onApplyBuiltinIsf: (layerId: number, presetId: string) => void | Promise<void>;
   onSetIsfEffect: (layerId: number, effect: VideoIsfEffectSummary | null) => void | Promise<void>;
   onAddCuePoint: (layerId: number) => void | Promise<void>;
   onJumpCuePoint: (layerId: number, cuePointIndex: number) => void | Promise<void>;
@@ -214,6 +215,7 @@ export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
               effect={layer.isf_effect}
               runtimeError={props.isfRuntimeError?.startsWith(`${layer.label}:`) ? props.isfRuntimeError : null}
               onImport={props.onImportIsf}
+              onApplyBuiltin={props.onApplyBuiltinIsf}
               onSetEffect={props.onSetIsfEffect}
             />
             <div class="split">

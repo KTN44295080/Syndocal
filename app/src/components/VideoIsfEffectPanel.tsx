@@ -6,8 +6,15 @@ interface VideoIsfEffectPanelProps {
   effect?: VideoIsfEffectSummary | null;
   runtimeError?: string | null;
   onImport: (layerId: number) => void | Promise<void>;
+  onApplyBuiltin: (layerId: number, presetId: string) => void | Promise<void>;
   onSetEffect: (layerId: number, effect: VideoIsfEffectSummary | null) => void | Promise<void>;
 }
+
+const BUILTIN_FX_GROUPS = [
+  { label: "Color", effects: [["invert", "Invert"], ["monochrome", "Monochrome"], ["threshold", "Threshold"], ["posterize", "Posterize"], ["colorize", "Colorize"]] },
+  { label: "Geometry", effects: [["mirror", "Mirror"], ["kaleidoscope", "Kaleidoscope"], ["zoom", "Zoom"], ["rotate", "Rotate"]] },
+  { label: "Rhythm & Glitch", effects: [["rgb-split", "RGB Split"], ["strobe", "Strobe"], ["scanlines", "Scanlines"], ["vignette", "Vignette"], ["glitch-shift", "Glitch Shift"]] },
+] as const;
 
 const replaceControl = (
   effect: VideoIsfEffectSummary,
@@ -42,7 +49,7 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
   };
 
   return (
-    <details class="videoIsfPanel" open={Boolean(props.runtimeError)}>
+    <details class="videoIsfPanel" open={!props.effect || Boolean(props.runtimeError)}>
       <summary>
         <strong>ISF Shader</strong>
         <Show when={props.effect} fallback={<span>None</span>}>
@@ -50,6 +57,27 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
         </Show>
       </summary>
       <div class="videoIsfBody">
+        <label class="builtinIsfLibrary">
+          <span>Built-in FX</span>
+          <select
+            aria-label="Built-in FX"
+            value=""
+            onChange={(event) => {
+              const presetId = event.currentTarget.value;
+              event.currentTarget.value = "";
+              if (presetId) void props.onApplyBuiltin(props.layerId, presetId);
+            }}
+          >
+            <option value="">Choose effect</option>
+            <For each={BUILTIN_FX_GROUPS}>
+              {(group) => (
+                <optgroup label={group.label}>
+                  <For each={group.effects}>{(effect) => <option value={effect[0]}>{effect[1]}</option>}</For>
+                </optgroup>
+              )}
+            </For>
+          </select>
+        </label>
         <div class="buttonRow">
           <button onClick={() => void props.onImport(props.layerId)}>{props.effect ? "Replace ISF" : "Import ISF"}</button>
           <Show when={props.effect}>

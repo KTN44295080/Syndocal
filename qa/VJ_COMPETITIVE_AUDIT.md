@@ -20,7 +20,7 @@ Primary comparison sources:
 |---|---|---|---|
 | Ready-to-play desk | Dedicated full-window VJ Desk, 12-pad banks, Preview/Cut/Take/Stop, Deck A/B crossfader, audio monitor, recording, live FFT, output and layer decks | Startup four-layer template, content browser, layer window, preview, hierarchy and property editor | Syndocal is operational after setup; it still lacks a first-run VJ template and rich content browser |
 | Media and outputs | Video/still multi-import, camera/screen/NDI/Spout input, Display/NDI/Spout output, H.264 recording, projection blend/mask | H.264/HAP/image media, Spout/OBS workflow and projector output | Syndocal has broader explicit routing and recording evidence on Windows |
-| Effects | Pixelate, blur, glow, edge, color key, transform/color controls, one imported safe single-pass ISF effect per layer | More than 100 advertised real-time effects and HLSL shader import | SynapseRack leads materially |
+| Effects | Pixelate, blur, glow, edge, color key, transform/color controls, 14 built-in live ISF effects, and one safe imported/built-in single-pass ISF effect per layer | More than 100 advertised real-time effects and HLSL shader import | The basic live library gap is reduced, but SynapseRack still leads materially in breadth and stacking |
 | Node authoring | Saved three-stage Source -> Transform -> Output graphs for LFO/position-wave/audio control of lighting/video parameters | General node editor with layer, texture, shader, math, UI, variable and operation modules | SynapseRack leads materially; the products do not currently expose equivalent node freedom |
 | Live control | MIDI, OSC, DMX, cue/timeline/BPM, Preview/Program, deck and blackout controls | MIDI, OSC, DMX mapping, keyboard mapping, global tempo, beat sync and operation nodes | Both are viable; Syndocal leads for unified lighting/video cueing |
 | Workspace customization | Persists selected workspace/tab/surface/category and UI scale/locale; VJ Desk layout is fixed | Panels can be freely arranged, resized and shown/hidden | SynapseRack leads |
@@ -33,10 +33,11 @@ Primary comparison sources:
 - Renamed `Mixer` to `VJ Desk` and made it a dedicated full-window surface; lighting Live Desk, Stage and Faders no longer consume its viewport.
 - Added a clear `Import Media` action to the empty Clip Grid and verified that it opens the production multi-select media dialog.
 - Updated viewport acceptance so all three reference sizes require the dedicated VJ surface and reject a visible lighting desk in VJ mode.
+- Added 14 GPU ISF presets (Invert, Monochrome, Threshold, Posterize, RGB Split, Mirror, Kaleidoscope, Zoom, Rotate, Strobe, Scanlines, Colorize, Vignette and Glitch Shift) to a categorized live selector. Every embedded shader is parsed and compiled by the production ISF preparation path in automated tests; viewport acceptance requires the selector on all three reference sizes.
 
 ## Required before parity can be claimed
 
-1. Ship a searchable built-in effect library and multi-effect stack with live-safe bypass/reset/preset/hold controls. The first target is the common VJ set: RGB split, invert, mirror, kaleidoscope, zoom, rotate, strobe, feedback, glitch, posterize, threshold, luma/chroma key, displace, scanline, noise and colorize.
+1. Expand the 14-effect first tranche to a searchable library of at least 100 production-quality effects, including feedback, luma key, displace and noise, then add a multi-effect stack with live-safe reorder, bypass, reset, preset and hold controls. Fourteen single-slot effects are not parity with SynapseRack's advertised breadth.
 2. Replace the fixed three-node authoring form with a real graph editor supporting arbitrary nodes, edges, fan-out, reusable graph tools and parameter exposure to the live desk.
 3. Add a first-run VJ template/wizard that creates Program composition/output and imports a media folder without visiting Setup.
 4. Add a content browser with folders, search, favorites, missing-media relink and thumbnail health/status.

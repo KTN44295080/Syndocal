@@ -738,6 +738,7 @@ async function measure(client, label) {
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'sel').length,
       visibleVideoLayerListCount: visibleCount('.videoLayerList'),
       visibleVideoLayerItemCount: visibleCount('.videoLayerItem'),
+      visibleBuiltinVideoFxSelectCount: visibleCount('.videoIsfPanel select[aria-label="Built-in FX"]'),
       visibleVideoMixerLayerDeckCount: visibleCount('.videoMixerLayerDeck'),
       visibleVideoMixerLayerFaderCount: visibleCount('.videoControlPanelMixer .videoMixerLayerDeck input[type="range"]'),
       visibleVideoMixerLayerButtonCount: visibleCount('.videoControlPanelMixer .videoMixerLayerDeck button'),
@@ -1083,6 +1084,7 @@ function hasExpectedControlModeSurface(result) {
       result.visibleVideoMixerOutputSelectButtonCount >= result.visibleVideoOutputItemCount &&
       result.visibleVideoLayerListCount > 0 &&
       result.visibleVideoLayerItemCount > 0 &&
+      result.visibleBuiltinVideoFxSelectCount > 0 &&
       result.visibleVideoMixerLayerDeckCount >= result.visibleVideoLayerItemCount &&
       result.visibleVideoMixerLayerFaderCount >= result.visibleVideoLayerItemCount &&
       result.visibleVideoMixerLayerButtonCount >= 5 &&
@@ -1565,7 +1567,7 @@ async function main() {
         ? ` editVisual=${result.visiblePanTiltPadCount}/${result.visiblePositionReadoutCount}/${result.visibleColorPlaneCount}/${result.visibleColorReadoutCount}/${result.visibleGroupControlBannerCount}/${result.visibleAttributeTargetSummaryCount}/${result.visibleGroupAttributeTargetSummaryCount}`
         : "";
       const mixerSuffix = result.label.startsWith("control-mixer-")
-        ? ` mixer=${result.visibleVideoOutputItemCount}/${result.visibleVideoOutputSelectedItemCount}/${result.visibleVideoMixerOutputDeckCount}/${result.visibleVideoMixerOutputFaderCount}/${result.visibleVideoMixerOutputSelectButtonCount}/${result.visibleVideoLayerItemCount}/${result.visibleVideoMixerLayerDeckCount}/${result.visibleVideoMixerLayerFaderCount}/${result.visibleVideoMixerLayerButtonCount}`
+        ? ` mixer=${result.visibleVideoOutputItemCount}/${result.visibleVideoOutputSelectedItemCount}/${result.visibleVideoMixerOutputDeckCount}/${result.visibleVideoMixerOutputFaderCount}/${result.visibleVideoMixerOutputSelectButtonCount}/${result.visibleVideoLayerItemCount}/${result.visibleBuiltinVideoFxSelectCount}/${result.visibleVideoMixerLayerDeckCount}/${result.visibleVideoMixerLayerFaderCount}/${result.visibleVideoMixerLayerButtonCount}`
         : "";
       console.log(
         `${status} ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${keyboardSuffix}${timelineSuffix}${touchSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${mixerSuffix}`,
