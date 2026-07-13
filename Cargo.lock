@@ -4904,6 +4904,8 @@ dependencies = [
  "tauri-plugin-updater",
  "video",
  "visualizer",
+ "webview2-com",
+ "windows 0.61.3",
  "zip",
 ]
 

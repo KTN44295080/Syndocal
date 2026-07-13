@@ -3,6 +3,9 @@ import { readFile } from "node:fs/promises";
 import ts from "typescript";
 
 const config = JSON.parse(await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
+const nativeAcceptanceConfig = JSON.parse(
+  await readFile(new URL("../src-tauri/tauri.native-acceptance.conf.json", import.meta.url), "utf8"),
+);
 const capability = JSON.parse(
   await readFile(new URL("../src-tauri/capabilities/main.json", import.meta.url), "utf8"),
 );
@@ -12,8 +15,70 @@ const controller = await readFile(
   "utf8",
 );
 const main = await readFile(new URL("../src/main.tsx", import.meta.url), "utf8");
+const backend = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
+const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+const nativeAcceptance = await readFile(
+  new URL("./check-native-window-acceptance.ps1", import.meta.url),
+  "utf8",
+);
 
 assert.equal(config.app.windows[0].maximized, true, "the primary desktop window must start maximized");
+assert.notEqual(
+  nativeAcceptanceConfig.identifier,
+  config.identifier,
+  "native acceptance must use an isolated application identifier",
+);
+assert.equal(nativeAcceptanceConfig.app.windows[0].title, "Syndocal QA - Native 1920 Acceptance");
+assert.equal(nativeAcceptanceConfig.app.windows[0].width, 1920);
+assert.equal(nativeAcceptanceConfig.app.windows[0].height, 1080);
+assert.equal(nativeAcceptanceConfig.app.windows[0].maximized, true);
+assert.equal(packageJson.scripts["check:native-window"], "node scripts/run-native-window-acceptance.mjs");
+assert.ok(
+  packageJson.scripts["check:release-ui"].includes("check:native-window"),
+  "the primary release UI gate must include real native maximized/fullscreen acceptance",
+);
+assert.ok(nativeAcceptance.includes('[string]$MinimumMaximizedClient = "1920x1000"'));
+assert.ok(nativeAcceptance.includes('[string]$ExpectedFullscreen = "1920x1080"'));
+assert.ok(nativeAcceptance.includes("-VirtualKey 0x7A"), "native acceptance must exercise F11");
+assert.ok(nativeAcceptance.includes("-VirtualKey 0x1B"), "native acceptance must exercise Escape restore");
+assert.ok(
+  nativeAcceptance.includes("-Expected $expectedFullscreenSize -AllowedTolerancePx 0") &&
+    nativeAcceptance.includes("-Expected $maximized -AllowedTolerancePx 0"),
+  "native acceptance must require exact fullscreen and maximized restoration dimensions",
+);
+assert.ok(nativeAcceptance.includes("Save-ClientScreenshot"), "native acceptance must capture full-size visual evidence");
+assert.ok(
+  backend.includes("AcceleratorKeyPressedEventHandler::create") &&
+    backend.includes("add_AcceleratorKeyPressed") &&
+    backend.includes("args.SetHandled(true)") &&
+    backend.includes("physical.WasKeyDown.as_bool()") &&
+    backend.includes("shortcut_window") &&
+    backend.includes(".emit(DESKTOP_FULLSCREEN_SHORTCUT_EVENT, ())") &&
+    backend.includes(".emit(DESKTOP_ESCAPE_SHORTCUT_EVENT, ())"),
+  "Windows must synchronously own WebView2 accelerators, reject repeats, and forward F11/Escape arbitration to the DOM",
+);
+assert.ok(
+  !nativeAcceptance.includes("AppActivate") && nativeAcceptance.includes("GetForegroundWindow() -ne $Handle"),
+  "native acceptance must inject keys only after verifying the exact isolated QA window handle",
+);
+assert.ok(
+  nativeAcceptance.includes("$preexistingQaWindow = Find-WindowByTitle") &&
+    nativeAcceptance.includes("$qaProcess.StartTime.ToUniversalTime()") &&
+    nativeAcceptance.includes("[IO.Path]::GetFullPath($qaProcess.Path) -ine $expectedQaExecutable") &&
+    nativeAcceptance.includes("if ($qaWindowVerified -and $qaWindow -ne [IntPtr]::Zero)"),
+  "native acceptance must reject stale same-title windows and bind evidence to the current isolated executable",
+);
+assert.ok(
+  nativeAcceptance.includes("PrintWindow($Handle, $deviceContext, 3)") &&
+    nativeAcceptance.includes("Save-VerifiedClientScreenshot") &&
+    nativeAcceptance.includes("UniqueSampledColors -ge 32") &&
+    nativeAcceptance.includes("visual_metrics"),
+  "native acceptance must capture the exact HWND and reject blank or visually unready evidence",
+);
+assert.ok(
+  capability.permissions.includes("core:window:allow-maximize"),
+  "the main window must be allowed to enforce its operational maximized mode",
+);
 assert.ok(
   capability.permissions.includes("core:window:allow-set-fullscreen"),
   "the main window must be allowed to change fullscreen state",
@@ -29,6 +94,19 @@ assert.match(
   "video output routes must render App directly, outside DesktopWindowModeController",
 );
 assert.ok(controller.includes("appWindow.setFullscreen(next)"), "fullscreen changes must use the Tauri window API");
+assert.ok(
+  controller.includes(".listen(DESKTOP_FULLSCREEN_SHORTCUT_EVENT") &&
+    controller.includes(".listen(DESKTOP_ESCAPE_SHORTCUT_EVENT, forwardNativeEscape)") &&
+    controller.includes('new KeyboardEvent("keydown"') &&
+    controller.includes("document.activeElement ?? window") &&
+    controller.includes("unlistenNativeFullscreen?.()") &&
+    controller.includes("unlistenNativeEscape?.()"),
+  "the DOM controller must own native F11/Escape arbitration and clean up both listeners",
+);
+assert.ok(
+  controller.includes("await appWindow.maximize()"),
+  "runtime startup must enforce maximized mode when the platform does not honor the config default",
+);
 assert.ok(controller.includes('window.addEventListener("resize"'), "native window-mode changes must be resynchronized");
 assert.ok(controller.includes('window.removeEventListener("keydown"'), "the global shortcut listener must be cleaned up");
 assert.ok(controller.includes('aria-live="polite"'), "window-mode feedback must be announced accessibly");

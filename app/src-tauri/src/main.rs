@@ -64,6 +64,8 @@ type AppVideoPreviewRenderer = video::VideoPreviewRenderer<
 >;
 
 const APP_NAME: &str = "Syndocal";
+const DESKTOP_FULLSCREEN_SHORTCUT_EVENT: &str = "desktop-window-toggle-fullscreen";
+const DESKTOP_ESCAPE_SHORTCUT_EVENT: &str = "desktop-window-forward-escape";
 const PROJECT_FILE_VERSION: u32 = 1;
 const PHASE1_SAMPLE_PROJECT_LABEL: &str = "samples/phase1-mini-show.sdc";
 const PHASE1_SAMPLE_PROJECT_JSON: &str = include_str!("../../../samples/phase1-mini-show.sdc");
@@ -28065,6 +28067,98 @@ fn main() {
     let media_audio_sync = MediaAudioSyncRuntime::start(engine.clone(), Arc::clone(&media_audio));
     tauri::Builder::default()
         .setup(move |app| {
+            #[cfg(target_os = "windows")]
+            if let Some(main_window) = app.get_webview_window("main") {
+                let shortcut_window = main_window.clone();
+                main_window.with_webview(move |webview| unsafe {
+                    use webview2_com::{
+                        AcceleratorKeyPressedEventHandler,
+                        Microsoft::Web::WebView2::Win32::{
+                            ICoreWebView2Settings3, COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
+                        },
+                    };
+                    use windows::core::Interface;
+                    use windows::Win32::UI::Input::KeyboardAndMouse::{
+                        GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+                    };
+
+                    let result = (|| -> windows::core::Result<()> {
+                        let controller = webview.controller();
+                        let core_webview = controller.CoreWebView2()?;
+                        let settings = core_webview.Settings()?;
+                        let settings3: ICoreWebView2Settings3 = settings.cast()?;
+                        settings3.SetAreBrowserAcceleratorKeysEnabled(false)?;
+
+                        let handler = AcceleratorKeyPressedEventHandler::create(Box::new(
+                            move |_, args| {
+                                let Some(args) = args else {
+                                    return Ok(());
+                                };
+                                let mut kind = Default::default();
+                                args.KeyEventKind(&mut kind)?;
+                                if kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN {
+                                    return Ok(());
+                                }
+
+                                let mut physical = Default::default();
+                                args.PhysicalKeyStatus(&mut physical)?;
+                                if physical.WasKeyDown.as_bool() {
+                                    return Ok(());
+                                }
+
+                                let has_command_modifier =
+                                    [VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN]
+                                        .into_iter()
+                                        .any(|key| GetKeyState(i32::from(key.0)) < 0);
+                                if has_command_modifier {
+                                    return Ok(());
+                                }
+
+                                let mut virtual_key = 0u32;
+                                args.VirtualKey(&mut virtual_key)?;
+                                match virtual_key {
+                                    0x7a => {
+                                        // WebView2 owns F11 before the DOM sees it. Forward a
+                                        // non-blocking event to the existing DOM controller instead
+                                        // of calling a synchronous window getter from this UI-thread
+                                        // callback (which would deadlock the wry dispatcher).
+                                        args.SetHandled(true)?;
+                                        if let Err(error) = shortcut_window
+                                            .emit(DESKTOP_FULLSCREEN_SHORTCUT_EVENT, ())
+                                        {
+                                            eprintln!(
+                                                "unable to forward the main window fullscreen shortcut: {error}"
+                                            );
+                                        }
+                                    }
+                                    0x1b => {
+                                        // WebView2 also owns physical Escape at this layer. Forward
+                                        // it to the DOM so editors/help/drag cancellation can consume
+                                        // it before the window controller decides to leave fullscreen.
+                                        args.SetHandled(true)?;
+                                        if let Err(error) =
+                                            shortcut_window.emit(DESKTOP_ESCAPE_SHORTCUT_EVENT, ())
+                                        {
+                                            eprintln!(
+                                                "unable to forward the main window Escape shortcut: {error}"
+                                            );
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                                Ok(())
+                            },
+                        ));
+                        let mut accelerator_token = 0i64;
+                        controller.add_AcceleratorKeyPressed(&handler, &mut accelerator_token)
+                    })();
+                    if let Err(error) = result {
+                        eprintln!(
+                            "unable to install the WebView2 fullscreen accelerator handler: {error}"
+                        );
+                    }
+                })?;
+            }
             let directory = app_data_subdirectory(app.handle(), CRASH_REPORT_DIRECTORY)?;
             app_data_subdirectory(app.handle(), PROJECT_BACKUP_DIRECTORY)?;
             if let Ok(mut configured_directory) = crash_directory.lock() {

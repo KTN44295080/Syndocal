@@ -1,0 +1,25 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Syndocal QA Native Acceptance",
+  "identifier": "jp.seraf.ktn.syndocal.qa.native-acceptance",
+  "build": {
+    "beforeDevCommand": "pnpm dev --host 127.0.0.1 --port 5187 --strictPort",
+    "devUrl": "http://127.0.0.1:5187"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Syndocal QA - Native 1920 Acceptance",
+        "width": 1920,
+        "height": 1080,
+        "minWidth": 960,
+        "minHeight": 640,
+        "maximized": true,
+        "resizable": true
+      }
+    ]
+  },
+  "bundle": {
+    "active": false
+  }
+}

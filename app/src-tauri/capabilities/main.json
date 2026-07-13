@@ -3,5 +3,9 @@
   "identifier": "main-capability",
   "description": "Core desktop APIs used by Syndocal windows.",
   "windows": ["*"],
-  "permissions": ["core:default", "core:window:allow-set-fullscreen"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-maximize",
+    "core:window:allow-set-fullscreen"
+  ]
 }

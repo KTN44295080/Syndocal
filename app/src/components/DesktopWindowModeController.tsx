@@ -8,6 +8,8 @@ type DesktopWindowMode = "unknown" | "windowed" | "maximized" | "fullscreen" | "
 
 const NOTICE_DURATION_MS = 4_000;
 const RESIZE_SETTLE_MS = 120;
+const DESKTOP_FULLSCREEN_SHORTCUT_EVENT = "desktop-window-toggle-fullscreen";
+const DESKTOP_ESCAPE_SHORTCUT_EVENT = "desktop-window-forward-escape";
 
 const isTauriRuntime = () =>
   typeof window !== "undefined" &&
@@ -32,6 +34,8 @@ export const DesktopWindowModeController: ParentComponent = (props) => {
   const [noticeVisible, setNoticeVisible] = createSignal(false);
   let noticeTimer: number | undefined;
   let resizeTimer: number | undefined;
+  let unlistenNativeFullscreen: (() => void) | undefined;
+  let unlistenNativeEscape: (() => void) | undefined;
   let transitionInFlight = false;
   let disposed = false;
 
@@ -62,6 +66,19 @@ export const DesktopWindowModeController: ParentComponent = (props) => {
         const changed = mode() !== nextMode;
         setMode(nextMode);
         if (announceChange && changed) showNotice();
+      } catch {
+        if (disposed) return;
+        setMode("error");
+        showNotice();
+      }
+    };
+
+    const enterOperationalWindowMode = async () => {
+      try {
+        if (!(await appWindow.isFullscreen()) && !(await appWindow.isMaximized())) {
+          await appWindow.maximize();
+        }
+        await syncMode(false);
       } catch {
         if (disposed) return;
         setMode("error");
@@ -116,14 +133,56 @@ export const DesktopWindowModeController: ParentComponent = (props) => {
       resizeTimer = window.setTimeout(() => void syncMode(true), RESIZE_SETTLE_MS);
     };
 
+    const forwardNativeEscape = () => {
+      const target = document.activeElement ?? window;
+      target.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          code: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    };
+
+    void appWindow
+      .listen(DESKTOP_FULLSCREEN_SHORTCUT_EVENT, () => void setFullscreen())
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+        unlistenNativeFullscreen = unlisten;
+      })
+      .catch(() => {
+        if (disposed) return;
+        setMode("error");
+        showNotice();
+      });
+    void appWindow
+      .listen(DESKTOP_ESCAPE_SHORTCUT_EVENT, forwardNativeEscape)
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+        unlistenNativeEscape = unlisten;
+      })
+      .catch(() => {
+        if (disposed) return;
+        setMode("error");
+        showNotice();
+      });
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("resize", handleResize, { passive: true });
-    void syncMode(true);
+    void enterOperationalWindowMode();
 
     onCleanup(() => {
       disposed = true;
       window.clearTimeout(noticeTimer);
       window.clearTimeout(resizeTimer);
+      unlistenNativeFullscreen?.();
+      unlistenNativeEscape?.();
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("resize", handleResize);
     });

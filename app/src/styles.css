@@ -21579,3 +21579,27 @@ h3 {
     overflow: visible;
   }
 }
+
+/*
+ * Maximized show desks use the extra canvas for the surfaces operators watch
+ * and manipulate. Compact fallback layouts keep their established geometry.
+ */
+@media (min-width: 1600px) and (min-height: 900px) {
+  .layoutSetup.setupMode-patch {
+    grid-template-columns: minmax(340px, 21vw) minmax(0, 1fr);
+  }
+
+  .layoutSetup.setupMode-patch > .fixtures {
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 0.32fr);
+    grid-template-rows: auto auto minmax(250px, 0.4fr) minmax(340px, 0.6fr);
+  }
+
+  .layoutSetup.setupMode-patch .dmxAddressGrid {
+    width: 100%;
+    max-width: none;
+  }
+
+  .layoutControl.controlModeMixer .videoControlPanelMixer {
+    grid-template-columns: minmax(440px, 0.92fr) minmax(600px, 1.28fr) minmax(340px, 0.8fr);
+  }
+}

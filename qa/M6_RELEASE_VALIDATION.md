@@ -38,6 +38,16 @@ Result: **PASS**
 4. The installer registered `.sdc` as `Syndocal Project`; the open command was `syndocal.exe "%1"` and the executable icon was registered.
 5. Silent uninstall removed the test installation and its association. No Syndocal process remained.
 
+## Full-window UI acceptance
+
+`pnpm --dir app run check:release-ui` is the release UI aggregate. The browser
+suite judges the full desk at 1920x1080 first and retains 2048x1152 plus the
+1366x768/1280x720 fallbacks. On Windows the same command then launches an
+isolated real Tauri build, proves maximized content of at least 1920x1000,
+toggles F11 to an exact 1920x1080 client, and verifies that Esc restores the
+exact starting maximized dimensions. Screenshots and a JSON report are written
+outside the source tree. See `qa/NATIVE_WINDOW_ACCEPTANCE.md`.
+
 ## Cross-platform release CI
 
 Final workflow: [Cross-platform run 29179218727](https://github.com/Seraf0-org/Rayard/actions/runs/29179218727), commit `1f04fd3`, result: **PASS** on all three jobs.
