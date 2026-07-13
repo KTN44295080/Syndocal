@@ -1197,6 +1197,14 @@ export default function App() {
     serialPorts,
     setSerialPorts,
   });
+  if (viewportFixture === "timeline") {
+    setDmxOutputRoutes(
+      Array.from({ length: 128 }, (_, universe) => ({
+        ...defaultOutput,
+        universe,
+      })),
+    );
+  }
   const refreshDmxInputStatus = async () => {
     if (!isTauriRuntime()) return;
     try {

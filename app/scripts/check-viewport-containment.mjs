@@ -582,6 +582,7 @@ async function measure(client, label) {
       visibleArtRdmPanelCount: visibleCount('.setupMode-dmx .artRdmPanel'),
       visibleOutputDiagnosticsDeskCount: visibleCount('.setupMode-dmx .outputDiagnosticsDesk'),
       visibleLightingRuntimeDeskCount: visibleCount('.setupMode-dmx .lightingRuntimeDesk'),
+      dmxRouteItemCount: document.querySelectorAll('.setupMode-dmx .dmxRoutes .timelineItem').length,
       dmxOutputConfigPanelWidth: dmxOutputConfigPanelRect ? Math.round(dmxOutputConfigPanelRect.width) : 0,
       outputDiagnosticsDeskWidth: outputDiagnosticsDeskRect ? Math.round(outputDiagnosticsDeskRect.width) : 0,
       lightingRuntimeDeskWidth: lightingRuntimeDeskRect ? Math.round(lightingRuntimeDeskRect.width) : 0,
@@ -1123,6 +1124,7 @@ function hasExpectedSetupSurface(result) {
       result.visibleArtRdmPanelCount >= 1 &&
       result.visibleOutputDiagnosticsDeskCount >= 1 &&
       result.visibleLightingRuntimeDeskCount >= 1 &&
+      result.dmxRouteItemCount === 128 &&
       result.dmxOutputConfigPanelWidth >= 250 &&
       result.outputDiagnosticsDeskWidth >= 420 &&
       result.lightingRuntimeDeskWidth >= 260

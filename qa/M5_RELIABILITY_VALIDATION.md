@@ -72,6 +72,8 @@ npm --prefix app run check:large-show-ui
 
 It injects 2,000 patched fixtures into the 1366x768 Stage Map workspace. The visible Mapping Fixture list reports `aria-rowcount=2000`, holds only nine fixture rows in the DOM at both the top and bottom of the scroll range, reaches `Large Fixture 2000`, and preserves full-window containment. Fixture lists use fixed-row windowing above their thresholds; Cue editing is bounded to 12 rows per page, while Clip Grid, video layers/outputs, and DMX addresses retain their existing banks/pages.
 
+The standard viewport gate also injects 128 distinct DMX output routes into Setup > DMX at 1280x720, 1366x768 and 2048x1129. All 128 route items must render while the application remains full-window contained. Rust boundary tests accept 128 and reject 257 routes; engine tests retain/tick 128 distinct universes and complete one enabled Art-Net tick with 128 successful sends and zero failures. A one-hour 128-universe physical-node soak remains a competitive acceptance gate.
+
 ## Project recovery crash injection
 
 Result: **PASS**

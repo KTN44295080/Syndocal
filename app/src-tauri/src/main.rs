@@ -1198,6 +1198,7 @@ const AUDIO_FILE_EXTENSIONS: &[&str] = &[
 ];
 const ARTNET_MAX_UNIVERSE: u16 = 32_767;
 const SACN_MAX_UNIVERSE: u16 = 63_999;
+const MAX_DMX_OUTPUT_ROUTES: usize = 256;
 const USER_TEMPLATE_VERSION: u32 = 1;
 const USER_TEMPLATE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
@@ -13508,8 +13509,10 @@ fn validate_dmx_output_routes(configs: &[DmxOutputConfig]) -> Result<(), String>
     if configs.is_empty() {
         return Err("At least one DMX output route is required".to_string());
     }
-    if configs.len() > 64 {
-        return Err("Cannot configure more than 64 DMX output routes".to_string());
+    if configs.len() > MAX_DMX_OUTPUT_ROUTES {
+        return Err(format!(
+            "Cannot configure more than {MAX_DMX_OUTPUT_ROUTES} DMX output routes"
+        ));
     }
 
     let mut route_keys = HashSet::new();
@@ -17698,6 +17701,33 @@ f 1 2 3
             ..DmxOutputConfig::default()
         })
         .unwrap();
+    }
+
+    #[test]
+    fn dmx_output_route_validation_exceeds_daslight_100_universe_scale() {
+        let routes = (1..=128)
+            .map(|universe| DmxOutputConfig {
+                protocol: DmxOutputProtocol::Sacn,
+                target_ip: "multicast".to_string(),
+                port: 5568,
+                universe,
+                ..DmxOutputConfig::default()
+            })
+            .collect::<Vec<_>>();
+
+        validate_dmx_output_routes(&routes).unwrap();
+
+        let error = validate_dmx_output_routes(
+            &(1..=MAX_DMX_OUTPUT_ROUTES + 1)
+                .map(|index| DmxOutputConfig {
+                    enabled: false,
+                    universe: index as u16,
+                    ..DmxOutputConfig::default()
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_err();
+        assert!(error.contains("256"));
     }
 
     #[test]

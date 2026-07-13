@@ -10504,6 +10504,44 @@ mod tests {
     }
 
     #[test]
+    fn engine_sustains_one_tick_across_128_enabled_artnet_universes() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine
+            .send(EngineCommand::SetDmxOutputs(
+                (0..128)
+                    .map(|universe| DmxOutputConfig {
+                        enabled: true,
+                        protocol: DmxOutputProtocol::ArtNet,
+                        target_ip: "127.0.0.1".to_string(),
+                        port: 6454,
+                        universe,
+                        serial_port: String::new(),
+                        serial_baud_rate: 57_600,
+                    })
+                    .collect(),
+            ))
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let snapshot = loop {
+            let snapshot = engine.snapshot();
+            if snapshot.telemetry.last_dmx_send_success_count == 128 || Instant::now() >= deadline {
+                break snapshot;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+        };
+
+        assert_eq!(snapshot.dmx_outputs.len(), 128);
+        assert_eq!(snapshot.telemetry.last_dmx_output_count, 128);
+        assert_eq!(snapshot.telemetry.last_dmx_send_success_count, 128);
+        assert_eq!(snapshot.telemetry.last_dmx_send_failure_count, 0);
+        assert!(snapshot.telemetry.last_error.is_none());
+    }
+
+    #[test]
     fn engine_sends_rendered_fixture_state_to_mixed_artnet_and_sacn_routes() {
         let artnet_receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
         artnet_receiver
@@ -16950,6 +16988,32 @@ mod tests {
                 && error.contains("serial port path is required")));
         assert_eq!(runtime.additional_dmx_outputs.len(), 1);
         assert!(runtime.additional_dmx_outputs[0].sender.is_none());
+    }
+
+    #[test]
+    fn engine_holds_and_ticks_128_distinct_dmx_universes() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let routes = (0..128)
+            .map(|universe| DmxOutputConfig {
+                enabled: false,
+                universe,
+                ..DmxOutputConfig::default()
+            })
+            .collect::<Vec<_>>();
+
+        runtime.apply_command(EngineCommand::SetDmxOutputs(routes));
+        let snapshot = RwLock::new(runtime.build_snapshot(0));
+        runtime.tick(0, &snapshot);
+        let snapshot = snapshot.read().unwrap();
+
+        assert_eq!(snapshot.dmx_outputs.len(), 128);
+        assert_eq!(snapshot.dmx_outputs[127].universe, 127);
+        assert_eq!(snapshot.telemetry.last_dmx_route_results.len(), 128);
+        assert_eq!(snapshot.telemetry.last_dmx_send_failure_count, 0);
+        assert!(snapshot.telemetry.last_error.is_none());
     }
 
     #[test]
