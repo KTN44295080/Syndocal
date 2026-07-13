@@ -31,7 +31,7 @@ export const liveAudioInputDetail = (
         ? `SAFETY CLEAR ACCEPTED · ${status.last_error} Stop then Start to reconnect.`
         : "SAFETY CLEAR ACCEPTED · Live audio is stale; the engine is draining the zero-source request.";
     case "live":
-      return `${status.sample_rate}Hz / ${status.channels}ch / ${status.analyzed_windows} FFT`;
+      return `OVR ${status.dropped_chunks}/${status.dropped_frames}f · ${(status.sample_rate / 1_000).toFixed(1)}kHz · ${status.channels}→M · FFT ${status.analyzed_windows} · C→W EST ${(status.capture_to_worker_us / 1_000).toFixed(1)}/${(status.max_capture_to_worker_us / 1_000).toFixed(1)}ms · Q ${status.queue_depth}/${status.queue_capacity}`;
     case "stopped":
       return status.last_error?.trim() || "Live bands can drive Node Graph Audio sources.";
   }

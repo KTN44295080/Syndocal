@@ -833,6 +833,13 @@ struct LiveAudioInputStatus {
     high: f32,
     analyzed_windows: u64,
     dropped_chunks: u64,
+    dropped_frames: u64,
+    callback_count: u64,
+    max_callback_frames: u64,
+    capture_to_worker_us: u64,
+    max_capture_to_worker_us: u64,
+    queue_depth: usize,
+    queue_capacity: usize,
     last_error: Option<String>,
 }
 
@@ -840,7 +847,77 @@ const LIVE_AUDIO_STALE_AFTER: Duration = Duration::from_millis(250);
 const LIVE_AUDIO_RECEIVE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const LIVE_AUDIO_STOP_CLEAR_RETRY: Duration = Duration::from_millis(100);
 const LIVE_AUDIO_STOP_CLEAR_RETRY_INTERVAL: Duration = Duration::from_millis(2);
+const LIVE_AUDIO_CAPTURE_SLOT_COUNT: usize = 4;
+const LIVE_AUDIO_CAPTURE_SLOT_FRAMES: usize = 2_048;
 const LIVE_AUDIO_STALE_ERROR: &str = "Live audio input is stale: no samples received for 250 ms";
+const LIVE_AUDIO_WORKER_STALE_ERROR: &str =
+    "Live audio input is stale: FFT worker heartbeat exceeded 250 ms";
+
+#[derive(Debug)]
+struct LiveAudioInputCaptureTelemetry {
+    started_at: Instant,
+    dropped_chunks: AtomicU64,
+    dropped_frames: AtomicU64,
+    callback_count: AtomicU64,
+    max_callback_frames: AtomicU64,
+    capture_to_worker_us: AtomicU64,
+    max_capture_to_worker_us: AtomicU64,
+    worker_heartbeat_us: AtomicU64,
+}
+
+impl Default for LiveAudioInputCaptureTelemetry {
+    fn default() -> Self {
+        Self {
+            started_at: Instant::now(),
+            dropped_chunks: AtomicU64::new(0),
+            dropped_frames: AtomicU64::new(0),
+            callback_count: AtomicU64::new(0),
+            max_callback_frames: AtomicU64::new(0),
+            capture_to_worker_us: AtomicU64::new(0),
+            max_capture_to_worker_us: AtomicU64::new(0),
+            worker_heartbeat_us: AtomicU64::new(0),
+        }
+    }
+}
+
+impl LiveAudioInputCaptureTelemetry {
+    fn elapsed_us(&self) -> u64 {
+        self.started_at.elapsed().as_micros().min(u64::MAX as u128) as u64
+    }
+
+    fn mark_worker_heartbeat(&self) {
+        self.worker_heartbeat_us
+            .store(self.elapsed_us(), Ordering::Release);
+    }
+
+    fn worker_heartbeat_is_stale_at(&self, now_us: u64) -> bool {
+        now_us.saturating_sub(self.worker_heartbeat_us.load(Ordering::Acquire))
+            >= LIVE_AUDIO_STALE_AFTER.as_micros() as u64
+    }
+
+    fn worker_heartbeat_is_stale(&self) -> bool {
+        self.worker_heartbeat_is_stale_at(self.elapsed_us())
+    }
+}
+
+#[derive(Debug)]
+struct LiveAudioSampleChunk {
+    samples: Box<[f32; LIVE_AUDIO_CAPTURE_SLOT_FRAMES]>,
+    len: usize,
+    callback_at: Instant,
+    device_delay: Duration,
+}
+
+impl LiveAudioSampleChunk {
+    fn new() -> Self {
+        Self {
+            samples: Box::new([0.0; LIVE_AUDIO_CAPTURE_SLOT_FRAMES]),
+            len: 0,
+            callback_at: Instant::now(),
+            device_delay: Duration::ZERO,
+        }
+    }
+}
 
 #[derive(Debug, Default)]
 struct LiveAudioInputSafety {
@@ -910,7 +987,8 @@ impl LiveAudioInputWatchdog {
     }
 
     fn record_chunk(&mut self, now: Instant) -> bool {
-        let recovered = self.stale;
+        let recovered = self.stale
+            || now.saturating_duration_since(self.last_chunk_at) >= LIVE_AUDIO_STALE_AFTER;
         self.last_chunk_at = now;
         self.stale = false;
         recovered
@@ -927,6 +1005,8 @@ struct LiveAudioInput {
     worker: Option<std::thread::JoinHandle<()>>,
     status: Arc<Mutex<LiveAudioInputStatus>>,
     safety: Arc<LiveAudioInputSafety>,
+    ready_capture_chunks: Arc<crossbeam_queue::ArrayQueue<LiveAudioSampleChunk>>,
+    capture_telemetry: Arc<LiveAudioInputCaptureTelemetry>,
     engine: EngineHandle,
 }
 
@@ -936,6 +1016,9 @@ impl Drop for LiveAudioInput {
         self.safety.mark_terminal_fault();
         self.stream.take();
         self.stop.store(true, Ordering::Relaxed);
+        if let Some(worker) = self.worker.as_ref() {
+            worker.thread().unpark();
+        }
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
@@ -6504,12 +6587,11 @@ fn start_live_audio_input(
         .live_audio_input_lifecycle
         .lock()
         .map_err(|_| "Live audio input lifecycle lock was poisoned".to_string())?;
-    if state
+    let mut active = state
         .live_audio_input
         .lock()
-        .map_err(|_| "Live audio input state lock was poisoned".to_string())?
-        .is_some()
-    {
+        .map_err(|_| "Live audio input state lock was poisoned".to_string())?;
+    if active.is_some() {
         return Err(
             "Live audio input is already active or stopping; wait for Stop to finish".to_string(),
         );
@@ -6543,15 +6625,65 @@ fn start_live_audio_input(
         device_name: resolved_name,
         sample_rate,
         channels,
+        queue_capacity: LIVE_AUDIO_CAPTURE_SLOT_COUNT,
         ..LiveAudioInputStatus::default()
     }));
     let stop = Arc::new(AtomicBool::new(false));
+    let capture_started = Arc::new(AtomicBool::new(false));
     let safety = Arc::new(LiveAudioInputSafety::default());
+    let free_capture_slots = Arc::new(crossbeam_queue::ArrayQueue::new(
+        LIVE_AUDIO_CAPTURE_SLOT_COUNT,
+    ));
+    let ready_capture_chunks = Arc::new(crossbeam_queue::ArrayQueue::new(
+        LIVE_AUDIO_CAPTURE_SLOT_COUNT,
+    ));
+    for _ in 0..LIVE_AUDIO_CAPTURE_SLOT_COUNT {
+        free_capture_slots
+            .push(LiveAudioSampleChunk::new())
+            .expect("preallocated live audio slot pool must have exact capacity");
+    }
+    let capture_telemetry = Arc::new(LiveAudioInputCaptureTelemetry::default());
     let engine = state.engine.clone();
-    let (sender, receiver) = std::sync::mpsc::sync_channel::<Vec<f32>>(8);
+    let worker_stop = Arc::clone(&stop);
+    let worker_capture_started = Arc::clone(&capture_started);
+    let worker_status = Arc::clone(&status);
+    let worker_safety = Arc::clone(&safety);
+    let worker_free_slots = Arc::clone(&free_capture_slots);
+    let worker_ready_chunks = Arc::clone(&ready_capture_chunks);
+    let worker_telemetry = Arc::clone(&capture_telemetry);
+    let worker_engine = engine.clone();
+    let worker = std::thread::Builder::new()
+        .name("syndocal-live-audio-fft".to_string())
+        .spawn(move || {
+            let run_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_live_audio_fft(
+                    worker_free_slots,
+                    worker_ready_chunks,
+                    worker_telemetry,
+                    sample_rate,
+                    worker_engine.clone(),
+                    Arc::clone(&worker_stop),
+                    worker_capture_started,
+                    Arc::clone(&worker_status),
+                    Arc::clone(&worker_safety),
+                )
+            }));
+            if run_result.is_err() && !worker_stop.load(Ordering::Acquire) {
+                fail_closed_live_audio(
+                    &worker_engine,
+                    &worker_status,
+                    &worker_safety,
+                    true,
+                    "Live audio FFT worker stopped unexpectedly".to_string(),
+                );
+            }
+        })
+        .map_err(|error| format!("Failed to start live audio FFT worker: {error}"))?;
+    let worker_wake = worker.thread().clone();
     let error_status = Arc::clone(&status);
     let error_safety = Arc::clone(&safety);
     let error_engine = engine.clone();
+    let error_worker_wake = worker_wake.clone();
     let error_callback = move |error: rodio::cpal::StreamError| {
         fail_closed_live_audio(
             &error_engine,
@@ -6560,83 +6692,119 @@ fn start_live_audio_input(
             true,
             format!("Live audio input stream failed: {error}"),
         );
+        error_worker_wake.unpark();
     };
-    let stream = match sample_format {
+    let stream_result = match sample_format {
         rodio::cpal::SampleFormat::F32 => {
-            let sender = sender.clone();
-            let status = Arc::clone(&status);
+            let free_capture_slots = Arc::clone(&free_capture_slots);
+            let ready_capture_chunks = Arc::clone(&ready_capture_chunks);
+            let capture_telemetry = Arc::clone(&capture_telemetry);
             let safety = Arc::clone(&safety);
+            let worker_wake = worker_wake.clone();
             device.build_input_stream(
                 &config,
-                move |data: &[f32], _| {
-                    send_live_audio_chunk(data, channels, &sender, &status, &safety, |value| value)
+                move |data: &[f32], callback_info| {
+                    queue_live_audio_samples(
+                        data,
+                        channels,
+                        sample_rate,
+                        callback_info,
+                        &free_capture_slots,
+                        &ready_capture_chunks,
+                        &capture_telemetry,
+                        &safety,
+                        &worker_wake,
+                        |value| value,
+                    )
                 },
                 error_callback,
                 None,
             )
         }
         rodio::cpal::SampleFormat::I16 => {
-            let sender = sender.clone();
-            let status = Arc::clone(&status);
+            let free_capture_slots = Arc::clone(&free_capture_slots);
+            let ready_capture_chunks = Arc::clone(&ready_capture_chunks);
+            let capture_telemetry = Arc::clone(&capture_telemetry);
             let safety = Arc::clone(&safety);
+            let worker_wake = worker_wake.clone();
             device.build_input_stream(
                 &config,
-                move |data: &[i16], _| {
-                    send_live_audio_chunk(data, channels, &sender, &status, &safety, |value| {
-                        value as f32 / i16::MAX as f32
-                    })
+                move |data: &[i16], callback_info| {
+                    queue_live_audio_samples(
+                        data,
+                        channels,
+                        sample_rate,
+                        callback_info,
+                        &free_capture_slots,
+                        &ready_capture_chunks,
+                        &capture_telemetry,
+                        &safety,
+                        &worker_wake,
+                        |value| value as f32 / i16::MAX as f32,
+                    )
                 },
                 error_callback,
                 None,
             )
         }
         rodio::cpal::SampleFormat::U16 => {
-            let status = Arc::clone(&status);
+            let free_capture_slots = Arc::clone(&free_capture_slots);
+            let ready_capture_chunks = Arc::clone(&ready_capture_chunks);
+            let capture_telemetry = Arc::clone(&capture_telemetry);
             let safety = Arc::clone(&safety);
+            let worker_wake = worker_wake.clone();
             device.build_input_stream(
                 &config,
-                move |data: &[u16], _| {
-                    send_live_audio_chunk(data, channels, &sender, &status, &safety, |value| {
-                        value as f32 / 32767.5 - 1.0
-                    })
+                move |data: &[u16], callback_info| {
+                    queue_live_audio_samples(
+                        data,
+                        channels,
+                        sample_rate,
+                        callback_info,
+                        &free_capture_slots,
+                        &ready_capture_chunks,
+                        &capture_telemetry,
+                        &safety,
+                        &worker_wake,
+                        |value| value as f32 / 32767.5 - 1.0,
+                    )
                 },
                 error_callback,
                 None,
             )
         }
-        format => return Err(format!("Unsupported audio input sample format {format:?}")),
+        format => {
+            stop.store(true, Ordering::Release);
+            worker_wake.unpark();
+            let _ = worker.join();
+            return Err(format!("Unsupported audio input sample format {format:?}"));
+        }
+    };
+    let stream = match stream_result {
+        Ok(stream) => stream,
+        Err(error) => {
+            stop.store(true, Ordering::Release);
+            worker_wake.unpark();
+            let _ = worker.join();
+            return Err(format!("Failed to build audio input stream: {error}"));
+        }
+    };
+    if let Err(error) = stream.play() {
+        stop.store(true, Ordering::Release);
+        worker_wake.unpark();
+        let _ = worker.join();
+        return Err(format!("Failed to start audio input stream: {error}"));
     }
-    .map_err(|error| format!("Failed to build audio input stream: {error}"))?;
-    stream
-        .play()
-        .map_err(|error| format!("Failed to start audio input stream: {error}"))?;
-    let worker_stop = Arc::clone(&stop);
-    let worker_status = Arc::clone(&status);
-    let worker_safety = Arc::clone(&safety);
-    let worker_engine = engine.clone();
-    let worker = std::thread::Builder::new()
-        .name("syndocal-live-audio-fft".to_string())
-        .spawn(move || {
-            run_live_audio_fft(
-                receiver,
-                sample_rate,
-                worker_engine,
-                worker_stop,
-                worker_status,
-                worker_safety,
-            )
-        })
-        .map_err(|error| format!("Failed to start live audio FFT worker: {error}"))?;
-    let mut active = state
-        .live_audio_input
-        .lock()
-        .map_err(|_| "Live audio input state lock was poisoned".to_string())?;
+    capture_started.store(true, Ordering::Release);
+    worker_wake.unpark();
     *active = Some(LiveAudioInput {
         stream: Some(stream),
         stop,
         worker: Some(worker),
         status: Arc::clone(&status),
         safety,
+        ready_capture_chunks,
+        capture_telemetry,
         engine,
     });
     drop(active);
@@ -6646,29 +6814,141 @@ fn start_live_audio_input(
         .map(|status| status.clone())
 }
 
-fn send_live_audio_chunk<T: Copy>(
+fn live_audio_frame_duration(frames: usize, sample_rate: u32) -> Duration {
+    if sample_rate == 0 {
+        return Duration::ZERO;
+    }
+    let nanos = (frames as u128)
+        .saturating_mul(1_000_000_000)
+        .checked_div(u128::from(sample_rate))
+        .unwrap_or_default()
+        .min(u64::MAX as u128) as u64;
+    Duration::from_nanos(nanos)
+}
+
+fn queue_live_audio_samples<T: Copy>(
     data: &[T],
     channels: u16,
-    sender: &std::sync::mpsc::SyncSender<Vec<f32>>,
-    status: &Mutex<LiveAudioInputStatus>,
+    sample_rate: u32,
+    callback_info: &rodio::cpal::InputCallbackInfo,
+    free_capture_slots: &crossbeam_queue::ArrayQueue<LiveAudioSampleChunk>,
+    ready_capture_chunks: &crossbeam_queue::ArrayQueue<LiveAudioSampleChunk>,
+    capture_telemetry: &LiveAudioInputCaptureTelemetry,
     safety: &LiveAudioInputSafety,
+    worker_wake: &std::thread::Thread,
     convert: impl Fn(T) -> f32,
 ) {
     if safety.terminal_faulted() {
         return;
     }
     let channels = channels.max(1) as usize;
-    let mono = data
-        .chunks(channels)
-        .map(|frame| frame.iter().copied().map(&convert).sum::<f32>() / frame.len().max(1) as f32)
-        .collect::<Vec<_>>();
-    if safety.terminal_faulted() {
-        return;
+    let callback_frames = data.len().div_ceil(channels);
+    capture_telemetry
+        .callback_count
+        .fetch_add(1, Ordering::Relaxed);
+    capture_telemetry
+        .max_callback_frames
+        .fetch_max(callback_frames as u64, Ordering::Relaxed);
+    let timestamp = callback_info.timestamp();
+    let device_delay = timestamp
+        .callback
+        .duration_since(&timestamp.capture)
+        .unwrap_or_default();
+    let callback_at = Instant::now();
+    let capture_capacity_frames =
+        LIVE_AUDIO_CAPTURE_SLOT_COUNT.saturating_mul(LIVE_AUDIO_CAPTURE_SLOT_FRAMES);
+    let mut frame_offset = callback_frames.saturating_sub(capture_capacity_frames);
+    if frame_offset > 0 {
+        capture_telemetry.dropped_chunks.fetch_add(
+            frame_offset.div_ceil(LIVE_AUDIO_CAPTURE_SLOT_FRAMES) as u64,
+            Ordering::Relaxed,
+        );
+        capture_telemetry
+            .dropped_frames
+            .fetch_add(frame_offset as u64, Ordering::Relaxed);
     }
-    if sender.try_send(mono).is_err() {
-        if let Ok(mut status) = status.lock() {
-            status.dropped_chunks = status.dropped_chunks.saturating_add(1);
+    while frame_offset < callback_frames {
+        if safety.terminal_faulted() {
+            return;
         }
+        let mut chunk = if let Some(chunk) = free_capture_slots.pop() {
+            chunk
+        } else if let Some(chunk) = ready_capture_chunks.pop() {
+            capture_telemetry
+                .dropped_chunks
+                .fetch_add(1, Ordering::Relaxed);
+            capture_telemetry
+                .dropped_frames
+                .fetch_add(chunk.len as u64, Ordering::Relaxed);
+            chunk
+        } else {
+            capture_telemetry
+                .dropped_chunks
+                .fetch_add(1, Ordering::Relaxed);
+            capture_telemetry
+                .dropped_frames
+                .fetch_add((callback_frames - frame_offset) as u64, Ordering::Relaxed);
+            break;
+        };
+        let chunk_frames = (callback_frames - frame_offset).min(LIVE_AUDIO_CAPTURE_SLOT_FRAMES);
+        for local_frame in 0..chunk_frames {
+            if safety.terminal_faulted() {
+                chunk.len = 0;
+                let _ = free_capture_slots.push(chunk);
+                return;
+            }
+            let sample_start = (frame_offset + local_frame) * channels;
+            let sample_end = (sample_start + channels).min(data.len());
+            let mut mixed = 0.0_f32;
+            for sample in &data[sample_start..sample_end] {
+                let converted = convert(*sample);
+                if converted.is_finite() {
+                    mixed += converted;
+                }
+            }
+            let mono = mixed / (sample_end - sample_start).max(1) as f32;
+            chunk.samples[local_frame] = if mono.is_finite() { mono } else { 0.0 };
+        }
+        chunk.len = chunk_frames;
+        chunk.callback_at = callback_at;
+        chunk.device_delay =
+            device_delay.saturating_sub(live_audio_frame_duration(frame_offset, sample_rate));
+        if let Err(mut chunk) = ready_capture_chunks.push(chunk) {
+            capture_telemetry
+                .dropped_chunks
+                .fetch_add(1, Ordering::Relaxed);
+            capture_telemetry
+                .dropped_frames
+                .fetch_add(chunk.len as u64, Ordering::Relaxed);
+            chunk.len = 0;
+            let _ = free_capture_slots.push(chunk);
+            break;
+        }
+        frame_offset += chunk_frames;
+    }
+    worker_wake.unpark();
+}
+
+fn sync_live_audio_capture_telemetry(
+    status: &Mutex<LiveAudioInputStatus>,
+    ready_capture_chunks: &crossbeam_queue::ArrayQueue<LiveAudioSampleChunk>,
+    capture_telemetry: &LiveAudioInputCaptureTelemetry,
+) {
+    if let Ok(mut status) = status.lock() {
+        status.dropped_chunks = capture_telemetry.dropped_chunks.load(Ordering::Relaxed);
+        status.dropped_frames = capture_telemetry.dropped_frames.load(Ordering::Relaxed);
+        status.callback_count = capture_telemetry.callback_count.load(Ordering::Relaxed);
+        status.max_callback_frames = capture_telemetry
+            .max_callback_frames
+            .load(Ordering::Relaxed);
+        status.capture_to_worker_us = capture_telemetry
+            .capture_to_worker_us
+            .load(Ordering::Relaxed);
+        status.max_capture_to_worker_us = capture_telemetry
+            .max_capture_to_worker_us
+            .load(Ordering::Relaxed);
+        status.queue_depth = ready_capture_chunks.len();
+        status.queue_capacity = ready_capture_chunks.capacity();
     }
 }
 
@@ -6873,6 +7153,9 @@ fn recover_live_audio_input_status(
     if status.last_error.as_deref() == Some(LIVE_AUDIO_STALE_ERROR) {
         status.last_error = None;
     }
+    if status.last_error.as_deref() == Some(LIVE_AUDIO_WORKER_STALE_ERROR) {
+        status.last_error = None;
+    }
     true
 }
 
@@ -6952,55 +7235,86 @@ fn empty_live_audio_spectrum() -> protocol::AudioSpectrumPoint {
 }
 
 fn run_live_audio_fft(
-    receiver: std::sync::mpsc::Receiver<Vec<f32>>,
+    free_capture_slots: Arc<crossbeam_queue::ArrayQueue<LiveAudioSampleChunk>>,
+    ready_capture_chunks: Arc<crossbeam_queue::ArrayQueue<LiveAudioSampleChunk>>,
+    capture_telemetry: Arc<LiveAudioInputCaptureTelemetry>,
     sample_rate: u32,
     engine: EngineHandle,
     stop: Arc<AtomicBool>,
+    capture_started: Arc<AtomicBool>,
     status: Arc<Mutex<LiveAudioInputStatus>>,
     safety: Arc<LiveAudioInputSafety>,
 ) {
+    capture_telemetry.mark_worker_heartbeat();
+    while !stop.load(Ordering::Acquire) && !capture_started.load(Ordering::Acquire) {
+        std::thread::park_timeout(LIVE_AUDIO_RECEIVE_POLL_INTERVAL);
+        capture_telemetry.mark_worker_heartbeat();
+    }
+    if stop.load(Ordering::Acquire) {
+        return;
+    }
     let mut samples = VecDeque::<f32>::with_capacity(4_096);
+    let mut fft_window = Vec::<f32>::with_capacity(1_024);
+    let mut analyzer = audio::LiveSpectrumAnalyzer::default();
     let mut last_analysis = Instant::now() - Duration::from_millis(34);
     let mut smoothed = empty_live_audio_spectrum();
     let mut watchdog = LiveAudioInputWatchdog::new(Instant::now());
-    while !stop.load(Ordering::Relaxed) {
+    while !stop.load(Ordering::Acquire) {
+        capture_telemetry.mark_worker_heartbeat();
         retry_live_audio_clear(&engine, &status, &safety);
+        sync_live_audio_capture_telemetry(&status, &ready_capture_chunks, &capture_telemetry);
         if safety.terminal_faulted() {
             std::thread::park_timeout(LIVE_AUDIO_RECEIVE_POLL_INTERVAL);
             continue;
         }
-        let chunk = match receiver.recv_timeout(watchdog.receive_wait(Instant::now())) {
-            Ok(chunk) => chunk,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                if stop.load(Ordering::Relaxed) || safety.terminal_faulted() {
-                    continue;
+        let mut received_samples = false;
+        while let Some(mut chunk) = ready_capture_chunks.pop() {
+            let capture_to_worker = chunk
+                .callback_at
+                .elapsed()
+                .saturating_add(chunk.device_delay);
+            let capture_to_worker_us = capture_to_worker.as_micros().min(u64::MAX as u128) as u64;
+            capture_telemetry
+                .capture_to_worker_us
+                .store(capture_to_worker_us, Ordering::Relaxed);
+            capture_telemetry
+                .max_capture_to_worker_us
+                .fetch_max(capture_to_worker_us, Ordering::Relaxed);
+            if capture_to_worker < LIVE_AUDIO_STALE_AFTER {
+                received_samples |= chunk.len > 0;
+                for sample in chunk.samples[..chunk.len].iter().copied() {
+                    if samples.len() == 4_096 {
+                        samples.pop_front();
+                    }
+                    samples.push_back(sample);
                 }
-                let now = Instant::now();
-                if watchdog.mark_stale_if_due(now) {
-                    samples.clear();
-                    smoothed = empty_live_audio_spectrum();
-                    last_analysis = now - Duration::from_millis(34);
-                    fail_closed_live_audio(
-                        &engine,
-                        &status,
-                        &safety,
-                        false,
-                        LIVE_AUDIO_STALE_ERROR.to_string(),
-                    );
-                }
+            }
+            chunk.len = 0;
+            free_capture_slots
+                .push(chunk)
+                .expect("live audio worker must return each capture slot exactly once");
+        }
+        sync_live_audio_capture_telemetry(&status, &ready_capture_chunks, &capture_telemetry);
+        if !received_samples {
+            if stop.load(Ordering::Acquire) || safety.terminal_faulted() {
                 continue;
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            let now = Instant::now();
+            if watchdog.mark_stale_if_due(now) {
+                samples.clear();
+                smoothed = empty_live_audio_spectrum();
+                last_analysis = now - Duration::from_millis(34);
                 fail_closed_live_audio(
                     &engine,
                     &status,
                     &safety,
-                    true,
-                    "Live audio input sample queue disconnected".to_string(),
+                    false,
+                    LIVE_AUDIO_STALE_ERROR.to_string(),
                 );
-                continue;
             }
-        };
+            std::thread::park_timeout(watchdog.receive_wait(Instant::now()));
+            continue;
+        }
         if safety.terminal_faulted() {
             continue;
         }
@@ -7013,21 +7327,13 @@ fn run_live_audio_fft(
                 continue;
             }
         }
-        samples.extend(chunk);
-        while samples.len() > 4_096 {
-            samples.pop_front();
-        }
         if samples.len() < 1_024 || last_analysis.elapsed() < Duration::from_millis(33) {
             continue;
         }
-        let window = samples
-            .iter()
-            .rev()
-            .take(1_024)
-            .copied()
-            .collect::<Vec<_>>();
-        let window = window.into_iter().rev().collect::<Vec<_>>();
-        let measured = audio::analyze_live_spectrum(&window, sample_rate);
+        fft_window.clear();
+        fft_window.extend(samples.iter().rev().take(1_024).copied());
+        fft_window.reverse();
+        let measured = analyzer.analyze(&fft_window, sample_rate);
         let smooth = |previous: f32, next: f32| previous * 0.65 + next * 0.35;
         smoothed.bass = smooth(smoothed.bass, measured.bass);
         smoothed.mid = smooth(smoothed.mid, measured.mid);
@@ -7092,6 +7398,42 @@ fn live_audio_input_status(state: State<'_, AppState>) -> Result<LiveAudioInputS
     let Some(input) = active.as_ref() else {
         return Ok(LiveAudioInputStatus::default());
     };
+    let worker_finished = input
+        .worker
+        .as_ref()
+        .is_some_and(|worker| worker.is_finished());
+    if worker_finished && !input.safety.terminal_faulted() {
+        fail_closed_live_audio(
+            &input.engine,
+            &input.status,
+            &input.safety,
+            true,
+            "Live audio FFT worker stopped unexpectedly".to_string(),
+        );
+    }
+    let worker_heartbeat_stale = input.capture_telemetry.worker_heartbeat_is_stale();
+    let status_already_stale = input
+        .status
+        .lock()
+        .map_err(|_| "Live audio input status lock was poisoned".to_string())?
+        .stale;
+    if worker_heartbeat_stale && !status_already_stale && !input.safety.terminal_faulted() {
+        fail_closed_live_audio(
+            &input.engine,
+            &input.status,
+            &input.safety,
+            false,
+            LIVE_AUDIO_WORKER_STALE_ERROR.to_string(),
+        );
+    }
+    if input.safety.clear_pending() {
+        retry_live_audio_clear(&input.engine, &input.status, &input.safety);
+    }
+    sync_live_audio_capture_telemetry(
+        &input.status,
+        &input.ready_capture_chunks,
+        &input.capture_telemetry,
+    );
     let status = Arc::clone(&input.status);
     let shutdown_ready = input.safety.shutdown_requested()
         && !input.safety.clear_pending()
@@ -28026,24 +28368,242 @@ mod live_audio_input_tests {
     use super::*;
     use std::cell::Cell;
 
+    fn callback_info(device_delay: Duration) -> rodio::cpal::InputCallbackInfo {
+        let capture = rodio::cpal::StreamInstant::new(1, 0);
+        let callback = capture.add(device_delay).unwrap();
+        rodio::cpal::InputCallbackInfo::new(rodio::cpal::InputStreamTimestamp { callback, capture })
+    }
+
+    fn capture_slot_pool(
+        slots: usize,
+    ) -> (
+        crossbeam_queue::ArrayQueue<LiveAudioSampleChunk>,
+        crossbeam_queue::ArrayQueue<LiveAudioSampleChunk>,
+    ) {
+        let free = crossbeam_queue::ArrayQueue::new(slots);
+        let ready = crossbeam_queue::ArrayQueue::new(slots);
+        for _ in 0..slots {
+            free.push(LiveAudioSampleChunk::new()).unwrap();
+        }
+        (free, ready)
+    }
+
     #[test]
     fn live_audio_callback_downmixes_interleaved_channels_without_blocking() {
-        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-        let status = Mutex::new(LiveAudioInputStatus::default());
+        let (free_capture_slots, ready_capture_chunks) = capture_slot_pool(1);
+        let capture_telemetry = LiveAudioInputCaptureTelemetry::default();
         let safety = LiveAudioInputSafety::default();
-        send_live_audio_chunk(
+        let worker_wake = std::thread::current();
+        queue_live_audio_samples(
             &[1.0_f32, -1.0, 0.5, 0.25],
             2,
-            &sender,
-            &status,
+            48_000,
+            &callback_info(Duration::from_millis(3)),
+            &free_capture_slots,
+            &ready_capture_chunks,
+            &capture_telemetry,
             &safety,
+            &worker_wake,
             |value| value,
         );
-        assert_eq!(receiver.recv().unwrap(), vec![0.0, 0.375]);
+        let mut first = ready_capture_chunks.pop().unwrap();
+        assert_eq!(&first.samples[..first.len], &[0.0, 0.375]);
+        assert_eq!(first.device_delay, Duration::from_millis(3));
+        first.len = 0;
+        free_capture_slots.push(first).unwrap();
 
-        sender.try_send(vec![0.0]).unwrap();
-        send_live_audio_chunk(&[1.0_f32, 1.0], 2, &sender, &status, &safety, |value| value);
-        assert_eq!(status.lock().unwrap().dropped_chunks, 1);
+        queue_live_audio_samples(
+            &[1.0_f32, 1.0],
+            2,
+            48_000,
+            &callback_info(Duration::ZERO),
+            &free_capture_slots,
+            &ready_capture_chunks,
+            &capture_telemetry,
+            &safety,
+            &worker_wake,
+            |value| value,
+        );
+        let second = ready_capture_chunks.pop().unwrap();
+        assert_eq!(&second.samples[..second.len], &[1.0]);
+        assert_eq!(capture_telemetry.dropped_chunks.load(Ordering::Relaxed), 0);
+        assert_eq!(capture_telemetry.dropped_frames.load(Ordering::Relaxed), 0);
+        assert_eq!(capture_telemetry.callback_count.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            capture_telemetry
+                .max_callback_frames
+                .load(Ordering::Relaxed),
+            2
+        );
+    }
+
+    #[test]
+    fn live_audio_callback_replaces_the_oldest_slot_when_the_pool_is_exhausted() {
+        let (free_capture_slots, ready_capture_chunks) = capture_slot_pool(1);
+        let capture_telemetry = LiveAudioInputCaptureTelemetry::default();
+        let safety = LiveAudioInputSafety::default();
+        let worker_wake = std::thread::current();
+
+        queue_live_audio_samples(
+            &[0.0_f32, 0.5],
+            1,
+            48_000,
+            &callback_info(Duration::ZERO),
+            &free_capture_slots,
+            &ready_capture_chunks,
+            &capture_telemetry,
+            &safety,
+            &worker_wake,
+            |value| value,
+        );
+        queue_live_audio_samples(
+            &[1.0_f32],
+            1,
+            48_000,
+            &callback_info(Duration::ZERO),
+            &free_capture_slots,
+            &ready_capture_chunks,
+            &capture_telemetry,
+            &safety,
+            &worker_wake,
+            |value| value,
+        );
+
+        let retained = ready_capture_chunks.pop().unwrap();
+        assert_eq!(&retained.samples[..retained.len], &[1.0]);
+        assert_eq!(capture_telemetry.dropped_chunks.load(Ordering::Relaxed), 1);
+        assert_eq!(capture_telemetry.dropped_frames.load(Ordering::Relaxed), 2);
+        assert_eq!(capture_telemetry.callback_count.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            capture_telemetry
+                .max_callback_frames
+                .load(Ordering::Relaxed),
+            2
+        );
+    }
+
+    #[test]
+    fn live_audio_callback_splits_large_buffers_without_losing_order() {
+        let (free_capture_slots, ready_capture_chunks) = capture_slot_pool(2);
+        let capture_telemetry = LiveAudioInputCaptureTelemetry::default();
+        let safety = LiveAudioInputSafety::default();
+        let input = (0..LIVE_AUDIO_CAPTURE_SLOT_FRAMES + 2)
+            .map(|index| index as f32)
+            .collect::<Vec<_>>();
+
+        queue_live_audio_samples(
+            &input,
+            1,
+            48_000,
+            &callback_info(Duration::from_millis(100)),
+            &free_capture_slots,
+            &ready_capture_chunks,
+            &capture_telemetry,
+            &safety,
+            &std::thread::current(),
+            |value| value,
+        );
+
+        let first = ready_capture_chunks.pop().unwrap();
+        let second = ready_capture_chunks.pop().unwrap();
+        assert_eq!(first.len, LIVE_AUDIO_CAPTURE_SLOT_FRAMES);
+        assert_eq!(first.samples[0], 0.0);
+        assert_eq!(first.samples[first.len - 1], (first.len - 1) as f32);
+        assert_eq!(second.samples[0], LIVE_AUDIO_CAPTURE_SLOT_FRAMES as f32);
+        assert_eq!(
+            second.samples[1],
+            (LIVE_AUDIO_CAPTURE_SLOT_FRAMES + 1) as f32
+        );
+        assert_eq!(first.device_delay, Duration::from_millis(100));
+        assert_eq!(
+            second.device_delay,
+            Duration::from_millis(100).saturating_sub(live_audio_frame_duration(
+                LIVE_AUDIO_CAPTURE_SLOT_FRAMES,
+                48_000
+            ))
+        );
+        assert_eq!(capture_telemetry.dropped_chunks.load(Ordering::Relaxed), 0);
+        assert!(free_capture_slots.is_empty());
+        assert!(ready_capture_chunks.is_empty());
+    }
+
+    #[test]
+    fn live_audio_callback_bounds_conversion_to_the_newest_pool_capacity() {
+        let (free_capture_slots, ready_capture_chunks) =
+            capture_slot_pool(LIVE_AUDIO_CAPTURE_SLOT_COUNT);
+        let capture_telemetry = LiveAudioInputCaptureTelemetry::default();
+        let safety = LiveAudioInputSafety::default();
+        let capture_capacity = LIVE_AUDIO_CAPTURE_SLOT_COUNT * LIVE_AUDIO_CAPTURE_SLOT_FRAMES;
+        let skipped_frames = 100;
+        let input = (0..capture_capacity + skipped_frames)
+            .map(|index| index as f32)
+            .collect::<Vec<_>>();
+        let converted = Cell::new(0_usize);
+
+        queue_live_audio_samples(
+            &input,
+            1,
+            48_000,
+            &callback_info(Duration::from_millis(200)),
+            &free_capture_slots,
+            &ready_capture_chunks,
+            &capture_telemetry,
+            &safety,
+            &std::thread::current(),
+            |value| {
+                converted.set(converted.get() + 1);
+                value
+            },
+        );
+
+        assert_eq!(converted.get(), capture_capacity);
+        assert_eq!(ready_capture_chunks.len(), LIVE_AUDIO_CAPTURE_SLOT_COUNT);
+        let first = ready_capture_chunks.pop().unwrap();
+        assert_eq!(first.samples[0], skipped_frames as f32);
+        assert_eq!(capture_telemetry.dropped_chunks.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            capture_telemetry.dropped_frames.load(Ordering::Relaxed),
+            skipped_frames as u64
+        );
+    }
+
+    #[test]
+    fn live_audio_callback_sanitizes_non_finite_pcm_and_recovers() {
+        let (free_capture_slots, ready_capture_chunks) = capture_slot_pool(1);
+        let capture_telemetry = LiveAudioInputCaptureTelemetry::default();
+        let safety = LiveAudioInputSafety::default();
+
+        queue_live_audio_samples(
+            &[f32::NAN, 1.0, f32::INFINITY, f32::NEG_INFINITY],
+            2,
+            48_000,
+            &callback_info(Duration::ZERO),
+            &free_capture_slots,
+            &ready_capture_chunks,
+            &capture_telemetry,
+            &safety,
+            &std::thread::current(),
+            |value| value,
+        );
+        let mut invalid = ready_capture_chunks.pop().unwrap();
+        assert_eq!(&invalid.samples[..invalid.len], &[0.5, 0.0]);
+        invalid.len = 0;
+        free_capture_slots.push(invalid).unwrap();
+
+        queue_live_audio_samples(
+            &[0.25_f32, 0.75],
+            2,
+            48_000,
+            &callback_info(Duration::ZERO),
+            &free_capture_slots,
+            &ready_capture_chunks,
+            &capture_telemetry,
+            &safety,
+            &std::thread::current(),
+            |value| value,
+        );
+        let recovered = ready_capture_chunks.pop().unwrap();
+        assert_eq!(&recovered.samples[..recovered.len], &[0.5]);
     }
 
     #[test]
@@ -28062,6 +28622,23 @@ mod live_audio_input_tests {
         assert!(watchdog.record_chunk(started + Duration::from_millis(300)));
         assert!(!watchdog.mark_stale_if_due(started + Duration::from_millis(549)));
         assert!(watchdog.mark_stale_if_due(started + Duration::from_millis(550)));
+
+        let mut starved_worker = LiveAudioInputWatchdog::new(started);
+        assert!(starved_worker.record_chunk(started + LIVE_AUDIO_STALE_AFTER));
+        assert!(!starved_worker
+            .record_chunk(started + LIVE_AUDIO_STALE_AFTER + Duration::from_millis(1)));
+    }
+
+    #[test]
+    fn live_audio_worker_heartbeat_stales_at_the_same_safety_boundary() {
+        let capture_telemetry = LiveAudioInputCaptureTelemetry::default();
+        capture_telemetry
+            .worker_heartbeat_us
+            .store(1, Ordering::Release);
+        let stale_after_us = LIVE_AUDIO_STALE_AFTER.as_micros() as u64;
+
+        assert!(!capture_telemetry.worker_heartbeat_is_stale_at(stale_after_us));
+        assert!(capture_telemetry.worker_heartbeat_is_stale_at(stale_after_us + 1));
     }
 
     #[test]
@@ -28119,9 +28696,23 @@ mod live_audio_input_tests {
         assert!(safety.terminal_faulted());
         assert!(safety.clear_pending());
 
-        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-        send_live_audio_chunk(&[1.0_f32, 1.0], 2, &sender, &status, &safety, |value| value);
-        assert!(receiver.try_recv().is_err());
+        let (free_capture_slots, ready_capture_chunks) = capture_slot_pool(1);
+        let capture_telemetry = LiveAudioInputCaptureTelemetry::default();
+        queue_live_audio_samples(
+            &[1.0_f32, 1.0],
+            2,
+            48_000,
+            &callback_info(Duration::ZERO),
+            &free_capture_slots,
+            &ready_capture_chunks,
+            &capture_telemetry,
+            &safety,
+            &std::thread::current(),
+            |value| value,
+        );
+        assert!(ready_capture_chunks.is_empty());
+        assert_eq!(free_capture_slots.len(), 1);
+        assert_eq!(capture_telemetry.callback_count.load(Ordering::Relaxed), 0);
 
         assert!(retry_live_audio_clear_with(&status, &safety, || Ok(())));
         assert!(!safety.clear_pending());
@@ -28308,6 +28899,16 @@ mod live_audio_input_tests {
         assert!(current.last_error.is_none());
         assert!(!safety.terminal_faulted());
         assert!(!safety.clear_pending());
+
+        fail_closed_live_audio_with(
+            &status,
+            &safety,
+            false,
+            LIVE_AUDIO_WORKER_STALE_ERROR.to_string(),
+            || Ok(()),
+        );
+        assert!(recover_live_audio_input_status(&status, &safety));
+        assert!(status.lock().unwrap().last_error.is_none());
     }
 }
 

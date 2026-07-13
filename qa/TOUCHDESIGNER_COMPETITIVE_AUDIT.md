@@ -23,17 +23,18 @@ The comparison must therefore keep two claims separate:
 | Area | TouchDesigner reference | Syndocal today | Assessment |
 |---|---|---|---|
 | Live presentation | [Perform Mode](https://docs.derivative.ca/Perform_Mode) renders one selected Window COMP without the network editor; Windows full-screen exclusive can avoid compositor stutter | A dedicated VJ Desk, automatic maximize, exact F11 1920x1080 and separate Program outputs; no exclusive-swapchain proof | Operational surface is now comparable in shape, but performance parity is unproven |
-| Audio capture | [Audio Device In CHOP](https://docs.derivative.ca/Audio_Device_In_CHOP) exposes default/native/ASIO drivers, device, channel, rate and buffer selection | CPAL default host/device, default stream config and all-channel mono downmix | TouchDesigner leads materially |
+| Audio capture | [Audio Device In CHOP](https://docs.derivative.ca/Audio_Device_In_CHOP) exposes default/native/ASIO drivers, device, channel, rate and buffer selection | CPAL default host/device and default stream config; allocation-free preallocated downmix slots with overrun telemetry and a CPAL timestamp-derived capture-age estimate | Callback structure is improved, but runtime parity is unproven and TouchDesigner still leads materially in configuration and backend breadth |
 | Spectrum/features | [Audio Spectrum CHOP](https://docs.derivative.ca/Audio_Spectrum_CHOP) exposes configurable FFT sizes and magnitude/phase; [Analyze CHOP](https://docs.derivative.ca/Analyze_CHOP) provides RMS, extrema and peak analysis | 1024-sample Hann FFT, Bass/Mid/High, silence gate and smoothing | TouchDesigner leads in general analysis breadth |
 | Beat | [Beat CHOP](https://docs.derivative.ca/Beat_CHOP) outputs ramps, pulses, beat/bar/count and BPM from configured or tapped tempo | Shared BPM/clock exists, but live microphone onset/BPM tracking is not implemented | Neither reference proves turnkey automatic beat detection; this is the clearest place for Syndocal to lead |
-| Safety | General networks can be built for fallback behavior | Stream fault or 250 ms without input requests a shared lighting/video clear, retains its retry owner while pending, then reports queue acceptance without claiming output-application acknowledgement | Syndocal has a product-level fail-closed contract; applied-clear acknowledgement remains open |
+| Safety | General networks can be built for fallback behavior | Stream fault or 250 ms without input requests a shared lighting/video clear, retains its retry owner while pending, and the Engine independently expires an unrefreshed live value after 250 ms | Syndocal has a product-level fail-closed contract; applied-clear acknowledgement remains open |
 | Authoring | General operator network and custom component model | Fixed Source → Transform → Output graph and one video effect slot per layer | TouchDesigner leads decisively |
 | Unified show control | Can be constructed from operators/protocols | Lighting Cue, video Take, clock, blackout, Timeline, MIDI/OSC/DMX and audio source share one show model | Syndocal has a simpler dedicated workflow |
 
 ## Required implementation order
 
-1. Replace callback allocation and status locking with a preallocated SPSC
-   capture ring. Timestamp every callback and expose overrun/backlog/latency.
+1. Extend the implemented preallocated capture pool and timestamp-derived age
+   estimate with callback duration/backlog high-water and
+   capture-to-analysis/publish percentiles.
 2. Add explicit WASAPI device, channel mix, sample rate and buffer-frame
    configuration plus same-device reconnect. Never silently switch to a
    different device during a show.
@@ -58,7 +59,9 @@ The comparison must therefore keep two claims separate:
 
 ### Audio runtime
 
-- Audio callback heap allocation and mutex acquisition: **0**.
+- Normal audio data callback heap allocation and mutex acquisition: **0**
+  (implemented structurally; the one-hour and instrumented-allocation gates
+  remain open).
 - 48 kHz / 128-frame ASIO and 48 kHz / 256-frame WASAPI, one hour: ring
   overrun **0**.
 - Callback duration: p99 below 20% of buffer duration, maximum below 50%.

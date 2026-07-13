@@ -1065,6 +1065,13 @@ export default function App() {
     high: 0,
     analyzed_windows: 0,
     dropped_chunks: 0,
+    dropped_frames: 0,
+    callback_count: 0,
+    max_callback_frames: 0,
+    capture_to_worker_us: 0,
+    max_capture_to_worker_us: 0,
+    queue_depth: 0,
+    queue_capacity: 0,
     last_error: null,
   });
   const [liveAudioInputStatusKnown, setLiveAudioInputStatusKnown] = createSignal(!isTauriRuntime());

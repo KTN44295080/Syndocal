@@ -4887,6 +4887,7 @@ version = "1.0.0"
 dependencies = [
  "audio",
  "base64 0.22.1",
+ "crossbeam-queue",
  "engine",
  "gdtf",
  "image",

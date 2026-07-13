@@ -53,6 +53,7 @@ const COMMANDS_PER_TICK_LIMIT: usize = 512;
 const DMX_TICK_INTERVAL: Duration = Duration::from_micros(22_727);
 const LOW_LATENCY_DMX_TICK_THRESHOLD: Duration = Duration::from_micros(5_000);
 const TICK_SPIN_THRESHOLD: Duration = Duration::from_millis(1);
+const LIVE_AUDIO_SPECTRUM_TTL: Duration = Duration::from_millis(250);
 const JITTER_PERCENTILE_WINDOW: usize = 256;
 const DMX_RECONNECT_BASE_DELAY: Duration = Duration::from_millis(250);
 const DMX_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(10);
@@ -2233,6 +2234,7 @@ struct EngineRuntime {
     timeline_video_automations: Vec<RuntimeTimelineVideoAutomation>,
     timeline_audio: Option<AudioAnalysisSummary>,
     live_audio_spectrum: Option<AudioSpectrumPoint>,
+    live_audio_spectrum_updated_at: Option<Instant>,
     timeline_playing: bool,
     timeline_position_ms: u64,
     timeline_playhead_boundary_armed: bool,
@@ -2392,6 +2394,7 @@ impl EngineRuntime {
             timeline_video_automations: Vec::new(),
             timeline_audio: None,
             live_audio_spectrum: None,
+            live_audio_spectrum_updated_at: None,
             timeline_playing: false,
             timeline_position_ms: 0,
             timeline_playhead_boundary_armed: false,
@@ -2572,6 +2575,7 @@ impl EngineRuntime {
             .collect();
         self.timeline_audio = snapshot.timeline.audio.clone();
         self.live_audio_spectrum = None;
+        self.live_audio_spectrum_updated_at = None;
         self.timeline_playing = snapshot.timeline.playing;
         self.timeline_playhead_boundary_armed = false;
         self.timeline_evaluated_boundary_position_ms = None;
@@ -5378,6 +5382,7 @@ impl EngineRuntime {
                 self.last_error = None;
             }
             EngineCommand::SetLiveAudioSpectrum(spectrum) => {
+                self.live_audio_spectrum_updated_at = spectrum.as_ref().map(|_| Instant::now());
                 self.live_audio_spectrum = spectrum.map(|mut point| {
                     point.time_ms = 0;
                     point.bass = finite_or(point.bass, 0.0).clamp(0.0, 1.0);
@@ -6522,6 +6527,19 @@ impl EngineRuntime {
                 .any(|output| output.config.enabled)
     }
 
+    fn expire_live_audio_spectrum(&mut self, now: Instant) -> bool {
+        let expired = self
+            .live_audio_spectrum_updated_at
+            .is_some_and(|updated_at| {
+                now.saturating_duration_since(updated_at) >= LIVE_AUDIO_SPECTRUM_TTL
+            });
+        if expired {
+            self.live_audio_spectrum = None;
+            self.live_audio_spectrum_updated_at = None;
+        }
+        expired
+    }
+
     fn tick(&mut self, queue_depth: usize, snapshot: &RwLock<EngineSnapshot>) {
         let now = Instant::now();
         let intentional_early_tick = std::mem::take(&mut self.low_latency_dmx_tick_advanced);
@@ -6532,6 +6550,7 @@ impl EngineRuntime {
             self.record_tick_jitter();
         }
         self.record_command_to_dmx_tick_latency(now);
+        self.expire_live_audio_spectrum(now);
         self.advance_timeline(now);
         self.advance_pending_cue(now);
         self.apply_timeline_automations();
@@ -16537,6 +16556,27 @@ mod tests {
     }
 
     #[test]
+    fn live_audio_spectrum_expires_inside_the_engine_at_the_ttl_boundary() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig::default());
+        let updated_at = Instant::now();
+        runtime.live_audio_spectrum = Some(AudioSpectrumPoint {
+            time_ms: 0,
+            bass: 0.1,
+            mid: 0.75,
+            high: 0.2,
+        });
+        runtime.live_audio_spectrum_updated_at = Some(updated_at);
+
+        assert!(!runtime.expire_live_audio_spectrum(
+            updated_at + LIVE_AUDIO_SPECTRUM_TTL - Duration::from_nanos(1)
+        ));
+        assert!(runtime.live_audio_spectrum.is_some());
+        assert!(runtime.expire_live_audio_spectrum(updated_at + LIVE_AUDIO_SPECTRUM_TTL));
+        assert!(runtime.live_audio_spectrum.is_none());
+        assert!(runtime.live_audio_spectrum_updated_at.is_none());
+    }
+
+    #[test]
     fn live_audio_node_graph_uses_ephemeral_spectrum_without_timeline_audio() {
         let engine = EngineHandle::start(DmxOutputConfig {
             enabled: false,
@@ -16585,6 +16625,33 @@ mod tests {
         engine
             .send(EngineCommand::SetLiveAudioSpectrum(None))
             .unwrap();
+        for _ in 0..20 {
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+            if snapshot.dmx_preview[0] == 0 {
+                break;
+            }
+        }
+        assert_eq!(snapshot.dmx_preview[0], 0);
+
+        engine
+            .send(EngineCommand::SetLiveAudioSpectrum(Some(
+                AudioSpectrumPoint {
+                    time_ms: 0,
+                    bass: 0.0,
+                    mid: 0.5,
+                    high: 0.0,
+                },
+            )))
+            .unwrap();
+        for _ in 0..20 {
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+            if snapshot.dmx_preview[0] == 128 {
+                break;
+            }
+        }
+        assert_eq!(snapshot.dmx_preview[0], 128);
         for _ in 0..20 {
             std::thread::sleep(DMX_TICK_INTERVAL);
             snapshot = engine.snapshot();

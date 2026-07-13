@@ -6,6 +6,7 @@ const source = await readFile(new URL("../src/liveAudioInputPresentation.ts", im
 const syncSource = await readFile(new URL("../src/liveAudioInputStatusSync.ts", import.meta.url), "utf8");
 const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
 const backend = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
+const engine = await readFile(new URL("../../crates/engine/src/lib.rs", import.meta.url), "utf8");
 const clipGrid = await readFile(
   new URL("../src/components/VideoClipGridPanel.tsx", import.meta.url),
   "utf8",
@@ -39,6 +40,13 @@ const status = (overrides = {}) => ({
   high: 0,
   analyzed_windows: 0,
   dropped_chunks: 0,
+  dropped_frames: 0,
+  callback_count: 0,
+  max_callback_frames: 0,
+  capture_to_worker_us: 0,
+  max_capture_to_worker_us: 0,
+  queue_depth: 0,
+  queue_capacity: 0,
   last_error: null,
   ...overrides,
 });
@@ -53,7 +61,7 @@ assert.equal(
   presentation.liveAudioInputDetail(
     status({ running: true, sample_rate: 48_000, channels: 2, analyzed_windows: 42 }),
   ),
-  "48000Hz / 2ch / 42 FFT",
+  "OVR 0/0f · 48.0kHz · 2→M · FFT 42 · C→W EST 0.0/0.0ms · Q 0/0",
 );
 const stale = status({ running: true, stale: true, last_error: "Input timed out." });
 assert.equal(presentation.liveAudioInputHealth(stale), "stale");
@@ -121,5 +129,22 @@ assert.ok(backend.includes("status.safety_clear_pending = false"));
 assert.ok(backend.includes("live_audio_input_lifecycle: Mutex<()>"));
 assert.ok(backend.includes("if pending_status.safety_clear_pending {\n        return Ok(pending_status);"));
 assert.ok(backend.includes("Live audio input is already active or stopping"));
+assert.ok(backend.includes("crossbeam_queue::ArrayQueue"));
+assert.ok(backend.includes("std::panic::catch_unwind"));
+assert.ok(backend.includes("worker.is_finished()"));
+assert.ok(backend.includes("worker_heartbeat_is_stale()"));
+assert.ok(backend.includes("callback_frames.saturating_sub(capture_capacity_frames)"));
+assert.ok(backend.includes("capture_to_worker < LIVE_AUDIO_STALE_AFTER"));
+assert.ok(backend.includes("if converted.is_finite()"));
+assert.ok(engine.includes("LIVE_AUDIO_SPECTRUM_TTL: Duration = Duration::from_millis(250)"));
+assert.ok(engine.includes("self.expire_live_audio_spectrum(now)"));
+const callbackStart = backend.indexOf("fn queue_live_audio_samples");
+const callbackEnd = backend.indexOf("fn sync_live_audio_capture_telemetry", callbackStart);
+assert.ok(callbackStart >= 0 && callbackEnd > callbackStart);
+const callbackSource = backend.slice(callbackStart, callbackEnd);
+assert.doesNotMatch(callbackSource, /Vec|collect\s*\(|status\.lock|Mutex/);
+assert.match(callbackSource, /free_capture_slots\.pop/);
+assert.match(callbackSource, /ready_capture_chunks\.push/);
+assert.doesNotMatch(callbackSource, /Box::new|LiveAudioSampleChunk::new/);
 
 console.log("live audio fail-closed lifecycle, presentation, and request ordering ok");

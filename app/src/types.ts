@@ -814,6 +814,13 @@ export interface LiveAudioInputStatus {
   high: number;
   analyzed_windows: number;
   dropped_chunks: number;
+  dropped_frames: number;
+  callback_count: number;
+  max_callback_frames: number;
+  capture_to_worker_us: number;
+  max_capture_to_worker_us: number;
+  queue_depth: number;
+  queue_capacity: number;
   last_error?: string | null;
 }
 

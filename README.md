@@ -151,7 +151,7 @@ Windowsの完全libav bundleでは`FFMPEG_DIR`を共有FFmpeg SDKルートへ設
 
 - v1.0以降の外部映像I/OはDisplay、feature-gated NDI、Windows x86_64のSpoutに対応しています。Syphonはwgpu世代差とmacOS実装環境が必要なため未実装です。
 - HAP Q Alpha、HAP R/BC7のGPU直接sampling + CPU fallback、安全境界付きsingle-pass ISFは実装済みです。ISF multipass／persistent buffer／imported resource／audio inputは未対応です。
-- Live FFT入力は現時点でCPAL既定host（WindowsはWASAPI）です。ASIO、明示buffer/channel選択、hot-plug自動復帰、onset/BPMとAuto VJは次段の実装・実機受入です。
+- Live FFT入力の通常data callbackは事前確保slotへallocation-freeで格納し、CPAL時刻由来のcapture-age推定値とdrop／queue telemetryを表示します。Engine側にも250ms TTLを持ち、capture worker停止時の値保持を防ぎます。現時点のhost/configはCPAL既定（WindowsはWASAPI）です。ASIO、明示buffer/sample-rate/channel-mix選択、hot-plug自動復帰、onset/BPMとAuto VJは次段の実装・実機受入です。
 - 3Dビジュアライザは本体UIへ戻さず、`visualizer`データ境界から外部実装へ接続します。標準UIは2D Stage Mapです。
 - Enttec Open DMXはOS/USBドライバ依存のbreak timingがあるため、最終現場ではUSB PRO系を推奨します。
 - Art-Net/sACN/Serialの実機遅延は接続機材ごとに再測定してください。リポジトリの自動検証はloopback中心です。

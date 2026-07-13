@@ -16,6 +16,7 @@ tauri-build.workspace = true
 [dependencies]
 audio = { path = "../../crates/audio" }
 base64.workspace = true
+crossbeam-queue.workspace = true
 engine = { path = "../../crates/engine" }
 gdtf = { path = "../../crates/gdtf" }
 image.workspace = true

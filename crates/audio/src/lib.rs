@@ -386,7 +386,42 @@ fn build_spectrum(samples: &[f32], sample_rate: u32, max_points: usize) -> Vec<A
     points
 }
 
+#[derive(Debug)]
+pub struct LiveSpectrumAnalyzer {
+    real: Vec<f32>,
+    imaginary: Vec<f32>,
+}
+
+impl Default for LiveSpectrumAnalyzer {
+    fn default() -> Self {
+        Self {
+            real: vec![0.0; SPECTRUM_FFT_SIZE],
+            imaginary: vec![0.0; SPECTRUM_FFT_SIZE],
+        }
+    }
+}
+
+impl LiveSpectrumAnalyzer {
+    pub fn analyze(&mut self, samples: &[f32], sample_rate: u32) -> AudioSpectrumPoint {
+        analyze_live_spectrum_with_buffers(
+            samples,
+            sample_rate,
+            &mut self.real,
+            &mut self.imaginary,
+        )
+    }
+}
+
 pub fn analyze_live_spectrum(samples: &[f32], sample_rate: u32) -> AudioSpectrumPoint {
+    LiveSpectrumAnalyzer::default().analyze(samples, sample_rate)
+}
+
+fn analyze_live_spectrum_with_buffers(
+    samples: &[f32],
+    sample_rate: u32,
+    real: &mut [f32],
+    imaginary: &mut [f32],
+) -> AudioSpectrumPoint {
     if samples.is_empty() || sample_rate == 0 {
         return AudioSpectrumPoint {
             time_ms: 0,
@@ -395,8 +430,10 @@ pub fn analyze_live_spectrum(samples: &[f32], sample_rate: u32) -> AudioSpectrum
             high: 0.0,
         };
     }
-    let mut real = vec![0.0_f32; SPECTRUM_FFT_SIZE];
-    let mut imaginary = vec![0.0_f32; SPECTRUM_FFT_SIZE];
+    debug_assert_eq!(real.len(), SPECTRUM_FFT_SIZE);
+    debug_assert_eq!(imaginary.len(), SPECTRUM_FFT_SIZE);
+    real.fill(0.0);
+    imaginary.fill(0.0);
     let available = samples.len().min(SPECTRUM_FFT_SIZE);
     let source_start = samples.len().saturating_sub(available);
     for index in 0..available {
@@ -405,8 +442,8 @@ pub fn analyze_live_spectrum(samples: &[f32], sample_rate: u32) -> AudioSpectrum
         let hann = 0.5 - 0.5 * phase.cos();
         real[index] = samples[source_start + index] * hann;
     }
-    fft_in_place(&mut real, &mut imaginary);
-    let (bass, mid, high) = spectrum_band_levels(&real, &imaginary, sample_rate);
+    fft_in_place(real, imaginary);
+    let (bass, mid, high) = spectrum_band_levels(real, imaginary, sample_rate);
     let peak = bass.max(mid).max(high);
     let rms = (samples[source_start..]
         .iter()
@@ -688,6 +725,23 @@ mod tests {
         assert!(spectrum.mid > 0.9);
         assert!(spectrum.mid > spectrum.bass * 4.0);
         assert!(spectrum.mid > spectrum.high * 4.0);
+    }
+
+    #[test]
+    fn reusable_live_spectrum_analyzer_clears_its_fft_scratch_between_windows() {
+        let mut analyzer = LiveSpectrumAnalyzer::default();
+        let tone = (0..SPECTRUM_FFT_SIZE)
+            .map(|index| (std::f32::consts::TAU * 1_000.0 * index as f32 / 48_000.0).sin() * 0.5)
+            .collect::<Vec<_>>();
+        let spectrum = analyzer.analyze(&tone, 48_000);
+        assert!(spectrum.mid > 0.9);
+
+        let silence = analyzer.analyze(&vec![0.0; SPECTRUM_FFT_SIZE], 48_000);
+        assert_eq!((silence.bass, silence.mid, silence.high), (0.0, 0.0, 0.0));
+        assert_eq!(
+            analyzer.analyze(&tone, 48_000),
+            analyze_live_spectrum(&tone, 48_000)
+        );
     }
 
     fn test_wav_with_clicks(bpm: f32, duration_ms: u64, beats: usize) -> Vec<u8> {
