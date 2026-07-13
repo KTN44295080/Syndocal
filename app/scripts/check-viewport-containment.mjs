@@ -430,6 +430,21 @@ async function measure(client, label) {
         const style = window.getComputedStyle(element);
         return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
       }).length;
+    const shrunkenDirectChildCount = (selector) => {
+      const parent = document.querySelector(selector);
+      return parent
+        ? [...parent.children].filter((element) => element.scrollHeight > element.clientHeight + 1).length
+        : 0;
+    };
+    const directChildOverlapCount = (selector) => {
+      const parent = document.querySelector(selector);
+      if (!parent) return 0;
+      const rects = [...parent.children]
+        .map((element) => element.getBoundingClientRect())
+        .filter((rect) => rect.width > 0 && rect.height > 0)
+        .sort((left, right) => left.top - right.top);
+      return rects.slice(1).filter((rect, index) => rects[index].bottom > rect.top + 1).length;
+    };
     const documentElement = document.documentElement;
     const body = document.body;
     const app = document.querySelector('.app');
@@ -552,6 +567,24 @@ async function measure(client, label) {
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'wave draft').length,
       visibleMappingHotkeyHelpCount: visibleCount('.mappingHotkeyHelp'),
       mappingHotkeyHelpKeyCount: document.querySelectorAll('.mappingHotkeyHelp kbd').length,
+      mappingFilterVerticalClipCount: [...document.querySelectorAll('.setupMode-mapping .mappingGroupStrip, .setupMode-mapping .mappingTypeStrip')]
+        .filter((element) => element.scrollHeight > element.clientHeight + 1).length,
+      mappingViewportShrunkenChildCount: shrunkenDirectChildCount('.setupMode-mapping .mappingStageViewport'),
+      mappingViewportChildOverlapCount: directChildOverlapCount('.setupMode-mapping .mappingStageViewport'),
+      mappingStageHeight: Math.round(document.querySelector('.setupMode-mapping .mappingStageViewport .visualizerStage')?.getBoundingClientRect().height ?? 0),
+      mappingSidebarHorizontalOverflowPx: (() => {
+        const sidebar = document.querySelector('.setupMode-mapping .mappingSelectionPanel');
+        return sidebar ? Math.max(0, sidebar.scrollWidth - sidebar.clientWidth) : 0;
+      })(),
+      mappingSidebarClippedControlCount: (() => {
+        const sidebar = document.querySelector('.setupMode-mapping .mappingSelectionPanel');
+        if (!sidebar) return 0;
+        const bounds = sidebar.getBoundingClientRect();
+        return [...sidebar.querySelectorAll('button, input, select')].filter((element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && (rect.left < bounds.left - 1 || rect.right > bounds.right + 1);
+        }).length;
+      })(),
       visiblePatchActionRowCount: visibleCount('.patchActionRow'),
       visiblePatchAutoButtonCount: [...document.querySelectorAll('.fieldWithAction button')]
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'auto').length,
@@ -588,6 +621,8 @@ async function measure(client, label) {
       dmxOutputConfigPanelWidth: dmxOutputConfigPanelRect ? Math.round(dmxOutputConfigPanelRect.width) : 0,
       outputDiagnosticsDeskWidth: outputDiagnosticsDeskRect ? Math.round(outputDiagnosticsDeskRect.width) : 0,
       lightingRuntimeDeskWidth: lightingRuntimeDeskRect ? Math.round(lightingRuntimeDeskRect.width) : 0,
+      dmxEndpointShrunkenChildCount: shrunkenDirectChildCount('.setupMode-dmx .dmxEndpointDesk'),
+      dmxEndpointChildOverlapCount: directChildOverlapCount('.setupMode-dmx .dmxEndpointDesk'),
       midiMappingEditorDeskWidth: midiMappingEditorDeskRect ? Math.round(midiMappingEditorDeskRect.width) : 0,
       midiMappingListDeskWidth: midiMappingListDeskRect ? Math.round(midiMappingListDeskRect.width) : 0,
       oscMappingEditorDeskWidth: oscMappingEditorDeskRect ? Math.round(oscMappingEditorDeskRect.width) : 0,
@@ -1205,7 +1240,9 @@ function hasExpectedSetupSurface(result) {
       result.visibleSerialProtocolRecommendationCount === 1 &&
       result.dmxOutputConfigPanelWidth >= 250 &&
       result.outputDiagnosticsDeskWidth >= 420 &&
-      result.lightingRuntimeDeskWidth >= 260
+      result.lightingRuntimeDeskWidth >= 260 &&
+      result.dmxEndpointShrunkenChildCount === 0 &&
+      result.dmxEndpointChildOverlapCount === 0
     );
   }
   if (result.label.startsWith("setup-midi-")) {
@@ -1252,7 +1289,12 @@ function hasExpectedSetupSurface(result) {
       result.visibleMappingProjectorWarpGridCount >= 1 &&
       result.visibleMappingProjectorActionButtonCount >= 4 &&
       result.visibleMappingProjectorResetPoseButtonCount >= 1 &&
-      result.visibleStageVideoSurfaceCount >= 1
+      result.visibleStageVideoSurfaceCount >= 1 &&
+      result.mappingFilterVerticalClipCount === 0 &&
+      result.mappingViewportChildOverlapCount === 0 &&
+      result.mappingStageHeight >= 180 &&
+      result.mappingSidebarHorizontalOverflowPx <= 1 &&
+      result.mappingSidebarClippedControlCount === 0
     );
   }
   if (result.label.startsWith("setup-video-")) {

@@ -1034,7 +1034,7 @@ h3 {
 .layoutSetup.setupMode-mapping .mappingVisualizer {
   order: -1;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -4936,7 +4936,7 @@ progress {
 }
 
 .layoutSetup.setupMode-mapping .mappingStageShell {
-  grid-template-columns: 38px minmax(0, 1fr) minmax(170px, 220px);
+  grid-template-columns: 38px minmax(0, 1fr) minmax(250px, 280px);
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -4986,7 +4986,7 @@ progress {
 
 .mappingStageViewport {
   display: grid;
-  grid-template-rows: auto auto auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto auto auto minmax(72px, 96px) minmax(180px, 1fr);
   gap: 7px;
   min-width: 0;
   min-height: 0;
@@ -5592,6 +5592,32 @@ progress {
 .mappingSelectionHeader span {
   color: #9f948b;
   font-size: 12px;
+}
+
+.layoutSetup.setupMode-mapping .mappingStageBoundsPanel {
+  min-height: 0;
+  overflow: auto;
+}
+
+.layoutSetup.setupMode-mapping .mappingSelectionPanel > *,
+.layoutSetup.setupMode-mapping .mappingStageObjectPanel,
+.layoutSetup.setupMode-mapping .mappingProjectorControls,
+.layoutSetup.setupMode-mapping .mappingSelectionAssign,
+.layoutSetup.setupMode-mapping .mappingSelectionAssign label,
+.layoutSetup.setupMode-mapping .mappingProjectorFieldGrid label,
+.layoutSetup.setupMode-mapping .mappingSelectionAssign input,
+.layoutSetup.setupMode-mapping .mappingSelectionAssign select,
+.layoutSetup.setupMode-mapping .mappingProjectorFieldGrid input {
+  min-width: 0;
+}
+
+.layoutSetup.setupMode-mapping .mappingSelectionAssign > .mappingSelectionQuickActions {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.layoutSetup.setupMode-mapping .mappingSelectionQuickActions button {
+  min-width: 0;
+  padding-inline: 4px;
 }
 
 .mappingSelectionHeader.secondary {
@@ -15534,9 +15560,15 @@ h3 {
 }
 
 .dmxEndpointDesk {
+  grid-auto-rows: max-content;
+  align-content: start;
   overflow: auto;
   border-right: 1px solid #39342f;
   padding-right: 5px;
+}
+
+.dmxEndpointDesk > * {
+  min-height: max-content;
 }
 
 .dmxInputPanel {
