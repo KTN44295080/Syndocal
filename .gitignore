@@ -1,4 +1,8 @@
 /target/
+/.codex-remote-attachments/
+/app/target/
+/app/tmp/
+/tmp/
 /app/node_modules/
 /app/dist/
 /app/src-tauri/target/

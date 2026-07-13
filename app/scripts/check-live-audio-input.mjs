@@ -128,6 +128,14 @@ assert.ok(app.includes("safety_clear_pending: false"));
 assert.ok(app.includes("liveAudioNodeAvailability(liveAudioInputStatus(), liveAudioInputStatusKnown())"));
 assert.ok(app.includes("const requestEpoch = liveAudioStatusRequests.beginPoll()"));
 assert.ok(app.includes("void refreshLiveAudioInputStatus();"), "status discovery must not depend on the stale frontend default");
+assert.ok(app.includes("{ deviceId: deviceId || null, sampleRate }"));
+assert.ok(app.includes("const capabilitiesReady = await refreshLiveAudioInputCapabilities("));
+assert.ok(
+  app.includes("capabilitiesReady && announce"),
+  "device discovery success must not overwrite a capability/config resolution error",
+);
+assert.ok(app.includes("stream_channels: resolvedConfig.channels"));
+assert.ok(app.includes("sample_format: resolvedConfig.sample_format"));
 assert.ok(
   app.includes("nextStatus.safety_clear_pending || nextStatus.running"),
   "Stop feedback must not claim completion while the backend retains the runtime",
@@ -138,6 +146,11 @@ assert.ok(inputRail.includes('role="status"'));
 assert.ok(inputRail.includes('aria-live="polite"'));
 assert.ok(inputRail.includes('role="meter"'));
 assert.ok(inputRail.includes('aria-valuenow={percent()}'));
+assert.ok(inputRail.includes("capabilities.resolved_config"));
+assert.ok(inputRail.includes("resolved.buffer_size"));
+assert.ok(inputRail.includes("rates.add(config.min_sample_rate)"));
+assert.ok(inputRail.includes("rates.add(config.max_sample_rate)"));
+assert.ok(inputRail.includes("!props.liveAudioInputCapabilities"));
 assert.ok(!inputRail.includes('<small aria-live="polite">'));
 assert.ok(clipGrid.includes("<Show when={!props.compact}>") && clipGrid.includes("<LiveAudioInputRail"));
 assert.ok(styles.includes(".liveAudioInputBar.stale"));
@@ -151,6 +164,9 @@ assert.ok(backend.includes("safety_clear_pending: bool"));
 assert.ok(backend.includes("status.safety_clear_pending = true"));
 assert.ok(backend.includes("status.safety_clear_pending = false"));
 assert.ok(backend.includes("live_audio_input_lifecycle: Mutex<()>"));
+assert.ok(backend.includes("fn resolve_live_audio_stream_config("));
+assert.ok(backend.includes("resolved_config: LiveAudioInputResolvedConfig"));
+assert.ok(backend.includes("sample_format: Option<String>"));
 assert.ok(backend.includes("if pending_status.safety_clear_pending {\n        return Ok(pending_status);"));
 assert.ok(backend.includes("Live audio input is already active or stopping"));
 assert.ok(backend.includes("crossbeam_queue::ArrayQueue"));

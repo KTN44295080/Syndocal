@@ -753,6 +753,15 @@ interface VjFirstRunSetupResult {
   output_id: number;
 }
 
+interface LiveAudioInputLevels {
+  running: boolean;
+  stale: boolean;
+  safety_clear_pending: boolean;
+  bass: number;
+  mid: number;
+  high: number;
+}
+
 interface EffectTargetOverride {
   fixture_ids: number[];
   target_group_ids: string[];
@@ -8991,19 +9000,28 @@ export default function App() {
     if (videoDeckBLayerId() !== null && !ids.has(videoDeckBLayerId()!)) setVideoDeckBLayerId(null);
   });
   let liveAudioInputCapabilitiesEpoch = 0;
+  let liveAudioInputDevicesRefreshEpoch = 0;
+  let liveAudioInputDevicesRefreshInFlight: Promise<void> | null = null;
+  let liveAudioInputLevelsEpoch = 0;
+  let liveAudioInputLevelsPollInFlight = false;
+  const invalidateLiveAudioInputLevels = () => {
+    liveAudioInputLevelsEpoch += 1;
+  };
   const refreshLiveAudioInputCapabilities = async (
     deviceId = selectedLiveAudioInputDevice(),
     announce = true,
-  ) => {
+    sampleRate = liveAudioInputSampleRate(),
+  ): Promise<boolean> => {
     const epoch = ++liveAudioInputCapabilitiesEpoch;
     setLiveAudioInputCapabilitiesBusy(true);
     try {
       const capabilities = await invoke<LiveAudioInputCapabilities>(
         "get_live_audio_input_capabilities",
-        { deviceId: deviceId || null },
+        { deviceId: deviceId || null, sampleRate },
       );
       if (epoch === liveAudioInputCapabilitiesEpoch) {
         setLiveAudioInputCapabilities(capabilities);
+        return true;
       }
     } catch (error) {
       if (epoch === liveAudioInputCapabilitiesEpoch) {
@@ -9015,41 +9033,110 @@ export default function App() {
         setLiveAudioInputCapabilitiesBusy(false);
       }
     }
+    return false;
   };
   const selectLiveAudioInputDevice = (deviceId: string) => {
+    if (liveAudioInputBusy()) return;
     setSelectedLiveAudioInputDevice(deviceId);
     setLiveAudioInputSampleRate(null);
     setLiveAudioInputBufferFrames(null);
     setLiveAudioInputChannelMix({ mode: "average_all" });
-    void refreshLiveAudioInputCapabilities(deviceId);
+    void refreshLiveAudioInputCapabilities(deviceId, true, null);
   };
   const selectLiveAudioInputSampleRate = (sampleRate: number | null) => {
     setLiveAudioInputSampleRate(sampleRate);
     setLiveAudioInputBufferFrames(null);
+    setLiveAudioInputChannelMix({ mode: "average_all" });
+    void refreshLiveAudioInputCapabilities(selectedLiveAudioInputDevice(), true, sampleRate);
   };
-  const refreshLiveAudioInputDevices = async (announce = true) => {
-    try {
-      const devices = await invoke<LiveAudioInputDeviceSummary[]>("list_audio_input_devices");
-      setLiveAudioInputDevices(devices);
-      const selectedDeviceId = devices.some((device) => device.id === selectedLiveAudioInputDevice())
-        ? selectedLiveAudioInputDevice()
-        : "";
-      if (selectedDeviceId !== selectedLiveAudioInputDevice()) {
-        setSelectedLiveAudioInputDevice(selectedDeviceId);
-        setLiveAudioInputSampleRate(null);
-        setLiveAudioInputBufferFrames(null);
-        setLiveAudioInputChannelMix({ mode: "average_all" });
+  const refreshLiveAudioInputDevices = (announce = true): Promise<void> => {
+    if (liveAudioInputDevicesRefreshInFlight) return liveAudioInputDevicesRefreshInFlight;
+    if (liveAudioInputBusy() || liveAudioInputStatus().running) return Promise.resolve();
+
+    const previousDeviceId = selectedLiveAudioInputDevice();
+    const previousDevices = liveAudioInputDevices();
+    const previousDevice = previousDevices.find((device) => device.id === previousDeviceId);
+    const epoch = ++liveAudioInputDevicesRefreshEpoch;
+    liveAudioInputCapabilitiesEpoch += 1;
+    setLiveAudioInputBusy(true);
+    setLiveAudioInputCapabilitiesBusy(true);
+
+    let request!: Promise<void>;
+    request = (async () => {
+      try {
+        const devices = await invoke<LiveAudioInputDeviceSummary[]>("list_audio_input_devices");
+        if (epoch !== liveAudioInputDevicesRefreshEpoch) return;
+
+        let selectedDeviceId = "";
+        let selectionRequiresConfirmation = false;
+        if (previousDeviceId) {
+          const previousIdentityMatches = previousDevice
+            ? previousDevices.filter(
+                (device) =>
+                  device.backend === previousDevice.backend && device.name === previousDevice.name,
+              )
+            : [];
+          const refreshedIdentityMatches = previousDevice
+            ? devices.filter(
+                (device) =>
+                  device.backend === previousDevice.backend && device.name === previousDevice.name,
+              )
+            : [];
+          if (previousIdentityMatches.length === 1 && refreshedIdentityMatches.length === 1) {
+            selectedDeviceId = refreshedIdentityMatches[0].id;
+          } else {
+            selectionRequiresConfirmation = true;
+            selectedDeviceId = previousDeviceId;
+          }
+        }
+
+        setLiveAudioInputDevices(devices);
+        if (selectionRequiresConfirmation) {
+          setLiveAudioInputCapabilities(null);
+          if (announce) {
+            setMessage(
+              "The previous audio input could not be identified safely after Refresh. Select an input again; Start is locked.",
+            );
+          }
+          return;
+        }
+        if (selectedDeviceId !== previousDeviceId) {
+          setSelectedLiveAudioInputDevice(selectedDeviceId);
+        }
+        const capabilitiesReady = await refreshLiveAudioInputCapabilities(
+          selectedDeviceId,
+          announce,
+          liveAudioInputSampleRate(),
+        );
+        if (epoch === liveAudioInputDevicesRefreshEpoch && capabilitiesReady && announce) {
+          setMessage(`Found ${devices.length} audio input device(s).`);
+        }
+      } catch (error) {
+        if (epoch !== liveAudioInputDevicesRefreshEpoch) return;
+        setLiveAudioInputDevices([]);
+        setLiveAudioInputCapabilities(null);
+        if (announce) setMessage(String(error));
       }
-      await refreshLiveAudioInputCapabilities(selectedDeviceId, announce);
-      if (announce) setMessage(`Found ${devices.length} audio input device(s).`);
-    } catch (error) {
-      setLiveAudioInputDevices([]);
-      setLiveAudioInputCapabilities(null);
-      if (announce) setMessage(String(error));
-    }
+    })().finally(() => {
+      if (liveAudioInputDevicesRefreshInFlight === request) {
+        liveAudioInputDevicesRefreshInFlight = null;
+      }
+      if (epoch === liveAudioInputDevicesRefreshEpoch) {
+        setLiveAudioInputCapabilitiesBusy(false);
+        setLiveAudioInputBusy(false);
+      }
+    });
+    liveAudioInputDevicesRefreshInFlight = request;
+    return request;
   };
   const startLiveAudioInput = async () => {
     if (liveAudioInputBusy()) return;
+    const resolvedConfig = liveAudioInputCapabilities()?.resolved_config;
+    if (!resolvedConfig) {
+      setMessage("Resolve a supported live audio input configuration before Start.");
+      return;
+    }
+    invalidateLiveAudioInputLevels();
     const requestEpoch = liveAudioStatusRequests.beginCommand();
     setLiveAudioInputBusy(true);
     setLiveAudioInputStatusKnown(false);
@@ -9057,7 +9144,8 @@ export default function App() {
       const request: LiveAudioInputStartRequest = {
         device_id: selectedLiveAudioInputDevice().trim() || null,
         sample_rate: liveAudioInputSampleRate(),
-        stream_channels: null,
+        stream_channels: resolvedConfig.channels,
+        sample_format: resolvedConfig.sample_format,
         buffer_frames: liveAudioInputBufferFrames(),
         channel_mix: liveAudioInputChannelMix(),
       };
@@ -9081,6 +9169,7 @@ export default function App() {
   };
   const stopLiveAudioInput = async () => {
     if (liveAudioInputBusy()) return;
+    invalidateLiveAudioInputLevels();
     const requestEpoch = liveAudioStatusRequests.beginCommand();
     setLiveAudioInputBusy(true);
     setLiveAudioInputStatusKnown(false);
@@ -9113,11 +9202,13 @@ export default function App() {
     try {
       const nextStatus = await invoke<LiveAudioInputStatus>("live_audio_input_status");
       if (liveAudioStatusRequests.accepts(requestEpoch)) {
+        invalidateLiveAudioInputLevels();
         setLiveAudioInputStatus(nextStatus);
         setLiveAudioInputStatusKnown(true);
       }
     } catch (error) {
       if (liveAudioStatusRequests.accepts(requestEpoch)) {
+        invalidateLiveAudioInputLevels();
         setLiveAudioInputStatus((current) => ({
           ...current,
           stale: current.running || current.stale,
@@ -9133,10 +9224,56 @@ export default function App() {
       liveAudioStatusRequests.endPoll();
     }
   };
+  const refreshLiveAudioInputLevels = async () => {
+    const current = liveAudioInputStatus();
+    if (
+      liveAudioInputLevelsPollInFlight ||
+      liveAudioInputBusy() ||
+      !liveAudioInputStatusKnown() ||
+      !current.running
+    ) {
+      return;
+    }
+
+    const epoch = liveAudioInputLevelsEpoch;
+    liveAudioInputLevelsPollInFlight = true;
+    try {
+      const levels = await invoke<LiveAudioInputLevels>("live_audio_input_levels");
+      if (
+        epoch !== liveAudioInputLevelsEpoch ||
+        liveAudioInputBusy() ||
+        !liveAudioInputStatusKnown()
+      ) {
+        return;
+      }
+      const safe = levels.running && !levels.stale && !levels.safety_clear_pending;
+      setLiveAudioInputStatus((status) => {
+        if (!status.running) return status;
+        const presentationSafe = safe && !status.stale && !status.safety_clear_pending;
+        return {
+          ...status,
+          bass: presentationSafe ? levels.bass : 0,
+          mid: presentationSafe ? levels.mid : 0,
+          high: presentationSafe ? levels.high : 0,
+        };
+      });
+    } catch {
+      if (epoch === liveAudioInputLevelsEpoch) {
+        setLiveAudioInputStatus((status) =>
+          status.running ? { ...status, bass: 0, mid: 0, high: 0 } : status,
+        );
+      }
+    } finally {
+      liveAudioInputLevelsPollInFlight = false;
+    }
+  };
   if (isTauriRuntime()) {
     void refreshLiveAudioInputStatus();
     void refreshLiveAudioInputDevices(false);
   }
+  const liveAudioInputLevelsTimer = isTauriRuntime()
+    ? window.setInterval(() => void refreshLiveAudioInputLevels(), 33)
+    : null;
   const videoOutputMetricsTimer = isTauriRuntime()
     ? window.setInterval(() => {
         if (videoOutputWindowStatuses()?.some((status) => status.live_open)) {
@@ -9153,6 +9290,12 @@ export default function App() {
     : null;
   onCleanup(() => {
     liveAudioStatusRequests.invalidate();
+    liveAudioInputCapabilitiesEpoch += 1;
+    liveAudioInputDevicesRefreshEpoch += 1;
+    invalidateLiveAudioInputLevels();
+    if (liveAudioInputLevelsTimer !== null) {
+      window.clearInterval(liveAudioInputLevelsTimer);
+    }
     if (videoOutputMetricsTimer !== null) {
       window.clearInterval(videoOutputMetricsTimer);
     }

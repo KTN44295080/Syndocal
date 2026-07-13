@@ -862,12 +862,20 @@ export interface LiveAudioInputConfigRange {
   buffer_size: LiveAudioBufferCapability;
 }
 
+export interface LiveAudioInputResolvedConfig {
+  channels: number;
+  sample_rate: number;
+  sample_format: string;
+  buffer_size: LiveAudioBufferCapability;
+}
+
 export interface LiveAudioInputCapabilities {
   device_id?: string | null;
   device_name: string;
   backend: string;
   default_config: LiveAudioInputConfig;
   supported_configs: LiveAudioInputConfigRange[];
+  resolved_config: LiveAudioInputResolvedConfig;
   max_capture_frames: number;
 }
 
@@ -875,6 +883,7 @@ export interface LiveAudioInputStartRequest {
   device_id?: string | null;
   sample_rate?: number | null;
   stream_channels?: number | null;
+  sample_format?: string | null;
   buffer_frames?: number | null;
   channel_mix: LiveAudioChannelMix;
 }

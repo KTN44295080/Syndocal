@@ -18,6 +18,7 @@
     "check:effect-draft": "node scripts/check-effect-draft-helpers.mjs",
     "check:localization": "node scripts/check-localization.mjs",
     "check:live-audio": "node scripts/check-live-audio-input.mjs",
+    "check:live-audio-viewport": "node scripts/check-viewport-containment.mjs --live-audio-only",
     "check:project-storage": "node scripts/check-project-storage-helpers.mjs",
     "check:release": "node scripts/check-release-metadata.mjs",
     "check:release-ui:browser": "pnpm run check:viewport && pnpm run check:timeline-viewport",

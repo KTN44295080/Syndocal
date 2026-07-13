@@ -744,6 +744,7 @@ const japaneseText: Record<string, string> = {
   Attrs: "属性",
   Audio: "音声",
   "All → mono": "全チャンネル → モノ",
+  "→ mono": "→ モノ",
   "Audio input": "音声入力",
   "Audio input channel mix": "音声入力チャンネルミックス",
   "Audio input requested buffer frames": "音声入力要求バッファフレーム",
@@ -1065,6 +1066,24 @@ const japaneseText: Record<string, string> = {
   "Live audio frequency levels": "ライブ音声周波数レベル",
   "Live audio input device": "ライブ音声入力デバイス",
   "Live audio FFT levels": "ライブ音声FFTレベル",
+  "Live audio status is unavailable. Stop remains available.":
+    "ライブ音声の状態を取得できません。安全な停止操作は使用できます。",
+  "Live audio status is unavailable. Start is locked.":
+    "ライブ音声の状態を取得できないため、開始はロックされています。",
+  "Live audio input stopped.": "ライブ音声入力は停止中です。",
+  "Live audio input active.": "ライブ音声入力は動作中です。",
+  "Live audio safety clear pending. Stop remains available.":
+    "ライブ音声の安全クリアを待っています。停止操作は使用できます。",
+  "Live audio Stop is waiting for the engine safety clear. Start is locked.":
+    "ライブ音声の停止はエンジンの安全クリア待ちです。開始はロックされています。",
+  "Live audio input stale. The engine accepted its zero-source clear request.":
+    "ライブ音声入力が途絶しました。エンジンはゼロソースのクリア要求を受け付けました。",
+  "Live audio FFT input started.": "ライブ音声FFT入力を開始しました。",
+  "Live audio FFT input stopped.": "ライブ音声FFT入力を停止しました。",
+  "Resolve a supported live audio input configuration before Start.":
+    "開始する前に、対応するライブ音声入力設定を確定してください。",
+  "The previous audio input could not be identified safely after Refresh. Select an input again; Start is locked.":
+    "更新後に以前の音声入力を安全に特定できませんでした。入力を選び直してください。開始はロックされています。",
   "Live Desk": "ライブデスク",
   "Live edit desk surface": "ライブ編集デスク面",
   "Live FFT input": "ライブFFT入力",
@@ -1211,6 +1230,7 @@ const japaneseText: Record<string, string> = {
   "No geometry nodes on this fixture.": "この灯体にジオメトリノードはありません。",
   "No geometry nodes.": "ジオメトリノードがありません。",
   "No I/O plan status": "I/Oプラン状態なし",
+  "I/O unavailable": "I/Oを利用できません",
   "No lighting targets in this scope.": "この範囲に照明対象がありません。",
   "No matched range": "一致範囲なし",
   "No palettes. Select a fixture, choose a kind, then Capture.": "パレットがありません。灯体と種類を選び、取得してください。",
@@ -1541,6 +1561,14 @@ const japaneseText: Record<string, string> = {
   "Load A": "Aへ読込",
   "Load B": "Bへ読込",
   Ready: "準備完了",
+  Checking: "確認中",
+  "Clear Pending": "クリア待ち",
+  "System default audio input": "システム既定の音声入力",
+  "Reselect input": "入力を再選択",
+  "Reselect audio input": "音声入力を再選択",
+  "Bass level": "低域レベル",
+  "Mid level": "中域レベル",
+  "High level": "高域レベル",
 };
 
 const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
@@ -1651,6 +1679,9 @@ const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
   [/^(\d+) steps?$/, (count) => `${count} 手順`],
   [/^Install v(.+)$/, (version) => `v${version}をインストール`],
   [/^(\d+)% downloaded$/, (percent) => `${percent}% ダウンロード済み`],
+  [/^(\d+) percent$/, (percent) => `${percent}パーセント`],
+  [/^(Bass|Mid|High) (\d+)%$/, (band, percent) => `${band === "Bass" ? "低域" : band === "Mid" ? "中域" : "高域"} ${percent}%`],
+  [/^Found (\d+) audio input device\(s\)\.$/, (count) => `音声入力デバイスが${count}件見つかりました。`],
   [/^(\d+) MB downloaded$/, (megabytes) => `${megabytes} MB ダウンロード済み`],
   [/^Saved project (.+)$/, (path) => `プロジェクトを保存しました: ${path}`],
   [/^Loaded project (.+)$/, (detail) => `プロジェクトを読み込みました: ${detail}`],
@@ -1734,7 +1765,7 @@ export function timelineOverviewMarkerAriaLabel(
 type RenderState = { source: string; rendered: string };
 const textStates = new WeakMap<Text, RenderState>();
 const attributeStates = new WeakMap<Element, Map<string, RenderState>>();
-const translatedAttributes = ["title", "aria-label", "placeholder"] as const;
+const translatedAttributes = ["title", "aria-label", "aria-valuetext", "placeholder"] as const;
 
 function localizeTextNode(node: Text, locale: UiLocale) {
   const parent = node.parentElement;

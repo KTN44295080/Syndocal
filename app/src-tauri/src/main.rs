@@ -852,6 +852,37 @@ struct LiveAudioInputStatus {
     last_error: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Default, PartialEq)]
+struct LiveAudioInputLevels {
+    running: bool,
+    stale: bool,
+    safety_clear_pending: bool,
+    bass: f32,
+    mid: f32,
+    high: f32,
+}
+
+impl LiveAudioInputLevels {
+    fn from_status(status: &LiveAudioInputStatus) -> Self {
+        let safe = status.running && !status.stale && !status.safety_clear_pending;
+        let level = |value: f32| {
+            if safe && value.is_finite() {
+                value.clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        };
+        Self {
+            running: status.running,
+            stale: status.stale,
+            safety_clear_pending: status.safety_clear_pending,
+            bass: level(status.bass),
+            mid: level(status.mid),
+            high: level(status.high),
+        }
+    }
+}
+
 const LIVE_AUDIO_STALE_AFTER: Duration = Duration::from_millis(250);
 const LIVE_AUDIO_RECEIVE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const LIVE_AUDIO_MAX_CONFIGURED_BUFFER_AGE: Duration = Duration::from_millis(200);
@@ -918,6 +949,7 @@ struct LiveAudioInputStartRequest {
     device_id: Option<String>,
     sample_rate: Option<u32>,
     stream_channels: Option<u16>,
+    sample_format: Option<String>,
     buffer_frames: Option<u32>,
     channel_mix: LiveAudioChannelMix,
 }
@@ -966,12 +998,21 @@ struct LiveAudioInputConfigRange {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct LiveAudioInputResolvedConfig {
+    channels: u16,
+    sample_rate: u32,
+    sample_format: String,
+    buffer_size: LiveAudioBufferCapability,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 struct LiveAudioInputCapabilities {
     device_id: Option<String>,
     device_name: String,
     backend: String,
     default_config: LiveAudioInputConfig,
     supported_configs: Vec<LiveAudioInputConfigRange>,
+    resolved_config: LiveAudioInputResolvedConfig,
     max_capture_frames: usize,
 }
 
@@ -987,6 +1028,7 @@ struct ResolvedLiveAudioInputDevice {
 struct SelectedLiveAudioInputConfig {
     stream_config: rodio::cpal::StreamConfig,
     sample_format: rodio::cpal::SampleFormat,
+    buffer_capability: LiveAudioBufferCapability,
     configured_buffer_frames: Option<u32>,
     channel_mix: LiveAudioChannelMix,
 }
@@ -6869,6 +6911,7 @@ fn live_audio_input_config_range(
 fn get_live_audio_input_capabilities(
     state: State<'_, AppState>,
     device_id: Option<String>,
+    sample_rate: Option<u32>,
 ) -> Result<LiveAudioInputCapabilities, String> {
     use rodio::cpal::traits::DeviceTrait;
 
@@ -6877,11 +6920,22 @@ fn get_live_audio_input_capabilities(
         .device
         .default_input_config()
         .map_err(|error| format!("Failed to read default audio input configuration: {error}"))?;
-    let mut supported_configs = resolved
+    let supported_config_ranges = resolved
         .device
         .supported_input_configs()
         .map_err(|error| format!("Failed to read supported audio input configurations: {error}"))?
-        .map(|range| live_audio_input_config_range(&range))
+        .collect::<Vec<_>>();
+    let selected = resolve_live_audio_stream_config(
+        &default_config,
+        &supported_config_ranges,
+        &LiveAudioInputStartRequest {
+            sample_rate,
+            ..LiveAudioInputStartRequest::default()
+        },
+    )?;
+    let mut supported_configs = supported_config_ranges
+        .iter()
+        .map(live_audio_input_config_range)
         .collect::<Vec<_>>();
     supported_configs.sort();
     supported_configs.dedup();
@@ -6891,6 +6945,12 @@ fn get_live_audio_input_capabilities(
         backend: resolved.backend,
         default_config: live_audio_input_config(&default_config),
         supported_configs,
+        resolved_config: LiveAudioInputResolvedConfig {
+            channels: selected.stream_config.channels,
+            sample_rate: selected.stream_config.sample_rate.0,
+            sample_format: selected.sample_format.to_string(),
+            buffer_size: selected.buffer_capability,
+        },
         max_capture_frames: LIVE_AUDIO_CAPTURE_SLOT_COUNT * LIVE_AUDIO_CAPTURE_SLOT_FRAMES,
     })
 }
@@ -6964,7 +7024,7 @@ fn validate_live_audio_configured_buffer(
     Ok(())
 }
 
-fn select_live_audio_stream_config(
+fn resolve_live_audio_stream_config(
     default_config: &rodio::cpal::SupportedStreamConfig,
     supported_configs: &[rodio::cpal::SupportedStreamConfigRange],
     request: &LiveAudioInputStartRequest,
@@ -6978,12 +7038,40 @@ fn select_live_audio_stream_config(
     if request.stream_channels == Some(0) {
         return Err("Live audio stream channel count must be greater than zero".to_string());
     }
+    let requested_sample_format = request.sample_format.as_deref().map(str::trim);
+    if requested_sample_format == Some("") {
+        return Err("Live audio sample format must not be empty".to_string());
+    }
 
     let target_sample_rate = request.sample_rate.unwrap_or(default_sample_rate);
     if let Some(buffer_frames) = request.buffer_frames {
         validate_live_audio_configured_buffer(buffer_frames, target_sample_rate)?;
     }
-    let use_default_stream = request.sample_rate.is_none() && request.stream_channels.is_none();
+    let channels_match_default = request
+        .stream_channels
+        .map(|channels| channels == default_channels)
+        .unwrap_or(true);
+    let format_matches_default = requested_sample_format
+        .map(|format| format == default_sample_format.to_string())
+        .unwrap_or(true);
+    if request.sample_rate.is_none() {
+        if !channels_match_default {
+            return Err(format!(
+                "System-default live audio configuration uses {default_channels} channels, not {}",
+                request.stream_channels.unwrap_or_default()
+            ));
+        }
+        if !format_matches_default {
+            return Err(format!(
+                "System-default live audio configuration uses {default_sample_format}, not {}",
+                requested_sample_format.unwrap_or_default()
+            ));
+        }
+    }
+    let use_default_stream = request.sample_rate.is_none()
+        || (target_sample_rate == default_sample_rate
+            && channels_match_default
+            && format_matches_default);
     let (channels, sample_format, buffer_capability) = if use_default_stream {
         (
             default_channels,
@@ -7000,14 +7088,8 @@ fn select_live_audio_stream_config(
                         .stream_channels
                         .map(|channels| channels == range.channels())
                         .unwrap_or(true)
-                    && request
-                        .buffer_frames
-                        .map(|frames| {
-                            live_audio_buffer_accepts(
-                                live_audio_buffer_capability(range.buffer_size()),
-                                frames,
-                            )
-                        })
+                    && requested_sample_format
+                        .map(|format| format == range.sample_format().to_string())
                         .unwrap_or(true)
             })
             .min_by_key(|range| {
@@ -7017,12 +7099,15 @@ fn select_live_audio_stream_config(
                     live_audio_channel_rank(range.channels(), default_channels)
                 };
                 let buffer_rank = match live_audio_buffer_capability(range.buffer_size()) {
-                    LiveAudioBufferCapability::Range { .. } => 0_u8,
-                    LiveAudioBufferCapability::Unknown => 1_u8,
+                    LiveAudioBufferCapability::Range {
+                        min_frames,
+                        max_frames,
+                    } => (0_u8, min_frames, max_frames),
+                    LiveAudioBufferCapability::Unknown => (1_u8, u32::MAX, u32::MAX),
                 };
                 (
                     channel_rank,
-                    request.buffer_frames.map(|_| buffer_rank).unwrap_or(0),
+                    buffer_rank,
                     live_audio_sample_format_rank(range.sample_format(), default_sample_format),
                     range.min_sample_rate().0,
                     range.max_sample_rate().0,
@@ -7030,15 +7115,12 @@ fn select_live_audio_stream_config(
             })
             .ok_or_else(|| {
                 format!(
-                    "No supported live audio input configuration matches sample_rate={target_sample_rate}, channels={}, buffer_frames={}",
+                    "No supported live audio input configuration matches sample_rate={target_sample_rate}, channels={}, sample_format={}",
                     request
                         .stream_channels
                         .map(|value| value.to_string())
                         .unwrap_or_else(|| "auto".to_string()),
-                    request
-                        .buffer_frames
-                        .map(|value| value.to_string())
-                        .unwrap_or_else(|| "default".to_string()),
+                    requested_sample_format.unwrap_or("auto"),
                 )
             })?;
         (
@@ -7066,6 +7148,7 @@ fn select_live_audio_stream_config(
                 .unwrap_or(rodio::cpal::BufferSize::Default),
         },
         sample_format,
+        buffer_capability,
         configured_buffer_frames: request.buffer_frames,
         channel_mix: request.channel_mix,
     })
@@ -7160,7 +7243,7 @@ fn start_live_audio_input(
         .device
         .default_input_config()
         .map_err(|error| format!("Failed to read audio input configuration: {error}"))?;
-    let supported_configs = if request.sample_rate.is_some() || request.stream_channels.is_some() {
+    let supported_configs = if request.sample_rate.is_some() {
         resolved
             .device
             .supported_input_configs()
@@ -7171,7 +7254,7 @@ fn start_live_audio_input(
     } else {
         Vec::new()
     };
-    let selected = select_live_audio_stream_config(&default_config, &supported_configs, &request)?;
+    let selected = resolve_live_audio_stream_config(&default_config, &supported_configs, &request)?;
     let sample_format = selected.sample_format;
     let config = selected.stream_config.clone();
     let channels = config.channels.max(1);
@@ -8060,6 +8143,22 @@ fn live_audio_input_status(state: State<'_, AppState>) -> Result<LiveAudioInputS
         .lock()
         .map_err(|_| "Live audio input status lock was poisoned".to_string())
         .map(|status| status.clone())
+}
+
+#[tauri::command]
+fn live_audio_input_levels(state: State<'_, AppState>) -> Result<LiveAudioInputLevels, String> {
+    let active = state
+        .live_audio_input
+        .lock()
+        .map_err(|_| "Live audio input state lock was poisoned".to_string())?;
+    let Some(input) = active.as_ref() else {
+        return Ok(LiveAudioInputLevels::default());
+    };
+    input
+        .status
+        .lock()
+        .map_err(|_| "Live audio input status lock was poisoned".to_string())
+        .map(|status| LiveAudioInputLevels::from_status(&status))
 }
 
 #[tauri::command]
@@ -28974,6 +29073,47 @@ mod live_audio_input_tests {
     use super::*;
     use std::cell::Cell;
 
+    #[test]
+    fn live_audio_levels_are_clamped_and_zeroed_when_unsafe() {
+        let live = LiveAudioInputLevels::from_status(&LiveAudioInputStatus {
+            running: true,
+            bass: -0.25,
+            mid: 0.5,
+            high: 1.25,
+            ..LiveAudioInputStatus::default()
+        });
+        assert_eq!((live.bass, live.mid, live.high), (0.0, 0.5, 1.0));
+
+        for status in [
+            LiveAudioInputStatus {
+                running: true,
+                stale: true,
+                bass: 0.25,
+                mid: 0.5,
+                high: 0.75,
+                ..LiveAudioInputStatus::default()
+            },
+            LiveAudioInputStatus {
+                running: true,
+                safety_clear_pending: true,
+                bass: 0.25,
+                mid: 0.5,
+                high: 0.75,
+                ..LiveAudioInputStatus::default()
+            },
+            LiveAudioInputStatus {
+                running: false,
+                bass: 0.25,
+                mid: 0.5,
+                high: 0.75,
+                ..LiveAudioInputStatus::default()
+            },
+        ] {
+            let levels = LiveAudioInputLevels::from_status(&status);
+            assert_eq!((levels.bass, levels.mid, levels.high), (0.0, 0.0, 0.0));
+        }
+    }
+
     fn callback_info(device_delay: Duration) -> rodio::cpal::InputCallbackInfo {
         let capture = rodio::cpal::StreamInstant::new(1, 0);
         let callback = capture.add(device_delay).unwrap();
@@ -29048,6 +29188,7 @@ mod live_audio_input_tests {
             "device_id": "wasapi:7:0",
             "sample_rate": 48_000,
             "stream_channels": 2,
+            "sample_format": "f32",
             "buffer_frames": 128,
             "channel_mix": {
                 "mode": "stereo_pair",
@@ -29059,6 +29200,7 @@ mod live_audio_input_tests {
         assert_eq!(request.device_id.as_deref(), Some("wasapi:7:0"));
         assert_eq!(request.sample_rate, Some(48_000));
         assert_eq!(request.stream_channels, Some(2));
+        assert_eq!(request.sample_format.as_deref(), Some("f32"));
         assert_eq!(request.buffer_frames, Some(128));
         assert_eq!(
             request.channel_mix,
@@ -29092,9 +29234,16 @@ mod live_audio_input_tests {
                 max: 2_048,
             },
         );
-        let selected =
-            select_live_audio_stream_config(&default, &[], &LiveAudioInputStartRequest::default())
-                .unwrap();
+        let selected = resolve_live_audio_stream_config(
+            &default,
+            &[],
+            &LiveAudioInputStartRequest {
+                stream_channels: Some(2),
+                sample_format: Some("f32".to_string()),
+                ..LiveAudioInputStartRequest::default()
+            },
+        )
+        .unwrap();
         assert_eq!(selected.stream_config.channels, 2);
         assert_eq!(selected.stream_config.sample_rate.0, 48_000);
         assert_eq!(
@@ -29102,8 +29251,29 @@ mod live_audio_input_tests {
             rodio::cpal::BufferSize::Default
         );
         assert_eq!(selected.sample_format, rodio::cpal::SampleFormat::F32);
+        assert_eq!(
+            selected.buffer_capability,
+            LiveAudioBufferCapability::Range {
+                min_frames: 64,
+                max_frames: 2_048,
+            }
+        );
         assert_eq!(selected.configured_buffer_frames, None);
         assert_eq!(selected.channel_mix, LiveAudioChannelMix::AverageAll);
+
+        let explicit_default = resolve_live_audio_stream_config(
+            &default,
+            &[],
+            &LiveAudioInputStartRequest {
+                sample_rate: Some(48_000),
+                stream_channels: Some(2),
+                sample_format: Some("f32".to_string()),
+                ..LiveAudioInputStartRequest::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(explicit_default.sample_format, selected.sample_format);
+        assert_eq!(explicit_default.stream_config, selected.stream_config);
     }
 
     #[test]
@@ -29142,11 +29312,12 @@ mod live_audio_input_tests {
         let request = LiveAudioInputStartRequest {
             sample_rate: Some(48_000),
             stream_channels: Some(2),
+            sample_format: Some("i16".to_string()),
             buffer_frames: Some(128),
             channel_mix: LiveAudioChannelMix::Single { channel_index: 1 },
             ..LiveAudioInputStartRequest::default()
         };
-        let selected = select_live_audio_stream_config(&default, &supported, &request).unwrap();
+        let selected = resolve_live_audio_stream_config(&default, &supported, &request).unwrap();
         assert_eq!(selected.sample_format, rodio::cpal::SampleFormat::I16);
         assert_eq!(selected.stream_config.sample_rate.0, 48_000);
         assert_eq!(selected.stream_config.channels, 2);
@@ -29155,6 +29326,19 @@ mod live_audio_input_tests {
             rodio::cpal::BufferSize::Fixed(128)
         );
         assert_eq!(selected.configured_buffer_frames, Some(128));
+
+        let preview_request = LiveAudioInputStartRequest {
+            buffer_frames: None,
+            sample_format: None,
+            ..request.clone()
+        };
+        let preview =
+            resolve_live_audio_stream_config(&default, &supported, &preview_request).unwrap();
+        assert_eq!(preview.sample_format, selected.sample_format);
+        assert_eq!(
+            preview.stream_config.channels,
+            selected.stream_config.channels
+        );
 
         let known_buffer_supported = vec![
             supported_range(
@@ -29176,9 +29360,16 @@ mod live_audio_input_tests {
             ),
         ];
         assert_eq!(
-            select_live_audio_stream_config(&default, &known_buffer_supported, &request)
-                .unwrap()
-                .sample_format,
+            resolve_live_audio_stream_config(
+                &default,
+                &known_buffer_supported,
+                &LiveAudioInputStartRequest {
+                    sample_format: None,
+                    ..request.clone()
+                },
+            )
+            .unwrap()
+            .sample_format,
             rodio::cpal::SampleFormat::F32,
             "a verified fixed-buffer range must outrank an unknown default-format range"
         );
@@ -29187,7 +29378,7 @@ mod live_audio_input_tests {
             sample_rate: Some(96_000),
             ..LiveAudioInputStartRequest::default()
         };
-        assert!(select_live_audio_stream_config(&default, &supported, &unsupported).is_err());
+        assert!(resolve_live_audio_stream_config(&default, &supported, &unsupported).is_err());
     }
 
     #[test]
@@ -29207,7 +29398,7 @@ mod live_audio_input_tests {
                 ..LiveAudioInputStartRequest::default()
             };
             assert!(
-                select_live_audio_stream_config(&default, &[], &request).is_err(),
+                resolve_live_audio_stream_config(&default, &[], &request).is_err(),
                 "buffer {frames} should be rejected"
             );
         }
@@ -29222,7 +29413,7 @@ mod live_audio_input_tests {
             buffer_frames: Some(32),
             ..LiveAudioInputStartRequest::default()
         };
-        assert!(select_live_audio_stream_config(&narrow, &[], &out_of_range).is_err());
+        assert!(resolve_live_audio_stream_config(&narrow, &[], &out_of_range).is_err());
 
         let unknown = supported_config(
             2,
@@ -29235,11 +29426,59 @@ mod live_audio_input_tests {
             ..LiveAudioInputStartRequest::default()
         };
         assert_eq!(
-            select_live_audio_stream_config(&unknown, &[], &exact_attempt)
+            resolve_live_audio_stream_config(&unknown, &[], &exact_attempt)
                 .unwrap()
                 .stream_config
                 .buffer_size,
             rodio::cpal::BufferSize::Fixed(256)
+        );
+
+        let explicit_rate_default = supported_config(
+            2,
+            44_100,
+            rodio::cpal::SampleFormat::I16,
+            rodio::cpal::SupportedBufferSize::Range { min: 64, max: 512 },
+        );
+        let heterogeneous = vec![
+            supported_range(
+                2,
+                48_000,
+                48_000,
+                rodio::cpal::SampleFormat::I16,
+                rodio::cpal::SupportedBufferSize::Range { min: 64, max: 64 },
+            ),
+            supported_range(
+                2,
+                48_000,
+                48_000,
+                rodio::cpal::SampleFormat::F32,
+                rodio::cpal::SupportedBufferSize::Range {
+                    min: 64,
+                    max: 1_024,
+                },
+            ),
+        ];
+        let preview = resolve_live_audio_stream_config(
+            &explicit_rate_default,
+            &heterogeneous,
+            &LiveAudioInputStartRequest {
+                sample_rate: Some(48_000),
+                ..LiveAudioInputStartRequest::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(preview.sample_format, rodio::cpal::SampleFormat::I16);
+        let start = LiveAudioInputStartRequest {
+            sample_rate: Some(48_000),
+            stream_channels: Some(preview.stream_config.channels),
+            sample_format: Some(preview.sample_format.to_string()),
+            buffer_frames: Some(128),
+            ..LiveAudioInputStartRequest::default()
+        };
+        assert!(
+            resolve_live_audio_stream_config(&explicit_rate_default, &heterogeneous, &start)
+                .is_err(),
+            "a fixed buffer must be rejected instead of silently switching to another format"
         );
     }
 
@@ -30745,6 +30984,7 @@ fn main() {
             start_live_audio_input,
             stop_live_audio_input,
             live_audio_input_status,
+            live_audio_input_levels,
             stop_video_layer_audio_monitor,
             set_video_layer_audio_monitor_volume,
             video_audio_monitor_status,

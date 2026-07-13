@@ -27,6 +27,32 @@ assert.equal(localization.translateUiText("  Save  ", "ja"), "  保存  ");
 assert.equal(localization.translateUiText("3 steps", "ja"), "3 手順");
 assert.equal(localization.translateUiText("Install v1.2.0", "ja"), "v1.2.0をインストール");
 assert.equal(localization.translateUiText("Jump", "ja"), "ジャンプ");
+assert.equal(localization.translateUiText("Live audio input stopped.", "ja"), "ライブ音声入力は停止中です。");
+assert.equal(localization.translateUiText("Bass level", "ja"), "低域レベル");
+assert.equal(localization.translateUiText("0 percent", "ja"), "0パーセント");
+assert.equal(localization.translateUiText("Checking", "ja"), "確認中");
+assert.equal(localization.translateUiText("Clear Pending", "ja"), "クリア待ち");
+assert.equal(
+  localization.translateUiText("System default audio input", "ja"),
+  "システム既定の音声入力",
+);
+assert.equal(localization.translateUiText("Reselect input", "ja"), "入力を再選択");
+assert.equal(
+  localization.translateUiText("Found 2 audio input device(s).", "ja"),
+  "音声入力デバイスが2件見つかりました。",
+);
+assert.equal(
+  localization.translateUiText("Live audio FFT input started.", "ja"),
+  "ライブ音声FFT入力を開始しました。",
+);
+assert.equal(
+  localization.translateUiText(
+    "The previous audio input could not be identified safely after Refresh. Select an input again; Start is locked.",
+    "ja",
+  ),
+  "更新後に以前の音声入力を安全に特定できませんでした。入力を選び直してください。開始はロックされています。",
+);
+assert.match(source, /"aria-valuetext"/, "dynamic meter aria-valuetext must be localized");
 assert.equal(localization.translateUiText("Blocks 13-24 / 500", "ja"), "ブロック 13-24 / 500");
 assert.equal(localization.translateUiText("Lighting overlap ×250", "ja"), "照明の重複 ×250");
 assert.equal(

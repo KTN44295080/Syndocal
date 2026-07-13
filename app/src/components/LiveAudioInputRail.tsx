@@ -40,7 +40,7 @@ const meterBands = [
 ] as const;
 
 const COMMON_SAMPLE_RATES = [44_100, 48_000, 88_200, 96_000, 176_400, 192_000] as const;
-const COMMON_BUFFER_FRAMES = [64, 128, 256, 512, 1_024, 2_048] as const;
+const COMMON_BUFFER_FRAMES = [32, 64, 128, 256, 512, 1_024, 2_048, 4_096, 8_192] as const;
 
 const channelMixValue = (mix: LiveAudioChannelMix): string => {
   switch (mix.mode) {
@@ -76,7 +76,14 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
   const selectableSampleRates = createMemo(() => {
     const capabilities = props.liveAudioInputCapabilities;
     if (!capabilities) return [];
-    const rates = new Set<number>([capabilities.default_config.sample_rate]);
+    const rates = new Set<number>();
+    if (capabilities.default_config.sample_rate > 0) {
+      rates.add(capabilities.default_config.sample_rate);
+    }
+    for (const config of capabilities.supported_configs) {
+      if (config.min_sample_rate > 0) rates.add(config.min_sample_rate);
+      if (config.max_sample_rate > 0) rates.add(config.max_sample_rate);
+    }
     for (const sampleRate of COMMON_SAMPLE_RATES) {
       if (
         capabilities.supported_configs.some(
@@ -91,23 +98,51 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
   const selectableBufferFrames = createMemo(() => {
     const capabilities = props.liveAudioInputCapabilities;
     if (!capabilities) return [];
-    const sampleRate = props.liveAudioInputSampleRate ?? capabilities.default_config.sample_rate;
-    return COMMON_BUFFER_FRAMES.filter(
-      (frames) =>
-        frames <= capabilities.max_capture_frames &&
-        capabilities.supported_configs.some(
-          (config) =>
-            config.min_sample_rate <= sampleRate &&
-            sampleRate <= config.max_sample_rate &&
-            (config.buffer_size.kind === "unknown" ||
-              (config.buffer_size.kind === "range" &&
-              config.buffer_size.min_frames <= frames &&
-              frames <= config.buffer_size.max_frames)),
-        ),
-    );
+    const resolved = capabilities.resolved_config;
+    const candidates = new Set<number>(COMMON_BUFFER_FRAMES);
+    if (resolved.buffer_size.kind === "range") {
+      candidates.add(resolved.buffer_size.min_frames);
+      candidates.add(resolved.buffer_size.max_frames);
+    }
+    return [...candidates]
+      .filter(
+        (frames) =>
+          frames > 0 &&
+          frames <= capabilities.max_capture_frames &&
+          frames * 1_000 <= resolved.sample_rate * 200 &&
+          (resolved.buffer_size.kind === "unknown" ||
+            (resolved.buffer_size.min_frames <= frames &&
+              frames <= resolved.buffer_size.max_frames)),
+      )
+      .sort((left, right) => left - right);
   });
   const inputChannels = createMemo(
-    () => props.liveAudioInputCapabilities?.default_config.channels ?? 0,
+    () => props.liveAudioInputCapabilities?.resolved_config.channels ?? 0,
+  );
+  const stereoPairs = createMemo(() =>
+    Array.from({ length: Math.floor(inputChannels() / 2) }, (_, index) => [index * 2, index * 2 + 1] as const),
+  );
+  const selectedDevice = createMemo(() =>
+    props.liveAudioInputDevices.find(
+      (device) => device.id === props.selectedLiveAudioInputDevice,
+    ),
+  );
+  const selectedDeviceRequiresReselection = createMemo(
+    () => Boolean(props.selectedLiveAudioInputDevice && !selectedDevice()),
+  );
+  const selectedDeviceLabel = createMemo(() =>
+    selectedDeviceRequiresReselection()
+      ? "Reselect audio input"
+      : selectedDevice()?.label ?? "System default audio input",
+  );
+  const configFormat = createMemo(() =>
+    selectedDeviceRequiresReselection()
+      ? "Reselect input"
+      : props.liveAudioInputCapabilitiesBusy
+        ? "I/O…"
+        : props.liveAudioInputCapabilities
+          ? `${props.liveAudioInputCapabilities.backend} · ${props.liveAudioInputCapabilities.resolved_config.sample_format} · ${props.liveAudioInputCapabilities.resolved_config.channels}ch`
+          : "I/O unavailable",
   );
   const inputLocked = () =>
     props.liveAudioInputBusy ||
@@ -128,9 +163,18 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
             aria-label="Live audio input device"
             disabled={inputLocked()}
             value={props.selectedLiveAudioInputDevice}
-            title={props.selectedLiveAudioInputDevice || "System default audio input"}
+            title={selectedDeviceLabel()}
+            aria-invalid={selectedDeviceRequiresReselection() ? "true" : undefined}
             onInput={(event) => props.onSetLiveAudioInputDevice(event.currentTarget.value)}
           >
+            <Show when={selectedDeviceRequiresReselection()}>
+              <option
+                value={props.selectedLiveAudioInputDevice}
+                selected={selectedDeviceRequiresReselection()}
+              >
+                Reselect input
+              </option>
+            </Show>
             <option value="">System default</option>
             <For each={props.liveAudioInputDevices}>
               {(device) => <option value={device.id} data-no-localize>{device.label}</option>}
@@ -149,7 +193,8 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
           class={props.liveAudioInputStatus.running ? "danger" : "primary"}
           disabled={
             props.liveAudioInputBusy ||
-            props.liveAudioInputCapabilitiesBusy ||
+            (!props.liveAudioInputStatus.running && props.liveAudioInputCapabilitiesBusy) ||
+            (!props.liveAudioInputStatus.running && !props.liveAudioInputCapabilities) ||
             (!props.liveAudioInputStatusKnown && !props.liveAudioInputStatus.running) ||
             (!props.liveAudioInputStatus.running && props.liveAudioInputStatus.safety_clear_pending)
           }
@@ -242,17 +287,17 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
               <For each={Array.from({ length: inputChannels() }, (_, index) => index)}>
                 {(channelIndex) => <option value={`single:${channelIndex}`}>Ch {channelIndex + 1}</option>}
               </For>
-              <Show when={inputChannels() >= 2}>
-                <option value="stereo_pair:0:1">Ch 1+2 → mono</option>
-              </Show>
+              <For each={stereoPairs()}>
+                {([leftChannelIndex, rightChannelIndex]) => (
+                  <option value={`stereo_pair:${leftChannelIndex}:${rightChannelIndex}`}>
+                    Ch {leftChannelIndex + 1}+{rightChannelIndex + 1} → mono
+                  </option>
+                )}
+              </For>
             </select>
           </label>
-          <span class="liveAudioConfigFormat" data-no-localize>
-            {props.liveAudioInputCapabilitiesBusy
-              ? "I/O…"
-              : props.liveAudioInputCapabilities
-                ? `${props.liveAudioInputCapabilities.backend} · ${props.liveAudioInputCapabilities.default_config.sample_format}`
-                : "I/O unavailable"}
+          <span class="liveAudioConfigFormat" title={configFormat()}>
+            {configFormat()}
           </span>
         </div>
       </Show>
@@ -272,7 +317,7 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
         </div>
       </Show>
       <Show when={health() !== "live" && health() !== "stopped"}>
-        <small class="liveAudioTelemetry liveAudioSafetyMessage">{detail()}</small>
+        <small class="liveAudioTelemetry liveAudioSafetyMessage" title={detail()}>{detail()}</small>
       </Show>
       <output class="liveAudioHealthAnnouncement" role="status" aria-live="polite" aria-atomic="true">
         {liveAudioInputAnnouncement(props.liveAudioInputStatus, props.liveAudioInputStatusKnown)}

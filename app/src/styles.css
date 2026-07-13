@@ -11782,9 +11782,13 @@ input[type="color"] {
   min-width: 0;
 }
 
-.videoControlPanelMixer .liveAudioInputControls select {
+.videoControlPanelMixer .liveAudioInputControls select,
+.videoControlPanelMixer .liveAudioInputControls button {
   min-width: 0;
   height: 24px;
+  min-height: 24px;
+  padding-top: 0;
+  padding-bottom: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -12113,7 +12117,7 @@ input[type="color"] {
   opacity: 0;
 }
 
-.liveAudioInputBar.stale .liveAudioMeters small {
+.liveAudioInputBar.stale .liveAudioSafetyMessage {
   color: #ffb48f;
   font-weight: 700;
 }
@@ -12123,12 +12127,12 @@ input[type="color"] {
   opacity: 0;
 }
 
-.liveAudioInputBar.clearing .liveAudioMeters small {
+.liveAudioInputBar.clearing .liveAudioSafetyMessage {
   color: #ff9b9b;
   font-weight: 800;
 }
 
-.liveAudioInputBar.unknown .liveAudioMeters small {
+.liveAudioInputBar.unknown .liveAudioSafetyMessage {
   color: #d4b982;
   font-weight: 700;
 }
@@ -12204,16 +12208,31 @@ input[type="color"] {
 .liveAudioTelemetry > span {
   flex: 0 0 auto;
   min-width: 0;
+  overflow: hidden;
   border: 1px solid #303a42;
   border-radius: 2px;
   background: #11171c;
   padding: 1px 4px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.liveAudioTelemetry > .liveAudioTelemetryOvr {
+  flex: 0 1 94px;
+}
+
+.liveAudioTelemetry > .liveAudioTelemetryLatency {
+  flex: 0 1 132px;
 }
 
 .liveAudioTelemetry > .liveAudioTelemetryIo {
   flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.liveAudioTelemetry > .liveAudioTelemetryQueue {
+  flex: 0 1 58px;
 }
 
 .liveAudioConfigControls {

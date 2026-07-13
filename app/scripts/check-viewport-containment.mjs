@@ -10,10 +10,11 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
 const largeShowMode = process.argv.includes("--large-show");
 const vjEmptyMode = process.argv.includes("--vj-empty");
+const liveAudioOnlyMode = process.argv.includes("--live-audio-only");
 const sceneBlockOnlyMode = process.argv.includes("--scene-block-only");
 const sceneBlockHourOnlyMode = process.argv.includes("--scene-block-hour-only");
 const sceneBlockOverlapOnlyMode = process.argv.includes("--scene-block-overlap-only");
-const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (largeShowMode ? "large-show" : vjEmptyMode ? "vj-empty" : "timeline");
+const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (largeShowMode ? "large-show" : vjEmptyMode || liveAudioOnlyMode ? "vj-empty" : "timeline");
 const defaultUrl =
   viewportFixture === "none"
     ? "http://127.0.0.1:5173/"
@@ -493,6 +494,229 @@ async function waitForApp(client) {
     await sleep(100);
   }
   throw new Error("Syndocal app shell did not mount.");
+}
+
+async function waitForClientCondition(client, expression, description) {
+  let lastValue = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    lastValue = await client.evaluate(expression);
+    if (lastValue) return lastValue;
+    await sleep(25);
+  }
+  throw new Error(description + " did not settle. Last value: " + JSON.stringify(lastValue));
+}
+
+function installLiveAudioMockInPage() {
+  const delay = (ms) => new Promise((resolveDelay) => window.setTimeout(resolveDelay, ms));
+  const clone = (value) => JSON.parse(JSON.stringify(value));
+  const stoppedStatus = () => ({
+    running: false,
+    stale: false,
+    safety_clear_pending: false,
+    device_id: null,
+    device_name: null,
+    backend: null,
+    sample_format: null,
+    sample_rate: 0,
+    channels: 0,
+    configured_buffer_frames: null,
+    channel_mix: { mode: "average_all" },
+    bass: 0,
+    mid: 0,
+    high: 0,
+    analyzed_windows: 0,
+    dropped_chunks: 0,
+    dropped_frames: 0,
+    callback_count: 0,
+    last_callback_frames: 0,
+    min_callback_frames: 0,
+    max_callback_frames: 0,
+    capture_to_worker_us: 0,
+    max_capture_to_worker_us: 0,
+    queue_depth: 0,
+    queue_capacity: 4,
+    queue_depth_high_water: 0,
+    last_error: null,
+  });
+  const mock = {
+    calls: [],
+    status: stoppedStatus(),
+    deviceGeneration: 0,
+  };
+  const invoke = async (command, args = {}) => {
+    mock.calls.push({ command, args: clone(args) });
+    if (command === "list_audio_input_devices") {
+      await delay(120);
+      mock.deviceGeneration += 1;
+      if (mock.deviceGeneration === 1) {
+        return [
+          { id: "viewport-wasapi-studio-g1", name: "Viewport Studio Microphone", label: "Viewport Studio Microphone · WASAPI", backend: "WASAPI" },
+          { id: "viewport-wasapi-line-g1", name: "Viewport Line Input", label: "Viewport Line Input · WASAPI", backend: "WASAPI" },
+        ];
+      }
+      if (mock.deviceGeneration === 2) {
+        return [
+          { id: "viewport-wasapi-studio-g2", name: "Viewport Studio Microphone", label: "Viewport Studio Microphone · WASAPI", backend: "WASAPI" },
+          { id: "viewport-wasapi-line-g2", name: "Viewport Line Input", label: "Viewport Line Input · WASAPI", backend: "WASAPI" },
+        ];
+      }
+      return [
+        { id: "viewport-wasapi-studio-g3a", name: "Viewport Studio Microphone", label: "Viewport Studio Microphone · WASAPI (#1)", backend: "WASAPI" },
+        { id: "viewport-wasapi-studio-g3b", name: "Viewport Studio Microphone", label: "Viewport Studio Microphone · WASAPI (#2)", backend: "WASAPI" },
+        { id: "viewport-wasapi-line-g3", name: "Viewport Line Input", label: "Viewport Line Input · WASAPI", backend: "WASAPI" },
+      ];
+    }
+    if (command === "get_live_audio_input_capabilities") {
+      await delay(100);
+      const sampleRate = Number(args.sampleRate) || 48_000;
+      return {
+        device_id: args.deviceId ?? null,
+        device_name: args.deviceId ? "Viewport Studio Microphone" : "System default",
+        backend: "WASAPI",
+        default_config: {
+          channels: 2,
+          sample_rate: 48_000,
+          sample_format: "f32",
+        },
+        supported_configs: [
+          {
+            channels: 2,
+            min_sample_rate: 44_100,
+            max_sample_rate: 192_000,
+            sample_format: "f32",
+            buffer_size: { kind: "range", min_frames: 64, max_frames: 8_192 },
+          },
+        ],
+        resolved_config: {
+          channels: 2,
+          sample_rate: sampleRate,
+          sample_format: "f32",
+          buffer_size: { kind: "range", min_frames: 64, max_frames: 8_192 },
+        },
+        max_capture_frames: 8_192,
+      };
+    }
+    if (command === "start_live_audio_input") {
+      await delay(120);
+      const request = args.request ?? {};
+      mock.status = {
+        running: true,
+        stale: false,
+        safety_clear_pending: false,
+        device_id: request.device_id ?? null,
+        device_name: "Viewport Studio Microphone",
+        backend: "WASAPI",
+        sample_format: request.sample_format ?? "f32",
+        sample_rate: request.sample_rate ?? 48_000,
+        channels: request.stream_channels ?? 2,
+        configured_buffer_frames: request.buffer_frames ?? null,
+        channel_mix: request.channel_mix ?? { mode: "average_all" },
+        bass: 0.42,
+        mid: 0.58,
+        high: 0.76,
+        analyzed_windows: 123_456,
+        dropped_chunks: 9_999,
+        dropped_frames: 999_999,
+        callback_count: 999_999,
+        last_callback_frames: 8_192,
+        min_callback_frames: 64,
+        max_callback_frames: 8_192,
+        capture_to_worker_us: 999_900,
+        max_capture_to_worker_us: 9_999_900,
+        queue_depth: 4,
+        queue_capacity: 4,
+        queue_depth_high_water: 4,
+        last_error: null,
+      };
+      return clone(mock.status);
+    }
+    if (command === "stop_live_audio_input") {
+      await delay(120);
+      mock.status = {
+        ...stoppedStatus(),
+        safety_clear_pending: true,
+        device_id: "viewport-wasapi-studio-g3a",
+        device_name: "Viewport Studio Microphone",
+        backend: "WASAPI",
+        sample_format: "f32",
+        sample_rate: 192_000,
+        channels: 2,
+        configured_buffer_frames: 8_192,
+        channel_mix: { mode: "stereo_pair", left_channel_index: 0, right_channel_index: 1 },
+        callback_count: 999_999,
+        last_callback_frames: 8_192,
+        min_callback_frames: 64,
+        max_callback_frames: 8_192,
+        queue_capacity: 4,
+        queue_depth_high_water: 4,
+      };
+      return clone(mock.status);
+    }
+    if (command === "live_audio_input_status") return clone(mock.status);
+    if (command === "live_audio_input_levels") {
+      return {
+        running: mock.status.running,
+        stale: mock.status.stale,
+        safety_clear_pending: mock.status.safety_clear_pending,
+        bass: mock.status.bass,
+        mid: mock.status.mid,
+        high: mock.status.high,
+      };
+    }
+    throw new Error("Unexpected live-audio viewport invoke: " + command);
+  };
+  Object.defineProperty(window, "__TAURI_INTERNALS__", {
+    configurable: true,
+    writable: true,
+    value: { invoke },
+  });
+  window.__syndocalLiveAudioMock = mock;
+}
+
+async function installLiveAudioInvokeMock(client) {
+  await client.evaluate("(" + installLiveAudioMockInPage.toString() + ")()");
+}
+
+function readLiveAudioRailStateInPage() {
+  const rail = document.querySelector(".videoMixerClipPane > .liveAudioInputBar");
+  if (!rail) return null;
+  const directButtons = [...rail.querySelectorAll(".liveAudioInputControls > button")];
+  const action = directButtons.at(-1);
+  const refresh = directButtons.at(0);
+  const device = rail.querySelector(".liveAudioInputControls select");
+  const configSelects = [...rail.querySelectorAll(".liveAudioConfigControls select")];
+  const optionValues = (select) =>
+    select ? [...select.options].map((option) => option.value) : [];
+  const meters = [...rail.querySelectorAll('.liveAudioMeters [role="meter"]')].map((meter) => ({
+    label: meter.getAttribute("aria-label") ?? "",
+    now: Number(meter.getAttribute("aria-valuenow") ?? -1),
+    valueText: meter.getAttribute("aria-valuetext") ?? "",
+    title: meter.getAttribute("title") ?? "",
+  }));
+  return {
+    health: rail.getAttribute("data-health") ?? "",
+    actionText: (action?.textContent ?? "").trim(),
+    actionDisabled: Boolean(action?.disabled),
+    refreshDisabled: Boolean(refresh?.disabled),
+    deviceDisabled: Boolean(device?.disabled),
+    deviceTitle: device?.getAttribute("title") ?? "",
+    deviceInvalid: device?.getAttribute("aria-invalid") ?? "",
+    selectedDevice: device?.value ?? "",
+    deviceOptions: optionValues(device),
+    sampleRateOptions: optionValues(configSelects[0]),
+    bufferOptions: optionValues(configSelects[1]),
+    mixOptions: optionValues(configSelects[2]),
+    configFormat: (rail.querySelector(".liveAudioConfigFormat")?.textContent ?? "").trim(),
+    meters,
+    telemetry: [...rail.querySelectorAll(":scope > .liveAudioTelemetry > span")]
+      .map((node) => (node.textContent ?? "").trim().replace(/\s+/g, " ")),
+    safetyMessage: (rail.querySelector(".liveAudioSafetyMessage")?.textContent ?? "").trim(),
+    announcement: (rail.querySelector(".liveAudioHealthAnnouncement")?.textContent ?? "").trim(),
+  };
+}
+
+async function readLiveAudioRailState(client) {
+  return client.evaluate("(" + readLiveAudioRailStateInPage.toString() + ")()");
 }
 
 async function seedViewportLocalStorage(client) {
@@ -1043,6 +1267,14 @@ async function measure(client, label) {
         .filter((node) => (node.textContent || '').trim() === 'UI言語').length,
       visibleJapaneseSaveButtonCount: [...document.querySelectorAll('.appProjectMenu button[role="menuitem"] span')]
         .filter((node) => (node.textContent || '').trim() === '保存').length,
+      visibleJapaneseLiveAudioStoppedCount: [...document.querySelectorAll('.liveAudioHealthAnnouncement')]
+        .filter((node) => (node.textContent || '').trim() === 'ライブ音声入力は停止中です。').length,
+      visibleJapaneseLiveAudioMeterLabelCount: [...document.querySelectorAll('.liveAudioMeters [role="meter"]')]
+        .filter((node) => ['低域レベル', '中域レベル', '高域レベル'].includes(node.getAttribute('aria-label') || '')).length,
+      visibleJapaneseLiveAudioMeterValueCount: [...document.querySelectorAll('.liveAudioMeters [role="meter"]')]
+        .filter((node) => (node.getAttribute('aria-valuetext') || '') === '0パーセント').length,
+      visibleJapaneseLiveAudioIoUnavailableCount: [...document.querySelectorAll('.liveAudioConfigFormat')]
+        .filter((node) => (node.textContent || '').trim() === 'I/Oを利用できません').length,
       preservedUserFixtureLabelCount: [...document.querySelectorAll('.fixtureList .fixture strong')]
         .filter((node) => ['Video', 'Save', 'Output'].includes((node.textContent || '').trim())).length,
       translatedUserFixtureCollisionCount: [...document.querySelectorAll('.fixtureList .fixture strong')]
@@ -1721,14 +1953,35 @@ async function measure(client, label) {
         const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
         return rail ? Math.max(0, rail.scrollHeight - rail.clientHeight) : 0;
       })(),
+      liveAudioRailControlOverflowY: (() => {
+        const controls = document.querySelector('.videoMixerClipPane > .liveAudioInputBar .liveAudioInputControls');
+        return controls ? Math.max(0, controls.scrollHeight - controls.clientHeight) : 0;
+      })(),
       liveAudioRailMeterCount: visibleCount('.videoMixerClipPane > .liveAudioInputBar [role="meter"]'),
       liveAudioRailPoliteRegionCount: visibleCount('.videoMixerClipPane > .liveAudioInputBar [aria-live="polite"]'),
+      liveAudioRailTelemetryBadgeCount: visibleCount('.videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetry > span'),
+      liveAudioRailCriticalTelemetryOverflowCount: [...document.querySelectorAll(
+        '.videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetryOvr, .videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetryLatency, .videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetryQueue',
+      )].filter((element) => element.scrollWidth - element.clientWidth > 1).length,
+      liveAudioRailTelemetryOutsideCount: (() => {
+        const telemetry = document.querySelector('.videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetry');
+        if (!telemetry) return 0;
+        const bounds = telemetry.getBoundingClientRect();
+        return [...telemetry.children].filter((element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.left < bounds.left - 1 || rect.right > bounds.right + 1 || rect.top < bounds.top - 1 || rect.bottom > bounds.bottom + 1;
+        }).length;
+      })(),
+      videoClipGridClientHeight: (() => {
+        const grid = document.querySelector('.videoMixerClipPane > .videoClipGridPanel .videoClipGrid');
+        return grid ? grid.clientHeight : 0;
+      })(),
       fullyVisibleVideoClipPadCount: (() => {
-        const grid = document.querySelector('.videoMixerClipPane > .videoClipGridPanel')?.getBoundingClientRect();
+        const grid = document.querySelector('.videoMixerClipPane > .videoClipGridPanel .videoClipGrid')?.getBoundingClientRect();
         if (!grid) return 0;
         return [...document.querySelectorAll('.videoMixerClipPane .videoClipPad')].filter((element) => {
           const rect = element.getBoundingClientRect();
-          return rect.width > 0 && rect.height > 0 && rect.top >= grid.top - 1 && rect.bottom <= grid.bottom + 1;
+          return rect.width > 0 && rect.height > 0 && rect.left >= grid.left - 1 && rect.right <= grid.right + 1 && rect.top >= grid.top - 1 && rect.bottom <= grid.bottom + 1;
         }).length;
       })(),
       visibleVideoOutputControlListCount: visibleCount('.videoOutputControlList'),
@@ -1917,6 +2170,21 @@ function hasExpectedProjectMenu(result) {
 function hasExpectedLocalization(result) {
   if (!result.label.startsWith("localization-ja-")) {
     return true;
+  }
+  if (result.label.startsWith("localization-ja-live-audio-")) {
+    return (
+      result.documentLanguage === "ja" &&
+      result.liveAudioAcceptancePassed === true &&
+      result.liveAudioAcceptance?.locale === "ja" &&
+      result.liveAudioAcceptance?.checks?.localizedSystemDefaultTitle === true &&
+      result.liveAudioAcceptance?.checks?.refreshShowsChecking === true &&
+      result.liveAudioAcceptance?.checks?.uniqueGenerationRemap === true &&
+      result.liveAudioAcceptance?.checks?.ambiguousIdentityFailsClosed === true &&
+      result.liveAudioAcceptance?.checks?.explicitReselectionUnlocksStart === true &&
+      result.liveAudioAcceptance?.checks?.startShowsChecking === true &&
+      result.liveAudioAcceptance?.checks?.localizedNonzeroMeters === true &&
+      result.liveAudioAcceptance?.checks?.safetyClearGatesRestart === true
+    );
   }
   return (
     result.documentLanguage === "ja" &&
@@ -2355,6 +2623,12 @@ function hasExpectedControlModeSurface(result) {
     );
   }
   if (result.label.startsWith("control-mixer-")) {
+    const liveTelemetryExpected = result.label.startsWith("control-mixer-live-");
+    const liveTelemetryIsValid =
+      !liveTelemetryExpected ||
+      (result.liveAudioRailTelemetryBadgeCount === 4 &&
+        result.liveAudioRailCriticalTelemetryOverflowCount === 0 &&
+        result.liveAudioRailTelemetryOutsideCount === 0);
     return (
       result.visibleLiveControlPanelCount === 0 &&
       result.visibleControlStagePanelCount === 0 &&
@@ -2394,8 +2668,11 @@ function hasExpectedControlModeSurface(result) {
       result.liveAudioRailAboveClipGrid === true &&
       result.liveAudioRailOverflowX <= 1 &&
       result.liveAudioRailOverflowY <= 1 &&
+      result.liveAudioRailControlOverflowY <= 1 &&
       result.liveAudioRailMeterCount === 3 &&
       result.liveAudioRailPoliteRegionCount === 1 &&
+      liveTelemetryIsValid &&
+      result.videoClipGridClientHeight >= 90 &&
       result.fullyVisibleVideoClipPadCount >= 1 &&
       result.visibleVideoOutputControlListCount > 0 &&
       result.visibleVideoOutputItemCount > 0 &&
@@ -2630,6 +2907,301 @@ async function checkTouchMomentaryFlash(client) {
   })()`);
 }
 
+function clickLiveAudioControlInPage(kind) {
+  const rail = document.querySelector(".videoMixerClipPane > .liveAudioInputBar");
+  if (!rail) return false;
+  const buttons = [...rail.querySelectorAll(".liveAudioInputControls > button")];
+  const button = kind === "refresh" ? buttons[0] : buttons.at(-1);
+  if (!button || button.disabled) return false;
+  button.click();
+  return true;
+}
+
+async function clickLiveAudioControl(client, kind) {
+  return client.evaluate(
+    "(" + clickLiveAudioControlInPage.toString() + ")(" + JSON.stringify(kind) + ")",
+  );
+}
+
+function setLiveAudioSelectInPage(kind, value) {
+  const indexes = { device: null, rate: 0, buffer: 1, mix: 2 };
+  const rail = document.querySelector(".videoMixerClipPane > .liveAudioInputBar");
+  if (!rail) return false;
+  const select = kind === "device"
+    ? rail.querySelector(".liveAudioInputControls select")
+    : rail.querySelectorAll(".liveAudioConfigControls select")[indexes[kind]];
+  if (!select || select.disabled || ![...select.options].some((option) => option.value === value)) {
+    return false;
+  }
+  select.value = value;
+  select.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertReplacementText" }));
+  return true;
+}
+
+async function setLiveAudioSelect(client, kind, value) {
+  return client.evaluate(
+    "(" + setLiveAudioSelectInPage.toString() + ")(" +
+      JSON.stringify(kind) + "," + JSON.stringify(value) + ")",
+  );
+}
+
+async function runLiveAudioAcceptance(client, locale, label) {
+  await installLiveAudioInvokeMock(client);
+  await sleep(60);
+  const initial = await readLiveAudioRailState(client);
+  const refreshClicked = await clickLiveAudioControl(client, "refresh");
+  await sleep(45);
+  const refreshBusy = await readLiveAudioRailState(client);
+  await waitForClientCondition(
+    client,
+    "(() => { const action = [...document.querySelectorAll('.videoMixerClipPane > .liveAudioInputBar .liveAudioInputControls > button')].at(-1); return Boolean(action && !action.disabled && document.querySelector('.videoMixerClipPane > .liveAudioInputBar .liveAudioConfigFormat')?.textContent?.includes('WASAPI') && window.__syndocalLiveAudioMock?.calls.some((call) => call.command === 'get_live_audio_input_capabilities')); })()",
+    "Live audio device refresh and default capability resolution",
+  );
+  const refreshed = await readLiveAudioRailState(client);
+
+  const deviceSelected = await setLiveAudioSelect(client, "device", "viewport-wasapi-studio-g1");
+  await waitForClientCondition(
+    client,
+    "(() => { const calls = window.__syndocalLiveAudioMock?.calls ?? []; const latest = calls.filter((call) => call.command === 'get_live_audio_input_capabilities').at(-1); const action = [...document.querySelectorAll('.videoMixerClipPane > .liveAudioInputBar .liveAudioInputControls > button')].at(-1); return latest?.args?.deviceId === 'viewport-wasapi-studio-g1' && Boolean(action && !action.disabled); })()",
+    "Explicit live audio input capability resolution",
+  );
+
+  const uniqueRefreshClicked = await clickLiveAudioControl(client, "refresh");
+  await waitForClientCondition(
+    client,
+    "(() => { const calls = window.__syndocalLiveAudioMock?.calls ?? []; const latest = calls.filter((call) => call.command === 'get_live_audio_input_capabilities').at(-1); const device = document.querySelector('.videoMixerClipPane > .liveAudioInputBar .liveAudioInputControls select'); const action = [...document.querySelectorAll('.videoMixerClipPane > .liveAudioInputBar .liveAudioInputControls > button')].at(-1); return device?.value === 'viewport-wasapi-studio-g2' && latest?.args?.deviceId === 'viewport-wasapi-studio-g2' && Boolean(action && !action.disabled); })()",
+    "Unique generation ID remap after live audio Refresh",
+  );
+  const uniquelyRemapped = await readLiveAudioRailState(client);
+
+  const ambiguousRefreshClicked = await clickLiveAudioControl(client, "refresh");
+  await waitForClientCondition(
+    client,
+    "window.__syndocalLiveAudioMock?.deviceGeneration === 3",
+    "Ambiguous live audio identity fail-closed state",
+  );
+  await sleep(45);
+  const ambiguousIdentity = await readLiveAudioRailState(client);
+
+  const finalDeviceSelected = await setLiveAudioSelect(client, "device", "viewport-wasapi-studio-g3a");
+  await waitForClientCondition(
+    client,
+    "(() => { const calls = window.__syndocalLiveAudioMock?.calls ?? []; const latest = calls.filter((call) => call.command === 'get_live_audio_input_capabilities').at(-1); const action = [...document.querySelectorAll('.videoMixerClipPane > .liveAudioInputBar .liveAudioInputControls > button')].at(-1); return latest?.args?.deviceId === 'viewport-wasapi-studio-g3a' && Boolean(action && !action.disabled); })()",
+    "Explicit live audio reselection after ambiguous Refresh",
+  );
+  const rateSelected = await setLiveAudioSelect(client, "rate", "192000");
+  await waitForClientCondition(
+    client,
+    "(() => { const calls = window.__syndocalLiveAudioMock?.calls ?? []; const latest = calls.filter((call) => call.command === 'get_live_audio_input_capabilities').at(-1); const action = [...document.querySelectorAll('.videoMixerClipPane > .liveAudioInputBar .liveAudioInputControls > button')].at(-1); return latest?.args?.sampleRate === 192000 && Boolean(action && !action.disabled); })()",
+    "Selected live audio sample-rate capability resolution",
+  );
+  const bufferSelected = await setLiveAudioSelect(client, "buffer", "8192");
+  const mixSelected = await setLiveAudioSelect(client, "mix", "stereo_pair:0:1");
+  await sleep(45);
+  const configured = await readLiveAudioRailState(client);
+
+  const startClicked = await clickLiveAudioControl(client, "action");
+  await sleep(45);
+  const startBusy = await readLiveAudioRailState(client);
+  await waitForClientCondition(
+    client,
+    "document.querySelector('.videoMixerClipPane > .liveAudioInputBar')?.getAttribute('data-health') === 'live'",
+    "Live audio Start response",
+  );
+  await sleep(60);
+  const live = await readLiveAudioRailState(client);
+  const liveContainment = await measure(client, label);
+
+  const stopClicked = await clickLiveAudioControl(client, "action");
+  await sleep(45);
+  const stopBusy = await readLiveAudioRailState(client);
+  await waitForClientCondition(
+    client,
+    "document.querySelector('.videoMixerClipPane > .liveAudioInputBar')?.getAttribute('data-health') === 'clearing'",
+    "Live audio Stop safety-clear response",
+  );
+  await sleep(60);
+  const clearing = await readLiveAudioRailState(client);
+  const calls = await client.evaluate(
+    "JSON.parse(JSON.stringify(window.__syndocalLiveAudioMock?.calls ?? []))",
+  );
+  const startCall = calls.find((call) => call.command === "start_live_audio_input");
+  const expected = locale === "ja"
+    ? {
+        systemDefaultTitle: "システム既定の音声入力",
+        reselectTitle: "音声入力を再選択",
+        reselectFormat: "入力を再選択",
+        checking: "確認中",
+        liveAnnouncement: "ライブ音声入力は動作中です。",
+        clearingAction: "クリア待ち",
+        clearingAnnouncement: "ライブ音声の停止はエンジンの安全クリア待ちです。開始はロックされています。",
+        meterLabels: ["低域レベル", "中域レベル", "高域レベル"],
+        meterValues: ["42パーセント", "58パーセント", "76パーセント"],
+        meterTitles: ["低域 42%", "中域 58%", "高域 76%"],
+      }
+    : {
+        systemDefaultTitle: "System default audio input",
+        reselectTitle: "Reselect audio input",
+        reselectFormat: "Reselect input",
+        checking: "Checking",
+        liveAnnouncement: "Live audio input active.",
+        clearingAction: "Clear Pending",
+        clearingAnnouncement: "Live audio Stop is waiting for the engine safety clear. Start is locked.",
+        meterLabels: ["Bass level", "Mid level", "High level"],
+        meterValues: ["42 percent", "58 percent", "76 percent"],
+        meterTitles: ["Bass 42%", "Mid 58%", "High 76%"],
+      };
+  const request = startCall?.args?.request;
+  const checks = {
+    initialStopped: initial?.health === "stopped",
+    localizedSystemDefaultTitle: initial?.deviceTitle === expected.systemDefaultTitle,
+    refreshClicked,
+    refreshShowsChecking:
+      refreshBusy?.actionText === expected.checking &&
+      refreshBusy?.actionDisabled === true &&
+      refreshBusy?.refreshDisabled === true,
+    deviceChoicesResolved:
+      refreshed?.deviceOptions?.includes("viewport-wasapi-studio-g1") &&
+      refreshed?.deviceOptions?.includes("viewport-wasapi-line-g1"),
+    uniqueGenerationRemap:
+      deviceSelected &&
+      uniqueRefreshClicked &&
+      uniquelyRemapped?.selectedDevice === "viewport-wasapi-studio-g2" &&
+      uniquelyRemapped?.deviceOptions?.includes("viewport-wasapi-studio-g2") &&
+      !uniquelyRemapped?.deviceOptions?.includes("viewport-wasapi-studio-g1") &&
+      uniquelyRemapped?.deviceInvalid === "" &&
+      uniquelyRemapped?.actionDisabled === false,
+    ambiguousIdentityFailsClosed:
+      ambiguousRefreshClicked &&
+      ambiguousIdentity?.selectedDevice === "viewport-wasapi-studio-g2" &&
+      ambiguousIdentity?.deviceOptions?.includes("viewport-wasapi-studio-g2") &&
+      ambiguousIdentity?.deviceOptions?.includes("viewport-wasapi-studio-g3a") &&
+      ambiguousIdentity?.deviceOptions?.includes("viewport-wasapi-studio-g3b") &&
+      ambiguousIdentity?.deviceInvalid === "true" &&
+      ambiguousIdentity?.deviceTitle === expected.reselectTitle &&
+      ambiguousIdentity?.configFormat === expected.reselectFormat &&
+      ambiguousIdentity?.actionDisabled === true,
+    explicitReselectionUnlocksStart:
+      finalDeviceSelected &&
+      configured?.selectedDevice === "viewport-wasapi-studio-g3a" &&
+      configured?.deviceInvalid === "" &&
+      configured?.deviceTitle === "Viewport Studio Microphone · WASAPI (#1)" &&
+      configured?.actionDisabled === false,
+    rateOptionsResolved:
+      rateSelected &&
+      ["44100", "48000", "88200", "96000", "176400", "192000"]
+        .every((value) => configured?.sampleRateOptions?.includes(value)),
+    bufferOptionsResolved:
+      bufferSelected &&
+      ["64", "128", "256", "512", "1024", "2048", "4096", "8192"]
+        .every((value) => configured?.bufferOptions?.includes(value)),
+    mixOptionsResolved:
+      mixSelected &&
+      ["average_all", "single:0", "single:1", "stereo_pair:0:1"]
+        .every((value) => configured?.mixOptions?.includes(value)),
+    exactResolvedFormat: configured?.configFormat === "WASAPI · f32 · 2ch",
+    startClicked,
+    startShowsChecking:
+      startBusy?.actionText === expected.checking && startBusy?.actionDisabled === true,
+    exactStartRequest:
+      request?.device_id === "viewport-wasapi-studio-g3a" &&
+      request?.sample_rate === 192_000 &&
+      request?.stream_channels === 2 &&
+      request?.sample_format === "f32" &&
+      request?.buffer_frames === 8_192 &&
+      request?.channel_mix?.mode === "stereo_pair" &&
+      request?.channel_mix?.left_channel_index === 0 &&
+      request?.channel_mix?.right_channel_index === 1,
+    liveState:
+      live?.health === "live" &&
+      live?.announcement === expected.liveAnnouncement &&
+      live?.telemetry?.length === 4 &&
+      live.telemetry[0] === "OVR 9999/999999f" &&
+      live.deviceDisabled === true,
+    localizedNonzeroMeters:
+      JSON.stringify(live?.meters?.map((meter) => meter.label)) === JSON.stringify(expected.meterLabels) &&
+      JSON.stringify(live?.meters?.map((meter) => meter.now)) === JSON.stringify([42, 58, 76]) &&
+      JSON.stringify(live?.meters?.map((meter) => meter.valueText)) === JSON.stringify(expected.meterValues) &&
+      JSON.stringify(live?.meters?.map((meter) => meter.title)) === JSON.stringify(expected.meterTitles),
+    stopClicked,
+    stopShowsChecking:
+      stopBusy?.actionText === expected.checking && stopBusy?.actionDisabled === true,
+    safetyClearGatesRestart:
+      clearing?.health === "clearing" &&
+      clearing?.actionText === expected.clearingAction &&
+      clearing?.actionDisabled === true &&
+      clearing?.deviceDisabled === true &&
+      clearing?.announcement === expected.clearingAnnouncement &&
+      clearing?.safetyMessage?.length > 0 &&
+      clearing?.meters?.every((meter) => meter.now === 0),
+    invokeSequence:
+      calls.filter((call) => call.command === "list_audio_input_devices").length === 3 &&
+      calls.filter((call) => call.command === "get_live_audio_input_capabilities").length >= 5 &&
+      calls.filter((call) => call.command === "start_live_audio_input").length === 1 &&
+      calls.filter((call) => call.command === "stop_live_audio_input").length === 1,
+  };
+  const failedChecks = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  const acceptance = {
+    passed: failedChecks.length === 0,
+    locale,
+    checks,
+    failedChecks,
+    initial,
+    refreshBusy,
+    refreshed,
+    uniquelyRemapped,
+    ambiguousIdentity,
+    configured,
+    startBusy,
+    live,
+    stopBusy,
+    clearing,
+    calls,
+  };
+  if (!acceptance.passed) {
+    throw new Error("Live audio UI acceptance failed: " + JSON.stringify(acceptance));
+  }
+  return {
+    ...acceptance,
+    liveContainment: {
+      ...liveContainment,
+      liveAudioAcceptancePassed: true,
+      liveAudioAcceptance: acceptance,
+    },
+  };
+}
+
+async function prepareLiveAudioAcceptanceViewport(client, viewport, locale) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await client.evaluate(
+    "window.localStorage.setItem('syndocal.uiLocale.v1'," + JSON.stringify(locale) + ")",
+  );
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await pressKey(client, "F2");
+  await sleep(120);
+  await clickByText(client, locale === "ja" ? "VJデスク" : "VJ Desk");
+  await sleep(120);
+}
+
+async function runLiveAudioAcceptanceViewport(client, viewport, locale) {
+  await prepareLiveAudioAcceptanceViewport(client, viewport, locale);
+  return runLiveAudioAcceptance(
+    client,
+    locale,
+    "live-audio-" + locale + "-" + viewport.width + "x" + viewport.height,
+  );
+}
+
 async function runViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -2692,6 +3264,17 @@ async function runViewport(client, viewport) {
     await clickVisibleByText(client, ".appMenuButton", "...");
     await sleep(120);
     results.push(await measure(client, `localization-ja-${viewport.width}x${viewport.height}`));
+    await clickVisibleByText(client, ".appMenuButton", "...");
+    await pressKey(client, "F2");
+    await sleep(120);
+    await clickByText(client, "VJデスク");
+    await sleep(120);
+    const japaneseLiveAudioAcceptance = await runLiveAudioAcceptance(
+      client,
+      "ja",
+      `localization-ja-live-audio-${viewport.width}x${viewport.height}`,
+    );
+    results.push(japaneseLiveAudioAcceptance.liveContainment);
     await client.evaluate(`window.localStorage.setItem('syndocal.uiLocale.v1', 'en')`);
     await client.send("Page.navigate", { url: appUrl });
     await waitForApp(client);
@@ -2735,6 +3318,14 @@ async function runViewport(client, viewport) {
       writeFileSync(join(screenshotDir, `control-${controlTab.id}-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
     }
     results.push(await measure(client, `control-${controlTab.id}-${viewport.width}x${viewport.height}`));
+    if (controlTab.id === "mixer") {
+      const liveAudioAcceptance = await runLiveAudioAcceptance(
+        client,
+        "en",
+        `control-mixer-live-${viewport.width}x${viewport.height}`,
+      );
+      results.push(liveAudioAcceptance.liveContainment);
+    }
     if (controlTab.id === "edit") {
       await clickVisibleByText(client, ".attributeCategoryRail button", "Position");
       await sleep(120);
@@ -4936,6 +5527,39 @@ async function main() {
       );
       console.log(`${passed ? "pass" : "fail"} large-show virtualization ${JSON.stringify(result.stats)}`);
       if (!passed) throw new Error(`Large-show UI virtualization failed: ${JSON.stringify(result)}`);
+      return;
+    }
+    if (liveAudioOnlyMode) {
+      const liveAudioResults = [];
+      for (const viewport of viewports) {
+        for (const locale of ["en", "ja"]) {
+          const result = await runLiveAudioAcceptanceViewport(client, viewport, locale);
+          const passed =
+            result.passed &&
+            isContained(result.liveContainment) &&
+            result.liveContainment.liveAudioRailTelemetryBadgeCount === 4 &&
+            result.liveContainment.liveAudioRailCriticalTelemetryOverflowCount === 0 &&
+            result.liveContainment.liveAudioRailTelemetryOutsideCount === 0;
+          liveAudioResults.push({ viewport, locale, passed, result });
+          console.log(
+            `${passed ? "pass" : "fail"} live audio stateful acceptance ${locale} ${viewport.width}x${viewport.height} ` +
+              JSON.stringify({
+                failedChecks: result.failedChecks,
+                startRequest: result.calls.find((call) => call.command === "start_live_audio_input")?.args?.request,
+                liveMeters: result.live.meters,
+                clearing: {
+                  health: result.clearing.health,
+                  action: result.clearing.actionText,
+                  announcement: result.clearing.announcement,
+                },
+              }),
+          );
+        }
+      }
+      const failures = liveAudioResults.filter((entry) => !entry.passed);
+      if (failures.length > 0) {
+        throw new Error(`Live audio stateful viewport acceptance failed: ${JSON.stringify(failures)}`);
+      }
       return;
     }
     if (vjEmptyMode) {
