@@ -18,7 +18,7 @@ Primary comparison sources:
 
 | Area | Syndocal evidence | SynapseRack evidence | Assessment |
 |---|---|---|---|
-| Ready-to-play desk | Dedicated full-window VJ Desk, 12-pad banks, Preview/Cut/Take/Stop, Deck A/B crossfader, audio monitor, recording, live FFT, output and layer decks | Startup four-layer template, content browser, layer window, preview, hierarchy and property editor | Syndocal is operational after setup; it still lacks a first-run VJ template and rich content browser |
+| Ready-to-play desk | Dedicated full-window VJ Desk, 12-pad banks, staged Preview and routed Program live monitors, Cut/Take/Stop, Deck A/B crossfader, audio monitor, recording, live FFT, output and layer decks | Startup four-layer template, content browser, layer window, preview, hierarchy and property editor | Syndocal is operational after setup; it still lacks an independent Preview transport, first-run VJ template and rich content browser |
 | Media and outputs | Video/still multi-import, camera/screen/NDI/Spout input, Display/NDI/Spout output, H.264 recording, projection blend/mask | H.264/HAP/image media, Spout/OBS workflow and projector output | Syndocal has broader explicit routing and recording evidence on Windows |
 | Effects | Pixelate, blur, glow, edge, color key, transform/color controls, 14 built-in live ISF effects, and one safe imported/built-in single-pass ISF effect per layer | More than 100 advertised real-time effects and HLSL shader import | The basic live library gap is reduced, but SynapseRack still leads materially in breadth and stacking |
 | Node authoring | Saved three-stage Source -> Transform -> Output graphs for LFO/position-wave/audio control of lighting/video parameters | General node editor with layer, texture, shader, math, UI, variable and operation modules | SynapseRack leads materially; the products do not currently expose equivalent node freedom |
@@ -34,6 +34,7 @@ Primary comparison sources:
 - Added a clear `Import Media` action to the empty Clip Grid and verified that it opens the production multi-select media dialog.
 - Updated viewport acceptance so all three reference sizes require the dedicated VJ surface and reject a visible lighting desk in VJ mode.
 - Added 14 GPU ISF presets (Invert, Monochrome, Threshold, Posterize, RGB Split, Mirror, Kaleidoscope, Zoom, Rotate, Strobe, Scanlines, Colorize, Vignette and Glitch Shift) to a categorized live selector. Every embedded shader is parsed and compiled by the production ISF preparation path in automated tests; viewport acceptance requires the selector on all three reference sizes.
+- Replaced the manual reference snapshot with side-by-side Preview and Program buses. A bounded raw Tauri packet carries backend JPEG frames and timing data; the frontend runs one non-overlapping 10/5 fps loop, pauses when hidden, discards stale responses and reports contention. `qa/VJ_LIVE_MONITOR_ACCEPTANCE.md` records why this is not yet proof of native-output or performance parity.
 
 ## Required before parity can be claimed
 

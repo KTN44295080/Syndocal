@@ -834,13 +834,11 @@ async function measure(client, label) {
       visibleVideoMixerClipPaneCount: visibleCount('.videoMixerClipPane'),
       visibleVideoMixerProgramPaneCount: visibleCount('.videoMixerProgramPane'),
       visibleVideoMixerLayerPaneCount: visibleCount('.videoMixerLayerPane'),
-      visibleVideoProgramPreviewCount: visibleCount('.videoMixerProgramPane .videoPreview'),
+      visibleVideoMonitorPanelCount: visibleCount('.liveVideoMonitorPanel'),
+      visibleVideoPreviewBusCount: visibleCount('[data-live-video-monitor="preview"]'),
+      visibleVideoProgramBusCount: visibleCount('[data-live-video-monitor="program"]'),
       visibleVideoProgramRefreshCount: [...document.querySelectorAll('.videoMixerProgramPane button')]
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'refresh').length,
-      visibleVideoProgramRefreshEnabledCount: [...document.querySelectorAll('.videoMixerProgramPane button')]
-        .filter((button) =>
-          (button.textContent || '').trim().toLowerCase() === 'refresh' && !button.disabled
-        ).length,
       visibleVideoMasterControlCount: visibleCount('.videoMasterControls'),
       visibleVideoMasterFaderCount: visibleCount('.videoMasterFader input[type="range"]'),
       visibleVideoClipGridCount: visibleCount('.videoClipGridPanel'),
@@ -1230,9 +1228,10 @@ function hasExpectedControlModeSurface(result) {
       result.visibleVideoMixerClipPaneCount === 1 &&
       result.visibleVideoMixerProgramPaneCount === 1 &&
       result.visibleVideoMixerLayerPaneCount === 1 &&
-      result.visibleVideoProgramPreviewCount === 1 &&
-      result.visibleVideoProgramRefreshCount === 1 &&
-      result.visibleVideoProgramRefreshEnabledCount === 1 &&
+      result.visibleVideoMonitorPanelCount === 1 &&
+      result.visibleVideoPreviewBusCount === 1 &&
+      result.visibleVideoProgramBusCount === 1 &&
+      result.visibleVideoProgramRefreshCount === 0 &&
       result.visibleVideoMasterControlCount > 0 &&
       result.visibleVideoMasterFaderCount > 0 &&
       result.visibleVideoClipGridCount > 0 &&

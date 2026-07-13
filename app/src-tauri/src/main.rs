@@ -8,8 +8,8 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
-        atomic::{AtomicBool, AtomicU8, Ordering},
-        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
+        Arc, Mutex, TryLockError,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -128,6 +128,7 @@ const STANDBY_SYNC_POLL_MS: u64 = 500;
 const STANDBY_SYNC_STALE_MS: u64 = 5_000;
 const STANDBY_SYNC_RETENTION: usize = 5;
 static RDM_TRANSACTION_NUMBER: AtomicU8 = AtomicU8::new(1);
+static LIVE_VIDEO_MONITOR_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 fn validate_app_name(file_label: &str, app: &str) -> Result<(), String> {
     if app.trim() == APP_NAME {
@@ -12366,6 +12367,305 @@ fn get_debug_video_output_preview(
         .map_err(|error| format!("{error:?}"))
 }
 
+const LIVE_VIDEO_MONITOR_MAGIC: [u8; 4] = *b"SYLV";
+const LIVE_VIDEO_MONITOR_VERSION: u8 = 1;
+const LIVE_VIDEO_MONITOR_STATUS_FRAME: u8 = 0;
+const LIVE_VIDEO_MONITOR_STATUS_BUSY: u8 = 1;
+const LIVE_VIDEO_MONITOR_HEADER_LEN: usize = 40;
+const LIVE_VIDEO_MONITOR_MAX_WIDTH: u32 = 640;
+const LIVE_VIDEO_MONITOR_MAX_HEIGHT: u32 = 360;
+const LIVE_VIDEO_MONITOR_MAX_PIXELS: u32 =
+    LIVE_VIDEO_MONITOR_MAX_WIDTH * LIVE_VIDEO_MONITOR_MAX_HEIGHT;
+const LIVE_VIDEO_MONITOR_DEFAULT_JPEG_QUALITY: u8 = 68;
+const LIVE_VIDEO_MONITOR_MIN_JPEG_QUALITY: u8 = 40;
+const LIVE_VIDEO_MONITOR_MAX_JPEG_QUALITY: u8 = 90;
+const LIVE_VIDEO_MONITOR_MAX_DECODE_BUDGET: usize = 2;
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum LiveVideoMonitorKind {
+    Program,
+    Preview,
+}
+
+impl LiveVideoMonitorKind {
+    fn packet_value(self) -> u8 {
+        match self {
+            Self::Program => 0,
+            Self::Preview => 1,
+        }
+    }
+}
+
+fn live_video_monitor_dimensions(width: u32, height: u32) -> (u32, u32) {
+    let width = width.clamp(1, LIVE_VIDEO_MONITOR_MAX_WIDTH);
+    let height = height.clamp(1, LIVE_VIDEO_MONITOR_MAX_HEIGHT);
+    if width.saturating_mul(height) <= LIVE_VIDEO_MONITOR_MAX_PIXELS {
+        return (width, height);
+    }
+    (width, (LIVE_VIDEO_MONITOR_MAX_PIXELS / width).max(1))
+}
+
+fn live_video_monitor_quality(quality: Option<u8>) -> u8 {
+    quality
+        .unwrap_or(LIVE_VIDEO_MONITOR_DEFAULT_JPEG_QUALITY)
+        .clamp(
+            LIVE_VIDEO_MONITOR_MIN_JPEG_QUALITY,
+            LIVE_VIDEO_MONITOR_MAX_JPEG_QUALITY,
+        )
+}
+
+fn live_video_monitor_elapsed_us(started: Instant) -> u32 {
+    started.elapsed().as_micros().min(u128::from(u32::MAX)) as u32
+}
+
+#[allow(clippy::too_many_arguments)]
+fn live_video_monitor_packet(
+    status: u8,
+    kind: LiveVideoMonitorKind,
+    sequence: u64,
+    pts_ms: u64,
+    render_us: u32,
+    encode_us: u32,
+    width: u32,
+    height: u32,
+    jpeg: &[u8],
+) -> Result<Vec<u8>, String> {
+    let width = u16::try_from(width)
+        .map_err(|_| "Live video monitor frame width exceeded the packet format".to_string())?;
+    let height = u16::try_from(height)
+        .map_err(|_| "Live video monitor frame height exceeded the packet format".to_string())?;
+    let jpeg_len = u32::try_from(jpeg.len())
+        .map_err(|_| "Live video monitor JPEG exceeded the packet format".to_string())?;
+    let mut packet = Vec::with_capacity(LIVE_VIDEO_MONITOR_HEADER_LEN + jpeg.len());
+    packet.extend_from_slice(&LIVE_VIDEO_MONITOR_MAGIC);
+    packet.push(LIVE_VIDEO_MONITOR_VERSION);
+    packet.push(status);
+    packet.push(kind.packet_value());
+    packet.push(0);
+    packet.extend_from_slice(&sequence.to_le_bytes());
+    packet.extend_from_slice(&pts_ms.to_le_bytes());
+    packet.extend_from_slice(&render_us.to_le_bytes());
+    packet.extend_from_slice(&encode_us.to_le_bytes());
+    packet.extend_from_slice(&width.to_le_bytes());
+    packet.extend_from_slice(&height.to_le_bytes());
+    packet.extend_from_slice(&jpeg_len.to_le_bytes());
+    debug_assert_eq!(packet.len(), LIVE_VIDEO_MONITOR_HEADER_LEN);
+    packet.extend_from_slice(jpeg);
+    Ok(packet)
+}
+
+fn encode_live_video_monitor_jpeg(
+    frame: &video::VideoFrame,
+    quality: u8,
+) -> Result<Vec<u8>, String> {
+    if frame.format != video::VideoPixelFormat::Rgba8 {
+        return Err(format!(
+            "Live video monitor expected RGBA8, received {:?}",
+            frame.format
+        ));
+    }
+    let expected_len = u64::from(frame.width)
+        .saturating_mul(u64::from(frame.height))
+        .saturating_mul(4);
+    if expected_len != frame.data.len() as u64 {
+        return Err(format!(
+            "Live video monitor RGBA8 buffer has {} bytes; expected {expected_len}",
+            frame.data.len()
+        ));
+    }
+    let mut jpeg = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, quality)
+        .encode(
+            &frame.data,
+            frame.width,
+            frame.height,
+            image::ColorType::Rgba8,
+        )
+        .map_err(|error| format!("Could not encode live video monitor JPEG: {error}"))?;
+    Ok(jpeg)
+}
+
+/// Returns one bounded Preview or Program monitor frame as a raw ArrayBuffer.
+///
+/// The fixed 40-byte little-endian header is: magic[4], version/status/kind/reserved,
+/// sequence(u64), pts_ms(u64), render_us(u32), encode_us(u32), width/height(u16),
+/// jpeg_len(u32), followed by JPEG bytes. A busy response has status 1 and no payload.
+#[tauri::command]
+fn get_live_video_monitor_frame(
+    state: State<'_, AppState>,
+    monitor_kind: LiveVideoMonitorKind,
+    output_id: Option<VideoOutputId>,
+    layer_id: Option<VideoLayerId>,
+    width: u32,
+    height: u32,
+    quality: Option<u8>,
+    decode_budget: Option<usize>,
+) -> Result<tauri::ipc::Response, String> {
+    let sequence = LIVE_VIDEO_MONITOR_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let (width, height) = live_video_monitor_dimensions(width, height);
+    let quality = live_video_monitor_quality(quality);
+
+    let mut renderer = match state.video_preview.try_lock() {
+        Ok(renderer) => renderer,
+        Err(TryLockError::WouldBlock) => {
+            let packet = live_video_monitor_packet(
+                LIVE_VIDEO_MONITOR_STATUS_BUSY,
+                monitor_kind,
+                sequence,
+                0,
+                0,
+                0,
+                width,
+                height,
+                &[],
+            )?;
+            return Ok(tauri::ipc::Response::new(packet));
+        }
+        Err(TryLockError::Poisoned(_)) => {
+            return Err("Video preview renderer lock was poisoned".to_string());
+        }
+    };
+
+    let snapshot = state.engine.snapshot();
+    renderer
+        .frame_provider_mut()
+        .set_bpm(Some(snapshot.clock.bpm));
+    let render_started = Instant::now();
+    let frame = match monitor_kind {
+        LiveVideoMonitorKind::Program => {
+            let output_id =
+                output_id.ok_or_else(|| "Program monitor requires an outputId".to_string())?;
+            let decode_budget = resolved_video_preview_decode_budget(
+                &renderer,
+                snapshot.video.layers.len(),
+                Some(
+                    decode_budget
+                        .unwrap_or(1)
+                        .clamp(1, LIVE_VIDEO_MONITOR_MAX_DECODE_BUDGET),
+                ),
+            );
+            renderer
+                .warm_output_decode_queue(&snapshot.video, output_id, width, height, decode_budget)
+                .map_err(|error| format!("{error:?}"))?;
+            renderer
+                .render_output_preview(&snapshot.video, output_id, width, height)
+                .map_err(|error| format!("{error:?}"))?
+        }
+        LiveVideoMonitorKind::Preview => {
+            let layer_id =
+                layer_id.ok_or_else(|| "Preview monitor requires a layerId".to_string())?;
+            renderer
+                .render_layer_preview(&snapshot.video, layer_id, width, height)
+                .map_err(|error| format!("{error:?}"))?
+        }
+    };
+    let render_us = live_video_monitor_elapsed_us(render_started);
+    drop(renderer);
+
+    let encode_started = Instant::now();
+    let jpeg = encode_live_video_monitor_jpeg(&frame, quality)?;
+    let encode_us = live_video_monitor_elapsed_us(encode_started);
+    let packet = live_video_monitor_packet(
+        LIVE_VIDEO_MONITOR_STATUS_FRAME,
+        monitor_kind,
+        sequence,
+        frame.pts_ms,
+        render_us,
+        encode_us,
+        frame.width,
+        frame.height,
+        &jpeg,
+    )?;
+    Ok(tauri::ipc::Response::new(packet))
+}
+
+#[cfg(test)]
+mod live_video_monitor_tests {
+    use super::*;
+
+    fn read_u16(packet: &[u8], offset: usize) -> u16 {
+        u16::from_le_bytes(packet[offset..offset + 2].try_into().unwrap())
+    }
+
+    fn read_u32(packet: &[u8], offset: usize) -> u32 {
+        u32::from_le_bytes(packet[offset..offset + 4].try_into().unwrap())
+    }
+
+    fn read_u64(packet: &[u8], offset: usize) -> u64 {
+        u64::from_le_bytes(packet[offset..offset + 8].try_into().unwrap())
+    }
+
+    #[test]
+    fn live_video_monitor_packet_has_stable_40_byte_header() {
+        let jpeg = [0xff, 0xd8, 0xff, 0xd9];
+        let packet = live_video_monitor_packet(
+            LIVE_VIDEO_MONITOR_STATUS_FRAME,
+            LiveVideoMonitorKind::Preview,
+            0x0102_0304_0506_0708,
+            12_345,
+            678,
+            90,
+            320,
+            180,
+            &jpeg,
+        )
+        .unwrap();
+
+        assert_eq!(&packet[0..4], b"SYLV");
+        assert_eq!(packet[4], LIVE_VIDEO_MONITOR_VERSION);
+        assert_eq!(packet[5], LIVE_VIDEO_MONITOR_STATUS_FRAME);
+        assert_eq!(packet[6], LiveVideoMonitorKind::Preview.packet_value());
+        assert_eq!(packet[7], 0);
+        assert_eq!(read_u64(&packet, 8), 0x0102_0304_0506_0708);
+        assert_eq!(read_u64(&packet, 16), 12_345);
+        assert_eq!(read_u32(&packet, 24), 678);
+        assert_eq!(read_u32(&packet, 28), 90);
+        assert_eq!(read_u16(&packet, 32), 320);
+        assert_eq!(read_u16(&packet, 34), 180);
+        assert_eq!(read_u32(&packet, 36), jpeg.len() as u32);
+        assert_eq!(&packet[LIVE_VIDEO_MONITOR_HEADER_LEN..], jpeg);
+    }
+
+    #[test]
+    fn live_video_monitor_request_limits_are_clamped() {
+        assert_eq!(live_video_monitor_dimensions(0, 0), (1, 1));
+        assert_eq!(
+            live_video_monitor_dimensions(u32::MAX, u32::MAX),
+            (LIVE_VIDEO_MONITOR_MAX_WIDTH, LIVE_VIDEO_MONITOR_MAX_HEIGHT)
+        );
+        assert_eq!(live_video_monitor_quality(None), 68);
+        assert_eq!(live_video_monitor_quality(Some(0)), 40);
+        assert_eq!(live_video_monitor_quality(Some(u8::MAX)), 90);
+    }
+
+    #[test]
+    fn live_video_monitor_encodes_a_decodable_jpeg() {
+        let frame = video::VideoFrame {
+            layer_id: 1,
+            width: 2,
+            height: 2,
+            pts_ms: 42,
+            duration_ms: 33,
+            format: video::VideoPixelFormat::Rgba8,
+            data: vec![
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+            ],
+        };
+
+        let jpeg = encode_live_video_monitor_jpeg(&frame, 68).unwrap();
+        assert_eq!(&jpeg[..2], &[0xff, 0xd8]);
+        assert_eq!(&jpeg[jpeg.len() - 2..], &[0xff, 0xd9]);
+        let decoded = image::load_from_memory_with_format(&jpeg, image::ImageFormat::Jpeg).unwrap();
+        assert_eq!(decoded.width(), frame.width);
+        assert_eq!(decoded.height(), frame.height);
+
+        let mut invalid = frame;
+        invalid.data.pop();
+        assert!(encode_live_video_monitor_jpeg(&invalid, 68).is_err());
+    }
+}
+
 fn video_preview_decode_budget(renderer: &AppVideoPreviewRenderer, layer_count: usize) -> usize {
     video_preview_decode_budget_from_prefetch(
         layer_count,
@@ -23323,6 +23623,7 @@ fn main() {
             get_video_layer_thumbnail,
             get_debug_video_preview,
             get_debug_video_output_preview,
+            get_live_video_monitor_frame,
             get_debug_video_output_test_pattern,
             get_video_output_window_statuses,
             sync_open_video_output_windows,

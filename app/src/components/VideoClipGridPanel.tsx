@@ -25,6 +25,7 @@ interface VideoClipGridPanelProps {
   liveAudioInputDevices: string[];
   selectedLiveAudioInputDevice: string;
   liveAudioInputStatus: LiveAudioInputStatus;
+  previewLayerId: number | null;
   onSetFadeMs: (fadeMs: number) => void;
   onSetAudioMonitorVolume: (volume: number) => void;
   onSetProgramAudioEnabled: (enabled: boolean) => void;
@@ -40,6 +41,7 @@ interface VideoClipGridPanelProps {
   onRefreshLiveAudioInputDevices: () => void | Promise<void>;
   onStartLiveAudioInput: () => void | Promise<void>;
   onStopLiveAudioInput: () => void | Promise<void>;
+  onPreviewLayerId: (layerId: number | null) => void;
   onImportMedia: () => void | Promise<void>;
   onLaunch: (layerId: number, fadeMs: number) => void | Promise<void>;
   onTake: (layerId: number, fadeMs: number) => void | Promise<void>;
@@ -58,22 +60,21 @@ const sourceLabel = (layer: VideoLayerSummary) => {
 
 export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
   const [bank, setBank] = createSignal(0);
-  const [previewLayerId, setPreviewLayerId] = createSignal<number | null>(null);
   const bankCount = createMemo(() => Math.max(1, Math.ceil(props.layers.length / CLIPS_PER_BANK)));
   const visibleLayers = createMemo(() => {
     const start = bank() * CLIPS_PER_BANK;
     return props.layers.slice(start, start + CLIPS_PER_BANK);
   });
   const previewLayer = createMemo(() =>
-    props.layers.find((layer) => layer.id === previewLayerId()) ?? null,
+    props.layers.find((layer) => layer.id === props.previewLayerId) ?? null,
   );
   const deckALayer = createMemo(() => props.layers.find((layer) => layer.id === props.deckALayerId) ?? null);
   const deckBLayer = createMemo(() => props.layers.find((layer) => layer.id === props.deckBLayerId) ?? null);
 
   createEffect(() => {
     if (bank() >= bankCount()) setBank(bankCount() - 1);
-    if (previewLayerId() !== null && !props.layers.some((layer) => layer.id === previewLayerId())) {
-      setPreviewLayerId(null);
+    if (props.previewLayerId !== null && !props.layers.some((layer) => layer.id === props.previewLayerId)) {
+      props.onPreviewLayerId(null);
     }
   });
 
@@ -263,7 +264,7 @@ export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
           <For each={visibleLayers()}>
             {(layer, index) => {
               const live = () => layer.state.enabled && layer.state.playing && layer.state.opacity > 0;
-              const previewed = () => previewLayerId() === layer.id;
+              const previewed = () => props.previewLayerId === layer.id;
               const audioMonitoring = () => props.audioMonitorLayerIds.includes(layer.id);
               const audioUnavailable = () => layer.source.kind !== "File" || layer.source.metadata?.has_audio === false;
               const clipNumber = () => bank() * CLIPS_PER_BANK + index() + 1;
@@ -293,7 +294,7 @@ export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
                     class="videoClipPreview"
                     aria-label={`Preview ${layer.label}`}
                     aria-pressed={previewed()}
-                    onClick={() => setPreviewLayerId(layer.id)}
+                    onClick={() => props.onPreviewLayerId(layer.id)}
                   >
                     P
                   </button>

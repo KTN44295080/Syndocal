@@ -247,6 +247,7 @@ import { createTimelineOverviewAutomationController } from "./createTimelineOver
 import { createTimelineKeyframeController } from "./createTimelineKeyframeController";
 import { createTimelineAutomationController } from "./createTimelineAutomationController";
 import { createVideoRuntimeController } from "./createVideoRuntimeController";
+import { createLiveVideoMonitorController } from "./createLiveVideoMonitorController";
 import { createAppKeyboardController } from "./createAppKeyboardController";
 import { createStageMapController } from "./createStageMapController";
 import { appStatusFromMessage } from "./statusModel";
@@ -889,6 +890,7 @@ export default function App() {
   const [videoPath, setVideoPath] = createSignal("");
   const [videoPreviewInfo, setVideoPreviewInfo] = createSignal("No preview");
   const [videoPreviewUrl, setVideoPreviewUrl] = createSignal("");
+  const [videoPreviewLayerId, setVideoPreviewLayerId] = createSignal<number | null>(null);
   const [videoClipThumbnails, setVideoClipThumbnails] = createSignal<Record<number, string>>({});
   const [videoAudioMonitorStatus, setVideoAudioMonitorStatus] = createSignal<VideoAudioMonitorStatus>({
     output_open: false,
@@ -7869,6 +7871,20 @@ export default function App() {
     setVideoOutputPreviewId,
     setVideoOutputPreviewMode,
   });
+  const liveVideoMonitors = createLiveVideoMonitorController({
+    invoke,
+    backendAvailable: () => isTauriRuntime(),
+    active: () => workspaceTab() === "control" && controlMode() === "mixer",
+    layerCount: () => snapshot().video.layers.length,
+    previewLayerId: videoPreviewLayerId,
+    programOutputId: selectedVideoOutputId,
+  });
+  const liveVideoPreviewLabel = createMemo(() =>
+    snapshot().video.layers.find((layer) => layer.id === videoPreviewLayerId())?.label ?? null,
+  );
+  const liveVideoProgramLabel = createMemo(() =>
+    snapshot().video.outputs.find((output) => output.id === selectedVideoOutputId())?.label ?? null,
+  );
   const videoThumbnailSourceSignature = createMemo(() => JSON.stringify(
     snapshot().video.layers.map((layer) => ({
       id: layer.id,
@@ -10637,9 +10653,12 @@ export default function App() {
             onSyncOutputWindow: syncVideoOutputWindow,
             onCloseOutputWindow: closeVideoOutputWindow,
           }}
-          previewImage={{
-            get previewUrl() { return videoPreviewUrl(); },
-            get layerCount() { return snapshot().video.layers.length; },
+          liveMonitors={{
+            get preview() { return liveVideoMonitors.preview(); },
+            get program() { return liveVideoMonitors.program(); },
+            get previewLabel() { return liveVideoPreviewLabel(); },
+            get programLabel() { return liveVideoProgramLabel(); },
+            onRetry: liveVideoMonitors.retry,
           }}
           sourceCreate={{
             get sourceKind() { return videoSourceKind(); },
@@ -10670,6 +10689,7 @@ export default function App() {
             get liveAudioInputDevices() { return liveAudioInputDevices(); },
             get selectedLiveAudioInputDevice() { return selectedLiveAudioInputDevice(); },
             get liveAudioInputStatus() { return liveAudioInputStatus(); },
+            get previewLayerId() { return videoPreviewLayerId(); },
             onSetFadeMs: setVideoOutputFadeMs,
             onSetAudioMonitorVolume: setVideoAudioMonitorVolume,
             onSetProgramAudioEnabled: setVideoProgramAudioEnabled,
@@ -10685,6 +10705,7 @@ export default function App() {
             onRefreshLiveAudioInputDevices: refreshLiveAudioInputDevices,
             onStartLiveAudioInput: startLiveAudioInput,
             onStopLiveAudioInput: stopLiveAudioInput,
+            onPreviewLayerId: setVideoPreviewLayerId,
             onImportMedia: importMediaFiles,
             onLaunch: launchVideoClipFromGrid,
             onTake: takeVideoClipFromGrid,

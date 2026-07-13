@@ -45,6 +45,31 @@ impl LibavFrameDecoder {
         self.entries.len()
     }
 
+    fn cached_frame(
+        &self,
+        request: &VideoFrameRequest,
+        path: &std::path::Path,
+        signature: &StillImageSignature,
+    ) -> Option<VideoFrame> {
+        self.entries
+            .iter()
+            .find(|entry| {
+                entry.layer_id == request.layer_id
+                    && entry.path == path
+                    && entry.width == request.width
+                    && entry.height == request.height
+                    && entry.position_ms == request.position_ms
+                    && entry.signature == *signature
+            })
+            .map(|entry| entry.frame.clone())
+    }
+
+    fn replace_layer_cache_entry(&mut self, entry: LibavFrameCacheEntry) {
+        self.entries
+            .retain(|cached| cached.layer_id != entry.layer_id);
+        self.entries.push(entry);
+    }
+
     #[cfg(feature = "libav")]
     fn decode_enabled(
         &mut self,
@@ -61,26 +86,12 @@ impl LibavFrameDecoder {
             })?;
         let path = PathBuf::from(path);
         let signature = StillImageSignature::from_path(&path);
-        if let Some(entry) = self.entries.iter().find(|entry| {
-            entry.layer_id == request.layer_id
-                && entry.path == path
-                && entry.width == request.width
-                && entry.height == request.height
-                && entry.position_ms == request.position_ms
-                && entry.signature == signature
-        }) {
-            return Ok(Some(entry.frame.clone()));
+        if let Some(frame) = self.cached_frame(request, &path, &signature) {
+            return Ok(Some(frame));
         }
 
         let frame = decode_libav_frame(request, &path)?;
-        self.entries.retain(|entry| {
-            !(entry.layer_id == request.layer_id
-                && entry.path == path
-                && entry.width == request.width
-                && entry.height == request.height
-                && entry.position_ms == request.position_ms)
-        });
-        self.entries.push(LibavFrameCacheEntry {
+        self.replace_layer_cache_entry(LibavFrameCacheEntry {
             layer_id: request.layer_id,
             path,
             width: request.width,
@@ -320,6 +331,113 @@ mod tests {
             width: 16,
             height: 16,
         }
+    }
+
+    fn signature(token: u64) -> StillImageSignature {
+        StillImageSignature {
+            len: Some(token),
+            modified: None,
+        }
+    }
+
+    fn cache_entry(
+        request: &VideoFrameRequest,
+        path: impl Into<PathBuf>,
+        signature: StillImageSignature,
+        token: u8,
+    ) -> LibavFrameCacheEntry {
+        LibavFrameCacheEntry {
+            layer_id: request.layer_id,
+            path: path.into(),
+            width: request.width,
+            height: request.height,
+            position_ms: request.position_ms,
+            signature,
+            frame: VideoFrame {
+                layer_id: request.layer_id,
+                width: request.width,
+                height: request.height,
+                pts_ms: request.position_ms,
+                duration_ms: 33,
+                format: crate::VideoPixelFormat::Rgba8,
+                data: vec![token],
+            },
+        }
+    }
+
+    #[test]
+    fn cache_replaces_a_layers_entry_when_request_identity_changes() {
+        let mut decoder = LibavFrameDecoder::new();
+        let mut request = request();
+        let mut path = PathBuf::from("first.mp4");
+        let mut file_signature = signature(1);
+
+        decoder.replace_layer_cache_entry(cache_entry(&request, &path, file_signature.clone(), 1));
+        assert_eq!(decoder.cache_len(), 1);
+        assert_eq!(
+            decoder
+                .cached_frame(&request, &path, &file_signature)
+                .unwrap()
+                .data,
+            vec![1]
+        );
+
+        request.position_ms = 33;
+        assert!(decoder
+            .cached_frame(&request, &path, &file_signature)
+            .is_none());
+        decoder.replace_layer_cache_entry(cache_entry(&request, &path, file_signature.clone(), 2));
+        assert_eq!(decoder.cache_len(), 1);
+
+        request.width = 32;
+        assert!(decoder
+            .cached_frame(&request, &path, &file_signature)
+            .is_none());
+        decoder.replace_layer_cache_entry(cache_entry(&request, &path, file_signature.clone(), 3));
+        assert_eq!(decoder.cache_len(), 1);
+
+        path = PathBuf::from("second.mp4");
+        assert!(decoder
+            .cached_frame(&request, &path, &file_signature)
+            .is_none());
+        decoder.replace_layer_cache_entry(cache_entry(&request, &path, file_signature.clone(), 4));
+        assert_eq!(decoder.cache_len(), 1);
+
+        file_signature = signature(2);
+        assert!(decoder
+            .cached_frame(&request, &path, &file_signature)
+            .is_none());
+        decoder.replace_layer_cache_entry(cache_entry(&request, &path, file_signature.clone(), 5));
+        assert_eq!(decoder.cache_len(), 1);
+        assert_eq!(decoder.entries[0].position_ms, 33);
+        assert_eq!(decoder.entries[0].width, 32);
+        assert_eq!(decoder.entries[0].path, path);
+        assert_eq!(decoder.entries[0].signature, file_signature);
+        assert_eq!(decoder.entries[0].frame.data, vec![5]);
+        assert_eq!(
+            decoder
+                .cached_frame(&request, &path, &file_signature)
+                .unwrap()
+                .data,
+            vec![5]
+        );
+    }
+
+    #[test]
+    fn retain_layers_prunes_the_bounded_layer_cache() {
+        let mut decoder = LibavFrameDecoder::new();
+        let first = request();
+        let mut second = request();
+        second.layer_id = 2;
+        decoder.replace_layer_cache_entry(cache_entry(&first, "first.mp4", signature(1), 1));
+        decoder.replace_layer_cache_entry(cache_entry(&second, "second.mp4", signature(2), 2));
+        assert_eq!(decoder.cache_len(), 2);
+
+        decoder.retain_layers(&[second.layer_id]);
+
+        assert_eq!(decoder.cache_len(), 1);
+        assert_eq!(decoder.entries[0].layer_id, second.layer_id);
+        assert_eq!(decoder.entries[0].frame.data, vec![2]);
     }
 
     #[cfg(not(feature = "libav"))]

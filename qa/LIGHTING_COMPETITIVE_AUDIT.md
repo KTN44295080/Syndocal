@@ -13,6 +13,8 @@ Primary sources:
 - <https://daslight.com/en/daslight5?country=ie>
 - <https://www.daslight.com/en/download.htm>
 
+Local visual comparison on 2026-07-13 used the installed Daslight 5 with `Shinkan2026.dvc` loaded. Its Control desk keeps group scene columns, the selected FX inspector, fixture-group tabs, the 2D stage and per-group Live Mixer visible together. Its Setup desk similarly keeps the fixture library, patch grid, group/stage map and dimmer/movement limits on one plane. Syndocal's new fixed full-window desks now match that task-density direction without copying Daslight's controls or colour system, but its lighting workflow still separates Live Edit, Timeline and several scene modifiers more than the loaded Daslight project does.
+
 ## Current comparison
 
 | Area | Syndocal evidence | Daslight 5 official evidence | Assessment |

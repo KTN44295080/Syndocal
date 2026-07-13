@@ -18,6 +18,7 @@ audio = { path = "../../crates/audio" }
 base64.workspace = true
 engine = { path = "../../crates/engine" }
 gdtf = { path = "../../crates/gdtf" }
+image.workspace = true
 io = { path = "../../crates/io" }
 minisign-verify.workspace = true
 protocol = { path = "../../crates/protocol" }

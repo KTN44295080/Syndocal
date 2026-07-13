@@ -7,9 +7,10 @@ import {
   VideoBackendStatusPanel,
   VideoOutputRenderPlanStatusPanel,
 } from "./VideoRuntimeStatusPanels";
-import { VideoPreviewImagePanel, VideoSourceCreatePanel } from "./VideoSourceCreatePanel";
+import { VideoSourceCreatePanel } from "./VideoSourceCreatePanel";
 import { VideoTimelineAutomationPanel } from "./VideoTimelineAutomationPanel";
 import { VideoClipGridPanel } from "./VideoClipGridPanel";
+import { LiveVideoMonitorPanel } from "./LiveVideoMonitorPanel";
 
 interface VideoControlPanelProps {
   mixer: boolean;
@@ -20,7 +21,7 @@ interface VideoControlPanelProps {
   externalIoStatus: ComponentProps<typeof ExternalVideoIoStatusPanel>;
   masterControls: ComponentProps<typeof VideoMasterControlsPanel>;
   outputControls: ComponentProps<typeof VideoOutputControlListPanel>;
-  previewImage: ComponentProps<typeof VideoPreviewImagePanel>;
+  liveMonitors: ComponentProps<typeof LiveVideoMonitorPanel>;
   sourceCreate: ComponentProps<typeof VideoSourceCreatePanel>;
   clipGrid: ComponentProps<typeof VideoClipGridPanel>;
   layerList: ComponentProps<typeof VideoLayerListPanel>;
@@ -54,20 +55,12 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
       <section class="videoMixerProgramPane" aria-label="Program monitor and outputs">
         <header class="videoMixerPaneHeader">
           <div>
-            <strong>Program Monitor</strong>
-            <span>Reference preview</span>
+            <strong>Live Monitors</strong>
+            <span>Staged clip and routed output</span>
           </div>
-          <div class="videoMixerPaneActions">
-            <span>PROGRAM</span>
-            <button
-              disabled={props.layerCount === 0}
-              onClick={() => void props.previewDiagnostics.onRenderPreview()}
-            >
-              Refresh
-            </button>
-          </div>
+          <span>PREVIEW / PROGRAM</span>
         </header>
-        <VideoPreviewImagePanel {...props.previewImage} />
+        <LiveVideoMonitorPanel {...props.liveMonitors} />
         <VideoOutputControlListPanel {...props.outputControls} compact={props.mixer} />
       </section>
       <div class="videoMixerSetupTools">
