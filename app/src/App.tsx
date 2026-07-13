@@ -60,6 +60,23 @@ import { TouchPanTiltPad } from "./components/TouchPanTiltPad";
 import { TouchSafetyDeck } from "./components/TouchSafetyDeck";
 import { TouchVideoPanel } from "./components/TouchVideoPanel";
 import type { TimelineOverviewAutomationRange, TimelineOverviewEvent } from "./components/TimelineOverview";
+import {
+  buildTimelineSceneBlockCueOptions,
+  buildTimelineSceneBlockRows,
+  buildTimelineSceneBlockSnapPlacements,
+  createTimelineSceneBlockController,
+  createTimelineSceneBlockLargeViewportFixture,
+  createTimelineSceneBlockViewportFixture,
+  growTimelineSceneBlockViewportDurationMs,
+  timelinePlacementDisplayEndMs,
+  reconcileTimelineEventDrafts,
+  timelineSceneBlockCueOptionsEqual,
+  timelineEventDraftsAreDirty,
+  timelineEventDraftMatchesSummary,
+  timelineExecutionIsLive,
+  timelineSceneBlockRowsEqual,
+  timelineSceneBlockSpanMs,
+} from "./timelineSceneBlocks";
 import { WorkspaceChrome } from "./components/WorkspaceChrome";
 import {
   defaultWorkspaceLayout,
@@ -87,7 +104,7 @@ import {
   rangesOverlap,
   reserveDmxAddressRange,
 } from "./dmxAddressing";
-import { confirmDestructiveAction } from "./destructiveActions";
+import { confirmCueRemoval, confirmDestructiveAction } from "./destructiveActions";
 import type {
   ApplicationUpdateCheck,
   ApplicationUpdateConfiguration,
@@ -547,6 +564,10 @@ const projectMutationCommands = new Set([
   "remove_cue",
   "add_timeline_cue_event",
   "set_timeline_cue_event",
+  "add_timeline_scene_block",
+  "set_timeline_scene_block",
+  "remove_timeline_scene_block",
+  "snap_timeline_items",
   "remove_timeline_event",
   "add_timeline_automation",
   "add_timeline_group_automation",
@@ -770,6 +791,8 @@ export default function App() {
     initialWorkspaceLayout.timeline_desk_surface,
   );
   const [editDeskSurface, setEditDeskSurface] = createSignal<EditDeskSurface>(initialWorkspaceLayout.edit_desk_surface);
+  const [revealedSourceCueId, setRevealedSourceCueId] = createSignal<number | null>(null);
+  const [revealedSourceCueRevision, setRevealedSourceCueRevision] = createSignal(0);
   const [profile, setProfile] = createSignal<FixtureProfileSummary | null>(null);
   const [selectedMode, setSelectedMode] = createSignal("");
   const [customManufacturer, setCustomManufacturer] = createSignal("Syndocal");
@@ -945,6 +968,9 @@ export default function App() {
   const [cuePadFollowActive, setCuePadFollowActive] = createSignal(true);
   const [timelineCueId, setTimelineCueId] = createSignal<number | null>(null);
   const [timelineEventTimeMs, setTimelineEventTimeMs] = createSignal(0);
+  const [timelineBlockDurationMs, setTimelineBlockDurationMs] = createSignal(1000);
+  const [timelineBlockLoopCount, setTimelineBlockLoopCount] = createSignal(1);
+  const [timelineBlockJumpToEventId, setTimelineBlockJumpToEventId] = createSignal<number | null>(null);
   const [timelineTrack, setTimelineTrack] = createSignal<TimelineTrackKind>("Lighting");
   const [timelineEventDrafts, setTimelineEventDrafts] = createSignal<Record<number, TimelineEventDraft>>({});
   const [timelineSnapMode, setTimelineSnapMode] = createSignal<TimelineSnapMode>("Off");
@@ -1143,14 +1169,33 @@ export default function App() {
   const [waveWavelength, setWaveWavelength] = createSignal(2);
   const [snapshot, setSnapshot] = createSignal<EngineSnapshot>(createInitialEngineSnapshot());
   const [snapshotRevision, setSnapshotRevision] = createSignal<number | null>(null);
+  const dirtyTimelineEventDrafts = createMemo(() => {
+    const eventsById = new Map(snapshot().timeline.events.map((event) => [event.id, event]));
+    const dirtyDrafts: Record<number, TimelineEventDraft> = {};
+    for (const [eventId, draft] of Object.entries(timelineEventDrafts())) {
+      const numericEventId = Number(eventId);
+      const event = eventsById.get(numericEventId);
+      if (!event || !timelineEventDraftMatchesSummary(event, draft)) {
+        dirtyDrafts[numericEventId] = draft;
+      }
+    }
+    return dirtyDrafts;
+  });
+  const timelineEventEditorDirty = createMemo(() =>
+    timelineEventDraftsAreDirty(snapshot().timeline.events, timelineEventDrafts()),
+  );
+  const visibleProjectDirty = createMemo(() => projectDirty() || timelineEventEditorDirty());
   const snapshotRequestGuard = createSnapshotRequestGuard();
   const viewportFixture = browserViewportFixture(isTauriRuntime());
   if (
     viewportFixture === "timeline"
+    || viewportFixture === "scene-block-large"
     || viewportFixture === "cue-recall"
     || viewportFixture === "cue-recall-large"
     || viewportFixture === "cue-node-graph"
   ) {
+    const sceneBlockLargeFixture = viewportFixture === "scene-block-large";
+    const timelineFixture = viewportFixture === "timeline" || sceneBlockLargeFixture;
     const cueRecallFixture = viewportFixture === "cue-recall";
     const cueRecallLargeFixture = viewportFixture === "cue-recall-large";
     const cueFixture = cueRecallFixture || cueRecallLargeFixture;
@@ -1175,6 +1220,13 @@ export default function App() {
           }],
         }))
       : [viewportFixtureData.cueRecallCue];
+    const timelineSceneBlockViewport = sceneBlockLargeFixture
+      ? createTimelineSceneBlockLargeViewportFixture(viewportFixtureData.cueRecallCue)
+      : createTimelineSceneBlockViewportFixture(
+          viewportFixtureData.cueRecallCue,
+          viewportFixtureData.videoLayer,
+        );
+    const timelineFixtureCues = timelineSceneBlockViewport.cues;
     const activeCueId = cueFixtureCues[0].id;
     setWorkspaceTab("control");
     setSelectedFixtureGroupFilter("front");
@@ -1206,14 +1258,14 @@ export default function App() {
       active_fade: cueNodeGraphFixture
         ? null
         : {
-            cue_id: cueFixture ? activeCueId : 1,
+            cue_id: cueFixture || timelineFixture ? activeCueId : 1,
             progress: 0.42,
             remaining_ms: 580,
             paused: false,
           },
-      active_cue_id: cueFixture ? activeCueId : current.active_cue_id,
-      cues: cueFixture ? cueFixtureCues : current.cues,
-      cue_lists: cueFixture
+      active_cue_id: cueFixture || timelineFixture ? activeCueId : current.active_cue_id,
+      cues: cueFixture ? cueFixtureCues : timelineFixture ? timelineFixtureCues : current.cues,
+      cue_lists: cueFixture || timelineFixture
         ? [{ id: 1, label: "Main", active_cue_id: activeCueId }]
         : current.cue_lists,
       effects: cueFixture ? cueFixtureEffects : current.effects,
@@ -1231,8 +1283,11 @@ export default function App() {
       stage_objects: [viewportFixtureData.stageObject],
       timeline: {
         ...current.timeline,
-        duration_ms: 4000,
+        duration_ms: sceneBlockLargeFixture
+          ? Math.max(...timelineSceneBlockViewport.events.map(timelinePlacementDisplayEndMs))
+          : timelineFixture ? 5000 : 4000,
         position_ms: 1000,
+        events: timelineFixture ? timelineSceneBlockViewport.events : current.timeline.events,
         automations: [
           {
             id: 1,
@@ -1285,6 +1340,43 @@ export default function App() {
       submasters: [{ group_id: "front", label: "front", level: 1 }],
     }));
   }
+  const sceneBlockLargeSnapshotCloneTimer = viewportFixture === "scene-block-large"
+    ? window.setInterval(() => {
+        setSnapshot((current) => ({
+          ...current,
+          cues: current.cues.map((cue) => ({ ...cue })),
+          timeline: {
+            ...current.timeline,
+            events: current.timeline.events.map((event) => ({ ...event })),
+            automations: current.timeline.automations.map((automation) => ({
+              ...automation,
+              keyframes: automation.keyframes.map((keyframe) => ({ ...keyframe })),
+            })),
+            video_automations: current.timeline.video_automations.map((automation) => ({
+              ...automation,
+              keyframes: automation.keyframes.map((keyframe) => ({ ...keyframe })),
+            })),
+          },
+        }));
+      }, 250)
+    : null;
+  const sceneBlockFixtureWindow = window as Window & {
+    __syndocalSetSceneBlockFixtureState?: (positionMs: number, playing: boolean) => void;
+  };
+  if (viewportFixture === "scene-block-large") {
+    sceneBlockFixtureWindow.__syndocalSetSceneBlockFixtureState = (positionMs, playing) => {
+      setSnapshot((current) => ({
+        ...current,
+        timeline: { ...current.timeline, position_ms: positionMs, playing },
+      }));
+    };
+  }
+  onCleanup(() => {
+    if (sceneBlockLargeSnapshotCloneTimer !== null) {
+      window.clearInterval(sceneBlockLargeSnapshotCloneTimer);
+    }
+    delete sceneBlockFixtureWindow.__syndocalSetSceneBlockFixtureState;
+  });
   let lastRecoverySignature = projectRecoveryCheckpoint()?.signature ?? null;
   let lastDesktopBackupSignature: string | null = null;
   let lastDesktopBackupAt = 0;
@@ -2799,7 +2891,11 @@ export default function App() {
         return Math.round(clamped);
     }
   };
-  const timelineCueOptions = createMemo(() => snapshot().cues.map((cue) => ({ id: cue.id, label: cue.label })));
+  const timelineCueOptions = createMemo(
+    () => buildTimelineSceneBlockCueOptions(snapshot().cues),
+    [],
+    { equals: timelineSceneBlockCueOptionsEqual },
+  );
   const selectedTimelineCueId = createMemo(() => {
     const current = timelineCueId();
     const cues = timelineCueOptions();
@@ -2808,16 +2904,20 @@ export default function App() {
     }
     return cues[0]?.id ?? null;
   });
-  const timelineEventRows = createMemo(() =>
-    snapshot().timeline.events.map((event) => {
-      const cue = snapshot().cues.find((candidate) => candidate.id === event.cue_id);
-      return {
-        ...event,
-        cue_label: cue?.label ?? `Cue ${event.cue_id}`,
-      };
-    }),
+  const timelineEventRows = createMemo(
+    () => buildTimelineSceneBlockRows(snapshot().timeline.events, snapshot().cues),
+    [],
+    { equals: timelineSceneBlockRowsEqual },
   );
-  const timelineOverviewDurationMs = createMemo(() => {
+  const timelineAutomationFixtureOptions = createMemo(
+    () => snapshot().fixtures.map((fixture) => ({ id: fixture.id, label: fixture.label })),
+    [],
+    {
+      equals: (previous, next) => previous.length === next.length && previous.every((fixture, index) =>
+        fixture.id === next[index].id && fixture.label === next[index].label),
+    },
+  );
+  const timelineOverviewContentEndMs = createMemo(() => {
     const lightingAutomationEndMs = snapshot().timeline.automations.flatMap((automation) =>
       automation.keyframes.map((keyframe) => keyframe.time_ms),
     );
@@ -2827,25 +2927,59 @@ export default function App() {
     return Math.max(
       1,
       snapshot().timeline.duration_ms,
-      ...snapshot().timeline.events.map((event) => event.time_ms + 1000),
+      ...snapshot().timeline.events.map(timelinePlacementDisplayEndMs),
       ...lightingAutomationEndMs,
       ...videoAutomationEndMs,
     );
   });
+  const [timelineOverviewViewportDurationMs, setTimelineOverviewViewportDurationMs] = createSignal(5000);
+  createEffect(() => {
+    const currentDurationMs = timelineOverviewViewportDurationMs();
+    const nextDurationMs = growTimelineSceneBlockViewportDurationMs(
+      currentDurationMs,
+      timelineOverviewContentEndMs(),
+    );
+    if (nextDurationMs !== currentDurationMs) setTimelineOverviewViewportDurationMs(nextDurationMs);
+  });
+  const timelineOverviewDurationMs = createMemo(() =>
+    Math.max(timelineOverviewViewportDurationMs(), timelineOverviewContentEndMs()),
+  );
   const timelineOverviewPlayheadX = createMemo(() =>
     clampRange((snapshot().timeline.position_ms / timelineOverviewDurationMs()) * 100, 0, 100),
   );
+  const timelineExecutionLive = createMemo(() => {
+    const current = snapshot();
+    return timelineExecutionIsLive(
+      current.timeline.playing,
+      current.clock.source,
+      current.clock.external_sync_locked,
+      current.clock.external_sync_age_ms,
+    );
+  });
   const timelineOverviewEvents = createMemo<TimelineOverviewEvent[]>(() =>
-    timelineEventRows().map((event) => ({
-      id: event.id,
-      cue_id: event.cue_id,
-      cue_label: event.cue_label,
-      track: event.track,
-      time_ms: event.time_ms,
-      x: clampRange((event.time_ms / timelineOverviewDurationMs()) * 100, 0, 100),
-      y: event.track === "Lighting" ? 14 : 31,
-      active: snapshot().active_cue_id === event.cue_id,
-    })),
+    timelineEventRows().map((event) => {
+      const currentPositionMs = snapshot().timeline.position_ms;
+      const underPlayhead = event.duration_ms > 0
+        ? currentPositionMs >= event.time_ms && currentPositionMs < event.time_ms + timelineSceneBlockSpanMs(event)
+        : currentPositionMs === event.time_ms;
+      return {
+        id: event.id,
+        cue_id: event.cue_id,
+        cue_label: event.cue_label,
+        track: event.track,
+        time_ms: event.time_ms,
+        duration_ms: event.duration_ms,
+        loop_count: event.loop_count,
+        total_duration_ms: timelineSceneBlockSpanMs(event),
+        x: clampRange((event.time_ms / timelineOverviewDurationMs()) * 100, 0, 100),
+        width: event.duration_ms > 0
+          ? clampRange((timelineSceneBlockSpanMs(event) / timelineOverviewDurationMs()) * 100, 0, 100)
+          : 0,
+        y: event.track === "Lighting" ? 14 : 31,
+        under_playhead: underPlayhead,
+        active: timelineExecutionLive() && underPlayhead,
+      };
+    }),
   );
   const timelineOverviewAutomationRanges = createMemo<TimelineOverviewAutomationRange[]>(() => {
     const duration = timelineOverviewDurationMs();
@@ -2972,10 +3106,19 @@ export default function App() {
     const selected = selectedTimelineAutomation();
     return selected?.kind === "video" ? selected.automationId : null;
   });
-  const cueTimelinePlacementsForCue = (cueId: number) =>
-    timelineEventRows()
-      .filter((event) => event.cue_id === cueId)
-      .sort((left, right) => left.time_ms - right.time_ms || left.id - right.id);
+  const cueTimelinePlacementMap = createMemo(() => {
+    const placements = new Map<number, TimelineCueEventSummary[]>();
+    for (const event of timelineEventRows()) {
+      const cuePlacements = placements.get(event.cue_id) ?? [];
+      cuePlacements.push(event);
+      placements.set(event.cue_id, cuePlacements);
+    }
+    for (const cuePlacements of placements.values()) {
+      cuePlacements.sort((left, right) => left.time_ms - right.time_ms || left.id - right.id);
+    }
+    return placements;
+  });
+  const cueTimelinePlacementsForCue = (cueId: number) => cueTimelinePlacementMap().get(cueId) ?? [];
   const timelinePlacementNudgeMs = createMemo(() => {
     switch (timelineSnapMode()) {
       case "Beat":
@@ -2990,14 +3133,36 @@ export default function App() {
   });
   const fixtureAttributeOptions = (fixtureId: number) =>
     snapshot().fixtures.find((fixture) => fixture.id === fixtureId)?.controls.map((control) => control.attribute) ?? [];
-  const allTimelineAutomationRows = createMemo(() =>
-    snapshot().timeline.automations.map((automation) => {
-      const fixture = snapshot().fixtures.find((candidate) => candidate.id === automation.fixture_id);
-      return {
-        ...automation,
-        fixture_label: fixture?.label ?? `Fixture ${automation.fixture_id}`,
-      };
-    }),
+  const automationKeyframesEqual = (
+    previous: { time_ms: number; value: number; interpolation: string }[],
+    next: { time_ms: number; value: number; interpolation: string }[],
+  ) => previous.length === next.length && previous.every((keyframe, index) => {
+    const candidate = next[index];
+    return keyframe.time_ms === candidate.time_ms &&
+      keyframe.value === candidate.value &&
+      keyframe.interpolation === candidate.interpolation;
+  });
+  const allTimelineAutomationRows = createMemo(
+    () => snapshot().timeline.automations.map((automation) => {
+        const fixture = snapshot().fixtures.find((candidate) => candidate.id === automation.fixture_id);
+        return {
+          ...automation,
+          fixture_label: fixture?.label ?? `Fixture ${automation.fixture_id}`,
+        };
+      }),
+    [],
+    {
+      equals: (previous, next) => previous.length === next.length && previous.every((automation, index) => {
+        const candidate = next[index];
+        return automation.id === candidate.id &&
+          automation.fixture_id === candidate.fixture_id &&
+          automation.attribute === candidate.attribute &&
+          automation.track === candidate.track &&
+          automation.enabled === candidate.enabled &&
+          automation.fixture_label === candidate.fixture_label &&
+          automationKeyframesEqual(automation.keyframes, candidate.keyframes);
+      }),
+    },
   );
   const timelineAutomationRows = createMemo(() => {
     const rows = allTimelineAutomationRows();
@@ -3515,7 +3680,7 @@ export default function App() {
       const normalizedPath = path.replaceAll("\\", "/");
       return normalizedPath.split("/").pop() || path;
     })();
-    return projectDirty() ? `${label} *` : label;
+    return visibleProjectDirty() ? `${label} *` : label;
   });
   const customProfilePreview = createMemo(() => customProfilePreviewFromText(customAttributes()));
   const selectedCustomAttributeIndexValue = createMemo(() => {
@@ -3743,14 +3908,27 @@ export default function App() {
         return { kind: "videoOnly" };
     }
   };
-  const allTimelineVideoAutomationRows = createMemo(() =>
-    snapshot().timeline.video_automations.map((automation) => {
-      const layer = snapshot().video.layers.find((candidate) => candidate.id === automation.layer_id);
-      return {
-        ...automation,
-        layer_label: layer?.label ?? `Video Layer ${automation.layer_id}`,
-      };
-    }),
+  const allTimelineVideoAutomationRows = createMemo(
+    () => snapshot().timeline.video_automations.map((automation) => {
+        const layer = snapshot().video.layers.find((candidate) => candidate.id === automation.layer_id);
+        return {
+          ...automation,
+          layer_label: layer?.label ?? `Video Layer ${automation.layer_id}`,
+        };
+      }),
+    [],
+    {
+      equals: (previous, next) => previous.length === next.length && previous.every((automation, index) => {
+        const candidate = next[index];
+        return automation.id === candidate.id &&
+          automation.layer_id === candidate.layer_id &&
+          automation.param === candidate.param &&
+          automation.track === candidate.track &&
+          automation.enabled === candidate.enabled &&
+          automation.layer_label === candidate.layer_label &&
+          automationKeyframesEqual(automation.keyframes, candidate.keyframes);
+      }),
+    },
   );
   const timelineVideoAutomationRows = createMemo(() => {
     const rows = allTimelineVideoAutomationRows();
@@ -4724,13 +4902,7 @@ export default function App() {
   };
 
   const syncTimelineEventDrafts = (events: TimelineCueEventSummary[]) => {
-    setTimelineEventDrafts((current) => {
-      const nextDrafts: Record<number, TimelineEventDraft> = {};
-      for (const event of events) {
-        nextDrafts[event.id] = current[event.id] ?? timelineEventDraftFromSummary(event);
-      }
-      return nextDrafts;
-    });
+    setTimelineEventDrafts((current) => reconcileTimelineEventDrafts(events, current));
   };
 
   const timelineEventDraft = (event: TimelineCueEventSummary) =>
@@ -4745,6 +4917,63 @@ export default function App() {
       },
     }));
   };
+  const confirmDiscardTimelineEventDrafts = (actionLabel: string) =>
+    !timelineEventEditorDirty() || window.confirm(`Discard unsaved Scene Block edits and ${actionLabel}?`);
+
+  const invokeTimelineSceneBlockCommand = async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
+    if (
+      viewportFixture === "scene-block-large" &&
+      (command === "set_timeline_scene_block" || command === "set_timeline_cue_event")
+    ) {
+      const eventId = Number(args?.eventId);
+      setSnapshot((current) => ({
+        ...current,
+        timeline: {
+          ...current.timeline,
+          events: current.timeline.events.map((event) => event.id === eventId
+            ? {
+                ...event,
+                cue_id: Number(args?.cueId ?? event.cue_id),
+                time_ms: Number(args?.timeMs ?? event.time_ms),
+                track: (args?.track ?? event.track) as TimelineTrackKind,
+                duration_ms: command === "set_timeline_scene_block"
+                  ? Number(args?.durationMs ?? event.duration_ms)
+                  : 0,
+                loop_count: command === "set_timeline_scene_block"
+                  ? Number(args?.loopCount ?? event.loop_count)
+                  : 1,
+                jump_to_event_id: command === "set_timeline_scene_block"
+                  ? (args?.jumpToEventId === null || args?.jumpToEventId === undefined
+                      ? null
+                      : Number(args.jumpToEventId))
+                  : null,
+              }
+            : event),
+        },
+      }));
+      return undefined as T;
+    }
+    return invoke<T>(command, args);
+  };
+
+  const timelineSceneBlocks = createTimelineSceneBlockController({
+    invoke: invokeTimelineSceneBlockCommand,
+    snapTimeMs,
+    hasEventId: (eventId) => snapshot().timeline.events.some((event) => event.id === eventId),
+    getEventById: (eventId) => timelineEventRows().find((event) => event.id === eventId),
+    getEventDraft: timelineEventDraft,
+    setEventDraft: (eventId, draft) => setTimelineEventDrafts((current) => ({
+      ...current,
+      [eventId]: draft,
+    })),
+    getAddDurationMs: timelineBlockDurationMs,
+    getAddLoopCount: timelineBlockLoopCount,
+    getAddJumpToEventId: timelineBlockJumpToEventId,
+    setNextStartMs: setTimelineEventTimeMs,
+    getOverviewDurationMs: timelineOverviewDurationMs,
+    setMessage,
+    refreshSnapshot: () => viewportFixture === "scene-block-large" ? Promise.resolve(snapshot()) : refreshSnapshot(),
+  });
 
   const syncTimelineAutomationDrafts = (automations: TimelineAutomationSummary[]) => {
     setTimelineAutomationDrafts((current) => {
@@ -4924,6 +5153,10 @@ export default function App() {
       setMessage("Nothing to undo.");
       return;
     }
+    if (!confirmDiscardTimelineEventDrafts("undo the last project edit")) {
+      setMessage("Undo canceled; unsaved Scene Block edits were kept.");
+      return;
+    }
     try {
       const status = await invoke<ProjectHistoryStatus>("undo_project_transaction");
       setProjectHistoryStatus(status);
@@ -4939,6 +5172,10 @@ export default function App() {
       setMessage("Nothing to redo.");
       return;
     }
+    if (!confirmDiscardTimelineEventDrafts("redo the next project edit")) {
+      setMessage("Redo canceled; unsaved Scene Block edits were kept.");
+      return;
+    }
     try {
       const status = await invoke<ProjectHistoryStatus>("redo_project_transaction");
       setProjectHistoryStatus(status);
@@ -4950,14 +5187,22 @@ export default function App() {
   };
 
   const saveProjectRecovery = async () => {
-    if (!isTauriRuntime() || !projectDirty()) {
+    if (!isTauriRuntime() || (!projectDirty() && !timelineEventEditorDirty())) {
       return;
     }
-    const signature = projectSnapshotSignature(snapshot());
+    const sceneBlockDrafts = dirtyTimelineEventDrafts();
+    const signature = `${projectSnapshotSignature(snapshot())}|scene-block-drafts:${JSON.stringify(
+      Object.entries(sceneBlockDrafts).sort(([left], [right]) => Number(left) - Number(right)),
+    )}`;
     try {
       if (signature !== lastRecoverySignature) {
         const project = await invoke<ProjectFile>("get_project_checkpoint");
-        const checkpoint = createProjectRecoveryCheckpoint(project, currentProjectPath(), signature);
+        const checkpoint = createProjectRecoveryCheckpoint(
+          project,
+          currentProjectPath(),
+          signature,
+          sceneBlockDrafts,
+        );
         if (!saveProjectRecoveryCheckpoint(checkpoint)) {
           throw new Error("browser storage is unavailable or full");
         }
@@ -4997,10 +5242,15 @@ export default function App() {
   };
 
   const confirmDiscardProjectChanges = (actionLabel: string) => {
-    if (!projectDirty()) {
+    if (!projectDirty() && !timelineEventEditorDirty()) {
       return true;
     }
-    return window.confirm(`Discard unsaved changes and ${actionLabel}?`);
+    const changeKind = projectDirty() && timelineEventEditorDirty()
+      ? "project changes and Scene Block edits"
+      : timelineEventEditorDirty()
+        ? "Scene Block edits"
+        : "project changes";
+    return window.confirm(`Discard unsaved ${changeKind} and ${actionLabel}?`);
   };
 
   const applyEngineSnapshot = (
@@ -5009,6 +5259,7 @@ export default function App() {
     resetEditorDrafts = false,
   ) => {
     if (resetEditorDrafts) {
+      setTimelineOverviewViewportDurationMs(5000);
       setVideoOutputConfigDrafts({});
       setCueMetadataDrafts({});
       setTimelineEventDrafts({});
@@ -6363,6 +6614,10 @@ export default function App() {
   };
 
   const saveProject = async () => {
+    if (timelineEventEditorDirty()) {
+      setMessage("Save each modified Scene Block row before saving the project.");
+      return;
+    }
     try {
       const path = await invoke<string | null>("save_project");
       if (path) {
@@ -6381,6 +6636,10 @@ export default function App() {
   };
 
   const saveProjectAs = async () => {
+    if (timelineEventEditorDirty()) {
+      setMessage("Save each modified Scene Block row before using Save As.");
+      return;
+    }
     try {
       const path = await invoke<string | null>("save_project_as");
       if (path) {
@@ -6472,6 +6731,8 @@ export default function App() {
       );
       const next = await refreshSnapshot(true, true);
       if (next) {
+        const recoveredTimelineEventDrafts = checkpoint.editor_drafts?.timeline_events ?? {};
+        setTimelineEventDrafts(reconcileTimelineEventDrafts(next.timeline.events, recoveredTimelineEventDrafts));
         setCleanProjectSignature("__syndocal_recovered_unsaved__");
         setProjectDirty(true);
       }
@@ -7874,8 +8135,18 @@ export default function App() {
 
   const removeCue = async (cueId: number) => {
     const cue = snapshot().cues.find((candidate) => candidate.id === cueId);
-    if (cue && !confirmDestructiveAction("cue", cue.label)) {
-      return;
+    if (cue) {
+      const linkedPlacements = snapshot().timeline.events.filter((event) => event.cue_id === cueId);
+      const linkedPlacementIds = new Set(linkedPlacements.map((event) => event.id));
+      const incomingJumpCount = snapshot().timeline.events.filter((event) =>
+        event.cue_id !== cueId &&
+        event.jump_to_event_id !== null &&
+        event.jump_to_event_id !== undefined &&
+        linkedPlacementIds.has(event.jump_to_event_id),
+      ).length;
+      if (!confirmCueRemoval(cue.label, linkedPlacements.length, incomingJumpCount)) {
+        return;
+      }
     }
     try {
       await invoke("remove_cue", { cueId });
@@ -7884,6 +8155,21 @@ export default function App() {
     } catch (error) {
       setMessage(String(error));
     }
+  };
+
+  const openTimelineSourceCue = (cueId: number) => {
+    const cue = snapshot().cues.find((candidate) => candidate.id === cueId);
+    if (!cue) {
+      setMessage(`Source Cue ${cueId} is no longer available.`);
+      return;
+    }
+    setWorkspaceTab("control");
+    setControlMode("live");
+    setTimelineDeskSurface("cues");
+    setSelectedCueListId(cue.cue_list_id);
+    setRevealedSourceCueId(cue.id);
+    setRevealedSourceCueRevision((revision) => revision + 1);
+    setMessage(`Opened source Cue ${cue.cue_number || cue.id} in Cue List ${cue.cue_list_id}.`);
   };
 
   const snapTimelineDrafts = () => {
@@ -7901,10 +8187,12 @@ export default function App() {
       return;
     }
     const timeline = snapshot().timeline;
-    const cueEventUpdates = timeline.events.map((event) => ({
-      event,
-      timeMs: snapTimeMs(event.time_ms),
-    }));
+    const cueEventUpdates = buildTimelineSceneBlockSnapPlacements(
+      timeline.events,
+      timelineEventDraft,
+      snapTimeMs,
+      (eventId) => timeline.events.some((event) => event.id === eventId),
+    );
     const lightingAutomationUpdates = timeline.automations.map((automation) => ({
       automation,
       keyframes: snappedTimelineKeyframes(automation.keyframes, snapTimeMs),
@@ -7919,40 +8207,23 @@ export default function App() {
       return;
     }
     try {
-      await Promise.all([
-        ...cueEventUpdates.map(({ event, timeMs }) =>
-          invoke("set_timeline_cue_event", {
-            eventId: event.id,
-            cueId: event.cue_id,
-            timeMs,
-            track: event.track,
-          }),
-        ),
-        ...lightingAutomationUpdates.map(({ automation, keyframes }) =>
-          invoke("set_timeline_automation", {
-            automationId: automation.id,
-            fixtureId: automation.fixture_id,
-            attribute: automation.attribute,
+      await invoke("snap_timeline_items", {
+        request: {
+          event_placements: cueEventUpdates.map(({ request }) => request),
+          lighting_automations: lightingAutomationUpdates.map(({ automation, keyframes }) => ({
+            automation_id: automation.id,
             keyframes,
-          }),
-        ),
-        ...videoAutomationUpdates.map(({ automation, keyframes }) =>
-          invoke("set_timeline_video_automation", {
-            automationId: automation.id,
-            layerId: automation.layer_id,
-            param: automation.param,
+          })),
+          video_automations: videoAutomationUpdates.map(({ automation, keyframes }) => ({
+            automation_id: automation.id,
             keyframes,
-          }),
-        ),
-      ]);
+          })),
+        },
+      });
       setTimelineEventDrafts((current) => {
         const next = { ...current };
-        for (const { event, timeMs } of cueEventUpdates) {
-          next[event.id] = {
-            cue_id: event.cue_id,
-            time_ms: timeMs,
-            track: event.track,
-          };
+        for (const { event, draft } of cueEventUpdates) {
+          next[event.id] = draft;
         }
         return next;
       });
@@ -7983,29 +8254,7 @@ export default function App() {
     }
   };
 
-  const addTimelineCueEventAt = async (cueId: number | null, timeMs: number, track: TimelineTrackKind, nextDraftTime = true) => {
-    if (cueId === null) {
-      setMessage("Create a cue before adding timeline events.");
-      return;
-    }
-    const snappedTimeMs = snapTimeMs(timeMs);
-    try {
-      const eventId = await invoke<number>("add_timeline_cue_event", {
-        cueId,
-        timeMs: snappedTimeMs,
-        track,
-      });
-      if (nextDraftTime) {
-        setTimelineEventTimeMs(snapTimeMs(snappedTimeMs + 1000));
-      } else {
-        setTimelineEventTimeMs(snappedTimeMs);
-      }
-      setMessage(`Added timeline event ${eventId} at ${snappedTimeMs} ms`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
+  const addTimelineCueEventAt = timelineSceneBlocks.addAt;
 
   const addTimelineCueEvent = async () => {
     await addTimelineCueEventAt(selectedTimelineCueId(), timelineEventTimeMs(), timelineTrack());
@@ -8015,84 +8264,9 @@ export default function App() {
     await addTimelineCueEventAt(selectedTimelineCueId(), snapshot().timeline.position_ms, timelineTrack(), false);
   };
 
-  const setTimelineCueEvent = async (event: TimelineCueEventSummary) => {
-    const draft = timelineEventDraft(event);
-    const cueId = Math.max(0, Math.round(draft.cue_id));
-    const timeMs = snapTimeMs(draft.time_ms);
-    try {
-      await invoke("set_timeline_cue_event", {
-        eventId: event.id,
-        cueId,
-        timeMs,
-        track: draft.track,
-      });
-      setTimelineEventDrafts((current) => ({
-        ...current,
-        [event.id]: {
-          cue_id: cueId,
-          time_ms: timeMs,
-          track: draft.track,
-        },
-      }));
-      setMessage(`Saved timeline event ${event.id}`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const moveTimelineCueEvent = async (event: TimelineCueEventSummary, deltaMs: number) => {
-    const timeMs = snapTimeMs(Math.max(0, event.time_ms + deltaMs));
-    try {
-      await invoke("set_timeline_cue_event", {
-        eventId: event.id,
-        cueId: event.cue_id,
-        timeMs,
-        track: event.track,
-      });
-      setTimelineEventDrafts((current) => ({
-        ...current,
-        [event.id]: {
-          cue_id: event.cue_id,
-          time_ms: timeMs,
-          track: event.track,
-        },
-      }));
-      setMessage(`Moved timeline event ${event.id} to ${timeMs} ms`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const moveTimelineCueEventToRatio = async (eventId: number, ratio: number) => {
-    const event = timelineEventRows().find((candidate) => candidate.id === eventId);
-    if (!event) {
-      setMessage(`Timeline event ${eventId} was not found.`);
-      return;
-    }
-    const timeMs = snapTimeMs(Math.round(clampRange(ratio, 0, 1) * timelineOverviewDurationMs()));
-    try {
-      await invoke("set_timeline_cue_event", {
-        eventId: event.id,
-        cueId: event.cue_id,
-        timeMs,
-        track: event.track,
-      });
-      setTimelineEventDrafts((current) => ({
-        ...current,
-        [event.id]: {
-          cue_id: event.cue_id,
-          time_ms: timeMs,
-          track: event.track,
-        },
-      }));
-      setMessage(`Moved ${event.cue_label} to ${timeMs} ms`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
+  const setTimelineCueEvent = timelineSceneBlocks.save;
+  const moveTimelineCueEvent = timelineSceneBlocks.moveBy;
+  const moveTimelineCueEventToRatio = timelineSceneBlocks.moveToRatio;
 
   const currentLightingAutomationValue = (automation: TimelineAutomationSummary) => {
     const fixture = snapshot().fixtures.find((candidate) => candidate.id === automation.fixture_id);
@@ -8137,15 +8311,7 @@ export default function App() {
     refreshSnapshot,
   });
 
-  const removeTimelineEvent = async (eventId: number) => {
-    try {
-      await invoke("remove_timeline_event", { eventId });
-      setMessage(`Removed timeline event ${eventId}`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
+  const removeTimelineEvent = timelineSceneBlocks.remove;
 
   const {
     usePlayheadForLightingAutomation,
@@ -10390,7 +10556,7 @@ export default function App() {
   };
 
   const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-    if (nativeCloseApproved || !projectDirty()) {
+    if (nativeCloseApproved || (!projectDirty() && !timelineEventEditorDirty())) {
       return;
     }
     event.preventDefault();
@@ -10402,7 +10568,7 @@ export default function App() {
   if (isTauriRuntime()) {
     void getCurrentWindow()
       .onCloseRequested((event) => {
-        if (!projectDirty()) {
+        if (!projectDirty() && !timelineEventEditorDirty()) {
           return;
         }
         if (confirmDiscardProjectChanges("close Syndocal")) {
@@ -10443,7 +10609,7 @@ export default function App() {
         dmxSuccessCount={snapshot().telemetry.last_dmx_send_success_count}
         dmxOutputCount={snapshot().telemetry.last_dmx_output_count}
         projectLabel={projectFileLabel()}
-        projectDirty={projectDirty()}
+        projectDirty={visibleProjectDirty()}
         currentProjectPath={currentProjectPath()}
         recentProjectPaths={recentProjectPaths()}
         recoveryCheckpoint={projectRecoveryCheckpoint()}
@@ -11896,6 +12062,8 @@ export default function App() {
             selectedCueListId={selectedCueList().id}
             cueListLabel={cueListLabel()}
             activeCueId={snapshot().active_cue_id}
+            revealCueId={revealedSourceCueId()}
+            revealCueRevision={revealedSourceCueRevision()}
             activeFade={snapshot().active_fade}
             timelinePositionMs={snapshot().timeline.position_ms}
             timelineTrack={timelineTrack()}
@@ -11939,6 +12107,7 @@ export default function App() {
             onAddTimelineCueEventAt={addTimelineCueEventAt}
             onRemoveCue={removeCue}
             onSeekTimeline={seekTimeline}
+            onOpenTimeline={() => setTimelineDeskSurface("show")}
             onMoveTimelineCueEvent={moveTimelineCueEvent}
             onRemoveTimelineEvent={removeTimelineEvent}
           />
@@ -11948,6 +12117,7 @@ export default function App() {
               positionMs={snapshot().timeline.position_ms}
               durationMs={snapshot().timeline.duration_ms}
               playing={snapshot().timeline.playing}
+              executingLive={timelineExecutionLive()}
               cuesCount={snapshot().cues.length}
               lightingAutomationCount={snapshot().timeline.automations.length}
               videoAutomationCount={snapshot().timeline.video_automations.length}
@@ -11963,6 +12133,9 @@ export default function App() {
               gridMs={timelineGridMs()}
               selectedCueId={selectedTimelineCueId()}
               eventTimeMs={timelineEventTimeMs()}
+              blockDurationMs={timelineBlockDurationMs()}
+              blockLoopCount={timelineBlockLoopCount()}
+              blockJumpToEventId={timelineBlockJumpToEventId()}
               track={timelineTrack()}
               cueOptions={timelineCueOptions()}
               eventRows={timelineEventRows()}
@@ -11985,12 +12158,16 @@ export default function App() {
               onSnapItems={snapTimelineItems}
               onSelectedCueId={setTimelineCueId}
               onEventTimeMs={setTimelineEventTimeMs}
+              onBlockDurationMs={setTimelineBlockDurationMs}
+              onBlockLoopCount={setTimelineBlockLoopCount}
+              onBlockJumpToEventId={setTimelineBlockJumpToEventId}
               onTrack={setTimelineTrack}
               onAddEvent={addTimelineCueEvent}
               onAddEventAtPlayhead={addTimelineCueEventAtPlayhead}
               onUpdateEventDraft={updateTimelineEventDraft}
               onSaveEvent={setTimelineCueEvent}
               onRemoveEvent={removeTimelineEvent}
+              onOpenSourceCue={openTimelineSourceCue}
             />
             </div>
             <div class="timelineAutomationSurface">
@@ -12009,7 +12186,7 @@ export default function App() {
               interpolation={automationInterpolation()}
               rows={timelineAutomationRows()}
               selectedAutomationId={selectedLightingTimelineAutomationId()}
-              fixtureOptions={snapshot().fixtures.map((fixture) => ({ id: fixture.id, label: fixture.label }))}
+              fixtureOptions={timelineAutomationFixtureOptions()}
               timelineAutomationDraft={timelineAutomationDraft}
               fixtureAttributeOptions={fixtureAttributeOptions}
               onAttribute={setEffectAttribute}

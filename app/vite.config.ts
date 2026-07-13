@@ -16,13 +16,16 @@ export default defineConfig({
         manualChunks(id) {
           const normalizedId = id.replace(/\\/g, "/");
           if (
+            normalizedId.includes("/src/components/CueManagementPanel") ||
             normalizedId.includes("/src/components/TimelineCueEventsPanel") ||
+            normalizedId.includes("/src/components/TimelineSceneBlocksEditor") ||
             normalizedId.includes("/src/components/TimelineLightingAutomationPanel") ||
             normalizedId.includes("/src/components/TimelineOverview") ||
             normalizedId.includes("/src/components/VideoTimelineAutomationPanel") ||
             normalizedId.includes("/src/createTimelineAutomationController") ||
             normalizedId.includes("/src/createTimelineKeyframeController") ||
             normalizedId.includes("/src/createTimelineOverviewAutomationController") ||
+            normalizedId.includes("/src/timelineSceneBlocks") ||
             normalizedId.includes("/src/timelineAutomationHelpers")
           ) {
             return "timeline-panels";

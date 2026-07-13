@@ -14,6 +14,8 @@ pub type VideoOutputId = u64;
 pub type NodeGraphId = u64;
 pub type StageObjectId = u64;
 
+pub const MAX_TIMELINE_SCENE_BLOCK_LOOPS: u16 = 256;
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct Vec3 {
     pub x: f32,
@@ -1188,6 +1190,16 @@ pub struct TimelineCueEventSummary {
     pub cue_id: CueId,
     pub time_ms: u64,
     pub track: TimelineTrackKind,
+    #[serde(default)]
+    pub duration_ms: u64,
+    #[serde(default = "default_timeline_scene_block_loop_count")]
+    pub loop_count: u16,
+    #[serde(default)]
+    pub jump_to_event_id: Option<TimelineEventId>,
+}
+
+fn default_timeline_scene_block_loop_count() -> u16 {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1263,7 +1275,43 @@ pub struct TimelineVideoAutomationSummary {
     pub enabled: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimelineEventPlacementUpdate {
+    pub event_id: TimelineEventId,
+    pub cue_id: CueId,
+    pub time_ms: u64,
+    pub track: TimelineTrackKind,
+    #[serde(default)]
+    pub duration_ms: u64,
+    #[serde(default = "default_timeline_scene_block_loop_count")]
+    pub loop_count: u16,
+    #[serde(default)]
+    pub jump_to_event_id: Option<TimelineEventId>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TimelineAutomationKeyframesUpdate {
+    pub automation_id: AutomationId,
+    pub keyframes: Vec<AutomationKeyframeSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TimelineVideoAutomationKeyframesUpdate {
+    pub automation_id: AutomationId,
+    pub keyframes: Vec<VideoAutomationKeyframeSummary>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TimelineSnapRequest {
+    #[serde(default)]
+    pub event_placements: Vec<TimelineEventPlacementUpdate>,
+    #[serde(default)]
+    pub lighting_automations: Vec<TimelineAutomationKeyframesUpdate>,
+    #[serde(default)]
+    pub video_automations: Vec<TimelineVideoAutomationKeyframesUpdate>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct TimelineSnapshot {
     pub events: Vec<TimelineCueEventSummary>,
     pub automations: Vec<TimelineAutomationSummary>,
@@ -1273,20 +1321,6 @@ pub struct TimelineSnapshot {
     pub playing: bool,
     pub position_ms: u64,
     pub duration_ms: u64,
-}
-
-impl Default for TimelineSnapshot {
-    fn default() -> Self {
-        Self {
-            events: Vec::new(),
-            automations: Vec::new(),
-            video_automations: Vec::new(),
-            audio: None,
-            playing: false,
-            position_ms: 0,
-            duration_ms: 0,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -2510,6 +2544,77 @@ mod tests {
         assert!(parsed.mib_fixture_ids.is_empty());
         assert!(parsed.palette_targets.is_empty());
         assert!(parsed.effect_targets.is_empty());
+    }
+
+    #[test]
+    fn legacy_timeline_cue_event_defaults_to_point_placement() {
+        let event: super::TimelineCueEventSummary = serde_json::from_value(serde_json::json!({
+            "id": 9,
+            "cue_id": 3,
+            "time_ms": 1_250,
+            "track": "Lighting"
+        }))
+        .unwrap();
+
+        assert_eq!(event.duration_ms, 0);
+        assert_eq!(event.loop_count, 1);
+        assert_eq!(event.jump_to_event_id, None);
+    }
+
+    #[test]
+    fn timeline_scene_block_fields_roundtrip() {
+        let event = super::TimelineCueEventSummary {
+            id: 9,
+            cue_id: 3,
+            time_ms: 1_250,
+            track: super::TimelineTrackKind::Lighting,
+            duration_ms: 2_000,
+            loop_count: 4,
+            jump_to_event_id: Some(2),
+        };
+
+        let encoded = serde_json::to_string(&event).unwrap();
+        let decoded: super::TimelineCueEventSummary = serde_json::from_str(&encoded).unwrap();
+
+        assert_eq!(decoded, event);
+    }
+
+    #[test]
+    fn timeline_snap_request_roundtrips_complete_items_and_defaults_missing_lists() {
+        let request = super::TimelineSnapRequest {
+            event_placements: vec![super::TimelineEventPlacementUpdate {
+                event_id: 9,
+                cue_id: 3,
+                time_ms: 1_250,
+                track: super::TimelineTrackKind::Lighting,
+                duration_ms: 2_000,
+                loop_count: 4,
+                jump_to_event_id: Some(2),
+            }],
+            lighting_automations: vec![super::TimelineAutomationKeyframesUpdate {
+                automation_id: 11,
+                keyframes: vec![super::AutomationKeyframeSummary {
+                    time_ms: 1_000,
+                    value: 32_768,
+                    interpolation: super::AutomationInterpolation::Linear,
+                }],
+            }],
+            video_automations: vec![super::TimelineVideoAutomationKeyframesUpdate {
+                automation_id: 12,
+                keyframes: vec![super::VideoAutomationKeyframeSummary {
+                    time_ms: 1_000,
+                    value: 0.5,
+                    interpolation: super::AutomationInterpolation::Step,
+                }],
+            }],
+        };
+
+        let encoded = serde_json::to_string(&request).unwrap();
+        let decoded: super::TimelineSnapRequest = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, request);
+
+        let defaults: super::TimelineSnapRequest = serde_json::from_str("{}").unwrap();
+        assert_eq!(defaults, super::TimelineSnapRequest::default());
     }
 
     #[test]

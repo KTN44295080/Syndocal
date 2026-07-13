@@ -18,6 +18,7 @@ import { CueEffectRecallEditor } from "./CueEffectRecallEditor";
 export type CueCaptureScopeMode = "all" | "lighting" | "effects" | "selectedFixture" | "selectedGroup" | "video";
 
 const cuesPerPage = 12;
+const timelinePlacementsPerCue = 8;
 
 const cueCaptureScopeLabel = (scope: CueCaptureScopeMode) => {
   if (scope === "all") return "All Sources";
@@ -39,6 +40,8 @@ interface CueManagementPanelProps {
   selectedCueListId: number;
   cueListLabel: string;
   activeCueId: number | null | undefined;
+  revealCueId: number | null;
+  revealCueRevision: number;
   activeFade: ActiveFadeSummary | null | undefined;
   timelinePositionMs: number;
   timelineTrack: TimelineTrackKind;
@@ -87,6 +90,7 @@ interface CueManagementPanelProps {
   ) => void | Promise<void>;
   onRemoveCue: (cueId: number) => void | Promise<void>;
   onSeekTimeline: (timeMs: number) => void | Promise<void>;
+  onOpenTimeline: () => void;
   onMoveTimelineCueEvent: (event: TimelineCueEventSummary, deltaMs: number) => void | Promise<void>;
   onRemoveTimelineEvent: (eventId: number) => void | Promise<void>;
 }
@@ -94,6 +98,7 @@ interface CueManagementPanelProps {
 export function CueManagementPanel(props: CueManagementPanelProps) {
   const [cuePage, setCuePage] = createSignal(0);
   const [cueEditing, setCueEditing] = createSignal(false);
+  let cuePanelElement: HTMLDivElement | undefined;
   const cuePageCount = createMemo(() => Math.max(1, Math.ceil(props.cues.length / cuesPerPage)));
   const visibleCues = createMemo(() => {
     const start = cuePage() * cuesPerPage;
@@ -104,14 +109,39 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
     if (cuePage() >= cuePageCount()) setCuePage(cuePageCount() - 1);
   });
 
+  let lastRevealRevision = -1;
+  let revealPriorityActive = false;
+  let activeCueIdAtReveal: number | null | undefined = undefined;
   createEffect(() => {
-    if (props.activeCueId === null || props.activeCueId === undefined) return;
-    const activeIndex = props.cues.findIndex((cue) => cue.id === props.activeCueId);
+    const revision = props.revealCueRevision;
+    const revealCueId = props.revealCueId;
+    const cues = props.cues;
+    if (revision === lastRevealRevision || revealCueId === null) return;
+    const revealIndex = cues.findIndex((cue) => cue.id === revealCueId);
+    if (revealIndex < 0) return;
+    lastRevealRevision = revision;
+    revealPriorityActive = true;
+    activeCueIdAtReveal = props.activeCueId;
+    setCuePage(Math.floor(revealIndex / cuesPerPage));
+    if (props.mode === "live") setCueEditing(true);
+    queueMicrotask(() => requestAnimationFrame(() => requestAnimationFrame(() => {
+      cuePanelElement
+        ?.querySelector<HTMLElement>(`[data-cue-id="${revealCueId}"]`)
+        ?.scrollIntoView({ block: "start" });
+    })));
+  });
+
+  createEffect(() => {
+    const activeCueId = props.activeCueId;
+    if (revealPriorityActive && activeCueId === activeCueIdAtReveal) return;
+    if (activeCueId !== activeCueIdAtReveal) revealPriorityActive = false;
+    if (activeCueId === null || activeCueId === undefined) return;
+    const activeIndex = props.cues.findIndex((cue) => cue.id === activeCueId);
     if (activeIndex >= 0) setCuePage(Math.floor(activeIndex / cuesPerPage));
   });
 
   return (
-    <div class={
+    <div ref={(element) => { cuePanelElement = element; }} class={
       props.mode === "live"
         ? `cuePanel cuePanelLive ${cueEditing() ? "cuePanelEditing" : ""}`
         : "cuePanel"
@@ -262,6 +292,8 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
             const canSaveRecall = () => canSaveCueEffectTargets(cue, draft().effect_targets);
             const recallSaveHintId = `cue-${cue.id}-recall-save-hint`;
             const placements = () => props.cueTimelinePlacementsForCue(cue.id);
+            const visiblePlacements = () => placements().slice(0, timelinePlacementsPerCue);
+            const hiddenPlacementCount = () => Math.max(0, placements().length - timelinePlacementsPerCue);
             const updateIfcbTiming = (patch: Partial<CueMetadataDraft["ifcb_timing"]>) =>
               props.onUpdateCueMetadataDraft(cue, {
                 ifcb_timing: { ...draft().ifcb_timing, ...patch },
@@ -324,6 +356,7 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
             return (
               <div
                 class={cue.id === props.activeCueId ? "cueItem active" : "cueItem"}
+                data-cue-id={cue.id}
                 role="listitem"
                 aria-posinset={cueIndex() + 1}
                 aria-setsize={props.cues.length}
@@ -599,29 +632,38 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                     Update Look
                   </button>
                   <button class="cueLiveGo" onClick={() => void props.onTriggerCue(cue.id)}>GO</button>
-                  <button class="cueEditOnly" onClick={() => void props.onAddTimelineCueEventAt(cue.id, props.timelinePositionMs, props.timelineTrack, false)}>
-                    At Playhead
+                  <button
+                    class="cueEditOnly"
+                    title="Place this Cue as a linked Scene Block at the current playhead."
+                    onClick={() => void props.onAddTimelineCueEventAt(cue.id, props.timelinePositionMs, props.timelineTrack, false)}
+                  >
+                    Block @ Playhead
                   </button>
                   <button class="cueEditOnly" onClick={() => void props.onRemoveCue(cue.id)}>Remove</button>
                 </div>
                 <Show when={placements().length > 0}>
                   <div class="cueTimelinePlacements">
-                    <For each={placements()}>
+                    <For each={visiblePlacements()}>
                       {(placement) => (
                         <span
                           class={[
                             "cueTimelinePlacementChip",
                             placement.track === "Lighting" ? "lighting" : "video",
+                            placement.duration_ms > 0 ? "linkedBlock" : "legacyPoint",
                             placement.time_ms < props.timelinePositionMs ? "past" : "",
                           ].filter(Boolean).join(" ")}
                         >
                           <button
                             class="cueTimelinePlacementMain"
-                            title={`Seek to ${placement.time_ms} ms / ${placement.track}`}
+                            title={placement.duration_ms > 0
+                              ? `Linked Scene Block · ${placement.time_ms} ms / ${placement.duration_ms} ms × ${placement.loop_count} / ${placement.track}`
+                              : `Legacy point · ${placement.time_ms} ms / ${placement.track}`}
                             onClick={() => void props.onSeekTimeline(placement.time_ms)}
                           >
                             <b>{placement.track === "Lighting" ? "L" : "V"}</b>
-                            <small>{placement.time_ms} ms</small>
+                            <small>
+                              {placement.time_ms} · {placement.duration_ms > 0 ? `${placement.duration_ms}×${placement.loop_count}` : "Point"}
+                            </small>
                           </button>
                           <button
                             class="cueTimelinePlacementMove"
@@ -645,6 +687,16 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                         </span>
                       )}
                     </For>
+                    <Show when={hiddenPlacementCount() > 0}>
+                      <button
+                        type="button"
+                        class="cueTimelinePlacementMore"
+                        title="Open the Timeline to inspect every linked placement."
+                        onClick={props.onOpenTimeline}
+                      >
+                        {hiddenPlacementCount()} more · Open Timeline
+                      </button>
+                    </Show>
                   </div>
                 </Show>
               </div>

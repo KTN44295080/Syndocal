@@ -1,4 +1,5 @@
 import type { ProjectFile } from "./types";
+import type { TimelineEventDraft } from "./editorDrafts";
 
 const projectRecoveryStorageKey = "syndocal.projectRecovery.v1";
 
@@ -9,7 +10,37 @@ export interface ProjectRecoveryCheckpoint {
   source_path: string | null;
   signature: string;
   project: ProjectFile;
+  editor_drafts?: {
+    version: 1;
+    timeline_events: Record<number, TimelineEventDraft>;
+  };
 }
+
+const isTimelineEventDraft = (candidate: unknown): candidate is TimelineEventDraft => {
+  if (!candidate || typeof candidate !== "object") return false;
+  const draft = candidate as Partial<TimelineEventDraft>;
+  return Number.isFinite(draft.cue_id) &&
+    Number.isFinite(draft.time_ms) &&
+    (draft.track === "Lighting" || draft.track === "Video") &&
+    Number.isFinite(draft.duration_ms) &&
+    Number.isFinite(draft.loop_count) &&
+    (draft.jump_to_event_id === null || Number.isFinite(draft.jump_to_event_id));
+};
+
+const editorDraftsFromUnknown = (candidate: unknown): ProjectRecoveryCheckpoint["editor_drafts"] => {
+  if (!candidate || typeof candidate !== "object") return undefined;
+  const source = candidate as { version?: unknown; timeline_events?: unknown };
+  if (source.version !== 1 || !source.timeline_events || typeof source.timeline_events !== "object") {
+    return undefined;
+  }
+  const timelineEvents: Record<number, TimelineEventDraft> = {};
+  for (const [eventId, draft] of Object.entries(source.timeline_events)) {
+    const numericEventId = Number(eventId);
+    if (!Number.isInteger(numericEventId) || numericEventId <= 0 || !isTimelineEventDraft(draft)) continue;
+    timelineEvents[numericEventId] = draft;
+  }
+  return { version: 1, timeline_events: timelineEvents };
+};
 
 const isProjectFile = (candidate: unknown): candidate is ProjectFile => {
   if (!candidate || typeof candidate !== "object") {
@@ -51,6 +82,7 @@ export const createProjectRecoveryCheckpoint = (
   project: ProjectFile,
   sourcePath: string | null,
   signature: string,
+  timelineEventDrafts?: Record<number, TimelineEventDraft>,
 ): ProjectRecoveryCheckpoint => ({
   version: 1,
   app: "Syndocal",
@@ -58,6 +90,9 @@ export const createProjectRecoveryCheckpoint = (
   source_path: sourcePath,
   signature,
   project,
+  ...(timelineEventDrafts && Object.keys(timelineEventDrafts).length > 0
+    ? { editor_drafts: { version: 1 as const, timeline_events: timelineEventDrafts } }
+    : {}),
 });
 
 export const recoveryCheckpointFromUnknown = (candidate: unknown): ProjectRecoveryCheckpoint | null => {
@@ -74,6 +109,7 @@ export const recoveryCheckpointFromUnknown = (candidate: unknown): ProjectRecove
   ) {
     return null;
   }
+  const editorDrafts = editorDraftsFromUnknown(source.editor_drafts);
   return {
     version: 1,
     app: "Syndocal",
@@ -81,6 +117,7 @@ export const recoveryCheckpointFromUnknown = (candidate: unknown): ProjectRecove
     source_path: typeof source.source_path === "string" && source.source_path.trim() ? source.source_path.trim() : null,
     signature: source.signature,
     project: source.project,
+    ...(editorDrafts ? { editor_drafts: editorDrafts } : {}),
   };
 };
 

@@ -22,6 +22,44 @@ assert.equal(localization.translateUiText("Save", "ja"), "保存");
 assert.equal(localization.translateUiText("  Save  ", "ja"), "  保存  ");
 assert.equal(localization.translateUiText("3 steps", "ja"), "3 手順");
 assert.equal(localization.translateUiText("Install v1.2.0", "ja"), "v1.2.0をインストール");
+assert.equal(localization.translateUiText("Jump", "ja"), "ジャンプ");
+assert.equal(localization.translateUiText("Blocks 13-24 / 500", "ja"), "ブロック 13-24 / 500");
+assert.equal(
+  localization.translateUiText("L 3 · V 2 · FX 1 · Fade 320 ms", "ja"),
+  "照明 3 · 映像 2 · FX 1 · フェード 320 ms",
+);
+assert.equal(
+  localization.translateUiText("1000 ms × 4 = 4000 ms span", "ja"),
+  "1000 ms × 4回 = 4000 ms",
+);
+assert.equal(
+  localization.translateUiText("Opening Wash / Lighting / 0 ms / 1000 ms x 4", "ja"),
+  "Opening Wash / 照明 / 0 ms / 1000 ms × 4回",
+);
+assert.equal(
+  localization.translateUiText("Added linked Scene Block 9 at 1200 ms (500 ms × 4)", "ja"),
+  "連動シーンブロック 9 を 1200 ms に追加しました（500 ms × 4回）",
+);
+assert.equal(
+  localization.translateUiText("Moved Scene Block 9 to 2400 ms", "ja"),
+  "シーンブロック 9 を 2400 ms へ移動しました",
+);
+assert.equal(
+  localization.translateUiText("Block 12 · 4.2 Moving Head @ 8000ms", "ja"),
+  "ブロック 12 · 4.2 Moving Head @ 8000ms",
+);
+assert.equal(
+  localization.translateUiText("Jump · Block 12 · 4.2 Moving Head @ 8000ms", "ja"),
+  "ジャンプ · ブロック 12 · 4.2 Moving Head @ 8000ms",
+);
+assert.equal(
+  localization.translateUiText("Repeat this block · Block 12 · 4.2 Moving Head @ 8000ms", "ja"),
+  "このブロックを繰り返す · ブロック 12 · 4.2 Moving Head @ 8000ms",
+);
+assert.equal(
+  localization.translateUiText("80 shown · 500 total", "ja"),
+  "80件表示 · 全500件",
+);
 assert.equal(
   localization.translateUiText(
     "Created an unsaved project from Festival Base (2 embedded profiles, 4 MIDI, 1 OSC mappings). All DMX and video outputs are disabled and blacked out.",

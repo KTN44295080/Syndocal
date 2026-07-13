@@ -1313,6 +1313,12 @@ export interface TimelineCueEventSummary {
   cue_id: number;
   time_ms: number;
   track: TimelineTrackKind;
+  /** Length of one linked Cue iteration. Zero preserves the legacy point-event behavior. */
+  duration_ms: number;
+  /** Number of Cue iterations within the placed block. */
+  loop_count: number;
+  /** Optional placement to seek to after the final iteration completes. */
+  jump_to_event_id: number | null;
 }
 
 export type AutomationInterpolation = "Step" | "Linear" | "Bezier";

@@ -42,11 +42,11 @@ use protocol::{
     PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RemoteControlConfig,
     RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile,
     StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary, TimelineEventId,
-    TimelineTrackKind, Vec3, VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode,
-    VideoEffectTarget, VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerTarget,
-    VideoOutputId, VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetFile,
-    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
-    VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
+    TimelineSnapRequest, TimelineTrackKind, Vec3, VideoAutomationKeyframeSummary,
+    VideoBackendState, VideoBlendMode, VideoEffectTarget, VideoIsfEffectSummary, VideoLayerId,
+    VideoLayerState, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
+    VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary, VideoOutputSummary,
+    VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -5189,10 +5189,7 @@ fn set_cue_fade_paused(state: State<'_, AppState>, paused: bool) -> Result<(), S
 
 #[tauri::command]
 fn remove_cue(state: State<'_, AppState>, cue_id: CueId) -> Result<(), String> {
-    state
-        .engine
-        .send(EngineCommand::RemoveCue(cue_id))
-        .map_err(|error| error.to_string())
+    state.engine.remove_cue_published(cue_id)
 }
 
 #[tauri::command]
@@ -5209,13 +5206,7 @@ fn add_timeline_cue_event(
     let event_id = state.engine.allocate_timeline_event_id();
     state
         .engine
-        .send(EngineCommand::AddTimelineCueEvent {
-            event_id,
-            cue_id,
-            time_ms,
-            track,
-        })
-        .map_err(|error| error.to_string())?;
+        .add_timeline_cue_event_published(event_id, cue_id, time_ms, track)?;
     Ok(event_id)
 }
 
@@ -5241,13 +5232,168 @@ fn set_timeline_cue_event(
     }
     state
         .engine
-        .send(EngineCommand::SetTimelineCueEvent {
-            event_id,
-            cue_id,
-            time_ms,
-            track,
-        })
-        .map_err(|error| error.to_string())
+        .set_timeline_cue_event_published(event_id, cue_id, time_ms, track)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_timeline_scene_block_fields(
+    events: &[protocol::TimelineCueEventSummary],
+    owner: &str,
+    time_ms: u64,
+    duration_ms: u64,
+    loop_count: u16,
+    jump_to_event_id: Option<TimelineEventId>,
+    allow_legacy_point: bool,
+) -> Result<(), String> {
+    if duration_ms == 0 {
+        if !allow_legacy_point {
+            return Err(format!("{owner} duration must be greater than zero"));
+        }
+        if loop_count != 1 {
+            return Err(format!(
+                "{owner} is a point event and must use a loop count of 1"
+            ));
+        }
+        if jump_to_event_id.is_some() {
+            return Err(format!("{owner} is a point event and cannot define a jump"));
+        }
+        return Ok(());
+    }
+
+    if !(1..=protocol::MAX_TIMELINE_SCENE_BLOCK_LOOPS).contains(&loop_count) {
+        return Err(format!(
+            "{owner} loop count must be from 1 to {}",
+            protocol::MAX_TIMELINE_SCENE_BLOCK_LOOPS
+        ));
+    }
+    let total_duration_ms = duration_ms
+        .checked_mul(u64::from(loop_count))
+        .ok_or_else(|| format!("{owner} total duration overflows the timeline"))?;
+    time_ms
+        .checked_add(total_duration_ms)
+        .ok_or_else(|| format!("{owner} end time overflows the timeline"))?;
+
+    if let Some(jump_to_event_id) = jump_to_event_id {
+        if !events.iter().any(|event| event.id == jump_to_event_id) {
+            return Err(format!(
+                "{owner} references missing jump target event {jump_to_event_id}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_timeline_scene_block_request(
+    snapshot: &EngineSnapshot,
+    owner: &str,
+    cue_id: CueId,
+    time_ms: u64,
+    duration_ms: u64,
+    loop_count: u16,
+    jump_to_event_id: Option<TimelineEventId>,
+) -> Result<(), String> {
+    if !snapshot.cues.iter().any(|cue| cue.id == cue_id) {
+        return Err(format!("Cue {cue_id} was not found"));
+    }
+    validate_timeline_scene_block_fields(
+        &snapshot.timeline.events,
+        owner,
+        time_ms,
+        duration_ms,
+        loop_count,
+        jump_to_event_id,
+        false,
+    )
+}
+
+#[tauri::command]
+fn add_timeline_scene_block(
+    state: State<'_, AppState>,
+    cue_id: CueId,
+    time_ms: u64,
+    track: TimelineTrackKind,
+    duration_ms: u64,
+    loop_count: u16,
+    jump_to_event_id: Option<TimelineEventId>,
+) -> Result<TimelineEventId, String> {
+    let snapshot = state.engine.snapshot();
+    validate_timeline_scene_block_request(
+        &snapshot,
+        "Timeline scene block",
+        cue_id,
+        time_ms,
+        duration_ms,
+        loop_count,
+        jump_to_event_id,
+    )?;
+    let event_id = state.engine.allocate_timeline_event_id();
+    state.engine.add_timeline_scene_block(
+        event_id,
+        cue_id,
+        time_ms,
+        track,
+        duration_ms,
+        loop_count,
+        jump_to_event_id,
+    )?;
+    Ok(event_id)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+fn set_timeline_scene_block(
+    state: State<'_, AppState>,
+    event_id: TimelineEventId,
+    cue_id: CueId,
+    time_ms: u64,
+    track: TimelineTrackKind,
+    duration_ms: u64,
+    loop_count: u16,
+    jump_to_event_id: Option<TimelineEventId>,
+) -> Result<(), String> {
+    let snapshot = state.engine.snapshot();
+    if !snapshot
+        .timeline
+        .events
+        .iter()
+        .any(|event| event.id == event_id)
+    {
+        return Err(format!("Timeline scene block {event_id} was not found"));
+    }
+    validate_timeline_scene_block_request(
+        &snapshot,
+        &format!("Timeline scene block {event_id}"),
+        cue_id,
+        time_ms,
+        duration_ms,
+        loop_count,
+        jump_to_event_id,
+    )?;
+    state.engine.set_timeline_scene_block(
+        event_id,
+        cue_id,
+        time_ms,
+        track,
+        duration_ms,
+        loop_count,
+        jump_to_event_id,
+    )
+}
+
+#[tauri::command]
+fn remove_timeline_scene_block(
+    state: State<'_, AppState>,
+    event_id: TimelineEventId,
+) -> Result<(), String> {
+    state.engine.remove_timeline_scene_block(event_id)
+}
+
+#[tauri::command]
+fn snap_timeline_items(
+    state: State<'_, AppState>,
+    request: TimelineSnapRequest,
+) -> Result<(), String> {
+    state.engine.snap_timeline_items(request)
 }
 
 #[tauri::command]
@@ -5255,10 +5401,7 @@ fn remove_timeline_event(
     state: State<'_, AppState>,
     event_id: TimelineEventId,
 ) -> Result<(), String> {
-    state
-        .engine
-        .send(EngineCommand::RemoveTimelineEvent(event_id))
-        .map_err(|error| error.to_string())
+    state.engine.remove_timeline_event_published(event_id)
 }
 
 #[tauri::command]
@@ -10017,6 +10160,7 @@ fn validate_project_file(project: &ProjectFile) -> Result<(), String> {
             .iter()
             .map(|event| event.id),
     )?;
+    validate_project_timeline_scene_blocks(&project.snapshot)?;
     validate_unique_ids(
         "timeline automation",
         project
@@ -10085,6 +10229,27 @@ fn validate_unique_ids(label: &str, ids: impl IntoIterator<Item = u64>) -> Resul
         if !seen.insert(id) {
             return Err(format!("Project contains duplicate {label} id {id}"));
         }
+    }
+    Ok(())
+}
+
+fn validate_project_timeline_scene_blocks(snapshot: &EngineSnapshot) -> Result<(), String> {
+    for event in &snapshot.timeline.events {
+        if !snapshot.cues.iter().any(|cue| cue.id == event.cue_id) {
+            return Err(format!(
+                "Project timeline event {} references missing cue {}",
+                event.id, event.cue_id
+            ));
+        }
+        validate_timeline_scene_block_fields(
+            &snapshot.timeline.events,
+            &format!("Project timeline event {}", event.id),
+            event.time_ms,
+            event.duration_ms,
+            event.loop_count,
+            event.jump_to_event_id,
+            true,
+        )?;
     }
     Ok(())
 }
@@ -23673,6 +23838,255 @@ f 1 2 3
         assert!(fixture_supports_color_effect(&duplicate_wheel));
     }
 
+    fn project_with_timeline_scene_blocks() -> ProjectFile {
+        let mut project = empty_project_file();
+        project.snapshot.cues = vec![protocol::CueSummary {
+            id: 7,
+            label: "Source look".to_string(),
+            ..protocol::CueSummary::default()
+        }];
+        project.snapshot.timeline.events = vec![
+            protocol::TimelineCueEventSummary {
+                id: 20,
+                cue_id: 7,
+                time_ms: 1_000,
+                track: TimelineTrackKind::Lighting,
+                duration_ms: 2_000,
+                loop_count: 3,
+                jump_to_event_id: Some(21),
+            },
+            protocol::TimelineCueEventSummary {
+                id: 21,
+                cue_id: 7,
+                time_ms: 8_000,
+                track: TimelineTrackKind::Lighting,
+                duration_ms: 1_000,
+                loop_count: 1,
+                jump_to_event_id: None,
+            },
+        ];
+        project
+    }
+
+    #[test]
+    fn timeline_scene_blocks_survive_project_roundtrip_and_legacy_events_default_to_points() {
+        let project = project_with_timeline_scene_blocks();
+        validate_project_file(&project).unwrap();
+
+        let saved_snapshot = project_snapshot_for_save(project.snapshot.clone());
+        assert_eq!(
+            saved_snapshot.timeline.events,
+            project.snapshot.timeline.events
+        );
+
+        let json = serde_json::to_string_pretty(&project).unwrap();
+        let roundtrip: ProjectFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            roundtrip.snapshot.timeline.events,
+            project.snapshot.timeline.events
+        );
+        validate_project_file(&roundtrip).unwrap();
+
+        let mut legacy = serde_json::to_value(project).unwrap();
+        for event in legacy["snapshot"]["timeline"]["events"]
+            .as_array_mut()
+            .unwrap()
+        {
+            let event = event.as_object_mut().unwrap();
+            event.remove("duration_ms");
+            event.remove("loop_count");
+            event.remove("jump_to_event_id");
+        }
+        let legacy: ProjectFile = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.snapshot.timeline.events.iter().all(|event| {
+            event.duration_ms == 0 && event.loop_count == 1 && event.jump_to_event_id.is_none()
+        }));
+        validate_project_file(&legacy).unwrap();
+    }
+
+    #[test]
+    fn timeline_scene_block_edits_survive_project_history_entries() {
+        let before = project_with_timeline_scene_blocks();
+        let mut after = before.clone();
+        after.snapshot.timeline.events[0].duration_ms = 4_000;
+        after.snapshot.timeline.events[0].loop_count = 2;
+        after.snapshot.timeline.events[0].jump_to_event_id = None;
+
+        let mut history = ProjectHistory::default();
+        commit_project_history_entry(
+            &mut history,
+            PendingProjectTransaction {
+                label: "Edit Scene Block".to_string(),
+                coalesce_key: "timeline:scene-block:20".to_string(),
+                before: before.clone(),
+            },
+            after.clone(),
+            1_000,
+        )
+        .unwrap();
+
+        assert_eq!(history.undo.len(), 1);
+        assert_eq!(
+            history.undo[0].before.snapshot.timeline.events,
+            before.snapshot.timeline.events
+        );
+        assert_eq!(
+            history.undo[0].after.snapshot.timeline.events,
+            after.snapshot.timeline.events
+        );
+    }
+
+    #[test]
+    fn timeline_snap_batch_is_preserved_as_one_project_history_entry() {
+        let mut before = project_with_timeline_scene_blocks();
+        before.snapshot.timeline.automations = vec![protocol::TimelineAutomationSummary {
+            id: 30,
+            fixture_id: 1,
+            attribute: "Dimmer".to_string(),
+            track: TimelineTrackKind::Lighting,
+            keyframes: vec![AutomationKeyframeSummary {
+                time_ms: 100,
+                value: 1_000,
+                interpolation: protocol::AutomationInterpolation::Linear,
+            }],
+            enabled: true,
+        }];
+        before.snapshot.timeline.video_automations =
+            vec![protocol::TimelineVideoAutomationSummary {
+                id: 31,
+                layer_id: 1,
+                param: VideoParam::Opacity,
+                track: TimelineTrackKind::Video,
+                keyframes: vec![VideoAutomationKeyframeSummary {
+                    time_ms: 100,
+                    value: 0.25,
+                    interpolation: protocol::AutomationInterpolation::Linear,
+                }],
+                enabled: true,
+            }];
+        let mut after = before.clone();
+        after.snapshot.timeline.events[0].time_ms = 2_000;
+        after.snapshot.timeline.events[0].duration_ms = 4_000;
+        after.snapshot.timeline.automations[0].keyframes = vec![AutomationKeyframeSummary {
+            time_ms: 2_000,
+            value: 60_000,
+            interpolation: protocol::AutomationInterpolation::Step,
+        }];
+        after.snapshot.timeline.video_automations[0].keyframes =
+            vec![VideoAutomationKeyframeSummary {
+                time_ms: 2_000,
+                value: 0.75,
+                interpolation: protocol::AutomationInterpolation::Step,
+            }];
+
+        let mut history = ProjectHistory::default();
+        commit_project_history_entry(
+            &mut history,
+            PendingProjectTransaction {
+                label: "Snap Timeline Items".to_string(),
+                coalesce_key: "timeline:snap-selection".to_string(),
+                before: before.clone(),
+            },
+            after.clone(),
+            1_000,
+        )
+        .unwrap();
+
+        assert_eq!(history.undo.len(), 1);
+        assert_eq!(
+            history.undo[0].before.snapshot.timeline,
+            before.snapshot.timeline
+        );
+        assert_eq!(
+            history.undo[0].after.snapshot.timeline,
+            after.snapshot.timeline
+        );
+    }
+
+    #[test]
+    fn project_scene_block_validation_rejects_invalid_source_timing_loop_and_jump() {
+        let mut project = project_with_timeline_scene_blocks();
+
+        project.snapshot.timeline.events[0].cue_id = 99;
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("references missing cue 99"));
+        project.snapshot.timeline.events[0].cue_id = 7;
+
+        project.snapshot.timeline.events[0].duration_ms = 0;
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("point event and must use a loop count of 1"));
+        project.snapshot.timeline.events[0].loop_count = 1;
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("point event and cannot define a jump"));
+
+        project.snapshot.timeline.events[0].duration_ms = 2_000;
+        project.snapshot.timeline.events[0].jump_to_event_id = None;
+        project.snapshot.timeline.events[0].loop_count = 0;
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("loop count must be from 1 to 256"));
+        project.snapshot.timeline.events[0].loop_count =
+            protocol::MAX_TIMELINE_SCENE_BLOCK_LOOPS + 1;
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("loop count must be from 1 to 256"));
+
+        project.snapshot.timeline.events[0].loop_count = 1;
+        project.snapshot.timeline.events[0].jump_to_event_id = Some(999);
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("missing jump target event 999"));
+
+        project.snapshot.timeline.events[0].jump_to_event_id = None;
+        project.snapshot.timeline.events[0].time_ms = u64::MAX;
+        project.snapshot.timeline.events[0].duration_ms = 1;
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("end time overflows the timeline"));
+    }
+
+    #[test]
+    fn scene_block_command_validation_requires_a_block_and_existing_references() {
+        let project = project_with_timeline_scene_blocks();
+        let snapshot = &project.snapshot;
+
+        validate_timeline_scene_block_request(
+            snapshot,
+            "Timeline scene block",
+            7,
+            12_000,
+            1_000,
+            2,
+            Some(20),
+        )
+        .unwrap();
+        assert!(validate_timeline_scene_block_request(
+            snapshot,
+            "Timeline scene block",
+            7,
+            12_000,
+            0,
+            1,
+            None,
+        )
+        .unwrap_err()
+        .contains("duration must be greater than zero"));
+        assert!(validate_timeline_scene_block_request(
+            snapshot,
+            "Timeline scene block",
+            99,
+            12_000,
+            1_000,
+            1,
+            None,
+        )
+        .unwrap_err()
+        .contains("Cue 99 was not found"));
+    }
+
     #[test]
     fn project_file_validation_rejects_duplicate_timeline_key_times() {
         let mut project = ProjectFile {
@@ -27843,6 +28257,10 @@ fn main() {
             remove_cue,
             add_timeline_cue_event,
             set_timeline_cue_event,
+            add_timeline_scene_block,
+            set_timeline_scene_block,
+            remove_timeline_scene_block,
+            snap_timeline_items,
             remove_timeline_event,
             add_timeline_automation,
             add_timeline_group_automation,

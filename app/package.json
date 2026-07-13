@@ -18,6 +18,7 @@
     "check:localization": "node scripts/check-localization.mjs",
     "check:project-storage": "node scripts/check-project-storage-helpers.mjs",
     "check:release": "node scripts/check-release-metadata.mjs",
+    "check:scene-blocks": "node scripts/check-scene-block-helpers.mjs",
     "check:status": "node scripts/check-status-model.mjs",
     "check:terminology": "node scripts/check-ui-terminology.mjs",
     "check:timeline-automation": "node scripts/check-timeline-automation-helpers.mjs",

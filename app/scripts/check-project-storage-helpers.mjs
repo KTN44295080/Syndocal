@@ -69,6 +69,34 @@ assert.equal(recovery.recoveryCheckpointFromUnknown({ ...checkpoint, project: { 
 assert.equal(recovery.projectRecoverySourceLabel({ ...checkpoint, source_path: null }), "Untitled.sdc");
 assert.equal(recovery.projectRecoveryTimeLabel({ ...checkpoint, saved_at: "bad-date" }), "Recovery");
 
+const dirtySceneBlockDraft = {
+  cue_id: 500,
+  time_ms: 123_456,
+  track: "Video",
+  duration_ms: 2_000,
+  loop_count: 4,
+  jump_to_event_id: 499,
+};
+const draftCheckpoint = recovery.createProjectRecoveryCheckpoint(
+  project,
+  "C:/shows/main.sdc",
+  "sig-draft-only",
+  { 500: dirtySceneBlockDraft },
+);
+assert.deepEqual(draftCheckpoint.editor_drafts, {
+  version: 1,
+  timeline_events: { 500: dirtySceneBlockDraft },
+});
+assert.deepEqual(recovery.recoveryCheckpointFromUnknown(draftCheckpoint), draftCheckpoint);
+assert.deepEqual(
+  recovery.recoveryCheckpointFromUnknown({
+    ...draftCheckpoint,
+    editor_drafts: { version: 99, timeline_events: { 500: dirtySceneBlockDraft } },
+  }),
+  (({ editor_drafts: _editorDrafts, ...legacyCompatible }) => legacyCompatible)(draftCheckpoint),
+  "legacy project recovery stays usable when a future draft payload cannot be read",
+);
+
 const storageValues = new Map();
 const localStorage = {
   getItem: (key) => storageValues.get(key) ?? null,
@@ -128,6 +156,12 @@ assert.equal(storageValues.has(workspaceLayout.workspaceLayoutStorageKey), false
 
 assert.equal(recovery.saveProjectRecoveryCheckpoint(checkpoint), true);
 assert.deepEqual(recovery.loadProjectRecoveryCheckpoint(), checkpoint);
+assert.equal(recovery.saveProjectRecoveryCheckpoint(draftCheckpoint), true);
+assert.deepEqual(
+  recovery.loadProjectRecoveryCheckpoint()?.editor_drafts?.timeline_events?.[500],
+  dirtySceneBlockDraft,
+  "draft-only Scene Block edits survive a storage reload",
+);
 
 storageValues.set("syndocal.projectRecovery.v1", "{broken-json");
 assert.equal(recovery.loadProjectRecoveryCheckpoint(), null);

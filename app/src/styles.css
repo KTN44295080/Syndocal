@@ -11090,7 +11090,7 @@ input[type="color"] {
 
 .timelineLaneLabel {
   fill: #718093;
-  font-size: 4px;
+  font-size: 5.2px;
   font-weight: 700;
   pointer-events: none;
   text-transform: uppercase;
@@ -11098,6 +11098,7 @@ input[type="color"] {
 
 .timelineAutomationRange {
   cursor: grab;
+  touch-action: none;
 }
 
 .timelineAutomationRange rect {
@@ -11152,6 +11153,7 @@ input[type="color"] {
 
 .timelineAutomationKeyframeGroup {
   cursor: ew-resize;
+  touch-action: none;
 }
 
 .timelineAutomationKeyframeGroup.dragging .timelineAutomationKeyframe {
@@ -11168,6 +11170,7 @@ input[type="color"] {
   fill: rgba(238, 246, 255, 0.66);
   stroke: rgba(13, 20, 28, 0.75);
   stroke-width: 0.22;
+  touch-action: none;
 }
 
 .timelineAutomationRange.dragging .timelineAutomationHandle,
@@ -11177,6 +11180,7 @@ input[type="color"] {
 
 .timelineMarker {
   cursor: grab;
+  touch-action: none;
 }
 
 .timelineMarker line {
@@ -20627,4 +20631,803 @@ h3 {
 .layoutSetup.setupMode-video .videoSetupOutputDesk .videoSetupInspectorPane.videoOutputDetailPane {
   overflow: hidden;
   padding-right: 0;
+}
+
+/* Source-linked Scene Blocks: full-window timeline authoring is the primary layout. */
+.timelineHeaderMeta {
+  grid-template-columns: repeat(4, minmax(68px, 1fr)) minmax(138px, 1.35fr);
+  width: min(100%, 600px);
+}
+
+.timelineHeaderMeta span,
+.timelineHeaderMeta span:last-child {
+  max-width: none;
+}
+
+.timelineMarker.sceneBlock {
+  cursor: grab;
+}
+
+.timelineSceneBlockHit {
+  fill: transparent;
+  stroke: transparent;
+}
+
+.timelineSceneBlockBody {
+  fill-opacity: 0.42;
+  stroke-width: 0.4;
+}
+
+.timelineMarker.sceneBlock.lighting .timelineSceneBlockBody {
+  fill: #4d91cd;
+  stroke: #83b9e7;
+}
+
+.timelineMarker.sceneBlock.video .timelineSceneBlockBody {
+  fill: #4f9f70;
+  stroke: #86cf9f;
+}
+
+.timelineSceneBlockStart {
+  stroke: #eef4f8;
+  stroke-width: 0.65;
+  pointer-events: none;
+}
+
+.timelineSceneBlockLoop {
+  stroke: rgba(238, 244, 248, 0.48);
+  stroke-width: 0.25;
+  pointer-events: none;
+}
+
+.timelineSceneBlockLabel {
+  fill: #f4f7f9;
+  font-size: 5.5px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.timelineMarker.sceneBlock.active .timelineSceneBlockBody {
+  stroke: #f0c56d;
+  stroke-width: 0.75;
+}
+
+.timelineMarker.sceneBlock.underPlayhead:not(.active) .timelineSceneBlockBody {
+  stroke: #94a7b5;
+  stroke-dasharray: 1.2 0.8;
+  stroke-width: 0.65;
+}
+
+.timelineMarker.sceneBlock.selected .timelineSceneBlockBody {
+  stroke: #ffffff;
+  stroke-width: 0.85;
+}
+
+.timelineMarker.sceneBlock.dragging .timelineSceneBlockBody {
+  fill-opacity: 0.58;
+  stroke: #ffffff;
+  stroke-width: 0.7;
+}
+
+.timelineShowSurface {
+  grid-template-rows: auto auto auto minmax(88px, 0.55fr) minmax(230px, 1.45fr);
+}
+
+.timelineShowSurface > .sceneBlockWorkspace {
+  min-height: 0;
+}
+
+.sceneBlockWorkspace {
+  container-name: scene-blocks;
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 250px;
+  overflow: hidden;
+  border: 1px solid #393530;
+  border-radius: 2px;
+  background: #151719;
+}
+
+.sceneBlockWorkspaceHeader {
+  display: grid;
+  grid-template-columns: minmax(150px, auto) minmax(260px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 38px;
+  border-bottom: 1px solid #393530;
+  background: #1b1d1f;
+  padding: 4px 7px;
+  flex: 0 0 auto;
+}
+
+.sceneBlockHeading {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+
+.sceneBlockHeading small {
+  color: #76828c;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+}
+
+.sceneBlockHeading h3 {
+  margin: 0;
+  color: #f2f3f4;
+  font-size: 13px;
+}
+
+.sceneBlockWorkspaceHeader p {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #9ba4ab;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sceneBlockLinkBadge,
+.sceneBlockPointBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-height: 16px;
+  border: 1px solid #477da8;
+  border-radius: 2px;
+  background: #1a2c3a;
+  color: #abd4f2;
+  padding: 1px 5px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.sceneBlockPointBadge {
+  border-color: #5a5f64;
+  background: #25282a;
+  color: #b2b7bb;
+}
+
+.sceneBlockStats {
+  display: flex;
+  align-items: stretch;
+  gap: 3px;
+}
+
+.sceneBlockStats > span {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: baseline;
+  gap: 4px;
+  border-left: 1px solid #3d3935;
+  padding: 1px 5px;
+}
+
+.sceneBlockStats small {
+  color: #838b91;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.sceneBlockStats strong {
+  color: #e3e6e8;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sceneBlockComposer {
+  display: grid;
+  grid-template-columns: minmax(165px, 1.3fr) 82px 92px 58px 82px minmax(145px, 1.05fr) minmax(168px, auto);
+  align-items: end;
+  gap: 4px;
+  min-width: 0;
+  border-bottom: 1px solid #393530;
+  background: #181a1c;
+  padding: 5px 6px;
+  flex: 0 0 auto;
+}
+
+.sceneBlockComposer label,
+.sceneBlockComposer .sceneBlockComposerPickerField,
+.sceneBlockRowFields label,
+.sceneBlockRowFields .sceneBlockSourceField {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  color: #8f989f;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.sceneBlockComposerPickerButton {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  min-width: 0;
+  min-height: 27px;
+  border-radius: 1px;
+  padding: 2px 5px;
+  font-size: 10px;
+  text-align: left;
+}
+
+.sceneBlockComposerPickerButton > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sceneBlockComposerPickerButton > small {
+  color: #8ebddb;
+  font-size: 9px;
+}
+
+.sceneBlockComposerAfterButtons {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  gap: 3px;
+}
+
+.sceneBlockRowFields .sceneBlockSourceField > span {
+  color: #8f989f;
+  font-size: 10px;
+}
+
+.sceneBlockComposer input,
+.sceneBlockComposer select,
+.sceneBlockRowFields input,
+.sceneBlockRowFields select {
+  width: 100%;
+  min-width: 0;
+  min-height: 27px;
+  border-radius: 1px;
+  padding: 2px 5px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sceneBlockSourceButton {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  min-width: 0;
+  min-height: 27px;
+  border-radius: 1px;
+  padding: 2px 5px;
+  font-size: 10px;
+  text-align: left;
+}
+
+.sceneBlockSourceButton > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sceneBlockSourceButton > small {
+  color: #8ebddb;
+  font-size: 8px;
+}
+
+.sceneBlockFieldLabel {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+}
+
+.sceneBlockFieldLabel small {
+  flex: 0 0 auto;
+  color: #73808a;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.sceneBlockComposerActions {
+  display: grid;
+  grid-template-columns: minmax(96px, 1.15fr) minmax(72px, 0.85fr);
+  gap: 3px;
+}
+
+.sceneBlockComposerActions button,
+.sceneBlockRowActions button {
+  min-width: 0;
+  min-height: 27px;
+  border-radius: 1px;
+  padding: 2px 6px;
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sceneBlockColumnGuide {
+  display: grid;
+  grid-template-columns: minmax(190px, 1.15fr) minmax(470px, 3fr) 200px;
+  gap: 6px;
+  min-width: 0;
+  border-bottom: 1px solid #302d2a;
+  background: #141618;
+  padding: 2px 6px;
+  color: #686f74;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  flex: 0 0 auto;
+}
+
+.sceneBlockList {
+  display: grid;
+  flex: 1 1 0;
+  align-content: start;
+  gap: 2px;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  padding: 3px;
+}
+
+.sceneBlockJumpPicker {
+  display: grid;
+  grid-template-columns: minmax(96px, auto) minmax(150px, 0.7fr) minmax(220px, 1fr) auto 92px 72px;
+  align-items: end;
+  gap: 4px;
+  flex: 0 0 auto;
+  border-bottom: 1px solid #393530;
+  background: #1b2024;
+  padding: 4px 6px;
+}
+
+.sceneBlockSourcePicker {
+  display: grid;
+  grid-template-columns: minmax(96px, auto) minmax(150px, 0.7fr) minmax(220px, 1fr) auto 92px 72px;
+  align-items: end;
+  gap: 4px;
+  flex: 0 0 auto;
+  border-bottom: 1px solid #393530;
+  background: #1b2024;
+  padding: 4px 6px;
+}
+
+.sceneBlockSourcePicker > span {
+  display: grid;
+  gap: 1px;
+}
+
+.sceneBlockSourcePicker small {
+  color: #7d8992;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.sceneBlockSourcePicker > span small {
+  text-transform: uppercase;
+}
+
+.sceneBlockSourcePicker strong {
+  color: #dce2e6;
+  font-size: 11px;
+}
+
+.sceneBlockSourcePicker input,
+.sceneBlockSourcePicker select,
+.sceneBlockSourcePicker button {
+  min-width: 0;
+  min-height: 27px;
+  font-size: 10px;
+}
+
+.sceneBlockJumpPicker > span {
+  display: grid;
+  gap: 1px;
+}
+
+.sceneBlockJumpPicker small {
+  color: #7d8992;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.sceneBlockJumpPicker strong {
+  color: #dce2e6;
+  font-size: 11px;
+}
+
+.sceneBlockJumpPicker input,
+.sceneBlockJumpPicker select,
+.sceneBlockJumpPicker button {
+  min-width: 0;
+  min-height: 27px;
+  font-size: 10px;
+}
+
+.sceneBlockPager {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) 48px 46px 46px minmax(135px, 0.65fr) 46px 46px;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  border-bottom: 1px solid #302d2a;
+  background: #17191b;
+  padding: 2px 4px;
+}
+
+.sceneBlockPager button {
+  min-height: 24px;
+  padding: 1px 5px;
+  font-size: 9px;
+}
+
+.sceneBlockPager input {
+  min-width: 0;
+  min-height: 24px;
+  padding: 1px 5px;
+  font-size: 9px;
+}
+
+.sceneBlockPager span {
+  color: #929ba2;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.sceneBlockEmpty {
+  display: grid;
+  place-content: center;
+  gap: 4px;
+  min-height: 110px;
+  color: #858e95;
+  text-align: center;
+}
+
+.sceneBlockEmpty strong {
+  color: #cbd0d4;
+  font-size: 12px;
+}
+
+.sceneBlockEmpty span {
+  font-size: 10px;
+}
+
+.sceneBlockRow {
+  display: grid;
+  grid-template-columns: minmax(190px, 1.15fr) minmax(470px, 3fr) 200px;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 58px;
+  border: 1px solid #34312e;
+  border-left-width: 3px;
+  border-radius: 1px;
+  background: #1a1c1e;
+  padding: 4px 5px;
+}
+
+.sceneBlockRow.linkedBlock {
+  border-left-color: #548eb8;
+}
+
+.sceneBlockRow.selected {
+  border-color: #7eb7df;
+  border-left-color: #f2aa5a;
+  box-shadow: inset 0 0 0 1px rgba(126, 183, 223, 0.2);
+}
+
+.sceneBlockRow.dirty {
+  border-color: #8f693e;
+  border-left-color: #f0a64f;
+  background: #211d18;
+}
+
+.sceneBlockRow.dirty.selected {
+  border-color: #f0b66f;
+  border-left-color: #ffd08d;
+  box-shadow: inset 0 0 0 1px rgba(240, 166, 79, 0.2);
+}
+
+.sceneBlockUnsavedBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 16px;
+  border: 1px solid #9f6c35;
+  border-radius: 2px;
+  background: #392819;
+  color: #ffd08d;
+  padding: 1px 5px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+}
+
+.sceneBlockLiveBadge,
+.sceneBlockPlayheadBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 16px;
+  border: 1px solid #b68037;
+  border-radius: 2px;
+  background: #3b2b17;
+  color: #ffd58d;
+  padding: 1px 5px;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.sceneBlockPlayheadBadge {
+  border-color: #596874;
+  background: #222b32;
+  color: #b9c8d2;
+}
+
+.sceneBlockRow.live {
+  border-color: #b68037;
+  border-left-color: #ffd58d;
+  box-shadow: inset 0 0 0 1px rgba(255, 213, 141, 0.14);
+}
+
+.sceneBlockRow.underPlayhead:not(.live):not(.dirty) {
+  border-left-color: #8196a5;
+}
+
+.sceneBlockLiveStatus {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  color: #aebbc4;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sceneBlockLiveStatus strong {
+  flex: 0 0 auto;
+  color: #ffd58d;
+  font-size: 9px;
+}
+
+.sceneBlockLiveStatus span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sceneBlockLiveOutput {
+  min-width: 0;
+  overflow: hidden;
+  border-left: 2px solid #f0a64f;
+  color: #f4c485;
+  padding-left: 4px;
+  font-size: 9px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sceneBlockRow.legacyPoint {
+  border-left-color: #62666a;
+  background: #17191b;
+}
+
+.sceneBlockSource {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.sceneBlockSourceBadges {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.sceneBlockSourceBadges > small {
+  color: #777f85;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sceneBlockSource > strong,
+.sceneBlockSource > span,
+.sceneBlockSource > small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sceneBlockSource > strong {
+  color: #eef0f1;
+  font-size: 11px;
+}
+
+.sceneBlockSource > span {
+  color: #a0a8ae;
+  font-size: 9px;
+}
+
+.sceneBlockSource > small {
+  color: #778087;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sceneBlockRowFields {
+  display: grid;
+  grid-template-columns: minmax(130px, 1.25fr) 74px 82px 54px 78px minmax(124px, 1fr);
+  align-items: end;
+  gap: 3px;
+  min-width: 0;
+}
+
+.sceneBlockRowActions {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr) minmax(0, 0.8fr);
+  gap: 3px;
+  min-width: 0;
+}
+
+.cueTimelinePlacementChip.linkedBlock {
+  border-left: 3px solid #548eb8;
+}
+
+.cueTimelinePlacementChip.legacyPoint {
+  border-left: 3px solid #62666a;
+}
+
+.cueTimelinePlacementMore {
+  min-height: 24px;
+  border: 1px solid #45413d;
+  border-radius: 2px;
+  background: #22201e;
+  color: #a9a39d;
+  padding: 2px 7px;
+  font-size: 10px;
+}
+
+@container scene-blocks (max-width: 880px) {
+  .sceneBlockComposer {
+    grid-template-columns: minmax(155px, 1.2fr) repeat(4, minmax(64px, 0.65fr)) minmax(130px, 1fr);
+  }
+
+  .sceneBlockComposerActions {
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(2, minmax(120px, 180px));
+    justify-content: end;
+  }
+
+  .sceneBlockColumnGuide {
+    display: none;
+  }
+
+  .sceneBlockRow {
+    grid-template-columns: minmax(180px, 0.8fr) minmax(460px, 2.2fr);
+  }
+
+  .sceneBlockRowActions {
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(2, minmax(100px, 150px));
+    justify-content: end;
+  }
+}
+
+@container scene-blocks (max-width: 760px) {
+  .sceneBlockWorkspaceHeader {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .sceneBlockWorkspaceHeader p {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .sceneBlockComposer {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .sceneBlockComposer > .sceneBlockSourceField {
+    grid-column: span 2;
+  }
+
+  .sceneBlockComposer > .sceneBlockAfterField,
+  .sceneBlockComposer > .sceneBlockComposerActions {
+    grid-column: span 3;
+  }
+
+  .sceneBlockComposerActions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .sceneBlockSourcePicker {
+    grid-template-columns: minmax(0, 0.65fr) minmax(0, 1fr) minmax(0, 1.3fr) auto;
+  }
+
+  .sceneBlockJumpPicker {
+    grid-template-columns: minmax(0, 0.65fr) minmax(0, 1fr) minmax(0, 1.3fr) auto;
+  }
+
+  .sceneBlockSourcePicker > button,
+  .sceneBlockJumpPicker > button {
+    grid-column: span 2;
+  }
+
+  .sceneBlockRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sceneBlockRowFields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .sceneBlockRowFields .sceneBlockSourceField,
+  .sceneBlockRowFields .sceneBlockAfterField,
+  .sceneBlockRowActions {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-height: 760px) {
+  .timelineShowSurface {
+    grid-template-rows: auto auto auto minmax(70px, 0.42fr) minmax(190px, 1.58fr);
+  }
+
+  .sceneBlockWorkspace {
+    min-height: 190px;
+  }
+
+  .sceneBlockWorkspaceHeader p,
+  .sceneBlockColumnGuide {
+    display: none;
+  }
+
+  .sceneBlockRow {
+    min-height: 54px;
+  }
+}
+
+@media (max-height: 800px) {
+  .timelineShowSurface {
+    grid-template-rows: auto auto auto minmax(64px, 0.48fr) minmax(0, 1.52fr);
+  }
+
+  .timelineShowSurface > .timelineOverview {
+    min-height: 64px;
+  }
+
+  .sceneBlockWorkspace {
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+  }
+
+  .sceneBlockList {
+    flex: 0 0 auto;
+    min-height: max-content;
+    overflow: visible;
+  }
 }

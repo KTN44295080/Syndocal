@@ -1,18 +1,28 @@
-import { For, Show } from "solid-js";
+import { createEffect, createSignal, For, Show } from "solid-js";
 import type { TimelineEventDraft } from "../editorDrafts";
 import type { AudioAnalysisSummary, TimelineCueEventSummary, TimelineTrackKind } from "../types";
 import { TimelineOverview, type TimelineOverviewAutomationRange, type TimelineOverviewEvent } from "./TimelineOverview";
+import {
+  TimelineSceneBlocksEditor,
+  type TimelineSceneBlockCueOption,
+  type TimelineSceneBlockRow,
+} from "./TimelineSceneBlocksEditor";
 
 export type TimelineSnapMode = "Off" | "Beat" | "Bar" | "Grid";
 
-export interface TimelineCueOption {
-  id: number;
-  label: string;
-}
-
-export interface TimelineEventRow extends TimelineCueEventSummary {
-  cue_label: string;
-}
+const formatTimelineHeaderTime = (timeMs: number) => {
+  const safeMs = Math.max(0, Math.round(timeMs));
+  const milliseconds = String(safeMs % 1000).padStart(3, "0");
+  const totalSeconds = Math.floor(safeMs / 1000);
+  const seconds = String(totalSeconds % 60).padStart(2, "0");
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes === 0) return `${Math.floor(totalSeconds)}.${milliseconds}s`;
+  const minutes = String(totalMinutes % 60).padStart(2, "0");
+  const hours = Math.floor(totalMinutes / 60);
+  return hours > 0
+    ? `${hours}:${minutes}:${seconds}.${milliseconds}`
+    : `${totalMinutes}:${seconds}.${milliseconds}`;
+};
 
 interface AudioBeatMarker {
   time_ms: number;
@@ -23,6 +33,7 @@ interface TimelineCueEventsPanelProps {
   positionMs: number;
   durationMs: number;
   playing: boolean;
+  executingLive: boolean;
   cuesCount: number;
   lightingAutomationCount: number;
   videoAutomationCount: number;
@@ -38,9 +49,12 @@ interface TimelineCueEventsPanelProps {
   gridMs: number;
   selectedCueId: number | null;
   eventTimeMs: number;
+  blockDurationMs: number;
+  blockLoopCount: number;
+  blockJumpToEventId: number | null;
   track: TimelineTrackKind;
-  cueOptions: TimelineCueOption[];
-  eventRows: TimelineEventRow[];
+  cueOptions: TimelineSceneBlockCueOption[];
+  eventRows: TimelineSceneBlockRow[];
   timelineEventDraft: (event: TimelineCueEventSummary) => TimelineEventDraft;
   onSeek: (timeMs: number) => void | Promise<void>;
   onPause: () => void | Promise<void>;
@@ -68,23 +82,43 @@ interface TimelineCueEventsPanelProps {
   onSnapItems: () => void | Promise<void>;
   onSelectedCueId: (cueId: number) => void;
   onEventTimeMs: (timeMs: number) => void;
+  onBlockDurationMs: (durationMs: number) => void;
+  onBlockLoopCount: (loopCount: number) => void;
+  onBlockJumpToEventId: (eventId: number | null) => void;
   onTrack: (track: TimelineTrackKind) => void;
   onAddEvent: () => void | Promise<void>;
   onAddEventAtPlayhead: () => void | Promise<void>;
   onUpdateEventDraft: (event: TimelineCueEventSummary, patch: Partial<TimelineEventDraft>) => void;
   onSaveEvent: (event: TimelineCueEventSummary) => void | Promise<void>;
-  onRemoveEvent: (eventId: number) => void | Promise<void>;
+  onRemoveEvent: (event: TimelineCueEventSummary) => void | Promise<void>;
+  onOpenSourceCue: (cueId: number) => void;
 }
 
 export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
+  const [selectedSceneBlockEventId, setSelectedSceneBlockEventId] = createSignal<number | null>(null);
+  const [sceneBlockSelectionRevision, setSceneBlockSelectionRevision] = createSignal(0);
+  const selectSceneBlockEvent = (eventId: number) => {
+    setSelectedSceneBlockEventId(eventId);
+    setSceneBlockSelectionRevision((revision) => revision + 1);
+  };
+  createEffect(() => {
+    const selectedEventId = selectedSceneBlockEventId();
+    if (selectedEventId !== null && !props.eventRows.some((event) => event.id === selectedEventId)) {
+      setSelectedSceneBlockEventId(null);
+    }
+  });
   return (
     <>
       <div class="panelHeader">
         <h2>Timeline</h2>
         <div class="timelineHeaderMeta" aria-label="Timeline summary">
           <span>
-            <small>Cue</small>
-            <strong>{props.eventRows.length}</strong>
+            <small>Blocks</small>
+            <strong>{props.eventRows.filter((event) => event.duration_ms > 0).length}</strong>
+          </span>
+          <span>
+            <small>Points</small>
+            <strong>{props.eventRows.filter((event) => event.duration_ms === 0).length}</strong>
           </span>
           <span>
             <small>Light</small>
@@ -94,9 +128,9 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
             <small>Video</small>
             <strong>{props.videoAutomationCount}</strong>
           </span>
-          <span>
+          <span class="timelineTimeStat" title={`${props.positionMs} / ${props.durationMs} ms`}>
             <small>Time</small>
-            <strong>{props.positionMs}/{props.durationMs}ms</strong>
+            <strong data-no-localize>{formatTimelineHeaderTime(props.positionMs)} / {formatTimelineHeaderTime(props.durationMs)}</strong>
           </span>
         </div>
       </div>
@@ -120,10 +154,12 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         events={props.overviewEvents}
         automationRanges={props.overviewAutomationRanges}
         selectedRangeId={props.selectedAutomationRangeId}
+        selectedEventId={selectedSceneBlockEventId()}
         playheadX={props.overviewPlayheadX}
         onSeekRatio={props.onSeekRatio}
         onSeekTime={(timeMs) => void props.onSeek(timeMs)}
         onSelectAutomationRange={props.onSelectAutomationRange}
+        onSelectEvent={selectSceneBlockEvent}
         onMoveEventRatio={(eventId, ratio) => void props.onMoveEventRatio(eventId, ratio)}
         onMoveAutomationRangeRatio={(range, ratio) => void props.onMoveAutomationRangeRatio(range, ratio)}
         onResizeAutomationRangeRatio={(range, edge, ratio) => void props.onResizeAutomationRangeRatio(range, edge, ratio)}
@@ -211,90 +247,34 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
           Snap Items
         </button>
       </div>
-      <div class="timelineForm">
-        <label>
-          Cue
-          <select value={props.selectedCueId ?? ""} onInput={(event) => props.onSelectedCueId(Number(event.currentTarget.value))} disabled={props.cuesCount === 0}>
-            <For each={props.cueOptions}>{(cue) => <option data-no-localize value={cue.id}>{cue.label}</option>}</For>
-          </select>
-        </label>
-        <label>
-          Time ms
-          <input type="number" min="0" value={props.eventTimeMs} onInput={(event) => props.onEventTimeMs(Number(event.currentTarget.value))} />
-        </label>
-        <label>
-          Track
-          <select value={props.track} onInput={(event) => props.onTrack(event.currentTarget.value as TimelineTrackKind)}>
-            <option value="Lighting">Lighting</option>
-            <option value="Video">Video</option>
-          </select>
-        </label>
-        <button class="primary" onClick={() => void props.onAddEvent()} disabled={props.cuesCount === 0}>
-          Add Event
-        </button>
-        <button onClick={() => void props.onAddEventAtPlayhead()} disabled={props.cuesCount === 0}>
-          At Playhead
-        </button>
-      </div>
-      <div class="timelineList">
-        <For each={props.eventRows}>
-          {(event) => {
-            const draft = () => props.timelineEventDraft(event);
-            return (
-              <div class="timelineItem timelineEventItem">
-                <div>
-                  <strong>{event.time_ms} ms</strong>
-                  <span data-no-localize>{event.cue_label} / {event.track}</span>
-                </div>
-                <label>
-                  Cue
-                  <select
-                    value={draft().cue_id}
-                    onInput={(inputEvent) =>
-                      props.onUpdateEventDraft(event, {
-                        cue_id: Number(inputEvent.currentTarget.value),
-                      })
-                    }
-                  >
-                    <For each={props.cueOptions}>{(cue) => <option data-no-localize value={cue.id}>{cue.label}</option>}</For>
-                  </select>
-                </label>
-                <label>
-                  Time
-                  <input
-                    type="number"
-                    min="0"
-                    value={draft().time_ms}
-                    onInput={(inputEvent) =>
-                      props.onUpdateEventDraft(event, {
-                        time_ms: Number(inputEvent.currentTarget.value),
-                      })
-                    }
-                  />
-                </label>
-                <label>
-                  Track
-                  <select
-                    value={draft().track}
-                    onInput={(inputEvent) =>
-                      props.onUpdateEventDraft(event, {
-                        track: inputEvent.currentTarget.value as TimelineTrackKind,
-                      })
-                    }
-                  >
-                    <option value="Lighting">Lighting</option>
-                    <option value="Video">Video</option>
-                  </select>
-                </label>
-                <div class="buttonRow">
-                  <button onClick={() => void props.onSaveEvent(event)}>Save</button>
-                  <button onClick={() => void props.onRemoveEvent(event.id)}>Remove</button>
-                </div>
-              </div>
-            );
-          }}
-        </For>
-      </div>
+      <TimelineSceneBlocksEditor
+        positionMs={props.positionMs}
+        executionLive={props.executingLive}
+        selectedCueId={props.selectedCueId}
+        startMs={props.eventTimeMs}
+        durationMs={props.blockDurationMs}
+        loopCount={props.blockLoopCount}
+        track={props.track}
+        jumpToEventId={props.blockJumpToEventId}
+        cueOptions={props.cueOptions}
+        eventRows={props.eventRows}
+        selectedEventId={selectedSceneBlockEventId()}
+        selectionRevision={sceneBlockSelectionRevision()}
+        timelineEventDraft={props.timelineEventDraft}
+        onSelectedCueId={props.onSelectedCueId}
+        onStartMs={props.onEventTimeMs}
+        onDurationMs={props.onBlockDurationMs}
+        onLoopCount={props.onBlockLoopCount}
+        onTrack={props.onTrack}
+        onJumpToEventId={props.onBlockJumpToEventId}
+        onAddBlock={props.onAddEvent}
+        onAddBlockAtPlayhead={props.onAddEventAtPlayhead}
+        onUpdateEventDraft={props.onUpdateEventDraft}
+        onSaveEvent={props.onSaveEvent}
+        onRemoveEvent={props.onRemoveEvent}
+        onSelectEvent={selectSceneBlockEvent}
+        onOpenSourceCue={props.onOpenSourceCue}
+      />
     </>
   );
 }

@@ -1,13 +1,16 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { inflateSync } from "node:zlib";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
 const largeShowMode = process.argv.includes("--large-show");
 const vjEmptyMode = process.argv.includes("--vj-empty");
+const sceneBlockOnlyMode = process.argv.includes("--scene-block-only");
 const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (largeShowMode ? "large-show" : vjEmptyMode ? "vj-empty" : "timeline");
 const defaultUrl =
   viewportFixture === "none"
@@ -27,6 +30,7 @@ const screenshotDir = process.env.SYNDOCAL_VIEWPORT_SCREENSHOT_DIR
   ? resolve(process.env.SYNDOCAL_VIEWPORT_SCREENSHOT_DIR)
   : null;
 const primaryOperationalViewport = { width: 1920, height: 1080 };
+const nativeMaximizedViewport = { width: 1920, height: 1032 };
 const extendedCeilingViewport = { width: 2048, height: 1152 };
 const compactFallbackViewports = [
   { width: 1366, height: 768 },
@@ -34,6 +38,7 @@ const compactFallbackViewports = [
 ];
 const allViewports = [
   primaryOperationalViewport,
+  nativeMaximizedViewport,
   extendedCeilingViewport,
   ...compactFallbackViewports,
 ];
@@ -52,10 +57,16 @@ const captureAllViewportScreenshots = process.env.SYNDOCAL_VIEWPORT_CAPTURE_ALL 
 const matchesViewport = (candidate, reference) =>
   candidate.width === reference.width && candidate.height === reference.height;
 const isPrimaryOperationalViewport = (viewport) => matchesViewport(viewport, primaryOperationalViewport);
+const isNativeMaximizedViewport = (viewport) => matchesViewport(viewport, nativeMaximizedViewport);
 const shouldCaptureViewport = (viewport) =>
-  Boolean(screenshotDir) && (isPrimaryOperationalViewport(viewport) || captureAllViewportScreenshots);
+  Boolean(screenshotDir) && (
+    isPrimaryOperationalViewport(viewport) ||
+    isNativeMaximizedViewport(viewport) ||
+    captureAllViewportScreenshots
+  );
 const viewportRole = ({ width, height }) => {
   if (matchesViewport({ width, height }, primaryOperationalViewport)) return "primary-maximized";
+  if (matchesViewport({ width, height }, nativeMaximizedViewport)) return "native-maximized";
   if (matchesViewport({ width, height }, extendedCeilingViewport)) return "extended-ceiling";
   return "compact-fallback";
 };
@@ -101,6 +112,212 @@ const viewportRecoveryCheckpoint = {
 };
 
 const sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+
+const paethPredictor = (left, up, upperLeft) => {
+  const estimate = left + up - upperLeft;
+  const leftDistance = Math.abs(estimate - left);
+  const upDistance = Math.abs(estimate - up);
+  const upperLeftDistance = Math.abs(estimate - upperLeft);
+  return leftDistance <= upDistance && leftDistance <= upperLeftDistance
+    ? left
+    : upDistance <= upperLeftDistance ? up : upperLeft;
+};
+
+function decodeScreenshotPng(buffer) {
+  if (buffer.length < 24 || buffer.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a") {
+    throw new Error("capture is not a PNG");
+  }
+  let offset = 8;
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = 0;
+  let interlace = 0;
+  const imageChunks = [];
+  while (offset + 12 <= buffer.length) {
+    const length = buffer.readUInt32BE(offset);
+    const type = buffer.toString("ascii", offset + 4, offset + 8);
+    const data = buffer.subarray(offset + 8, offset + 8 + length);
+    if (type === "IHDR") {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      bitDepth = data[8];
+      colorType = data[9];
+      interlace = data[12];
+    } else if (type === "IDAT") {
+      imageChunks.push(data);
+    } else if (type === "IEND") {
+      break;
+    }
+    offset += length + 12;
+  }
+  if (bitDepth !== 8 || ![2, 6].includes(colorType) || interlace !== 0 || width <= 0 || height <= 0) {
+    throw new Error(`unsupported PNG layout ${width}x${height} depth=${bitDepth} color=${colorType} interlace=${interlace}`);
+  }
+  const bytesPerPixel = colorType === 6 ? 4 : 3;
+  const stride = width * bytesPerPixel;
+  const inflated = inflateSync(Buffer.concat(imageChunks));
+  const rgba = Buffer.alloc(width * height * 4);
+  let inputOffset = 0;
+  let previous = Buffer.alloc(stride);
+  for (let y = 0; y < height; y += 1) {
+    const filter = inflated[inputOffset];
+    inputOffset += 1;
+    const raw = inflated.subarray(inputOffset, inputOffset + stride);
+    inputOffset += stride;
+    const row = Buffer.allocUnsafe(stride);
+    for (let x = 0; x < stride; x += 1) {
+      const left = x >= bytesPerPixel ? row[x - bytesPerPixel] : 0;
+      const up = previous[x] ?? 0;
+      const upperLeft = x >= bytesPerPixel ? previous[x - bytesPerPixel] : 0;
+      const predictor = filter === 0
+        ? 0
+        : filter === 1
+          ? left
+          : filter === 2
+            ? up
+            : filter === 3
+              ? Math.floor((left + up) / 2)
+              : filter === 4
+                ? paethPredictor(left, up, upperLeft)
+                : NaN;
+      if (!Number.isFinite(predictor)) throw new Error(`unsupported PNG filter ${filter}`);
+      row[x] = (raw[x] + predictor) & 0xff;
+    }
+    for (let x = 0; x < width; x += 1) {
+      const source = x * bytesPerPixel;
+      const target = (y * width + x) * 4;
+      rgba[target] = row[source];
+      rgba[target + 1] = row[source + 1];
+      rgba[target + 2] = row[source + 2];
+      rgba[target + 3] = colorType === 6 ? row[source + 3] : 255;
+    }
+    previous = row;
+  }
+  return { width, height, rgba };
+}
+
+function screenshotContentStats(decoded) {
+  let sampled = 0;
+  let exactBlack = 0;
+  let bright = 0;
+  let accent = 0;
+  const colors = new Set();
+  for (let y = 0; y < decoded.height; y += 4) {
+    for (let x = 0; x < decoded.width; x += 4) {
+      const index = (y * decoded.width + x) * 4;
+      const red = decoded.rgba[index];
+      const green = decoded.rgba[index + 1];
+      const blue = decoded.rgba[index + 2];
+      sampled += 1;
+      if (red === 0 && green === 0 && blue === 0) exactBlack += 1;
+      if (red + green + blue >= 300) bright += 1;
+      if (red >= 145 && green >= 65 && green <= 205 && blue <= 145) accent += 1;
+      if (colors.size < 512) colors.add(`${red >> 3},${green >> 3},${blue >> 3}`);
+    }
+  }
+  return {
+    sampled,
+    exactBlackRatio: exactBlack / Math.max(1, sampled),
+    brightRatio: bright / Math.max(1, sampled),
+    accentRatio: accent / Math.max(1, sampled),
+    sampledColorCount: colors.size,
+  };
+}
+
+function screenshotDifferenceRatio(left, right) {
+  if (left.width !== right.width || left.height !== right.height) return 1;
+  let compared = 0;
+  let changed = 0;
+  for (let y = 0; y < left.height; y += 4) {
+    for (let x = 0; x < left.width; x += 4) {
+      const index = (y * left.width + x) * 4;
+      compared += 1;
+      const delta = Math.abs(left.rgba[index] - right.rgba[index]) +
+        Math.abs(left.rgba[index + 1] - right.rgba[index + 1]) +
+        Math.abs(left.rgba[index + 2] - right.rgba[index + 2]);
+      if (delta > 18) changed += 1;
+    }
+  }
+  return changed / Math.max(1, compared);
+}
+
+async function captureSettledViewport(client, outputPath) {
+  await client.send("Page.bringToFront");
+  await client.evaluate(`(async () => {
+    if (document.fonts?.ready) await document.fonts.ready;
+    window.dispatchEvent(new Event('resize'));
+    document.documentElement.getBoundingClientRect();
+    await new Promise((resolveFrame) => requestAnimationFrame(() =>
+      requestAnimationFrame(() => requestAnimationFrame(resolveFrame))));
+  })()`);
+  await sleep(220);
+  // Early compositor readbacks can contain unrasterized tiles after a large
+  // SVG/list fixture is mounted. Warm successive frames before the QA capture.
+  for (let warmup = 0; warmup < 3; warmup += 1) {
+    await client.send("Page.captureScreenshot", {
+      format: "png",
+      fromSurface: true,
+      captureBeyondViewport: false,
+    });
+    await sleep(220);
+  }
+  const expectedViewport = await client.evaluate(`({ width: window.innerWidth, height: window.innerHeight })`);
+  let accepted = null;
+  let verification = null;
+  for (let attempt = 1; attempt <= 6; attempt += 1) {
+    const firstCapture = await client.send("Page.captureScreenshot", {
+      format: "png",
+      fromSurface: true,
+      captureBeyondViewport: false,
+    });
+    await sleep(80);
+    const secondCapture = await client.send("Page.captureScreenshot", {
+      format: "png",
+      fromSurface: true,
+      captureBeyondViewport: false,
+    });
+    const firstBuffer = Buffer.from(firstCapture.data, "base64");
+    const secondBuffer = Buffer.from(secondCapture.data, "base64");
+    const first = decodeScreenshotPng(firstBuffer);
+    const second = decodeScreenshotPng(secondBuffer);
+    const firstStats = screenshotContentStats(first);
+    const secondStats = screenshotContentStats(second);
+    const differenceRatio = screenshotDifferenceRatio(first, second);
+    const dimensionsValid = first.width === expectedViewport.width && first.height === expectedViewport.height &&
+      second.width === expectedViewport.width && second.height === expectedViewport.height;
+    const contentValid = [firstStats, secondStats].every((stats) =>
+      stats.exactBlackRatio < 0.12 &&
+      stats.brightRatio > 0.002 &&
+      stats.accentRatio > 0.00005 &&
+      stats.sampledColorCount >= 24,
+    );
+    verification = {
+      verified: false,
+      attempt,
+      width: second.width,
+      height: second.height,
+      dimensionsValid,
+      contentValid,
+      differenceRatio,
+      firstHash: createHash("sha256").update(firstBuffer).digest("hex"),
+      secondHash: createHash("sha256").update(secondBuffer).digest("hex"),
+      firstStats,
+      secondStats,
+    };
+    if (dimensionsValid && contentValid && differenceRatio <= 0.01) {
+      verification.verified = true;
+      accepted = secondBuffer;
+      break;
+    }
+    await sleep(180);
+  }
+  if (!accepted || !verification) {
+    throw new Error(`unable to verify stable viewport capture: ${JSON.stringify(verification)}`);
+  }
+  writeFileSync(outputPath, accepted);
+  return verification;
+}
 
 function executableExists(command) {
   if (command.includes("\\") || command.includes("/")) {
@@ -527,6 +744,23 @@ async function measure(client, label) {
             rect.bottom <= Math.min(innerHeight, containerRect.bottom) + 1;
         }).length;
     };
+    const lastControlReachableWhenScrolled = (containerSelector, controlSelector) => {
+      const container = document.querySelector(containerSelector);
+      const controls = container ? [...container.querySelectorAll(controlSelector)] : [];
+      const control = controls.at(-1);
+      if (!container || !control) return false;
+      const previousScrollTop = container.scrollTop;
+      container.scrollTop = container.scrollHeight;
+      const containerRect = container.getBoundingClientRect();
+      const controlRect = control.getBoundingClientRect();
+      const reachable = controlRect.width > 0 && controlRect.height > 0 &&
+        controlRect.left >= Math.max(0, containerRect.left) - 1 &&
+        controlRect.right <= Math.min(innerWidth, containerRect.right) + 1 &&
+        controlRect.top >= Math.max(0, containerRect.top) - 1 &&
+        controlRect.bottom <= Math.min(innerHeight, containerRect.bottom) + 1;
+      container.scrollTop = previousScrollTop;
+      return reachable;
+    };
     const shrunkenDirectChildCount = (selector) => {
       const parent = document.querySelector(selector);
       return parent
@@ -599,6 +833,12 @@ async function measure(client, label) {
     const cuePanel = document.querySelector('.cuePanel');
     const cueEditToggle = document.querySelector('.cuePanelEditToggle');
     const cueHost = document.querySelector('.layoutControl.controlModeLive .faders');
+    const timelinePanel = document.querySelector('.layoutControl.controlModeLive .timelinePanel');
+    const timelinePanelRect = timelinePanel?.getBoundingClientRect() ?? null;
+    const sceneBlockWorkspace = document.querySelector('.sceneBlockWorkspace');
+    const sceneBlockWorkspaceRect = sceneBlockWorkspace?.getBoundingClientRect() ?? null;
+    const sceneBlockList = document.querySelector('.sceneBlockList');
+    const sceneBlockComposer = document.querySelector('.sceneBlockComposer');
     const moveEffectForm = document.querySelector('.effectInspectorPane > .effectForm');
     const moveEffectEditorPanel = document.querySelector('.moveEffectEditorPanel');
     const moveEffectEditorSurface = document.querySelector('.moveEffectEditorSurface');
@@ -986,6 +1226,56 @@ async function measure(client, label) {
       visibleTimelineDeskTabCount: visibleCount('.timelineDeskTabs button'),
       visibleTimelineShowSurfaceCount: visibleCount('.timelineShowSurface'),
       visibleTimelineAutomationSurfaceCount: visibleCount('.timelineAutomationSurface'),
+      timelineTimeStatClipped: (() => {
+        const container = document.querySelector('.timelineTimeStat');
+        const stat = document.querySelector('.timelineTimeStat strong');
+        return Boolean(
+          (container && container.scrollWidth > container.clientWidth + 1) ||
+          (stat && stat.scrollWidth > stat.clientWidth + 1)
+        );
+      })(),
+      timelineTimeStatTitle: document.querySelector('.timelineTimeStat')?.getAttribute('title') ?? '',
+      visibleSceneBlockWorkspaceCount: visibleCount('.sceneBlockWorkspace'),
+      sceneBlockRowCount: document.querySelectorAll('.sceneBlockRow').length,
+      visibleSceneBlockRowCount: visibleCount('.sceneBlockRow'),
+      timelineSceneBlockCount: document.querySelectorAll('.timelineOverview .timelineMarker.sceneBlock').length,
+      timelinePointEventCount: document.querySelectorAll('.timelineOverview .timelineMarker.pointEvent').length,
+      timelineActiveSceneBlockCount: document.querySelectorAll('.timelineOverview .timelineMarker.sceneBlock.active').length,
+      timelineActivePointEventCount: document.querySelectorAll('.timelineOverview .timelineMarker.pointEvent.active').length,
+      sceneBlockLaneScopeHintCount: [...document.querySelectorAll('.sceneBlockLaneScopeHint')]
+        .filter((node) => (node.textContent || '').trim() === 'FULL CUE' && (node.title || '').includes('full linked Cue fires')).length,
+      sceneBlockPlaybackJumpHintCount: [...document.querySelectorAll('.sceneBlockPlaybackJumpHint')]
+        .filter((node) => (node.textContent || '').trim() === 'PLAY ONLY' && (node.title || '').includes('MTC/LTC')).length,
+      visibleSceneBlockLinkBadgeCount: visibleCount('.sceneBlockLinkBadge'),
+      visibleSceneBlockComposerControlCount: visibleCount('.sceneBlockComposer input, .sceneBlockComposer select, .sceneBlockComposer button'),
+      fullyVisibleSceneBlockComposerControlCount: fullyVisibleCount(
+        '.sceneBlockComposer input, .sceneBlockComposer select, .sceneBlockComposer button',
+        '.sceneBlockWorkspace',
+      ),
+      visibleSceneBlockRowActionCount: visibleCount('.sceneBlockRowActions button'),
+      fullyVisibleSceneBlockRowActionCount: fullyVisibleCount(
+        '.sceneBlockRowActions button',
+        '.sceneBlockWorkspace',
+      ),
+      sceneBlockWorkspaceWidth: sceneBlockWorkspaceRect ? Math.round(sceneBlockWorkspaceRect.width) : 0,
+      sceneBlockWorkspaceHeight: sceneBlockWorkspaceRect ? Math.round(sceneBlockWorkspaceRect.height) : 0,
+      timelinePanelWidth: timelinePanelRect ? Math.round(timelinePanelRect.width) : 0,
+      sceneBlockWorkspaceHorizontalOverflowPx: sceneBlockWorkspace
+        ? Math.max(0, sceneBlockWorkspace.scrollWidth - sceneBlockWorkspace.clientWidth)
+        : 0,
+      sceneBlockWorkspaceVerticalOverflowPx: sceneBlockWorkspace
+        ? Math.max(0, sceneBlockWorkspace.scrollHeight - sceneBlockWorkspace.clientHeight)
+        : 0,
+      sceneBlockLastControlReachable: lastControlReachableWhenScrolled(
+        '.sceneBlockWorkspace',
+        '.sceneBlockComposer input, .sceneBlockComposer select, .sceneBlockComposer button, .sceneBlockRow input, .sceneBlockRow select, .sceneBlockRow button',
+      ),
+      sceneBlockListHorizontalOverflowPx: sceneBlockList
+        ? Math.max(0, sceneBlockList.scrollWidth - sceneBlockList.clientWidth)
+        : 0,
+      sceneBlockComposerHorizontalOverflowPx: sceneBlockComposer
+        ? Math.max(0, sceneBlockComposer.scrollWidth - sceneBlockComposer.clientWidth)
+        : 0,
       visibleEditDeskTabCount: visibleCount('.editDeskTabs button'),
       visibleEffectEditorCount: visibleCount('.effectEditor'),
       visibleEffectWorkbenchCount: visibleCount('.effectWorkbench'),
@@ -1449,6 +1739,41 @@ function hasTimelineAutomationVisuals(result) {
     result.timelineAutomationGroupButtonCount >= 1 &&
     result.timelineAutomationRangeWidths.length >= 2 &&
     result.timelineAutomationRangeWidths.every((width) => width > 0)
+  );
+}
+
+function hasExpectedSceneBlocks(result) {
+  if (!/^control-live-\d+x\d+$/.test(result.label)) {
+    return true;
+  }
+  const fullSizeWindow = result.innerWidth >= 1920 && result.innerHeight >= 1032;
+  const minimumWorkspaceHeight = fullSizeWindow ? 230 : 100;
+  const composerControlsReachable = fullSizeWindow
+    ? result.fullyVisibleSceneBlockComposerControlCount === 8
+    : result.sceneBlockLastControlReachable && result.sceneBlockWorkspaceVerticalOverflowPx > 0;
+  const rowActionsReachable = fullSizeWindow
+    ? result.fullyVisibleSceneBlockRowActionCount >= 4
+    : result.visibleSceneBlockRowActionCount === 6 && result.sceneBlockLastControlReachable;
+  return (
+    result.visibleSceneBlockWorkspaceCount === 1 &&
+    result.sceneBlockRowCount === 3 &&
+    result.visibleSceneBlockRowCount >= 2 &&
+    result.timelineSceneBlockCount === 2 &&
+    result.timelinePointEventCount === 1 &&
+    result.timelineActiveSceneBlockCount === 1 &&
+    result.timelineActivePointEventCount === 0 &&
+    result.sceneBlockLaneScopeHintCount === 4 &&
+    result.sceneBlockPlaybackJumpHintCount === 4 &&
+    result.visibleSceneBlockLinkBadgeCount >= 3 &&
+    result.visibleSceneBlockComposerControlCount === 8 &&
+    composerControlsReachable &&
+    rowActionsReachable &&
+    result.sceneBlockWorkspaceWidth >= result.timelinePanelWidth * 0.97 &&
+    result.sceneBlockWorkspaceHeight >= minimumWorkspaceHeight &&
+    result.sceneBlockWorkspaceHorizontalOverflowPx === 0 &&
+    result.sceneBlockListHorizontalOverflowPx === 0 &&
+    result.sceneBlockComposerHorizontalOverflowPx === 0
+    && !result.timelineTimeStatClipped
   );
 }
 
@@ -2422,6 +2747,12 @@ async function runViewport(client, viewport) {
       await sleep(120);
       results.push(await measure(client, `control-live-playback-${viewport.width}x${viewport.height}`));
       await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
+      if (shouldCaptureViewport(viewport)) {
+        await captureSettledViewport(
+          client,
+          join(screenshotDir, `control-live-${viewport.width}x${viewport.height}.png`),
+        );
+      }
     }
   }
   await clickByText(client, "Touch");
@@ -2643,6 +2974,741 @@ async function runEffectStackLargeViewport(client, viewport) {
   return { label: `effect-stack-large-${viewport.width}x${viewport.height}`, passed, containment, stats };
 }
 
+async function runSceneBlockLargeViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: fixtureUrl("scene-block-large") });
+  await waitForApp(client);
+  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
+  await sleep(180);
+  const idleMutationStats = await client.evaluate(`(() => new Promise((resolveIdle) => {
+    const target = document.querySelector('.timelinePanel');
+    if (!target) {
+      resolveIdle({ records: -1, addedNodes: -1, removedNodes: -1 });
+      return;
+    }
+    let records = 0;
+    let addedNodes = 0;
+    let removedNodes = 0;
+    let classAttributeMutations = 0;
+    const samples = [];
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (mutation.type === 'attributes') {
+          classAttributeMutations += 1;
+          continue;
+        }
+        if (mutation.type !== 'childList') continue;
+        records += 1;
+        addedNodes += mutation.addedNodes.length;
+        removedNodes += mutation.removedNodes.length;
+        if (samples.length < 8) {
+          const describe = (node) => node.nodeType === Node.TEXT_NODE
+            ? '#text:' + (node.textContent || '').trim().slice(0, 32)
+            : node.nodeName + '.' + (node.className?.baseVal ?? node.className ?? '');
+          samples.push({
+            target: describe(mutation.target),
+            added: [...mutation.addedNodes].map(describe),
+            removed: [...mutation.removedNodes].map(describe),
+          });
+        }
+      }
+    });
+    observer.observe(target, { childList: true, attributes: true, attributeFilter: ['class'], subtree: true });
+    setTimeout(() => {
+      observer.disconnect();
+      resolveIdle({ records, addedNodes, removedNodes, classAttributeMutations, samples });
+    }, 1100);
+  }))()`);
+  const activeTransitionStats = await client.evaluate(`(async () => {
+    const overview = document.querySelector('.timelineOverview');
+    const markersBefore = [...document.querySelectorAll('.timelineMarker.sceneBlock')];
+    if (!overview || typeof window.__syndocalSetSceneBlockFixtureState !== 'function') return null;
+    let childListMutations = 0;
+    let addedNodes = 0;
+    let removedNodes = 0;
+    let classAttributeMutations = 0;
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (mutation.type === 'childList') {
+          childListMutations += 1;
+          addedNodes += mutation.addedNodes.length;
+          removedNodes += mutation.removedNodes.length;
+        } else if (mutation.type === 'attributes') {
+          classAttributeMutations += 1;
+        }
+      }
+    });
+    observer.observe(overview, { childList: true, attributes: true, attributeFilter: ['class'], subtree: true });
+    const startedAt = performance.now();
+    window.__syndocalSetSceneBlockFixtureState(1000, true);
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const activeCount = document.querySelectorAll('.timelineMarker.sceneBlock.active').length;
+    const liveRowCount = document.querySelectorAll('.sceneBlockRow.live').length;
+    window.__syndocalSetSceneBlockFixtureState(1000, false);
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const elapsedMs = performance.now() - startedAt;
+    observer.disconnect();
+    const markersAfter = [...document.querySelectorAll('.timelineMarker.sceneBlock')];
+    return {
+      activeCount,
+      liveRowCount,
+      stoppedActiveCount: document.querySelectorAll('.timelineMarker.sceneBlock.active').length,
+      stoppedUnderPlayheadCount: document.querySelectorAll('.timelineMarker.sceneBlock.underPlayhead').length,
+      stoppedLiveRowCount: document.querySelectorAll('.sceneBlockRow.live').length,
+      childListMutations,
+      addedNodes,
+      removedNodes,
+      classAttributeMutations,
+      elapsedMs,
+      markerIdentityStable: markersBefore.length === markersAfter.length &&
+        markersBefore.every((marker, index) => marker === markersAfter[index]),
+    };
+  })()`);
+  const dragGeometry = await client.evaluate(`(() => {
+    const marker = document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="500"]');
+    const body = marker?.querySelector('.timelineSceneBlockBody');
+    const svg = marker?.ownerSVGElement;
+    if (!marker || !body || !svg) return null;
+    const rect = body.getBoundingClientRect();
+    const svgRect = svg.getBoundingClientRect();
+    return {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+      svgWidth: svgRect.width,
+    };
+  })()`);
+  let markerDragStats = null;
+  if (dragGeometry) {
+    const markerX = () => client.evaluate(`(() => {
+      const marker = document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="500"]');
+      const body = marker?.querySelector('.timelineSceneBlockBody');
+      return body ? body.getBoundingClientRect().left : null;
+    })()`);
+    const initialX = await markerX();
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x: dragGeometry.x,
+      y: dragGeometry.y,
+      button: 'left',
+      buttons: 1,
+      clickCount: 1,
+    });
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: dragGeometry.x + 2,
+      y: dragGeometry.y,
+      button: 'left',
+      buttons: 1,
+    });
+    const tinyMoveX = await markerX();
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: dragGeometry.x + 60,
+      y: dragGeometry.y,
+      button: 'left',
+      buttons: 1,
+    });
+    const committedMoveX = await markerX();
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: dragGeometry.x + 60,
+      y: dragGeometry.y,
+      button: 'left',
+      buttons: 0,
+      clickCount: 1,
+    });
+    await client.evaluate(`new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)))`);
+    const settledMouseX = await markerX();
+    const nonMouseInitialX = await markerX();
+    const nonMouseGeometry = await client.evaluate(`(() => {
+      const body = document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="500"] .timelineSceneBlockBody');
+      if (!body) return null;
+      const rect = body.getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    })()`);
+    const markerTouchAction = await client.evaluate(`(() => {
+      const marker = document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="500"]');
+      return marker ? getComputedStyle(marker).touchAction : '';
+    })()`);
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x: nonMouseGeometry?.x ?? dragGeometry.x,
+      y: nonMouseGeometry?.y ?? dragGeometry.y,
+      button: 'left',
+      buttons: 1,
+      clickCount: 1,
+      pointerType: 'pen',
+    });
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: (nonMouseGeometry?.x ?? dragGeometry.x) + 2,
+      y: nonMouseGeometry?.y ?? dragGeometry.y,
+      button: 'left',
+      buttons: 1,
+      pointerType: 'pen',
+    });
+    const nonMouseTinyMoveX = await markerX();
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: (nonMouseGeometry?.x ?? dragGeometry.x) + 60,
+      y: nonMouseGeometry?.y ?? dragGeometry.y,
+      button: 'left',
+      buttons: 1,
+      pointerType: 'pen',
+    });
+    const nonMouseCommittedMoveX = await markerX();
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: (nonMouseGeometry?.x ?? dragGeometry.x) + 60,
+      y: nonMouseGeometry?.y ?? dragGeometry.y,
+      button: 'left',
+      buttons: 0,
+      clickCount: 1,
+      pointerType: 'pen',
+    });
+    await client.evaluate(`new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)))`);
+    const settledNonMouseX = await markerX();
+    markerDragStats = {
+      initialX,
+      tinyMoveX,
+      committedMoveX,
+      expectedCommittedX: initialX + 60,
+      settledMouseX,
+      markerTouchAction,
+      nonMousePointerType: 'pen',
+      nonMouseInitialX,
+      nonMouseTinyMoveX,
+      nonMouseCommittedMoveX,
+      expectedNonMouseCommittedX: nonMouseInitialX + 60,
+      settledNonMouseX,
+    };
+  }
+  const showStats = await client.evaluate(`(async () => {
+    const rows = () => [...document.querySelectorAll('.sceneBlockRow')];
+    const beforeRows = rows();
+    const sourceOptionCount = document.querySelectorAll('.sceneBlockRow .sceneBlockSourceField option').length;
+    const sourceChangeButtonCount = document.querySelectorAll('.sceneBlockRow .sceneBlockSourceButton').length;
+    const composerSourceOptionCount = document.querySelectorAll('.sceneBlockComposer .sceneBlockSourceField option').length;
+    const rowJumpOptionCount = document.querySelectorAll('.sceneBlockRow .sceneBlockAfterField option').length;
+    const totalOptionCount = document.querySelectorAll('.sceneBlockWorkspace option').length;
+    const marker493 = document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="493"]');
+    marker493?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const list = document.querySelector('.sceneBlockList');
+    const workspace = document.querySelector('.sceneBlockWorkspace');
+    const rowVisible = (row) => {
+      if (!row || !list || !workspace) return false;
+      const rect = row.getBoundingClientRect();
+      const listRect = list.getBoundingClientRect();
+      const workspaceRect = workspace.getBoundingClientRect();
+      return rect.top >= Math.max(0, listRect.top, workspaceRect.top) - 1 &&
+        rect.bottom <= Math.min(window.innerHeight, listRect.bottom, workspaceRect.bottom) + 1;
+    };
+    const firstSelectionRow = document.querySelector('.sceneBlockRow.selected[data-scene-block-id="493"]');
+    const firstMarkerRevealVisible = rowVisible(firstSelectionRow);
+    const firstButton = [...document.querySelectorAll('.sceneBlockPager button')]
+      .find((button) => (button.textContent || '').trim() === 'First');
+    firstButton?.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
+    marker493?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const repeatedSelectionVisible = rowVisible(
+      document.querySelector('.sceneBlockRow.selected[data-scene-block-id="493"]'),
+    );
+    const search = document.querySelector('.sceneBlockRowSearch');
+    if (search instanceof HTMLInputElement) {
+      search.value = 'L1 cue 500';
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const cueIdentitySearchReached500 = rows().some((row) => row.getAttribute('data-scene-block-id') === '500');
+    const clear = [...document.querySelectorAll('.sceneBlockPager button')]
+      .find((button) => (button.textContent || '').trim() === 'Clear');
+    clear?.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
+    const last = [...document.querySelectorAll('.sceneBlockPager button')]
+      .find((button) => (button.textContent || '').trim() === 'Last');
+    last?.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const afterRows = rows();
+    const row500 = document.querySelector('.sceneBlockRow[data-scene-block-id="500"]');
+    const row500StartInput = row500?.querySelector('.sceneBlockRowFields input[type="number"]');
+    const row500Save = row500?.querySelector('.sceneBlockRowActions .primary');
+    const cleanSaveDisabled = row500Save instanceof HTMLButtonElement && row500Save.disabled;
+    const originalStart = row500StartInput instanceof HTMLInputElement ? row500StartInput.value : '';
+    if (row500StartInput instanceof HTMLInputElement) {
+      row500StartInput.value = String(Number(originalStart) + 100);
+      row500StartInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const dirtyClassVisible = row500?.classList.contains('dirty') ?? false;
+    const dirtyBadgeVisible = Boolean(row500?.querySelector('.sceneBlockUnsavedBadge'));
+    const dirtySaveEnabled = row500Save instanceof HTMLButtonElement && !row500Save.disabled;
+    const topbarDirtyVisible = document.querySelector('.topbarProject')?.classList.contains('dirty') ?? false;
+    const projectLabelDirtyVisible = (document.querySelector('.topbarProject span')?.textContent || '').trim().endsWith('*');
+    const globalSave = document.querySelector('.projectAction[title^="Save project"]');
+    globalSave?.click();
+    await Promise.resolve();
+    const globalSaveBlocked = (document.querySelector('.appStatusText')?.textContent || '')
+      .includes('Save each modified Scene Block row');
+    if (row500StartInput instanceof HTMLInputElement) {
+      row500StartInput.value = originalStart;
+      row500StartInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const cleanAfterRevert = !(row500?.classList.contains('dirty') ?? true) &&
+      (row500Save instanceof HTMLButtonElement && row500Save.disabled);
+    const svg = document.querySelector('.timelineOverview');
+    const overviewBackground = svg?.querySelector('.timelineOverviewBg');
+    const svgRect = svg?.getBoundingClientRect();
+    const backgroundRect = overviewBackground?.getBoundingClientRect();
+    const longLabel = document.querySelector('.timelineMarker[data-timeline-event-id="500"] .timelineSceneBlockLabel');
+    const longBody = document.querySelector('.timelineMarker[data-timeline-event-id="500"] .timelineSceneBlockBody');
+    const renderedBlockLabelFontSize = longLabel && svgRect
+      ? parseFloat(getComputedStyle(longLabel).fontSize) * (svgRect.height / 44)
+      : 0;
+    const longLabelWithinBody = Boolean(longLabel && longBody &&
+      longLabel.getBBox().x + longLabel.getBBox().width <= longBody.getBBox().x + longBody.getBBox().width + 0.5);
+    return {
+      overviewBlockCount: document.querySelectorAll('.timelineOverview .timelineMarker.sceneBlock').length,
+      overviewLoopLineCount: document.querySelectorAll('.timelineOverview .timelineSceneBlockLoop').length,
+      overviewNodeCount: document.querySelectorAll('.timelineOverview *').length,
+      beforeRowCount: beforeRows.length,
+      afterRowCount: afterRows.length,
+      sourceOptionCount,
+      sourceChangeButtonCount,
+      composerSourceOptionCount,
+      rowJumpOptionCount,
+      totalOptionCount,
+      pagerCount: document.querySelectorAll('.sceneBlockPager').length,
+      pagerLabel: (document.querySelector('.sceneBlockPager span')?.textContent || '').trim(),
+      reachedLastBlock: afterRows.some((row) => row.getAttribute('data-scene-block-id') === '500'),
+      firstMarkerRevealVisible,
+      repeatedSelectionVisible,
+      cueIdentitySearchReached500,
+      selectedMarkerRenderedLast: document.querySelector('.timelineOverview .timelineMarker:last-of-type')?.getAttribute('data-timeline-event-id') === '493',
+      cleanSaveDisabled,
+      dirtyClassVisible,
+      dirtyBadgeVisible,
+      dirtySaveEnabled,
+      topbarDirtyVisible,
+      projectLabelDirtyVisible,
+      globalSaveBlocked,
+      cleanAfterRevert,
+      overviewBackgroundFits: Boolean(svgRect && backgroundRect &&
+        Math.abs(svgRect.left - backgroundRect.left) <= 2 && Math.abs(svgRect.right - backgroundRect.right) <= 2),
+      renderedBlockLabelFontSize,
+      longLabelWithinBody,
+      sharedJumpPickerCount: document.querySelectorAll('.sceneBlockJumpPicker').length,
+      fieldLabelFontSize: parseFloat(getComputedStyle(document.querySelector('.sceneBlockRowFields label')).fontSize),
+      semanticHintFontSize: parseFloat(getComputedStyle(document.querySelector('.sceneBlockFieldLabel small')).fontSize),
+      columnGuideFontSize: parseFloat(getComputedStyle(document.querySelector('.sceneBlockColumnGuide')).fontSize),
+      timeLabel: (document.querySelector('.timelineTimeStat strong')?.textContent || '').trim(),
+      timeTitle: document.querySelector('.timelineTimeStat')?.getAttribute('title') ?? '',
+      timeStatClipped: (() => {
+        const container = document.querySelector('.timelineTimeStat');
+        const value = container?.querySelector('strong');
+        return Boolean(
+          (container && container.scrollWidth > container.clientWidth + 1) ||
+          (value && value.scrollWidth > value.clientWidth + 1)
+        );
+      })(),
+    };
+  })()`);
+  const showContainment = await measure(client, `scene-block-large-show-${viewport.width}x${viewport.height}`);
+  const sourcePickerStats = await client.evaluate(`(async () => {
+    const sourceButton = [...document.querySelectorAll('.sceneBlockRow .sceneBlockSourceButton')].at(-1);
+    if (!(sourceButton instanceof HTMLButtonElement)) return null;
+    const expectedCueId = Number(sourceButton.closest('.sceneBlockRow')?.getAttribute('data-source-cue-id'));
+    sourceButton.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    let picker = document.querySelector('.sceneBlockSourcePicker');
+    picker?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const initialSelect = picker?.querySelector('select');
+    const initialSelectedCueId = initialSelect instanceof HTMLSelectElement ? Number(initialSelect.value) : null;
+    const initialSelectedLabel = initialSelect instanceof HTMLSelectElement
+      ? (initialSelect.selectedOptions[0]?.textContent || '').trim()
+      : '';
+    const initialOptionCount = picker?.querySelectorAll('option').length ?? 0;
+    const initialQuery = picker?.querySelector('input[type="search"]');
+    const apply = [...(picker?.querySelectorAll('button') ?? [])]
+      .find((button) => (button.textContent || '').trim() === 'Apply Source');
+    if (initialQuery instanceof HTMLInputElement) {
+      initialQuery.value = 'no such source cue';
+      initialQuery.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const noMatchOptionCount = picker?.querySelectorAll('option').length ?? 0;
+    const applyDisabledWithNoMatches = apply instanceof HTMLButtonElement && apply.disabled;
+    if (initialQuery instanceof HTMLInputElement) {
+      initialQuery.value = '';
+      initialQuery.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const restoredSelect = picker?.querySelector('select');
+    const restoredCueId = restoredSelect instanceof HTMLSelectElement ? Number(restoredSelect.value) : null;
+    if (apply instanceof HTMLButtonElement) apply.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const preservedAfterApply = sourceButton.textContent?.includes('Scale Cue 500') ?? false;
+    const closedAfterApply = document.querySelectorAll('.sceneBlockSourcePicker').length === 0;
+    sourceButton.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    picker = document.querySelector('.sceneBlockSourcePicker');
+    picker?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const query = picker?.querySelector('input[type="search"]');
+    if (query instanceof HTMLInputElement) {
+      query.value = 'L1 cue 800 Scale Cue 500';
+      query.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const select = picker?.querySelector('select');
+    const workspace = document.querySelector('.sceneBlockWorkspace');
+    const pickerRect = picker?.getBoundingClientRect();
+    const workspaceRect = workspace?.getBoundingClientRect();
+    const reachable = Boolean(pickerRect && workspaceRect &&
+      pickerRect.width > 0 && pickerRect.height > 0 &&
+      pickerRect.left >= Math.max(0, workspaceRect.left) - 1 &&
+      pickerRect.right <= Math.min(window.innerWidth, workspaceRect.right) + 1 &&
+      pickerRect.top >= Math.max(0, workspaceRect.top) - 1 &&
+      pickerRect.bottom <= Math.min(window.innerHeight, workspaceRect.bottom) + 1);
+    const sourcePickerControls = [...(picker?.querySelectorAll('input, select, button') ?? [])];
+    const fullyVisibleControlCount = sourcePickerControls.filter((control) => {
+      if (!workspaceRect) return false;
+      const rect = control.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 &&
+        rect.left >= Math.max(0, workspaceRect.left) - 1 &&
+        rect.right <= Math.min(window.innerWidth, workspaceRect.right) + 1 &&
+        rect.top >= Math.max(0, workspaceRect.top) - 1 &&
+        rect.bottom <= Math.min(window.innerHeight, workspaceRect.bottom) + 1 &&
+        (!pickerRect || (
+          rect.left >= pickerRect.left - 1 && rect.right <= pickerRect.right + 1 &&
+          rect.top >= pickerRect.top - 1 && rect.bottom <= pickerRect.bottom + 1
+        ));
+    }).length;
+    const cancel = [...(picker?.querySelectorAll('button') ?? [])]
+      .find((button) => (button.textContent || '').trim() === 'Cancel');
+    if (cancel instanceof HTMLButtonElement) cancel.click();
+    await Promise.resolve();
+    return {
+      pickerCount: picker ? 1 : 0,
+      expectedCueId,
+      initialOptionCount,
+      initialSelectedCueId,
+      initialSelectedLabel,
+      noMatchOptionCount,
+      applyDisabledWithNoMatches,
+      restoredCueId,
+      preservedAfterApply,
+      closedAfterApply,
+      filteredOptionCount: picker?.querySelectorAll('option').length ?? 0,
+      filteredValue: select instanceof HTMLSelectElement ? Number(select.value) : null,
+      filteredLabel: select instanceof HTMLSelectElement ? (select.selectedOptions[0]?.textContent || '').trim() : '',
+      reachable,
+      controlCount: sourcePickerControls.length,
+      fullyVisibleControlCount,
+      closedAfterCancel: document.querySelectorAll('.sceneBlockSourcePicker').length === 0,
+    };
+  })()`);
+  const pickerStats = await client.evaluate(`(async () => {
+    const sourceButton = document.querySelector('.sceneBlockRow .sceneBlockSourceButton');
+    if (sourceButton instanceof HTMLButtonElement) sourceButton.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const sourcePickerCountBeforeJump = document.querySelectorAll('.sceneBlockSourcePicker').length;
+    const rowAfterSelect = document.querySelector('.sceneBlockRow .sceneBlockAfterField select');
+    if (rowAfterSelect) {
+      rowAfterSelect.value = 'pick';
+      rowAfterSelect.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const sourcePickerCountAfterJump = document.querySelectorAll('.sceneBlockSourcePicker').length;
+    const workspace = document.querySelector('.sceneBlockWorkspace');
+    const list = document.querySelector('.sceneBlockList');
+    const picker = document.querySelector('.sceneBlockJumpPicker');
+    const pager = document.querySelector('.sceneBlockPager');
+    const lastAction = [...document.querySelectorAll('.sceneBlockRowActions button')].at(-1) ?? null;
+    const fullyVisibleWithin = (element, container) => {
+      if (!element || !container) return false;
+      const rect = element.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 &&
+        rect.left >= Math.max(0, containerRect.left) - 1 &&
+        rect.right <= Math.min(window.innerWidth, containerRect.right) + 1 &&
+        rect.top >= Math.max(0, containerRect.top) - 1 &&
+        rect.bottom <= Math.min(window.innerHeight, containerRect.bottom) + 1;
+    };
+    const fullyVisibleInWorkspace = (element) => fullyVisibleWithin(element, workspace);
+    const reveal = async (element, scrollport = null) => {
+      if (!element) return false;
+      element.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+      return fullyVisibleInWorkspace(element) && (!scrollport || fullyVisibleWithin(element, scrollport));
+    };
+    const pickerReachable = await reveal(picker);
+    const pickerControls = [...(picker?.querySelectorAll('select, button') ?? [])];
+    const fullyVisiblePickerControlCount = pickerControls.filter((control) =>
+      fullyVisibleInWorkspace(control) && fullyVisibleWithin(control, picker)).length;
+    const pagerReachable = await reveal(pager);
+    const lastActionReachable = await reveal(lastAction, list);
+    return {
+      pickerCount: document.querySelectorAll('.sceneBlockJumpPicker').length,
+      sourcePickerCountBeforeJump,
+      sourcePickerCountAfterJump,
+      pickerOptionCount: document.querySelectorAll('.sceneBlockJumpPicker option').length,
+      pagerCount: document.querySelectorAll('.sceneBlockPager').length,
+      rowCount: document.querySelectorAll('.sceneBlockRow').length,
+      rowActionCount: document.querySelectorAll('.sceneBlockRowActions button').length,
+      listHeight: list ? Math.round(list.getBoundingClientRect().height) : 0,
+      pickerReachable,
+      pickerControlCount: pickerControls.length,
+      fullyVisiblePickerControlCount,
+      pagerReachable,
+      lastActionReachable,
+    };
+  })()`);
+  const composerPickerStats = await client.evaluate(`(async () => {
+    const openJumpPicker = document.querySelector('.sceneBlockJumpPicker');
+    const cancelOpenJump = [...(openJumpPicker?.querySelectorAll('button') ?? [])]
+      .find((button) => (button.textContent || '').trim() === 'Cancel');
+    cancelOpenJump?.click();
+    await Promise.resolve();
+    const sourceButton = document.querySelector('.sceneBlockComposerSourceButton');
+    sourceButton?.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const sourcePicker = document.querySelector('.sceneBlockSourcePicker');
+    const sourceInitialOptionCount = sourcePicker?.querySelectorAll('option').length ?? 0;
+    const sourceQuery = sourcePicker?.querySelector('input[type="search"]');
+    if (sourceQuery instanceof HTMLInputElement) {
+      sourceQuery.value = 'L1 cue 800 Scale Cue 500';
+      sourceQuery.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const sourceFilteredOptionCount = sourcePicker?.querySelectorAll('option').length ?? 0;
+    const sourceApply = [...(sourcePicker?.querySelectorAll('button') ?? [])]
+      .find((button) => (button.textContent || '').trim() === 'Apply Source');
+    sourceApply?.click();
+    await Promise.resolve();
+    const afterButton = document.querySelector('.sceneBlockComposerAfterButton');
+    afterButton?.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const jumpPicker = document.querySelector('.sceneBlockJumpPicker');
+    const jumpInitialOptionCount = jumpPicker?.querySelectorAll('option').length ?? 0;
+    const jumpQuery = jumpPicker?.querySelector('input[type="search"]');
+    if (jumpQuery instanceof HTMLInputElement) {
+      jumpQuery.value = '500';
+      jumpQuery.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const jumpFilteredOptionCount = jumpPicker?.querySelectorAll('option').length ?? 0;
+    const jumpSelect = jumpPicker?.querySelector('select');
+    if (jumpSelect instanceof HTMLSelectElement && jumpSelect.options.length > 0) {
+      jumpSelect.value = jumpSelect.options[0].value;
+      jumpSelect.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    const jumpApply = [...(jumpPicker?.querySelectorAll('button') ?? [])]
+      .find((button) => (button.textContent || '').trim() === 'Apply Target');
+    const jumpApplyEnabledAfterChoice = jumpApply instanceof HTMLButtonElement && !jumpApply.disabled;
+    jumpApply?.click();
+    await Promise.resolve();
+    return {
+      sourceInitialOptionCount,
+      sourceFilteredOptionCount,
+      sourceClosedAfterApply: document.querySelectorAll('.sceneBlockSourcePicker').length === 0,
+      jumpInitialOptionCount,
+      jumpFilteredOptionCount,
+      jumpApplyEnabledAfterChoice,
+      jumpClosedAfterApply: document.querySelectorAll('.sceneBlockJumpPicker').length === 0,
+      composerEagerOptionCount: document.querySelectorAll(
+        '.sceneBlockComposer .sceneBlockSourceField option, .sceneBlockComposer .sceneBlockAfterField option',
+      ).length,
+    };
+  })()`);
+  const pickerContainment = await measure(client, `scene-block-large-picker-${viewport.width}x${viewport.height}`);
+  let screenshotVerification = null;
+  if (shouldCaptureViewport(viewport)) {
+    mkdirSync(screenshotDir, { recursive: true });
+    screenshotVerification = await captureSettledViewport(
+      client,
+      join(screenshotDir, `scene-block-large-${viewport.width}x${viewport.height}.png`),
+    );
+  }
+  const sourceOpenStats = await client.evaluate(`(async () => {
+    const openSource = document.querySelector('.sceneBlockRow[data-scene-block-id="500"] .sceneBlockOpenSourceButton');
+    openSource?.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))));
+    const cue500 = document.querySelector('.cueItem[data-cue-id="800"]');
+    const cuePanel = document.querySelector('.cuePanel');
+    const cueSurfaceTab = [...document.querySelectorAll('.timelineDeskTabs button')]
+      .find((button) => (button.textContent || '').trim() === 'Cues');
+    const cueHeader = cue500?.querySelector('.cueMetaLine');
+    const headerRect = cueHeader?.getBoundingClientRect();
+    const panelRect = cuePanel?.getBoundingClientRect();
+    return {
+      cue500Visible: Boolean(headerRect && panelRect && headerRect.width > 0 && headerRect.height > 0 &&
+        headerRect.top >= Math.max(0, panelRect.top) - 1 && headerRect.bottom <= Math.min(window.innerHeight, panelRect.bottom) + 1),
+      cuePanelEditing: cuePanel?.classList.contains('cuePanelEditing') ?? false,
+      cuesSurfaceActive: cueSurfaceTab?.classList.contains('active') ?? false,
+      pagerLabel: (document.querySelector('.cuePager span')?.textContent || '').trim(),
+    };
+  })()`);
+  await client.evaluate(`(async () => {
+    for (let page = 0; page < 60; page += 1) {
+      const previous = document.querySelector('.cuePager button[aria-label="Previous cue page"]');
+      if (!(previous instanceof HTMLButtonElement) || previous.disabled) break;
+      previous.click();
+      await Promise.resolve();
+    }
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+  })()`);
+  const cueStats = await client.evaluate(`(() => ({
+    cueRowCount: document.querySelectorAll('.cueItem').length,
+    placementChipCount: document.querySelectorAll('.cueTimelinePlacementChip').length,
+    placementChipButtonCount: document.querySelectorAll('.cueTimelinePlacementChip button').length,
+    placementMoreButtonCount: document.querySelectorAll('.cueTimelinePlacementMore').length,
+    placementMoreLabel: (document.querySelector('.cueTimelinePlacementMore')?.textContent || '').trim(),
+  }))()`);
+  const cueContainment = await measure(client, `scene-block-large-cues-${viewport.width}x${viewport.height}`);
+  const passed = Boolean(
+    showStats.overviewBlockCount === 500 &&
+    showStats.overviewLoopLineCount <= 400 &&
+    showStats.overviewNodeCount < 3_500 &&
+    idleMutationStats.records === 0 &&
+    idleMutationStats.addedNodes === 0 &&
+    idleMutationStats.removedNodes === 0 &&
+    idleMutationStats.classAttributeMutations === 0 &&
+    activeTransitionStats !== null &&
+    activeTransitionStats.activeCount === 500 &&
+    activeTransitionStats.liveRowCount > 0 &&
+    activeTransitionStats.stoppedActiveCount === 0 &&
+    activeTransitionStats.stoppedUnderPlayheadCount === 500 &&
+    activeTransitionStats.stoppedLiveRowCount === 0 &&
+    activeTransitionStats.childListMutations === 0 &&
+    activeTransitionStats.addedNodes === 0 &&
+    activeTransitionStats.removedNodes === 0 &&
+    activeTransitionStats.classAttributeMutations <= 1_100 &&
+    activeTransitionStats.markerIdentityStable &&
+    activeTransitionStats.elapsedMs < 1_200 &&
+    markerDragStats !== null &&
+    Math.abs(markerDragStats.tinyMoveX - markerDragStats.initialX) < 1 &&
+    Math.abs(markerDragStats.committedMoveX - markerDragStats.expectedCommittedX) < 2 &&
+    Math.abs(markerDragStats.settledMouseX - markerDragStats.committedMoveX) < 2 &&
+    markerDragStats.markerTouchAction === 'none' &&
+    markerDragStats.nonMousePointerType === 'pen' &&
+    Math.abs(markerDragStats.nonMouseTinyMoveX - markerDragStats.nonMouseInitialX) < 1 &&
+    Math.abs(markerDragStats.nonMouseCommittedMoveX - markerDragStats.expectedNonMouseCommittedX) < 2 &&
+    Math.abs(markerDragStats.settledNonMouseX - markerDragStats.nonMouseCommittedMoveX) < 2 &&
+    showStats.beforeRowCount <= 12 &&
+    showStats.afterRowCount <= 12 &&
+    showStats.sourceOptionCount === 0 &&
+    showStats.sourceChangeButtonCount === showStats.beforeRowCount &&
+    showStats.composerSourceOptionCount === 0 &&
+    showStats.rowJumpOptionCount <= 48 &&
+    showStats.totalOptionCount < 200 &&
+    showStats.pagerCount === 1 &&
+    showStats.pagerLabel.includes('493-500 / 500') &&
+    showStats.reachedLastBlock &&
+    showStats.firstMarkerRevealVisible &&
+    showStats.repeatedSelectionVisible &&
+    showStats.cueIdentitySearchReached500 &&
+    showStats.selectedMarkerRenderedLast &&
+    showStats.cleanSaveDisabled &&
+    showStats.dirtyClassVisible &&
+    showStats.dirtyBadgeVisible &&
+    showStats.dirtySaveEnabled &&
+    showStats.topbarDirtyVisible &&
+    showStats.projectLabelDirtyVisible &&
+    showStats.globalSaveBlocked &&
+    showStats.cleanAfterRevert &&
+    showStats.overviewBackgroundFits &&
+    showStats.renderedBlockLabelFontSize >= 9 &&
+    showStats.longLabelWithinBody &&
+    showStats.sharedJumpPickerCount === 0 &&
+    showStats.fieldLabelFontSize >= 10 &&
+    showStats.semanticHintFontSize >= 9 &&
+    showStats.columnGuideFontSize >= 9 &&
+    showStats.timeLabel.includes(' / ') &&
+    showStats.timeTitle.startsWith('1000 / ') &&
+    showStats.timeTitle.endsWith(' ms') &&
+    !showStats.timeStatClipped &&
+    sourcePickerStats !== null &&
+    sourcePickerStats.pickerCount === 1 &&
+    sourcePickerStats.initialOptionCount <= 80 &&
+    sourcePickerStats.initialSelectedCueId === sourcePickerStats.expectedCueId &&
+    sourcePickerStats.initialSelectedLabel.includes('Scale Cue 500') &&
+    sourcePickerStats.noMatchOptionCount === 0 &&
+    sourcePickerStats.applyDisabledWithNoMatches &&
+    sourcePickerStats.restoredCueId === sourcePickerStats.expectedCueId &&
+    sourcePickerStats.preservedAfterApply &&
+    sourcePickerStats.closedAfterApply &&
+    sourcePickerStats.filteredOptionCount === 1 &&
+    sourcePickerStats.filteredLabel.includes('Scale Cue 500') &&
+    sourcePickerStats.reachable &&
+    sourcePickerStats.controlCount > 0 &&
+    sourcePickerStats.fullyVisibleControlCount === sourcePickerStats.controlCount &&
+    sourcePickerStats.closedAfterCancel &&
+    pickerStats.pickerCount === 1 &&
+    pickerStats.sourcePickerCountBeforeJump === 1 &&
+    pickerStats.sourcePickerCountAfterJump === 0 &&
+    pickerStats.pickerOptionCount <= 80 &&
+    pickerStats.pagerCount === 1 &&
+    pickerStats.rowCount <= 12 &&
+    pickerStats.rowActionCount > 0 &&
+    pickerStats.listHeight > 0 &&
+    pickerStats.pickerReachable &&
+    pickerStats.pickerControlCount > 0 &&
+    pickerStats.fullyVisiblePickerControlCount === pickerStats.pickerControlCount &&
+    pickerStats.pagerReachable &&
+    pickerStats.lastActionReachable &&
+    composerPickerStats.sourceInitialOptionCount <= 80 &&
+    composerPickerStats.sourceFilteredOptionCount === 1 &&
+    composerPickerStats.sourceClosedAfterApply &&
+    composerPickerStats.jumpInitialOptionCount <= 80 &&
+    composerPickerStats.jumpFilteredOptionCount >= 1 &&
+    composerPickerStats.jumpFilteredOptionCount <= 80 &&
+    composerPickerStats.jumpApplyEnabledAfterChoice &&
+    composerPickerStats.jumpClosedAfterApply &&
+    composerPickerStats.composerEagerOptionCount === 0 &&
+    sourceOpenStats.cue500Visible &&
+    sourceOpenStats.cuePanelEditing &&
+    sourceOpenStats.cuesSurfaceActive &&
+    sourceOpenStats.pagerLabel.includes('42 / 42') &&
+    cueStats.cueRowCount === 12 &&
+    cueStats.placementChipCount === 8 &&
+    cueStats.placementChipButtonCount === 24 &&
+    cueStats.placementMoreButtonCount === 1 &&
+    cueStats.placementMoreLabel.includes('491 more') &&
+    (!shouldCaptureViewport(viewport) || screenshotVerification?.verified === true) &&
+    hasNoOuterOverflow(showContainment) &&
+    hasNoOuterOverflow(pickerContainment) &&
+    hasNoOuterOverflow(cueContainment)
+  );
+  return {
+    label: `scene-block-large-${viewport.width}x${viewport.height}`,
+    passed,
+    showStats,
+    idleMutationStats,
+    activeTransitionStats,
+    markerDragStats,
+    sourcePickerStats,
+    pickerStats,
+    cueStats,
+    showContainment,
+    pickerContainment,
+    composerPickerStats,
+    sourceOpenStats,
+    cueContainment,
+    screenshotVerification,
+  };
+}
+
 async function runLargeShowViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -2725,7 +3791,6 @@ async function main() {
 
     browserProcess = startProcess(browser, [
       "--headless=new",
-      "--disable-gpu",
       "--hide-scrollbars",
       "--disable-crash-reporter",
       "--disable-crashpad",
@@ -2738,7 +3803,7 @@ async function main() {
 
     client = await createCdpClient();
     console.log(
-      `viewport contract primary=${primaryOperationalViewport.width}x${primaryOperationalViewport.height} extended=${extendedCeilingViewport.width}x${extendedCeilingViewport.height} fallbacks=${compactFallbackViewports.map((viewport) => `${viewport.width}x${viewport.height}`).join(",")} screenshots=${captureAllViewportScreenshots ? "all" : "primary-only"}`,
+      `viewport contract primary=${primaryOperationalViewport.width}x${primaryOperationalViewport.height} native=${nativeMaximizedViewport.width}x${nativeMaximizedViewport.height} extended=${extendedCeilingViewport.width}x${extendedCeilingViewport.height} fallbacks=${compactFallbackViewports.map((viewport) => `${viewport.width}x${viewport.height}`).join(",")} screenshots=${captureAllViewportScreenshots ? "all" : "maximized"}`,
     );
     if (largeShowMode) {
       const result = await runLargeShowViewport(client, viewports[0]);
@@ -2784,6 +3849,26 @@ async function main() {
       }
       return;
     }
+    if (sceneBlockOnlyMode) {
+      const sceneBlockResults = [];
+      for (const viewport of viewports) {
+        sceneBlockResults.push(await runSceneBlockLargeViewport(client, viewport));
+      }
+      for (const result of sceneBlockResults) {
+        console.log(`${result.passed ? "pass" : "fail"} ${result.label} ${JSON.stringify({
+          markerDragStats: result.markerDragStats,
+          activeTransitionStats: result.activeTransitionStats,
+          showStats: result.showStats,
+          sourcePickerStats: result.sourcePickerStats,
+          composerPickerStats: result.composerPickerStats,
+          sourceOpenStats: result.sourceOpenStats,
+          screenshotVerification: result.screenshotVerification,
+        })}`);
+      }
+      const failures = sceneBlockResults.filter((result) => !result.passed);
+      if (failures.length > 0) throw new Error(`Scene Block viewport failed: ${JSON.stringify(failures)}`);
+      return;
+    }
 
     const results = [];
     for (const viewport of viewports) {
@@ -2792,6 +3877,7 @@ async function main() {
     const cueRecallResults = [];
     const cueRecallLargeResults = [];
     const effectStackLargeResults = [];
+    const sceneBlockLargeResults = [];
     const cueNodeGraphResults = [];
     for (const viewport of viewports) {
       cueRecallResults.push(await runCueRecallViewport(client, viewport));
@@ -2799,11 +3885,20 @@ async function main() {
       effectStackLargeResults.push(await runEffectStackLargeViewport(client, viewport));
       cueNodeGraphResults.push(await runCueNodeGraphViewport(client, viewport));
     }
+    const sceneBlockScaleViewports = viewports.filter((viewport) =>
+      isPrimaryOperationalViewport(viewport) ||
+      isNativeMaximizedViewport(viewport) ||
+      matchesViewport(viewport, compactFallbackViewports[0]),
+    );
+    for (const viewport of sceneBlockScaleViewports.length > 0 ? sceneBlockScaleViewports : viewports.slice(0, 1)) {
+      sceneBlockLargeResults.push(await runSceneBlockLargeViewport(client, viewport));
+    }
 
     const failures = results.filter((result) => !isContained(result));
     const cueRecallFailures = cueRecallResults.filter((result) => !result.passed);
     const cueRecallLargeFailures = cueRecallLargeResults.filter((result) => !result.passed);
     const effectStackLargeFailures = effectStackLargeResults.filter((result) => !result.passed);
+    const sceneBlockLargeFailures = sceneBlockLargeResults.filter((result) => !result.passed);
     const cueNodeGraphFailures = cueNodeGraphResults.filter((result) => !result.passed);
     const setupSurfaceFailures = results.filter((result) => !hasExpectedSetupSurface(result));
     const projectMenuFailures = results.filter((result) => !hasExpectedProjectMenu(result));
@@ -2816,6 +3911,9 @@ async function main() {
     const timelineAutomationFailures = shouldCheckTimelineAutomation
       ? results.filter((result) => result.label.startsWith("control-live-") && !hasTimelineAutomationVisuals(result))
       : [];
+    const sceneBlockFailures = shouldCheckTimelineAutomation
+      ? results.filter((result) => !hasExpectedSceneBlocks(result))
+      : [];
     const statusLineFailures = results.filter(
       (result) => result.visibleAppStatusLineCount !== 1 || !["info", "success", "warning", "error"].includes(result.appStatusTone),
     );
@@ -2823,6 +3921,9 @@ async function main() {
       const status = isContained(result) ? "pass" : "fail";
       const timelineSuffix = result.label.startsWith("control-live-")
         ? ` timelineAutomation=${result.timelineAutomationRangeCount}/${result.timelineAutomationHandleCount}/${result.timelineAutomationKeyframeCount}/${result.timelineAutomationChipCount}/${result.timelineAutomationCurveCount}/${result.timelineAutomationValueInputCount}/${result.timelineAutomationEnabledToggleCount}/${result.timelineAutomationScopeCount}/${result.timelineAutomationBatchButtonCount}/${result.timelineAutomationGroupButtonCount}`
+        : "";
+      const sceneBlockSuffix = /^control-live-\d+x\d+$/.test(result.label)
+        ? ` sceneBlocks=${result.timelineSceneBlockCount}/${result.timelinePointEventCount}/${result.sceneBlockRowCount} workspace=${result.sceneBlockWorkspaceWidth}x${result.sceneBlockWorkspaceHeight}/${result.timelinePanelWidth} controls=${result.fullyVisibleSceneBlockComposerControlCount}/${result.visibleSceneBlockComposerControlCount} actions=${result.fullyVisibleSceneBlockRowActionCount}/${result.visibleSceneBlockRowActionCount} reachable=${result.sceneBlockLastControlReachable ? 1 : 0} overflow=${result.sceneBlockWorkspaceHorizontalOverflowPx}/${result.sceneBlockWorkspaceVerticalOverflowPx}/${result.sceneBlockListHorizontalOverflowPx}/${result.sceneBlockComposerHorizontalOverflowPx}`
         : "";
       const projectMenuSuffix = result.label.startsWith("project-menu-")
         ? ` projectMenu=${result.visibleProjectMenuCount}/${result.visibleProjectMenuItemCount}/${result.visibleProjectMenuShortcutCount}/${result.visibleRecentProjectMenuItemCount}/${result.visibleRecoveryProjectMenuItemCount}/${result.visibleUpdateMenuLabelCount}/${result.visibleUpdateCheckButtonCount}/${result.visibleUserTemplateMenuLabelCount}/${result.visibleUserTemplateActionCount}`
@@ -2867,7 +3968,7 @@ async function main() {
         ? ` mixer=${result.visibleVideoOutputItemCount}/${result.visibleVideoOutputSelectedItemCount}/${result.visibleVideoMixerOutputDeckCount}/${result.visibleVideoMixerOutputFaderCount}/${result.visibleVideoMixerOutputSelectButtonCount}/${result.visibleVideoLayerItemCount}/${result.visibleBuiltinVideoFxSelectCount}/${result.visibleVideoMixerLayerDeckCount}/${result.visibleVideoMixerLayerFaderCount}/${result.visibleVideoMixerLayerButtonCount}`
         : "";
       console.log(
-        `${status} [${viewportRole({ width: result.innerWidth, height: result.innerHeight })}] ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${keyboardSuffix}${timelineSuffix}${touchSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${positionVisualSuffix}${colorEffectSuffix}${chaserEffectSuffix}${moveEffectSuffix}${mixerSuffix}`,
+        `${status} [${viewportRole({ width: result.innerWidth, height: result.innerHeight })}] ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${keyboardSuffix}${timelineSuffix}${sceneBlockSuffix}${touchSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${positionVisualSuffix}${colorEffectSuffix}${chaserEffectSuffix}${moveEffectSuffix}${mixerSuffix}`,
       );
     }
     for (const result of cueRecallResults) {
@@ -2885,6 +3986,11 @@ async function main() {
         `${result.passed ? "pass" : "fail"} ${result.label} rows=${result.stats.beforeCount}->${result.stats.afterCount}/${result.stats.total} page=${result.stats.pageLabel}`,
       );
     }
+    for (const result of sceneBlockLargeResults) {
+      console.log(
+        `${result.passed ? "pass" : "fail"} ${result.label} rows=${result.showStats.beforeRowCount}->${result.showStats.afterRowCount}/500 page=${result.showStats.pagerLabel} overview=${result.showStats.overviewNodeCount} picker=${result.pickerStats.pickerCount}/${result.pickerStats.pickerOptionCount} reachable=${result.pickerStats.pickerReachable ? 1 : 0}/${result.pickerStats.pagerReachable ? 1 : 0}/${result.pickerStats.lastActionReachable ? 1 : 0} cuePlacements=${result.cueStats.placementChipCount}+${result.cueStats.placementMoreButtonCount} idle=${result.idleMutationStats.records}/${result.idleMutationStats.addedNodes}/${result.idleMutationStats.removedNodes} samples=${JSON.stringify(result.idleMutationStats.samples ?? [])}`,
+      );
+    }
     for (const result of cueNodeGraphResults) {
       console.log(
         `${result.passed ? "pass" : "fail"} ${result.label} all=${result.allScope.storeDisabled ? "disabled" : "enabled"}/${result.allScope.scopeErrorCount} video=${result.videoScope.storeDisabled ? "disabled" : "enabled"}/${result.videoScope.scopeErrorCount} graphs=${result.videoScope.graphCount}`,
@@ -2895,6 +4001,7 @@ async function main() {
       cueRecallFailures.length > 0 ||
       cueRecallLargeFailures.length > 0 ||
       effectStackLargeFailures.length > 0 ||
+      sceneBlockLargeFailures.length > 0 ||
       cueNodeGraphFailures.length > 0 ||
       keyboardNavigationFailures.length > 0 ||
       setupSurfaceFailures.length > 0 ||
@@ -2905,6 +4012,7 @@ async function main() {
       controlModeFailures.length > 0 ||
       touchSurfaceFailures.length > 0 ||
       timelineAutomationFailures.length > 0 ||
+      sceneBlockFailures.length > 0 ||
       statusLineFailures.length > 0
     ) {
       console.error(
@@ -2914,6 +4022,7 @@ async function main() {
             cueRecall: cueRecallFailures,
             cueRecallLarge: cueRecallLargeFailures,
             effectStackLarge: effectStackLargeFailures,
+            sceneBlockLarge: sceneBlockLargeFailures,
             cueNodeGraph: cueNodeGraphFailures,
             keyboardNavigation: keyboardNavigationFailures,
             setupSurface: setupSurfaceFailures,
@@ -2924,6 +4033,7 @@ async function main() {
             controlMode: controlModeFailures,
             touchSurface: touchSurfaceFailures,
             timelineAutomation: timelineAutomationFailures,
+            sceneBlocks: sceneBlockFailures,
             statusLine: statusLineFailures,
           },
           null,
@@ -2931,7 +4041,7 @@ async function main() {
         ),
       );
       throw new Error(
-        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${effectStackLargeFailures.length} large live-effect DOM-budget check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${statusLineFailures.length} status line check(s) failed.`,
+        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${effectStackLargeFailures.length} large live-effect DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block full-window check(s), ${statusLineFailures.length} status line check(s) failed.`,
       );
     }
   } finally {

@@ -44,6 +44,9 @@ export interface TimelineEventDraft {
   cue_id: number;
   time_ms: number;
   track: TimelineTrackKind;
+  duration_ms: number;
+  loop_count: number;
+  jump_to_event_id: number | null;
 }
 
 export interface TimelineAutomationDraft {
@@ -109,6 +112,9 @@ export const timelineEventDraftFromSummary = (event: TimelineCueEventSummary): T
   cue_id: event.cue_id,
   time_ms: event.time_ms,
   track: event.track,
+  duration_ms: event.duration_ms ?? 0,
+  loop_count: event.loop_count ?? 1,
+  jump_to_event_id: event.jump_to_event_id ?? null,
 });
 
 export const timelineAutomationDraftFromSummary = (automation: TimelineAutomationSummary): TimelineAutomationDraft => {
