@@ -40,7 +40,7 @@ const setupTabs = [
 const controlTabs = [
   { id: "edit", label: "Live Edit" },
   { id: "live", label: "Timeline" },
-  { id: "mixer", label: "Mixer" },
+  { id: "mixer", label: "VJ Desk" },
 ];
 const viewportRecentProjects = [
   "C:/shows/front-room.sdc",
@@ -933,15 +933,18 @@ function hasExpectedControlModeSurface(result) {
     return false;
   }
   if (
-    result.visibleLiveControlPanelCount !== 1 ||
-    result.visibleControlStagePanelCount !== 1 ||
-    result.visibleControlStageCount !== 1 ||
-    result.controlStageWidth < 520 ||
-    result.controlStageHeight < 190 ||
-    result.controlStageViewBoxAspect < 2 ||
-    result.controlStageGridCoverage < 0.95 ||
-    result.controlStageFixtureMinSize < 12 ||
-    result.visibleControlStageReferenceLabelCount > 1
+    !result.label.startsWith("control-mixer-") &&
+    (
+      result.visibleLiveControlPanelCount !== 1 ||
+      result.visibleControlStagePanelCount !== 1 ||
+      result.visibleControlStageCount !== 1 ||
+      result.controlStageWidth < 520 ||
+      result.controlStageHeight < 190 ||
+      result.controlStageViewBoxAspect < 2 ||
+      result.controlStageGridCoverage < 0.95 ||
+      result.controlStageFixtureMinSize < 12 ||
+      result.visibleControlStageReferenceLabelCount > 1
+    )
   ) {
     return false;
   }
@@ -1057,6 +1060,9 @@ function hasExpectedControlModeSurface(result) {
   }
   if (result.label.startsWith("control-mixer-")) {
     return (
+      result.visibleLiveControlPanelCount === 0 &&
+      result.visibleControlStagePanelCount === 0 &&
+      result.visibleControlStageCount === 0 &&
       result.visibleVideoControlPanelCount > 0 &&
       result.visibleVideoMasterControlCount > 0 &&
       result.visibleVideoMasterFaderCount > 0 &&

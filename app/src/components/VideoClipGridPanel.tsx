@@ -39,6 +39,7 @@ interface VideoClipGridPanelProps {
   onRefreshLiveAudioInputDevices: () => void | Promise<void>;
   onStartLiveAudioInput: () => void | Promise<void>;
   onStopLiveAudioInput: () => void | Promise<void>;
+  onImportMedia: () => void | Promise<void>;
   onLaunch: (layerId: number, fadeMs: number) => void | Promise<void>;
   onTake: (layerId: number, fadeMs: number) => void | Promise<void>;
   onStop: (layerId: number, fadeMs: number) => void | Promise<void>;
@@ -243,7 +244,17 @@ export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
             : props.liveAudioInputStatus.last_error ?? "Live bands can drive Node Graph Audio sources."}</small>
         </div>
       </div>
-      <Show when={props.layers.length > 0} fallback={<span class="emptyState">Import media to populate the clip grid.</span>}>
+      <Show
+        when={props.layers.length > 0}
+        fallback={
+          <div class="emptyState emptyStateAction">
+            <span>Import video or still images to populate the clip grid.</span>
+            <button class="primary" onClick={() => void props.onImportMedia()}>
+              Import Media
+            </button>
+          </div>
+        }
+      >
         <div class="videoClipGrid">
           <For each={visibleLayers()}>
             {(layer, index) => {

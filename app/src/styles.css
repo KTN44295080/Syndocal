@@ -9984,6 +9984,21 @@ input[type="color"] {
   overflow: hidden;
 }
 
+.videoControlPanelMixer .emptyStateAction {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 10px;
+  min-height: 120px;
+  padding: 16px;
+  text-align: center;
+}
+
+.videoControlPanelMixer .emptyStateAction button {
+  min-height: 36px;
+  min-width: 132px;
+}
+
 .videoControlPanelMixer .liveAudioInputBar {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -16668,4 +16683,24 @@ h3 {
   .buttonLink {
     min-height: 28px;
   }
+}
+
+/* The VJ desk is a dedicated live surface. Keep lighting desks out of its viewport. */
+.layoutControl.controlModeMixer {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.layoutControl.controlModeMixer .liveControlPanel,
+.layoutControl.controlModeMixer .controlStagePanel,
+.layoutControl.controlModeMixer .faders,
+.layoutControl.controlModeMixer .output {
+  display: none;
+}
+
+.layoutControl.controlModeMixer .videoControlPanel {
+  grid-column: 1;
+  grid-row: 1;
+  width: 100%;
+  height: 100%;
 }

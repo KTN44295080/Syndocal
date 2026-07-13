@@ -10651,6 +10651,7 @@ export default function App() {
             onRefreshLiveAudioInputDevices: refreshLiveAudioInputDevices,
             onStartLiveAudioInput: startLiveAudioInput,
             onStopLiveAudioInput: stopLiveAudioInput,
+            onImportMedia: importMediaFiles,
             onLaunch: launchVideoClipFromGrid,
             onTake: takeVideoClipFromGrid,
             onStop: stopVideoClipFromGrid,

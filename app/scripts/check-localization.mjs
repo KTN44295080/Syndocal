@@ -49,7 +49,7 @@ for (const operatorText of [
   "Remote",
   "Live Edit",
   "Timeline",
-  "Mixer",
+  "VJ Desk",
   "Cues",
   "Playback",
   "Attributes",

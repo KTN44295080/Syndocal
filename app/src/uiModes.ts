@@ -33,7 +33,7 @@ export const setupSubTabsForArea = (area: SetupArea) => setupSubTabs.filter((tab
 export const controlModes: { id: ControlMode; label: string; description: string }[] = [
   { id: "edit", label: "Live Edit", description: "Fixture attributes, visual controls, and presets" },
   { id: "live", label: "Timeline", description: "Cue playback, timeline, and blackout controls" },
-  { id: "mixer", label: "Mixer", description: "Video layers, compositions, and outputs" },
+  { id: "mixer", label: "VJ Desk", description: "Clip launch, preview/program mixing, layers, and outputs" },
 ];
 
 export const controlCategories: { id: ControlCategory; label: string }[] = [
