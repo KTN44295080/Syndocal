@@ -1052,6 +1052,12 @@ export default function App() {
         viewportPatchedFixture(2, "Save", 9, 0, -2),
         viewportPatchedFixture(3, "Output", 17, 4, -2),
       ],
+      active_fade: {
+        cue_id: 1,
+        progress: 0.42,
+        remaining_ms: 580,
+        paused: false,
+      },
       submasters: [{ group_id: "front", label: "front", level: 1 }],
       video: {
         ...current.video,

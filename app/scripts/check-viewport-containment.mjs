@@ -606,6 +606,14 @@ async function measure(client, label) {
       controlModeTabCount: document.querySelectorAll('.controlModeTabs button').length,
       visibleLiveControlPanelCount: visibleCount('.liveControlPanel'),
       liveControlPanelHeight: Math.round(document.querySelector('.liveControlPanel')?.getBoundingClientRect().height ?? 0),
+      visibleLiveFadeMeterCount: visibleCount('.liveControlPanel > .liveFadeMeter'),
+      liveFadeMeterGridRow: getComputedStyle(document.querySelector('.liveControlPanel > .liveFadeMeter') ?? document.body).gridRowStart,
+      liveMasterGridRow: getComputedStyle(document.querySelector('.liveControlPanel > .liveMasterGrid') ?? document.body).gridRowStart,
+      liveFadeAboveMaster: (() => {
+        const fade = document.querySelector('.liveControlPanel > .liveFadeMeter')?.getBoundingClientRect();
+        const master = document.querySelector('.liveControlPanel > .liveMasterGrid')?.getBoundingClientRect();
+        return Boolean(fade && master && fade.bottom <= master.top + 1);
+      })(),
       visibleControlStagePanelCount: visibleCount('.controlStagePanel'),
       visibleControlStageCount: visibleCount('.controlStage'),
       controlStageWidth: Math.round(document.querySelector('.controlStage')?.getBoundingClientRect().width ?? 0),
@@ -738,6 +746,10 @@ async function measure(client, label) {
       visibleVideoProgramPreviewCount: visibleCount('.videoMixerProgramPane .videoPreview'),
       visibleVideoProgramRefreshCount: [...document.querySelectorAll('.videoMixerProgramPane button')]
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'refresh').length,
+      visibleVideoProgramRefreshEnabledCount: [...document.querySelectorAll('.videoMixerProgramPane button')]
+        .filter((button) =>
+          (button.textContent || '').trim().toLowerCase() === 'refresh' && !button.disabled
+        ).length,
       visibleVideoMasterControlCount: visibleCount('.videoMasterControls'),
       visibleVideoMasterFaderCount: visibleCount('.videoMasterFader input[type="range"]'),
       visibleVideoClipGridCount: visibleCount('.videoClipGridPanel'),
@@ -1065,6 +1077,12 @@ function hasExpectedControlModeSurface(result) {
   }
   if (result.label.startsWith("control-live-")) {
     if (result.liveControlPanelHeight < 330 || result.liveControlPanelHeight > 342) return false;
+    if (
+      result.visibleLiveFadeMeterCount !== 1 ||
+      result.liveFadeMeterGridRow !== "5" ||
+      result.liveMasterGridRow !== "6" ||
+      !result.liveFadeAboveMaster
+    ) return false;
     if (result.label.startsWith("control-live-playback-")) {
       return (
         result.visibleTimelineDeskTabCount === 4 &&
@@ -1123,6 +1141,7 @@ function hasExpectedControlModeSurface(result) {
       result.visibleVideoMixerLayerPaneCount === 1 &&
       result.visibleVideoProgramPreviewCount === 1 &&
       result.visibleVideoProgramRefreshCount === 1 &&
+      result.visibleVideoProgramRefreshEnabledCount === 1 &&
       result.visibleVideoMasterControlCount > 0 &&
       result.visibleVideoMasterFaderCount > 0 &&
       result.visibleVideoClipGridCount > 0 &&

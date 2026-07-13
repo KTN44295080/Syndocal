@@ -59,7 +59,12 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
           </div>
           <div class="videoMixerPaneActions">
             <span>PROGRAM</span>
-            <button onClick={() => void props.previewDiagnostics.onRenderPreview()}>Refresh</button>
+            <button
+              disabled={props.layerCount === 0}
+              onClick={() => void props.previewDiagnostics.onRenderPreview()}
+            >
+              Refresh
+            </button>
           </div>
         </header>
         <VideoPreviewImagePanel {...props.previewImage} />
