@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     collections::{BTreeSet, HashMap, HashSet},
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -20,15 +21,16 @@ use protocol::{
     set_video_output_mapping_field_value, ActiveFadeSummary, AttributeControl, AttributeResolution,
     AttributeValueSummary, AudioAnalysisSummary, AudioSpectrumBand, AudioSpectrumPoint,
     AudioSpectrumSource, AutomationId, AutomationInterpolation, AutomationKeyframeSummary,
-    ClockSnapshot, ClockSource, CompositionId, CompositionSummary, CueFixtureTarget, CueId,
-    CueIfcbTiming, CueListId, CueListSummary, CueNodeGraphTarget, CuePaletteTarget, CuePartSummary,
-    CueSummary, DmxMergeMode, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol,
-    DmxOutputRouteTelemetry, DmxUniversePreview, EffectBlendMode, EffectId, EffectKind,
-    EffectSummary, EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId,
-    FixtureId, FixtureLimits, FixtureProfileSummary, LfoEffectRequest, LfoShape, NodeGraphId,
-    NodeGraphNodeKind, NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId,
-    PatchFixtureRequest, PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest,
-    ProgrammerSnapshot, ProgrammerValueSummary, ReferencePaletteSummary, Rotation3, StageMapConfig,
+    ClockSnapshot, ClockSource, ColorEffectAlgorithm, ColorEffectColor, ColorEffectInterpolation,
+    ColorEffectRequest, CompositionId, CompositionSummary, CueFixtureTarget, CueId, CueIfcbTiming,
+    CueListId, CueListSummary, CueNodeGraphTarget, CuePaletteTarget, CuePartSummary, CueSummary,
+    DmxMergeMode, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, DmxOutputRouteTelemetry,
+    DmxUniversePreview, EffectBlendMode, EffectId, EffectKind, EffectSummary, EngineSnapshot,
+    EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId, FixtureId, FixtureLimits,
+    FixtureProfileSummary, LfoEffectRequest, LfoShape, NodeGraphId, NodeGraphNodeKind,
+    NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId, PatchFixtureRequest,
+    PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot,
+    ProgrammerValueSummary, ReferencePaletteSummary, Rotation3, StageMapConfig,
     StageMapPresetSummary, StageObjectId, StageObjectSummary, SubmasterSummary,
     TimelineAutomationSummary, TimelineCueEventSummary, TimelineEventId, TimelineSnapshot,
     TimelineTrackKind, TimelineVideoAutomationSummary, Transform2D, Vec3,
@@ -280,6 +282,13 @@ pub enum EngineCommand {
         effect_id: EffectId,
         request: PositionWaveEffectRequest,
     },
+    AddColorEffect {
+        effect_id: EffectId,
+        request: ColorEffectRequest,
+        enabled: bool,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     UpdateLfoEffect {
         effect_id: EffectId,
         request: LfoEffectRequest,
@@ -287,6 +296,12 @@ pub enum EngineCommand {
     UpdatePositionWaveEffect {
         effect_id: EffectId,
         request: PositionWaveEffectRequest,
+    },
+    UpdateColorEffect {
+        effect_id: EffectId,
+        request: ColorEffectRequest,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
     },
     SetEffectEnabled {
         effect_id: EffectId,
@@ -641,8 +656,10 @@ impl EngineCommand {
                 | EngineCommand::SetGroupSubmaster { .. }
                 | EngineCommand::AddLfoEffect { .. }
                 | EngineCommand::AddPositionWaveEffect { .. }
+                | EngineCommand::AddColorEffect { .. }
                 | EngineCommand::UpdateLfoEffect { .. }
                 | EngineCommand::UpdatePositionWaveEffect { .. }
+                | EngineCommand::UpdateColorEffect { .. }
                 | EngineCommand::SetEffectEnabled { .. }
                 | EngineCommand::SetEffectVideoTargetPosition { .. }
                 | EngineCommand::MoveEffect { .. }
@@ -958,6 +975,44 @@ impl EngineHandle {
         }
     }
 
+    pub fn add_color_effect(
+        &self,
+        effect_id: EffectId,
+        request: ColorEffectRequest,
+        enabled: bool,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::AddColorEffect {
+            effect_id,
+            request,
+            enabled,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Color effect add acknowledgement failed: {error}"))?
+    }
+
+    pub fn update_color_effect(
+        &self,
+        effect_id: EffectId,
+        request: ColorEffectRequest,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::UpdateColorEffect {
+            effect_id,
+            request,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Color effect update acknowledgement failed: {error}"))?
+    }
+
     pub fn bootstrap_vj_show(
         &self,
         layers: Vec<(VideoLayerId, String, VideoSourceSummary)>,
@@ -1206,8 +1261,10 @@ struct RuntimeFixture {
     profile: FixtureProfileSummary,
     mode_index: usize,
     limits: FixtureLimits,
+    color_binding: Option<RuntimeColorBinding>,
 }
 
+#[derive(Clone)]
 struct RuntimeEffect {
     id: EffectId,
     kind: RuntimeEffectKind,
@@ -1220,9 +1277,117 @@ struct RuntimeNodeGraph {
     created_at: Instant,
 }
 
+#[derive(Clone)]
 enum RuntimeEffectKind {
     Lfo(LfoEffectRequest),
     PositionWave(PositionWaveEffectRequest),
+    Color(RuntimeColorEffect),
+}
+
+#[derive(Clone)]
+struct RuntimeColorEffect {
+    request: ColorEffectRequest,
+    targets: Vec<RuntimeColorTarget>,
+    target_indices: HashMap<FixtureId, usize>,
+}
+
+#[derive(Clone)]
+struct RuntimeColorTarget {
+    fixture_id: FixtureId,
+    phase_offset: f32,
+    cached: Cell<Option<RuntimeColorEvaluation>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RuntimeColorEvaluation {
+    at: Instant,
+    rgb: ColorEffectColor,
+    rgbw: [u16; 4],
+    cmy: [u16; 3],
+    hsv: [u16; 3],
+}
+
+#[derive(Clone)]
+struct RuntimeColorBinding {
+    outputs: HashMap<String, RuntimeColorOutput>,
+    conversions: RuntimeColorConversionFlags,
+}
+
+#[derive(Clone, Copy, Default)]
+struct RuntimeColorConversionFlags {
+    rgbw: bool,
+    cmy: bool,
+    hsv: bool,
+}
+
+#[derive(Clone)]
+enum RuntimeColorOutput {
+    Red { extract_white: bool },
+    Green { extract_white: bool },
+    Blue { extract_white: bool },
+    White,
+    Cyan,
+    Magenta,
+    Yellow,
+    Hue,
+    Saturation,
+    Value,
+    Zero,
+    OpenWheel(u16),
+    Wheel(Vec<RuntimeColorWheelSlot>),
+}
+
+impl RuntimeColorBinding {
+    fn new(outputs: HashMap<String, RuntimeColorOutput>) -> Self {
+        let mut conversions = RuntimeColorConversionFlags::default();
+        for output in outputs.values() {
+            match output {
+                RuntimeColorOutput::Red {
+                    extract_white: true,
+                }
+                | RuntimeColorOutput::Green {
+                    extract_white: true,
+                }
+                | RuntimeColorOutput::Blue {
+                    extract_white: true,
+                }
+                | RuntimeColorOutput::White => conversions.rgbw = true,
+                RuntimeColorOutput::Cyan
+                | RuntimeColorOutput::Magenta
+                | RuntimeColorOutput::Yellow => conversions.cmy = true,
+                RuntimeColorOutput::Hue
+                | RuntimeColorOutput::Saturation
+                | RuntimeColorOutput::Value => conversions.hsv = true,
+                RuntimeColorOutput::Red {
+                    extract_white: false,
+                }
+                | RuntimeColorOutput::Green {
+                    extract_white: false,
+                }
+                | RuntimeColorOutput::Blue {
+                    extract_white: false,
+                }
+                | RuntimeColorOutput::Zero
+                | RuntimeColorOutput::OpenWheel(_)
+                | RuntimeColorOutput::Wheel(_) => {}
+            }
+        }
+        Self {
+            outputs,
+            conversions,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct RuntimeColorWheelSlot {
+    identity: String,
+    dmx_from: u16,
+    dmx_to: u16,
+    dmx_value: u16,
+    color: ColorEffectColor,
+    oklab: [f32; 3],
+    neutral: bool,
 }
 
 #[derive(Clone)]
@@ -1328,11 +1493,24 @@ struct PendingCommandAck {
 #[derive(Clone)]
 enum PendingCommandRollback {
     ClearBootstrappedVjShow,
+    RestoreColorEffects {
+        effects: Vec<RuntimeEffect>,
+        last_error: Option<String>,
+    },
     RestoreExclusiveVideoTake {
         video_layers: Vec<RuntimeVideoLayer>,
         video_layer_fades: Vec<RuntimeVideoLayerFade>,
         last_error: Option<String>,
     },
+}
+
+impl PendingCommandRollback {
+    fn restores_last_error(&self) -> bool {
+        matches!(
+            self,
+            Self::RestoreColorEffects { .. } | Self::RestoreExclusiveVideoTake { .. }
+        )
+    }
 }
 
 #[derive(Clone)]
@@ -1992,6 +2170,15 @@ impl EngineRuntime {
                         created_at: now,
                     })
                 }
+                RuntimeEffectKind::Color(runtime) => {
+                    let runtime = self.resolve_color_effect_request(runtime.request).ok()?;
+                    Some(RuntimeEffect {
+                        id: effect.id,
+                        kind: RuntimeEffectKind::Color(runtime),
+                        enabled: effect.enabled,
+                        created_at: now,
+                    })
+                }
             })
             .collect();
     }
@@ -2120,7 +2307,10 @@ impl EngineRuntime {
             let resets_telemetry = matches!(queued_command.command, EngineCommand::ResetTelemetry);
             let publication_barrier = matches!(
                 queued_command.command,
-                EngineCommand::BootstrapVjShow { .. } | EngineCommand::ExclusiveVideoTake { .. }
+                EngineCommand::BootstrapVjShow { .. }
+                    | EngineCommand::ExclusiveVideoTake { .. }
+                    | EngineCommand::AddColorEffect { .. }
+                    | EngineCommand::UpdateColorEffect { .. }
             );
             if queued_command.command.requests_low_latency_dmx_tick() {
                 self.low_latency_dmx_tick_request_count =
@@ -2195,13 +2385,19 @@ impl EngineRuntime {
                 self.highlighted_fixtures.remove(&fixture_id);
                 self.soloed_fixtures.remove(&fixture_id);
                 self.parked_fixture_values.remove(&fixture_id);
+                let color_binding = profile
+                    .dmx_modes
+                    .get(mode_index)
+                    .and_then(|mode| compile_runtime_color_binding(&mode.controls));
                 self.fixtures.push(RuntimeFixture {
                     id: fixture_id,
                     request,
                     profile,
                     mode_index,
                     limits: FixtureLimits::default(),
+                    color_binding,
                 });
+                self.rebuild_color_effect_targets();
                 self.last_error = None;
             }
             EngineCommand::RemoveFixture(fixture_id) => {
@@ -2443,6 +2639,7 @@ impl EngineRuntime {
                     .find(|fixture| fixture.id == fixture_id)
                 {
                     fixture.request.group_ids = group_ids;
+                    self.rebuild_color_effect_targets();
                     self.last_error = None;
                 } else {
                     self.last_error = Some(format!("Fixture {fixture_id} was not found"));
@@ -2753,6 +2950,45 @@ impl EngineRuntime {
                 });
                 self.last_error = None;
             }
+            EngineCommand::AddColorEffect {
+                effect_id,
+                request,
+                enabled,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreColorEffects {
+                    effects: self.effects.clone(),
+                    last_error: previous_last_error.clone(),
+                };
+                let expired = Instant::now() > expires_at;
+                let result = if expired {
+                    Err("Color effect add expired before engine execution".to_string())
+                } else if self.effects.iter().any(|effect| effect.id == effect_id) {
+                    Err(format!("Effect {effect_id} already exists"))
+                } else {
+                    self.resolve_color_effect_request(request).map(|runtime| {
+                        self.effects.push(RuntimeEffect {
+                            id: effect_id,
+                            kind: RuntimeEffectKind::Color(runtime),
+                            enabled,
+                            created_at: Instant::now(),
+                        });
+                    })
+                };
+                self.last_error = if expired {
+                    previous_last_error
+                } else {
+                    result.as_ref().err().cloned()
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error: "Engine snapshot was busy; Color effect add was rolled back",
+                });
+            }
             EngineCommand::UpdateLfoEffect { effect_id, request } => {
                 let request = match self.resolve_lfo_effect_request(request) {
                     Ok(request) => request,
@@ -2793,6 +3029,46 @@ impl EngineRuntime {
                     self.last_error = Some(format!("Effect {effect_id} was not found"));
                 }
             }
+            EngineCommand::UpdateColorEffect {
+                effect_id,
+                request,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreColorEffects {
+                    effects: self.effects.clone(),
+                    last_error: previous_last_error.clone(),
+                };
+                let expired = Instant::now() > expires_at;
+                let result = if expired {
+                    Err("Color effect update expired before engine execution".to_string())
+                } else {
+                    self.resolve_color_effect_request(request)
+                        .and_then(|runtime| {
+                            let effect = self
+                                .effects
+                                .iter_mut()
+                                .find(|effect| effect.id == effect_id)
+                                .ok_or_else(|| format!("Effect {effect_id} was not found"))?;
+                            effect.kind = RuntimeEffectKind::Color(runtime);
+                            effect.created_at = Instant::now();
+                            Ok(())
+                        })
+                };
+                self.last_error = if expired {
+                    previous_last_error
+                } else {
+                    result.as_ref().err().cloned()
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Color effect update was rolled back",
+                });
+            }
             EngineCommand::SetEffectEnabled { effect_id, enabled } => {
                 if let Some(effect) = self
                     .effects
@@ -2830,6 +3106,12 @@ impl EngineRuntime {
                 let video_targets = match &mut effect.kind {
                     RuntimeEffectKind::Lfo(request) => &mut request.video_targets,
                     RuntimeEffectKind::PositionWave(request) => &mut request.video_targets,
+                    RuntimeEffectKind::Color(_) => {
+                        self.last_error = Some(format!(
+                            "Color effect {effect_id} cannot target video layers"
+                        ));
+                        return;
+                    }
                 };
                 let mut updated = false;
                 for target in video_targets.iter_mut() {
@@ -4462,16 +4744,21 @@ impl EngineRuntime {
             true
         };
         if !published {
+            let restores_last_error = pending
+                .iter()
+                .any(|pending| pending.result.is_ok() && pending.rollback.restores_last_error());
             for pending in pending.iter().rev() {
                 if pending.result.is_ok() {
                     self.rollback_pending_command(pending.rollback.clone());
                 }
             }
-            self.last_error = pending
-                .iter()
-                .rev()
-                .find(|pending| pending.result.is_ok())
-                .map(|pending| pending.publication_error.to_string());
+            if !restores_last_error {
+                self.last_error = pending
+                    .iter()
+                    .rev()
+                    .find(|pending| pending.result.is_ok())
+                    .map(|pending| pending.publication_error.to_string());
+            }
         }
         for pending in pending {
             let result = if pending.result.is_ok() && !published {
@@ -4490,6 +4777,13 @@ impl EngineRuntime {
                 self.video_layer_fades.clear();
                 self.video_outputs.clear();
                 self.video_output_fades.clear();
+            }
+            PendingCommandRollback::RestoreColorEffects {
+                effects,
+                last_error,
+            } => {
+                self.effects = effects;
+                self.last_error = last_error;
             }
             PendingCommandRollback::RestoreExclusiveVideoTake {
                 video_layers,
@@ -4553,7 +4847,13 @@ impl EngineRuntime {
                     || !request.target_group_ids.is_empty()
                     || !request.video_targets.is_empty()
             }
+            RuntimeEffectKind::Color(runtime) => {
+                runtime.request.fixture_ids.retain(|id| *id != fixture_id);
+                !runtime.request.fixture_ids.is_empty()
+                    || !runtime.request.target_group_ids.is_empty()
+            }
         });
+        self.rebuild_color_effect_targets();
         self.sanitize_node_graph_references();
         self.clear_empty_active_fade();
         self.last_error = None;
@@ -4595,6 +4895,7 @@ impl EngineRuntime {
                     || !request.target_group_ids.is_empty()
                     || !request.video_targets.is_empty()
             }
+            RuntimeEffectKind::Color(_) => true,
         });
         self.sanitize_node_graph_references();
         self.clear_empty_active_fade();
@@ -5427,6 +5728,36 @@ impl EngineRuntime {
         Ok(request)
     }
 
+    fn resolve_color_effect_request(
+        &self,
+        mut request: ColorEffectRequest,
+    ) -> Result<RuntimeColorEffect, String> {
+        validate_runtime_color_effect_request(&request)?;
+        request.fixture_ids = self.normalize_effect_fixture_ids(request.fixture_ids)?;
+        request.target_group_ids = normalize_runtime_group_ids(request.target_group_ids)?;
+        for group_id in &request.target_group_ids {
+            if self.fixture_ids_in_group(group_id).is_empty() {
+                return Err(format!(
+                    "Group '{group_id}' was not found or has no fixtures"
+                ));
+            }
+        }
+        runtime_color_effect_from_request(request, &self.fixtures)
+    }
+
+    fn rebuild_color_effect_targets(&mut self) {
+        let fixtures = &self.fixtures;
+        self.effects.retain_mut(|effect| {
+            let RuntimeEffectKind::Color(runtime) = &mut effect.kind else {
+                return true;
+            };
+            let (targets, target_indices) = runtime_color_targets(&runtime.request, fixtures);
+            runtime.targets = targets;
+            runtime.target_indices = target_indices;
+            !runtime.targets.is_empty() || !runtime.request.target_group_ids.is_empty()
+        });
+    }
+
     fn resolve_effect_light_targets(
         &self,
         fixture_ids: &mut Vec<FixtureId>,
@@ -5580,26 +5911,53 @@ impl EngineRuntime {
         let mut value = base_value;
         let clock = self.clock.snapshot(now);
         for effect in &self.effects {
-            if !effect.enabled || !effect_targets_fixture_attribute(effect, fixture, attribute) {
+            if !effect.enabled {
                 continue;
             }
-            let (effect_value, blend_mode) = match &effect.kind {
-                RuntimeEffectKind::Lfo(request) => (
-                    evaluate_lfo_effect(request, effect.created_at, now, &clock),
-                    &request.blend_mode,
-                ),
-                RuntimeEffectKind::PositionWave(request) => (
-                    evaluate_position_wave_effect(
-                        request,
-                        fixture.request.position,
+            match &effect.kind {
+                RuntimeEffectKind::Color(runtime) => {
+                    let Some(binding) = fixture.color_binding.as_ref() else {
+                        continue;
+                    };
+                    if let Some(next) = evaluate_runtime_color_attribute(
+                        runtime,
+                        binding,
+                        fixture.id,
+                        attribute,
+                        value,
+                        effect.id,
                         effect.created_at,
                         now,
                         &clock,
-                    ),
-                    &request.blend_mode,
-                ),
-            };
-            value = blend_effect_value(value, effect_value, blend_mode);
+                    ) {
+                        value = next;
+                    }
+                }
+                RuntimeEffectKind::Lfo(request) => {
+                    if effect_targets_fixture_attribute(effect, fixture, attribute) {
+                        value = blend_effect_value(
+                            value,
+                            evaluate_lfo_effect(request, effect.created_at, now, &clock),
+                            &request.blend_mode,
+                        );
+                    }
+                }
+                RuntimeEffectKind::PositionWave(request) => {
+                    if effect_targets_fixture_attribute(effect, fixture, attribute) {
+                        value = blend_effect_value(
+                            value,
+                            evaluate_position_wave_effect(
+                                request,
+                                fixture.request.position,
+                                effect.created_at,
+                                now,
+                                &clock,
+                            ),
+                            &request.blend_mode,
+                        );
+                    }
+                }
+            }
         }
         for graph in &self.node_graphs {
             if !graph.summary.enabled {
@@ -6688,6 +7046,7 @@ impl EngineRuntime {
                         apply_video_effect_param(state, &target.param, value, &request.blend_mode);
                     }
                 }
+                RuntimeEffectKind::Color(_) => {}
             }
         }
         for graph in &self.node_graphs {
@@ -7065,6 +7424,7 @@ fn cue_summary(cue: &RuntimeCue) -> CueSummary {
 }
 
 fn runtime_fixture_from_snapshot(fixture: &PatchedFixtureSummary) -> RuntimeFixture {
+    let color_binding = compile_runtime_color_binding(&fixture.controls);
     RuntimeFixture {
         id: fixture.id,
         request: PatchFixtureRequest {
@@ -7092,6 +7452,7 @@ fn runtime_fixture_from_snapshot(fixture: &PatchedFixtureSummary) -> RuntimeFixt
         },
         mode_index: 0,
         limits: normalized_fixture_limits(fixture.limits),
+        color_binding,
     }
 }
 
@@ -8217,6 +8578,7 @@ fn effect_targets_fixture_attribute(
                     fixture,
                 )
         }
+        RuntimeEffectKind::Color(_) => false,
     }
 }
 
@@ -8552,6 +8914,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             speed: None,
             wavelength: None,
             enabled: effect.enabled,
+            color: None,
         },
         RuntimeEffectKind::PositionWave(request) => EffectSummary {
             id: effect.id,
@@ -8573,6 +8936,29 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             speed: Some(request.speed),
             wavelength: Some(request.wavelength),
             enabled: effect.enabled,
+            color: None,
+        },
+        RuntimeEffectKind::Color(runtime) => EffectSummary {
+            id: effect.id,
+            label: runtime.request.label.clone(),
+            effect_type: EffectKind::Color,
+            fixture_ids: runtime.request.fixture_ids.clone(),
+            target_group_ids: runtime.request.target_group_ids.clone(),
+            attribute: "Color".to_string(),
+            video_targets: Vec::new(),
+            shape: LfoShape::Saw,
+            period_ms: Some(runtime.request.period_ms),
+            clock_sync: runtime.request.clock_sync,
+            low: 0,
+            high: u16::MAX,
+            phase: runtime.request.phase,
+            blend_mode: runtime.request.blend_mode.clone(),
+            origin: None,
+            direction: None,
+            speed: None,
+            wavelength: None,
+            enabled: effect.enabled,
+            color: Some(runtime.request.clone()),
         },
     }
 }
@@ -8610,6 +8996,11 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
             phase: effect.phase,
             blend_mode: effect.blend_mode.clone(),
         }),
+        EffectKind::Color => RuntimeEffectKind::Color(RuntimeColorEffect {
+            request: effect.color.clone()?,
+            targets: Vec::new(),
+            target_indices: HashMap::new(),
+        }),
     };
     Some(RuntimeEffect {
         id: effect.id,
@@ -8617,6 +9008,899 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
         enabled: effect.enabled,
         created_at: now,
     })
+}
+
+fn validate_runtime_color_effect_request(request: &ColorEffectRequest) -> Result<(), String> {
+    if request.label.trim().is_empty() {
+        return Err("Color effect label is required".to_string());
+    }
+    if request.fixture_ids.is_empty() && request.target_group_ids.is_empty() {
+        return Err("Color effect must target at least one fixture or group".to_string());
+    }
+    if !(2..=8).contains(&request.stops.len()) {
+        return Err("Color effect requires between 2 and 8 stops".to_string());
+    }
+    let mut previous = None;
+    for stop in &request.stops {
+        if !stop.position.is_finite() || !(0.0..=1.0).contains(&stop.position) {
+            return Err("Color effect stop positions must be finite and within 0..1".to_string());
+        }
+        if previous.is_some_and(|previous| stop.position <= previous) {
+            return Err("Color effect stop positions must be strictly increasing".to_string());
+        }
+        previous = Some(stop.position);
+    }
+    if request.period_ms < 10 {
+        return Err("Color effect period must be at least 10 ms".to_string());
+    }
+    if let Some(clock_sync) = request.clock_sync {
+        if !clock_sync.beats.is_finite() || clock_sync.beats <= 0.0 {
+            return Err(
+                "Color effect clock sync beats must be finite and greater than 0".to_string(),
+            );
+        }
+    }
+    if !request.phase.is_finite() || !request.fixture_spread.is_finite() {
+        return Err("Color effect phase and fixture spread must be finite".to_string());
+    }
+    if !(0.0..=1.0).contains(&request.fixture_spread) {
+        return Err("Color effect fixture spread must be within 0..1".to_string());
+    }
+    Ok(())
+}
+
+fn runtime_color_effect_from_request(
+    request: ColorEffectRequest,
+    fixtures: &[RuntimeFixture],
+) -> Result<RuntimeColorEffect, String> {
+    let (targets, target_indices) = runtime_color_targets(&request, fixtures);
+    if targets.is_empty() {
+        return Err("Color effect targets expose no supported color controls".to_string());
+    }
+    Ok(RuntimeColorEffect {
+        request,
+        targets,
+        target_indices,
+    })
+}
+
+fn runtime_color_targets(
+    request: &ColorEffectRequest,
+    fixtures: &[RuntimeFixture],
+) -> (Vec<RuntimeColorTarget>, HashMap<FixtureId, usize>) {
+    let mut fixture_ids = Vec::new();
+    let mut seen = HashSet::new();
+    for fixture_id in &request.fixture_ids {
+        if fixtures
+            .iter()
+            .any(|fixture| fixture.id == *fixture_id && fixture.color_binding.is_some())
+            && seen.insert(*fixture_id)
+        {
+            fixture_ids.push(*fixture_id);
+        }
+    }
+    for group_id in &request.target_group_ids {
+        for fixture in fixtures {
+            if fixture.color_binding.is_some()
+                && fixture
+                    .request
+                    .group_ids
+                    .iter()
+                    .any(|fixture_group| group_matches(fixture_group, group_id))
+                && seen.insert(fixture.id)
+            {
+                fixture_ids.push(fixture.id);
+            }
+        }
+    }
+    let count = fixture_ids.len().max(1) as f32;
+    let targets = fixture_ids
+        .into_iter()
+        .enumerate()
+        .map(|(index, fixture_id)| RuntimeColorTarget {
+            fixture_id,
+            phase_offset: request.fixture_spread * index as f32 / count,
+            cached: Cell::new(None),
+        })
+        .collect::<Vec<_>>();
+    let target_indices = targets
+        .iter()
+        .enumerate()
+        .map(|(index, target)| (target.fixture_id, index))
+        .collect();
+    (targets, target_indices)
+}
+
+fn compile_runtime_color_binding(controls: &[AttributeControl]) -> Option<RuntimeColorBinding> {
+    let red = runtime_color_attribute(
+        controls,
+        &[
+            "colorred",
+            "colourred",
+            "red",
+            "coloraddr",
+            "colouraddr",
+            "colorrgbred",
+        ],
+    );
+    let green = runtime_color_attribute(
+        controls,
+        &[
+            "colorgreen",
+            "colourgreen",
+            "green",
+            "coloraddg",
+            "colouraddg",
+            "colorrgbgreen",
+        ],
+    );
+    let blue = runtime_color_attribute(
+        controls,
+        &[
+            "colorblue",
+            "colourblue",
+            "blue",
+            "coloraddb",
+            "colouraddb",
+            "colorrgbblue",
+        ],
+    );
+    if let (Some(red), Some(green), Some(blue)) = (red, green, blue) {
+        let white = runtime_color_attribute(
+            controls,
+            &[
+                "coloraddw",
+                "colouraddw",
+                "colorwhite",
+                "colourwhite",
+                "white",
+            ],
+        );
+        let mut outputs = HashMap::new();
+        let extract_white = white.is_some();
+        outputs.insert(red, RuntimeColorOutput::Red { extract_white });
+        outputs.insert(green, RuntimeColorOutput::Green { extract_white });
+        outputs.insert(blue, RuntimeColorOutput::Blue { extract_white });
+        if let Some(white) = white {
+            outputs.insert(white, RuntimeColorOutput::White);
+        }
+        insert_runtime_color_zero_outputs(controls, &mut outputs);
+        insert_runtime_color_open_wheels(controls, &mut outputs);
+        return Some(RuntimeColorBinding::new(outputs));
+    }
+
+    let cyan = runtime_color_attribute(
+        controls,
+        &[
+            "colorsubc",
+            "coloursubc",
+            "colorcyan",
+            "colourcyan",
+            "cyan",
+            "colorrgbcyan",
+        ],
+    );
+    let magenta = runtime_color_attribute(
+        controls,
+        &[
+            "colorsubm",
+            "coloursubm",
+            "colormagenta",
+            "colourmagenta",
+            "magenta",
+            "colorrgbmagenta",
+        ],
+    );
+    let yellow = runtime_color_attribute(
+        controls,
+        &[
+            "colorsuby",
+            "coloursuby",
+            "coloryellow",
+            "colouryellow",
+            "yellow",
+            "colorrgbyellow",
+        ],
+    );
+    if let (Some(cyan), Some(magenta), Some(yellow)) = (cyan, magenta, yellow) {
+        let mut outputs = HashMap::new();
+        outputs.insert(cyan, RuntimeColorOutput::Cyan);
+        outputs.insert(magenta, RuntimeColorOutput::Magenta);
+        outputs.insert(yellow, RuntimeColorOutput::Yellow);
+        insert_runtime_color_zero_outputs(controls, &mut outputs);
+        insert_runtime_color_open_wheels(controls, &mut outputs);
+        return Some(RuntimeColorBinding::new(outputs));
+    }
+
+    let hue = runtime_color_attribute(
+        controls,
+        &[
+            "colorhsvhue",
+            "colourhsvhue",
+            "colorhsbhue",
+            "colourhsbhue",
+            "colorhue",
+            "colourhue",
+            "hue",
+            "hsbhue",
+        ],
+    );
+    let saturation = runtime_color_attribute(
+        controls,
+        &[
+            "colorhsvsaturation",
+            "colourhsvsaturation",
+            "colorhsbsaturation",
+            "colourhsbsaturation",
+            "colorsaturation",
+            "coloursaturation",
+            "saturation",
+            "hsbsaturation",
+        ],
+    );
+    let value = runtime_color_attribute(
+        controls,
+        &[
+            "colorhsvvalue",
+            "colourhsvvalue",
+            "colorhsbbrightness",
+            "colourhsbbrightness",
+            "colorbrightness",
+            "colourbrightness",
+            "value",
+            "brightness",
+            "hsbbrightness",
+        ],
+    );
+    if let (Some(hue), Some(saturation), Some(value)) = (hue, saturation, value) {
+        let mut outputs = HashMap::new();
+        outputs.insert(hue, RuntimeColorOutput::Hue);
+        outputs.insert(saturation, RuntimeColorOutput::Saturation);
+        outputs.insert(value, RuntimeColorOutput::Value);
+        insert_runtime_color_zero_outputs(controls, &mut outputs);
+        insert_runtime_color_open_wheels(controls, &mut outputs);
+        return Some(RuntimeColorBinding::new(outputs));
+    }
+
+    let (attribute, slots, distinct_count) = controls
+        .iter()
+        .filter_map(|control| {
+            let slots = runtime_color_wheel_slots(control);
+            let distinct_count = runtime_color_wheel_distinct_count(&slots);
+            (distinct_count >= 2).then(|| (control.attribute.clone(), slots, distinct_count))
+        })
+        .max_by_key(|(_, _, distinct_count)| *distinct_count)?;
+    debug_assert!(distinct_count >= 2);
+    let mut outputs = HashMap::from([(attribute, RuntimeColorOutput::Wheel(slots))]);
+    insert_runtime_color_open_wheels(controls, &mut outputs);
+    Some(RuntimeColorBinding::new(outputs))
+}
+
+fn runtime_color_attribute(controls: &[AttributeControl], aliases: &[&str]) -> Option<String> {
+    aliases.iter().find_map(|alias| {
+        controls
+            .iter()
+            .find(|control| normalized_attribute_name(&control.attribute) == *alias)
+            .map(|control| control.attribute.clone())
+    })
+}
+
+fn insert_runtime_color_zero_outputs(
+    controls: &[AttributeControl],
+    outputs: &mut HashMap<String, RuntimeColorOutput>,
+) {
+    for control in controls {
+        if outputs.contains_key(&control.attribute) {
+            continue;
+        }
+        let normalized = normalized_attribute_name(&control.attribute);
+        if matches!(
+            normalized.as_str(),
+            "coloramber"
+                | "colouramber"
+                | "amber"
+                | "coloradda"
+                | "colouradda"
+                | "colorlime"
+                | "colourlime"
+                | "lime"
+                | "coloraddl"
+                | "colouraddl"
+                | "coloraddc"
+                | "colouraddc"
+                | "coloraddm"
+                | "colouraddm"
+                | "coloraddy"
+                | "colouraddy"
+                | "coloraddry"
+                | "colouraddry"
+                | "coloraddgy"
+                | "colouraddgy"
+                | "coloraddgc"
+                | "colouraddgc"
+                | "coloraddbc"
+                | "colouraddbc"
+                | "coloraddbm"
+                | "colouraddbm"
+                | "coloraddrm"
+                | "colouraddrm"
+                | "coloruv"
+                | "colouruv"
+                | "uv"
+                | "ultraviolet"
+                | "coloradduv"
+                | "colouradduv"
+                | "warmwhite"
+                | "coldwhite"
+                | "coolwhite"
+                | "coloraddww"
+                | "colouraddww"
+                | "coloraddcw"
+                | "colouraddcw"
+        ) {
+            outputs.insert(control.attribute.clone(), RuntimeColorOutput::Zero);
+        }
+    }
+}
+
+fn insert_runtime_color_open_wheels(
+    controls: &[AttributeControl],
+    outputs: &mut HashMap<String, RuntimeColorOutput>,
+) {
+    for control in controls {
+        if outputs.contains_key(&control.attribute) {
+            continue;
+        }
+        let slots = runtime_color_wheel_slots(control);
+        if let Some(open) = slots.iter().find(|slot| slot.neutral) {
+            outputs.insert(
+                control.attribute.clone(),
+                RuntimeColorOutput::OpenWheel(open.dmx_value),
+            );
+        }
+    }
+}
+
+fn runtime_color_wheel_slots(control: &AttributeControl) -> Vec<RuntimeColorWheelSlot> {
+    let control_name = normalized_attribute_name(&control.attribute);
+    if !control_name.contains("color") && !control_name.contains("colour") {
+        return Vec::new();
+    }
+    let mut slots = Vec::<RuntimeColorWheelSlot>::new();
+    for function in &control.functions {
+        let parsed_color = function
+            .wheel_slot_color
+            .as_deref()
+            .and_then(parse_runtime_color_hex);
+        let Some(color) = parsed_color.or_else(|| runtime_named_color(function, control)) else {
+            continue;
+        };
+        let identity = runtime_color_wheel_slot_identity(function, color);
+        let neutral = runtime_color_slot_has_neutral_name(function)
+            || parsed_color.is_some_and(runtime_color_is_near_white);
+        let dmx_value = function
+            .dmx_from
+            .saturating_add(function.dmx_to.saturating_sub(function.dmx_from) / 2);
+        slots.push(RuntimeColorWheelSlot {
+            identity,
+            dmx_from: function.dmx_from,
+            dmx_to: function.dmx_to,
+            dmx_value,
+            color,
+            oklab: color_to_oklab(color),
+            neutral,
+        });
+    }
+    let neutral_identities = slots
+        .iter()
+        .filter(|slot| slot.neutral)
+        .map(|slot| slot.identity.clone())
+        .collect::<HashSet<_>>();
+    for slot in &mut slots {
+        slot.neutral = neutral_identities.contains(&slot.identity);
+    }
+    slots
+}
+
+fn runtime_color_wheel_distinct_count(slots: &[RuntimeColorWheelSlot]) -> usize {
+    slots
+        .iter()
+        .map(|slot| slot.identity.as_str())
+        .collect::<HashSet<_>>()
+        .len()
+}
+
+fn runtime_color_wheel_slot_identity(
+    function: &protocol::ChannelFunctionSummary,
+    color: ColorEffectColor,
+) -> String {
+    if let Some(reference) = function
+        .wheel_slot
+        .as_deref()
+        .map(str::trim)
+        .filter(|reference| !reference.is_empty())
+    {
+        return format!("reference:{}", reference.to_ascii_lowercase());
+    }
+    if let Some(name) = function
+        .wheel_slot_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        return format!("name:{}", name.to_ascii_lowercase());
+    }
+    format!(
+        "color:{:04x}:{:04x}:{:04x}",
+        color.red, color.green, color.blue
+    )
+}
+
+fn runtime_color_slot_has_neutral_name(function: &protocol::ChannelFunctionSummary) -> bool {
+    [
+        Some(function.name.as_str()),
+        function.wheel_slot.as_deref(),
+        function.wheel_slot_name.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .flat_map(|value| value.split(|character: char| !character.is_ascii_alphanumeric()))
+    .any(|token| {
+        matches!(
+            token.to_ascii_lowercase().as_str(),
+            "open" | "clear" | "white"
+        )
+    })
+}
+
+fn runtime_color_is_near_white(color: ColorEffectColor) -> bool {
+    const NEAR_WHITE_MIN: u16 = 60_000;
+    color.red >= NEAR_WHITE_MIN && color.green >= NEAR_WHITE_MIN && color.blue >= NEAR_WHITE_MIN
+}
+
+fn parse_runtime_color_hex(value: &str) -> Option<ColorEffectColor> {
+    let value = value.trim().strip_prefix('#')?;
+    if value.len() != 6 {
+        return None;
+    }
+    Some(ColorEffectColor {
+        red: u16::from_str_radix(&value[0..2], 16).ok()? * 257,
+        green: u16::from_str_radix(&value[2..4], 16).ok()? * 257,
+        blue: u16::from_str_radix(&value[4..6], 16).ok()? * 257,
+    })
+}
+
+fn runtime_named_color(
+    function: &protocol::ChannelFunctionSummary,
+    control: &AttributeControl,
+) -> Option<ColorEffectColor> {
+    let text = format!(
+        "{} {} {} {} {} {}",
+        function.name,
+        function.attribute,
+        function.wheel_slot.as_deref().unwrap_or_default(),
+        function.wheel_slot_name.as_deref().unwrap_or_default(),
+        function.parent_function.as_deref().unwrap_or_default(),
+        control.channel_name,
+    )
+    .to_ascii_lowercase();
+    let tokens = text
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .collect::<HashSet<_>>();
+    let rgb8 = if tokens.contains("open") || tokens.contains("clear") || tokens.contains("white") {
+        [255, 255, 255]
+    } else if tokens.contains("red") {
+        [255, 0, 0]
+    } else if tokens.contains("green") {
+        [0, 255, 0]
+    } else if tokens.contains("blue") {
+        [0, 0, 255]
+    } else if tokens.contains("cyan") || tokens.contains("aqua") {
+        [0, 255, 255]
+    } else if tokens.contains("magenta") || tokens.contains("pink") {
+        [255, 0, 255]
+    } else if tokens.contains("yellow") {
+        [255, 255, 0]
+    } else if tokens.contains("amber") || tokens.contains("orange") {
+        [255, 145, 0]
+    } else if tokens.contains("purple") || tokens.contains("violet") || tokens.contains("uv") {
+        [145, 80, 255]
+    } else {
+        return None;
+    };
+    Some(ColorEffectColor {
+        red: rgb8[0] * 257,
+        green: rgb8[1] * 257,
+        blue: rgb8[2] * 257,
+    })
+}
+
+fn evaluate_runtime_color_attribute(
+    runtime: &RuntimeColorEffect,
+    binding: &RuntimeColorBinding,
+    fixture_id: FixtureId,
+    attribute: &str,
+    base_value: u16,
+    effect_id: EffectId,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+) -> Option<u16> {
+    let output = binding.outputs.get(attribute)?;
+    let target = runtime
+        .target_indices
+        .get(&fixture_id)
+        .and_then(|index| runtime.targets.get(*index))?;
+    let evaluated = target
+        .cached
+        .get()
+        .filter(|cached| cached.at == now)
+        .unwrap_or_else(|| {
+            let rgb = evaluate_color_effect(
+                &runtime.request,
+                target.phase_offset,
+                effect_id,
+                fixture_id,
+                created_at,
+                now,
+                clock,
+            );
+            let rgbw = if binding.conversions.rgbw {
+                let white = rgb.red.min(rgb.green).min(rgb.blue);
+                [
+                    rgb.red.saturating_sub(white),
+                    rgb.green.saturating_sub(white),
+                    rgb.blue.saturating_sub(white),
+                    white,
+                ]
+            } else {
+                [0; 4]
+            };
+            let cmy = if binding.conversions.cmy {
+                [
+                    u16::MAX - rgb.red,
+                    u16::MAX - rgb.green,
+                    u16::MAX - rgb.blue,
+                ]
+            } else {
+                [0; 3]
+            };
+            let hsv = if binding.conversions.hsv {
+                color_to_hsv_u16(rgb)
+            } else {
+                [0; 3]
+            };
+            let evaluated = RuntimeColorEvaluation {
+                at: now,
+                rgb,
+                rgbw,
+                cmy,
+                hsv,
+            };
+            target.cached.set(Some(evaluated));
+            evaluated
+        });
+    let component = match output {
+        RuntimeColorOutput::Red { extract_white } => {
+            if *extract_white {
+                evaluated.rgbw[0]
+            } else {
+                evaluated.rgb.red
+            }
+        }
+        RuntimeColorOutput::Green { extract_white } => {
+            if *extract_white {
+                evaluated.rgbw[1]
+            } else {
+                evaluated.rgb.green
+            }
+        }
+        RuntimeColorOutput::Blue { extract_white } => {
+            if *extract_white {
+                evaluated.rgbw[2]
+            } else {
+                evaluated.rgb.blue
+            }
+        }
+        RuntimeColorOutput::White => evaluated.rgbw[3],
+        RuntimeColorOutput::Cyan => evaluated.cmy[0],
+        RuntimeColorOutput::Magenta => evaluated.cmy[1],
+        RuntimeColorOutput::Yellow => evaluated.cmy[2],
+        RuntimeColorOutput::Hue => evaluated.hsv[0],
+        RuntimeColorOutput::Saturation => evaluated.hsv[1],
+        RuntimeColorOutput::Value => evaluated.hsv[2],
+        RuntimeColorOutput::Zero => 0,
+        RuntimeColorOutput::OpenWheel(value) => return Some(*value),
+        RuntimeColorOutput::Wheel(slots) => {
+            let target_color = match runtime.request.blend_mode {
+                EffectBlendMode::Override => evaluated.rgb,
+                EffectBlendMode::Add | EffectBlendMode::Multiply => {
+                    let base_color = slots
+                        .iter()
+                        .find(|slot| (slot.dmx_from..=slot.dmx_to).contains(&base_value))
+                        .map(|slot| slot.color)?;
+                    blend_runtime_color(base_color, evaluated.rgb, &runtime.request.blend_mode)
+                }
+            };
+            return nearest_runtime_color_wheel_value(slots, target_color).or(Some(base_value));
+        }
+    };
+    Some(blend_effect_value(
+        base_value,
+        component,
+        &runtime.request.blend_mode,
+    ))
+}
+
+fn evaluate_color_effect(
+    request: &ColorEffectRequest,
+    fixture_phase: f32,
+    effect_id: EffectId,
+    fixture_id: FixtureId,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+) -> ColorEffectColor {
+    let time_phase = request
+        .clock_sync
+        .map(|clock_sync| {
+            (clock.beat_counter as f64 + clock.beat_phase as f64)
+                / clock_sync.beats.max(0.000_1) as f64
+        })
+        .unwrap_or_else(|| {
+            now.saturating_duration_since(created_at).as_secs_f64()
+                / (request.period_ms.max(10) as f64 / 1000.0)
+        });
+    let absolute_phase = time_phase + request.phase as f64 + fixture_phase as f64;
+    match request.algorithm {
+        ColorEffectAlgorithm::Cycle => {
+            evaluate_cycle_color(request, absolute_phase.rem_euclid(1.0) as f32)
+        }
+        ColorEffectAlgorithm::Bounce => {
+            let phase = absolute_phase.rem_euclid(1.0) as f32;
+            let position = if phase <= 0.5 {
+                phase * 2.0
+            } else {
+                (1.0 - phase) * 2.0
+            };
+            evaluate_linear_stop_color(request, position)
+        }
+        ColorEffectAlgorithm::Sequence => {
+            let phase = absolute_phase.rem_euclid(1.0) as f32;
+            request
+                .stops
+                .iter()
+                .rev()
+                .find(|stop| stop.position <= phase)
+                .unwrap_or_else(|| &request.stops[request.stops.len() - 1])
+                .color
+        }
+        ColorEffectAlgorithm::Random => {
+            let step = (absolute_phase * request.stops.len() as f64).floor() as i64;
+            let random =
+                splitmix64(effect_id ^ fixture_id.rotate_left(21) ^ (step as u64).rotate_left(43));
+            request.stops[random as usize % request.stops.len()].color
+        }
+    }
+}
+
+fn evaluate_cycle_color(request: &ColorEffectRequest, position: f32) -> ColorEffectColor {
+    let stops = &request.stops;
+    for pair in stops.windows(2) {
+        if position >= pair[0].position && position < pair[1].position {
+            let amount = (position - pair[0].position)
+                / (pair[1].position - pair[0].position).max(f32::EPSILON);
+            return interpolate_color_effect_color(
+                pair[0].color,
+                pair[1].color,
+                amount,
+                request.interpolation,
+            );
+        }
+    }
+    let first = &stops[0];
+    let last = &stops[stops.len() - 1];
+    let (from_position, to_position, sample_position) = if position < first.position {
+        (last.position - 1.0, first.position, position)
+    } else {
+        (last.position, first.position + 1.0, position)
+    };
+    let distance = to_position - from_position;
+    if distance <= f32::EPSILON {
+        return first.color;
+    }
+    interpolate_color_effect_color(
+        last.color,
+        first.color,
+        (sample_position - from_position) / distance,
+        request.interpolation,
+    )
+}
+
+fn evaluate_linear_stop_color(request: &ColorEffectRequest, position: f32) -> ColorEffectColor {
+    let stops = &request.stops;
+    if position <= stops[0].position {
+        return stops[0].color;
+    }
+    for pair in stops.windows(2) {
+        if position <= pair[1].position {
+            let amount = (position - pair[0].position)
+                / (pair[1].position - pair[0].position).max(f32::EPSILON);
+            return interpolate_color_effect_color(
+                pair[0].color,
+                pair[1].color,
+                amount,
+                request.interpolation,
+            );
+        }
+    }
+    stops[stops.len() - 1].color
+}
+
+fn interpolate_color_effect_color(
+    from: ColorEffectColor,
+    to: ColorEffectColor,
+    amount: f32,
+    interpolation: ColorEffectInterpolation,
+) -> ColorEffectColor {
+    let amount = amount.clamp(0.0, 1.0);
+    if matches!(interpolation, ColorEffectInterpolation::Rgb) {
+        return ColorEffectColor {
+            red: interpolate_u16(from.red, to.red, amount),
+            green: interpolate_u16(from.green, to.green, amount),
+            blue: interpolate_u16(from.blue, to.blue, amount),
+        };
+    }
+    let (mut from_hue, from_saturation, from_value) = color_to_hsv(from);
+    let (mut to_hue, to_saturation, to_value) = color_to_hsv(to);
+    if from_saturation <= f32::EPSILON {
+        from_hue = to_hue;
+    }
+    if to_saturation <= f32::EPSILON {
+        to_hue = from_hue;
+    }
+    let mut delta = (to_hue - from_hue + 540.0).rem_euclid(360.0) - 180.0;
+    if (delta + 180.0).abs() <= f32::EPSILON {
+        delta = 180.0;
+    }
+    if matches!(interpolation, ColorEffectInterpolation::HsvLongest) {
+        if delta.abs() <= f32::EPSILON {
+            if from_saturation > f32::EPSILON && to_saturation > f32::EPSILON {
+                delta = 360.0;
+            }
+        } else {
+            delta = if delta > 0.0 {
+                delta - 360.0
+            } else {
+                delta + 360.0
+            };
+        }
+    }
+    hsv_to_color(
+        (from_hue + delta * amount).rem_euclid(360.0),
+        from_saturation + (to_saturation - from_saturation) * amount,
+        from_value + (to_value - from_value) * amount,
+    )
+}
+
+fn color_to_hsv(color: ColorEffectColor) -> (f32, f32, f32) {
+    let red = color.red as f32 / u16::MAX as f32;
+    let green = color.green as f32 / u16::MAX as f32;
+    let blue = color.blue as f32 / u16::MAX as f32;
+    let max = red.max(green).max(blue);
+    let min = red.min(green).min(blue);
+    let delta = max - min;
+    let hue = if delta <= f32::EPSILON {
+        0.0
+    } else if max == red {
+        60.0 * ((green - blue) / delta).rem_euclid(6.0)
+    } else if max == green {
+        60.0 * ((blue - red) / delta + 2.0)
+    } else {
+        60.0 * ((red - green) / delta + 4.0)
+    };
+    let saturation = if max <= f32::EPSILON {
+        0.0
+    } else {
+        delta / max
+    };
+    (hue.rem_euclid(360.0), saturation, max)
+}
+
+fn color_to_hsv_u16(color: ColorEffectColor) -> [u16; 3] {
+    let (hue, saturation, value) = color_to_hsv(color);
+    [
+        ((hue / 360.0) * u16::MAX as f32).round() as u16,
+        (saturation * u16::MAX as f32).round() as u16,
+        (value * u16::MAX as f32).round() as u16,
+    ]
+}
+
+fn hsv_to_color(hue: f32, saturation: f32, value: f32) -> ColorEffectColor {
+    let saturation = saturation.clamp(0.0, 1.0);
+    let value = value.clamp(0.0, 1.0);
+    let chroma = value * saturation;
+    let section = hue.rem_euclid(360.0) / 60.0;
+    let x = chroma * (1.0 - (section.rem_euclid(2.0) - 1.0).abs());
+    let (red, green, blue) = match section.floor() as u8 {
+        0 => (chroma, x, 0.0),
+        1 => (x, chroma, 0.0),
+        2 => (0.0, chroma, x),
+        3 => (0.0, x, chroma),
+        4 => (x, 0.0, chroma),
+        _ => (chroma, 0.0, x),
+    };
+    let offset = value - chroma;
+    ColorEffectColor {
+        red: ((red + offset) * u16::MAX as f32).round() as u16,
+        green: ((green + offset) * u16::MAX as f32).round() as u16,
+        blue: ((blue + offset) * u16::MAX as f32).round() as u16,
+    }
+}
+
+fn blend_runtime_color(
+    base: ColorEffectColor,
+    effect: ColorEffectColor,
+    blend_mode: &EffectBlendMode,
+) -> ColorEffectColor {
+    ColorEffectColor {
+        red: blend_effect_value(base.red, effect.red, blend_mode),
+        green: blend_effect_value(base.green, effect.green, blend_mode),
+        blue: blend_effect_value(base.blue, effect.blue, blend_mode),
+    }
+}
+
+fn nearest_runtime_color_wheel_value(
+    slots: &[RuntimeColorWheelSlot],
+    color: ColorEffectColor,
+) -> Option<u16> {
+    let target = color_to_oklab(color);
+    slots
+        .iter()
+        .min_by(|left, right| {
+            oklab_distance_squared(left.oklab, target)
+                .total_cmp(&oklab_distance_squared(right.oklab, target))
+                .then_with(|| left.dmx_value.cmp(&right.dmx_value))
+        })
+        .map(|slot| slot.dmx_value)
+}
+
+fn color_to_oklab(color: ColorEffectColor) -> [f32; 3] {
+    fn linear(value: u16) -> f32 {
+        let value = value as f32 / u16::MAX as f32;
+        if value <= 0.040_45 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    let red = linear(color.red);
+    let green = linear(color.green);
+    let blue = linear(color.blue);
+    let l = (0.412_221_46 * red + 0.536_332_55 * green + 0.051_445_995 * blue).cbrt();
+    let m = (0.211_903_5 * red + 0.680_699_5 * green + 0.107_396_96 * blue).cbrt();
+    let s = (0.088_302_46 * red + 0.281_718_85 * green + 0.629_978_7 * blue).cbrt();
+    [
+        0.210_454_26 * l + 0.793_617_8 * m - 0.004_072_047 * s,
+        1.977_998_5 * l - 2.428_592_2 * m + 0.450_593_7 * s,
+        0.025_904_037 * l + 0.782_771_77 * m - 0.808_675_77 * s,
+    ]
+}
+
+fn oklab_distance_squared(left: [f32; 3], right: [f32; 3]) -> f32 {
+    left.iter()
+        .zip(right)
+        .map(|(left, right)| (left - right).powi(2))
+        .sum()
+}
+
+fn splitmix64(mut value: u64) -> u64 {
+    value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    let mut mixed = value;
+    mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    mixed ^ (mixed >> 31)
 }
 
 fn dmx_preview_to_frame(preview: &[u8]) -> [u8; 512] {
@@ -11203,6 +12487,7 @@ mod tests {
                 speed: None,
                 wavelength: None,
                 enabled: false,
+                color: None,
             }],
             node_graphs: vec![sample_node_graph(48, 40)],
             output: DmxOutputConfig {
@@ -12091,6 +13376,7 @@ mod tests {
                     speed: None,
                     wavelength: None,
                     enabled: true,
+                    color: None,
                 },
                 EffectSummary {
                     id: 51,
@@ -12112,6 +13398,7 @@ mod tests {
                     speed: None,
                     wavelength: None,
                     enabled: true,
+                    color: None,
                 },
                 EffectSummary {
                     id: 52,
@@ -12133,6 +13420,7 @@ mod tests {
                     speed: None,
                     wavelength: None,
                     enabled: true,
+                    color: None,
                 },
             ],
             ..EngineSnapshot::default()
@@ -12290,6 +13578,7 @@ mod tests {
                     speed: None,
                     wavelength: None,
                     enabled: true,
+                    color: None,
                 },
                 EffectSummary {
                     id: 41,
@@ -12311,6 +13600,7 @@ mod tests {
                     speed: None,
                     wavelength: None,
                     enabled: true,
+                    color: None,
                 },
             ],
             ..EngineSnapshot::default()
@@ -24498,5 +25788,1138 @@ mod tests {
             .all(|preview| preview.values.len() == 512));
         assert_eq!(loaded.telemetry.queue_push_failure_count, 0);
         assert_eq!(loaded.telemetry.command_drain_limit_hit_count, 0);
+    }
+
+    fn test_color(red: u16, green: u16, blue: u16) -> ColorEffectColor {
+        ColorEffectColor { red, green, blue }
+    }
+
+    fn test_color_request(
+        fixture_ids: Vec<FixtureId>,
+        color: ColorEffectColor,
+    ) -> ColorEffectRequest {
+        ColorEffectRequest {
+            label: "Test Color".to_string(),
+            fixture_ids,
+            target_group_ids: Vec::new(),
+            stops: vec![
+                protocol::ColorEffectStop {
+                    position: 0.0,
+                    color,
+                },
+                protocol::ColorEffectStop {
+                    position: 1.0,
+                    color,
+                },
+            ],
+            algorithm: ColorEffectAlgorithm::Sequence,
+            interpolation: ColorEffectInterpolation::Rgb,
+            period_ms: 1_000,
+            clock_sync: None,
+            phase: 0.0,
+            fixture_spread: 0.0,
+            blend_mode: EffectBlendMode::Override,
+        }
+    }
+
+    fn test_color_control(attribute: &str, offset: u16) -> AttributeControl {
+        AttributeControl {
+            attribute: attribute.to_string(),
+            channel_name: attribute.to_string(),
+            geometry: None,
+            offsets: vec![offset],
+            resolution: AttributeResolution::EightBit,
+            default_value: 0,
+            functions: Vec::new(),
+        }
+    }
+
+    fn test_runtime_color_fixture(
+        id: FixtureId,
+        group_ids: Vec<String>,
+        controls: Vec<AttributeControl>,
+    ) -> RuntimeFixture {
+        let color_binding = compile_runtime_color_binding(&controls);
+        RuntimeFixture {
+            id,
+            request: PatchFixtureRequest {
+                profile_path: format!("memory://color-{id}.gdtf"),
+                mode_name: Some("Color".to_string()),
+                label: format!("Color {id}"),
+                universe: 0,
+                address: 1,
+                group_ids,
+                position: Vec3::default(),
+                rotation: Rotation3::default(),
+            },
+            profile: FixtureProfileSummary {
+                source_path: format!("memory://color-{id}.gdtf"),
+                manufacturer: "Syndocal".to_string(),
+                name: "Color Test".to_string(),
+                short_name: None,
+                fixture_type_id: None,
+                dmx_modes: vec![DmxModeSummary {
+                    name: "Color".to_string(),
+                    controls,
+                }],
+                geometries: Vec::new(),
+                warnings: Vec::new(),
+            },
+            mode_index: 0,
+            limits: FixtureLimits::default(),
+            color_binding,
+        }
+    }
+
+    fn evaluate_test_binding(
+        controls: Vec<AttributeControl>,
+        color: ColorEffectColor,
+        attribute: &str,
+        base: u16,
+        blend_mode: EffectBlendMode,
+    ) -> u16 {
+        let binding = compile_runtime_color_binding(&controls).expect("color binding");
+        let mut request = test_color_request(vec![1], color);
+        request.blend_mode = blend_mode;
+        let runtime = RuntimeColorEffect {
+            request,
+            targets: vec![RuntimeColorTarget {
+                fixture_id: 1,
+                phase_offset: 0.0,
+                cached: Cell::new(None),
+            }],
+            target_indices: HashMap::from([(1, 0)]),
+        };
+        let now = Instant::now();
+        evaluate_runtime_color_attribute(
+            &runtime,
+            &binding,
+            1,
+            attribute,
+            base,
+            10,
+            now,
+            now,
+            &ClockSnapshot::default(),
+        )
+        .unwrap_or(base)
+    }
+
+    #[test]
+    fn color_effect_validation_enforces_stop_and_timing_invariants() {
+        let valid = test_color_request(vec![1], test_color(u16::MAX, 0, 0));
+        assert!(validate_runtime_color_effect_request(&valid).is_ok());
+
+        let mut one_stop = valid.clone();
+        one_stop.stops.truncate(1);
+        assert!(validate_runtime_color_effect_request(&one_stop)
+            .unwrap_err()
+            .contains("between 2 and 8"));
+
+        let mut unordered = valid.clone();
+        unordered.stops[1].position = 0.0;
+        assert!(validate_runtime_color_effect_request(&unordered)
+            .unwrap_err()
+            .contains("strictly increasing"));
+
+        let mut invalid_clock = valid.clone();
+        invalid_clock.clock_sync = Some(protocol::EffectClockSync { beats: 0.0 });
+        assert!(validate_runtime_color_effect_request(&invalid_clock).is_err());
+
+        for fixture_spread in [-0.001, 1.001] {
+            let mut invalid_spread = valid.clone();
+            invalid_spread.fixture_spread = fixture_spread;
+            assert!(validate_runtime_color_effect_request(&invalid_spread)
+                .unwrap_err()
+                .contains("within 0..1"));
+        }
+    }
+
+    #[test]
+    fn color_effect_algorithms_are_distinct_and_random_is_deterministic() {
+        let mut request = test_color_request(vec![1], test_color(u16::MAX, 0, 0));
+        request.stops[1].color = test_color(0, u16::MAX, 0);
+        request.interpolation = ColorEffectInterpolation::Rgb;
+        let created_at = Instant::now();
+        let clock = ClockSnapshot::default();
+
+        request.algorithm = ColorEffectAlgorithm::Cycle;
+        let cycle = evaluate_color_effect(
+            &request,
+            0.0,
+            1,
+            1,
+            created_at,
+            created_at + Duration::from_millis(500),
+            &clock,
+        );
+        assert!((32_760..=32_775).contains(&cycle.red));
+        assert!((32_760..=32_775).contains(&cycle.green));
+
+        request.algorithm = ColorEffectAlgorithm::Bounce;
+        let bounce = evaluate_color_effect(
+            &request,
+            0.0,
+            1,
+            1,
+            created_at,
+            created_at + Duration::from_millis(250),
+            &clock,
+        );
+        assert_eq!(bounce, cycle);
+
+        request.algorithm = ColorEffectAlgorithm::Sequence;
+        request.stops[1].position = 0.5;
+        let sequence = evaluate_color_effect(
+            &request,
+            0.0,
+            1,
+            1,
+            created_at,
+            created_at + Duration::from_millis(750),
+            &clock,
+        );
+        assert_eq!(sequence, test_color(0, u16::MAX, 0));
+
+        request.stops = vec![
+            protocol::ColorEffectStop {
+                position: 0.2,
+                color: test_color(u16::MAX, 0, 0),
+            },
+            protocol::ColorEffectStop {
+                position: 0.7,
+                color: test_color(0, u16::MAX, 0),
+            },
+            protocol::ColorEffectStop {
+                position: 1.0,
+                color: test_color(0, 0, u16::MAX),
+            },
+        ];
+        let sequence_at = |millis| {
+            evaluate_color_effect(
+                &request,
+                0.0,
+                1,
+                1,
+                created_at,
+                created_at + Duration::from_millis(millis),
+                &clock,
+            )
+        };
+        assert_eq!(sequence_at(100), test_color(0, 0, u16::MAX));
+        assert_eq!(sequence_at(200), test_color(u16::MAX, 0, 0));
+        assert_eq!(sequence_at(699), test_color(u16::MAX, 0, 0));
+        assert_eq!(sequence_at(700), test_color(0, u16::MAX, 0));
+        assert_eq!(sequence_at(999), test_color(0, u16::MAX, 0));
+
+        request.stops = vec![
+            protocol::ColorEffectStop {
+                position: 0.0,
+                color: test_color(u16::MAX, 0, 0),
+            },
+            protocol::ColorEffectStop {
+                position: 1.0,
+                color: test_color(0, u16::MAX, 0),
+            },
+        ];
+        request.algorithm = ColorEffectAlgorithm::Random;
+        let first = evaluate_color_effect(
+            &request,
+            0.0,
+            19,
+            7,
+            created_at,
+            created_at + Duration::from_millis(750),
+            &clock,
+        );
+        let second = evaluate_color_effect(
+            &request,
+            0.0,
+            19,
+            7,
+            created_at,
+            created_at + Duration::from_millis(750),
+            &clock,
+        );
+        assert_eq!(first, second);
+        let distinct = (0..16)
+            .map(|step| {
+                let color = evaluate_color_effect(
+                    &request,
+                    0.0,
+                    19,
+                    7,
+                    created_at,
+                    created_at + Duration::from_millis(step * 500),
+                    &clock,
+                );
+                (color.red, color.green, color.blue)
+            })
+            .collect::<HashSet<_>>();
+        assert_eq!(distinct.len(), 2);
+    }
+
+    #[test]
+    fn color_effect_hsv_shortest_and_longest_take_opposite_hue_paths() {
+        let from = hsv_to_color(350.0, 1.0, 1.0);
+        let to = hsv_to_color(10.0, 1.0, 1.0);
+        let shortest =
+            interpolate_color_effect_color(from, to, 0.5, ColorEffectInterpolation::HsvShortest);
+        let longest =
+            interpolate_color_effect_color(from, to, 0.5, ColorEffectInterpolation::HsvLongest);
+
+        assert!(shortest.red > 65_000 && shortest.green < 1_000 && shortest.blue < 1_000);
+        assert!(longest.red < 1_000 && longest.green > 65_000 && longest.blue > 65_000);
+
+        let red = test_color(u16::MAX, 0, 0);
+        let full_turn =
+            interpolate_color_effect_color(red, red, 0.5, ColorEffectInterpolation::HsvLongest);
+        assert!(full_turn.red < 1_000 && full_turn.green > 65_000 && full_turn.blue > 65_000);
+    }
+
+    #[test]
+    fn color_binding_converts_rgbw_cmy_hsv_and_zeros_uncalibrated_emitters() {
+        let rgbw_controls = vec![
+            test_color_control("ColorAdd_R", 1),
+            test_color_control("ColorAdd_G", 2),
+            test_color_control("ColorAdd_B", 3),
+            test_color_control("ColorAdd_W", 4),
+            test_color_control("ColorAdd_A", 5),
+            test_color_control("ColorAdd_L", 6),
+            test_color_control("ColorAdd_UV", 7),
+            test_color_control("ColorAdd_RY", 8),
+        ];
+        let rgbw_binding = compile_runtime_color_binding(&rgbw_controls).unwrap();
+        assert!(rgbw_binding.conversions.rgbw);
+        assert!(!rgbw_binding.conversions.cmy);
+        assert!(!rgbw_binding.conversions.hsv);
+        let rgb_binding = compile_runtime_color_binding(&rgbw_controls[..3]).unwrap();
+        assert!(!rgb_binding.conversions.rgbw);
+        assert!(!rgb_binding.conversions.cmy);
+        assert!(!rgb_binding.conversions.hsv);
+        let warm = test_color(u16::MAX, 32_768, 32_768);
+        assert_eq!(
+            evaluate_test_binding(
+                rgbw_controls.clone(),
+                warm,
+                "ColorAdd_R",
+                0,
+                EffectBlendMode::Override,
+            ),
+            32_767
+        );
+        assert_eq!(
+            evaluate_test_binding(
+                rgbw_controls.clone(),
+                warm,
+                "ColorAdd_W",
+                0,
+                EffectBlendMode::Override,
+            ),
+            32_768
+        );
+        assert_eq!(
+            evaluate_test_binding(
+                rgbw_controls.clone(),
+                warm,
+                "ColorAdd_A",
+                12_345,
+                EffectBlendMode::Override,
+            ),
+            0
+        );
+        assert_eq!(
+            evaluate_test_binding(
+                rgbw_controls.clone(),
+                warm,
+                "ColorAdd_L",
+                12_345,
+                EffectBlendMode::Override,
+            ),
+            0
+        );
+        assert_eq!(
+            evaluate_test_binding(
+                rgbw_controls.clone(),
+                warm,
+                "ColorAdd_UV",
+                12_345,
+                EffectBlendMode::Override,
+            ),
+            0
+        );
+        assert_eq!(
+            evaluate_test_binding(
+                rgbw_controls,
+                warm,
+                "ColorAdd_RY",
+                12_345,
+                EffectBlendMode::Override,
+            ),
+            0
+        );
+
+        let cmy_controls = vec![
+            test_color_control("ColorSub_C", 1),
+            test_color_control("ColorSub_M", 2),
+            test_color_control("ColorSub_Y", 3),
+        ];
+        let cmy_binding = compile_runtime_color_binding(&cmy_controls).unwrap();
+        assert!(!cmy_binding.conversions.rgbw);
+        assert!(cmy_binding.conversions.cmy);
+        assert!(!cmy_binding.conversions.hsv);
+        let red = test_color(u16::MAX, 0, 0);
+        assert_eq!(
+            evaluate_test_binding(
+                cmy_controls.clone(),
+                red,
+                "ColorSub_C",
+                0,
+                EffectBlendMode::Override,
+            ),
+            0
+        );
+        assert_eq!(
+            evaluate_test_binding(
+                cmy_controls,
+                red,
+                "ColorSub_M",
+                0,
+                EffectBlendMode::Override,
+            ),
+            u16::MAX
+        );
+
+        let hsv_controls = vec![
+            test_color_control("ColorHSV_Hue", 1),
+            test_color_control("ColorHSV_Saturation", 2),
+            test_color_control("ColorHSV_Value", 3),
+        ];
+        let hsv_binding = compile_runtime_color_binding(&hsv_controls).unwrap();
+        assert!(!hsv_binding.conversions.rgbw);
+        assert!(!hsv_binding.conversions.cmy);
+        assert!(hsv_binding.conversions.hsv);
+        let green = test_color(0, u16::MAX, 0);
+        let hue = evaluate_test_binding(
+            hsv_controls.clone(),
+            green,
+            "ColorHSV_Hue",
+            0,
+            EffectBlendMode::Override,
+        );
+        assert!((21_840..=21_850).contains(&hue));
+        assert_eq!(
+            evaluate_test_binding(
+                hsv_controls,
+                green,
+                "ColorHSV_Saturation",
+                0,
+                EffectBlendMode::Override,
+            ),
+            u16::MAX
+        );
+
+        for controls in [
+            vec![
+                test_color_control("ColorRGB_Red", 1),
+                test_color_control("ColorRGB_Green", 2),
+                test_color_control("ColorRGB_Blue", 3),
+            ],
+            vec![
+                test_color_control("ColorRGB_Cyan", 1),
+                test_color_control("ColorRGB_Magenta", 2),
+                test_color_control("ColorRGB_Yellow", 3),
+            ],
+            vec![
+                test_color_control("HSB_Hue", 1),
+                test_color_control("HSB_Saturation", 2),
+                test_color_control("HSB_Brightness", 3),
+            ],
+        ] {
+            assert!(compile_runtime_color_binding(&controls).is_some());
+        }
+    }
+
+    #[test]
+    fn color_wheel_binding_uses_nearest_oklab_slot_and_relative_blend() {
+        let wheel = AttributeControl {
+            attribute: "Color1".to_string(),
+            channel_name: "Color Wheel".to_string(),
+            geometry: None,
+            offsets: vec![1],
+            resolution: AttributeResolution::EightBit,
+            default_value: 0,
+            functions: [
+                ("Red", 0, 99, "#ff0000"),
+                ("Green", 100, 199, "#00ff00"),
+                ("Blue", 200, 299, "#0000ff"),
+                ("Magenta", 300, 399, "#ff00ff"),
+            ]
+            .into_iter()
+            .map(
+                |(name, dmx_from, dmx_to, color)| protocol::ChannelFunctionSummary {
+                    name: name.to_string(),
+                    attribute: "Color1".to_string(),
+                    parent_function: None,
+                    dmx_from,
+                    dmx_to,
+                    physical_from: None,
+                    physical_to: None,
+                    wheel_slot: Some(format!("ColorWheel.{name}")),
+                    wheel_slot_name: Some(name.to_string()),
+                    wheel_slot_color: Some(color.to_string()),
+                    wheel_slot_media: None,
+                },
+            )
+            .collect(),
+        };
+        let wheel_binding = compile_runtime_color_binding(&[wheel.clone()]).unwrap();
+        assert!(!wheel_binding.conversions.rgbw);
+        assert!(!wheel_binding.conversions.cmy);
+        assert!(!wheel_binding.conversions.hsv);
+        assert_eq!(
+            evaluate_test_binding(
+                vec![wheel.clone()],
+                test_color(0, u16::MAX, 0),
+                "Color1",
+                0,
+                EffectBlendMode::Override,
+            ),
+            149
+        );
+        assert_eq!(
+            evaluate_test_binding(
+                vec![wheel.clone()],
+                test_color(0, 0, u16::MAX),
+                "Color1",
+                49,
+                EffectBlendMode::Add,
+            ),
+            349
+        );
+
+        let mut duplicate_wheel = wheel.clone();
+        let mut red_shake = duplicate_wheel.functions[0].clone();
+        red_shake.name = "Red Shake".to_string();
+        red_shake.dmx_from = 400;
+        red_shake.dmx_to = 499;
+        duplicate_wheel.functions.push(red_shake.clone());
+        let duplicate_slots = runtime_color_wheel_slots(&duplicate_wheel);
+        assert_eq!(duplicate_slots.len(), 5);
+        assert_eq!(runtime_color_wheel_distinct_count(&duplicate_slots), 4);
+        assert_eq!(
+            evaluate_test_binding(
+                vec![duplicate_wheel],
+                test_color(0, 0, u16::MAX),
+                "Color1",
+                449,
+                EffectBlendMode::Add,
+            ),
+            349
+        );
+
+        let mut single_physical_slot = wheel.clone();
+        single_physical_slot.functions = vec![wheel.functions[0].clone(), red_shake];
+        assert!(compile_runtime_color_binding(&[single_physical_slot]).is_none());
+
+        let mut duplicate_heavy = wheel.clone();
+        duplicate_heavy.functions.truncate(2);
+        for index in 0..3 {
+            let mut duplicate = duplicate_heavy.functions[index % 2].clone();
+            duplicate.name = format!("{} alternate {index}", duplicate.name);
+            duplicate.dmx_from = 500 + index as u16 * 100;
+            duplicate.dmx_to = duplicate.dmx_from + 99;
+            duplicate_heavy.functions.push(duplicate);
+        }
+        let mut three_distinct = wheel.clone();
+        three_distinct.attribute = "Color2".to_string();
+        three_distinct.channel_name = "Second Color Wheel".to_string();
+        three_distinct.functions.truncate(3);
+        let ranked = compile_runtime_color_binding(&[duplicate_heavy, three_distinct]).unwrap();
+        assert!(matches!(
+            ranked.outputs.get("Color2"),
+            Some(RuntimeColorOutput::Wheel(slots))
+                if runtime_color_wheel_distinct_count(slots) == 3
+        ));
+
+        let mut secondary_wheel = wheel.clone();
+        secondary_wheel.attribute = "Color2".to_string();
+        secondary_wheel.channel_name = "Second Color Wheel".to_string();
+        secondary_wheel.functions.truncate(1);
+        secondary_wheel.functions[0].name = "Open".to_string();
+        secondary_wheel.functions[0].wheel_slot_name = Some("Open".to_string());
+        secondary_wheel.functions[0].wheel_slot_color = None;
+        assert_eq!(
+            evaluate_test_binding(
+                vec![wheel.clone(), secondary_wheel],
+                test_color(0, u16::MAX, 0),
+                "Color2",
+                149,
+                EffectBlendMode::Override,
+            ),
+            49
+        );
+
+        let mut frost_wheel = wheel.clone();
+        frost_wheel.attribute = "Color2".to_string();
+        frost_wheel.channel_name = "Second Color Wheel".to_string();
+        frost_wheel.functions.truncate(1);
+        frost_wheel.functions[0].name = "Frost".to_string();
+        frost_wheel.functions[0].wheel_slot = Some("ColorWheel.Frost".to_string());
+        frost_wheel.functions[0].wheel_slot_name = Some("Frost".to_string());
+        frost_wheel.functions[0].wheel_slot_color = Some("#f8f7f6".to_string());
+        assert_eq!(
+            evaluate_test_binding(
+                vec![wheel.clone(), frost_wheel],
+                test_color(0, u16::MAX, 0),
+                "Color2",
+                149,
+                EffectBlendMode::Override,
+            ),
+            49
+        );
+
+        let mut red_only_wheel = wheel.clone();
+        red_only_wheel.attribute = "Color2".to_string();
+        red_only_wheel.channel_name = "Second Color Wheel".to_string();
+        red_only_wheel.functions.truncate(1);
+        assert_eq!(
+            evaluate_test_binding(
+                vec![wheel, red_only_wheel],
+                test_color(0, u16::MAX, 0),
+                "Color2",
+                12_345,
+                EffectBlendMode::Override,
+            ),
+            12_345
+        );
+    }
+
+    #[test]
+    fn color_fixture_spread_uses_supported_target_order_and_updates_groups() {
+        let controls = vec![
+            test_color_control("ColorRed", 1),
+            test_color_control("ColorGreen", 2),
+            test_color_control("ColorBlue", 3),
+        ];
+        let fixtures = vec![
+            test_runtime_color_fixture(2, vec!["Front".to_string()], controls.clone()),
+            test_runtime_color_fixture(1, vec!["Front".to_string()], controls),
+        ];
+        let mut request = test_color_request(Vec::new(), test_color(u16::MAX, 0, 0));
+        request.target_group_ids = vec!["Front".to_string()];
+        request.stops[1].color = test_color(0, u16::MAX, 0);
+        request.stops[1].position = 0.5;
+        request.fixture_spread = 1.0;
+        let runtime = runtime_color_effect_from_request(request, &fixtures).unwrap();
+
+        assert_eq!(runtime.targets[0].fixture_id, 2);
+        assert_eq!(runtime.targets[1].fixture_id, 1);
+        assert_eq!(runtime.targets[0].phase_offset, 0.0);
+        assert_eq!(runtime.targets[1].phase_offset, 0.5);
+        let now = Instant::now();
+        let first = evaluate_color_effect(
+            &runtime.request,
+            runtime.targets[0].phase_offset,
+            1,
+            2,
+            now,
+            now,
+            &ClockSnapshot::default(),
+        );
+        let second = evaluate_color_effect(
+            &runtime.request,
+            runtime.targets[1].phase_offset,
+            1,
+            1,
+            now,
+            now,
+            &ClockSnapshot::default(),
+        );
+        assert_eq!(first, test_color(u16::MAX, 0, 0));
+        assert_eq!(second, test_color(0, u16::MAX, 0));
+
+        let mut engine_runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine_runtime.fixtures = vec![
+            test_runtime_color_fixture(
+                2,
+                vec!["Front".to_string()],
+                vec![
+                    test_color_control("ColorRed", 1),
+                    test_color_control("ColorGreen", 2),
+                    test_color_control("ColorBlue", 3),
+                ],
+            ),
+            test_runtime_color_fixture(
+                1,
+                Vec::new(),
+                vec![
+                    test_color_control("ColorRed", 1),
+                    test_color_control("ColorGreen", 2),
+                    test_color_control("ColorBlue", 3),
+                ],
+            ),
+        ];
+        let effect = engine_runtime
+            .resolve_color_effect_request(runtime.request.clone())
+            .unwrap();
+        engine_runtime.effects.push(RuntimeEffect {
+            id: 1,
+            kind: RuntimeEffectKind::Color(effect),
+            enabled: true,
+            created_at: now,
+        });
+        assert!(matches!(
+            &engine_runtime.effects[0].kind,
+            RuntimeEffectKind::Color(effect) if effect.targets.len() == 1
+        ));
+        engine_runtime.apply_command(EngineCommand::SetFixtureGroups {
+            fixture_id: 1,
+            group_ids: vec!["Front".to_string()],
+        });
+        assert!(matches!(
+            &engine_runtime.effects[0].kind,
+            RuntimeEffectKind::Color(effect) if effect.targets.len() == 2
+                && effect.targets[1].fixture_id == 1
+        ));
+        engine_runtime.remove_fixture(2);
+        assert!(matches!(
+            &engine_runtime.effects[0].kind,
+            RuntimeEffectKind::Color(effect) if effect.targets.len() == 1
+                && effect.targets[0].fixture_id == 1
+        ));
+        engine_runtime.apply_command(EngineCommand::SetFixtureGroups {
+            fixture_id: 1,
+            group_ids: Vec::new(),
+        });
+        assert!(matches!(
+            &engine_runtime.effects[0].kind,
+            RuntimeEffectKind::Color(effect) if effect.targets.is_empty()
+                && effect.request.target_group_ids == ["Front"]
+        ));
+        engine_runtime.apply_command(EngineCommand::SetFixtureGroups {
+            fixture_id: 1,
+            group_ids: vec!["Front".to_string()],
+        });
+        assert!(matches!(
+            &engine_runtime.effects[0].kind,
+            RuntimeEffectKind::Color(effect) if effect.targets.len() == 1
+                && effect.targets[0].fixture_id == 1
+        ));
+
+        let mut removed_group_runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        removed_group_runtime
+            .fixtures
+            .push(test_runtime_color_fixture(
+                3,
+                vec!["Front".to_string()],
+                vec![
+                    test_color_control("ColorRed", 1),
+                    test_color_control("ColorGreen", 2),
+                    test_color_control("ColorBlue", 3),
+                ],
+            ));
+        let mut group_request = test_color_request(Vec::new(), test_color(u16::MAX, 0, 0));
+        group_request.target_group_ids = vec!["Front".to_string()];
+        let group_effect = removed_group_runtime
+            .resolve_color_effect_request(group_request)
+            .unwrap();
+        removed_group_runtime.effects.push(RuntimeEffect {
+            id: 2,
+            kind: RuntimeEffectKind::Color(group_effect),
+            enabled: true,
+            created_at: now,
+        });
+        removed_group_runtime.remove_fixture(3);
+        assert!(matches!(
+            &removed_group_runtime.effects[0].kind,
+            RuntimeEffectKind::Color(effect) if effect.targets.is_empty()
+                && effect.request.target_group_ids == ["Front"]
+        ));
+        removed_group_runtime
+            .fixtures
+            .push(test_runtime_color_fixture(
+                4,
+                vec!["Front".to_string()],
+                vec![
+                    test_color_control("ColorRed", 1),
+                    test_color_control("ColorGreen", 2),
+                    test_color_control("ColorBlue", 3),
+                ],
+            ));
+        removed_group_runtime.rebuild_color_effect_targets();
+        assert!(matches!(
+            &removed_group_runtime.effects[0].kind,
+            RuntimeEffectKind::Color(effect) if effect.targets.len() == 1
+                && effect.targets[0].fixture_id == 4
+        ));
+
+        let mixed = vec![
+            test_runtime_color_fixture(
+                1,
+                vec!["Mixed".to_string()],
+                vec![
+                    test_color_control("ColorRed", 1),
+                    test_color_control("ColorGreen", 2),
+                    test_color_control("ColorBlue", 3),
+                ],
+            ),
+            test_runtime_color_fixture(
+                2,
+                vec!["Mixed".to_string()],
+                vec![test_color_control("Dimmer", 1)],
+            ),
+        ];
+        let mut mixed_request = test_color_request(Vec::new(), test_color(u16::MAX, 0, 0));
+        mixed_request.target_group_ids = vec!["Mixed".to_string()];
+        let mixed_effect =
+            runtime_color_effect_from_request(mixed_request.clone(), &mixed).unwrap();
+        assert_eq!(mixed_effect.targets.len(), 1);
+        assert_eq!(mixed_effect.targets[0].fixture_id, 1);
+        assert!(runtime_color_effect_from_request(mixed_request, &mixed[1..]).is_err());
+    }
+
+    #[test]
+    fn color_effect_summary_survives_project_runtime_roundtrip() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        runtime.fixtures.push(test_runtime_color_fixture(
+            1,
+            Vec::new(),
+            vec![
+                test_color_control("ColorRed", 1),
+                test_color_control("ColorGreen", 2),
+                test_color_control("ColorBlue", 3),
+            ],
+        ));
+        let request = test_color_request(vec![1], test_color(1_000, 2_000, 3_000));
+        let effect = runtime
+            .resolve_color_effect_request(request.clone())
+            .unwrap();
+        runtime.effects.push(RuntimeEffect {
+            id: 9,
+            kind: RuntimeEffectKind::Color(effect),
+            enabled: false,
+            created_at: Instant::now(),
+        });
+        let snapshot = runtime.build_snapshot(0);
+        assert_eq!(snapshot.effects[0].color.as_ref(), Some(&request));
+
+        let mut loaded = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        loaded.load_project_snapshot(snapshot);
+        let roundtrip = loaded.build_snapshot(0);
+        assert_eq!(roundtrip.effects.len(), 1);
+        assert_eq!(roundtrip.effects[0].effect_type, EffectKind::Color);
+        assert_eq!(roundtrip.effects[0].color.as_ref(), Some(&request));
+        assert!(!roundtrip.effects[0].enabled);
+    }
+
+    #[test]
+    fn color_effect_with_mixed_group_survives_project_runtime_load() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let supported = test_runtime_color_fixture(
+            1,
+            vec!["Mixed".to_string()],
+            vec![
+                test_color_control("ColorRed", 1),
+                test_color_control("ColorGreen", 2),
+                test_color_control("ColorBlue", 3),
+            ],
+        );
+        let mut unsupported = test_runtime_color_fixture(
+            2,
+            vec!["Mixed".to_string()],
+            vec![test_color_control("Dimmer", 1)],
+        );
+        unsupported.request.address = 10;
+        runtime.fixtures = vec![supported, unsupported];
+        let mut request = test_color_request(Vec::new(), test_color(1_000, 2_000, 3_000));
+        request.target_group_ids = vec!["Mixed".to_string()];
+        let effect = runtime
+            .resolve_color_effect_request(request.clone())
+            .unwrap();
+        assert_eq!(effect.targets.len(), 1);
+        runtime.effects.push(RuntimeEffect {
+            id: 10,
+            kind: RuntimeEffectKind::Color(effect),
+            enabled: true,
+            created_at: Instant::now(),
+        });
+
+        let mut loaded = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        loaded.load_project_snapshot(runtime.build_snapshot(0));
+
+        assert_eq!(loaded.fixtures.len(), 2);
+        assert!(matches!(
+            &loaded.effects[0].kind,
+            RuntimeEffectKind::Color(runtime) if runtime.request == request
+                && runtime.targets.len() == 1
+                && runtime.targets[0].fixture_id == 1
+        ));
+    }
+
+    #[test]
+    fn color_effect_stack_order_obeys_existing_blend_semantics() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        runtime.fixtures.push(test_runtime_color_fixture(
+            1,
+            Vec::new(),
+            vec![
+                test_color_control("ColorRed", 1),
+                test_color_control("ColorGreen", 2),
+                test_color_control("ColorBlue", 3),
+            ],
+        ));
+        let first_request = test_color_request(vec![1], test_color(20_000, 0, 0));
+        let mut second_request = test_color_request(vec![1], test_color(1_000, 0, 0));
+        second_request.blend_mode = EffectBlendMode::Add;
+        let first = runtime.resolve_color_effect_request(first_request).unwrap();
+        let second = runtime
+            .resolve_color_effect_request(second_request)
+            .unwrap();
+        let now = Instant::now();
+        runtime.effects = vec![
+            RuntimeEffect {
+                id: 1,
+                kind: RuntimeEffectKind::Color(first.clone()),
+                enabled: true,
+                created_at: now,
+            },
+            RuntimeEffect {
+                id: 2,
+                kind: RuntimeEffectKind::Color(second.clone()),
+                enabled: true,
+                created_at: now,
+            },
+        ];
+        assert_eq!(
+            runtime.apply_effects(&runtime.fixtures[0], "ColorRed", 500, now),
+            21_000
+        );
+
+        runtime.effects.reverse();
+        assert_eq!(
+            runtime.apply_effects(&runtime.fixtures[0], "ColorRed", 500, now),
+            20_000
+        );
+    }
+
+    #[test]
+    fn color_effect_add_is_a_publication_barrier_and_rolls_back_when_busy() {
+        let controls = vec![
+            test_color_control("ColorRed", 1),
+            test_color_control("ColorGreen", 2),
+            test_color_control("ColorBlue", 3),
+        ];
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        runtime
+            .fixtures
+            .push(test_runtime_color_fixture(1, Vec::new(), controls.clone()));
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::AddColorEffect {
+            effect_id: 10,
+            request: test_color_request(vec![1], test_color(u16::MAX, 0, 0)),
+            enabled: false,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(receiver.recv().unwrap(), Ok(()));
+        assert_eq!(published.read().unwrap().effects.len(), 1);
+        assert!(!published.read().unwrap().effects[0].enabled);
+        let mut updated_request = test_color_request(vec![1], test_color(0, u16::MAX, 0));
+        updated_request.fixture_spread = 0.5;
+        let (update_ack, update_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::UpdateColorEffect {
+            effect_id: 10,
+            request: updated_request.clone(),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: update_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(update_receiver.recv().unwrap(), Ok(()));
+        assert_eq!(
+            published.read().unwrap().effects[0].color.as_ref(),
+            Some(&updated_request)
+        );
+
+        let mut busy = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        busy.fixtures
+            .push(test_runtime_color_fixture(1, Vec::new(), controls));
+        busy.last_error = Some("previous".to_string());
+        let busy_snapshot = RwLock::new(busy.build_snapshot(0));
+        let (busy_ack, busy_receiver) = mpsc::sync_channel(1);
+        busy.apply_command(EngineCommand::AddColorEffect {
+            effect_id: 11,
+            request: test_color_request(vec![1], test_color(0, u16::MAX, 0)),
+            enabled: true,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: busy_ack,
+        });
+        let guard = busy_snapshot.read().unwrap();
+        busy.publish_pending_command_acks(0, &busy_snapshot);
+        assert!(busy_receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("rolled back"));
+        assert!(busy.effects.is_empty());
+        assert_eq!(busy.last_error.as_deref(), Some("previous"));
+        drop(guard);
+
+        let mut expired = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        expired.fixtures.push(test_runtime_color_fixture(
+            1,
+            Vec::new(),
+            vec![
+                test_color_control("ColorRed", 1),
+                test_color_control("ColorGreen", 2),
+                test_color_control("ColorBlue", 3),
+            ],
+        ));
+        expired.last_error = Some("previous".to_string());
+        let expired_snapshot = RwLock::new(expired.build_snapshot(0));
+        let (expired_ack, expired_receiver) = mpsc::sync_channel(1);
+        expired.apply_command(EngineCommand::AddColorEffect {
+            effect_id: 12,
+            request: test_color_request(vec![1], test_color(0, 0, u16::MAX)),
+            enabled: true,
+            expires_at: Instant::now() - Duration::from_millis(1),
+            ack: expired_ack,
+        });
+        expired.publish_pending_command_acks(0, &expired_snapshot);
+        assert!(expired_receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("expired"));
+        assert!(expired.effects.is_empty());
+        assert_eq!(expired.last_error.as_deref(), Some("previous"));
+    }
+
+    #[test]
+    fn color_effect_handle_returns_only_after_snapshot_publication() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let fixture_id = engine.allocate_fixture_id();
+        let controls = vec![
+            test_color_control("ColorRed", 1),
+            test_color_control("ColorGreen", 2),
+            test_color_control("ColorBlue", 3),
+        ];
+        let fixture = test_runtime_color_fixture(fixture_id, Vec::new(), controls);
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id,
+                request: fixture.request,
+                profile: fixture.profile,
+            })
+            .unwrap();
+        for _ in 0..20 {
+            if engine.snapshot().fixtures.len() == 1 {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+        }
+        let effect_id = engine.allocate_effect_id();
+        engine
+            .add_color_effect(
+                effect_id,
+                test_color_request(vec![fixture_id], test_color(u16::MAX, 0, 0)),
+                true,
+            )
+            .unwrap();
+
+        let snapshot = engine.snapshot();
+        assert_eq!(snapshot.effects.len(), 1);
+        assert_eq!(snapshot.effects[0].id, effect_id);
+        assert_eq!(snapshot.effects[0].effect_type, EffectKind::Color);
+    }
+
+    #[test]
+    fn color_effect_large_stack_reuses_per_fixture_tick_evaluations() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let controls = vec![
+            test_color_control("ColorRed", 1),
+            test_color_control("ColorGreen", 2),
+            test_color_control("ColorBlue", 3),
+        ];
+        runtime.fixtures = (1..=200)
+            .map(|id| test_runtime_color_fixture(id, Vec::new(), controls.clone()))
+            .collect();
+        let fixture_ids = (1..=200).collect::<Vec<_>>();
+        let now = Instant::now();
+        for id in 1..=64 {
+            let mut request = test_color_request(
+                fixture_ids.clone(),
+                test_color((id * 977) as u16, (id * 431) as u16, (id * 211) as u16),
+            );
+            request.algorithm = ColorEffectAlgorithm::Cycle;
+            request.fixture_spread = 1.0;
+            let effect = runtime.resolve_color_effect_request(request).unwrap();
+            runtime.effects.push(RuntimeEffect {
+                id,
+                kind: RuntimeEffectKind::Color(effect),
+                enabled: true,
+                created_at: now,
+            });
+        }
+
+        let started = Instant::now();
+        let mut checksum = 0_u64;
+        for fixture in &runtime.fixtures {
+            for attribute in ["ColorRed", "ColorGreen", "ColorBlue"] {
+                checksum =
+                    checksum.wrapping_add(runtime.apply_effects(fixture, attribute, 0, now) as u64);
+            }
+        }
+        assert_ne!(checksum, 0);
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "large Color stack evaluation took {:?}",
+            started.elapsed()
+        );
+        assert!(runtime.effects.iter().all(|effect| match &effect.kind {
+            RuntimeEffectKind::Color(runtime) => runtime
+                .targets
+                .iter()
+                .all(|target| target.cached.get().is_some_and(|cached| cached.at == now)),
+            _ => true,
+        }));
     }
 }

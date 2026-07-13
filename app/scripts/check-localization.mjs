@@ -122,6 +122,7 @@ const localeInvariantText = new Set([
 const untranslated = new Map();
 const unprotectedUserText = [];
 const localizedDynamicTextAllow = new Set([
+  "ColorEffectEditorPanel.tsx:preset.label",
   "CueCapturePreviewPanel.tsx:row.label",
   "EffectSourceControlsPanel.tsx:preset.label",
   "MappingHotkeyHelp.tsx:group.label",
@@ -175,7 +176,7 @@ for (const file of tsxFiles) {
   visit(sourceFile);
 }
 const coverage = staticTextCount === 0 ? 1 : localizedStaticTextCount / staticTextCount;
-assert.equal(coverage, 1, `static Japanese UI coverage regressed to ${(coverage * 100).toFixed(1)}%`);
+// Diagnostic output is emitted below before the final coverage assertion.
 const reportOffset = Number.parseInt(process.env.LOCALIZATION_REPORT_OFFSET ?? "0", 10);
 const reportLimit = Number.parseInt(process.env.LOCALIZATION_REPORT_LIMIT ?? "20", 10);
 console.log(
@@ -194,5 +195,7 @@ console.log(
     .map(([text, count]) => `${count}× ${text}`)
     .join(" | "),
 );
+
+assert.equal(coverage, 1, `static Japanese UI coverage regressed to ${(coverage * 100).toFixed(1)}%`);
 
 console.log("ui localization helpers ok");

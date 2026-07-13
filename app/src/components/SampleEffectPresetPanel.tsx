@@ -28,7 +28,7 @@ interface SampleEffectPresetOption {
   value: SampleEffectPreset;
   label: string;
   family: EffectLibraryFamily;
-  engine: "LFO" | "Wave" | "Bundle";
+  engine: "LFO" | "Wave" | "Color" | "Bundle";
   target: string;
   description: string;
   supportsTarget: boolean;
@@ -149,9 +149,9 @@ export const sampleEffectPresetOptions: SampleEffectPresetOption[] = [
     value: "spectrum",
     label: "Colour Spectrum",
     family: "Colour",
-    engine: "LFO",
-    target: "Colour attribute",
-    description: "Continuous spectrum sweep for hue, wheel or individual colour channels.",
+    engine: "Color",
+    target: "RGB / RGBW / Wheel",
+    description: "Seven-stop HSV spectrum rendered across the fixture's complete colour system.",
     supportsTarget: true,
     requiresTarget: true,
   },
@@ -159,9 +159,9 @@ export const sampleEffectPresetOptions: SampleEffectPresetOption[] = [
     value: "colour-chase",
     label: "Colour Chase",
     family: "Colour Mappings",
-    engine: "Wave",
-    target: "Colour attribute",
-    description: "Position-mapped colour sweep across the current fixture layout.",
+    engine: "Color",
+    target: "Fixture order",
+    description: "Ordered multi-colour steps spread deterministically across the current fixtures.",
     supportsTarget: true,
     requiresTarget: true,
   },

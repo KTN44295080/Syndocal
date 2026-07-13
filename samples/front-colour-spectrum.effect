@@ -1,22 +1,30 @@
 {
   "version": 1,
-  "effect_type": "Lfo",
+  "effect_type": "Color",
   "enabled": true,
-  "lfo": {
+  "lfo": null,
+  "position_wave": null,
+  "color": {
     "label": "Colour Spectrum",
     "fixture_ids": [],
     "target_group_ids": ["Front"],
-    "attribute": "Dimmer",
-    "video_targets": [],
-    "shape": "Saw",
-    "period_ms": 2000,
+    "stops": [
+      { "position": 0.0, "color": { "red": 65535, "green": 0, "blue": 0 } },
+      { "position": 0.166667, "color": { "red": 65535, "green": 65535, "blue": 0 } },
+      { "position": 0.333333, "color": { "red": 0, "green": 65535, "blue": 0 } },
+      { "position": 0.5, "color": { "red": 0, "green": 65535, "blue": 65535 } },
+      { "position": 0.666667, "color": { "red": 0, "green": 0, "blue": 65535 } },
+      { "position": 0.833333, "color": { "red": 65535, "green": 0, "blue": 65535 } },
+      { "position": 1.0, "color": { "red": 65535, "green": 0, "blue": 0 } }
+    ],
+    "algorithm": "Cycle",
+    "interpolation": "HsvShortest",
+    "period_ms": 4000,
     "clock_sync": {
       "beats": 4.0
     },
-    "low": 0,
-    "high": 65535,
     "phase": 0.0,
+    "fixture_spread": 0.0,
     "blend_mode": "Override"
-  },
-  "position_wave": null
+  }
 }

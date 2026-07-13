@@ -18683,6 +18683,259 @@ h3 {
   padding: 7px;
 }
 
+.colorEffectEditor {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.colorEffectPalettePanel,
+.colorEffectMotionPanel {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  border: 1px solid #343a3f;
+  border-radius: 2px;
+  background: #181c1f;
+  padding: 7px;
+}
+
+.colorEffectPalettePanel > legend,
+.colorEffectMotionPanel > legend {
+  color: #d8dcdf;
+  padding: 0 4px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.colorEffectGradientPreview {
+  position: relative;
+  height: 46px;
+  min-width: 0;
+  border: 1px solid #555d63;
+  background: #111416;
+  overflow: visible;
+}
+
+.colorEffectGradientMarker {
+  position: absolute;
+  bottom: -5px;
+  width: 9px;
+  height: 9px;
+  border: 1px solid #f4f6f7;
+  background: var(--stop-color);
+  transform: translateX(-50%) rotate(45deg);
+  pointer-events: none;
+}
+
+.colorEffectStopList {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.colorEffectStopRow {
+  display: grid;
+  grid-template-columns: 22px 32px minmax(72px, 1fr) 72px repeat(3, 32px);
+  align-items: end;
+  gap: 4px;
+  min-width: 0;
+  border-bottom: 1px solid #30363b;
+  padding: 3px 0;
+}
+
+.colorEffectStopNumber {
+  align-self: center;
+  color: #8f999f;
+  font-size: 11px;
+  text-align: center;
+}
+
+.effectInspectorPane .colorEffectStopPicker {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  border: 1px solid #555d63;
+  padding: 1px;
+  cursor: pointer;
+}
+
+.colorEffectStopHex,
+.colorEffectStopPosition input {
+  width: 100%;
+  min-width: 0;
+}
+
+.colorEffectStopPosition {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.colorEffectStopPosition > span {
+  overflow: hidden;
+  color: #7f8990;
+  font-size: 9px;
+  line-height: 1;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.colorEffectStopAction {
+  width: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  border-radius: 1px;
+  padding: 0;
+  font-size: 13px;
+}
+
+.colorEffectStopAction.remove:not(:disabled) {
+  color: #ed8585;
+}
+
+.colorEffectPaletteFooter,
+.colorEffectClockHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.colorEffectPaletteFooter > span,
+.colorEffectClockHeader > span {
+  color: #8f999f;
+  font-size: 11px;
+}
+
+.colorEffectPaletteFooter button {
+  min-height: 30px;
+  border-radius: 1px;
+  padding: 0 10px;
+  font-size: 11px;
+}
+
+.colorEffectModeGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.colorEffectModeGrid label,
+.colorEffectPeriodInput {
+  min-width: 0;
+}
+
+.colorEffectClockHeader {
+  border-top: 1px solid #30363b;
+  padding-top: 6px;
+}
+
+.colorEffectClockHeader strong {
+  color: #d8dcdf;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.colorEffectPeriodInput {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 112px;
+  align-items: center;
+  gap: 7px;
+}
+
+.colorEffectClockPresets {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.colorEffectClockPresets button {
+  display: grid;
+  align-content: center;
+  gap: 1px;
+  min-width: 0;
+  min-height: 38px;
+  border-radius: 1px;
+  padding: 3px 2px;
+}
+
+.colorEffectClockPresets button strong,
+.colorEffectClockPresets button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.colorEffectClockPresets button strong {
+  font-size: 11px;
+}
+
+.colorEffectClockPresets button span {
+  color: #818b92;
+  font-size: 9px;
+}
+
+.colorEffectClockPresets button.active,
+.app .colorEffectClockPresets button[aria-pressed="true"] {
+  border-color: #806039;
+  background: #30261b;
+  color: #fff;
+  box-shadow: inset 0 -2px 0 var(--ray-accent);
+}
+
+.colorEffectSpreadControl {
+  display: grid;
+  grid-template-columns: 88px minmax(80px, 1fr) 52px 12px;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  border-top: 1px solid #30363b;
+  padding-top: 6px;
+}
+
+.colorEffectSpreadControl > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.effectInspectorPane .colorEffectSpreadControl input[type="range"] {
+  min-width: 0;
+  min-height: 24px;
+  accent-color: var(--ray-accent);
+}
+
+.colorEffectSpreadControl > strong {
+  color: #8f999f;
+  font-size: 11px;
+}
+
+.effectMetaChip.color {
+  border-color: #806039;
+  color: #ffd395;
+}
+
+.effectColorSwatches {
+  display: inline-flex;
+  width: 48px;
+  height: 18px;
+  flex: 0 0 48px;
+  border: 1px solid #555d63;
+  overflow: hidden;
+}
+
+.effectColorSwatches > i {
+  min-width: 2px;
+  flex: 1 1 0;
+}
+
 @media (max-width: 1320px) {
   .effectWorkbench {
     grid-template-columns: minmax(236px, 0.68fr) minmax(400px, 1.2fr) minmax(292px, 0.88fr);
@@ -18717,6 +18970,20 @@ h3 {
 
   .effectActionDock {
     padding: 5px;
+  }
+
+  .colorEffectGradientPreview {
+    height: 38px;
+  }
+
+  .colorEffectPalettePanel,
+  .colorEffectMotionPanel {
+    gap: 4px;
+    padding: 5px;
+  }
+
+  .colorEffectClockPresets button {
+    min-height: 34px;
   }
 }
 

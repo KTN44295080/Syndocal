@@ -8,7 +8,7 @@ interface NodeGraphEditorPanelProps {
   transformAmount: number;
   transformMin: number;
   transformMax: number;
-  effectType: EffectKind;
+  effectType: Exclude<EffectKind, "Color">;
   sourceMode: "Effect" | "Audio";
   audioBand: AudioSpectrumBand;
   audioSource: AudioSpectrumSource;

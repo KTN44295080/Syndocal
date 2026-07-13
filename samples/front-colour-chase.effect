@@ -1,33 +1,27 @@
 {
   "version": 1,
-  "effect_type": "PositionWave",
+  "effect_type": "Color",
   "enabled": true,
   "lfo": null,
-  "position_wave": {
+  "position_wave": null,
+  "color": {
     "label": "Colour Mapping Chase",
     "fixture_ids": [],
     "target_group_ids": ["Front"],
-    "attribute": "Dimmer",
-    "video_targets": [],
-    "shape": "Saw",
-    "origin": {
-      "x": 0.0,
-      "y": 0.0,
-      "z": 0.0
-    },
-    "direction": {
-      "x": 1.0,
-      "y": 0.0,
-      "z": 0.0
-    },
-    "speed": 1.0,
-    "wavelength": 3.0,
+    "stops": [
+      { "position": 0.0, "color": { "red": 65535, "green": 12288, "blue": 0 } },
+      { "position": 0.333333, "color": { "red": 0, "green": 65535, "blue": 24576 } },
+      { "position": 0.666667, "color": { "red": 8192, "green": 16384, "blue": 65535 } },
+      { "position": 1.0, "color": { "red": 65535, "green": 12288, "blue": 0 } }
+    ],
+    "algorithm": "Sequence",
+    "interpolation": "Rgb",
+    "period_ms": 2000,
     "clock_sync": {
       "beats": 4.0
     },
-    "low": 0,
-    "high": 65535,
     "phase": 0.0,
+    "fixture_spread": 1.0,
     "blend_mode": "Override"
   }
 }

@@ -6,6 +6,7 @@ import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "so
 import { CueManagementPanel } from "./components/CueManagementPanel";
 import { AppStatusLine } from "./components/AppStatusLine";
 import { ArtRdmPanel } from "./components/ArtRdmPanel";
+import { ColorEffectEditorPanel, defaultColorEffectStops } from "./components/ColorEffectEditorPanel";
 import { CustomProfileEditorPanel } from "./components/CustomProfileEditorPanel";
 import {
   type DmxAddressCell,
@@ -99,6 +100,10 @@ import type {
   AutomationKeyframeSummary,
   AutomationInterpolation,
   CompositionSummary,
+  ColorEffectAlgorithm,
+  ColorEffectInterpolation,
+  ColorEffectRequest,
+  ColorEffectStop,
   CustomFixtureProfileRequest,
   CueListSummary,
   CueSummary,
@@ -552,8 +557,10 @@ const projectMutationCommands = new Set([
   "load_video_output_mapping_preset_file",
   "add_lfo_effect",
   "add_position_wave_effect",
+  "add_color_effect",
   "update_lfo_effect",
   "update_position_wave_effect",
+  "update_color_effect",
   "save_node_graph",
   "set_node_graph_enabled",
   "remove_node_graph",
@@ -1016,6 +1023,9 @@ export default function App() {
     createSignal<TimelineVideoAutomationRowScope>("all");
   const [effectShape, setEffectShape] = createSignal<LfoShape>("Sine");
   const [effectType, setEffectType] = createSignal<EffectKind>("Lfo");
+  const nodeGraphEffectType = createMemo<Exclude<EffectKind, "Color">>(() =>
+    effectType() === "PositionWave" ? "PositionWave" : "Lfo",
+  );
   const [effectTargetMode, setEffectTargetMode] = createSignal<EffectTargetMode>("fixture");
   const [effectTargetGroups, setEffectTargetGroups] = createSignal("");
   const [effectVideoLayerId, setEffectVideoLayerId] = createSignal<number | null>(null);
@@ -1031,6 +1041,13 @@ export default function App() {
   const [editingEffectId, setEditingEffectId] = createSignal<number | null>(null);
   const [effectPeriod, setEffectPeriod] = createSignal(1000);
   const [effectClockSyncBeats, setEffectClockSyncBeats] = createSignal<number | null>(null);
+  const [colorEffectStops, setColorEffectStops] = createSignal<ColorEffectStop[]>(
+    defaultColorEffectStops.map((stop) => ({ ...stop, color: { ...stop.color } })),
+  );
+  const [colorEffectAlgorithm, setColorEffectAlgorithm] = createSignal<ColorEffectAlgorithm>("Cycle");
+  const [colorEffectInterpolation, setColorEffectInterpolation] =
+    createSignal<ColorEffectInterpolation>("HsvShortest");
+  const [colorEffectFixtureSpread, setColorEffectFixtureSpread] = createSignal(0);
   const [effectLow, setEffectLow] = createSignal(0);
   const [effectHigh, setEffectHigh] = createSignal(65535);
   const [effectPhase, setEffectPhase] = createSignal(0);
@@ -2404,13 +2421,19 @@ export default function App() {
   const effectTargetSummary = createMemo(() => {
     const fixtureCount = effectTargetFixtures().length;
     const attributeCount = effectTargetControls().length;
+    const wholeFixtureColor = effectType() === "Color";
     switch (effectTargetMode()) {
       case "selection":
+        if (wholeFixtureColor) {
+          return `${fixtureCount} mapped fixture${fixtureCount === 1 ? "" : "s"} / whole-fixture colour`;
+        }
         return `${fixtureCount} mapped fixture${fixtureCount === 1 ? "" : "s"} / ${attributeCount} common attribute${attributeCount === 1 ? "" : "s"}`;
       case "group": {
         const groups = parseGroupIds(effectTargetGroups());
         return groups.length > 0
-          ? `${groups.join(", ")} / ${fixtureCount} fixture${fixtureCount === 1 ? "" : "s"} / ${attributeCount} common attribute${attributeCount === 1 ? "" : "s"}`
+          ? wholeFixtureColor
+            ? `${groups.join(", ")} / ${fixtureCount} fixture${fixtureCount === 1 ? "" : "s"} / whole-fixture colour`
+            : `${groups.join(", ")} / ${fixtureCount} fixture${fixtureCount === 1 ? "" : "s"} / ${attributeCount} common attribute${attributeCount === 1 ? "" : "s"}`
           : "No group target";
       }
       case "video":
@@ -2419,7 +2442,9 @@ export default function App() {
           : `Video Layer ${selectedEffectVideoLayerId()} / ${effectVideoParam()} ${Math.round(effectVideoLow() * 100)}-${Math.round(effectVideoHigh() * 100)}%`;
       case "fixture":
       default:
-        return selectedFixture()?.label ?? "No fixture selected";
+        return selectedFixture()
+          ? `${selectedFixture()!.label}${wholeFixtureColor ? " / whole-fixture colour" : ""}`
+          : "No fixture selected";
     }
   });
   const effectDraftSummary = createMemo(() => {
@@ -2427,6 +2452,10 @@ export default function App() {
       return `Wave O ${waveOriginX().toFixed(1)},${waveOriginY().toFixed(1)},${waveOriginZ().toFixed(1)} / D ${waveDirectionX().toFixed(1)},${waveDirectionY().toFixed(1)},${waveDirectionZ().toFixed(1)} / ${waveWavelength().toFixed(1)}m`;
     }
     const sync = effectClockSyncBeats();
+    if (effectType() === "Color") {
+      const clock = sync === null ? `${effectPeriod()}ms` : `${sync} beat`;
+      return `Color ${colorEffectAlgorithm()} / ${colorEffectStops().length} stops / ${clock}`;
+    }
     return sync === null ? `LFO ${effectShape()} / ${effectPeriod()}ms` : `LFO ${effectShape()} / ${sync} beat`;
   });
   const editingEffectSummary = createMemo<EffectSummary | null>(() => {
@@ -8823,8 +8852,33 @@ export default function App() {
       },
     ];
   };
+  const colorEffectDraftValid = createMemo(() => {
+    const stops = colorEffectStops();
+    if (stops.length < 2 || stops.length > 8) return false;
+    return stops.every((stop, index) =>
+      Number.isFinite(stop.position)
+      && stop.position >= 0
+      && stop.position <= 1
+      && (index === 0 || stop.position > stops[index - 1].position)
+      && [stop.color.red, stop.color.green, stop.color.blue].every(
+        (channel) => Number.isFinite(channel) && channel >= 0 && channel <= 65_535,
+      ));
+  });
   const effectSubmitDisabled = createMemo(() => {
     const linkedVideoMissing = effectVideoTargetLinked() && selectedEffectVideoLayerId() === null;
+    if (effectType() === "Color") {
+      if (!colorEffectDraftValid()) return true;
+      if (effectVideoTargetLinked() || effectTargetMode() === "video") return true;
+      switch (effectTargetMode()) {
+        case "selection":
+          return selectedMappingFixtures().length === 0;
+        case "group":
+          return parseGroupIds(effectTargetGroups()).length === 0;
+        case "fixture":
+        default:
+          return !selectedFixture();
+      }
+    }
     switch (effectTargetMode()) {
       case "video":
         return snapshot().video.layers.length === 0;
@@ -8840,15 +8894,21 @@ export default function App() {
 
   type EffectRequestDraft =
     | { effectType: "Lfo"; request: LfoEffectRequest }
-    | { effectType: "PositionWave"; request: PositionWaveEffectRequest };
+    | { effectType: "PositionWave"; request: PositionWaveEffectRequest }
+    | { effectType: "Color"; request: ColorEffectRequest };
 
   const buildEffectRequestFromForm = (): EffectRequestDraft | null => {
     const fixture = selectedFixture();
     const attribute = selectedEffectAttribute();
     const targetMode = effectTargetMode();
     const isVideoTarget = targetMode === "video";
-    const includesVideoTarget = isVideoTarget || effectVideoTargetLinked();
-    if (targetMode === "fixture" && (!fixture || !attribute)) {
+    const colorEffect = effectType() === "Color";
+    const includesVideoTarget = !colorEffect && (isVideoTarget || effectVideoTargetLinked());
+    if (colorEffect && (isVideoTarget || effectVideoTargetLinked())) {
+      setMessage("Color effects target complete lighting fixtures and cannot link a video parameter.");
+      return null;
+    }
+    if (targetMode === "fixture" && (!fixture || (!colorEffect && !attribute))) {
       setMessage("Select a fixture and attribute first.");
       return null;
     }
@@ -8857,7 +8917,7 @@ export default function App() {
       setMessage("Select one or more fixtures on the 2D mapping stage first.");
       return null;
     }
-    if (targetMode === "selection" && !attribute) {
+    if (!colorEffect && targetMode === "selection" && !attribute) {
       setMessage("Select a fixture profile attribute before targeting a map selection.");
       return null;
     }
@@ -8866,7 +8926,7 @@ export default function App() {
       setMessage("Enter at least one target group.");
       return null;
     }
-    if (targetMode === "group" && !attribute) {
+    if (!colorEffect && targetMode === "group" && !attribute) {
       setMessage("Select a fixture profile attribute before targeting a group.");
       return null;
     }
@@ -8876,7 +8936,7 @@ export default function App() {
       return null;
     }
     const lightAttribute = attribute ?? "";
-    const videoTargets = buildEffectVideoTargets(effectType() === "PositionWave");
+    const videoTargets = colorEffect ? [] : buildEffectVideoTargets(effectType() === "PositionWave");
     const clockSyncBeats = effectClockSyncBeats();
     const labelTarget = !isVideoTarget && videoTargets.length > 0 ? `${lightAttribute} + ${effectVideoParam()}` : isVideoTarget ? effectVideoParam() : lightAttribute;
     const requestBase = {
@@ -8897,6 +8957,28 @@ export default function App() {
       phase: effectPhase(),
       blend_mode: effectBlendMode(),
     };
+    if (colorEffect) {
+      if (!colorEffectDraftValid()) {
+        setMessage("Color effects require 2 to 8 ordered palette stops with valid colors.");
+        return null;
+      }
+      return {
+        effectType: "Color",
+        request: {
+          label: `Color ${targetMode === "group" ? "Group" : targetMode === "selection" ? "Selection" : "Fixture"}`,
+          fixture_ids: requestBase.fixture_ids,
+          target_group_ids: requestBase.target_group_ids,
+          stops: colorEffectStops().map((stop) => ({ ...stop, color: { ...stop.color } })),
+          algorithm: colorEffectAlgorithm(),
+          interpolation: colorEffectInterpolation(),
+          period_ms: effectPeriod(),
+          clock_sync: requestBase.clock_sync,
+          phase: effectPhase(),
+          fixture_spread: colorEffectFixtureSpread(),
+          blend_mode: effectBlendMode(),
+        },
+      };
+    }
     if (effectType() === "Lfo") {
       return {
         effectType: "Lfo",
@@ -8924,16 +9006,13 @@ export default function App() {
       return;
     }
     try {
-      const effectId =
-        draft.effectType === "Lfo"
-          ? await invoke<number>("add_lfo_effect", {
-              request: draft.request,
-            })
-          : await invoke<number>("add_position_wave_effect", {
-              request: draft.request,
-            });
+      const effectId = draft.effectType === "Lfo"
+        ? await invoke<number>("add_lfo_effect", { request: draft.request })
+        : draft.effectType === "PositionWave"
+          ? await invoke<number>("add_position_wave_effect", { request: draft.request })
+          : await invoke<number>("add_color_effect", { request: draft.request });
       setEditingEffectId(null);
-      setMessage(`Added ${draft.effectType === "PositionWave" ? "position wave" : "LFO"} effect ${effectId}`);
+      setMessage(`Added ${draft.effectType === "PositionWave" ? "position wave" : draft.effectType === "Color" ? "color" : "LFO"} effect ${effectId}`);
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
@@ -8953,8 +9032,10 @@ export default function App() {
     try {
       if (draft.effectType === "Lfo") {
         await invoke("update_lfo_effect", { effectId, request: draft.request });
-      } else {
+      } else if (draft.effectType === "PositionWave") {
         await invoke("update_position_wave_effect", { effectId, request: draft.request });
+      } else {
+        await invoke("update_color_effect", { effectId, request: draft.request });
       }
       setMessage(`Updated effect ${effectId}`);
       await refreshSnapshot();
@@ -9000,6 +9081,23 @@ export default function App() {
     const targetPlan = effectDraftTargetPlan(effect, snapshot().fixtures);
     setEditingEffectId(effect.id);
     setEffectType(effect.effect_type);
+    if (effect.effect_type === "Color") {
+      const color = effect.color;
+      if (!color) {
+        setEditingEffectId(null);
+        setMessage(`Color effect ${effect.id} is missing its editor body.`);
+        return;
+      }
+      setColorEffectStops(color.stops.map((stop) => ({ ...stop, color: { ...stop.color } })));
+      setColorEffectAlgorithm(color.algorithm);
+      setColorEffectInterpolation(color.interpolation);
+      setColorEffectFixtureSpread(color.fixture_spread);
+      setEffectPeriod(color.period_ms);
+      setEffectClockSyncBeats(color.clock_sync?.beats ?? null);
+      setEffectPhase(color.phase);
+      setEffectBlendMode(color.blend_mode);
+      setEffectVideoTargetLinked(false);
+    }
     setEffectShape(effect.shape);
     setEffectClockSyncBeats(effect.clock_sync?.beats ?? null);
     if (effect.period_ms) {
@@ -9066,21 +9164,15 @@ export default function App() {
   type EffectTargetOverrideOptions = {
     forceVideoTarget?: boolean;
     requireLightTarget?: boolean;
+    wholeFixtureColor?: boolean;
   };
 
   const sampleEffectTargetOverrideOptions = (preset: SampleEffectPreset): EffectTargetOverrideOptions =>
-    preset === "shared" ? { forceVideoTarget: true, requireLightTarget: true } : {};
-
-  const isColourEffectTarget = () => {
-    if (effectTargetMode() === "video") {
-      return effectVideoParam().startsWith("Color") || effectVideoParam().startsWith("FxKey");
-    }
-    const attribute = selectedEffectAttribute().toLowerCase();
-    return [
-      "color", "colour", "red", "green", "blue", "cyan", "magenta", "yellow",
-      "hue", "saturation", "white", "amber", "lime", "uv", "cto", "ctb",
-    ].some((token) => attribute.includes(token));
-  };
+    preset === "shared"
+      ? { forceVideoTarget: true, requireLightTarget: true }
+      : preset === "spectrum" || preset === "colour-chase"
+        ? { requireLightTarget: true, wholeFixtureColor: true }
+        : {};
 
   const effectTargetOverrideError = (options: EffectTargetOverrideOptions = {}) => {
     const targetMode = effectTargetMode();
@@ -9089,14 +9181,17 @@ export default function App() {
     if (options.requireLightTarget && targetMode === "video") {
       return "Select a fixture or group target for this shared lighting + video preset.";
     }
-    if (targetMode === "fixture" && (!fixture || !attribute)) {
+    if (options.wholeFixtureColor && effectVideoTargetLinked()) {
+      return "Whole-fixture colour effects cannot link a video parameter.";
+    }
+    if (targetMode === "fixture" && (!fixture || (!options.wholeFixtureColor && !attribute))) {
       return "Select a fixture and attribute first.";
     }
     if (targetMode === "selection") {
       if (selectedMappingFixtures().length === 0) {
         return "Select one or more fixtures on the 2D mapping stage first.";
       }
-      if (!attribute) {
+      if (!options.wholeFixtureColor && !attribute) {
         return "Select a fixture profile attribute before targeting a map selection.";
       }
     }
@@ -9104,11 +9199,11 @@ export default function App() {
       if (parseGroupIds(effectTargetGroups()).length === 0) {
         return "Enter at least one target group.";
       }
-      if (!attribute) {
+      if (!options.wholeFixtureColor && !attribute) {
         return "Select a fixture profile attribute before targeting a group.";
       }
     }
-    if ((targetMode === "video" || effectVideoTargetLinked() || options.forceVideoTarget) && selectedEffectVideoLayerId() === null) {
+    if (!options.wholeFixtureColor && (targetMode === "video" || effectVideoTargetLinked() || options.forceVideoTarget) && selectedEffectVideoLayerId() === null) {
       return targetMode === "video"
         ? "Add a video layer before loading a video effect preset."
         : "Add a video layer before loading this lighting + video preset.";
@@ -9119,9 +9214,6 @@ export default function App() {
   const sampleEffectTargetOverrideError = (preset: SampleEffectPreset) => {
     const targetError = effectTargetOverrideError(sampleEffectTargetOverrideOptions(preset));
     if (targetError) return targetError;
-    if ((preset === "spectrum" || preset === "colour-chase") && !isColourEffectTarget()) {
-      return "Select a colour, hue, wheel, emitter, or video colour target.";
-    }
     return "";
   };
 
@@ -9132,7 +9224,9 @@ export default function App() {
     const targetMode = effectTargetMode();
     const fixture = selectedFixture();
     const attribute = selectedEffectAttribute();
-    const videoTargets = buildEffectVideoTargets(true, Boolean(options.forceVideoTarget));
+    const videoTargets = options.wholeFixtureColor
+      ? []
+      : buildEffectVideoTargets(true, Boolean(options.forceVideoTarget));
     return {
       fixture_ids:
         targetMode === "selection"
@@ -9141,7 +9235,7 @@ export default function App() {
             ? [fixture.id]
             : [],
       target_group_ids: targetMode === "group" ? parseGroupIds(effectTargetGroups()) : [],
-      attribute: targetMode === "video" ? "" : attribute,
+      attribute: targetMode === "video" || options.wholeFixtureColor ? "" : attribute,
       video_targets: videoTargets,
     };
   };
@@ -9165,7 +9259,7 @@ export default function App() {
   const nodeGraphSourceLabel = () =>
     nodeGraphSourceMode() === "Audio"
       ? `${nodeGraphAudioSource() === "Live" ? "Live" : "Timeline"} Audio ${nodeGraphAudioBand()}`
-      : effectType() === "PositionWave"
+      : nodeGraphEffectType() === "PositionWave"
         ? "Position Wave"
         : "LFO";
 
@@ -9226,7 +9320,7 @@ export default function App() {
             transform: null,
             output: null,
           }
-        : effectType() === "PositionWave"
+        : nodeGraphEffectType() === "PositionWave"
         ? {
             id: 1,
             label: "Wave",
@@ -11371,7 +11465,7 @@ export default function App() {
                 <strong>Inspector</strong>
                 <span>{editingEffectId() === null ? "New effect" : `Editing #${editingEffectId()}`}</span>
               </div>
-              <span>{effectType() === "PositionWave" ? "SPATIAL" : "MODULATOR"}</span>
+              <span>{effectType() === "PositionWave" ? "SPATIAL" : effectType() === "Color" ? "MULTI-COLOR" : "MODULATOR"}</span>
             </header>
             <div class="effectForm">
               <div class="effectTargetHint">
@@ -11380,7 +11474,7 @@ export default function App() {
                   <span data-no-localize>{effectTargetSummary()}</span> / {effectDraftSummary()}
                 </span>
               </div>
-              <Show when={effectTargetMode() !== "video"}>
+              <Show when={effectTargetMode() !== "video" && effectType() !== "Color"}>
                 <label>
                   Attribute
                   <select
@@ -11410,18 +11504,30 @@ export default function App() {
                     <option value="fixture">Selected fixture</option>
                     <option value="selection">Map selection ({selectedMappingFixtures().length})</option>
                     <option value="group">Group</option>
-                    <option value="video">Video layer</option>
+                    <option value="video" disabled={effectType() === "Color"}>Video layer</option>
                   </select>
                 </label>
                 <label>
                   Type
-                  <select value={effectType()} onInput={(event) => setEffectType(event.currentTarget.value as EffectKind)}>
+                  <select
+                    value={effectType()}
+                    onInput={(event) => {
+                      const nextType = event.currentTarget.value as EffectKind;
+                      setEffectType(nextType);
+                      if (nextType === "Color") {
+                        setEffectVideoTargetLinked(false);
+                        if (effectTargetMode() === "video") setEffectTargetMode("fixture");
+                        setMessage("Prepared a multi-color draft for whole-fixture colour output.");
+                      }
+                    }}
+                  >
                     <option value="Lfo">LFO</option>
                     <option value="PositionWave">Position Wave</option>
+                    <option value="Color">Multi-color</option>
                   </select>
                 </label>
               </div>
-              <Show when={effectTargetMode() !== "video"}>
+              <Show when={effectTargetMode() !== "video" && effectType() !== "Color"}>
                 <label class="checkbox inlineCheckbox effectLinkedVideoToggle">
                   <input
                     type="checkbox"
@@ -11441,7 +11547,7 @@ export default function App() {
                   onToggleGroup={toggleEffectTargetGroup}
                 />
               </Show>
-              <Show when={effectTargetMode() === "video" || effectVideoTargetLinked()}>
+              <Show when={effectType() !== "Color" && (effectTargetMode() === "video" || effectVideoTargetLinked())}>
                 <VideoEffectTargetPanel
                   layers={snapshot().video.layers}
                   outputsCount={snapshot().video.outputs.length}
@@ -11467,6 +11573,7 @@ export default function App() {
                   onSetPositionZ={setEffectVideoPositionZ}
                 />
               </Show>
+              <Show when={effectType() !== "Color"}>
               <EffectSourceControlsPanel
                 effectType={effectType()}
                 shape={effectShape()}
@@ -11524,9 +11631,27 @@ export default function App() {
                 onSpeed={setWaveSpeed}
                 onWavelength={setWaveWavelength}
               />
+              </Show>
+              <Show when={effectType() === "Color"}>
+                <ColorEffectEditorPanel
+                  stops={colorEffectStops()}
+                  algorithm={colorEffectAlgorithm()}
+                  interpolation={colorEffectInterpolation()}
+                  periodMs={effectPeriod()}
+                  bpm={snapshot().clock.bpm}
+                  clockSyncBeats={effectClockSyncBeats()}
+                  fixtureSpread={colorEffectFixtureSpread()}
+                  onStops={setColorEffectStops}
+                  onAlgorithm={setColorEffectAlgorithm}
+                  onInterpolation={setColorEffectInterpolation}
+                  onPeriodMs={setEffectPeriod}
+                  onClockSyncBeats={setEffectClockSyncPreset}
+                  onFixtureSpread={setColorEffectFixtureSpread}
+                />
+              </Show>
             </div>
             <EffectActionControlsPanel
-              showLightRange={effectTargetMode() !== "video"}
+              showLightRange={effectTargetMode() !== "video" && effectType() !== "Color"}
               low={effectLow()}
               high={effectHigh()}
               phase={effectPhase()}
@@ -11562,7 +11687,7 @@ export default function App() {
               transformAmount={nodeGraphTransformAmount()}
               transformMin={nodeGraphTransformMin()}
               transformMax={nodeGraphTransformMax()}
-              effectType={effectType()}
+              effectType={nodeGraphEffectType()}
               sourceMode={nodeGraphSourceMode()}
               audioBand={nodeGraphAudioBand()}
               audioSource={nodeGraphAudioSource()}

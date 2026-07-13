@@ -219,8 +219,10 @@ export interface RemoteControlStatus {
 
 export type ClockSource = "Manual" | "Tap" | "MidiClock" | "MidiTimecode" | "Ltc" | "AbletonLink";
 export type LfoShape = "Sine" | "Cosine" | "Triangle" | "Saw" | "Square" | "Random" | "Perlin";
-export type EffectKind = "Lfo" | "PositionWave";
+export type EffectKind = "Lfo" | "PositionWave" | "Color";
 export type EffectBlendMode = "Override" | "Add" | "Multiply";
+export type ColorEffectAlgorithm = "Cycle" | "Bounce" | "Sequence" | "Random";
+export type ColorEffectInterpolation = "Rgb" | "HsvShortest" | "HsvLongest";
 export type NodeGraphNodeKind = "Lfo" | "PositionWave" | "Audio" | "Transform" | "Output";
 export type AudioSpectrumBand = "Bass" | "Mid" | "High";
 export type AudioSpectrumSource = "Timeline" | "Live";
@@ -1394,6 +1396,31 @@ export interface EffectClockSync {
   beats: number;
 }
 
+export interface ColorEffectColor {
+  red: number;
+  green: number;
+  blue: number;
+}
+
+export interface ColorEffectStop {
+  position: number;
+  color: ColorEffectColor;
+}
+
+export interface ColorEffectRequest {
+  label: string;
+  fixture_ids: number[];
+  target_group_ids: string[];
+  stops: ColorEffectStop[];
+  algorithm: ColorEffectAlgorithm;
+  interpolation: ColorEffectInterpolation;
+  period_ms: number;
+  clock_sync?: EffectClockSync | null;
+  phase: number;
+  fixture_spread: number;
+  blend_mode: EffectBlendMode;
+}
+
 export interface PositionWaveEffectRequest {
   label: string;
   fixture_ids: number[];
@@ -1440,6 +1467,7 @@ export interface EffectSummary {
   speed?: number | null;
   wavelength?: number | null;
   enabled: boolean;
+  color?: ColorEffectRequest | null;
 }
 
 export interface EffectPreset {
@@ -1448,6 +1476,7 @@ export interface EffectPreset {
   enabled: boolean;
   lfo?: LfoEffectRequest | null;
   position_wave?: PositionWaveEffectRequest | null;
+  color?: ColorEffectRequest | null;
 }
 
 export type DmxOutputProtocol =

@@ -25,21 +25,22 @@ use io::sacn::is_sacn_multicast_target;
 use minisign_verify::PublicKey;
 use protocol::{
     canonical_video_output_mapping_field, AttributeControl, AttributeResolution,
-    AudioAnalysisSummary, AutomationId, AutomationKeyframeSummary, ClockSnapshot, CompositionId,
-    CompositionSummary, CueFixtureTarget, CueId, CueNodeGraphTarget, CustomFixtureProfileFile,
-    CustomFixtureProfileRequest, DmxInputConfig, DmxInputProtocol, DmxInputStatus, DmxModeSummary,
-    DmxOutputConfig, DmxOutputProtocol, EffectId, EffectKind, EffectPreset, EffectSummary,
-    EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, FixtureId, FixtureLimits,
-    FixturePreset, FixtureProfileSummary, GeometrySummary, LearnedMidiControl, LearnedOscControl,
-    LfoEffectRequest, MidiControlAction, MidiControlMapping, MidiInputSummary, MidiOutputSummary,
-    NodeGraphId, NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp,
-    OscControlAction, OscControlMapping, OscInputConfig, PatchFixtureRequest,
-    PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RemoteControlConfig,
-    RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile,
-    StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary, TimelineEventId,
-    TimelineTrackKind, Vec3, VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode,
-    VideoEffectTarget, VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerTarget,
-    VideoOutputId, VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetFile,
+    AudioAnalysisSummary, AutomationId, AutomationKeyframeSummary, ClockSnapshot,
+    ColorEffectRequest, CompositionId, CompositionSummary, CueFixtureTarget, CueId,
+    CueNodeGraphTarget, CustomFixtureProfileFile, CustomFixtureProfileRequest, DmxInputConfig,
+    DmxInputProtocol, DmxInputStatus, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, EffectId,
+    EffectKind, EffectPreset, EffectSummary, EngineSnapshot, EngineTelemetry,
+    ExclusiveVideoTakeRequest, FixtureId, FixtureLimits, FixturePreset, FixtureProfileSummary,
+    GeometrySummary, LearnedMidiControl, LearnedOscControl, LfoEffectRequest, MidiControlAction,
+    MidiControlMapping, MidiInputSummary, MidiOutputSummary, NodeGraphId, NodeGraphNodeKind,
+    NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp, OscControlAction,
+    OscControlMapping, OscInputConfig, PatchFixtureRequest, PatchedFixtureSummary,
+    PositionWaveEffectRequest, ProjectFile, RemoteControlConfig, RemoteControlStatus, Rotation3,
+    SerialPortSummary, StageMapConfig, StageMapPresetFile, StageMapPresetSummary, StageObjectId,
+    StageObjectKind, StageObjectSummary, TimelineEventId, TimelineTrackKind, Vec3,
+    VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode, VideoEffectTarget,
+    VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerTarget, VideoOutputId,
+    VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetFile,
     VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
     VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
 };
@@ -7040,6 +7041,17 @@ fn add_position_wave_effect(
 }
 
 #[tauri::command]
+fn add_color_effect(
+    state: State<'_, AppState>,
+    request: ColorEffectRequest,
+) -> Result<EffectId, String> {
+    validate_color_effect_request(&request)?;
+    let effect_id = state.engine.allocate_effect_id();
+    state.engine.add_color_effect(effect_id, request, true)?;
+    Ok(effect_id)
+}
+
+#[tauri::command]
 fn update_lfo_effect(
     state: State<'_, AppState>,
     effect_id: EffectId,
@@ -7081,6 +7093,16 @@ fn update_position_wave_effect(
         .engine
         .send(EngineCommand::UpdatePositionWaveEffect { effect_id, request })
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn update_color_effect(
+    state: State<'_, AppState>,
+    effect_id: EffectId,
+    request: ColorEffectRequest,
+) -> Result<(), String> {
+    validate_color_effect_request(&request)?;
+    state.engine.update_color_effect(effect_id, request)
 }
 
 #[tauri::command]
@@ -7245,6 +7267,11 @@ fn relabel_effect_preset(mut preset: EffectPreset, label: String) -> EffectPrese
         }
         EffectKind::PositionWave => {
             if let Some(request) = &mut preset.position_wave {
+                request.label = label;
+            }
+        }
+        EffectKind::Color => {
+            if let Some(request) = &mut preset.color {
                 request.label = label;
             }
         }
@@ -7418,8 +7445,23 @@ fn add_effect_preset_to_engine(
                 .send(EngineCommand::AddPositionWaveEffect { effect_id, request })
                 .map_err(|error| error.to_string())?;
         }
+        EffectKind::Color => {
+            let request = preset
+                .color
+                .ok_or_else(|| "Color effect preset is missing its request body".to_string())?;
+            let request = match target_override {
+                Some(target_override) => {
+                    let request = apply_color_effect_target_override(request, target_override)?;
+                    validate_color_effect_request(&request)?;
+                    request
+                }
+                None => request,
+            };
+            validate_effect_target_references(&snapshot, &request.fixture_ids, &[])?;
+            engine.add_color_effect(effect_id, request, enabled)?;
+        }
     }
-    if !enabled {
+    if !enabled && !matches!(preset.effect_type, EffectKind::Color) {
         engine
             .send(EngineCommand::SetEffectEnabled {
                 effect_id,
@@ -7447,7 +7489,7 @@ fn load_sample_effect_preset(
         serde_json::from_str(json).map_err(|error| format!("Failed to parse {label}: {error}"))?;
     validate_effect_preset(&preset)?;
     if let Some(target_override) = &target_override {
-        validate_effect_target_override(target_override)?;
+        validate_effect_target_override_for_preset(&preset, target_override)?;
     }
     add_effect_preset_to_engine(&state.engine, preset, target_override.as_ref())
 }
@@ -7520,7 +7562,7 @@ fn load_effect_preset_for_target(
     let json = fs::read_to_string(&path).map_err(|error| error.to_string())?;
     let preset: EffectPreset = serde_json::from_str(&json).map_err(|error| error.to_string())?;
     validate_effect_preset(&preset)?;
-    validate_effect_target_override(&target_override)?;
+    validate_effect_target_override_for_preset(&preset, &target_override)?;
 
     add_effect_preset_to_engine(&state.engine, preset, Some(&target_override)).map(Some)
 }
@@ -10245,6 +10287,29 @@ fn validate_project_lighting_references(snapshot: &EngineSnapshot) -> Result<(),
 
     for effect in &snapshot.effects {
         validate_project_effect_body(effect)?;
+        if matches!(effect.effect_type, EffectKind::Color) {
+            let request = effect.color.as_ref().ok_or_else(|| {
+                format!(
+                    "Project effect {} is missing its Color request body",
+                    effect.id
+                )
+            })?;
+            if !effect.video_targets.is_empty() {
+                return Err(format!(
+                    "Project Color effect {} cannot target video layers",
+                    effect.id
+                ));
+            }
+            validate_group_ids(&request.target_group_ids)?;
+            validate_project_color_effect_targets(
+                snapshot,
+                &fixtures_by_id,
+                &request.fixture_ids,
+                &request.target_group_ids,
+                &format!("Color effect {}", effect.id),
+            )?;
+            continue;
+        }
         let has_light_targets =
             !effect.fixture_ids.is_empty() || !effect.target_group_ids.is_empty();
         let has_video_targets = !effect.video_targets.is_empty();
@@ -10377,6 +10442,234 @@ fn validate_project_effect_fixture_targets(
         }
     }
     Ok(())
+}
+
+fn validate_project_color_effect_targets(
+    snapshot: &EngineSnapshot,
+    fixtures_by_id: &HashMap<FixtureId, &PatchedFixtureSummary>,
+    fixture_ids: &[FixtureId],
+    target_group_ids: &[String],
+    owner_label: &str,
+) -> Result<(), String> {
+    validate_project_unique_refs(owner_label, fixture_ids)?;
+    let mut target_ids = HashSet::new();
+    for fixture_id in fixture_ids {
+        if !fixtures_by_id.contains_key(fixture_id) {
+            return Err(format!(
+                "Project {owner_label} references missing fixture {fixture_id}"
+            ));
+        }
+        target_ids.insert(*fixture_id);
+    }
+
+    for group_id in target_group_ids {
+        let mut matched = false;
+        for fixture in &snapshot.fixtures {
+            if fixture
+                .group_ids
+                .iter()
+                .any(|candidate| group_matches(candidate, group_id))
+            {
+                matched = true;
+                target_ids.insert(fixture.id);
+            }
+        }
+        if !matched {
+            return Err(format!(
+                "Project {owner_label} references missing fixture group '{group_id}'"
+            ));
+        }
+    }
+
+    let compatible_count = target_ids
+        .iter()
+        .filter(|fixture_id| {
+            fixtures_by_id
+                .get(fixture_id)
+                .is_some_and(|fixture| fixture_supports_color_effect(fixture))
+        })
+        .count();
+    if compatible_count == 0 {
+        return Err(format!(
+            "Project {owner_label} has no fixtures with an RGB, RGBW, CMY, HSV, or colored-wheel control system"
+        ));
+    }
+    Ok(())
+}
+
+fn fixture_supports_color_effect(fixture: &PatchedFixtureSummary) -> bool {
+    let has_control = |aliases: &[&str]| {
+        aliases.iter().any(|alias| {
+            fixture
+                .controls
+                .iter()
+                .any(|control| normalize_custom_attribute_name(&control.attribute) == *alias)
+        })
+    };
+    let has_rgb = has_control(&[
+        "colorred",
+        "colourred",
+        "red",
+        "coloraddr",
+        "colouraddr",
+        "colorrgbred",
+    ]) && has_control(&[
+        "colorgreen",
+        "colourgreen",
+        "green",
+        "coloraddg",
+        "colouraddg",
+        "colorrgbgreen",
+    ]) && has_control(&[
+        "colorblue",
+        "colourblue",
+        "blue",
+        "coloraddb",
+        "colouraddb",
+        "colorrgbblue",
+    ]);
+    let has_cmy = has_control(&[
+        "colorsubc",
+        "coloursubc",
+        "colorcyan",
+        "colourcyan",
+        "cyan",
+        "colorrgbcyan",
+    ]) && has_control(&[
+        "colorsubm",
+        "coloursubm",
+        "colormagenta",
+        "colourmagenta",
+        "magenta",
+        "colorrgbmagenta",
+    ]) && has_control(&[
+        "colorsuby",
+        "coloursuby",
+        "coloryellow",
+        "colouryellow",
+        "yellow",
+        "colorrgbyellow",
+    ]);
+    let has_hsv = has_control(&[
+        "colorhsvhue",
+        "colourhsvhue",
+        "colorhsbhue",
+        "colourhsbhue",
+        "colorhue",
+        "colourhue",
+        "hue",
+        "hsbhue",
+    ]) && has_control(&[
+        "colorhsvsaturation",
+        "colourhsvsaturation",
+        "colorhsbsaturation",
+        "colourhsbsaturation",
+        "colorsaturation",
+        "coloursaturation",
+        "saturation",
+        "hsbsaturation",
+    ]) && has_control(&[
+        "colorhsvvalue",
+        "colourhsvvalue",
+        "colorhsbbrightness",
+        "colourhsbbrightness",
+        "colorbrightness",
+        "colourbrightness",
+        "value",
+        "brightness",
+        "hsbbrightness",
+    ]);
+
+    has_rgb
+        || has_cmy
+        || has_hsv
+        || fixture
+            .controls
+            .iter()
+            .any(control_supports_colored_wheel_effect)
+}
+
+fn control_supports_colored_wheel_effect(control: &AttributeControl) -> bool {
+    let normalized = normalize_custom_attribute_name(&control.attribute);
+    if !normalized.contains("color") && !normalized.contains("colour") {
+        return false;
+    }
+    let mut physical_slots = HashSet::new();
+    for function in &control.functions {
+        if let Some(identity) = color_wheel_function_identity(function, control) {
+            physical_slots.insert(identity);
+            if physical_slots.len() >= 2 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn color_wheel_function_identity(
+    function: &protocol::ChannelFunctionSummary,
+    control: &AttributeControl,
+) -> Option<String> {
+    let color = function
+        .wheel_slot_color
+        .as_deref()
+        .and_then(normalized_color_wheel_hex)
+        .or_else(|| named_color_wheel_key(function, control).map(str::to_string))?;
+    let physical_slot = function
+        .wheel_slot
+        .as_deref()
+        .or(function.wheel_slot_name.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase);
+    Some(physical_slot.map_or_else(|| format!("color:{color}"), |slot| format!("slot:{slot}")))
+}
+
+fn named_color_wheel_key(
+    function: &protocol::ChannelFunctionSummary,
+    control: &AttributeControl,
+) -> Option<&'static str> {
+    let text = format!(
+        "{} {} {} {} {} {}",
+        function.name,
+        function.attribute,
+        function.wheel_slot.as_deref().unwrap_or_default(),
+        function.wheel_slot_name.as_deref().unwrap_or_default(),
+        function.parent_function.as_deref().unwrap_or_default(),
+        control.channel_name,
+    )
+    .to_ascii_lowercase();
+    let tokens = text
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .collect::<HashSet<_>>();
+    if tokens.contains("open") || tokens.contains("clear") || tokens.contains("white") {
+        Some("white")
+    } else if tokens.contains("red") {
+        Some("red")
+    } else if tokens.contains("green") {
+        Some("green")
+    } else if tokens.contains("blue") {
+        Some("blue")
+    } else if tokens.contains("cyan") || tokens.contains("aqua") {
+        Some("cyan")
+    } else if tokens.contains("magenta") || tokens.contains("pink") {
+        Some("magenta")
+    } else if tokens.contains("yellow") {
+        Some("yellow")
+    } else if tokens.contains("amber") || tokens.contains("orange") {
+        Some("amber")
+    } else if tokens.contains("purple") || tokens.contains("violet") || tokens.contains("uv") {
+        Some("purple")
+    } else {
+        None
+    }
+}
+
+fn normalized_color_wheel_hex(value: &str) -> Option<String> {
+    let value = value.trim().strip_prefix('#')?;
+    (value.len() == 6 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| value.to_ascii_lowercase())
 }
 
 fn validate_project_custom_profiles(profiles: &[FixtureProfileSummary]) -> Result<(), String> {
@@ -10943,6 +11236,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                     blend_mode: effect.blend_mode.clone(),
                 }),
                 position_wave: None,
+                color: None,
             })
         }
         EffectKind::PositionWave => {
@@ -10980,6 +11274,21 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                     phase: effect.phase,
                     blend_mode: effect.blend_mode.clone(),
                 }),
+                color: None,
+            })
+        }
+        EffectKind::Color => {
+            let request = effect
+                .color
+                .clone()
+                .ok_or_else(|| "Color effect summary is missing its request body".to_string())?;
+            Ok(EffectPreset {
+                version: 1,
+                effect_type: EffectKind::Color,
+                enabled: effect.enabled,
+                lfo: None,
+                position_wave: None,
+                color: Some(request),
             })
         }
     }
@@ -11007,6 +11316,28 @@ fn apply_position_wave_effect_target_override(
     request
 }
 
+fn apply_color_effect_target_override(
+    mut request: ColorEffectRequest,
+    target_override: &EffectTargetOverride,
+) -> Result<ColorEffectRequest, String> {
+    validate_color_effect_target_override(target_override)?;
+    request.fixture_ids = target_override.fixture_ids.clone();
+    request.target_group_ids = target_override.target_group_ids.clone();
+    Ok(request)
+}
+
+fn validate_color_effect_target_override(
+    target_override: &EffectTargetOverride,
+) -> Result<(), String> {
+    if target_override.fixture_ids.is_empty() && target_override.target_group_ids.is_empty() {
+        return Err("Color effects require a fixture, selection, or group target".to_string());
+    }
+    if !target_override.video_targets.is_empty() {
+        return Err("Color effects cannot target video parameters".to_string());
+    }
+    validate_group_ids(&target_override.target_group_ids)
+}
+
 fn overridden_light_attribute(target_override: &EffectTargetOverride) -> String {
     if target_override.fixture_ids.is_empty() && target_override.target_group_ids.is_empty() {
         String::new()
@@ -11028,6 +11359,18 @@ fn validate_effect_target_override(target_override: &EffectTargetOverride) -> Re
     validate_group_ids(&target_override.target_group_ids)?;
     validate_video_effect_targets(&target_override.video_targets)?;
     Ok(())
+}
+
+fn validate_effect_target_override_for_preset(
+    preset: &EffectPreset,
+    target_override: &EffectTargetOverride,
+) -> Result<(), String> {
+    match preset.effect_type {
+        EffectKind::Color => validate_color_effect_target_override(target_override),
+        EffectKind::Lfo | EffectKind::PositionWave => {
+            validate_effect_target_override(target_override)
+        }
+    }
 }
 
 fn validate_node_graph_summary(
@@ -11309,8 +11652,8 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
     }
     match preset.effect_type {
         EffectKind::Lfo => {
-            if preset.position_wave.is_some() {
-                return Err("LFO effect preset must not contain a position wave body".to_string());
+            if preset.position_wave.is_some() || preset.color.is_some() {
+                return Err("LFO effect preset must not contain another effect body".to_string());
             }
             let request = preset
                 .lfo
@@ -11319,13 +11662,25 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
             validate_lfo_effect_request(request)?;
         }
         EffectKind::PositionWave => {
-            if preset.lfo.is_some() {
-                return Err("Position wave effect preset must not contain an LFO body".to_string());
+            if preset.lfo.is_some() || preset.color.is_some() {
+                return Err(
+                    "Position wave effect preset must not contain another effect body".to_string(),
+                );
             }
             let request = preset.position_wave.as_ref().ok_or_else(|| {
                 "Position wave effect preset is missing its request body".to_string()
             })?;
             validate_position_wave_effect_request(request)?;
+        }
+        EffectKind::Color => {
+            if preset.lfo.is_some() || preset.position_wave.is_some() {
+                return Err("Color effect preset must not contain another effect body".to_string());
+            }
+            let request = preset
+                .color
+                .as_ref()
+                .ok_or_else(|| "Color effect preset is missing its request body".to_string())?;
+            validate_color_effect_request(request)?;
         }
     }
     Ok(())
@@ -15852,6 +16207,46 @@ fn validate_position_wave_effect_request(
     }
     validate_group_ids(&request.target_group_ids)?;
     validate_video_effect_targets(&request.video_targets)?;
+    Ok(())
+}
+
+fn validate_color_effect_request(request: &ColorEffectRequest) -> Result<(), String> {
+    if request.label.trim().is_empty() {
+        return Err("Color effect label is required".to_string());
+    }
+    if request.fixture_ids.is_empty() && request.target_group_ids.is_empty() {
+        return Err("Color effect must target at least one fixture or group".to_string());
+    }
+    if !(2..=8).contains(&request.stops.len()) {
+        return Err("Color effect requires between 2 and 8 stops".to_string());
+    }
+    let mut previous_position = None;
+    for stop in &request.stops {
+        if !stop.position.is_finite() || !(0.0..=1.0).contains(&stop.position) {
+            return Err("Color effect stop positions must be finite and within 0..1".to_string());
+        }
+        if previous_position.is_some_and(|previous| stop.position <= previous) {
+            return Err("Color effect stop positions must be strictly increasing".to_string());
+        }
+        previous_position = Some(stop.position);
+    }
+    if request.period_ms < 10 {
+        return Err("Color effect period must be at least 10 ms".to_string());
+    }
+    if let Some(clock_sync) = request.clock_sync {
+        if !clock_sync.beats.is_finite() || clock_sync.beats <= 0.0 {
+            return Err(
+                "Color effect clock sync beats must be finite and greater than 0".to_string(),
+            );
+        }
+    }
+    if !request.phase.is_finite() {
+        return Err("Color effect phase must be finite".to_string());
+    }
+    if !request.fixture_spread.is_finite() || !(0.0..=1.0).contains(&request.fixture_spread) {
+        return Err("Color effect fixture spread must be finite and within 0..1".to_string());
+    }
+    validate_group_ids(&request.target_group_ids)?;
     Ok(())
 }
 
@@ -21571,6 +21966,69 @@ f 1 2 3
             speed: None,
             wavelength: None,
             enabled: true,
+            color: None,
+        }
+    }
+
+    fn project_color_control(attribute: &str, offset: u16) -> AttributeControl {
+        AttributeControl {
+            attribute: attribute.to_string(),
+            channel_name: attribute.to_string(),
+            geometry: None,
+            offsets: vec![offset],
+            resolution: AttributeResolution::EightBit,
+            default_value: 0,
+            functions: Vec::new(),
+        }
+    }
+
+    fn project_color_wheel_function(
+        name: &str,
+        slot: &str,
+        color: &str,
+        dmx_from: u16,
+        dmx_to: u16,
+    ) -> protocol::ChannelFunctionSummary {
+        protocol::ChannelFunctionSummary {
+            name: name.to_string(),
+            attribute: "ColorWheel1".to_string(),
+            parent_function: None,
+            dmx_from,
+            dmx_to,
+            physical_from: None,
+            physical_to: None,
+            wheel_slot: Some(slot.to_string()),
+            wheel_slot_name: Some(name.to_string()),
+            wheel_slot_color: Some(color.to_string()),
+            wheel_slot_media: None,
+        }
+    }
+
+    fn project_color_effect(id: EffectId, target_group_ids: Vec<String>) -> EffectSummary {
+        let mut request = sample_color_effect_request();
+        request.fixture_ids.clear();
+        request.target_group_ids = target_group_ids;
+        EffectSummary {
+            id,
+            label: request.label.clone(),
+            effect_type: EffectKind::Color,
+            fixture_ids: request.fixture_ids.clone(),
+            target_group_ids: request.target_group_ids.clone(),
+            attribute: "Color".to_string(),
+            video_targets: Vec::new(),
+            shape: protocol::LfoShape::Saw,
+            period_ms: Some(request.period_ms),
+            clock_sync: request.clock_sync,
+            low: 0,
+            high: u16::MAX,
+            phase: request.phase,
+            blend_mode: request.blend_mode.clone(),
+            origin: None,
+            direction: None,
+            speed: None,
+            wavelength: None,
+            enabled: true,
+            color: Some(request),
         }
     }
 
@@ -21806,6 +22264,7 @@ f 1 2 3
             speed: None,
             wavelength: None,
             enabled: true,
+            color: None,
         }];
         assert!(validate_project_file(&project)
             .unwrap_err()
@@ -21867,10 +22326,136 @@ f 1 2 3
             speed: Some(1.0),
             wavelength: Some(1.0),
             enabled: true,
+            color: None,
         }];
         assert!(validate_project_file(&project)
             .unwrap_err()
             .contains("origin and direction values must be finite"));
+    }
+
+    #[test]
+    fn project_file_validation_accepts_mixed_color_targets_and_rejects_zero_support() {
+        let mut rgb = project_fixture(1, "RGB Bar", 0, 1);
+        rgb.group_ids = vec!["front".to_string()];
+        rgb.controls.extend([
+            project_color_control("ColorAdd_R", 4),
+            project_color_control("ColorAdd_G", 5),
+            project_color_control("ColorAdd_B", 6),
+            project_color_control("ColorAdd_W", 7),
+        ]);
+
+        let mut wheel = project_fixture(2, "Wheel Spot", 0, 20);
+        wheel.group_ids = vec!["front".to_string()];
+        let mut wheel_control = project_color_control("ColorWheel1", 4);
+        wheel_control.functions = vec![
+            protocol::ChannelFunctionSummary {
+                name: "Open".to_string(),
+                attribute: "ColorWheel1".to_string(),
+                parent_function: None,
+                dmx_from: 0,
+                dmx_to: 84,
+                physical_from: None,
+                physical_to: None,
+                wheel_slot: Some("Open".to_string()),
+                wheel_slot_name: Some("Open".to_string()),
+                wheel_slot_color: Some("#FFFFFF".to_string()),
+                wheel_slot_media: None,
+            },
+            protocol::ChannelFunctionSummary {
+                name: "Red".to_string(),
+                attribute: "ColorWheel1".to_string(),
+                parent_function: None,
+                dmx_from: 85,
+                dmx_to: 169,
+                physical_from: None,
+                physical_to: None,
+                wheel_slot: Some("Red".to_string()),
+                wheel_slot_name: Some("Red".to_string()),
+                wheel_slot_color: Some("#FF0000".to_string()),
+                wheel_slot_media: None,
+            },
+            protocol::ChannelFunctionSummary {
+                name: "Blue".to_string(),
+                attribute: "ColorWheel1".to_string(),
+                parent_function: None,
+                dmx_from: 170,
+                dmx_to: 255,
+                physical_from: None,
+                physical_to: None,
+                wheel_slot: Some("Blue".to_string()),
+                wheel_slot_name: Some("Blue".to_string()),
+                wheel_slot_color: Some("#0000FF".to_string()),
+                wheel_slot_media: None,
+            },
+        ];
+        wheel.controls.push(wheel_control);
+
+        let mut unsupported = project_fixture(3, "Dimmer Only", 0, 40);
+        unsupported.group_ids = vec!["front".to_string()];
+        let mut project = ProjectFile {
+            version: 1,
+            app: "Syndocal".to_string(),
+            custom_profiles: Vec::new(),
+            snapshot: EngineSnapshot {
+                fixtures: vec![rgb, wheel, unsupported.clone()],
+                effects: vec![project_color_effect(9, vec!["front".to_string()])],
+                ..EngineSnapshot::default()
+            },
+        };
+
+        validate_project_file(&project).unwrap();
+
+        unsupported.group_ids = vec!["front".to_string()];
+        project.snapshot.fixtures = vec![unsupported];
+        let error = validate_project_file(&project).unwrap_err();
+        assert!(error.contains("no fixtures with an RGB, RGBW, CMY, HSV, or colored-wheel"));
+    }
+
+    #[test]
+    fn color_support_detection_accepts_gdtf_rgb_cmy_and_hsb_aliases() {
+        let mut rgb = project_fixture(1, "GDTF RGB", 0, 1);
+        rgb.controls.extend([
+            project_color_control("ColorRGB_Red", 4),
+            project_color_control("ColorRGB_Green", 5),
+            project_color_control("ColorRGB_Blue", 6),
+        ]);
+        assert!(fixture_supports_color_effect(&rgb));
+
+        let mut cmy = project_fixture(2, "GDTF CMY", 0, 20);
+        cmy.controls.extend([
+            project_color_control("ColorRGB_Cyan", 4),
+            project_color_control("ColorRGB_Magenta", 5),
+            project_color_control("ColorRGB_Yellow", 6),
+        ]);
+        assert!(fixture_supports_color_effect(&cmy));
+
+        let mut hsb = project_fixture(3, "GDTF HSB", 0, 40);
+        hsb.controls.extend([
+            project_color_control("HSB_Hue", 4),
+            project_color_control("HSB_Saturation", 5),
+            project_color_control("HSB_Brightness", 6),
+        ]);
+        assert!(fixture_supports_color_effect(&hsb));
+
+        let mut duplicate_wheel = project_fixture(4, "Duplicate Wheel Ranges", 0, 60);
+        let mut wheel_control = project_color_control("ColorWheel1", 4);
+        wheel_control.functions = vec![
+            project_color_wheel_function("Red static", "Wheel.Red", "#FF0000", 0, 10_000),
+            project_color_wheel_function("Red shake", "Wheel.Red", "#FF0000", 10_001, 20_000),
+        ];
+        duplicate_wheel.controls.push(wheel_control.clone());
+        assert!(!fixture_supports_color_effect(&duplicate_wheel));
+
+        wheel_control.functions.push(project_color_wheel_function(
+            "Blue",
+            "Wheel.Blue",
+            "#0000FF",
+            20_001,
+            u16::MAX,
+        ));
+        duplicate_wheel.controls.pop();
+        duplicate_wheel.controls.push(wheel_control);
+        assert!(fixture_supports_color_effect(&duplicate_wheel));
     }
 
     #[test]
@@ -22765,6 +23350,47 @@ f 1 2 3
         }
     }
 
+    fn sample_color_effect_request() -> ColorEffectRequest {
+        ColorEffectRequest {
+            label: "Front spectrum".to_string(),
+            fixture_ids: vec![1],
+            target_group_ids: Vec::new(),
+            stops: vec![
+                protocol::ColorEffectStop {
+                    position: 0.0,
+                    color: protocol::ColorEffectColor {
+                        red: u16::MAX,
+                        green: 0,
+                        blue: 0,
+                    },
+                },
+                protocol::ColorEffectStop {
+                    position: 0.5,
+                    color: protocol::ColorEffectColor {
+                        red: 0,
+                        green: u16::MAX,
+                        blue: 0,
+                    },
+                },
+                protocol::ColorEffectStop {
+                    position: 1.0,
+                    color: protocol::ColorEffectColor {
+                        red: 0,
+                        green: 0,
+                        blue: u16::MAX,
+                    },
+                },
+            ],
+            algorithm: protocol::ColorEffectAlgorithm::Bounce,
+            interpolation: protocol::ColorEffectInterpolation::HsvLongest,
+            period_ms: 2_000,
+            clock_sync: Some(protocol::EffectClockSync { beats: 4.0 }),
+            phase: 0.125,
+            fixture_spread: 0.75,
+            blend_mode: protocol::EffectBlendMode::Override,
+        }
+    }
+
     fn sample_video_effect_target(layer_id: VideoLayerId) -> VideoEffectTarget {
         VideoEffectTarget {
             layer_ids: vec![layer_id],
@@ -22797,6 +23423,7 @@ f 1 2 3
             speed: None,
             wavelength: None,
             enabled: false,
+            color: None,
         };
 
         let preset = effect_summary_to_preset(&effect).unwrap();
@@ -22857,6 +23484,7 @@ f 1 2 3
             speed: Some(1.25),
             wavelength: Some(3.5),
             enabled: false,
+            color: None,
         };
 
         let preset = effect_summary_to_preset(&effect).unwrap();
@@ -22886,6 +23514,44 @@ f 1 2 3
         assert_eq!(wave.low, 8_192);
         assert_eq!(wave.high, 57_344);
         assert_eq!(wave.blend_mode, protocol::EffectBlendMode::Multiply);
+    }
+
+    #[test]
+    fn effect_summary_serializes_color_preset_without_scalar_bodies() {
+        let request = sample_color_effect_request();
+        let effect = EffectSummary {
+            id: 14,
+            label: request.label.clone(),
+            effect_type: EffectKind::Color,
+            fixture_ids: request.fixture_ids.clone(),
+            target_group_ids: request.target_group_ids.clone(),
+            attribute: "Color".to_string(),
+            video_targets: Vec::new(),
+            shape: protocol::LfoShape::Saw,
+            period_ms: Some(request.period_ms),
+            clock_sync: request.clock_sync,
+            low: 0,
+            high: u16::MAX,
+            phase: request.phase,
+            blend_mode: request.blend_mode.clone(),
+            origin: None,
+            direction: None,
+            speed: None,
+            wavelength: None,
+            enabled: false,
+            color: Some(request.clone()),
+        };
+
+        let preset = effect_summary_to_preset(&effect).unwrap();
+        validate_effect_preset(&preset).unwrap();
+        let json = serde_json::to_string_pretty(&preset).unwrap();
+        let roundtrip: EffectPreset = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(roundtrip.effect_type, EffectKind::Color);
+        assert!(!roundtrip.enabled);
+        assert!(roundtrip.lfo.is_none());
+        assert!(roundtrip.position_wave.is_none());
+        assert_eq!(roundtrip.color, Some(request));
     }
 
     #[test]
@@ -22950,11 +23616,65 @@ f 1 2 3
             enabled: true,
             lfo: Some(sample_lfo_request()),
             position_wave: Some(sample_position_wave_request()),
+            color: None,
         };
 
         let error = validate_effect_preset(&preset).unwrap_err();
 
         assert!(error.contains("must not contain"));
+
+        let color_with_scalar_body = EffectPreset {
+            version: 1,
+            effect_type: EffectKind::Color,
+            enabled: true,
+            lfo: Some(sample_lfo_request()),
+            position_wave: None,
+            color: Some(sample_color_effect_request()),
+        };
+        assert!(validate_effect_preset(&color_with_scalar_body)
+            .unwrap_err()
+            .contains("must not contain"));
+    }
+
+    #[test]
+    fn color_effect_validation_rejects_invalid_palette_timing_and_targets() {
+        let mut request = sample_color_effect_request();
+        validate_color_effect_request(&request).unwrap();
+
+        request.fixture_ids.clear();
+        assert!(validate_color_effect_request(&request)
+            .unwrap_err()
+            .contains("target at least one"));
+
+        request = sample_color_effect_request();
+        request.stops.truncate(1);
+        assert!(validate_color_effect_request(&request)
+            .unwrap_err()
+            .contains("between 2 and 8"));
+
+        request = sample_color_effect_request();
+        request.stops[1].position = request.stops[0].position;
+        assert!(validate_color_effect_request(&request)
+            .unwrap_err()
+            .contains("strictly increasing"));
+
+        request = sample_color_effect_request();
+        request.period_ms = 9;
+        assert!(validate_color_effect_request(&request)
+            .unwrap_err()
+            .contains("at least 10"));
+
+        request = sample_color_effect_request();
+        request.fixture_spread = f32::NAN;
+        assert!(validate_color_effect_request(&request)
+            .unwrap_err()
+            .contains("within 0..1"));
+
+        request = sample_color_effect_request();
+        request.fixture_spread = 1.01;
+        assert!(validate_color_effect_request(&request)
+            .unwrap_err()
+            .contains("within 0..1"));
     }
 
     #[test]
@@ -23175,12 +23895,12 @@ f 1 2 3
             (
                 "spectrum",
                 SAMPLE_EFFECT_PRESET_COLOUR_SPECTRUM_LABEL,
-                EffectKind::Lfo,
+                EffectKind::Color,
             ),
             (
                 "colour-chase",
                 SAMPLE_EFFECT_PRESET_COLOUR_CHASE_LABEL,
-                EffectKind::PositionWave,
+                EffectKind::Color,
             ),
         ];
         for (id, expected_label, expected_kind) in expected {
@@ -23200,25 +23920,51 @@ f 1 2 3
         let target_override = EffectTargetOverride {
             fixture_ids: vec![42],
             target_group_ids: Vec::new(),
-            attribute: "ColorRed".to_string(),
+            attribute: String::new(),
             video_targets: Vec::new(),
         };
         let (_, spectrum_json) = sample_effect_preset_json("spectrum").unwrap();
         let spectrum: EffectPreset = serde_json::from_str(spectrum_json).unwrap();
+        validate_effect_target_override_for_preset(&spectrum, &target_override).unwrap();
+        assert!(spectrum.lfo.is_none());
+        assert!(spectrum.position_wave.is_none());
         let spectrum_request =
-            apply_lfo_effect_target_override(spectrum.lfo.unwrap(), &target_override);
-        assert_eq!(spectrum_request.attribute, "ColorRed");
-        assert_eq!(spectrum_request.shape, protocol::LfoShape::Saw);
+            apply_color_effect_target_override(spectrum.color.unwrap(), &target_override).unwrap();
+        assert_eq!(spectrum_request.fixture_ids, vec![42]);
+        assert_eq!(spectrum_request.stops.len(), 7);
+        assert_eq!(
+            spectrum_request.algorithm,
+            protocol::ColorEffectAlgorithm::Cycle
+        );
+        assert_eq!(
+            spectrum_request.interpolation,
+            protocol::ColorEffectInterpolation::HsvShortest
+        );
 
         let (_, colour_chase_json) = sample_effect_preset_json("colour-chase").unwrap();
         let colour_chase: EffectPreset = serde_json::from_str(colour_chase_json).unwrap();
-        let colour_chase_request = apply_position_wave_effect_target_override(
-            colour_chase.position_wave.unwrap(),
-            &target_override,
+        validate_effect_target_override_for_preset(&colour_chase, &target_override).unwrap();
+        assert!(colour_chase.lfo.is_none());
+        assert!(colour_chase.position_wave.is_none());
+        let colour_chase_request =
+            apply_color_effect_target_override(colour_chase.color.unwrap(), &target_override)
+                .unwrap();
+        assert_eq!(colour_chase_request.fixture_ids, vec![42]);
+        assert_eq!(colour_chase_request.stops.len(), 4);
+        assert_eq!(
+            colour_chase_request.algorithm,
+            protocol::ColorEffectAlgorithm::Sequence
         );
-        assert_eq!(colour_chase_request.attribute, "ColorRed");
-        assert_eq!(colour_chase_request.shape, protocol::LfoShape::Saw);
-        assert_eq!(colour_chase_request.wavelength, 3.0);
+        assert_eq!(colour_chase_request.fixture_spread, 1.0);
+
+        let mut video_target = target_override;
+        video_target.video_targets = vec![sample_video_effect_target(7)];
+        let colour_chase: EffectPreset = serde_json::from_str(colour_chase_json).unwrap();
+        assert!(
+            validate_effect_target_override_for_preset(&colour_chase, &video_target)
+                .unwrap_err()
+                .contains("cannot target video")
+        );
     }
 
     #[test]
@@ -23511,6 +24257,101 @@ f 1 2 3
     }
 
     #[test]
+    fn embedded_color_sample_adds_and_duplicates_complete_disabled_body() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let profile = custom_fixture_profile_from_request(CustomFixtureProfileRequest {
+            manufacturer: "Syndocal".to_string(),
+            name: "RGB Preset Target".to_string(),
+            mode_name: "RGB".to_string(),
+            attributes: vec![
+                "ColorAdd_R".to_string(),
+                "ColorAdd_G".to_string(),
+                "ColorAdd_B".to_string(),
+            ],
+        });
+        let fixture_id = engine.allocate_fixture_id();
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id,
+                request: PatchFixtureRequest {
+                    profile_path: profile.source_path.clone(),
+                    mode_name: Some("RGB".to_string()),
+                    label: "RGB Preset Target".to_string(),
+                    universe: 0,
+                    address: 1,
+                    group_ids: Vec::new(),
+                    position: Vec3::default(),
+                    rotation: Rotation3::default(),
+                },
+                profile,
+            })
+            .unwrap();
+        for _ in 0..20 {
+            if engine
+                .snapshot()
+                .fixtures
+                .iter()
+                .any(|fixture| fixture.id == fixture_id)
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+
+        let (_, json) = sample_effect_preset_json("spectrum").unwrap();
+        let mut preset: EffectPreset = serde_json::from_str(json).unwrap();
+        preset.enabled = false;
+        let target_override = EffectTargetOverride {
+            fixture_ids: vec![fixture_id],
+            target_group_ids: Vec::new(),
+            attribute: String::new(),
+            video_targets: Vec::new(),
+        };
+        validate_effect_target_override_for_preset(&preset, &target_override).unwrap();
+        let source_id =
+            add_effect_preset_to_engine(&engine, preset, Some(&target_override)).unwrap();
+        let source = engine
+            .snapshot()
+            .effects
+            .into_iter()
+            .find(|effect| effect.id == source_id)
+            .expect("Color sample should publish before add returns");
+        assert_eq!(source.effect_type, EffectKind::Color);
+        assert!(!source.enabled);
+        let source_color = source.color.expect("Color sample body");
+        assert_eq!(source_color.fixture_ids, vec![fixture_id]);
+        assert!(source_color.target_group_ids.is_empty());
+        assert_eq!(source_color.stops.len(), 7);
+        assert_eq!(
+            source_color.interpolation,
+            protocol::ColorEffectInterpolation::HsvShortest
+        );
+
+        let duplicate_id = duplicate_effect_in_engine(&engine, source_id).unwrap();
+        let duplicate = engine
+            .snapshot()
+            .effects
+            .into_iter()
+            .find(|effect| effect.id == duplicate_id)
+            .expect("Color duplicate should publish before duplicate returns");
+        assert!(!duplicate.enabled);
+        let duplicate_color = duplicate.color.expect("duplicated Color body");
+        assert_eq!(duplicate_color.label, "Colour Spectrum Copy");
+        assert_eq!(duplicate_color.fixture_ids, source_color.fixture_ids);
+        assert_eq!(duplicate_color.stops, source_color.stops);
+        assert_eq!(duplicate_color.algorithm, source_color.algorithm);
+        assert_eq!(duplicate_color.interpolation, source_color.interpolation);
+        assert_eq!(duplicate_color.period_ms, source_color.period_ms);
+        assert_eq!(duplicate_color.clock_sync, source_color.clock_sync);
+        assert_eq!(duplicate_color.phase, source_color.phase);
+        assert_eq!(duplicate_color.fixture_spread, source_color.fixture_spread);
+        assert_eq!(duplicate_color.blend_mode, source_color.blend_mode);
+    }
+
+    #[test]
     fn duplicate_effect_copies_lfo_preset_details_into_new_stack_item() {
         let engine = EngineHandle::start(DmxOutputConfig {
             enabled: false,
@@ -23578,6 +24419,7 @@ f 1 2 3
                     blend_mode: protocol::EffectBlendMode::Add,
                 }),
                 position_wave: None,
+                color: None,
             },
             None,
         )
@@ -24639,8 +25481,10 @@ fn main() {
             load_video_output_mapping_preset_file,
             add_lfo_effect,
             add_position_wave_effect,
+            add_color_effect,
             update_lfo_effect,
             update_position_wave_effect,
+            update_color_effect,
             save_node_graph,
             set_node_graph_enabled,
             remove_node_graph,

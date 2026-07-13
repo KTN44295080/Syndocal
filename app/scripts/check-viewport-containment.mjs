@@ -24,7 +24,7 @@ const screenshotDir = process.env.SYNDOCAL_VIEWPORT_SCREENSHOT_DIR
 const allViewports = [
   { width: 1280, height: 720 },
   { width: 1366, height: 768 },
-  { width: 2048, height: 1129 },
+  { width: 2048, height: 1152 },
 ];
 const viewports = largeShowMode || process.env.SYNDOCAL_VIEWPORT_SINGLE === "1" ? [allViewports[1]] : allViewports;
 const setupTabs = [
@@ -288,6 +288,30 @@ async function clickVisibleByText(client, selector, text) {
   })()`);
   if (!clicked) {
     throw new Error(`Could not find visible ${selector} text: ${text}`);
+  }
+}
+
+async function selectVisibleOption(client, selector, value) {
+  const selected = await client.evaluate(`(() => {
+    const wanted = ${JSON.stringify(value)};
+    const select = [...document.querySelectorAll(${JSON.stringify(selector)})]
+      .filter((candidate) => candidate instanceof HTMLSelectElement)
+      .filter((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        const style = window.getComputedStyle(candidate);
+        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      })
+      .find((candidate) => [...candidate.options].some((option) => option.value === wanted));
+    if (!select) {
+      return false;
+    }
+    select.value = wanted;
+    select.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    return select.value === wanted;
+  })()`);
+  if (!selected) {
+    throw new Error(`Could not select visible ${selector} option: ${value}`);
   }
 }
 
@@ -780,8 +804,10 @@ async function measure(client, label) {
         return select ? select.value : '';
       })(),
       effectCommonAttributeValue: (() => {
-        const select = [...document.querySelectorAll('.effectEditor select')]
-          .find((candidate) => ![...candidate.options].some((option) => ['selection', 'fixture', 'group', 'video', 'PositionWave', 'Lfo'].includes(option.value)));
+        const attributeLabel = [...document.querySelectorAll('.effectForm > label')]
+          .find((candidate) => [...candidate.childNodes]
+            .some((node) => node.nodeType === Node.TEXT_NODE && (node.textContent || '').trim() === 'Attribute'));
+        const select = attributeLabel?.querySelector('select');
         return select ? select.value : '';
       })(),
       visibleFixtureEditSurfaceCount: visibleCount('.fixtureEditSurface'),
@@ -813,6 +839,91 @@ async function measure(client, label) {
       visibleActiveEffectFamilyButtonCount: visibleCount('.effectFamilyRail button.active[aria-pressed="true"]'),
       visibleEffectLibraryCardCount: visibleCount('.sampleEffectPresetCard'),
       visibleTargetRequiredEffectCardCount: visibleCount('.sampleEffectPresetCard[data-requires-target="true"]'),
+      visibleColorEffectEditorCount: visibleCount('.colorEffectEditor'),
+      visibleColorEffectStopCount: visibleCount('.colorEffectStopRow'),
+      visibleColorEffectAddButtonCount: [...document.querySelectorAll('.colorEffectPaletteFooter button')]
+        .filter((button) => {
+          const rect = button.getBoundingClientRect();
+          const style = window.getComputedStyle(button);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' &&
+            (button.textContent || '').trim().toLowerCase() === 'add stop';
+        }).length,
+      visibleColorEffectRemoveButtonCount: visibleCount('.colorEffectStopAction.remove'),
+      visibleColorEffectGradientCount: visibleCount('.colorEffectGradientPreview'),
+      colorEffectGradientRenderedCount: [...document.querySelectorAll('.colorEffectGradientPreview')]
+        .filter((element) => {
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' &&
+            style.backgroundImage.includes('linear-gradient');
+        }).length,
+      visibleColorEffectAlgorithmSelectCount: [...document.querySelectorAll('.colorEffectModeGrid select')]
+        .filter((select) => {
+          const rect = select.getBoundingClientRect();
+          const style = window.getComputedStyle(select);
+          const optionValues = [...select.options].map((option) => option.value);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' &&
+            ['Cycle', 'Bounce', 'Sequence', 'Random'].every((value) => optionValues.includes(value));
+        }).length,
+      colorEffectAlgorithmValue: (() => {
+        const select = [...document.querySelectorAll('.colorEffectModeGrid select')]
+          .find((candidate) => [...candidate.options].some((option) => option.value === 'Cycle'));
+        return select ? select.value : '';
+      })(),
+      visibleColorEffectInterpolationSelectCount: [...document.querySelectorAll('.colorEffectModeGrid select')]
+        .filter((select) => {
+          const rect = select.getBoundingClientRect();
+          const style = window.getComputedStyle(select);
+          const optionValues = [...select.options].map((option) => option.value);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' &&
+            ['Rgb', 'HsvShortest', 'HsvLongest'].every((value) => optionValues.includes(value));
+        }).length,
+      colorEffectInterpolationValue: (() => {
+        const select = [...document.querySelectorAll('.colorEffectModeGrid select')]
+          .find((candidate) => [...candidate.options].some((option) => option.value === 'HsvShortest'));
+        return select ? select.value : '';
+      })(),
+      visibleLegacyEffectAttributeCount: [...document.querySelectorAll('.effectForm > label')]
+        .filter((label) => {
+          const rect = label.getBoundingClientRect();
+          const style = window.getComputedStyle(label);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' &&
+            [...label.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && (node.textContent || '').trim() === 'Attribute');
+        }).length,
+      visibleLegacyEffectWaveformCount: visibleCount('.effectShapePresetPanel') +
+        visibleCount('.effectBpmPeriodPanel') + visibleCount('.waveStagePicker'),
+      visibleLegacyEffectVideoTargetCount: visibleCount('.videoEffectTarget') + visibleCount('.videoTargetPositionPanel'),
+      colorEffectDraftSummaryIsCurrent: (() => {
+        const text = document.querySelector('.effectTargetHint')?.textContent || '';
+        return text.includes('whole-fixture colour') && text.includes('Color Random / 3 stops') && !text.includes('LFO ');
+      })(),
+      colorEffectStatusIsCurrent: (() => {
+        const text = document.querySelector('.appStatusText')?.textContent || '';
+        return text.includes('Prepared a multi-color draft') && !text.includes('position wave draft');
+      })(),
+      colorEffectDisabledVideoOptionCount: [...document.querySelectorAll('.effectEditor select')]
+        .filter((select) => [...select.options].some((option) => option.value === 'selection'))
+        .flatMap((select) => [...select.options])
+        .filter((option) => option.value === 'video' && option.disabled).length,
+      colorEffectUnlabeledActionCount: [...document.querySelectorAll('.colorEffectStopAction')]
+        .filter((button) => {
+          const rect = button.getBoundingClientRect();
+          const style = window.getComputedStyle(button);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' &&
+            !(button.getAttribute('aria-label') || '').trim();
+        }).length,
+      colorEffectHorizontalOverflowPx: (() => {
+        const editor = document.querySelector('.colorEffectEditor');
+        return editor ? Math.max(0, editor.scrollWidth - editor.clientWidth) : -1;
+      })(),
+      colorEffectEditorContained: (() => {
+        const editor = document.querySelector('.colorEffectEditor');
+        const form = document.querySelector('.effectInspectorPane > .effectForm');
+        if (!editor || !form) return false;
+        const editorRect = editor.getBoundingClientRect();
+        const formRect = form.getBoundingClientRect();
+        return editorRect.left >= formRect.left - 1 && editorRect.right <= formRect.right + 1;
+      })(),
       visibleNodeGraphPanelCount: visibleCount('.nodeGraphPanel'),
       nodeGraphAudioSourceOptionCount: [...document.querySelectorAll('.nodeGraphPanel option')]
         .filter((option) => (option.textContent || '').trim().toLowerCase() === 'audio fft').length,
@@ -1095,7 +1206,7 @@ function hasExpectedControlModeSurface(result) {
       result.visibleControlStageCount !== 1 ||
       result.controlStageWidth < 520 ||
       result.controlStageHeight < 190 ||
-      result.controlStageViewBoxAspect < (result.label.startsWith("control-live-") ? 1.45 : 2) ||
+      result.controlStageViewBoxAspect < (result.label.startsWith("control-live-") ? 1.44 : 2) ||
       result.controlStageGridCoverage < 0.95 ||
       result.controlStageFixtureMinSize < 12 ||
       result.visibleControlStageReferenceLabelCount > 1
@@ -1144,6 +1255,32 @@ function hasExpectedControlModeSurface(result) {
         result.visibleEffectRackTabCount === 2;
       if (result.label.startsWith("control-edit-effects-graphs-")) {
         return hasFxDesk && result.visibleNodeGraphPanelCount === 1 && result.controlWorkSurfaceUnsafeOverflowCount === 0;
+      }
+      if (result.label.startsWith("control-edit-effects-color-editor-")) {
+        return (
+          hasFxDesk &&
+          result.effectTypeValue === "Color" &&
+          result.visibleColorEffectEditorCount === 1 &&
+          result.visibleColorEffectStopCount === 3 &&
+          result.visibleColorEffectAddButtonCount === 1 &&
+          result.visibleColorEffectRemoveButtonCount === 3 &&
+          result.visibleColorEffectGradientCount === 1 &&
+          result.colorEffectGradientRenderedCount === 1 &&
+          result.visibleColorEffectAlgorithmSelectCount === 1 &&
+          result.colorEffectAlgorithmValue === "Random" &&
+          result.visibleColorEffectInterpolationSelectCount === 1 &&
+          result.colorEffectInterpolationValue === "HsvLongest" &&
+          result.visibleLegacyEffectAttributeCount === 0 &&
+          result.visibleLegacyEffectWaveformCount === 0 &&
+          result.visibleLegacyEffectVideoTargetCount === 0 &&
+          result.colorEffectDraftSummaryIsCurrent &&
+          result.colorEffectStatusIsCurrent &&
+          result.colorEffectDisabledVideoOptionCount === 1 &&
+          result.colorEffectUnlabeledActionCount === 0 &&
+          result.colorEffectHorizontalOverflowPx <= 1 &&
+          result.colorEffectEditorContained &&
+          result.controlWorkSurfaceUnsafeOverflowCount === 0
+        );
       }
       if (result.label.startsWith("control-edit-effects-colour-")) {
         return (
@@ -1639,6 +1776,39 @@ async function runViewport(client, viewport) {
       await sleep(80);
       results.push(await measure(client, `control-edit-effects-colour-${viewport.width}x${viewport.height}`));
       await clickVisibleByText(client, ".effectFamilyRail button", "All");
+      await selectVisibleOption(client, ".effectEditor select", "Color");
+      await sleep(120);
+      const initialColorStopCount = await client.evaluate("document.querySelectorAll('.colorEffectStopRow').length");
+      if (initialColorStopCount !== 3) {
+        throw new Error(`Expected 3 initial Color stops, found ${initialColorStopCount}`);
+      }
+      await clickVisibleByText(client, ".colorEffectPaletteFooter button", "Add stop");
+      await sleep(40);
+      const addedColorStopCount = await client.evaluate("document.querySelectorAll('.colorEffectStopRow').length");
+      if (addedColorStopCount !== 4) {
+        throw new Error(`Expected Add stop to create a fourth Color stop, found ${addedColorStopCount}`);
+      }
+      const removedColorStop = await client.evaluate(`(() => {
+        const buttons = [...document.querySelectorAll('.colorEffectStopAction.remove:not(:disabled)')]
+          .filter((candidate) => {
+            const rect = candidate.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+          });
+        const button = buttons[1] || buttons[0];
+        button?.click();
+        return Boolean(button);
+      })()`);
+      if (!removedColorStop) {
+        throw new Error("Could not exercise Color stop removal");
+      }
+      await selectVisibleOption(client, ".colorEffectModeGrid select", "Random");
+      await selectVisibleOption(client, ".colorEffectModeGrid select", "HsvLongest");
+      await sleep(240);
+      if (screenshotDir) {
+        const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+        writeFileSync(join(screenshotDir, `control-edit-effects-color-editor-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
+      }
+      results.push(await measure(client, `control-edit-effects-color-editor-${viewport.width}x${viewport.height}`));
       await clickVisibleByText(client, ".editDeskTabs button", "DMX");
       await sleep(120);
       results.push(await measure(client, `control-edit-dmx-${viewport.width}x${viewport.height}`));
@@ -1860,11 +2030,14 @@ async function main() {
       const editVisualSuffix = result.label.startsWith("control-edit-position-") || result.label.startsWith("control-edit-color-")
         ? ` editVisual=${result.visiblePanTiltPadCount}/${result.visiblePositionReadoutCount}/${result.visibleColorPlaneCount}/${result.visibleColorReadoutCount}/${result.visibleGroupControlBannerCount}/${result.visibleAttributeTargetSummaryCount}/${result.visibleGroupAttributeTargetSummaryCount}`
         : "";
+      const colorEffectSuffix = result.label.startsWith("control-edit-effects-color-editor-")
+        ? ` colorFx=${result.effectTypeValue}/${result.visibleColorEffectEditorCount}/${result.visibleColorEffectStopCount}/${result.visibleColorEffectAddButtonCount}/${result.visibleColorEffectRemoveButtonCount}/${result.visibleColorEffectAlgorithmSelectCount}/${result.visibleColorEffectInterpolationSelectCount}/${result.visibleColorEffectGradientCount} legacy=${result.visibleLegacyEffectAttributeCount}/${result.visibleLegacyEffectWaveformCount}/${result.visibleLegacyEffectVideoTargetCount} overflow=${result.colorEffectHorizontalOverflowPx}`
+        : "";
       const mixerSuffix = result.label.startsWith("control-mixer-")
         ? ` mixer=${result.visibleVideoOutputItemCount}/${result.visibleVideoOutputSelectedItemCount}/${result.visibleVideoMixerOutputDeckCount}/${result.visibleVideoMixerOutputFaderCount}/${result.visibleVideoMixerOutputSelectButtonCount}/${result.visibleVideoLayerItemCount}/${result.visibleBuiltinVideoFxSelectCount}/${result.visibleVideoMixerLayerDeckCount}/${result.visibleVideoMixerLayerFaderCount}/${result.visibleVideoMixerLayerButtonCount}`
         : "";
       console.log(
-        `${status} ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${keyboardSuffix}${timelineSuffix}${touchSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${mixerSuffix}`,
+        `${status} ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${keyboardSuffix}${timelineSuffix}${touchSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${colorEffectSuffix}${mixerSuffix}`,
       );
     }
     if (

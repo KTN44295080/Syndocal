@@ -2205,6 +2205,7 @@ mod tests {
                 speed: None,
                 wavelength: None,
                 enabled: true,
+                color: None,
             }],
             ..EngineSnapshot::default()
         };

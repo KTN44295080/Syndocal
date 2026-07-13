@@ -1439,6 +1439,50 @@ pub struct NodeGraphPresetFile {
     pub graph: NodeGraphSummary,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct ColorEffectColor {
+    pub red: u16,
+    pub green: u16,
+    pub blue: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ColorEffectStop {
+    pub position: f32,
+    pub color: ColorEffectColor,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ColorEffectAlgorithm {
+    Cycle,
+    Bounce,
+    Sequence,
+    Random,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ColorEffectInterpolation {
+    Rgb,
+    HsvShortest,
+    HsvLongest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ColorEffectRequest {
+    pub label: String,
+    pub fixture_ids: Vec<FixtureId>,
+    pub target_group_ids: Vec<String>,
+    pub stops: Vec<ColorEffectStop>,
+    pub algorithm: ColorEffectAlgorithm,
+    pub interpolation: ColorEffectInterpolation,
+    pub period_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_sync: Option<EffectClockSync>,
+    pub phase: f32,
+    pub fixture_spread: f32,
+    pub blend_mode: EffectBlendMode,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LfoEffectRequest {
     pub label: String,
@@ -1480,6 +1524,7 @@ pub struct PositionWaveEffectRequest {
 pub enum EffectKind {
     Lfo,
     PositionWave,
+    Color,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1504,6 +1549,8 @@ pub struct EffectSummary {
     pub speed: Option<f32>,
     pub wavelength: Option<f32>,
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<ColorEffectRequest>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1513,6 +1560,8 @@ pub struct EffectPreset {
     pub enabled: bool,
     pub lfo: Option<LfoEffectRequest>,
     pub position_wave: Option<PositionWaveEffectRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<ColorEffectRequest>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -2415,5 +2464,83 @@ mod tests {
         assert_eq!(parsed.bitmap_mask_width, 0);
         assert_eq!(parsed.bitmap_mask_height, 0);
         assert_eq!(parsed.bitmap_mask_luma_words, [0; 32]);
+    }
+
+    #[test]
+    fn legacy_effect_summary_defaults_color_body_to_none() {
+        let mut value = serde_json::json!({
+            "id": 7,
+            "label": "Legacy LFO",
+            "effect_type": "Lfo",
+            "fixture_ids": [1],
+            "target_group_ids": [],
+            "attribute": "Dimmer",
+            "video_targets": [],
+            "shape": "Sine",
+            "period_ms": 1000,
+            "clock_sync": null,
+            "low": 0,
+            "high": 65535,
+            "phase": 0.0,
+            "blend_mode": "Override",
+            "origin": null,
+            "direction": null,
+            "speed": null,
+            "wavelength": null,
+            "enabled": true
+        });
+        value.as_object_mut().unwrap().remove("color");
+
+        let parsed: super::EffectSummary = serde_json::from_value(value).unwrap();
+
+        assert_eq!(parsed.effect_type, super::EffectKind::Lfo);
+        assert!(parsed.color.is_none());
+    }
+
+    #[test]
+    fn color_effect_request_and_preset_roundtrip_rgb16_stops() {
+        let request = super::ColorEffectRequest {
+            label: "Rainbow".to_string(),
+            fixture_ids: vec![1, 2],
+            target_group_ids: vec!["Front".to_string()],
+            stops: vec![
+                super::ColorEffectStop {
+                    position: 0.0,
+                    color: super::ColorEffectColor {
+                        red: 65_535,
+                        green: 0,
+                        blue: 0,
+                    },
+                },
+                super::ColorEffectStop {
+                    position: 1.0,
+                    color: super::ColorEffectColor {
+                        red: 0,
+                        green: 0,
+                        blue: 65_535,
+                    },
+                },
+            ],
+            algorithm: super::ColorEffectAlgorithm::Bounce,
+            interpolation: super::ColorEffectInterpolation::HsvShortest,
+            period_ms: 2_000,
+            clock_sync: Some(super::EffectClockSync { beats: 4.0 }),
+            phase: 0.125,
+            fixture_spread: 1.0,
+            blend_mode: super::EffectBlendMode::Multiply,
+        };
+        let preset = super::EffectPreset {
+            version: 1,
+            effect_type: super::EffectKind::Color,
+            enabled: false,
+            lfo: None,
+            position_wave: None,
+            color: Some(request),
+        };
+
+        let json = serde_json::to_string(&preset).unwrap();
+        let parsed: super::EffectPreset = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed, preset);
     }
 }
