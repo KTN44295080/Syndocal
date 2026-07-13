@@ -52,6 +52,8 @@ const serialProtocolHint = (protocol: DmxOutputConfig["protocol"]) => {
 };
 
 export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
+  const selectedSerialPort = () => props.serialPorts.find((port) => port.name === props.output.serial_port);
+
   return (
     <section class="dmxOutputConfigPanel">
       <header class="ioDeskHeader">
@@ -148,6 +150,27 @@ export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
               </For>
             </select>
           </label>
+          <Show when={selectedSerialPort()}>
+            {(port) => (
+              <div class="serialPortIdentity">
+                <div>
+                  <strong data-no-localize>{port().product || port().port_type}</strong>
+                  <span data-no-localize>
+                    {[port().manufacturer, port().usb_vid != null && port().usb_pid != null
+                      ? `${port().usb_vid!.toString(16).padStart(4, "0")}:${port().usb_pid!.toString(16).padStart(4, "0")}`
+                      : null, port().serial_number].filter(Boolean).join(" / ")}
+                  </span>
+                </div>
+                <Show when={port().recommended_protocol} fallback={<span class="serialProtocolManual">Manual protocol selection</span>}>
+                  {(recommended) => (
+                    <button type="button" onClick={() => props.onProtocolChange(recommended())}>
+                      Use recommended protocol
+                    </button>
+                  )}
+                </Show>
+              </div>
+            )}
+          </Show>
           <label>
             Manual port
             <input

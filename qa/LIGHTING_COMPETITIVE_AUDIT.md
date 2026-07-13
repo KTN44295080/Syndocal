@@ -42,7 +42,7 @@ Primary sources:
 7. Add full/partial operator lock with credential-safe project policy. Treat hardware standalone playback as a separate hardware-product workstream rather than pretending software alone closes it.
 8. Build a curated fixture onboarding/catalog experience on top of GDTF Share: search facets, favorites, cached/offline availability, profile health, missing-profile repair and verified common-rig packs.
 9. Run same-host cold start, project-open, control-to-DMX, UI input latency, CPU/GPU/memory and 128-universe soak tests. If Daslight can be legally installed on the comparison host, capture the same measurements there.
-10. Broaden serial DMX toward the QLC+ device class: VID/PID recommendation, Pro Mk2/Ultra Pro dual output, verified device profiles and serial DMX input. Existing ENTTEC Pro-compatible, DMXKing ultraDMX and Open DMX output remains the baseline; see `qa/SERIAL_DMX_COMPATIBILITY.md`.
+10. Broaden serial DMX toward the QLC+ device class: build the maintained VID/PID catalog on top of the completed conservative USB identity recommendation, then add Pro Mk2/Ultra Pro dual output, verified device profiles and serial DMX input. Existing ENTTEC Pro-compatible, DMXKing ultraDMX and Open DMX output remains the baseline; see `qa/SERIAL_DMX_COMPATIBILITY.md`.
 11. Complete real controller, DMX node, serial interface, fixture rig, projector and operator rehearsal evidence before any superiority language is published.
 
 ## Fixed in this audit pass

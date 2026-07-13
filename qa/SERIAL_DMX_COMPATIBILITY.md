@@ -10,6 +10,8 @@ Syndocal can already transmit DMX through operating-system serial ports. Setup >
 - DMXKing ultraDMX through the compatible USB Pro packet path
 - ENTTEC Open DMX and compatible VCP/FTDI serial ports at 250000 baud, 8N2, with a dedicated non-blocking worker, 176 us break and 16 us mark-after-break
 
+Scan Serial now preserves USB VID/PID, product, manufacturer and serial number. Known single-port ENTTEC USB Pro, DMXKing ultraDMX and Open DMX product identities expose a confirmation button for the recommended protocol. Generic FTDI devices and unsupported dual-port Pro Mk2/Ultra Pro products stay on manual selection instead of receiving a potentially unsafe guess.
+
 The engine applies the same per-route reconnect/backoff telemetry used by network output. A failed USB/serial route does not block healthy Art-Net/sACN routes.
 
 ## QLC+ comparison
@@ -19,7 +21,7 @@ Official QLC+ 5 documentation describes a broader DMX USB plugin with automatic 
 Syndocal currently covers the common output-only Open TX and Pro-compatible TX class through serial/VCP ports. It does **not** yet match QLC+ in:
 
 - FTDI D2XX/native USB discovery independent of virtual COM drivers
-- device VID/PID recognition and recommended driver/profile selection
+- a maintained VID/PID catalog and driver guidance beyond the current conservative product-name recommendation
 - ENTTEC Pro Mk2 and DMXKing Ultra Pro dual-port routing
 - DMX4ALL and Vince Tx packet protocols
 - generic Open RX/Pro RX serial DMX input
@@ -30,7 +32,7 @@ QLC+'s plugin architecture should not be confused with arbitrary application ser
 ## Acceptance plan
 
 1. Keep the existing three output modes as the stable serial baseline.
-2. Add USB VID/PID/product metadata and a non-destructive protocol recommendation to Scan Serial; manual override remains available.
+2. **Complete:** add USB VID/PID/product metadata and a non-destructive protocol recommendation to Scan Serial; manual override remains available. Product-matching tests and three reference viewport checks cover the behavior.
 3. Add Pro Mk2/Ultra Pro dual-output profiles using verified vendor protocol documentation and per-port routing.
 4. Add supported serial DMX input modes to the existing HTP/LTP input merge path.
 5. Build packet-codec tests for every profile before allowing a physical port to open.

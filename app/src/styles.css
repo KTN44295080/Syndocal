@@ -588,6 +588,40 @@ h3 {
   background: linear-gradient(180deg, #202d39, #17212a);
 }
 
+.serialPortIdentity {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid #3b4b58;
+  border-radius: 4px;
+  background: #151d24;
+  padding: 7px 8px;
+}
+
+.serialPortIdentity > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.serialPortIdentity strong,
+.serialPortIdentity span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.serialPortIdentity span {
+  color: #8f9caf;
+  font-size: 10px;
+}
+
+.serialProtocolManual {
+  padding-inline: 4px;
+  font-weight: 700;
+}
+
 .videoIsfControl {
   display: grid;
   grid-template-columns: minmax(76px, 1fr) repeat(4, minmax(54px, 72px));

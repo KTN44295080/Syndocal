@@ -113,6 +113,12 @@ export interface LearnedMidiControl {
 export interface SerialPortSummary {
   name: string;
   port_type: string;
+  usb_vid?: number | null;
+  usb_pid?: number | null;
+  serial_number?: string | null;
+  manufacturer?: string | null;
+  product?: string | null;
+  recommended_protocol?: DmxOutputProtocol | null;
 }
 
 export interface OscInputConfig {

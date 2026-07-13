@@ -132,6 +132,8 @@ Mark/MIBは直前Cue完了時にIntensity controlが全て0のfixtureだけ次Cu
 
 DMX出力routeの設定上限を64から256へ引き上げた。128個の異なるArt-Net universeを同時に有効化したproduction engine tickで128/128 send成功・0 failureを確認し、無効routeを含むstate/tickでも128件のroute telemetryを保持する。ブラウザ受入fixtureにも128 routeを投入し、Setup > DMXの全route表示が1280x720、1366x768、2048x1129でfull-window containmentを維持する。Daslight 5の公称100 universeを構成数では上回ったが、実Art-Net/sACN nodeを用いた128 universe一時間packet loss／jitter受入は未完了であり、性能優位の根拠にはまだ数えない。
 
+Serial DMX出力はENTTEC USB Pro packet、DMXKing ultraDMX互換packet、Open DMX／FTDIの250000 baud 8N2 + dedicated timing workerを維持する。Scan SerialはUSB VID/PID、product、manufacturer、serial numberを返し、既知のsingle-port ENTTEC Pro／DMXKing／Open DMXだけへ確認式の推奨protocolを表示する。generic FTDI、Pro Mk2、Ultra Proは誤った自動選択を避けてmanualのままとする。product判定と未知／dual-port非推奨をRust testで固定し、推奨UIは128 routeを同時表示した全3 viewportでcontainmentを通過した。QLC+級のnative USB catalog、Pro Mk2／Ultra Pro二系統、DMX4ALL／Vince、serial DMX inputと実機長時間受入は残る。
+
 DMX入力の第一段としてArt-NetとsACN E1.31の受信、ユニバースフィルタ、HTP/LTPマージ、信号断タイムアウト、自動マージ解除、受信元／packet／invalid packet状態を追加した。入力は専用threadで受信し、engine command queue経由で44Hz renderへ渡す。アプリblackoutは入力マージ後にも優先して0を出す。Setup > DMXから起動・停止・状態確認でき、UDP loopback、HTP/LTP、signal clear、blackoutを自動テスト済み。
 
 DMX出力経路は、初期化／送信失敗時にsenderを破棄し、250msから最大10秒までの指数バックオフで自動再接続するようにした。待機中は44Hz engine threadをブロックせず、連続失敗数、再接続試行数、次回試行までの時間、最終成功時刻を経路別telemetryに表示する。複数経路を併用すれば一方の障害中も他方への送信を継続できる。回復状態遷移と上限付きbackoffは自動テスト済み。

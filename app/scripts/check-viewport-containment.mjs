@@ -583,6 +583,8 @@ async function measure(client, label) {
       visibleOutputDiagnosticsDeskCount: visibleCount('.setupMode-dmx .outputDiagnosticsDesk'),
       visibleLightingRuntimeDeskCount: visibleCount('.setupMode-dmx .lightingRuntimeDesk'),
       dmxRouteItemCount: document.querySelectorAll('.setupMode-dmx .dmxRoutes .timelineItem').length,
+      visibleSerialPortIdentityCount: visibleCount('.setupMode-dmx .serialPortIdentity'),
+      visibleSerialProtocolRecommendationCount: visibleCount('.setupMode-dmx .serialPortIdentity button'),
       dmxOutputConfigPanelWidth: dmxOutputConfigPanelRect ? Math.round(dmxOutputConfigPanelRect.width) : 0,
       outputDiagnosticsDeskWidth: outputDiagnosticsDeskRect ? Math.round(outputDiagnosticsDeskRect.width) : 0,
       lightingRuntimeDeskWidth: lightingRuntimeDeskRect ? Math.round(lightingRuntimeDeskRect.width) : 0,
@@ -1125,6 +1127,8 @@ function hasExpectedSetupSurface(result) {
       result.visibleOutputDiagnosticsDeskCount >= 1 &&
       result.visibleLightingRuntimeDeskCount >= 1 &&
       result.dmxRouteItemCount === 128 &&
+      result.visibleSerialPortIdentityCount === 1 &&
+      result.visibleSerialProtocolRecommendationCount === 1 &&
       result.dmxOutputConfigPanelWidth >= 250 &&
       result.outputDiagnosticsDeskWidth >= 420 &&
       result.lightingRuntimeDeskWidth >= 260
@@ -1358,6 +1362,14 @@ async function runViewport(client, viewport) {
   for (const setupTab of setupTabs) {
     await clickByText(client, setupTab.area);
     await clickByText(client, setupTab.tab);
+    if (setupTab.id === "dmx") {
+      await client.evaluate(`(() => {
+        const select = document.querySelector('.setupMode-dmx .dmxOutputConfigPanel select');
+        if (!(select instanceof HTMLSelectElement)) return;
+        select.value = 'EnttecUsbPro';
+        select.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      })()`);
+    }
     await sleep(180);
     if (screenshotDir) {
       mkdirSync(screenshotDir, { recursive: true });

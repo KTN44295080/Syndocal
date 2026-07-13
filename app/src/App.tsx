@@ -1198,6 +1198,18 @@ export default function App() {
     setSerialPorts,
   });
   if (viewportFixture === "timeline") {
+    setSerialPorts([
+      {
+        name: "COM9",
+        port_type: "USB 0403:6001 ENTTEC DMX USB Pro",
+        usb_vid: 0x0403,
+        usb_pid: 0x6001,
+        serial_number: "VIEWPORT-DMX-PRO",
+        manufacturer: "ENTTEC",
+        product: "DMX USB Pro",
+        recommended_protocol: "EnttecUsbPro",
+      },
+    ]);
     setDmxOutputRoutes(
       Array.from({ length: 128 }, (_, universe) => ({
         ...defaultOutput,

@@ -1620,6 +1620,18 @@ pub struct DmxOutputRouteTelemetry {
 pub struct SerialPortSummary {
     pub name: String,
     pub port_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usb_vid: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usb_pid: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serial_number: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manufacturer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub product: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended_protocol: Option<DmxOutputProtocol>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

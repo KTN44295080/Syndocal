@@ -10,7 +10,7 @@ use std::{
 };
 
 use crossbeam_queue::ArrayQueue;
-use protocol::SerialPortSummary;
+use protocol::{DmxOutputProtocol, SerialPortSummary};
 use serialport::{DataBits, Parity, SerialPort, SerialPortType, StopBits};
 use thiserror::Error;
 
@@ -148,12 +148,77 @@ pub fn list_serial_ports() -> Result<Vec<SerialPortSummary>, SerialDmxError> {
         .map(|ports| {
             ports
                 .into_iter()
-                .map(|port| SerialPortSummary {
-                    name: port.port_name,
-                    port_type: serial_port_type_label(&port.port_type),
+                .map(|port| {
+                    let (usb_vid, usb_pid, serial_number, manufacturer, product) =
+                        serial_port_usb_metadata(&port.port_type);
+                    let recommended_protocol = recommended_serial_dmx_protocol(
+                        manufacturer.as_deref(),
+                        product.as_deref(),
+                    );
+                    SerialPortSummary {
+                        name: port.port_name,
+                        port_type: serial_port_type_label(&port.port_type),
+                        usb_vid,
+                        usb_pid,
+                        serial_number,
+                        manufacturer,
+                        product,
+                        recommended_protocol,
+                    }
                 })
                 .collect()
         })
+}
+
+fn serial_port_usb_metadata(
+    port_type: &SerialPortType,
+) -> (
+    Option<u16>,
+    Option<u16>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
+    match port_type {
+        SerialPortType::UsbPort(info) => (
+            Some(info.vid),
+            Some(info.pid),
+            info.serial_number.clone(),
+            info.manufacturer.clone(),
+            info.product.clone(),
+        ),
+        _ => (None, None, None, None, None),
+    }
+}
+
+fn recommended_serial_dmx_protocol(
+    manufacturer: Option<&str>,
+    product: Option<&str>,
+) -> Option<DmxOutputProtocol> {
+    let identity = format!(
+        "{} {}",
+        manufacturer.unwrap_or_default(),
+        product.unwrap_or_default()
+    )
+    .to_ascii_lowercase();
+    if identity.contains("pro mk2")
+        || identity.contains("ultra pro")
+        || identity.contains("ultradmx pro")
+    {
+        return None;
+    }
+    if identity.contains("dmxking") || identity.contains("ultradmx") {
+        return Some(DmxOutputProtocol::DmxKingUltraDmx);
+    }
+    if identity.contains("open dmx") || identity.contains("usb dmx open") {
+        return Some(DmxOutputProtocol::EnttecOpenDmx);
+    }
+    if identity.contains("dmx usb pro")
+        || (identity.contains("enttec") && identity.contains("usb pro"))
+    {
+        return Some(DmxOutputProtocol::EnttecUsbPro);
+    }
+    None
 }
 
 pub fn build_enttec_open_dmx_payload(frame: &[u8; 512]) -> [u8; ENTTEC_OPEN_DMX_PAYLOAD_LEN] {
@@ -365,5 +430,33 @@ mod tests {
             EnttecOpenDmxSender::new(""),
             Err(SerialDmxError::MissingPort)
         ));
+    }
+
+    #[test]
+    fn recommends_only_known_single_port_serial_dmx_products() {
+        assert_eq!(
+            recommended_serial_dmx_protocol(Some("ENTTEC"), Some("DMX USB Pro")),
+            Some(DmxOutputProtocol::EnttecUsbPro)
+        );
+        assert_eq!(
+            recommended_serial_dmx_protocol(Some("DMXKing"), Some("ultraDMX Micro")),
+            Some(DmxOutputProtocol::DmxKingUltraDmx)
+        );
+        assert_eq!(
+            recommended_serial_dmx_protocol(Some("ENTTEC"), Some("Open DMX USB")),
+            Some(DmxOutputProtocol::EnttecOpenDmx)
+        );
+        assert_eq!(
+            recommended_serial_dmx_protocol(Some("FTDI"), Some("FT232R USB UART")),
+            None
+        );
+        assert_eq!(
+            recommended_serial_dmx_protocol(Some("ENTTEC"), Some("DMX USB Pro Mk2")),
+            None
+        );
+        assert_eq!(
+            recommended_serial_dmx_protocol(Some("DMXKing"), Some("ultraDMX Pro")),
+            None
+        );
     }
 }
