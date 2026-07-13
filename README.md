@@ -34,6 +34,7 @@ Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPM
 - 照明と映像が混在する共有タイムライン
 - 1キューで灯体値、映像Layer、Output、Node Graphを同時リコール
 - 1つのLFO/位置ウェーブから灯体属性と映像パラメータを同時駆動
+- マイクLive FFTのBass/Mid/Highから照明・映像を同時駆動し、切断／250ms無入力時は共有0クリアを要求して未受理を明示する
 - Tap / MIDI Clock / MTC / LTC / Ableton Link用共有クロック境界
 - MIDI、OSC、WebSocket、iPad/Android向けPWAリモート
 - 10秒間隔の自動Recovery、Recent Project、`.sdc` OS関連付け
@@ -142,12 +143,15 @@ Windowsの完全libav bundleでは`FFMPEG_DIR`を共有FFmpeg SDKルートへ設
 - [qa/M5_RELIABILITY_VALIDATION.md](qa/M5_RELIABILITY_VALIDATION.md)
 - [qa/M6_RELEASE_VALIDATION.md](qa/M6_RELEASE_VALIDATION.md)
 - [qa/NATIVE_WINDOW_ACCEPTANCE.md](qa/NATIVE_WINDOW_ACCEPTANCE.md)
+- [qa/LIVE_AUDIO_FAIL_CLOSED.md](qa/LIVE_AUDIO_FAIL_CLOSED.md)
+- [qa/TOUCHDESIGNER_COMPETITIVE_AUDIT.md](qa/TOUCHDESIGNER_COMPETITIVE_AUDIT.md)
 - [RELEASE_STATUS.md](RELEASE_STATUS.md) - v1.0完成判定、外部受入、次スレッド向けバックログ
 
 ## 既知の制限
 
 - v1.0以降の外部映像I/OはDisplay、feature-gated NDI、Windows x86_64のSpoutに対応しています。Syphonはwgpu世代差とmacOS実装環境が必要なため未実装です。
 - HAP Q Alpha、HAP R/BC7のGPU直接sampling + CPU fallback、安全境界付きsingle-pass ISFは実装済みです。ISF multipass／persistent buffer／imported resource／audio inputは未対応です。
+- Live FFT入力は現時点でCPAL既定host（WindowsはWASAPI）です。ASIO、明示buffer/channel選択、hot-plug自動復帰、onset/BPMとAuto VJは次段の実装・実機受入です。
 - 3Dビジュアライザは本体UIへ戻さず、`visualizer`データ境界から外部実装へ接続します。標準UIは2D Stage Mapです。
 - Enttec Open DMXはOS/USBドライバ依存のbreak timingがあるため、最終現場ではUSB PRO系を推奨します。
 - Art-Net/sACN/Serialの実機遅延は接続機材ごとに再測定してください。リポジトリの自動検証はloopback中心です。

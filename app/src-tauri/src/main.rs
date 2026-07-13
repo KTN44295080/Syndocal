@@ -150,6 +150,7 @@ struct AppState {
     vj_preview_renderer_reset_pending: AtomicBool,
     media_audio: Arc<Mutex<MediaAudioPlayback>>,
     _media_audio_sync: MediaAudioSyncRuntime,
+    live_audio_input_lifecycle: Mutex<()>,
     live_audio_input: Mutex<Option<LiveAudioInput>>,
     video_preview: Arc<Mutex<AppVideoPreviewRenderer>>,
     video_recording: Mutex<VideoRecordingRuntime>,
@@ -822,6 +823,8 @@ struct VideoAudioMonitorStatus {
 #[derive(Debug, Clone, Serialize, Default)]
 struct LiveAudioInputStatus {
     running: bool,
+    stale: bool,
+    safety_clear_pending: bool,
     device_name: Option<String>,
     sample_rate: u32,
     channels: u16,
@@ -833,27 +836,120 @@ struct LiveAudioInputStatus {
     last_error: Option<String>,
 }
 
+const LIVE_AUDIO_STALE_AFTER: Duration = Duration::from_millis(250);
+const LIVE_AUDIO_RECEIVE_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const LIVE_AUDIO_STOP_CLEAR_RETRY: Duration = Duration::from_millis(100);
+const LIVE_AUDIO_STOP_CLEAR_RETRY_INTERVAL: Duration = Duration::from_millis(2);
+const LIVE_AUDIO_STALE_ERROR: &str = "Live audio input is stale: no samples received for 250 ms";
+
+#[derive(Debug, Default)]
+struct LiveAudioInputSafety {
+    terminal_fault: AtomicBool,
+    clear_pending: AtomicBool,
+    shutdown_requested: AtomicBool,
+}
+
+impl LiveAudioInputSafety {
+    fn terminal_faulted(&self) -> bool {
+        self.terminal_fault.load(Ordering::Acquire)
+    }
+
+    fn mark_terminal_fault(&self) {
+        self.terminal_fault.store(true, Ordering::Release);
+    }
+
+    fn request_shutdown(&self) {
+        self.shutdown_requested.store(true, Ordering::Release);
+        self.mark_terminal_fault();
+    }
+
+    fn shutdown_requested(&self) -> bool {
+        self.shutdown_requested.load(Ordering::Acquire)
+    }
+
+    fn clear_pending(&self) -> bool {
+        self.clear_pending.load(Ordering::Acquire)
+    }
+
+    fn record_clear_result(&self, result: &Result<(), String>) {
+        self.clear_pending.store(result.is_err(), Ordering::Release);
+    }
+}
+
+#[derive(Debug)]
+struct LiveAudioInputWatchdog {
+    last_chunk_at: Instant,
+    stale: bool,
+}
+
+impl LiveAudioInputWatchdog {
+    fn new(now: Instant) -> Self {
+        Self {
+            last_chunk_at: now,
+            stale: false,
+        }
+    }
+
+    fn receive_wait(&self, now: Instant) -> Duration {
+        if self.stale {
+            LIVE_AUDIO_RECEIVE_POLL_INTERVAL
+        } else {
+            LIVE_AUDIO_STALE_AFTER
+                .saturating_sub(now.saturating_duration_since(self.last_chunk_at))
+                .min(LIVE_AUDIO_RECEIVE_POLL_INTERVAL)
+        }
+    }
+
+    fn mark_stale_if_due(&mut self, now: Instant) -> bool {
+        if self.stale || now.saturating_duration_since(self.last_chunk_at) < LIVE_AUDIO_STALE_AFTER
+        {
+            return false;
+        }
+        self.stale = true;
+        true
+    }
+
+    fn record_chunk(&mut self, now: Instant) -> bool {
+        let recovered = self.stale;
+        self.last_chunk_at = now;
+        self.stale = false;
+        recovered
+    }
+
+    fn defer_recovery(&mut self) {
+        self.stale = true;
+    }
+}
+
 struct LiveAudioInput {
     stream: Option<rodio::cpal::Stream>,
     stop: Arc<AtomicBool>,
     worker: Option<std::thread::JoinHandle<()>>,
     status: Arc<Mutex<LiveAudioInputStatus>>,
+    safety: Arc<LiveAudioInputSafety>,
     engine: EngineHandle,
 }
 
 impl Drop for LiveAudioInput {
     fn drop(&mut self) {
+        let clear_required = !self.safety.terminal_faulted() || self.safety.clear_pending();
+        self.safety.mark_terminal_fault();
         self.stream.take();
         self.stop.store(true, Ordering::Relaxed);
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
-        let _ = self.engine.send(EngineCommand::SetLiveAudioSpectrum(None));
+        let clear_pending = clear_required && !send_live_audio_clear_bounded(&self.engine);
         if let Ok(mut status) = self.status.lock() {
             status.running = false;
+            status.stale = false;
+            status.safety_clear_pending = clear_pending;
             status.bass = 0.0;
             status.mid = 0.0;
             status.high = 0.0;
+            status.last_error = clear_pending.then(|| {
+                "Live audio stopped, but the engine safety clear is still pending".to_string()
+            });
         }
     }
 }
@@ -6404,6 +6500,21 @@ fn start_live_audio_input(
 ) -> Result<LiveAudioInputStatus, String> {
     use rodio::cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
+    let _lifecycle = state
+        .live_audio_input_lifecycle
+        .lock()
+        .map_err(|_| "Live audio input lifecycle lock was poisoned".to_string())?;
+    if state
+        .live_audio_input
+        .lock()
+        .map_err(|_| "Live audio input state lock was poisoned".to_string())?
+        .is_some()
+    {
+        return Err(
+            "Live audio input is already active or stopping; wait for Stop to finish".to_string(),
+        );
+    }
+
     let requested_name = device_name
         .as_deref()
         .map(str::trim)
@@ -6435,21 +6546,30 @@ fn start_live_audio_input(
         ..LiveAudioInputStatus::default()
     }));
     let stop = Arc::new(AtomicBool::new(false));
+    let safety = Arc::new(LiveAudioInputSafety::default());
+    let engine = state.engine.clone();
     let (sender, receiver) = std::sync::mpsc::sync_channel::<Vec<f32>>(8);
     let error_status = Arc::clone(&status);
+    let error_safety = Arc::clone(&safety);
+    let error_engine = engine.clone();
     let error_callback = move |error: rodio::cpal::StreamError| {
-        if let Ok(mut status) = error_status.lock() {
-            status.last_error = Some(error.to_string());
-        }
+        fail_closed_live_audio(
+            &error_engine,
+            &error_status,
+            &error_safety,
+            true,
+            format!("Live audio input stream failed: {error}"),
+        );
     };
     let stream = match sample_format {
         rodio::cpal::SampleFormat::F32 => {
             let sender = sender.clone();
             let status = Arc::clone(&status);
+            let safety = Arc::clone(&safety);
             device.build_input_stream(
                 &config,
                 move |data: &[f32], _| {
-                    send_live_audio_chunk(data, channels, &sender, &status, |value| value)
+                    send_live_audio_chunk(data, channels, &sender, &status, &safety, |value| value)
                 },
                 error_callback,
                 None,
@@ -6458,10 +6578,11 @@ fn start_live_audio_input(
         rodio::cpal::SampleFormat::I16 => {
             let sender = sender.clone();
             let status = Arc::clone(&status);
+            let safety = Arc::clone(&safety);
             device.build_input_stream(
                 &config,
                 move |data: &[i16], _| {
-                    send_live_audio_chunk(data, channels, &sender, &status, |value| {
+                    send_live_audio_chunk(data, channels, &sender, &status, &safety, |value| {
                         value as f32 / i16::MAX as f32
                     })
                 },
@@ -6471,10 +6592,11 @@ fn start_live_audio_input(
         }
         rodio::cpal::SampleFormat::U16 => {
             let status = Arc::clone(&status);
+            let safety = Arc::clone(&safety);
             device.build_input_stream(
                 &config,
                 move |data: &[u16], _| {
-                    send_live_audio_chunk(data, channels, &sender, &status, |value| {
+                    send_live_audio_chunk(data, channels, &sender, &status, &safety, |value| {
                         value as f32 / 32767.5 - 1.0
                     })
                 },
@@ -6490,7 +6612,7 @@ fn start_live_audio_input(
         .map_err(|error| format!("Failed to start audio input stream: {error}"))?;
     let worker_stop = Arc::clone(&stop);
     let worker_status = Arc::clone(&status);
-    let engine = state.engine.clone();
+    let worker_safety = Arc::clone(&safety);
     let worker_engine = engine.clone();
     let worker = std::thread::Builder::new()
         .name("syndocal-live-audio-fft".to_string())
@@ -6501,6 +6623,7 @@ fn start_live_audio_input(
                 worker_engine,
                 worker_stop,
                 worker_status,
+                worker_safety,
             )
         })
         .map_err(|error| format!("Failed to start live audio FFT worker: {error}"))?;
@@ -6508,14 +6631,15 @@ fn start_live_audio_input(
         .live_audio_input
         .lock()
         .map_err(|_| "Live audio input state lock was poisoned".to_string())?;
-    *active = None;
     *active = Some(LiveAudioInput {
         stream: Some(stream),
         stop,
         worker: Some(worker),
         status: Arc::clone(&status),
+        safety,
         engine,
     });
+    drop(active);
     status
         .lock()
         .map_err(|_| "Live audio input status lock was poisoned".to_string())
@@ -6527,17 +6651,303 @@ fn send_live_audio_chunk<T: Copy>(
     channels: u16,
     sender: &std::sync::mpsc::SyncSender<Vec<f32>>,
     status: &Mutex<LiveAudioInputStatus>,
+    safety: &LiveAudioInputSafety,
     convert: impl Fn(T) -> f32,
 ) {
+    if safety.terminal_faulted() {
+        return;
+    }
     let channels = channels.max(1) as usize;
     let mono = data
         .chunks(channels)
         .map(|frame| frame.iter().copied().map(&convert).sum::<f32>() / frame.len().max(1) as f32)
         .collect::<Vec<_>>();
+    if safety.terminal_faulted() {
+        return;
+    }
     if sender.try_send(mono).is_err() {
         if let Ok(mut status) = status.lock() {
             status.dropped_chunks = status.dropped_chunks.saturating_add(1);
         }
+    }
+}
+
+fn zero_live_audio_input_status(status: &mut LiveAudioInputStatus, error: String) {
+    status.stale = true;
+    status.bass = 0.0;
+    status.mid = 0.0;
+    status.high = 0.0;
+    status.last_error = Some(error);
+}
+
+fn fail_closed_live_audio_with(
+    status: &Mutex<LiveAudioInputStatus>,
+    safety: &LiveAudioInputSafety,
+    terminal: bool,
+    error: String,
+    send_clear: impl FnOnce() -> Result<(), String>,
+) {
+    if !terminal && safety.terminal_faulted() {
+        return;
+    }
+    if terminal {
+        safety.mark_terminal_fault();
+    }
+    match status.lock() {
+        Ok(mut status) => {
+            if !terminal && safety.terminal_faulted() {
+                return;
+            }
+            zero_live_audio_input_status(&mut status, error);
+            status.safety_clear_pending = true;
+            let result = send_clear();
+            status.safety_clear_pending = result.is_err();
+            safety.record_clear_result(&result);
+        }
+        Err(_) => {
+            if !terminal && safety.terminal_faulted() {
+                return;
+            }
+            let result = send_clear();
+            safety.record_clear_result(&result);
+        }
+    }
+}
+
+fn latch_terminal_live_audio_fault_with(
+    status: &Mutex<LiveAudioInputStatus>,
+    safety: &LiveAudioInputSafety,
+    error: String,
+    send_clear: impl FnOnce() -> Result<(), String>,
+) {
+    if safety.terminal_faulted() {
+        return;
+    }
+    match status.lock() {
+        Ok(mut status) => {
+            if safety.terminal_faulted() {
+                return;
+            }
+            safety.mark_terminal_fault();
+            zero_live_audio_input_status(&mut status, error);
+            status.safety_clear_pending = true;
+            let result = send_clear();
+            status.safety_clear_pending = result.is_err();
+            safety.record_clear_result(&result);
+        }
+        Err(_) => {
+            if safety.terminal_faulted() {
+                return;
+            }
+            safety.mark_terminal_fault();
+            let result = send_clear();
+            safety.record_clear_result(&result);
+        }
+    }
+}
+
+fn fail_closed_live_audio(
+    engine: &EngineHandle,
+    status: &Mutex<LiveAudioInputStatus>,
+    safety: &LiveAudioInputSafety,
+    terminal: bool,
+    error: String,
+) {
+    let send_clear = || {
+        engine
+            .send(EngineCommand::SetLiveAudioSpectrum(None))
+            .map_err(|error| error.to_string())
+    };
+    if terminal {
+        latch_terminal_live_audio_fault_with(status, safety, error, send_clear);
+    } else {
+        fail_closed_live_audio_with(status, safety, false, error, send_clear);
+    }
+}
+
+fn request_live_audio_shutdown_with(
+    status: &Mutex<LiveAudioInputStatus>,
+    safety: &LiveAudioInputSafety,
+    send_clear: impl FnOnce() -> Result<(), String>,
+) {
+    safety.request_shutdown();
+    fail_closed_live_audio_with(
+        status,
+        safety,
+        true,
+        "Live audio input Stop requested; waiting for the engine safety clear".to_string(),
+        send_clear,
+    );
+}
+
+fn request_live_audio_shutdown(
+    engine: &EngineHandle,
+    status: &Mutex<LiveAudioInputStatus>,
+    safety: &LiveAudioInputSafety,
+) {
+    request_live_audio_shutdown_with(status, safety, || {
+        engine
+            .send(EngineCommand::SetLiveAudioSpectrum(None))
+            .map_err(|error| error.to_string())
+    });
+}
+
+fn retry_live_audio_clear_with(
+    status: &Mutex<LiveAudioInputStatus>,
+    safety: &LiveAudioInputSafety,
+    send_clear: impl FnOnce() -> Result<(), String>,
+) -> bool {
+    if !safety.clear_pending() {
+        return true;
+    }
+    let mut output_gate = status.lock().ok();
+    if !safety.clear_pending() {
+        return true;
+    }
+    let clear_result = send_clear();
+    let cleared = clear_result.is_ok();
+    if let Some(status) = output_gate.as_mut() {
+        status.safety_clear_pending = !cleared;
+    }
+    safety.record_clear_result(&clear_result);
+    cleared
+}
+
+fn retry_live_audio_clear(
+    engine: &EngineHandle,
+    status: &Mutex<LiveAudioInputStatus>,
+    safety: &LiveAudioInputSafety,
+) -> bool {
+    retry_live_audio_clear_with(status, safety, || {
+        engine
+            .send(EngineCommand::SetLiveAudioSpectrum(None))
+            .map_err(|error| error.to_string())
+    })
+}
+
+fn send_live_audio_clear_bounded_with(
+    timeout: Duration,
+    retry_interval: Duration,
+    mut send_clear: impl FnMut() -> Result<(), String>,
+) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if send_clear().is_ok() {
+            return true;
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        std::thread::park_timeout(retry_interval.min(deadline.saturating_duration_since(now)));
+    }
+}
+
+fn send_live_audio_clear_bounded(engine: &EngineHandle) -> bool {
+    send_live_audio_clear_bounded_with(
+        LIVE_AUDIO_STOP_CLEAR_RETRY,
+        LIVE_AUDIO_STOP_CLEAR_RETRY_INTERVAL,
+        || {
+            engine
+                .send(EngineCommand::SetLiveAudioSpectrum(None))
+                .map_err(|error| error.to_string())
+        },
+    )
+}
+
+fn recover_live_audio_input_status(
+    status: &Mutex<LiveAudioInputStatus>,
+    safety: &LiveAudioInputSafety,
+) -> bool {
+    let Ok(mut status) = status.lock() else {
+        safety.mark_terminal_fault();
+        return false;
+    };
+    if safety.terminal_faulted() {
+        return false;
+    }
+    if safety.clear_pending() || status.safety_clear_pending {
+        return false;
+    }
+    status.stale = false;
+    if status.last_error.as_deref() == Some(LIVE_AUDIO_STALE_ERROR) {
+        status.last_error = None;
+    }
+    true
+}
+
+fn publish_live_audio_spectrum_with(
+    status: &Mutex<LiveAudioInputStatus>,
+    safety: &LiveAudioInputSafety,
+    spectrum: &protocol::AudioSpectrumPoint,
+    send_spectrum: impl FnOnce() -> Result<(), String>,
+    send_clear: impl FnOnce() -> Result<(), String>,
+) -> bool {
+    let Ok(mut status) = status.lock() else {
+        safety.mark_terminal_fault();
+        let clear_result = send_clear();
+        safety.record_clear_result(&clear_result);
+        return false;
+    };
+    if safety.terminal_faulted() || status.stale {
+        return false;
+    }
+    match send_spectrum() {
+        Ok(()) => {
+            status.safety_clear_pending = false;
+            status.bass = spectrum.bass;
+            status.mid = spectrum.mid;
+            status.high = spectrum.high;
+            status.analyzed_windows = status.analyzed_windows.saturating_add(1);
+            true
+        }
+        Err(error) => {
+            safety.mark_terminal_fault();
+            zero_live_audio_input_status(
+                &mut status,
+                format!("Live audio spectrum publish failed: {error}"),
+            );
+            status.safety_clear_pending = true;
+            let clear_result = send_clear();
+            status.safety_clear_pending = clear_result.is_err();
+            safety.record_clear_result(&clear_result);
+            false
+        }
+    }
+}
+
+fn publish_live_audio_spectrum(
+    engine: &EngineHandle,
+    status: &Mutex<LiveAudioInputStatus>,
+    safety: &LiveAudioInputSafety,
+    spectrum: &protocol::AudioSpectrumPoint,
+) -> bool {
+    let published_spectrum = spectrum.clone();
+    publish_live_audio_spectrum_with(
+        status,
+        safety,
+        spectrum,
+        || {
+            engine
+                .send(EngineCommand::SetLiveAudioSpectrum(Some(
+                    published_spectrum,
+                )))
+                .map_err(|error| error.to_string())
+        },
+        || {
+            engine
+                .send(EngineCommand::SetLiveAudioSpectrum(None))
+                .map_err(|error| error.to_string())
+        },
+    )
+}
+
+fn empty_live_audio_spectrum() -> protocol::AudioSpectrumPoint {
+    protocol::AudioSpectrumPoint {
+        time_ms: 0,
+        bass: 0.0,
+        mid: 0.0,
+        high: 0.0,
     }
 }
 
@@ -6547,21 +6957,62 @@ fn run_live_audio_fft(
     engine: EngineHandle,
     stop: Arc<AtomicBool>,
     status: Arc<Mutex<LiveAudioInputStatus>>,
+    safety: Arc<LiveAudioInputSafety>,
 ) {
     let mut samples = VecDeque::<f32>::with_capacity(4_096);
     let mut last_analysis = Instant::now() - Duration::from_millis(34);
-    let mut smoothed = protocol::AudioSpectrumPoint {
-        time_ms: 0,
-        bass: 0.0,
-        mid: 0.0,
-        high: 0.0,
-    };
+    let mut smoothed = empty_live_audio_spectrum();
+    let mut watchdog = LiveAudioInputWatchdog::new(Instant::now());
     while !stop.load(Ordering::Relaxed) {
-        let chunk = match receiver.recv_timeout(Duration::from_millis(50)) {
+        retry_live_audio_clear(&engine, &status, &safety);
+        if safety.terminal_faulted() {
+            std::thread::park_timeout(LIVE_AUDIO_RECEIVE_POLL_INTERVAL);
+            continue;
+        }
+        let chunk = match receiver.recv_timeout(watchdog.receive_wait(Instant::now())) {
             Ok(chunk) => chunk,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if stop.load(Ordering::Relaxed) || safety.terminal_faulted() {
+                    continue;
+                }
+                let now = Instant::now();
+                if watchdog.mark_stale_if_due(now) {
+                    samples.clear();
+                    smoothed = empty_live_audio_spectrum();
+                    last_analysis = now - Duration::from_millis(34);
+                    fail_closed_live_audio(
+                        &engine,
+                        &status,
+                        &safety,
+                        false,
+                        LIVE_AUDIO_STALE_ERROR.to_string(),
+                    );
+                }
+                continue;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                fail_closed_live_audio(
+                    &engine,
+                    &status,
+                    &safety,
+                    true,
+                    "Live audio input sample queue disconnected".to_string(),
+                );
+                continue;
+            }
         };
+        if safety.terminal_faulted() {
+            continue;
+        }
+        if watchdog.record_chunk(Instant::now()) {
+            samples.clear();
+            smoothed = empty_live_audio_spectrum();
+            last_analysis = Instant::now() - Duration::from_millis(34);
+            if !recover_live_audio_input_status(&status, &safety) {
+                watchdog.defer_recovery();
+                continue;
+            }
+        }
         samples.extend(chunk);
         while samples.len() > 4_096 {
             samples.pop_front();
@@ -6581,18 +7032,8 @@ fn run_live_audio_fft(
         smoothed.bass = smooth(smoothed.bass, measured.bass);
         smoothed.mid = smooth(smoothed.mid, measured.mid);
         smoothed.high = smooth(smoothed.high, measured.high);
-        if let Err(error) = engine.send(EngineCommand::SetLiveAudioSpectrum(Some(smoothed.clone())))
-        {
-            if let Ok(mut status) = status.lock() {
-                status.last_error = Some(error.to_string());
-            }
-            break;
-        }
-        if let Ok(mut status) = status.lock() {
-            status.bass = smoothed.bass;
-            status.mid = smoothed.mid;
-            status.high = smoothed.high;
-            status.analyzed_windows = status.analyzed_windows.saturating_add(1);
+        if !publish_live_audio_spectrum(&engine, &status, &safety, &smoothed) {
+            continue;
         }
         last_analysis = Instant::now();
     }
@@ -6600,30 +7041,77 @@ fn run_live_audio_fft(
 
 #[tauri::command]
 fn stop_live_audio_input(state: State<'_, AppState>) -> Result<LiveAudioInputStatus, String> {
+    let _lifecycle = state
+        .live_audio_input_lifecycle
+        .lock()
+        .map_err(|_| "Live audio input lifecycle lock was poisoned".to_string())?;
+    let (status, safety, engine) = {
+        let active = state
+            .live_audio_input
+            .lock()
+            .map_err(|_| "Live audio input state lock was poisoned".to_string())?;
+        let Some(input) = active.as_ref() else {
+            return Ok(LiveAudioInputStatus::default());
+        };
+        (
+            Arc::clone(&input.status),
+            Arc::clone(&input.safety),
+            input.engine.clone(),
+        )
+    };
+    request_live_audio_shutdown(&engine, &status, &safety);
+    let pending_status = status
+        .lock()
+        .map_err(|_| "Live audio input status lock was poisoned".to_string())?
+        .clone();
+    if pending_status.safety_clear_pending {
+        return Ok(pending_status);
+    }
     let input = state
         .live_audio_input
         .lock()
         .map_err(|_| "Live audio input state lock was poisoned".to_string())?
         .take();
-    let status = input.as_ref().map(|input| Arc::clone(&input.status));
     drop(input);
     status
-        .and_then(|status| status.lock().ok().map(|status| status.clone()))
-        .map(Ok)
-        .unwrap_or_else(|| Ok(LiveAudioInputStatus::default()))
+        .lock()
+        .map_err(|_| "Live audio input status lock was poisoned".to_string())
+        .map(|status| status.clone())
 }
 
 #[tauri::command]
 fn live_audio_input_status(state: State<'_, AppState>) -> Result<LiveAudioInputStatus, String> {
-    let active = state
+    let _lifecycle = state
+        .live_audio_input_lifecycle
+        .lock()
+        .map_err(|_| "Live audio input lifecycle lock was poisoned".to_string())?;
+    let mut active = state
         .live_audio_input
         .lock()
         .map_err(|_| "Live audio input state lock was poisoned".to_string())?;
-    active
-        .as_ref()
-        .and_then(|input| input.status.lock().ok().map(|status| status.clone()))
-        .map(Ok)
-        .unwrap_or_else(|| Ok(LiveAudioInputStatus::default()))
+    let Some(input) = active.as_ref() else {
+        return Ok(LiveAudioInputStatus::default());
+    };
+    let status = Arc::clone(&input.status);
+    let shutdown_ready = input.safety.shutdown_requested()
+        && !input.safety.clear_pending()
+        && !status
+            .lock()
+            .map_err(|_| "Live audio input status lock was poisoned".to_string())?
+            .safety_clear_pending;
+    if !shutdown_ready {
+        return status
+            .lock()
+            .map_err(|_| "Live audio input status lock was poisoned".to_string())
+            .map(|status| status.clone());
+    }
+    let input = active.take();
+    drop(active);
+    drop(input);
+    status
+        .lock()
+        .map_err(|_| "Live audio input status lock was poisoned".to_string())
+        .map(|status| status.clone())
 }
 
 #[tauri::command]
@@ -27536,19 +28024,290 @@ mod media_audio_playback_tests {
 #[cfg(test)]
 mod live_audio_input_tests {
     use super::*;
+    use std::cell::Cell;
 
     #[test]
     fn live_audio_callback_downmixes_interleaved_channels_without_blocking() {
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         let status = Mutex::new(LiveAudioInputStatus::default());
-        send_live_audio_chunk(&[1.0_f32, -1.0, 0.5, 0.25], 2, &sender, &status, |value| {
-            value
-        });
+        let safety = LiveAudioInputSafety::default();
+        send_live_audio_chunk(
+            &[1.0_f32, -1.0, 0.5, 0.25],
+            2,
+            &sender,
+            &status,
+            &safety,
+            |value| value,
+        );
         assert_eq!(receiver.recv().unwrap(), vec![0.0, 0.375]);
 
         sender.try_send(vec![0.0]).unwrap();
-        send_live_audio_chunk(&[1.0_f32, 1.0], 2, &sender, &status, |value| value);
+        send_live_audio_chunk(&[1.0_f32, 1.0], 2, &sender, &status, &safety, |value| value);
         assert_eq!(status.lock().unwrap().dropped_chunks, 1);
+    }
+
+    #[test]
+    fn live_audio_watchdog_stales_at_the_deadline_once_and_rearms() {
+        let started = Instant::now();
+        let mut watchdog = LiveAudioInputWatchdog::new(started);
+
+        assert_eq!(
+            watchdog.receive_wait(started + Duration::from_millis(249)),
+            Duration::from_millis(1)
+        );
+        assert!(!watchdog.mark_stale_if_due(started + Duration::from_millis(249)));
+        assert!(watchdog.mark_stale_if_due(started + Duration::from_millis(250)));
+        assert!(!watchdog.mark_stale_if_due(started + Duration::from_secs(1)));
+
+        assert!(watchdog.record_chunk(started + Duration::from_millis(300)));
+        assert!(!watchdog.mark_stale_if_due(started + Duration::from_millis(549)));
+        assert!(watchdog.mark_stale_if_due(started + Duration::from_millis(550)));
+    }
+
+    #[test]
+    fn live_audio_stream_fault_zeroes_meters_and_retries_a_full_clear_queue() {
+        let status = Mutex::new(LiveAudioInputStatus {
+            running: true,
+            bass: 0.25,
+            mid: 0.5,
+            high: 0.75,
+            ..LiveAudioInputStatus::default()
+        });
+        let safety = LiveAudioInputSafety::default();
+        let clear_attempts = Cell::new(0_u32);
+
+        fail_closed_live_audio_with(&status, &safety, true, "stream failed".to_string(), || {
+            clear_attempts.set(clear_attempts.get() + 1);
+            Err("queue full".to_string())
+        });
+
+        let current = status.lock().unwrap().clone();
+        assert!(current.running);
+        assert!(current.stale);
+        assert!(current.safety_clear_pending);
+        assert_eq!((current.bass, current.mid, current.high), (0.0, 0.0, 0.0));
+        assert_eq!(current.last_error.as_deref(), Some("stream failed"));
+        assert!(safety.terminal_faulted());
+        assert!(safety.clear_pending());
+
+        assert!(retry_live_audio_clear_with(&status, &safety, || {
+            clear_attempts.set(clear_attempts.get() + 1);
+            Ok(())
+        }));
+        assert_eq!(clear_attempts.get(), 2);
+        assert!(!safety.clear_pending());
+        assert!(!status.lock().unwrap().safety_clear_pending);
+    }
+
+    #[test]
+    fn live_audio_stop_keeps_the_retry_owner_inert_until_clear_is_accepted() {
+        let status = Mutex::new(LiveAudioInputStatus {
+            running: true,
+            bass: 0.25,
+            mid: 0.5,
+            high: 0.75,
+            ..LiveAudioInputStatus::default()
+        });
+        let safety = LiveAudioInputSafety::default();
+        request_live_audio_shutdown_with(&status, &safety, || Err("queue full".to_string()));
+
+        let pending = status.lock().unwrap().clone();
+        assert!(pending.running);
+        assert!(pending.stale);
+        assert!(pending.safety_clear_pending);
+        assert!(safety.shutdown_requested());
+        assert!(safety.terminal_faulted());
+        assert!(safety.clear_pending());
+
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        send_live_audio_chunk(&[1.0_f32, 1.0], 2, &sender, &status, &safety, |value| value);
+        assert!(receiver.try_recv().is_err());
+
+        assert!(retry_live_audio_clear_with(&status, &safety, || Ok(())));
+        assert!(!safety.clear_pending());
+        let accepted = status.lock().unwrap();
+        assert!(accepted.running);
+        assert!(!accepted.safety_clear_pending);
+    }
+
+    #[test]
+    fn late_stream_fault_cannot_replace_an_accepted_stop_clear() {
+        let status = Mutex::new(LiveAudioInputStatus {
+            running: true,
+            ..LiveAudioInputStatus::default()
+        });
+        let safety = LiveAudioInputSafety::default();
+        request_live_audio_shutdown_with(&status, &safety, || Ok(()));
+        let late_clear_attempts = Cell::new(0_u32);
+
+        fail_closed_live_audio_with(
+            &status,
+            &safety,
+            false,
+            LIVE_AUDIO_STALE_ERROR.to_string(),
+            || {
+                late_clear_attempts.set(late_clear_attempts.get() + 1);
+                Err("queue full".to_string())
+            },
+        );
+
+        latch_terminal_live_audio_fault_with(
+            &status,
+            &safety,
+            "late stream error".to_string(),
+            || {
+                late_clear_attempts.set(late_clear_attempts.get() + 1);
+                Err("queue full".to_string())
+            },
+        );
+
+        assert_eq!(late_clear_attempts.get(), 0);
+        assert!(!safety.clear_pending());
+        let current = status.lock().unwrap();
+        assert!(!current.safety_clear_pending);
+        assert_eq!(
+            current.last_error.as_deref(),
+            Some("Live audio input Stop requested; waiting for the engine safety clear")
+        );
+    }
+
+    #[test]
+    fn live_audio_drop_clear_retry_is_bounded_and_can_recover_queue_pressure() {
+        let attempts = Cell::new(0_u32);
+        assert!(send_live_audio_clear_bounded_with(
+            Duration::from_millis(10),
+            Duration::ZERO,
+            || {
+                attempts.set(attempts.get() + 1);
+                (attempts.get() >= 3)
+                    .then_some(())
+                    .ok_or_else(|| "queue full".to_string())
+            },
+        ));
+        assert_eq!(attempts.get(), 3);
+
+        let attempts = Cell::new(0_u32);
+        assert!(!send_live_audio_clear_bounded_with(
+            Duration::ZERO,
+            Duration::ZERO,
+            || {
+                attempts.set(attempts.get() + 1);
+                Err("queue full".to_string())
+            },
+        ));
+        assert_eq!(attempts.get(), 1);
+    }
+
+    #[test]
+    fn live_audio_publish_failure_fails_closed_and_latches_the_fault() {
+        let status = Mutex::new(LiveAudioInputStatus {
+            running: true,
+            ..LiveAudioInputStatus::default()
+        });
+        let safety = LiveAudioInputSafety::default();
+        let clear_attempts = Cell::new(0_u32);
+        let spectrum = protocol::AudioSpectrumPoint {
+            time_ms: 0,
+            bass: 0.2,
+            mid: 0.4,
+            high: 0.6,
+        };
+
+        assert!(!publish_live_audio_spectrum_with(
+            &status,
+            &safety,
+            &spectrum,
+            || Err("queue full".to_string()),
+            || {
+                clear_attempts.set(clear_attempts.get() + 1);
+                Err("queue full".to_string())
+            },
+        ));
+
+        let current = status.lock().unwrap().clone();
+        assert!(current.running);
+        assert!(current.stale);
+        assert!(current.safety_clear_pending);
+        assert_eq!((current.bass, current.mid, current.high), (0.0, 0.0, 0.0));
+        assert_eq!(
+            current.last_error.as_deref(),
+            Some("Live audio spectrum publish failed: queue full")
+        );
+        assert!(safety.terminal_faulted());
+        assert!(safety.clear_pending());
+        assert_eq!(clear_attempts.get(), 1);
+    }
+
+    #[test]
+    fn live_audio_terminal_fault_prevents_a_late_spectrum_publish() {
+        let status = Mutex::new(LiveAudioInputStatus {
+            running: true,
+            ..LiveAudioInputStatus::default()
+        });
+        let safety = LiveAudioInputSafety::default();
+        fail_closed_live_audio_with(&status, &safety, true, "stream failed".to_string(), || {
+            Ok(())
+        });
+        let spectrum_sends = Cell::new(0_u32);
+        let clear_sends = Cell::new(0_u32);
+
+        assert!(!publish_live_audio_spectrum_with(
+            &status,
+            &safety,
+            &protocol::AudioSpectrumPoint {
+                time_ms: 0,
+                bass: 1.0,
+                mid: 1.0,
+                high: 1.0,
+            },
+            || {
+                spectrum_sends.set(spectrum_sends.get() + 1);
+                Ok(())
+            },
+            || {
+                clear_sends.set(clear_sends.get() + 1);
+                Ok(())
+            },
+        ));
+        assert_eq!(spectrum_sends.get(), 0);
+        assert_eq!(clear_sends.get(), 0);
+        let current = status.lock().unwrap();
+        assert!(!current.safety_clear_pending);
+        assert_eq!(current.analyzed_windows, 0);
+    }
+
+    #[test]
+    fn live_audio_watchdog_stale_recovers_only_from_a_fresh_chunk() {
+        let status = Mutex::new(LiveAudioInputStatus {
+            running: true,
+            bass: 0.2,
+            mid: 0.4,
+            high: 0.6,
+            ..LiveAudioInputStatus::default()
+        });
+        let safety = LiveAudioInputSafety::default();
+        fail_closed_live_audio_with(
+            &status,
+            &safety,
+            false,
+            LIVE_AUDIO_STALE_ERROR.to_string(),
+            || Err("queue full".to_string()),
+        );
+        let current = status.lock().unwrap().clone();
+        assert!(current.stale);
+        assert!(current.safety_clear_pending);
+        assert!(safety.clear_pending());
+
+        assert!(!recover_live_audio_input_status(&status, &safety));
+        assert!(retry_live_audio_clear_with(&status, &safety, || Ok(())));
+        assert!(!status.lock().unwrap().safety_clear_pending);
+        assert!(recover_live_audio_input_status(&status, &safety));
+        let current = status.lock().unwrap().clone();
+        assert!(current.running);
+        assert!(!current.stale);
+        assert!(current.last_error.is_none());
+        assert!(!safety.terminal_faulted());
+        assert!(!safety.clear_pending());
     }
 }
 
@@ -28174,6 +28933,7 @@ fn main() {
             vj_preview_renderer_reset_pending: AtomicBool::new(false),
             media_audio,
             _media_audio_sync: media_audio_sync,
+            live_audio_input_lifecycle: Mutex::new(()),
             live_audio_input: Mutex::new(None),
             video_preview: Arc::new(Mutex::new(
                 video::VideoPreviewRenderer::with_frame_provider(

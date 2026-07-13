@@ -804,6 +804,8 @@ export interface VideoRecordingStatus {
 
 export interface LiveAudioInputStatus {
   running: boolean;
+  stale: boolean;
+  safety_clear_pending: boolean;
   device_name?: string | null;
   sample_rate: number;
   channels: number;

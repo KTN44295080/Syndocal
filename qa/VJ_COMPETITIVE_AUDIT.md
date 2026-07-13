@@ -1,6 +1,6 @@
 # VJ Competitive Audit
 
-Updated: 2026-07-13
+Updated: 2026-07-14
 
 ## Verdict
 
@@ -38,6 +38,7 @@ Primary comparison sources:
 - Added a first-run action in the empty Clip Grid. File selection and full path validation happen off the IPC thread before mutation; one engine publication barrier creates all stopped file layers and a windowed Display output that remains disabled and blacked out. Cancellation changes nothing, duplicate setup is rejected, a busy snapshot rolls the runtime mutation back, and the exact published snapshot is acknowledged before the frontend commits its single Undo transaction.
 - Replaced per-position Libav decoder construction during ordinary forward playback with an eight-layer LRU of sequential sessions and normalized non-zero stream timestamps. B-frame/offset-start oracle parity, seek/reverse reset, EOF drain, invalid-source release, capacity eviction and diagnostics counters are covered. The CLI fallback also retains only one frame per layer and eight layers globally, while scaler reuse and shared decode/render fan-out remain open.
 - Separated Preview from the Program project playhead. Explicit `P` staging starts a local File/Still at its in-point and exposes pause, seek, reverse/forward speed, inherited loop bounds and Clear without mutating project state. Cut/Take require the staged layer and transfer its current position/speed to Program. The runtime-only session is cleared across project/history/standby and source-identity changes; a dedicated prefetch-zero renderer and post-render/post-encode generation checks bound cache impact and suppress raced frames.
+- Made live microphone FFT fail closed. Stream faults, receiver disconnect, publish failure and 250 ms without a callback clear the ephemeral spectrum instead of intentionally holding the last lighting/video value. The runtime and retry owner remain alive while an engine clear is unaccepted, exposed as `SAFETY CLEAR PENDING`; queue acceptance becomes `SAFETY CLEAR ACCEPTED` without falsely claiming output-application acknowledgement. Start cannot replace an active/stopping generation. Focused tests fix the watchdog boundary, QueueFull retry and Some-to-None output reset.
 
 ## Required before parity can be claimed
 
@@ -49,5 +50,6 @@ Primary comparison sources:
 6. Extend independent Preview beyond local File/Still transport where operator rehearsal proves it necessary, including Preview audio scrub and safe live-source semantics. The current Preview deliberately rejects Camera/Screen/NDI/Spout and does not persist a second editable layer state.
 7. Run representative HAP Q Alpha/HAP R/ISF packs at 1080p and 4K with multi-layer seek/reverse/loop, both monitor buses, NDI/Spout output, recording and one-hour dropped-frame capture on the target venue GPU. Measure duplicated decoder/cache cost across Preview, Program and output workers rather than inferring performance from synthetic engine soaks.
 8. Complete operator rehearsal and public/venue field evidence. Internal synthetic tests do not replace this gate.
+9. Add an allocation-free timestamped capture path, explicit WASAPI buffers/channels, feature-gated ASIO after the SDK/license decision, richer bands/onset/BPM, an Audio Reactive Rack and deterministic Auto VJ. The current three-band FFT is a useful shared lighting/video source, not TouchDesigner-class audio tooling or turnkey Auto VJ.
 
 Until these are complete, release language must say that Syndocal is a functional unified lighting/VJ application, not that it is perfect or categorically superior to established VJ software.

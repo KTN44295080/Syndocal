@@ -121,6 +121,8 @@ import {
   reserveDmxAddressRange,
 } from "./dmxAddressing";
 import { confirmCueRemoval, confirmDestructiveAction } from "./destructiveActions";
+import { liveAudioNodeAvailability } from "./liveAudioInputPresentation";
+import { createLiveAudioInputStatusRequestGate } from "./liveAudioInputStatusSync";
 import type {
   ApplicationUpdateCheck,
   ApplicationUpdateConfiguration,
@@ -1053,6 +1055,8 @@ export default function App() {
   const [selectedLiveAudioInputDevice, setSelectedLiveAudioInputDevice] = createSignal("");
   const [liveAudioInputStatus, setLiveAudioInputStatus] = createSignal<LiveAudioInputStatus>({
     running: false,
+    stale: false,
+    safety_clear_pending: false,
     device_name: null,
     sample_rate: 0,
     channels: 0,
@@ -1063,6 +1067,9 @@ export default function App() {
     dropped_chunks: 0,
     last_error: null,
   });
+  const [liveAudioInputStatusKnown, setLiveAudioInputStatusKnown] = createSignal(!isTauriRuntime());
+  const [liveAudioInputBusy, setLiveAudioInputBusy] = createSignal(false);
+  const liveAudioStatusRequests = createLiveAudioInputStatusRequestGate();
   const [videoPreviewDiagnostics, setVideoPreviewDiagnostics] = createSignal<VideoPreviewDiagnostics | null>(null);
   const [videoOutputRenderPlans, setVideoOutputRenderPlans] = createSignal<VideoOutputRenderPlan[] | null>(null);
   const [videoOutputWindowStatuses, setVideoOutputWindowStatuses] = createSignal<VideoOutputWindowStatus[] | null>(null);
@@ -8964,24 +8971,88 @@ export default function App() {
     } catch (error) { setMessage(String(error)); }
   };
   const startLiveAudioInput = async () => {
+    if (liveAudioInputBusy()) return;
+    const requestEpoch = liveAudioStatusRequests.beginCommand();
+    setLiveAudioInputBusy(true);
+    setLiveAudioInputStatusKnown(false);
     try {
-      setLiveAudioInputStatus(await invoke<LiveAudioInputStatus>("start_live_audio_input", {
+      const nextStatus = await invoke<LiveAudioInputStatus>("start_live_audio_input", {
         deviceName: selectedLiveAudioInputDevice().trim() || null,
-      }));
-      setMessage("Live audio FFT input started.");
-    } catch (error) { setMessage(String(error)); }
+      });
+      if (liveAudioStatusRequests.accepts(requestEpoch)) {
+        setLiveAudioInputStatus(nextStatus);
+        setLiveAudioInputStatusKnown(true);
+        setMessage("Live audio FFT input started.");
+      }
+    } catch (error) {
+      if (liveAudioStatusRequests.accepts(requestEpoch)) {
+        setLiveAudioInputStatusKnown(false);
+        setMessage(String(error));
+      }
+    } finally {
+      if (liveAudioStatusRequests.accepts(requestEpoch)) {
+        liveAudioStatusRequests.endCommand(requestEpoch);
+        setLiveAudioInputBusy(false);
+      }
+    }
   };
   const stopLiveAudioInput = async () => {
+    if (liveAudioInputBusy()) return;
+    const requestEpoch = liveAudioStatusRequests.beginCommand();
+    setLiveAudioInputBusy(true);
+    setLiveAudioInputStatusKnown(false);
     try {
-      setLiveAudioInputStatus(await invoke<LiveAudioInputStatus>("stop_live_audio_input"));
-      setMessage("Live audio FFT input stopped.");
-    } catch (error) { setMessage(String(error)); }
+      const nextStatus = await invoke<LiveAudioInputStatus>("stop_live_audio_input");
+      if (liveAudioStatusRequests.accepts(requestEpoch)) {
+        setLiveAudioInputStatus(nextStatus);
+        setLiveAudioInputStatusKnown(true);
+        setMessage(
+          nextStatus.safety_clear_pending || nextStatus.running
+            ? "Live audio Stop requested; safety clear is pending."
+            : "Live audio FFT input stopped.",
+        );
+      }
+    } catch (error) {
+      if (liveAudioStatusRequests.accepts(requestEpoch)) {
+        setLiveAudioInputStatusKnown(false);
+        setMessage(String(error));
+      }
+    } finally {
+      if (liveAudioStatusRequests.accepts(requestEpoch)) {
+        liveAudioStatusRequests.endCommand(requestEpoch);
+        setLiveAudioInputBusy(false);
+      }
+    }
   };
   const refreshLiveAudioInputStatus = async () => {
+    const requestEpoch = liveAudioStatusRequests.beginPoll();
+    if (requestEpoch === null) return;
     try {
-      setLiveAudioInputStatus(await invoke<LiveAudioInputStatus>("live_audio_input_status"));
-    } catch { /* Background meter polling is best-effort. */ }
+      const nextStatus = await invoke<LiveAudioInputStatus>("live_audio_input_status");
+      if (liveAudioStatusRequests.accepts(requestEpoch)) {
+        setLiveAudioInputStatus(nextStatus);
+        setLiveAudioInputStatusKnown(true);
+      }
+    } catch (error) {
+      if (liveAudioStatusRequests.accepts(requestEpoch)) {
+        setLiveAudioInputStatus((current) => ({
+          ...current,
+          stale: current.running || current.stale,
+          safety_clear_pending: current.running || current.safety_clear_pending,
+          bass: 0,
+          mid: 0,
+          high: 0,
+          last_error: `Live audio status unavailable: ${String(error)}`,
+        }));
+        setLiveAudioInputStatusKnown(false);
+      }
+    } finally {
+      liveAudioStatusRequests.endPoll();
+    }
   };
+  if (isTauriRuntime()) {
+    void refreshLiveAudioInputStatus();
+  }
   const videoOutputMetricsTimer = isTauriRuntime()
     ? window.setInterval(() => {
         if (videoOutputWindowStatuses()?.some((status) => status.live_open)) {
@@ -8993,12 +9064,11 @@ export default function App() {
         if (videoRecordingStatus().active) {
           void refreshVideoRecordingStatus();
         }
-        if (liveAudioInputStatus().running) {
-          void refreshLiveAudioInputStatus();
-        }
+        void refreshLiveAudioInputStatus();
       }, 1000)
     : null;
   onCleanup(() => {
+    liveAudioStatusRequests.invalidate();
     if (videoOutputMetricsTimer !== null) {
       window.clearInterval(videoOutputMetricsTimer);
     }
@@ -10194,7 +10264,7 @@ export default function App() {
   const nodeGraphSourceDetail = () => {
     if (nodeGraphSourceMode() === "Audio") {
       const availability = nodeGraphAudioSource() === "Live"
-        ? liveAudioInputStatus().running ? "Live input" : "Live stopped"
+        ? liveAudioNodeAvailability(liveAudioInputStatus(), liveAudioInputStatusKnown())
         : audioAnalysis()?.spectrum.length ? "FFT ready" : "No FFT";
       return `${nodeGraphAudioGain().toFixed(1)}x ${nodeGraphAudioBias() >= 0 ? "+" : ""}${nodeGraphAudioBias().toFixed(2)} / ${availability}`;
     }
@@ -11928,6 +11998,8 @@ export default function App() {
             get liveAudioInputDevices() { return liveAudioInputDevices(); },
             get selectedLiveAudioInputDevice() { return selectedLiveAudioInputDevice(); },
             get liveAudioInputStatus() { return liveAudioInputStatus(); },
+            get liveAudioInputStatusKnown() { return liveAudioInputStatusKnown(); },
+            get liveAudioInputBusy() { return liveAudioInputBusy(); },
             get previewLayerId() { return videoPreviewLayerId(); },
             get previewBusy() { return vjPreviewTransportBusy(); },
             get previewError() { return vjPreviewTransportError(); },

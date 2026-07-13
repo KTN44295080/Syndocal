@@ -3514,10 +3514,6 @@ progress {
 }
 
 @media (max-height: 760px) {
-  .videoControlPanelMixer .videoMixerClipPane .liveAudioInputBar small {
-    display: none;
-  }
-
   .videoControlPanelMixer .videoMixerClipPane .videoClipGridPanel {
     gap: 4px;
     padding: 5px;
@@ -11718,8 +11714,7 @@ input[type="color"] {
 .videoControlPanelMixer .videoClipGridPanel.empty > .videoAudioSyncStatus,
 .videoControlPanelMixer .videoClipGridPanel.empty > .videoClipPreviewBar,
 .videoControlPanelMixer .videoClipGridPanel.empty > .videoAbDeck,
-.videoControlPanelMixer .videoClipGridPanel.empty > .videoRecordingBar,
-.videoControlPanelMixer .videoClipGridPanel.empty > .liveAudioInputBar {
+.videoControlPanelMixer .videoClipGridPanel.empty > .videoRecordingBar {
   display: none;
 }
 
@@ -12037,6 +12032,48 @@ input[type="color"] {
   border-color: #3e8b6b;
 }
 
+.liveAudioInputBar.stale {
+  border-color: #c86c42;
+  background: #211714;
+  box-shadow: inset 3px 0 0 #e17b48;
+}
+
+.liveAudioInputBar.clearing {
+  border-color: #e14f4f;
+  background: #271315;
+  box-shadow: inset 3px 0 0 #ff5f5f;
+}
+
+.liveAudioInputBar.unknown {
+  border-color: #8d7650;
+  background: #1d1912;
+  box-shadow: inset 3px 0 0 #b08b4f;
+}
+
+.liveAudioInputBar.stale .liveAudioMeters i {
+  opacity: 0;
+}
+
+.liveAudioInputBar.stale .liveAudioMeters small {
+  color: #ffb48f;
+  font-weight: 700;
+}
+
+.liveAudioInputBar.clearing .liveAudioMeters i,
+.liveAudioInputBar.unknown .liveAudioMeters i {
+  opacity: 0;
+}
+
+.liveAudioInputBar.clearing .liveAudioMeters small {
+  color: #ff9b9b;
+  font-weight: 800;
+}
+
+.liveAudioInputBar.unknown .liveAudioMeters small {
+  color: #d4b982;
+  font-weight: 700;
+}
+
 .liveAudioInputControls {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 24px auto;
@@ -12088,6 +12125,15 @@ input[type="color"] {
   color: #81909f;
   font-size: 9px;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.liveAudioHealthAnnouncement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
   white-space: nowrap;
 }
 
