@@ -5,6 +5,7 @@ const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
 const backend = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
 const engine = await readFile(new URL("../../crates/engine/src/lib.rs", import.meta.url), "utf8");
 const clipGrid = await readFile(new URL("../src/components/VideoClipGridPanel.tsx", import.meta.url), "utf8");
+const liveMonitors = await readFile(new URL("../src/components/LiveVideoMonitorPanel.tsx", import.meta.url), "utf8");
 
 const workflowStart = app.indexOf("const createFirstRunVjShow = async () => {");
 const workflowEnd = app.indexOf("const videoThumbnailSourceSignature", workflowStart);
@@ -29,7 +30,8 @@ for (const forbidden of [
   assert.ok(!workflow.includes(forbidden), `first-run VJ workflow must not call ${forbidden}`);
 }
 assert.ok(workflow.includes("setSelectedVideoOutputId(result.output_id)"));
-assert.ok(workflow.includes("setVideoPreviewLayerId(result.layer_ids[0] ?? null)"));
+assert.ok(workflow.includes("await stageVjPreviewLayer(firstLayerId)"));
+assert.ok(!workflow.includes("setVideoPreviewLayerId("), "first-run Preview must be staged by the runtime backend");
 assert.ok(backend.includes("enabled: false"));
 assert.ok(backend.includes("blackout: true"));
 assert.ok(backend.includes("fullscreen: false"));
@@ -43,4 +45,29 @@ assert.ok(backend.includes("tauri::async_runtime::spawn_blocking(move ||"));
 assert.ok(clipGrid.includes('aria-busy={props.firstRunBusy}'));
 assert.ok(clipGrid.includes('querySelector<HTMLButtonElement>(".videoClipLaunch")?.focus()'));
 
-console.log("safe first-run VJ workflow ok");
+const mutationCommandsStart = app.indexOf("const projectMutationCommands = new Set([");
+const mutationCommandsEnd = app.indexOf("]);", mutationCommandsStart);
+assert.ok(mutationCommandsStart >= 0 && mutationCommandsEnd > mutationCommandsStart);
+const mutationCommands = app.slice(mutationCommandsStart, mutationCommandsEnd);
+for (const command of [
+  "get_vj_preview_transport",
+  "stage_vj_preview_layer",
+  "set_vj_preview_playing",
+  "seek_vj_preview",
+  "set_vj_preview_speed",
+  "clear_vj_preview",
+]) {
+  assert.ok(app.includes(`"${command}"`), `${command} frontend command is missing`);
+  assert.ok(backend.includes(command), `${command} backend command is missing`);
+  assert.ok(!mutationCommands.includes(`"${command}"`), `${command} must not create project history`);
+}
+assert.ok(app.includes("vjPreviewPollInFlight"), "Preview polling must remain single-flight");
+assert.ok(clipGrid.includes("onStagePreview(layer.id)"), "P buttons must stage the runtime Preview");
+assert.ok(clipGrid.includes("!props.previewBackendAvailable"), "browser P buttons must stay disabled");
+assert.ok(liveMonitors.includes("PREVIEW TRANSPORT"));
+assert.ok(liveMonitors.includes("props.onSetPreviewPlaying"));
+assert.ok(liveMonitors.includes("props.onSeekPreview"));
+assert.ok(liveMonitors.includes("props.onSetPreviewSpeed"));
+assert.ok(liveMonitors.includes("props.onClearPreview"));
+
+console.log("safe first-run VJ workflow and independent Preview transport ok");

@@ -29,8 +29,8 @@ use protocol::{
     CompositionSummary, CueFixtureTarget, CueId, CueNodeGraphTarget, CustomFixtureProfileFile,
     CustomFixtureProfileRequest, DmxInputConfig, DmxInputProtocol, DmxInputStatus, DmxModeSummary,
     DmxOutputConfig, DmxOutputProtocol, EffectId, EffectKind, EffectPreset, EffectSummary,
-    EngineSnapshot, EngineTelemetry, FixtureId, FixtureLimits, FixturePreset,
-    FixtureProfileSummary, GeometrySummary, LearnedMidiControl, LearnedOscControl,
+    EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, FixtureId, FixtureLimits,
+    FixturePreset, FixtureProfileSummary, GeometrySummary, LearnedMidiControl, LearnedOscControl,
     LfoEffectRequest, MidiControlAction, MidiControlMapping, MidiInputSummary, MidiOutputSummary,
     NodeGraphId, NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp,
     OscControlAction, OscControlMapping, OscInputConfig, PatchFixtureRequest,
@@ -141,6 +141,9 @@ fn validate_app_name(file_label: &str, app: &str) -> Result<(), String> {
 struct AppState {
     engine: EngineHandle,
     vj_first_run: Arc<Mutex<()>>,
+    vj_preview_transport: Mutex<VjPreviewTransportRuntime>,
+    vj_preview_renderer: Mutex<AppVideoPreviewRenderer>,
+    vj_preview_renderer_reset_pending: AtomicBool,
     media_audio: Arc<Mutex<MediaAudioPlayback>>,
     _media_audio_sync: MediaAudioSyncRuntime,
     live_audio_input: Mutex<Option<LiveAudioInput>>,
@@ -173,6 +176,475 @@ struct AppState {
     standby_sync: Mutex<StandbySyncRuntime>,
     native_video_output_metrics:
         Mutex<HashMap<VideoOutputId, Arc<Mutex<NativeVideoOutputMetrics>>>>,
+}
+
+const VJ_PREVIEW_MIN_SPEED: f32 = -4.0;
+const VJ_PREVIEW_MAX_SPEED: f32 = 4.0;
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+struct VjPreviewTransportSummary {
+    layer_id: Option<VideoLayerId>,
+    playing: bool,
+    position_ms: u64,
+    duration_ms: Option<u64>,
+    speed: f32,
+    loop_enabled: bool,
+    loop_start_ms: u64,
+    loop_end_ms: u64,
+    source_name: Option<String>,
+    updated_at_ms: u64,
+    generation: u64,
+}
+
+impl VjPreviewTransportSummary {
+    fn empty(generation: u64, updated_at_ms: u64) -> Self {
+        Self {
+            layer_id: None,
+            playing: false,
+            position_ms: 0,
+            duration_ms: None,
+            speed: 1.0,
+            loop_enabled: false,
+            loop_start_ms: 0,
+            loop_end_ms: 0,
+            source_name: None,
+            updated_at_ms,
+            generation,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VjPreviewSourceIdentity {
+    kind: VideoSourceKind,
+    path: Option<String>,
+    name: Option<String>,
+    codec: Option<String>,
+    duration_ms: Option<u64>,
+    width: Option<u32>,
+    height: Option<u32>,
+    frame_rate_bits: Option<u32>,
+    has_audio: bool,
+}
+
+impl VjPreviewSourceIdentity {
+    fn from_layer(layer: &protocol::VideoLayerSummary) -> Self {
+        let metadata = layer.source.metadata;
+        Self {
+            kind: layer.source.kind.clone(),
+            path: layer.source.path.clone(),
+            name: layer.source.name.clone(),
+            codec: layer.source.codec.clone(),
+            duration_ms: metadata.and_then(|metadata| metadata.duration_ms),
+            width: metadata.and_then(|metadata| metadata.width),
+            height: metadata.and_then(|metadata| metadata.height),
+            frame_rate_bits: metadata
+                .and_then(|metadata| metadata.frame_rate)
+                .map(f32::to_bits),
+            has_audio: metadata.is_some_and(|metadata| metadata.has_audio),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct VjPreviewTransportSession {
+    layer_id: VideoLayerId,
+    source: VjPreviewSourceIdentity,
+    source_name: Option<String>,
+    position_ms: f64,
+    duration_ms: Option<u64>,
+    playing: bool,
+    speed: f32,
+    loop_enabled: bool,
+    loop_start_ms: u64,
+    loop_end_ms: u64,
+    anchored_at: Instant,
+    updated_at_ms: u64,
+    generation: u64,
+}
+
+#[derive(Debug, Default)]
+struct VjPreviewTransportRuntime {
+    session: Option<VjPreviewTransportSession>,
+    generation: u64,
+}
+
+impl VjPreviewTransportRuntime {
+    fn next_generation(&mut self) -> u64 {
+        self.generation = self.generation.saturating_add(1).max(1);
+        self.generation
+    }
+
+    fn clear_at(&mut self, updated_at_ms: u64) -> VjPreviewTransportSummary {
+        self.session = None;
+        let generation = self.next_generation();
+        VjPreviewTransportSummary::empty(generation, updated_at_ms)
+    }
+
+    fn stage_at(
+        &mut self,
+        layer: &protocol::VideoLayerSummary,
+        now: Instant,
+        updated_at_ms: u64,
+    ) -> Result<VjPreviewTransportSummary, String> {
+        validate_vj_preview_layer(layer)?;
+        let state = video::sanitize_layer_state(layer.state.clone());
+        let duration_ms = if layer.source.kind == VideoSourceKind::StillImage {
+            Some(0)
+        } else {
+            layer
+                .source
+                .metadata
+                .and_then(|metadata| metadata.duration_ms)
+        };
+        let (loop_enabled, loop_start_ms, loop_end_ms) =
+            vj_preview_loop_bounds(&state, duration_ms);
+        let generation = self.next_generation();
+        let mut session = VjPreviewTransportSession {
+            layer_id: layer.id,
+            source: VjPreviewSourceIdentity::from_layer(layer),
+            source_name: vj_preview_source_name(layer),
+            // Staging a pad is a cue operation, not a mirror of the live Program playhead.
+            // Always begin at the clip in-point so an ended Program clip remains auditionable.
+            position_ms: (if loop_enabled { loop_start_ms } else { 0 }) as f64,
+            duration_ms,
+            playing: false,
+            speed: sanitize_vj_preview_speed(state.speed),
+            loop_enabled,
+            loop_start_ms,
+            loop_end_ms,
+            anchored_at: now,
+            updated_at_ms,
+            generation,
+        };
+        session.position_ms = clamp_vj_preview_position(&session, session.position_ms);
+        self.session = Some(session);
+        Ok(self.summary_at(now, updated_at_ms))
+    }
+
+    fn reconcile_at(
+        &mut self,
+        snapshot: &EngineSnapshot,
+        now: Instant,
+        updated_at_ms: u64,
+    ) -> bool {
+        let Some(session) = self.session.as_ref() else {
+            return true;
+        };
+        let valid = snapshot
+            .video
+            .layers
+            .iter()
+            .find(|layer| layer.id == session.layer_id)
+            .is_some_and(|layer| {
+                validate_vj_preview_layer(layer).is_ok()
+                    && VjPreviewSourceIdentity::from_layer(layer) == session.source
+            });
+        if !valid {
+            self.clear_at(updated_at_ms);
+            return false;
+        }
+        self.advance_at(now, updated_at_ms);
+        true
+    }
+
+    fn summary_at(&mut self, now: Instant, updated_at_ms: u64) -> VjPreviewTransportSummary {
+        self.advance_at(now, updated_at_ms);
+        self.session
+            .as_ref()
+            .map(vj_preview_transport_summary)
+            .unwrap_or_else(|| VjPreviewTransportSummary::empty(self.generation, updated_at_ms))
+    }
+
+    fn set_playing_at(
+        &mut self,
+        playing: bool,
+        now: Instant,
+        updated_at_ms: u64,
+    ) -> Result<VjPreviewTransportSummary, String> {
+        self.require_session()?;
+        self.advance_at(now, updated_at_ms);
+        let generation = self.next_generation();
+        let session = self.session.as_mut().expect("preview session was checked");
+        if playing && !session.playing {
+            let lower = if session.loop_enabled {
+                session.loop_start_ms
+            } else {
+                0
+            } as f64;
+            let upper = vj_preview_upper_bound(session);
+            if session.speed > 0.0 && session.position_ms >= upper {
+                session.position_ms = lower;
+            } else if session.speed < 0.0 && session.position_ms <= lower {
+                session.position_ms = upper;
+            }
+        }
+        session.playing = playing && session.duration_ms != Some(0);
+        session.anchored_at = now;
+        session.updated_at_ms = updated_at_ms;
+        session.generation = generation;
+        Ok(vj_preview_transport_summary(session))
+    }
+
+    fn seek_at(
+        &mut self,
+        position_ms: u64,
+        now: Instant,
+        updated_at_ms: u64,
+    ) -> Result<VjPreviewTransportSummary, String> {
+        self.require_session()?;
+        self.advance_at(now, updated_at_ms);
+        let generation = self.next_generation();
+        let session = self.session.as_mut().expect("preview session was checked");
+        session.position_ms = clamp_vj_preview_position(session, position_ms as f64);
+        session.anchored_at = now;
+        session.updated_at_ms = updated_at_ms;
+        session.generation = generation;
+        Ok(vj_preview_transport_summary(session))
+    }
+
+    fn set_speed_at(
+        &mut self,
+        speed: f32,
+        now: Instant,
+        updated_at_ms: u64,
+    ) -> Result<VjPreviewTransportSummary, String> {
+        if !speed.is_finite() {
+            return Err("VJ Preview speed must be finite".to_string());
+        }
+        self.require_session()?;
+        self.advance_at(now, updated_at_ms);
+        let generation = self.next_generation();
+        let session = self.session.as_mut().expect("preview session was checked");
+        session.speed = sanitize_vj_preview_speed(speed);
+        session.anchored_at = now;
+        session.updated_at_ms = updated_at_ms;
+        session.generation = generation;
+        Ok(vj_preview_transport_summary(session))
+    }
+
+    fn current_take_state_at(
+        &mut self,
+        layer_id: VideoLayerId,
+        now: Instant,
+        updated_at_ms: u64,
+    ) -> Option<VjPreviewTakeState> {
+        self.advance_at(now, updated_at_ms);
+        self.session
+            .as_ref()
+            .filter(|session| session.layer_id == layer_id)
+            .map(|session| VjPreviewTakeState {
+                position_ms: vj_preview_position_ms(session),
+                speed: session.speed,
+            })
+    }
+
+    fn require_session(&self) -> Result<(), String> {
+        if self.session.is_some() {
+            Ok(())
+        } else {
+            Err("No VJ Preview layer is staged".to_string())
+        }
+    }
+
+    fn advance_at(&mut self, now: Instant, updated_at_ms: u64) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        let elapsed_ms = now
+            .saturating_duration_since(session.anchored_at)
+            .as_secs_f64()
+            * 1_000.0;
+        session.anchored_at = now;
+        if !session.playing || elapsed_ms <= 0.0 || session.speed == 0.0 {
+            return;
+        }
+
+        let next = session.position_ms + elapsed_ms * f64::from(session.speed);
+        if session.loop_enabled {
+            let start = session.loop_start_ms as f64;
+            let end = session.loop_end_ms as f64;
+            let span = end - start;
+            session.position_ms = if span > 0.0 {
+                start + (next - start).rem_euclid(span)
+            } else {
+                start
+            };
+        } else {
+            let upper = vj_preview_upper_bound(session);
+            if next <= 0.0 {
+                session.position_ms = 0.0;
+                if session.speed < 0.0 {
+                    session.playing = false;
+                }
+            } else if next >= upper {
+                session.position_ms = upper;
+                if session.speed > 0.0 && session.duration_ms.is_some() {
+                    session.playing = false;
+                }
+            } else {
+                session.position_ms = next;
+            }
+        }
+        session.updated_at_ms = updated_at_ms;
+    }
+}
+
+fn validate_vj_preview_layer(layer: &protocol::VideoLayerSummary) -> Result<(), String> {
+    if !matches!(
+        layer.source.kind,
+        VideoSourceKind::File | VideoSourceKind::StillImage
+    ) {
+        return Err(format!(
+            "VJ Preview supports local File and Still Image layers; layer {} uses {:?}",
+            layer.id, layer.source.kind
+        ));
+    }
+    if layer
+        .source
+        .path
+        .as_deref()
+        .is_none_or(|path| path.trim().is_empty())
+    {
+        return Err(format!(
+            "VJ Preview layer {} requires a local source path",
+            layer.id
+        ));
+    }
+    Ok(())
+}
+
+fn vj_preview_source_name(layer: &protocol::VideoLayerSummary) -> Option<String> {
+    layer
+        .source
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            layer
+                .source
+                .path
+                .as_deref()
+                .and_then(|path| Path::new(path).file_name())
+                .and_then(OsStr::to_str)
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            let label = layer.label.trim();
+            (!label.is_empty()).then(|| label.to_string())
+        })
+}
+
+fn sanitize_vj_preview_speed(speed: f32) -> f32 {
+    if speed.is_finite() {
+        speed.clamp(VJ_PREVIEW_MIN_SPEED, VJ_PREVIEW_MAX_SPEED)
+    } else {
+        1.0
+    }
+}
+
+fn vj_preview_loop_bounds(state: &VideoLayerState, duration_ms: Option<u64>) -> (bool, u64, u64) {
+    if !state.loop_enabled {
+        return (false, 0, duration_ms.unwrap_or(0));
+    }
+    let mut start = state.loop_start_ms;
+    let mut end = state.loop_end_ms.max(start.saturating_add(1));
+    if let Some(duration_ms) = duration_ms {
+        start = start.min(duration_ms);
+        end = end.min(duration_ms);
+        if duration_ms == 0 || end <= start {
+            return (false, 0, duration_ms);
+        }
+    }
+    if end <= start {
+        return (false, 0, duration_ms.unwrap_or(0));
+    }
+    (true, start, end)
+}
+
+fn vj_preview_upper_bound(session: &VjPreviewTransportSession) -> f64 {
+    if session.loop_enabled {
+        session.loop_end_ms as f64
+    } else {
+        session.duration_ms.unwrap_or(u64::MAX) as f64
+    }
+}
+
+fn clamp_vj_preview_position(session: &VjPreviewTransportSession, position_ms: f64) -> f64 {
+    let lower = if session.loop_enabled {
+        session.loop_start_ms
+    } else {
+        0
+    } as f64;
+    let upper = vj_preview_upper_bound(session).max(lower);
+    if position_ms.is_finite() {
+        position_ms.clamp(lower, upper)
+    } else {
+        lower
+    }
+}
+
+fn vj_preview_position_ms(session: &VjPreviewTransportSession) -> u64 {
+    clamp_vj_preview_position(session, session.position_ms).floor() as u64
+}
+
+fn vj_preview_transport_summary(session: &VjPreviewTransportSession) -> VjPreviewTransportSummary {
+    VjPreviewTransportSummary {
+        layer_id: Some(session.layer_id),
+        playing: session.playing,
+        position_ms: vj_preview_position_ms(session),
+        duration_ms: session.duration_ms,
+        speed: session.speed,
+        loop_enabled: session.loop_enabled,
+        loop_start_ms: session.loop_start_ms,
+        loop_end_ms: session.loop_end_ms,
+        source_name: session.source_name.clone(),
+        updated_at_ms: session.updated_at_ms,
+        generation: session.generation,
+    }
+}
+
+fn vj_preview_timestamp_ms() -> u64 {
+    current_unix_ms().min(u128::from(u64::MAX)) as u64
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct VjPreviewTakeState {
+    position_ms: u64,
+    speed: f32,
+}
+
+fn new_vj_preview_renderer() -> AppVideoPreviewRenderer {
+    // Deliberately omit capture/NDI/Spout registries: the Preview transport only accepts
+    // File and Still Image sources and must never consume a shared latest-frame queue.
+    video::VideoPreviewRenderer::with_frame_provider(
+        video::VideoRuntimeConfig::default(),
+        video::DecoderBackedFrameProvider::new(
+            ndi_transport::NdiAwareVideoFrameDecoder::from_env(),
+        )
+        .with_prefetch(0, 33),
+    )
+}
+
+fn reset_vj_preview_renderer(state: &State<'_, AppState>) -> Result<(), String> {
+    state
+        .vj_preview_renderer_reset_pending
+        .store(true, Ordering::Release);
+    match state.vj_preview_renderer.try_lock() {
+        Ok(mut renderer) => {
+            *renderer = new_vj_preview_renderer();
+            state
+                .vj_preview_renderer_reset_pending
+                .store(false, Ordering::Release);
+            Ok(())
+        }
+        // A slow decode must not make Clear, project load, or source removal block the UI.
+        // The in-flight frame is rejected by its generation check and the next render resets.
+        Err(TryLockError::WouldBlock) => Ok(()),
+        Err(TryLockError::Poisoned(_)) => Err("VJ Preview renderer lock was poisoned".to_string()),
+    }
 }
 
 #[derive(Default)]
@@ -5410,7 +5882,22 @@ fn remove_video_layer(state: State<'_, AppState>, layer_id: VideoLayerId) -> Res
     state
         .engine
         .send(EngineCommand::RemoveVideoLayer(layer_id))
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    let mut cleared_preview = false;
+    if let Ok(mut transport) = state.vj_preview_transport.lock() {
+        if transport
+            .session
+            .as_ref()
+            .is_some_and(|session| session.layer_id == layer_id)
+        {
+            transport.clear_at(vj_preview_timestamp_ms());
+            cleared_preview = true;
+        }
+    }
+    if cleared_preview {
+        reset_vj_preview_renderer(&state)?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -5571,27 +6058,33 @@ fn take_video_clip(
     fade_ms: u64,
 ) -> Result<(), String> {
     let snapshot = state.engine.snapshot();
-    let states = exclusive_video_take_states(&snapshot.video.layers, layer_id, fade_ms)?;
-    for (candidate_id, next) in states {
-        state
-            .engine
-            .send(EngineCommand::SetVideoLayerState {
-                layer_id: candidate_id,
-                state: next,
-            })
-            .map_err(|error| error.to_string())?;
-        if fade_ms > 0 {
-            state
-                .engine
-                .send(EngineCommand::FadeVideoLayerOpacity {
-                    layer_id: candidate_id,
-                    opacity: if candidate_id == layer_id { 1.0 } else { 0.0 },
-                    duration_ms: fade_ms,
-                })
-                .map_err(|error| error.to_string())?;
-        }
+    let now = Instant::now();
+    let updated_at_ms = vj_preview_timestamp_ms();
+    let (preview_take_state, preview_valid) = {
+        let mut transport = state
+            .vj_preview_transport
+            .lock()
+            .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+        let valid = transport.reconcile_at(&snapshot, now, updated_at_ms);
+        (
+            transport.current_take_state_at(layer_id, now, updated_at_ms),
+            valid,
+        )
+    };
+    if !preview_valid {
+        reset_vj_preview_renderer(&state)?;
     }
-    Ok(())
+    let preview_take_state = preview_take_state.ok_or_else(|| {
+        format!("Stage video layer {layer_id} in Preview before sending it to Program")
+    })?;
+    state
+        .engine
+        .exclusive_video_take(ExclusiveVideoTakeRequest {
+            target_layer_id: layer_id,
+            fade_ms,
+            preview_position_ms: Some(preview_take_state.position_ms),
+            preview_speed: Some(preview_take_state.speed),
+        })
 }
 
 #[tauri::command]
@@ -6031,31 +6524,6 @@ fn stopped_video_clip_state(current: &VideoLayerState, fade_ms: u64) -> VideoLay
         next.opacity = 0.0;
     }
     next
-}
-
-fn exclusive_video_take_states(
-    layers: &[protocol::VideoLayerSummary],
-    target_layer_id: VideoLayerId,
-    fade_ms: u64,
-) -> Result<Vec<(VideoLayerId, VideoLayerState)>, String> {
-    let target = layers
-        .iter()
-        .find(|layer| layer.id == target_layer_id)
-        .ok_or_else(|| format!("Video layer {target_layer_id} was not found"))?;
-    let mut states = layers
-        .iter()
-        .filter(|layer| {
-            layer.id != target_layer_id
-                && layer.state.enabled
-                && (layer.state.playing || layer.state.opacity > 0.0)
-        })
-        .map(|layer| (layer.id, stopped_video_clip_state(&layer.state, fade_ms)))
-        .collect::<Vec<_>>();
-    states.push((
-        target_layer_id,
-        launched_video_clip_state(&target.state, fade_ms),
-    ));
-    Ok(states)
 }
 
 #[tauri::command]
@@ -7245,7 +7713,9 @@ fn new_project(state: State<'_, AppState>) -> Result<(), String> {
     state
         .engine
         .load_project_snapshot(EngineSnapshot::default())
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    reset_vj_preview_after_project_change(&state);
+    Ok(())
 }
 
 #[tauri::command]
@@ -9027,6 +9497,7 @@ fn load_project_from_file(
         .engine
         .load_project_snapshot(project.snapshot)
         .map_err(|error| error.to_string())?;
+    reset_vj_preview_after_project_change(state);
     if let Some(path) = current_path {
         set_current_project_path(state, path)?;
     } else {
@@ -9036,6 +9507,13 @@ fn load_project_from_file(
         path: path_label,
         profiles,
     })
+}
+
+fn reset_vj_preview_after_project_change(state: &State<'_, AppState>) {
+    if let Ok(mut transport) = state.vj_preview_transport.lock() {
+        transport.clear_at(vj_preview_timestamp_ms());
+    }
+    let _ = reset_vj_preview_renderer(state);
 }
 
 fn normalize_project_save_path(mut path: PathBuf) -> Result<PathBuf, String> {
@@ -12467,6 +12945,168 @@ fn get_debug_video_output_preview(
         .map_err(|error| format!("{error:?}"))
 }
 
+#[tauri::command]
+fn get_vj_preview_transport(
+    state: State<'_, AppState>,
+) -> Result<VjPreviewTransportSummary, String> {
+    let snapshot = state.engine.snapshot();
+    let now = Instant::now();
+    let updated_at_ms = vj_preview_timestamp_ms();
+    let mut transport = state
+        .vj_preview_transport
+        .lock()
+        .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+    let valid = transport.reconcile_at(&snapshot, now, updated_at_ms);
+    let summary = transport.summary_at(now, updated_at_ms);
+    drop(transport);
+    if !valid {
+        reset_vj_preview_renderer(&state)?;
+    }
+    Ok(summary)
+}
+
+#[tauri::command]
+fn stage_vj_preview_layer(
+    state: State<'_, AppState>,
+    layer_id: VideoLayerId,
+) -> Result<VjPreviewTransportSummary, String> {
+    let snapshot = state.engine.snapshot();
+    let layer = snapshot
+        .video
+        .layers
+        .iter()
+        .find(|layer| layer.id == layer_id)
+        .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
+    let source = VjPreviewSourceIdentity::from_layer(layer);
+    let mut transport = state
+        .vj_preview_transport
+        .lock()
+        .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+    let reset_renderer = transport
+        .session
+        .as_ref()
+        .is_some_and(|session| session.layer_id != layer_id || session.source != source);
+    let summary = transport.stage_at(layer, Instant::now(), vj_preview_timestamp_ms())?;
+    drop(transport);
+    if reset_renderer {
+        reset_vj_preview_renderer(&state)?;
+    }
+    Ok(summary)
+}
+
+#[tauri::command]
+fn set_vj_preview_playing(
+    state: State<'_, AppState>,
+    playing: bool,
+) -> Result<VjPreviewTransportSummary, String> {
+    let snapshot = state.engine.snapshot();
+    let now = Instant::now();
+    let updated_at_ms = vj_preview_timestamp_ms();
+    let mut transport = state
+        .vj_preview_transport
+        .lock()
+        .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+    let valid = transport.reconcile_at(&snapshot, now, updated_at_ms);
+    let result = transport.set_playing_at(playing, now, updated_at_ms);
+    drop(transport);
+    if !valid {
+        reset_vj_preview_renderer(&state)?;
+    }
+    result
+}
+
+#[tauri::command]
+fn seek_vj_preview(
+    state: State<'_, AppState>,
+    position_ms: u64,
+) -> Result<VjPreviewTransportSummary, String> {
+    let snapshot = state.engine.snapshot();
+    let now = Instant::now();
+    let updated_at_ms = vj_preview_timestamp_ms();
+    let mut transport = state
+        .vj_preview_transport
+        .lock()
+        .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+    let valid = transport.reconcile_at(&snapshot, now, updated_at_ms);
+    let result = transport.seek_at(position_ms, now, updated_at_ms);
+    drop(transport);
+    if !valid {
+        reset_vj_preview_renderer(&state)?;
+    }
+    result
+}
+
+#[tauri::command]
+fn set_vj_preview_speed(
+    state: State<'_, AppState>,
+    speed: f32,
+) -> Result<VjPreviewTransportSummary, String> {
+    let snapshot = state.engine.snapshot();
+    let now = Instant::now();
+    let updated_at_ms = vj_preview_timestamp_ms();
+    let mut transport = state
+        .vj_preview_transport
+        .lock()
+        .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+    let valid = transport.reconcile_at(&snapshot, now, updated_at_ms);
+    let result = transport.set_speed_at(speed, now, updated_at_ms);
+    drop(transport);
+    if !valid {
+        reset_vj_preview_renderer(&state)?;
+    }
+    result
+}
+
+#[tauri::command]
+fn clear_vj_preview(state: State<'_, AppState>) -> Result<VjPreviewTransportSummary, String> {
+    let summary = state
+        .vj_preview_transport
+        .lock()
+        .map_err(|_| "VJ Preview transport lock was poisoned".to_string())
+        .map(|mut transport| transport.clear_at(vj_preview_timestamp_ms()))?;
+    reset_vj_preview_renderer(&state)?;
+    Ok(summary)
+}
+
+fn vj_preview_render_snapshot(
+    snapshot: &EngineSnapshot,
+    layer_id: VideoLayerId,
+    position_ms: u64,
+) -> Result<protocol::VideoSnapshot, String> {
+    let mut layer = snapshot
+        .video
+        .layers
+        .iter()
+        .find(|layer| layer.id == layer_id)
+        .cloned()
+        .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
+    validate_vj_preview_layer(&layer)?;
+    layer.state.position_ms = position_ms;
+    layer.state.playing = false;
+    // render_layer_preview treats position zero as an invitation to use loop_start_ms.
+    // The independent transport must be able to seek to an actual zero frame.
+    layer.state.loop_start_ms = 0;
+    Ok(protocol::VideoSnapshot {
+        layers: vec![layer],
+        compositions: Vec::new(),
+        outputs: Vec::new(),
+        mapping_presets: Vec::new(),
+        master_opacity: 1.0,
+        blackout: false,
+    })
+}
+
+fn vj_preview_frame_is_current(
+    rendered: &VjPreviewTransportSummary,
+    current: &VjPreviewTransportSummary,
+    source_is_valid: bool,
+) -> bool {
+    source_is_valid
+        && rendered.layer_id.is_some()
+        && rendered.layer_id == current.layer_id
+        && rendered.generation == current.generation
+}
+
 const LIVE_VIDEO_MONITOR_MAGIC: [u8; 4] = *b"SYLV";
 const LIVE_VIDEO_MONITOR_VERSION: u8 = 1;
 const LIVE_VIDEO_MONITOR_STATUS_FRAME: u8 = 0;
@@ -12605,37 +13245,36 @@ fn get_live_video_monitor_frame(
     let sequence = LIVE_VIDEO_MONITOR_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let (width, height) = live_video_monitor_dimensions(width, height);
     let quality = live_video_monitor_quality(quality);
-
-    let mut renderer = match state.video_preview.try_lock() {
-        Ok(renderer) => renderer,
-        Err(TryLockError::WouldBlock) => {
-            let packet = live_video_monitor_packet(
-                LIVE_VIDEO_MONITOR_STATUS_BUSY,
-                monitor_kind,
-                sequence,
-                0,
-                0,
-                0,
-                width,
-                height,
-                &[],
-            )?;
-            return Ok(tauri::ipc::Response::new(packet));
-        }
-        Err(TryLockError::Poisoned(_)) => {
-            return Err("Video preview renderer lock was poisoned".to_string());
-        }
-    };
-
     let snapshot = state.engine.snapshot();
-    renderer
-        .frame_provider_mut()
-        .set_bpm(Some(snapshot.clock.bpm));
     let render_started = Instant::now();
+    let mut rendered_preview_summary: Option<VjPreviewTransportSummary> = None;
     let frame = match monitor_kind {
         LiveVideoMonitorKind::Program => {
             let output_id =
                 output_id.ok_or_else(|| "Program monitor requires an outputId".to_string())?;
+            let mut renderer = match state.video_preview.try_lock() {
+                Ok(renderer) => renderer,
+                Err(TryLockError::WouldBlock) => {
+                    let packet = live_video_monitor_packet(
+                        LIVE_VIDEO_MONITOR_STATUS_BUSY,
+                        monitor_kind,
+                        sequence,
+                        0,
+                        0,
+                        0,
+                        width,
+                        height,
+                        &[],
+                    )?;
+                    return Ok(tauri::ipc::Response::new(packet));
+                }
+                Err(TryLockError::Poisoned(_)) => {
+                    return Err("Video preview renderer lock was poisoned".to_string());
+                }
+            };
+            renderer
+                .frame_provider_mut()
+                .set_bpm(Some(snapshot.clock.bpm));
             let decode_budget = resolved_video_preview_decode_budget(
                 &renderer,
                 snapshot.video.layers.len(),
@@ -12653,19 +13292,132 @@ fn get_live_video_monitor_frame(
                 .map_err(|error| format!("{error:?}"))?
         }
         LiveVideoMonitorKind::Preview => {
-            let layer_id =
-                layer_id.ok_or_else(|| "Preview monitor requires a layerId".to_string())?;
+            // layer_id remains in the binary IPC contract for compatibility, but Preview is
+            // rendered exclusively from the explicitly staged ephemeral transport.
+            let _ = layer_id;
+            let now = Instant::now();
+            let updated_at_ms = vj_preview_timestamp_ms();
+            let (summary, valid) = {
+                let mut transport = state
+                    .vj_preview_transport
+                    .lock()
+                    .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+                let valid = transport.reconcile_at(&snapshot, now, updated_at_ms);
+                (transport.summary_at(now, updated_at_ms), valid)
+            };
+            if !valid {
+                reset_vj_preview_renderer(&state)?;
+            }
+            let layer_id = summary
+                .layer_id
+                .ok_or_else(|| "Preview monitor has no staged layer".to_string())?;
+            let preview_video =
+                vj_preview_render_snapshot(&snapshot, layer_id, summary.position_ms)?;
+            let mut renderer = match state.vj_preview_renderer.try_lock() {
+                Ok(renderer) => renderer,
+                Err(TryLockError::WouldBlock) => {
+                    let packet = live_video_monitor_packet(
+                        LIVE_VIDEO_MONITOR_STATUS_BUSY,
+                        monitor_kind,
+                        sequence,
+                        summary.position_ms,
+                        0,
+                        0,
+                        width,
+                        height,
+                        &[],
+                    )?;
+                    return Ok(tauri::ipc::Response::new(packet));
+                }
+                Err(TryLockError::Poisoned(_)) => {
+                    return Err("VJ Preview renderer lock was poisoned".to_string());
+                }
+            };
+            if state
+                .vj_preview_renderer_reset_pending
+                .swap(false, Ordering::AcqRel)
+            {
+                *renderer = new_vj_preview_renderer();
+            }
             renderer
-                .render_layer_preview(&snapshot.video, layer_id, width, height)
-                .map_err(|error| format!("{error:?}"))?
+                .frame_provider_mut()
+                .set_bpm(Some(snapshot.clock.bpm));
+            let frame = renderer
+                .render_layer_preview(&preview_video, layer_id, width, height)
+                .map_err(|error| format!("{error:?}"))?;
+            drop(renderer);
+
+            // A seek, restage, clear, layer removal, or source replacement may race a slow
+            // decode. Do not publish that stale frame into the Preview bus.
+            let latest_snapshot = state.engine.snapshot();
+            let check_now = Instant::now();
+            let check_timestamp_ms = vj_preview_timestamp_ms();
+            let (current, valid) = {
+                let mut transport = state
+                    .vj_preview_transport
+                    .lock()
+                    .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+                let valid = transport.reconcile_at(&latest_snapshot, check_now, check_timestamp_ms);
+                (transport.summary_at(check_now, check_timestamp_ms), valid)
+            };
+            if !valid {
+                reset_vj_preview_renderer(&state)?;
+            }
+            if !vj_preview_frame_is_current(&summary, &current, valid) {
+                let packet = live_video_monitor_packet(
+                    LIVE_VIDEO_MONITOR_STATUS_BUSY,
+                    monitor_kind,
+                    sequence,
+                    current.position_ms,
+                    live_video_monitor_elapsed_us(render_started),
+                    0,
+                    width,
+                    height,
+                    &[],
+                )?;
+                return Ok(tauri::ipc::Response::new(packet));
+            }
+            rendered_preview_summary = Some(summary);
+            frame
         }
     };
     let render_us = live_video_monitor_elapsed_us(render_started);
-    drop(renderer);
 
     let encode_started = Instant::now();
     let jpeg = encode_live_video_monitor_jpeg(&frame, quality)?;
     let encode_us = live_video_monitor_elapsed_us(encode_started);
+    if let Some(rendered) = rendered_preview_summary.as_ref() {
+        // Encoding is intentionally outside the transport lock. Recheck after it too, so a
+        // seek/clear/project transition during JPEG work can never publish one stale packet.
+        let latest_snapshot = state.engine.snapshot();
+        let check_now = Instant::now();
+        let check_timestamp_ms = vj_preview_timestamp_ms();
+        let (current, valid) = {
+            let mut transport = state
+                .vj_preview_transport
+                .lock()
+                .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+            let valid = transport.reconcile_at(&latest_snapshot, check_now, check_timestamp_ms);
+            (transport.summary_at(check_now, check_timestamp_ms), valid)
+        };
+        if !valid {
+            reset_vj_preview_renderer(&state)?;
+        }
+        if !vj_preview_frame_is_current(rendered, &current, valid) {
+            let packet = live_video_monitor_packet(
+                LIVE_VIDEO_MONITOR_STATUS_BUSY,
+                monitor_kind,
+                sequence,
+                current.position_ms,
+                render_us,
+                encode_us,
+                width,
+                height,
+                &[],
+            )?;
+            return Ok(tauri::ipc::Response::new(packet));
+        }
+    }
     let packet = live_video_monitor_packet(
         LIVE_VIDEO_MONITOR_STATUS_FRAME,
         monitor_kind,
@@ -12678,6 +13430,225 @@ fn get_live_video_monitor_frame(
         &jpeg,
     )?;
     Ok(tauri::ipc::Response::new(packet))
+}
+
+#[cfg(test)]
+mod vj_preview_transport_tests {
+    use super::*;
+
+    fn file_layer(
+        id: VideoLayerId,
+        position_ms: u64,
+        duration_ms: Option<u64>,
+    ) -> protocol::VideoLayerSummary {
+        protocol::VideoLayerSummary {
+            id,
+            label: format!("Clip {id}"),
+            source: VideoSourceSummary {
+                kind: VideoSourceKind::File,
+                path: Some(format!("clip-{id}.mp4")),
+                name: Some(format!("Source {id}")),
+                codec: Some("h264".to_string()),
+                metadata: Some(protocol::VideoMediaMetadata {
+                    duration_ms,
+                    width: Some(1_920),
+                    height: Some(1_080),
+                    frame_rate: Some(30.0),
+                    has_audio: true,
+                }),
+            },
+            blend_mode: VideoBlendMode::Normal,
+            state: VideoLayerState {
+                position_ms,
+                speed: 1.0,
+                ..VideoLayerState::default()
+            },
+            isf_effect: None,
+        }
+    }
+
+    fn snapshot_with_layer(layer: protocol::VideoLayerSummary) -> EngineSnapshot {
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.video.layers.push(layer);
+        snapshot
+    }
+
+    #[test]
+    fn preview_requires_explicit_stage_and_uses_no_decode_prefetch() {
+        let now = Instant::now();
+        let mut runtime = VjPreviewTransportRuntime::default();
+        let empty = runtime.summary_at(now, 1);
+        assert_eq!(empty.layer_id, None);
+        assert!(!empty.playing);
+
+        let renderer = new_vj_preview_renderer();
+        assert_eq!(renderer.frame_provider().prefetch_count(), 0);
+    }
+
+    #[test]
+    fn preview_clock_is_independent_and_monitor_snapshot_uses_preview_position() {
+        let snapshot = snapshot_with_layer(file_layer(7, 250, Some(5_000)));
+        let started = Instant::now();
+        let mut runtime = VjPreviewTransportRuntime::default();
+        let initial = runtime
+            .stage_at(&snapshot.video.layers[0], started, 1_000)
+            .unwrap();
+        let staged = runtime.seek_at(1_750, started, 1_001).unwrap();
+
+        assert_eq!(snapshot.video.layers[0].state.position_ms, 250);
+        assert_eq!(staged.position_ms, 1_750);
+        assert!(staged.generation > initial.generation);
+        assert_eq!(staged.updated_at_ms, 1_001);
+        let preview = vj_preview_render_snapshot(&snapshot, 7, staged.position_ms).unwrap();
+        assert_eq!(preview.layers.len(), 1);
+        assert_eq!(preview.layers[0].state.position_ms, 1_750);
+        assert_eq!(snapshot.video.layers[0].state.position_ms, 250);
+
+        assert!(vj_preview_frame_is_current(&staged, &staged, true));
+        let changed = runtime.seek_at(1_800, started, 1_002).unwrap();
+        assert!(!vj_preview_frame_is_current(&staged, &changed, true));
+        assert!(!vj_preview_frame_is_current(&changed, &changed, false));
+    }
+
+    #[test]
+    fn preview_clock_advances_pauses_and_seeks_without_engine_commands() {
+        let snapshot = snapshot_with_layer(file_layer(1, 100, Some(5_000)));
+        let started = Instant::now();
+        let mut runtime = VjPreviewTransportRuntime::default();
+        runtime
+            .stage_at(&snapshot.video.layers[0], started, 10)
+            .unwrap();
+        runtime.set_playing_at(true, started, 11).unwrap();
+
+        let advanced = runtime.summary_at(started + Duration::from_millis(250), 261);
+        assert_eq!(advanced.position_ms, 250);
+        assert!(advanced.playing);
+        let paused = runtime
+            .set_playing_at(false, started + Duration::from_millis(250), 262)
+            .unwrap();
+        assert_eq!(paused.position_ms, 250);
+        let held = runtime.summary_at(started + Duration::from_secs(5), 5_011);
+        assert_eq!(held.position_ms, 250);
+        assert!(!held.playing);
+        let sought = runtime
+            .seek_at(9_999, started + Duration::from_secs(5), 5_012)
+            .unwrap();
+        assert_eq!(sought.position_ms, 5_000);
+    }
+
+    #[test]
+    fn preview_clock_wraps_forward_and_reverse_inside_sanitized_loop() {
+        let mut layer = file_layer(2, 100, Some(1_000));
+        layer.state.loop_enabled = true;
+        layer.state.loop_start_ms = 100;
+        layer.state.loop_end_ms = 300;
+        let started = Instant::now();
+        let mut runtime = VjPreviewTransportRuntime::default();
+        runtime.stage_at(&layer, started, 20).unwrap();
+        runtime.set_playing_at(true, started, 21).unwrap();
+        let forward = runtime.summary_at(started + Duration::from_millis(250), 271);
+        assert_eq!(forward.position_ms, 150);
+
+        runtime
+            .seek_at(150, started + Duration::from_millis(250), 272)
+            .unwrap();
+        runtime
+            .set_speed_at(-1.0, started + Duration::from_millis(250), 273)
+            .unwrap();
+        let reverse = runtime.summary_at(started + Duration::from_millis(350), 373);
+        assert_eq!(reverse.position_ms, 250);
+        assert_eq!(reverse.speed, -1.0);
+    }
+
+    #[test]
+    fn preview_reverse_stops_at_zero_and_speed_is_sanitized() {
+        let layer = file_layer(3, 100, Some(1_000));
+        let started = Instant::now();
+        let mut runtime = VjPreviewTransportRuntime::default();
+        runtime.stage_at(&layer, started, 30).unwrap();
+        assert!(runtime.set_speed_at(f32::NAN, started, 31).is_err());
+        assert_eq!(
+            runtime.set_speed_at(-99.0, started, 32).unwrap().speed,
+            VJ_PREVIEW_MIN_SPEED
+        );
+        runtime.seek_at(100, started, 33).unwrap();
+        runtime.set_playing_at(true, started, 34).unwrap();
+        let stopped = runtime.summary_at(started + Duration::from_millis(100), 133);
+        assert_eq!(stopped.position_ms, 0);
+        assert!(!stopped.playing);
+    }
+
+    #[test]
+    fn preview_rejects_external_or_pathless_sources_and_stills_never_run() {
+        let mut external = file_layer(4, 0, Some(1_000));
+        external.source.kind = VideoSourceKind::Ndi;
+        external.source.path = None;
+        external.source.name = Some("Camera feed".to_string());
+        assert!(validate_vj_preview_layer(&external)
+            .unwrap_err()
+            .contains("File and Still Image"));
+
+        let mut pathless = file_layer(5, 0, Some(1_000));
+        pathless.source.path = Some("  ".to_string());
+        assert!(validate_vj_preview_layer(&pathless)
+            .unwrap_err()
+            .contains("local source path"));
+
+        let mut still = file_layer(6, 0, None);
+        still.source.kind = VideoSourceKind::StillImage;
+        let started = Instant::now();
+        let mut runtime = VjPreviewTransportRuntime::default();
+        let staged = runtime.stage_at(&still, started, 40).unwrap();
+        assert_eq!(staged.duration_ms, Some(0));
+        let playing = runtime.set_playing_at(true, started, 41).unwrap();
+        assert!(!playing.playing);
+        assert_eq!(
+            runtime
+                .summary_at(started + Duration::from_secs(10), 10_041)
+                .position_ms,
+            0
+        );
+    }
+
+    #[test]
+    fn preview_is_cleared_when_layer_disappears_or_source_identity_changes() {
+        let original = file_layer(8, 0, Some(1_000));
+        let snapshot = snapshot_with_layer(original.clone());
+        let started = Instant::now();
+        let mut runtime = VjPreviewTransportRuntime::default();
+        let staged = runtime.stage_at(&original, started, 50).unwrap();
+        assert_eq!(staged.layer_id, Some(8));
+
+        let mut replaced = snapshot.clone();
+        replaced.video.layers[0].source.path = Some("replacement.mp4".to_string());
+        assert!(!runtime.reconcile_at(&replaced, started, 51));
+        assert_eq!(runtime.summary_at(started, 51).layer_id, None);
+
+        runtime.stage_at(&original, started, 52).unwrap();
+        let empty = EngineSnapshot::default();
+        assert!(!runtime.reconcile_at(&empty, started, 53));
+        assert_eq!(runtime.summary_at(started, 53).layer_id, None);
+    }
+
+    #[test]
+    fn staging_rewinds_to_the_in_point_instead_of_copying_program_position() {
+        let started = Instant::now();
+        let mut runtime = VjPreviewTransportRuntime::default();
+        let ended = file_layer(9, 900, Some(1_000));
+        assert_eq!(
+            runtime.stage_at(&ended, started, 60).unwrap().position_ms,
+            0
+        );
+
+        let mut looped = file_layer(10, 900, Some(1_000));
+        looped.state.loop_enabled = true;
+        looped.state.loop_start_ms = 240;
+        looped.state.loop_end_ms = 800;
+        assert_eq!(
+            runtime.stage_at(&looped, started, 61).unwrap().position_ms,
+            240
+        );
+    }
 }
 
 #[cfg(test)]
@@ -22811,48 +23782,6 @@ mod video_clip_state_tests {
         assert!(!cut.playing);
         assert_eq!(cut.opacity, 0.0);
     }
-
-    #[test]
-    fn exclusive_take_retires_live_layers_and_launches_only_the_target() {
-        let layer = |id, enabled, playing, opacity| protocol::VideoLayerSummary {
-            id,
-            label: format!("Clip {id}"),
-            source: protocol::VideoSourceSummary {
-                kind: VideoSourceKind::File,
-                path: Some(format!("clip-{id}.mp4")),
-                name: None,
-                codec: None,
-                metadata: None,
-            },
-            blend_mode: protocol::VideoBlendMode::Normal,
-            state: VideoLayerState {
-                enabled,
-                playing,
-                opacity,
-                position_ms: 900,
-                ..VideoLayerState::default()
-            },
-            isf_effect: None,
-        };
-        let layers = vec![
-            layer(1, true, true, 1.0),
-            layer(2, true, false, 0.0),
-            layer(3, false, true, 1.0),
-        ];
-
-        let states = exclusive_video_take_states(&layers, 2, 400).unwrap();
-
-        assert_eq!(
-            states.iter().map(|entry| entry.0).collect::<Vec<_>>(),
-            vec![1, 2]
-        );
-        assert!(!states[0].1.playing);
-        assert_eq!(states[0].1.opacity, 1.0);
-        assert!(states[1].1.playing);
-        assert_eq!(states[1].1.position_ms, 0);
-        assert_eq!(states[1].1.opacity, 0.0);
-        assert!(exclusive_video_take_states(&layers, 99, 0).is_err());
-    }
 }
 
 #[cfg(test)]
@@ -23462,6 +24391,9 @@ fn main() {
         .manage(AppState {
             engine,
             vj_first_run: Arc::new(Mutex::new(())),
+            vj_preview_transport: Mutex::new(VjPreviewTransportRuntime::default()),
+            vj_preview_renderer: Mutex::new(new_vj_preview_renderer()),
+            vj_preview_renderer_reset_pending: AtomicBool::new(false),
             media_audio,
             _media_audio_sync: media_audio_sync,
             live_audio_input: Mutex::new(None),
@@ -23787,6 +24719,12 @@ fn main() {
             get_video_layer_thumbnail,
             get_debug_video_preview,
             get_debug_video_output_preview,
+            get_vj_preview_transport,
+            stage_vj_preview_layer,
+            set_vj_preview_playing,
+            seek_vj_preview,
+            set_vj_preview_speed,
+            clear_vj_preview,
             get_live_video_monitor_frame,
             get_debug_video_output_test_pattern,
             get_video_output_window_statuses,

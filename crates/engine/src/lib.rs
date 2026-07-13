@@ -24,11 +24,11 @@ use protocol::{
     CueIfcbTiming, CueListId, CueListSummary, CueNodeGraphTarget, CuePaletteTarget, CuePartSummary,
     CueSummary, DmxMergeMode, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol,
     DmxOutputRouteTelemetry, DmxUniversePreview, EffectBlendMode, EffectId, EffectKind,
-    EffectSummary, EngineSnapshot, EngineTelemetry, ExecutorId, FixtureId, FixtureLimits,
-    FixtureProfileSummary, LfoEffectRequest, LfoShape, NodeGraphId, NodeGraphNodeKind,
-    NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId, PatchFixtureRequest,
-    PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot,
-    ProgrammerValueSummary, ReferencePaletteSummary, Rotation3, StageMapConfig,
+    EffectSummary, EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId,
+    FixtureId, FixtureLimits, FixtureProfileSummary, LfoEffectRequest, LfoShape, NodeGraphId,
+    NodeGraphNodeKind, NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId,
+    PatchFixtureRequest, PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest,
+    ProgrammerSnapshot, ProgrammerValueSummary, ReferencePaletteSummary, Rotation3, StageMapConfig,
     StageMapPresetSummary, StageObjectId, StageObjectSummary, SubmasterSummary,
     TimelineAutomationSummary, TimelineCueEventSummary, TimelineEventId, TimelineSnapshot,
     TimelineTrackKind, TimelineVideoAutomationSummary, Transform2D, Vec3,
@@ -474,6 +474,11 @@ pub enum EngineCommand {
     SetVideoLayerState {
         layer_id: VideoLayerId,
         state: VideoLayerState,
+    },
+    ExclusiveVideoTake {
+        request: ExclusiveVideoTakeRequest,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
     },
     SetVideoLayerParam {
         layer_id: VideoLayerId,
@@ -972,6 +977,19 @@ impl EngineHandle {
             .map_err(|error| format!("VJ setup engine acknowledgement failed: {error}"))?
     }
 
+    pub fn exclusive_video_take(&self, request: ExclusiveVideoTakeRequest) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::ExclusiveVideoTake {
+            request,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Exclusive video Take acknowledgement failed: {error}"))?
+    }
+
     pub fn load_project_snapshot(&self, snapshot: EngineSnapshot) -> Result<(), EngineError> {
         self.sync_allocator_counters(&snapshot);
         self.send(EngineCommand::LoadProjectSnapshot(snapshot))
@@ -1300,6 +1318,23 @@ struct RuntimeVideoLayerFade {
     target_opacity: f32,
 }
 
+struct PendingCommandAck {
+    ack: mpsc::SyncSender<Result<(), String>>,
+    result: Result<(), String>,
+    rollback: PendingCommandRollback,
+    publication_error: &'static str,
+}
+
+#[derive(Clone)]
+enum PendingCommandRollback {
+    ClearBootstrappedVjShow,
+    RestoreExclusiveVideoTake {
+        video_layers: Vec<RuntimeVideoLayer>,
+        video_layer_fades: Vec<RuntimeVideoLayerFade>,
+        last_error: Option<String>,
+    },
+}
+
 #[derive(Clone)]
 struct RuntimeVideoComposition {
     summary: CompositionSummary,
@@ -1346,7 +1381,7 @@ struct RuntimeDmxInputFrame {
 
 struct EngineRuntime {
     shared_telemetry: Arc<EngineSharedTelemetry>,
-    pending_command_acks: Vec<(mpsc::SyncSender<Result<(), String>>, Result<(), String>)>,
+    pending_command_acks: Vec<PendingCommandAck>,
     fixtures: Vec<RuntimeFixture>,
     effects: Vec<RuntimeEffect>,
     node_graphs: Vec<RuntimeNodeGraph>,
@@ -2085,7 +2120,7 @@ impl EngineRuntime {
             let resets_telemetry = matches!(queued_command.command, EngineCommand::ResetTelemetry);
             let publication_barrier = matches!(
                 queued_command.command,
-                EngineCommand::BootstrapVjShow { .. }
+                EngineCommand::BootstrapVjShow { .. } | EngineCommand::ExclusiveVideoTake { .. }
             );
             if queued_command.command.requests_low_latency_dmx_tick() {
                 self.low_latency_dmx_tick_request_count =
@@ -3799,6 +3834,30 @@ impl EngineRuntime {
                     self.last_error = Some(format!("Video layer {layer_id} was not found"));
                 }
             }
+            EngineCommand::ExclusiveVideoTake {
+                request,
+                expires_at,
+                ack,
+            } => {
+                let rollback = PendingCommandRollback::RestoreExclusiveVideoTake {
+                    video_layers: self.video_layers.clone(),
+                    video_layer_fades: self.video_layer_fades.clone(),
+                    last_error: self.last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Exclusive video Take expired before engine execution".to_string())
+                } else {
+                    self.apply_exclusive_video_take(request)
+                };
+                self.last_error = result.as_ref().err().cloned();
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; exclusive video Take was rolled back",
+                });
+            }
             EngineCommand::SetVideoLayerParam {
                 layer_id,
                 param,
@@ -4183,7 +4242,13 @@ impl EngineRuntime {
                     Ok(())
                 })();
                 self.last_error = result.as_ref().err().cloned();
-                self.pending_command_acks.push((ack, result));
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback: PendingCommandRollback::ClearBootstrappedVjShow,
+                    publication_error:
+                        "Engine snapshot was busy; first-run VJ setup was rolled back",
+                });
             }
             EngineCommand::AddVideoOutput(output) => {
                 self.video_outputs
@@ -4378,7 +4443,7 @@ impl EngineRuntime {
             return;
         }
         let pending = std::mem::take(&mut self.pending_command_acks);
-        let requires_publication = pending.iter().any(|(_, result)| result.is_ok());
+        let requires_publication = pending.iter().any(|pending| pending.result.is_ok());
         let published = if requires_publication {
             let deadline = Instant::now() + Duration::from_millis(5);
             loop {
@@ -4397,20 +4462,44 @@ impl EngineRuntime {
             true
         };
         if !published {
-            self.video_layers.clear();
-            self.video_layer_fades.clear();
-            self.video_outputs.clear();
-            self.video_output_fades.clear();
-            self.last_error =
-                Some("Engine snapshot was busy; first-run VJ setup was rolled back".to_string());
+            for pending in pending.iter().rev() {
+                if pending.result.is_ok() {
+                    self.rollback_pending_command(pending.rollback.clone());
+                }
+            }
+            self.last_error = pending
+                .iter()
+                .rev()
+                .find(|pending| pending.result.is_ok())
+                .map(|pending| pending.publication_error.to_string());
         }
-        for (ack, result) in pending {
-            let result = if result.is_ok() && !published {
-                Err("Engine snapshot was busy; first-run VJ setup was rolled back".to_string())
+        for pending in pending {
+            let result = if pending.result.is_ok() && !published {
+                Err(pending.publication_error.to_string())
             } else {
-                result
+                pending.result
             };
-            let _ = ack.send(result);
+            let _ = pending.ack.send(result);
+        }
+    }
+
+    fn rollback_pending_command(&mut self, rollback: PendingCommandRollback) {
+        match rollback {
+            PendingCommandRollback::ClearBootstrappedVjShow => {
+                self.video_layers.clear();
+                self.video_layer_fades.clear();
+                self.video_outputs.clear();
+                self.video_output_fades.clear();
+            }
+            PendingCommandRollback::RestoreExclusiveVideoTake {
+                video_layers,
+                video_layer_fades,
+                last_error,
+            } => {
+                self.video_layers = video_layers;
+                self.video_layer_fades = video_layer_fades;
+                self.last_error = last_error;
+            }
         }
     }
 
@@ -5953,6 +6042,93 @@ impl EngineRuntime {
                 output.summary.opacity = target.opacity.clamp(0.0, 1.0);
             }
         }
+    }
+
+    fn apply_exclusive_video_take(
+        &mut self,
+        request: ExclusiveVideoTakeRequest,
+    ) -> Result<(), String> {
+        if request
+            .preview_speed
+            .is_some_and(|speed| !speed.is_finite())
+        {
+            return Err("Exclusive video Take preview speed must be finite".to_string());
+        }
+        let target = self
+            .video_layers
+            .iter()
+            .find(|layer| layer.id == request.target_layer_id)
+            .ok_or_else(|| format!("Video layer {} was not found", request.target_layer_id))?;
+
+        let mut updates = self
+            .video_layers
+            .iter()
+            .filter(|layer| {
+                layer.id != request.target_layer_id
+                    && layer.state.enabled
+                    && (layer.state.playing || layer.state.opacity > 0.0)
+            })
+            .map(|layer| {
+                let mut state = layer.state.clone();
+                state.playing = false;
+                if request.fade_ms == 0 {
+                    state.opacity = 0.0;
+                }
+                (layer.id, video::sanitize_layer_state(state), 0.0)
+            })
+            .collect::<Vec<_>>();
+
+        let mut target_state = target.state.clone();
+        target_state.enabled = true;
+        target_state.playing = true;
+        target_state.position_ms = if target_state.loop_enabled {
+            target_state.loop_start_ms
+        } else {
+            0
+        };
+        target_state.opacity = if request.fade_ms == 0 { 1.0 } else { 0.0 };
+        if let Some(position_ms) = request.preview_position_ms {
+            target_state.position_ms = position_ms;
+        }
+        if let Some(speed) = request.preview_speed {
+            target_state.speed = speed;
+        }
+        updates.push((
+            request.target_layer_id,
+            video::sanitize_layer_state(target_state),
+            1.0,
+        ));
+
+        let affected_layer_ids = updates
+            .iter()
+            .map(|(layer_id, _, _)| *layer_id)
+            .collect::<HashSet<_>>();
+        self.video_layer_fades
+            .retain(|fade| !affected_layer_ids.contains(&fade.layer_id));
+
+        for (layer_id, state, _) in &updates {
+            if let Some(layer) = self
+                .video_layers
+                .iter_mut()
+                .find(|layer| layer.id == *layer_id)
+            {
+                layer.state = state.clone();
+            }
+        }
+
+        if request.fade_ms > 0 {
+            let duration = Duration::from_millis(request.fade_ms);
+            for (layer_id, state, target_opacity) in updates {
+                self.video_layer_fades.push(RuntimeVideoLayerFade {
+                    layer_id,
+                    started_at: self.last_tick,
+                    duration,
+                    start_opacity: state.opacity,
+                    target_opacity,
+                });
+            }
+        }
+        Ok(())
     }
 
     fn advance_video_layers(&mut self, delta: Duration) {
@@ -9961,6 +10137,56 @@ mod tests {
     use io::{artnet::parse_art_dmx_packet, sacn::parse_sacn_dmx_packet};
     use protocol::{AudioWaveformPoint, DmxModeSummary, GeometrySummary, Vec3, VideoMediaMetadata};
     use std::net::UdpSocket;
+
+    fn add_runtime_test_video_layer(
+        runtime: &mut EngineRuntime,
+        layer_id: VideoLayerId,
+        state: VideoLayerState,
+    ) {
+        runtime.apply_command(EngineCommand::AddVideoLayer {
+            layer_id,
+            label: format!("Layer {layer_id}"),
+            source: VideoSourceSummary {
+                kind: protocol::VideoSourceKind::File,
+                path: Some(format!("memory://clip-{layer_id}.mp4")),
+                name: None,
+                codec: Some("h264".to_string()),
+                metadata: Some(VideoMediaMetadata {
+                    duration_ms: Some(10_000),
+                    width: Some(1_920),
+                    height: Some(1_080),
+                    frame_rate: Some(30.0),
+                    has_audio: false,
+                }),
+            },
+        });
+        runtime.apply_command(EngineCommand::SetVideoLayerState { layer_id, state });
+    }
+
+    fn runtime_video_layer_state(
+        runtime: &EngineRuntime,
+        layer_id: VideoLayerId,
+    ) -> &VideoLayerState {
+        &runtime
+            .video_layers
+            .iter()
+            .find(|layer| layer.id == layer_id)
+            .expect("test video layer exists")
+            .state
+    }
+
+    fn apply_runtime_exclusive_video_take(
+        runtime: &mut EngineRuntime,
+        request: ExclusiveVideoTakeRequest,
+    ) -> mpsc::Receiver<Result<(), String>> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::ExclusiveVideoTake {
+            request,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        receiver
+    }
 
     fn sample_geometries() -> Vec<GeometrySummary> {
         vec![
@@ -18698,6 +18924,243 @@ mod tests {
     }
 
     #[test]
+    fn exclusive_video_take_cut_updates_all_layers_atomically_and_uses_preview_transport() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        add_runtime_test_video_layer(
+            &mut runtime,
+            1,
+            VideoLayerState {
+                playing: true,
+                opacity: 1.0,
+                position_ms: 900,
+                ..VideoLayerState::default()
+            },
+        );
+        add_runtime_test_video_layer(
+            &mut runtime,
+            2,
+            VideoLayerState {
+                enabled: false,
+                opacity: 0.2,
+                speed: 2.0,
+                position_ms: 800,
+                ..VideoLayerState::default()
+            },
+        );
+        add_runtime_test_video_layer(
+            &mut runtime,
+            3,
+            VideoLayerState {
+                enabled: false,
+                playing: true,
+                opacity: 1.0,
+                position_ms: 700,
+                ..VideoLayerState::default()
+            },
+        );
+
+        apply_runtime_exclusive_video_take(
+            &mut runtime,
+            ExclusiveVideoTakeRequest {
+                target_layer_id: 2,
+                fade_ms: 0,
+                preview_position_ms: Some(1_234),
+                preview_speed: Some(-1.5),
+            },
+        );
+
+        let retired = runtime_video_layer_state(&runtime, 1);
+        assert!(!retired.playing);
+        assert_eq!(retired.opacity, 0.0);
+        let target = runtime_video_layer_state(&runtime, 2);
+        assert!(target.enabled);
+        assert!(target.playing);
+        assert_eq!(target.opacity, 1.0);
+        assert_eq!(target.position_ms, 1_234);
+        assert_eq!(target.speed, -1.5);
+        let disabled = runtime_video_layer_state(&runtime, 3);
+        assert!(!disabled.enabled);
+        assert!(disabled.playing);
+        assert_eq!(disabled.opacity, 1.0);
+        assert!(runtime.video_layer_fades.is_empty());
+        assert_eq!(runtime.last_error, None);
+    }
+
+    #[test]
+    fn exclusive_video_take_schedules_retire_and_launch_fades_in_one_command() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        add_runtime_test_video_layer(
+            &mut runtime,
+            1,
+            VideoLayerState {
+                playing: true,
+                opacity: 0.8,
+                ..VideoLayerState::default()
+            },
+        );
+        add_runtime_test_video_layer(
+            &mut runtime,
+            2,
+            VideoLayerState {
+                enabled: false,
+                opacity: 0.4,
+                speed: 2.0,
+                position_ms: 900,
+                loop_enabled: true,
+                loop_start_ms: 500,
+                loop_end_ms: 4_000,
+                ..VideoLayerState::default()
+            },
+        );
+        add_runtime_test_video_layer(
+            &mut runtime,
+            3,
+            VideoLayerState {
+                opacity: 0.0,
+                ..VideoLayerState::default()
+            },
+        );
+        let old_started_at = runtime.last_tick - Duration::from_millis(10);
+        for layer_id in [1, 2, 3] {
+            runtime.video_layer_fades.push(RuntimeVideoLayerFade {
+                layer_id,
+                started_at: old_started_at,
+                duration: Duration::from_secs(9),
+                start_opacity: 0.25,
+                target_opacity: 0.75,
+            });
+        }
+
+        apply_runtime_exclusive_video_take(
+            &mut runtime,
+            ExclusiveVideoTakeRequest {
+                target_layer_id: 2,
+                fade_ms: 1_000,
+                preview_position_ms: None,
+                preview_speed: None,
+            },
+        );
+
+        let retired = runtime_video_layer_state(&runtime, 1);
+        assert!(!retired.playing);
+        assert_eq!(retired.opacity, 0.8);
+        let target = runtime_video_layer_state(&runtime, 2);
+        assert!(target.enabled);
+        assert!(target.playing);
+        assert_eq!(target.position_ms, 500);
+        assert_eq!(target.speed, 2.0);
+        assert_eq!(target.opacity, 0.0);
+
+        assert_eq!(runtime.video_layer_fades.len(), 3);
+        let retire_fade = runtime
+            .video_layer_fades
+            .iter()
+            .find(|fade| fade.layer_id == 1)
+            .unwrap();
+        assert_eq!(retire_fade.started_at, runtime.last_tick);
+        assert_eq!(retire_fade.duration, Duration::from_millis(1_000));
+        assert_eq!(retire_fade.start_opacity, 0.8);
+        assert_eq!(retire_fade.target_opacity, 0.0);
+        let launch_fade = runtime
+            .video_layer_fades
+            .iter()
+            .find(|fade| fade.layer_id == 2)
+            .unwrap();
+        assert_eq!(launch_fade.started_at, runtime.last_tick);
+        assert_eq!(launch_fade.start_opacity, 0.0);
+        assert_eq!(launch_fade.target_opacity, 1.0);
+        let untouched_fade = runtime
+            .video_layer_fades
+            .iter()
+            .find(|fade| fade.layer_id == 3)
+            .unwrap();
+        assert_eq!(untouched_fade.started_at, old_started_at);
+
+        runtime.advance_video_layer_fades(runtime.last_tick + Duration::from_millis(500));
+        assert!((runtime_video_layer_state(&runtime, 1).opacity - 0.4).abs() < 0.001);
+        assert!((runtime_video_layer_state(&runtime, 2).opacity - 0.5).abs() < 0.001);
+        assert_eq!(runtime.last_error, None);
+    }
+
+    #[test]
+    fn exclusive_video_take_rejects_invalid_request_without_partial_state_changes() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        add_runtime_test_video_layer(
+            &mut runtime,
+            1,
+            VideoLayerState {
+                playing: true,
+                opacity: 0.75,
+                position_ms: 600,
+                ..VideoLayerState::default()
+            },
+        );
+        add_runtime_test_video_layer(&mut runtime, 2, VideoLayerState::default());
+        let before = runtime
+            .video_layers
+            .iter()
+            .map(|layer| (layer.id, layer.state.clone()))
+            .collect::<Vec<_>>();
+
+        apply_runtime_exclusive_video_take(
+            &mut runtime,
+            ExclusiveVideoTakeRequest {
+                target_layer_id: 2,
+                fade_ms: 500,
+                preview_position_ms: Some(900),
+                preview_speed: Some(f32::NAN),
+            },
+        );
+        assert!(runtime
+            .last_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("must be finite"));
+        assert_eq!(
+            runtime
+                .video_layers
+                .iter()
+                .map(|layer| (layer.id, layer.state.clone()))
+                .collect::<Vec<_>>(),
+            before
+        );
+        assert!(runtime.video_layer_fades.is_empty());
+
+        apply_runtime_exclusive_video_take(
+            &mut runtime,
+            ExclusiveVideoTakeRequest {
+                target_layer_id: 99,
+                fade_ms: 0,
+                preview_position_ms: None,
+                preview_speed: None,
+            },
+        );
+        assert!(runtime
+            .last_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("99 was not found"));
+        assert_eq!(
+            runtime
+                .video_layers
+                .iter()
+                .map(|layer| (layer.id, layer.state.clone()))
+                .collect::<Vec<_>>(),
+            before
+        );
+        assert!(runtime.video_layer_fades.is_empty());
+    }
+
+    #[test]
     fn video_layer_opacity_can_fade_and_direct_set_cancels_fade() {
         let engine = EngineHandle::start(DmxOutputConfig {
             enabled: false,
@@ -19793,6 +20256,210 @@ mod tests {
         assert!(busy_runtime.video_layers.is_empty());
         assert!(busy_runtime.video_outputs.is_empty());
         drop(read_guard);
+    }
+
+    #[test]
+    fn exclusive_video_take_is_a_publication_barrier() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        add_runtime_test_video_layer(
+            &mut runtime,
+            1,
+            VideoLayerState {
+                playing: true,
+                opacity: 1.0,
+                ..VideoLayerState::default()
+            },
+        );
+        add_runtime_test_video_layer(&mut runtime, 2, VideoLayerState::default());
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let (ack, receiver) = mpsc::sync_channel(1);
+        let queue = ArrayQueue::new(2);
+        assert!(queue
+            .push(QueuedEngineCommand {
+                command: EngineCommand::ExclusiveVideoTake {
+                    request: ExclusiveVideoTakeRequest {
+                        target_layer_id: 2,
+                        fade_ms: 0,
+                        preview_position_ms: Some(1_234),
+                        preview_speed: Some(0.0),
+                    },
+                    expires_at: Instant::now() + Duration::from_secs(1),
+                    ack,
+                },
+                queued_at: Instant::now(),
+            })
+            .is_ok());
+        assert!(queue
+            .push(QueuedEngineCommand {
+                command: EngineCommand::SetVideoLayerPlaying {
+                    layer_id: 2,
+                    playing: false,
+                },
+                queued_at: Instant::now(),
+            })
+            .is_ok());
+
+        runtime.consume_commands(&queue);
+        assert_eq!(queue.len(), 1);
+        runtime.publish_pending_command_acks(queue.len(), &published);
+        assert_eq!(receiver.recv().unwrap(), Ok(()));
+        let snapshot = published.read().unwrap();
+        let retired = snapshot
+            .video
+            .layers
+            .iter()
+            .find(|layer| layer.id == 1)
+            .unwrap();
+        let target = snapshot
+            .video
+            .layers
+            .iter()
+            .find(|layer| layer.id == 2)
+            .unwrap();
+        assert!(!retired.state.playing);
+        assert!(target.state.playing);
+        assert_eq!(target.state.position_ms, 1_234);
+        drop(snapshot);
+
+        runtime.consume_commands(&queue);
+        assert!(!runtime_video_layer_state(&runtime, 2).playing);
+        assert!(
+            published
+                .read()
+                .unwrap()
+                .video
+                .layers
+                .iter()
+                .find(|layer| layer.id == 2)
+                .unwrap()
+                .state
+                .playing
+        );
+    }
+
+    #[test]
+    fn exclusive_video_take_rolls_back_if_snapshot_publication_is_busy() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        add_runtime_test_video_layer(
+            &mut runtime,
+            1,
+            VideoLayerState {
+                playing: true,
+                opacity: 0.75,
+                position_ms: 600,
+                ..VideoLayerState::default()
+            },
+        );
+        add_runtime_test_video_layer(&mut runtime, 2, VideoLayerState::default());
+        runtime.video_layer_fades.push(RuntimeVideoLayerFade {
+            layer_id: 1,
+            started_at: runtime.last_tick,
+            duration: Duration::from_secs(4),
+            start_opacity: 0.75,
+            target_opacity: 0.25,
+        });
+        let before_states = runtime
+            .video_layers
+            .iter()
+            .map(|layer| (layer.id, layer.state.clone()))
+            .collect::<Vec<_>>();
+        let before_fade = runtime.video_layer_fades[0].clone();
+        let busy_snapshot = RwLock::new(runtime.build_snapshot(0));
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::ExclusiveVideoTake {
+            request: ExclusiveVideoTakeRequest {
+                target_layer_id: 2,
+                fade_ms: 1_000,
+                preview_position_ms: Some(900),
+                preview_speed: Some(-1.0),
+            },
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        assert!(runtime_video_layer_state(&runtime, 2).playing);
+
+        let read_guard = busy_snapshot.read().unwrap();
+        runtime.publish_pending_command_acks(0, &busy_snapshot);
+        assert!(receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("rolled back"));
+        assert_eq!(
+            runtime
+                .video_layers
+                .iter()
+                .map(|layer| (layer.id, layer.state.clone()))
+                .collect::<Vec<_>>(),
+            before_states
+        );
+        assert_eq!(runtime.video_layer_fades.len(), 1);
+        assert_eq!(runtime.video_layer_fades[0].layer_id, before_fade.layer_id);
+        assert_eq!(
+            runtime.video_layer_fades[0].started_at,
+            before_fade.started_at
+        );
+        assert_eq!(
+            runtime.video_layer_fades[0].target_opacity,
+            before_fade.target_opacity
+        );
+        drop(read_guard);
+    }
+
+    #[test]
+    fn exclusive_video_take_handle_returns_after_snapshot_publication() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let source = |id| VideoSourceSummary {
+            kind: protocol::VideoSourceKind::File,
+            path: Some(format!("memory://take-{id}.mp4")),
+            name: None,
+            codec: Some("h264".to_string()),
+            metadata: None,
+        };
+        for layer_id in [1, 2] {
+            engine
+                .send(EngineCommand::AddVideoLayer {
+                    layer_id,
+                    label: format!("Layer {layer_id}"),
+                    source: source(layer_id),
+                })
+                .unwrap();
+        }
+        for _ in 0..20 {
+            if engine.snapshot().video.layers.len() == 2 {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+        }
+        assert_eq!(engine.snapshot().video.layers.len(), 2);
+
+        engine
+            .exclusive_video_take(ExclusiveVideoTakeRequest {
+                target_layer_id: 2,
+                fade_ms: 0,
+                preview_position_ms: Some(2_345),
+                preview_speed: Some(0.0),
+            })
+            .unwrap();
+        let snapshot = engine.snapshot();
+        let target = snapshot
+            .video
+            .layers
+            .iter()
+            .find(|layer| layer.id == 2)
+            .unwrap();
+        assert!(target.state.playing);
+        assert_eq!(target.state.position_ms, 2_345);
+        assert_eq!(target.state.speed, 0.0);
     }
 
     #[test]

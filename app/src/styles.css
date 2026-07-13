@@ -3161,7 +3161,7 @@ progress {
 
 .liveVideoMonitorPanel {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto auto;
   gap: 5px;
   min-width: 0;
   min-height: 0;
@@ -3320,6 +3320,122 @@ progress {
   min-height: 32px;
   border-radius: 2px;
   font-size: 11px;
+}
+
+.vjPreviewTransport {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid #5d4930;
+  border-radius: 2px;
+  background: #15191c;
+  padding: 5px;
+}
+
+.vjPreviewTransport > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+  min-height: 20px;
+}
+
+.vjPreviewTransport > header strong {
+  color: #f0b15d;
+  font-size: 10px;
+}
+
+.vjPreviewTransport > header span {
+  min-width: 0;
+  overflow: hidden;
+  color: #a99b89;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vjPreviewTransportControls {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto 56px;
+  align-items: stretch;
+  gap: 4px;
+  min-width: 0;
+}
+
+.vjPreviewTransportControls button {
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: 2px;
+  padding: 0 6px;
+}
+
+.vjPreviewPlay {
+  border-color: #806039;
+  background: #34291d;
+  color: #ffd395;
+  font-size: 15px;
+}
+
+.vjPreviewSeek {
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  min-width: 0;
+  min-height: 44px;
+}
+
+.vjPreviewSeek > span {
+  overflow: hidden;
+  color: #c5c9cc;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vjPreviewSeek input {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+}
+
+.vjPreviewSpeed {
+  display: grid;
+  grid-template-columns: 44px 54px 44px;
+  align-items: stretch;
+  gap: 2px;
+  min-width: 0;
+}
+
+.vjPreviewSpeed output {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  border-top: 1px solid #3c4247;
+  border-bottom: 1px solid #3c4247;
+  background: #101315;
+  color: #e4e7e9;
+  font-size: 11px;
+}
+
+.vjPreviewClear {
+  color: #b8bec2;
+  font-size: 10px;
+}
+
+.vjPreviewTransportNotice,
+.vjPreviewTransportError {
+  overflow-wrap: anywhere;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.vjPreviewTransportNotice {
+  color: #d0a563;
+}
+
+.vjPreviewTransportError {
+  color: #ed8585;
 }
 
 .videoControlPanelMixer .videoMixerProgramPane .videoOutputControlList {
@@ -11326,6 +11442,25 @@ input[type="color"] {
   min-width: 0;
 }
 
+.videoClipProgramTransfer {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  min-width: 0;
+}
+
+.videoClipProgramTransfer .buttonRow button {
+  min-width: 56px;
+  min-height: 44px;
+}
+
+.videoClipPreviewError {
+  overflow-wrap: anywhere;
+  color: #ed8585 !important;
+  text-overflow: initial !important;
+  white-space: normal !important;
+}
+
 .videoClipPreviewBar small {
   color: #61b7ff;
   font-weight: 800;
@@ -11500,7 +11635,7 @@ input[type="color"] {
   position: relative;
   display: grid;
   min-width: 0;
-  min-height: 66px;
+  min-height: 90px;
 }
 
 .videoClipLaunch {
@@ -11508,10 +11643,10 @@ input[type="color"] {
   align-content: start;
   gap: 1px;
   min-width: 0;
-  min-height: 66px;
+  min-height: 90px;
   border-color: #334152;
   background: linear-gradient(180deg, #17212b, #10161d);
-  padding: 5px 25px 5px 6px;
+  padding: 5px 49px 5px 6px;
   text-align: left;
 }
 
@@ -11586,6 +11721,10 @@ input[type="color"] {
 
 .videoClipPreview {
   top: 3px;
+  width: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  font-size: 12px;
 }
 
 .videoClipStop {

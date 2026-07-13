@@ -559,6 +559,16 @@ pub struct VideoLayerTarget {
     pub state: VideoLayerState,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct ExclusiveVideoTakeRequest {
+    pub target_layer_id: VideoLayerId,
+    pub fade_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_position_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_speed: Option<f32>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VideoOutputTarget {
     pub output_id: VideoOutputId,

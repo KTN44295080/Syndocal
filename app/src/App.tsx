@@ -180,6 +180,7 @@ import type {
   VideoRecordingStatus,
   VideoRuntimeStatus,
   VideoSourceKind,
+  VjPreviewTransportSummary,
   VisualizerRenderPayload,
 } from "./types";
 import { videoFrameToDataUrl } from "./videoFrameCanvas";
@@ -444,6 +445,20 @@ import {
 } from "./timelineAutomationHelpers";
 
 const tauriBackendUnavailableMessage = "Syndocal desktop backend is not connected in this browser preview.";
+
+const emptyVjPreviewTransport = (): VjPreviewTransportSummary => ({
+  layer_id: null,
+  playing: false,
+  position_ms: 0,
+  duration_ms: null,
+  speed: 1,
+  loop_enabled: false,
+  loop_start_ms: 0,
+  loop_end_ms: 0,
+  updated_at_ms: 0,
+  generation: 0,
+  source_name: null,
+});
 
 const isTauriRuntime = () =>
   typeof window !== "undefined" && Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
@@ -898,6 +913,11 @@ export default function App() {
   const [videoPreviewInfo, setVideoPreviewInfo] = createSignal("No preview");
   const [videoPreviewUrl, setVideoPreviewUrl] = createSignal("");
   const [videoPreviewLayerId, setVideoPreviewLayerId] = createSignal<number | null>(null);
+  const [vjPreviewTransport, setVjPreviewTransport] = createSignal<VjPreviewTransportSummary>(
+    emptyVjPreviewTransport(),
+  );
+  const [vjPreviewTransportBusy, setVjPreviewTransportBusy] = createSignal(false);
+  const [vjPreviewTransportError, setVjPreviewTransportError] = createSignal<string | null>(null);
   const [vjFirstRunBusy, setVjFirstRunBusy] = createSignal(false);
   const [vjFirstRunError, setVjFirstRunError] = createSignal<string | null>(null);
   const [vjFirstRunAwaitingSync, setVjFirstRunAwaitingSync] = createSignal(false);
@@ -7881,6 +7901,118 @@ export default function App() {
     setVideoOutputPreviewId,
     setVideoOutputPreviewMode,
   });
+  let vjPreviewRequestGeneration = 0;
+  let vjPreviewPollInFlight: Promise<VjPreviewTransportSummary | null> | null = null;
+  const isVjPreviewTransportSummary = (value: unknown): value is VjPreviewTransportSummary => {
+    if (!value || typeof value !== "object") return false;
+    const candidate = value as Partial<VjPreviewTransportSummary>;
+    return (candidate.layer_id === null || typeof candidate.layer_id === "number") &&
+      typeof candidate.playing === "boolean" &&
+      typeof candidate.position_ms === "number" &&
+      (candidate.duration_ms === null || typeof candidate.duration_ms === "number") &&
+      typeof candidate.speed === "number" &&
+      typeof candidate.loop_enabled === "boolean";
+  };
+  const applyVjPreviewTransport = (summary: VjPreviewTransportSummary) => {
+    setVjPreviewTransport({
+      ...emptyVjPreviewTransport(),
+      ...summary,
+      position_ms: Math.max(0, summary.position_ms),
+      duration_ms: summary.duration_ms === null ? null : Math.max(0, summary.duration_ms),
+    });
+    setVideoPreviewLayerId(summary.layer_id);
+  };
+  const readVjPreviewTransport = (showError = false): Promise<VjPreviewTransportSummary | null> => {
+    if (!isTauriRuntime() || vjPreviewTransportBusy()) return Promise.resolve(null);
+    if (vjPreviewPollInFlight) return vjPreviewPollInFlight;
+    const requestGeneration = ++vjPreviewRequestGeneration;
+    const request = (async () => {
+      try {
+        const summary = await invoke<VjPreviewTransportSummary>("get_vj_preview_transport");
+        if (requestGeneration !== vjPreviewRequestGeneration) return null;
+        applyVjPreviewTransport(summary);
+        setVjPreviewTransportError(null);
+        return summary;
+      } catch (error) {
+        if (requestGeneration === vjPreviewRequestGeneration && showError) {
+          setVjPreviewTransportError(String(error));
+        }
+        return null;
+      }
+    })();
+    vjPreviewPollInFlight = request;
+    void request.finally(() => {
+      if (vjPreviewPollInFlight === request) vjPreviewPollInFlight = null;
+    });
+    return request;
+  };
+  const runVjPreviewTransportCommand = async (
+    command: string,
+    args?: Record<string, unknown>,
+  ) => {
+    if (!isTauriRuntime()) {
+      setVjPreviewTransportError(tauriBackendUnavailableMessage);
+      return null;
+    }
+    if (vjPreviewTransportBusy()) return null;
+    setVjPreviewTransportBusy(true);
+    setVjPreviewTransportError(null);
+    ++vjPreviewRequestGeneration;
+    const requestGeneration = ++vjPreviewRequestGeneration;
+    try {
+      const response = await invoke<unknown>(command, args);
+      const summary = isVjPreviewTransportSummary(response)
+        ? response
+        : await invoke<VjPreviewTransportSummary>("get_vj_preview_transport");
+      if (requestGeneration !== vjPreviewRequestGeneration) return null;
+      applyVjPreviewTransport(summary);
+      return summary;
+    } catch (error) {
+      if (requestGeneration === vjPreviewRequestGeneration) {
+        setVjPreviewTransportError(String(error));
+      }
+      return null;
+    } finally {
+      if (requestGeneration === vjPreviewRequestGeneration) setVjPreviewTransportBusy(false);
+    }
+  };
+  const stageVjPreviewLayer = async (layerId: number) => {
+    const summary = await runVjPreviewTransportCommand("stage_vj_preview_layer", { layerId });
+    if (!summary) return false;
+    if (summary.layer_id !== layerId) {
+      setVjPreviewTransportError(`Preview staged layer ${summary.layer_id ?? "none"}, expected ${layerId}.`);
+      return false;
+    }
+    return true;
+  };
+  const clearVjPreview = async () => {
+    const summary = await runVjPreviewTransportCommand("clear_vj_preview");
+    return summary !== null && summary.layer_id === null;
+  };
+  const setVjPreviewPlaying = async (playing: boolean) => {
+    await runVjPreviewTransportCommand("set_vj_preview_playing", { playing });
+  };
+  const seekVjPreview = async (positionMs: number) => {
+    await runVjPreviewTransportCommand("seek_vj_preview", {
+      positionMs: Math.max(0, Math.round(positionMs)),
+    });
+  };
+  const setVjPreviewSpeed = async (speed: number) => {
+    await runVjPreviewTransportCommand("set_vj_preview_speed", {
+      speed: Math.max(-4, Math.min(4, speed)),
+    });
+  };
+  createEffect(() => {
+    const active = workspaceTab() === "control" && controlMode() === "mixer";
+    if (!isTauriRuntime()) {
+      applyVjPreviewTransport(emptyVjPreviewTransport());
+      return;
+    }
+    if (!active || vjPreviewTransportBusy()) return;
+    void readVjPreviewTransport(true);
+    const intervalId = window.setInterval(() => void readVjPreviewTransport(), 250);
+    onCleanup(() => window.clearInterval(intervalId));
+  });
   const liveVideoMonitors = createLiveVideoMonitorController({
     invoke,
     backendAvailable: () => isTauriRuntime(),
@@ -7930,7 +8062,8 @@ export default function App() {
       setVjFirstRunAwaitingSync(true);
       const refreshed = await refreshSnapshot();
       setSelectedVideoOutputId(result.output_id);
-      setVideoPreviewLayerId(result.layer_ids[0] ?? null);
+      const firstLayerId = result.layer_ids[0] ?? null;
+      const previewStaged = firstLayerId === null ? false : await stageVjPreviewLayer(firstLayerId);
       setVideoLabel(`Video Layer ${result.layer_ids.length + 1}`);
       if (!refreshed) {
         const detail = uiLocale() === "ja"
@@ -7941,6 +8074,14 @@ export default function App() {
         return;
       }
       setVjFirstRunAwaitingSync(false);
+      if (!previewStaged) {
+        const detail = uiLocale() === "ja"
+          ? "VJショーは安全に作成されましたが、最初のクリップをPREVIEWへ送れませんでした。Pボタンで再試行できます。"
+          : "The VJ show was created safely, but the first clip could not be staged. Use its P button to retry.";
+        setVjFirstRunError(detail);
+        setMessage(detail);
+        return;
+      }
       setMessage(
         `VJ show ready with ${result.layer_ids.length} clip(s). VJ Program remains Off and Blackout until you enable it explicitly.`,
       );
@@ -10725,6 +10866,14 @@ export default function App() {
             get program() { return liveVideoMonitors.program(); },
             get previewLabel() { return liveVideoPreviewLabel(); },
             get programLabel() { return liveVideoProgramLabel(); },
+            get previewTransport() { return vjPreviewTransport(); },
+            get previewTransportBusy() { return vjPreviewTransportBusy(); },
+            get previewTransportError() { return vjPreviewTransportError(); },
+            previewTransportBackendAvailable: isTauriRuntime(),
+            onSetPreviewPlaying: setVjPreviewPlaying,
+            onSeekPreview: seekVjPreview,
+            onSetPreviewSpeed: setVjPreviewSpeed,
+            onClearPreview: clearVjPreview,
             onRetry: liveVideoMonitors.retry,
           }}
           sourceCreate={{
@@ -10757,6 +10906,9 @@ export default function App() {
             get selectedLiveAudioInputDevice() { return selectedLiveAudioInputDevice(); },
             get liveAudioInputStatus() { return liveAudioInputStatus(); },
             get previewLayerId() { return videoPreviewLayerId(); },
+            get previewBusy() { return vjPreviewTransportBusy(); },
+            get previewError() { return vjPreviewTransportError(); },
+            previewBackendAvailable: isTauriRuntime(),
             get firstRunAvailable() { return vjFirstRunAvailable(); },
             get firstRunBusy() { return vjFirstRunBusy(); },
             get firstRunError() { return vjFirstRunError(); },
@@ -10776,7 +10928,7 @@ export default function App() {
             onRefreshLiveAudioInputDevices: refreshLiveAudioInputDevices,
             onStartLiveAudioInput: startLiveAudioInput,
             onStopLiveAudioInput: stopLiveAudioInput,
-            onPreviewLayerId: setVideoPreviewLayerId,
+            onStagePreview: stageVjPreviewLayer,
             onImportMedia: importMediaFiles,
             onCreateFirstRunShow: createFirstRunVjShow,
             onLaunch: launchVideoClipFromGrid,

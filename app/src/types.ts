@@ -1242,6 +1242,25 @@ export interface VideoSnapshot {
   blackout: boolean;
 }
 
+/**
+ * Runtime-only state for the VJ preview deck. This is deliberately kept out of
+ * VideoSnapshot so preview transport never becomes project history or changes
+ * the Program bus.
+ */
+export interface VjPreviewTransportSummary {
+  layer_id: number | null;
+  playing: boolean;
+  position_ms: number;
+  duration_ms: number | null;
+  speed: number;
+  loop_enabled: boolean;
+  loop_start_ms: number;
+  loop_end_ms: number;
+  updated_at_ms: number;
+  generation: number;
+  source_name?: string | null;
+}
+
 export interface CueSummary {
   id: number;
   cue_list_id: number;

@@ -838,6 +838,23 @@ async function measure(client, label) {
       visibleVideoMonitorPanelCount: visibleCount('.liveVideoMonitorPanel'),
       visibleVideoPreviewBusCount: visibleCount('[data-live-video-monitor="preview"]'),
       visibleVideoProgramBusCount: visibleCount('[data-live-video-monitor="program"]'),
+      visibleVjPreviewTransportCount: visibleCount('.vjPreviewTransport'),
+      visibleVjPreviewTransportButtonCount: visibleCount('.vjPreviewTransportControls button'),
+      disabledVjPreviewTransportButtonCount: [...document.querySelectorAll('.vjPreviewTransportControls button')]
+        .filter((button) => button.disabled).length,
+      undersizedVjPreviewTransportButtonCount: [...document.querySelectorAll('.vjPreviewTransportControls button')]
+        .filter((button) => {
+          const rect = button.getBoundingClientRect();
+          return rect.width < 44 || rect.height < 44;
+        }).length,
+      visibleVjPreviewStageButtonCount: visibleCount('.videoClipPreview'),
+      disabledVjPreviewStageButtonCount: [...document.querySelectorAll('.videoClipPreview')]
+        .filter((button) => button.disabled).length,
+      undersizedVjPreviewStageButtonCount: [...document.querySelectorAll('.videoClipPreview')]
+        .filter((button) => {
+          const rect = button.getBoundingClientRect();
+          return rect.width < 44 || rect.height < 44;
+        }).length,
       visibleVjFirstRunCount: visibleCount('.vjFirstRunEmptyState'),
       visibleVjFirstRunButtonCount: visibleCount('.vjFirstRunEmptyState button'),
       fullyVisibleVjFirstRunButtonCount: [...document.querySelectorAll('.vjFirstRunEmptyState button')]
@@ -1243,6 +1260,13 @@ function hasExpectedControlModeSurface(result) {
       result.visibleVideoMonitorPanelCount === 1 &&
       result.visibleVideoPreviewBusCount === 1 &&
       result.visibleVideoProgramBusCount === 1 &&
+      result.visibleVjPreviewTransportCount === 1 &&
+      result.visibleVjPreviewTransportButtonCount === 4 &&
+      result.disabledVjPreviewTransportButtonCount === 4 &&
+      result.undersizedVjPreviewTransportButtonCount === 0 &&
+      result.visibleVjPreviewStageButtonCount > 0 &&
+      result.disabledVjPreviewStageButtonCount === result.visibleVjPreviewStageButtonCount &&
+      result.undersizedVjPreviewStageButtonCount === 0 &&
       result.visibleVideoProgramRefreshCount === 0 &&
       result.visibleVideoMasterControlCount > 0 &&
       result.visibleVideoMasterFaderCount > 0 &&
@@ -1765,13 +1789,19 @@ async function main() {
           result.visibleVjFirstRunButtonCount === 1 &&
           result.fullyVisibleVjFirstRunButtonCount === 1 &&
           result.disabledVjFirstRunButtonCount === 1 &&
-          result.visibleVjFirstRunSafetyCount === 1;
+          result.visibleVjFirstRunSafetyCount === 1 &&
+          result.visibleVjPreviewTransportCount === 1 &&
+          result.visibleVjPreviewTransportButtonCount === 4 &&
+          result.disabledVjPreviewTransportButtonCount === 4 &&
+          result.undersizedVjPreviewTransportButtonCount === 0;
         console.log(`${passed ? "pass" : "fail"} empty VJ first-run ${viewport.width}x${viewport.height} ${JSON.stringify({
           visible: result.visibleVjFirstRunCount,
           buttons: result.visibleVjFirstRunButtonCount,
           fullyVisibleButtons: result.fullyVisibleVjFirstRunButtonCount,
           disabled: result.disabledVjFirstRunButtonCount,
           safety: result.visibleVjFirstRunSafetyCount,
+          previewTransportButtons: result.visibleVjPreviewTransportButtonCount,
+          disabledPreviewTransportButtons: result.disabledVjPreviewTransportButtonCount,
         })}`);
         if (!passed) throw new Error(`Empty VJ first-run viewport failed: ${JSON.stringify(result)}`);
       }
