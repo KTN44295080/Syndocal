@@ -3467,6 +3467,16 @@ export default function App() {
   const enabledDmxOutputCount = createMemo(() => snapshot().dmx_outputs.filter((route) => route.enabled).length);
   const enabledVideoOutputCount = createMemo(() => snapshot().video.outputs.filter((output) => output.enabled).length);
   const activeEffectCount = createMemo(() => snapshot().effects.filter((effect) => effect.enabled).length);
+  const faderDeskTitle = createMemo(() => {
+    if (controlMode() === "edit") return editDeskSurface() === "effects" ? "Lighting FX" : "Faders";
+    if (controlMode() !== "live") return "Faders";
+    switch (timelineDeskSurface()) {
+      case "cues": return "Cue List";
+      case "automation": return "Automation";
+      case "playback": return "Playback";
+      default: return "Show Timeline";
+    }
+  });
   const touchLayoutClass = createMemo(() =>
     workspaceTab() === "setup"
       ? `layoutSetup setupMode-${setupSubTab()}`
@@ -10739,7 +10749,7 @@ export default function App() {
           class={`panel faders controlPanel timelineDesk-${timelineDeskSurface()} editDesk-${editDeskSurface()}`}
         >
           <div class="panelHeader">
-            <h2>{controlMode() === "edit" && editDeskSurface() === "effects" ? "Lighting FX" : "Faders"}</h2>
+            <h2>{faderDeskTitle()}</h2>
             <Show when={controlMode() === "live"}>
               <nav class="timelineDeskTabs" aria-label="Timeline desk surface">
                 <button class={timelineDeskSurface() === "show" ? "active" : ""} onClick={() => setTimelineDeskSurface("show")}>Show</button>

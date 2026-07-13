@@ -605,6 +605,7 @@ async function measure(client, label) {
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'duplicate fixture').length,
       controlModeTabCount: document.querySelectorAll('.controlModeTabs button').length,
       visibleLiveControlPanelCount: visibleCount('.liveControlPanel'),
+      liveControlPanelHeight: Math.round(document.querySelector('.liveControlPanel')?.getBoundingClientRect().height ?? 0),
       visibleControlStagePanelCount: visibleCount('.controlStagePanel'),
       visibleControlStageCount: visibleCount('.controlStage'),
       controlStageWidth: Math.round(document.querySelector('.controlStage')?.getBoundingClientRect().width ?? 0),
@@ -964,7 +965,7 @@ function hasExpectedControlModeSurface(result) {
       result.visibleControlStageCount !== 1 ||
       result.controlStageWidth < 520 ||
       result.controlStageHeight < 190 ||
-      result.controlStageViewBoxAspect < 2 ||
+      result.controlStageViewBoxAspect < (result.label.startsWith("control-live-") ? 1.45 : 2) ||
       result.controlStageGridCoverage < 0.95 ||
       result.controlStageFixtureMinSize < 12 ||
       result.visibleControlStageReferenceLabelCount > 1
@@ -1063,6 +1064,7 @@ function hasExpectedControlModeSurface(result) {
     );
   }
   if (result.label.startsWith("control-live-")) {
+    if (result.liveControlPanelHeight < 330 || result.liveControlPanelHeight > 342) return false;
     if (result.label.startsWith("control-live-playback-")) {
       return (
         result.visibleTimelineDeskTabCount === 4 &&

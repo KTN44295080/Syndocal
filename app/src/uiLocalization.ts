@@ -57,6 +57,7 @@ const japaneseText: Record<string, string> = {
   Attributes: "属性",
   Effects: "エフェクト",
   "Lighting FX": "ライティングFX",
+  "Show Timeline": "ショータイムライン",
   "FX Workspace": "FXワークスペース",
   "Effect Library": "エフェクトライブラリ",
   "Effect recipes": "エフェクトレシピ",
