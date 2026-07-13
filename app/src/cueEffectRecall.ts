@@ -33,11 +33,15 @@ export const canSaveCueEffectTargets = (
   targets: CueEffectTarget[],
 ) => targets.length > 0 || cueHasNonEffectTargets(cue);
 
-const normalizedGroupId = (value: string) => value.trim().toLowerCase();
+const normalizedGroupId = (value: string) => {
+  const segments = value.trim().split("/").map((segment) => segment.trim());
+  return segments.some((segment) => segment.length === 0) ? null : segments.join("/");
+};
 
-const groupMatches = (candidate: string, requested: string) => {
+export const groupMatches = (candidate: string, requested: string) => {
   const candidateId = normalizedGroupId(candidate);
   const requestedId = normalizedGroupId(requested);
+  if (candidateId === null || requestedId === null) return false;
   return candidateId === requestedId || candidateId.startsWith(`${requestedId}/`);
 };
 

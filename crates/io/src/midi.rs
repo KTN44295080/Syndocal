@@ -2206,6 +2206,7 @@ mod tests {
                 wavelength: None,
                 enabled: true,
                 color: None,
+                chaser: None,
             }],
             ..EngineSnapshot::default()
         };

@@ -45,6 +45,16 @@ assert.match(cuePanelSource, /cuesPerPage\s*=\s*12/);
 assert.match(cuePanelSource, /<For each=\{visibleCues\(\)\}>/);
 assert.match(cuePanelSource, /aria-setsize=\{props\.cues\.length\}/);
 
+const effectListSource = await readFile(new URL("../src/components/EffectListPanel.tsx", import.meta.url), "utf8");
+assert.match(effectListSource, /effectsPerPage\s*=\s*10/);
+assert.match(effectListSource, /<For each=\{visibleEffects\(\)\}>/);
+assert.match(effectListSource, /aria-rowcount=\{props\.effects\.length\}/);
+
+const chaserEditorSource = await readFile(new URL("../src/components/ChaserEffectEditorPanel.tsx", import.meta.url), "utf8");
+assert.match(chaserEditorSource, /chaserStepsPerPage\s*=\s*8/);
+assert.match(chaserEditorSource, /<For each=\{visibleSteps\(\)\}>/);
+assert.match(chaserEditorSource, /aria-rowcount=\{props\.steps\.length\}/);
+
 const mappingFixtureSource = await readFile(new URL("../src/components/MappingFixtureSelectionPanel.tsx", import.meta.url), "utf8");
 assert.match(mappingFixtureSource, /mappingFixtureVirtualizationThreshold\s*=\s*60/);
 assert.match(mappingFixtureSource, /virtualizedMappingFixtureList/);

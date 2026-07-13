@@ -1,5 +1,7 @@
-import { For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import type { EffectSummary } from "../types";
+
+const effectsPerPage = 10;
 
 interface EffectListPanelProps {
   effects: EffectSummary[];
@@ -13,22 +15,37 @@ interface EffectListPanelProps {
 }
 
 export function EffectListPanel(props: EffectListPanelProps) {
+  const [page, setPage] = createSignal(0);
+  const pageCount = createMemo(() => Math.max(1, Math.ceil(props.effects.length / effectsPerPage)));
+  const currentPage = createMemo(() => Math.min(page(), pageCount() - 1));
+  const pageStart = createMemo(() => currentPage() * effectsPerPage);
+  const visibleEffects = createMemo(() => props.effects.slice(pageStart(), pageStart() + effectsPerPage));
   const effectKindLabel = (effect: EffectSummary) => {
     if (effect.effect_type === "Color") return "Color";
+    if (effect.effect_type === "Chaser") return "Chaser";
     return effect.effect_type === "PositionWave" ? "Wave" : "LFO";
   };
   const effectKindClass = (effect: EffectSummary) => {
     if (effect.effect_type === "Color") return "color";
+    if (effect.effect_type === "Chaser") return "chaser";
     return effect.effect_type === "PositionWave" ? "wave" : "lfo";
   };
   const timingLabel = (effect: EffectSummary) => {
-    const clockSync = effect.effect_type === "Color" ? effect.color?.clock_sync : effect.clock_sync;
+    const clockSync = effect.effect_type === "Color"
+      ? effect.color?.clock_sync
+      : effect.effect_type === "Chaser"
+        ? effect.chaser?.clock_sync
+        : effect.clock_sync;
     if (clockSync) {
       return `sync ${clockSync.beats} beat`;
     }
-    const periodMs = effect.effect_type === "Color" ? effect.color?.period_ms : effect.period_ms;
+    const periodMs = effect.effect_type === "Color"
+      ? effect.color?.period_ms
+      : effect.effect_type === "Chaser"
+        ? effect.chaser?.step_duration_ms
+        : effect.period_ms;
     if (periodMs) {
-      return `${periodMs}ms`;
+      return effect.effect_type === "Chaser" ? `${periodMs}ms/step` : `${periodMs}ms`;
     }
     if (effect.speed !== null && effect.speed !== undefined) {
       return `speed ${effect.speed.toFixed(1)}`;
@@ -62,9 +79,24 @@ export function EffectListPanel(props: EffectListPanelProps) {
   return (
     <div class="effectList">
       <Show when={props.effects.length > 0} fallback={<div class="effectListEmpty">Choose a recipe in Effect Library, then Apply to Current.</div>}>
-        <For each={props.effects}>
-          {(effect, index) => (
-            <div class={effect.enabled ? "effectItem" : "effectItem disabled"}>
+        <Show when={pageCount() > 1}>
+          <nav class="effectListPager" aria-label="Live effect pages">
+            <button type="button" onClick={() => setPage(Math.max(0, currentPage() - 1))} disabled={currentPage() === 0}>Previous</button>
+            <span class="tabularNums">Page {currentPage() + 1} / {pageCount()}</span>
+            <button type="button" onClick={() => setPage(Math.min(pageCount() - 1, currentPage() + 1))} disabled={currentPage() === pageCount() - 1}>Next</button>
+          </nav>
+        </Show>
+        <div class="effectListRows" role="list" aria-label="Live effects" aria-rowcount={props.effects.length}>
+        <For each={visibleEffects()}>
+          {(effect, pageIndex) => {
+            const index = () => pageStart() + pageIndex();
+            return (
+            <div
+              class={effect.enabled ? "effectItem" : "effectItem disabled"}
+              role="listitem"
+              aria-posinset={index() + 1}
+              aria-setsize={props.effects.length}
+            >
               <button
                 class="effectItemSummary"
                 aria-label={`Edit ${effect.label}`}
@@ -78,9 +110,19 @@ export function EffectListPanel(props: EffectListPanelProps) {
                 </div>
                 <div class="effectMetaGrid" aria-label={`Effect summary for ${effect.label}`}>
                   <span class={`effectMetaChip ${effectKindClass(effect)}`}>{effectKindLabel(effect)}</span>
-                  <Show when={effect.effect_type !== "Color"}>
+                  <Show when={effect.effect_type === "Lfo" || effect.effect_type === "PositionWave"}>
                     <span class="effectMetaChip">{effect.attribute}</span>
                     <span class="effectMetaChip">{effect.shape}</span>
+                  </Show>
+                  <Show when={effect.effect_type === "Chaser" ? effect.chaser : null}>
+                    {(chaser) => (
+                      <>
+                        <span class="effectMetaChip tabularNums">{chaser().steps.length} steps</span>
+                        <span class="effectMetaChip tabularNums">{chaser().active_step_count} on</span>
+                        <span class="effectMetaChip">{chaser().direction}</span>
+                        <span class="effectMetaChip tabularNums">{chaser().features.length} feature{chaser().features.length === 1 ? "" : "s"}</span>
+                      </>
+                    )}
                   </Show>
                   <Show when={effect.effect_type === "Color" ? effect.color : null}>
                     {(color) => (
@@ -107,7 +149,13 @@ export function EffectListPanel(props: EffectListPanelProps) {
                     )}
                   </Show>
                   <span
-                    class={(effect.effect_type === "Color" ? effect.color?.clock_sync : effect.clock_sync) ? "effectMetaChip sync" : "effectMetaChip"}
+                    class={(
+                      effect.effect_type === "Color"
+                        ? effect.color?.clock_sync
+                        : effect.effect_type === "Chaser"
+                          ? effect.chaser?.clock_sync
+                          : effect.clock_sync
+                    ) ? "effectMetaChip sync" : "effectMetaChip"}
                   >
                     {timingLabel(effect)}
                   </span>
@@ -118,7 +166,7 @@ export function EffectListPanel(props: EffectListPanelProps) {
                     <span class="effectMetaChip range">{rangeLabel(effect)}</span>
                   </Show>
                   <span class="effectMetaChip target">{targetLabel(effect)}</span>
-                  <span class="effectMetaChip blend">{effect.color?.blend_mode ?? effect.blend_mode}</span>
+                  <span class="effectMetaChip blend">{effect.color?.blend_mode ?? effect.chaser?.blend_mode ?? effect.blend_mode}</span>
                 </div>
               </button>
               <div class="effectItemActions">
@@ -145,8 +193,10 @@ export function EffectListPanel(props: EffectListPanelProps) {
                 </details>
               </div>
             </div>
-          )}
+            );
+          }}
         </For>
+        </div>
       </Show>
     </div>
   );

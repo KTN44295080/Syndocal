@@ -1530,10 +1530,63 @@ pub struct PositionWaveEffectRequest {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ChaserDirection {
+    Forward,
+    Reverse,
+    Bounce,
+    Random,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChaserStep {
+    pub fixture_ids: Vec<FixtureId>,
+    pub target_group_ids: Vec<String>,
+    pub level: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChaserFeature {
+    pub attribute: String,
+    pub low: u16,
+    pub high: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChaserEffectRequest {
+    pub label: String,
+    /// Ordered target/level cells. Empty target cells are deliberate blackout gaps.
+    pub steps: Vec<ChaserStep>,
+    /// Independently scaled attributes; each step level maps from the feature low to high value.
+    pub features: Vec<ChaserFeature>,
+    /// Free-running duration of one step. Ignored while `clock_sync` is active.
+    pub step_duration_ms: u64,
+    /// Shared-clock beats per step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_sync: Option<EffectClockSync>,
+    pub direction: ChaserDirection,
+    /// Evenly-spaced simultaneous heads.
+    pub wings: u8,
+    /// Width of each head in contiguous traversal steps ("pixels on").
+    pub active_step_count: u16,
+    /// Fraction of a step slot for which the current block remains active.
+    pub duty_cycle: f32,
+    /// Final fraction of a slot that crossfades the whole current block into the next block.
+    /// The crossfade takes precedence over the duty gate inside this interval.
+    pub overlap: f32,
+    /// Global offset expressed as a fraction of the traversal path.
+    pub phase: f32,
+    /// Distributes stable target-order offsets across a fraction of the traversal path.
+    pub fixture_spread: f32,
+    pub random_seed: u64,
+    pub blend_mode: EffectBlendMode,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum EffectKind {
     Lfo,
     PositionWave,
     Color,
+    Chaser,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1560,6 +1613,8 @@ pub struct EffectSummary {
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<ColorEffectRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chaser: Option<ChaserEffectRequest>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1571,6 +1626,8 @@ pub struct EffectPreset {
     pub position_wave: Option<PositionWaveEffectRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<ColorEffectRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chaser: Option<ChaserEffectRequest>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -2527,6 +2584,7 @@ mod tests {
 
         assert_eq!(parsed.effect_type, super::EffectKind::Lfo);
         assert!(parsed.color.is_none());
+        assert!(parsed.chaser.is_none());
     }
 
     #[test]
@@ -2568,6 +2626,63 @@ mod tests {
             lfo: None,
             position_wave: None,
             color: Some(request),
+            chaser: None,
+        };
+
+        let json = serde_json::to_string(&preset).unwrap();
+        let parsed: super::EffectPreset = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed, preset);
+    }
+
+    #[test]
+    fn chaser_effect_request_and_preset_roundtrip_multi_feature_width() {
+        let request = super::ChaserEffectRequest {
+            label: "Front multi-feature chase".to_string(),
+            steps: vec![
+                super::ChaserStep {
+                    fixture_ids: vec![1],
+                    target_group_ids: Vec::new(),
+                    level: 65_535,
+                },
+                super::ChaserStep {
+                    fixture_ids: vec![2],
+                    target_group_ids: vec!["Front".to_string()],
+                    level: 32_768,
+                },
+            ],
+            features: vec![
+                super::ChaserFeature {
+                    attribute: "Dimmer".to_string(),
+                    low: 0,
+                    high: 65_535,
+                },
+                super::ChaserFeature {
+                    attribute: "Pan".to_string(),
+                    low: 10_000,
+                    high: 50_000,
+                },
+            ],
+            step_duration_ms: 250,
+            clock_sync: Some(super::EffectClockSync { beats: 0.5 }),
+            direction: super::ChaserDirection::Bounce,
+            wings: 2,
+            active_step_count: 2,
+            duty_cycle: 0.75,
+            overlap: 0.25,
+            phase: 0.125,
+            fixture_spread: 0.5,
+            random_seed: 0x5eed,
+            blend_mode: super::EffectBlendMode::Override,
+        };
+        let preset = super::EffectPreset {
+            version: 1,
+            effect_type: super::EffectKind::Chaser,
+            enabled: true,
+            lfo: None,
+            position_wave: None,
+            color: None,
+            chaser: Some(request),
         };
 
         let json = serde_json::to_string(&preset).unwrap();

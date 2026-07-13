@@ -28,7 +28,7 @@ interface SampleEffectPresetOption {
   value: SampleEffectPreset;
   label: string;
   family: EffectLibraryFamily;
-  engine: "LFO" | "Wave" | "Color" | "Bundle";
+  engine: "LFO" | "Wave" | "Color" | "Chaser" | "Bundle";
   target: string;
   description: string;
   supportsTarget: boolean;
@@ -104,10 +104,11 @@ export const sampleEffectPresetOptions: SampleEffectPresetOption[] = [
     value: "chase",
     label: "Chase",
     family: "Chaser",
-    engine: "Wave",
+    engine: "Chaser",
     target: "Dimmer",
-    description: "Directional front-group chase driven by stage position.",
+    description: "Fixture-index beam chase with explicit order, active width and fading.",
     supportsTarget: true,
+    requiresTarget: true,
   },
   {
     value: "ball",

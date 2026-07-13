@@ -219,10 +219,11 @@ export interface RemoteControlStatus {
 
 export type ClockSource = "Manual" | "Tap" | "MidiClock" | "MidiTimecode" | "Ltc" | "AbletonLink";
 export type LfoShape = "Sine" | "Cosine" | "Triangle" | "Saw" | "Square" | "Random" | "Perlin";
-export type EffectKind = "Lfo" | "PositionWave" | "Color";
+export type EffectKind = "Lfo" | "PositionWave" | "Color" | "Chaser";
 export type EffectBlendMode = "Override" | "Add" | "Multiply";
 export type ColorEffectAlgorithm = "Cycle" | "Bounce" | "Sequence" | "Random";
 export type ColorEffectInterpolation = "Rgb" | "HsvShortest" | "HsvLongest";
+export type ChaserDirection = "Forward" | "Reverse" | "Bounce" | "Random";
 export type NodeGraphNodeKind = "Lfo" | "PositionWave" | "Audio" | "Transform" | "Output";
 export type AudioSpectrumBand = "Bass" | "Mid" | "High";
 export type AudioSpectrumSource = "Timeline" | "Live";
@@ -1445,6 +1446,35 @@ export interface PositionWaveEffectRequest {
   blend_mode: EffectBlendMode;
 }
 
+export interface ChaserStep {
+  fixture_ids: number[];
+  target_group_ids: string[];
+  level: number;
+}
+
+export interface ChaserFeature {
+  attribute: string;
+  low: number;
+  high: number;
+}
+
+export interface ChaserEffectRequest {
+  label: string;
+  steps: ChaserStep[];
+  features: ChaserFeature[];
+  step_duration_ms: number;
+  clock_sync?: EffectClockSync | null;
+  direction: ChaserDirection;
+  wings: number;
+  active_step_count: number;
+  duty_cycle: number;
+  overlap: number;
+  phase: number;
+  fixture_spread: number;
+  random_seed: number;
+  blend_mode: EffectBlendMode;
+}
+
 export interface VideoEffectTarget {
   layer_ids: number[];
   param: VideoParam;
@@ -1474,6 +1504,7 @@ export interface EffectSummary {
   wavelength?: number | null;
   enabled: boolean;
   color?: ColorEffectRequest | null;
+  chaser?: ChaserEffectRequest | null;
 }
 
 export interface EffectPreset {
@@ -1483,6 +1514,7 @@ export interface EffectPreset {
   lfo?: LfoEffectRequest | null;
   position_wave?: PositionWaveEffectRequest | null;
   color?: ColorEffectRequest | null;
+  chaser?: ChaserEffectRequest | null;
 }
 
 export type DmxOutputProtocol =

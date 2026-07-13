@@ -6,6 +6,7 @@ import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "so
 import { CueManagementPanel } from "./components/CueManagementPanel";
 import { AppStatusLine } from "./components/AppStatusLine";
 import { ArtRdmPanel } from "./components/ArtRdmPanel";
+import { ChaserEffectEditorPanel } from "./components/ChaserEffectEditorPanel";
 import { ColorEffectEditorPanel, defaultColorEffectStops } from "./components/ColorEffectEditorPanel";
 import { CustomProfileEditorPanel } from "./components/CustomProfileEditorPanel";
 import {
@@ -100,6 +101,10 @@ import type {
   AutomationKeyframeSummary,
   AutomationInterpolation,
   CompositionSummary,
+  ChaserDirection,
+  ChaserEffectRequest,
+  ChaserFeature,
+  ChaserStep,
   ColorEffectAlgorithm,
   ColorEffectInterpolation,
   ColorEffectRequest,
@@ -240,8 +245,17 @@ import {
 import { projectSnapshotSignature } from "./projectSnapshot";
 import { effectDraftTargetPlan } from "./effectDraft";
 import {
+  canonicalChaserAttribute,
+  chaserDefaultSeed,
+  chaserDraftError,
+  chaserStepsFromTargets,
+  clampChaserUnit,
+  clampChaserWings,
+} from "./chaserDraft";
+import {
   currentCueEffectTargets,
   eligibleCueEffects,
+  groupMatches,
   normalizedCueEffectTargets,
   syncCueEffectCaptureTargets,
 } from "./cueEffectRecall";
@@ -568,9 +582,11 @@ const projectMutationCommands = new Set([
   "add_lfo_effect",
   "add_position_wave_effect",
   "add_color_effect",
+  "add_chaser_effect",
   "update_lfo_effect",
   "update_position_wave_effect",
   "update_color_effect",
+  "update_chaser_effect",
   "save_node_graph",
   "set_node_graph_enabled",
   "remove_node_graph",
@@ -1036,7 +1052,7 @@ export default function App() {
     createSignal<TimelineVideoAutomationRowScope>("all");
   const [effectShape, setEffectShape] = createSignal<LfoShape>("Sine");
   const [effectType, setEffectType] = createSignal<EffectKind>("Lfo");
-  const nodeGraphEffectType = createMemo<Exclude<EffectKind, "Color">>(() =>
+  const nodeGraphEffectType = createMemo<"Lfo" | "PositionWave">(() =>
     effectType() === "PositionWave" ? "PositionWave" : "Lfo",
   );
   const [effectTargetMode, setEffectTargetMode] = createSignal<EffectTargetMode>("fixture");
@@ -1061,6 +1077,18 @@ export default function App() {
   const [colorEffectInterpolation, setColorEffectInterpolation] =
     createSignal<ColorEffectInterpolation>("HsvShortest");
   const [colorEffectFixtureSpread, setColorEffectFixtureSpread] = createSignal(0);
+  const [chaserSteps, setChaserSteps] = createSignal<ChaserStep[]>([]);
+  const [chaserFeatures, setChaserFeatures] = createSignal<ChaserFeature[]>([
+    { attribute: "Dimmer", low: 0, high: 65_535 },
+  ]);
+  const [chaserStepDuration, setChaserStepDuration] = createSignal(250);
+  const [chaserDirection, setChaserDirection] = createSignal<ChaserDirection>("Forward");
+  const [chaserWings, setChaserWings] = createSignal(1);
+  const [chaserActiveStepCount, setChaserActiveStepCount] = createSignal(1);
+  const [chaserDutyCycle, setChaserDutyCycle] = createSignal(1);
+  const [chaserOverlap, setChaserOverlap] = createSignal(0);
+  const [chaserFixtureSpread, setChaserFixtureSpread] = createSignal(0);
+  const [chaserRandomSeed, setChaserRandomSeed] = createSignal(chaserDefaultSeed);
   const [effectLow, setEffectLow] = createSignal(0);
   const [effectHigh, setEffectHigh] = createSignal(65535);
   const [effectPhase, setEffectPhase] = createSignal(0);
@@ -2464,7 +2492,9 @@ export default function App() {
         if (groups.length === 0) {
           return [];
         }
-        return snapshot().fixtures.filter((fixture) => groups.some((groupId) => fixture.group_ids.includes(groupId)));
+        return snapshot().fixtures.filter((fixture) =>
+          groups.some((groupId) => fixture.group_ids.some((candidate) => groupMatches(candidate, groupId)))
+        );
       }
       case "video":
       default:
@@ -2472,6 +2502,30 @@ export default function App() {
     }
   });
   const effectTargetControls = createMemo<AttributeControl[]>(() => commonAttributeControls(effectTargetFixtures()));
+  const chaserAttributeOptions = createMemo(() => {
+    const attributes: string[] = [];
+    const seen = new Set<string>();
+    for (const fixture of effectTargetFixtures()) {
+      for (const control of fixture.controls) {
+        const canonical = canonicalChaserAttribute(control.attribute);
+        if (canonical && !seen.has(canonical)) {
+          seen.add(canonical);
+          attributes.push(control.attribute);
+        }
+      }
+    }
+    return attributes;
+  });
+  const chaserAttributeCoverage = createMemo<Record<string, string>>(() => {
+    const fixtures = effectTargetFixtures();
+    return Object.fromEntries(chaserAttributeOptions().map((attribute) => {
+      const canonical = canonicalChaserAttribute(attribute);
+      const compatible = fixtures.filter((fixture) =>
+        fixture.controls.some((control) => canonicalChaserAttribute(control.attribute) === canonical)
+      ).length;
+      return [canonical, `${compatible}/${fixtures.length} fixtures`];
+    }));
+  });
   const selectedEffectAttribute = createMemo(() => {
     const controls = effectTargetControls();
     const current = effectAttribute();
@@ -2480,9 +2534,40 @@ export default function App() {
     }
     return controls[0]?.attribute ?? "";
   });
+  const selectedChaserAttribute = createMemo(() => {
+    const attributes = chaserAttributeOptions();
+    const current = canonicalChaserAttribute(effectAttribute());
+    return attributes.find((attribute) => canonicalChaserAttribute(attribute) === current) ?? attributes[0] ?? "";
+  });
+  const chaserCurrentTargetSteps = createMemo(() =>
+    chaserStepsFromTargets(
+      effectTargetMode() === "video" ? [] : effectTargetFixtures().map((fixture) => fixture.id),
+      [],
+      false,
+    ),
+  );
+  const prepareChaserDraftFromCurrentTarget = (forceReset = false) => {
+    const fixtureIds = effectTargetMode() === "video"
+      ? selectedFixture() ? [selectedFixture()!.id] : []
+      : effectTargetFixtures().map((fixture) => fixture.id);
+    const nextSteps = chaserStepsFromTargets(fixtureIds, [], true);
+    const replacesSteps = forceReset || chaserSteps().length === 0;
+    if (replacesSteps) {
+      setChaserSteps(nextSteps);
+    }
+    if (forceReset || chaserFeatures().length === 0 || chaserFeatures()[0]?.attribute === "Dimmer") {
+      const attribute = selectedChaserAttribute() || chaserFeatures()[0]?.attribute || "Dimmer";
+      setChaserFeatures([{ attribute, low: Math.round(effectLow()), high: Math.round(effectHigh()) }]);
+    }
+    const stepCount = replacesSteps ? nextSteps.length : chaserSteps().length;
+    const maxActiveSteps = Math.max(1, Math.min(stepCount || fixtureIds.length, 64));
+    const maxWings = Math.max(1, Math.min(stepCount || fixtureIds.length, 16));
+    setChaserActiveStepCount((current) => forceReset ? 1 : Math.max(1, Math.min(current, maxActiveSteps)));
+    setChaserWings((current) => forceReset ? 1 : Math.max(1, Math.min(current, maxWings)));
+  };
   const effectTargetSummary = createMemo(() => {
     const fixtureCount = effectTargetFixtures().length;
-    const attributeCount = effectTargetControls().length;
+    const attributeCount = effectType() === "Chaser" ? chaserAttributeOptions().length : effectTargetControls().length;
     const wholeFixtureColor = effectType() === "Color";
     switch (effectTargetMode()) {
       case "selection":
@@ -2517,6 +2602,10 @@ export default function App() {
     if (effectType() === "Color") {
       const clock = sync === null ? `${effectPeriod()}ms` : `${sync} beat`;
       return `Color ${colorEffectAlgorithm()} / ${colorEffectStops().length} stops / ${clock}`;
+    }
+    if (effectType() === "Chaser") {
+      const clock = sync === null ? `${chaserStepDuration()}ms` : `${sync} beat`;
+      return `Chaser ${chaserSteps().length} steps / ${chaserFeatures().length} features / ${chaserDirection()} / ${chaserActiveStepCount()} pixels on / ${clock}`;
     }
     return sync === null ? `LFO ${effectShape()} / ${effectPeriod()}ms` : `LFO ${effectShape()} / ${sync} beat`;
   });
@@ -9073,8 +9162,24 @@ export default function App() {
         (channel) => Number.isFinite(channel) && channel >= 0 && channel <= 65_535,
       ));
   });
+  const currentChaserDraftError = createMemo(() => chaserDraftError({
+    steps: chaserSteps(),
+    features: chaserFeatures(),
+    stepDurationMs: chaserStepDuration(),
+    clockSyncBeats: effectClockSyncBeats(),
+    wings: chaserWings(),
+    activeStepCount: chaserActiveStepCount(),
+    dutyCycle: chaserDutyCycle(),
+    overlap: chaserOverlap(),
+    phase: effectPhase(),
+    fixtureSpread: chaserFixtureSpread(),
+    randomSeed: chaserRandomSeed(),
+  }));
   const effectSubmitDisabled = createMemo(() => {
     const linkedVideoMissing = effectVideoTargetLinked() && selectedEffectVideoLayerId() === null;
+    if (effectType() === "Chaser") {
+      return Boolean(currentChaserDraftError()) || effectVideoTargetLinked() || effectTargetMode() === "video";
+    }
     if (effectType() === "Color") {
       if (!colorEffectDraftValid()) return true;
       if (effectVideoTargetLinked() || effectTargetMode() === "video") return true;
@@ -9104,7 +9209,8 @@ export default function App() {
   type EffectRequestDraft =
     | { effectType: "Lfo"; request: LfoEffectRequest }
     | { effectType: "PositionWave"; request: PositionWaveEffectRequest }
-    | { effectType: "Color"; request: ColorEffectRequest };
+    | { effectType: "Color"; request: ColorEffectRequest }
+    | { effectType: "Chaser"; request: ChaserEffectRequest };
 
   const buildEffectRequestFromForm = (): EffectRequestDraft | null => {
     const fixture = selectedFixture();
@@ -9112,6 +9218,42 @@ export default function App() {
     const targetMode = effectTargetMode();
     const isVideoTarget = targetMode === "video";
     const colorEffect = effectType() === "Color";
+    const chaserEffect = effectType() === "Chaser";
+    if (chaserEffect) {
+      const error = currentChaserDraftError();
+      if (error) {
+        setMessage(error);
+        return null;
+      }
+      const features = chaserFeatures().map((feature) => ({
+        attribute: feature.attribute.trim(),
+        low: Math.round(feature.low),
+        high: Math.round(feature.high),
+      }));
+      return {
+        effectType: "Chaser",
+        request: {
+          label: `${features[0]?.attribute ?? "Fixture"} Chaser`,
+          steps: chaserSteps().map((step) => ({
+            fixture_ids: [...step.fixture_ids],
+            target_group_ids: [...step.target_group_ids],
+            level: Math.round(step.level),
+          })),
+          features,
+          step_duration_ms: Math.max(10, Math.round(chaserStepDuration())),
+          clock_sync: effectClockSyncBeats() === null ? null : { beats: effectClockSyncBeats()! },
+          direction: chaserDirection(),
+          wings: clampChaserWings(chaserWings()),
+          active_step_count: Math.round(chaserActiveStepCount()),
+          duty_cycle: Math.max(0.01, clampChaserUnit(chaserDutyCycle())),
+          overlap: clampChaserUnit(chaserOverlap()),
+          phase: clampChaserUnit(effectPhase()),
+          fixture_spread: clampChaserUnit(chaserFixtureSpread()),
+          random_seed: Math.round(chaserRandomSeed()),
+          blend_mode: effectBlendMode(),
+        },
+      };
+    }
     const includesVideoTarget = !colorEffect && (isVideoTarget || effectVideoTargetLinked());
     if (colorEffect && (isVideoTarget || effectVideoTargetLinked())) {
       setMessage("Color effects target complete lighting fixtures and cannot link a video parameter.");
@@ -9219,9 +9361,11 @@ export default function App() {
         ? await invoke<number>("add_lfo_effect", { request: draft.request })
         : draft.effectType === "PositionWave"
           ? await invoke<number>("add_position_wave_effect", { request: draft.request })
-          : await invoke<number>("add_color_effect", { request: draft.request });
+          : draft.effectType === "Color"
+            ? await invoke<number>("add_color_effect", { request: draft.request })
+            : await invoke<number>("add_chaser_effect", { request: draft.request });
       setEditingEffectId(null);
-      setMessage(`Added ${draft.effectType === "PositionWave" ? "position wave" : draft.effectType === "Color" ? "color" : "LFO"} effect ${effectId}`);
+      setMessage(`Added ${draft.effectType === "PositionWave" ? "position wave" : draft.effectType === "Color" ? "color" : draft.effectType === "Chaser" ? "Chaser" : "LFO"} effect ${effectId}`);
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
@@ -9243,8 +9387,10 @@ export default function App() {
         await invoke("update_lfo_effect", { effectId, request: draft.request });
       } else if (draft.effectType === "PositionWave") {
         await invoke("update_position_wave_effect", { effectId, request: draft.request });
-      } else {
+      } else if (draft.effectType === "Color") {
         await invoke("update_color_effect", { effectId, request: draft.request });
+      } else {
+        await invoke("update_chaser_effect", { effectId, request: draft.request });
       }
       setMessage(`Updated effect ${effectId}`);
       await refreshSnapshot();
@@ -9290,6 +9436,32 @@ export default function App() {
     const targetPlan = effectDraftTargetPlan(effect, snapshot().fixtures);
     setEditingEffectId(effect.id);
     setEffectType(effect.effect_type);
+    if (effect.effect_type === "Chaser") {
+      const chaser = effect.chaser;
+      if (!chaser) {
+        setEditingEffectId(null);
+        setMessage(`Chaser effect ${effect.id} is missing its editor body.`);
+        return;
+      }
+      setChaserSteps(chaser.steps.map((step) => ({
+        fixture_ids: [...step.fixture_ids],
+        target_group_ids: [...step.target_group_ids],
+        level: step.level,
+      })));
+      setChaserFeatures(chaser.features.map((feature) => ({ ...feature })));
+      setChaserStepDuration(chaser.step_duration_ms);
+      setEffectClockSyncBeats(chaser.clock_sync?.beats ?? null);
+      setChaserDirection(chaser.direction);
+      setChaserWings(chaser.wings);
+      setChaserActiveStepCount(chaser.active_step_count);
+      setChaserDutyCycle(chaser.duty_cycle);
+      setChaserOverlap(chaser.overlap);
+      setEffectPhase(chaser.phase);
+      setChaserFixtureSpread(chaser.fixture_spread);
+      setChaserRandomSeed(chaser.random_seed);
+      setEffectBlendMode(chaser.blend_mode);
+      setEffectVideoTargetLinked(false);
+    }
     if (effect.effect_type === "Color") {
       const color = effect.color;
       if (!color) {
@@ -9358,7 +9530,11 @@ export default function App() {
         activateFixture(fixture);
       }
     }
-    setMessage(targetPlan.message);
+    setMessage(
+      effect.effect_type === "Chaser"
+        ? `Loaded Chaser effect ${effect.id} with ${effect.chaser?.steps.length ?? 0} ordered steps and ${effect.chaser?.features.length ?? 0} features.`
+        : targetPlan.message,
+    );
   };
 
   const saveEffectPreset = async (effectId: number) => {
@@ -9374,11 +9550,19 @@ export default function App() {
     forceVideoTarget?: boolean;
     requireLightTarget?: boolean;
     wholeFixtureColor?: boolean;
+    allowPartialLightAttribute?: boolean;
+    deferLightAttributeValidation?: boolean;
+  };
+
+  const effectPresetFileTargetOverrideOptions: EffectTargetOverrideOptions = {
+    deferLightAttributeValidation: true,
   };
 
   const sampleEffectTargetOverrideOptions = (preset: SampleEffectPreset): EffectTargetOverrideOptions =>
     preset === "shared"
       ? { forceVideoTarget: true, requireLightTarget: true }
+      : preset === "chase"
+        ? { requireLightTarget: true, allowPartialLightAttribute: true }
       : preset === "spectrum" || preset === "colour-chase"
         ? { requireLightTarget: true, wholeFixtureColor: true }
         : {};
@@ -9386,21 +9570,22 @@ export default function App() {
   const effectTargetOverrideError = (options: EffectTargetOverrideOptions = {}) => {
     const targetMode = effectTargetMode();
     const fixture = selectedFixture();
-    const attribute = selectedEffectAttribute();
+    const attribute = options.allowPartialLightAttribute ? selectedChaserAttribute() : selectedEffectAttribute();
     if (options.requireLightTarget && targetMode === "video") {
       return "Select a fixture or group target for this shared lighting + video preset.";
     }
     if (options.wholeFixtureColor && effectVideoTargetLinked()) {
       return "Whole-fixture colour effects cannot link a video parameter.";
     }
-    if (targetMode === "fixture" && (!fixture || (!options.wholeFixtureColor && !attribute))) {
+    const requiresLightAttribute = !options.wholeFixtureColor && !options.deferLightAttributeValidation;
+    if (targetMode === "fixture" && (!fixture || (requiresLightAttribute && !attribute))) {
       return "Select a fixture and attribute first.";
     }
     if (targetMode === "selection") {
       if (selectedMappingFixtures().length === 0) {
         return "Select one or more fixtures on the 2D mapping stage first.";
       }
-      if (!options.wholeFixtureColor && !attribute) {
+      if (requiresLightAttribute && !attribute) {
         return "Select a fixture profile attribute before targeting a map selection.";
       }
     }
@@ -9408,7 +9593,7 @@ export default function App() {
       if (parseGroupIds(effectTargetGroups()).length === 0) {
         return "Enter at least one target group.";
       }
-      if (!options.wholeFixtureColor && !attribute) {
+      if (requiresLightAttribute && !attribute) {
         return "Select a fixture profile attribute before targeting a group.";
       }
     }
@@ -9432,7 +9617,7 @@ export default function App() {
     }
     const targetMode = effectTargetMode();
     const fixture = selectedFixture();
-    const attribute = selectedEffectAttribute();
+    const attribute = options.allowPartialLightAttribute ? selectedChaserAttribute() : selectedEffectAttribute();
     const videoTargets = options.wholeFixtureColor
       ? []
       : buildEffectVideoTargets(true, Boolean(options.forceVideoTarget));
@@ -9729,9 +9914,9 @@ export default function App() {
   };
 
   const loadEffectPresetForCurrentTarget = async () => {
-    const targetOverride = effectTargetOverrideFromForm();
+    const targetOverride = effectTargetOverrideFromForm(effectPresetFileTargetOverrideOptions);
     if (!targetOverride) {
-      setMessage(effectTargetOverrideError());
+      setMessage(effectTargetOverrideError(effectPresetFileTargetOverrideOptions));
       return;
     }
     try {
@@ -11681,7 +11866,10 @@ export default function App() {
               </div>
               <div class="panelHeaderActions">
                 <button onClick={loadEffectPreset}>Load File</button>
-                <button onClick={loadEffectPresetForCurrentTarget} disabled={Boolean(effectTargetOverrideError())}>
+                <button
+                  onClick={loadEffectPresetForCurrentTarget}
+                  disabled={Boolean(effectTargetOverrideError(effectPresetFileTargetOverrideOptions))}
+                >
                   Load Target
                 </button>
               </div>
@@ -11702,7 +11890,7 @@ export default function App() {
                 <strong>Inspector</strong>
                 <span>{editingEffectId() === null ? "New effect" : `Editing #${editingEffectId()}`}</span>
               </div>
-              <span>{effectType() === "PositionWave" ? "SPATIAL" : effectType() === "Color" ? "MULTI-COLOR" : "MODULATOR"}</span>
+              <span>{effectType() === "PositionWave" ? "SPATIAL" : effectType() === "Color" ? "MULTI-COLOR" : effectType() === "Chaser" ? "CHASE" : "MODULATOR"}</span>
             </header>
             <div class="effectForm">
               <div class="effectTargetHint">
@@ -11711,7 +11899,7 @@ export default function App() {
                   <span data-no-localize>{effectTargetSummary()}</span> / {effectDraftSummary()}
                 </span>
               </div>
-              <Show when={effectTargetMode() !== "video" && effectType() !== "Color"}>
+              <Show when={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "Chaser"}>
                 <label>
                   Attribute
                   <select
@@ -11741,7 +11929,7 @@ export default function App() {
                     <option value="fixture">Selected fixture</option>
                     <option value="selection">Map selection ({selectedMappingFixtures().length})</option>
                     <option value="group">Group</option>
-                    <option value="video" disabled={effectType() === "Color"}>Video layer</option>
+                    <option value="video" disabled={effectType() === "Color" || effectType() === "Chaser"}>Video layer</option>
                   </select>
                 </label>
                 <label>
@@ -11750,21 +11938,34 @@ export default function App() {
                     value={effectType()}
                     onInput={(event) => {
                       const nextType = event.currentTarget.value as EffectKind;
+                      const previousType = effectType();
+                      const sourceEffectId = editingEffectId();
+                      const startsNewEffect = sourceEffectId !== null && nextType !== previousType;
+                      if (startsNewEffect) {
+                        setEditingEffectId(null);
+                        setMessage(`Effect ${sourceEffectId} remains unchanged; Type change starts a new ${nextType} effect.`);
+                      }
                       setEffectType(nextType);
                       if (nextType === "Color") {
                         setEffectVideoTargetLinked(false);
                         if (effectTargetMode() === "video") setEffectTargetMode("fixture");
-                        setMessage("Prepared a multi-color draft for whole-fixture colour output.");
+                        if (!startsNewEffect) setMessage("Prepared a multi-color draft for whole-fixture colour output.");
+                      } else if (nextType === "Chaser") {
+                        setEffectVideoTargetLinked(false);
+                        if (effectTargetMode() === "video") setEffectTargetMode("fixture");
+                        prepareChaserDraftFromCurrentTarget(nextType !== previousType);
+                        if (!startsNewEffect) setMessage("Prepared an ordered fixture-index Chaser draft from the current target.");
                       }
                     }}
                   >
                     <option value="Lfo">LFO</option>
                     <option value="PositionWave">Position Wave</option>
                     <option value="Color">Multi-color</option>
+                    <option value="Chaser">Chaser</option>
                   </select>
                 </label>
               </div>
-              <Show when={effectTargetMode() !== "video" && effectType() !== "Color"}>
+              <Show when={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "Chaser"}>
                 <label class="checkbox inlineCheckbox effectLinkedVideoToggle">
                   <input
                     type="checkbox"
@@ -11784,7 +11985,7 @@ export default function App() {
                   onToggleGroup={toggleEffectTargetGroup}
                 />
               </Show>
-              <Show when={effectType() !== "Color" && (effectTargetMode() === "video" || effectVideoTargetLinked())}>
+              <Show when={effectType() !== "Color" && effectType() !== "Chaser" && (effectTargetMode() === "video" || effectVideoTargetLinked())}>
                 <VideoEffectTargetPanel
                   layers={snapshot().video.layers}
                   outputsCount={snapshot().video.outputs.length}
@@ -11810,7 +12011,7 @@ export default function App() {
                   onSetPositionZ={setEffectVideoPositionZ}
                 />
               </Show>
-              <Show when={effectType() !== "Color"}>
+              <Show when={effectType() === "Lfo" || effectType() === "PositionWave"}>
               <EffectSourceControlsPanel
                 effectType={effectType()}
                 shape={effectShape()}
@@ -11886,9 +12087,43 @@ export default function App() {
                   onFixtureSpread={setColorEffectFixtureSpread}
                 />
               </Show>
+              <Show when={effectType() === "Chaser"}>
+                <ChaserEffectEditorPanel
+                  steps={chaserSteps()}
+                  features={chaserFeatures()}
+                  fixtureOptions={snapshot().fixtures.map((fixture) => ({ id: fixture.id, label: fixture.label }))}
+                  attributeOptions={chaserAttributeOptions()}
+                  attributeCoverage={chaserAttributeCoverage()}
+                  currentTargetLabel={effectTargetSummary()}
+                  currentTargetSteps={chaserCurrentTargetSteps()}
+                  stepDurationMs={chaserStepDuration()}
+                  bpm={snapshot().clock.bpm}
+                  clockSyncBeats={effectClockSyncBeats()}
+                  direction={chaserDirection()}
+                  wings={chaserWings()}
+                  activeStepCount={chaserActiveStepCount()}
+                  dutyCycle={chaserDutyCycle()}
+                  overlap={chaserOverlap()}
+                  phase={effectPhase()}
+                  fixtureSpread={chaserFixtureSpread()}
+                  randomSeed={chaserRandomSeed()}
+                  error={currentChaserDraftError()}
+                  onSteps={setChaserSteps}
+                  onFeatures={setChaserFeatures}
+                  onStepDurationMs={setChaserStepDuration}
+                  onClockSyncBeats={setEffectClockSyncPreset}
+                  onDirection={setChaserDirection}
+                  onWings={setChaserWings}
+                  onActiveStepCount={setChaserActiveStepCount}
+                  onDutyCycle={setChaserDutyCycle}
+                  onOverlap={setChaserOverlap}
+                  onFixtureSpread={setChaserFixtureSpread}
+                  onRandomSeed={setChaserRandomSeed}
+                />
+              </Show>
             </div>
             <EffectActionControlsPanel
-              showLightRange={effectTargetMode() !== "video" && effectType() !== "Color"}
+              showLightRange={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "Chaser"}
               low={effectLow()}
               high={effectHigh()}
               phase={effectPhase()}

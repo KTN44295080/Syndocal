@@ -15,7 +15,10 @@ use std::{
 };
 
 use base64::Engine as _;
-use engine::{EngineCommand, EngineHandle, FixtureFlagClearKind};
+use engine::{
+    validate_chaser_effect_request as validate_engine_chaser_effect_request, EngineCommand,
+    EngineHandle, FixtureFlagClearKind,
+};
 use io::midi::{
     MidiClockEvent, MidiClockInput, MidiControlEvent, MidiControlInput, MidiFeedbackOutput,
 };
@@ -25,13 +28,13 @@ use io::sacn::is_sacn_multicast_target;
 use minisign_verify::PublicKey;
 use protocol::{
     canonical_video_output_mapping_field, AttributeControl, AttributeResolution,
-    AudioAnalysisSummary, AutomationId, AutomationKeyframeSummary, ClockSnapshot,
-    ColorEffectRequest, CompositionId, CompositionSummary, CueEffectTarget, CueFixtureTarget,
-    CueId, CueNodeGraphTarget, CustomFixtureProfileFile, CustomFixtureProfileRequest,
-    DmxInputConfig, DmxInputProtocol, DmxInputStatus, DmxModeSummary, DmxOutputConfig,
-    DmxOutputProtocol, EffectId, EffectKind, EffectPreset, EffectSummary, EngineSnapshot,
-    EngineTelemetry, ExclusiveVideoTakeRequest, FixtureId, FixtureLimits, FixturePreset,
-    FixtureProfileSummary, GeometrySummary, LearnedMidiControl, LearnedOscControl,
+    AudioAnalysisSummary, AutomationId, AutomationKeyframeSummary, ChaserEffectRequest, ChaserStep,
+    ClockSnapshot, ColorEffectRequest, CompositionId, CompositionSummary, CueEffectTarget,
+    CueFixtureTarget, CueId, CueNodeGraphTarget, CustomFixtureProfileFile,
+    CustomFixtureProfileRequest, DmxInputConfig, DmxInputProtocol, DmxInputStatus, DmxModeSummary,
+    DmxOutputConfig, DmxOutputProtocol, EffectId, EffectKind, EffectPreset, EffectSummary,
+    EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, FixtureId, FixtureLimits,
+    FixturePreset, FixtureProfileSummary, GeometrySummary, LearnedMidiControl, LearnedOscControl,
     LfoEffectRequest, MidiControlAction, MidiControlMapping, MidiInputSummary, MidiOutputSummary,
     NodeGraphId, NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp,
     OscControlAction, OscControlMapping, OscInputConfig, PatchFixtureRequest,
@@ -7068,21 +7071,24 @@ fn add_color_effect(
 }
 
 #[tauri::command]
+fn add_chaser_effect(
+    state: State<'_, AppState>,
+    request: ChaserEffectRequest,
+) -> Result<EffectId, String> {
+    validate_chaser_effect_request(&request)?;
+    let effect_id = state.engine.allocate_effect_id();
+    state.engine.add_chaser_effect(effect_id, request, true)?;
+    Ok(effect_id)
+}
+
+#[tauri::command]
 fn update_lfo_effect(
     state: State<'_, AppState>,
     effect_id: EffectId,
     request: LfoEffectRequest,
 ) -> Result<(), String> {
     validate_lfo_effect_request(&request)?;
-    if !state
-        .engine
-        .snapshot()
-        .effects
-        .iter()
-        .any(|effect| effect.id == effect_id)
-    {
-        return Err(format!("Effect {effect_id} was not found"));
-    }
+    validate_effect_update_kind(&state.engine.snapshot(), effect_id, EffectKind::Lfo)?;
     state
         .engine
         .send(EngineCommand::UpdateLfoEffect { effect_id, request })
@@ -7096,15 +7102,11 @@ fn update_position_wave_effect(
     request: PositionWaveEffectRequest,
 ) -> Result<(), String> {
     validate_position_wave_effect_request(&request)?;
-    if !state
-        .engine
-        .snapshot()
-        .effects
-        .iter()
-        .any(|effect| effect.id == effect_id)
-    {
-        return Err(format!("Effect {effect_id} was not found"));
-    }
+    validate_effect_update_kind(
+        &state.engine.snapshot(),
+        effect_id,
+        EffectKind::PositionWave,
+    )?;
     state
         .engine
         .send(EngineCommand::UpdatePositionWaveEffect { effect_id, request })
@@ -7118,7 +7120,38 @@ fn update_color_effect(
     request: ColorEffectRequest,
 ) -> Result<(), String> {
     validate_color_effect_request(&request)?;
+    validate_effect_update_kind(&state.engine.snapshot(), effect_id, EffectKind::Color)?;
     state.engine.update_color_effect(effect_id, request)
+}
+
+#[tauri::command]
+fn update_chaser_effect(
+    state: State<'_, AppState>,
+    effect_id: EffectId,
+    request: ChaserEffectRequest,
+) -> Result<(), String> {
+    validate_chaser_effect_request(&request)?;
+    validate_effect_update_kind(&state.engine.snapshot(), effect_id, EffectKind::Chaser)?;
+    state.engine.update_chaser_effect(effect_id, request)
+}
+
+fn validate_effect_update_kind(
+    snapshot: &EngineSnapshot,
+    effect_id: EffectId,
+    expected: EffectKind,
+) -> Result<(), String> {
+    let effect = snapshot
+        .effects
+        .iter()
+        .find(|effect| effect.id == effect_id)
+        .ok_or_else(|| format!("Effect {effect_id} was not found"))?;
+    if effect.effect_type != expected {
+        return Err(format!(
+            "Effect {effect_id} is {:?}, not {:?}; change the Type to start a new effect",
+            effect.effect_type, expected
+        ));
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -7290,6 +7323,11 @@ fn relabel_effect_preset(mut preset: EffectPreset, label: String) -> EffectPrese
                 request.label = label;
             }
         }
+        EffectKind::Chaser => {
+            if let Some(request) = &mut preset.chaser {
+                request.label = label;
+            }
+        }
     }
     preset
 }
@@ -7398,7 +7436,10 @@ fn sample_effect_bundle_jsons(preset: &str) -> Result<Vec<(&'static str, &'stati
 fn sample_effect_requires_target(preset: &str) -> bool {
     matches!(
         preset.trim().to_ascii_lowercase().as_str(),
-        "spectrum"
+        "chase"
+            | "front-dimmer-chase"
+            | "front_dimmer_chase"
+            | "spectrum"
             | "colour-spectrum"
             | "color-spectrum"
             | "colour-chase"
@@ -7475,8 +7516,21 @@ fn add_effect_preset_to_engine(
             validate_effect_target_references(&snapshot, &request.fixture_ids, &[])?;
             engine.add_color_effect(effect_id, request, enabled)?;
         }
+        EffectKind::Chaser => {
+            let request = preset
+                .chaser
+                .ok_or_else(|| "Chaser effect preset is missing its request body".to_string())?;
+            let request = match target_override {
+                Some(target_override) => {
+                    apply_chaser_effect_target_override(request, target_override, &snapshot)?
+                }
+                None => request,
+            };
+            validate_chaser_effect_request(&request)?;
+            engine.add_chaser_effect(effect_id, request, enabled)?;
+        }
     }
-    if !enabled && !matches!(preset.effect_type, EffectKind::Color) {
+    if !enabled && !matches!(preset.effect_type, EffectKind::Color | EffectKind::Chaser) {
         engine
             .send(EngineCommand::SetEffectEnabled {
                 effect_id,
@@ -7485,6 +7539,29 @@ fn add_effect_preset_to_engine(
             .map_err(|error| error.to_string())?;
     }
     Ok(effect_id)
+}
+
+fn add_sample_effect_preset_to_engine(
+    engine: &EngineHandle,
+    mut preset: EffectPreset,
+    target_override: Option<&EffectTargetOverride>,
+) -> Result<EffectId, String> {
+    if preset.effect_type == EffectKind::Chaser {
+        if let Some(target_override) = target_override {
+            let request = preset
+                .chaser
+                .take()
+                .ok_or_else(|| "Chaser effect preset is missing its request body".to_string())?;
+            let snapshot = engine.snapshot();
+            preset.chaser = Some(apply_fixture_index_chaser_effect_target_override(
+                request,
+                target_override,
+                &snapshot,
+            )?);
+            return add_effect_preset_to_engine(engine, preset, None);
+        }
+    }
+    add_effect_preset_to_engine(engine, preset, target_override)
 }
 
 #[tauri::command]
@@ -7506,7 +7583,7 @@ fn load_sample_effect_preset(
     if let Some(target_override) = &target_override {
         validate_effect_target_override_for_preset(&preset, target_override)?;
     }
-    add_effect_preset_to_engine(&state.engine, preset, target_override.as_ref())
+    add_sample_effect_preset_to_engine(&state.engine, preset, target_override.as_ref())
 }
 
 #[tauri::command]
@@ -10345,6 +10422,33 @@ fn validate_project_lighting_references(snapshot: &EngineSnapshot) -> Result<(),
             )?;
             continue;
         }
+        if matches!(effect.effect_type, EffectKind::Chaser) {
+            let request = effect.chaser.as_ref().ok_or_else(|| {
+                format!(
+                    "Project effect {} is missing its Chaser request body",
+                    effect.id
+                )
+            })?;
+            if !effect.video_targets.is_empty() {
+                return Err(format!(
+                    "Project Chaser effect {} cannot target video layers",
+                    effect.id
+                ));
+            }
+            let (fixture_ids, target_group_ids) = validate_project_chaser_effect_targets(
+                snapshot,
+                &fixtures_by_id,
+                request,
+                &format!("Chaser effect {}", effect.id),
+            )?;
+            if effect.fixture_ids != fixture_ids || effect.target_group_ids != target_group_ids {
+                return Err(format!(
+                    "Project Chaser effect {} target summary does not match its ordered steps",
+                    effect.id
+                ));
+            }
+            continue;
+        }
         let has_light_targets =
             !effect.fixture_ids.is_empty() || !effect.target_group_ids.is_empty();
         let has_video_targets = !effect.video_targets.is_empty();
@@ -10530,6 +10634,80 @@ fn validate_project_color_effect_targets(
         ));
     }
     Ok(())
+}
+
+fn validate_project_chaser_effect_targets(
+    snapshot: &EngineSnapshot,
+    fixtures_by_id: &HashMap<FixtureId, &PatchedFixtureSummary>,
+    request: &ChaserEffectRequest,
+    owner_label: &str,
+) -> Result<(Vec<FixtureId>, Vec<String>), String> {
+    let mut fixture_ids = Vec::new();
+    let mut target_group_ids = Vec::new();
+    let mut seen_fixture_ids = HashSet::new();
+    let mut seen_group_ids = HashSet::new();
+    let mut resolved_target_ids = HashSet::new();
+    let mut has_group_reference = false;
+
+    for (step_index, step) in request.steps.iter().enumerate() {
+        validate_project_unique_refs(
+            &format!("{owner_label} step {} fixture", step_index + 1),
+            &step.fixture_ids,
+        )?;
+        validate_group_ids(&step.target_group_ids)?;
+        for fixture_id in &step.fixture_ids {
+            if !fixtures_by_id.contains_key(fixture_id) {
+                return Err(format!(
+                    "Project {owner_label} step {} references missing fixture {fixture_id}",
+                    step_index + 1
+                ));
+            }
+            resolved_target_ids.insert(*fixture_id);
+            if seen_fixture_ids.insert(*fixture_id) {
+                fixture_ids.push(*fixture_id);
+            }
+        }
+        for group_id in &step.target_group_ids {
+            has_group_reference = true;
+            for fixture in &snapshot.fixtures {
+                if fixture
+                    .group_ids
+                    .iter()
+                    .any(|candidate| group_matches(candidate, group_id))
+                {
+                    resolved_target_ids.insert(fixture.id);
+                }
+            }
+            if seen_group_ids.insert(group_id.clone()) {
+                target_group_ids.push(group_id.clone());
+            }
+        }
+    }
+
+    if resolved_target_ids.is_empty() && !has_group_reference {
+        return Err(format!(
+            "Project {owner_label} resolves to no fixture targets"
+        ));
+    }
+    for feature in &request.features {
+        let feature_key = normalize_custom_attribute_name(&feature.attribute);
+        let compatible = resolved_target_ids.iter().any(|fixture_id| {
+            fixtures_by_id.get(fixture_id).is_some_and(|fixture| {
+                fixture.controls.iter().any(|control| {
+                    control.attribute.eq_ignore_ascii_case(&feature.attribute)
+                        || normalize_custom_attribute_name(&control.attribute) == feature_key
+                })
+            })
+        });
+        if !compatible && !has_group_reference {
+            return Err(format!(
+                "Project {owner_label} feature '{}' is unavailable on every targeted fixture",
+                feature.attribute
+            ));
+        }
+    }
+
+    Ok((fixture_ids, target_group_ids))
 }
 
 fn fixture_supports_color_effect(fixture: &PatchedFixtureSummary) -> bool {
@@ -11145,6 +11323,61 @@ fn validate_project_video_keyframes(
 }
 
 fn validate_project_effect_body(effect: &EffectSummary) -> Result<(), String> {
+    match effect.effect_type {
+        EffectKind::Lfo | EffectKind::PositionWave => {
+            if effect.color.is_some() || effect.chaser.is_some() {
+                return Err(format!(
+                    "Project effect {} contains a body for another effect kind",
+                    effect.id
+                ));
+            }
+        }
+        EffectKind::Color => {
+            if effect.chaser.is_some() {
+                return Err(format!(
+                    "Project Color effect {} contains a Chaser body",
+                    effect.id
+                ));
+            }
+        }
+        EffectKind::Chaser => {
+            if effect.color.is_some() {
+                return Err(format!(
+                    "Project Chaser effect {} contains a Color body",
+                    effect.id
+                ));
+            }
+            let request = effect.chaser.as_ref().ok_or_else(|| {
+                format!(
+                    "Project Chaser effect {} is missing its request body",
+                    effect.id
+                )
+            })?;
+            let first_feature = request
+                .features
+                .first()
+                .ok_or_else(|| format!("Project Chaser effect {} has no features", effect.id))?;
+            let scalar_body_matches = effect.label == request.label
+                && effect.attribute == first_feature.attribute
+                && effect.low == first_feature.low
+                && effect.high == first_feature.high
+                && effect.period_ms == Some(request.step_duration_ms)
+                && effect.clock_sync == request.clock_sync
+                && effect.phase == request.phase
+                && effect.blend_mode == request.blend_mode
+                && effect.shape == protocol::LfoShape::Square
+                && effect.origin.is_none()
+                && effect.direction.is_none()
+                && effect.speed.is_none()
+                && effect.wavelength.is_none();
+            if !scalar_body_matches {
+                return Err(format!(
+                    "Project Chaser effect {} summary fields do not match its request body",
+                    effect.id
+                ));
+            }
+        }
+    }
     let preset = effect_summary_to_preset(effect)
         .map_err(|error| format!("Project effect {} is invalid: {error}", effect.id))?;
     validate_effect_preset(&preset)
@@ -11272,6 +11505,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 }),
                 position_wave: None,
                 color: None,
+                chaser: None,
             })
         }
         EffectKind::PositionWave => {
@@ -11310,6 +11544,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                     blend_mode: effect.blend_mode.clone(),
                 }),
                 color: None,
+                chaser: None,
             })
         }
         EffectKind::Color => {
@@ -11324,6 +11559,22 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 lfo: None,
                 position_wave: None,
                 color: Some(request),
+                chaser: None,
+            })
+        }
+        EffectKind::Chaser => {
+            let request = effect
+                .chaser
+                .clone()
+                .ok_or_else(|| "Chaser effect summary is missing its request body".to_string())?;
+            Ok(EffectPreset {
+                version: 1,
+                effect_type: EffectKind::Chaser,
+                enabled: effect.enabled,
+                lfo: None,
+                position_wave: None,
+                color: None,
+                chaser: Some(request),
             })
         }
     }
@@ -11361,6 +11612,134 @@ fn apply_color_effect_target_override(
     Ok(request)
 }
 
+fn apply_chaser_effect_target_override(
+    mut request: ChaserEffectRequest,
+    target_override: &EffectTargetOverride,
+    snapshot: &EngineSnapshot,
+) -> Result<ChaserEffectRequest, String> {
+    validate_chaser_effect_target_override(target_override)?;
+    let fixture_ids = resolve_chaser_effect_target_override(target_override, snapshot)?;
+    let mut target_cursor = 0_usize;
+    request.steps = request
+        .steps
+        .into_iter()
+        .map(|step| {
+            let target_slot_count = step.fixture_ids.len() + step.target_group_ids.len();
+            if target_slot_count == 0 {
+                return ChaserStep {
+                    fixture_ids: Vec::new(),
+                    target_group_ids: Vec::new(),
+                    level: step.level,
+                };
+            }
+
+            let mut remapped_fixture_ids = Vec::new();
+            for _ in 0..target_slot_count.min(fixture_ids.len()) {
+                let fixture_id = fixture_ids[target_cursor % fixture_ids.len()];
+                target_cursor = target_cursor.saturating_add(1);
+                if !remapped_fixture_ids.contains(&fixture_id) {
+                    remapped_fixture_ids.push(fixture_id);
+                }
+            }
+            ChaserStep {
+                fixture_ids: remapped_fixture_ids,
+                target_group_ids: Vec::new(),
+                level: step.level,
+            }
+        })
+        .collect();
+    if request.features.len() == 1 && !target_override.attribute.trim().is_empty() {
+        request.features[0].attribute = overridden_light_attribute(target_override);
+    }
+    Ok(request)
+}
+
+fn apply_fixture_index_chaser_effect_target_override(
+    mut request: ChaserEffectRequest,
+    target_override: &EffectTargetOverride,
+    snapshot: &EngineSnapshot,
+) -> Result<ChaserEffectRequest, String> {
+    validate_chaser_effect_target_override(target_override)?;
+    let fixture_ids = resolve_chaser_effect_target_override(target_override, snapshot)?;
+    let single_fixture_target = fixture_ids.len() == 1;
+
+    let active_level = request
+        .steps
+        .iter()
+        .map(|step| step.level)
+        .max()
+        .filter(|level| *level > 0)
+        .unwrap_or(u16::MAX);
+    request.steps = fixture_ids
+        .into_iter()
+        .map(|fixture_id| ChaserStep {
+            fixture_ids: vec![fixture_id],
+            target_group_ids: Vec::new(),
+            level: active_level,
+        })
+        .collect();
+    if request.steps.len() == 1 {
+        request.steps.push(ChaserStep {
+            fixture_ids: Vec::new(),
+            target_group_ids: Vec::new(),
+            level: 0,
+        });
+    }
+    if single_fixture_target {
+        request.active_step_count = 1;
+        request.wings = 1;
+    } else {
+        request.active_step_count = request
+            .active_step_count
+            .max(1)
+            .min(request.steps.len().min(64) as u16);
+        request.wings = request.wings.max(1).min(request.steps.len().min(16) as u8);
+    }
+    if request.features.len() == 1 && !target_override.attribute.trim().is_empty() {
+        request.features[0].attribute = overridden_light_attribute(target_override);
+    }
+    Ok(request)
+}
+
+fn resolve_chaser_effect_target_override(
+    target_override: &EffectTargetOverride,
+    snapshot: &EngineSnapshot,
+) -> Result<Vec<FixtureId>, String> {
+    validate_effect_target_references(snapshot, &target_override.fixture_ids, &[])?;
+
+    let mut fixture_ids = Vec::new();
+    let mut seen_fixture_ids = HashSet::new();
+    for fixture_id in &target_override.fixture_ids {
+        if seen_fixture_ids.insert(*fixture_id) {
+            fixture_ids.push(*fixture_id);
+        }
+    }
+    for group_id in &target_override.target_group_ids {
+        let mut matched = false;
+        for fixture in &snapshot.fixtures {
+            if fixture
+                .group_ids
+                .iter()
+                .any(|candidate| group_matches(candidate, group_id))
+            {
+                matched = true;
+                if seen_fixture_ids.insert(fixture.id) {
+                    fixture_ids.push(fixture.id);
+                }
+            }
+        }
+        if !matched {
+            return Err(format!(
+                "Group '{group_id}' was not found or has no fixtures"
+            ));
+        }
+    }
+    if fixture_ids.is_empty() {
+        return Err("Chaser effects require at least one resolved fixture target".to_string());
+    }
+    Ok(fixture_ids)
+}
+
 fn validate_color_effect_target_override(
     target_override: &EffectTargetOverride,
 ) -> Result<(), String> {
@@ -11369,6 +11748,18 @@ fn validate_color_effect_target_override(
     }
     if !target_override.video_targets.is_empty() {
         return Err("Color effects cannot target video parameters".to_string());
+    }
+    validate_group_ids(&target_override.target_group_ids)
+}
+
+fn validate_chaser_effect_target_override(
+    target_override: &EffectTargetOverride,
+) -> Result<(), String> {
+    if !target_override.video_targets.is_empty() {
+        return Err("Chaser effects cannot target video parameters".to_string());
+    }
+    if target_override.fixture_ids.is_empty() && target_override.target_group_ids.is_empty() {
+        return Err("Chaser effects require a fixture, selection, or group target".to_string());
     }
     validate_group_ids(&target_override.target_group_ids)
 }
@@ -11402,6 +11793,13 @@ fn validate_effect_target_override_for_preset(
 ) -> Result<(), String> {
     match preset.effect_type {
         EffectKind::Color => validate_color_effect_target_override(target_override),
+        EffectKind::Chaser => {
+            preset
+                .chaser
+                .as_ref()
+                .ok_or_else(|| "Chaser effect preset is missing its request body".to_string())?;
+            validate_chaser_effect_target_override(target_override)
+        }
         EffectKind::Lfo | EffectKind::PositionWave => {
             validate_effect_target_override(target_override)
         }
@@ -11687,7 +12085,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
     }
     match preset.effect_type {
         EffectKind::Lfo => {
-            if preset.position_wave.is_some() || preset.color.is_some() {
+            if preset.position_wave.is_some() || preset.color.is_some() || preset.chaser.is_some() {
                 return Err("LFO effect preset must not contain another effect body".to_string());
             }
             let request = preset
@@ -11697,7 +12095,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
             validate_lfo_effect_request(request)?;
         }
         EffectKind::PositionWave => {
-            if preset.lfo.is_some() || preset.color.is_some() {
+            if preset.lfo.is_some() || preset.color.is_some() || preset.chaser.is_some() {
                 return Err(
                     "Position wave effect preset must not contain another effect body".to_string(),
                 );
@@ -11708,7 +12106,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
             validate_position_wave_effect_request(request)?;
         }
         EffectKind::Color => {
-            if preset.lfo.is_some() || preset.position_wave.is_some() {
+            if preset.lfo.is_some() || preset.position_wave.is_some() || preset.chaser.is_some() {
                 return Err("Color effect preset must not contain another effect body".to_string());
             }
             let request = preset
@@ -11716,6 +12114,16 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 .as_ref()
                 .ok_or_else(|| "Color effect preset is missing its request body".to_string())?;
             validate_color_effect_request(request)?;
+        }
+        EffectKind::Chaser => {
+            if preset.lfo.is_some() || preset.position_wave.is_some() || preset.color.is_some() {
+                return Err("Chaser effect preset must not contain another effect body".to_string());
+            }
+            let request = preset
+                .chaser
+                .as_ref()
+                .ok_or_else(|| "Chaser effect preset is missing its request body".to_string())?;
+            validate_chaser_effect_request(request)?;
         }
     }
     Ok(())
@@ -16503,6 +16911,27 @@ fn validate_color_effect_request(request: &ColorEffectRequest) -> Result<(), Str
     Ok(())
 }
 
+fn validate_chaser_effect_request(request: &ChaserEffectRequest) -> Result<(), String> {
+    validate_engine_chaser_effect_request(request)?;
+    let mut feature_attributes = HashSet::new();
+    for feature in &request.features {
+        let attribute = feature.attribute.trim();
+        let canonical = normalize_custom_attribute_name(attribute);
+        if canonical.is_empty() {
+            return Err("Chaser feature attributes must contain a letter or number".to_string());
+        }
+        if !feature_attributes.insert(canonical) {
+            return Err(format!(
+                "Chaser feature '{attribute}' is targeted more than once"
+            ));
+        }
+    }
+    for step in &request.steps {
+        validate_group_ids(&step.target_group_ids)?;
+    }
+    Ok(())
+}
+
 fn vec3_is_finite(value: Vec3) -> bool {
     value.x.is_finite() && value.y.is_finite() && value.z.is_finite()
 }
@@ -20224,6 +20653,7 @@ f 1 2 3
         assert!(group_matches("front / movers", "front/movers"));
         assert!(!group_matches("frontline", "front"));
         assert!(!group_matches("front", "front/movers"));
+        assert!(!group_matches("Front/movers", "front"));
     }
 
     #[test]
@@ -22342,6 +22772,7 @@ f 1 2 3
             wavelength: None,
             enabled: true,
             color: None,
+            chaser: None,
         }
     }
 
@@ -22404,6 +22835,7 @@ f 1 2 3
             wavelength: None,
             enabled: true,
             color: Some(request),
+            chaser: None,
         }
     }
 
@@ -22640,6 +23072,7 @@ f 1 2 3
             wavelength: None,
             enabled: true,
             color: None,
+            chaser: None,
         }];
         assert!(validate_project_file(&project)
             .unwrap_err()
@@ -22702,10 +23135,36 @@ f 1 2 3
             wavelength: Some(1.0),
             enabled: true,
             color: None,
+            chaser: None,
         }];
         assert!(validate_project_file(&project)
             .unwrap_err()
             .contains("origin and direction values must be finite"));
+    }
+
+    #[test]
+    fn legacy_project_effect_without_chaser_field_remains_loadable() {
+        let project = ProjectFile {
+            version: 1,
+            app: "Syndocal".to_string(),
+            custom_profiles: Vec::new(),
+            snapshot: EngineSnapshot {
+                fixtures: vec![project_fixture(1, "Legacy fixture", 0, 1)],
+                effects: vec![project_lfo_effect(4, vec![1])],
+                ..EngineSnapshot::default()
+            },
+        };
+        let mut json = serde_json::to_value(&project).unwrap();
+        json["snapshot"]["effects"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("chaser");
+
+        let legacy: ProjectFile = serde_json::from_value(json).unwrap();
+        validate_project_file(&legacy).unwrap();
+        assert_eq!(legacy.snapshot.effects.len(), 1);
+        assert_eq!(legacy.snapshot.effects[0].effect_type, EffectKind::Lfo);
+        assert!(legacy.snapshot.effects[0].chaser.is_none());
     }
 
     #[test]
@@ -22784,6 +23243,106 @@ f 1 2 3
         project.snapshot.fixtures = vec![unsupported];
         let error = validate_project_file(&project).unwrap_err();
         assert!(error.contains("no fixtures with an RGB, RGBW, CMY, HSV, or colored-wheel"));
+    }
+
+    #[test]
+    fn project_file_validation_keeps_mixed_chaser_features_and_rejects_corrupt_targets() {
+        let mut dimmer_only = project_fixture(1, "Dimmer only", 0, 1);
+        dimmer_only
+            .controls
+            .retain(|control| control.attribute != "Pan");
+        let pan_and_dimmer = project_fixture(2, "Mover", 0, 10);
+        let request = sample_chaser_effect_request();
+        let effect = EffectSummary {
+            id: 17,
+            label: request.label.clone(),
+            effect_type: EffectKind::Chaser,
+            fixture_ids: vec![1, 2],
+            target_group_ids: Vec::new(),
+            attribute: request.features[0].attribute.clone(),
+            video_targets: Vec::new(),
+            shape: protocol::LfoShape::Square,
+            period_ms: Some(request.step_duration_ms),
+            clock_sync: request.clock_sync,
+            low: request.features[0].low,
+            high: request.features[0].high,
+            phase: request.phase,
+            blend_mode: request.blend_mode.clone(),
+            origin: None,
+            direction: None,
+            speed: None,
+            wavelength: None,
+            enabled: true,
+            color: None,
+            chaser: Some(request.clone()),
+        };
+        let mut project = ProjectFile {
+            version: 1,
+            app: "Syndocal".to_string(),
+            custom_profiles: Vec::new(),
+            snapshot: EngineSnapshot {
+                fixtures: vec![dimmer_only, pan_and_dimmer],
+                effects: vec![effect.clone()],
+                ..EngineSnapshot::default()
+            },
+        };
+
+        validate_project_file(&project).unwrap();
+
+        let mut dormant_request = request.clone();
+        for step in &mut dormant_request.steps {
+            step.fixture_ids.clear();
+            step.target_group_ids.clear();
+        }
+        dormant_request.steps[0].target_group_ids = vec!["Future/Rig".to_string()];
+        let mut dormant = effect.clone();
+        dormant.fixture_ids.clear();
+        dormant.target_group_ids = vec!["Future/Rig".to_string()];
+        dormant.chaser = Some(dormant_request);
+        project.snapshot.effects = vec![dormant];
+        validate_project_file(&project).unwrap();
+
+        project.snapshot.effects[0].fixture_ids = vec![2, 1];
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("target summary does not match its ordered steps"));
+
+        let mut unsupported = effect.clone();
+        unsupported
+            .chaser
+            .as_mut()
+            .unwrap()
+            .features
+            .push(protocol::ChaserFeature {
+                attribute: "Zoom".to_string(),
+                low: 0,
+                high: u16::MAX,
+            });
+        project.snapshot.effects = vec![unsupported];
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("feature 'Zoom' is unavailable on every targeted fixture"));
+
+        let mut extra_body = effect.clone();
+        extra_body.color = Some(sample_color_effect_request());
+        project.snapshot.effects = vec![extra_body];
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("contains a Color body"));
+
+        let mut mismatched_summary = effect.clone();
+        mismatched_summary.period_ms = Some(request.step_duration_ms + 1);
+        project.snapshot.effects = vec![mismatched_summary];
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("summary fields do not match its request body"));
+
+        let mut video_targeted = effect;
+        video_targeted.video_targets = vec![sample_video_effect_target(99)];
+        project.snapshot.effects = vec![video_targeted];
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("cannot target video layers"));
     }
 
     #[test]
@@ -24259,6 +24818,174 @@ f 1 2 3
         }
     }
 
+    fn sample_chaser_effect_request() -> ChaserEffectRequest {
+        ChaserEffectRequest {
+            label: "Front multi-feature Chaser".to_string(),
+            steps: vec![
+                ChaserStep {
+                    fixture_ids: vec![1],
+                    target_group_ids: Vec::new(),
+                    level: u16::MAX,
+                },
+                ChaserStep {
+                    fixture_ids: vec![2],
+                    target_group_ids: Vec::new(),
+                    level: 48_000,
+                },
+                ChaserStep {
+                    fixture_ids: Vec::new(),
+                    target_group_ids: Vec::new(),
+                    level: 0,
+                },
+            ],
+            features: vec![
+                protocol::ChaserFeature {
+                    attribute: "Dimmer".to_string(),
+                    low: 1_024,
+                    high: 62_000,
+                },
+                protocol::ChaserFeature {
+                    attribute: "Pan".to_string(),
+                    low: 20_000,
+                    high: 45_000,
+                },
+            ],
+            step_duration_ms: 375,
+            clock_sync: Some(protocol::EffectClockSync { beats: 0.5 }),
+            direction: protocol::ChaserDirection::Bounce,
+            wings: 2,
+            active_step_count: 2,
+            duty_cycle: 0.75,
+            overlap: 0.25,
+            phase: 0.125,
+            fixture_spread: 0.5,
+            random_seed: 9_876,
+            blend_mode: protocol::EffectBlendMode::Add,
+        }
+    }
+
+    fn chaser_effect_summary_for_test(id: EffectId, request: ChaserEffectRequest) -> EffectSummary {
+        let mut fixture_ids = Vec::new();
+        let mut target_group_ids = Vec::new();
+        let mut seen_fixture_ids = HashSet::new();
+        let mut seen_group_ids = HashSet::new();
+        for step in &request.steps {
+            for fixture_id in &step.fixture_ids {
+                if seen_fixture_ids.insert(*fixture_id) {
+                    fixture_ids.push(*fixture_id);
+                }
+            }
+            for group_id in &step.target_group_ids {
+                if seen_group_ids.insert(group_id.clone()) {
+                    target_group_ids.push(group_id.clone());
+                }
+            }
+        }
+        let first_feature = &request.features[0];
+        EffectSummary {
+            id,
+            label: request.label.clone(),
+            effect_type: EffectKind::Chaser,
+            fixture_ids,
+            target_group_ids,
+            attribute: first_feature.attribute.clone(),
+            video_targets: Vec::new(),
+            shape: protocol::LfoShape::Square,
+            period_ms: Some(request.step_duration_ms),
+            clock_sync: request.clock_sync,
+            low: first_feature.low,
+            high: first_feature.high,
+            phase: request.phase,
+            blend_mode: request.blend_mode.clone(),
+            origin: None,
+            direction: None,
+            speed: None,
+            wavelength: None,
+            enabled: true,
+            color: None,
+            chaser: Some(request),
+        }
+    }
+
+    #[test]
+    fn dormant_group_chaser_and_case_distinct_groups_survive_project_save_roundtrip() {
+        let mut incompatible_fixture = project_fixture(1, "Front dimmer", 0, 1);
+        incompatible_fixture.group_ids = vec!["Front".to_string()];
+        incompatible_fixture
+            .controls
+            .retain(|control| control.attribute == "Dimmer");
+        let mut dormant_request = sample_chaser_effect_request();
+        for step in &mut dormant_request.steps {
+            step.fixture_ids.clear();
+            step.target_group_ids.clear();
+        }
+        dormant_request.steps[0].target_group_ids = vec!["Front".to_string()];
+        dormant_request.features = vec![protocol::ChaserFeature {
+            attribute: "Pan".to_string(),
+            low: 20_000,
+            high: 45_000,
+        }];
+        let dormant_project = ProjectFile {
+            version: PROJECT_FILE_VERSION,
+            app: APP_NAME.to_string(),
+            custom_profiles: Vec::new(),
+            snapshot: EngineSnapshot {
+                fixtures: vec![incompatible_fixture],
+                effects: vec![chaser_effect_summary_for_test(17, dormant_request)],
+                ..EngineSnapshot::default()
+            },
+        };
+
+        validate_project_file(&dormant_project).unwrap();
+        let saved_dormant = ProjectFile {
+            snapshot: project_snapshot_for_save(dormant_project.snapshot.clone()),
+            ..dormant_project
+        };
+        let dormant_json = serde_json::to_string_pretty(&saved_dormant).unwrap();
+        let dormant_roundtrip: ProjectFile = serde_json::from_str(&dormant_json).unwrap();
+        validate_project_file(&dormant_roundtrip).unwrap();
+        assert_eq!(
+            dormant_roundtrip.snapshot.effects[0].target_group_ids,
+            vec!["Front"]
+        );
+
+        let mut upper_fixture = project_fixture(1, "Upper Front", 0, 1);
+        upper_fixture.group_ids = vec!["Front".to_string()];
+        let mut lower_fixture = project_fixture(2, "Lower front", 0, 10);
+        lower_fixture.group_ids = vec!["front".to_string()];
+        let mut case_request = sample_chaser_effect_request();
+        case_request.features.truncate(1);
+        for step in &mut case_request.steps {
+            step.fixture_ids.clear();
+            step.target_group_ids.clear();
+        }
+        case_request.steps[0].target_group_ids = vec!["Front".to_string()];
+        case_request.steps[1].target_group_ids = vec!["front".to_string()];
+        let case_project = ProjectFile {
+            version: PROJECT_FILE_VERSION,
+            app: APP_NAME.to_string(),
+            custom_profiles: Vec::new(),
+            snapshot: EngineSnapshot {
+                fixtures: vec![upper_fixture, lower_fixture],
+                effects: vec![chaser_effect_summary_for_test(18, case_request)],
+                ..EngineSnapshot::default()
+            },
+        };
+
+        validate_project_file(&case_project).unwrap();
+        let case_json = serde_json::to_string_pretty(&ProjectFile {
+            snapshot: project_snapshot_for_save(case_project.snapshot.clone()),
+            ..case_project
+        })
+        .unwrap();
+        let case_roundtrip: ProjectFile = serde_json::from_str(&case_json).unwrap();
+        validate_project_file(&case_roundtrip).unwrap();
+        assert_eq!(
+            case_roundtrip.snapshot.effects[0].target_group_ids,
+            vec!["Front", "front"]
+        );
+    }
+
     fn sample_video_effect_target(layer_id: VideoLayerId) -> VideoEffectTarget {
         VideoEffectTarget {
             layer_ids: vec![layer_id],
@@ -24292,6 +25019,7 @@ f 1 2 3
             wavelength: None,
             enabled: false,
             color: None,
+            chaser: None,
         };
 
         let preset = effect_summary_to_preset(&effect).unwrap();
@@ -24353,6 +25081,7 @@ f 1 2 3
             wavelength: Some(3.5),
             enabled: false,
             color: None,
+            chaser: None,
         };
 
         let preset = effect_summary_to_preset(&effect).unwrap();
@@ -24408,6 +25137,7 @@ f 1 2 3
             wavelength: None,
             enabled: false,
             color: Some(request.clone()),
+            chaser: None,
         };
 
         let preset = effect_summary_to_preset(&effect).unwrap();
@@ -24420,6 +25150,201 @@ f 1 2 3
         assert!(roundtrip.lfo.is_none());
         assert!(roundtrip.position_wave.is_none());
         assert_eq!(roundtrip.color, Some(request));
+    }
+
+    #[test]
+    fn effect_summary_serializes_chaser_preset_without_losing_order_or_features() {
+        let request = sample_chaser_effect_request();
+        let effect = EffectSummary {
+            id: 15,
+            label: request.label.clone(),
+            effect_type: EffectKind::Chaser,
+            fixture_ids: vec![1, 2],
+            target_group_ids: Vec::new(),
+            attribute: request.features[0].attribute.clone(),
+            video_targets: Vec::new(),
+            shape: protocol::LfoShape::Square,
+            period_ms: Some(request.step_duration_ms),
+            clock_sync: request.clock_sync,
+            low: request.features[0].low,
+            high: request.features[0].high,
+            phase: request.phase,
+            blend_mode: request.blend_mode.clone(),
+            origin: None,
+            direction: None,
+            speed: None,
+            wavelength: None,
+            enabled: false,
+            color: None,
+            chaser: Some(request.clone()),
+        };
+
+        let preset = effect_summary_to_preset(&effect).unwrap();
+        validate_effect_preset(&preset).unwrap();
+        let json = serde_json::to_string_pretty(&preset).unwrap();
+        let roundtrip: EffectPreset = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(roundtrip.effect_type, EffectKind::Chaser);
+        assert!(!roundtrip.enabled);
+        assert!(roundtrip.lfo.is_none());
+        assert!(roundtrip.position_wave.is_none());
+        assert!(roundtrip.color.is_none());
+        assert_eq!(roundtrip.chaser, Some(request.clone()));
+
+        let relabeled = relabel_effect_preset(roundtrip, "Operator Copy".to_string());
+        let relabeled_request = relabeled.chaser.unwrap();
+        assert_eq!(relabeled_request.label, "Operator Copy");
+        assert_eq!(relabeled_request.steps, request.steps);
+        assert_eq!(relabeled_request.features, request.features);
+        assert_eq!(relabeled_request.direction, request.direction);
+        assert_eq!(relabeled_request.random_seed, request.random_seed);
+    }
+
+    #[test]
+    fn fixture_index_chaser_target_override_expands_groups_in_patch_order_and_adds_single_gap() {
+        let mut first = project_fixture(3, "Front 3", 0, 1);
+        first.group_ids = vec!["front".to_string()];
+        let mut second = project_fixture(1, "Front 1", 0, 10);
+        second.group_ids = vec!["front".to_string()];
+        let third = project_fixture(2, "Back 2", 0, 20);
+        let snapshot = EngineSnapshot {
+            fixtures: vec![first, second, third],
+            ..EngineSnapshot::default()
+        };
+        let mut request = sample_chaser_effect_request();
+        request.features.truncate(1);
+        request.features[0].attribute = "Old".to_string();
+        let target_override = EffectTargetOverride {
+            fixture_ids: vec![2],
+            target_group_ids: vec!["front".to_string()],
+            attribute: "Dimmer".to_string(),
+            video_targets: Vec::new(),
+        };
+
+        let retargeted = apply_fixture_index_chaser_effect_target_override(
+            request.clone(),
+            &target_override,
+            &snapshot,
+        )
+        .unwrap();
+        assert_eq!(
+            retargeted
+                .steps
+                .iter()
+                .map(|step| step.fixture_ids.clone())
+                .collect::<Vec<_>>(),
+            vec![vec![2], vec![3], vec![1]]
+        );
+        assert!(retargeted
+            .steps
+            .iter()
+            .all(|step| step.target_group_ids.is_empty()));
+        assert_eq!(retargeted.features[0].attribute, "Dimmer");
+
+        let single_override = EffectTargetOverride {
+            fixture_ids: vec![1],
+            target_group_ids: Vec::new(),
+            attribute: "Dimmer".to_string(),
+            video_targets: Vec::new(),
+        };
+        let single = apply_fixture_index_chaser_effect_target_override(
+            request.clone(),
+            &single_override,
+            &snapshot,
+        )
+        .unwrap();
+        assert_eq!(single.steps.len(), 2);
+        assert_eq!(single.steps[0].fixture_ids, vec![1]);
+        assert!(single.steps[1].fixture_ids.is_empty());
+        assert!(single.steps[1].target_group_ids.is_empty());
+        assert_eq!(single.steps[1].level, 0);
+        assert_eq!(single.active_step_count, 1);
+        assert_eq!(single.wings, 1);
+
+        let multi_feature_override = EffectTargetOverride {
+            fixture_ids: vec![1, 2],
+            target_group_ids: Vec::new(),
+            attribute: String::new(),
+            video_targets: Vec::new(),
+        };
+        let multi_feature = apply_fixture_index_chaser_effect_target_override(
+            sample_chaser_effect_request(),
+            &multi_feature_override,
+            &snapshot,
+        )
+        .unwrap();
+        assert_eq!(multi_feature.features[0].attribute, "Dimmer");
+        assert_eq!(multi_feature.features[1].attribute, "Pan");
+
+        let mut video_override = single_override;
+        video_override.video_targets = vec![sample_video_effect_target(7)];
+        assert!(apply_fixture_index_chaser_effect_target_override(
+            request,
+            &video_override,
+            &snapshot
+        )
+        .unwrap_err()
+        .contains("cannot target video"));
+    }
+
+    #[test]
+    fn general_chaser_target_override_preserves_step_pattern_levels_and_features() {
+        let snapshot = EngineSnapshot {
+            fixtures: vec![
+                project_fixture(3, "Target 3", 0, 1),
+                project_fixture(1, "Target 1", 0, 10),
+            ],
+            ..EngineSnapshot::default()
+        };
+        let mut request = sample_chaser_effect_request();
+        request.steps[1].fixture_ids = vec![2, 4];
+        let original_features = request.features.clone();
+        let original_levels = request
+            .steps
+            .iter()
+            .map(|step| step.level)
+            .collect::<Vec<_>>();
+        let original_direction = request.direction;
+        let original_wings = request.wings;
+        let original_active_step_count = request.active_step_count;
+        let target_override = EffectTargetOverride {
+            fixture_ids: vec![3, 1],
+            target_group_ids: Vec::new(),
+            attribute: String::new(),
+            video_targets: Vec::new(),
+        };
+
+        let retargeted =
+            apply_chaser_effect_target_override(request, &target_override, &snapshot).unwrap();
+
+        assert_eq!(retargeted.steps.len(), 3);
+        assert_eq!(retargeted.steps[0].fixture_ids, vec![3]);
+        assert_eq!(retargeted.steps[1].fixture_ids, vec![1, 3]);
+        assert!(retargeted.steps[2].fixture_ids.is_empty());
+        assert!(retargeted.steps[2].target_group_ids.is_empty());
+        assert_eq!(
+            retargeted
+                .steps
+                .iter()
+                .map(|step| step.level)
+                .collect::<Vec<_>>(),
+            original_levels
+        );
+        assert_eq!(retargeted.features, original_features);
+        assert_eq!(retargeted.direction, original_direction);
+        assert_eq!(retargeted.wings, original_wings);
+        assert_eq!(retargeted.active_step_count, original_active_step_count);
+
+        let mut single_feature_request = sample_chaser_effect_request();
+        single_feature_request.features.truncate(1);
+        let original_attribute = single_feature_request.features[0].attribute.clone();
+        let retargeted_single = apply_chaser_effect_target_override(
+            single_feature_request,
+            &target_override,
+            &snapshot,
+        )
+        .unwrap();
+        assert_eq!(retargeted_single.features[0].attribute, original_attribute);
     }
 
     #[test]
@@ -24485,6 +25410,7 @@ f 1 2 3
             lfo: Some(sample_lfo_request()),
             position_wave: Some(sample_position_wave_request()),
             color: None,
+            chaser: None,
         };
 
         let error = validate_effect_preset(&preset).unwrap_err();
@@ -24498,8 +25424,22 @@ f 1 2 3
             lfo: Some(sample_lfo_request()),
             position_wave: None,
             color: Some(sample_color_effect_request()),
+            chaser: None,
         };
         assert!(validate_effect_preset(&color_with_scalar_body)
+            .unwrap_err()
+            .contains("must not contain"));
+
+        let chaser_with_color_body = EffectPreset {
+            version: 1,
+            effect_type: EffectKind::Chaser,
+            enabled: true,
+            lfo: None,
+            position_wave: None,
+            color: Some(sample_color_effect_request()),
+            chaser: Some(sample_chaser_effect_request()),
+        };
+        assert!(validate_effect_preset(&chaser_with_color_body)
             .unwrap_err()
             .contains("must not contain"));
     }
@@ -24666,15 +25606,21 @@ f 1 2 3
         let (chase_label, chase_json) = sample_effect_preset_json("chase").unwrap();
         assert_eq!(chase_label, SAMPLE_EFFECT_PRESET_CHASE_LABEL);
         assert_eq!(chase_json, SAMPLE_EFFECT_PRESET_CHASE_JSON);
-        assert_eq!(chase.effect_type, EffectKind::PositionWave);
-        let chase_wave = chase.position_wave.as_ref().unwrap();
-        assert_eq!(chase_wave.target_group_ids, vec!["Front".to_string()]);
-        assert_eq!(chase_wave.attribute, "Dimmer");
-        assert_eq!(chase_wave.shape, protocol::LfoShape::Square);
-        assert_eq!(chase_wave.wavelength, 2.0);
+        assert_eq!(chase.effect_type, EffectKind::Chaser);
+        let chase_request = chase.chaser.as_ref().unwrap();
         assert_eq!(
-            chase_wave.clock_sync,
-            Some(protocol::EffectClockSync { beats: 2.0 })
+            chase_request.steps[0].target_group_ids,
+            vec!["Front".to_string()]
+        );
+        assert!(chase_request.steps[1].fixture_ids.is_empty());
+        assert!(chase_request.steps[1].target_group_ids.is_empty());
+        assert_eq!(chase_request.features[0].attribute, "Dimmer");
+        assert_eq!(chase_request.active_step_count, 1);
+        assert_eq!(chase_request.duty_cycle, 0.75);
+        assert_eq!(chase_request.overlap, 0.2);
+        assert_eq!(
+            chase_request.clock_sync,
+            Some(protocol::EffectClockSync { beats: 0.5 })
         );
 
         let ball: EffectPreset =
@@ -24780,6 +25726,8 @@ f 1 2 3
         }
 
         assert!(!sample_effect_requires_target("curve"));
+        assert!(sample_effect_requires_target("chase"));
+        assert!(sample_effect_requires_target("front_dimmer_chase"));
         assert!(sample_effect_requires_target("spectrum"));
         assert!(sample_effect_requires_target("color-spectrum"));
         assert!(sample_effect_requires_target("colour-chase"));
@@ -24975,23 +25923,42 @@ f 1 2 3
         let (_, chase_json) = sample_effect_preset_json("front-dimmer-chase").unwrap();
         let chase: EffectPreset = serde_json::from_str(chase_json).unwrap();
         validate_effect_preset(&chase).unwrap();
-        let chase_request = apply_position_wave_effect_target_override(
-            chase.position_wave.unwrap(),
-            &target_override,
-        );
-        validate_position_wave_effect_request(&chase_request).unwrap();
-        assert_eq!(chase_request.fixture_ids, vec![42]);
-        assert_eq!(chase_request.target_group_ids, vec!["floor".to_string()]);
-        assert_eq!(chase_request.attribute, "ColorRed");
+        assert_eq!(chase.effect_type, EffectKind::Chaser);
+        assert!(chase.position_wave.is_none());
+        let mut first = project_fixture(42, "Floor 1", 0, 1);
+        first.group_ids = vec!["floor".to_string()];
+        let mut second = project_fixture(43, "Floor 2", 0, 10);
+        second.group_ids = vec!["floor".to_string()];
+        let snapshot = EngineSnapshot {
+            fixtures: vec![first, second],
+            ..EngineSnapshot::default()
+        };
+        let light_target_override = EffectTargetOverride {
+            fixture_ids: vec![42],
+            target_group_ids: vec!["floor".to_string()],
+            attribute: "Dimmer".to_string(),
+            video_targets: Vec::new(),
+        };
+        let chase_request = apply_fixture_index_chaser_effect_target_override(
+            chase.chaser.unwrap(),
+            &light_target_override,
+            &snapshot,
+        )
+        .unwrap();
+        validate_chaser_effect_request(&chase_request).unwrap();
         assert_eq!(
-            chase_request.video_targets,
-            vec![sample_video_effect_target(7)]
+            chase_request
+                .steps
+                .iter()
+                .map(|step| step.fixture_ids.clone())
+                .collect::<Vec<_>>(),
+            vec![vec![42], vec![43]]
         );
-        assert_eq!(chase_request.shape, protocol::LfoShape::Square);
-        assert_eq!(chase_request.wavelength, 2.0);
+        assert_eq!(chase_request.features[0].attribute, "Dimmer");
+        assert_eq!(chase_request.active_step_count, 1);
         assert_eq!(
             chase_request.clock_sync,
-            Some(protocol::EffectClockSync { beats: 2.0 })
+            Some(protocol::EffectClockSync { beats: 0.5 })
         );
 
         let (_, ball_json) = sample_effect_preset_json("front_dimmer_ball").unwrap();
@@ -25273,7 +26240,7 @@ f 1 2 3
         };
         validate_effect_target_override_for_preset(&preset, &target_override).unwrap();
         let source_id =
-            add_effect_preset_to_engine(&engine, preset, Some(&target_override)).unwrap();
+            add_sample_effect_preset_to_engine(&engine, preset, Some(&target_override)).unwrap();
         let source = engine
             .snapshot()
             .effects
@@ -25310,6 +26277,109 @@ f 1 2 3
         assert_eq!(duplicate_color.phase, source_color.phase);
         assert_eq!(duplicate_color.fixture_spread, source_color.fixture_spread);
         assert_eq!(duplicate_color.blend_mode, source_color.blend_mode);
+    }
+
+    #[test]
+    fn embedded_chaser_sample_expands_group_and_publishes_add_update_duplicate() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let profile = custom_fixture_profile_from_request(CustomFixtureProfileRequest {
+            manufacturer: "Syndocal".to_string(),
+            name: "Chaser Target Spot".to_string(),
+            mode_name: "8ch".to_string(),
+            attributes: vec!["Dimmer".to_string(), "Pan".to_string()],
+        });
+        let first_id = engine.allocate_fixture_id();
+        let second_id = engine.allocate_fixture_id();
+        for (fixture_id, label, address) in [
+            (first_id, "Chaser Front 1", 1),
+            (second_id, "Chaser Front 2", 10),
+        ] {
+            engine
+                .send(EngineCommand::PatchFixture {
+                    fixture_id,
+                    request: PatchFixtureRequest {
+                        profile_path: profile.source_path.clone(),
+                        mode_name: Some("8ch".to_string()),
+                        label: label.to_string(),
+                        universe: 0,
+                        address,
+                        group_ids: vec!["Front".to_string()],
+                        position: Vec3::default(),
+                        rotation: Rotation3::default(),
+                    },
+                    profile: profile.clone(),
+                })
+                .unwrap();
+        }
+        for _ in 0..20 {
+            if engine.snapshot().fixtures.len() == 2 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+
+        let (_, json) = sample_effect_preset_json("chase").unwrap();
+        let mut preset: EffectPreset = serde_json::from_str(json).unwrap();
+        preset.enabled = false;
+        let target_override = EffectTargetOverride {
+            fixture_ids: Vec::new(),
+            target_group_ids: vec!["Front".to_string()],
+            attribute: "Dimmer".to_string(),
+            video_targets: Vec::new(),
+        };
+        let source_id =
+            add_sample_effect_preset_to_engine(&engine, preset, Some(&target_override)).unwrap();
+        let source = engine
+            .snapshot()
+            .effects
+            .into_iter()
+            .find(|effect| effect.id == source_id)
+            .expect("Chaser sample should publish before add returns");
+        assert_eq!(source.effect_type, EffectKind::Chaser);
+        assert!(!source.enabled);
+        let mut source_request = source.chaser.expect("Chaser sample body");
+        assert_eq!(source_request.steps.len(), 2);
+        assert_eq!(source_request.steps[0].fixture_ids, vec![first_id]);
+        assert_eq!(source_request.steps[1].fixture_ids, vec![second_id]);
+        assert!(source_request
+            .steps
+            .iter()
+            .all(|step| step.target_group_ids.is_empty()));
+
+        source_request.direction = protocol::ChaserDirection::Random;
+        source_request.random_seed = 77;
+        engine
+            .update_chaser_effect(source_id, source_request.clone())
+            .unwrap();
+        let updated = engine
+            .snapshot()
+            .effects
+            .into_iter()
+            .find(|effect| effect.id == source_id)
+            .expect("Chaser update should publish before returning");
+        assert_eq!(updated.chaser.as_ref().unwrap(), &source_request);
+
+        let duplicate_id = duplicate_effect_in_engine(&engine, source_id).unwrap();
+        let duplicate = engine
+            .snapshot()
+            .effects
+            .into_iter()
+            .find(|effect| effect.id == duplicate_id)
+            .expect("Chaser duplicate should publish before duplicate returns");
+        assert!(!duplicate.enabled);
+        let duplicate_request = duplicate.chaser.expect("duplicated Chaser body");
+        assert_eq!(duplicate_request.label, "Front Dimmer Chaser Copy");
+        assert_eq!(duplicate_request.steps, source_request.steps);
+        assert_eq!(duplicate_request.features, source_request.features);
+        assert_eq!(duplicate_request.direction, source_request.direction);
+        assert_eq!(
+            duplicate_request.active_step_count,
+            source_request.active_step_count
+        );
+        assert_eq!(duplicate_request.random_seed, source_request.random_seed);
     }
 
     #[test]
@@ -25381,6 +26451,7 @@ f 1 2 3
                 }),
                 position_wave: None,
                 color: None,
+                chaser: None,
             },
             None,
         )
@@ -26444,9 +27515,11 @@ fn main() {
             add_lfo_effect,
             add_position_wave_effect,
             add_color_effect,
+            add_chaser_effect,
             update_lfo_effect,
             update_position_wave_effect,
             update_color_effect,
+            update_chaser_effect,
             save_node_graph,
             set_node_graph_enabled,
             remove_node_graph,

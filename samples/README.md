@@ -69,8 +69,11 @@ Files:
 
 - `front-dimmer-pulse.effect`
 - `front-dimmer-wave.effect`
+- `front-dimmer-chase.effect`
 
 These are small reusable effect presets for the `Front` group used by `phase1-mini-show.sdc`. The pulse preset is an LFO-driven dimmer look. The wave preset is a position-wave dimmer look that uses the fixture's 2D/3D patch position as the phase source.
+
+The chase preset is an independent Chaser recipe. Load it with a current fixture or group target so Syndocal can materialize patch-order fixture steps; the embedded `Front` group is compatibility metadata and is not an instruction to guess a target in another project.
 
 Targeted check:
 

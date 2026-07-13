@@ -122,6 +122,7 @@ const localeInvariantText = new Set([
 const untranslated = new Map();
 const unprotectedUserText = [];
 const localizedDynamicTextAllow = new Set([
+  "ChaserEffectEditorPanel.tsx:preset.label",
   "ColorEffectEditorPanel.tsx:preset.label",
   "CueCapturePreviewPanel.tsx:row.label",
   "EffectSourceControlsPanel.tsx:preset.label",

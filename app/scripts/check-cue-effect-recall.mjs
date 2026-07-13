@@ -16,6 +16,7 @@ const helpers = await import(
 );
 const guardSource = await readFile(new URL("../src/snapshotRequestGuard.ts", import.meta.url), "utf8");
 const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const editorSource = await readFile(new URL("../src/components/CueEffectRecallEditor.tsx", import.meta.url), "utf8");
 const guardTranspiled = ts.transpileModule(guardSource, {
   compilerOptions: {
     module: ts.ModuleKind.ESNext,
@@ -32,6 +33,11 @@ assert.match(
   appSource,
   /const projectMutationCommands = new Set\(\[[\s\S]*?"set_cue_effect_targets"[\s\S]*?\]\);/,
   "Effect Recall saves must participate in project history",
+);
+assert.match(
+  editorSource,
+  /effect\.effect_type === "Chaser"\) return "Chaser"/,
+  "Cue Effect Recall must label Chaser effects as Chaser instead of LFO",
 );
 assert.match(
   appSource,
@@ -59,7 +65,7 @@ const effects = [
     fixture_ids: [],
     target_group_ids: [],
     video_targets: [],
-    color: { fixture_ids: [], target_group_ids: ["front"] },
+    color: { fixture_ids: [], target_group_ids: ["Front"] },
     enabled: false,
   },
   { id: 30, label: "Rear wave", effect_type: "PositionWave", fixture_ids: [2], target_group_ids: [], video_targets: [], enabled: true },
@@ -73,8 +79,36 @@ const context = {
     { id: 3, group_ids: ["Front/Beam"] },
   ],
   selectedFixtureId: 1,
-  selectedGroupId: "FRONT",
+  selectedGroupId: "Front",
 };
+assert.equal(helpers.groupMatches("Front / Beam", "Front/Beam"), true);
+assert.equal(helpers.groupMatches("Front/Beam", "Front"), true);
+assert.equal(helpers.groupMatches("front/Beam", "Front"), false);
+assert.equal(helpers.groupMatches("Front//Beam", "Front"), false);
+const chaserEffect = {
+  id: 60,
+  label: "Nested beam Chaser",
+  effect_type: "Chaser",
+  fixture_ids: [3],
+  target_group_ids: [],
+  video_targets: [],
+  chaser: {
+    steps: [
+      { fixture_ids: [3], target_group_ids: [], level: 65_535 },
+      { fixture_ids: [], target_group_ids: [], level: 0 },
+    ],
+    features: [{ attribute: "Dimmer", low: 0, high: 65_535 }],
+  },
+  enabled: true,
+};
+
+assert.deepEqual(helpers.eligibleCueEffects([chaserEffect], "lighting", context).map((effect) => effect.id), [60]);
+assert.deepEqual(helpers.eligibleCueEffects([chaserEffect], "video", context), []);
+assert.deepEqual(helpers.eligibleCueEffects([chaserEffect], "selectedGroup", context).map((effect) => effect.id), [60]);
+assert.deepEqual(
+  helpers.eligibleCueEffects([chaserEffect], "selectedFixture", { ...context, selectedFixtureId: 3 }).map((effect) => effect.id),
+  [60],
+);
 
 assert.deepEqual(helpers.eligibleCueEffects(effects, "all", context).map((effect) => effect.id), [10, 20, 30, 40, 50]);
 assert.deepEqual(helpers.eligibleCueEffects(effects, "effects", context).map((effect) => effect.id), [10, 20, 30, 40, 50]);

@@ -19194,6 +19194,433 @@ h3 {
   flex: 1 1 0;
 }
 
+.effectMetaChip.chaser {
+  border-color: #74552f;
+  color: #ffc477;
+}
+
+.effectListRows {
+  display: grid;
+  align-content: start;
+  gap: 1px;
+  min-width: 0;
+}
+
+.effectListPager,
+.chaserStepPager {
+  display: grid;
+  grid-template-columns: minmax(70px, 1fr) minmax(90px, auto) minmax(70px, 1fr);
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  border-bottom: 1px solid #30363b;
+  background: #171a1d;
+  padding: 4px;
+}
+
+.effectListPager button,
+.chaserStepPager button {
+  min-height: 29px;
+  border-radius: 1px;
+  font-size: 11px;
+}
+
+.effectListPager span,
+.chaserStepPager span {
+  color: #9ca5ab;
+  font-size: 11px;
+  text-align: center;
+}
+
+.chaserEffectEditor {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.chaserPreviewPanel,
+.chaserFlowPanel,
+.chaserFeaturesPanel,
+.chaserStepsPanel {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  border: 1px solid #343a3f;
+  border-radius: 2px;
+  background: #181c1f;
+  padding: 7px;
+}
+
+.chaserPreviewPanel > legend,
+.chaserFlowPanel > legend,
+.chaserFeaturesPanel > legend,
+.chaserStepsPanel > legend {
+  color: #d8dcdf;
+  padding: 0 4px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.chaserPreviewHeader,
+.chaserClockHeader,
+.chaserFeatureFooter,
+.chaserStepFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.chaserPreviewHeader > div {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.chaserPreviewHeader strong,
+.chaserClockHeader strong {
+  color: #e3e6e8;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.chaserPreviewHeader span,
+.chaserClockHeader span,
+.chaserFeatureFooter span,
+.chaserStepFooter span,
+.chaserPreviewWindow {
+  min-width: 0;
+  overflow: hidden;
+  color: #8f999f;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chaserPreviewStrip {
+  display: grid;
+  grid-auto-columns: minmax(18px, 1fr);
+  grid-auto-flow: column;
+  gap: 2px;
+  height: 58px;
+  min-width: 0;
+  border: 1px solid #424a50;
+  background: #101315;
+  padding: 4px;
+  overflow: hidden;
+}
+
+.chaserPreviewCell {
+  position: relative;
+  min-width: 0;
+  border: 1px solid #343b40;
+  background: #202428;
+  overflow: hidden;
+}
+
+.chaserPreviewCell.active {
+  border-color: #b67839;
+  background: #2e2922;
+  box-shadow: inset 0 -2px 0 var(--ray-accent);
+}
+
+.chaserPreviewCell > i {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: var(--chaser-size);
+  height: var(--chaser-level);
+  background: #d98c47;
+  opacity: 0.86;
+}
+
+.chaserPreviewCell > b {
+  position: relative;
+  z-index: 1;
+  display: block;
+  padding-top: 2px;
+  color: #d7dcdf;
+  font-size: 9px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.chaserPreviewEmpty {
+  align-self: center;
+  color: #8f999f;
+  font-size: 11px;
+  text-align: center;
+}
+
+.chaserDirectionGrid,
+.chaserClockPresets {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.chaserDirectionGrid button,
+.chaserClockPresets button {
+  display: grid;
+  align-content: center;
+  gap: 1px;
+  min-width: 0;
+  min-height: 40px;
+  border-radius: 1px;
+  padding: 3px 4px;
+}
+
+.chaserDirectionGrid button strong,
+.chaserDirectionGrid button span,
+.chaserClockPresets button strong,
+.chaserClockPresets button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chaserDirectionGrid button strong,
+.chaserClockPresets button strong {
+  font-size: 10px;
+}
+
+.chaserDirectionGrid button span,
+.chaserClockPresets button span {
+  color: #818b92;
+  font-size: 9px;
+}
+
+.chaserDirectionGrid button.active,
+.app .chaserDirectionGrid button[aria-pressed="true"],
+.chaserClockPresets button.active,
+.app .chaserClockPresets button[aria-pressed="true"] {
+  border-color: #806039;
+  background: #30261b;
+  color: #fff;
+  box-shadow: inset 0 -2px 0 var(--ray-accent);
+}
+
+.chaserParameterGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+  min-width: 0;
+}
+
+.chaserPercentControl {
+  display: grid;
+  grid-template-columns: 82px minmax(60px, 1fr) 43px;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.chaserPercentControl > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.effectInspectorPane .chaserPercentControl input[type="range"] {
+  min-width: 0;
+  min-height: 24px;
+  accent-color: var(--ray-accent);
+}
+
+.chaserPercentControl output {
+  color: #aeb6bc;
+  font-size: 11px;
+  text-align: right;
+}
+
+.chaserFadingToggle {
+  min-height: 30px;
+}
+
+.chaserOverlapControl {
+  border-top: 1px solid #30363b;
+  padding-top: 5px;
+}
+
+.chaserClockHeader {
+  border-top: 1px solid #30363b;
+  padding-top: 6px;
+}
+
+.chaserStepDurationInput {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 112px;
+  align-items: center;
+  gap: 7px;
+}
+
+.chaserClockPresets {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.chaserFeatureList,
+.chaserStepList {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.chaserFeatureRow {
+  display: grid;
+  grid-template-columns: 22px minmax(92px, 1fr) 69px 69px repeat(3, 29px);
+  align-items: end;
+  gap: 3px;
+  min-width: 0;
+  border-bottom: 1px solid #30363b;
+  padding: 3px 0;
+}
+
+.chaserFeatureRow label {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.chaserFeatureRow label > span,
+.chaserStepRow label > span {
+  min-width: 0;
+  overflow: hidden;
+  color: #7f8990;
+  font-size: 9px;
+  line-height: 1;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.chaserFeatureRow input,
+.chaserFeatureRow select,
+.chaserStepRow input {
+  width: 100%;
+  min-width: 0;
+}
+
+.chaserFeatureCoverage {
+  min-width: 0;
+  overflow: hidden;
+  color: #78838a;
+  font-size: 8px;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chaserFeatureRow > button,
+.chaserStepRow > button {
+  min-width: 29px;
+  min-height: 32px;
+  border-radius: 1px;
+  padding: 0;
+}
+
+.chaserFeatureRow > button.remove:not(:disabled),
+.chaserStepRow > button.remove:not(:disabled) {
+  color: #ed8585;
+}
+
+.chaserFeatureNumber,
+.chaserStepNumber {
+  align-self: center;
+  color: #8f999f;
+  font-size: 10px;
+  text-align: center;
+}
+
+.chaserFeatureFooter button {
+  min-height: 30px;
+  border-radius: 1px;
+  font-size: 11px;
+}
+
+.chaserTargetDock {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(84px, auto) minmax(64px, auto);
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  border-bottom: 1px solid #30363b;
+  padding-bottom: 5px;
+}
+
+.chaserTargetDock > div,
+.chaserStepTarget {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.chaserTargetDock strong,
+.chaserTargetDock span,
+.chaserStepTarget strong,
+.chaserStepTarget span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chaserTargetDock strong,
+.chaserStepTarget strong {
+  color: #d7dcdf;
+  font-size: 11px;
+}
+
+.chaserTargetDock span,
+.chaserStepTarget span {
+  color: #818b92;
+  font-size: 9px;
+}
+
+.chaserTargetDock button {
+  min-width: 0;
+  min-height: 31px;
+  border-radius: 1px;
+  padding: 0 6px;
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chaserStepRow {
+  display: grid;
+  grid-template-columns: 22px minmax(92px, 1fr) 76px repeat(4, 29px);
+  align-items: end;
+  gap: 3px;
+  min-width: 0;
+  border-bottom: 1px solid #30363b;
+  padding: 3px 0;
+}
+
+.chaserStepRow label {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.chaserStepPager {
+  border: 1px solid #30363b;
+  padding: 3px;
+}
+
+.chaserStepFooter {
+  align-items: baseline;
+}
+
+.chaserStepFooter span:last-child {
+  text-align: right;
+}
+
 @media (max-width: 1320px) {
   .effectWorkbench {
     grid-template-columns: minmax(236px, 0.68fr) minmax(400px, 1.2fr) minmax(292px, 0.88fr);
@@ -19241,6 +19668,23 @@ h3 {
   }
 
   .colorEffectClockPresets button {
+    min-height: 34px;
+  }
+
+  .chaserPreviewPanel,
+  .chaserFlowPanel,
+  .chaserFeaturesPanel,
+  .chaserStepsPanel {
+    gap: 4px;
+    padding: 5px;
+  }
+
+  .chaserPreviewStrip {
+    height: 48px;
+  }
+
+  .chaserDirectionGrid button,
+  .chaserClockPresets button {
     min-height: 34px;
   }
 }

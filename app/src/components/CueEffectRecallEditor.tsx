@@ -22,6 +22,7 @@ interface CueEffectRecallEditorProps {
 
 const effectKindLabel = (effect: EffectSummary) => {
   if (effect.effect_type === "Color") return "Color";
+  if (effect.effect_type === "Chaser") return "Chaser";
   if (effect.effect_type === "PositionWave") return "Position Wave";
   return "LFO";
 };

@@ -950,6 +950,42 @@ async function measure(client, label) {
         const formRect = form.getBoundingClientRect();
         return editorRect.left >= formRect.left - 1 && editorRect.right <= formRect.right + 1;
       })(),
+      visibleChaserEditorCount: visibleCount('.chaserEffectEditor'),
+      visibleChaserStepCount: visibleCount('.chaserStepRow'),
+      visibleChaserFeatureCount: visibleCount('.chaserFeatureRow'),
+      visibleChaserPreviewCellCount: visibleCount('.chaserPreviewCell'),
+      visibleActiveChaserPreviewCellCount: visibleCount('.chaserPreviewCell.active'),
+      visibleChaserDirectionButtonCount: visibleCount('.chaserDirectionGrid button'),
+      visibleChaserReplaceButtonCount: visibleCount('.chaserStepRow button[title="Replace with current target"]'),
+      chaserDirectionValue: document.querySelector('.chaserPreviewStrip')?.dataset.direction ?? '',
+      chaserActiveStepCount: Number(document.querySelector('.chaserPreviewStrip')?.dataset.activeStepCount ?? 0),
+      chaserSizePercent: Number(document.querySelector('.chaserPreviewStrip')?.dataset.sizePercent ?? -1),
+      chaserPhasePercent: Number(document.querySelector('.chaserPreviewStrip')?.dataset.phasePercent ?? -1),
+      chaserFadingEnabled: Boolean(document.querySelector('.chaserFadingToggle input')?.checked),
+      chaserDisabledVideoOptionCount: [...document.querySelectorAll('.effectEditor select')]
+        .filter((select) => [...select.options].some((option) => option.value === 'selection'))
+        .flatMap((select) => [...select.options])
+        .filter((option) => option.value === 'video' && option.disabled).length,
+      chaserUnlabeledActionCount: [...document.querySelectorAll('.chaserEffectEditor button')]
+        .filter((button) => {
+          const rect = button.getBoundingClientRect();
+          const style = window.getComputedStyle(button);
+          const visible = rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+          const hasText = (button.textContent || '').trim().length > 0;
+          return visible && !hasText && !(button.getAttribute('aria-label') || '').trim();
+        }).length,
+      chaserHorizontalOverflowPx: (() => {
+        const editor = document.querySelector('.chaserEffectEditor');
+        return editor ? Math.max(0, editor.scrollWidth - editor.clientWidth) : -1;
+      })(),
+      chaserEditorContained: (() => {
+        const editor = document.querySelector('.chaserEffectEditor');
+        const form = document.querySelector('.effectInspectorPane > .effectForm');
+        if (!editor || !form) return false;
+        const editorRect = editor.getBoundingClientRect();
+        const formRect = form.getBoundingClientRect();
+        return editorRect.left >= formRect.left - 1 && editorRect.right <= formRect.right + 1;
+      })(),
       visibleNodeGraphPanelCount: visibleCount('.nodeGraphPanel'),
       nodeGraphAudioSourceOptionCount: [...document.querySelectorAll('.nodeGraphPanel option')]
         .filter((option) => (option.textContent || '').trim().toLowerCase() === 'audio fft').length,
@@ -1324,6 +1360,32 @@ function hasExpectedControlModeSurface(result) {
           result.controlWorkSurfaceUnsafeOverflowCount === 0
         );
       }
+      if (result.label.startsWith("control-edit-effects-chaser-editor-")) {
+        return (
+          hasFxDesk &&
+          result.effectTypeValue === "Chaser" &&
+          result.visibleChaserEditorCount === 1 &&
+          result.visibleChaserStepCount === 6 &&
+          result.visibleChaserFeatureCount === 2 &&
+          result.visibleChaserPreviewCellCount === 6 &&
+          result.visibleActiveChaserPreviewCellCount === 2 &&
+          result.visibleChaserDirectionButtonCount === 4 &&
+          result.visibleChaserReplaceButtonCount === 6 &&
+          result.chaserDirectionValue === "Reverse" &&
+          result.chaserActiveStepCount === 2 &&
+          result.chaserSizePercent === 37 &&
+          result.chaserPhasePercent === 50 &&
+          result.chaserFadingEnabled &&
+          result.visibleLegacyEffectAttributeCount === 0 &&
+          result.visibleLegacyEffectWaveformCount === 0 &&
+          result.visibleLegacyEffectVideoTargetCount === 0 &&
+          result.chaserDisabledVideoOptionCount === 1 &&
+          result.chaserUnlabeledActionCount === 0 &&
+          result.chaserHorizontalOverflowPx <= 1 &&
+          result.chaserEditorContained &&
+          result.controlWorkSurfaceUnsafeOverflowCount === 0
+        );
+      }
       if (result.label.startsWith("control-edit-effects-colour-")) {
         return (
           hasFxDesk &&
@@ -1343,7 +1405,7 @@ function hasExpectedControlModeSurface(result) {
         result.visibleEffectFamilyButtonCount === 8 &&
         result.visibleActiveEffectFamilyButtonCount === 1 &&
         result.visibleEffectLibraryCardCount === 13 &&
-        result.visibleTargetRequiredEffectCardCount === 2 &&
+        result.visibleTargetRequiredEffectCardCount === 3 &&
         result.visibleNodeGraphPanelCount === 0 &&
         result.effectTargetHintCount >= 1 &&
         result.visibleRawMonitorCount === 0 &&
@@ -1900,6 +1962,34 @@ async function runViewport(client, viewport) {
         writeFileSync(join(screenshotDir, `control-edit-effects-color-editor-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
       }
       results.push(await measure(client, `control-edit-effects-color-editor-${viewport.width}x${viewport.height}`));
+      await selectVisibleOption(client, ".effectEditor select", "Chaser");
+      await sleep(100);
+      await clickVisibleByText(client, ".chaserDirectionGrid button", "Reverse");
+      await client.evaluate(`(() => {
+        const setInput = (input, value) => {
+          if (!input) return false;
+          input.value = String(value);
+          input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        };
+        const labels = [...document.querySelectorAll('.chaserEffectEditor label, .effectActionDock > label')];
+        const pixels = labels.find((label) => (label.textContent || '').trim().startsWith('Pixels on'))?.querySelector('input');
+        const size = labels.find((label) => (label.textContent || '').trim().startsWith('Size'))?.querySelector('input[type="range"]');
+        const phase = labels.find((label) => (label.textContent || '').trim().startsWith('Phase'))?.querySelector('input');
+        const fading = document.querySelector('.chaserFadingToggle input');
+        const results = [setInput(pixels, 2), setInput(size, 37), setInput(phase, 0.5)];
+        if (fading && !fading.checked) fading.click();
+        if (results.some((result) => !result)) throw new Error('Could not update responsive Chaser controls');
+      })()`);
+      await clickVisibleByText(client, ".chaserFeatureFooter button", "Add feature");
+      await clickVisibleByText(client, ".chaserTargetDock button", "Append current");
+      await sleep(180);
+      if (screenshotDir) {
+        const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+        writeFileSync(join(screenshotDir, `control-edit-effects-chaser-editor-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
+      }
+      results.push(await measure(client, `control-edit-effects-chaser-editor-${viewport.width}x${viewport.height}`));
       await clickVisibleByText(client, ".editDeskTabs button", "DMX");
       await sleep(120);
       results.push(await measure(client, `control-edit-dmx-${viewport.width}x${viewport.height}`));
@@ -2097,6 +2187,57 @@ async function runCueRecallLargeViewport(client, viewport) {
   return { label: `cue-recall-large-${viewport.width}x${viewport.height}`, passed, containment, before, after };
 }
 
+async function runEffectStackLargeViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: fixtureUrl("cue-recall-large") });
+  await waitForApp(client);
+  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await clickVisibleByText(client, ".controlModeTabs button", "Live Edit");
+  await clickVisibleByText(client, ".editDeskTabs button", "Effects");
+  await sleep(160);
+  const stats = await client.evaluate(`(async () => {
+    const rows = () => [...document.querySelectorAll('.effectListRows .effectItem')];
+    const list = document.querySelector('.effectListRows');
+    const beforeCount = rows().length;
+    const total = Number(list?.getAttribute('aria-rowcount') || 0);
+    for (let page = 0; page < 80; page += 1) {
+      const next = [...document.querySelectorAll('.effectListPager button')]
+        .find((button) => (button.textContent || '').trim() === 'Next');
+      if (!next || next.disabled) break;
+      next.click();
+      await Promise.resolve();
+    }
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const afterRows = rows();
+    return {
+      total,
+      beforeCount,
+      afterCount: afterRows.length,
+      pagerCount: document.querySelectorAll('.effectListPager').length,
+      pageLabel: (document.querySelector('.effectListPager span')?.textContent || '').trim(),
+      reachedLastEffect: afterRows.some((row) => (row.textContent || '').includes('Viewport Effect 500')),
+    };
+  })()`);
+  const containment = await measure(client, `effect-stack-large-${viewport.width}x${viewport.height}`);
+  const passed = Boolean(
+    stats &&
+    stats.total === 500 &&
+    stats.beforeCount <= 10 &&
+    stats.afterCount <= 10 &&
+    stats.pagerCount === 1 &&
+    stats.pageLabel.includes('50 / 50') &&
+    stats.reachedLastEffect &&
+    hasNoOuterOverflow(containment) &&
+    containment.controlWorkSurfaceUnsafeOverflowCount === 0
+  );
+  return { label: `effect-stack-large-${viewport.width}x${viewport.height}`, passed, containment, stats };
+}
+
 async function runLargeShowViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -2242,16 +2383,19 @@ async function main() {
     }
     const cueRecallResults = [];
     const cueRecallLargeResults = [];
+    const effectStackLargeResults = [];
     const cueNodeGraphResults = [];
     for (const viewport of viewports) {
       cueRecallResults.push(await runCueRecallViewport(client, viewport));
       cueRecallLargeResults.push(await runCueRecallLargeViewport(client, viewport));
+      effectStackLargeResults.push(await runEffectStackLargeViewport(client, viewport));
       cueNodeGraphResults.push(await runCueNodeGraphViewport(client, viewport));
     }
 
     const failures = results.filter((result) => !isContained(result));
     const cueRecallFailures = cueRecallResults.filter((result) => !result.passed);
     const cueRecallLargeFailures = cueRecallLargeResults.filter((result) => !result.passed);
+    const effectStackLargeFailures = effectStackLargeResults.filter((result) => !result.passed);
     const cueNodeGraphFailures = cueNodeGraphResults.filter((result) => !result.passed);
     const setupSurfaceFailures = results.filter((result) => !hasExpectedSetupSurface(result));
     const projectMenuFailures = results.filter((result) => !hasExpectedProjectMenu(result));
@@ -2302,11 +2446,14 @@ async function main() {
       const colorEffectSuffix = result.label.startsWith("control-edit-effects-color-editor-")
         ? ` colorFx=${result.effectTypeValue}/${result.visibleColorEffectEditorCount}/${result.visibleColorEffectStopCount}/${result.visibleColorEffectAddButtonCount}/${result.visibleColorEffectRemoveButtonCount}/${result.visibleColorEffectAlgorithmSelectCount}/${result.visibleColorEffectInterpolationSelectCount}/${result.visibleColorEffectGradientCount} legacy=${result.visibleLegacyEffectAttributeCount}/${result.visibleLegacyEffectWaveformCount}/${result.visibleLegacyEffectVideoTargetCount} overflow=${result.colorEffectHorizontalOverflowPx}`
         : "";
+      const chaserEffectSuffix = result.label.startsWith("control-edit-effects-chaser-editor-")
+        ? ` chaserFx=${result.effectTypeValue}/${result.visibleChaserStepCount}/${result.visibleChaserFeatureCount}/${result.chaserDirectionValue}/${result.chaserActiveStepCount}/${result.chaserSizePercent}/${result.chaserPhasePercent} active=${result.visibleActiveChaserPreviewCellCount} replace=${result.visibleChaserReplaceButtonCount} fading=${result.chaserFadingEnabled ? 1 : 0} legacy=${result.visibleLegacyEffectAttributeCount}/${result.visibleLegacyEffectWaveformCount}/${result.visibleLegacyEffectVideoTargetCount} overflow=${result.chaserHorizontalOverflowPx}`
+        : "";
       const mixerSuffix = result.label.startsWith("control-mixer-")
         ? ` mixer=${result.visibleVideoOutputItemCount}/${result.visibleVideoOutputSelectedItemCount}/${result.visibleVideoMixerOutputDeckCount}/${result.visibleVideoMixerOutputFaderCount}/${result.visibleVideoMixerOutputSelectButtonCount}/${result.visibleVideoLayerItemCount}/${result.visibleBuiltinVideoFxSelectCount}/${result.visibleVideoMixerLayerDeckCount}/${result.visibleVideoMixerLayerFaderCount}/${result.visibleVideoMixerLayerButtonCount}`
         : "";
       console.log(
-        `${status} ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${keyboardSuffix}${timelineSuffix}${touchSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${colorEffectSuffix}${mixerSuffix}`,
+        `${status} ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${keyboardSuffix}${timelineSuffix}${touchSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${colorEffectSuffix}${chaserEffectSuffix}${mixerSuffix}`,
       );
     }
     for (const result of cueRecallResults) {
@@ -2319,6 +2466,11 @@ async function main() {
         `${result.passed ? "pass" : "fail"} ${result.label} rows=${result.before.captureRows}+${result.before.cueRows}->${result.after.captureRows}+${result.after.cueRows} open=${result.after.openCueEditors}`,
       );
     }
+    for (const result of effectStackLargeResults) {
+      console.log(
+        `${result.passed ? "pass" : "fail"} ${result.label} rows=${result.stats.beforeCount}->${result.stats.afterCount}/${result.stats.total} page=${result.stats.pageLabel}`,
+      );
+    }
     for (const result of cueNodeGraphResults) {
       console.log(
         `${result.passed ? "pass" : "fail"} ${result.label} all=${result.allScope.storeDisabled ? "disabled" : "enabled"}/${result.allScope.scopeErrorCount} video=${result.videoScope.storeDisabled ? "disabled" : "enabled"}/${result.videoScope.scopeErrorCount} graphs=${result.videoScope.graphCount}`,
@@ -2328,6 +2480,7 @@ async function main() {
       failures.length > 0 ||
       cueRecallFailures.length > 0 ||
       cueRecallLargeFailures.length > 0 ||
+      effectStackLargeFailures.length > 0 ||
       cueNodeGraphFailures.length > 0 ||
       keyboardNavigationFailures.length > 0 ||
       setupSurfaceFailures.length > 0 ||
@@ -2346,6 +2499,7 @@ async function main() {
             viewport: failures,
             cueRecall: cueRecallFailures,
             cueRecallLarge: cueRecallLargeFailures,
+            effectStackLarge: effectStackLargeFailures,
             cueNodeGraph: cueNodeGraphFailures,
             keyboardNavigation: keyboardNavigationFailures,
             setupSurface: setupSurfaceFailures,
@@ -2363,7 +2517,7 @@ async function main() {
         ),
       );
       throw new Error(
-        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${statusLineFailures.length} status line check(s) failed.`,
+        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${effectStackLargeFailures.length} large live-effect DOM-budget check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${statusLineFailures.length} status line check(s) failed.`,
       );
     }
   } finally {

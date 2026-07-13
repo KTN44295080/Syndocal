@@ -21,16 +21,17 @@ use protocol::{
     set_video_output_mapping_field_value, ActiveFadeSummary, AttributeControl, AttributeResolution,
     AttributeValueSummary, AudioAnalysisSummary, AudioSpectrumBand, AudioSpectrumPoint,
     AudioSpectrumSource, AutomationId, AutomationInterpolation, AutomationKeyframeSummary,
-    ClockSnapshot, ClockSource, ColorEffectAlgorithm, ColorEffectColor, ColorEffectInterpolation,
-    ColorEffectRequest, CompositionId, CompositionSummary, CueEffectTarget, CueFixtureTarget,
-    CueId, CueIfcbTiming, CueListId, CueListSummary, CueNodeGraphTarget, CuePaletteTarget,
-    CuePartSummary, CueSummary, DmxMergeMode, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol,
-    DmxOutputRouteTelemetry, DmxUniversePreview, EffectBlendMode, EffectId, EffectKind,
-    EffectSummary, EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId,
-    FixtureId, FixtureLimits, FixtureProfileSummary, LfoEffectRequest, LfoShape, NodeGraphId,
-    NodeGraphNodeKind, NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId,
-    PatchFixtureRequest, PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest,
-    ProgrammerSnapshot, ProgrammerValueSummary, ReferencePaletteSummary, Rotation3, StageMapConfig,
+    ChaserDirection, ChaserEffectRequest, ClockSnapshot, ClockSource, ColorEffectAlgorithm,
+    ColorEffectColor, ColorEffectInterpolation, ColorEffectRequest, CompositionId,
+    CompositionSummary, CueEffectTarget, CueFixtureTarget, CueId, CueIfcbTiming, CueListId,
+    CueListSummary, CueNodeGraphTarget, CuePaletteTarget, CuePartSummary, CueSummary, DmxMergeMode,
+    DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, DmxOutputRouteTelemetry,
+    DmxUniversePreview, EffectBlendMode, EffectId, EffectKind, EffectSummary, EngineSnapshot,
+    EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId, FixtureId, FixtureLimits,
+    FixtureProfileSummary, LfoEffectRequest, LfoShape, NodeGraphId, NodeGraphNodeKind,
+    NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId, PatchFixtureRequest,
+    PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot,
+    ProgrammerValueSummary, ReferencePaletteSummary, Rotation3, StageMapConfig,
     StageMapPresetSummary, StageObjectId, StageObjectSummary, SubmasterSummary,
     TimelineAutomationSummary, TimelineCueEventSummary, TimelineEventId, TimelineSnapshot,
     TimelineTrackKind, TimelineVideoAutomationSummary, Transform2D, Vec3,
@@ -289,6 +290,13 @@ pub enum EngineCommand {
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
+    AddChaserEffect {
+        effect_id: EffectId,
+        request: ChaserEffectRequest,
+        enabled: bool,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     UpdateLfoEffect {
         effect_id: EffectId,
         request: LfoEffectRequest,
@@ -300,6 +308,12 @@ pub enum EngineCommand {
     UpdateColorEffect {
         effect_id: EffectId,
         request: ColorEffectRequest,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    UpdateChaserEffect {
+        effect_id: EffectId,
+        request: ChaserEffectRequest,
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
@@ -712,9 +726,11 @@ impl EngineCommand {
                 | EngineCommand::AddLfoEffect { .. }
                 | EngineCommand::AddPositionWaveEffect { .. }
                 | EngineCommand::AddColorEffect { .. }
+                | EngineCommand::AddChaserEffect { .. }
                 | EngineCommand::UpdateLfoEffect { .. }
                 | EngineCommand::UpdatePositionWaveEffect { .. }
                 | EngineCommand::UpdateColorEffect { .. }
+                | EngineCommand::UpdateChaserEffect { .. }
                 | EngineCommand::SetEffectEnabled { .. }
                 | EngineCommand::SetEffectEnabledPublished { .. }
                 | EngineCommand::SetEffectVideoTargetPosition { .. }
@@ -1071,6 +1087,44 @@ impl EngineHandle {
         receiver
             .recv_timeout(Duration::from_secs(3))
             .map_err(|error| format!("Color effect update acknowledgement failed: {error}"))?
+    }
+
+    pub fn add_chaser_effect(
+        &self,
+        effect_id: EffectId,
+        request: ChaserEffectRequest,
+        enabled: bool,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::AddChaserEffect {
+            effect_id,
+            request,
+            enabled,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Chaser effect add acknowledgement failed: {error}"))?
+    }
+
+    pub fn update_chaser_effect(
+        &self,
+        effect_id: EffectId,
+        request: ChaserEffectRequest,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::UpdateChaserEffect {
+            effect_id,
+            request,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Chaser effect update acknowledgement failed: {error}"))?
     }
 
     pub fn set_effect_enabled_published(
@@ -1481,6 +1535,7 @@ enum RuntimeEffectKind {
     Lfo(LfoEffectRequest),
     PositionWave(PositionWaveEffectRequest),
     Color(RuntimeColorEffect),
+    Chaser(RuntimeChaserEffect),
 }
 
 #[derive(Clone)]
@@ -1488,6 +1543,29 @@ struct RuntimeColorEffect {
     request: ColorEffectRequest,
     targets: Vec<RuntimeColorTarget>,
     target_indices: HashMap<FixtureId, usize>,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeChaserEffect {
+    request: ChaserEffectRequest,
+    step_order: Vec<usize>,
+    target_phase_offsets: HashMap<FixtureId, f32>,
+    target_step_levels: HashMap<FixtureId, Vec<u16>>,
+    target_level_cache: HashMap<FixtureId, Cell<Option<RuntimeChaserEvaluation>>>,
+    feature_indices: HashMap<String, usize>,
+    feature_fixture_ids: Vec<Vec<FixtureId>>,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeChaserStep {
+    fixture_ids: Vec<FixtureId>,
+    level: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct RuntimeChaserEvaluation {
+    at: Instant,
+    normalized_level: f32,
 }
 
 #[derive(Clone)]
@@ -1703,8 +1781,13 @@ struct PendingCommandAck {
 #[derive(Clone)]
 enum PendingCommandRollback {
     ClearBootstrappedVjShow,
-    RestoreColorEffects {
-        effects: Vec<RuntimeEffect>,
+    RemoveAddedEffect {
+        effect_id: EffectId,
+        last_error: Option<String>,
+    },
+    RestoreEffect {
+        index: Option<usize>,
+        effect: Option<RuntimeEffect>,
         last_error: Option<String>,
     },
     RestoreEffectEnabled {
@@ -1728,7 +1811,8 @@ impl PendingCommandRollback {
     fn restores_last_error(&self) -> bool {
         matches!(
             self,
-            Self::RestoreColorEffects { .. }
+            Self::RemoveAddedEffect { .. }
+                | Self::RestoreEffect { .. }
                 | Self::RestoreEffectEnabled { .. }
                 | Self::RestoreExclusiveVideoTake { .. }
                 | Self::RestoreCues { .. }
@@ -2404,6 +2488,15 @@ impl EngineRuntime {
                         created_at: now,
                     })
                 }
+                RuntimeEffectKind::Chaser(runtime) => {
+                    let runtime = self.restore_chaser_effect_request(runtime.request).ok()?;
+                    Some(RuntimeEffect {
+                        id: effect.id,
+                        kind: RuntimeEffectKind::Chaser(runtime),
+                        enabled: effect.enabled,
+                        created_at: now,
+                    })
+                }
             })
             .collect();
         self.sanitize_cue_effect_targets();
@@ -2551,6 +2644,8 @@ impl EngineRuntime {
                     | EngineCommand::ExclusiveVideoTake { .. }
                     | EngineCommand::AddColorEffect { .. }
                     | EngineCommand::UpdateColorEffect { .. }
+                    | EngineCommand::AddChaserEffect { .. }
+                    | EngineCommand::UpdateChaserEffect { .. }
                     | EngineCommand::SetEffectEnabledPublished { .. }
                     | EngineCommand::CreateCuePublished { .. }
                     | EngineCommand::UpdateCuePublished { .. }
@@ -2643,6 +2738,7 @@ impl EngineRuntime {
                     color_binding,
                 });
                 self.rebuild_color_effect_targets();
+                self.rebuild_chaser_effect_targets();
                 self.last_error = None;
             }
             EngineCommand::RemoveFixture(fixture_id) => {
@@ -2885,6 +2981,7 @@ impl EngineRuntime {
                 {
                     fixture.request.group_ids = group_ids;
                     self.rebuild_color_effect_targets();
+                    self.rebuild_chaser_effect_targets();
                     self.last_error = None;
                 } else {
                     self.last_error = Some(format!("Fixture {fixture_id} was not found"));
@@ -3203,8 +3300,8 @@ impl EngineRuntime {
                 ack,
             } => {
                 let previous_last_error = self.last_error.clone();
-                let rollback = PendingCommandRollback::RestoreColorEffects {
-                    effects: self.effects.clone(),
+                let rollback = PendingCommandRollback::RemoveAddedEffect {
+                    effect_id,
                     last_error: previous_last_error.clone(),
                 };
                 let expired = Instant::now() > expires_at;
@@ -3234,6 +3331,46 @@ impl EngineRuntime {
                     publication_error: "Engine snapshot was busy; Color effect add was rolled back",
                 });
             }
+            EngineCommand::AddChaserEffect {
+                effect_id,
+                request,
+                enabled,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RemoveAddedEffect {
+                    effect_id,
+                    last_error: previous_last_error.clone(),
+                };
+                let expired = Instant::now() > expires_at;
+                let result = if expired {
+                    Err("Chaser effect add expired before engine execution".to_string())
+                } else if self.effects.iter().any(|effect| effect.id == effect_id) {
+                    Err(format!("Effect {effect_id} already exists"))
+                } else {
+                    self.resolve_chaser_effect_request(request).map(|runtime| {
+                        self.effects.push(RuntimeEffect {
+                            id: effect_id,
+                            kind: RuntimeEffectKind::Chaser(runtime),
+                            enabled,
+                            created_at: Instant::now(),
+                        });
+                    })
+                };
+                self.last_error = if expired {
+                    previous_last_error
+                } else {
+                    result.as_ref().err().cloned()
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Chaser effect add was rolled back",
+                });
+            }
             EngineCommand::UpdateLfoEffect { effect_id, request } => {
                 let request = match self.resolve_lfo_effect_request(request) {
                     Ok(request) => request,
@@ -3247,9 +3384,13 @@ impl EngineRuntime {
                     .iter_mut()
                     .find(|effect| effect.id == effect_id)
                 {
-                    effect.kind = RuntimeEffectKind::Lfo(request);
-                    effect.created_at = Instant::now();
-                    self.last_error = None;
+                    if matches!(&effect.kind, RuntimeEffectKind::Lfo(_)) {
+                        effect.kind = RuntimeEffectKind::Lfo(request);
+                        effect.created_at = Instant::now();
+                        self.last_error = None;
+                    } else {
+                        self.last_error = Some(format!("Effect {effect_id} is not an LFO"));
+                    }
                 } else {
                     self.last_error = Some(format!("Effect {effect_id} was not found"));
                 }
@@ -3267,9 +3408,14 @@ impl EngineRuntime {
                     .iter_mut()
                     .find(|effect| effect.id == effect_id)
                 {
-                    effect.kind = RuntimeEffectKind::PositionWave(request);
-                    effect.created_at = Instant::now();
-                    self.last_error = None;
+                    if matches!(&effect.kind, RuntimeEffectKind::PositionWave(_)) {
+                        effect.kind = RuntimeEffectKind::PositionWave(request);
+                        effect.created_at = Instant::now();
+                        self.last_error = None;
+                    } else {
+                        self.last_error =
+                            Some(format!("Effect {effect_id} is not a Position Wave"));
+                    }
                 } else {
                     self.last_error = Some(format!("Effect {effect_id} was not found"));
                 }
@@ -3281,8 +3427,13 @@ impl EngineRuntime {
                 ack,
             } => {
                 let previous_last_error = self.last_error.clone();
-                let rollback = PendingCommandRollback::RestoreColorEffects {
-                    effects: self.effects.clone(),
+                let previous_index = self
+                    .effects
+                    .iter()
+                    .position(|effect| effect.id == effect_id);
+                let rollback = PendingCommandRollback::RestoreEffect {
+                    index: previous_index,
+                    effect: previous_index.map(|index| self.effects[index].clone()),
                     last_error: previous_last_error.clone(),
                 };
                 let expired = Instant::now() > expires_at;
@@ -3296,6 +3447,9 @@ impl EngineRuntime {
                                 .iter_mut()
                                 .find(|effect| effect.id == effect_id)
                                 .ok_or_else(|| format!("Effect {effect_id} was not found"))?;
+                            if !matches!(&effect.kind, RuntimeEffectKind::Color(_)) {
+                                return Err(format!("Effect {effect_id} is not a Color effect"));
+                            }
                             effect.kind = RuntimeEffectKind::Color(runtime);
                             effect.created_at = Instant::now();
                             Ok(())
@@ -3312,6 +3466,54 @@ impl EngineRuntime {
                     rollback,
                     publication_error:
                         "Engine snapshot was busy; Color effect update was rolled back",
+                });
+            }
+            EngineCommand::UpdateChaserEffect {
+                effect_id,
+                request,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let previous_index = self
+                    .effects
+                    .iter()
+                    .position(|effect| effect.id == effect_id);
+                let rollback = PendingCommandRollback::RestoreEffect {
+                    index: previous_index,
+                    effect: previous_index.map(|index| self.effects[index].clone()),
+                    last_error: previous_last_error.clone(),
+                };
+                let expired = Instant::now() > expires_at;
+                let result = if expired {
+                    Err("Chaser effect update expired before engine execution".to_string())
+                } else {
+                    self.resolve_chaser_effect_request(request)
+                        .and_then(|runtime| {
+                            let effect = self
+                                .effects
+                                .iter_mut()
+                                .find(|effect| effect.id == effect_id)
+                                .ok_or_else(|| format!("Effect {effect_id} was not found"))?;
+                            if !matches!(&effect.kind, RuntimeEffectKind::Chaser(_)) {
+                                return Err(format!("Effect {effect_id} is not a Chaser"));
+                            }
+                            effect.kind = RuntimeEffectKind::Chaser(runtime);
+                            effect.created_at = Instant::now();
+                            Ok(())
+                        })
+                };
+                self.last_error = if expired {
+                    previous_last_error
+                } else {
+                    result.as_ref().err().cloned()
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Chaser effect update was rolled back",
                 });
             }
             EngineCommand::SetEffectEnabled { effect_id, enabled } => {
@@ -3394,9 +3596,9 @@ impl EngineRuntime {
                 let video_targets = match &mut effect.kind {
                     RuntimeEffectKind::Lfo(request) => &mut request.video_targets,
                     RuntimeEffectKind::PositionWave(request) => &mut request.video_targets,
-                    RuntimeEffectKind::Color(_) => {
+                    RuntimeEffectKind::Color(_) | RuntimeEffectKind::Chaser(_) => {
                         self.last_error = Some(format!(
-                            "Color effect {effect_id} cannot target video layers"
+                            "Lighting-only effect {effect_id} cannot target video layers"
                         ));
                         return;
                     }
@@ -5204,11 +5406,33 @@ impl EngineRuntime {
                 self.video_outputs.clear();
                 self.video_output_fades.clear();
             }
-            PendingCommandRollback::RestoreColorEffects {
-                effects,
+            PendingCommandRollback::RemoveAddedEffect {
+                effect_id,
                 last_error,
             } => {
-                self.effects = effects;
+                self.effects.retain(|effect| effect.id != effect_id);
+                self.sanitize_cue_effect_targets();
+                self.last_error = last_error;
+            }
+            PendingCommandRollback::RestoreEffect {
+                index,
+                effect,
+                last_error,
+            } => {
+                if let Some(effect) = effect {
+                    if let Some(current_index) = self
+                        .effects
+                        .iter()
+                        .position(|candidate| candidate.id == effect.id)
+                    {
+                        self.effects[current_index] = effect;
+                    } else {
+                        self.effects.insert(
+                            index.unwrap_or(self.effects.len()).min(self.effects.len()),
+                            effect,
+                        );
+                    }
+                }
                 self.last_error = last_error;
             }
             PendingCommandRollback::RestoreEffectEnabled {
@@ -5301,8 +5525,19 @@ impl EngineRuntime {
                 !runtime.request.fixture_ids.is_empty()
                     || !runtime.request.target_group_ids.is_empty()
             }
+            RuntimeEffectKind::Chaser(runtime) => {
+                for step in &mut runtime.request.steps {
+                    step.fixture_ids.retain(|id| *id != fixture_id);
+                }
+                runtime
+                    .request
+                    .steps
+                    .iter()
+                    .any(|step| !step.fixture_ids.is_empty() || !step.target_group_ids.is_empty())
+            }
         });
         self.rebuild_color_effect_targets();
+        self.rebuild_chaser_effect_targets();
         self.sanitize_node_graph_references();
         self.clear_empty_active_fade();
         self.last_error = None;
@@ -5344,7 +5579,7 @@ impl EngineRuntime {
                     || !request.target_group_ids.is_empty()
                     || !request.video_targets.is_empty()
             }
-            RuntimeEffectKind::Color(_) => true,
+            RuntimeEffectKind::Color(_) | RuntimeEffectKind::Chaser(_) => true,
         });
         self.sanitize_cue_effect_targets();
         self.sanitize_node_graph_references();
@@ -6441,6 +6676,114 @@ impl EngineRuntime {
         runtime_color_effect_from_request(request, &self.fixtures)
     }
 
+    fn resolve_chaser_effect_request(
+        &self,
+        request: ChaserEffectRequest,
+    ) -> Result<RuntimeChaserEffect, String> {
+        self.resolve_chaser_effect_request_with_policy(request, false)
+    }
+
+    fn restore_chaser_effect_request(
+        &self,
+        request: ChaserEffectRequest,
+    ) -> Result<RuntimeChaserEffect, String> {
+        self.resolve_chaser_effect_request_with_policy(request, true)
+    }
+
+    fn resolve_chaser_effect_request_with_policy(
+        &self,
+        mut request: ChaserEffectRequest,
+        allow_unresolved_groups: bool,
+    ) -> Result<RuntimeChaserEffect, String> {
+        validate_chaser_effect_request(&request)?;
+        let mut target_fixture_ids = Vec::new();
+        let mut seen_targets = HashSet::new();
+        let mut has_group_reference = false;
+        for step in &mut request.steps {
+            step.fixture_ids =
+                self.normalize_effect_fixture_ids(std::mem::take(&mut step.fixture_ids))?;
+            step.target_group_ids =
+                normalize_runtime_group_ids(std::mem::take(&mut step.target_group_ids))?;
+            for fixture_id in &step.fixture_ids {
+                if seen_targets.insert(*fixture_id) {
+                    target_fixture_ids.push(*fixture_id);
+                }
+            }
+            for group_id in &step.target_group_ids {
+                has_group_reference = true;
+                let group_fixture_ids = self.fixture_ids_in_group(group_id);
+                if group_fixture_ids.is_empty() {
+                    if allow_unresolved_groups {
+                        continue;
+                    }
+                    return Err(format!(
+                        "Group '{group_id}' was not found or has no fixtures"
+                    ));
+                }
+                for fixture_id in group_fixture_ids {
+                    if seen_targets.insert(fixture_id) {
+                        target_fixture_ids.push(fixture_id);
+                    }
+                }
+            }
+        }
+        if target_fixture_ids.is_empty() {
+            if allow_unresolved_groups && has_group_reference {
+                return runtime_chaser_effect_from_request(request, &self.fixtures, false);
+            }
+            return Err("Chaser effect must resolve at least one fixture target".to_string());
+        }
+        let mut seen_attributes = HashSet::new();
+        let mut has_unresolved_feature = false;
+        for feature in &mut request.features {
+            let requested_attribute = feature.attribute.clone();
+            let mut canonical_attribute: Option<String> = None;
+            for fixture_id in &target_fixture_ids {
+                let Some(fixture) = self
+                    .fixtures
+                    .iter()
+                    .find(|fixture| fixture.id == *fixture_id)
+                else {
+                    continue;
+                };
+                let Some(resolved) = runtime_fixture_attribute(fixture, &requested_attribute)
+                else {
+                    continue;
+                };
+                if let Some(canonical) = &canonical_attribute {
+                    if normalize_chaser_attribute(canonical) != normalize_chaser_attribute(resolved)
+                    {
+                        return Err(format!(
+                            "Attribute '{requested_attribute}' resolves inconsistently across Chaser targets"
+                        ));
+                    }
+                } else {
+                    canonical_attribute = Some(resolved.to_string());
+                }
+            }
+            let Some(canonical_attribute) = canonical_attribute else {
+                if allow_unresolved_groups && has_group_reference {
+                    has_unresolved_feature = true;
+                    continue;
+                }
+                return Err(format!(
+                    "Chaser feature '{requested_attribute}' resolves to no fixtures"
+                ));
+            };
+            if !seen_attributes.insert(normalize_chaser_attribute(&canonical_attribute)) {
+                return Err(format!(
+                    "Chaser feature '{canonical_attribute}' is targeted more than once"
+                ));
+            }
+            feature.attribute = canonical_attribute;
+        }
+        runtime_chaser_effect_from_request(
+            request,
+            &self.fixtures,
+            !(allow_unresolved_groups && has_group_reference && has_unresolved_feature),
+        )
+    }
+
     fn rebuild_color_effect_targets(&mut self) {
         let fixtures = &self.fixtures;
         self.effects.retain_mut(|effect| {
@@ -6451,6 +6794,28 @@ impl EngineRuntime {
             runtime.targets = targets;
             runtime.target_indices = target_indices;
             !runtime.targets.is_empty() || !runtime.request.target_group_ids.is_empty()
+        });
+        self.sanitize_cue_effect_targets();
+    }
+
+    fn rebuild_chaser_effect_targets(&mut self) {
+        let fixtures = &self.fixtures;
+        self.effects.retain_mut(|effect| {
+            let RuntimeEffectKind::Chaser(runtime) = &mut effect.kind else {
+                return true;
+            };
+            let has_group_reference = runtime
+                .request
+                .steps
+                .iter()
+                .any(|step| !step.target_group_ids.is_empty());
+            match runtime_chaser_effect_from_request(runtime.request.clone(), fixtures, false) {
+                Ok(rebuilt) => {
+                    *runtime = rebuilt;
+                    !runtime.target_phase_offsets.is_empty() || has_group_reference
+                }
+                Err(_) => has_group_reference,
+            }
         });
         self.sanitize_cue_effect_targets();
     }
@@ -6651,6 +7016,33 @@ impl EngineRuntime {
                                 &clock,
                             ),
                             &request.blend_mode,
+                        );
+                    }
+                }
+                RuntimeEffectKind::Chaser(runtime) => {
+                    if let (Some(feature_index), true) = (
+                        runtime.feature_indices.get(attribute),
+                        runtime.target_phase_offsets.contains_key(&fixture.id),
+                    ) {
+                        let Some(feature_fixture_ids) =
+                            runtime.feature_fixture_ids.get(*feature_index)
+                        else {
+                            continue;
+                        };
+                        if feature_fixture_ids.binary_search(&fixture.id).is_err() {
+                            continue;
+                        }
+                        value = blend_effect_value(
+                            value,
+                            evaluate_chaser_effect(
+                                runtime,
+                                *feature_index,
+                                fixture.id,
+                                effect.created_at,
+                                now,
+                                &clock,
+                            ),
+                            &runtime.request.blend_mode,
                         );
                     }
                 }
@@ -7756,7 +8148,7 @@ impl EngineRuntime {
                         apply_video_effect_param(state, &target.param, value, &request.blend_mode);
                     }
                 }
-                RuntimeEffectKind::Color(_) => {}
+                RuntimeEffectKind::Color(_) | RuntimeEffectKind::Chaser(_) => {}
             }
         }
         for graph in &self.node_graphs {
@@ -9290,7 +9682,7 @@ fn effect_targets_fixture_attribute(
                     fixture,
                 )
         }
-        RuntimeEffectKind::Color(_) => false,
+        RuntimeEffectKind::Color(_) | RuntimeEffectKind::Chaser(_) => false,
     }
 }
 
@@ -9627,6 +10019,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             wavelength: None,
             enabled: effect.enabled,
             color: None,
+            chaser: None,
         },
         RuntimeEffectKind::PositionWave(request) => EffectSummary {
             id: effect.id,
@@ -9649,6 +10042,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             wavelength: Some(request.wavelength),
             enabled: effect.enabled,
             color: None,
+            chaser: None,
         },
         RuntimeEffectKind::Color(runtime) => EffectSummary {
             id: effect.id,
@@ -9671,7 +10065,52 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             wavelength: None,
             enabled: effect.enabled,
             color: Some(runtime.request.clone()),
+            chaser: None,
         },
+        RuntimeEffectKind::Chaser(runtime) => {
+            let mut fixture_ids = Vec::new();
+            let mut group_ids = Vec::new();
+            let mut seen_fixtures = HashSet::new();
+            let mut seen_groups = HashSet::new();
+            for step in &runtime.request.steps {
+                for fixture_id in &step.fixture_ids {
+                    if seen_fixtures.insert(*fixture_id) {
+                        fixture_ids.push(*fixture_id);
+                    }
+                }
+                for group_id in &step.target_group_ids {
+                    if seen_groups.insert(group_id.clone()) {
+                        group_ids.push(group_id.clone());
+                    }
+                }
+            }
+            let first_feature = runtime.request.features.first();
+            EffectSummary {
+                id: effect.id,
+                label: runtime.request.label.clone(),
+                effect_type: EffectKind::Chaser,
+                fixture_ids,
+                target_group_ids: group_ids,
+                attribute: first_feature
+                    .map(|feature| feature.attribute.clone())
+                    .unwrap_or_default(),
+                video_targets: Vec::new(),
+                shape: LfoShape::Square,
+                period_ms: Some(runtime.request.step_duration_ms),
+                clock_sync: runtime.request.clock_sync,
+                low: first_feature.map(|feature| feature.low).unwrap_or(0),
+                high: first_feature.map(|feature| feature.high).unwrap_or(0),
+                phase: runtime.request.phase,
+                blend_mode: runtime.request.blend_mode.clone(),
+                origin: None,
+                direction: None,
+                speed: None,
+                wavelength: None,
+                enabled: effect.enabled,
+                color: None,
+                chaser: Some(runtime.request.clone()),
+            }
+        }
     }
 }
 
@@ -9712,6 +10151,15 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
             request: effect.color.clone()?,
             targets: Vec::new(),
             target_indices: HashMap::new(),
+        }),
+        EffectKind::Chaser => RuntimeEffectKind::Chaser(RuntimeChaserEffect {
+            request: effect.chaser.clone()?,
+            step_order: Vec::new(),
+            target_phase_offsets: HashMap::new(),
+            target_step_levels: HashMap::new(),
+            target_level_cache: HashMap::new(),
+            feature_indices: HashMap::new(),
+            feature_fixture_ids: Vec::new(),
         }),
     };
     Some(RuntimeEffect {
@@ -9759,6 +10207,226 @@ fn validate_runtime_color_effect_request(request: &ColorEffectRequest) -> Result
         return Err("Color effect fixture spread must be within 0..1".to_string());
     }
     Ok(())
+}
+
+pub fn validate_chaser_effect_request(request: &ChaserEffectRequest) -> Result<(), String> {
+    if request.label.trim().is_empty() {
+        return Err("Chaser effect label is required".to_string());
+    }
+    if !(1..=16).contains(&request.features.len()) {
+        return Err("Chaser effect requires between 1 and 16 features".to_string());
+    }
+    if request
+        .features
+        .iter()
+        .any(|feature| feature.attribute.trim().is_empty())
+    {
+        return Err("Chaser feature attributes must not be empty".to_string());
+    }
+    let mut feature_attributes = HashSet::new();
+    for feature in &request.features {
+        let canonical = normalize_chaser_attribute(&feature.attribute);
+        if canonical.is_empty() {
+            return Err("Chaser feature attributes must contain a letter or number".to_string());
+        }
+        if !feature_attributes.insert(canonical) {
+            return Err(format!(
+                "Chaser feature '{}' is targeted more than once",
+                feature.attribute.trim()
+            ));
+        }
+    }
+    if !(2..=256).contains(&request.steps.len()) {
+        return Err("Chaser effect requires between 2 and 256 steps".to_string());
+    }
+    if !request
+        .steps
+        .iter()
+        .any(|step| !step.fixture_ids.is_empty() || !step.target_group_ids.is_empty())
+    {
+        return Err("Chaser effect must target at least one fixture or group".to_string());
+    }
+    if request.step_duration_ms < 10 {
+        return Err("Chaser effect step duration must be at least 10 ms".to_string());
+    }
+    if let Some(clock_sync) = request.clock_sync {
+        if !clock_sync.beats.is_finite() || clock_sync.beats <= 0.0 {
+            return Err(
+                "Chaser effect clock sync beats must be finite and greater than 0".to_string(),
+            );
+        }
+    }
+    if request.wings == 0 || request.wings > 16 {
+        return Err("Chaser effect wings must be between 1 and 16".to_string());
+    }
+    if request.wings as usize > request.steps.len() {
+        return Err("Chaser effect wings must not exceed its step count".to_string());
+    }
+    if request.active_step_count == 0
+        || request.active_step_count as usize > request.steps.len()
+        || request.active_step_count > 64
+    {
+        return Err(
+            "Chaser effect active step count must be between 1 and min(step count, 64)".to_string(),
+        );
+    }
+    if !request.duty_cycle.is_finite() || request.duty_cycle <= 0.0 || request.duty_cycle > 1.0 {
+        return Err("Chaser effect duty cycle must be within (0, 1]".to_string());
+    }
+    if !request.overlap.is_finite() || !(0.0..=1.0).contains(&request.overlap) {
+        return Err("Chaser effect overlap must be within 0..1".to_string());
+    }
+    if !request.phase.is_finite() || !(0.0..=1.0).contains(&request.phase) {
+        return Err("Chaser effect phase must be within 0..1".to_string());
+    }
+    if !request.fixture_spread.is_finite() || !(0.0..=1.0).contains(&request.fixture_spread) {
+        return Err("Chaser effect fixture spread must be within 0..1".to_string());
+    }
+    if request.random_seed == 0 || request.random_seed > u32::MAX as u64 {
+        return Err("Chaser effect random seed must be between 1 and 4294967295".to_string());
+    }
+    Ok(())
+}
+
+fn runtime_chaser_effect_from_request(
+    request: ChaserEffectRequest,
+    fixtures: &[RuntimeFixture],
+    require_resolved_target: bool,
+) -> Result<RuntimeChaserEffect, String> {
+    let mut target_order = Vec::new();
+    let mut seen_targets = HashSet::new();
+    let steps = request
+        .steps
+        .iter()
+        .map(|step| {
+            let mut fixture_ids = Vec::new();
+            let mut seen_step = HashSet::new();
+            for fixture_id in &step.fixture_ids {
+                if fixtures.iter().any(|fixture| fixture.id == *fixture_id)
+                    && seen_step.insert(*fixture_id)
+                {
+                    fixture_ids.push(*fixture_id);
+                    if seen_targets.insert(*fixture_id) {
+                        target_order.push(*fixture_id);
+                    }
+                }
+            }
+            for group_id in &step.target_group_ids {
+                for fixture in fixtures.iter().filter(|fixture| {
+                    fixture
+                        .request
+                        .group_ids
+                        .iter()
+                        .any(|fixture_group| group_matches(fixture_group, group_id))
+                }) {
+                    if seen_step.insert(fixture.id) {
+                        fixture_ids.push(fixture.id);
+                        if seen_targets.insert(fixture.id) {
+                            target_order.push(fixture.id);
+                        }
+                    }
+                }
+            }
+            fixture_ids.sort_unstable();
+            RuntimeChaserStep {
+                fixture_ids,
+                level: step.level,
+            }
+        })
+        .collect::<Vec<_>>();
+    if require_resolved_target && target_order.is_empty() {
+        return Err("Chaser effect targets resolve to no fixtures".to_string());
+    }
+    let step_order = chaser_step_order(request.direction, request.steps.len(), request.random_seed);
+    let path_len = step_order.len().max(1) as f32;
+    let target_denominator = target_order.len().max(1) as f32;
+    let mut target_step_levels = target_order
+        .iter()
+        .map(|fixture_id| (*fixture_id, vec![0; steps.len()]))
+        .collect::<HashMap<_, _>>();
+    for (step_index, step) in steps.iter().enumerate() {
+        for fixture_id in &step.fixture_ids {
+            if let Some(levels) = target_step_levels.get_mut(fixture_id) {
+                levels[step_index] = step.level;
+            }
+        }
+    }
+    let target_phase_offsets: HashMap<FixtureId, f32> = target_order
+        .into_iter()
+        .enumerate()
+        .map(|(index, fixture_id)| {
+            let normalized = index as f32 / target_denominator;
+            (fixture_id, normalized * request.fixture_spread * path_len)
+        })
+        .collect();
+    let target_level_cache = target_phase_offsets
+        .keys()
+        .map(|fixture_id| (*fixture_id, Cell::new(None)))
+        .collect();
+    let mut feature_indices = HashMap::new();
+    let feature_fixture_ids = request
+        .features
+        .iter()
+        .enumerate()
+        .map(|(feature_index, feature)| {
+            let mut fixture_ids = Vec::new();
+            for fixture in fixtures {
+                if !target_phase_offsets.contains_key(&fixture.id) {
+                    continue;
+                }
+                let Some(actual_attribute) = runtime_fixture_attribute(fixture, &feature.attribute)
+                else {
+                    continue;
+                };
+                feature_indices.insert(actual_attribute.to_string(), feature_index);
+                fixture_ids.push(fixture.id);
+            }
+            fixture_ids.sort_unstable();
+            fixture_ids
+        })
+        .collect::<Vec<_>>();
+    if require_resolved_target
+        && feature_fixture_ids
+            .iter()
+            .any(|fixture_ids| fixture_ids.is_empty())
+    {
+        return Err("Each Chaser feature must resolve on at least one target fixture".to_string());
+    }
+    Ok(RuntimeChaserEffect {
+        request,
+        step_order,
+        target_phase_offsets,
+        target_step_levels,
+        target_level_cache,
+        feature_indices,
+        feature_fixture_ids,
+    })
+}
+
+fn runtime_fixture_attribute<'a>(fixture: &'a RuntimeFixture, attribute: &str) -> Option<&'a str> {
+    let normalized = normalize_chaser_attribute(attribute);
+    fixture
+        .profile
+        .dmx_modes
+        .get(fixture.mode_index)
+        .and_then(|mode| {
+            mode.controls
+                .iter()
+                .find(|control| {
+                    control.attribute == attribute
+                        || control.attribute.eq_ignore_ascii_case(attribute)
+                        || normalize_chaser_attribute(&control.attribute) == normalized
+                })
+                .map(|control| control.attribute.as_str())
+        })
+}
+
+fn normalize_chaser_attribute(attribute: &str) -> String {
+    attribute
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 fn runtime_color_effect_from_request(
@@ -10740,6 +11408,192 @@ fn evaluate_position_wave_effect_normalized(
         .unwrap_or_else(|| elapsed * request.speed / wavelength);
     let phase = (request.phase + time_phase - distance_phase).rem_euclid(1.0);
     evaluate_lfo_shape(&request.shape, phase)
+}
+
+#[cfg(test)]
+fn chaser_path_len(direction: ChaserDirection, step_count: usize) -> usize {
+    match direction {
+        ChaserDirection::Bounce if step_count > 1 => step_count * 2 - 2,
+        ChaserDirection::Forward
+        | ChaserDirection::Reverse
+        | ChaserDirection::Random
+        | ChaserDirection::Bounce => step_count.max(1),
+    }
+}
+
+fn chaser_step_order(
+    direction: ChaserDirection,
+    step_count: usize,
+    random_seed: u64,
+) -> Vec<usize> {
+    let step_count = step_count.max(1);
+    match direction {
+        ChaserDirection::Forward => (0..step_count).collect(),
+        ChaserDirection::Reverse => (0..step_count).rev().collect(),
+        ChaserDirection::Bounce if step_count > 1 => {
+            (0..step_count).chain((1..step_count - 1).rev()).collect()
+        }
+        ChaserDirection::Bounce => vec![0],
+        ChaserDirection::Random => {
+            let mut order = (0..step_count).collect::<Vec<_>>();
+            let mut state = (random_seed ^ (random_seed >> 32)) as u32;
+            for index in (1..order.len()).rev() {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let target = state as usize % (index + 1);
+                order.swap(index, target);
+            }
+            order
+        }
+    }
+}
+
+#[cfg(test)]
+fn chaser_step_index(
+    direction: ChaserDirection,
+    step_count: usize,
+    absolute_slot: i64,
+    random_seed: u64,
+) -> usize {
+    if step_count <= 1 {
+        return 0;
+    }
+    match direction {
+        ChaserDirection::Forward => absolute_slot.rem_euclid(step_count as i64) as usize,
+        ChaserDirection::Reverse => {
+            step_count - 1 - absolute_slot.rem_euclid(step_count as i64) as usize
+        }
+        ChaserDirection::Bounce => {
+            let path_len = chaser_path_len(direction, step_count);
+            let position = absolute_slot.rem_euclid(path_len as i64) as usize;
+            if position < step_count {
+                position
+            } else {
+                path_len - position
+            }
+        }
+        ChaserDirection::Random => {
+            let order = chaser_step_order(direction, step_count, random_seed);
+            order[absolute_slot.rem_euclid(order.len() as i64) as usize]
+        }
+    }
+}
+
+fn chaser_slot_weights(fraction: f64, duty_cycle: f32, overlap: f32) -> (f32, f32) {
+    let overlap = overlap as f64;
+    if overlap > f64::EPSILON {
+        let fade_end = (duty_cycle as f64 + overlap).min(1.0);
+        let fade_start = fade_end - overlap;
+        if fraction >= fade_start {
+            let next = ((fraction - fade_start) / overlap).clamp(0.0, 1.0) as f32;
+            return (1.0 - next, next);
+        }
+    }
+    if fraction < duty_cycle as f64 {
+        (1.0, 0.0)
+    } else {
+        (0.0, 0.0)
+    }
+}
+
+fn chaser_block_level(
+    runtime: &RuntimeChaserEffect,
+    fixture_id: FixtureId,
+    absolute_slot: i64,
+) -> u16 {
+    let Some(step_levels) = runtime.target_step_levels.get(&fixture_id) else {
+        return 0;
+    };
+    if runtime.step_order.is_empty() {
+        return 0;
+    }
+    let mut level = 0;
+    let mut seen_steps = [0_u64; 4];
+    let mut selected_count = 0_usize;
+    let target_count = runtime.request.active_step_count as usize;
+    for path_offset in 0..runtime.step_order.len() {
+        let order_index = (absolute_slot - path_offset as i64)
+            .rem_euclid(runtime.step_order.len() as i64) as usize;
+        let step_index = runtime.step_order[order_index];
+        let word = step_index / 64;
+        let mask = 1_u64 << (step_index % 64);
+        if seen_steps[word] & mask != 0 {
+            continue;
+        }
+        seen_steps[word] |= mask;
+        selected_count += 1;
+        level = level.max(step_levels.get(step_index).copied().unwrap_or(0));
+        if selected_count >= target_count {
+            break;
+        }
+    }
+    level
+}
+
+fn evaluate_chaser_effect(
+    runtime: &RuntimeChaserEffect,
+    feature_index: usize,
+    fixture_id: FixtureId,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+) -> u16 {
+    let Some(feature) = runtime.request.features.get(feature_index) else {
+        return 0;
+    };
+    let normalized_level =
+        evaluate_chaser_effect_normalized(runtime, fixture_id, created_at, now, clock);
+    scale_effect_u16(feature.low, feature.high, normalized_level)
+}
+
+fn evaluate_chaser_effect_normalized(
+    runtime: &RuntimeChaserEffect,
+    fixture_id: FixtureId,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+) -> f32 {
+    let Some(cache) = runtime.target_level_cache.get(&fixture_id) else {
+        return 0.0;
+    };
+    if let Some(cached) = cache.get().filter(|cached| cached.at == now) {
+        return cached.normalized_level;
+    }
+    let step_position = if let Some(clock_sync) = runtime.request.clock_sync {
+        let beat_position = clock.beat_counter as f64 + clock.beat_phase as f64;
+        beat_position / clock_sync.beats.max(0.000_1) as f64
+    } else {
+        let elapsed_ms = now.saturating_duration_since(created_at).as_secs_f64() * 1000.0;
+        elapsed_ms / runtime.request.step_duration_ms.max(10) as f64
+    };
+    let path_len = runtime.step_order.len().max(1);
+    let fixture_offset = runtime
+        .target_phase_offsets
+        .get(&fixture_id)
+        .copied()
+        .unwrap_or(0.0) as f64;
+    let cursor = step_position + runtime.request.phase as f64 * path_len as f64 + fixture_offset;
+    let absolute_slot = cursor.floor() as i64;
+    let fraction = cursor.rem_euclid(1.0);
+    let (current_weight, next_weight) = chaser_slot_weights(
+        fraction,
+        runtime.request.duty_cycle,
+        runtime.request.overlap,
+    );
+    let mut normalized_level = 0.0_f32;
+    let wing_count = runtime.request.wings.max(1) as usize;
+    for wing in 0..wing_count {
+        let wing_offset = (wing * path_len) / wing_count;
+        let wing_slot = absolute_slot + wing_offset as i64;
+        let current = chaser_block_level(runtime, fixture_id, wing_slot) as f32 / 65_535.0;
+        let next = chaser_block_level(runtime, fixture_id, wing_slot + 1) as f32 / 65_535.0;
+        normalized_level = normalized_level.max(current * current_weight + next * next_weight);
+    }
+    let normalized_level = normalized_level.clamp(0.0, 1.0);
+    cache.set(Some(RuntimeChaserEvaluation {
+        at: now,
+        normalized_level,
+    }));
+    normalized_level
 }
 
 fn evaluate_node_graph_output_normalized(
@@ -13255,6 +14109,7 @@ mod tests {
                 wavelength: None,
                 enabled: false,
                 color: None,
+                chaser: None,
             }],
             node_graphs: vec![sample_node_graph(48, 40)],
             output: DmxOutputConfig {
@@ -14145,6 +15000,7 @@ mod tests {
                     wavelength: None,
                     enabled: true,
                     color: None,
+                    chaser: None,
                 },
                 EffectSummary {
                     id: 51,
@@ -14167,6 +15023,7 @@ mod tests {
                     wavelength: None,
                     enabled: true,
                     color: None,
+                    chaser: None,
                 },
                 EffectSummary {
                     id: 52,
@@ -14189,6 +15046,7 @@ mod tests {
                     wavelength: None,
                     enabled: true,
                     color: None,
+                    chaser: None,
                 },
             ],
             ..EngineSnapshot::default()
@@ -14347,6 +15205,7 @@ mod tests {
                     wavelength: None,
                     enabled: true,
                     color: None,
+                    chaser: None,
                 },
                 EffectSummary {
                     id: 41,
@@ -14369,6 +15228,7 @@ mod tests {
                     wavelength: None,
                     enabled: true,
                     color: None,
+                    chaser: None,
                 },
             ],
             ..EngineSnapshot::default()
@@ -28559,5 +29419,855 @@ mod tests {
                 .all(|target| target.cached.get().is_some_and(|cached| cached.at == now)),
             _ => true,
         }));
+    }
+
+    fn runtime_with_chaser_fixtures(count: u64) -> EngineRuntime {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        for fixture_id in 1..=count {
+            let zero_based = fixture_id - 1;
+            let mut request = sample_patch_request(
+                &format!("Chaser {fixture_id}"),
+                1 + ((zero_based % 128) as u16) * 4,
+            );
+            request.universe = (zero_based / 128) as u16;
+            request.group_ids = vec!["Front".to_string()];
+            runtime.apply_command(EngineCommand::PatchFixture {
+                fixture_id,
+                request,
+                profile: sample_profile(),
+            });
+        }
+        assert_eq!(runtime.last_error, None);
+        runtime
+    }
+
+    fn test_chaser_request(fixture_ids: &[FixtureId]) -> ChaserEffectRequest {
+        let mut steps = fixture_ids
+            .iter()
+            .map(|fixture_id| protocol::ChaserStep {
+                fixture_ids: vec![*fixture_id],
+                target_group_ids: Vec::new(),
+                level: u16::MAX,
+            })
+            .collect::<Vec<_>>();
+        if steps.len() == 1 {
+            steps.push(protocol::ChaserStep {
+                fixture_ids: Vec::new(),
+                target_group_ids: Vec::new(),
+                level: 0,
+            });
+        }
+        ChaserEffectRequest {
+            label: "Production Chaser".to_string(),
+            steps,
+            features: vec![protocol::ChaserFeature {
+                attribute: "Dimmer".to_string(),
+                low: 0,
+                high: u16::MAX,
+            }],
+            step_duration_ms: 100,
+            clock_sync: None,
+            direction: ChaserDirection::Forward,
+            wings: 1,
+            active_step_count: 1,
+            duty_cycle: 1.0,
+            overlap: 0.0,
+            phase: 0.0,
+            fixture_spread: 0.0,
+            random_seed: 0x5eed_cafe,
+            blend_mode: EffectBlendMode::Override,
+        }
+    }
+
+    #[test]
+    fn chaser_validation_enforces_production_bounds_and_gap_steps() {
+        let valid = test_chaser_request(&[1, 2]);
+        validate_chaser_effect_request(&valid).unwrap();
+
+        let mut gap = valid.clone();
+        gap.steps[1].fixture_ids.clear();
+        validate_chaser_effect_request(&gap).unwrap();
+
+        let mut too_short = valid.clone();
+        too_short.steps.pop();
+        assert!(validate_chaser_effect_request(&too_short)
+            .unwrap_err()
+            .contains("between 2 and 256"));
+
+        let mut too_many = valid.clone();
+        too_many.steps = (0..257)
+            .map(|_| protocol::ChaserStep {
+                fixture_ids: Vec::new(),
+                target_group_ids: Vec::new(),
+                level: 0,
+            })
+            .collect();
+        assert!(validate_chaser_effect_request(&too_many).is_err());
+
+        let mut no_features = valid.clone();
+        no_features.features.clear();
+        assert!(validate_chaser_effect_request(&no_features)
+            .unwrap_err()
+            .contains("between 1 and 16 features"));
+
+        let mut duplicate_feature = valid.clone();
+        duplicate_feature.features.push(protocol::ChaserFeature {
+            attribute: "D-immer".to_string(),
+            low: 0,
+            high: u16::MAX,
+        });
+        assert!(validate_chaser_effect_request(&duplicate_feature)
+            .unwrap_err()
+            .contains("more than once"));
+
+        let mut too_many_features = valid.clone();
+        too_many_features.features = (0..17)
+            .map(|index| protocol::ChaserFeature {
+                attribute: format!("Feature {index}"),
+                low: 0,
+                high: u16::MAX,
+            })
+            .collect();
+        assert!(validate_chaser_effect_request(&too_many_features).is_err());
+
+        for active_step_count in [0, 3, 65] {
+            let mut invalid = valid.clone();
+            invalid.active_step_count = active_step_count;
+            assert!(validate_chaser_effect_request(&invalid)
+                .unwrap_err()
+                .contains("min(step count, 64)"));
+        }
+
+        let mut sixty_four = valid.clone();
+        sixty_four.steps = (0..64)
+            .map(|index| protocol::ChaserStep {
+                fixture_ids: if index == 0 { vec![1] } else { Vec::new() },
+                target_group_ids: Vec::new(),
+                level: u16::MAX,
+            })
+            .collect();
+        sixty_four.active_step_count = 64;
+        validate_chaser_effect_request(&sixty_four).unwrap();
+
+        for invalid_value in [-0.01, 1.01, f32::NAN] {
+            let mut invalid = valid.clone();
+            invalid.overlap = invalid_value;
+            assert!(validate_chaser_effect_request(&invalid).is_err());
+            let mut invalid = valid.clone();
+            invalid.fixture_spread = invalid_value;
+            assert!(validate_chaser_effect_request(&invalid).is_err());
+        }
+        for invalid_value in [0.0, 1.01, f32::NAN] {
+            let mut invalid = valid.clone();
+            invalid.duty_cycle = invalid_value;
+            assert!(validate_chaser_effect_request(&invalid).is_err());
+        }
+        for invalid_seed in [0, u32::MAX as u64 + 1] {
+            let mut invalid = valid.clone();
+            invalid.random_seed = invalid_seed;
+            assert!(validate_chaser_effect_request(&invalid)
+                .unwrap_err()
+                .contains("random seed"));
+        }
+    }
+
+    #[test]
+    fn chaser_resolves_ordered_steps_multi_features_and_mixed_fixture_support() {
+        let mut runtime = runtime_with_chaser_fixtures(2);
+        let mut dimmer_only = sample_profile();
+        dimmer_only.dmx_modes[0]
+            .controls
+            .retain(|control| control.attribute == "Dimmer");
+        dimmer_only.dmx_modes[0].controls[0].attribute = "Dim mer".to_string();
+        runtime.fixtures[1].profile = dimmer_only;
+
+        let mut request = test_chaser_request(&[1, 2]);
+        request.steps[0].fixture_ids = vec![1, 1];
+        request.steps[0].target_group_ids = vec![" Front ".to_string(), "Front".to_string()];
+        request.features.push(protocol::ChaserFeature {
+            attribute: "pan".to_string(),
+            low: 10_000,
+            high: 50_000,
+        });
+        let resolved = runtime.resolve_chaser_effect_request(request).unwrap();
+
+        assert_eq!(resolved.request.steps[0].fixture_ids, vec![1]);
+        assert_eq!(resolved.request.steps[0].target_group_ids, vec!["Front"]);
+        assert_eq!(resolved.target_step_levels[&1][0], u16::MAX);
+        assert_eq!(resolved.target_step_levels[&2][0], u16::MAX);
+        assert_eq!(resolved.request.features[0].attribute, "Dimmer");
+        assert_eq!(resolved.request.features[1].attribute, "Pan");
+        assert_eq!(resolved.feature_fixture_ids[0], vec![1, 2]);
+        assert_eq!(resolved.feature_fixture_ids[1], vec![1]);
+        assert_eq!(resolved.feature_indices.get("Dim mer"), Some(&0));
+
+        let summary = effect_summary(&RuntimeEffect {
+            id: 7,
+            kind: RuntimeEffectKind::Chaser(resolved.clone()),
+            enabled: true,
+            created_at: Instant::now(),
+        });
+        assert_eq!(summary.effect_type, EffectKind::Chaser);
+        assert_eq!(summary.fixture_ids, vec![1, 2]);
+        assert_eq!(summary.target_group_ids, vec!["Front"]);
+        assert_eq!(summary.attribute, "Dimmer");
+        assert_eq!(summary.low, 0);
+        assert_eq!(summary.high, u16::MAX);
+        assert_eq!(summary.chaser, Some(resolved.request));
+
+        let mut unsupported = test_chaser_request(&[1, 2]);
+        unsupported.features = vec![protocol::ChaserFeature {
+            attribute: "Zoom".to_string(),
+            low: 0,
+            high: u16::MAX,
+        }];
+        assert!(runtime
+            .resolve_chaser_effect_request(unsupported)
+            .unwrap_err()
+            .contains("resolves to no fixtures"));
+    }
+
+    #[test]
+    fn chaser_direction_width_wings_duty_overlap_clock_phase_and_spread_are_distinct() {
+        let runtime = runtime_with_chaser_fixtures(4);
+        let now = Instant::now();
+        let clock = ClockSnapshot::default();
+
+        let request = test_chaser_request(&[1, 2, 3, 4]);
+        let forward = runtime
+            .resolve_chaser_effect_request(request.clone())
+            .unwrap();
+        assert_eq!(
+            evaluate_chaser_effect(&forward, 0, 1, now, now, &clock),
+            u16::MAX
+        );
+        assert_eq!(evaluate_chaser_effect(&forward, 0, 2, now, now, &clock), 0);
+        assert_eq!(
+            evaluate_chaser_effect(
+                &forward,
+                0,
+                2,
+                now,
+                now + Duration::from_millis(100),
+                &clock,
+            ),
+            u16::MAX
+        );
+
+        let mut single_gap_request = test_chaser_request(&[1, 2]);
+        single_gap_request.steps[1].fixture_ids.clear();
+        let single_gap = runtime
+            .resolve_chaser_effect_request(single_gap_request)
+            .unwrap();
+        assert_eq!(
+            evaluate_chaser_effect(
+                &single_gap,
+                0,
+                1,
+                now,
+                now + Duration::from_millis(100),
+                &clock,
+            ),
+            0
+        );
+
+        let mut reverse_request = request.clone();
+        reverse_request.direction = ChaserDirection::Reverse;
+        let reverse = runtime
+            .resolve_chaser_effect_request(reverse_request)
+            .unwrap();
+        assert_eq!(
+            evaluate_chaser_effect(&reverse, 0, 4, now, now, &clock),
+            u16::MAX
+        );
+        assert_eq!(
+            (0..6)
+                .map(|slot| chaser_step_index(ChaserDirection::Bounce, 4, slot, 0))
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2, 3, 2, 1]
+        );
+        let random_a = (0..32)
+            .map(|slot| chaser_step_index(ChaserDirection::Random, 4, slot, 123))
+            .collect::<Vec<_>>();
+        let random_b = (0..32)
+            .map(|slot| chaser_step_index(ChaserDirection::Random, 4, slot, 123))
+            .collect::<Vec<_>>();
+        let random_c = (0..32)
+            .map(|slot| chaser_step_index(ChaserDirection::Random, 4, slot, 456))
+            .collect::<Vec<_>>();
+        assert_eq!(random_a, random_b);
+        assert_ne!(random_a, random_c);
+        assert_eq!(&random_a[0..4], &random_a[4..8]);
+        assert_eq!(
+            random_a[0..4].iter().copied().collect::<HashSet<_>>().len(),
+            4
+        );
+        assert!(random_a.windows(2).all(|window| window[0] != window[1]));
+
+        let mut width_request = request.clone();
+        width_request.active_step_count = 2;
+        let width = runtime
+            .resolve_chaser_effect_request(width_request)
+            .unwrap();
+        let at_step_one = now + Duration::from_millis(100);
+        assert_eq!(
+            evaluate_chaser_effect(&width, 0, 1, now, at_step_one, &clock),
+            u16::MAX
+        );
+        assert_eq!(
+            evaluate_chaser_effect(&width, 0, 2, now, at_step_one, &clock),
+            u16::MAX
+        );
+
+        let mut bounce_width_request = request.clone();
+        bounce_width_request.direction = ChaserDirection::Bounce;
+        bounce_width_request.active_step_count = 4;
+        let bounce_width = runtime
+            .resolve_chaser_effect_request(bounce_width_request)
+            .unwrap();
+        for fixture_id in 1..=4 {
+            assert_eq!(
+                evaluate_chaser_effect(
+                    &bounce_width,
+                    0,
+                    fixture_id,
+                    now,
+                    now + Duration::from_millis(400),
+                    &clock,
+                ),
+                u16::MAX
+            );
+        }
+
+        let mut wings_request = request.clone();
+        wings_request.wings = 2;
+        let wings = runtime
+            .resolve_chaser_effect_request(wings_request)
+            .unwrap();
+        assert_eq!(
+            evaluate_chaser_effect(&wings, 0, 1, now, now, &clock),
+            u16::MAX
+        );
+        assert_eq!(
+            evaluate_chaser_effect(&wings, 0, 3, now, now, &clock),
+            u16::MAX
+        );
+
+        let mut duty_request = request.clone();
+        duty_request.duty_cycle = 0.5;
+        let duty = runtime.resolve_chaser_effect_request(duty_request).unwrap();
+        assert_eq!(
+            evaluate_chaser_effect(&duty, 0, 1, now, now + Duration::from_millis(75), &clock,),
+            0
+        );
+
+        let mut overlap_request = request.clone();
+        overlap_request.duty_cycle = 0.5;
+        overlap_request.overlap = 0.5;
+        let overlap = runtime
+            .resolve_chaser_effect_request(overlap_request)
+            .unwrap();
+        let crossfade = now + Duration::from_millis(75);
+        for fixture_id in [1, 2] {
+            let value = evaluate_chaser_effect(&overlap, 0, fixture_id, now, crossfade, &clock);
+            assert!((32_760..=32_775).contains(&value));
+        }
+
+        assert_eq!(chaser_slot_weights(0.80, 0.75, 0.0), (0.0, 0.0));
+        assert_eq!(chaser_slot_weights(0.75, 0.75, 0.2), (1.0, 0.0));
+        let shifted_crossfade = chaser_slot_weights(0.85, 0.75, 0.2);
+        assert!((shifted_crossfade.0 - 0.5).abs() < 0.000_1);
+        assert!((shifted_crossfade.1 - 0.5).abs() < 0.000_1);
+        assert_eq!(chaser_slot_weights(0.975, 0.75, 0.2), (0.0, 1.0));
+
+        let mut synced_request = request.clone();
+        synced_request.clock_sync = Some(protocol::EffectClockSync { beats: 0.5 });
+        let synced = runtime
+            .resolve_chaser_effect_request(synced_request)
+            .unwrap();
+        let mut beat_clock = ClockSnapshot::default();
+        beat_clock.beat_counter = 1;
+        assert_eq!(
+            evaluate_chaser_effect(&synced, 0, 3, now, now, &beat_clock),
+            u16::MAX
+        );
+
+        let mut phase_request = request.clone();
+        phase_request.phase = 0.25;
+        let phased = runtime
+            .resolve_chaser_effect_request(phase_request)
+            .unwrap();
+        assert_eq!(
+            evaluate_chaser_effect(&phased, 0, 2, now, now, &clock),
+            u16::MAX
+        );
+
+        let mut spread_request = request;
+        spread_request.fixture_spread = 1.0;
+        let spread = runtime
+            .resolve_chaser_effect_request(spread_request)
+            .unwrap();
+        for fixture_id in 1..=4 {
+            assert_eq!(
+                evaluate_chaser_effect(&spread, 0, fixture_id, now, now, &clock),
+                u16::MAX
+            );
+        }
+    }
+
+    #[test]
+    fn chaser_step_level_scales_all_features_and_hot_path_skips_unsupported_fixture() {
+        let mut runtime = runtime_with_chaser_fixtures(2);
+        let mut dimmer_only = sample_profile();
+        dimmer_only.dmx_modes[0]
+            .controls
+            .retain(|control| control.attribute == "Dimmer");
+        runtime.fixtures[1].profile = dimmer_only;
+        let mut request = test_chaser_request(&[1, 2]);
+        request.steps[0].level = 32_768;
+        request.features.push(protocol::ChaserFeature {
+            attribute: "Pan".to_string(),
+            low: 10_000,
+            high: 50_000,
+        });
+        let resolved = runtime.resolve_chaser_effect_request(request).unwrap();
+        let now = Instant::now();
+        let clock = ClockSnapshot::default();
+
+        assert!(
+            (32_767..=32_769).contains(&evaluate_chaser_effect(&resolved, 0, 1, now, now, &clock))
+        );
+        let cached = resolved.target_level_cache[&1]
+            .get()
+            .expect("first Chaser feature should cache the fixture level");
+        assert_eq!(cached.at, now);
+        assert!(
+            (29_999..=30_002).contains(&evaluate_chaser_effect(&resolved, 1, 1, now, now, &clock))
+        );
+        assert_eq!(resolved.target_level_cache[&1].get(), Some(cached));
+        assert_eq!(resolved.feature_fixture_ids[1], vec![1]);
+
+        runtime.effects.push(RuntimeEffect {
+            id: 90,
+            kind: RuntimeEffectKind::Chaser(resolved),
+            enabled: true,
+            created_at: now,
+        });
+        assert_eq!(
+            runtime.apply_effects(&runtime.fixtures[1], "Pan", 12_345, now),
+            12_345
+        );
+    }
+
+    #[test]
+    fn chaser_group_ids_remain_case_sensitive() {
+        let mut runtime = runtime_with_chaser_fixtures(2);
+        runtime.fixtures[1].request.group_ids = vec!["front".to_string()];
+        let mut request = test_chaser_request(&[1, 2]);
+        request.steps[0].fixture_ids.clear();
+        request.steps[0].target_group_ids = vec!["Front".to_string()];
+        request.steps[1].fixture_ids.clear();
+        request.steps[1].target_group_ids = vec!["front".to_string()];
+
+        let resolved = runtime.resolve_chaser_effect_request(request).unwrap();
+
+        assert_eq!(resolved.target_step_levels[&1], vec![u16::MAX, 0]);
+        assert_eq!(resolved.target_step_levels[&2], vec![0, u16::MAX]);
+        assert_eq!(
+            resolved
+                .request
+                .steps
+                .iter()
+                .flat_map(|step| step.target_group_ids.iter())
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec!["Front", "front"]
+        );
+    }
+
+    #[test]
+    fn chaser_group_rebind_preserves_zero_or_incompatible_target_and_cue_reference() {
+        let mut runtime = runtime_with_chaser_fixtures(1);
+        let mut request = test_chaser_request(&[1]);
+        request.steps[0].fixture_ids.clear();
+        request.steps[0].target_group_ids = vec!["Front".to_string()];
+        let effect = runtime.resolve_chaser_effect_request(request).unwrap();
+        runtime.effects.push(RuntimeEffect {
+            id: 77,
+            kind: RuntimeEffectKind::Chaser(effect),
+            enabled: true,
+            created_at: Instant::now(),
+        });
+        runtime.cues.push(RuntimeCue {
+            id: 88,
+            cue_list_id: DEFAULT_CUE_LIST_ID,
+            cue_number: "1".to_string(),
+            label: "Recall Chaser".to_string(),
+            fade_ms: 0,
+            pre_wait_ms: 0,
+            follow_ms: None,
+            ifcb_timing: CueIfcbTiming::default(),
+            parts: Vec::new(),
+            mark: false,
+            mib_fixture_ids: Vec::new(),
+            palette_targets: Vec::new(),
+            tracking: false,
+            notes: String::new(),
+            targets: Vec::new(),
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: vec![CueEffectTarget {
+                effect_id: 77,
+                enabled: true,
+            }],
+        });
+
+        runtime.remove_fixture(1);
+        assert_eq!(runtime.effects.len(), 1);
+        assert_eq!(runtime.cues[0].effect_targets.len(), 1);
+        assert!(matches!(
+            &runtime.effects[0].kind,
+            RuntimeEffectKind::Chaser(effect) if effect.target_phase_offsets.is_empty()
+        ));
+
+        let dormant_snapshot = runtime.build_snapshot(0);
+        let mut restored = runtime_with_chaser_fixtures(0);
+        restored.load_project_snapshot(dormant_snapshot);
+        assert_eq!(restored.effects.len(), 1);
+        assert_eq!(restored.cues[0].effect_targets.len(), 1);
+        assert!(matches!(
+            &restored.effects[0].kind,
+            RuntimeEffectKind::Chaser(effect)
+                if effect.target_phase_offsets.is_empty()
+                    && effect.request.steps[0].target_group_ids == vec!["Front"]
+        ));
+        runtime = restored;
+
+        let mut replacement = sample_patch_request("Replacement", 5);
+        replacement.group_ids = vec!["Front".to_string()];
+        runtime.apply_command(EngineCommand::PatchFixture {
+            fixture_id: 2,
+            request: replacement,
+            profile: sample_profile(),
+        });
+        assert!(matches!(
+            &runtime.effects[0].kind,
+            RuntimeEffectKind::Chaser(effect)
+                if effect.target_phase_offsets.contains_key(&2)
+                    && effect.target_step_levels[&2][0] == u16::MAX
+        ));
+        assert_eq!(runtime.cues[0].effect_targets.len(), 1);
+
+        let fixture = runtime
+            .fixtures
+            .iter_mut()
+            .find(|fixture| fixture.id == 2)
+            .unwrap();
+        fixture.profile.dmx_modes[fixture.mode_index]
+            .controls
+            .retain(|control| control.attribute == "Pan");
+        runtime.rebuild_chaser_effect_targets();
+        assert!(matches!(
+            &runtime.effects[0].kind,
+            RuntimeEffectKind::Chaser(effect)
+                if effect.target_phase_offsets.contains_key(&2)
+                    && effect.feature_fixture_ids[0].is_empty()
+        ));
+        assert_eq!(runtime.cues[0].effect_targets.len(), 1);
+
+        let incompatible_snapshot = runtime.build_snapshot(0);
+        let mut restored = runtime_with_chaser_fixtures(0);
+        restored.load_project_snapshot(incompatible_snapshot);
+        assert!(matches!(
+            &restored.effects[0].kind,
+            RuntimeEffectKind::Chaser(effect)
+                if effect.target_phase_offsets.contains_key(&2)
+                    && effect.feature_fixture_ids[0].is_empty()
+        ));
+        assert_eq!(restored.cues[0].effect_targets.len(), 1);
+
+        restored.fixtures[0].profile = sample_profile();
+        restored.rebuild_chaser_effect_targets();
+        assert!(matches!(
+            &restored.effects[0].kind,
+            RuntimeEffectKind::Chaser(effect) if effect.feature_fixture_ids[0] == vec![2]
+        ));
+        assert_eq!(restored.cues[0].effect_targets.len(), 1);
+    }
+
+    #[test]
+    fn chaser_published_add_update_roundtrip_and_busy_rollback_are_atomic() {
+        let mut runtime = runtime_with_chaser_fixtures(2);
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let request = test_chaser_request(&[1, 2]);
+        let (add_ack, add_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::AddChaserEffect {
+            effect_id: 100,
+            request: request.clone(),
+            enabled: false,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: add_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(add_receiver.recv().unwrap(), Ok(()));
+        let snapshot = published.read().unwrap().clone();
+        assert_eq!(snapshot.effects[0].effect_type, EffectKind::Chaser);
+        assert!(!snapshot.effects[0].enabled);
+        assert_eq!(snapshot.effects[0].chaser, Some(request.clone()));
+
+        let mut updated = request.clone();
+        updated.direction = ChaserDirection::Bounce;
+        updated.active_step_count = 2;
+        let (update_ack, update_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::UpdateChaserEffect {
+            effect_id: 100,
+            request: updated.clone(),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: update_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(update_receiver.recv().unwrap(), Ok(()));
+        assert_eq!(published.read().unwrap().effects[0].chaser, Some(updated));
+
+        runtime.effects.push(RuntimeEffect {
+            id: 101,
+            kind: RuntimeEffectKind::Lfo(LfoEffectRequest {
+                label: "Keep LFO".to_string(),
+                fixture_ids: vec![1],
+                target_group_ids: Vec::new(),
+                attribute: "Dimmer".to_string(),
+                video_targets: Vec::new(),
+                shape: LfoShape::Sine,
+                period_ms: 500,
+                clock_sync: None,
+                low: 0,
+                high: u16::MAX,
+                phase: 0.0,
+                blend_mode: EffectBlendMode::Override,
+            }),
+            enabled: true,
+            created_at: Instant::now(),
+        });
+        let before_wrong_kind = effect_summary(runtime.effects.last().unwrap());
+        let (wrong_kind_ack, wrong_kind_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::UpdateChaserEffect {
+            effect_id: 101,
+            request: request.clone(),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: wrong_kind_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(wrong_kind_receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("not a Chaser"));
+        assert_eq!(
+            effect_summary(runtime.effects.last().unwrap()),
+            before_wrong_kind
+        );
+
+        let before_busy = effect_summary(&runtime.effects[0]);
+        let guard = published.write().unwrap();
+        let mut rejected = request;
+        rejected.random_seed = 999;
+        let (busy_ack, busy_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::UpdateChaserEffect {
+            effect_id: 100,
+            request: rejected,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: busy_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(busy_receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("rolled back"));
+        assert_eq!(effect_summary(&runtime.effects[0]), before_busy);
+        drop(guard);
+
+        let roundtrip = runtime.build_snapshot(0);
+        let mut loaded = runtime_with_chaser_fixtures(2);
+        loaded.load_project_snapshot(roundtrip.clone());
+        assert_eq!(loaded.build_snapshot(0).effects, roundtrip.effects);
+    }
+
+    #[test]
+    fn chaser_handle_returns_only_after_add_and_update_are_published() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        for fixture_id in 1..=2 {
+            let mut request = sample_patch_request(
+                &format!("Published Chaser {fixture_id}"),
+                1 + (fixture_id as u16 - 1) * 4,
+            );
+            request.group_ids = vec!["Front".to_string()];
+            engine
+                .send(EngineCommand::PatchFixture {
+                    fixture_id,
+                    request,
+                    profile: sample_profile(),
+                })
+                .unwrap();
+        }
+        for _ in 0..20 {
+            if engine.snapshot().fixtures.len() == 2 {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+        }
+
+        let effect_id = engine.allocate_effect_id();
+        let request = test_chaser_request(&[1, 2]);
+        engine
+            .add_chaser_effect(effect_id, request.clone(), true)
+            .unwrap();
+        let added = engine.snapshot();
+        assert_eq!(added.effects.len(), 1);
+        assert_eq!(added.effects[0].chaser, Some(request.clone()));
+
+        let mut updated = request;
+        updated.direction = ChaserDirection::Random;
+        updated.random_seed = 42;
+        engine
+            .update_chaser_effect(effect_id, updated.clone())
+            .unwrap();
+        assert_eq!(engine.snapshot().effects[0].chaser, Some(updated));
+    }
+
+    #[test]
+    fn chaser_max_width_and_wings_hot_path_stays_bounded() {
+        let mut runtime = runtime_with_chaser_fixtures(64);
+        let fixture_ids = (1..=64).collect::<Vec<_>>();
+        let feature_names = (0..16)
+            .map(|index| match index {
+                0 => "Dimmer".to_string(),
+                1 => "Pan".to_string(),
+                _ => format!("ChaserAux{index}"),
+            })
+            .collect::<Vec<_>>();
+        for fixture in &mut runtime.fixtures {
+            let mode = &mut fixture.profile.dmx_modes[fixture.mode_index];
+            let template = mode.controls[0].clone();
+            for attribute in feature_names.iter().skip(2) {
+                let mut control = template.clone();
+                control.attribute = attribute.clone();
+                control.channel_name = attribute.clone();
+                mode.controls.push(control);
+            }
+        }
+        let mut request = test_chaser_request(&fixture_ids);
+        request.features = feature_names
+            .iter()
+            .map(|attribute| protocol::ChaserFeature {
+                attribute: attribute.clone(),
+                low: 5_000,
+                high: 60_000,
+            })
+            .collect();
+        request.wings = 16;
+        request.active_step_count = 64;
+        request.fixture_spread = 1.0;
+        let resolved = runtime.resolve_chaser_effect_request(request).unwrap();
+        let stack = (0..10).map(|_| resolved.clone()).collect::<Vec<_>>();
+        let now = Instant::now();
+        let clock = ClockSnapshot::default();
+        let started = Instant::now();
+        let mut checksum = 0_u64;
+
+        for frame in 0..10 {
+            let at = now + Duration::from_millis(frame * 10);
+            for effect in &stack {
+                for fixture_id in &fixture_ids {
+                    for feature_index in 0..feature_names.len() {
+                        checksum = checksum.wrapping_add(evaluate_chaser_effect(
+                            effect,
+                            feature_index,
+                            *fixture_id,
+                            now,
+                            at,
+                            &clock,
+                        ) as u64);
+                    }
+                }
+            }
+        }
+
+        assert_ne!(checksum, 0);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "10-stack, 16-feature max-width Chaser evaluation took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn chaser_venue_stack_200_fixtures_64_effects_stays_bounded() {
+        let runtime = runtime_with_chaser_fixtures(200);
+        let fixture_ids = (1..=200).collect::<Vec<_>>();
+        let mut base = test_chaser_request(&fixture_ids);
+        base.features.push(protocol::ChaserFeature {
+            attribute: "Pan".to_string(),
+            low: 8_000,
+            high: 56_000,
+        });
+        base.active_step_count = 4;
+        base.wings = 2;
+        base.duty_cycle = 0.75;
+        base.overlap = 0.25;
+        base.fixture_spread = 0.5;
+        let stack = (0..64)
+            .map(|index| {
+                let mut request = base.clone();
+                request.phase = index as f32 / 64.0;
+                runtime.resolve_chaser_effect_request(request).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let created_at = Instant::now();
+        let clock = ClockSnapshot::default();
+        let started = Instant::now();
+        let mut checksum = 0_u64;
+
+        for frame in 0..10 {
+            let at = created_at + Duration::from_millis(frame * 10);
+            for effect in &stack {
+                for fixture_id in &fixture_ids {
+                    checksum = checksum.wrapping_add(evaluate_chaser_effect(
+                        effect,
+                        0,
+                        *fixture_id,
+                        created_at,
+                        at,
+                        &clock,
+                    ) as u64);
+                    checksum = checksum.wrapping_add(evaluate_chaser_effect(
+                        effect,
+                        1,
+                        *fixture_id,
+                        created_at,
+                        at,
+                        &clock,
+                    ) as u64);
+                }
+            }
+            assert!(stack.iter().all(|effect| effect
+                .target_level_cache
+                .values()
+                .all(|cached| cached.get().is_some_and(|value| value.at == at))));
+        }
+
+        assert_ne!(checksum, 0);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "200-fixture, 64-effect Chaser venue regression took {:?}",
+            started.elapsed()
+        );
     }
 }

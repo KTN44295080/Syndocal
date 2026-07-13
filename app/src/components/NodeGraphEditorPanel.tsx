@@ -8,7 +8,7 @@ interface NodeGraphEditorPanelProps {
   transformAmount: number;
   transformMin: number;
   transformMax: number;
-  effectType: Exclude<EffectKind, "Color">;
+  effectType: Extract<EffectKind, "Lfo" | "PositionWave">;
   sourceMode: "Effect" | "Audio";
   audioBand: AudioSpectrumBand;
   audioSource: AudioSpectrumSource;
