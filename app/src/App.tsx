@@ -995,6 +995,7 @@ export default function App() {
   const [effectVideoPositionZ, setEffectVideoPositionZ] = createSignal(0);
   const [effectVideoTargetLinked, setEffectVideoTargetLinked] = createSignal(false);
   const [sampleEffectPreset, setSampleEffectPreset] = createSignal<SampleEffectPreset>("pulse");
+  const [effectRackSurface, setEffectRackSurface] = createSignal<"stack" | "graphs">("stack");
   const [editingEffectId, setEditingEffectId] = createSignal<number | null>(null);
   const [effectPeriod, setEffectPeriod] = createSignal(1000);
   const [effectClockSyncBeats, setEffectClockSyncBeats] = createSignal<number | null>(null);
@@ -3471,7 +3472,9 @@ export default function App() {
       ? `layoutSetup setupMode-${setupSubTab()}`
       : workspaceTab() === "touch"
         ? "layoutTouch"
-        : `layoutControl controlMode${controlMode()[0].toUpperCase()}${controlMode().slice(1)}`,
+        : `layoutControl controlMode${controlMode()[0].toUpperCase()}${controlMode().slice(1)}${
+            controlMode() === "edit" ? ` editDesk-${editDeskSurface()}` : ""
+          }`,
   );
   const remoteConfig = createMemo<RemoteControlConfig>(() => ({
     bind_ip: remoteBindIp(),
@@ -8828,6 +8831,17 @@ export default function App() {
   const sampleEffectTargetOverrideOptions = (preset: SampleEffectPreset): EffectTargetOverrideOptions =>
     preset === "shared" ? { forceVideoTarget: true, requireLightTarget: true } : {};
 
+  const isColourEffectTarget = () => {
+    if (effectTargetMode() === "video") {
+      return effectVideoParam().startsWith("Color") || effectVideoParam().startsWith("FxKey");
+    }
+    const attribute = selectedEffectAttribute().toLowerCase();
+    return [
+      "color", "colour", "red", "green", "blue", "cyan", "magenta", "yellow",
+      "hue", "saturation", "white", "amber", "lime", "uv", "cto", "ctb",
+    ].some((token) => attribute.includes(token));
+  };
+
   const effectTargetOverrideError = (options: EffectTargetOverrideOptions = {}) => {
     const targetMode = effectTargetMode();
     const fixture = selectedFixture();
@@ -8862,8 +8876,14 @@ export default function App() {
     return "";
   };
 
-  const sampleEffectTargetOverrideError = (preset: SampleEffectPreset) =>
-    effectTargetOverrideError(sampleEffectTargetOverrideOptions(preset));
+  const sampleEffectTargetOverrideError = (preset: SampleEffectPreset) => {
+    const targetError = effectTargetOverrideError(sampleEffectTargetOverrideOptions(preset));
+    if (targetError) return targetError;
+    if ((preset === "spectrum" || preset === "colour-chase") && !isColourEffectTarget()) {
+      return "Select a colour, hue, wheel, emitter, or video colour target.";
+    }
+    return "";
+  };
 
   const effectTargetOverrideFromForm = (options: EffectTargetOverrideOptions = {}): EffectTargetOverride | null => {
     if (effectTargetOverrideError(options)) {
@@ -10743,7 +10763,7 @@ export default function App() {
           class={`panel faders controlPanel timelineDesk-${timelineDeskSurface()} editDesk-${editDeskSurface()}`}
         >
           <div class="panelHeader">
-            <h2>Faders</h2>
+            <h2>{controlMode() === "edit" && editDeskSurface() === "effects" ? "Lighting FX" : "Faders"}</h2>
             <Show when={controlMode() === "live"}>
               <nav class="timelineDeskTabs" aria-label="Timeline desk surface">
                 <button class={timelineDeskSurface() === "show" ? "active" : ""} onClick={() => setTimelineDeskSurface("show")}>Show</button>
@@ -11086,16 +11106,20 @@ export default function App() {
             </div>
           </div>
           <div class="effectEditor">
-            <div class="panelHeader">
-              <h2>Effects</h2>
+            <div class="effectWorkspaceHeader">
+              <div>
+                <strong>FX Workspace</strong>
+                <span>{activeEffectCount()} active · {snapshot().effects.length} stacked · {snapshot().clock.bpm.toFixed(1)} BPM</span>
+              </div>
               <div class="panelHeaderActions">
-                <span>{snapshot().effects.length}</span>
-                <button onClick={loadEffectPreset}>Load</button>
+                <button onClick={loadEffectPreset}>Load File</button>
                 <button onClick={loadEffectPresetForCurrentTarget} disabled={Boolean(effectTargetOverrideError())}>
                   Load Target
                 </button>
               </div>
             </div>
+            <div class="effectWorkbench">
+            <section class="effectLibraryPane" aria-label="Effect Library">
             <SampleEffectPresetPanel
               selectedPreset={sampleEffectPreset()}
               targetErrorForPreset={sampleEffectTargetOverrideError}
@@ -11103,6 +11127,15 @@ export default function App() {
               onLoadPreset={(preset) => loadSampleEffectPreset(preset)}
               onLoadPresetForTarget={(preset) => loadSampleEffectPreset(preset, true)}
             />
+            </section>
+            <section class="effectInspectorPane" aria-label="Effect Inspector">
+            <header class="effectPaneHeader">
+              <div>
+                <strong>Inspector</strong>
+                <span>{editingEffectId() === null ? "New effect" : `Editing #${editingEffectId()}`}</span>
+              </div>
+              <span>{effectType() === "PositionWave" ? "SPATIAL" : "MODULATOR"}</span>
+            </header>
             <div class="effectForm">
               <div class="effectTargetHint">
                 <strong>{effectTargetMode() === "selection" ? "Map selection" : effectTargetMode()}</strong>
@@ -11254,24 +11287,37 @@ export default function App() {
                 onSpeed={setWaveSpeed}
                 onWavelength={setWaveWavelength}
               />
-              <EffectActionControlsPanel
-                showLightRange={effectTargetMode() !== "video"}
-                low={effectLow()}
-                high={effectHigh()}
-                phase={effectPhase()}
-                blendMode={effectBlendMode()}
-                addDisabled={effectSubmitDisabled()}
-                submitLabel={editingEffectId() === null ? "Add Effect" : `Update Effect ${editingEffectId()}`}
-                editing={editingEffectId() !== null}
-                editingLabel={editingEffectSummary()?.label ?? null}
-                onLow={setEffectLow}
-                onHigh={setEffectHigh}
-                onPhase={setEffectPhase}
-                onBlendMode={setEffectBlendMode}
-                onSubmitEffect={updateEditingEffect}
-                onCancelEdit={cancelEffectEdit}
-              />
             </div>
+            <EffectActionControlsPanel
+              showLightRange={effectTargetMode() !== "video"}
+              low={effectLow()}
+              high={effectHigh()}
+              phase={effectPhase()}
+              blendMode={effectBlendMode()}
+              addDisabled={effectSubmitDisabled()}
+              submitLabel={editingEffectId() === null ? "Add Effect" : `Update Effect ${editingEffectId()}`}
+              editing={editingEffectId() !== null}
+              editingLabel={editingEffectSummary()?.label ?? null}
+              onLow={setEffectLow}
+              onHigh={setEffectHigh}
+              onPhase={setEffectPhase}
+              onBlendMode={setEffectBlendMode}
+              onSubmitEffect={updateEditingEffect}
+              onCancelEdit={cancelEffectEdit}
+            />
+            </section>
+            <section class="effectRackPane" aria-label="Live FX Rack">
+              <header class="effectPaneHeader">
+                <div>
+                  <strong>Live Rack</strong>
+                  <span>{effectRackSurface() === "stack" ? `${snapshot().effects.length} effects` : `${snapshot().node_graphs.length} graphs`}</span>
+                </div>
+                <nav class="effectRackTabs" aria-label="FX rack surface">
+                  <button class={effectRackSurface() === "stack" ? "active" : ""} aria-pressed={effectRackSurface() === "stack"} onClick={() => setEffectRackSurface("stack")}>Stack</button>
+                  <button class={effectRackSurface() === "graphs" ? "active" : ""} aria-pressed={effectRackSurface() === "graphs"} onClick={() => setEffectRackSurface("graphs")}>Graphs</button>
+                </nav>
+              </header>
+            <Show when={effectRackSurface() === "graphs"}>
             <NodeGraphEditorPanel
               graphCount={snapshot().node_graphs.length}
               label={nodeGraphLabel()}
@@ -11314,6 +11360,8 @@ export default function App() {
               onSaveGraphPreset={saveNodeGraphPreset}
               onRemoveGraph={removeNodeGraph}
             />
+            </Show>
+            <Show when={effectRackSurface() === "stack"}>
             <EffectListPanel
               effects={snapshot().effects}
               onMoveEffect={moveEffect}
@@ -11324,6 +11372,9 @@ export default function App() {
               onSavePreset={saveEffectPreset}
               onRemoveEffect={removeEffect}
             />
+            </Show>
+            </section>
+            </div>
           </div>
           <DmxRawMonitor
             previews={dmxPreviewOptions()}

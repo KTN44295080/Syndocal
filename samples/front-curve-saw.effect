@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "effect_type": "Lfo",
+  "enabled": true,
+  "lfo": {
+    "label": "Front Curve Saw",
+    "fixture_ids": [],
+    "target_group_ids": ["Front"],
+    "attribute": "Dimmer",
+    "video_targets": [],
+    "shape": "Saw",
+    "period_ms": 1000,
+    "clock_sync": {
+      "beats": 2.0
+    },
+    "low": 0,
+    "high": 65535,
+    "phase": 0.0,
+    "blend_mode": "Override"
+  },
+  "position_wave": null
+}

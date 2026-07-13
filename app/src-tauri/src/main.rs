@@ -94,6 +94,15 @@ const SAMPLE_EFFECT_PRESET_CIRCLE_PAN_JSON: &str =
 const SAMPLE_EFFECT_PRESET_CIRCLE_TILT_LABEL: &str = "samples/front-circle-tilt.effect";
 const SAMPLE_EFFECT_PRESET_CIRCLE_TILT_JSON: &str =
     include_str!("../../../samples/front-circle-tilt.effect");
+const SAMPLE_EFFECT_PRESET_CURVE_SAW_LABEL: &str = "samples/front-curve-saw.effect";
+const SAMPLE_EFFECT_PRESET_CURVE_SAW_JSON: &str =
+    include_str!("../../../samples/front-curve-saw.effect");
+const SAMPLE_EFFECT_PRESET_COLOUR_SPECTRUM_LABEL: &str = "samples/front-colour-spectrum.effect";
+const SAMPLE_EFFECT_PRESET_COLOUR_SPECTRUM_JSON: &str =
+    include_str!("../../../samples/front-colour-spectrum.effect");
+const SAMPLE_EFFECT_PRESET_COLOUR_CHASE_LABEL: &str = "samples/front-colour-chase.effect";
+const SAMPLE_EFFECT_PRESET_COLOUR_CHASE_JSON: &str =
+    include_str!("../../../samples/front-colour-chase.effect");
 const PHASE1_SMOKE_EXPECTED_FIRST_8: [u8; 8] = [255, 255, 255, 255, 0x80, 0x00, 0x80, 0x00];
 const TELEMETRY_DMX_TARGET_FRAME_RATE_HZ: u32 = 44;
 const TELEMETRY_DMX_TARGET_TICK_INTERVAL_US: u64 =
@@ -6739,8 +6748,20 @@ fn sample_effect_preset_json(preset: &str) -> Result<(&'static str, &'static str
         "fan" | "front-pan-fan" | "front_pan_fan" => {
             Ok((SAMPLE_EFFECT_PRESET_FAN_LABEL, SAMPLE_EFFECT_PRESET_FAN_JSON))
         }
+        "curve" | "curve-saw" | "front-curve-saw" | "front_curve_saw" => Ok((
+            SAMPLE_EFFECT_PRESET_CURVE_SAW_LABEL,
+            SAMPLE_EFFECT_PRESET_CURVE_SAW_JSON,
+        )),
+        "spectrum" | "colour-spectrum" | "color-spectrum" => Ok((
+            SAMPLE_EFFECT_PRESET_COLOUR_SPECTRUM_LABEL,
+            SAMPLE_EFFECT_PRESET_COLOUR_SPECTRUM_JSON,
+        )),
+        "colour-chase" | "color-chase" | "colour-mapping" | "color-mapping" => Ok((
+            SAMPLE_EFFECT_PRESET_COLOUR_CHASE_LABEL,
+            SAMPLE_EFFECT_PRESET_COLOUR_CHASE_JSON,
+        )),
         value => Err(format!(
-            "Unknown sample effect preset '{value}'. Expected 'pulse', 'shared', 'wave', 'flash', 'random', 'perlin', 'chase', 'ball', or 'fan'."
+            "Unknown sample effect preset '{value}'. Expected 'pulse', 'shared', 'wave', 'flash', 'random', 'perlin', 'chase', 'ball', 'fan', 'curve', 'spectrum', or 'colour-chase'."
         )),
     }
 }
@@ -6761,6 +6782,19 @@ fn sample_effect_bundle_jsons(preset: &str) -> Result<Vec<(&'static str, &'stati
             "Unknown sample effect bundle '{value}'. Expected 'circle'."
         )),
     }
+}
+
+fn sample_effect_requires_target(preset: &str) -> bool {
+    matches!(
+        preset.trim().to_ascii_lowercase().as_str(),
+        "spectrum"
+            | "colour-spectrum"
+            | "color-spectrum"
+            | "colour-chase"
+            | "color-chase"
+            | "colour-mapping"
+            | "color-mapping"
+    )
 }
 
 fn add_effect_preset_to_engine(
@@ -6833,6 +6867,12 @@ fn load_sample_effect_preset(
     preset: String,
     target_override: Option<EffectTargetOverride>,
 ) -> Result<EffectId, String> {
+    if sample_effect_requires_target(&preset) && target_override.is_none() {
+        return Err(format!(
+            "Sample effect '{}' requires an explicit current target",
+            preset.trim()
+        ));
+    }
     let (label, json) = sample_effect_preset_json(&preset)?;
     let preset: EffectPreset =
         serde_json::from_str(json).map_err(|error| format!("Failed to parse {label}: {error}"))?;
@@ -21689,6 +21729,63 @@ f 1 2 3
         assert_eq!(circle_tilt_lfo.high, 40960);
         assert!(sample_effect_preset_json("missing").is_err());
         assert!(sample_effect_bundle_jsons("missing").is_err());
+    }
+
+    #[test]
+    fn seven_family_effect_library_presets_validate_and_require_colour_targets() {
+        let expected = [
+            (
+                "curve",
+                SAMPLE_EFFECT_PRESET_CURVE_SAW_LABEL,
+                EffectKind::Lfo,
+            ),
+            (
+                "spectrum",
+                SAMPLE_EFFECT_PRESET_COLOUR_SPECTRUM_LABEL,
+                EffectKind::Lfo,
+            ),
+            (
+                "colour-chase",
+                SAMPLE_EFFECT_PRESET_COLOUR_CHASE_LABEL,
+                EffectKind::PositionWave,
+            ),
+        ];
+        for (id, expected_label, expected_kind) in expected {
+            let (label, json) = sample_effect_preset_json(id).unwrap();
+            assert_eq!(label, expected_label);
+            let preset: EffectPreset = serde_json::from_str(json).unwrap();
+            validate_effect_preset(&preset).unwrap();
+            assert_eq!(preset.effect_type, expected_kind);
+        }
+
+        assert!(!sample_effect_requires_target("curve"));
+        assert!(sample_effect_requires_target("spectrum"));
+        assert!(sample_effect_requires_target("color-spectrum"));
+        assert!(sample_effect_requires_target("colour-chase"));
+        assert!(sample_effect_requires_target("color-mapping"));
+
+        let target_override = EffectTargetOverride {
+            fixture_ids: vec![42],
+            target_group_ids: Vec::new(),
+            attribute: "ColorRed".to_string(),
+            video_targets: Vec::new(),
+        };
+        let (_, spectrum_json) = sample_effect_preset_json("spectrum").unwrap();
+        let spectrum: EffectPreset = serde_json::from_str(spectrum_json).unwrap();
+        let spectrum_request =
+            apply_lfo_effect_target_override(spectrum.lfo.unwrap(), &target_override);
+        assert_eq!(spectrum_request.attribute, "ColorRed");
+        assert_eq!(spectrum_request.shape, protocol::LfoShape::Saw);
+
+        let (_, colour_chase_json) = sample_effect_preset_json("colour-chase").unwrap();
+        let colour_chase: EffectPreset = serde_json::from_str(colour_chase_json).unwrap();
+        let colour_chase_request = apply_position_wave_effect_target_override(
+            colour_chase.position_wave.unwrap(),
+            &target_override,
+        );
+        assert_eq!(colour_chase_request.attribute, "ColorRed");
+        assert_eq!(colour_chase_request.shape, protocol::LfoShape::Saw);
+        assert_eq!(colour_chase_request.wavelength, 3.0);
     }
 
     #[test]

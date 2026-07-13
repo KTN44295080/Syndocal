@@ -21,7 +21,7 @@ interface EffectActionControlsPanelProps {
 
 export function EffectActionControlsPanel(props: EffectActionControlsPanelProps) {
   return (
-    <>
+    <div class="effectActionDock">
       <Show when={props.showLightRange}>
         <div class="split">
           <label>
@@ -68,6 +68,6 @@ export function EffectActionControlsPanel(props: EffectActionControlsPanelProps)
           <button onClick={props.onCancelEdit}>Cancel Edit</button>
         </Show>
       </div>
-    </>
+    </div>
   );
 }

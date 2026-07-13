@@ -43,11 +43,15 @@ export function EffectListPanel(props: EffectListPanelProps) {
 
   return (
     <div class="effectList">
-      <Show when={props.effects.length > 0} fallback={<div class="effectListEmpty">No effects in the stack.</div>}>
+      <Show when={props.effects.length > 0} fallback={<div class="effectListEmpty">Choose a recipe in Effect Library, then Apply to Current.</div>}>
         <For each={props.effects}>
           {(effect, index) => (
             <div class={effect.enabled ? "effectItem" : "effectItem disabled"}>
-              <div class="effectItemSummary">
+              <button
+                class="effectItemSummary"
+                aria-label={`Edit ${effect.label}`}
+                onClick={() => props.onUseAsDraft(effect)}
+              >
                 <div class="effectItemTitleRow">
                   <strong>{effect.label}</strong>
                   <span class={effect.enabled ? "effectMetaChip state-on" : "effectMetaChip state-off"}>
@@ -66,24 +70,29 @@ export function EffectListPanel(props: EffectListPanelProps) {
                   <span class="effectMetaChip target">{targetLabel(effect)}</span>
                   <span class="effectMetaChip blend">{effect.blend_mode}</span>
                 </div>
-              </div>
+              </button>
               <div class="effectItemActions">
-                <button onClick={() => void props.onMoveEffect(effect.id, -1)} disabled={index() === 0}>
-                  Up
+                <button aria-label={`Move ${effect.label} up`} title="Move up" onClick={() => void props.onMoveEffect(effect.id, -1)} disabled={index() === 0}>
+                  ↑
                 </button>
-                <button onClick={() => void props.onMoveEffect(effect.id, 1)} disabled={index() === props.effects.length - 1}>
-                  Down
+                <button aria-label={`Move ${effect.label} down`} title="Move down" onClick={() => void props.onMoveEffect(effect.id, 1)} disabled={index() === props.effects.length - 1}>
+                  ↓
                 </button>
                 <button onClick={() => void props.onSetEnabled(effect.id, !effect.enabled)}>
                   {effect.enabled ? "Disable" : "Enable"}
                 </button>
-                <button onClick={() => props.onUseAsDraft(effect)}>Use Draft</button>
-                <button onClick={() => void props.onDuplicateEffect(effect.id)}>Duplicate</button>
-                <Show when={effect.effect_type === "PositionWave" && effect.video_targets.length > 0}>
-                  <button onClick={() => void props.onUseOutputPosition(effect.id, effect.video_targets)}>Use Video Output Pos</button>
-                </Show>
-                <button onClick={() => void props.onSavePreset(effect.id)}>Save</button>
-                <button onClick={() => void props.onRemoveEffect(effect.id)}>Remove</button>
+                <details class="effectItemMore">
+                  <summary>More</summary>
+                  <div>
+                    <button onClick={() => props.onUseAsDraft(effect)}>Edit</button>
+                    <button onClick={() => void props.onDuplicateEffect(effect.id)}>Duplicate</button>
+                    <Show when={effect.effect_type === "PositionWave" && effect.video_targets.length > 0}>
+                      <button onClick={() => void props.onUseOutputPosition(effect.id, effect.video_targets)}>Use Video Output Pos</button>
+                    </Show>
+                    <button onClick={() => void props.onSavePreset(effect.id)}>Save Preset</button>
+                    <button onClick={() => void props.onRemoveEffect(effect.id)}>Remove</button>
+                  </div>
+                </details>
               </div>
             </div>
           )}

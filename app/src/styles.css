@@ -12714,6 +12714,28 @@ input[type="color"] {
   overflow-wrap: anywhere;
 }
 
+.effectFamilyRail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.effectFamilyRail button {
+  min-height: 28px;
+  border-color: #35414e;
+  background: #151b22;
+  padding: 0 8px;
+  color: #a9b5c3;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.effectFamilyRail button.active {
+  border-color: #5dd64c;
+  background: #142419;
+  color: #e5f8e8;
+}
+
 .sampleEffectPresetGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
@@ -14254,22 +14276,22 @@ input[type="color"] {
 
 /* Syndocal visual system: dense, neutral live-production workspace. */
 :root {
-  color: #f0ece7;
-  background: #141311;
+  color: #f1f3f5;
+  background: #101214;
   font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   font-size: 12px;
-  --ray-bg: #141311;
-  --ray-surface: #1b1917;
-  --ray-surface-raised: #24211e;
-  --ray-surface-control: #2b2824;
-  --ray-surface-hover: #35302b;
-  --ray-border: #3d3934;
-  --ray-border-strong: #57504a;
-  --ray-text: #f0ece7;
-  --ray-text-muted: #aaa198;
-  --ray-text-faint: #776f68;
-  --ray-accent: #e47b28;
-  --ray-accent-strong: #f08a32;
+  --ray-bg: #101214;
+  --ray-surface: #171a1d;
+  --ray-surface-raised: #1d2125;
+  --ray-surface-control: #252a2f;
+  --ray-surface-hover: #2e343a;
+  --ray-border: #30363b;
+  --ray-border-strong: #485057;
+  --ray-text: #f1f3f5;
+  --ray-text-muted: #a7afb6;
+  --ray-text-faint: #6e777e;
+  --ray-accent: #ed8435;
+  --ray-accent-strong: #f3974f;
   --ray-success: #70c967;
   --ray-cyan: #39b8cb;
   --ray-danger: #dc625b;
@@ -15787,6 +15809,25 @@ h3 {
   font-size: 11px;
 }
 
+.effectFamilyRail {
+  gap: 3px;
+}
+
+.effectFamilyRail button {
+  min-height: 24px;
+  border-color: #3b3732;
+  border-radius: 1px;
+  background: #211f1c;
+  padding-inline: 7px;
+  color: #a9a198;
+}
+
+.effectFamilyRail button.active {
+  border-color: #9d6a3f;
+  background: #2b231d;
+  color: #f2e3d4;
+}
+
 .sampleEffectPresetGrid {
   grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
   gap: 3px;
@@ -16757,4 +16798,666 @@ h3 {
   grid-row: 1;
   width: 100%;
   height: 100%;
+}
+
+/* Lighting FX is a full production desk, not a stack of web cards. */
+.layoutControl.controlModeEdit.editDesk-effects {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.layoutControl.controlModeEdit.editDesk-effects > .liveControlPanel,
+.layoutControl.controlModeEdit.editDesk-effects > .controlStagePanel {
+  display: none;
+}
+
+.layoutControl.controlModeEdit.editDesk-effects > .faders {
+  grid-column: 1;
+  grid-row: 1;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  border-color: var(--ray-border);
+  background: var(--ray-surface);
+  padding: 0;
+}
+
+.layoutControl.controlModeEdit.editDesk-effects > .faders > .panelHeader {
+  min-height: 34px;
+  border-bottom: 1px solid var(--ray-border);
+  background: #1b1f22;
+  padding: 3px 6px 3px 10px;
+}
+
+.layoutControl.controlModeEdit.editDesk-effects > .faders > .panelHeader h2 {
+  color: #f7f8f9;
+  font-size: 13px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.layoutControl.controlModeEdit.editDesk-effects .editDeskTabs {
+  min-width: 300px;
+}
+
+.layoutControl.controlModeEdit.editDesk-effects .editDeskTabs button {
+  min-height: 27px;
+  border: 0;
+  border-left: 1px solid var(--ray-border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ray-text-muted);
+  padding: 0 12px;
+  font-size: 11px;
+}
+
+.layoutControl.controlModeEdit.editDesk-effects .editDeskTabs button.active {
+  background: #252a2f;
+  color: #fff;
+  box-shadow: inset 0 -2px 0 var(--ray-accent);
+}
+
+.layoutControl.controlModeEdit .faders.editDesk-effects > .effectEditor {
+  height: 100%;
+  grid-template-rows: 39px minmax(0, 1fr);
+  gap: 0;
+  border: 0;
+  background: #121518;
+  padding: 0;
+  overflow: hidden;
+}
+
+.effectWorkspaceHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  border-bottom: 1px solid var(--ray-border);
+  background: #171b1e;
+  padding: 4px 7px 4px 11px;
+}
+
+.effectWorkspaceHeader > div:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.effectWorkspaceHeader strong {
+  color: #f1f3f5;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+}
+
+.effectWorkspaceHeader span {
+  min-width: 0;
+  overflow: hidden;
+  color: #8e989f;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.effectWorkspaceHeader .panelHeaderActions {
+  display: flex;
+  gap: 1px;
+}
+
+.effectWorkspaceHeader .panelHeaderActions button {
+  min-height: 28px;
+  border-radius: 0;
+  padding: 0 10px;
+  font-size: 11px;
+}
+
+.effectWorkbench {
+  display: grid;
+  grid-template-columns: minmax(250px, 0.72fr) minmax(420px, 1.18fr) minmax(310px, 0.9fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.effectLibraryPane,
+.effectInspectorPane,
+.effectRackPane {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #15181b;
+}
+
+.effectLibraryPane,
+.effectInspectorPane {
+  border-right: 1px solid var(--ray-border);
+}
+
+.effectLibraryPane {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.effectInspectorPane,
+.effectRackPane {
+  grid-template-rows: 40px minmax(0, 1fr);
+}
+
+.effectInspectorPane {
+  grid-template-rows: 40px minmax(0, 1fr) auto;
+}
+
+.effectPaneHeader,
+.sampleEffectPresetHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  min-height: 40px;
+  border-bottom: 1px solid var(--ray-border);
+  background: #1b1f22;
+  padding: 5px 9px;
+}
+
+.effectPaneHeader > div,
+.sampleEffectPresetHeader > div {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.effectPaneHeader strong,
+.sampleEffectPresetHeader strong {
+  color: #f1f3f5;
+  font-size: 13px;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+}
+
+.effectPaneHeader span,
+.sampleEffectPresetHeader span {
+  min-width: 0;
+  overflow: hidden;
+  color: #8f999f;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.effectPaneHeader > span:last-child,
+.sampleEffectPresetHeader > span:last-child {
+  color: #c2c8cc;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.sampleEffectPresetPanel {
+  height: 100%;
+  grid-template-rows: 40px auto minmax(0, 1fr) auto;
+  gap: 0;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  overflow: hidden;
+}
+
+.effectFamilyRail {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  border-bottom: 1px solid var(--ray-border);
+  background: #111416;
+  padding: 4px;
+}
+
+.effectFamilyRail button {
+  min-width: 0;
+  min-height: 28px;
+  border: 0;
+  border-radius: 0;
+  background: #202428;
+  color: #aeb5ba;
+  padding: 0 4px;
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.effectFamilyRail button:hover {
+  background: #2a3035;
+}
+
+.effectFamilyRail button.active,
+.app .effectFamilyRail button[aria-pressed="true"] {
+  border: 0;
+  background: #30363b;
+  color: #fff;
+  box-shadow: inset 2px 0 0 var(--ray-accent);
+}
+
+.sampleEffectPresetGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 1px;
+  min-height: 0;
+  overflow: hidden auto;
+  background: #111416;
+  padding: 4px;
+}
+
+.sampleEffectPresetCard {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  grid-template-rows: 1fr;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 49px;
+  border: 0;
+  border-bottom: 1px solid #2b3034;
+  border-radius: 0;
+  background: #1b1f22;
+  padding: 5px 8px;
+  color: #dce0e3;
+  text-align: left;
+}
+
+.sampleEffectPresetCard:hover {
+  background: #252a2e;
+}
+
+.sampleEffectPresetCard.active,
+.app .sampleEffectPresetCard[aria-pressed="true"] {
+  border-color: #3a4147;
+  background: #292e33;
+  color: #fff;
+  box-shadow: inset 3px 0 0 var(--ray-accent);
+}
+
+.effectRecipeGlyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border: 1px solid #485057;
+  border-radius: 2px;
+  background: #111416;
+  color: #f0a066;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+
+.sampleEffectPresetPick {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  padding: 0;
+}
+
+.sampleEffectPresetPick strong {
+  overflow: hidden;
+  color: #eef0f2;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sampleEffectPresetPick small {
+  display: block;
+  overflow: hidden;
+  color: #8f999f;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.effectRecipeDock {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  border-top: 1px solid var(--ray-border);
+  background: #1b1f22;
+  padding: 8px;
+}
+
+.effectRecipeSelection {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.effectRecipeSelection > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.effectRecipeSelection strong {
+  color: #f3f4f5;
+  font-size: 12px;
+}
+
+.effectRecipeSelection span,
+.effectRecipeSelection p,
+.sampleEffectPresetHint {
+  margin: 0;
+  color: #98a1a7;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.effectRecipeSelection p {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.effectRecipeActions {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 4px;
+}
+
+.effectRecipeActions button {
+  min-width: 0;
+  min-height: 31px;
+  border-radius: 2px;
+  padding: 0 6px;
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.effectInspectorPane > .effectForm {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 0;
+  overflow: hidden auto;
+  padding: 8px;
+}
+
+.effectInspectorPane label {
+  color: #aeb6bc;
+  font-size: 12px;
+}
+
+.effectInspectorPane input,
+.effectInspectorPane select {
+  min-height: 32px;
+  background: #111416;
+  font-size: 12px;
+}
+
+.effectInspectorPane .effectTargetHint,
+.effectInspectorPane .effectShapePresetPanel,
+.effectInspectorPane .effectBpmPeriodPanel,
+.effectInspectorPane .waveStagePicker,
+.effectInspectorPane .videoTargetPositionPanel,
+.effectInspectorPane .nodeGraphPanel {
+  border-color: #343a3f;
+  border-radius: 2px;
+  background: #181c1f;
+}
+
+.effectInspectorPane .effectTargetHint {
+  min-height: 34px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.effectInspectorPane .effectShapePresetGrid,
+.effectInspectorPane .effectBpmPeriodGrid {
+  gap: 3px;
+}
+
+.effectInspectorPane .effectShapePresetGrid button,
+.effectInspectorPane .effectBpmPeriodGrid button {
+  min-height: 40px;
+  border-radius: 2px;
+}
+
+.effectActionDock {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: end;
+  gap: 5px;
+  border-top: 1px solid #485057;
+  background: #1b1f22;
+  padding: 7px;
+  box-shadow: 0 -6px 12px rgb(0 0 0 / 0.28);
+}
+
+.effectActionDock > .split {
+  grid-column: span 2;
+}
+
+.effectActionDock > label {
+  min-width: 0;
+}
+
+.effectActionDock .effectSubmitActions {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 0.75fr) minmax(90px, 0.45fr);
+  gap: 4px;
+}
+
+.effectActionDock .effectSubmitActions button {
+  min-height: 32px;
+}
+
+.effectRackTabs {
+  display: flex;
+  align-self: stretch;
+  gap: 1px;
+}
+
+.effectRackTabs button {
+  min-width: 62px;
+  min-height: 29px;
+  border: 0;
+  border-left: 1px solid var(--ray-border);
+  border-radius: 0;
+  background: transparent;
+  color: #9ca5ab;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.effectRackTabs button.active,
+.app .effectRackTabs button[aria-pressed="true"] {
+  background: #292e33;
+  color: #fff;
+  box-shadow: inset 0 -2px 0 var(--ray-accent);
+}
+
+.effectRackPane > .effectList,
+.effectRackPane > .nodeGraphPanel {
+  min-height: 0;
+  overflow: hidden auto;
+}
+
+.effectRackPane > .effectList {
+  align-content: start;
+  gap: 1px;
+  background: #111416;
+  padding: 5px;
+}
+
+.effectRackPane .effectListEmpty {
+  border-color: #3b4248;
+  border-radius: 2px;
+  background: #171a1d;
+  color: #9ca5ab;
+  font-size: 12px;
+}
+
+.effectRackPane .effectItem {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px;
+  min-height: 62px;
+  border: 0;
+  border-bottom: 1px solid #30363b;
+  border-radius: 0;
+  background: #1b1f22;
+  padding: 5px 6px;
+}
+
+.effectRackPane .effectItem.disabled {
+  background: #171a1d;
+}
+
+.effectRackPane .effectItemSummary {
+  min-height: 48px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 2px 4px;
+  color: inherit;
+  text-align: left;
+}
+
+.effectRackPane .effectItemSummary:hover {
+  background: #252a2f;
+}
+
+.effectRackPane .effectItemTitleRow > strong {
+  color: #f0f2f4;
+  font-size: 12px;
+}
+
+.effectRackPane .effectMetaGrid {
+  flex-wrap: nowrap;
+  gap: 3px;
+}
+
+.effectRackPane .effectMetaChip {
+  min-height: 18px;
+  border-radius: 1px;
+  background: #111416;
+  padding: 1px 4px;
+  font-size: 10px;
+}
+
+.effectRackPane .effectItemActions {
+  display: grid;
+  grid-template-columns: repeat(2, 27px) minmax(62px, auto);
+  justify-content: end;
+  gap: 2px;
+  max-width: 132px;
+}
+
+.effectRackPane .effectItemActions > button,
+.effectRackPane .effectItemMore > summary {
+  min-height: 27px;
+  border: 1px solid #42494f;
+  border-radius: 1px;
+  background: #252a2f;
+  padding: 2px 5px;
+  color: #d7dcdf;
+  font-size: 11px;
+  text-align: center;
+}
+
+.effectRackPane .effectItemMore {
+  position: relative;
+  grid-column: 1 / -1;
+}
+
+.effectRackPane .effectItemMore > summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  list-style: none;
+}
+
+.effectRackPane .effectItemMore > summary::-webkit-details-marker {
+  display: none;
+}
+
+.effectRackPane .effectItemMore > div {
+  position: absolute;
+  right: 0;
+  bottom: 31px;
+  display: grid;
+  width: 170px;
+  border: 1px solid #4a5157;
+  background: #202428;
+  padding: 3px;
+  box-shadow: 0 8px 18px rgb(0 0 0 / 0.38);
+}
+
+.effectRackPane .effectItemMore > div button {
+  min-height: 29px;
+  border: 0;
+  border-bottom: 1px solid #333a3f;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.effectRackPane > .nodeGraphPanel {
+  align-content: start;
+  gap: 7px;
+  border: 0;
+  border-radius: 0;
+  background: #15181b;
+  padding: 7px;
+}
+
+@media (max-width: 1320px) {
+  .effectWorkbench {
+    grid-template-columns: minmax(236px, 0.68fr) minmax(400px, 1.2fr) minmax(292px, 0.88fr);
+  }
+
+  .effectFamilyRail {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .effectWorkspaceHeader span {
+    max-width: 360px;
+  }
+}
+
+@media (max-height: 760px) {
+  .effectRecipeSelection p {
+    display: none;
+  }
+
+  .effectRecipeDock {
+    gap: 5px;
+    padding: 6px;
+  }
+
+  .sampleEffectPresetCard {
+    min-height: 43px;
+  }
+
+  .effectInspectorPane > .effectForm {
+    padding-bottom: 6px;
+  }
+
+  .effectActionDock {
+    padding: 5px;
+  }
 }

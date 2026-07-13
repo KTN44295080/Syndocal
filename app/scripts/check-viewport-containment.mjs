@@ -701,6 +701,17 @@ async function measure(client, label) {
       visibleTimelineAutomationSurfaceCount: visibleCount('.timelineAutomationSurface'),
       visibleEditDeskTabCount: visibleCount('.editDeskTabs button'),
       visibleEffectEditorCount: visibleCount('.effectEditor'),
+      visibleEffectWorkbenchCount: visibleCount('.effectWorkbench'),
+      visibleEffectLibraryPaneCount: visibleCount('.effectLibraryPane'),
+      visibleEffectInspectorPaneCount: visibleCount('.effectInspectorPane'),
+      visibleEffectRackPaneCount: visibleCount('.effectRackPane'),
+      visibleEffectRecipeDockCount: visibleCount('.effectRecipeDock'),
+      visibleEffectActionDockCount: visibleCount('.effectActionDock'),
+      visibleEffectRackTabCount: visibleCount('.effectRackTabs button'),
+      visibleEffectFamilyButtonCount: visibleCount('.effectFamilyRail button'),
+      visibleActiveEffectFamilyButtonCount: visibleCount('.effectFamilyRail button.active[aria-pressed="true"]'),
+      visibleEffectLibraryCardCount: visibleCount('.sampleEffectPresetCard'),
+      visibleTargetRequiredEffectCardCount: visibleCount('.sampleEffectPresetCard[data-requires-target="true"]'),
       visibleNodeGraphPanelCount: visibleCount('.nodeGraphPanel'),
       nodeGraphAudioSourceOptionCount: [...document.querySelectorAll('.nodeGraphPanel option')]
         .filter((option) => (option.textContent || '').trim().toLowerCase() === 'audio fft').length,
@@ -938,6 +949,7 @@ function hasExpectedControlModeSurface(result) {
   }
   if (
     !result.label.startsWith("control-mixer-") &&
+    !result.label.startsWith("control-edit-effects-") &&
     (
       result.visibleLiveControlPanelCount !== 1 ||
       result.visibleControlStagePanelCount !== 1 ||
@@ -980,13 +992,41 @@ function hasExpectedControlModeSurface(result) {
   }
   if (result.label.startsWith("control-edit-")) {
     if (result.label.startsWith("control-edit-effects-")) {
+      const hasFxDesk =
+        result.visibleLiveControlPanelCount === 0 &&
+        result.visibleControlStagePanelCount === 0 &&
+        result.visibleControlStageCount === 0 &&
+        result.visibleEffectWorkbenchCount === 1 &&
+        result.visibleEffectLibraryPaneCount === 1 &&
+        result.visibleEffectInspectorPaneCount === 1 &&
+        result.visibleEffectRackPaneCount === 1 &&
+        result.visibleEffectRecipeDockCount === 1 &&
+        result.visibleEffectActionDockCount === 1 &&
+        result.visibleEffectRackTabCount === 2;
+      if (result.label.startsWith("control-edit-effects-graphs-")) {
+        return hasFxDesk && result.visibleNodeGraphPanelCount === 1 && result.controlWorkSurfaceUnsafeOverflowCount === 0;
+      }
+      if (result.label.startsWith("control-edit-effects-colour-")) {
+        return (
+          hasFxDesk &&
+          result.visibleEffectEditorCount === 1 &&
+          result.visibleEffectFamilyButtonCount === 8 &&
+          result.visibleActiveEffectFamilyButtonCount === 1 &&
+          result.visibleEffectLibraryCardCount === 1 &&
+          result.visibleTargetRequiredEffectCardCount === 1 &&
+          result.controlWorkSurfaceUnsafeOverflowCount === 0
+        );
+      }
       return (
+        hasFxDesk &&
         result.visibleEditDeskTabCount === 3 &&
         result.visibleFixtureEditSurfaceCount === 0 &&
         result.visibleEffectEditorCount === 1 &&
-        result.visibleNodeGraphPanelCount === 1 &&
-        result.nodeGraphAudioSourceOptionCount === 1 &&
-        result.nodeGraphLiveAudioOptionCount === 1 &&
+        result.visibleEffectFamilyButtonCount === 8 &&
+        result.visibleActiveEffectFamilyButtonCount === 1 &&
+        result.visibleEffectLibraryCardCount === 13 &&
+        result.visibleTargetRequiredEffectCardCount === 2 &&
+        result.visibleNodeGraphPanelCount === 0 &&
         result.effectTargetHintCount >= 1 &&
         result.visibleRawMonitorCount === 0 &&
         result.controlWorkSurfaceUnsafeOverflowCount === 0
@@ -1406,7 +1446,19 @@ async function runViewport(client, viewport) {
       results.push(await measure(client, `control-edit-color-${viewport.width}x${viewport.height}`));
       await clickVisibleByText(client, ".editDeskTabs button", "Effects");
       await sleep(120);
+      if (screenshotDir) {
+        const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+        writeFileSync(join(screenshotDir, `control-edit-effects-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
+      }
       results.push(await measure(client, `control-edit-effects-${viewport.width}x${viewport.height}`));
+      await clickVisibleByText(client, ".effectRackTabs button", "Graphs");
+      await sleep(80);
+      results.push(await measure(client, `control-edit-effects-graphs-${viewport.width}x${viewport.height}`));
+      await clickVisibleByText(client, ".effectRackTabs button", "Stack");
+      await clickVisibleByText(client, ".effectFamilyRail button", "Colour");
+      await sleep(80);
+      results.push(await measure(client, `control-edit-effects-colour-${viewport.width}x${viewport.height}`));
+      await clickVisibleByText(client, ".effectFamilyRail button", "All");
       await clickVisibleByText(client, ".editDeskTabs button", "DMX");
       await sleep(120);
       results.push(await measure(client, `control-edit-dmx-${viewport.width}x${viewport.height}`));
