@@ -23,17 +23,12 @@ import {
 import { ProjectorMapEditor } from "./ProjectorMapEditor";
 
 type MaybePromise = void | Promise<unknown>;
-type VideoOutputPreviewMode = "output" | "test";
 
 type VideoOutputMappingPanelProps = {
   output: VideoOutputSummary;
   mappingPresetLabel: string;
   selectedMappingPresetLabel: string;
   mappingPresets: VideoOutputMappingPresetSummary[];
-  previewOutputId: number | null;
-  previewMode: VideoOutputPreviewMode;
-  previewInfo: string;
-  previewUrl: string;
   onMappingPresetLabel: (value: string) => void;
   onSelectedMappingPresetLabel: (value: string) => void;
   onSavePreset: (mapping: VideoOutputMapping) => MaybePromise;
@@ -55,11 +50,6 @@ export function VideoOutputMappingPanel(props: VideoOutputMappingPanelProps) {
       aspect_ratio: aspectRatio,
       aspect_mode: "Fit",
     });
-
-  const previewLabel = () =>
-    props.previewOutputId === props.output.id
-      ? `${props.previewMode === "test" ? "Pattern" : "Output"} / ${props.previewInfo}`
-      : "No preview";
 
   const nativeAspectLabel = () => aspectRatioLabel(outputAspectRatio(props.output.width, props.output.height));
 
@@ -90,6 +80,12 @@ export function VideoOutputMappingPanel(props: VideoOutputMappingPanelProps) {
         <strong>{mappingCorrectionReadout(props.output.mapping)}</strong>
         <span>{mappingReadout(props.output.mapping)}</span>
       </div>
+      <ProjectorMapEditor
+        mapping={props.output.mapping}
+        outputId={props.output.id}
+        label={props.output.label}
+        onPatch={(patch) => void patchMapping(patch)}
+      />
       <div class="split">
         <label>
           Preset Label
@@ -165,24 +161,6 @@ export function VideoOutputMappingPanel(props: VideoOutputMappingPanelProps) {
             </button>
           )}
         </For>
-      </div>
-      <ProjectorMapEditor
-        mapping={props.output.mapping}
-        outputId={props.output.id}
-        label={props.output.label}
-        onPatch={(patch) => void patchMapping(patch)}
-      />
-      <div class="videoOutputPreviewCard">
-        <div class="sectionHeader">
-          <h4>Output Preview</h4>
-          <span>{previewLabel()}</span>
-        </div>
-        <Show
-          when={props.previewOutputId === props.output.id && props.previewUrl}
-          fallback={<span class="emptyState">No preview</span>}
-        >
-          {(url) => <img src={url()} alt={`${props.output.label} preview`} />}
-        </Show>
       </div>
       <div class="triple">
         <label>

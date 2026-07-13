@@ -461,6 +461,18 @@ async function measure(client, label) {
     const videoSetupSidebarRect = videoSetupSidebar?.getBoundingClientRect() ?? null;
     const videoSetupOutputDesk = document.querySelector('.videoSetupPanel .videoSetupOutputDesk');
     const videoSetupOutputDeskRect = videoSetupOutputDesk?.getBoundingClientRect() ?? null;
+    const videoSetupRoutingPane = document.querySelector('.videoSetupPanel .videoSetupRoutingPane');
+    const videoSetupRoutingPaneRect = videoSetupRoutingPane?.getBoundingClientRect() ?? null;
+    const videoSetupMapPane = document.querySelector('.videoSetupPanel .videoSetupMapPane');
+    const videoSetupMapPaneRect = videoSetupMapPane?.getBoundingClientRect() ?? null;
+    const videoSetupInspectorPane = document.querySelector('.videoSetupPanel .videoSetupInspectorPane');
+    const videoSetupInspectorPaneRect = videoSetupInspectorPane?.getBoundingClientRect() ?? null;
+    const videoSetupProjectorSurface = document.querySelector('.videoSetupPanel .projectorMapSurface');
+    const videoSetupProjectorSurfaceRect = videoSetupProjectorSurface?.getBoundingClientRect() ?? null;
+    const videoSetupPreviewCard = document.querySelector('.videoSetupPanel .videoSetupInspectorPane .videoOutputPreviewCard');
+    const videoSetupPreviewCardRect = videoSetupPreviewCard?.getBoundingClientRect() ?? null;
+    const videoSetupActionDock = document.querySelector('.videoSetupPanel .videoOutputActionDock');
+    const videoSetupActionDockRect = videoSetupActionDock?.getBoundingClientRect() ?? null;
     const profileLoadPanel = document.querySelector('.setupMode-library .profileLoadPanel');
     const profileLoadPanelRect = profileLoadPanel?.getBoundingClientRect() ?? null;
     const loadedProfileSummaryPanel = document.querySelector('.setupMode-library .loadedProfileSummaryPanel');
@@ -602,6 +614,50 @@ async function measure(client, label) {
       compactMappingStageHeight: compactMappingStageRect ? Math.round(compactMappingStageRect.height) : 0,
       videoSetupSidebarWidth: videoSetupSidebarRect ? Math.round(videoSetupSidebarRect.width) : 0,
       videoSetupOutputDeskWidth: videoSetupOutputDeskRect ? Math.round(videoSetupOutputDeskRect.width) : 0,
+      visibleVideoSetupRoutingPaneCount: visibleCount('.videoSetupPanel .videoSetupRoutingPane'),
+      visibleVideoSetupMapPaneCount: visibleCount('.videoSetupPanel .videoSetupMapPane'),
+      visibleVideoSetupInspectorPaneCount: visibleCount('.videoSetupPanel .videoSetupInspectorPane'),
+      videoSetupRoutingPaneWidth: videoSetupRoutingPaneRect ? Math.round(videoSetupRoutingPaneRect.width) : 0,
+      videoSetupMapPaneWidth: videoSetupMapPaneRect ? Math.round(videoSetupMapPaneRect.width) : 0,
+      videoSetupInspectorPaneWidth: videoSetupInspectorPaneRect ? Math.round(videoSetupInspectorPaneRect.width) : 0,
+      videoSetupMapPaneHeight: videoSetupMapPaneRect ? Math.round(videoSetupMapPaneRect.height) : 0,
+      videoSetupMapPaneOverflowPx: videoSetupMapPane
+        ? Math.max(0, videoSetupMapPane.scrollHeight - videoSetupMapPane.clientHeight)
+        : 0,
+      videoSetupProjectorSurfaceContained: Boolean(
+        videoSetupProjectorSurfaceRect &&
+        videoSetupMapPaneRect &&
+        videoSetupProjectorSurfaceRect.left >= videoSetupMapPaneRect.left - 1 &&
+        videoSetupProjectorSurfaceRect.right <= videoSetupMapPaneRect.right + 1 &&
+        videoSetupProjectorSurfaceRect.top >= videoSetupMapPaneRect.top - 1 &&
+        videoSetupProjectorSurfaceRect.bottom <= Math.min(videoSetupMapPaneRect.bottom, innerHeight) + 1
+      ),
+      videoSetupPreviewContained: Boolean(
+        videoSetupPreviewCardRect &&
+        videoSetupInspectorPaneRect &&
+        videoSetupPreviewCardRect.left >= videoSetupInspectorPaneRect.left - 1 &&
+        videoSetupPreviewCardRect.right <= videoSetupInspectorPaneRect.right + 1 &&
+        videoSetupPreviewCardRect.top >= videoSetupInspectorPaneRect.top - 1 &&
+        videoSetupPreviewCardRect.bottom <= Math.min(videoSetupInspectorPaneRect.bottom, innerHeight) + 1
+      ),
+      visibleVideoSetupActionDockCount: visibleCount('.videoSetupPanel .videoOutputActionDock'),
+      videoSetupActionDockInViewport: Boolean(
+        videoSetupActionDockRect &&
+        videoSetupInspectorPaneRect &&
+        videoSetupActionDockRect.left >= videoSetupInspectorPaneRect.left - 1 &&
+        videoSetupActionDockRect.right <= videoSetupInspectorPaneRect.right + 1 &&
+        videoSetupActionDockRect.top >= videoSetupInspectorPaneRect.top - 1 &&
+        videoSetupActionDockRect.bottom <= Math.min(videoSetupInspectorPaneRect.bottom, innerHeight) + 1 &&
+        videoSetupActionDockRect.height >= 96
+      ),
+      videoSetupCriticalActionInViewportCount: ['toggle-blackout', 'preview', 'open-window'].filter((action) =>
+        [...document.querySelectorAll('.videoSetupPanel .videoOutputActionDock button[data-action]')].some((button) => {
+          const rect = button.getBoundingClientRect();
+          return button.dataset.action === action &&
+            rect.left >= 0 && rect.right <= innerWidth + 1 && rect.top >= 0 && rect.bottom <= innerHeight + 1;
+        })
+      ).length,
+      visibleVideoSetupDisplayActionCount: visibleCount('.videoSetupPanel .videoOutputActionDock button[data-action="open-window"]'),
       visibleProfileLoadPanelCount: visibleCount('.setupMode-library .profileLoadPanel'),
       visibleLoadedProfileSummaryPanelCount: visibleCount('.setupMode-library .loadedProfileSummaryPanel'),
       profileLoadPanelWidth: profileLoadPanelRect ? Math.round(profileLoadPanelRect.width) : 0,
@@ -1302,6 +1358,20 @@ function hasExpectedSetupSurface(result) {
       result.visibleSetupVideoPanelCount >= 1 &&
       result.videoSetupSidebarWidth >= 220 &&
       result.videoSetupOutputDeskWidth >= 780 &&
+      result.visibleVideoSetupRoutingPaneCount === 1 &&
+      result.visibleVideoSetupMapPaneCount === 1 &&
+      result.visibleVideoSetupInspectorPaneCount === 1 &&
+      result.videoSetupRoutingPaneWidth >= 220 &&
+      result.videoSetupMapPaneWidth >= 498 &&
+      result.videoSetupInspectorPaneWidth >= 288 &&
+      result.videoSetupMapPaneHeight >= 520 &&
+      result.videoSetupMapPaneOverflowPx <= 1 &&
+      result.videoSetupProjectorSurfaceContained &&
+      result.videoSetupPreviewContained &&
+      result.visibleVideoSetupActionDockCount === 1 &&
+      result.videoSetupActionDockInViewport &&
+      result.videoSetupCriticalActionInViewportCount === 3 &&
+      result.visibleVideoSetupDisplayActionCount === 1 &&
       result.visibleSetupVideoOutputDeckCount >= 1 &&
       result.visibleSetupVideoOutputActiveDeckCount >= 1 &&
       result.visibleSetupVideoOutputDetailPaneCount >= 1 &&
@@ -1699,7 +1769,7 @@ async function main() {
         ? ` patch=${result.visiblePatchActionRowCount}/${result.visiblePatchAutoButtonCount}/${result.visiblePatchPrimaryButtonCount}/${result.visiblePatchNextFreeButtonCount}/${result.visiblePatchFootprintCount}/${result.visibleDmxAddressGridCount}/${result.dmxAddressCellCount}/${result.dmxAddressOccupiedCellCount}/${result.dmxAddressPlannedCellCount}/${result.visibleDmxFixtureBlockCount}/${result.compactMappingStageWidth}x${result.compactMappingStageHeight}/${result.visibleDmxGridSummaryCount}/${result.visibleFixtureSetupEditorCount}/${result.visibleUseProfileForPatchButtonCount}/${result.visibleDuplicateFixtureButtonCount}`
         : "";
       const outputSetupSuffix = result.label.startsWith("setup-video-")
-        ? ` outputSetup=${result.visibleSetupVideoPanelCount}/${result.visibleSetupVideoOutputDeckCount}/${result.visibleSetupVideoOutputActiveDeckCount}/${result.visibleSetupVideoOutputDetailPaneCount}/${result.visibleVideoOutputMappingPanelCount}/${result.visibleVideoOutputBlendControlsCount}/${result.visibleProjectorMapEditorCount}/${result.visibleProjectorMapHandleCount}/${result.visibleProjectorKeystoneHandleCount}/${result.visibleProjectorScaleHandleCount}/${result.visibleProjectorRotateHandleCount}/${result.visibleProjectorAspectModeButtonCount}/${result.visibleProjectorAspectPresetButtonCount}/${result.visibleProjectorResetPoseButtonCount}`
+        ? ` outputSetup=${result.visibleSetupVideoPanelCount}/${result.visibleSetupVideoOutputDeckCount}/${result.visibleSetupVideoOutputActiveDeckCount}/${result.visibleSetupVideoOutputDetailPaneCount}/${result.visibleVideoOutputMappingPanelCount}/${result.visibleVideoOutputBlendControlsCount}/${result.visibleProjectorMapEditorCount}/${result.visibleProjectorMapHandleCount}/${result.visibleProjectorKeystoneHandleCount}/${result.visibleProjectorScaleHandleCount}/${result.visibleProjectorRotateHandleCount}/${result.visibleProjectorAspectModeButtonCount}/${result.visibleProjectorAspectPresetButtonCount}/${result.visibleProjectorResetPoseButtonCount}/${result.videoSetupSidebarWidth}w/${result.videoSetupOutputDeskWidth}w panes=${result.videoSetupRoutingPaneWidth}/${result.videoSetupMapPaneWidth}/${result.videoSetupInspectorPaneWidth} actions=${result.videoSetupCriticalActionInViewportCount}`
         : "";
       const waveDraftSuffix = result.label.startsWith("mapping-wave-draft-")
         ? ` waveDraft=${result.effectTargetValue}/${result.effectTypeValue}/${result.effectCommonAttributeValue || 'none'}`

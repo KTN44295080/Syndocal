@@ -91,41 +91,43 @@ export function SetupVideoPanel(props: SetupVideoPanelProps) {
         <span>{props.outputs.length} video output(s)</span>
       </div>
       <div class="videoSetupWorkbench">
-        <aside class="videoSetupSidebar">
-          <VideoCompositionSetupPanel
-            compositions={props.compositions}
-            layers={props.layers}
-            draftLabel={props.compositionLabel}
-            draftLayerIds={props.compositionLayerIds}
-            onDraftLabel={props.onCompositionLabel}
-            onToggleDraftLayer={props.onToggleCompositionLayer}
-            onAddComposition={props.onAddComposition}
-            onRemoveComposition={props.onRemoveComposition}
-            onSetCompositionLayers={props.onSetCompositionLayers}
-            onMoveCompositionLayer={props.onMoveCompositionLayer}
-          />
-          <VideoOutputCreatePanel
-            label={props.outputLabel}
-            kind={props.outputKind}
-            width={props.outputWidth}
-            height={props.outputHeight}
-            fadeMs={props.outputFadeMs}
-            monitorId={props.outputMonitorId}
-            fullscreen={props.outputFullscreen}
-            endpoint={props.outputEndpoint}
-            onLabel={props.onOutputLabel}
-            onKind={props.onOutputKind}
-            onWidth={props.onOutputWidth}
-            onHeight={props.onOutputHeight}
-            onFadeMs={props.onOutputFadeMs}
-            onMonitorId={props.onOutputMonitorId}
-            onFullscreen={props.onOutputFullscreen}
-            onEndpoint={props.onOutputEndpoint}
-            onAddOutput={props.onAddOutput}
-          />
-        </aside>
         <div class="videoSetupOutputDesk">
           <VideoOutputListPanel
+            setupTools={
+              <div class="videoSetupSidebar" aria-label="Video setup tools">
+                <VideoCompositionSetupPanel
+                  compositions={props.compositions}
+                  layers={props.layers}
+                  draftLabel={props.compositionLabel}
+                  draftLayerIds={props.compositionLayerIds}
+                  onDraftLabel={props.onCompositionLabel}
+                  onToggleDraftLayer={props.onToggleCompositionLayer}
+                  onAddComposition={props.onAddComposition}
+                  onRemoveComposition={props.onRemoveComposition}
+                  onSetCompositionLayers={props.onSetCompositionLayers}
+                  onMoveCompositionLayer={props.onMoveCompositionLayer}
+                />
+                <VideoOutputCreatePanel
+                  label={props.outputLabel}
+                  kind={props.outputKind}
+                  width={props.outputWidth}
+                  height={props.outputHeight}
+                  fadeMs={props.outputFadeMs}
+                  monitorId={props.outputMonitorId}
+                  fullscreen={props.outputFullscreen}
+                  endpoint={props.outputEndpoint}
+                  onLabel={props.onOutputLabel}
+                  onKind={props.onOutputKind}
+                  onWidth={props.onOutputWidth}
+                  onHeight={props.onOutputHeight}
+                  onFadeMs={props.onOutputFadeMs}
+                  onMonitorId={props.onOutputMonitorId}
+                  onFullscreen={props.onOutputFullscreen}
+                  onEndpoint={props.onOutputEndpoint}
+                  onAddOutput={props.onAddOutput}
+                />
+              </div>
+            }
             outputs={props.outputs}
             compositions={props.compositions}
             mappingPresets={props.mappingPresets}

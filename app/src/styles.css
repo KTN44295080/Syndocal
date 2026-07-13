@@ -2485,6 +2485,303 @@ h3 {
   min-height: 48px;
 }
 
+/* Setup Video: fixed routing, map and output-inspector production desk. */
+.layoutSetup.setupMode-video .videoSetupWorkbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.layoutSetup.setupMode-video .videoSetupOutputDesk,
+.layoutSetup.setupMode-video .videoOutputSetupShell {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.layoutSetup.setupMode-video .videoOutputSetupShell {
+  display: grid;
+  grid-template-columns: minmax(222px, 248px) minmax(520px, 1fr) minmax(288px, 330px);
+  gap: 0;
+  background: #121518;
+}
+
+.videoSetupRoutingPane,
+.videoSetupMapPane,
+.videoSetupInspectorPane {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  border-radius: 0;
+  background: #15181b;
+}
+
+.videoSetupRoutingPane,
+.videoSetupMapPane {
+  border-right: 1px solid var(--ray-border);
+}
+
+.videoSetupRoutingPane {
+  grid-template-rows: 34px minmax(0, 1fr);
+}
+
+.videoSetupPaneHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+  min-width: 0;
+  min-height: 34px;
+  border-bottom: 1px solid var(--ray-border);
+  padding: 4px 7px;
+}
+
+.videoSetupPaneHeader h3,
+.videoSetupPaneHeader span {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.videoSetupPaneHeader h3 {
+  color: #e7e9eb;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.videoSetupPaneHeader span {
+  color: #858e95;
+  font-size: 10px;
+}
+
+.videoOutputRail {
+  display: grid;
+  grid-template-rows: minmax(72px, 0.28fr) minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.layoutSetup.setupMode-video .videoOutputDeckList {
+  gap: 1px;
+  min-height: 0;
+  border-bottom: 1px solid var(--ray-border);
+  background: #111416;
+  overflow: hidden auto;
+  padding: 3px;
+}
+
+.layoutSetup.setupMode-video .videoOutputDeck {
+  min-height: 52px;
+  border: 0;
+  border-bottom: 1px solid #343a3f;
+  border-radius: 0;
+  background: #1b1f22;
+  padding: 5px 7px;
+}
+
+.layoutSetup.setupMode-video .videoOutputDeck.active {
+  border-color: #343a3f;
+  background: #292e33;
+  box-shadow: inset 3px 0 0 var(--ray-accent);
+}
+
+.layoutSetup.setupMode-video .videoSetupSidebar {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  min-width: 0;
+  min-height: 0;
+  border-right: 0;
+  padding: 4px;
+  overflow: hidden auto;
+}
+
+.layoutSetup.setupMode-video .videoSetupDisclosure {
+  border-width: 0 0 1px;
+  border-radius: 0;
+  background: #191c1f;
+}
+
+.layoutSetup.setupMode-video .videoSetupDisclosure > summary {
+  min-height: 30px;
+  padding: 7px;
+}
+
+.videoSetupMapPane {
+  grid-template-rows: 46px 39px minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.videoSetupMapPane > .videoOutputDetailHeader {
+  min-height: 46px;
+  border: 0;
+  border-bottom: 1px solid var(--ray-border);
+  border-radius: 0;
+  background: #171a1d;
+  padding: 5px 8px;
+}
+
+.videoSetupMapPane > .videoOutputDetailHeader strong {
+  border-radius: 2px;
+  background: #20252a;
+}
+
+.videoSetupMapPane > label {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  border-bottom: 1px solid var(--ray-border);
+  padding: 4px 7px;
+  color: #929aa0;
+  font-size: 11px;
+}
+
+.videoSetupMapPane > label select {
+  min-width: 0;
+  min-height: 28px;
+}
+
+.videoSetupMapPane > .videoOutputMapping {
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: #15181b;
+  padding: 7px;
+  overflow: hidden auto;
+}
+
+.videoSetupMapPane .mappingReadout,
+.videoSetupMapPane .projectorMapEditor,
+.videoSetupMapPane .videoOutputBlendControls,
+.videoSetupMapPane .videoOutputMaskControls {
+  border-radius: 1px;
+  background: #111416;
+}
+
+.videoSetupMapPane .projectorMapEditor {
+  border-color: #3b4247;
+  padding: 6px;
+}
+
+.videoSetupMapPane .projectorMapSurface {
+  width: 100%;
+  height: min(42vh, 520px);
+  min-height: 240px;
+  aspect-ratio: auto;
+  border-radius: 0;
+  background: #090c0e;
+}
+
+.videoSetupMapPane .projectorMapModeRow,
+.videoSetupMapPane .projectorMapCornerResetRow,
+.videoSetupMapPane .projectorMapAspectPresetRow {
+  gap: 2px;
+  margin-top: 4px;
+}
+
+.videoSetupMapPane .presetRow {
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+  gap: 2px;
+}
+
+.videoSetupInspectorPane {
+  grid-template-rows: 34px auto auto minmax(0, 1fr);
+  align-content: start;
+  overflow: hidden;
+}
+
+.videoSetupInspectorPane > .videoOutputPreviewCard,
+.videoSetupInspectorPane > .videoOutputConfig {
+  gap: 5px;
+  min-width: 0;
+  border: 0;
+  border-bottom: 1px solid var(--ray-border);
+  border-radius: 0;
+  background: #15181b;
+  padding: 7px;
+}
+
+.videoSetupInspectorPane > .videoOutputPreviewCard img {
+  max-height: 150px;
+  border-radius: 0;
+}
+
+.videoSetupInspectorPane > .videoOutputPreviewCard .emptyState {
+  display: grid;
+  min-height: 96px;
+  place-items: center;
+  border: 1px solid #30363a;
+  background: #090c0e;
+}
+
+.videoSetupInspectorPane > .videoOutputConfig .split {
+  gap: 4px;
+}
+
+.videoSetupInspectorPane > .videoOutputConfig .buttonRow {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.videoSetupInspectorPane > .videoOutputActionDock {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  gap: 2px;
+  min-width: 0;
+  min-height: 0;
+  border-top: 1px solid #3b4247;
+  padding: 7px;
+  overflow: hidden auto;
+}
+
+.videoSetupInspectorPane > .videoOutputActionDock button {
+  min-width: 0;
+  min-height: 32px;
+  border-radius: 1px;
+  padding: 3px 5px;
+}
+
+.videoSetupInspectorPane > .videoOutputActionDock button[data-action="toggle-blackout"],
+.videoSetupInspectorPane > .videoOutputActionDock button[data-action="open-window"],
+.videoSetupInspectorPane > .videoOutputActionDock button[data-action="remove-output"] {
+  min-height: 44px;
+}
+
+.videoSetupInspectorPane > .videoOutputActionDock button[aria-pressed="true"] {
+  box-shadow: inset 3px 0 0 var(--ray-accent);
+}
+
+.videoSetupInspectorPane > .videoOutputActionDock button.danger {
+  grid-column: 1 / -1;
+  margin-top: 5px;
+}
+
+@media (max-width: 1320px) {
+  .layoutSetup.setupMode-video .videoOutputSetupShell {
+    grid-template-columns: 222px minmax(498px, 1fr) 288px;
+  }
+
+  .videoSetupInspectorPane > .videoOutputPreviewCard .emptyState {
+    min-height: 72px;
+  }
+
+  .videoSetupMapPane .projectorMapSurface {
+    height: 260px;
+    min-height: 220px;
+  }
+}
+
 /* Native form accents follow the desktop system instead of browser blue. */
 input[type="range"],
 input[type="checkbox"],
@@ -18111,4 +18408,10 @@ h3 {
 
 .app .layoutTouch label:has(input[type="checkbox"]) {
   min-height: 48px;
+}
+
+/* Keep the Setup Video inspector fixed; only its action dock scrolls. */
+.layoutSetup.setupMode-video .videoSetupOutputDesk .videoSetupInspectorPane.videoOutputDetailPane {
+  overflow: hidden;
+  padding-right: 0;
 }
