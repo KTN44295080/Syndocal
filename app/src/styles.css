@@ -8223,35 +8223,137 @@ progress {
   text-align: right;
 }
 
+.positionConsoleSurface {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.9fr) minmax(300px, 1.1fr);
+  gap: 8px;
+  min-width: 0;
+  min-height: 300px;
+}
+
+.positionConsolePrimary,
+.positionToolDeck {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid #393530;
+  border-radius: 2px;
+  background: #151719;
+}
+
+.positionConsolePrimary {
+  display: grid;
+  align-items: center;
+  padding: 6px;
+}
+
+.positionToolDeck {
+  display: grid;
+  grid-template-rows: 29px minmax(0, 1fr);
+}
+
+.positionToolTabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  min-width: 0;
+  border-bottom: 1px solid #393530;
+  background: #111315;
+}
+
+.positionToolTabs button {
+  min-width: 0;
+  min-height: 28px;
+  border: 0;
+  border-radius: 0;
+  background: #1b1d1f;
+  color: #9f9992;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+.positionToolTabs button.active {
+  background: #292724;
+  color: #ffffff;
+  box-shadow: inset 0 -2px 0 var(--ray-accent);
+}
+
+.positionToolTabs button:disabled {
+  background: #171819;
+  color: #625d58;
+  opacity: 1;
+}
+
+.positionToolPane {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  padding: 5px;
+}
+
+.positionToolPane:focus-visible {
+  outline: 2px solid #5d97d6;
+  outline-offset: -2px;
+}
+
+.positionToolPane > .controlLimitPanel {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.positionToolPanePosition .positionFavoritePanel {
+  border-top: 1px solid #393530;
+  padding-top: 5px;
+}
+
+.positionQuickGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  align-items: start;
+  gap: 5px;
+  min-width: 0;
+}
+
 .positionNudgeGrid {
   display: grid;
   grid-template-columns: repeat(3, minmax(64px, 1fr));
-  gap: 6px;
+  gap: 3px;
 }
 
 .positionNudgeGrid button {
-  min-height: 30px;
+  min-height: 24px;
   padding: 0 8px;
 }
 
 .positionTargetGrid {
   display: grid;
-  grid-template-columns: repeat(9, minmax(34px, 1fr));
-  gap: 5px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 3px;
 }
 
 .positionTargetGrid button {
   display: grid;
-  justify-items: center;
-  gap: 3px;
-  min-height: 46px;
-  padding: 5px;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+  padding: 2px 4px;
+  text-align: left;
 }
 
 .positionTargetGrid small {
+  min-width: 0;
+  overflow: hidden;
   color: #8d9aaa;
   font-size: 0.67rem;
   line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .positionTargetMini {
@@ -8279,9 +8381,28 @@ progress {
 
 .positionPadRow {
   display: grid;
-  grid-template-columns: minmax(184px, 1fr) minmax(120px, 0.36fr);
+  grid-template-columns: minmax(170px, 1fr) minmax(104px, 0.34fr);
   gap: 10px;
   align-items: stretch;
+  min-width: 0;
+  min-height: 0;
+}
+
+.positionConsolePrimary .positionPadRow {
+  height: 100%;
+}
+
+.positionConsolePrimary .panTiltPad {
+  width: min(100%, 360px);
+  aspect-ratio: 1;
+  align-self: center;
+  justify-self: center;
+}
+
+.positionConsolePrimary .axisSliderRack {
+  align-self: center;
+  width: 100%;
+  height: min(100%, 360px);
 }
 
 .axisSliderRack {
@@ -8353,6 +8474,23 @@ progress {
   height: 30px;
 }
 
+.positionToolPane .positionDirectGrid {
+  gap: 5px;
+}
+
+.positionToolPane .positionDirectGrid label {
+  gap: 2px;
+  font-size: 11px;
+}
+
+.positionToolPane .positionDirectGrid input,
+.positionToolPane .positionDirectGrid select {
+  min-height: 26px;
+  height: 26px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+
 .controlLimitPanel {
   display: grid;
   gap: 8px;
@@ -8412,7 +8550,17 @@ progress {
 
 .positionFavoritePanel {
   display: grid;
-  gap: 8px;
+  gap: 4px;
+}
+
+.positionFavoritePanel .swatchHeader {
+  flex-wrap: wrap;
+}
+
+.positionFavoritePanel .miniButtonRow {
+  flex: 1 1 180px;
+  min-width: 0;
+  justify-content: flex-end;
 }
 
 .miniButtonRow {
@@ -8426,7 +8574,9 @@ progress {
 }
 
 .positionFavoriteLabelInput {
+  flex: 1 1 72px;
   width: min(112px, 32vw);
+  min-width: 64px;
   min-height: 24px;
   padding: 2px 7px;
   font-size: 0.74rem;
@@ -8434,7 +8584,7 @@ progress {
 
 .positionFavoriteGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
   gap: 6px;
 }
 
@@ -8445,8 +8595,8 @@ progress {
   align-items: center;
   column-gap: 7px;
   row-gap: 2px;
-  min-height: 52px;
-  padding: 6px;
+  min-height: 44px;
+  padding: 4px;
   text-align: left;
 }
 
@@ -8505,11 +8655,11 @@ progress {
 .positionTransformRow {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
+  gap: 3px;
 }
 
 .positionTransformRow button {
-  min-height: 30px;
+  min-height: 26px;
 }
 
 .panTiltPad,
@@ -8701,6 +8851,15 @@ progress {
 }
 
 @media (max-width: 980px) {
+  .positionConsoleSurface {
+    grid-template-columns: 1fr;
+  }
+
+  .positionConsolePrimary,
+  .positionToolDeck {
+    min-height: 280px;
+  }
+
   .positionPadRow,
   .colorPickerRow {
     grid-template-columns: 1fr;
@@ -17842,13 +18001,21 @@ h3 {
   grid-template-rows: auto auto minmax(0, 1fr);
 }
 
-.layoutControl.controlModeEdit .visualControlPanel:has(.positionReadoutStrip) > .positionNudgeGrid,
-.layoutControl.controlModeEdit .visualControlPanel:has(.positionReadoutStrip) > .positionTargetGrid,
-.layoutControl.controlModeEdit .visualControlPanel:has(.positionReadoutStrip) > .positionTransformRow,
-.layoutControl.controlModeEdit .visualControlPanel:has(.positionReadoutStrip) > .positionDirectGrid,
-.layoutControl.controlModeEdit .visualControlPanel:has(.positionReadoutStrip) > .controlLimitPanel,
-.layoutControl.controlModeEdit .visualControlPanel:has(.positionReadoutStrip) > .positionFavoritePanel {
-  display: none;
+.layoutControl.controlModeEdit .positionConsoleSurface {
+  grid-template-columns: minmax(260px, 0.9fr) minmax(280px, 1.1fr);
+  gap: 5px;
+  height: 100%;
+  min-height: 0;
+}
+
+.layoutControl.controlModeEdit .positionConsolePrimary {
+  padding: 4px;
+}
+
+.layoutControl.controlModeEdit .positionConsolePrimary,
+.layoutControl.controlModeEdit .positionToolDeck,
+.layoutControl.controlModeEdit .positionToolPane {
+  min-height: 0;
 }
 
 .layoutControl.controlModeEdit .positionPadRow {
@@ -17861,6 +18028,13 @@ h3 {
 .layoutControl.controlModeEdit .axisSliderRack {
   min-height: 0;
   height: 100%;
+}
+
+.layoutControl.controlModeEdit .positionConsolePrimary .panTiltPad {
+  width: auto;
+  max-width: 100%;
+  max-height: 360px;
+  aspect-ratio: 1;
 }
 
 .layoutControl.controlModeEdit .axisSliderRack {

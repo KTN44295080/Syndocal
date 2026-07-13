@@ -128,7 +128,7 @@ Windowsの完全libav bundleでは`FFMPEG_DIR`を共有FFmpeg SDKルートへ設
 - Windows: Pro Audio MMCSS Critical + 1ms timer、macOS: USER_INTERACTIVE QoS
 - 1時間release soak: 108,001フレーム、drop 0、tick jitter p99 0.535ms、command-to-DMX p99 0.476ms、最大13.3MB (ハーネス構成)
 - 大規模Engine gate: 200灯体、8ユニバース、100キュー、20,000ターゲット
-- UI viewport gate: 1280x720 / 1366x768 / 2048x1129、document overflow 0
+- UI viewport policy: 最大化1920x1080を運用・見た目の主ゲート、1280x720 / 1366x768をcontainment fallback、2048x1152を拡張上限回帰とし、全てdocument overflow 0を要求。小画面fallbackの通過だけではデザイン合格にしない
 
 検証記録:
 

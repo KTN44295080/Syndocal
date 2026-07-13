@@ -53,7 +53,6 @@ interface FaderPrimaryAttributePanelsProps {
   formatDmxPercent: (value: number) => string;
   formatShortDmxPercent: (value: number) => string;
   dmxValueToPercent: (value: number) => number;
-  clampDmxValue: (value: number) => number;
   colorPreviewForSaturation: (saturation: number) => string;
   onSetDimmerValue: (value: number) => void;
   onUpdateDimmerLimit: (field: DimmerLimitField, value: number) => void;
@@ -130,7 +129,6 @@ export function FaderPrimaryAttributePanels(props: FaderPrimaryAttributePanelsPr
             formatShortDmxPercent={props.formatShortDmxPercent}
             applyLimitsLabel={props.applyLimitsLabel}
             dmxValueToPercent={props.dmxValueToPercent}
-            clampDmxValue={props.clampDmxValue}
             onNudge={props.onNudgePanTilt}
             onCenter={props.onCenterPanTilt}
             onMirrorAxis={props.onMirrorPanTiltAxis}

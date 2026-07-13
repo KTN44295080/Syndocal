@@ -11622,7 +11622,6 @@ export default function App() {
             formatDmxPercent={formatDmxPercent}
             formatShortDmxPercent={formatShortDmxPercent}
             dmxValueToPercent={dmxValueToPercent}
-            clampDmxValue={clampDmxValue}
             colorPreviewForSaturation={colorPreviewForSaturation}
             onSetDimmerValue={setDimmerValue}
             onUpdateDimmerLimit={(field, value) => updateSelectedFixtureLimit(field, value)}

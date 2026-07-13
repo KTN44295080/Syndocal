@@ -26,12 +26,19 @@ const cdpPort = Number(process.env.SYNDOCAL_CDP_PORT ?? 9227);
 const screenshotDir = process.env.SYNDOCAL_VIEWPORT_SCREENSHOT_DIR
   ? resolve(process.env.SYNDOCAL_VIEWPORT_SCREENSHOT_DIR)
   : null;
+const compactValidationViewport = { width: 1366, height: 768 };
+const primaryOperationalViewport = { width: 1920, height: 1080 };
 const allViewports = [
   { width: 1280, height: 720 },
-  { width: 1366, height: 768 },
+  compactValidationViewport,
+  primaryOperationalViewport,
   { width: 2048, height: 1152 },
 ];
-const viewports = largeShowMode || process.env.SYNDOCAL_VIEWPORT_SINGLE === "1" ? [allViewports[1]] : allViewports;
+const viewports = largeShowMode
+  ? [compactValidationViewport]
+  : process.env.SYNDOCAL_VIEWPORT_SINGLE === "1"
+    ? [primaryOperationalViewport]
+    : allViewports;
 const setupTabs = [
   { area: "Lighting", tab: "Library", id: "library" },
   { area: "Lighting", tab: "Profiles", id: "profiles" },
@@ -206,7 +213,11 @@ class CdpClient {
       returnByValue: true,
     });
     if (result.exceptionDetails) {
-      throw new Error(result.exceptionDetails.text ?? "Runtime evaluation failed.");
+      const description = result.exceptionDetails.exception?.description ?? result.exceptionDetails.text ?? "Runtime evaluation failed.";
+      const location = result.exceptionDetails.stackTrace?.callFrames?.[0];
+      const suffix = location ? ` at ${location.url || "<evaluation>"}:${location.lineNumber + 1}:${location.columnNumber + 1}` : "";
+      const expressionPreview = expression.replace(/\s+/g, " ").slice(0, 180);
+      throw new Error(`${description}${suffix} [expression: ${expressionPreview}]`);
     }
     return result.result.value;
   }
@@ -293,6 +304,23 @@ async function clickVisibleByText(client, selector, text) {
   })()`);
   if (!clicked) {
     throw new Error(`Could not find visible ${selector} text: ${text}`);
+  }
+}
+
+async function clickVisibleSelector(client, selector) {
+  const clicked = await client.evaluate(`(() => {
+    const node = document.querySelector(${JSON.stringify(selector)});
+    if (!node || node.disabled) return false;
+    const rect = node.getBoundingClientRect();
+    const style = window.getComputedStyle(node);
+    if (rect.width <= 0 || rect.height <= 0 || style.display === 'none' || style.visibility === 'hidden') {
+      return false;
+    }
+    node.click();
+    return true;
+  })()`);
+  if (!clicked) {
+    throw new Error(`Could not find visible selector: ${selector}`);
   }
 }
 
@@ -460,6 +488,25 @@ async function measure(client, label) {
         const style = window.getComputedStyle(element);
         return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
       }).length;
+    const fullyVisibleCount = (selector, containerSelector) => {
+      const container = containerSelector ? document.querySelector(containerSelector) : null;
+      const containerRect = container?.getBoundingClientRect() ?? {
+        left: 0,
+        top: 0,
+        right: innerWidth,
+        bottom: innerHeight,
+      };
+      return [...document.querySelectorAll(selector)]
+        .filter((element) => {
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' &&
+            rect.left >= Math.max(0, containerRect.left) - 1 &&
+            rect.right <= Math.min(innerWidth, containerRect.right) + 1 &&
+            rect.top >= Math.max(0, containerRect.top) - 1 &&
+            rect.bottom <= Math.min(innerHeight, containerRect.bottom) + 1;
+        }).length;
+    };
     const shrunkenDirectChildCount = (selector) => {
       const parent = document.querySelector(selector);
       return parent
@@ -532,6 +579,24 @@ async function measure(client, label) {
     const cuePanel = document.querySelector('.cuePanel');
     const cueEditToggle = document.querySelector('.cuePanelEditToggle');
     const cueHost = document.querySelector('.layoutControl.controlModeLive .faders');
+    const positionToolPane = document.querySelector('.positionToolPane');
+    let positionToolPaneLastControlReachable = false;
+    if (positionToolPane) {
+      const initialScrollTop = positionToolPane.scrollTop;
+      const controls = [...positionToolPane.querySelectorAll('button, input, select')]
+        .filter((element) => !element.disabled);
+      const lastControl = controls.at(-1);
+      positionToolPane.scrollTop = positionToolPane.scrollHeight;
+      await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
+      if (lastControl) {
+        const paneRect = positionToolPane.getBoundingClientRect();
+        const controlRect = lastControl.getBoundingClientRect();
+        positionToolPaneLastControlReachable =
+          controlRect.top >= paneRect.top - 1 && controlRect.bottom <= paneRect.bottom + 1;
+      }
+      positionToolPane.scrollTop = initialScrollTop;
+      await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
+    }
     window.scrollTo(9999, 9999);
     await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
     const movedX = window.scrollX;
@@ -995,6 +1060,65 @@ async function measure(client, label) {
       visibleColorPlaneCount: visibleCount('.colorPlane'),
       visiblePositionReadoutCount: visibleCount('.positionReadoutStrip'),
       visibleColorReadoutCount: visibleCount('.colorReadoutStrip'),
+      visiblePositionConsoleCount: visibleCount('.positionConsoleSurface'),
+      visiblePositionToolDeckCount: visibleCount('.positionToolDeck'),
+      visiblePositionToolTabCount: visibleCount('.positionToolTabs button'),
+      visibleActivePositionToolTabCount: visibleCount('.positionToolTabs button.active[aria-selected="true"]'),
+      visiblePositionDirectControlCount: visibleCount('.positionDirectGrid input, .positionDirectGrid select'),
+      visiblePositionNudgeButtonCount: visibleCount('.positionNudgeGrid button'),
+      visiblePositionTargetButtonCount: visibleCount('.positionTargetGrid button'),
+      visiblePositionTransformButtonCount: visibleCount('.positionTransformRow button'),
+      visiblePositionFavoriteButtonCount: visibleCount('.positionFavoriteGrid .positionFavorite'),
+      visiblePositionAxisSliderCount: visibleCount('.axisSliderRack input[type="range"]'),
+      visibleControlLimitPanelCount: visibleCount('.positionToolPane .controlLimitPanel'),
+      fullyVisiblePositionDirectControlCount: fullyVisibleCount(
+        '.positionDirectGrid input, .positionDirectGrid select',
+        '.positionToolPane',
+      ),
+      fullyVisiblePositionNudgeButtonCount: fullyVisibleCount('.positionNudgeGrid button', '.positionToolPane'),
+      fullyVisiblePositionTargetButtonCount: fullyVisibleCount('.positionTargetGrid button', '.positionToolPane'),
+      fullyVisiblePositionTransformButtonCount: fullyVisibleCount('.positionTransformRow button', '.positionToolPane'),
+      fullyVisiblePositionFavoriteButtonCount: fullyVisibleCount(
+        '.positionFavoriteGrid .positionFavorite',
+        '.positionToolPane',
+      ),
+      positionConsoleWidth: Math.round(document.querySelector('.positionConsoleSurface')?.getBoundingClientRect().width ?? 0),
+      positionConsoleHeight: Math.round(document.querySelector('.positionConsoleSurface')?.getBoundingClientRect().height ?? 0),
+      positionPadWidth: Math.round(document.querySelector('.panTiltPad')?.getBoundingClientRect().width ?? 0),
+      positionPadHeight: Math.round(document.querySelector('.panTiltPad')?.getBoundingClientRect().height ?? 0),
+      positionToolDeckWidth: Math.round(document.querySelector('.positionToolDeck')?.getBoundingClientRect().width ?? 0),
+      positionToolPaneHeight: Math.round(document.querySelector('.positionToolPane')?.getBoundingClientRect().height ?? 0),
+      positionConsoleHorizontalOverflowPx: (() => {
+        const surface = document.querySelector('.positionConsoleSurface');
+        return surface ? Math.max(0, surface.scrollWidth - surface.clientWidth) : -1;
+      })(),
+      positionToolPaneHorizontalOverflowPx: (() => {
+        const pane = document.querySelector('.positionToolPane');
+        return pane ? Math.max(0, pane.scrollWidth - pane.clientWidth) : -1;
+      })(),
+      positionToolPaneVerticalOverflowPx: (() => {
+        const pane = document.querySelector('.positionToolPane');
+        return pane ? Math.max(0, pane.scrollHeight - pane.clientHeight) : -1;
+      })(),
+      positionToolPaneOverflowY: (() => {
+        const pane = document.querySelector('.positionToolPane');
+        return pane ? window.getComputedStyle(pane).overflowY : '';
+      })(),
+      positionToolPaneLastControlReachable,
+      positionConsoleContained: (() => {
+        const surface = document.querySelector('.positionConsoleSurface');
+        const panel = surface?.closest('.visualControlPanel');
+        if (!surface || !panel) return false;
+        const surfaceRect = surface.getBoundingClientRect();
+        const panelRect = panel.getBoundingClientRect();
+        return surfaceRect.left >= panelRect.left - 1 && surfaceRect.right <= panelRect.right + 1 &&
+          surfaceRect.top >= panelRect.top - 1 && surfaceRect.bottom <= panelRect.bottom + 1;
+      })(),
+      positionPrimaryAndToolsSideBySide: (() => {
+        const primary = document.querySelector('.positionPrimaryDeck')?.getBoundingClientRect();
+        const tools = document.querySelector('.positionToolDeck')?.getBoundingClientRect();
+        return Boolean(primary && tools && tools.left >= primary.right - 1 && Math.abs(primary.top - tools.top) <= 2);
+      })(),
       visibleAttributeTargetSummaryCount: visibleCount('.attributeTargetSummary'),
       visibleGroupAttributeTargetSummaryCount: visibleCount('.attributeTargetSummary.group'),
       effectTargetHintCount: visibleCount('.effectTargetHint'),
@@ -1293,16 +1417,69 @@ function hasExpectedControlModeSurface(result) {
     return false;
   }
   if (result.label.startsWith("control-edit-position-")) {
-    return (
+    const hasPositionConsole =
       result.visiblePanTiltPadCount >= 1 &&
       result.visiblePositionReadoutCount >= 1 &&
+      result.visiblePositionConsoleCount === 1 &&
+      result.visiblePositionToolDeckCount === 1 &&
+      result.visiblePositionToolTabCount === 2 &&
+      result.visibleActivePositionToolTabCount === 1 &&
+      result.visiblePositionAxisSliderCount === 2 &&
+      result.positionConsoleHorizontalOverflowPx <= 1 &&
+      result.positionToolPaneHorizontalOverflowPx <= 1 &&
+      ["auto", "scroll"].includes(result.positionToolPaneOverflowY) &&
+      result.positionConsoleContained &&
+      result.positionConsoleHeight >= 120 &&
+      result.positionToolPaneHeight >= 96 &&
+      result.positionToolPaneLastControlReachable &&
       result.visibleAttributeTargetSummaryCount >= 1 &&
       result.visibleGroupAttributeTargetSummaryCount >= 1 &&
       result.visibleEditDeskTabCount === 3 &&
       result.controlWorkSurfaceUnsafeOverflowCount === 0 &&
       result.visibleCuePanelCount === 0 &&
       result.visibleTimelinePanelCount === 0 &&
-      result.visibleVideoControlPanelCount === 0
+      result.visibleVideoControlPanelCount === 0;
+    if (result.label.startsWith("control-edit-position-limits-")) {
+      return (
+        hasPositionConsole &&
+        result.visibleControlLimitPanelCount === 1 &&
+        result.visiblePositionDirectControlCount === 0 &&
+        result.visiblePositionNudgeButtonCount === 0 &&
+        result.visiblePositionTargetButtonCount === 0 &&
+        result.visiblePositionTransformButtonCount === 0 &&
+        result.visiblePositionFavoriteButtonCount === 0
+      );
+    }
+    const hasPrimaryPositionTools =
+      result.visibleControlLimitPanelCount === 0 &&
+      result.visiblePositionDirectControlCount === 3 &&
+      result.visiblePositionNudgeButtonCount === 5 &&
+      result.visiblePositionTargetButtonCount === 9 &&
+      result.visiblePositionTransformButtonCount === 3 &&
+      result.visiblePositionFavoriteButtonCount >= 3 &&
+      result.fullyVisiblePositionDirectControlCount === 3 &&
+      result.fullyVisiblePositionNudgeButtonCount >= 4;
+    const hasFullScreenOperationalLayout =
+      result.innerWidth < primaryOperationalViewport.width ||
+      result.innerHeight < primaryOperationalViewport.height ||
+      (
+        result.positionConsoleWidth >= 700 &&
+        result.positionToolDeckWidth >= 300 &&
+        result.positionPadWidth >= 170 &&
+        result.positionPadWidth <= 420 &&
+        result.positionPadHeight >= 170 &&
+        result.positionPadHeight <= 360 &&
+        result.positionPadWidth / Math.max(1, result.positionPadHeight) >= 0.75 &&
+        result.positionPadWidth / Math.max(1, result.positionPadHeight) <= 1.35 &&
+        result.positionPrimaryAndToolsSideBySide &&
+        result.fullyVisiblePositionTargetButtonCount === 9 &&
+        result.fullyVisiblePositionTransformButtonCount === 3 &&
+        result.fullyVisiblePositionFavoriteButtonCount >= 1
+      );
+    return (
+      hasPositionConsole &&
+      hasPrimaryPositionTools &&
+      hasFullScreenOperationalLayout
     );
   }
   if (result.label.startsWith("control-edit-color-")) {
@@ -1910,7 +2087,29 @@ async function runViewport(client, viewport) {
     if (controlTab.id === "edit") {
       await clickVisibleByText(client, ".attributeCategoryRail button", "Position");
       await sleep(120);
+      if (screenshotDir) {
+        const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+        writeFileSync(
+          join(screenshotDir, `control-edit-static-position-${viewport.width}x${viewport.height}.png`),
+          screenshot.data,
+          "base64",
+        );
+      }
       results.push(await measure(client, `control-edit-position-${viewport.width}x${viewport.height}`));
+      await client.evaluate("document.querySelector('#position-tool-tab-position')?.focus()");
+      await pressKey(client, "ArrowRight");
+      await sleep(120);
+      if (screenshotDir && viewport.width === primaryOperationalViewport.width) {
+        const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+        writeFileSync(
+          join(screenshotDir, `control-edit-static-position-limits-${viewport.width}x${viewport.height}.png`),
+          screenshot.data,
+          "base64",
+        );
+      }
+      results.push(await measure(client, `control-edit-position-limits-${viewport.width}x${viewport.height}`));
+      await clickVisibleSelector(client, "#position-tool-tab-position");
+      await sleep(80);
       await clickVisibleByText(client, ".attributeCategoryRail button", "Color");
       await sleep(120);
       results.push(await measure(client, `control-edit-color-${viewport.width}x${viewport.height}`));
@@ -2443,6 +2642,9 @@ async function main() {
       const editVisualSuffix = result.label.startsWith("control-edit-position-") || result.label.startsWith("control-edit-color-")
         ? ` editVisual=${result.visiblePanTiltPadCount}/${result.visiblePositionReadoutCount}/${result.visibleColorPlaneCount}/${result.visibleColorReadoutCount}/${result.visibleGroupControlBannerCount}/${result.visibleAttributeTargetSummaryCount}/${result.visibleGroupAttributeTargetSummaryCount}`
         : "";
+      const positionVisualSuffix = result.label.startsWith("control-edit-position-")
+        ? ` positionDesk=${result.positionConsoleWidth}x${result.positionConsoleHeight} pad=${result.positionPadWidth}x${result.positionPadHeight} tools=${result.positionToolDeckWidth}w tabs=${result.visiblePositionToolTabCount}/${result.visibleActivePositionToolTabCount} live=${result.visiblePositionDirectControlCount}/${result.visiblePositionNudgeButtonCount}/${result.visiblePositionTargetButtonCount}/${result.visiblePositionTransformButtonCount}/${result.visiblePositionFavoriteButtonCount} limits=${result.visibleControlLimitPanelCount} overflow=${result.positionConsoleHorizontalOverflowPx}/${result.positionToolPaneHorizontalOverflowPx}/${result.positionToolPaneVerticalOverflowPx}`
+        : "";
       const colorEffectSuffix = result.label.startsWith("control-edit-effects-color-editor-")
         ? ` colorFx=${result.effectTypeValue}/${result.visibleColorEffectEditorCount}/${result.visibleColorEffectStopCount}/${result.visibleColorEffectAddButtonCount}/${result.visibleColorEffectRemoveButtonCount}/${result.visibleColorEffectAlgorithmSelectCount}/${result.visibleColorEffectInterpolationSelectCount}/${result.visibleColorEffectGradientCount} legacy=${result.visibleLegacyEffectAttributeCount}/${result.visibleLegacyEffectWaveformCount}/${result.visibleLegacyEffectVideoTargetCount} overflow=${result.colorEffectHorizontalOverflowPx}`
         : "";
@@ -2453,7 +2655,7 @@ async function main() {
         ? ` mixer=${result.visibleVideoOutputItemCount}/${result.visibleVideoOutputSelectedItemCount}/${result.visibleVideoMixerOutputDeckCount}/${result.visibleVideoMixerOutputFaderCount}/${result.visibleVideoMixerOutputSelectButtonCount}/${result.visibleVideoLayerItemCount}/${result.visibleBuiltinVideoFxSelectCount}/${result.visibleVideoMixerLayerDeckCount}/${result.visibleVideoMixerLayerFaderCount}/${result.visibleVideoMixerLayerButtonCount}`
         : "";
       console.log(
-        `${status} ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${keyboardSuffix}${timelineSuffix}${touchSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${colorEffectSuffix}${chaserEffectSuffix}${mixerSuffix}`,
+        `${status} ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${keyboardSuffix}${timelineSuffix}${touchSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${positionVisualSuffix}${colorEffectSuffix}${chaserEffectSuffix}${mixerSuffix}`,
       );
     }
     for (const result of cueRecallResults) {
