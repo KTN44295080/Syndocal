@@ -54,7 +54,7 @@ import { TouchDimmerControlPanel } from "./components/TouchDimmerControlPanel";
 import { TouchFixturePanel } from "./components/TouchFixturePanel";
 import { TouchGenericAttributeGrid } from "./components/TouchGenericAttributeGrid";
 import { TouchPanTiltPad } from "./components/TouchPanTiltPad";
-import { TouchRemotePanel } from "./components/TouchRemotePanel";
+import { TouchSafetyDeck } from "./components/TouchSafetyDeck";
 import { TouchVideoPanel } from "./components/TouchVideoPanel";
 import type { TimelineOverviewAutomationRange, TimelineOverviewEvent } from "./components/TimelineOverview";
 import { WorkspaceChrome } from "./components/WorkspaceChrome";
@@ -9821,6 +9821,17 @@ export default function App() {
         </section>
         </Show>
         <Show when={workspaceTab() === "touch"}>
+        <TouchSafetyDeck
+          snapshot={snapshot()}
+          onTriggerPreviousCue={triggerPreviousCue}
+          onTriggerNextCue={triggerNextCue}
+          onSetCueFadePaused={setCueFadePaused}
+          onSetLightingMaster={setLightingMaster}
+          onSetVideoMasterOpacity={setVideoMasterOpacity}
+          onSetBlackout={setBlackout}
+          onSetVideoBlackout={setVideoBlackout}
+          onSetAllBlackout={setAllBlackout}
+        />
         <TouchCuePanel
           snapshot={snapshot()}
           activeCue={activeCue()}
@@ -9837,15 +9848,7 @@ export default function App() {
             setCuePadFollowActive(false);
             setCuePadBank(Math.min(cuePadBankCount() - 1, cuePadBank() + 1));
           }}
-          onTriggerPreviousCue={triggerPreviousCue}
-          onTriggerNextCue={triggerNextCue}
           onTriggerCue={triggerCue}
-          onSetCueFadePaused={setCueFadePaused}
-          onSetLightingMaster={setLightingMaster}
-          onSetVideoMasterOpacity={setVideoMasterOpacity}
-          onSetBlackout={setBlackout}
-          onSetVideoBlackout={setVideoBlackout}
-          onSetAllBlackout={setAllBlackout}
         />
         <section class="panel touchPanel touchStagePanel">
           <div class="panelHeader">
@@ -10040,33 +10043,6 @@ export default function App() {
             />
           </Show>
         </TouchFixturePanel>
-        <TouchRemotePanel
-          running={remoteRunning()}
-          remoteUrls={remoteUrls()}
-          bindIp={remoteBindIp()}
-          port={remotePort()}
-          pairingPin={remotePairingPin()}
-          allowLan={remoteAllowLan()}
-          status={remoteStatus()}
-          bpmDraft={bpmDraft()}
-          submasters={snapshot().submasters}
-          onBindIp={setRemoteBindIp}
-          onPort={setRemotePort}
-          onPairingPin={setRemotePairingPin}
-          onRegeneratePairingPin={() => setRemotePairingPin(createPairingPin())}
-          onAllowLan={(value) => {
-            setRemoteAllowLan(value);
-            setRemoteBindIp(value ? "0.0.0.0" : "127.0.0.1");
-          }}
-          onCopyRemoteUrl={copyRemoteUrl}
-          onOpenRemoteUrl={openRemoteUrl}
-          onStart={startRemoteControl}
-          onStop={stopRemoteControl}
-          onBpmDraft={setBpmDraft}
-          onApplyBpm={applyBpm}
-          onTapBpm={tapBpm}
-          onSetSubmaster={setGroupSubmaster}
-        />
         <TouchVideoPanel
           layers={snapshot().video.layers}
           outputs={snapshot().video.outputs}
@@ -11583,6 +11559,8 @@ export default function App() {
           </Show>
           <Show when={workspaceTab() === "control" || setupSubTab() === "remote"}>
           <RemoteControlPanel
+            backendAvailable={isTauriRuntime()}
+            invokeCommand={invoke}
             bindIp={remoteBindIp()}
             port={remotePort()}
             pairingPin={remotePairingPin()}

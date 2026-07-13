@@ -731,6 +731,12 @@ async function measure(client, label) {
         .filter((option) => (option.textContent || '').trim().toLowerCase().startsWith('map selection')).length,
       visibleRawMonitorCount: visibleCount('.rawMonitor'),
       visibleVideoControlPanelCount: visibleCount('.videoControlPanel'),
+      visibleVideoMixerClipPaneCount: visibleCount('.videoMixerClipPane'),
+      visibleVideoMixerProgramPaneCount: visibleCount('.videoMixerProgramPane'),
+      visibleVideoMixerLayerPaneCount: visibleCount('.videoMixerLayerPane'),
+      visibleVideoProgramPreviewCount: visibleCount('.videoMixerProgramPane .videoPreview'),
+      visibleVideoProgramRefreshCount: [...document.querySelectorAll('.videoMixerProgramPane button')]
+        .filter((button) => (button.textContent || '').trim().toLowerCase() === 'refresh').length,
       visibleVideoMasterControlCount: visibleCount('.videoMasterControls'),
       visibleVideoMasterFaderCount: visibleCount('.videoMasterFader input[type="range"]'),
       visibleVideoClipGridCount: visibleCount('.videoClipGridPanel'),
@@ -784,6 +790,8 @@ async function measure(client, label) {
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'reset pose').length,
       visibleStageVideoSurfaceCount: visibleCount('.mappingStageViewport .stageVideoSurface2d'),
       visibleTouchCuePanelCount: visibleCount('.touchCuePanel'),
+      visibleTouchSafetyDeckCount: visibleCount('.touchSafetyDeck'),
+      visibleTouchSafetyGuardButtonCount: visibleCount('.touchSafetyDeck .touchGuardRow button'),
       visibleTouchGoDeckCount: visibleCount('.touchGoDeck'),
       visibleTouchCuePadCount: visibleCount('.touchCuePadGrid .liveCuePad'),
       visibleTouchStagePanelCount: visibleCount('.touchStagePanel'),
@@ -811,13 +819,13 @@ async function measure(client, label) {
         })
         .filter((element) => {
           const rect = element.getBoundingClientRect();
-          return rect.width < 39.5 || rect.height < 39.5;
+          return rect.width < 47.5 || rect.height < 47.5;
         }).length,
       touchUndersizedTargets: [...document.querySelectorAll('.layoutTouch button, .layoutTouch .buttonLink, .layoutTouch input:not([type="checkbox"]), .layoutTouch select')]
         .filter((element) => {
           const rect = element.getBoundingClientRect();
           const style = window.getComputedStyle(element);
-          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && (rect.width < 39.5 || rect.height < 39.5);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && (rect.width < 47.5 || rect.height < 47.5);
         })
         .slice(0, 40)
         .map((element) => {
@@ -1108,6 +1116,11 @@ function hasExpectedControlModeSurface(result) {
       result.visibleControlStagePanelCount === 0 &&
       result.visibleControlStageCount === 0 &&
       result.visibleVideoControlPanelCount > 0 &&
+      result.visibleVideoMixerClipPaneCount === 1 &&
+      result.visibleVideoMixerProgramPaneCount === 1 &&
+      result.visibleVideoMixerLayerPaneCount === 1 &&
+      result.visibleVideoProgramPreviewCount === 1 &&
+      result.visibleVideoProgramRefreshCount === 1 &&
       result.visibleVideoMasterControlCount > 0 &&
       result.visibleVideoMasterFaderCount > 0 &&
       result.visibleVideoClipGridCount > 0 &&
@@ -1272,16 +1285,15 @@ function hasExpectedTouchSurface(result) {
   }
   return (
     result.visibleTouchCuePanelCount > 0 &&
+    result.visibleTouchSafetyDeckCount === 1 &&
+    result.visibleTouchSafetyGuardButtonCount === 4 &&
     result.visibleTouchGoDeckCount > 0 &&
     result.visibleTouchCuePadCount >= 4 &&
     result.visibleTouchStagePanelCount > 0 &&
     result.visibleTouchStageCount > 0 &&
     result.visibleTouchFixturePanelCount > 0 &&
     result.visibleTouchFixtureScrollerCount > 0 &&
-    result.visibleTouchRemotePanelCount > 0 &&
-    result.visibleTouchRemoteUrlItemCount > 0 &&
-    result.visibleTouchRemoteCopyButtonCount > 0 &&
-    result.visibleTouchRemoteOpenButtonCount > 0 &&
+    result.visibleTouchRemotePanelCount === 0 &&
     result.visibleTouchVideoPanelCount > 0 &&
     result.visibleTouchVideoOutputDeckCount > 0 &&
     result.visibleTouchVideoSelectedOutputDeckCount > 0 &&

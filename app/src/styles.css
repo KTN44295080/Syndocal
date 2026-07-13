@@ -2369,6 +2369,450 @@ h3 {
   }
 }
 
+/* Touch keeps show-critical transport, masters and blackouts in a fixed safety deck. */
+.layoutTouch {
+  grid-template-columns: minmax(330px, 0.95fr) minmax(360px, 1.1fr) minmax(300px, 0.86fr);
+  grid-template-rows: 92px minmax(0, 1fr) minmax(165px, 0.42fr);
+  gap: 3px;
+  font-size: 13px;
+}
+
+.layoutTouch .touchSafetyDeck {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  display: grid;
+  grid-template-columns: minmax(240px, 0.72fr) minmax(390px, 1.15fr) minmax(340px, 1fr);
+  align-items: stretch;
+  gap: 5px;
+  min-width: 0;
+  min-height: 0;
+  border-color: #4a5157;
+  border-radius: 0;
+  background: #171a1d;
+  padding: 5px;
+  overflow: hidden;
+}
+
+.layoutTouch .touchSafetyDeck .touchGoDeck {
+  display: grid;
+  grid-template-columns: minmax(64px, 0.75fr) minmax(100px, 1.2fr) minmax(72px, 0.8fr);
+  gap: 4px;
+  min-width: 0;
+}
+
+.layoutTouch .touchSafetyDeck .touchGoDeck button {
+  min-height: 52px;
+  border-radius: 2px;
+  font-size: 14px;
+}
+
+.layoutTouch .touchSafetyDeck .touchGoDeck .primary {
+  min-height: 68px;
+  background: #6a3517;
+  font-size: 27px;
+}
+
+.layoutTouch .touchSafetyDeck .touchMasterGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  min-width: 0;
+}
+
+.layoutTouch .touchSafetyDeck .touchMasterGrid label {
+  grid-template-columns: 58px minmax(90px, 1fr) 44px;
+  gap: 5px;
+  min-width: 0;
+  border: 1px solid #343a3f;
+  border-radius: 2px;
+  background: #111416;
+  padding: 5px 7px;
+  color: #b4bbc0;
+  font-size: 12px;
+}
+
+.layoutTouch .touchSafetyDeck .touchMasterGrid strong {
+  color: #fff;
+  font-size: 13px;
+}
+
+.layoutTouch .touchSafetyDeck .touchGuardRow {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  min-width: 0;
+}
+
+.layoutTouch .touchSafetyDeck .touchGuardRow button {
+  min-width: 0;
+  min-height: 56px;
+  border-radius: 2px;
+  padding: 0 5px;
+  font-size: 12px;
+}
+
+.layoutTouch .touchCuePanel {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.layoutTouch .touchStagePanel {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.layoutTouch .touchFixturePanel {
+  grid-column: 3;
+  grid-row: 2 / span 2;
+}
+
+.layoutTouch .touchRemotePanel {
+  display: none;
+}
+
+.layoutTouch .touchVideoPanel {
+  grid-column: 1 / span 2;
+  grid-row: 3;
+}
+
+.app .layoutTouch button,
+.app .layoutTouch .buttonLink,
+.app .layoutTouch input:not([type="checkbox"]),
+.app .layoutTouch select {
+  min-width: 48px;
+  min-height: 48px;
+}
+
+.app .layoutTouch label:has(input[type="checkbox"]) {
+  min-height: 48px;
+}
+
+.layoutTouch .touchCuePadGrid .liveCuePad {
+  min-height: 64px;
+  border-radius: 2px;
+  font-size: 13px;
+}
+
+.layoutTouch .touchPanel {
+  border-radius: 0;
+}
+
+@media (max-height: 760px) {
+  .layoutTouch {
+    grid-template-rows: 88px minmax(0, 1fr) minmax(150px, 0.38fr);
+  }
+}
+
+/* VJ Desk: three continuous production panes with a persistent program monitor. */
+.layoutControl.controlModeMixer .videoControlPanelMixer {
+  grid-template-columns: minmax(390px, 1.12fr) minmax(400px, 1fr) minmax(300px, 0.72fr);
+  grid-template-rows: 36px minmax(0, 1fr);
+  gap: 0;
+  min-width: 0;
+  min-height: 0;
+  border-color: var(--ray-border);
+  border-radius: 0;
+  background: #121518;
+  padding: 0;
+}
+
+.layoutControl.controlModeMixer .videoControlPanelMixer > .panelHeader {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  min-height: 36px;
+  border-bottom: 1px solid var(--ray-border);
+  background: #1b1f22;
+  padding: 4px 10px;
+}
+
+.layoutControl.controlModeMixer .videoControlPanelMixer > .panelHeader h2 {
+  color: #f4f6f7;
+  font-size: 13px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.videoMixerClipPane,
+.videoMixerProgramPane,
+.videoMixerLayerPane {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #15181b;
+}
+
+.videoMixerClipPane,
+.videoMixerProgramPane {
+  border-right: 1px solid var(--ray-border);
+}
+
+.videoMixerClipPane {
+  grid-column: 1;
+  grid-row: 2;
+  grid-template-rows: 40px auto minmax(0, 1fr);
+}
+
+.videoMixerProgramPane {
+  grid-column: 2;
+  grid-row: 2;
+  grid-template-rows: 40px minmax(180px, 1fr) minmax(225px, 0.94fr);
+}
+
+.videoMixerLayerPane {
+  grid-column: 3;
+  grid-row: 2;
+  grid-template-rows: 40px minmax(0, 1fr);
+}
+
+.videoMixerPaneHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  min-height: 40px;
+  border-bottom: 1px solid var(--ray-border);
+  background: #1b1f22;
+  padding: 5px 9px;
+}
+
+.videoMixerPaneHeader > div {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.videoMixerPaneHeader strong {
+  color: #f1f3f5;
+  font-size: 13px;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+}
+
+.videoMixerPaneHeader span {
+  min-width: 0;
+  overflow: hidden;
+  color: #8f999f;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.videoMixerPaneHeader > span:last-child {
+  color: #c1c7cb;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.videoMixerPaneActions {
+  display: flex !important;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px !important;
+}
+
+.videoMixerPaneActions > span {
+  color: #c1c7cb;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.videoMixerPaneActions > button {
+  min-height: 28px;
+  border-radius: 2px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+.videoControlPanelMixer .videoMixerClipPane .videoMasterControls {
+  grid-column: auto;
+  grid-row: auto;
+  gap: 5px;
+  min-width: 0;
+  border: 0;
+  border-bottom: 1px solid var(--ray-border);
+  border-radius: 0;
+  background: #181c1f;
+  padding: 7px 8px;
+}
+
+.videoControlPanelMixer .videoMixerClipPane .videoMasterReadout span {
+  font-size: 15px;
+}
+
+.videoControlPanelMixer .videoMixerClipPane .videoClipGridPanel {
+  grid-column: auto;
+  grid-row: auto;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: #15181b;
+  overflow: hidden auto;
+  padding: 7px;
+}
+
+.videoControlPanelMixer .videoMixerClipPane .videoClipPreviewBar,
+.videoControlPanelMixer .videoMixerClipPane .videoRecordingBar,
+.videoControlPanelMixer .videoMixerClipPane .liveAudioInputBar {
+  border-color: #343a3f;
+  border-radius: 2px;
+  background: #181c1f;
+}
+
+.videoControlPanelMixer .videoClipUtilities {
+  border: 0;
+}
+
+.videoControlPanelMixer .videoClipUtilities > summary {
+  display: flex;
+  align-items: center;
+  min-height: 29px;
+  border: 1px solid #343a3f;
+  border-radius: 2px;
+  background: #202428;
+  padding: 0 8px;
+  color: #aeb6bc;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  list-style: none;
+  text-transform: uppercase;
+}
+
+.videoControlPanelMixer .videoClipUtilities > summary::-webkit-details-marker {
+  display: none;
+}
+
+.videoControlPanelMixer .videoClipUtilities[open] > summary {
+  border-color: #555d63;
+  color: #fff;
+  box-shadow: inset 2px 0 0 var(--ray-accent);
+}
+
+.videoControlPanelMixer .videoClipUtilities .videoClipGridSettings {
+  margin-top: 4px;
+  border-left: 1px solid #343a3f;
+  padding-left: 6px;
+}
+
+.videoControlPanelMixer .videoMixerClipPane .videoAbDeck > button,
+.videoControlPanelMixer .videoMixerClipPane .videoClipPad,
+.videoControlPanelMixer .videoMixerClipPane .videoClipLaunch {
+  border-radius: 2px;
+}
+
+.videoControlPanelMixer .videoMixerProgramPane .videoPreview {
+  display: grid;
+  align-self: stretch;
+  justify-self: stretch;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
+  aspect-ratio: auto;
+  border: 0;
+  border-bottom: 1px solid var(--ray-border);
+  border-radius: 0;
+  background: #080a0c;
+  margin: 0;
+}
+
+.videoControlPanelMixer .videoMixerProgramPane .videoPreview img {
+  image-rendering: auto;
+  object-fit: contain;
+}
+
+.videoControlPanelMixer .videoMixerProgramPane .videoPreview span {
+  color: #7e888f;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.videoControlPanelMixer .videoMixerProgramPane .videoOutputControlList {
+  grid-column: auto;
+  grid-row: auto;
+  align-content: start;
+  gap: 4px;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: #15181b;
+  overflow: hidden auto;
+  padding: 6px;
+}
+
+.videoControlPanelMixer .videoMixerProgramPane .videoOutputControlList.compact .sectionHeader,
+.videoControlPanelMixer .videoMixerProgramPane .videoOutputControlList.compact .deckPager,
+.videoControlPanelMixer .videoMixerLayerPane .videoLayerList.compact > .deckPager {
+  min-height: 29px;
+  border-bottom: 1px solid #30363b;
+  padding-bottom: 4px;
+}
+
+.videoControlPanelMixer .videoMixerProgramPane .videoOutputControlItem {
+  border-color: #3a4146;
+  border-radius: 2px;
+  background: #1b1f22;
+}
+
+.videoControlPanelMixer .videoMixerProgramPane .videoWindowStatusBar {
+  border-color: #343a3f;
+  border-radius: 2px;
+  background: #171a1d;
+}
+
+.videoControlPanelMixer .videoMixerLayerPane .videoLayerList {
+  grid-column: auto;
+  grid-row: auto;
+  align-content: start;
+  gap: 1px;
+  min-height: 0;
+  background: #111416;
+  overflow: hidden auto;
+  padding: 5px;
+}
+
+.videoControlPanelMixer .videoMixerLayerPane .videoLayerItem {
+  grid-template-columns: minmax(110px, 0.42fr) minmax(0, 1fr);
+  min-height: 94px;
+  border: 0;
+  border-bottom: 1px solid #30363b;
+  border-radius: 0;
+  background: #1b1f22;
+  padding: 7px;
+}
+
+.videoControlPanelMixer .videoMixerLayerPane .videoLayerItem > div:first-child strong {
+  color: #f1f3f5;
+  font-size: 12px;
+}
+
+.videoControlPanelMixer .videoMixerLayerPane .videoMixerLayerDeck button,
+.videoControlPanelMixer .videoMixerLayerPane .videoMixerLayerDeck input,
+.videoControlPanelMixer .videoMixerLayerPane .videoMixerLayerDeck select {
+  border-radius: 2px;
+}
+
+@media (max-width: 1320px) {
+  .layoutControl.controlModeMixer .videoControlPanelMixer {
+    grid-template-columns: minmax(380px, 1.08fr) minmax(370px, 1fr) minmax(285px, 0.76fr);
+  }
+
+  .videoMixerProgramPane {
+    grid-template-rows: 40px minmax(160px, 0.88fr) minmax(220px, 1fr);
+  }
+}
+
+@media (max-height: 760px) {
+  .videoControlPanelMixer .videoMixerClipPane .liveAudioInputBar small {
+    display: none;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane .videoClipGridPanel {
+    gap: 4px;
+    padding: 5px;
+  }
+}
+
 .layoutSetup .setupPanelFocus {
   border-color: #d2a33d;
   box-shadow:
@@ -17460,4 +17904,17 @@ h3 {
   .effectActionDock {
     padding: 5px;
   }
+}
+
+/* Final touch-size guard: late desktop tokens must not shrink the live surface. */
+.app .layoutTouch button,
+.app .layoutTouch .buttonLink,
+.app .layoutTouch input:not([type="checkbox"]),
+.app .layoutTouch select {
+  min-width: 48px;
+  min-height: 48px;
+}
+
+.app .layoutTouch label:has(input[type="checkbox"]) {
+  min-height: 48px;
 }

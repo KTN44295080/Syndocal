@@ -40,14 +40,44 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
         <VideoBackendStatusPanel {...props.backendStatus} />
         <ExternalVideoIoStatusPanel {...props.externalIoStatus} />
       </div>
-      <VideoMasterControlsPanel {...props.masterControls} />
-      <VideoClipGridPanel {...props.clipGrid} />
-      <VideoOutputControlListPanel {...props.outputControls} compact={props.mixer} />
-      <VideoPreviewImagePanel {...props.previewImage} />
+      <section class="videoMixerClipPane" aria-label="Clip and transition desk">
+        <header class="videoMixerPaneHeader">
+          <div>
+            <strong>Clips</strong>
+            <span>{props.layerCount} available</span>
+          </div>
+          <span>LIVE TAKE</span>
+        </header>
+        <VideoMasterControlsPanel {...props.masterControls} />
+        <VideoClipGridPanel {...props.clipGrid} compact={props.mixer} />
+      </section>
+      <section class="videoMixerProgramPane" aria-label="Program monitor and outputs">
+        <header class="videoMixerPaneHeader">
+          <div>
+            <strong>Program Monitor</strong>
+            <span>Reference preview</span>
+          </div>
+          <div class="videoMixerPaneActions">
+            <span>PROGRAM</span>
+            <button onClick={() => void props.previewDiagnostics.onRenderPreview()}>Refresh</button>
+          </div>
+        </header>
+        <VideoPreviewImagePanel {...props.previewImage} />
+        <VideoOutputControlListPanel {...props.outputControls} compact={props.mixer} />
+      </section>
       <div class="videoMixerSetupTools">
         <VideoSourceCreatePanel {...props.sourceCreate} />
       </div>
-      <VideoLayerListPanel {...props.layerList} compact={props.mixer} />
+      <section class="videoMixerLayerPane" aria-label="Live video layers">
+        <header class="videoMixerPaneHeader">
+          <div>
+            <strong>Layers</strong>
+            <span>{props.layerCount} in composition</span>
+          </div>
+          <span>COMPOSITE</span>
+        </header>
+        <VideoLayerListPanel {...props.layerList} compact={props.mixer} />
+      </section>
       <div class="videoMixerAutomationTools">
         <VideoTimelineAutomationPanel {...props.timelineAutomation} />
       </div>

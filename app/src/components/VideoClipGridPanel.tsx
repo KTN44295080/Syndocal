@@ -7,6 +7,7 @@ import type {
 } from "../types";
 
 interface VideoClipGridPanelProps {
+  compact?: boolean;
   layers: VideoLayerSummary[];
   thumbnails: Record<number, string>;
   fadeMs: number;
@@ -83,7 +84,9 @@ export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
           <h3>Clip Grid</h3>
           <span>{props.layers.length} clip(s)</span>
         </div>
-        <div class="videoClipGridSettings">
+        <details class={`videoClipUtilities ${props.compact ? "compact" : ""}`} open={!props.compact}>
+          <summary>Audio &amp; Capture</summary>
+          <div class="videoClipGridSettings">
           <label>
             Take fade ms
             <input
@@ -126,7 +129,8 @@ export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
             </label>
             <button aria-label="Refresh audio output devices" title="Refresh audio output devices" onClick={() => void props.onRefreshAudioOutputDevices()}>↻</button>
           </div>
-        </div>
+          </div>
+        </details>
       </div>
       <Show when={props.audioMonitorStatus.active_layer_ids.length > 0 || props.audioMonitorStatus.last_sync_error}>
         <div class={`videoAudioSyncStatus ${props.audioMonitorStatus.last_sync_error ? "error" : ""}`} role="status">

@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import { createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
 
 type StandbySyncRole = "primary" | "standby";
@@ -60,7 +59,12 @@ function formatHeartbeat(ageMs: number | null): string {
   return `${(ageMs / 1000).toFixed(1)} s`;
 }
 
-export function StandbySyncPanel() {
+interface StandbySyncPanelProps {
+  backendAvailable: boolean;
+  invokeCommand: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+}
+
+export function StandbySyncPanel(props: StandbySyncPanelProps) {
   const initialRole = storedValue(standbyRoleStorageKey);
   const [directory, setDirectory] = createSignal(storedValue(standbyDirectoryStorageKey));
   const [role, setRole] = createSignal<StandbySyncRole>(initialRole === "standby" ? "standby" : "primary");
@@ -75,6 +79,7 @@ export function StandbySyncPanel() {
   const forceRequired = createMemo(() => !status().takeover_ready || status().split_brain);
   const statusLabel = createMemo(() => {
     const current = status();
+    if (!props.backendAvailable) return "Desktop required";
     if (!current.running) return "Stopped";
     if (current.split_brain) return "Fenced";
     if (current.role === "primary") return current.last_error ? "Write error" : "Publishing";
@@ -85,13 +90,14 @@ export function StandbySyncPanel() {
 
   const pollStatus = async () => {
     try {
-      setStatus(await invoke<StandbySyncStatus>("standby_sync_status"));
+      setStatus(await props.invokeCommand<StandbySyncStatus>("standby_sync_status"));
     } catch (error) {
       setActionError(String(error));
     }
   };
 
   onMount(() => {
+    if (!props.backendAvailable) return;
     void pollStatus();
     const timer = window.setInterval(() => void pollStatus(), 1000);
     onCleanup(() => window.clearInterval(timer));
@@ -100,7 +106,7 @@ export function StandbySyncPanel() {
   const chooseDirectory = async () => {
     setActionError(null);
     try {
-      const selected = await invoke<string | null>("select_standby_sync_directory");
+      const selected = await props.invokeCommand<string | null>("select_standby_sync_directory");
       if (!selected) return;
       setDirectory(selected);
       window.localStorage.setItem(standbyDirectoryStorageKey, selected);
@@ -119,7 +125,7 @@ export function StandbySyncPanel() {
     try {
       window.localStorage.setItem(standbyDirectoryStorageKey, directory());
       window.localStorage.setItem(standbyRoleStorageKey, role());
-      setStatus(await invoke<StandbySyncStatus>("start_standby_sync", {
+      setStatus(await props.invokeCommand<StandbySyncStatus>("start_standby_sync", {
         directory: directory(),
         role: role(),
       }));
@@ -134,7 +140,7 @@ export function StandbySyncPanel() {
     setBusy(true);
     setActionError(null);
     try {
-      setStatus(await invoke<StandbySyncStatus>("stop_standby_sync"));
+      setStatus(await props.invokeCommand<StandbySyncStatus>("stop_standby_sync"));
     } catch (error) {
       setActionError(String(error));
     } finally {
@@ -151,7 +157,7 @@ export function StandbySyncPanel() {
     setBusy(true);
     setActionError(null);
     try {
-      await invoke("take_over_standby", { force: forceRequired() });
+      await props.invokeCommand("take_over_standby", { force: forceRequired() });
       takeoverDialog.close();
       await pollStatus();
     } catch (error) {
@@ -181,7 +187,7 @@ export function StandbySyncPanel() {
             placeholder="Choose a local, UNC, or mounted shared folder"
             onInput={(event) => setDirectory(event.currentTarget.value)}
           />
-          <button onClick={() => void chooseDirectory()} disabled={status().running || busy()}>Browse</button>
+          <button onClick={() => void chooseDirectory()} disabled={!props.backendAvailable || status().running || busy()}>Browse</button>
         </div>
       </label>
 
@@ -204,16 +210,16 @@ export function StandbySyncPanel() {
       </div>
 
       <div class="buttonRow">
-        <button class="primary" onClick={() => void start()} disabled={status().running || busy()}>
+        <button class="primary" onClick={() => void start()} disabled={!props.backendAvailable || status().running || busy()}>
           Start Sync
         </button>
-        <button onClick={() => void stop()} disabled={!status().running || busy()}>
+        <button onClick={() => void stop()} disabled={!props.backendAvailable || !status().running || busy()}>
           Stop Sync
         </button>
         <button
           class="danger"
           onClick={requestTakeOver}
-          disabled={status().role !== "standby" || status().generation === null || busy()}
+          disabled={!props.backendAvailable || status().role !== "standby" || status().generation === null || busy()}
         >
           Take Over
         </button>

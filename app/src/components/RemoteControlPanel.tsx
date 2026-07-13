@@ -3,6 +3,8 @@ import type { RemoteControlStatus } from "../types";
 import { StandbySyncPanel } from "./StandbySyncPanel";
 
 interface RemoteControlPanelProps {
+  backendAvailable: boolean;
+  invokeCommand: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
   bindIp: string;
   port: number;
   pairingPin: string;
@@ -125,7 +127,7 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
           </button>
         </div>
       </section>
-      <StandbySyncPanel />
+      <StandbySyncPanel backendAvailable={props.backendAvailable} invokeCommand={props.invokeCommand} />
       <section class="remoteEndpointDesk">
         <header class="ioDeskHeader">
           <h2>Endpoints</h2>
