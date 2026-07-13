@@ -30,6 +30,13 @@ pub struct VideoDecoderDiagnostics {
     pub decode_failures: u64,
     pub hap_cache_len: usize,
     pub libav_cache_len: usize,
+    pub libav_session_count: usize,
+    pub libav_session_open_count: u64,
+    pub libav_session_reset_count: u64,
+    pub libav_sequential_continue_count: u64,
+    pub libav_frame_reuse_count: u64,
+    pub libav_working_set_eviction_count: u64,
+    pub libav_session_error_count: u64,
     pub cli_cache_len: usize,
 }
 
@@ -100,10 +107,24 @@ impl PreferredVideoFrameDecoder {
         self.hap.frame_cache_len() + self.libav.cache_len() + self.fallback.cache_len()
     }
 
+    pub fn release_layer(&mut self, layer_id: VideoLayerId) {
+        self.hap.release_layer(layer_id);
+        self.libav.release_layer(layer_id);
+        VideoFrameDecoder::release_layer(&mut self.fallback, layer_id);
+    }
+
     pub fn diagnostics(&self) -> VideoDecoderDiagnostics {
+        let libav_sessions = self.libav.session_diagnostics();
         VideoDecoderDiagnostics {
             hap_cache_len: self.hap.frame_cache_len(),
             libav_cache_len: self.libav.cache_len(),
+            libav_session_count: libav_sessions.active_sessions,
+            libav_session_open_count: libav_sessions.opens,
+            libav_session_reset_count: libav_sessions.resets,
+            libav_sequential_continue_count: libav_sessions.sequential_continues,
+            libav_frame_reuse_count: libav_sessions.frame_reuses,
+            libav_working_set_eviction_count: libav_sessions.evictions,
+            libav_session_error_count: libav_sessions.errors,
             cli_cache_len: self.fallback.cache_len(),
             ..self.diagnostics
         }
@@ -173,12 +194,27 @@ impl VideoFrameDecoder for PreferredVideoFrameDecoder {
         self.fallback.retain_layers(layer_ids);
     }
 
+    fn release_layer(&mut self, layer_id: VideoLayerId) {
+        PreferredVideoFrameDecoder::release_layer(self, layer_id);
+    }
+
     fn decode_frame(
         &mut self,
         request: &VideoFrameRequest,
     ) -> Result<Option<VideoFrame>, VideoDecodeError> {
         self.diagnostics.total_requests = self.diagnostics.total_requests.saturating_add(1);
+        let has_file_path = request.source.kind == VideoSourceKind::File
+            && request
+                .source
+                .path
+                .as_deref()
+                .is_some_and(|path| !path.trim().is_empty());
+        if !has_file_path {
+            self.release_layer(request.layer_id);
+        }
         if HapMovFrameDecoder::supports_request(request) {
+            self.libav.release_layer(request.layer_id);
+            VideoFrameDecoder::release_layer(&mut self.fallback, request.layer_id);
             self.diagnostics.hap_requests = self.diagnostics.hap_requests.saturating_add(1);
             return match self.hap.decode_frame(request) {
                 Ok(Some(frame)) => {
@@ -207,6 +243,10 @@ impl HapMovFrameDecoder {
             movies: Vec::new(),
             frames: Vec::new(),
         }
+    }
+
+    fn release_layer(&mut self, layer_id: VideoLayerId) {
+        self.frames.retain(|frame| frame.layer_id != layer_id);
     }
 
     pub fn supports_request(request: &VideoFrameRequest) -> bool {

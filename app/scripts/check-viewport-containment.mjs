@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
 const largeShowMode = process.argv.includes("--large-show");
-const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (largeShowMode ? "large-show" : "timeline");
+const vjEmptyMode = process.argv.includes("--vj-empty");
+const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (largeShowMode ? "large-show" : vjEmptyMode ? "vj-empty" : "timeline");
 const defaultUrl =
   viewportFixture === "none"
     ? "http://127.0.0.1:5173/"
@@ -837,6 +838,17 @@ async function measure(client, label) {
       visibleVideoMonitorPanelCount: visibleCount('.liveVideoMonitorPanel'),
       visibleVideoPreviewBusCount: visibleCount('[data-live-video-monitor="preview"]'),
       visibleVideoProgramBusCount: visibleCount('[data-live-video-monitor="program"]'),
+      visibleVjFirstRunCount: visibleCount('.vjFirstRunEmptyState'),
+      visibleVjFirstRunButtonCount: visibleCount('.vjFirstRunEmptyState button'),
+      fullyVisibleVjFirstRunButtonCount: [...document.querySelectorAll('.vjFirstRunEmptyState button')]
+        .filter((element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.left >= 0 && rect.top >= 0 && rect.right <= window.innerWidth && rect.bottom <= window.innerHeight;
+        }).length,
+      disabledVjFirstRunButtonCount: [...document.querySelectorAll('.vjFirstRunEmptyState button')]
+        .filter((button) => button.disabled).length,
+      visibleVjFirstRunSafetyCount: [...document.querySelectorAll('.vjFirstRunSafety')]
+        .filter((element) => (element.textContent || '').includes('No output window opens automatically')).length,
       visibleVideoProgramRefreshCount: [...document.querySelectorAll('.videoMixerProgramPane button')]
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'refresh').length,
       visibleVideoMasterControlCount: visibleCount('.videoMasterControls'),
@@ -1672,6 +1684,26 @@ async function runLargeShowViewport(client, viewport) {
   return { stats, containment };
 }
 
+async function runEmptyVjViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await clickByText(client, "Control");
+  await clickByText(client, "VJ Desk");
+  await sleep(180);
+  if (screenshotDir) {
+    mkdirSync(screenshotDir, { recursive: true });
+    const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+    writeFileSync(join(screenshotDir, `vj-empty-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
+  }
+  return measure(client, `vj-empty-${viewport.width}x${viewport.height}`);
+}
+
 async function main() {
   const browser = findBrowser();
   if (!browser) {
@@ -1721,6 +1753,28 @@ async function main() {
       );
       console.log(`${passed ? "pass" : "fail"} large-show virtualization ${JSON.stringify(result.stats)}`);
       if (!passed) throw new Error(`Large-show UI virtualization failed: ${JSON.stringify(result)}`);
+      return;
+    }
+    if (vjEmptyMode) {
+      for (const viewport of viewports) {
+        const result = await runEmptyVjViewport(client, viewport);
+        const passed =
+          isContained(result) &&
+          result.visibleVideoControlPanelCount === 1 &&
+          result.visibleVjFirstRunCount === 1 &&
+          result.visibleVjFirstRunButtonCount === 1 &&
+          result.fullyVisibleVjFirstRunButtonCount === 1 &&
+          result.disabledVjFirstRunButtonCount === 1 &&
+          result.visibleVjFirstRunSafetyCount === 1;
+        console.log(`${passed ? "pass" : "fail"} empty VJ first-run ${viewport.width}x${viewport.height} ${JSON.stringify({
+          visible: result.visibleVjFirstRunCount,
+          buttons: result.visibleVjFirstRunButtonCount,
+          fullyVisibleButtons: result.fullyVisibleVjFirstRunButtonCount,
+          disabled: result.disabledVjFirstRunButtonCount,
+          safety: result.visibleVjFirstRunSafetyCount,
+        })}`);
+        if (!passed) throw new Error(`Empty VJ first-run viewport failed: ${JSON.stringify(result)}`);
+      }
       return;
     }
 

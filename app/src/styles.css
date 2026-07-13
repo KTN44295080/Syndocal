@@ -11118,6 +11118,54 @@ input[type="color"] {
   min-width: 132px;
 }
 
+.videoControlPanelMixer .vjFirstRunEmptyState {
+  align-content: center;
+  min-height: 220px;
+  border-left: 2px solid #d68a37;
+  background: #13181c;
+}
+
+.videoControlPanelMixer .videoClipGridPanel.empty > .videoAudioSyncStatus,
+.videoControlPanelMixer .videoClipGridPanel.empty > .videoClipPreviewBar,
+.videoControlPanelMixer .videoClipGridPanel.empty > .videoAbDeck,
+.videoControlPanelMixer .videoClipGridPanel.empty > .videoRecordingBar,
+.videoControlPanelMixer .videoClipGridPanel.empty > .liveAudioInputBar {
+  display: none;
+}
+
+.videoControlPanelMixer .videoClipGridPanel.empty .videoClipUtilities {
+  display: none;
+}
+
+.videoControlPanelMixer .vjFirstRunEmptyState h4 {
+  margin: 0;
+  color: #f1f3f5;
+  font-size: 14px;
+  text-wrap: balance;
+}
+
+.videoControlPanelMixer .vjFirstRunEmptyState span,
+.videoControlPanelMixer .vjFirstRunEmptyState small {
+  max-width: 340px;
+  color: #9da6ac;
+  line-height: 1.4;
+  text-wrap: pretty;
+}
+
+.videoControlPanelMixer .vjFirstRunEmptyState small {
+  color: #d7a463;
+}
+
+.videoControlPanelMixer .vjFirstRunEmptyState .vjFirstRunError {
+  max-width: 340px;
+  color: #ed8585;
+}
+
+.videoControlPanelMixer .vjFirstRunEmptyState button {
+  min-width: 190px;
+  min-height: 44px;
+}
+
 .videoControlPanelMixer .liveAudioInputBar {
   grid-template-columns: minmax(0, 1fr);
 }

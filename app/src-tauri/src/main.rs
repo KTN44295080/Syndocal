@@ -140,6 +140,7 @@ fn validate_app_name(file_label: &str, app: &str) -> Result<(), String> {
 
 struct AppState {
     engine: EngineHandle,
+    vj_first_run: Arc<Mutex<()>>,
     media_audio: Arc<Mutex<MediaAudioPlayback>>,
     _media_audio_sync: MediaAudioSyncRuntime,
     live_audio_input: Mutex<Option<LiveAudioInput>>,
@@ -275,6 +276,13 @@ struct VideoBitmapMaskImportResult {
     height: u8,
     luma_words: Vec<u32>,
     source_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+struct VjFirstRunSetupResult {
+    layer_ids: Vec<VideoLayerId>,
+    composition_id: CompositionId,
+    output_id: VideoOutputId,
 }
 
 impl Default for VideoRecordingStatus {
@@ -5010,12 +5018,10 @@ fn add_video_file_layer(
     Ok(layer_id)
 }
 
-#[tauri::command]
-fn add_local_media_layers(
-    state: State<'_, AppState>,
+fn prepare_local_media_layers(
     kind: VideoSourceKind,
     paths: Vec<String>,
-) -> Result<Vec<VideoLayerId>, String> {
+) -> Result<Vec<(String, VideoSourceSummary)>, String> {
     const MAX_BATCH_MEDIA_FILES: usize = 64;
     if !matches!(kind, VideoSourceKind::File | VideoSourceKind::StillImage) {
         return Err("Batch media import supports video files and still images only".to_string());
@@ -5078,12 +5084,17 @@ fn add_local_media_layers(
     if prepared.is_empty() {
         return Err("No unique media files were selected".to_string());
     }
+    Ok(prepared)
+}
 
+fn add_prepared_local_media_layers(
+    engine: &EngineHandle,
+    prepared: Vec<(String, VideoSourceSummary)>,
+) -> Result<Vec<VideoLayerId>, String> {
     let mut layer_ids = Vec::with_capacity(prepared.len());
     for (label, source) in prepared {
-        let layer_id = state.engine.allocate_video_layer_id();
-        state
-            .engine
+        let layer_id = engine.allocate_video_layer_id();
+        engine
             .send(EngineCommand::AddVideoLayer {
                 layer_id,
                 label,
@@ -5093,6 +5104,95 @@ fn add_local_media_layers(
         layer_ids.push(layer_id);
     }
     Ok(layer_ids)
+}
+
+#[tauri::command]
+fn add_local_media_layers(
+    state: State<'_, AppState>,
+    kind: VideoSourceKind,
+    paths: Vec<String>,
+) -> Result<Vec<VideoLayerId>, String> {
+    let prepared = prepare_local_media_layers(kind, paths)?;
+    add_prepared_local_media_layers(&state.engine, prepared)
+}
+
+fn safe_first_run_vj_output(output_id: VideoOutputId) -> VideoOutputSummary {
+    VideoOutputSummary {
+        id: output_id,
+        label: "VJ Program".to_string(),
+        kind: VideoOutputKind::Display,
+        enabled: false,
+        composition_id: 1,
+        fullscreen: false,
+        monitor_id: Some(0),
+        width: 1920,
+        height: 1080,
+        endpoint_name: None,
+        opacity: 1.0,
+        blackout: true,
+        mapping: VideoOutputMapping::default(),
+    }
+}
+
+fn bootstrap_vj_show_engine(
+    engine: &EngineHandle,
+    kind: VideoSourceKind,
+    paths: Vec<String>,
+) -> Result<VjFirstRunSetupResult, String> {
+    if kind != VideoSourceKind::File {
+        return Err("First-run VJ setup requires local video files".to_string());
+    }
+    let snapshot = engine.snapshot();
+    if !snapshot.video.layers.is_empty()
+        || !snapshot.video.outputs.is_empty()
+        || snapshot
+            .video
+            .compositions
+            .iter()
+            .any(|composition| composition.id != 1)
+    {
+        return Err(
+            "First-run VJ setup requires an empty video show with only the Main composition"
+                .to_string(),
+        );
+    }
+
+    let prepared = prepare_local_media_layers(kind, paths)?;
+    ensure_video_output_backend_available(&VideoOutputKind::Display)?;
+    let output_id = engine.allocate_video_output_id();
+    let output = safe_first_run_vj_output(output_id);
+    let layers = prepared
+        .into_iter()
+        .map(|(label, source)| (engine.allocate_video_layer_id(), label, source))
+        .collect::<Vec<_>>();
+    let layer_ids = layers
+        .iter()
+        .map(|(layer_id, _, _)| *layer_id)
+        .collect::<Vec<_>>();
+    engine.bootstrap_vj_show(layers, output)?;
+    Ok(VjFirstRunSetupResult {
+        layer_ids,
+        composition_id: 1,
+        output_id,
+    })
+}
+
+#[tauri::command]
+async fn bootstrap_vj_show(
+    state: State<'_, AppState>,
+    kind: VideoSourceKind,
+    paths: Vec<String>,
+) -> Result<VjFirstRunSetupResult, String> {
+    let engine = state.engine.clone();
+    let first_run = Arc::clone(&state.vj_first_run);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = first_run
+            .lock()
+            .map_err(|_| "First-run VJ setup lock is unavailable".to_string())?;
+        bootstrap_vj_show_engine(&engine, kind, paths)
+    })
+    .await
+    .map_err(|error| format!("First-run VJ setup worker failed: {error}"))?
 }
 
 #[tauri::command]
@@ -18592,6 +18692,68 @@ f 1 2 3
     }
 
     #[test]
+    fn first_run_vj_setup_validates_every_path_before_mutating_and_stays_output_safe() {
+        let media_path = unique_test_directory("vj-first-run-media").with_extension("mov");
+        let missing_path = media_path.with_extension("missing");
+        fs::write(&media_path, b"test media").unwrap();
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+
+        let error = bootstrap_vj_show_engine(
+            &engine,
+            VideoSourceKind::File,
+            vec![
+                media_path.to_string_lossy().to_string(),
+                missing_path.to_string_lossy().to_string(),
+            ],
+        )
+        .unwrap_err();
+        assert!(error.contains("path was not found"));
+        let unchanged = engine.snapshot();
+        assert!(unchanged.video.layers.is_empty());
+        assert!(unchanged.video.outputs.is_empty());
+
+        let result = bootstrap_vj_show_engine(
+            &engine,
+            VideoSourceKind::File,
+            vec![media_path.to_string_lossy().to_string()],
+        )
+        .unwrap();
+        let snapshot = engine.snapshot();
+        assert_eq!(result.composition_id, 1);
+        assert_eq!(result.layer_ids.len(), 1);
+        assert_eq!(snapshot.video.layers.len(), 1);
+        assert!(!snapshot.video.layers[0].state.playing);
+        assert_eq!(snapshot.video.compositions[0].id, 1);
+        assert_eq!(snapshot.video.compositions[0].layer_ids, result.layer_ids);
+        assert_eq!(snapshot.video.outputs.len(), 1);
+        let output = &snapshot.video.outputs[0];
+        assert_eq!(output.id, result.output_id);
+        assert_eq!(output.label, "VJ Program");
+        assert_eq!(output.kind, VideoOutputKind::Display);
+        assert_eq!(output.composition_id, 1);
+        assert_eq!((output.width, output.height), (1920, 1080));
+        assert!(!output.enabled);
+        assert!(output.blackout);
+        assert!(!output.fullscreen);
+
+        let duplicate_error = bootstrap_vj_show_engine(
+            &engine,
+            VideoSourceKind::File,
+            vec![media_path.to_string_lossy().to_string()],
+        )
+        .unwrap_err();
+        assert!(duplicate_error.contains("requires an empty video show"));
+        let after_duplicate = engine.snapshot();
+        assert_eq!(after_duplicate.video.layers.len(), 1);
+        assert_eq!(after_duplicate.video.outputs.len(), 1);
+
+        let _ = fs::remove_file(media_path);
+    }
+
+    #[test]
     fn import_gdtf_rejects_blank_path_before_opening() {
         let error = import_gdtf_from_path("   ".to_string()).unwrap_err();
 
@@ -23299,6 +23461,7 @@ fn main() {
         })
         .manage(AppState {
             engine,
+            vj_first_run: Arc::new(Mutex::new(())),
             media_audio,
             _media_audio_sync: media_audio_sync,
             live_audio_input: Mutex::new(None),
@@ -23492,6 +23655,7 @@ fn main() {
             add_video_file_layer,
             add_still_image_layer,
             add_local_media_layers,
+            bootstrap_vj_show,
             refresh_video_layer_metadata,
             add_video_input_layer,
             duplicate_video_layer,

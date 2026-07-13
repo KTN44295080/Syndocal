@@ -975,6 +975,7 @@ pub trait VideoFrameProvider {
 
 pub trait VideoFrameDecoder {
     fn retain_layers(&mut self, layer_ids: &[VideoLayerId]);
+    fn release_layer(&mut self, _layer_id: VideoLayerId) {}
     fn decode_frame(
         &mut self,
         request: &VideoFrameRequest,
@@ -1012,6 +1013,7 @@ pub struct VideoPreviewRenderer<P = PreviewFrameProvider> {
 }
 
 const ISF_SHADER_CACHE_CAPACITY: usize = 64;
+const FFMPEG_CLI_FRAME_CACHE_CAPACITY: usize = 8;
 
 #[derive(Default)]
 pub struct StillImageFrameCache {
@@ -1343,6 +1345,38 @@ impl FfmpegCliFrameDecoder {
 
     pub fn cache_len(&self) -> usize {
         self.entries.len()
+    }
+
+    fn evict_layer(&mut self, layer_id: VideoLayerId) {
+        self.entries.retain(|entry| entry.layer_id != layer_id);
+    }
+
+    fn cached_frame(
+        &mut self,
+        request: &VideoFrameRequest,
+        path: &Path,
+        signature: &StillImageSignature,
+    ) -> Option<VideoFrame> {
+        let index = self.entries.iter().position(|entry| {
+            entry.layer_id == request.layer_id
+                && entry.path == path
+                && entry.width == request.width
+                && entry.height == request.height
+                && entry.position_ms == request.position_ms
+                && &entry.signature == signature
+        })?;
+        let entry = self.entries.remove(index);
+        let frame = entry.frame.clone();
+        self.entries.push(entry);
+        Some(frame)
+    }
+
+    fn cache_frame(&mut self, entry: FfmpegCliFrameCacheEntry) {
+        self.evict_layer(entry.layer_id);
+        self.entries.push(entry);
+        if self.entries.len() > FFMPEG_CLI_FRAME_CACHE_CAPACITY {
+            self.entries.remove(0);
+        }
     }
 }
 
@@ -1787,45 +1821,40 @@ impl VideoFrameDecoder for FfmpegCliFrameDecoder {
             .retain(|entry| layer_ids.iter().any(|layer_id| *layer_id == entry.layer_id));
     }
 
+    fn release_layer(&mut self, layer_id: VideoLayerId) {
+        self.evict_layer(layer_id);
+    }
+
     fn decode_frame(
         &mut self,
         request: &VideoFrameRequest,
     ) -> Result<Option<VideoFrame>, VideoDecodeError> {
         if request.source.kind != VideoSourceKind::File {
+            self.evict_layer(request.layer_id);
             return Ok(None);
         }
 
-        let path = request
+        let Some(path) = request
             .source
             .path
             .as_deref()
             .filter(|path| !path.trim().is_empty())
-            .ok_or_else(|| VideoDecodeError::MissingSourcePath {
+        else {
+            self.evict_layer(request.layer_id);
+            return Err(VideoDecodeError::MissingSourcePath {
                 layer_id: request.layer_id,
                 label: request.label.clone(),
-            })?;
+            });
+        };
         let path = PathBuf::from(path);
         let signature = StillImageSignature::from_path(&path);
-        if let Some(entry) = self.entries.iter().find(|entry| {
-            entry.layer_id == request.layer_id
-                && entry.path == path
-                && entry.width == request.width
-                && entry.height == request.height
-                && entry.position_ms == request.position_ms
-                && entry.signature == signature
-        }) {
-            return Ok(Some(entry.frame.clone()));
+        if let Some(frame) = self.cached_frame(request, &path, &signature) {
+            return Ok(Some(frame));
         }
 
+        self.evict_layer(request.layer_id);
         let frame = decode_ffmpeg_cli_frame(request, &self.binary, &path)?;
-        self.entries.retain(|entry| {
-            !(entry.layer_id == request.layer_id
-                && entry.path == path
-                && entry.width == request.width
-                && entry.height == request.height
-                && entry.position_ms == request.position_ms)
-        });
-        self.entries.push(FfmpegCliFrameCacheEntry {
+        self.cache_frame(FfmpegCliFrameCacheEntry {
             layer_id: request.layer_id,
             path,
             width: request.width,
@@ -1957,6 +1986,7 @@ impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
         let state = sanitize_layer_state(layer.state.clone());
         let position_ms = position_override_ms.unwrap_or(state.position_ms);
         if matches!(layer.source.kind, VideoSourceKind::StillImage) {
+            self.decoder.release_layer(layer.id);
             let path = layer
                 .source
                 .path
@@ -6508,6 +6538,124 @@ mod tests {
         assert_eq!(first.data, b"ABCD");
         assert_eq!(first, second);
         assert_eq!(first.pts_ms, 250);
+    }
+
+    #[test]
+    fn ffmpeg_cli_decoder_replaces_the_cached_frame_for_each_layer() {
+        let binary = fake_ffmpeg_binary();
+        let mut decoder = FfmpegCliFrameDecoder::new(&binary);
+        let mut request = VideoFrameRequest {
+            layer_id: 21,
+            label: "Clip".to_string(),
+            source: VideoSourceSummary {
+                kind: VideoSourceKind::File,
+                path: Some("ignored-by-fake-ffmpeg.mp4".to_string()),
+                name: None,
+                codec: Some("H264".to_string()),
+                metadata: None,
+            },
+            position_ms: 100,
+            width: 1,
+            height: 1,
+        };
+
+        decoder.decode_frame(&request).unwrap();
+        request.position_ms = 200;
+        decoder.decode_frame(&request).unwrap();
+        let _ = std::fs::remove_file(&binary);
+
+        assert_eq!(decoder.cache_len(), 1);
+        assert_eq!(decoder.entries[0].layer_id, 21);
+        assert_eq!(decoder.entries[0].position_ms, 200);
+        assert_eq!(decoder.entries[0].frame.pts_ms, 200);
+    }
+
+    #[test]
+    fn ffmpeg_cli_decoder_enforces_global_lru_capacity() {
+        let binary = fake_ffmpeg_binary();
+        let mut decoder = FfmpegCliFrameDecoder::new(&binary);
+        let mut request = VideoFrameRequest {
+            layer_id: 1,
+            label: "Clip".to_string(),
+            source: VideoSourceSummary {
+                kind: VideoSourceKind::File,
+                path: Some("ignored-by-fake-ffmpeg.mp4".to_string()),
+                name: None,
+                codec: Some("H264".to_string()),
+                metadata: None,
+            },
+            position_ms: 0,
+            width: 1,
+            height: 1,
+        };
+
+        for layer_id in 1..=FFMPEG_CLI_FRAME_CACHE_CAPACITY as VideoLayerId {
+            request.layer_id = layer_id;
+            request.position_ms = layer_id;
+            decoder.decode_frame(&request).unwrap();
+        }
+        request.layer_id = 1;
+        request.position_ms = 1;
+        decoder.decode_frame(&request).unwrap();
+        request.layer_id = 9;
+        request.position_ms = 9;
+        decoder.decode_frame(&request).unwrap();
+        let _ = std::fs::remove_file(&binary);
+
+        let cached_layer_ids = decoder
+            .entries
+            .iter()
+            .map(|entry| entry.layer_id)
+            .collect::<Vec<_>>();
+        assert_eq!(decoder.cache_len(), FFMPEG_CLI_FRAME_CACHE_CAPACITY);
+        assert_eq!(cached_layer_ids, vec![3, 4, 5, 6, 7, 8, 1, 9]);
+    }
+
+    #[test]
+    fn ffmpeg_cli_decoder_evicts_invalid_non_file_and_pathless_sources() {
+        let binary = fake_ffmpeg_binary();
+        let mut decoder = FfmpegCliFrameDecoder::new(&binary);
+        let mut request = VideoFrameRequest {
+            layer_id: 22,
+            label: "Clip".to_string(),
+            source: VideoSourceSummary {
+                kind: VideoSourceKind::File,
+                path: Some("ignored-by-fake-ffmpeg.mp4".to_string()),
+                name: None,
+                codec: Some("H264".to_string()),
+                metadata: None,
+            },
+            position_ms: 100,
+            width: 1,
+            height: 1,
+        };
+
+        decoder.decode_frame(&request).unwrap();
+        request.source.kind = VideoSourceKind::Ndi;
+        assert_eq!(decoder.decode_frame(&request), Ok(None));
+        assert_eq!(decoder.cache_len(), 0);
+
+        request.source.kind = VideoSourceKind::File;
+        decoder.decode_frame(&request).unwrap();
+        request.source.path = Some("  ".to_string());
+        assert_eq!(
+            decoder.decode_frame(&request),
+            Err(VideoDecodeError::MissingSourcePath {
+                layer_id: 22,
+                label: "Clip".to_string(),
+            })
+        );
+        assert_eq!(decoder.cache_len(), 0);
+
+        request.source.path = Some("ignored-by-fake-ffmpeg.mp4".to_string());
+        decoder.decode_frame(&request).unwrap();
+        request.width = 0;
+        assert!(matches!(
+            decoder.decode_frame(&request),
+            Err(VideoDecodeError::Decode { .. })
+        ));
+        assert_eq!(decoder.cache_len(), 0);
+        let _ = std::fs::remove_file(&binary);
     }
 
     #[test]

@@ -875,6 +875,13 @@ export interface VideoDecoderDiagnostics {
   decode_failures: number;
   hap_cache_len: number;
   libav_cache_len: number;
+  libav_session_count: number;
+  libav_session_open_count: number;
+  libav_session_reset_count: number;
+  libav_sequential_continue_count: number;
+  libav_frame_reuse_count: number;
+  libav_working_set_eviction_count: number;
+  libav_session_error_count: number;
   cli_cache_len: number;
 }
 

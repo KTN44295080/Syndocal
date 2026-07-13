@@ -18,9 +18,11 @@
     "check:status": "node scripts/check-status-model.mjs",
     "check:terminology": "node scripts/check-ui-terminology.mjs",
     "check:timeline-automation": "node scripts/check-timeline-automation-helpers.mjs",
+    "check:vj-first-run": "node scripts/check-vj-first-run.mjs",
     "check:virtualization": "node scripts/check-virtualization.mjs",
     "check:large-show-ui": "node scripts/check-viewport-containment.mjs --large-show",
     "check:viewport": "node scripts/check-viewport-containment.mjs",
+    "check:vj-first-run-viewport": "node scripts/check-viewport-containment.mjs --vj-empty",
     "prepare:runtime-libs": "node scripts/prepare-release-runtime.mjs",
     "tauri": "tauri"
   },

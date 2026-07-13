@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeSet, HashMap, HashSet},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Condvar, Mutex, RwLock, Weak,
+        mpsc, Arc, Condvar, Mutex, RwLock, Weak,
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -538,6 +538,12 @@ pub enum EngineCommand {
         composition_id: CompositionId,
         layer_ids: Vec<VideoLayerId>,
     },
+    BootstrapVjShow {
+        layers: Vec<(VideoLayerId, String, VideoSourceSummary)>,
+        output: VideoOutputSummary,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     AddVideoOutput(VideoOutputSummary),
     RemoveVideoOutput(VideoOutputId),
     SetVideoOutputConfig {
@@ -947,6 +953,25 @@ impl EngineHandle {
         }
     }
 
+    pub fn bootstrap_vj_show(
+        &self,
+        layers: Vec<(VideoLayerId, String, VideoSourceSummary)>,
+        output: VideoOutputSummary,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        let expires_at = Instant::now() + Duration::from_secs(2);
+        self.send(EngineCommand::BootstrapVjShow {
+            layers,
+            output,
+            expires_at,
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("VJ setup engine acknowledgement failed: {error}"))?
+    }
+
     pub fn load_project_snapshot(&self, snapshot: EngineSnapshot) -> Result<(), EngineError> {
         self.sync_allocator_counters(&snapshot);
         self.send(EngineCommand::LoadProjectSnapshot(snapshot))
@@ -1321,6 +1346,7 @@ struct RuntimeDmxInputFrame {
 
 struct EngineRuntime {
     shared_telemetry: Arc<EngineSharedTelemetry>,
+    pending_command_acks: Vec<(mpsc::SyncSender<Result<(), String>>, Result<(), String>)>,
     fixtures: Vec<RuntimeFixture>,
     effects: Vec<RuntimeEffect>,
     node_graphs: Vec<RuntimeNodeGraph>,
@@ -1474,6 +1500,7 @@ impl EngineRuntime {
         let dmx_sender = dmx_sender_result.ok().flatten();
         Self {
             shared_telemetry,
+            pending_command_acks: Vec::new(),
             fixtures: Vec::new(),
             effects: Vec::new(),
             node_graphs: Vec::new(),
@@ -2015,6 +2042,7 @@ impl EngineRuntime {
             }
             self.record_queue_depth(queue.len());
             self.consume_commands(&queue);
+            self.publish_pending_command_acks(queue.len(), &snapshot);
 
             let mut now = Instant::now();
             self.maybe_advance_low_latency_dmx_tick(now, &mut next_tick);
@@ -2055,6 +2083,10 @@ impl EngineRuntime {
             self.record_command_queue_latency(queued_command.queued_at.elapsed());
             self.track_command_for_dmx_tick(queued_command.queued_at);
             let resets_telemetry = matches!(queued_command.command, EngineCommand::ResetTelemetry);
+            let publication_barrier = matches!(
+                queued_command.command,
+                EngineCommand::BootstrapVjShow { .. }
+            );
             if queued_command.command.requests_low_latency_dmx_tick() {
                 self.low_latency_dmx_tick_request_count =
                     self.low_latency_dmx_tick_request_count.saturating_add(1);
@@ -2069,6 +2101,9 @@ impl EngineRuntime {
                 consumed_since_last_reset = 0;
             } else {
                 consumed_since_last_reset = consumed_since_last_reset.saturating_add(1);
+            }
+            if publication_barrier {
+                break;
             }
         }
         if consumed_since_last_reset > 0 {
@@ -4082,6 +4117,74 @@ impl EngineRuntime {
                         Some(format!("Video composition {composition_id} was not found"));
                 }
             }
+            EngineCommand::BootstrapVjShow {
+                layers,
+                output,
+                expires_at,
+                ack,
+            } => {
+                let result = (|| -> Result<(), String> {
+                    if Instant::now() > expires_at {
+                        return Err(
+                            "First-run VJ setup expired before engine execution".to_string()
+                        );
+                    }
+                    if !self.video_layers.is_empty()
+                        || !self.video_outputs.is_empty()
+                        || !self.video_compositions.is_empty()
+                    {
+                        return Err("First-run VJ setup requires an empty video show".to_string());
+                    }
+                    if layers.is_empty() {
+                        return Err(
+                            "First-run VJ setup requires at least one media layer".to_string()
+                        );
+                    }
+                    if layers.iter().any(|(_, _, source)| {
+                        source.kind != protocol::VideoSourceKind::File || source.path.is_none()
+                    }) {
+                        return Err("First-run VJ setup only accepts local File layers".to_string());
+                    }
+                    if output.id == 0
+                        || output.kind != VideoOutputKind::Display
+                        || output.composition_id != 1
+                        || output.enabled
+                        || !output.blackout
+                        || output.fullscreen
+                    {
+                        return Err(
+                            "First-run VJ output must be a disabled, blacked-out windowed Display routed to Main"
+                                .to_string(),
+                        );
+                    }
+                    let mut layer_ids = HashSet::new();
+                    if layers
+                        .iter()
+                        .any(|(layer_id, _, _)| *layer_id == 0 || !layer_ids.insert(*layer_id))
+                    {
+                        return Err("First-run VJ layers must have unique non-zero IDs".to_string());
+                    }
+                    let next_layers = layers
+                        .into_iter()
+                        .map(|(layer_id, label, source)| RuntimeVideoLayer {
+                            id: layer_id,
+                            label: sanitize_video_layer_label(label, layer_id),
+                            source,
+                            blend_mode: VideoBlendMode::Normal,
+                            state: VideoLayerState::default(),
+                            isf_effect: None,
+                        })
+                        .collect::<Vec<_>>();
+                    let output = sanitize_video_output(output);
+                    self.video_layers = next_layers;
+                    self.video_layer_fades.clear();
+                    self.video_outputs = vec![RuntimeVideoOutput { summary: output }];
+                    self.video_output_fades.clear();
+                    Ok(())
+                })();
+                self.last_error = result.as_ref().err().cloned();
+                self.pending_command_acks.push((ack, result));
+            }
             EngineCommand::AddVideoOutput(output) => {
                 self.video_outputs
                     .retain(|candidate| candidate.summary.id != output.id);
@@ -4263,6 +4366,51 @@ impl EngineRuntime {
                     self.last_error = None;
                 }
             }
+        }
+    }
+
+    fn publish_pending_command_acks(
+        &mut self,
+        queue_depth: usize,
+        snapshot: &RwLock<EngineSnapshot>,
+    ) {
+        if self.pending_command_acks.is_empty() {
+            return;
+        }
+        let pending = std::mem::take(&mut self.pending_command_acks);
+        let requires_publication = pending.iter().any(|(_, result)| result.is_ok());
+        let published = if requires_publication {
+            let deadline = Instant::now() + Duration::from_millis(5);
+            loop {
+                match snapshot.try_write() {
+                    Ok(mut guard) => {
+                        *guard = self.build_snapshot(queue_depth);
+                        break true;
+                    }
+                    Err(std::sync::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                        std::thread::yield_now();
+                    }
+                    Err(_) => break false,
+                }
+            }
+        } else {
+            true
+        };
+        if !published {
+            self.video_layers.clear();
+            self.video_layer_fades.clear();
+            self.video_outputs.clear();
+            self.video_output_fades.clear();
+            self.last_error =
+                Some("Engine snapshot was busy; first-run VJ setup was rolled back".to_string());
+        }
+        for (ack, result) in pending {
+            let result = if result.is_ok() && !published {
+                Err("Engine snapshot was busy; first-run VJ setup was rolled back".to_string())
+            } else {
+                result
+            };
+            let _ = ack.send(result);
         }
     }
 
@@ -19489,6 +19637,162 @@ mod tests {
         let layer = snapshot.video.layers.first().unwrap();
         assert!(layer.state.bpm_sync.enabled);
         assert!(layer.state.position_ms > 0);
+    }
+
+    #[test]
+    fn bootstrap_vj_show_is_atomic_safe_and_acknowledges_published_snapshot() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let layer_id = engine.allocate_video_layer_id();
+        let output_id = engine.allocate_video_output_id();
+        let source = VideoSourceSummary {
+            kind: protocol::VideoSourceKind::File,
+            path: Some("memory://first-run.mp4".to_string()),
+            name: None,
+            codec: Some("H264".to_string()),
+            metadata: None,
+        };
+        let mut output = VideoOutputSummary {
+            id: output_id,
+            label: "VJ Program".to_string(),
+            kind: VideoOutputKind::Display,
+            enabled: true,
+            composition_id: 1,
+            fullscreen: false,
+            monitor_id: Some(0),
+            width: 1920,
+            height: 1080,
+            endpoint_name: None,
+            opacity: 1.0,
+            blackout: true,
+            mapping: VideoOutputMapping::default(),
+        };
+        let unsafe_error = engine
+            .bootstrap_vj_show(
+                vec![(layer_id, "First Run".to_string(), source.clone())],
+                output.clone(),
+            )
+            .unwrap_err();
+        assert!(unsafe_error.contains("disabled, blacked-out"));
+        assert!(engine.snapshot().video.layers.is_empty());
+        assert!(engine.snapshot().video.outputs.is_empty());
+
+        output.enabled = false;
+        engine
+            .bootstrap_vj_show(vec![(layer_id, "First Run".to_string(), source)], output)
+            .unwrap();
+        let snapshot = engine.snapshot();
+        assert_eq!(snapshot.video.layers.len(), 1);
+        assert_eq!(snapshot.video.outputs.len(), 1);
+        assert!(!snapshot.video.layers[0].state.playing);
+        assert!(!snapshot.video.outputs[0].enabled);
+        assert!(snapshot.video.outputs[0].blackout);
+        assert!(!snapshot.video.outputs[0].fullscreen);
+        assert_eq!(snapshot.video.compositions[0].layer_ids, vec![layer_id]);
+    }
+
+    #[test]
+    fn bootstrap_vj_show_is_a_publication_barrier_and_rolls_back_if_snapshot_is_busy() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let source = VideoSourceSummary {
+            kind: protocol::VideoSourceKind::File,
+            path: Some("memory://first-run.mp4".to_string()),
+            name: None,
+            codec: Some("H264".to_string()),
+            metadata: None,
+        };
+        let output = VideoOutputSummary {
+            id: 1,
+            label: "VJ Program".to_string(),
+            kind: VideoOutputKind::Display,
+            enabled: false,
+            composition_id: 1,
+            fullscreen: false,
+            monitor_id: Some(0),
+            width: 1920,
+            height: 1080,
+            endpoint_name: None,
+            opacity: 1.0,
+            blackout: true,
+            mapping: VideoOutputMapping::default(),
+        };
+        let (ack, receiver) = mpsc::sync_channel(1);
+        let queue = ArrayQueue::new(2);
+        assert!(queue
+            .push(QueuedEngineCommand {
+                command: EngineCommand::BootstrapVjShow {
+                    layers: vec![(1, "First Run".to_string(), source.clone())],
+                    output,
+                    expires_at: Instant::now() + Duration::from_secs(1),
+                    ack,
+                },
+                queued_at: Instant::now(),
+            })
+            .is_ok());
+        assert!(queue
+            .push(QueuedEngineCommand {
+                command: EngineCommand::AddVideoLayer {
+                    layer_id: 2,
+                    label: "Later".to_string(),
+                    source: source.clone(),
+                },
+                queued_at: Instant::now(),
+            })
+            .is_ok());
+
+        runtime.consume_commands(&queue);
+        assert_eq!(queue.len(), 1);
+        runtime.publish_pending_command_acks(queue.len(), &published);
+        assert_eq!(receiver.recv().unwrap(), Ok(()));
+        assert_eq!(published.read().unwrap().video.layers.len(), 1);
+        assert_eq!(published.read().unwrap().video.layers[0].id, 1);
+
+        runtime.consume_commands(&queue);
+        assert_eq!(runtime.video_layers.len(), 2);
+        assert_eq!(published.read().unwrap().video.layers.len(), 1);
+
+        let mut busy_runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let busy_snapshot = RwLock::new(busy_runtime.build_snapshot(0));
+        let (busy_ack, busy_receiver) = mpsc::sync_channel(1);
+        busy_runtime.apply_command(EngineCommand::BootstrapVjShow {
+            layers: vec![(3, "Busy".to_string(), source)],
+            output: VideoOutputSummary {
+                id: 2,
+                label: "VJ Program".to_string(),
+                kind: VideoOutputKind::Display,
+                enabled: false,
+                composition_id: 1,
+                fullscreen: false,
+                monitor_id: Some(0),
+                width: 1920,
+                height: 1080,
+                endpoint_name: None,
+                opacity: 1.0,
+                blackout: true,
+                mapping: VideoOutputMapping::default(),
+            },
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: busy_ack,
+        });
+        let read_guard = busy_snapshot.read().unwrap();
+        busy_runtime.publish_pending_command_acks(0, &busy_snapshot);
+        assert!(busy_receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("rolled back"));
+        assert!(busy_runtime.video_layers.is_empty());
+        assert!(busy_runtime.video_outputs.is_empty());
+        drop(read_guard);
     }
 
     #[test]

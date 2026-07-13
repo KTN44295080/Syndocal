@@ -51,6 +51,14 @@ const japaneseText: Record<string, string> = {
   "VJ Desk": "VJデスク",
   "Import Media": "素材を読み込む",
   "Import video or still images to populate the clip grid.": "動画または静止画を読み込み、クリップグリッドへ追加します。",
+  "Start your first VJ show": "最初のVJショーを始める",
+  "Choose local video files to build the clip grid and stage the first clip.": "ローカル動画を選び、クリップグリッドを作成して先頭クリップをプレビュー待機にします。",
+  "VJ Program is created Off and Blackout. No output window opens automatically.": "VJ ProgramはOff・Blackoutで作成されます。出力ウィンドウは自動で開きません。",
+  "Choose media and set up the VJ show": "素材を選んでVJショーをセットアップ",
+  "Setting Up…": "セットアップ中…",
+  "Choose Media & Set Up": "素材を選んでセットアップ",
+  "First-run VJ setup is only available for an empty video show.": "初回VJセットアップは空の映像ショーでのみ利用できます。",
+  "VJ setup canceled. No project changes were made.": "VJセットアップをキャンセルしました。プロジェクトは変更されていません。",
   Cues: "キュー",
   Automation: "オートメーション",
   Playback: "プレイバック",
@@ -1249,6 +1257,10 @@ const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
   [/^Update check failed: (.+)$/, (detail) => `更新確認に失敗しました: ${detail}`],
   [/^Analyzed audio (.+)$/, (detail) => `音声を解析しました: ${detail}`],
   [/^Applied audio BPM (.+)$/, (bpm) => `音声BPM ${bpm}を適用しました`],
+  [
+    /^VJ show ready with (\d+) clips?\(s\)\. VJ Program remains Off and Blackout until you enable it explicitly\.$/,
+    (clips) => `VJショーを${clips}クリップで準備しました。明示的に有効化するまでVJ ProgramはOff・Blackoutのままです。`,
+  ],
 ];
 
 export function uiLocaleFromUnknown(value: unknown): UiLocale {

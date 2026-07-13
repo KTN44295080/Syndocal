@@ -17,7 +17,7 @@ Control > VJ Desk now exposes two continuously refreshed buses instead of a manu
 
 - `cargo test -p syndocal live_video_monitor -- --nocapture`: 3 passed. The packet layout, request bounds and JPEG decodability are covered.
 - `pnpm build`: TypeScript and production Vite build passed.
-- `pnpm check:localization`: 1956/1956 static strings covered, with no unprotected user labels.
+- `pnpm check:localization`: 1959/1959 static strings covered, with no unprotected user labels.
 - `pnpm check:viewport`: all Control, Setup and Touch surfaces passed at 1280x720, 1366x768 and 2048x1129. VJ acceptance now requires exactly one Preview bus, one Program bus and zero normal Refresh buttons.
 - A 1366x768 screenshot review confirmed that both 16:9 buses remain visible beside Clips, Outputs and Layers without document scrolling.
 
@@ -27,5 +27,6 @@ This closes the manual-reference-preview UI gap. It does **not** prove that the 
 
 The shared preview renderer uses non-blocking `try_lock`, so recording or a manual diagnostic render can produce visible busy drops. Conversely, a synchronous monitor render can briefly occupy that renderer before recording acquires it. Real-media sustained fps, freshness, CPU/GPU cost and native-output interference still require measurement.
 
-The existing Libav backend also reopens, seeks and constructs a decoder for each uncached position. Its RGBA cache is now bounded to one frame per layer so the live monitor cannot cause unbounded memory growth, but persistent sequential decoder sessions remain the next P0 performance task. No claim of lower VJ playback cost than SynapseRack is allowed until representative multi-layer H.264/H.265/ProRes/HAP measurements pass with both monitor buses enabled.
+The Libav backend now keeps an eight-layer LRU working set, with at most one sequential decode session and one RGBA frame per retained layer. Requests advancing by at most 250 ms continue the same demuxer/decoder; repeated requests reuse the current decoded frame, while reverse motion, loops, larger jumps, source/size/signature changes and errors explicitly reopen or evict the session. Non-file, pathless and HAP-routed replacements release stale sessions immediately. Decoded PTS and seeks share the stream start-time origin instead of assuming zero-based media. Generated MPEG-4 B-frame and offset-start streams are compared against an independent FFmpeg sequential RGBA oracle, including forward continuation, reverse/large-jump reopen, EOF drain and terminal-frame reuse. Session/open/reset/continue/reuse/eviction/error counters are exposed in runtime diagnostics. The CLI fallback is independently capped to a one-frame-per-layer, eight-layer LRU so no-libav and transient-error paths cannot accumulate full RGBA history.
 
+This removes per-frame decoder construction from ordinary forward playback, but the scaler is still created per request and sessions are not shared between output workers. No claim of lower VJ playback cost than SynapseRack is allowed until representative multi-layer H.264/H.265/ProRes/HAP measurements pass with both monitor buses enabled.

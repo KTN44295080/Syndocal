@@ -500,6 +500,7 @@ const projectMutationCommands = new Set([
   "add_video_file_layer",
   "add_still_image_layer",
   "add_local_media_layers",
+  "bootstrap_vj_show",
   "refresh_video_layer_metadata",
   "add_video_input_layer",
   "duplicate_video_layer",
@@ -637,6 +638,12 @@ type SelectedTimelineAutomation = {
   kind: "lighting" | "video";
   automationId: number;
 };
+
+interface VjFirstRunSetupResult {
+  layer_ids: number[];
+  composition_id: number;
+  output_id: number;
+}
 
 interface EffectTargetOverride {
   fixture_ids: number[];
@@ -891,6 +898,9 @@ export default function App() {
   const [videoPreviewInfo, setVideoPreviewInfo] = createSignal("No preview");
   const [videoPreviewUrl, setVideoPreviewUrl] = createSignal("");
   const [videoPreviewLayerId, setVideoPreviewLayerId] = createSignal<number | null>(null);
+  const [vjFirstRunBusy, setVjFirstRunBusy] = createSignal(false);
+  const [vjFirstRunError, setVjFirstRunError] = createSignal<string | null>(null);
+  const [vjFirstRunAwaitingSync, setVjFirstRunAwaitingSync] = createSignal(false);
   const [videoClipThumbnails, setVideoClipThumbnails] = createSignal<Record<number, string>>({});
   const [videoAudioMonitorStatus, setVideoAudioMonitorStatus] = createSignal<VideoAudioMonitorStatus>({
     output_open: false,
@@ -2880,7 +2890,7 @@ export default function App() {
     return layers[0]?.id ?? null;
   });
   const videoDecoderDiagnosticsLabel = (diagnostics: VideoDecoderDiagnostics) =>
-    `routes HAP ${diagnostics.hap_successes}/${diagnostics.hap_requests}, libav ${diagnostics.libav_successes}/${diagnostics.libav_requests}, CLI ${diagnostics.cli_fallback_successes}/${diagnostics.cli_fallback_requests}, deferred ${diagnostics.deferred_requests}, failed ${diagnostics.decode_failures}, cache ${diagnostics.hap_cache_len}+${diagnostics.libav_cache_len}+${diagnostics.cli_cache_len}`;
+    `routes HAP ${diagnostics.hap_successes}/${diagnostics.hap_requests}, libav ${diagnostics.libav_successes}/${diagnostics.libav_requests}, CLI ${diagnostics.cli_fallback_successes}/${diagnostics.cli_fallback_requests}, deferred ${diagnostics.deferred_requests}, failed ${diagnostics.decode_failures}, cache ${diagnostics.hap_cache_len}+${diagnostics.libav_cache_len}+${diagnostics.cli_cache_len}, libav sessions ${diagnostics.libav_session_count} (open ${diagnostics.libav_session_open_count}, reset ${diagnostics.libav_session_reset_count}, seq ${diagnostics.libav_sequential_continue_count}, reuse ${diagnostics.libav_frame_reuse_count}, evict ${diagnostics.libav_working_set_eviction_count}, error ${diagnostics.libav_session_error_count})`;
   const videoPreviewDiagnosticsText = createMemo(() => {
     const diagnostics = videoPreviewDiagnostics();
     if (!diagnostics) {
@@ -7885,6 +7895,63 @@ export default function App() {
   const liveVideoProgramLabel = createMemo(() =>
     snapshot().video.outputs.find((output) => output.id === selectedVideoOutputId())?.label ?? null,
   );
+  const vjFirstRunAvailable = createMemo(() =>
+    !vjFirstRunAwaitingSync() &&
+    snapshot().video.layers.length === 0 &&
+    snapshot().video.outputs.length === 0 &&
+    snapshot().video.compositions.every((composition) => composition.id === 1),
+  );
+  createEffect(() => {
+    if (
+      vjFirstRunAwaitingSync() &&
+      (snapshot().video.layers.length > 0 || snapshot().video.outputs.length > 0)
+    ) {
+      setVjFirstRunAwaitingSync(false);
+    }
+  });
+  const createFirstRunVjShow = async () => {
+    if (vjFirstRunBusy()) return;
+    if (!vjFirstRunAvailable()) {
+      setMessage("First-run VJ setup is only available for an empty video show.");
+      return;
+    }
+    setVjFirstRunBusy(true);
+    setVjFirstRunError(null);
+    try {
+      const paths = await invoke<string[]>("select_video_source_files", { kind: "File" });
+      if (paths.length === 0) {
+        setMessage("VJ setup canceled. No project changes were made.");
+        return;
+      }
+      const result = await invoke<VjFirstRunSetupResult>("bootstrap_vj_show", {
+        kind: "File",
+        paths,
+      });
+      setVjFirstRunAwaitingSync(true);
+      const refreshed = await refreshSnapshot();
+      setSelectedVideoOutputId(result.output_id);
+      setVideoPreviewLayerId(result.layer_ids[0] ?? null);
+      setVideoLabel(`Video Layer ${result.layer_ids.length + 1}`);
+      if (!refreshed) {
+        const detail = uiLocale() === "ja"
+          ? "VJショーは安全に作成されましたが、画面を再同期できませんでした。スナップショット同期で再試行します。"
+          : "The VJ show was created safely, but the local view could not refresh. Automatic snapshot sync will retry.";
+        setVjFirstRunError(detail);
+        setMessage(detail);
+        return;
+      }
+      setVjFirstRunAwaitingSync(false);
+      setMessage(
+        `VJ show ready with ${result.layer_ids.length} clip(s). VJ Program remains Off and Blackout until you enable it explicitly.`,
+      );
+    } catch (error) {
+      const detail = String(error);
+      setVjFirstRunError(uiLocale() === "ja" ? `VJセットアップに失敗しました。${detail}` : detail);
+      setMessage(detail);
+    } finally {
+      setVjFirstRunBusy(false);
+    }
+  };
   const videoThumbnailSourceSignature = createMemo(() => JSON.stringify(
     snapshot().video.layers.map((layer) => ({
       id: layer.id,
@@ -10690,6 +10757,10 @@ export default function App() {
             get selectedLiveAudioInputDevice() { return selectedLiveAudioInputDevice(); },
             get liveAudioInputStatus() { return liveAudioInputStatus(); },
             get previewLayerId() { return videoPreviewLayerId(); },
+            get firstRunAvailable() { return vjFirstRunAvailable(); },
+            get firstRunBusy() { return vjFirstRunBusy(); },
+            get firstRunError() { return vjFirstRunError(); },
+            firstRunBackendAvailable: isTauriRuntime(),
             onSetFadeMs: setVideoOutputFadeMs,
             onSetAudioMonitorVolume: setVideoAudioMonitorVolume,
             onSetProgramAudioEnabled: setVideoProgramAudioEnabled,
@@ -10707,6 +10778,7 @@ export default function App() {
             onStopLiveAudioInput: stopLiveAudioInput,
             onPreviewLayerId: setVideoPreviewLayerId,
             onImportMedia: importMediaFiles,
+            onCreateFirstRunShow: createFirstRunVjShow,
             onLaunch: launchVideoClipFromGrid,
             onTake: takeVideoClipFromGrid,
             onStop: stopVideoClipFromGrid,

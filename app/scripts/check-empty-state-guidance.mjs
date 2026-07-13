@@ -11,6 +11,7 @@ const files = new Map(
       "../src/components/TouchFixturePickerPanel.tsx",
       "../src/components/TouchVideoPanel.tsx",
       "../src/components/VideoLayerListPanel.tsx",
+      "../src/components/VideoClipGridPanel.tsx",
     ].map(async (path) => [path, await readFile(new URL(path, import.meta.url), "utf8")]),
   ),
 );
@@ -23,6 +24,7 @@ const expectedGuidance = [
   ["../src/components/TouchFixturePickerPanel.tsx", "Patch one in Setup &gt; Patch."],
   ["../src/components/TouchVideoPanel.tsx", "Add one in Setup &gt; Output."],
   ["../src/components/VideoLayerListPanel.tsx", "Add a file, still, or input above."],
+  ["../src/components/VideoClipGridPanel.tsx", "VJ Program is created Off and Blackout. No output window opens automatically."],
 ];
 
 for (const [path, guidance] of expectedGuidance) {

@@ -26,6 +26,10 @@ interface VideoClipGridPanelProps {
   selectedLiveAudioInputDevice: string;
   liveAudioInputStatus: LiveAudioInputStatus;
   previewLayerId: number | null;
+  firstRunAvailable: boolean;
+  firstRunBusy: boolean;
+  firstRunError: string | null;
+  firstRunBackendAvailable: boolean;
   onSetFadeMs: (fadeMs: number) => void;
   onSetAudioMonitorVolume: (volume: number) => void;
   onSetProgramAudioEnabled: (enabled: boolean) => void;
@@ -43,6 +47,7 @@ interface VideoClipGridPanelProps {
   onStopLiveAudioInput: () => void | Promise<void>;
   onPreviewLayerId: (layerId: number | null) => void;
   onImportMedia: () => void | Promise<void>;
+  onCreateFirstRunShow: () => void | Promise<void>;
   onLaunch: (layerId: number, fadeMs: number) => void | Promise<void>;
   onTake: (layerId: number, fadeMs: number) => void | Promise<void>;
   onStop: (layerId: number, fadeMs: number) => void | Promise<void>;
@@ -59,6 +64,8 @@ const sourceLabel = (layer: VideoLayerSummary) => {
 };
 
 export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
+  let panelElement: HTMLElement | undefined;
+  let previousLayerCount = props.layers.length;
   const [bank, setBank] = createSignal(0);
   const bankCount = createMemo(() => Math.max(1, Math.ceil(props.layers.length / CLIPS_PER_BANK)));
   const visibleLayers = createMemo(() => {
@@ -72,6 +79,13 @@ export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
   const deckBLayer = createMemo(() => props.layers.find((layer) => layer.id === props.deckBLayerId) ?? null);
 
   createEffect(() => {
+    const layerCount = props.layers.length;
+    if (previousLayerCount === 0 && layerCount > 0) {
+      window.requestAnimationFrame(() => {
+        panelElement?.querySelector<HTMLButtonElement>(".videoClipLaunch")?.focus();
+      });
+    }
+    previousLayerCount = layerCount;
     if (bank() >= bankCount()) setBank(bankCount() - 1);
     if (props.previewLayerId !== null && !props.layers.some((layer) => layer.id === props.previewLayerId)) {
       props.onPreviewLayerId(null);
@@ -79,7 +93,7 @@ export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
   });
 
   return (
-    <section class="videoClipGridPanel" aria-label="Video clip grid">
+    <section ref={panelElement} class={`videoClipGridPanel ${props.layers.length === 0 ? "empty" : ""}`} aria-label="Video clip grid">
       <div class="sectionHeader videoClipGridHeader">
         <div>
           <h3>Clip Grid</h3>
@@ -252,12 +266,36 @@ export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
       <Show
         when={props.layers.length > 0}
         fallback={
-          <div class="emptyState emptyStateAction">
-            <span>Import video or still images to populate the clip grid.</span>
-            <button class="primary" onClick={() => void props.onImportMedia()}>
-              Import Media
-            </button>
-          </div>
+          <Show
+            when={props.firstRunAvailable}
+            fallback={
+              <div class="emptyState emptyStateAction">
+                <span>Import video or still images to populate the clip grid.</span>
+                <button class="primary" onClick={() => void props.onImportMedia()}>
+                  Import Media
+                </button>
+              </div>
+            }
+          >
+            <div class="emptyState emptyStateAction vjFirstRunEmptyState" aria-busy={props.firstRunBusy} aria-live="polite">
+              <h4>Start your first VJ show</h4>
+              <span>Choose local video files to build the clip grid and stage the first clip.</span>
+              <small class="vjFirstRunSafety">VJ Program is created Off and Blackout. No output window opens automatically.</small>
+              <button
+                class="primary"
+                disabled={props.firstRunBusy || !props.firstRunBackendAvailable}
+                title={props.firstRunBackendAvailable ? "Choose media and set up the VJ show" : "Desktop required"}
+                onClick={() => void props.onCreateFirstRunShow()}
+              >
+                <span role={props.firstRunBusy ? "status" : undefined}>
+                  {props.firstRunBusy ? "Setting Up…" : props.firstRunBackendAvailable ? "Choose Media & Set Up" : "Desktop required"}
+                </span>
+              </button>
+              <Show when={props.firstRunError}>
+                {(error) => <small class="vjFirstRunError" role="alert" data-no-localize>{error()}</small>}
+              </Show>
+            </div>
+          </Show>
         }
       >
         <div class="videoClipGrid">
