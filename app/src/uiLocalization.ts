@@ -60,6 +60,8 @@ const japaneseText: Record<string, string> = {
   "First-run VJ setup is only available for an empty video show.": "初回VJセットアップは空の映像ショーでのみ利用できます。",
   "VJ setup canceled. No project changes were made.": "VJセットアップをキャンセルしました。プロジェクトは変更されていません。",
   Cues: "キュー",
+  "Edit Cues": "キューを編集",
+  Done: "完了",
   Automation: "オートメーション",
   Playback: "プレイバック",
   Attributes: "属性",
@@ -293,6 +295,35 @@ const japaneseText: Record<string, string> = {
   "Video Cue Point Previous": "前の映像キューポイント",
   "Node Graph Enable": "ノードグラフを有効化",
   "Effect Enable": "エフェクトを有効化",
+  "Effect Recall": "エフェクト呼び出し",
+  "Effects Only": "エフェクトのみ",
+  "All Sources": "すべてのソース",
+  "Effect Recall selection tools": "エフェクト呼び出し対象の選択ツール",
+  "Cue Effect Recall targets": "キューのエフェクト呼び出し対象",
+  "Included Effects recall their stored ON/OFF state on GO. Effects not listed here are left unchanged.":
+    "対象に含めたエフェクトはGO時に保存済みのON/OFF状態を呼び出します。含めていないエフェクトは変更しません。",
+  "Select All": "全て選択",
+  "Capture Current": "現在状態を取得",
+  "Refresh States": "状態を再取得",
+  "Filter Effects": "エフェクトを絞り込み",
+  "Name, ID, or type": "名前、ID、種類",
+  "Effect Recall pages": "エフェクト呼び出しページ",
+  "Previous Effect Recall page": "前のエフェクト呼び出しページ",
+  "Next Effect Recall page": "次のエフェクト呼び出しページ",
+  "No Effects match this filter.": "絞り込み条件に一致するエフェクトはありません。",
+  "Create an Effect in the Effect rack first.": "先にエフェクトラックでエフェクトを作成してください。",
+  "No Effects match this Cue scope.": "このキュー範囲に一致するエフェクトはありません。",
+  "Save Recall stores only this Effect Recall list, including an empty list when the Cue still has another target.":
+    "呼び出しを保存では、このエフェクト呼び出しリストだけを保存します。キューに別のターゲットがあれば空のリストも保存できます。",
+  "Update Look recaptures the current Store Scope:": "ルックを更新すると、現在の保存範囲を再取得します:",
+  "It does not save Recall edits.": "呼び出し設定の編集内容は保存しません。",
+  "A Cue needs at least one target. Remove this Cue instead of saving an empty Effect-only Recall.":
+    "キューには1つ以上のターゲットが必要です。エフェクト専用の呼び出しを空で保存せず、このキューを削除してください。",
+  "Press Update to store Effect Recall edits with the Cue.": "更新を押すと、エフェクト呼び出し設定をキューへ保存します。",
+  "Only Effects matching this Cue scope are listed. Mixed Lighting/Video Effects appear in both scopes.":
+    "このキュー範囲に一致するエフェクトだけを表示します。照明と映像の両方を対象にするエフェクトは、両方の範囲に表示されます。",
+  "Effects Only updates Effect Recall while preserving every other target already stored in this Cue.":
+    "エフェクトのみで更新すると、このキューに保存済みの他の全ターゲットを維持したままエフェクト呼び出しだけを更新します。",
   "Position Wave": "位置ウェーブ",
   "Projection Mapping": "プロジェクションマッピング",
   "Projection Surfaces": "投影面",
@@ -573,6 +604,7 @@ const japaneseText: Record<string, string> = {
   Out: "出力",
   Place: "配置",
   "fixture(s) /": "灯体 /",
+  "effect(s) /": "エフェクト /",
   yaw: "ヨー",
   Blind: "ブラインド",
   Bottom: "下",
@@ -967,6 +999,11 @@ const japaneseText: Record<string, string> = {
   "Multiple Primary sessions are active (": "複数のプライマリセッションが動作中（",
   "NDI input": "NDI入力",
   "No cues. Create one in Control &gt; Live with Store Cue.": "キューがありません。コントロール > ライブでStore Cueしてください。",
+  "No cues. Choose a scope, then Store Cue.": "キューがありません。範囲を選び、キューを保存してください。",
+  "No cues. Patch fixtures, add video, or create an Effect first.":
+    "キューがありません。先に灯体をパッチするか、映像またはエフェクトを作成してください。",
+  "No cues. Patch fixtures, add video, create a Node Graph, or create an Effect first.":
+    "キューがありません。先に灯体をパッチするか、映像、ノードグラフ、またはエフェクトを作成してください。",
   "No faders on this page. Add a Cue List assignment above.": "このページにフェーダーがありません。上でキューリストを割り当ててください。",
   "No fixtures in this universe. Use Setup &gt; Patch to assign one.": "このユニバースに灯体がありません。セットアップ > パッチで割り当ててください。",
   "No geometry nodes on this fixture.": "この灯体にジオメトリノードはありません。",
@@ -1178,6 +1215,23 @@ const japaneseText: Record<string, string> = {
   "Stop OSC": "OSC停止",
   "Stop Sync": "同期停止",
   "Store Cue": "キューを保存",
+  "Save Details": "詳細を保存",
+  "Save Recall": "呼び出しを保存",
+  "Update Look": "ルックを更新",
+  "Saves Cue details only. Effect Recall uses Save Recall.":
+    "キューの詳細だけを保存します。エフェクト呼び出しには「呼び出しを保存」を使用してください。",
+  "Recaptures the current Store Scope shown above. Recall edits use Save Recall.":
+    "上に表示した現在の保存範囲を再取得します。呼び出し設定の編集には「呼び出しを保存」を使用してください。",
+  "Patch fixtures, add video, create a Node Graph, or include at least one Effect.":
+    "灯体をパッチするか、映像またはノードグラフを追加するか、エフェクトを1つ以上含めてください。",
+  "Add video layers, outputs, or Node Graphs before storing a video cue.":
+    "映像キューを保存する前に、映像レイヤー、出力、またはノードグラフを追加してください。",
+  "Patch fixtures, add video, or include at least one Effect.":
+    "灯体をパッチするか、映像を追加するか、エフェクトを1つ以上含めてください。",
+  "Patch fixtures or include at least one Effect before storing this Cue.":
+    "このキューを保存する前に、灯体をパッチするかエフェクトを1つ以上含めてください。",
+  "Include at least one Effect before storing an Effects Only Cue.":
+    "エフェクトのみのキューを保存する前に、エフェクトを1つ以上含めてください。",
   Stored: "保存済み",
   "Stored View": "保存済み表示",
   Stretch: "ストレッチ",
@@ -1288,6 +1342,11 @@ const japaneseText: Record<string, string> = {
 };
 
 const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
+  [/^Include Effect (\d+) (.+)$/, (id, label) => `エフェクト ${id} ${label} を対象に含める`],
+  [/^Recall Effect (\d+) (ON|OFF)$/, (id, state) => `エフェクト ${id} を${state}で呼び出す`],
+  [/^Updated cue (\d+) look from the current Store Scope\.$/, (id) => `キュー ${id} のルックを現在の保存範囲から更新しました。`],
+  [/^Saved cue (\d+) Effect Recall only\.$/, (id) => `キュー ${id} のエフェクト呼び出しだけを保存しました。`],
+  [/^Saved cue (\d+) details only\. Effect Recall is unchanged\.$/, (id) => `キュー ${id} の詳細だけを保存しました。エフェクト呼び出しは変更していません。`],
   [/^Color effect gradient with (\d+) stops$/, (count) => `${count}色のカラーエフェクトグラデーション`],
   [/^Color for palette stop (\d+)$/, (index) => `パレットストップ${index}の色`],
   [/^Hex color for palette stop (\d+)$/, (index) => `パレットストップ${index}のHEXカラー`],

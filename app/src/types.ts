@@ -1282,10 +1282,16 @@ export interface CueSummary {
   video_targets: VideoLayerTarget[];
   video_output_targets: VideoOutputTarget[];
   node_graph_targets: CueNodeGraphTarget[];
+  effect_targets: CueEffectTarget[];
 }
 
 export interface CueNodeGraphTarget {
   graph_id: number;
+  enabled: boolean;
+}
+
+export interface CueEffectTarget {
+  effect_id: number;
   enabled: boolean;
 }
 

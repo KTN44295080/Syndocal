@@ -3,6 +3,7 @@
 import type {
   AutomationInterpolation,
   CueSummary,
+  CueEffectTarget,
   CueIfcbTiming,
   CuePartSummary,
   TimelineAutomationSummary,
@@ -36,6 +37,7 @@ export interface CueMetadataDraft {
   mib_fixture_ids: number[];
   tracking: boolean;
   notes: string;
+  effect_targets: CueEffectTarget[];
 }
 
 export interface TimelineEventDraft {
@@ -100,6 +102,7 @@ export const cueMetadataDraftFromSummary = (cue: CueSummary): CueMetadataDraft =
   mib_fixture_ids: [...(cue.mib_fixture_ids ?? [])],
   tracking: cue.tracking ?? true,
   notes: cue.notes ?? "",
+  effect_targets: (cue.effect_targets ?? []).map((target) => ({ ...target })),
 });
 
 export const timelineEventDraftFromSummary = (event: TimelineCueEventSummary): TimelineEventDraft => ({

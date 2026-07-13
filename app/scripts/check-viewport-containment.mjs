@@ -14,6 +14,11 @@ const defaultUrl =
     ? "http://127.0.0.1:5173/"
     : `http://127.0.0.1:5173/?syndocalViewportFixture=${encodeURIComponent(viewportFixture)}`;
 const appUrl = process.env.SYNDOCAL_VIEWPORT_URL ?? defaultUrl;
+const fixtureUrl = (fixture) => {
+  const url = new URL(appUrl);
+  url.searchParams.set("syndocalViewportFixture", fixture);
+  return url.toString();
+};
 const shouldStartVite = appUrl === defaultUrl && process.env.SYNDOCAL_VIEWPORT_NO_SERVER !== "1";
 const shouldCheckTimelineAutomation = new URL(appUrl).searchParams.get("syndocalViewportFixture") === "timeline";
 const vitePort = 5173;
@@ -524,6 +529,9 @@ async function measure(client, label) {
     const remoteServerDeskRect = remoteServerDesk?.getBoundingClientRect() ?? null;
     const remoteEndpointDesk = document.querySelector('.setupMode-remote .remoteEndpointDesk');
     const remoteEndpointDeskRect = remoteEndpointDesk?.getBoundingClientRect() ?? null;
+    const cuePanel = document.querySelector('.cuePanel');
+    const cueEditToggle = document.querySelector('.cuePanelEditToggle');
+    const cueHost = document.querySelector('.layoutControl.controlModeLive .faders');
     window.scrollTo(9999, 9999);
     await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
     const movedX = window.scrollX;
@@ -817,6 +825,24 @@ async function measure(client, label) {
       visibleCueFormCount: visibleCount('.cueForm'),
       visibleCueEditOnlyCount: visibleCount('.cueEditOnly'),
       visibleCueLiveGoCount: visibleCount('.cueLiveGo'),
+      visibleCueEffectRecallEditorCount: visibleCount('.cueEffectRecallEditor'),
+      visibleCueEditToggleCount: visibleCount('.cuePanelEditToggle'),
+      cueEditToggleExpanded: cueEditToggle?.getAttribute('aria-expanded') ?? '',
+      cueEditToggleControls: cueEditToggle?.getAttribute('aria-controls') ?? '',
+      cueEditToggleMinTargetSize: cueEditToggle
+        ? Math.round(Math.min(cueEditToggle.getBoundingClientRect().width, cueEditToggle.getBoundingClientRect().height))
+        : 0,
+      cuePanelOverflowY: cuePanel ? window.getComputedStyle(cuePanel).overflowY : '',
+      cuePanelVerticalOverflowPx: cuePanel ? Math.max(0, cuePanel.scrollHeight - cuePanel.clientHeight) : 0,
+      cuePanelHorizontalOverflowPx: cuePanel ? Math.max(0, cuePanel.scrollWidth - cuePanel.clientWidth) : 0,
+      cueHostHorizontalOverflowPx: cueHost ? Math.max(0, cueHost.scrollWidth - cueHost.clientWidth) : 0,
+      cueHostVerticalOverflowPx: cueHost ? Math.max(0, cueHost.scrollHeight - cueHost.clientHeight) : 0,
+      cueCaptureScopeValue: document.querySelector('#cue-store-form select')?.value ?? '',
+      cuePreviewScopeLabel: (document.querySelector('.cuePreviewHeader strong')?.textContent || '').trim(),
+      cuePreviewStatValues: [...document.querySelectorAll('.cuePreviewStats > span > strong')]
+        .map((node) => Number((node.textContent || '').trim())),
+      cueStoreButtonDisabled: Boolean(document.querySelector('#cue-store-form button.primary')?.disabled),
+      visibleCueScopeErrorCount: visibleCount('.cueScopeHint.invalid'),
       visiblePlaybackDeskSurfaceCount: visibleCount('.playbackDeskSurface'),
       visibleProgrammerPanelCount: visibleCount('.programmerPanel'),
       visibleReferencePalettePanelCount: visibleCount('.referencePalettePanel'),
@@ -1190,6 +1216,22 @@ function isContained(result) {
   );
 }
 
+function hasNoOuterOverflow(result) {
+  return (
+    isContained(result) &&
+    result.documentScrollWidth === result.documentClientWidth &&
+    result.documentScrollHeight === result.documentClientHeight &&
+    result.bodyScrollWidth === result.documentClientWidth &&
+    result.bodyScrollHeight === result.documentClientHeight &&
+    result.appScrollWidth === result.appClientWidth &&
+    result.appScrollHeight === result.appClientHeight &&
+    result.layoutScrollWidth === result.layoutClientWidth &&
+    result.layoutScrollHeight === result.layoutClientHeight &&
+    result.cueHostHorizontalOverflowPx === 0 &&
+    result.cueHostVerticalOverflowPx === 0
+  );
+}
+
 function hasExpectedControlModeSurface(result) {
   if (!result.label.startsWith("control-")) {
     return true;
@@ -1352,10 +1394,59 @@ function hasExpectedControlModeSurface(result) {
       );
     }
     if (result.label.startsWith("control-live-cues-")) {
+      const cueToggleIsAccessible =
+        result.visibleCueEditToggleCount === 1 &&
+        result.cueEditToggleMinTargetSize >= 44 &&
+        result.cueEditToggleControls === "cue-list-editor cue-store-form cue-effect-capture-editor cue-list-items";
+      if (result.label.startsWith("control-live-cues-effects-only-")) {
+        return (
+          result.visibleTimelineDeskTabCount === 4 &&
+          result.visibleCuePanelCount === 1 &&
+          result.visibleCueLivePanelCount === 1 &&
+          result.visibleCueFormCount === 1 &&
+          result.visibleCueEffectRecallEditorCount >= 1 &&
+          cueToggleIsAccessible &&
+          result.cueEditToggleExpanded === "true" &&
+          result.cueCaptureScopeValue === "effects" &&
+          result.cuePreviewScopeLabel === "Effects Only" &&
+          result.cuePreviewStatValues.length === 5 &&
+          result.cuePreviewStatValues.every((value) => value === 0) &&
+          result.cueStoreButtonDisabled &&
+          result.visibleCueScopeErrorCount === 1 &&
+          result.cuePanelOverflowY === "auto" &&
+          result.cuePanelHorizontalOverflowPx <= 1 &&
+          result.cueHostVerticalOverflowPx <= 1 &&
+          result.visibleTimelinePanelCount === 0 &&
+          result.controlWorkSurfaceUnsafeOverflowCount === 0
+        );
+      }
+      if (result.label.startsWith("control-live-cues-edit-")) {
+        return (
+          result.visibleTimelineDeskTabCount === 4 &&
+          result.visibleCuePanelCount === 1 &&
+          result.visibleCueLivePanelCount === 1 &&
+          result.visibleCueFormCount === 1 &&
+          result.visibleCueEffectRecallEditorCount >= 1 &&
+          result.visibleCueEditOnlyCount > 0 &&
+          cueToggleIsAccessible &&
+          result.cueEditToggleExpanded === "true" &&
+          result.cuePanelOverflowY === "auto" &&
+          result.cuePanelVerticalOverflowPx > 0 &&
+          result.cuePanelHorizontalOverflowPx <= 1 &&
+          result.cueHostVerticalOverflowPx <= 1 &&
+          result.visibleTimelinePanelCount === 0 &&
+          result.controlWorkSurfaceUnsafeOverflowCount === 0
+        );
+      }
       return (
         result.visibleTimelineDeskTabCount === 4 &&
         result.visibleCuePanelCount === 1 &&
         result.visibleCueLivePanelCount === 1 &&
+        result.visibleCueFormCount === 0 &&
+        result.visibleCueEffectRecallEditorCount === 0 &&
+        result.visibleCueEditOnlyCount === 0 &&
+        cueToggleIsAccessible &&
+        result.cueEditToggleExpanded === "false" &&
         result.visibleTimelinePanelCount === 0 &&
         result.controlWorkSurfaceUnsafeOverflowCount === 0
       );
@@ -1818,6 +1909,21 @@ async function runViewport(client, viewport) {
       await clickVisibleByText(client, ".timelineDeskTabs button", "Cues");
       await sleep(120);
       results.push(await measure(client, `control-live-cues-${viewport.width}x${viewport.height}`));
+      await clickVisibleByText(client, ".cuePanelEditToggle", "Edit Cues");
+      await sleep(120);
+      results.push(await measure(client, `control-live-cues-edit-${viewport.width}x${viewport.height}`));
+      await selectVisibleOption(client, "#cue-store-form select", "effects");
+      await sleep(120);
+      results.push(await measure(client, `control-live-cues-effects-only-${viewport.width}x${viewport.height}`));
+      if (screenshotDir) {
+        const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+        writeFileSync(join(screenshotDir, `control-live-cues-effects-only-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
+      }
+      await selectVisibleOption(client, "#cue-store-form select", "all");
+      await sleep(80);
+      await clickVisibleByText(client, ".cuePanelEditToggle", "Done");
+      await sleep(120);
+      results.push(await measure(client, `control-live-cues-closed-${viewport.width}x${viewport.height}`));
       await clickVisibleByText(client, ".timelineDeskTabs button", "Automation");
       await sleep(120);
       results.push(await measure(client, `control-live-automation-${viewport.width}x${viewport.height}`));
@@ -1837,6 +1943,158 @@ async function runViewport(client, viewport) {
   }
   results.push(await measure(client, `touch-${viewport.width}x${viewport.height}`));
   return results;
+}
+
+async function openCueFixture(client, viewport, fixture) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: fixtureUrl(fixture) });
+  await waitForApp(client);
+  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await clickVisibleByText(client, ".timelineDeskTabs button", "Cues");
+  await sleep(120);
+  await clickVisibleByText(client, ".cuePanelEditToggle", "Edit Cues");
+  await sleep(120);
+}
+
+async function runCueRecallViewport(client, viewport) {
+  await openCueFixture(client, viewport, "cue-recall");
+  await selectVisibleOption(client, "#cue-store-form select", "effects");
+  await sleep(120);
+  await clickVisibleByText(client, ".cueItem .cueEffectRecallEditor > summary", "Effect Recall");
+  await sleep(80);
+  await clickVisibleByText(client, ".cueItem .cueEffectRecallToolbar .buttonRow button", "Clear");
+  await sleep(120);
+  const actionReached = await client.evaluate(`(() => {
+    const action = document.querySelector('.cueItem .cueSaveRecall');
+    if (!action) return false;
+    action.scrollIntoView({ block: 'center', inline: 'nearest' });
+    return true;
+  })()`);
+  await sleep(120);
+  const containment = await measure(client, `cue-recall-${viewport.width}x${viewport.height}`);
+  const stats = await client.evaluate(`(() => {
+    const panel = document.querySelector('.cuePanel');
+    const panelRect = panel?.getBoundingClientRect();
+    const actions = [...document.querySelectorAll('.cueItem .cueSaveDetails, .cueItem .cueSaveRecall, .cueItem .cueUpdateLook')];
+    const fullyVisible = (element) => {
+      if (!element || !panelRect) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return style.display !== 'none' && style.visibility !== 'hidden' &&
+        rect.width > 0 && rect.height > 0 &&
+        rect.left >= Math.max(0, panelRect.left) && rect.right <= Math.min(innerWidth, panelRect.right) &&
+        rect.top >= Math.max(0, panelRect.top) && rect.bottom <= Math.min(innerHeight, panelRect.bottom);
+    };
+    const saveDetails = document.querySelector('.cueItem .cueSaveDetails');
+    const saveRecall = document.querySelector('.cueItem .cueSaveRecall');
+    const updateLook = document.querySelector('.cueItem .cueUpdateLook');
+    const recallDetails = document.querySelector('.cueItem .cueEffectRecallEditor');
+    return {
+      scope: document.querySelector('#cue-store-form select')?.value ?? '',
+      recallDetailsOpen: Boolean(recallDetails?.open),
+      recallCount: (recallDetails?.querySelector('summary small')?.textContent || '').trim(),
+      saveDetailsLabel: (saveDetails?.textContent || '').trim(),
+      saveRecallLabel: (saveRecall?.textContent || '').trim(),
+      updateLookLabel: (updateLook?.textContent || '').trim(),
+      saveDetailsDisabled: Boolean(saveDetails?.disabled),
+      saveRecallDisabled: Boolean(saveRecall?.disabled),
+      updateLookDisabled: Boolean(updateLook?.disabled),
+      actionCount: actions.length,
+      fullyVisibleActionCount: actions.filter(fullyVisible).length,
+    };
+  })()`);
+  if (screenshotDir && viewport.width === 1366) {
+    mkdirSync(screenshotDir, { recursive: true });
+    const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+    writeFileSync(join(screenshotDir, "cue-recall-open-1366x768.png"), screenshot.data, "base64");
+  }
+  const passed = Boolean(
+    actionReached &&
+    hasNoOuterOverflow(containment) &&
+    stats.scope === "effects" &&
+    stats.recallDetailsOpen &&
+    stats.recallCount === "0 / 1" &&
+    stats.saveDetailsLabel === "Save Details" &&
+    stats.saveRecallLabel === "Save Recall" &&
+    stats.updateLookLabel === "Update Look" &&
+    !stats.saveDetailsDisabled &&
+    !stats.saveRecallDisabled &&
+    !stats.updateLookDisabled &&
+    stats.actionCount === 3 &&
+    stats.fullyVisibleActionCount === 3
+  );
+  return { label: `cue-recall-${viewport.width}x${viewport.height}`, passed, containment, stats };
+}
+
+async function runCueNodeGraphViewport(client, viewport) {
+  await openCueFixture(client, viewport, "cue-node-graph");
+  const allScope = await client.evaluate(`(() => {
+    const store = document.querySelector('#cue-store-form button.primary');
+    return {
+      scope: document.querySelector('#cue-store-form select')?.value ?? '',
+      storeDisabled: Boolean(store?.disabled),
+      scopeErrorCount: document.querySelectorAll('.cueScopeHint.invalid').length,
+    };
+  })()`);
+  await selectVisibleOption(client, "#cue-store-form select", "video");
+  await sleep(120);
+  const containment = await measure(client, `cue-node-graph-${viewport.width}x${viewport.height}`);
+  const videoScope = {
+    scope: containment.cueCaptureScopeValue,
+    storeDisabled: containment.cueStoreButtonDisabled,
+    scopeErrorCount: containment.visibleCueScopeErrorCount,
+    graphCount: containment.cuePreviewStatValues[4] ?? 0,
+  };
+  const passed = Boolean(
+    hasNoOuterOverflow(containment) &&
+    allScope.scope === "all" &&
+    !allScope.storeDisabled &&
+    allScope.scopeErrorCount === 0 &&
+    videoScope.scope === "video" &&
+    !videoScope.storeDisabled &&
+    videoScope.scopeErrorCount === 0 &&
+    videoScope.graphCount === 1
+  );
+  return { label: `cue-node-graph-${viewport.width}x${viewport.height}`, passed, containment, allScope, videoScope };
+}
+
+async function runCueRecallLargeViewport(client, viewport) {
+  await openCueFixture(client, viewport, "cue-recall-large");
+  const before = await client.evaluate(`(() => ({
+    cueCount: document.querySelectorAll('.cueItem').length,
+    captureRows: document.querySelectorAll('#cue-effect-capture-editor .cueEffectRecallRow').length,
+    cueRows: document.querySelectorAll('.cueItem .cueEffectRecallRow').length,
+    closedCueEditors: [...document.querySelectorAll('.cueItem .cueEffectRecallEditor')].filter((editor) => !editor.open).length,
+    filterCount: document.querySelectorAll('#cue-effect-capture-editor .cueEffectRecallFilter').length,
+  }))()`);
+  await clickVisibleByText(client, ".cueItem .cueEffectRecallEditor > summary", "Effect Recall");
+  await sleep(120);
+  const after = await client.evaluate(`(() => ({
+    captureRows: document.querySelectorAll('#cue-effect-capture-editor .cueEffectRecallRow').length,
+    cueRows: document.querySelectorAll('.cueItem .cueEffectRecallRow').length,
+    openCueEditors: [...document.querySelectorAll('.cueItem .cueEffectRecallEditor')].filter((editor) => editor.open).length,
+    filterCount: document.querySelectorAll('.cueItem .cueEffectRecallFilter').length,
+  }))()`);
+  const containment = await measure(client, `cue-recall-large-${viewport.width}x${viewport.height}`);
+  const passed = Boolean(
+    hasNoOuterOverflow(containment) &&
+    before.cueCount === 12 &&
+    before.captureRows === 48 &&
+    before.cueRows === 0 &&
+    before.closedCueEditors === 12 &&
+    before.filterCount === 1 &&
+    after.captureRows === 48 &&
+    after.cueRows === 48 &&
+    after.openCueEditors === 1 &&
+    after.filterCount === 1
+  );
+  return { label: `cue-recall-large-${viewport.width}x${viewport.height}`, passed, containment, before, after };
 }
 
 async function runLargeShowViewport(client, viewport) {
@@ -1982,8 +2240,19 @@ async function main() {
     for (const viewport of viewports) {
       results.push(...(await runViewport(client, viewport)));
     }
+    const cueRecallResults = [];
+    const cueRecallLargeResults = [];
+    const cueNodeGraphResults = [];
+    for (const viewport of viewports) {
+      cueRecallResults.push(await runCueRecallViewport(client, viewport));
+      cueRecallLargeResults.push(await runCueRecallLargeViewport(client, viewport));
+      cueNodeGraphResults.push(await runCueNodeGraphViewport(client, viewport));
+    }
 
     const failures = results.filter((result) => !isContained(result));
+    const cueRecallFailures = cueRecallResults.filter((result) => !result.passed);
+    const cueRecallLargeFailures = cueRecallLargeResults.filter((result) => !result.passed);
+    const cueNodeGraphFailures = cueNodeGraphResults.filter((result) => !result.passed);
     const setupSurfaceFailures = results.filter((result) => !hasExpectedSetupSurface(result));
     const projectMenuFailures = results.filter((result) => !hasExpectedProjectMenu(result));
     const localizationFailures = results.filter((result) => !hasExpectedLocalization(result));
@@ -2040,8 +2309,26 @@ async function main() {
         `${status} ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${keyboardSuffix}${timelineSuffix}${touchSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${colorEffectSuffix}${mixerSuffix}`,
       );
     }
+    for (const result of cueRecallResults) {
+      console.log(
+        `${result.passed ? "pass" : "fail"} ${result.label} actions=${result.stats.fullyVisibleActionCount}/${result.stats.actionCount} recall=${result.stats.recallCount} outer=${result.containment.cueHostHorizontalOverflowPx}/${result.containment.cueHostVerticalOverflowPx}`,
+      );
+    }
+    for (const result of cueRecallLargeResults) {
+      console.log(
+        `${result.passed ? "pass" : "fail"} ${result.label} rows=${result.before.captureRows}+${result.before.cueRows}->${result.after.captureRows}+${result.after.cueRows} open=${result.after.openCueEditors}`,
+      );
+    }
+    for (const result of cueNodeGraphResults) {
+      console.log(
+        `${result.passed ? "pass" : "fail"} ${result.label} all=${result.allScope.storeDisabled ? "disabled" : "enabled"}/${result.allScope.scopeErrorCount} video=${result.videoScope.storeDisabled ? "disabled" : "enabled"}/${result.videoScope.scopeErrorCount} graphs=${result.videoScope.graphCount}`,
+      );
+    }
     if (
       failures.length > 0 ||
+      cueRecallFailures.length > 0 ||
+      cueRecallLargeFailures.length > 0 ||
+      cueNodeGraphFailures.length > 0 ||
       keyboardNavigationFailures.length > 0 ||
       setupSurfaceFailures.length > 0 ||
       projectMenuFailures.length > 0 ||
@@ -2057,6 +2344,9 @@ async function main() {
         JSON.stringify(
           {
             viewport: failures,
+            cueRecall: cueRecallFailures,
+            cueRecallLarge: cueRecallLargeFailures,
+            cueNodeGraph: cueNodeGraphFailures,
             keyboardNavigation: keyboardNavigationFailures,
             setupSurface: setupSurfaceFailures,
             projectMenu: projectMenuFailures,
@@ -2073,7 +2363,7 @@ async function main() {
         ),
       );
       throw new Error(
-        `${failures.length} viewport containment check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${statusLineFailures.length} status line check(s) failed.`,
+        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${statusLineFailures.length} status line check(s) failed.`,
       );
     }
   } finally {

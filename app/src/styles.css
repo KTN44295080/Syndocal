@@ -9688,10 +9688,31 @@ input[type="color"] {
   min-height: 0;
 }
 
-.cuePanelLive .cueForm,
-.cuePanelLive .cueCapturePreview,
-.cuePanelLive .cueEditRow,
-.cuePanelLive .cueEditOnly {
+.cuePanelHeaderActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.cuePanelEditToggle {
+  min-width: 84px;
+  min-height: 44px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.cuePanelEditToggle[aria-expanded="true"] {
+  border-color: #796b5f;
+  background: #342f2b;
+  color: #ffffff;
+}
+
+.cuePanelLive:not(.cuePanelEditing) .cueForm,
+.cuePanelLive:not(.cuePanelEditing) .cueCapturePreview,
+.cuePanelLive:not(.cuePanelEditing) .cueEditRow,
+.cuePanelLive:not(.cuePanelEditing) .cueEditOnly {
   display: none;
 }
 
@@ -9784,7 +9805,7 @@ input[type="color"] {
 
 .cueForm {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 92px minmax(126px, 0.45fr) 92px minmax(116px, auto);
+  grid-template-columns: minmax(0, 1fr) 92px minmax(126px, 0.45fr) minmax(116px, auto);
   align-items: end;
   gap: 8px;
 }
@@ -9795,6 +9816,8 @@ input[type="color"] {
 }
 
 .cueScopeHint {
+  grid-column: 1 / -1;
+  align-self: start;
   color: #8d9aaa;
 }
 
@@ -10504,6 +10527,210 @@ input[type="color"] {
   font-size: 12px;
 }
 
+.cueEffectRecallEditor {
+  min-width: 0;
+  border: 1px solid #303947;
+  border-radius: 4px;
+  background: #0d141c;
+  padding: 5px 7px;
+}
+
+.cueEffectRecallEditor > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 30px;
+  cursor: pointer;
+  color: #c7d0dc;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.cueEffectRecallEditor > summary small {
+  color: #8d9aaa;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.cueEffectRecallToolbar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.cueEffectRecallToolbar > p,
+.cueEffectRecallApplyHint {
+  margin: 0;
+  color: #8d9aaa;
+  font-size: 11px;
+  line-height: 1.35;
+  text-wrap: pretty;
+}
+
+.cueEffectRecallToolbar .buttonRow {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.cueEffectRecallApplyHint {
+  margin-top: 5px;
+  color: #b7c5d6;
+}
+
+.cueEffectRecallFilter {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) auto;
+  align-items: end;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.cueEffectRecallFilter > label {
+  display: grid;
+  gap: 3px;
+  color: #8d9aaa;
+  font-size: 11px;
+}
+
+.cueEffectRecallFilter input {
+  min-height: 32px;
+}
+
+.cueEffectRecallFilter nav {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.cueEffectRecallFilter nav span {
+  min-width: 46px;
+  color: #8d9aaa;
+  text-align: center;
+}
+
+.cueEffectRecallList {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 210px), 1fr));
+  gap: 4px;
+  max-height: 184px;
+  margin-top: 6px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.cueEffectRecallRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 46px;
+  align-items: stretch;
+  min-width: 0;
+  border: 1px solid #28313d;
+  border-radius: 4px;
+  background: #111820;
+}
+
+.cueEffectRecallRow.included {
+  border-color: #426c91;
+  background: #13202d;
+}
+
+.cueEffectRecallRow > label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+
+.cueEffectRecallRow > label input {
+  width: auto;
+  min-height: 0;
+  margin: 0;
+}
+
+.cueEffectRecallRow > label span {
+  display: grid;
+  min-width: 0;
+}
+
+.cueEffectRecallRow > label b,
+.cueEffectRecallRow > label small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cueEffectRecallRow > label b {
+  color: #d4dce6;
+  font-size: 11px;
+}
+
+.cueEffectRecallRow > label small {
+  color: #7f8e9f;
+  font-size: 10px;
+}
+
+.cueEffectRecallState {
+  min-width: 0;
+  min-height: 30px;
+  border-width: 0 0 0 1px;
+  border-radius: 0 3px 3px 0;
+  padding: 3px 5px;
+  color: #8491a0;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.cueLookUpdateHint,
+.cueRecallSaveHint {
+  margin: 0;
+  color: #8d9aaa;
+  font-size: 11px;
+  line-height: 1.35;
+  text-wrap: pretty;
+}
+
+.cueLookUpdateHint strong {
+  color: #c7d0dc;
+}
+
+.cueRecallSaveHint {
+  color: #ffb4b4;
+}
+
+.cueEffectRecallState.on:not(:disabled) {
+  border-color: #46784b;
+  background: #183321;
+  color: #8ee69a;
+}
+
+.cueEffectRecallState.off:not(:disabled) {
+  border-color: #5a4650;
+  background: #2b1c23;
+  color: #dda4b5;
+}
+
+@media (max-width: 760px) {
+  .cueEffectRecallToolbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cueEffectRecallToolbar .buttonRow {
+    justify-content: flex-start;
+  }
+
+  .cueEffectRecallFilter {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cueEffectRecallFilter nav {
+    justify-content: flex-end;
+  }
+}
+
 .cuePartRow {
   display: grid;
   gap: 5px;
@@ -10602,6 +10829,12 @@ input[type="color"] {
   gap: 10px;
   border-top: 1px solid #28313d;
   padding-top: 10px;
+}
+
+.cueActionRow .cueSaveDetails,
+.cueActionRow .cueSaveRecall,
+.cueActionRow .cueUpdateLook {
+  min-height: 34px;
 }
 
 .timelineHeaderMeta {
@@ -17699,6 +17932,31 @@ h3 {
 .layoutControl.controlModeLive .faders.timelineDesk-playback > .cuePanel,
 .layoutControl.controlModeLive .faders.timelineDesk-playback > .timelinePanel {
   display: none;
+}
+
+.layoutControl.controlModeLive .faders.timelineDesk-cues > .cuePanel.cuePanelEditing {
+  grid-template-rows: none;
+  grid-auto-rows: max-content;
+  align-content: start;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding-right: 3px;
+}
+
+.layoutControl.controlModeLive .faders.timelineDesk-cues > .cuePanel.cuePanelEditing .cueList {
+  grid-template-columns: minmax(0, 1fr);
+  overflow: visible;
+}
+
+.layoutControl.controlModeLive .faders.timelineDesk-cues > .cuePanel.cuePanelEditing .cueItem {
+  min-height: 72px;
+}
+
+.layoutControl.controlModeLive .faders.timelineDesk-cues > .cuePanel.cuePanelEditing .cueActionRow {
+  display: flex;
+  flex-wrap: wrap;
 }
 
 .layoutControl.controlModeLive .timelinePanel {

@@ -1,11 +1,32 @@
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import type { CueMetadataDraft } from "../editorDrafts";
-import type { ActiveFadeSummary, CueListSummary, CueSummary, ReferencePaletteSummary, TimelineCueEventSummary, TimelineTrackKind } from "../types";
+import type {
+  ActiveFadeSummary,
+  CueEffectTarget,
+  CueListSummary,
+  CueSummary,
+  EffectSummary,
+  ReferencePaletteSummary,
+  TimelineCueEventSummary,
+  TimelineTrackKind,
+} from "../types";
+import { canSaveCueEffectTargets } from "../cueEffectRecall";
+import type { CueEffectRecallChange } from "../cueEffectRecall";
 import { CueCapturePreviewPanel, type CueCapturePreviewModel } from "./CueCapturePreviewPanel";
+import { CueEffectRecallEditor } from "./CueEffectRecallEditor";
 
-export type CueCaptureScopeMode = "all" | "lighting" | "selectedFixture" | "selectedGroup" | "video";
+export type CueCaptureScopeMode = "all" | "lighting" | "effects" | "selectedFixture" | "selectedGroup" | "video";
 
 const cuesPerPage = 12;
+
+const cueCaptureScopeLabel = (scope: CueCaptureScopeMode) => {
+  if (scope === "all") return "All Sources";
+  if (scope === "lighting") return "Lighting Only";
+  if (scope === "effects") return "Effects Only";
+  if (scope === "selectedFixture") return "Selected Fixture";
+  if (scope === "selectedGroup") return "Selected Group";
+  return "Video Only";
+};
 
 interface CueManagementPanelProps {
   mode: "edit" | "live";
@@ -13,6 +34,8 @@ interface CueManagementPanelProps {
   allCues: CueSummary[];
   cueLists: CueListSummary[];
   palettes: ReferencePaletteSummary[];
+  effects: EffectSummary[];
+  cueCaptureEffects: EffectSummary[];
   selectedCueListId: number;
   cueListLabel: string;
   activeCueId: number | null | undefined;
@@ -24,6 +47,7 @@ interface CueManagementPanelProps {
   cueCaptureScope: CueCaptureScopeMode;
   cueCaptureScopeError: string | null;
   hasCueSources: boolean;
+  cueEffectCaptureTargets: CueEffectTarget[];
   cueCapturePreview: CueCapturePreviewModel;
   stageViewBoxSize: number;
   stageOrigin: { x: number; z: number };
@@ -34,6 +58,7 @@ interface CueManagementPanelProps {
   onCueLabel: (value: string) => void;
   onCueFadeMs: (value: number) => void;
   onCueCaptureScope: (scope: CueCaptureScopeMode) => void;
+  onCueEffectCaptureTargets: (targets: CueEffectTarget[], change: CueEffectRecallChange) => void;
   onSelectCueList: (cueListId: number) => void;
   onCueListLabel: (label: string) => void;
   onCreateCueList: () => void | Promise<void>;
@@ -50,6 +75,7 @@ interface CueManagementPanelProps {
   onUpdateCueMetadataDraft: (cue: CueSummary, patch: Partial<CueMetadataDraft>) => void;
   onMoveCue: (cueId: number, delta: -1 | 1) => void | Promise<void>;
   onSetCueMetadata: (cue: CueSummary) => void | Promise<void>;
+  onSetCueEffectTargets: (cueId: number, effectTargets: CueEffectTarget[]) => void | Promise<void>;
   onDuplicateCue: (cue: CueSummary) => void | Promise<void>;
   onUpdateCue: (cueId: number, label: string, fadeMs: number) => void | Promise<void>;
   onTriggerCue: (cueId: number) => void | Promise<void>;
@@ -67,6 +93,7 @@ interface CueManagementPanelProps {
 
 export function CueManagementPanel(props: CueManagementPanelProps) {
   const [cuePage, setCuePage] = createSignal(0);
+  const [cueEditing, setCueEditing] = createSignal(false);
   const cuePageCount = createMemo(() => Math.max(1, Math.ceil(props.cues.length / cuesPerPage)));
   const visibleCues = createMemo(() => {
     const start = cuePage() * cuesPerPage;
@@ -84,12 +111,29 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
   });
 
   return (
-    <div class={props.mode === "live" ? "cuePanel cuePanelLive" : "cuePanel"}>
+    <div class={
+      props.mode === "live"
+        ? `cuePanel cuePanelLive ${cueEditing() ? "cuePanelEditing" : ""}`
+        : "cuePanel"
+    }>
       <div class="panelHeader">
         <h2>Cues</h2>
-        <span>{props.cues.length}</span>
+        <div class="cuePanelHeaderActions">
+          <span>{props.cues.length}</span>
+          <Show when={props.mode === "live"}>
+            <button
+              type="button"
+              class="cuePanelEditToggle"
+              aria-expanded={cueEditing()}
+              aria-controls="cue-list-editor cue-store-form cue-effect-capture-editor cue-list-items"
+              onClick={() => setCueEditing((current) => !current)}
+            >
+              {cueEditing() ? "Done" : "Edit Cues"}
+            </button>
+          </Show>
+        </div>
       </div>
-      <div class="cueListManager cueEditOnly" aria-label="Cue List manager">
+      <div id="cue-list-editor" class="cueListManager cueEditOnly" aria-label="Cue List manager">
         <label>
           Cue List
           <select value={props.selectedCueListId} onInput={(event) => props.onSelectCueList(Number(event.currentTarget.value))}>
@@ -123,7 +167,7 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
           }}
         </For>
       </div>
-      <div class="cueForm">
+      <div id="cue-store-form" class="cueForm">
         <label>
           Label
           <input value={props.cueLabel} onInput={(event) => props.onCueLabel(event.currentTarget.value)} />
@@ -135,20 +179,35 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
         <label>
           Scope
           <select value={props.cueCaptureScope} onInput={(event) => props.onCueCaptureScope(event.currentTarget.value as CueCaptureScopeMode)}>
-            <option value="all">Lighting + Video</option>
+            <option value="all">All Sources</option>
             <option value="lighting">Lighting Only</option>
+            <option value="effects">Effects Only</option>
             <option value="selectedFixture">Selected Fixture</option>
             <option value="selectedGroup">Selected Group</option>
             <option value="video">Video Only</option>
           </select>
         </label>
+        <button
+          class="primary"
+          onClick={() => void props.onCreateCue()}
+          disabled={(!props.hasCueSources && props.cueEffectCaptureTargets.length === 0) || Boolean(props.cueCaptureScopeError)}
+        >
+          Store Cue
+        </button>
         <Show when={props.cueCaptureScopeError}>
           {(error) => <span class="cueScopeHint invalid">{error()}</span>}
         </Show>
-        <button class="primary" onClick={() => void props.onCreateCue()} disabled={!props.hasCueSources || Boolean(props.cueCaptureScopeError)}>
-          Store Cue
-        </button>
       </div>
+      <CueEffectRecallEditor
+        id="cue-effect-capture-editor"
+        effects={props.cueCaptureEffects}
+        hasAnyEffects={props.effects.length > 0}
+        targets={props.cueEffectCaptureTargets}
+        expanded
+        currentMode="capture"
+        applyHint="Only Effects matching this Cue scope are listed. Mixed Lighting/Video Effects appear in both scopes."
+        onChange={props.onCueEffectCaptureTargets}
+      />
       <CueCapturePreviewPanel
         preview={props.cueCapturePreview}
         invalid={Boolean(props.cueCaptureScopeError)}
@@ -188,14 +247,20 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
           <button aria-label="Next cue page" onClick={() => setCuePage(Math.min(cuePageCount() - 1, cuePage() + 1))} disabled={cuePage() >= cuePageCount() - 1}>Next</button>
         </nav>
       </Show>
-      <div class="cueList" role="list">
+      <div id="cue-list-items" class="cueList" role="list">
         <Show when={props.cues.length === 0}>
-          <p class="empty">{props.hasCueSources ? "No cues. Choose a scope, then Store Cue." : "No cues. Patch fixtures or add a video layer, then Store Cue."}</p>
+          <p class="empty">
+            {props.hasCueSources || props.cueEffectCaptureTargets.length > 0
+              ? "No cues. Choose a scope, then Store Cue."
+              : "No cues. Patch fixtures, add video, create a Node Graph, or create an Effect first."}
+          </p>
         </Show>
         <For each={visibleCues()}>
           {(cue, index) => {
             const cueIndex = () => cuePage() * cuesPerPage + index();
             const draft = () => props.cueMetadataDraft(cue);
+            const canSaveRecall = () => canSaveCueEffectTargets(cue, draft().effect_targets);
+            const recallSaveHintId = `cue-${cue.id}-recall-save-hint`;
             const placements = () => props.cueTimelinePlacementsForCue(cue.id);
             const updateIfcbTiming = (patch: Partial<CueMetadataDraft["ifcb_timing"]>) =>
               props.onUpdateCueMetadataDraft(cue, {
@@ -267,7 +332,8 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                   <strong data-no-localize><b>{cue.cue_number || cue.id}</b> {cue.label}</strong>
                   <span>
                     {cue.targets.length} fixture(s) / {cue.video_targets.length} video /{" "}
-                    {cue.video_output_targets.length} video output(s) / {cue.fade_ms}ms / {cue.tracking ? "Track" : "Block"}{cue.mark ? " / MIB" : ""}
+                    {cue.video_output_targets.length} video output(s) / {(cue.effect_targets ?? []).length} effect(s) /{" "}
+                    {cue.fade_ms}ms / {cue.tracking ? "Track" : "Block"}{cue.mark ? " / MIB" : ""}
                   </span>
                 </div>
                 <div class="cueEditRow">
@@ -479,6 +545,23 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                     </div>
                   </Show>
                 </details>
+                <CueEffectRecallEditor
+                  effects={props.effects}
+                  targets={draft().effect_targets}
+                  currentMode="refresh"
+                  applyHint="Save Recall stores only this Effect Recall list, including an empty list when the Cue still has another target."
+                  onChange={(effect_targets) => props.onUpdateCueMetadataDraft(cue, { effect_targets })}
+                />
+                <p class="cueLookUpdateHint cueEditOnly">
+                  <span>Update Look recaptures the current Store Scope:</span>{" "}
+                  <strong>{cueCaptureScopeLabel(props.cueCaptureScope)}</strong>.{" "}
+                  <span>It does not save Recall edits.</span>
+                </p>
+                <Show when={!canSaveRecall()}>
+                  <p id={recallSaveHintId} class="cueRecallSaveHint cueEditOnly">
+                    A Cue needs at least one target. Remove this Cue instead of saving an empty Effect-only Recall.
+                  </p>
+                </Show>
                 <div class="cueActionRow">
                   <button class="cueEditOnly" onClick={() => void props.onMoveCue(cue.id, -1)} disabled={cueIndex() === 0}>
                     Up
@@ -486,18 +569,34 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                   <button class="cueEditOnly" onClick={() => void props.onMoveCue(cue.id, 1)} disabled={cueIndex() === props.cues.length - 1}>
                     Down
                   </button>
-                  <button class="cueEditOnly" onClick={() => void props.onSetCueMetadata(cue)}>
-                    Save
+                  <button
+                    class="cueEditOnly cueSaveDetails"
+                    title="Saves Cue details only. Effect Recall uses Save Recall."
+                    onClick={() => void props.onSetCueMetadata(cue)}
+                  >
+                    Save Details
+                  </button>
+                  <button
+                    class="cueEditOnly cueSaveRecall"
+                    aria-describedby={!canSaveRecall() ? recallSaveHintId : undefined}
+                    disabled={!canSaveRecall()}
+                    onClick={() => void props.onSetCueEffectTargets(cue.id, draft().effect_targets)}
+                  >
+                    Save Recall
                   </button>
                   <button class="cueEditOnly" onClick={() => void props.onDuplicateCue(cue)}>
                     Copy
                   </button>
                   <button
-                    class="cueEditOnly"
+                    class="cueEditOnly cueUpdateLook"
+                    title="Recaptures the current Store Scope shown above. Recall edits use Save Recall."
                     onClick={() => void props.onUpdateCue(cue.id, draft().label, draft().fade_ms)}
-                    disabled={!props.hasCueSources || Boolean(props.cueCaptureScopeError)}
+                    disabled={
+                      (!props.hasCueSources && props.cueEffectCaptureTargets.length === 0)
+                      || Boolean(props.cueCaptureScopeError)
+                    }
                   >
-                    Update
+                    Update Look
                   </button>
                   <button class="cueLiveGo" onClick={() => void props.onTriggerCue(cue.id)}>GO</button>
                   <button class="cueEditOnly" onClick={() => void props.onAddTimelineCueEventAt(cue.id, props.timelinePositionMs, props.timelineTrack, false)}>

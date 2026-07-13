@@ -22,15 +22,15 @@ use protocol::{
     AttributeValueSummary, AudioAnalysisSummary, AudioSpectrumBand, AudioSpectrumPoint,
     AudioSpectrumSource, AutomationId, AutomationInterpolation, AutomationKeyframeSummary,
     ClockSnapshot, ClockSource, ColorEffectAlgorithm, ColorEffectColor, ColorEffectInterpolation,
-    ColorEffectRequest, CompositionId, CompositionSummary, CueFixtureTarget, CueId, CueIfcbTiming,
-    CueListId, CueListSummary, CueNodeGraphTarget, CuePaletteTarget, CuePartSummary, CueSummary,
-    DmxMergeMode, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, DmxOutputRouteTelemetry,
-    DmxUniversePreview, EffectBlendMode, EffectId, EffectKind, EffectSummary, EngineSnapshot,
-    EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId, FixtureId, FixtureLimits,
-    FixtureProfileSummary, LfoEffectRequest, LfoShape, NodeGraphId, NodeGraphNodeKind,
-    NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId, PatchFixtureRequest,
-    PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot,
-    ProgrammerValueSummary, ReferencePaletteSummary, Rotation3, StageMapConfig,
+    ColorEffectRequest, CompositionId, CompositionSummary, CueEffectTarget, CueFixtureTarget,
+    CueId, CueIfcbTiming, CueListId, CueListSummary, CueNodeGraphTarget, CuePaletteTarget,
+    CuePartSummary, CueSummary, DmxMergeMode, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol,
+    DmxOutputRouteTelemetry, DmxUniversePreview, EffectBlendMode, EffectId, EffectKind,
+    EffectSummary, EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId,
+    FixtureId, FixtureLimits, FixtureProfileSummary, LfoEffectRequest, LfoShape, NodeGraphId,
+    NodeGraphNodeKind, NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId,
+    PatchFixtureRequest, PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest,
+    ProgrammerSnapshot, ProgrammerValueSummary, ReferencePaletteSummary, Rotation3, StageMapConfig,
     StageMapPresetSummary, StageObjectId, StageObjectSummary, SubmasterSummary,
     TimelineAutomationSummary, TimelineCueEventSummary, TimelineEventId, TimelineSnapshot,
     TimelineTrackKind, TimelineVideoAutomationSummary, Transform2D, Vec3,
@@ -307,6 +307,12 @@ pub enum EngineCommand {
         effect_id: EffectId,
         enabled: bool,
     },
+    SetEffectEnabledPublished {
+        effect_id: EffectId,
+        enabled: bool,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     SetEffectVideoTargetPosition {
         effect_id: EffectId,
         layer_id: VideoLayerId,
@@ -331,6 +337,20 @@ pub enum EngineCommand {
         video_targets: Vec<VideoLayerTarget>,
         video_output_targets: Vec<VideoOutputTarget>,
         node_graph_targets: Vec<CueNodeGraphTarget>,
+        effect_targets: Vec<CueEffectTarget>,
+    },
+    CreateCuePublished {
+        cue_id: CueId,
+        cue_list_id: CueListId,
+        label: String,
+        fade_ms: u64,
+        targets: Vec<CueFixtureTarget>,
+        video_targets: Vec<VideoLayerTarget>,
+        video_output_targets: Vec<VideoOutputTarget>,
+        node_graph_targets: Vec<CueNodeGraphTarget>,
+        effect_targets: Vec<CueEffectTarget>,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
     },
     UpdateCue {
         cue_id: CueId,
@@ -340,6 +360,41 @@ pub enum EngineCommand {
         video_targets: Vec<VideoLayerTarget>,
         video_output_targets: Vec<VideoOutputTarget>,
         node_graph_targets: Vec<CueNodeGraphTarget>,
+        effect_targets: Vec<CueEffectTarget>,
+    },
+    UpdateCuePublished {
+        cue_id: CueId,
+        label: String,
+        fade_ms: u64,
+        targets: Vec<CueFixtureTarget>,
+        video_targets: Vec<VideoLayerTarget>,
+        video_output_targets: Vec<VideoOutputTarget>,
+        node_graph_targets: Vec<CueNodeGraphTarget>,
+        effect_targets: Vec<CueEffectTarget>,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    SetCueEffectTargetsPublished {
+        cue_id: CueId,
+        effect_targets: Vec<CueEffectTarget>,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    SetCueDetailsPublished {
+        cue_id: CueId,
+        cue_number: String,
+        label: String,
+        fade_ms: u64,
+        pre_wait_ms: u64,
+        follow_ms: Option<u64>,
+        ifcb_timing: CueIfcbTiming,
+        parts: Vec<CuePartSummary>,
+        mark: bool,
+        mib_fixture_ids: Vec<FixtureId>,
+        tracking: bool,
+        notes: String,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
     },
     SetCueMetadata {
         cue_id: CueId,
@@ -661,6 +716,7 @@ impl EngineCommand {
                 | EngineCommand::UpdatePositionWaveEffect { .. }
                 | EngineCommand::UpdateColorEffect { .. }
                 | EngineCommand::SetEffectEnabled { .. }
+                | EngineCommand::SetEffectEnabledPublished { .. }
                 | EngineCommand::SetEffectVideoTargetPosition { .. }
                 | EngineCommand::MoveEffect { .. }
                 | EngineCommand::RemoveEffect(_)
@@ -668,7 +724,11 @@ impl EngineCommand {
                 | EngineCommand::SetNodeGraphEnabled { .. }
                 | EngineCommand::RemoveNodeGraph(_)
                 | EngineCommand::CreateCue { .. }
+                | EngineCommand::CreateCuePublished { .. }
                 | EngineCommand::UpdateCue { .. }
+                | EngineCommand::UpdateCuePublished { .. }
+                | EngineCommand::SetCueEffectTargetsPublished { .. }
+                | EngineCommand::SetCueDetailsPublished { .. }
                 | EngineCommand::SetCueMetadata { .. }
                 | EngineCommand::SetCueParts { .. }
                 | EngineCommand::SetCueMark { .. }
@@ -1011,6 +1071,145 @@ impl EngineHandle {
         receiver
             .recv_timeout(Duration::from_secs(3))
             .map_err(|error| format!("Color effect update acknowledgement failed: {error}"))?
+    }
+
+    pub fn set_effect_enabled_published(
+        &self,
+        effect_id: EffectId,
+        enabled: bool,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::SetEffectEnabledPublished {
+            effect_id,
+            enabled,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Effect enable acknowledgement failed: {error}"))?
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_cue_published(
+        &self,
+        cue_id: CueId,
+        cue_list_id: CueListId,
+        label: String,
+        fade_ms: u64,
+        targets: Vec<CueFixtureTarget>,
+        video_targets: Vec<VideoLayerTarget>,
+        video_output_targets: Vec<VideoOutputTarget>,
+        node_graph_targets: Vec<CueNodeGraphTarget>,
+        effect_targets: Vec<CueEffectTarget>,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::CreateCuePublished {
+            cue_id,
+            cue_list_id,
+            label,
+            fade_ms,
+            targets,
+            video_targets,
+            video_output_targets,
+            node_graph_targets,
+            effect_targets,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Cue create acknowledgement failed: {error}"))?
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_cue_published(
+        &self,
+        cue_id: CueId,
+        label: String,
+        fade_ms: u64,
+        targets: Vec<CueFixtureTarget>,
+        video_targets: Vec<VideoLayerTarget>,
+        video_output_targets: Vec<VideoOutputTarget>,
+        node_graph_targets: Vec<CueNodeGraphTarget>,
+        effect_targets: Vec<CueEffectTarget>,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::UpdateCuePublished {
+            cue_id,
+            label,
+            fade_ms,
+            targets,
+            video_targets,
+            video_output_targets,
+            node_graph_targets,
+            effect_targets,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Cue update acknowledgement failed: {error}"))?
+    }
+
+    pub fn set_cue_effect_targets_published(
+        &self,
+        cue_id: CueId,
+        effect_targets: Vec<CueEffectTarget>,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::SetCueEffectTargetsPublished {
+            cue_id,
+            effect_targets,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Cue effect-target update acknowledgement failed: {error}"))?
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_cue_details_published(
+        &self,
+        cue_id: CueId,
+        cue_number: String,
+        label: String,
+        fade_ms: u64,
+        pre_wait_ms: u64,
+        follow_ms: Option<u64>,
+        ifcb_timing: CueIfcbTiming,
+        parts: Vec<CuePartSummary>,
+        mark: bool,
+        mib_fixture_ids: Vec<FixtureId>,
+        tracking: bool,
+        notes: String,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::SetCueDetailsPublished {
+            cue_id,
+            cue_number,
+            label,
+            fade_ms,
+            pre_wait_ms,
+            follow_ms,
+            ifcb_timing,
+            parts,
+            mark,
+            mib_fixture_ids,
+            tracking,
+            notes,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Cue details acknowledgement failed: {error}"))?
     }
 
     pub fn bootstrap_vj_show(
@@ -1410,6 +1609,17 @@ struct RuntimeCue {
     video_targets: Vec<VideoLayerTarget>,
     video_output_targets: Vec<VideoOutputTarget>,
     node_graph_targets: Vec<CueNodeGraphTarget>,
+    effect_targets: Vec<CueEffectTarget>,
+}
+
+struct CueBody {
+    label: String,
+    fade_ms: u64,
+    targets: Vec<CueFixtureTarget>,
+    video_targets: Vec<VideoLayerTarget>,
+    video_output_targets: Vec<VideoOutputTarget>,
+    node_graph_targets: Vec<CueNodeGraphTarget>,
+    effect_targets: Vec<CueEffectTarget>,
 }
 
 struct RuntimeFade {
@@ -1497,9 +1707,19 @@ enum PendingCommandRollback {
         effects: Vec<RuntimeEffect>,
         last_error: Option<String>,
     },
+    RestoreEffectEnabled {
+        effect_id: EffectId,
+        enabled: bool,
+        last_error: Option<String>,
+    },
     RestoreExclusiveVideoTake {
         video_layers: Vec<RuntimeVideoLayer>,
         video_layer_fades: Vec<RuntimeVideoLayerFade>,
+        last_error: Option<String>,
+    },
+    RestoreCues {
+        cues: Vec<RuntimeCue>,
+        cue_lists: Vec<CueListSummary>,
         last_error: Option<String>,
     },
 }
@@ -1508,7 +1728,10 @@ impl PendingCommandRollback {
     fn restores_last_error(&self) -> bool {
         matches!(
             self,
-            Self::RestoreColorEffects { .. } | Self::RestoreExclusiveVideoTake { .. }
+            Self::RestoreColorEffects { .. }
+                | Self::RestoreEffectEnabled { .. }
+                | Self::RestoreExclusiveVideoTake { .. }
+                | Self::RestoreCues { .. }
         )
     }
 }
@@ -2072,6 +2295,7 @@ impl EngineRuntime {
                     &self.palettes,
                     &self.fixtures,
                 );
+                let effect_targets = cue.effect_targets;
                 let mib_fixture_ids =
                     reconcile_mib_fixture_ids(cue.mib_fixture_ids, &targets, &palette_targets);
                 Some(RuntimeCue {
@@ -2098,6 +2322,7 @@ impl EngineRuntime {
                     video_targets,
                     video_output_targets,
                     node_graph_targets,
+                    effect_targets,
                 })
             })
             .collect();
@@ -2181,6 +2406,7 @@ impl EngineRuntime {
                 }
             })
             .collect();
+        self.sanitize_cue_effect_targets();
     }
 
     fn sanitize_node_graph_references(&mut self) {
@@ -2249,6 +2475,20 @@ impl EngineRuntime {
         }
     }
 
+    fn sanitize_cue_effect_targets(&mut self) {
+        let effect_ids = self
+            .effects
+            .iter()
+            .map(|effect| effect.id)
+            .collect::<HashSet<_>>();
+        for cue in &mut self.cues {
+            cue.effect_targets
+                .retain(|target| effect_ids.contains(&target.effect_id));
+            cue.effect_targets.sort_by_key(|target| target.effect_id);
+            cue.effect_targets.dedup_by_key(|target| target.effect_id);
+        }
+    }
+
     fn run(
         &mut self,
         queue: Arc<ArrayQueue<QueuedEngineCommand>>,
@@ -2311,6 +2551,11 @@ impl EngineRuntime {
                     | EngineCommand::ExclusiveVideoTake { .. }
                     | EngineCommand::AddColorEffect { .. }
                     | EngineCommand::UpdateColorEffect { .. }
+                    | EngineCommand::SetEffectEnabledPublished { .. }
+                    | EngineCommand::CreateCuePublished { .. }
+                    | EngineCommand::UpdateCuePublished { .. }
+                    | EngineCommand::SetCueEffectTargetsPublished { .. }
+                    | EngineCommand::SetCueDetailsPublished { .. }
             );
             if queued_command.command.requests_low_latency_dmx_tick() {
                 self.low_latency_dmx_tick_request_count =
@@ -3081,6 +3326,49 @@ impl EngineRuntime {
                     self.last_error = Some(format!("Effect {effect_id} was not found"));
                 }
             }
+            EngineCommand::SetEffectEnabledPublished {
+                effect_id,
+                enabled,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let previous_enabled = self
+                    .effects
+                    .iter()
+                    .find(|effect| effect.id == effect_id)
+                    .map(|effect| effect.enabled)
+                    .unwrap_or(enabled);
+                let rollback = PendingCommandRollback::RestoreEffectEnabled {
+                    effect_id,
+                    enabled: previous_enabled,
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Effect enable update expired before engine execution".to_string())
+                } else if let Some(effect) = self
+                    .effects
+                    .iter_mut()
+                    .find(|effect| effect.id == effect_id)
+                {
+                    effect.enabled = enabled;
+                    Ok(())
+                } else {
+                    Err(format!("Effect {effect_id} was not found"))
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Effect enable update was rolled back",
+                });
+            }
             EngineCommand::SetEffectVideoTargetPosition {
                 effect_id,
                 layer_id,
@@ -3152,6 +3440,10 @@ impl EngineRuntime {
             }
             EngineCommand::RemoveEffect(effect_id) => {
                 self.effects.retain(|effect| effect.id != effect_id);
+                for cue in &mut self.cues {
+                    cue.effect_targets
+                        .retain(|target| target.effect_id != effect_id);
+                }
             }
             EngineCommand::UpsertNodeGraph(graph) => {
                 let graph = match sanitize_node_graph(&graph) {
@@ -3208,42 +3500,72 @@ impl EngineRuntime {
                 video_targets,
                 video_output_targets,
                 node_graph_targets,
+                effect_targets,
             } => {
-                let (targets, video_targets, video_output_targets, node_graph_targets) = match self
-                    .resolve_cue_targets(
+                let result = self.create_cue_state(
+                    cue_id,
+                    DEFAULT_CUE_LIST_ID,
+                    CueBody {
+                        label,
+                        fade_ms,
                         targets,
                         video_targets,
                         video_output_targets,
                         node_graph_targets,
-                    ) {
-                    Ok(targets) => targets,
-                    Err(error) => {
-                        self.last_error = Some(error);
-                        return;
-                    }
+                        effect_targets,
+                    },
+                    true,
+                );
+                self.last_error = result.err();
+            }
+            EngineCommand::CreateCuePublished {
+                cue_id,
+                cue_list_id,
+                label,
+                fade_ms,
+                targets,
+                video_targets,
+                video_output_targets,
+                node_graph_targets,
+                effect_targets,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreCues {
+                    cues: self.cues.clone(),
+                    cue_lists: self.cue_lists.clone(),
+                    last_error: previous_last_error.clone(),
                 };
-                self.cues.retain(|cue| cue.id != cue_id);
-                self.cues.push(RuntimeCue {
-                    id: cue_id,
-                    cue_list_id: DEFAULT_CUE_LIST_ID,
-                    cue_number: cue_id.to_string(),
-                    label,
-                    fade_ms,
-                    pre_wait_ms: 0,
-                    follow_ms: None,
-                    ifcb_timing: CueIfcbTiming::default(),
-                    parts: Vec::new(),
-                    mark: false,
-                    mib_fixture_ids: Vec::new(),
-                    palette_targets: Vec::new(),
-                    tracking: true,
-                    notes: String::new(),
-                    targets,
-                    video_targets,
-                    video_output_targets,
-                    node_graph_targets,
+                let result = if Instant::now() > expires_at {
+                    Err("Cue create expired before engine execution".to_string())
+                } else {
+                    self.create_cue_state(
+                        cue_id,
+                        cue_list_id,
+                        CueBody {
+                            label,
+                            fade_ms,
+                            targets,
+                            video_targets,
+                            video_output_targets,
+                            node_graph_targets,
+                            effect_targets,
+                        },
+                        false,
+                    )
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error: "Engine snapshot was busy; Cue create was rolled back",
                 });
-                self.last_error = None;
             }
             EngineCommand::UpdateCue {
                 cue_id,
@@ -3253,46 +3575,150 @@ impl EngineRuntime {
                 video_targets,
                 video_output_targets,
                 node_graph_targets,
+                effect_targets,
             } => {
-                let Some(cue_index) = self.cues.iter().position(|cue| cue.id == cue_id) else {
-                    self.last_error = Some(format!("Cue {cue_id} was not found"));
-                    return;
-                };
-                let (targets, video_targets, video_output_targets, node_graph_targets) = match self
-                    .resolve_cue_targets(
+                let result = self.update_cue_state(
+                    cue_id,
+                    CueBody {
+                        label,
+                        fade_ms,
                         targets,
                         video_targets,
                         video_output_targets,
                         node_graph_targets,
-                    ) {
-                    Ok(targets) => targets,
-                    Err(error) => {
-                        self.last_error = Some(error);
-                        return;
-                    }
+                        effect_targets,
+                    },
+                );
+                self.last_error = result.err();
+            }
+            EngineCommand::UpdateCuePublished {
+                cue_id,
+                label,
+                fade_ms,
+                targets,
+                video_targets,
+                video_output_targets,
+                node_graph_targets,
+                effect_targets,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreCues {
+                    cues: self.cues.clone(),
+                    cue_lists: self.cue_lists.clone(),
+                    last_error: previous_last_error.clone(),
                 };
-                if let Some(cue) = self.cues.get_mut(cue_index) {
-                    let parts = reconcile_cue_parts(
-                        std::mem::take(&mut cue.parts),
-                        &targets,
-                        &video_targets,
-                        &video_output_targets,
-                    );
-                    let mib_fixture_ids = reconcile_mib_fixture_ids(
-                        std::mem::take(&mut cue.mib_fixture_ids),
-                        &targets,
-                        &cue.palette_targets,
-                    );
-                    cue.label = label;
-                    cue.fade_ms = fade_ms;
-                    cue.targets = targets;
-                    cue.video_targets = video_targets;
-                    cue.video_output_targets = video_output_targets;
-                    cue.node_graph_targets = node_graph_targets;
-                    cue.parts = parts;
-                    cue.mib_fixture_ids = mib_fixture_ids;
-                    self.last_error = None;
-                }
+                let result = if Instant::now() > expires_at {
+                    Err("Cue update expired before engine execution".to_string())
+                } else {
+                    self.update_cue_state(
+                        cue_id,
+                        CueBody {
+                            label,
+                            fade_ms,
+                            targets,
+                            video_targets,
+                            video_output_targets,
+                            node_graph_targets,
+                            effect_targets,
+                        },
+                    )
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error: "Engine snapshot was busy; Cue update was rolled back",
+                });
+            }
+            EngineCommand::SetCueEffectTargetsPublished {
+                cue_id,
+                effect_targets,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreCues {
+                    cues: self.cues.clone(),
+                    cue_lists: self.cue_lists.clone(),
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Cue effect-target update expired before engine execution".to_string())
+                } else {
+                    self.set_cue_effect_targets_state(cue_id, effect_targets)
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Cue effect-target update was rolled back",
+                });
+            }
+            EngineCommand::SetCueDetailsPublished {
+                cue_id,
+                cue_number,
+                label,
+                fade_ms,
+                pre_wait_ms,
+                follow_ms,
+                ifcb_timing,
+                parts,
+                mark,
+                mib_fixture_ids,
+                tracking,
+                notes,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreCues {
+                    cues: self.cues.clone(),
+                    cue_lists: self.cue_lists.clone(),
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Cue details update expired before engine execution".to_string())
+                } else {
+                    self.set_cue_details_state(
+                        cue_id,
+                        cue_number,
+                        label,
+                        fade_ms,
+                        pre_wait_ms,
+                        follow_ms,
+                        ifcb_timing,
+                        parts,
+                        mark,
+                        mib_fixture_ids,
+                        tracking,
+                        notes,
+                    )
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Cue details update was rolled back",
+                });
             }
             EngineCommand::SetCueParts { cue_id, parts } => {
                 let Some(cue) = self.cues.iter_mut().find(|cue| cue.id == cue_id) else {
@@ -4785,6 +5211,20 @@ impl EngineRuntime {
                 self.effects = effects;
                 self.last_error = last_error;
             }
+            PendingCommandRollback::RestoreEffectEnabled {
+                effect_id,
+                enabled,
+                last_error,
+            } => {
+                if let Some(effect) = self
+                    .effects
+                    .iter_mut()
+                    .find(|effect| effect.id == effect_id)
+                {
+                    effect.enabled = enabled;
+                }
+                self.last_error = last_error;
+            }
             PendingCommandRollback::RestoreExclusiveVideoTake {
                 video_layers,
                 video_layer_fades,
@@ -4792,6 +5232,15 @@ impl EngineRuntime {
             } => {
                 self.video_layers = video_layers;
                 self.video_layer_fades = video_layer_fades;
+                self.last_error = last_error;
+            }
+            PendingCommandRollback::RestoreCues {
+                cues,
+                cue_lists,
+                last_error,
+            } => {
+                self.cues = cues;
+                self.cue_lists = cue_lists;
                 self.last_error = last_error;
             }
         }
@@ -4897,6 +5346,7 @@ impl EngineRuntime {
             }
             RuntimeEffectKind::Color(_) => true,
         });
+        self.sanitize_cue_effect_targets();
         self.sanitize_node_graph_references();
         self.clear_empty_active_fade();
     }
@@ -5596,6 +6046,227 @@ impl EngineRuntime {
             .collect()
     }
 
+    fn resolve_cue_body(&self, body: CueBody) -> Result<CueBody, String> {
+        let CueBody {
+            label,
+            fade_ms,
+            targets,
+            video_targets,
+            video_output_targets,
+            node_graph_targets,
+            effect_targets,
+        } = body;
+        let (targets, video_targets, video_output_targets, node_graph_targets) = self
+            .resolve_cue_targets(
+                targets,
+                video_targets,
+                video_output_targets,
+                node_graph_targets,
+            )?;
+        let effect_targets = self.resolve_cue_effect_targets(effect_targets)?;
+        Ok(CueBody {
+            label,
+            fade_ms,
+            targets,
+            video_targets,
+            video_output_targets,
+            node_graph_targets,
+            effect_targets,
+        })
+    }
+
+    fn create_cue_state(
+        &mut self,
+        cue_id: CueId,
+        cue_list_id: CueListId,
+        body: CueBody,
+        replace_existing: bool,
+    ) -> Result<(), String> {
+        if !self
+            .cue_lists
+            .iter()
+            .any(|cue_list| cue_list.id == cue_list_id)
+        {
+            return Err(format!("Cue list {cue_list_id} was not found"));
+        }
+        if !replace_existing && self.cues.iter().any(|cue| cue.id == cue_id) {
+            return Err(format!("Cue {cue_id} already exists"));
+        }
+        let CueBody {
+            label,
+            fade_ms,
+            targets,
+            video_targets,
+            video_output_targets,
+            node_graph_targets,
+            effect_targets,
+        } = self.resolve_cue_body(body)?;
+        if replace_existing {
+            self.cues.retain(|cue| cue.id != cue_id);
+        }
+        self.cues.push(RuntimeCue {
+            id: cue_id,
+            cue_list_id,
+            cue_number: cue_id.to_string(),
+            label,
+            fade_ms,
+            pre_wait_ms: 0,
+            follow_ms: None,
+            ifcb_timing: CueIfcbTiming::default(),
+            parts: Vec::new(),
+            mark: false,
+            mib_fixture_ids: Vec::new(),
+            palette_targets: Vec::new(),
+            tracking: true,
+            notes: String::new(),
+            targets,
+            video_targets,
+            video_output_targets,
+            node_graph_targets,
+            effect_targets,
+        });
+        Ok(())
+    }
+
+    fn update_cue_state(&mut self, cue_id: CueId, body: CueBody) -> Result<(), String> {
+        let cue_index = self
+            .cues
+            .iter()
+            .position(|cue| cue.id == cue_id)
+            .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
+        let CueBody {
+            label,
+            fade_ms,
+            targets,
+            video_targets,
+            video_output_targets,
+            node_graph_targets,
+            effect_targets,
+        } = self.resolve_cue_body(body)?;
+        let cue = self
+            .cues
+            .get_mut(cue_index)
+            .expect("resolved Cue index must remain valid");
+        let parts = reconcile_cue_parts(
+            std::mem::take(&mut cue.parts),
+            &targets,
+            &video_targets,
+            &video_output_targets,
+        );
+        let mib_fixture_ids = reconcile_mib_fixture_ids(
+            std::mem::take(&mut cue.mib_fixture_ids),
+            &targets,
+            &cue.palette_targets,
+        );
+        cue.label = label;
+        cue.fade_ms = fade_ms;
+        cue.targets = targets;
+        cue.video_targets = video_targets;
+        cue.video_output_targets = video_output_targets;
+        cue.node_graph_targets = node_graph_targets;
+        cue.effect_targets = effect_targets;
+        cue.parts = parts;
+        cue.mib_fixture_ids = mib_fixture_ids;
+        Ok(())
+    }
+
+    fn set_cue_effect_targets_state(
+        &mut self,
+        cue_id: CueId,
+        effect_targets: Vec<CueEffectTarget>,
+    ) -> Result<(), String> {
+        let cue_index = self
+            .cues
+            .iter()
+            .position(|cue| cue.id == cue_id)
+            .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
+        let effect_targets = self.resolve_cue_effect_targets(effect_targets)?;
+        let cue = self
+            .cues
+            .get(cue_index)
+            .expect("resolved Cue index must remain valid");
+        let has_non_effect_target = !cue.targets.is_empty()
+            || !cue.palette_targets.is_empty()
+            || !cue.video_targets.is_empty()
+            || !cue.video_output_targets.is_empty()
+            || !cue.node_graph_targets.is_empty();
+        if effect_targets.is_empty() && !has_non_effect_target {
+            return Err(format!(
+                "Cue {cue_id} must keep at least one fixture, palette, video, output, node graph, or effect target"
+            ));
+        }
+        self.cues
+            .get_mut(cue_index)
+            .expect("resolved Cue index must remain valid")
+            .effect_targets = effect_targets;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn set_cue_details_state(
+        &mut self,
+        cue_id: CueId,
+        cue_number: String,
+        label: String,
+        fade_ms: u64,
+        pre_wait_ms: u64,
+        follow_ms: Option<u64>,
+        ifcb_timing: CueIfcbTiming,
+        parts: Vec<CuePartSummary>,
+        mark: bool,
+        mib_fixture_ids: Vec<FixtureId>,
+        tracking: bool,
+        notes: String,
+    ) -> Result<(), String> {
+        let cue_index = self
+            .cues
+            .iter()
+            .position(|cue| cue.id == cue_id)
+            .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
+        let cue_number = cue_number.trim().to_string();
+        if cue_number.is_empty() {
+            return Err("Cue number is required".to_string());
+        }
+        let label = label.trim().to_string();
+        if label.is_empty() {
+            return Err("Cue label is required".to_string());
+        }
+        let cue_list_id = self.cues[cue_index].cue_list_id;
+        if self.cues.iter().any(|cue| {
+            cue.id != cue_id && cue.cue_list_id == cue_list_id && cue.cue_number == cue_number
+        }) {
+            return Err(format!("Cue number '{cue_number}' is already in use"));
+        }
+        let cue = &self.cues[cue_index];
+        let parts = validate_and_sanitize_cue_parts(
+            parts,
+            &cue.targets,
+            &cue.video_targets,
+            &cue.video_output_targets,
+        )?;
+        let mib_fixture_ids = validate_and_sanitize_mib_fixture_ids(
+            mib_fixture_ids,
+            &cue.targets,
+            &cue.palette_targets,
+        )?;
+        let cue = self
+            .cues
+            .get_mut(cue_index)
+            .expect("resolved Cue index must remain valid");
+        cue.cue_number = cue_number;
+        cue.label = label;
+        cue.fade_ms = fade_ms;
+        cue.pre_wait_ms = pre_wait_ms;
+        cue.follow_ms = follow_ms;
+        cue.ifcb_timing = ifcb_timing;
+        cue.parts = parts;
+        cue.mark = mark;
+        cue.mib_fixture_ids = mib_fixture_ids;
+        cue.tracking = tracking;
+        cue.notes = notes.trim().chars().take(500).collect();
+        Ok(())
+    }
+
     fn resolve_cue_targets(
         &self,
         targets: Vec<CueFixtureTarget>,
@@ -5680,6 +6351,31 @@ impl EngineRuntime {
         ))
     }
 
+    fn resolve_cue_effect_targets(
+        &self,
+        mut targets: Vec<CueEffectTarget>,
+    ) -> Result<Vec<CueEffectTarget>, String> {
+        targets.sort_by_key(|target| target.effect_id);
+        if let Some(duplicate) = targets
+            .windows(2)
+            .find(|pair| pair[0].effect_id == pair[1].effect_id)
+        {
+            return Err(format!(
+                "Effect {} is targeted more than once by the cue",
+                duplicate[0].effect_id
+            ));
+        }
+        if let Some(missing) = targets.iter().find(|target| {
+            !self
+                .effects
+                .iter()
+                .any(|effect| effect.id == target.effect_id)
+        }) {
+            return Err(format!("Effect {} was not found", missing.effect_id));
+        }
+        Ok(targets)
+    }
+
     fn resolve_lfo_effect_request(
         &self,
         mut request: LfoEffectRequest,
@@ -5756,6 +6452,7 @@ impl EngineRuntime {
             runtime.target_indices = target_indices;
             !runtime.targets.is_empty() || !runtime.request.target_group_ids.is_empty()
         });
+        self.sanitize_cue_effect_targets();
     }
 
     fn resolve_effect_light_targets(
@@ -6060,6 +6757,7 @@ impl EngineRuntime {
                 due_at: now + Duration::from_millis(follow_ms),
             })
         });
+        self.apply_cue_effect_targets(&cue.effect_targets);
         let mut target_values = if cue.tracking {
             HashMap::new()
         } else {
@@ -6372,6 +7070,18 @@ impl EngineRuntime {
         for graph in &mut self.node_graphs {
             if let Some(enabled) = targets.get(&graph.summary.id) {
                 graph.summary.enabled = *enabled;
+            }
+        }
+    }
+
+    fn apply_cue_effect_targets(&mut self, targets: &[CueEffectTarget]) {
+        for target in targets {
+            if let Some(effect) = self
+                .effects
+                .iter_mut()
+                .find(|effect| effect.id == target.effect_id)
+            {
+                effect.enabled = target.enabled;
             }
         }
     }
@@ -7420,6 +8130,7 @@ fn cue_summary(cue: &RuntimeCue) -> CueSummary {
         video_targets: cue.video_targets.clone(),
         video_output_targets: cue.video_output_targets.clone(),
         node_graph_targets: cue.node_graph_targets.clone(),
+        effect_targets: cue.effect_targets.clone(),
     }
 }
 
@@ -7554,6 +8265,7 @@ fn runtime_cue_from_summary(cue: &CueSummary) -> RuntimeCue {
         video_targets: cue.video_targets.clone(),
         video_output_targets: cue.video_output_targets.clone(),
         node_graph_targets: cue.node_graph_targets.clone(),
+        effect_targets: cue.effect_targets.clone(),
     }
 }
 
@@ -11586,6 +12298,61 @@ mod tests {
         }
     }
 
+    fn runtime_with_lfo_effects(states: &[(EffectId, bool)]) -> EngineRuntime {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        runtime.apply_command(EngineCommand::PatchFixture {
+            fixture_id: 1,
+            request: sample_patch_request("Effect Fixture", 1),
+            profile: sample_profile(),
+        });
+        for (effect_id, enabled) in states {
+            runtime.apply_command(EngineCommand::AddLfoEffect {
+                effect_id: *effect_id,
+                request: LfoEffectRequest {
+                    label: format!("Effect {effect_id}"),
+                    fixture_ids: vec![1],
+                    target_group_ids: Vec::new(),
+                    attribute: "Dimmer".to_string(),
+                    video_targets: Vec::new(),
+                    shape: LfoShape::Sine,
+                    period_ms: 1_000,
+                    clock_sync: None,
+                    low: 0,
+                    high: u16::MAX,
+                    phase: 0.0,
+                    blend_mode: EffectBlendMode::Override,
+                },
+            });
+            runtime.apply_command(EngineCommand::SetEffectEnabled {
+                effect_id: *effect_id,
+                enabled: *enabled,
+            });
+        }
+        assert_eq!(runtime.last_error, None);
+        runtime
+    }
+
+    fn create_effect_only_cue(
+        runtime: &mut EngineRuntime,
+        cue_id: CueId,
+        targets: Vec<CueEffectTarget>,
+    ) {
+        runtime.apply_command(EngineCommand::CreateCue {
+            cue_id,
+            label: format!("Cue {cue_id}"),
+            fade_ms: 0,
+            targets: Vec::new(),
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: targets,
+        });
+        assert_eq!(runtime.last_error, None);
+    }
+
     fn sample_patched_fixture(id: FixtureId, label: &str, address: u16) -> PatchedFixtureSummary {
         PatchedFixtureSummary {
             id,
@@ -12657,6 +13424,7 @@ mod tests {
                     graph_id,
                     enabled: true,
                 }],
+                effect_targets: Vec::new(),
             })
             .unwrap();
 
@@ -14661,6 +15429,7 @@ mod tests {
                 video_output_targets: Vec::new(),
 
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
         engine
@@ -14765,6 +15534,7 @@ mod tests {
                 video_output_targets: Vec::new(),
 
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
         engine
@@ -14783,6 +15553,7 @@ mod tests {
                 video_output_targets: Vec::new(),
 
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
 
@@ -14805,6 +15576,837 @@ mod tests {
         assert_eq!(snapshot.cues[0].label, "Updated");
         assert_eq!(snapshot.cues[0].fade_ms, 250);
         assert_eq!(snapshot.cues[0].targets[0].values[0].value, 50_000);
+    }
+
+    #[test]
+    fn cue_effect_targets_create_update_and_project_roundtrip() {
+        let mut runtime = runtime_with_lfo_effects(&[(1, false), (2, true)]);
+        create_effect_only_cue(
+            &mut runtime,
+            10,
+            vec![
+                CueEffectTarget {
+                    effect_id: 2,
+                    enabled: false,
+                },
+                CueEffectTarget {
+                    effect_id: 1,
+                    enabled: true,
+                },
+            ],
+        );
+        assert_eq!(
+            runtime.cues[0].effect_targets,
+            vec![
+                CueEffectTarget {
+                    effect_id: 1,
+                    enabled: true,
+                },
+                CueEffectTarget {
+                    effect_id: 2,
+                    enabled: false,
+                },
+            ]
+        );
+
+        runtime.apply_command(EngineCommand::UpdateCue {
+            cue_id: 10,
+            label: "Updated".to_string(),
+            fade_ms: 250,
+            targets: Vec::new(),
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: vec![
+                CueEffectTarget {
+                    effect_id: 1,
+                    enabled: false,
+                },
+                CueEffectTarget {
+                    effect_id: 2,
+                    enabled: true,
+                },
+            ],
+        });
+        assert_eq!(runtime.last_error, None);
+
+        let encoded = serde_json::to_string(&runtime.build_snapshot(0)).unwrap();
+        let snapshot: EngineSnapshot = serde_json::from_str(&encoded).unwrap();
+        let mut loaded = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        loaded.load_project_snapshot(snapshot);
+
+        assert_eq!(loaded.cues.len(), 1);
+        assert_eq!(loaded.cues[0].label, "Updated");
+        assert_eq!(loaded.cues[0].fade_ms, 250);
+        assert_eq!(
+            loaded.cues[0].effect_targets,
+            vec![
+                CueEffectTarget {
+                    effect_id: 1,
+                    enabled: false,
+                },
+                CueEffectTarget {
+                    effect_id: 2,
+                    enabled: true,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn effect_only_cues_recall_on_go_and_back_without_touching_unlisted_effects() {
+        let mut runtime = runtime_with_lfo_effects(&[(1, false), (2, true), (3, true)]);
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![
+                CueEffectTarget {
+                    effect_id: 1,
+                    enabled: true,
+                },
+                CueEffectTarget {
+                    effect_id: 2,
+                    enabled: false,
+                },
+            ],
+        );
+        create_effect_only_cue(
+            &mut runtime,
+            2,
+            vec![
+                CueEffectTarget {
+                    effect_id: 1,
+                    enabled: false,
+                },
+                CueEffectTarget {
+                    effect_id: 2,
+                    enabled: true,
+                },
+            ],
+        );
+
+        runtime.apply_command(EngineCommand::TriggerCue(1));
+        assert_eq!(runtime.active_cue_id, Some(1));
+        assert!(runtime.effects[0].enabled);
+        assert!(!runtime.effects[1].enabled);
+        assert!(runtime.effects[2].enabled);
+        assert!(runtime.active_fade.is_none());
+
+        runtime.apply_command(EngineCommand::TriggerCueListNext(DEFAULT_CUE_LIST_ID));
+        assert_eq!(runtime.active_cue_id, Some(2));
+        assert!(!runtime.effects[0].enabled);
+        assert!(runtime.effects[1].enabled);
+        assert!(runtime.effects[2].enabled);
+
+        runtime.apply_command(EngineCommand::TriggerCueListPrevious(DEFAULT_CUE_LIST_ID));
+        assert_eq!(runtime.active_cue_id, Some(1));
+        assert!(runtime.effects[0].enabled);
+        assert!(!runtime.effects[1].enabled);
+        assert!(runtime.effects[2].enabled);
+    }
+
+    #[test]
+    fn effect_only_cue_respects_pre_wait_and_follow_progression() {
+        let mut runtime = runtime_with_lfo_effects(&[(1, false), (2, false)]);
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![CueEffectTarget {
+                effect_id: 1,
+                enabled: true,
+            }],
+        );
+        create_effect_only_cue(
+            &mut runtime,
+            2,
+            vec![CueEffectTarget {
+                effect_id: 2,
+                enabled: true,
+            }],
+        );
+        runtime.cues[0].pre_wait_ms = 100;
+        runtime.cues[0].follow_ms = Some(200);
+
+        let now = Instant::now();
+        runtime.request_cue(1, now);
+        assert_eq!(runtime.active_cue_id, None);
+        assert!(!runtime.effects[0].enabled);
+
+        runtime.advance_pending_cue(now + Duration::from_millis(99));
+        assert_eq!(runtime.active_cue_id, None);
+        assert!(!runtime.effects[0].enabled);
+
+        runtime.advance_pending_cue(now + Duration::from_millis(100));
+        assert_eq!(runtime.active_cue_id, Some(1));
+        assert!(runtime.effects[0].enabled);
+        assert!(!runtime.effects[1].enabled);
+
+        runtime.advance_pending_cue(now + Duration::from_millis(299));
+        assert_eq!(runtime.active_cue_id, Some(1));
+        assert!(!runtime.effects[1].enabled);
+
+        runtime.advance_pending_cue(now + Duration::from_millis(300));
+        assert_eq!(runtime.active_cue_id, Some(2));
+        assert!(runtime.effects[1].enabled);
+    }
+
+    #[test]
+    fn removing_effect_cleans_cues_and_missing_input_is_rejected() {
+        let mut runtime = runtime_with_lfo_effects(&[(1, false)]);
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![CueEffectTarget {
+                effect_id: 1,
+                enabled: true,
+            }],
+        );
+
+        runtime.apply_command(EngineCommand::UpdateCue {
+            cue_id: 1,
+            label: "Should not apply".to_string(),
+            fade_ms: 0,
+            targets: Vec::new(),
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: vec![CueEffectTarget {
+                effect_id: 99,
+                enabled: true,
+            }],
+        });
+        assert_eq!(runtime.cues[0].label, "Cue 1");
+        assert_eq!(runtime.cues[0].effect_targets[0].effect_id, 1);
+        assert_eq!(
+            runtime.last_error.as_deref(),
+            Some("Effect 99 was not found")
+        );
+
+        runtime.apply_command(EngineCommand::RemoveEffect(1));
+        assert!(runtime.effects.is_empty());
+        assert!(runtime.cues[0].effect_targets.is_empty());
+
+        runtime.apply_command(EngineCommand::CreateCue {
+            cue_id: 2,
+            label: "Missing".to_string(),
+            fade_ms: 0,
+            targets: Vec::new(),
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: vec![CueEffectTarget {
+                effect_id: 99,
+                enabled: true,
+            }],
+        });
+        assert_eq!(runtime.cues.len(), 1);
+        assert_eq!(
+            runtime.last_error.as_deref(),
+            Some("Effect 99 was not found")
+        );
+    }
+
+    #[test]
+    fn project_load_drops_missing_cue_effect_references_without_dropping_cue() {
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.cues.push(CueSummary {
+            id: 7,
+            label: "Legacy missing effect".to_string(),
+            effect_targets: vec![CueEffectTarget {
+                effect_id: 404,
+                enabled: true,
+            }],
+            ..CueSummary::default()
+        });
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+
+        runtime.load_project_snapshot(snapshot);
+
+        assert_eq!(runtime.cues.len(), 1);
+        assert_eq!(runtime.cues[0].id, 7);
+        assert!(runtime.cues[0].effect_targets.is_empty());
+    }
+
+    #[test]
+    fn published_cue_apis_assign_non_main_list_and_publish_complete_body_before_return() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let fixture_id = engine.allocate_fixture_id();
+        let effect_id = engine.allocate_effect_id();
+        let cue_list_id = engine.allocate_cue_list_id();
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id,
+                request: sample_patch_request("Published Cue Fixture", 1),
+                profile: sample_profile(),
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::AddLfoEffect {
+                effect_id,
+                request: LfoEffectRequest {
+                    label: "Published Cue Effect".to_string(),
+                    fixture_ids: vec![fixture_id],
+                    target_group_ids: Vec::new(),
+                    attribute: "Dimmer".to_string(),
+                    video_targets: Vec::new(),
+                    shape: LfoShape::Sine,
+                    period_ms: 1_000,
+                    clock_sync: None,
+                    low: 0,
+                    high: u16::MAX,
+                    phase: 0.0,
+                    blend_mode: EffectBlendMode::Override,
+                },
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::UpsertCueList {
+                cue_list_id,
+                label: "Secondary".to_string(),
+            })
+            .unwrap();
+
+        let mut ready = false;
+        for _ in 0..40 {
+            let snapshot = engine.snapshot();
+            ready = snapshot
+                .fixtures
+                .iter()
+                .any(|fixture| fixture.id == fixture_id)
+                && snapshot.effects.iter().any(|effect| effect.id == effect_id)
+                && snapshot
+                    .cue_lists
+                    .iter()
+                    .any(|cue_list| cue_list.id == cue_list_id);
+            if ready {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+        }
+        assert!(
+            ready,
+            "published Cue prerequisites did not reach the snapshot"
+        );
+        engine
+            .set_effect_enabled_published(effect_id, false)
+            .unwrap();
+        assert!(
+            !engine
+                .snapshot()
+                .effects
+                .iter()
+                .find(|effect| effect.id == effect_id)
+                .expect("Effect must be visible when enable update returns")
+                .enabled
+        );
+
+        let cue_id = engine.allocate_cue_id();
+        engine
+            .create_cue_published(
+                cue_id,
+                cue_list_id,
+                "Atomic Create".to_string(),
+                250,
+                vec![CueFixtureTarget {
+                    fixture_id,
+                    values: vec![AttributeValueSummary {
+                        attribute: "Dimmer".to_string(),
+                        value: 12_345,
+                    }],
+                }],
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![CueEffectTarget {
+                    effect_id,
+                    enabled: true,
+                }],
+            )
+            .unwrap();
+
+        let created = engine
+            .snapshot()
+            .cues
+            .into_iter()
+            .find(|cue| cue.id == cue_id)
+            .expect("Cue must be visible when create returns");
+        assert_eq!(created.cue_list_id, cue_list_id);
+        assert_eq!(created.label, "Atomic Create");
+        assert_eq!(created.fade_ms, 250);
+        assert_eq!(created.targets[0].values[0].value, 12_345);
+        assert_eq!(
+            created.effect_targets,
+            vec![CueEffectTarget {
+                effect_id,
+                enabled: true,
+            }]
+        );
+
+        engine
+            .update_cue_published(
+                cue_id,
+                "Atomic Update".to_string(),
+                500,
+                vec![CueFixtureTarget {
+                    fixture_id,
+                    values: vec![AttributeValueSummary {
+                        attribute: "Dimmer".to_string(),
+                        value: 54_321,
+                    }],
+                }],
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![CueEffectTarget {
+                    effect_id,
+                    enabled: false,
+                }],
+            )
+            .unwrap();
+        let updated = engine
+            .snapshot()
+            .cues
+            .into_iter()
+            .find(|cue| cue.id == cue_id)
+            .expect("Cue must be visible when update returns");
+        assert_eq!(updated.cue_list_id, cue_list_id);
+        assert_eq!(updated.label, "Atomic Update");
+        assert_eq!(updated.fade_ms, 500);
+        assert_eq!(updated.targets[0].values[0].value, 54_321);
+        assert!(!updated.effect_targets[0].enabled);
+
+        let parts = vec![CuePartSummary {
+            number: 1,
+            label: "Published Part".to_string(),
+            delay_ms: 25,
+            fade_ms: Some(75),
+            fixture_ids: vec![fixture_id],
+            video_layer_ids: Vec::new(),
+            video_output_ids: Vec::new(),
+        }];
+        engine
+            .set_cue_details_published(
+                cue_id,
+                "2.5".to_string(),
+                "Published Details".to_string(),
+                750,
+                125,
+                Some(2_000),
+                CueIfcbTiming {
+                    intensity_delay_ms: 10,
+                    ..CueIfcbTiming::default()
+                },
+                parts.clone(),
+                true,
+                vec![fixture_id],
+                false,
+                "Published notes".to_string(),
+            )
+            .unwrap();
+        let detailed = engine
+            .snapshot()
+            .cues
+            .into_iter()
+            .find(|cue| cue.id == cue_id)
+            .expect("Cue details must be visible when update returns");
+        assert_eq!(detailed.cue_number, "2.5");
+        assert_eq!(detailed.label, "Published Details");
+        assert_eq!(detailed.fade_ms, 750);
+        assert_eq!(detailed.pre_wait_ms, 125);
+        assert_eq!(detailed.follow_ms, Some(2_000));
+        assert_eq!(detailed.ifcb_timing.intensity_delay_ms, 10);
+        assert_eq!(detailed.parts, parts);
+        assert!(detailed.mark);
+        assert_eq!(detailed.mib_fixture_ids, vec![fixture_id]);
+        assert!(!detailed.tracking);
+        assert_eq!(detailed.notes, "Published notes");
+
+        engine
+            .set_cue_effect_targets_published(cue_id, Vec::new())
+            .unwrap();
+        let cleared = engine
+            .snapshot()
+            .cues
+            .into_iter()
+            .find(|cue| cue.id == cue_id)
+            .expect("Cue must be visible when effect-target clear returns");
+        assert!(cleared.effect_targets.is_empty());
+        assert_eq!(cleared.targets[0].values[0].value, 54_321);
+    }
+
+    #[test]
+    fn published_cue_create_rejects_missing_list_or_effect_without_mutating_state() {
+        let mut runtime = runtime_with_lfo_effects(&[(1, false)]);
+        runtime.last_error = Some("preserve me".to_string());
+        let before_cues = runtime.cues.iter().map(cue_summary).collect::<Vec<_>>();
+        let before_cue_lists = runtime.cue_lists.clone();
+
+        let (missing_list_ack, missing_list_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::CreateCuePublished {
+            cue_id: 10,
+            cue_list_id: 404,
+            label: "Missing list".to_string(),
+            fade_ms: 0,
+            targets: Vec::new(),
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: vec![CueEffectTarget {
+                effect_id: 1,
+                enabled: true,
+            }],
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: missing_list_ack,
+        });
+        let published = RwLock::new(runtime.build_snapshot(0));
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(
+            missing_list_receiver.recv().unwrap().unwrap_err(),
+            "Cue list 404 was not found"
+        );
+        assert_eq!(
+            runtime.cues.iter().map(cue_summary).collect::<Vec<_>>(),
+            before_cues
+        );
+        assert_eq!(runtime.cue_lists, before_cue_lists);
+        assert_eq!(runtime.last_error.as_deref(), Some("preserve me"));
+
+        let (missing_effect_ack, missing_effect_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::CreateCuePublished {
+            cue_id: 11,
+            cue_list_id: DEFAULT_CUE_LIST_ID,
+            label: "Missing effect".to_string(),
+            fade_ms: 0,
+            targets: Vec::new(),
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: vec![CueEffectTarget {
+                effect_id: 999,
+                enabled: true,
+            }],
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: missing_effect_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(
+            missing_effect_receiver.recv().unwrap().unwrap_err(),
+            "Effect 999 was not found"
+        );
+        assert_eq!(
+            runtime.cues.iter().map(cue_summary).collect::<Vec<_>>(),
+            before_cues
+        );
+        assert_eq!(runtime.cue_lists, before_cue_lists);
+        assert_eq!(runtime.last_error.as_deref(), Some("preserve me"));
+
+        let (expired_ack, expired_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::CreateCuePublished {
+            cue_id: 12,
+            cue_list_id: DEFAULT_CUE_LIST_ID,
+            label: "Expired".to_string(),
+            fade_ms: 0,
+            targets: Vec::new(),
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: vec![CueEffectTarget {
+                effect_id: 1,
+                enabled: true,
+            }],
+            expires_at: Instant::now() - Duration::from_millis(1),
+            ack: expired_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(
+            expired_receiver.recv().unwrap().unwrap_err(),
+            "Cue create expired before engine execution"
+        );
+        assert_eq!(
+            runtime.cues.iter().map(cue_summary).collect::<Vec<_>>(),
+            before_cues
+        );
+        assert_eq!(runtime.cue_lists, before_cue_lists);
+        assert_eq!(runtime.last_error.as_deref(), Some("preserve me"));
+    }
+
+    #[test]
+    fn published_cue_update_rolls_back_body_lists_and_error_when_snapshot_is_busy() {
+        let mut runtime = runtime_with_lfo_effects(&[(1, false)]);
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![CueEffectTarget {
+                effect_id: 1,
+                enabled: true,
+            }],
+        );
+        runtime.last_error = Some("preserve me".to_string());
+        let before_cues = runtime.cues.iter().map(cue_summary).collect::<Vec<_>>();
+        let before_cue_lists = runtime.cue_lists.clone();
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let (ack, receiver) = mpsc::sync_channel(1);
+
+        runtime.apply_command(EngineCommand::UpdateCuePublished {
+            cue_id: 1,
+            label: "Must roll back".to_string(),
+            fade_ms: 999,
+            targets: Vec::new(),
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: vec![CueEffectTarget {
+                effect_id: 1,
+                enabled: false,
+            }],
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        assert_eq!(runtime.cues[0].label, "Must roll back");
+        assert_eq!(runtime.last_error, None);
+
+        let snapshot_guard = published.read().unwrap();
+        runtime.publish_pending_command_acks(0, &published);
+        drop(snapshot_guard);
+
+        assert!(receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("snapshot was busy"));
+        assert_eq!(
+            runtime.cues.iter().map(cue_summary).collect::<Vec<_>>(),
+            before_cues
+        );
+        assert_eq!(runtime.cue_lists, before_cue_lists);
+        assert_eq!(runtime.last_error.as_deref(), Some("preserve me"));
+        assert_eq!(published.read().unwrap().cues, before_cues);
+    }
+
+    #[test]
+    fn published_effect_enable_and_cue_details_are_atomic_and_roll_back_when_snapshot_is_busy() {
+        let mut runtime = runtime_with_lfo_effects(&[(1, false)]);
+        runtime.apply_command(EngineCommand::CreateCue {
+            cue_id: 1,
+            label: "Original Details".to_string(),
+            fade_ms: 100,
+            targets: vec![CueFixtureTarget {
+                fixture_id: 1,
+                values: vec![AttributeValueSummary {
+                    attribute: "Dimmer".to_string(),
+                    value: 30_000,
+                }],
+            }],
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: Vec::new(),
+        });
+        runtime.last_error = Some("preserve me".to_string());
+        let before_cues = runtime.cues.iter().map(cue_summary).collect::<Vec<_>>();
+        let published = RwLock::new(runtime.build_snapshot(0));
+
+        let (effect_ack, effect_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetEffectEnabledPublished {
+            effect_id: 1,
+            enabled: true,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: effect_ack,
+        });
+        assert!(runtime.effects[0].enabled);
+        let snapshot_guard = published.read().unwrap();
+        runtime.publish_pending_command_acks(0, &published);
+        drop(snapshot_guard);
+        assert!(effect_receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("snapshot was busy"));
+        assert!(!runtime.effects[0].enabled);
+        assert_eq!(runtime.last_error.as_deref(), Some("preserve me"));
+        assert!(!published.read().unwrap().effects[0].enabled);
+
+        let (invalid_ack, invalid_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetCueDetailsPublished {
+            cue_id: 1,
+            cue_number: "9".to_string(),
+            label: "Must stay atomic".to_string(),
+            fade_ms: 999,
+            pre_wait_ms: 25,
+            follow_ms: Some(50),
+            ifcb_timing: CueIfcbTiming::default(),
+            parts: Vec::new(),
+            mark: true,
+            mib_fixture_ids: vec![999],
+            tracking: false,
+            notes: "invalid mib".to_string(),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: invalid_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(
+            invalid_receiver.recv().unwrap().unwrap_err(),
+            "MIB fixture 999 is not targeted by this Cue"
+        );
+        assert_eq!(
+            runtime.cues.iter().map(cue_summary).collect::<Vec<_>>(),
+            before_cues
+        );
+        assert_eq!(runtime.last_error.as_deref(), Some("preserve me"));
+
+        let (details_ack, details_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetCueDetailsPublished {
+            cue_id: 1,
+            cue_number: "2".to_string(),
+            label: "Must roll back".to_string(),
+            fade_ms: 999,
+            pre_wait_ms: 25,
+            follow_ms: Some(50),
+            ifcb_timing: CueIfcbTiming::default(),
+            parts: Vec::new(),
+            mark: true,
+            mib_fixture_ids: vec![1],
+            tracking: false,
+            notes: "valid details".to_string(),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: details_ack,
+        });
+        assert_eq!(runtime.cues[0].label, "Must roll back");
+        let snapshot_guard = published.read().unwrap();
+        runtime.publish_pending_command_acks(0, &published);
+        drop(snapshot_guard);
+        assert!(details_receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("snapshot was busy"));
+        assert_eq!(
+            runtime.cues.iter().map(cue_summary).collect::<Vec<_>>(),
+            before_cues
+        );
+        assert_eq!(runtime.last_error.as_deref(), Some("preserve me"));
+        assert_eq!(published.read().unwrap().cues, before_cues);
+    }
+
+    #[test]
+    fn published_effect_target_clear_preserves_non_effect_targets_and_rejects_targetless_cue() {
+        let mut runtime = runtime_with_lfo_effects(&[(1, false)]);
+        runtime.apply_command(EngineCommand::CreateCue {
+            cue_id: 1,
+            label: "Fixture plus effect".to_string(),
+            fade_ms: 0,
+            targets: vec![CueFixtureTarget {
+                fixture_id: 1,
+                values: vec![AttributeValueSummary {
+                    attribute: "Dimmer".to_string(),
+                    value: 30_000,
+                }],
+            }],
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: vec![CueEffectTarget {
+                effect_id: 1,
+                enabled: true,
+            }],
+        });
+        create_effect_only_cue(
+            &mut runtime,
+            2,
+            vec![CueEffectTarget {
+                effect_id: 1,
+                enabled: false,
+            }],
+        );
+        runtime.apply_command(EngineCommand::UpsertPalette(ReferencePaletteSummary {
+            id: 1,
+            label: "Palette target".to_string(),
+            kind: protocol::PaletteKind::All,
+            values: vec![AttributeValueSummary {
+                attribute: "Dimmer".to_string(),
+                value: 20_000,
+            }],
+        }));
+        create_effect_only_cue(
+            &mut runtime,
+            3,
+            vec![CueEffectTarget {
+                effect_id: 1,
+                enabled: true,
+            }],
+        );
+        runtime.apply_command(EngineCommand::SetCuePaletteTargets {
+            cue_id: 3,
+            palette_targets: vec![CuePaletteTarget {
+                palette_id: 1,
+                fixture_ids: vec![1],
+            }],
+        });
+        assert_eq!(runtime.last_error, None);
+
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let (fixture_ack, fixture_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetCueEffectTargetsPublished {
+            cue_id: 1,
+            effect_targets: Vec::new(),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: fixture_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        fixture_receiver.recv().unwrap().unwrap();
+        assert!(runtime.cues[0].effect_targets.is_empty());
+        assert_eq!(runtime.cues[0].targets[0].values[0].value, 30_000);
+
+        runtime.last_error = Some("preserve me".to_string());
+        let targetless_before = cue_summary(&runtime.cues[1]);
+        let (targetless_ack, targetless_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetCueEffectTargetsPublished {
+            cue_id: 2,
+            effect_targets: Vec::new(),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: targetless_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(targetless_receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("must keep at least one"));
+        assert_eq!(cue_summary(&runtime.cues[1]), targetless_before);
+        assert_eq!(runtime.last_error.as_deref(), Some("preserve me"));
+
+        let (palette_ack, palette_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetCueEffectTargetsPublished {
+            cue_id: 3,
+            effect_targets: Vec::new(),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: palette_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        palette_receiver.recv().unwrap().unwrap();
+        assert!(runtime.cues[2].targets.is_empty());
+        assert_eq!(runtime.cues[2].palette_targets.len(), 1);
+        assert!(runtime.cues[2].effect_targets.is_empty());
+        assert_eq!(
+            published
+                .read()
+                .unwrap()
+                .cues
+                .iter()
+                .find(|cue| cue.id == 3)
+                .unwrap()
+                .effect_targets,
+            Vec::new()
+        );
     }
 
     #[test]
@@ -14855,6 +16457,7 @@ mod tests {
                 video_targets: Vec::new(),
                 video_output_targets: Vec::new(),
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
         engine
@@ -14973,6 +16576,7 @@ mod tests {
                 video_targets: Vec::new(),
                 video_output_targets: Vec::new(),
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
         engine
@@ -15080,6 +16684,7 @@ mod tests {
                 video_output_targets: Vec::new(),
 
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
         engine
@@ -15156,6 +16761,7 @@ mod tests {
                 video_targets: Vec::new(),
                 video_output_targets: Vec::new(),
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
         engine
@@ -15287,6 +16893,7 @@ mod tests {
                     video_targets: Vec::new(),
                     video_output_targets: Vec::new(),
                     node_graph_targets: Vec::new(),
+                    effect_targets: Vec::new(),
                 })
                 .unwrap();
         }
@@ -15383,6 +16990,7 @@ mod tests {
                     video_targets: Vec::new(),
                     video_output_targets: Vec::new(),
                     node_graph_targets: Vec::new(),
+                    effect_targets: Vec::new(),
                 })
                 .unwrap();
         }
@@ -15479,6 +17087,7 @@ mod tests {
                 video_targets: Vec::new(),
                 video_output_targets: Vec::new(),
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
         engine
@@ -15540,6 +17149,7 @@ mod tests {
                     video_targets: Vec::new(),
                     video_output_targets: Vec::new(),
                     node_graph_targets: Vec::new(),
+                    effect_targets: Vec::new(),
                 })
                 .unwrap();
         }
@@ -15770,6 +17380,7 @@ mod tests {
                 video_output_targets: Vec::new(),
 
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
 
@@ -15806,6 +17417,7 @@ mod tests {
                 video_output_targets: Vec::new(),
 
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
 
@@ -15842,6 +17454,7 @@ mod tests {
                 video_output_targets: Vec::new(),
 
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
 
@@ -15906,6 +17519,7 @@ mod tests {
                 video_output_targets: Vec::new(),
 
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
         engine
@@ -15924,6 +17538,7 @@ mod tests {
                 video_output_targets: Vec::new(),
 
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
 
@@ -16009,6 +17624,7 @@ mod tests {
                     blackout: false,
                 }],
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
 
@@ -16040,6 +17656,7 @@ mod tests {
                 video_output_targets: Vec::new(),
 
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
 
@@ -16074,6 +17691,7 @@ mod tests {
                     blackout: false,
                 }],
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
 
@@ -16111,6 +17729,7 @@ mod tests {
                     video_output_targets: Vec::new(),
 
                     node_graph_targets: Vec::new(),
+                    effect_targets: Vec::new(),
                 })
                 .unwrap();
         }
@@ -16188,6 +17807,7 @@ mod tests {
                 video_output_targets: Vec::new(),
 
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
         engine
@@ -16262,6 +17882,7 @@ mod tests {
                 video_output_targets: Vec::new(),
 
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
         engine
@@ -16320,6 +17941,7 @@ mod tests {
                     video_targets: Vec::new(),
                     video_output_targets: Vec::new(),
                     node_graph_targets: Vec::new(),
+                    effect_targets: Vec::new(),
                 })
                 .unwrap();
         }
@@ -16437,6 +18059,7 @@ mod tests {
                     video_output_targets: Vec::new(),
 
                     node_graph_targets: Vec::new(),
+                    effect_targets: Vec::new(),
                 })
                 .unwrap();
         }
@@ -16484,6 +18107,7 @@ mod tests {
                     video_output_targets: Vec::new(),
 
                     node_graph_targets: Vec::new(),
+                    effect_targets: Vec::new(),
                 })
                 .unwrap();
         }
@@ -19264,6 +20888,7 @@ mod tests {
                     video_output_targets: Vec::new(),
 
                     node_graph_targets: Vec::new(),
+                    effect_targets: Vec::new(),
                 })
                 .unwrap();
         }
@@ -19347,6 +20972,7 @@ mod tests {
                 video_output_targets: Vec::new(),
 
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
         engine.send(EngineCommand::TriggerCue(cue_id)).unwrap();
@@ -19439,6 +21065,7 @@ mod tests {
                 video_output_targets: Vec::new(),
 
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
         engine
@@ -19519,6 +21146,7 @@ mod tests {
                 video_output_targets: Vec::new(),
 
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
         engine
@@ -19916,6 +21544,7 @@ mod tests {
                 video_output_targets: Vec::new(),
 
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
         engine.send(EngineCommand::TriggerCue(cue_id)).unwrap();
@@ -20600,6 +22229,7 @@ mod tests {
                 video_output_targets: Vec::new(),
 
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
         engine.send(EngineCommand::TriggerCue(cue_id)).unwrap();
@@ -20725,6 +22355,7 @@ mod tests {
                     blackout: false,
                 }],
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
         engine
@@ -22337,6 +23968,7 @@ mod tests {
                     blackout: true,
                 }],
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
         engine.send(EngineCommand::TriggerCue(snap_cue)).unwrap();
@@ -22376,6 +24008,7 @@ mod tests {
                     blackout: false,
                 }],
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
         engine.send(EngineCommand::TriggerCue(fade_cue)).unwrap();
@@ -22809,6 +24442,7 @@ mod tests {
                 video_output_targets: Vec::new(),
 
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
         engine
@@ -22917,6 +24551,7 @@ mod tests {
                     blackout: false,
                 }],
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
         engine.send(EngineCommand::TriggerCue(cue_id)).unwrap();
@@ -22984,6 +24619,7 @@ mod tests {
                 video_output_targets: Vec::new(),
 
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
         engine
@@ -23055,6 +24691,7 @@ mod tests {
                     graph_id,
                     enabled: true,
                 }],
+                effect_targets: Vec::new(),
             })
             .unwrap();
         engine
@@ -23154,6 +24791,7 @@ mod tests {
                 video_output_targets: Vec::new(),
 
                 node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
         engine

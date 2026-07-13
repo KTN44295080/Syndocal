@@ -26,21 +26,21 @@ use minisign_verify::PublicKey;
 use protocol::{
     canonical_video_output_mapping_field, AttributeControl, AttributeResolution,
     AudioAnalysisSummary, AutomationId, AutomationKeyframeSummary, ClockSnapshot,
-    ColorEffectRequest, CompositionId, CompositionSummary, CueFixtureTarget, CueId,
-    CueNodeGraphTarget, CustomFixtureProfileFile, CustomFixtureProfileRequest, DmxInputConfig,
-    DmxInputProtocol, DmxInputStatus, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, EffectId,
-    EffectKind, EffectPreset, EffectSummary, EngineSnapshot, EngineTelemetry,
-    ExclusiveVideoTakeRequest, FixtureId, FixtureLimits, FixturePreset, FixtureProfileSummary,
-    GeometrySummary, LearnedMidiControl, LearnedOscControl, LfoEffectRequest, MidiControlAction,
-    MidiControlMapping, MidiInputSummary, MidiOutputSummary, NodeGraphId, NodeGraphNodeKind,
-    NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp, OscControlAction,
-    OscControlMapping, OscInputConfig, PatchFixtureRequest, PatchedFixtureSummary,
-    PositionWaveEffectRequest, ProjectFile, RemoteControlConfig, RemoteControlStatus, Rotation3,
-    SerialPortSummary, StageMapConfig, StageMapPresetFile, StageMapPresetSummary, StageObjectId,
-    StageObjectKind, StageObjectSummary, TimelineEventId, TimelineTrackKind, Vec3,
-    VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode, VideoEffectTarget,
-    VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerTarget, VideoOutputId,
-    VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetFile,
+    ColorEffectRequest, CompositionId, CompositionSummary, CueEffectTarget, CueFixtureTarget,
+    CueId, CueNodeGraphTarget, CustomFixtureProfileFile, CustomFixtureProfileRequest,
+    DmxInputConfig, DmxInputProtocol, DmxInputStatus, DmxModeSummary, DmxOutputConfig,
+    DmxOutputProtocol, EffectId, EffectKind, EffectPreset, EffectSummary, EngineSnapshot,
+    EngineTelemetry, ExclusiveVideoTakeRequest, FixtureId, FixtureLimits, FixturePreset,
+    FixtureProfileSummary, GeometrySummary, LearnedMidiControl, LearnedOscControl,
+    LfoEffectRequest, MidiControlAction, MidiControlMapping, MidiInputSummary, MidiOutputSummary,
+    NodeGraphId, NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp,
+    OscControlAction, OscControlMapping, OscInputConfig, PatchFixtureRequest,
+    PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RemoteControlConfig,
+    RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile,
+    StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary, TimelineEventId,
+    TimelineTrackKind, Vec3, VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode,
+    VideoEffectTarget, VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerTarget,
+    VideoOutputId, VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetFile,
     VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
     VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
 };
@@ -1062,6 +1062,7 @@ enum CueCaptureScope {
         group_id: String,
     },
     VideoOnly,
+    EffectsOnly,
 }
 
 impl Default for CueCaptureScope {
@@ -4372,6 +4373,7 @@ fn create_cue_from_current(
     fade_ms: u64,
     capture_scope: Option<CueCaptureScope>,
     cue_list_id: Option<protocol::CueListId>,
+    effect_targets: Option<Vec<CueEffectTarget>>,
 ) -> Result<CueId, String> {
     let label = label.trim().to_string();
     if label.is_empty() {
@@ -4388,37 +4390,36 @@ fn create_cue_from_current(
         return Err(format!("Cue List {cue_list_id} was not found"));
     }
     let scope = capture_scope.unwrap_or_default();
-    let (targets, video_targets, video_output_targets, node_graph_targets) =
+    let (targets, video_targets, video_output_targets, node_graph_targets, captured_effect_targets) =
         cue_targets_from_snapshot_with_scope(&snapshot, &scope)?;
+    let effect_targets = match effect_targets {
+        Some(effect_targets) => {
+            validate_cue_effect_targets(&snapshot, &effect_targets)?;
+            effect_targets
+        }
+        None => captured_effect_targets,
+    };
     ensure_cue_targets_present(
         &targets,
         &video_targets,
         &video_output_targets,
         &node_graph_targets,
+        &effect_targets,
+        false,
         "creating",
     )?;
     let cue_id = state.engine.allocate_cue_id();
-    state
-        .engine
-        .send(EngineCommand::CreateCue {
-            cue_id,
-            label,
-            fade_ms,
-            targets,
-            video_targets,
-            video_output_targets,
-            node_graph_targets,
-        })
-        .map_err(|error| error.to_string())?;
-    if cue_list_id != protocol::DEFAULT_CUE_LIST_ID {
-        state
-            .engine
-            .send(EngineCommand::SetCueList {
-                cue_id,
-                cue_list_id,
-            })
-            .map_err(|error| error.to_string())?;
-    }
+    state.engine.create_cue_published(
+        cue_id,
+        cue_list_id,
+        label,
+        fade_ms,
+        targets,
+        video_targets,
+        video_output_targets,
+        node_graph_targets,
+        effect_targets,
+    )?;
     Ok(cue_id)
 }
 
@@ -4846,6 +4847,7 @@ fn update_cue_from_current(
     label: String,
     fade_ms: u64,
     capture_scope: Option<CueCaptureScope>,
+    effect_targets: Option<Vec<CueEffectTarget>>,
 ) -> Result<(), String> {
     let label = label.trim().to_string();
     if label.is_empty() {
@@ -4853,32 +4855,61 @@ fn update_cue_from_current(
     }
     let mut snapshot = state.engine.snapshot();
     apply_programmer_preview_to_snapshot(&mut snapshot);
-    if !snapshot.cues.iter().any(|cue| cue.id == cue_id) {
-        return Err(format!("Cue {cue_id} was not found"));
-    }
+    let existing_cue = snapshot
+        .cues
+        .iter()
+        .find(|cue| cue.id == cue_id)
+        .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
     let scope = capture_scope.unwrap_or_default();
     let captured = cue_targets_from_snapshot_with_scope(&snapshot, &scope)?;
+    let explicit_effect_targets = match effect_targets {
+        Some(effect_targets) => {
+            validate_cue_effect_targets(&snapshot, &effect_targets)?;
+            Some(effect_targets)
+        }
+        None => None,
+    };
+    let merged =
+        merge_cue_update_targets(&snapshot, cue_id, &scope, captured, explicit_effect_targets)?;
     ensure_cue_targets_present(
-        &captured.0,
-        &captured.1,
-        &captured.2,
-        &captured.3,
+        &merged.0,
+        &merged.1,
+        &merged.2,
+        &merged.3,
+        &merged.4,
+        !existing_cue.palette_targets.is_empty(),
         "updating",
     )?;
-    let (targets, video_targets, video_output_targets, node_graph_targets) =
-        merge_cue_update_targets(&snapshot, cue_id, &scope, captured)?;
+    let (targets, video_targets, video_output_targets, node_graph_targets, effect_targets) = merged;
+    state.engine.update_cue_published(
+        cue_id,
+        label,
+        fade_ms,
+        targets,
+        video_targets,
+        video_output_targets,
+        node_graph_targets,
+        effect_targets,
+    )
+}
+
+#[tauri::command]
+fn set_cue_effect_targets(
+    state: State<'_, AppState>,
+    cue_id: CueId,
+    effect_targets: Vec<CueEffectTarget>,
+) -> Result<(), String> {
+    let snapshot = state.engine.snapshot();
+    let cue = snapshot
+        .cues
+        .iter()
+        .find(|cue| cue.id == cue_id)
+        .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
+    validate_cue_effect_targets(&snapshot, &effect_targets)?;
+    validate_cue_effect_target_replacement(cue, &effect_targets)?;
     state
         .engine
-        .send(EngineCommand::UpdateCue {
-            cue_id,
-            label,
-            fade_ms,
-            targets,
-            video_targets,
-            video_output_targets,
-            node_graph_targets,
-        })
-        .map_err(|error| error.to_string())
+        .set_cue_effect_targets_published(cue_id, effect_targets)
 }
 
 fn apply_programmer_preview_to_snapshot(snapshot: &mut EngineSnapshot) {
@@ -4946,35 +4977,20 @@ fn set_cue_metadata(
         .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
     validate_cue_parts_for_summary(cue, &parts)?;
     validate_cue_mib_fixture_ids(cue, &mib_fixture_ids)?;
-    state
-        .engine
-        .send(EngineCommand::SetCueMetadata {
-            cue_id,
-            cue_number,
-            label,
-            fade_ms,
-            pre_wait_ms,
-            follow_ms,
-            ifcb_timing,
-            tracking,
-            notes,
-        })
-        .map_err(|error| error.to_string())?;
-    state
-        .engine
-        .send(EngineCommand::SetCueParts { cue_id, parts })
-        .map_err(|error| error.to_string())?;
-    state
-        .engine
-        .send(EngineCommand::SetCueMark { cue_id, mark })
-        .map_err(|error| error.to_string())?;
-    state
-        .engine
-        .send(EngineCommand::SetCueMibFixtureIds {
-            cue_id,
-            fixture_ids: mib_fixture_ids,
-        })
-        .map_err(|error| error.to_string())
+    state.engine.set_cue_details_published(
+        cue_id,
+        cue_number,
+        label,
+        fade_ms,
+        pre_wait_ms,
+        follow_ms,
+        ifcb_timing,
+        parts,
+        mark,
+        mib_fixture_ids,
+        tracking,
+        notes,
+    )
 }
 
 fn validate_cue_mib_fixture_ids(
@@ -7207,8 +7223,7 @@ fn set_effect_enabled(
 ) -> Result<(), String> {
     state
         .engine
-        .send(EngineCommand::SetEffectEnabled { effect_id, enabled })
-        .map_err(|error| error.to_string())
+        .set_effect_enabled_published(effect_id, enabled)
 }
 
 #[tauri::command]
@@ -10188,6 +10203,11 @@ fn validate_project_lighting_references(snapshot: &EngineSnapshot) -> Result<(),
         .iter()
         .map(|palette| palette.id)
         .collect::<HashSet<_>>();
+    let effect_ids = snapshot
+        .effects
+        .iter()
+        .map(|effect| effect.id)
+        .collect::<HashSet<_>>();
 
     for cue in &snapshot.cues {
         if cue.label.trim().is_empty() {
@@ -10241,6 +10261,21 @@ fn validate_project_lighting_references(snapshot: &EngineSnapshot) -> Result<(),
                         cue.id, target.palette_id, fixture_id
                     ));
                 }
+            }
+        }
+        validate_project_unique_refs(
+            &format!("cue {} effect", cue.id),
+            &cue.effect_targets
+                .iter()
+                .map(|target| target.effect_id)
+                .collect::<Vec<_>>(),
+        )?;
+        for target in &cue.effect_targets {
+            if !effect_ids.contains(&target.effect_id) {
+                return Err(format!(
+                    "Project cue {} references missing effect {}",
+                    cue.id, target.effect_id
+                ));
             }
         }
     }
@@ -15480,6 +15515,7 @@ fn cue_targets_from_snapshot(
     Vec<VideoLayerTarget>,
     Vec<VideoOutputTarget>,
     Vec<CueNodeGraphTarget>,
+    Vec<CueEffectTarget>,
 ) {
     let targets = snapshot
         .fixtures
@@ -15517,12 +15553,141 @@ fn cue_targets_from_snapshot(
             enabled: graph.enabled,
         })
         .collect::<Vec<_>>();
+    let effect_targets = snapshot
+        .effects
+        .iter()
+        .map(|effect| CueEffectTarget {
+            effect_id: effect.id,
+            enabled: effect.enabled,
+        })
+        .collect::<Vec<_>>();
     (
         targets,
         video_targets,
         video_output_targets,
         node_graph_targets,
+        effect_targets,
     )
+}
+
+fn effect_lighting_targets(effect: &EffectSummary) -> (&[FixtureId], &[String]) {
+    match effect.color.as_ref() {
+        Some(color) if matches!(effect.effect_type, EffectKind::Color) => {
+            (&color.fixture_ids, &color.target_group_ids)
+        }
+        _ => (&effect.fixture_ids, &effect.target_group_ids),
+    }
+}
+
+fn effect_has_lighting_targets(effect: &EffectSummary) -> bool {
+    let (fixture_ids, target_group_ids) = effect_lighting_targets(effect);
+    !fixture_ids.is_empty() || !target_group_ids.is_empty()
+}
+
+fn filter_cue_effect_targets(
+    snapshot: &EngineSnapshot,
+    effect_targets: Vec<CueEffectTarget>,
+    predicate: impl Fn(&EffectSummary) -> bool,
+) -> Vec<CueEffectTarget> {
+    effect_targets
+        .into_iter()
+        .filter(|target| {
+            snapshot
+                .effects
+                .iter()
+                .find(|effect| effect.id == target.effect_id)
+                .is_some_and(&predicate)
+        })
+        .collect()
+}
+
+fn effect_targets_selected_fixture(
+    snapshot: &EngineSnapshot,
+    effect: &EffectSummary,
+    fixture_id: FixtureId,
+) -> bool {
+    let Some(fixture) = snapshot
+        .fixtures
+        .iter()
+        .find(|fixture| fixture.id == fixture_id)
+    else {
+        return false;
+    };
+    let (fixture_ids, target_group_ids) = effect_lighting_targets(effect);
+    fixture_ids.contains(&fixture_id)
+        || target_group_ids.iter().any(|target_group_id| {
+            fixture
+                .group_ids
+                .iter()
+                .any(|group_id| group_matches(group_id, target_group_id))
+        })
+}
+
+fn effect_targets_selected_group(
+    snapshot: &EngineSnapshot,
+    effect: &EffectSummary,
+    group_id: &str,
+) -> bool {
+    let (fixture_ids, target_group_ids) = effect_lighting_targets(effect);
+    snapshot.fixtures.iter().any(|fixture| {
+        let fixture_is_in_selected_group = fixture
+            .group_ids
+            .iter()
+            .any(|candidate| group_matches(candidate, group_id));
+        let effect_targets_fixture = fixture_ids.contains(&fixture.id)
+            || target_group_ids.iter().any(|target_group_id| {
+                fixture
+                    .group_ids
+                    .iter()
+                    .any(|candidate| group_matches(candidate, target_group_id))
+            });
+        fixture_is_in_selected_group && effect_targets_fixture
+    })
+}
+
+fn validate_cue_effect_targets(
+    snapshot: &EngineSnapshot,
+    effect_targets: &[CueEffectTarget],
+) -> Result<(), String> {
+    let effect_ids = snapshot
+        .effects
+        .iter()
+        .map(|effect| effect.id)
+        .collect::<HashSet<_>>();
+    let mut seen = HashSet::new();
+    for target in effect_targets {
+        if !effect_ids.contains(&target.effect_id) {
+            return Err(format!("Effect {} was not found", target.effect_id));
+        }
+        if !seen.insert(target.effect_id) {
+            return Err(format!(
+                "Effect {} can only be referenced once per cue",
+                target.effect_id
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_cue_effect_target_replacement(
+    cue: &protocol::CueSummary,
+    effect_targets: &[CueEffectTarget],
+) -> Result<(), String> {
+    ensure_cue_targets_present(
+        &cue.targets,
+        &cue.video_targets,
+        &cue.video_output_targets,
+        &cue.node_graph_targets,
+        effect_targets,
+        !cue.palette_targets.is_empty(),
+        "updating",
+    )
+    .map_err(|_| {
+        format!(
+            "Cue {} would contain no targets after clearing Effect Recall; remove the Cue instead",
+            cue.id
+        )
+    })
 }
 
 fn cue_targets_from_snapshot_with_scope(
@@ -15534,10 +15699,11 @@ fn cue_targets_from_snapshot_with_scope(
         Vec<VideoLayerTarget>,
         Vec<VideoOutputTarget>,
         Vec<CueNodeGraphTarget>,
+        Vec<CueEffectTarget>,
     ),
     String,
 > {
-    let (targets, video_targets, video_output_targets, node_graph_targets) =
+    let (targets, video_targets, video_output_targets, node_graph_targets, effect_targets) =
         cue_targets_from_snapshot(snapshot);
     match scope {
         CueCaptureScope::All => Ok((
@@ -15545,8 +15711,15 @@ fn cue_targets_from_snapshot_with_scope(
             video_targets,
             video_output_targets,
             node_graph_targets,
+            effect_targets,
         )),
-        CueCaptureScope::LightingOnly => Ok((targets, Vec::new(), Vec::new(), Vec::new())),
+        CueCaptureScope::LightingOnly => Ok((
+            targets,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            filter_cue_effect_targets(snapshot, effect_targets, effect_has_lighting_targets),
+        )),
         CueCaptureScope::SelectedFixture { fixture_id } => {
             if !snapshot
                 .fixtures
@@ -15563,6 +15736,9 @@ fn cue_targets_from_snapshot_with_scope(
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
+                filter_cue_effect_targets(snapshot, effect_targets, |effect| {
+                    effect_targets_selected_fixture(snapshot, effect, *fixture_id)
+                }),
             ))
         }
         CueCaptureScope::SelectedGroup { group_id } => {
@@ -15589,6 +15765,9 @@ fn cue_targets_from_snapshot_with_scope(
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
+                filter_cue_effect_targets(snapshot, effect_targets, |effect| {
+                    effect_targets_selected_group(snapshot, effect, &group_id)
+                }),
             ))
         }
         CueCaptureScope::VideoOnly => Ok((
@@ -15596,6 +15775,16 @@ fn cue_targets_from_snapshot_with_scope(
             video_targets,
             video_output_targets,
             node_graph_targets,
+            filter_cue_effect_targets(snapshot, effect_targets, |effect| {
+                !effect.video_targets.is_empty()
+            }),
+        )),
+        CueCaptureScope::EffectsOnly => Ok((
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            effect_targets,
         )),
     }
 }
@@ -15605,15 +15794,19 @@ fn ensure_cue_targets_present(
     video_targets: &[VideoLayerTarget],
     video_output_targets: &[VideoOutputTarget],
     node_graph_targets: &[CueNodeGraphTarget],
+    effect_targets: &[CueEffectTarget],
+    has_palette_targets: bool,
     operation: &str,
 ) -> Result<(), String> {
     if fixture_targets.is_empty()
         && video_targets.is_empty()
         && video_output_targets.is_empty()
         && node_graph_targets.is_empty()
+        && effect_targets.is_empty()
+        && !has_palette_targets
     {
         return Err(format!(
-            "Patch a fixture, add a video layer, add a video output, or save a node graph before {operation} a cue"
+            "Patch a fixture, add an effect, add a video layer, add a video output, or save a node graph before {operation} a cue"
         ));
     }
     Ok(())
@@ -15628,13 +15821,16 @@ fn merge_cue_update_targets(
         Vec<VideoLayerTarget>,
         Vec<VideoOutputTarget>,
         Vec<CueNodeGraphTarget>,
+        Vec<CueEffectTarget>,
     ),
+    explicit_effect_targets: Option<Vec<CueEffectTarget>>,
 ) -> Result<
     (
         Vec<CueFixtureTarget>,
         Vec<VideoLayerTarget>,
         Vec<VideoOutputTarget>,
         Vec<CueNodeGraphTarget>,
+        Vec<CueEffectTarget>,
     ),
     String,
 > {
@@ -15648,21 +15844,32 @@ fn merge_cue_update_targets(
         captured_video_targets,
         captured_video_output_targets,
         captured_node_graph_targets,
+        captured_effect_targets,
     ) = captured;
-    match scope {
-        CueCaptureScope::All => Ok((
+    let captured_effect_ids = captured_effect_targets
+        .iter()
+        .map(|target| target.effect_id)
+        .collect::<HashSet<_>>();
+    let mut merged = match scope {
+        CueCaptureScope::All => (
             captured_fixture_targets,
             captured_video_targets,
             captured_video_output_targets,
             captured_node_graph_targets,
-        )),
-        CueCaptureScope::LightingOnly => Ok((
+            captured_effect_targets,
+        ),
+        CueCaptureScope::LightingOnly => (
             captured_fixture_targets,
             existing.video_targets.clone(),
             existing.video_output_targets.clone(),
             existing.node_graph_targets.clone(),
-        )),
-        CueCaptureScope::SelectedFixture { .. } | CueCaptureScope::SelectedGroup { .. } => Ok((
+            merge_by_id(
+                existing.effect_targets.clone(),
+                captured_effect_targets,
+                |target| target.effect_id,
+            ),
+        ),
+        CueCaptureScope::SelectedFixture { .. } | CueCaptureScope::SelectedGroup { .. } => (
             merge_by_id(
                 existing.targets.clone(),
                 captured_fixture_targets,
@@ -15671,14 +15878,60 @@ fn merge_cue_update_targets(
             existing.video_targets.clone(),
             existing.video_output_targets.clone(),
             existing.node_graph_targets.clone(),
-        )),
-        CueCaptureScope::VideoOnly => Ok((
+            merge_by_id(
+                existing.effect_targets.clone(),
+                captured_effect_targets,
+                |target| target.effect_id,
+            ),
+        ),
+        CueCaptureScope::VideoOnly => (
             existing.targets.clone(),
             captured_video_targets,
             captured_video_output_targets,
             captured_node_graph_targets,
-        )),
+            merge_by_id(
+                existing.effect_targets.clone(),
+                captured_effect_targets,
+                |target| target.effect_id,
+            ),
+        ),
+        CueCaptureScope::EffectsOnly => (
+            existing.targets.clone(),
+            existing.video_targets.clone(),
+            existing.video_output_targets.clone(),
+            existing.node_graph_targets.clone(),
+            captured_effect_targets,
+        ),
+    };
+    if let Some(effect_targets) = explicit_effect_targets {
+        merged.4 = match scope {
+            CueCaptureScope::All | CueCaptureScope::EffectsOnly => effect_targets,
+            CueCaptureScope::LightingOnly
+            | CueCaptureScope::SelectedFixture { .. }
+            | CueCaptureScope::SelectedGroup { .. }
+            | CueCaptureScope::VideoOnly => {
+                if let Some(target) = effect_targets
+                    .iter()
+                    .find(|target| !captured_effect_ids.contains(&target.effect_id))
+                {
+                    return Err(format!(
+                        "Effect {} is outside the selected Cue capture scope",
+                        target.effect_id
+                    ));
+                }
+                let mut scoped = existing
+                    .effect_targets
+                    .iter()
+                    .filter(|target| !captured_effect_ids.contains(&target.effect_id))
+                    .cloned()
+                    .chain(effect_targets)
+                    .collect::<Vec<_>>();
+                scoped.sort_by_key(|target| target.effect_id);
+                scoped
+            }
+        };
     }
+    Ok(merged)
 }
 
 fn merge_by_id<T, Id, F>(existing: Vec<T>, captured: Vec<T>, id_for: F) -> Vec<T>
@@ -18927,6 +19180,10 @@ f 1 2 3
     #[test]
     fn user_templates_round_trip_shared_mappings_and_open_with_outputs_disarmed() {
         let mut project = project_with_valid_video_graph();
+        let effect_project = project_with_effect_only_cue();
+        project.snapshot.fixtures = effect_project.snapshot.fixtures;
+        project.snapshot.effects = effect_project.snapshot.effects;
+        project.snapshot.cues = effect_project.snapshot.cues;
         project.snapshot.output.enabled = true;
         project.snapshot.dmx_outputs = vec![DmxOutputConfig {
             enabled: true,
@@ -18981,6 +19238,13 @@ f 1 2 3
         assert_eq!(normalized.label, "Festival Base");
         assert_eq!(normalized.midi_mappings.len(), 1);
         assert_eq!(normalized.osc_mappings.len(), 1);
+        assert_eq!(
+            normalized.project.snapshot.cues[0].effect_targets,
+            vec![CueEffectTarget {
+                effect_id: 9,
+                enabled: false,
+            }]
+        );
 
         let safe = project_for_warm_standby(normalized.project);
         assert!(!safe.snapshot.output.enabled);
@@ -18997,6 +19261,13 @@ f 1 2 3
             .outputs
             .iter()
             .all(|output| !output.enabled && output.blackout));
+        assert_eq!(
+            safe.snapshot.cues[0].effect_targets,
+            vec![CueEffectTarget {
+                effect_id: 9,
+                enabled: false,
+            }]
+        );
 
         let mut legacy = serde_json::to_value(&template).unwrap();
         legacy.as_object_mut().unwrap().remove("midi_mappings");
@@ -21246,6 +21517,110 @@ f 1 2 3
         );
     }
 
+    fn project_with_effect_only_cue() -> ProjectFile {
+        ProjectFile {
+            version: PROJECT_FILE_VERSION,
+            app: APP_NAME.to_string(),
+            custom_profiles: Vec::new(),
+            snapshot: EngineSnapshot {
+                fixtures: vec![project_fixture(1, "Effect Target", 0, 1)],
+                cues: vec![protocol::CueSummary {
+                    id: 7,
+                    label: "Effect Look".to_string(),
+                    fade_ms: 250,
+                    effect_targets: vec![CueEffectTarget {
+                        effect_id: 9,
+                        enabled: false,
+                    }],
+                    ..protocol::CueSummary::default()
+                }],
+                effects: vec![project_lfo_effect(9, vec![1])],
+                ..EngineSnapshot::default()
+            },
+        }
+    }
+
+    #[test]
+    fn strict_sdc_validation_rejects_duplicate_or_unknown_cue_effect_targets() {
+        // Saved .sdc files are an operator-authored contract, so dangling Cue references are
+        // rejected here. The engine also prunes them defensively when lower-level snapshots are
+        // loaded directly, but that recovery behavior must not hide a corrupt project file.
+        let mut project = project_with_effect_only_cue();
+        validate_project_file(&project).unwrap();
+
+        project.snapshot.cues[0]
+            .effect_targets
+            .push(CueEffectTarget {
+                effect_id: 9,
+                enabled: true,
+            });
+        assert_eq!(
+            validate_project_file(&project).unwrap_err(),
+            "Project contains duplicate cue 7 effect reference 9"
+        );
+
+        project.snapshot.cues[0].effect_targets = vec![CueEffectTarget {
+            effect_id: 99,
+            enabled: true,
+        }];
+        assert_eq!(
+            validate_project_file(&project).unwrap_err(),
+            "Project cue 7 references missing effect 99"
+        );
+    }
+
+    #[test]
+    fn cue_effect_targets_survive_project_save_history_and_legacy_default() {
+        let project = project_with_effect_only_cue();
+        validate_project_file(&project).unwrap();
+
+        let saved_snapshot = project_snapshot_for_save(project.snapshot.clone());
+        assert_eq!(
+            saved_snapshot.cues[0].effect_targets,
+            project.snapshot.cues[0].effect_targets
+        );
+        let json = serde_json::to_string_pretty(&ProjectFile {
+            snapshot: saved_snapshot,
+            ..project.clone()
+        })
+        .unwrap();
+        let roundtrip: ProjectFile = serde_json::from_str(&json).unwrap();
+        validate_project_file(&roundtrip).unwrap();
+        assert_eq!(
+            roundtrip.snapshot.cues[0].effect_targets,
+            vec![CueEffectTarget {
+                effect_id: 9,
+                enabled: false,
+            }]
+        );
+
+        let mut after = roundtrip.clone();
+        after.snapshot.cues[0].effect_targets[0].enabled = true;
+        let mut history = ProjectHistory::default();
+        commit_project_history_entry(
+            &mut history,
+            PendingProjectTransaction {
+                label: "Update Cue Effects".to_string(),
+                coalesce_key: "cue:7:effects".to_string(),
+                before: roundtrip.clone(),
+            },
+            after,
+            100,
+        )
+        .unwrap();
+        assert!(!history.undo[0].before.snapshot.cues[0].effect_targets[0].enabled);
+        assert!(history.undo[0].after.snapshot.cues[0].effect_targets[0].enabled);
+
+        let mut legacy = serde_json::to_value(roundtrip).unwrap();
+        legacy["snapshot"]["cues"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("effect_targets");
+        let legacy: ProjectFile = serde_json::from_value(legacy).unwrap();
+        validate_project_file(&legacy).unwrap();
+        assert!(legacy.snapshot.cues[0].effect_targets.is_empty());
+    }
+
     fn project_video_layer(id: VideoLayerId) -> protocol::VideoLayerSummary {
         protocol::VideoLayerSummary {
             id,
@@ -22655,9 +23030,17 @@ f 1 2 3
         let mut graph = project_node_graph(9, 1);
         graph.enabled = false;
         snapshot.node_graphs.push(graph);
+        let mut effect = project_lfo_effect(13, vec![1]);
+        effect.enabled = false;
+        snapshot.effects.push(effect);
 
-        let (fixture_targets, video_targets, video_output_targets, node_graph_targets) =
-            cue_targets_from_snapshot(&snapshot);
+        let (
+            fixture_targets,
+            video_targets,
+            video_output_targets,
+            node_graph_targets,
+            effect_targets,
+        ) = cue_targets_from_snapshot(&snapshot);
 
         assert!(fixture_targets.is_empty());
         assert!(video_targets.is_empty());
@@ -22669,6 +23052,13 @@ f 1 2 3
         assert_eq!(node_graph_targets.len(), 1);
         assert_eq!(node_graph_targets[0].graph_id, 9);
         assert!(!node_graph_targets[0].enabled);
+        assert_eq!(
+            effect_targets,
+            vec![CueEffectTarget {
+                effect_id: 13,
+                enabled: false,
+            }]
+        );
     }
 
     #[test]
@@ -22720,15 +23110,24 @@ f 1 2 3
             soloed: false,
             parked: false,
         });
+        let mut front_effect = project_lfo_effect(11, vec![1]);
+        front_effect.enabled = false;
+        snapshot.effects.push(front_effect);
+        snapshot.effects.push(project_lfo_effect(12, vec![2]));
 
-        let (fixture_targets, video_targets, video_output_targets, node_graph_targets) =
-            cue_targets_from_snapshot_with_scope(
-                &snapshot,
-                &CueCaptureScope::SelectedGroup {
-                    group_id: "front".to_string(),
-                },
-            )
-            .unwrap();
+        let (
+            fixture_targets,
+            video_targets,
+            video_output_targets,
+            node_graph_targets,
+            effect_targets,
+        ) = cue_targets_from_snapshot_with_scope(
+            &snapshot,
+            &CueCaptureScope::SelectedGroup {
+                group_id: "front".to_string(),
+            },
+        )
+        .unwrap();
 
         assert_eq!(fixture_targets.len(), 1);
         assert_eq!(fixture_targets[0].fixture_id, 1);
@@ -22736,6 +23135,180 @@ f 1 2 3
         assert!(video_targets.is_empty());
         assert!(video_output_targets.is_empty());
         assert!(node_graph_targets.is_empty());
+        assert_eq!(
+            effect_targets,
+            vec![CueEffectTarget {
+                effect_id: 11,
+                enabled: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn cue_capture_scope_partitions_lighting_video_and_mixed_effects() {
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.fixtures.push(project_fixture(1, "Front", 0, 1));
+        snapshot.video.layers.push(project_video_layer(7));
+
+        let mut lighting_only = project_lfo_effect(11, vec![1]);
+        lighting_only.enabled = false;
+        let mut video_only = project_lfo_effect(12, Vec::new());
+        video_only.video_targets = vec![sample_video_effect_target(7)];
+        let mut mixed = project_lfo_effect(13, vec![1]);
+        mixed.video_targets = vec![sample_video_effect_target(7)];
+        snapshot.effects = vec![lighting_only, video_only, mixed];
+
+        let all = cue_targets_from_snapshot_with_scope(&snapshot, &CueCaptureScope::All).unwrap();
+        assert_eq!(
+            all.4
+                .iter()
+                .map(|target| target.effect_id)
+                .collect::<Vec<_>>(),
+            vec![11, 12, 13]
+        );
+
+        let lighting =
+            cue_targets_from_snapshot_with_scope(&snapshot, &CueCaptureScope::LightingOnly)
+                .unwrap();
+        assert!(lighting.1.is_empty());
+        assert_eq!(
+            lighting
+                .4
+                .iter()
+                .map(|target| (target.effect_id, target.enabled))
+                .collect::<Vec<_>>(),
+            vec![(11, false), (13, true)]
+        );
+
+        let video =
+            cue_targets_from_snapshot_with_scope(&snapshot, &CueCaptureScope::VideoOnly).unwrap();
+        assert!(video.0.is_empty());
+        assert_eq!(video.1.len(), 1);
+        assert_eq!(
+            video
+                .4
+                .iter()
+                .map(|target| target.effect_id)
+                .collect::<Vec<_>>(),
+            vec![12, 13]
+        );
+    }
+
+    #[test]
+    fn effects_only_cue_capture_creates_pure_effect_body_and_rejects_empty_stack() {
+        let scope: CueCaptureScope = serde_json::from_value(json!({ "kind": "effectsOnly" }))
+            .expect("effectsOnly must be the camelCase Tauri API value");
+        assert!(matches!(scope, CueCaptureScope::EffectsOnly));
+
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.fixtures.push(project_fixture(1, "Front", 0, 1));
+        snapshot.video.layers.push(project_video_layer(7));
+        snapshot.video.outputs.push(project_video_output(8, 1));
+        snapshot.node_graphs.push(project_node_graph(10, 1));
+        let mut effect = project_lfo_effect(11, vec![1]);
+        effect.enabled = false;
+        snapshot.effects.push(effect);
+
+        let captured =
+            cue_targets_from_snapshot_with_scope(&snapshot, &CueCaptureScope::EffectsOnly).unwrap();
+        assert!(captured.0.is_empty());
+        assert!(captured.1.is_empty());
+        assert!(captured.2.is_empty());
+        assert!(captured.3.is_empty());
+        assert_eq!(
+            captured.4,
+            vec![CueEffectTarget {
+                effect_id: 11,
+                enabled: false,
+            }]
+        );
+        ensure_cue_targets_present(
+            &captured.0,
+            &captured.1,
+            &captured.2,
+            &captured.3,
+            &captured.4,
+            false,
+            "creating",
+        )
+        .unwrap();
+
+        snapshot.effects.clear();
+        let empty =
+            cue_targets_from_snapshot_with_scope(&snapshot, &CueCaptureScope::EffectsOnly).unwrap();
+        assert!(ensure_cue_targets_present(
+            &empty.0, &empty.1, &empty.2, &empty.3, &empty.4, false, "creating",
+        )
+        .unwrap_err()
+        .contains("add an effect"));
+    }
+
+    #[test]
+    fn effects_only_cue_update_preserves_other_targets_and_replaces_effect_states() {
+        let existing = protocol::CueSummary {
+            id: 42,
+            label: "FX Trigger".to_string(),
+            fade_ms: 0,
+            targets: vec![CueFixtureTarget {
+                fixture_id: 1,
+                values: vec![protocol::AttributeValueSummary {
+                    attribute: "Dimmer".to_string(),
+                    value: 20_000,
+                }],
+            }],
+            video_targets: vec![VideoLayerTarget {
+                layer_id: 7,
+                state: VideoLayerState::default(),
+            }],
+            video_output_targets: vec![VideoOutputTarget {
+                output_id: 8,
+                enabled: true,
+                opacity: 0.75,
+                blackout: false,
+            }],
+            node_graph_targets: vec![CueNodeGraphTarget {
+                graph_id: 10,
+                enabled: false,
+            }],
+            effect_targets: vec![CueEffectTarget {
+                effect_id: 11,
+                enabled: true,
+            }],
+            ..protocol::CueSummary::default()
+        };
+        let mut first = project_lfo_effect(11, vec![1]);
+        first.enabled = false;
+        let second = project_lfo_effect(12, vec![1]);
+        let mut snapshot = EngineSnapshot {
+            cues: vec![existing.clone()],
+            effects: vec![first, second],
+            ..EngineSnapshot::default()
+        };
+        snapshot.fixtures.push(project_fixture(1, "Front", 0, 1));
+
+        let captured =
+            cue_targets_from_snapshot_with_scope(&snapshot, &CueCaptureScope::EffectsOnly).unwrap();
+        let updated =
+            merge_cue_update_targets(&snapshot, 42, &CueCaptureScope::EffectsOnly, captured, None)
+                .unwrap();
+
+        assert_eq!(updated.0, existing.targets);
+        assert_eq!(updated.1, existing.video_targets);
+        assert_eq!(updated.2, existing.video_output_targets);
+        assert_eq!(updated.3, existing.node_graph_targets);
+        assert_eq!(
+            updated.4,
+            vec![
+                CueEffectTarget {
+                    effect_id: 11,
+                    enabled: false,
+                },
+                CueEffectTarget {
+                    effect_id: 12,
+                    enabled: true,
+                },
+            ]
+        );
     }
 
     #[test]
@@ -22787,6 +23360,10 @@ f 1 2 3
             soloed: false,
             parked: false,
         });
+        let mut front_effect = project_lfo_effect(11, vec![1]);
+        front_effect.enabled = false;
+        snapshot.effects.push(front_effect);
+        snapshot.effects.push(project_lfo_effect(12, vec![2]));
         snapshot.cues.push(protocol::CueSummary {
             id: 42,
             label: "Look".to_string(),
@@ -22821,6 +23398,16 @@ f 1 2 3
                 blackout: false,
             }],
             node_graph_targets: Vec::new(),
+            effect_targets: vec![
+                CueEffectTarget {
+                    effect_id: 11,
+                    enabled: true,
+                },
+                CueEffectTarget {
+                    effect_id: 12,
+                    enabled: false,
+                },
+            ],
             ..protocol::CueSummary::default()
         });
 
@@ -22828,8 +23415,13 @@ f 1 2 3
             group_id: "front".to_string(),
         };
         let captured = cue_targets_from_snapshot_with_scope(&snapshot, &scope).unwrap();
-        let (fixture_targets, video_targets, video_output_targets, node_graph_targets) =
-            merge_cue_update_targets(&snapshot, 42, &scope, captured).unwrap();
+        let (
+            fixture_targets,
+            video_targets,
+            video_output_targets,
+            node_graph_targets,
+            effect_targets,
+        ) = merge_cue_update_targets(&snapshot, 42, &scope, captured, None).unwrap();
 
         let front = fixture_targets
             .iter()
@@ -22847,6 +23439,282 @@ f 1 2 3
         assert_eq!(video_output_targets.len(), 1);
         assert_eq!(video_output_targets[0].output_id, 7);
         assert!(node_graph_targets.is_empty());
+        assert_eq!(effect_targets.len(), 2);
+        assert_eq!(
+            effect_targets
+                .iter()
+                .find(|target| target.effect_id == 11)
+                .unwrap()
+                .enabled,
+            false
+        );
+        assert_eq!(
+            effect_targets
+                .iter()
+                .find(|target| target.effect_id == 12)
+                .unwrap()
+                .enabled,
+            false
+        );
+    }
+
+    #[test]
+    fn selected_group_effect_filter_matches_parent_targets_through_selected_fixtures() {
+        let mut fixture = project_fixture(1, "Front Beam", 0, 1);
+        fixture.group_ids = vec!["front/beam".to_string()];
+        let mut parent_group_effect = project_lfo_effect(11, Vec::new());
+        parent_group_effect.target_group_ids = vec!["front".to_string()];
+        let snapshot = EngineSnapshot {
+            fixtures: vec![fixture],
+            effects: vec![parent_group_effect.clone()],
+            ..EngineSnapshot::default()
+        };
+
+        assert!(effect_targets_selected_group(
+            &snapshot,
+            &parent_group_effect,
+            "front/beam"
+        ));
+        assert!(effect_targets_selected_group(
+            &snapshot,
+            &parent_group_effect,
+            "front"
+        ));
+        assert!(!effect_targets_selected_group(
+            &snapshot,
+            &parent_group_effect,
+            "rear"
+        ));
+
+        let captured = cue_targets_from_snapshot_with_scope(
+            &snapshot,
+            &CueCaptureScope::SelectedGroup {
+                group_id: "front/beam".to_string(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            captured.4,
+            vec![CueEffectTarget {
+                effect_id: 11,
+                enabled: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn scoped_effect_fallback_merges_and_full_effect_scopes_replace() {
+        let existing = protocol::CueSummary {
+            id: 42,
+            label: "Scoped Effect Look".to_string(),
+            effect_targets: vec![
+                CueEffectTarget {
+                    effect_id: 11,
+                    enabled: true,
+                },
+                CueEffectTarget {
+                    effect_id: 12,
+                    enabled: false,
+                },
+            ],
+            ..protocol::CueSummary::default()
+        };
+        let snapshot = EngineSnapshot {
+            cues: vec![existing],
+            ..EngineSnapshot::default()
+        };
+        let captured = |effect_targets| {
+            (
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                effect_targets,
+            )
+        };
+        let enabled_for = |targets: &[CueEffectTarget], effect_id| {
+            targets
+                .iter()
+                .find(|target| target.effect_id == effect_id)
+                .map(|target| target.enabled)
+        };
+
+        for scope in [
+            CueCaptureScope::LightingOnly,
+            CueCaptureScope::VideoOnly,
+            CueCaptureScope::SelectedFixture { fixture_id: 1 },
+            CueCaptureScope::SelectedGroup {
+                group_id: "front".to_string(),
+            },
+        ] {
+            let merged = merge_cue_update_targets(
+                &snapshot,
+                42,
+                &scope,
+                captured(vec![CueEffectTarget {
+                    effect_id: 11,
+                    enabled: false,
+                }]),
+                None,
+            )
+            .unwrap();
+            assert_eq!(enabled_for(&merged.4, 11), Some(false));
+            assert_eq!(enabled_for(&merged.4, 12), Some(false));
+
+            let explicitly_selected = merge_cue_update_targets(
+                &snapshot,
+                42,
+                &scope,
+                captured(vec![CueEffectTarget {
+                    effect_id: 11,
+                    enabled: true,
+                }]),
+                Some(vec![CueEffectTarget {
+                    effect_id: 11,
+                    enabled: false,
+                }]),
+            )
+            .unwrap();
+            assert_eq!(enabled_for(&explicitly_selected.4, 11), Some(false));
+            assert_eq!(enabled_for(&explicitly_selected.4, 12), Some(false));
+
+            let explicitly_cleared = merge_cue_update_targets(
+                &snapshot,
+                42,
+                &scope,
+                captured(vec![CueEffectTarget {
+                    effect_id: 11,
+                    enabled: true,
+                }]),
+                Some(Vec::new()),
+            )
+            .unwrap();
+            assert_eq!(enabled_for(&explicitly_cleared.4, 11), None);
+            assert_eq!(enabled_for(&explicitly_cleared.4, 12), Some(false));
+
+            let outside_scope = merge_cue_update_targets(
+                &snapshot,
+                42,
+                &scope,
+                captured(vec![CueEffectTarget {
+                    effect_id: 11,
+                    enabled: true,
+                }]),
+                Some(vec![CueEffectTarget {
+                    effect_id: 12,
+                    enabled: true,
+                }]),
+            )
+            .unwrap_err();
+            assert_eq!(
+                outside_scope,
+                "Effect 12 is outside the selected Cue capture scope"
+            );
+        }
+
+        for scope in [CueCaptureScope::All, CueCaptureScope::EffectsOnly] {
+            let replaced = merge_cue_update_targets(
+                &snapshot,
+                42,
+                &scope,
+                captured(vec![CueEffectTarget {
+                    effect_id: 11,
+                    enabled: false,
+                }]),
+                None,
+            )
+            .unwrap();
+            assert_eq!(
+                replaced.4,
+                vec![CueEffectTarget {
+                    effect_id: 11,
+                    enabled: false,
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn effects_only_explicit_clear_validates_the_final_preserved_cue_body() {
+        let existing = protocol::CueSummary {
+            id: 42,
+            label: "Mixed Look".to_string(),
+            targets: vec![CueFixtureTarget {
+                fixture_id: 1,
+                values: vec![protocol::AttributeValueSummary {
+                    attribute: "Dimmer".to_string(),
+                    value: 30_000,
+                }],
+            }],
+            effect_targets: vec![CueEffectTarget {
+                effect_id: 11,
+                enabled: true,
+            }],
+            ..protocol::CueSummary::default()
+        };
+        let snapshot = EngineSnapshot {
+            cues: vec![existing.clone()],
+            ..EngineSnapshot::default()
+        };
+        let cleared = merge_cue_update_targets(
+            &snapshot,
+            42,
+            &CueCaptureScope::EffectsOnly,
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+            Some(Vec::new()),
+        )
+        .unwrap();
+
+        assert_eq!(cleared.0, existing.targets);
+        assert!(cleared.4.is_empty());
+        ensure_cue_targets_present(
+            &cleared.0, &cleared.1, &cleared.2, &cleared.3, &cleared.4, false, "updating",
+        )
+        .unwrap();
+
+        let empty_snapshot = EngineSnapshot {
+            cues: vec![protocol::CueSummary {
+                id: 43,
+                label: "Effect Only".to_string(),
+                effect_targets: vec![CueEffectTarget {
+                    effect_id: 11,
+                    enabled: true,
+                }],
+                ..protocol::CueSummary::default()
+            }],
+            ..EngineSnapshot::default()
+        };
+        let empty = merge_cue_update_targets(
+            &empty_snapshot,
+            43,
+            &CueCaptureScope::EffectsOnly,
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+            Some(Vec::new()),
+        )
+        .unwrap();
+        assert!(ensure_cue_targets_present(
+            &empty.0, &empty.1, &empty.2, &empty.3, &empty.4, false, "updating",
+        )
+        .is_err());
+        assert_eq!(
+            validate_cue_effect_target_replacement(&empty_snapshot.cues[0], &[]).unwrap_err(),
+            "Cue 43 would contain no targets after clearing Effect Recall; remove the Cue instead"
+        );
+
+        let palette_only = protocol::CueSummary {
+            id: 44,
+            label: "Palette Recall".to_string(),
+            palette_targets: vec![protocol::CuePaletteTarget {
+                palette_id: 7,
+                fixture_ids: vec![1],
+            }],
+            effect_targets: vec![CueEffectTarget {
+                effect_id: 11,
+                enabled: true,
+            }],
+            ..protocol::CueSummary::default()
+        };
+        validate_cue_effect_target_replacement(&palette_only, &[]).unwrap();
     }
 
     #[test]
@@ -24257,6 +25125,99 @@ f 1 2 3
     }
 
     #[test]
+    fn effect_only_cue_loads_duplicates_recalls_and_cleans_removed_effect_refs() {
+        let project = project_with_effect_only_cue();
+        validate_project_file(&project).unwrap();
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine
+            .load_project_snapshot(project.snapshot.clone())
+            .unwrap();
+
+        let mut loaded = engine.snapshot();
+        for _ in 0..20 {
+            if loaded.cues.iter().any(|cue| cue.id == 7)
+                && loaded.effects.iter().any(|effect| effect.id == 9)
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+            loaded = engine.snapshot();
+        }
+        assert_eq!(loaded.cues.len(), 1);
+        assert_eq!(
+            loaded.cues[0].effect_targets,
+            project.snapshot.cues[0].effect_targets
+        );
+        assert!(loaded.effects[0].enabled);
+
+        engine.send(EngineCommand::TriggerCue(7)).unwrap();
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if snapshot
+                .effects
+                .iter()
+                .any(|effect| effect.id == 9 && !effect.enabled)
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+            snapshot = engine.snapshot();
+        }
+        assert!(snapshot
+            .effects
+            .iter()
+            .any(|effect| effect.id == 9 && !effect.enabled));
+
+        engine
+            .send(EngineCommand::DuplicateCue {
+                source_cue_id: 7,
+                cue_id: 8,
+                label: "Effect Look Copy".to_string(),
+            })
+            .unwrap();
+        snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if snapshot.cues.iter().any(|cue| cue.id == 8) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+            snapshot = engine.snapshot();
+        }
+        let duplicate = snapshot
+            .cues
+            .iter()
+            .find(|cue| cue.id == 8)
+            .expect("duplicated effect-only cue");
+        assert_eq!(
+            duplicate.effect_targets,
+            project.snapshot.cues[0].effect_targets
+        );
+
+        engine.send(EngineCommand::RemoveEffect(9)).unwrap();
+        snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if snapshot.effects.is_empty()
+                && snapshot
+                    .cues
+                    .iter()
+                    .all(|cue| cue.effect_targets.is_empty())
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+            snapshot = engine.snapshot();
+        }
+        assert!(snapshot.effects.is_empty());
+        assert!(snapshot
+            .cues
+            .iter()
+            .all(|cue| cue.effect_targets.is_empty()));
+    }
+
+    #[test]
     fn embedded_color_sample_adds_and_duplicates_complete_disabled_body() {
         let engine = EngineHandle::start(DmxOutputConfig {
             enabled: false,
@@ -25404,6 +26365,7 @@ fn main() {
             trigger_cue_list_next,
             trigger_cue_list_previous,
             update_cue_from_current,
+            set_cue_effect_targets,
             set_cue_metadata,
             move_cue,
             duplicate_cue,

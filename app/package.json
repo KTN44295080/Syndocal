@@ -11,6 +11,7 @@
     "check:clock-display": "node scripts/check-clock-display.mjs",
     "check:destructive-actions": "node scripts/check-destructive-actions.mjs",
     "check:empty-states": "node scripts/check-empty-state-guidance.mjs",
+    "check:cue-effect-recall": "node scripts/check-cue-effect-recall.mjs",
     "check:effect-draft": "node scripts/check-effect-draft-helpers.mjs",
     "check:localization": "node scripts/check-localization.mjs",
     "check:project-storage": "node scripts/check-project-storage-helpers.mjs",

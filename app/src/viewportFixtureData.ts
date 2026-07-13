@@ -2,7 +2,10 @@ import { defaultFixtureLimits } from "./fixtureLimits";
 import type {
   AttributeControl,
   CompositionSummary,
+  CueSummary,
+  EffectSummary,
   FixtureProfileSummary,
+  NodeGraphSummary,
   PatchedFixtureSummary,
   StageObjectSummary,
   VideoLayerSummary,
@@ -217,6 +220,64 @@ const stageObject: StageObjectSummary = {
   color: "#2f6f9f",
 };
 
+const cueRecallEffect: EffectSummary = {
+  id: 101,
+  label: "Viewport Video Pulse",
+  effect_type: "Lfo",
+  fixture_ids: [],
+  target_group_ids: [],
+  attribute: "Dimmer",
+  video_targets: [{ layer_ids: [1], param: "Opacity", low: 0.2, high: 1, position: null }],
+  shape: "Sine",
+  period_ms: 2_000,
+  clock_sync: null,
+  low: 0,
+  high: 65_535,
+  phase: 0,
+  blend_mode: "Override",
+  enabled: true,
+  color: null,
+};
+
+const cueRecallNodeGraph: NodeGraphSummary = {
+  id: 201,
+  label: "Viewport Node Graph",
+  enabled: true,
+  nodes: [],
+  edges: [],
+};
+
+const cueRecallCue: CueSummary = {
+  id: 301,
+  cue_list_id: 1,
+  cue_number: "1",
+  label: "Viewport Cue",
+  fade_ms: 1_000,
+  pre_wait_ms: 0,
+  follow_ms: null,
+  ifcb_timing: {
+    intensity_fade_ms: null,
+    intensity_delay_ms: 0,
+    focus_fade_ms: null,
+    focus_delay_ms: 0,
+    color_fade_ms: null,
+    color_delay_ms: 0,
+    beam_fade_ms: null,
+    beam_delay_ms: 0,
+  },
+  parts: [],
+  mark: false,
+  mib_fixture_ids: [],
+  palette_targets: [],
+  tracking: true,
+  notes: "",
+  targets: [{ fixture_id: 1, values: [{ attribute: "Dimmer", value: 32_768 }] }],
+  video_targets: [],
+  video_output_targets: [],
+  node_graph_targets: [{ graph_id: cueRecallNodeGraph.id, enabled: true }],
+  effect_targets: [{ effect_id: cueRecallEffect.id, enabled: true }],
+};
+
 export const viewportFixtureData = {
   profile,
   projectorMapping,
@@ -224,4 +285,7 @@ export const viewportFixtureData = {
   composition,
   videoOutput,
   stageObject,
+  cueRecallEffect,
+  cueRecallNodeGraph,
+  cueRecallCue,
 } as const;

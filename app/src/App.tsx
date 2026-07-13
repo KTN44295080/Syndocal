@@ -105,6 +105,7 @@ import type {
   ColorEffectRequest,
   ColorEffectStop,
   CustomFixtureProfileRequest,
+  CueEffectTarget,
   CueListSummary,
   CueSummary,
   PaletteKind,
@@ -238,6 +239,14 @@ import {
 } from "./uiModes";
 import { projectSnapshotSignature } from "./projectSnapshot";
 import { effectDraftTargetPlan } from "./effectDraft";
+import {
+  currentCueEffectTargets,
+  eligibleCueEffects,
+  normalizedCueEffectTargets,
+  syncCueEffectCaptureTargets,
+} from "./cueEffectRecall";
+import type { CueEffectRecallChange } from "./cueEffectRecall";
+import { createSnapshotRequestGuard } from "./snapshotRequestGuard";
 import { createMappingViewportModel } from "./createMappingViewportModel";
 import { createMappingRenderModel } from "./createMappingRenderModel";
 import { createMappingInteractionController } from "./createMappingInteractionController";
@@ -503,6 +512,7 @@ const projectMutationCommands = new Set([
   "update_playback_executor",
   "remove_playback_executor",
   "update_cue_from_current",
+  "set_cue_effect_targets",
   "set_cue_metadata",
   "move_cue",
   "duplicate_cue",
@@ -653,7 +663,7 @@ const profileLoadMessage = (prefix: string, profile: FixtureProfileSummary) => {
 type TimelineSnapMode = "Off" | "Beat" | "Bar" | "Grid";
 type VideoOutputPreviewMode = "output" | "test";
 type EffectTargetMode = "fixture" | "selection" | "group" | "video";
-type CueCaptureScopeMode = "all" | "lighting" | "selectedFixture" | "selectedGroup" | "video";
+type CueCaptureScopeMode = "all" | "lighting" | "effects" | "selectedFixture" | "selectedGroup" | "video";
 type TimelineLightingAutomationRowScope = "all" | "current";
 type TimelineVideoAutomationRowScope = "all" | "layer";
 type SelectedTimelineAutomation = {
@@ -677,6 +687,7 @@ interface EffectTargetOverride {
 type CueCaptureScopeRequest =
   | { kind: "all" }
   | { kind: "lightingOnly" }
+  | { kind: "effectsOnly" }
   | { kind: "selectedFixture"; fixtureId: number }
   | { kind: "selectedGroup"; groupId: string }
   | { kind: "videoOnly" };
@@ -893,6 +904,8 @@ export default function App() {
   const [cueLabel, setCueLabel] = createSignal("Cue 1");
   const [cueFadeMs, setCueFadeMs] = createSignal(1000);
   const [cueCaptureScope, setCueCaptureScope] = createSignal<CueCaptureScopeMode>("all");
+  const [cueEffectCaptureTargets, setCueEffectCaptureTargets] = createSignal<CueEffectTarget[]>([]);
+  const [cueEffectCaptureStateOverrideIds, setCueEffectCaptureStateOverrideIds] = createSignal<number[]>([]);
   const [selectedCueListId, setSelectedCueListId] = createSignal(1);
   const [cueListLabel, setCueListLabel] = createSignal("Main");
   const [cueMetadataDrafts, setCueMetadataDrafts] = createSignal<Record<number, CueMetadataDraft>>({});
@@ -1074,8 +1087,39 @@ export default function App() {
   const [waveWavelength, setWaveWavelength] = createSignal(2);
   const [snapshot, setSnapshot] = createSignal<EngineSnapshot>(createInitialEngineSnapshot());
   const [snapshotRevision, setSnapshotRevision] = createSignal<number | null>(null);
+  const snapshotRequestGuard = createSnapshotRequestGuard();
   const viewportFixture = browserViewportFixture(isTauriRuntime());
-  if (viewportFixture === "timeline") {
+  if (
+    viewportFixture === "timeline"
+    || viewportFixture === "cue-recall"
+    || viewportFixture === "cue-recall-large"
+    || viewportFixture === "cue-node-graph"
+  ) {
+    const cueRecallFixture = viewportFixture === "cue-recall";
+    const cueRecallLargeFixture = viewportFixture === "cue-recall-large";
+    const cueFixture = cueRecallFixture || cueRecallLargeFixture;
+    const cueNodeGraphFixture = viewportFixture === "cue-node-graph";
+    const cueFixtureEffects = cueRecallLargeFixture
+      ? Array.from({ length: 500 }, (_, index) => ({
+          ...viewportFixtureData.cueRecallEffect,
+          id: viewportFixtureData.cueRecallEffect.id + index,
+          label: `Viewport Effect ${index + 1}`,
+          enabled: index % 3 !== 0,
+        }))
+      : [viewportFixtureData.cueRecallEffect];
+    const cueFixtureCues = cueRecallLargeFixture
+      ? Array.from({ length: 12 }, (_, index) => ({
+          ...viewportFixtureData.cueRecallCue,
+          id: viewportFixtureData.cueRecallCue.id + index,
+          cue_number: String(index + 1),
+          label: `Viewport Cue ${index + 1}`,
+          effect_targets: [{
+            effect_id: cueFixtureEffects[index].id,
+            enabled: cueFixtureEffects[index].enabled,
+          }],
+        }))
+      : [viewportFixtureData.cueRecallCue];
+    const activeCueId = cueFixtureCues[0].id;
     setWorkspaceTab("control");
     setSelectedFixtureGroupFilter("front");
     setProfile(viewportFixtureData.profile);
@@ -1096,25 +1140,38 @@ export default function App() {
     setSelectedFixtureLimitsDraft(defaultFixtureLimits);
     setSnapshot((current) => ({
       ...current,
-      fixtures: [
-        viewportPatchedFixture(1, "Video", 1, -4, -2),
-        viewportPatchedFixture(2, "Save", 9, 0, -2),
-        viewportPatchedFixture(3, "Output", 17, 4, -2),
-      ],
-      active_fade: {
-        cue_id: 1,
-        progress: 0.42,
-        remaining_ms: 580,
-        paused: false,
-      },
+      fixtures: cueNodeGraphFixture
+        ? []
+        : [
+            viewportPatchedFixture(1, "Video", 1, -4, -2),
+            viewportPatchedFixture(2, "Save", 9, 0, -2),
+            viewportPatchedFixture(3, "Output", 17, 4, -2),
+          ],
+      active_fade: cueNodeGraphFixture
+        ? null
+        : {
+            cue_id: cueFixture ? activeCueId : 1,
+            progress: 0.42,
+            remaining_ms: 580,
+            paused: false,
+          },
+      active_cue_id: cueFixture ? activeCueId : current.active_cue_id,
+      cues: cueFixture ? cueFixtureCues : current.cues,
+      cue_lists: cueFixture
+        ? [{ id: 1, label: "Main", active_cue_id: activeCueId }]
+        : current.cue_lists,
+      effects: cueFixture ? cueFixtureEffects : current.effects,
+      node_graphs: cueFixture || cueNodeGraphFixture ? [viewportFixtureData.cueRecallNodeGraph] : current.node_graphs,
       submasters: [{ group_id: "front", label: "front", level: 1 }],
-      video: {
-        ...current.video,
-        layers: [viewportFixtureData.videoLayer],
-        compositions: [viewportFixtureData.composition],
-        outputs: [viewportFixtureData.videoOutput],
-        mapping_presets: [{ label: "Viewport 16:9", mapping: viewportFixtureData.projectorMapping }],
-      },
+      video: cueNodeGraphFixture
+        ? current.video
+        : {
+            ...current.video,
+            layers: [viewportFixtureData.videoLayer],
+            compositions: [viewportFixtureData.composition],
+            outputs: [viewportFixtureData.videoOutput],
+            mapping_presets: [{ label: "Viewport 16:9", mapping: viewportFixtureData.projectorMapping }],
+          },
       stage_objects: [viewportFixtureData.stageObject],
       timeline: {
         ...current.timeline,
@@ -1253,7 +1310,12 @@ export default function App() {
     serialPorts,
     setSerialPorts,
   });
-  if (viewportFixture === "timeline") {
+  if (
+    viewportFixture === "timeline"
+    || viewportFixture === "cue-recall"
+    || viewportFixture === "cue-recall-large"
+    || viewportFixture === "cue-node-graph"
+  ) {
     setSerialPorts([
       {
         name: "COM9",
@@ -3415,8 +3477,54 @@ export default function App() {
     });
   });
   const hasCueSources = createMemo(
-    () => snapshot().fixtures.length > 0 || snapshot().video.layers.length > 0 || snapshot().video.outputs.length > 0,
+    () => snapshot().fixtures.length > 0
+      || snapshot().video.layers.length > 0
+      || snapshot().video.outputs.length > 0
+      || snapshot().node_graphs.length > 0,
   );
+  const cueCaptureEligibleEffects = createMemo(() => eligibleCueEffects(
+    snapshot().effects,
+    cueCaptureScope(),
+    {
+      fixtures: snapshot().fixtures,
+      selectedFixtureId: selectedFixtureId(),
+      selectedGroupId: selectedFixtureGroupFilter(),
+    },
+  ));
+  let lastCueEffectEligibilityIds = "";
+  let lastCueEffectEligibilityStates = "";
+  createEffect(() => {
+    const effects = cueCaptureEligibleEffects();
+    const idSignature = effects.map((effect) => effect.id).join(",");
+    const stateSignature = effects.map((effect) => `${effect.id}:${effect.enabled ? 1 : 0}`).join(",");
+    if (idSignature === lastCueEffectEligibilityIds && stateSignature === lastCueEffectEligibilityStates) return;
+    const idsChanged = idSignature !== lastCueEffectEligibilityIds;
+    lastCueEffectEligibilityIds = idSignature;
+    lastCueEffectEligibilityStates = stateSignature;
+    setCueEffectCaptureTargets((current) => syncCueEffectCaptureTargets(
+      effects,
+      current,
+      cueEffectCaptureStateOverrideIds(),
+      idsChanged,
+    ));
+    const eligibleIds = new Set(effects.map((effect) => effect.id));
+    setCueEffectCaptureStateOverrideIds((current) => current.filter((effectId) => eligibleIds.has(effectId)));
+  });
+  const updateCueEffectCaptureTargets = (targets: CueEffectTarget[], change: CueEffectRecallChange) => {
+    setCueEffectCaptureTargets(targets);
+    const targetIds = new Set(targets.map((target) => target.effect_id));
+    setCueEffectCaptureStateOverrideIds((current) => {
+      if (change.kind === "captureCurrent" || change.kind === "clear") return [];
+      if (change.kind === "state") {
+        return [...new Set([...current.filter((effectId) => targetIds.has(effectId)), change.effectId])];
+      }
+      if (change.kind === "include") {
+        return current.filter((effectId) => effectId !== change.effectId && targetIds.has(effectId));
+      }
+      return current.filter((effectId) => targetIds.has(effectId));
+    });
+  };
+  const hasCueEffectCaptureTargets = createMemo(() => cueEffectCaptureTargets().length > 0);
   const selectedCueList = createMemo<CueListSummary>(() =>
     snapshot().cue_lists.find((cueList) => cueList.id === selectedCueListId())
       ?? snapshot().cue_lists[0]
@@ -3430,28 +3538,39 @@ export default function App() {
     if (selected.id !== selectedCueListId()) setSelectedCueListId(selected.id);
     setCueListLabel(selected.label);
   });
-  const cueCaptureScopeError = createMemo(() => {
+  const cueCaptureScopeErrorForEffectSelection = (hasEffectTargets: boolean) => {
     switch (cueCaptureScope()) {
       case "all":
-        return hasCueSources() ? "" : "Patch fixtures or add video layers/outputs first.";
+        return hasCueSources() || hasEffectTargets
+          ? ""
+          : "Patch fixtures, add video, create a Node Graph, or include at least one Effect.";
       case "lighting":
-        return snapshot().fixtures.length > 0 ? "" : "Patch fixtures before storing a lighting cue.";
+        return snapshot().fixtures.length > 0 || hasEffectTargets
+          ? ""
+          : "Patch fixtures or include at least one Effect before storing this Cue.";
+      case "effects":
+        return hasEffectTargets ? "" : "Include at least one Effect before storing an Effects Only Cue.";
       case "selectedFixture":
         return selectedFixture() ? "" : "Select a fixture before storing a selected-fixture cue.";
       case "selectedGroup":
         return selectedFixtureGroupFilter() ? "" : "Select a group before storing a group cue.";
       case "video":
-        return snapshot().video.layers.length > 0 || snapshot().video.outputs.length > 0
+        return snapshot().video.layers.length > 0
+          || snapshot().video.outputs.length > 0
+          || snapshot().node_graphs.length > 0
           ? ""
-          : "Add video layers or outputs before storing a video cue.";
+          : "Add video layers, outputs, or Node Graphs before storing a video cue.";
     }
-  });
+  };
+  const cueCaptureScopeError = createMemo(() => cueCaptureScopeErrorForEffectSelection(hasCueEffectCaptureTargets()));
   const cueCaptureScopeRequest = (): CueCaptureScopeRequest | null => {
     switch (cueCaptureScope()) {
       case "all":
         return { kind: "all" };
       case "lighting":
         return { kind: "lightingOnly" };
+      case "effects":
+        return { kind: "effectsOnly" };
       case "selectedFixture": {
         const fixture = selectedFixture();
         return fixture ? { kind: "selectedFixture", fixtureId: fixture.id } : null;
@@ -3632,7 +3751,7 @@ export default function App() {
     const bounds = stageWorldBounds();
     const selectedGroupId = selectedFixtureGroupFilter();
     const fixtures = (() => {
-      if (scope === "video") {
+      if (scope === "video" || scope === "effects") {
         return [];
       }
       if (scope === "selectedFixture") {
@@ -3652,14 +3771,16 @@ export default function App() {
     const nodeGraphs = includeVideo ? current.node_graphs : [];
     const scopeLabel =
       scope === "all"
-        ? "Lighting + Video"
+        ? "All Sources"
         : scope === "lighting"
           ? "Lighting Only"
-          : scope === "selectedFixture"
-            ? "Selected Fixture"
-            : scope === "selectedGroup"
-              ? "Selected Group"
-              : "Video Only";
+          : scope === "effects"
+            ? "Effects Only"
+            : scope === "selectedFixture"
+              ? "Selected Fixture"
+              : scope === "selectedGroup"
+                ? "Selected Group"
+                : "Video Only";
     const scopeDetail =
       scope === "selectedFixture"
         ? selectedFixture()?.label ?? "No fixture selected"
@@ -4415,11 +4536,15 @@ export default function App() {
     }));
   };
 
-  const syncCueMetadataDrafts = (cues: CueSummary[]) => {
+  const syncCueMetadataDrafts = (cues: CueSummary[], effects: EffectSummary[]) => {
     setCueMetadataDrafts((current) => {
       const nextDrafts: Record<number, CueMetadataDraft> = {};
       for (const cue of cues) {
-        nextDrafts[cue.id] = current[cue.id] ?? cueMetadataDraftFromSummary(cue);
+        const draft = current[cue.id] ?? cueMetadataDraftFromSummary(cue);
+        nextDrafts[cue.id] = {
+          ...draft,
+          effect_targets: normalizedCueEffectTargets(effects, draft.effect_targets),
+        };
       }
       return nextDrafts;
     });
@@ -4642,7 +4767,7 @@ export default function App() {
     try {
       const status = await invoke<ProjectHistoryStatus>("undo_project_transaction");
       setProjectHistoryStatus(status);
-      await refreshSnapshot();
+      await refreshSnapshot(true, true);
       setMessage(`Undid ${status.redo_label ?? "last edit"}.`);
     } catch (error) {
       setMessage(`Undo failed: ${String(error)}`);
@@ -4657,7 +4782,7 @@ export default function App() {
     try {
       const status = await invoke<ProjectHistoryStatus>("redo_project_transaction");
       setProjectHistoryStatus(status);
-      await refreshSnapshot();
+      await refreshSnapshot(true, true);
       setMessage(`Redid ${status.undo_label ?? "last edit"}.`);
     } catch (error) {
       setMessage(`Redo failed: ${String(error)}`);
@@ -4718,7 +4843,29 @@ export default function App() {
     return window.confirm(`Discard unsaved changes and ${actionLabel}?`);
   };
 
-  const applyEngineSnapshot = (next: EngineSnapshot, syncProjectState = true) => {
+  const applyEngineSnapshot = (
+    next: EngineSnapshot,
+    syncProjectState = true,
+    resetEditorDrafts = false,
+  ) => {
+    if (resetEditorDrafts) {
+      setVideoOutputConfigDrafts({});
+      setCueMetadataDrafts({});
+      setTimelineEventDrafts({});
+      setTimelineAutomationDrafts({});
+      setTimelineVideoAutomationDrafts({});
+      const captureEffects = eligibleCueEffects(next.effects, cueCaptureScope(), {
+        fixtures: next.fixtures,
+        selectedFixtureId: selectedFixtureId(),
+        selectedGroupId: selectedFixtureGroupFilter(),
+      });
+      setCueEffectCaptureTargets(currentCueEffectTargets(captureEffects));
+      setCueEffectCaptureStateOverrideIds([]);
+      lastCueEffectEligibilityIds = captureEffects.map((effect) => effect.id).join(",");
+      lastCueEffectEligibilityStates = captureEffects
+        .map((effect) => `${effect.id}:${effect.enabled ? 1 : 0}`)
+        .join(",");
+    }
     setSnapshot(next);
     if (syncProjectState) {
       const signature = projectSnapshotSignature(next);
@@ -4733,7 +4880,7 @@ export default function App() {
       setDmxOutputRoutes(next.dmx_outputs.length > 0 ? next.dmx_outputs : [next.output]);
       setFaderValues((current) => ({ ...current, ...snapshotFaderValues(next) }));
       syncVideoOutputConfigDrafts(next.video.outputs);
-      syncCueMetadataDrafts(next.cues);
+      syncCueMetadataDrafts(next.cues, next.effects);
       syncTimelineEventDrafts(next.timeline.events);
       syncTimelineAutomationDrafts(next.timeline.automations);
       syncTimelineVideoAutomationDrafts(next.timeline.video_automations);
@@ -4760,27 +4907,67 @@ export default function App() {
     }
   };
 
-  const refreshSnapshot = async (syncProjectState = true) => {
+  type SnapshotRefreshWaiter = {
+    syncProjectState: boolean;
+    resetEditorDrafts: boolean;
+    resolve: (snapshot: EngineSnapshot | null) => void;
+  };
+  const pendingFullSnapshotRefreshes: SnapshotRefreshWaiter[] = [];
+  let fullSnapshotRefreshRunning = false;
+  const runFullSnapshotRefreshes = async () => {
+    if (fullSnapshotRefreshRunning) return;
+    fullSnapshotRefreshRunning = true;
     try {
-      const next = await invoke<EngineSnapshot>("get_snapshot");
-      applyEngineSnapshot(next, syncProjectState);
-      return next;
-    } catch (error) {
-      setMessage(String(error));
-      return null;
+      while (pendingFullSnapshotRefreshes.length > 0) {
+        const batch = pendingFullSnapshotRefreshes.splice(0);
+        snapshotRequestGuard.beginFull();
+        let next: EngineSnapshot | null = null;
+        try {
+          next = await invoke<EngineSnapshot>("get_snapshot");
+          setSnapshotRevision(null);
+          applyEngineSnapshot(
+            next,
+            batch.some((waiter) => waiter.syncProjectState),
+            batch.some((waiter) => waiter.resetEditorDrafts),
+          );
+        } catch (error) {
+          setMessage(String(error));
+        } finally {
+          snapshotRequestGuard.finishFull();
+        }
+        for (const waiter of batch) waiter.resolve(next);
+      }
+    } finally {
+      fullSnapshotRefreshRunning = false;
     }
   };
+  const refreshSnapshot = (
+    syncProjectState = true,
+    resetEditorDrafts = false,
+  ): Promise<EngineSnapshot | null> =>
+    new Promise((resolve) => {
+      pendingFullSnapshotRefreshes.push({ syncProjectState, resetEditorDrafts, resolve });
+      void runFullSnapshotRefreshes();
+    });
 
   const refreshSnapshotDelta = async () => {
+    const requestGeneration = snapshotRequestGuard.beginDelta();
+    if (requestGeneration === null) return null;
     try {
       const response = await invoke<EngineSnapshotSyncResponse>("get_snapshot_delta", {
         clientRevision: snapshotRevision(),
       });
+      if (!snapshotRequestGuard.canApplyDelta(requestGeneration)) {
+        return null;
+      }
       const next = response.full ?? ({ ...snapshot(), ...(response.delta ?? {}) } as EngineSnapshot);
       setSnapshotRevision(response.revision);
       applyEngineSnapshot(next, false);
       return next;
     } catch (error) {
+      if (!snapshotRequestGuard.canApplyDelta(requestGeneration)) {
+        return null;
+      }
       setSnapshotRevision(null);
       setMessage(String(error));
       return null;
@@ -5954,7 +6141,7 @@ export default function App() {
       setWorkspaceTab("setup");
       setSetupSubTab("patch");
       setMessage("Created new untitled project.");
-      const next = await refreshSnapshot();
+      const next = await refreshSnapshot(true, true);
       if (next) {
         markProjectClean(next);
       }
@@ -6001,7 +6188,7 @@ export default function App() {
       setCurrentProjectPath(null);
       setWorkspaceTab("setup");
       setSetupSubTab("patch");
-      const next = await refreshSnapshot();
+      const next = await refreshSnapshot(true, true);
       if (next) {
         setCleanProjectSignature("__syndocal_template_unsaved__");
         setProjectDirty(true);
@@ -6061,7 +6248,7 @@ export default function App() {
     setCurrentProjectPath(currentPath);
     rememberRecentProjectPath(currentPath);
     setMessage(loadedProjectMessage(result));
-    const next = await refreshSnapshot();
+    const next = await refreshSnapshot(true, true);
     if (next) {
       markProjectClean(next);
     }
@@ -6123,7 +6310,7 @@ export default function App() {
       setMessage(
         `Recovered ${projectRecoverySourceLabel(checkpoint)} from ${projectRecoveryTimeLabel(checkpoint)} (${result.profiles.length} embedded profiles). Save to keep it.`,
       );
-      const next = await refreshSnapshot();
+      const next = await refreshSnapshot(true, true);
       if (next) {
         setCleanProjectSignature("__syndocal_recovered_unsaved__");
         setProjectDirty(true);
@@ -6151,7 +6338,7 @@ export default function App() {
       setMessage(
         `Restored backup from ${new Date(backup.created_at_unix_ms).toLocaleString()}. Save the project to keep it.`,
       );
-      const next = await refreshSnapshot();
+      const next = await refreshSnapshot(true, true);
       if (next) {
         setCleanProjectSignature("__syndocal_backup_recovered_unsaved__");
         setProjectDirty(true);
@@ -6225,7 +6412,7 @@ export default function App() {
       setWorkspaceTab("setup");
       setSetupSubTab("patch");
       setMessage(loadedProjectMessage(result));
-      const next = await refreshSnapshot();
+      const next = await refreshSnapshot(true, true);
       if (next) {
         markProjectClean(next);
       }
@@ -6247,7 +6434,7 @@ export default function App() {
       setDmxTestChannel(1);
       setDmxTestWidth(8);
       setDmxTestValue(255);
-      const afterSmoke = await refreshSnapshot();
+      const afterSmoke = await refreshSnapshot(true, true);
       if (afterSmoke) {
         markProjectClean(afterSmoke);
       }
@@ -7191,6 +7378,7 @@ export default function App() {
         fadeMs: cueFadeMs(),
         captureScope,
         cueListId: selectedCueList().id,
+        effectTargets: cueEffectCaptureTargets(),
       });
       setCueLabel(`Cue ${snapshot().cues.length + 2}`);
       setMessage(`Created cue ${cueId}`);
@@ -7356,7 +7544,11 @@ export default function App() {
     }
   };
 
-  const updateCue = async (cueId: number, label: string, fadeMs: number) => {
+  const updateCue = async (
+    cueId: number,
+    label: string,
+    fadeMs: number,
+  ) => {
     const normalizedFadeMs = Math.max(0, Math.round(Number.isFinite(fadeMs) ? fadeMs : cueFadeMs()));
     const scopeError = cueCaptureScopeError();
     if (scopeError) {
@@ -7369,8 +7561,24 @@ export default function App() {
       return;
     }
     try {
-      await invoke("update_cue_from_current", { cueId, label, fadeMs: normalizedFadeMs, captureScope });
-      setMessage(`Updated cue ${cueId}`);
+      await invoke("update_cue_from_current", {
+        cueId,
+        label,
+        fadeMs: normalizedFadeMs,
+        captureScope,
+        effectTargets: cueEffectCaptureTargets(),
+      });
+      setMessage(`Updated cue ${cueId} look from the current Store Scope.`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const setCueEffectTargets = async (cueId: number, effectTargets: CueEffectTarget[]) => {
+    try {
+      await invoke("set_cue_effect_targets", { cueId, effectTargets });
+      setMessage(`Saved cue ${cueId} Effect Recall only.`);
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
@@ -7440,9 +7648,10 @@ export default function App() {
           mib_fixture_ids: mibFixtureIds,
           tracking: draft.tracking,
           notes: draft.notes,
+          effect_targets: draft.effect_targets.map((target) => ({ ...target })),
         },
       }));
-      setMessage(`Saved cue ${cue.id}`);
+      setMessage(`Saved cue ${cue.id} details only. Effect Recall is unchanged.`);
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
@@ -9574,12 +9783,35 @@ export default function App() {
     }
   };
 
+  const effectEnableCaptureGenerations = new Map<number, number>();
   const setEffectEnabled = async (effectId: number, enabled: boolean) => {
+    const generation = (effectEnableCaptureGenerations.get(effectId) ?? 0) + 1;
+    effectEnableCaptureGenerations.set(effectId, generation);
+    const previousCaptureTarget = cueEffectCaptureTargets().find((target) => target.effect_id === effectId);
+    const mirrorsLiveState = Boolean(previousCaptureTarget)
+      && !cueEffectCaptureStateOverrideIds().includes(effectId);
+    if (mirrorsLiveState) {
+      setCueEffectCaptureTargets((current) => current.map((target) =>
+        target.effect_id === effectId ? { ...target, enabled } : target
+      ));
+    }
     try {
       await invoke("set_effect_enabled", { effectId, enabled });
       setMessage(`${enabled ? "Enabled" : "Disabled"} effect ${effectId}`);
       await refreshSnapshot();
     } catch (error) {
+      if (
+        mirrorsLiveState
+        && previousCaptureTarget
+        && effectEnableCaptureGenerations.get(effectId) === generation
+        && !cueEffectCaptureStateOverrideIds().includes(effectId)
+      ) {
+        setCueEffectCaptureTargets((current) => current.map((target) =>
+          target.effect_id === effectId && target.enabled === enabled
+            ? { ...target, enabled: previousCaptureTarget.enabled }
+            : target
+        ));
+      }
       setMessage(String(error));
     }
   };
@@ -11295,6 +11527,8 @@ export default function App() {
             allCues={snapshot().cues}
             cueLists={snapshot().cue_lists}
             palettes={snapshot().palettes}
+            effects={snapshot().effects}
+            cueCaptureEffects={cueCaptureEligibleEffects()}
             selectedCueListId={selectedCueList().id}
             cueListLabel={cueListLabel()}
             activeCueId={snapshot().active_cue_id}
@@ -11306,6 +11540,7 @@ export default function App() {
             cueCaptureScope={cueCaptureScope()}
             cueCaptureScopeError={cueCaptureScopeError()}
             hasCueSources={hasCueSources()}
+            cueEffectCaptureTargets={cueEffectCaptureTargets()}
             cueCapturePreview={cueCapturePreview()}
             stageViewBoxSize={stageViewBoxSize}
             stageOrigin={stageOrigin2d()}
@@ -11316,6 +11551,7 @@ export default function App() {
             onCueLabel={setCueLabel}
             onCueFadeMs={setCueFadeMs}
             onCueCaptureScope={setCueCaptureScope}
+            onCueEffectCaptureTargets={updateCueEffectCaptureTargets}
             onSelectCueList={setSelectedCueListId}
             onCueListLabel={setCueListLabel}
             onCreateCueList={createCueList}
@@ -11332,6 +11568,7 @@ export default function App() {
             onUpdateCueMetadataDraft={updateCueMetadataDraft}
             onMoveCue={moveCue}
             onSetCueMetadata={setCueMetadata}
+            onSetCueEffectTargets={setCueEffectTargets}
             onDuplicateCue={duplicateCue}
             onUpdateCue={updateCue}
             onTriggerCue={triggerCue}

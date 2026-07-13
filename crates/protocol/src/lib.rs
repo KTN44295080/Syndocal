@@ -270,6 +270,12 @@ pub struct CueFixtureTarget {
     pub values: Vec<AttributeValueSummary>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CueEffectTarget {
+    pub effect_id: EffectId,
+    pub enabled: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum VideoSourceKind {
     File,
@@ -989,6 +995,8 @@ pub struct CueSummary {
     pub video_output_targets: Vec<VideoOutputTarget>,
     #[serde(default)]
     pub node_graph_targets: Vec<CueNodeGraphTarget>,
+    #[serde(default)]
+    pub effect_targets: Vec<CueEffectTarget>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -1130,6 +1138,7 @@ impl Default for CueSummary {
             video_targets: Vec::new(),
             video_output_targets: Vec::new(),
             node_graph_targets: Vec::new(),
+            effect_targets: Vec::new(),
         }
     }
 }
@@ -2378,6 +2387,7 @@ mod tests {
         value.as_object_mut().unwrap().remove("mark");
         value.as_object_mut().unwrap().remove("mib_fixture_ids");
         value.as_object_mut().unwrap().remove("palette_targets");
+        value.as_object_mut().unwrap().remove("effect_targets");
 
         let parsed: super::CueSummary = serde_json::from_value(value).unwrap();
 
@@ -2389,6 +2399,28 @@ mod tests {
         assert!(!parsed.mark);
         assert!(parsed.mib_fixture_ids.is_empty());
         assert!(parsed.palette_targets.is_empty());
+        assert!(parsed.effect_targets.is_empty());
+    }
+
+    #[test]
+    fn cue_effect_targets_roundtrip() {
+        let mut cue = super::CueSummary::default();
+        cue.id = 17;
+        cue.effect_targets = vec![
+            super::CueEffectTarget {
+                effect_id: 3,
+                enabled: true,
+            },
+            super::CueEffectTarget {
+                effect_id: 8,
+                enabled: false,
+            },
+        ];
+
+        let encoded = serde_json::to_string(&cue).unwrap();
+        let decoded: super::CueSummary = serde_json::from_str(&encoded).unwrap();
+
+        assert_eq!(decoded, cue);
     }
 
     #[test]
