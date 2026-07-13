@@ -61,6 +61,16 @@ const japaneseText: Record<string, string> = {
   "FULL CUE": "キュー全体",
   "Scene Block summary": "シーンブロック概要",
   Blocks: "ブロック",
+  blocks: "ブロック",
+  "Timeline visible range controls": "タイムライン表示範囲の操作",
+  "Visible timeline range": "タイムライン表示範囲",
+  "Pan Prev": "前の範囲へ",
+  "Pan Next": "次の範囲へ",
+  "Zoom Out": "縮小",
+  "Zoom In": "拡大",
+  "Reveal Selected": "選択位置を表示",
+  "Reveal Playhead": "再生位置を表示",
+  "Clear overlap filter": "重複フィルターを解除",
   "Block #": "ブロック #",
   Points: "ポイント",
   LINKED: "連動",
@@ -1518,7 +1528,31 @@ const japaneseText: Record<string, string> = {
 };
 
 const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
+  [
+    /^Scene Block #(\d+), (.+), (Lighting|Video), starts at (\d+) milliseconds, base duration (\d+) milliseconds, loop count (\d+), effective span (\d+) milliseconds$/,
+    (id, label, track, startMs, durationMs, loopCount, spanMs) =>
+      `シーンブロック #${id}、${label}、${track === "Lighting" ? "照明" : "映像"}、開始 ${startMs}ミリ秒、基本時間 ${durationMs}ミリ秒、ループ回数 ${loopCount}、実効範囲 ${spanMs}ミリ秒`,
+  ],
+  [
+    /^Point event #(\d+), (.+), (Lighting|Video), at (\d+) milliseconds$/,
+    (id, label, track, timeMs) =>
+      `ポイントイベント #${id}、${label}、${track === "Lighting" ? "照明" : "映像"}、${timeMs}ミリ秒`,
+  ],
   [/^(\d+) shown · (\d+) total$/, (shown, total) => `${shown}件表示 · 全${total}件`],
+  [
+    /^(Lighting|Video) overlap ×(\d+)$/,
+    (track, count) => `${track === "Lighting" ? "照明" : "映像"}の重複 ×${count}`,
+  ],
+  [
+    /^(Lighting|Video) overlap \((\d+)\); (\d+) to (\d+) ms; inspect (\d+) overlapping blocks$/,
+    (track, _clusterCount, startMs, endMs, count) =>
+      `${track === "Lighting" ? "照明" : "映像"}の重複。${startMs}〜${endMs} ms、${count}ブロックを確認`,
+  ],
+  [
+    /^(Lighting|Video) overlap groups \((\d+)\); (\d+) to (\d+) ms; inspect (\d+) blocks across (\d+) overlap groups$/,
+    (track, _clusterCount, startMs, endMs, count, groupCount) =>
+      `${track === "Lighting" ? "照明" : "映像"}の重複グループ。${startMs}〜${endMs} ms、${groupCount}グループ内の${count}ブロックを確認`,
+  ],
   [
     /^Linked Scene Block · (\d+) ms \/ (\d+) ms × (\d+) \/ (Lighting|Video)$/,
     (timeMs, durationMs, loops, lane) =>
@@ -1659,6 +1693,26 @@ export function translateUiText(value: string, locale: UiLocale): string {
     if (match) return `${leading}${render(...match.slice(1))}${trailing}`;
   }
   return value;
+}
+
+export interface TimelineOverviewMarkerAccessibleEvent {
+  id: number;
+  cue_label: string;
+  track: "Lighting" | "Video";
+  time_ms: number;
+  duration_ms: number;
+  loop_count: number;
+  total_duration_ms: number;
+}
+
+export function timelineOverviewMarkerAriaLabel(
+  event: TimelineOverviewMarkerAccessibleEvent,
+  locale: UiLocale,
+): string {
+  const source = event.duration_ms > 0
+    ? `Scene Block #${event.id}, ${event.cue_label}, ${event.track}, starts at ${event.time_ms} milliseconds, base duration ${event.duration_ms} milliseconds, loop count ${event.loop_count}, effective span ${event.total_duration_ms} milliseconds`
+    : `Point event #${event.id}, ${event.cue_label}, ${event.track}, at ${event.time_ms} milliseconds`;
+  return translateUiText(source, locale);
 }
 
 type RenderState = { source: string; rendered: string };

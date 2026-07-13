@@ -59,24 +59,40 @@ import { TouchGenericAttributeGrid } from "./components/TouchGenericAttributeGri
 import { TouchPanTiltPad } from "./components/TouchPanTiltPad";
 import { TouchSafetyDeck } from "./components/TouchSafetyDeck";
 import { TouchVideoPanel } from "./components/TouchVideoPanel";
-import type { TimelineOverviewAutomationRange, TimelineOverviewEvent } from "./components/TimelineOverview";
+import type {
+  TimelineOverviewAutomationRange,
+  TimelineOverviewEvent,
+  TimelineOverviewOverlapCluster,
+} from "./components/TimelineOverview";
 import {
   buildTimelineSceneBlockCueOptions,
   buildTimelineSceneBlockRows,
   buildTimelineSceneBlockSnapPlacements,
   createTimelineSceneBlockController,
+  createTimelineSceneBlockHourViewportFixture,
   createTimelineSceneBlockLargeViewportFixture,
   createTimelineSceneBlockViewportFixture,
-  growTimelineSceneBlockViewportDurationMs,
   timelinePlacementDisplayEndMs,
   reconcileTimelineEventDrafts,
   timelineSceneBlockCueOptionsEqual,
-  timelineEventDraftsAreDirty,
   timelineEventDraftMatchesSummary,
   timelineExecutionIsLive,
   timelineSceneBlockRowsEqual,
   timelineSceneBlockSpanMs,
 } from "./timelineSceneBlocks";
+import {
+  createTimelineViewportState,
+  fitTimelineVisibleWindow,
+  panTimelineVisibleWindow,
+  reconcileTimelineViewportState,
+  revealTimelineVisibleRange,
+  timelineClosedRangeIntersectsVisibleWindow,
+  timelineRangeIntersectsVisibleWindow,
+  timelineTimeToVisibleRawRatio,
+  timelineVisibleWindowSpanMs,
+  zoomTimelineVisibleWindow,
+} from "./timelineViewport";
+import { buildTimelineOverlapClusters } from "./timelineOverlapClusters";
 import { WorkspaceChrome } from "./components/WorkspaceChrome";
 import {
   defaultWorkspaceLayout,
@@ -482,6 +498,7 @@ import {
   installUiLocalization,
   loadUiLocale,
   saveUiLocale,
+  timelineOverviewMarkerAriaLabel,
   type UiLocale,
 } from "./uiLocalization";
 import {
@@ -973,6 +990,8 @@ export default function App() {
   const [timelineBlockJumpToEventId, setTimelineBlockJumpToEventId] = createSignal<number | null>(null);
   const [timelineTrack, setTimelineTrack] = createSignal<TimelineTrackKind>("Lighting");
   const [timelineEventDrafts, setTimelineEventDrafts] = createSignal<Record<number, TimelineEventDraft>>({});
+  const [selectedTimelineSceneBlockEventId, setSelectedTimelineSceneBlockEventId] = createSignal<number | null>(null);
+  const [timelineSceneBlockSelectionRevision, setTimelineSceneBlockSelectionRevision] = createSignal(0);
   const [timelineSnapMode, setTimelineSnapMode] = createSignal<TimelineSnapMode>("Off");
   const [timelineGridMs, setTimelineGridMs] = createSignal(500);
   const [selectedTimelineAutomation, setSelectedTimelineAutomation] =
@@ -1169,10 +1188,18 @@ export default function App() {
   const [waveWavelength, setWaveWavelength] = createSignal(2);
   const [snapshot, setSnapshot] = createSignal<EngineSnapshot>(createInitialEngineSnapshot());
   const [snapshotRevision, setSnapshotRevision] = createSignal<number | null>(null);
+  const snapshotCues = createMemo(() => snapshot().cues);
+  const snapshotTimelineEvents = createMemo(() => snapshot().timeline.events);
+  const snapshotTimelineEventById = createMemo(() => new Map(
+    snapshotTimelineEvents().map((event) => [event.id, event]),
+  ));
   const dirtyTimelineEventDrafts = createMemo(() => {
-    const eventsById = new Map(snapshot().timeline.events.map((event) => [event.id, event]));
+    const drafts = timelineEventDrafts();
+    const draftEntries = Object.entries(drafts);
+    if (draftEntries.length === 0) return {};
+    const eventsById = snapshotTimelineEventById();
     const dirtyDrafts: Record<number, TimelineEventDraft> = {};
-    for (const [eventId, draft] of Object.entries(timelineEventDrafts())) {
+    for (const [eventId, draft] of draftEntries) {
       const numericEventId = Number(eventId);
       const event = eventsById.get(numericEventId);
       if (!event || !timelineEventDraftMatchesSummary(event, draft)) {
@@ -1181,21 +1208,21 @@ export default function App() {
     }
     return dirtyDrafts;
   });
-  const timelineEventEditorDirty = createMemo(() =>
-    timelineEventDraftsAreDirty(snapshot().timeline.events, timelineEventDrafts()),
-  );
+  const timelineEventEditorDirty = createMemo(() => Object.keys(dirtyTimelineEventDrafts()).length > 0);
   const visibleProjectDirty = createMemo(() => projectDirty() || timelineEventEditorDirty());
   const snapshotRequestGuard = createSnapshotRequestGuard();
   const viewportFixture = browserViewportFixture(isTauriRuntime());
   if (
     viewportFixture === "timeline"
     || viewportFixture === "scene-block-large"
+    || viewportFixture === "scene-block-hour"
     || viewportFixture === "cue-recall"
     || viewportFixture === "cue-recall-large"
     || viewportFixture === "cue-node-graph"
   ) {
     const sceneBlockLargeFixture = viewportFixture === "scene-block-large";
-    const timelineFixture = viewportFixture === "timeline" || sceneBlockLargeFixture;
+    const sceneBlockHourFixture = viewportFixture === "scene-block-hour";
+    const timelineFixture = viewportFixture === "timeline" || sceneBlockLargeFixture || sceneBlockHourFixture;
     const cueRecallFixture = viewportFixture === "cue-recall";
     const cueRecallLargeFixture = viewportFixture === "cue-recall-large";
     const cueFixture = cueRecallFixture || cueRecallLargeFixture;
@@ -1222,7 +1249,9 @@ export default function App() {
       : [viewportFixtureData.cueRecallCue];
     const timelineSceneBlockViewport = sceneBlockLargeFixture
       ? createTimelineSceneBlockLargeViewportFixture(viewportFixtureData.cueRecallCue)
-      : createTimelineSceneBlockViewportFixture(
+      : sceneBlockHourFixture
+        ? createTimelineSceneBlockHourViewportFixture(viewportFixtureData.cueRecallCue)
+        : createTimelineSceneBlockViewportFixture(
           viewportFixtureData.cueRecallCue,
           viewportFixtureData.videoLayer,
         );
@@ -1283,10 +1312,13 @@ export default function App() {
       stage_objects: [viewportFixtureData.stageObject],
       timeline: {
         ...current.timeline,
-        duration_ms: sceneBlockLargeFixture
+        playing: timelineFixture ? true : current.timeline.playing,
+        duration_ms: sceneBlockHourFixture
+          ? 3_600_000
+          : sceneBlockLargeFixture
           ? Math.max(...timelineSceneBlockViewport.events.map(timelinePlacementDisplayEndMs))
           : timelineFixture ? 5000 : 4000,
-        position_ms: 1000,
+        position_ms: sceneBlockHourFixture ? 1_800_000 : 1000,
         events: timelineFixture ? timelineSceneBlockViewport.events : current.timeline.events,
         automations: [
           {
@@ -1297,7 +1329,7 @@ export default function App() {
             enabled: true,
             keyframes: [
               { time_ms: 0, value: 65535, interpolation: "Linear" },
-              { time_ms: 4000, value: 0, interpolation: "Step" },
+              { time_ms: sceneBlockHourFixture ? 3_600_000 : 4000, value: 0, interpolation: "Step" },
             ],
           },
         ],
@@ -1310,7 +1342,7 @@ export default function App() {
             enabled: true,
             keyframes: [
               { time_ms: 0, value: 1, interpolation: "Linear" },
-              { time_ms: 4000, value: 0, interpolation: "Step" },
+              { time_ms: sceneBlockHourFixture ? 3_600_000 : 4000, value: 0, interpolation: "Step" },
             ],
           },
         ],
@@ -1362,6 +1394,7 @@ export default function App() {
     : null;
   const sceneBlockFixtureWindow = window as Window & {
     __syndocalSetSceneBlockFixtureState?: (positionMs: number, playing: boolean) => void;
+    __syndocalPauseSceneBlockFixtureChurn?: () => void;
   };
   if (viewportFixture === "scene-block-large") {
     sceneBlockFixtureWindow.__syndocalSetSceneBlockFixtureState = (positionMs, playing) => {
@@ -1370,12 +1403,18 @@ export default function App() {
         timeline: { ...current.timeline, position_ms: positionMs, playing },
       }));
     };
+    sceneBlockFixtureWindow.__syndocalPauseSceneBlockFixtureChurn = () => {
+      if (sceneBlockLargeSnapshotCloneTimer !== null) {
+        window.clearInterval(sceneBlockLargeSnapshotCloneTimer);
+      }
+    };
   }
   onCleanup(() => {
     if (sceneBlockLargeSnapshotCloneTimer !== null) {
       window.clearInterval(sceneBlockLargeSnapshotCloneTimer);
     }
     delete sceneBlockFixtureWindow.__syndocalSetSceneBlockFixtureState;
+    delete sceneBlockFixtureWindow.__syndocalPauseSceneBlockFixtureChurn;
   });
   let lastRecoverySignature = projectRecoveryCheckpoint()?.signature ?? null;
   let lastDesktopBackupSignature: string | null = null;
@@ -2892,7 +2931,7 @@ export default function App() {
     }
   };
   const timelineCueOptions = createMemo(
-    () => buildTimelineSceneBlockCueOptions(snapshot().cues),
+    () => buildTimelineSceneBlockCueOptions(snapshotCues()),
     [],
     { equals: timelineSceneBlockCueOptionsEqual },
   );
@@ -2905,10 +2944,19 @@ export default function App() {
     return cues[0]?.id ?? null;
   });
   const timelineEventRows = createMemo(
-    () => buildTimelineSceneBlockRows(snapshot().timeline.events, snapshot().cues),
+    () => buildTimelineSceneBlockRows(snapshotTimelineEvents(), snapshotCues()),
     [],
     { equals: timelineSceneBlockRowsEqual },
   );
+  const timelineEventRowById = createMemo(() => new Map(
+    timelineEventRows().map((event) => [event.id, event]),
+  ));
+  createEffect(() => {
+    const selectedEventId = selectedTimelineSceneBlockEventId();
+    if (selectedEventId !== null && !timelineEventRowById().has(selectedEventId)) {
+      setSelectedTimelineSceneBlockEventId(null);
+    }
+  });
   const timelineAutomationFixtureOptions = createMemo(
     () => snapshot().fixtures.map((fixture) => ({ id: fixture.id, label: fixture.label })),
     [],
@@ -2917,36 +2965,116 @@ export default function App() {
         fixture.id === next[index].id && fixture.label === next[index].label),
     },
   );
-  const timelineOverviewContentEndMs = createMemo(() => {
-    const lightingAutomationEndMs = snapshot().timeline.automations.flatMap((automation) =>
+  const timelineOverviewContentEndMsForSnapshot = (current: EngineSnapshot) => {
+    const lightingAutomationEndMs = current.timeline.automations.flatMap((automation) =>
       automation.keyframes.map((keyframe) => keyframe.time_ms),
     );
-    const videoAutomationEndMs = snapshot().timeline.video_automations.flatMap((automation) =>
+    const videoAutomationEndMs = current.timeline.video_automations.flatMap((automation) =>
       automation.keyframes.map((keyframe) => keyframe.time_ms),
     );
     return Math.max(
       1,
-      snapshot().timeline.duration_ms,
-      ...snapshot().timeline.events.map(timelinePlacementDisplayEndMs),
+      current.timeline.duration_ms,
+      ...current.timeline.events.map(timelinePlacementDisplayEndMs),
       ...lightingAutomationEndMs,
       ...videoAutomationEndMs,
     );
-  });
-  const [timelineOverviewViewportDurationMs, setTimelineOverviewViewportDurationMs] = createSignal(5000);
+  };
+  const timelineOverviewContentEndMs = createMemo(() => timelineOverviewContentEndMsForSnapshot(snapshot()));
+  const [timelineViewportState, setTimelineViewportState] = createSignal(
+    createTimelineViewportState(timelineOverviewContentEndMs()),
+  );
+  const timelineOverviewShowDurationMs = () => timelineViewportState().show_duration_ms;
+  const timelineOverviewEditExtentMs = () => timelineViewportState().edit_extent_ms;
+  const timelineVisibleWindow = () => timelineViewportState().visible_window;
   createEffect(() => {
-    const currentDurationMs = timelineOverviewViewportDurationMs();
-    const nextDurationMs = growTimelineSceneBlockViewportDurationMs(
-      currentDurationMs,
-      timelineOverviewContentEndMs(),
-    );
-    if (nextDurationMs !== currentDurationMs) setTimelineOverviewViewportDurationMs(nextDurationMs);
+    const showDurationMs = timelineOverviewContentEndMs();
+    setTimelineViewportState((current) => reconcileTimelineViewportState(current, showDurationMs));
   });
-  const timelineOverviewDurationMs = createMemo(() =>
-    Math.max(timelineOverviewViewportDurationMs(), timelineOverviewContentEndMs()),
-  );
   const timelineOverviewPlayheadX = createMemo(() =>
-    clampRange((snapshot().timeline.position_ms / timelineOverviewDurationMs()) * 100, 0, 100),
+    timelineTimeToVisibleRawRatio(snapshot().timeline.position_ms, timelineVisibleWindow()) * 100,
   );
+  const fitTimelineOverview = () => {
+    setTimelineViewportState((current) => ({
+      ...reconcileTimelineViewportState(current, timelineOverviewContentEndMs()),
+      mode: "fit",
+      visible_window: fitTimelineVisibleWindow(timelineOverviewContentEndMs()),
+    }));
+  };
+  const timelineViewportAnchorMs = () => {
+    const visibleWindow = timelineVisibleWindow();
+    const selected = selectedTimelineSceneBlockEventId() === null
+      ? undefined
+      : timelineEventRowById().get(selectedTimelineSceneBlockEventId()!);
+    const selectedCenterMs = selected
+      ? selected.time_ms + timelineSceneBlockSpanMs(selected) / 2
+      : Number.NaN;
+    if (Number.isFinite(selectedCenterMs)) {
+      const ratio = timelineTimeToVisibleRawRatio(selectedCenterMs, visibleWindow);
+      if (ratio >= 0 && ratio <= 1) return selectedCenterMs;
+    }
+    const playheadMs = snapshot().timeline.position_ms;
+    const playheadRatio = timelineTimeToVisibleRawRatio(playheadMs, visibleWindow);
+    return playheadRatio >= 0 && playheadRatio <= 1
+      ? playheadMs
+      : visibleWindow.start_ms + timelineVisibleWindowSpanMs(visibleWindow) / 2;
+  };
+  const zoomTimelineOverview = (scale: number) => {
+    const anchorMs = timelineViewportAnchorMs();
+    setTimelineViewportState((current) => ({
+      ...current,
+      mode: "manual",
+      visible_window: zoomTimelineVisibleWindow(
+        current.visible_window,
+        current.edit_extent_ms,
+        scale,
+        anchorMs,
+      ),
+    }));
+  };
+  const panTimelineOverview = (direction: -1 | 1) => {
+    setTimelineViewportState((current) => ({
+      ...current,
+      mode: "manual",
+      visible_window: panTimelineVisibleWindow(
+        current.visible_window,
+        current.edit_extent_ms,
+        direction,
+      ),
+    }));
+  };
+  const revealTimelineSceneBlock = (eventId: number) => {
+    const event = timelineEventRowById().get(eventId);
+    if (!event) return;
+    setTimelineViewportState((current) => ({
+      ...current,
+      mode: "manual",
+      visible_window: revealTimelineVisibleRange(
+        current.visible_window,
+        current.edit_extent_ms,
+        event.time_ms,
+        event.duration_ms > 0 ? event.time_ms + timelineSceneBlockSpanMs(event) : event.time_ms,
+      ),
+    }));
+  };
+  const revealTimelinePlayhead = () => {
+    const positionMs = snapshot().timeline.position_ms;
+    setTimelineViewportState((current) => ({
+      ...current,
+      mode: "manual",
+      visible_window: revealTimelineVisibleRange(
+        current.visible_window,
+        current.edit_extent_ms,
+        positionMs,
+        positionMs,
+      ),
+    }));
+  };
+  const selectTimelineSceneBlockEvent = (eventId: number, reveal: boolean) => {
+    setSelectedTimelineSceneBlockEventId(eventId);
+    setTimelineSceneBlockSelectionRevision((revision) => revision + 1);
+    if (reveal) revealTimelineSceneBlock(eventId);
+  };
   const timelineExecutionLive = createMemo(() => {
     const current = snapshot();
     return timelineExecutionIsLive(
@@ -2956,9 +3084,16 @@ export default function App() {
       current.clock.external_sync_age_ms,
     );
   });
-  const timelineOverviewEvents = createMemo<TimelineOverviewEvent[]>(() =>
-    timelineEventRows().map((event) => {
-      const currentPositionMs = snapshot().timeline.position_ms;
+  const timelinePositionMs = createMemo(() => snapshot().timeline.position_ms);
+  const timelineOverviewEvents = createMemo<TimelineOverviewEvent[]>(() => {
+    const visibleWindow = timelineVisibleWindow();
+    const visibleSpanMs = timelineVisibleWindowSpanMs(visibleWindow);
+    const currentPositionMs = timelinePositionMs();
+    return timelineEventRows().filter((event) => timelineRangeIntersectsVisibleWindow(
+      event.time_ms,
+      event.duration_ms > 0 ? event.time_ms + timelineSceneBlockSpanMs(event) : event.time_ms,
+      visibleWindow,
+    )).map((event) => {
       const underPlayhead = event.duration_ms > 0
         ? currentPositionMs >= event.time_ms && currentPositionMs < event.time_ms + timelineSceneBlockSpanMs(event)
         : currentPositionMs === event.time_ms;
@@ -2971,18 +3106,42 @@ export default function App() {
         duration_ms: event.duration_ms,
         loop_count: event.loop_count,
         total_duration_ms: timelineSceneBlockSpanMs(event),
-        x: clampRange((event.time_ms / timelineOverviewDurationMs()) * 100, 0, 100),
+        x: timelineTimeToVisibleRawRatio(event.time_ms, visibleWindow) * 100,
         width: event.duration_ms > 0
-          ? clampRange((timelineSceneBlockSpanMs(event) / timelineOverviewDurationMs()) * 100, 0, 100)
+          ? (timelineSceneBlockSpanMs(event) / visibleSpanMs) * 100
           : 0,
         y: event.track === "Lighting" ? 14 : 31,
         under_playhead: underPlayhead,
-        active: timelineExecutionLive() && underPlayhead,
       };
-    }),
-  );
+    });
+  });
+  const timelineOverlapClusters = createMemo(() => buildTimelineOverlapClusters(
+    timelineEventRows().map((event) => ({
+      id: event.id,
+      track: event.track,
+      time_ms: event.time_ms,
+      total_duration_ms: timelineSceneBlockSpanMs(event),
+    })),
+  ));
+  const timelineOverviewOverlapClusters = createMemo<TimelineOverviewOverlapCluster[]>(() => {
+    const visibleWindow = timelineVisibleWindow();
+    const visibleSpanMs = timelineVisibleWindowSpanMs(visibleWindow);
+    return timelineOverlapClusters()
+      .filter((cluster) => timelineRangeIntersectsVisibleWindow(
+        cluster.start_ms,
+        cluster.end_ms,
+        visibleWindow,
+      ))
+      .map((cluster) => ({
+        ...cluster,
+        member_ids: cluster.member_ids.map(Number),
+        x: timelineTimeToVisibleRawRatio(cluster.start_ms, visibleWindow) * 100,
+        width: ((cluster.end_ms - cluster.start_ms) / visibleSpanMs) * 100,
+      }));
+  });
   const timelineOverviewAutomationRanges = createMemo<TimelineOverviewAutomationRange[]>(() => {
-    const duration = timelineOverviewDurationMs();
+    const visibleWindow = timelineVisibleWindow();
+    const visibleSpanMs = timelineVisibleWindowSpanMs(visibleWindow);
     const currentSnapshot = snapshot();
     const lightingGroupId = selectedFixtureGroupFilter();
     const lightingFixtureId = selectedFixtureId();
@@ -3030,8 +3189,9 @@ export default function App() {
       const times = keyframes.map((keyframe) => keyframe.time_ms);
       const startMs = Math.min(...times);
       const endMs = Math.max(...times);
-      const x = clampRange((startMs / duration) * 100, 0, 100);
-      const width = Math.max(0.75, clampRange(((endMs - startMs) / duration) * 100, 0, 100 - x));
+      if (!timelineClosedRangeIntersectsVisibleWindow(startMs, endMs, visibleWindow)) return null;
+      const x = timelineTimeToVisibleRawRatio(startMs, visibleWindow) * 100;
+      const width = Math.max(0.75, ((endMs - startMs) / visibleSpanMs) * 100);
       return {
         id,
         kind,
@@ -4922,7 +5082,7 @@ export default function App() {
 
   const invokeTimelineSceneBlockCommand = async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
     if (
-      viewportFixture === "scene-block-large" &&
+      (viewportFixture === "scene-block-large" || viewportFixture === "scene-block-hour") &&
       (command === "set_timeline_scene_block" || command === "set_timeline_cue_event")
     ) {
       const eventId = Number(args?.eventId);
@@ -4960,7 +5120,7 @@ export default function App() {
     invoke: invokeTimelineSceneBlockCommand,
     snapTimeMs,
     hasEventId: (eventId) => snapshot().timeline.events.some((event) => event.id === eventId),
-    getEventById: (eventId) => timelineEventRows().find((event) => event.id === eventId),
+    getEventById: (eventId) => timelineEventRowById().get(eventId),
     getEventDraft: timelineEventDraft,
     setEventDraft: (eventId, draft) => setTimelineEventDrafts((current) => ({
       ...current,
@@ -4970,9 +5130,10 @@ export default function App() {
     getAddLoopCount: timelineBlockLoopCount,
     getAddJumpToEventId: timelineBlockJumpToEventId,
     setNextStartMs: setTimelineEventTimeMs,
-    getOverviewDurationMs: timelineOverviewDurationMs,
     setMessage,
-    refreshSnapshot: () => viewportFixture === "scene-block-large" ? Promise.resolve(snapshot()) : refreshSnapshot(),
+    refreshSnapshot: () => viewportFixture === "scene-block-large" || viewportFixture === "scene-block-hour"
+      ? Promise.resolve(snapshot())
+      : refreshSnapshot(),
   });
 
   const syncTimelineAutomationDrafts = (automations: TimelineAutomationSummary[]) => {
@@ -5259,7 +5420,7 @@ export default function App() {
     resetEditorDrafts = false,
   ) => {
     if (resetEditorDrafts) {
-      setTimelineOverviewViewportDurationMs(5000);
+      setSelectedTimelineSceneBlockEventId(null);
       setVideoOutputConfigDrafts({});
       setCueMetadataDrafts({});
       setTimelineEventDrafts({});
@@ -5278,6 +5439,13 @@ export default function App() {
         .join(",");
     }
     setSnapshot(next);
+    if (resetEditorDrafts) {
+      setTimelineViewportState((current) => reconcileTimelineViewportState(
+        current,
+        timelineOverviewContentEndMsForSnapshot(next),
+        { project_replaced: true },
+      ));
+    }
     if (syncProjectState) {
       const signature = projectSnapshotSignature(next);
       const cleanSignature = cleanProjectSignature();
@@ -8266,7 +8434,7 @@ export default function App() {
 
   const setTimelineCueEvent = timelineSceneBlocks.save;
   const moveTimelineCueEvent = timelineSceneBlocks.moveBy;
-  const moveTimelineCueEventToRatio = timelineSceneBlocks.moveToRatio;
+  const moveTimelineCueEventToTime = timelineSceneBlocks.moveToTime;
 
   const currentLightingAutomationValue = (automation: TimelineAutomationSummary) => {
     const fixture = snapshot().fixtures.find((candidate) => candidate.id === automation.fixture_id);
@@ -8297,13 +8465,12 @@ export default function App() {
   const keyframeDeleteToleranceMs = () => Math.max(1, Math.min(100, Math.round(timelinePlacementNudgeMs() / 4)));
 
   const {
-    moveTimelineAutomationRangeToRatio,
-    resizeTimelineAutomationRangeToRatio,
-    moveTimelineAutomationKeyframeToRatio,
+    moveTimelineAutomationRangeToTime,
+    resizeTimelineAutomationRangeToTime,
+    moveTimelineAutomationKeyframeToTime,
   } = createTimelineOverviewAutomationController({
     snapshot,
     snapTimeMs,
-    timelineOverviewDurationMs,
     invoke,
     setTimelineAutomationDrafts,
     setTimelineVideoAutomationDrafts,
@@ -8363,7 +8530,7 @@ export default function App() {
     playTimeline,
     pauseTimeline,
     seekTimeline,
-    seekTimelineFromOverviewRatio,
+    seekTimelineFromOverviewTime,
   } = createTimelineAutomationController({
     snapshot,
     selectedFixture,
@@ -8387,7 +8554,6 @@ export default function App() {
     setTimelineAutomationDrafts,
     setTimelineVideoAutomationDrafts,
     snapTimeMs,
-    timelineOverviewDurationMs,
     invoke,
     setMessage,
     refreshSnapshot,
@@ -12122,9 +12288,20 @@ export default function App() {
               lightingAutomationCount={snapshot().timeline.automations.length}
               videoAutomationCount={snapshot().timeline.video_automations.length}
               overviewEvents={timelineOverviewEvents()}
+              overviewMarkerAriaLabel={(event) => timelineOverviewMarkerAriaLabel(event, uiLocale())}
               overviewAutomationRanges={timelineOverviewAutomationRanges()}
+              overviewOverlapClusters={timelineOverviewOverlapClusters()}
+              overlapClusterMemberships={timelineOverlapClusters().map((cluster) => ({
+                id: cluster.id,
+                member_ids: cluster.member_ids.map(Number),
+              }))}
               selectedAutomationRangeId={selectedTimelineAutomationRangeId()}
               overviewPlayheadX={timelineOverviewPlayheadX()}
+              visibleWindow={timelineVisibleWindow()}
+              overviewShowDurationMs={timelineOverviewShowDurationMs()}
+              overviewEditExtentMs={timelineOverviewEditExtentMs()}
+              selectedEventId={selectedTimelineSceneBlockEventId()}
+              selectionRevision={timelineSceneBlockSelectionRevision()}
               audioAnalysis={audioAnalysis()}
               audioWaveformPoints={audioWaveformPoints()}
               audioSpectrumPaths={audioSpectrumPaths()}
@@ -12143,12 +12320,21 @@ export default function App() {
               onSeek={seekTimeline}
               onPause={pauseTimeline}
               onPlay={playTimeline}
-              onSeekRatio={seekTimelineFromOverviewRatio}
-              onMoveEventRatio={moveTimelineCueEventToRatio}
+              onSeekOverviewTime={seekTimelineFromOverviewTime}
+              onMoveEventTime={moveTimelineCueEventToTime}
               onSelectAutomationRange={selectTimelineAutomationRange}
-              onMoveAutomationRangeRatio={moveTimelineAutomationRangeToRatio}
-              onResizeAutomationRangeRatio={resizeTimelineAutomationRangeToRatio}
-              onMoveAutomationKeyframeRatio={moveTimelineAutomationKeyframeToRatio}
+              onMoveAutomationRangeTime={moveTimelineAutomationRangeToTime}
+              onResizeAutomationRangeTime={resizeTimelineAutomationRangeToTime}
+              onMoveAutomationKeyframeTime={moveTimelineAutomationKeyframeToTime}
+              onSelectEvent={selectTimelineSceneBlockEvent}
+              onFitOverview={fitTimelineOverview}
+              onZoomOverview={zoomTimelineOverview}
+              onPanOverview={panTimelineOverview}
+              onRevealSelected={() => {
+                const eventId = selectedTimelineSceneBlockEventId();
+                if (eventId !== null) revealTimelineSceneBlock(eventId);
+              }}
+              onRevealPlayhead={revealTimelinePlayhead}
               onAnalyzeAudio={analyzeAudioFile}
               onClearAudio={clearTimelineAudio}
               onApplyAudioBpm={applyAudioBpm}

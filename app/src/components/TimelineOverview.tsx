@@ -1,10 +1,18 @@
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import {
-  beginTimelineMarkerDragProjection,
   shouldCommitTimelineMarkerDrag,
   timelineSceneBlockLoopDivisionPositions,
-  updateTimelineMarkerDragProjection,
 } from "../timelineSceneBlocks";
+import {
+  beginTimelineAbsoluteDragProjection,
+  buildTimelineRulerTicks,
+  timelineTimeToVisibleRawRatio,
+  timelineVisibleRatioToTimeMs,
+  timelineVisibleWindowSpanMs,
+  updateTimelineAbsoluteDragProjection,
+  type TimelineVisibleWindow,
+} from "../timelineViewport";
+import { packTimelineOverlapClusterBadges } from "../timelineOverlapClusters";
 import type { TimelineTrackKind } from "../types";
 
 export interface TimelineOverviewEvent {
@@ -20,7 +28,6 @@ export interface TimelineOverviewEvent {
   width: number;
   y: number;
   under_playhead: boolean;
-  active: boolean;
 }
 
 export interface TimelineOverviewAutomationRange {
@@ -39,36 +46,54 @@ export interface TimelineOverviewAutomationRange {
   enabled: boolean;
 }
 
+export interface TimelineOverviewOverlapCluster {
+  id: string;
+  label: string;
+  track: TimelineTrackKind;
+  start_ms: number;
+  end_ms: number;
+  count: number;
+  member_ids: number[];
+  x: number;
+  width: number;
+  source_cluster_ids?: string[];
+  group_count?: number;
+  aggregated?: boolean;
+}
+
 interface TimelineOverviewProps {
   events: TimelineOverviewEvent[];
+  executionLive: boolean;
+  markerAriaLabel: (event: TimelineOverviewEvent) => string;
   automationRanges: TimelineOverviewAutomationRange[];
+  overlapClusters: TimelineOverviewOverlapCluster[];
   selectedRangeId: string | null;
   selectedEventId: number | null;
   playheadX: number;
-  onSeekRatio: (ratio: number) => void;
+  visibleWindow: TimelineVisibleWindow;
   onSeekTime: (timeMs: number) => void;
   onSelectAutomationRange: (range: TimelineOverviewAutomationRange) => void;
   onSelectEvent: (eventId: number) => void;
-  onMoveEventRatio: (eventId: number, ratio: number) => void;
-  onMoveAutomationRangeRatio: (range: TimelineOverviewAutomationRange, ratio: number) => void;
-  onResizeAutomationRangeRatio: (
+  onInspectOverlapCluster: (cluster: TimelineOverviewOverlapCluster) => void;
+  onMoveEventTime: (eventId: number, timeMs: number) => void;
+  onMoveAutomationRangeTime: (range: TimelineOverviewAutomationRange, timeMs: number) => void;
+  onResizeAutomationRangeTime: (
     range: TimelineOverviewAutomationRange,
     edge: "start" | "end",
-    ratio: number,
+    timeMs: number,
   ) => void;
-  onMoveAutomationKeyframeRatio: (
+  onMoveAutomationKeyframeTime: (
     range: TimelineOverviewAutomationRange,
     keyframeIndex: number,
-    ratio: number,
+    timeMs: number,
   ) => void;
 }
 
 interface TimelineMarkerDrag {
   eventId: number;
   pointerId: number;
-  x: number;
-  maxX: number;
-  grabOffsetX: number;
+  originalTimeMs: number;
+  timeMs: number;
   startClientX: number;
   moved: boolean;
 }
@@ -77,11 +102,12 @@ interface TimelineAutomationRangeDrag {
   rangeId: string;
   pointerId: number;
   mode: "move" | "resize-start" | "resize-end";
-  grabOffsetX: number;
   startClientX: number;
   moved: boolean;
-  x: number;
-  width: number;
+  originalStartMs: number;
+  originalEndMs: number;
+  startMs: number;
+  endMs: number;
 }
 
 interface TimelineAutomationKeyframeDrag {
@@ -90,13 +116,11 @@ interface TimelineAutomationKeyframeDrag {
   pointerId: number;
   startClientX: number;
   moved: boolean;
-  grabOffsetX: number;
-  x: number;
+  originalTimeMs: number;
+  timeMs: number;
 }
 
 const clampRatio = (value: number) => Math.min(1, Math.max(0, value));
-const clampPercent = (value: number, max = 100) => Math.min(max, Math.max(0, value));
-const minAutomationRangeWidth = 0.75;
 const maxSceneBlockLoopLines = 400;
 const sameNumberSet = (left: Set<number>, right: Set<number>) =>
   left.size === right.size && [...left].every((value) => right.has(value));
@@ -141,14 +165,19 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   const [keyframeDrag, setKeyframeDrag] = createSignal<TimelineAutomationKeyframeDrag | null>(null);
   const [suppressClickEventId, setSuppressClickEventId] = createSignal<number | null>(null);
   const [suppressClickRangeId, setSuppressClickRangeId] = createSignal<string | null>(null);
+  const [keyboardMarkerEventId, setKeyboardMarkerEventId] = createSignal<number | null>(null);
   const [viewBoxWidth, setViewBoxWidth] = createSignal(100);
+  const [overviewPixelWidth, setOverviewPixelWidth] = createSignal(1);
   let overviewElement: SVGSVGElement | undefined;
   onMount(() => {
     const updateViewBox = () => {
       if (!overviewElement) return;
       const width = overviewElement.clientWidth;
       const height = overviewElement.clientHeight;
-      if (width > 0 && height > 0) setViewBoxWidth(44 * (width / height));
+      if (width > 0 && height > 0) {
+        setViewBoxWidth(44 * (width / height));
+        setOverviewPixelWidth(width);
+      }
     };
     updateViewBox();
     const observer = new ResizeObserver(updateViewBox);
@@ -179,11 +208,6 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     cachedAutomationRangesById = nextCache;
     return ranges;
   });
-  const activeEventIds = createMemo(
-    () => new Set(props.events.filter((event) => event.active).map((event) => event.id)),
-    new Set<number>(),
-    { equals: sameNumberSet },
-  );
   const underPlayheadEventIds = createMemo(
     () => new Set(props.events.filter((event) => event.under_playhead).map((event) => event.id)),
     new Set<number>(),
@@ -198,6 +222,33 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       ? [...events.filter((event) => event.id !== selectedEventId), selectedEvent]
       : events;
   });
+  const markerTabStopId = createMemo(() => {
+    const events = orderedEvents();
+    if (events.some((event) => event.id === props.selectedEventId)) return props.selectedEventId;
+    const keyboardId = keyboardMarkerEventId();
+    return events.some((event) => event.id === keyboardId) ? keyboardId : (events[0]?.id ?? null);
+  });
+  const focusMarkerById = (eventId: number) => {
+    setKeyboardMarkerEventId(eventId);
+    requestAnimationFrame(() => {
+      overviewElement
+        ?.querySelector<SVGGElement>(`.timelineMarker[data-timeline-event-id="${eventId}"]`)
+        ?.focus();
+    });
+  };
+  const moveMarkerKeyboardFocus = (eventId: number, direction: -1 | 1 | "first" | "last") => {
+    const events = stableEvents();
+    if (events.length === 0) return;
+    const currentIndex = Math.max(0, events.findIndex((event) => event.id === eventId));
+    const nextIndex = direction === "first"
+      ? 0
+      : direction === "last"
+        ? events.length - 1
+        : (currentIndex + direction + events.length) % events.length;
+    const next = events[nextIndex];
+    props.onSelectEvent(next.id);
+    focusMarkerById(next.id);
+  };
 
   const ratioFromPointer = (event: PointerEvent | MouseEvent, svg: SVGSVGElement) => {
     const rect = svg.getBoundingClientRect();
@@ -205,7 +256,10 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   };
 
   const seekFromPointer = (event: MouseEvent & { currentTarget: SVGSVGElement }) => {
-    props.onSeekRatio(ratioFromPointer(event, event.currentTarget));
+    props.onSeekTime(timelineVisibleRatioToTimeMs(
+      ratioFromPointer(event, event.currentTarget),
+      props.visibleWindow,
+    ));
   };
 
   const beginMarkerDrag = (event: PointerEvent & { currentTarget: SVGGElement }, overviewEvent: TimelineOverviewEvent) => {
@@ -217,18 +271,12 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     event.stopPropagation();
     props.onSelectEvent(overviewEvent.id);
     event.currentTarget.setPointerCapture(event.pointerId);
-    const projection = beginTimelineMarkerDragProjection(
-      overviewEvent.x,
-      overviewEvent.width,
-      ratioFromPointer(event, svg) * 100,
-      event.clientX,
-    );
+    const projection = beginTimelineAbsoluteDragProjection(overviewEvent.time_ms, event.clientX);
     setMarkerDrag({
       eventId: overviewEvent.id,
       pointerId: event.pointerId,
-      x: projection.x,
-      maxX: projection.max_x,
-      grabOffsetX: projection.grab_offset_x,
+      originalTimeMs: projection.original_time_ms,
+      timeMs: projection.time_ms,
       startClientX: projection.start_client_x,
       moved: projection.moved,
     });
@@ -242,20 +290,20 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     }
     event.preventDefault();
     event.stopPropagation();
-    const projection = updateTimelineMarkerDragProjection(
+    const projection = updateTimelineAbsoluteDragProjection(
       {
-        x: drag.x,
-        max_x: drag.maxX,
-        grab_offset_x: drag.grabOffsetX,
+        original_time_ms: drag.originalTimeMs,
+        time_ms: drag.timeMs,
         start_client_x: drag.startClientX,
         moved: drag.moved,
       },
-      ratioFromPointer(event, svg) * 100,
       event.clientX,
+      svg.getBoundingClientRect().width,
+      timelineVisibleWindowSpanMs(props.visibleWindow),
     );
     setMarkerDrag({
       ...drag,
-      x: projection.x,
+      timeMs: projection.time_ms,
       moved: projection.moved,
     });
   };
@@ -278,7 +326,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       return;
     }
     setSuppressClickEventId(drag.eventId);
-    props.onMoveEventRatio(drag.eventId, drag.x / 100);
+    props.onMoveEventTime(drag.eventId, drag.timeMs);
   };
   const endMarkerDrag = (event: PointerEvent & { currentTarget: SVGGElement }) =>
     finishMarkerDrag(event, false);
@@ -290,7 +338,6 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     if (!svg) {
       return;
     }
-    const pointerX = ratioFromPointer(event, svg) * 100;
     event.preventDefault();
     event.stopPropagation();
     props.onSelectAutomationRange(range);
@@ -299,11 +346,12 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       rangeId: range.id,
       pointerId: event.pointerId,
       mode: "move",
-      grabOffsetX: pointerX - range.x,
       startClientX: event.clientX,
       moved: false,
-      x: range.x,
-      width: range.width,
+      originalStartMs: range.start_ms,
+      originalEndMs: range.end_ms,
+      startMs: range.start_ms,
+      endMs: range.end_ms,
     });
   };
 
@@ -324,11 +372,12 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       rangeId: range.id,
       pointerId: event.pointerId,
       mode: edge === "start" ? "resize-start" : "resize-end",
-      grabOffsetX: 0,
       startClientX: event.clientX,
       moved: false,
-      x: range.x,
-      width: range.width,
+      originalStartMs: range.start_ms,
+      originalEndMs: range.end_ms,
+      startMs: range.start_ms,
+      endMs: range.end_ms,
     });
   };
 
@@ -341,36 +390,43 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     }
     event.preventDefault();
     event.stopPropagation();
-    const pointerX = ratioFromPointer(event, svg) * 100;
-    const moved = drag.moved || Math.abs(event.clientX - drag.startClientX) >= 4;
-    if (!moved) {
-      return;
-    }
+    const originalTimeMs = drag.mode === "resize-end" ? drag.originalEndMs : drag.originalStartMs;
+    const projection = updateTimelineAbsoluteDragProjection(
+      {
+        original_time_ms: originalTimeMs,
+        time_ms: drag.mode === "resize-end" ? drag.endMs : drag.startMs,
+        start_client_x: drag.startClientX,
+        moved: drag.moved,
+      },
+      event.clientX,
+      svg.getBoundingClientRect().width,
+      timelineVisibleWindowSpanMs(props.visibleWindow),
+      drag.mode === "resize-end" ? drag.originalStartMs + 1 : 0,
+      drag.mode === "resize-start" ? drag.originalEndMs - 1 : Number.POSITIVE_INFINITY,
+    );
+    if (!projection.moved) return;
     if (drag.mode === "resize-start") {
-      const nextX = clampPercent(pointerX, range.x + range.width - minAutomationRangeWidth);
       setRangeDrag({
         ...drag,
-        moved,
-        x: nextX,
-        width: Math.max(minAutomationRangeWidth, range.x + range.width - nextX),
+        moved: projection.moved,
+        startMs: projection.time_ms,
       });
       return;
     }
     if (drag.mode === "resize-end") {
-      const nextEndX = Math.max(range.x + minAutomationRangeWidth, clampPercent(pointerX));
       setRangeDrag({
         ...drag,
-        moved,
-        x: range.x,
-        width: Math.max(minAutomationRangeWidth, nextEndX - range.x),
+        moved: projection.moved,
+        endMs: projection.time_ms,
       });
       return;
     }
+    const durationMs = Math.max(1, drag.originalEndMs - drag.originalStartMs);
     setRangeDrag({
       ...drag,
-      moved,
-      x: clampPercent(pointerX - drag.grabOffsetX, 100 - range.width),
-      width: range.width,
+      moved: projection.moved,
+      startMs: projection.time_ms,
+      endMs: projection.time_ms + durationMs,
     });
   };
 
@@ -395,11 +451,22 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     const range = props.automationRanges.find((candidate) => candidate.id === drag.rangeId);
     if (range) {
       if (drag.mode === "resize-start") {
-        props.onResizeAutomationRangeRatio(range, "start", drag.x / 100);
+        props.onResizeAutomationRangeTime(
+          range,
+          "start",
+          drag.startMs,
+        );
       } else if (drag.mode === "resize-end") {
-        props.onResizeAutomationRangeRatio(range, "end", (drag.x + drag.width) / 100);
+        props.onResizeAutomationRangeTime(
+          range,
+          "end",
+          drag.endMs,
+        );
       } else {
-        props.onMoveAutomationRangeRatio(range, drag.x / 100);
+        props.onMoveAutomationRangeTime(
+          range,
+          drag.startMs,
+        );
       }
     }
   };
@@ -420,20 +487,17 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
-    const spanMs = Math.max(1, range.end_ms - range.start_ms);
-    const localRatio = clampRatio(
-      ((range.keyframes.find((keyframe) => keyframe.keyframe_index === keyframeIndex)?.time_ms ?? range.start_ms) - range.start_ms) / spanMs,
-    );
-    const keyframeX = range.x + localRatio * range.width;
-    const pointerX = ratioFromPointer(event, svg) * 100;
+    const keyframeTimeMs = range.keyframes.find(
+      (keyframe) => keyframe.keyframe_index === keyframeIndex,
+    )?.time_ms ?? range.start_ms;
     setKeyframeDrag({
       rangeId: range.id,
       keyframeIndex,
       pointerId: event.pointerId,
       startClientX: event.clientX,
       moved: false,
-      grabOffsetX: pointerX - keyframeX,
-      x: keyframeX,
+      originalTimeMs: keyframeTimeMs,
+      timeMs: keyframeTimeMs,
     });
   };
 
@@ -445,14 +509,22 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     }
     event.preventDefault();
     event.stopPropagation();
-    const moved = drag.moved || Math.abs(event.clientX - drag.startClientX) >= 4;
-    if (!moved) {
-      return;
-    }
+    const projection = updateTimelineAbsoluteDragProjection(
+      {
+        original_time_ms: drag.originalTimeMs,
+        time_ms: drag.timeMs,
+        start_client_x: drag.startClientX,
+        moved: drag.moved,
+      },
+      event.clientX,
+      svg.getBoundingClientRect().width,
+      timelineVisibleWindowSpanMs(props.visibleWindow),
+    );
+    if (!projection.moved) return;
     setKeyframeDrag({
       ...drag,
-      moved,
-      x: clampPercent(ratioFromPointer(event, svg) * 100 - drag.grabOffsetX),
+      moved: projection.moved,
+      timeMs: projection.time_ms,
     });
   };
 
@@ -476,7 +548,11 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     setSuppressClickRangeId(drag.rangeId);
     const range = props.automationRanges.find((candidate) => candidate.id === drag.rangeId);
     if (range) {
-      props.onMoveAutomationKeyframeRatio(range, drag.keyframeIndex, drag.x / 100);
+      props.onMoveAutomationKeyframeTime(
+        range,
+        drag.keyframeIndex,
+        drag.timeMs,
+      );
     }
   };
   const endKeyframeDrag = (event: PointerEvent & { currentTarget: SVGGElement }) =>
@@ -484,20 +560,42 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   const cancelKeyframeDrag = (event: PointerEvent & { currentTarget: SVGGElement }) =>
     finishKeyframeDrag(event, true);
 
-  const automationRangeX = (range: TimelineOverviewAutomationRange) =>
-    rangeDrag()?.rangeId === range.id ? rangeDrag()!.x : range.x;
-  const automationRangeWidth = (range: TimelineOverviewAutomationRange) =>
-    rangeDrag()?.rangeId === range.id ? rangeDrag()!.width : range.width;
+  const automationRangeX = (range: TimelineOverviewAutomationRange) => {
+    const drag = rangeDrag();
+    return drag?.rangeId === range.id
+      ? timelineTimeToVisibleRawRatio(drag.startMs, props.visibleWindow) * 100
+      : range.x;
+  };
+  const automationRangeWidth = (range: TimelineOverviewAutomationRange) => {
+    const drag = rangeDrag();
+    return drag?.rangeId === range.id
+      ? ((drag.endMs - drag.startMs) / timelineVisibleWindowSpanMs(props.visibleWindow)) * 100
+      : range.width;
+  };
   const automationKeyframeX = (range: TimelineOverviewAutomationRange, keyframeIndex: number, timeMs: number) => {
     const drag = keyframeDrag();
     if (drag?.rangeId === range.id && drag.keyframeIndex === keyframeIndex) {
-      return drag.x;
+      return timelineTimeToVisibleRawRatio(drag.timeMs, props.visibleWindow) * 100;
     }
     const spanMs = Math.max(1, range.end_ms - range.start_ms);
     const localRatio = clampRatio((timeMs - range.start_ms) / spanMs);
     return automationRangeX(range) + localRatio * automationRangeWidth(range);
   };
   const viewBoxX = (percent: number) => (percent / 100) * viewBoxWidth();
+  const packedOverlapClusters = createMemo(() => packTimelineOverlapClusterBadges(
+    props.overlapClusters.map((cluster) => ({
+      ...cluster,
+      x: viewBoxX(cluster.x),
+      width: viewBoxX(cluster.width),
+    })),
+    viewBoxWidth(),
+  ));
+  const rulerTicks = createMemo(() => buildTimelineRulerTicks(props.visibleWindow, overviewPixelWidth()));
+  const rulerLabelX = (ratio: number) => Math.min(
+    Math.max(1.2, ratio * viewBoxWidth()),
+    Math.max(1.2, viewBoxWidth() - 1.2),
+  );
+  const rulerLabelAnchor = (ratio: number) => ratio <= 0.04 ? "start" : ratio >= 0.96 ? "end" : "middle";
   const desiredSceneBlockLoopDivisions = (event: TimelineOverviewEvent) => {
     const divisions = Math.max(0, event.loop_count - 1);
     const divisionsAllowedByWidth = Math.max(0, Math.min(8, Math.floor(event.width / 2.5) - 1));
@@ -533,7 +631,10 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     return timelineSceneBlockLoopDivisionPositions(event.width, event.loop_count, visibleDivisions);
   };
   const sceneBlockLabel = (event: TimelineOverviewEvent) => {
-    const label = event.loop_count > 1 ? `${event.cue_label} x${event.loop_count}` : event.cue_label;
+    // Keep the dense overview label focused on identity. Loop semantics remain
+    // available through the marker title and data attributes; repeating a nearby
+    // `x256` beside an aggregate `×250` badge made the two counts ambiguous.
+    const label = event.cue_label;
     const availableWidth = Math.max(0, viewBoxX(event.width) - 2.4);
     const maxCharacters = Math.floor(availableWidth / 5.5);
     if (maxCharacters < 3) return "";
@@ -544,18 +645,38 @@ export function TimelineOverview(props: TimelineOverviewProps) {
 
   return (
     <svg
-      class="timelineOverview"
+      class={`timelineOverview ${props.executionLive ? "executingLive" : ""}`}
       ref={(element) => { overviewElement = element; }}
       viewBox={`0 0 ${viewBoxWidth()} 44`}
       data-viewbox-width={viewBoxWidth()}
-      role="img"
+      role="group"
       aria-label="Timeline overview"
       onClick={seekFromPointer}
     >
       <rect class="timelineOverviewBg" x="0" y="0" width={viewBoxWidth()} height="44" />
       <line class="timelineLaneDivider" x1="0" y1="22" x2={viewBoxWidth()} y2="22" />
-      <text class="timelineLaneLabel" x="1.2" y="12">Light</text>
-      <text class="timelineLaneLabel" x="1.2" y="30">Video</text>
+      <g class="timelineRuler" aria-hidden="true">
+        <For each={rulerTicks()}>
+          {(tick) => (
+            <g data-timeline-ruler-ms={tick.time_ms}>
+              <line
+                class={tick.major ? "major" : ""}
+                x1={tick.ratio * viewBoxWidth()}
+                x2={tick.ratio * viewBoxWidth()}
+                y1="6"
+                y2="42"
+              />
+              <text
+                x={rulerLabelX(tick.ratio)}
+                y="5"
+                text-anchor={rulerLabelAnchor(tick.ratio)}
+              >
+                {tick.label}
+              </text>
+            </g>
+          )}
+        </For>
+      </g>
       <For each={stableAutomationRanges()}>
         {(range) => (
           <g
@@ -657,12 +778,21 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               event.duration_ms > 0 ? "sceneBlock" : "pointEvent",
               event.track === "Lighting" ? "lighting" : "video",
               underPlayheadEventIds().has(event.id) ? "underPlayhead" : "",
-              activeEventIds().has(event.id) ? "active" : "",
               props.selectedEventId === event.id ? "selected" : "",
               markerDrag()?.eventId === event.id ? "dragging" : "",
             ].filter(Boolean).join(" ")}
             data-timeline-event-id={event.id}
-            transform={`translate(${viewBoxX(markerDrag()?.eventId === event.id ? markerDrag()!.x : event.x)} ${event.y})`}
+            data-timeline-start-ms={event.time_ms}
+            data-timeline-loop-count={event.loop_count}
+            data-timeline-preview-start-ms={markerDrag()?.eventId === event.id
+              ? markerDrag()!.timeMs
+              : event.time_ms}
+            role="button"
+            tabIndex={markerTabStopId() === event.id ? 0 : -1}
+            aria-label={props.markerAriaLabel(event)}
+            transform={`translate(${viewBoxX(markerDrag()?.eventId === event.id
+              ? timelineTimeToVisibleRawRatio(markerDrag()!.timeMs, props.visibleWindow) * 100
+              : event.x)} ${event.y})`}
             onPointerDown={(pointerEvent) => beginMarkerDrag(pointerEvent, event)}
             onPointerMove={moveMarkerDrag}
             onPointerUp={endMarkerDrag}
@@ -673,6 +803,31 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                 setSuppressClickEventId(null);
                 return;
               }
+              props.onSelectEvent(event.id);
+              props.onSeekTime(event.time_ms);
+            }}
+            onKeyDown={(keyboardEvent) => {
+              if (keyboardEvent.key === "ArrowRight" || keyboardEvent.key === "ArrowDown") {
+                keyboardEvent.preventDefault();
+                keyboardEvent.stopPropagation();
+                moveMarkerKeyboardFocus(event.id, 1);
+                return;
+              }
+              if (keyboardEvent.key === "ArrowLeft" || keyboardEvent.key === "ArrowUp") {
+                keyboardEvent.preventDefault();
+                keyboardEvent.stopPropagation();
+                moveMarkerKeyboardFocus(event.id, -1);
+                return;
+              }
+              if (keyboardEvent.key === "Home" || keyboardEvent.key === "End") {
+                keyboardEvent.preventDefault();
+                keyboardEvent.stopPropagation();
+                moveMarkerKeyboardFocus(event.id, keyboardEvent.key === "Home" ? "first" : "last");
+                return;
+              }
+              if (keyboardEvent.key !== "Enter" && keyboardEvent.key !== " ") return;
+              keyboardEvent.preventDefault();
+              keyboardEvent.stopPropagation();
               props.onSelectEvent(event.id);
               props.onSeekTime(event.time_ms);
             }}
@@ -699,7 +854,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                   class="timelineSceneBlockLabel"
                   x="1.1"
                   y="1.25"
-                  data-full-label={event.loop_count > 1 ? `${event.cue_label} x${event.loop_count}` : event.cue_label}
+                  data-full-label={event.cue_label}
                 >
                   {sceneBlockLabel(event)}
                 </text>
@@ -713,7 +868,71 @@ export function TimelineOverview(props: TimelineOverviewProps) {
           </g>
         )}
       </For>
-      <line class="timelinePlayhead" x1={viewBoxX(props.playheadX)} y1="2" x2={viewBoxX(props.playheadX)} y2="42" />
+      <For each={packedOverlapClusters()}>
+        {(cluster) => {
+          const timeSpanLabel = `${cluster.start_ms} to ${cluster.end_ms} ms`;
+          const accessibleLabel = cluster.aggregated
+            ? `${cluster.label}; ${timeSpanLabel}; inspect ${cluster.count} blocks across ${cluster.group_count} overlap groups`
+            : `${cluster.label}; ${timeSpanLabel}; inspect ${cluster.count} overlapping blocks`;
+          const activate = () => {
+            const startedAt = performance.now();
+            props.onInspectOverlapCluster(cluster);
+            // Diagnostic only: synchronous handler and microtask state activation.
+            // These are state timing metrics, not frame timing metrics.
+            overviewElement?.setAttribute(
+              "data-overlap-state-handler-ms",
+              String(performance.now() - startedAt),
+            );
+            overviewElement?.setAttribute("data-overlap-state-track", cluster.track);
+            queueMicrotask(() => {
+              overviewElement?.setAttribute(
+                "data-overlap-state-microtask-ms",
+                String(performance.now() - startedAt),
+              );
+            });
+          };
+          return (
+            <g
+              class={`timelineOverlapCluster ${cluster.track === "Lighting" ? "lighting" : "video"}`}
+              role="button"
+              tabIndex={0}
+              aria-label={accessibleLabel}
+              data-overlap-track={cluster.track}
+              data-overlap-count={cluster.count}
+              data-overlap-start-ms={cluster.start_ms}
+              data-overlap-end-ms={cluster.end_ms}
+              data-overlap-members={cluster.member_ids.join(",")}
+              data-overlap-cluster-ids={cluster.source_cluster_ids.join(",")}
+              data-overlap-group-count={cluster.group_count}
+              data-overlap-aggregated={cluster.aggregated ? "true" : "false"}
+              transform={`translate(${cluster.x} ${cluster.track === "Lighting" ? 6 : 24})`}
+              onClick={(event) => {
+                event.stopPropagation();
+                activate();
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                event.stopPropagation();
+                activate();
+              }}
+            >
+              <rect width="18" height="6" rx="1" />
+              <text x="1.2" y="4.6">×{cluster.count}</text>
+              <title>{accessibleLabel}</title>
+            </g>
+          );
+        }}
+      </For>
+      <g class="timelineLaneLabelPlate" aria-hidden="true">
+        <rect x="0" y="6" width="26" height="13" rx="1" />
+        <rect x="0" y="24" width="26" height="13" rx="1" />
+        <text class="timelineLaneLabel" x="1.2" y="14">Light</text>
+        <text class="timelineLaneLabel" x="1.2" y="32">Video</text>
+      </g>
+      <Show when={props.playheadX >= 0 && props.playheadX <= 100}>
+        <line class="timelinePlayhead" x1={viewBoxX(props.playheadX)} y1="2" x2={viewBoxX(props.playheadX)} y2="42" />
+      </Show>
     </svg>
   );
 }

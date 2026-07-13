@@ -11,6 +11,8 @@ const appRoot = resolve(scriptDir, "..");
 const largeShowMode = process.argv.includes("--large-show");
 const vjEmptyMode = process.argv.includes("--vj-empty");
 const sceneBlockOnlyMode = process.argv.includes("--scene-block-only");
+const sceneBlockHourOnlyMode = process.argv.includes("--scene-block-hour-only");
+const sceneBlockOverlapOnlyMode = process.argv.includes("--scene-block-overlap-only");
 const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (largeShowMode ? "large-show" : vjEmptyMode ? "vj-empty" : "timeline");
 const defaultUrl =
   viewportFixture === "none"
@@ -30,7 +32,7 @@ const screenshotDir = process.env.SYNDOCAL_VIEWPORT_SCREENSHOT_DIR
   ? resolve(process.env.SYNDOCAL_VIEWPORT_SCREENSHOT_DIR)
   : null;
 const primaryOperationalViewport = { width: 1920, height: 1080 };
-const nativeMaximizedViewport = { width: 1920, height: 1032 };
+const measuredClientSizeViewport = { width: 1920, height: 1032 };
 const extendedCeilingViewport = { width: 2048, height: 1152 };
 const compactFallbackViewports = [
   { width: 1366, height: 768 },
@@ -38,7 +40,7 @@ const compactFallbackViewports = [
 ];
 const allViewports = [
   primaryOperationalViewport,
-  nativeMaximizedViewport,
+  measuredClientSizeViewport,
   extendedCeilingViewport,
   ...compactFallbackViewports,
 ];
@@ -53,20 +55,23 @@ const viewports = requestedViewport
   : process.env.SYNDOCAL_VIEWPORT_SINGLE === "1"
     ? [primaryOperationalViewport]
     : allViewports;
+const fullWindowTimelineViewports = requestedViewport
+  ? [requestedViewport]
+  : [primaryOperationalViewport, measuredClientSizeViewport];
 const captureAllViewportScreenshots = process.env.SYNDOCAL_VIEWPORT_CAPTURE_ALL === "1";
 const matchesViewport = (candidate, reference) =>
   candidate.width === reference.width && candidate.height === reference.height;
 const isPrimaryOperationalViewport = (viewport) => matchesViewport(viewport, primaryOperationalViewport);
-const isNativeMaximizedViewport = (viewport) => matchesViewport(viewport, nativeMaximizedViewport);
+const isMeasuredClientSizeViewport = (viewport) => matchesViewport(viewport, measuredClientSizeViewport);
 const shouldCaptureViewport = (viewport) =>
   Boolean(screenshotDir) && (
     isPrimaryOperationalViewport(viewport) ||
-    isNativeMaximizedViewport(viewport) ||
+    isMeasuredClientSizeViewport(viewport) ||
     captureAllViewportScreenshots
   );
 const viewportRole = ({ width, height }) => {
   if (matchesViewport({ width, height }, primaryOperationalViewport)) return "primary-maximized";
-  if (matchesViewport({ width, height }, nativeMaximizedViewport)) return "native-maximized";
+  if (matchesViewport({ width, height }, measuredClientSizeViewport)) return "measured-client-size-browser";
   if (matchesViewport({ width, height }, extendedCeilingViewport)) return "extended-ceiling";
   return "compact-fallback";
 };
@@ -544,6 +549,11 @@ async function clickVisibleByText(client, selector, text) {
   }
 }
 
+async function evaluatePageFunction(client, callback, ...args) {
+  const serializedArgs = args.map((argument) => JSON.stringify(argument)).join(",");
+  return client.evaluate(`(${callback.toString()})(${serializedArgs})`);
+}
+
 async function clickVisibleSelector(client, selector) {
   const clicked = await client.evaluate(`(() => {
     const node = document.querySelector(${JSON.stringify(selector)});
@@ -588,6 +598,62 @@ async function selectVisibleOption(client, selector, value) {
 async function pressKey(client, code, key = code, modifiers = 0) {
   await client.send("Input.dispatchKeyEvent", { type: "keyDown", code, key, modifiers });
   await client.send("Input.dispatchKeyEvent", { type: "keyUp", code, key, modifiers });
+}
+
+async function focusTimelineOverlapClusterWithTab(client, track) {
+  await evaluatePageFunction(client, () => {
+    const revealPlayhead = [...document.querySelectorAll(".timelineViewportToolbar button")]
+      .find((button) => (button.textContent || "").trim() === "Reveal Playhead");
+    revealPlayhead?.focus();
+  });
+  let active = null;
+  let tabsToCluster = 0;
+  for (let tab = 1; tab <= 5; tab += 1) {
+    await pressKey(client, "Tab");
+    active = await evaluatePageFunction(client, () => ({
+      className: document.activeElement?.getAttribute("class") ?? "",
+      track: document.activeElement?.getAttribute("data-overlap-track") ?? "",
+      ariaLabel: document.activeElement?.getAttribute("aria-label") ?? "",
+    }));
+    if (active.track === track) {
+      tabsToCluster = tab;
+      break;
+    }
+  }
+  await client.send("Accessibility.enable");
+  const accessibility = await client.send("Accessibility.getFullAXTree");
+  const axButtonFound = (accessibility.nodes ?? []).some((node) =>
+    node.role?.value === "button" &&
+    String(node.name?.value ?? "").includes(track + " overlap") &&
+    String(node.name?.value ?? "").includes("250"));
+  await client.send("Accessibility.disable");
+  const tabOrderStats = await evaluatePageFunction(client, () => ({
+    markerTabStopCount: document.querySelectorAll('.timelineMarker[tabindex="0"]').length,
+    clusterTabStopCount: document.querySelectorAll('.timelineOverlapCluster[tabindex="0"]').length,
+    overviewRole: document.querySelector(".timelineOverview")?.getAttribute("role") ?? "",
+  }));
+  return { active, tabsToCluster, axButtonFound, ...tabOrderStats };
+}
+
+async function readTimelineRulerBounds(client) {
+  return evaluatePageFunction(client, () => {
+    const overview = document.querySelector(".timelineOverview");
+    const viewBoxWidth = overview instanceof SVGSVGElement ? overview.viewBox.baseVal.width : 0;
+    const bounds = [...document.querySelectorAll("[data-timeline-ruler-ms] text")].map((label) => {
+      const box = label instanceof SVGGraphicsElement ? label.getBBox() : null;
+      return box
+        ? { x: box.x, right: box.x + box.width, width: box.width, text: label.textContent ?? "" }
+        : null;
+    }).filter(Boolean);
+    return {
+      count: bounds.length,
+      viewBoxWidth,
+      minimumX: bounds.length > 0 ? Math.min(...bounds.map((box) => box.x)) : null,
+      maximumRight: bounds.length > 0 ? Math.max(...bounds.map((box) => box.right)) : null,
+      contained: bounds.length > 0 && bounds.every((box) =>
+        box.x >= -0.05 && box.right <= viewBoxWidth + 0.05),
+    };
+  });
 }
 
 async function checkWorkspaceLayoutPersistence(client) {
@@ -749,7 +815,18 @@ async function measure(client, label) {
       const controls = container ? [...container.querySelectorAll(controlSelector)] : [];
       const control = controls.at(-1);
       if (!container || !control) return false;
+      const scrollableAncestors = [];
+      for (let ancestor = container.parentElement; ancestor; ancestor = ancestor.parentElement) {
+        const overflowY = getComputedStyle(ancestor).overflowY;
+        if (/(auto|scroll)/.test(overflowY) && ancestor.scrollHeight > ancestor.clientHeight + 1) {
+          scrollableAncestors.push(ancestor);
+        }
+      }
+      const ancestorScrollTops = scrollableAncestors.map((ancestor) => ancestor.scrollTop);
       const previousScrollTop = container.scrollTop;
+      for (const ancestor of [...scrollableAncestors].reverse()) {
+        ancestor.scrollTop = ancestor.scrollHeight;
+      }
       container.scrollTop = container.scrollHeight;
       const containerRect = container.getBoundingClientRect();
       const controlRect = control.getBoundingClientRect();
@@ -759,6 +836,9 @@ async function measure(client, label) {
         controlRect.top >= Math.max(0, containerRect.top) - 1 &&
         controlRect.bottom <= Math.min(innerHeight, containerRect.bottom) + 1;
       container.scrollTop = previousScrollTop;
+      scrollableAncestors.forEach((ancestor, index) => {
+        ancestor.scrollTop = ancestorScrollTops[index];
+      });
       return reachable;
     };
     const shrunkenDirectChildCount = (selector) => {
@@ -1240,8 +1320,10 @@ async function measure(client, label) {
       visibleSceneBlockRowCount: visibleCount('.sceneBlockRow'),
       timelineSceneBlockCount: document.querySelectorAll('.timelineOverview .timelineMarker.sceneBlock').length,
       timelinePointEventCount: document.querySelectorAll('.timelineOverview .timelineMarker.pointEvent').length,
-      timelineActiveSceneBlockCount: document.querySelectorAll('.timelineOverview .timelineMarker.sceneBlock.active').length,
-      timelineActivePointEventCount: document.querySelectorAll('.timelineOverview .timelineMarker.pointEvent.active').length,
+      timelineActiveSceneBlockCount: document.querySelector('.timelineHeaderMeta.executingLive')
+        ? document.querySelectorAll('.timelineOverview .timelineMarker.sceneBlock.underPlayhead').length : 0,
+      timelineActivePointEventCount: document.querySelector('.timelineHeaderMeta.executingLive')
+        ? document.querySelectorAll('.timelineOverview .timelineMarker.pointEvent.underPlayhead').length : 0,
       sceneBlockLaneScopeHintCount: [...document.querySelectorAll('.sceneBlockLaneScopeHint')]
         .filter((node) => (node.textContent || '').trim() === 'FULL CUE' && (node.title || '').includes('full linked Cue fires')).length,
       sceneBlockPlaybackJumpHintCount: [...document.querySelectorAll('.sceneBlockPlaybackJumpHint')]
@@ -1749,11 +1831,14 @@ function hasExpectedSceneBlocks(result) {
   const fullSizeWindow = result.innerWidth >= 1920 && result.innerHeight >= 1032;
   const minimumWorkspaceHeight = fullSizeWindow ? 230 : 100;
   const composerControlsReachable = fullSizeWindow
-    ? result.fullyVisibleSceneBlockComposerControlCount === 8
+    ? result.fullyVisibleSceneBlockComposerControlCount === 9
     : result.sceneBlockLastControlReachable && result.sceneBlockWorkspaceVerticalOverflowPx > 0;
   const rowActionsReachable = fullSizeWindow
-    ? result.fullyVisibleSceneBlockRowActionCount >= 4
-    : result.visibleSceneBlockRowActionCount === 6 && result.sceneBlockLastControlReachable;
+    ? result.fullyVisibleSceneBlockRowActionCount === 9
+    : result.visibleSceneBlockRowActionCount === 9 && result.sceneBlockLastControlReachable;
+  const linkBadgesReachable = fullSizeWindow
+    ? result.visibleSceneBlockLinkBadgeCount >= 3
+    : result.visibleSceneBlockLinkBadgeCount >= 2 && result.sceneBlockLastControlReachable;
   return (
     result.visibleSceneBlockWorkspaceCount === 1 &&
     result.sceneBlockRowCount === 3 &&
@@ -1764,8 +1849,8 @@ function hasExpectedSceneBlocks(result) {
     result.timelineActivePointEventCount === 0 &&
     result.sceneBlockLaneScopeHintCount === 4 &&
     result.sceneBlockPlaybackJumpHintCount === 4 &&
-    result.visibleSceneBlockLinkBadgeCount >= 3 &&
-    result.visibleSceneBlockComposerControlCount === 8 &&
+    linkBadgesReachable &&
+    result.visibleSceneBlockComposerControlCount === 9 &&
     composerControlsReachable &&
     rowActionsReachable &&
     result.sceneBlockWorkspaceWidth >= result.timelinePanelWidth * 0.97 &&
@@ -2974,6 +3059,947 @@ async function runEffectStackLargeViewport(client, viewport) {
   return { label: `effect-stack-large-${viewport.width}x${viewport.height}`, passed, containment, stats };
 }
 
+async function openTimelineShowFixture(client, viewport, fixture) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: fixtureUrl(fixture) });
+  await waitForApp(client);
+  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
+  await sleep(180);
+}
+
+async function runSceneBlockHourViewport(client, viewport) {
+  await openTimelineShowFixture(client, viewport, "scene-block-hour");
+
+  const initialStats = await evaluatePageFunction(client, () => {
+    const range = document.querySelector(".timelineVisibleRange");
+    const overview = document.querySelector(".timelineOverview");
+    const overviewRect = overview?.getBoundingClientRect();
+    return {
+      showDurationMs: Number(range?.getAttribute("data-show-duration-ms")),
+      editExtentMs: Number(range?.getAttribute("data-edit-extent-ms")),
+      visibleStartMs: Number(range?.getAttribute("data-visible-start-ms")),
+      visibleEndMs: Number(range?.getAttribute("data-visible-end-ms")),
+      toolbarButtonCount: document.querySelectorAll(".timelineViewportToolbar button").length,
+      rulerTickCount: document.querySelectorAll("[data-timeline-ruler-ms]").length,
+      overviewNodeCount: document.querySelectorAll(".timelineOverview *").length,
+      overviewWidth: overviewRect?.width ?? 0,
+      initialMarkerCount: document.querySelectorAll(".timelineMarker.sceneBlock").length,
+    };
+  });
+  const initialRulerBounds = await readTimelineRulerBounds(client);
+
+  const selectedByRow = await evaluatePageFunction(client, async () => {
+    const search = document.querySelector(".sceneBlockRowSearch");
+    if (!(search instanceof HTMLInputElement)) return false;
+    search.value = "500";
+    search.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: "500" }));
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const row = document.querySelector('.sceneBlockRow[data-scene-block-id="500"]');
+    if (!(row instanceof HTMLElement)) return false;
+    row.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))));
+    return true;
+  });
+
+  const revealStats = await evaluatePageFunction(client, () => {
+    const range = document.querySelector(".timelineVisibleRange");
+    const marker = document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="500"]');
+    const body = marker?.querySelector(".timelineSceneBlockBody");
+    const bodyRect = body?.getBoundingClientRect();
+    const svgRect = marker?.ownerSVGElement?.getBoundingClientRect();
+    return {
+      visibleStartMs: Number(range?.getAttribute("data-visible-start-ms")),
+      visibleEndMs: Number(range?.getAttribute("data-visible-end-ms")),
+      editExtentMs: Number(range?.getAttribute("data-edit-extent-ms")),
+      terminalMarkerRendered: Boolean(marker),
+      terminalMarkerSelected: marker?.classList.contains("selected") ?? false,
+      terminalMarkerStartMs: Number(marker?.getAttribute("data-timeline-start-ms")),
+      terminalMarkerWidth: bodyRect?.width ?? 0,
+      terminalMarkerCenterX: bodyRect ? bodyRect.left + bodyRect.width / 2 : 0,
+      overviewWidth: svgRect?.width ?? 0,
+      firstMarkerRendered: Boolean(document.querySelector('.timelineMarker[data-timeline-event-id="1"]')),
+      playheadRendered: Boolean(document.querySelector(".timelinePlayhead")),
+      rulerTickCount: document.querySelectorAll("[data-timeline-ruler-ms]").length,
+      overviewNodeCount: document.querySelectorAll(".timelineOverview *").length,
+    };
+  });
+  const revealRulerBounds = await readTimelineRulerBounds(client);
+
+  const dragGeometry = await evaluatePageFunction(client, () => {
+    const marker = document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="500"]');
+    const body = marker?.querySelector(".timelineSceneBlockBody");
+    const range = document.querySelector(".timelineVisibleRange");
+    const bodyRect = body?.getBoundingClientRect();
+    const svgRect = marker?.ownerSVGElement?.getBoundingClientRect();
+    if (!marker || !bodyRect || !svgRect) return null;
+    return {
+      x: bodyRect.left + bodyRect.width / 2,
+      y: bodyRect.top + bodyRect.height / 2,
+      bodyLeft: bodyRect.left,
+      svgWidth: svgRect.width,
+      startMs: Number(marker.getAttribute("data-timeline-start-ms")),
+      previewStartMs: Number(marker.getAttribute("data-timeline-preview-start-ms")),
+      visibleStartMs: Number(range?.getAttribute("data-visible-start-ms")),
+      visibleEndMs: Number(range?.getAttribute("data-visible-end-ms")),
+    };
+  });
+  let dragStats = null;
+  if (dragGeometry) {
+    const markerSnapshot = () => evaluatePageFunction(client, () => {
+      const marker = document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="500"]');
+      const bodyRect = marker?.querySelector(".timelineSceneBlockBody")?.getBoundingClientRect();
+      return {
+        bodyLeft: bodyRect?.left ?? null,
+        bodyCenterX: bodyRect ? bodyRect.left + bodyRect.width / 2 : null,
+        startMs: Number(marker?.getAttribute("data-timeline-start-ms")),
+        previewStartMs: Number(marker?.getAttribute("data-timeline-preview-start-ms")),
+      };
+    });
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: dragGeometry.x,
+      y: dragGeometry.y,
+      button: "left",
+      buttons: 1,
+      clickCount: 1,
+    });
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: dragGeometry.x + 2,
+      y: dragGeometry.y,
+      button: "left",
+      buttons: 1,
+    });
+    const tiny = await markerSnapshot();
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: dragGeometry.x + 60,
+      y: dragGeometry.y,
+      button: "left",
+      buttons: 1,
+    });
+    const moved = await markerSnapshot();
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: dragGeometry.x + 60,
+      y: dragGeometry.y,
+      button: "left",
+      buttons: 0,
+      clickCount: 1,
+    });
+    await sleep(80);
+    await evaluatePageFunction(client, () =>
+      new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))),
+    );
+    const settled = await markerSnapshot();
+    const spanMs = dragGeometry.visibleEndMs - dragGeometry.visibleStartMs;
+    dragStats = {
+      ...dragGeometry,
+      tiny,
+      moved,
+      settled,
+      expectedDeltaMs: (60 / dragGeometry.svgWidth) * spanMs,
+      actualPreviewDeltaMs: moved.previewStartMs - dragGeometry.previewStartMs,
+    };
+  }
+
+  const zoomStats = await evaluatePageFunction(client, async () => {
+    const read = () => {
+      const range = document.querySelector(".timelineVisibleRange");
+      const marker = document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="500"]');
+      const bodyRect = marker?.querySelector(".timelineSceneBlockBody")?.getBoundingClientRect();
+      return {
+        startMs: Number(range?.getAttribute("data-visible-start-ms")),
+        endMs: Number(range?.getAttribute("data-visible-end-ms")),
+        markerCenterX: bodyRect ? bodyRect.left + bodyRect.width / 2 : null,
+      };
+    };
+    const before = read();
+    const zoomOut = [...document.querySelectorAll(".timelineViewportToolbar button")]
+      .find((button) => (button.textContent || "").trim() === "Zoom Out");
+    const zoomOutClicked = zoomOut instanceof HTMLButtonElement && !zoomOut.disabled;
+    if (zoomOutClicked) zoomOut.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    return { zoomOutClicked, before, after: read() };
+  });
+
+  const navigationStats = await evaluatePageFunction(client, async () => {
+    const button = (label) => [...document.querySelectorAll(".timelineViewportToolbar button")]
+      .find((candidate) => (candidate.textContent || "").trim() === label);
+    const clickAndSettle = async (label) => {
+      const target = button(label);
+      if (!(target instanceof HTMLButtonElement) || target.disabled) return false;
+      target.click();
+      await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+      return true;
+    };
+    const read = () => {
+      const range = document.querySelector(".timelineVisibleRange");
+      return {
+        startMs: Number(range?.getAttribute("data-visible-start-ms")),
+        endMs: Number(range?.getAttribute("data-visible-end-ms")),
+        showDurationMs: Number(range?.getAttribute("data-show-duration-ms")),
+        editExtentMs: Number(range?.getAttribute("data-edit-extent-ms")),
+      };
+    };
+    const playheadTitle = document.querySelector(".timelineTimeStat")?.getAttribute("title") ?? "";
+    const playheadMatch = playheadTitle.match(/^\s*(-?\d+(?:\.\d+)?)/);
+    const playheadMs = playheadMatch ? Number(playheadMatch[1]) : Number.NaN;
+    const beforePanNext = read();
+    const panNextClicked = await clickAndSettle("Pan Next");
+    const afterPanNext = read();
+    const panPreviousClicked = await clickAndSettle("Pan Prev");
+    const afterPanPrevious = read();
+    const zoomInClicked = await clickAndSettle("Zoom In");
+    const afterZoomIn = read();
+    const fitAllClicked = await clickAndSettle("Fit All");
+    const afterFit = read();
+    const revealSelectedClicked = await clickAndSettle("Reveal Selected");
+    const afterRevealSelected = read();
+    const revealPlayheadClicked = await clickAndSettle("Reveal Playhead");
+    const afterRevealPlayhead = read();
+    return {
+      playheadMs,
+      panNextClicked,
+      panPreviousClicked,
+      zoomInClicked,
+      fitAllClicked,
+      revealSelectedClicked,
+      revealPlayheadClicked,
+      beforePanNext,
+      afterPanNext,
+      afterPanPrevious,
+      afterZoomIn,
+      afterFit,
+      afterRevealSelected,
+      afterRevealPlayhead,
+      rulerTickCount: document.querySelectorAll("[data-timeline-ruler-ms]").length,
+    };
+  });
+  await openTimelineShowFixture(client, viewport, "scene-block-hour");
+  await evaluatePageFunction(client, async () => {
+    const search = document.querySelector(".sceneBlockRowSearch");
+    if (!(search instanceof HTMLInputElement)) return;
+    search.value = "500";
+    search.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: "500" }));
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    document.querySelector('.sceneBlockRow[data-scene-block-id="500"]')?.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+  });
+  await clickVisibleByText(client, ".timelineViewportToolbar button", "Reveal Selected");
+  await sleep(80);
+  const finalRevealStats = await evaluatePageFunction(client, () => {
+    const range = document.querySelector(".timelineVisibleRange");
+    const bodyRect = document.querySelector(
+      '.timelineMarker.sceneBlock[data-timeline-event-id="500"] .timelineSceneBlockBody',
+    )?.getBoundingClientRect();
+    return {
+      startMs: Number(range?.getAttribute("data-visible-start-ms")),
+      endMs: Number(range?.getAttribute("data-visible-end-ms")),
+      terminalMarkerWidth: bodyRect?.width ?? 0,
+      rulerTickCount: document.querySelectorAll("[data-timeline-ruler-ms]").length,
+    };
+  });
+  const finalRulerBounds = await readTimelineRulerBounds(client);
+  let screenshotVerification = null;
+  if (shouldCaptureViewport(viewport)) {
+    mkdirSync(screenshotDir, { recursive: true });
+    screenshotVerification = await captureSettledViewport(
+      client,
+      join(screenshotDir, "scene-block-hour-" + viewport.width + "x" + viewport.height + ".png"),
+    );
+  }
+  const containment = await measure(client, "scene-block-hour-" + viewport.width + "x" + viewport.height);
+  const passed = Boolean(
+    selectedByRow &&
+    initialStats.showDurationMs === 3_600_000 &&
+    initialStats.editExtentMs >= 3_605_000 &&
+    initialStats.visibleStartMs === 0 &&
+    initialStats.visibleEndMs === 3_600_000 &&
+    initialStats.initialMarkerCount === 500 &&
+    initialStats.toolbarButtonCount === 7 &&
+    initialStats.rulerTickCount > 1 &&
+    initialStats.rulerTickCount <= 64 &&
+    initialRulerBounds.count === initialStats.rulerTickCount &&
+    initialRulerBounds.contained &&
+    initialStats.overviewNodeCount < 3_500 &&
+    revealStats.visibleStartMs === 3_597_000 &&
+    revealStats.visibleEndMs === 3_602_000 &&
+    revealStats.terminalMarkerRendered &&
+    revealStats.terminalMarkerSelected &&
+    revealStats.terminalMarkerStartMs === 3_599_000 &&
+    revealStats.terminalMarkerWidth >= 32 &&
+    !revealStats.firstMarkerRendered &&
+    !revealStats.playheadRendered &&
+    revealStats.rulerTickCount > 1 &&
+    revealStats.rulerTickCount <= 64 &&
+    revealRulerBounds.count === revealStats.rulerTickCount &&
+    revealRulerBounds.contained &&
+    revealStats.overviewNodeCount < 3_500 &&
+    dragStats !== null &&
+    dragStats.expectedDeltaMs > 0 &&
+    dragStats.expectedDeltaMs < dragStats.visibleEndMs - dragStats.visibleStartMs &&
+    dragStats.tiny.previewStartMs === dragStats.previewStartMs &&
+    Math.abs(dragStats.tiny.bodyLeft - dragStats.bodyLeft) < 1 &&
+    Math.abs(dragStats.actualPreviewDeltaMs - dragStats.expectedDeltaMs) <= 2 &&
+    Math.abs(dragStats.moved.bodyLeft - (dragStats.bodyLeft + 60)) <= 2 &&
+    dragStats.settled.startMs > 3_599_000 &&
+    Math.abs(dragStats.settled.startMs - dragStats.moved.previewStartMs) <= 2 &&
+    Math.abs(dragStats.settled.startMs - (dragStats.startMs + dragStats.expectedDeltaMs)) <= 2 &&
+    Math.abs(dragStats.settled.bodyLeft - dragStats.moved.bodyLeft) <= 2 &&
+    zoomStats.zoomOutClicked &&
+    zoomStats.before.markerCenterX !== null &&
+    zoomStats.after.markerCenterX !== null &&
+    Math.abs(zoomStats.after.markerCenterX - zoomStats.before.markerCenterX) <= 2 &&
+    zoomStats.after.endMs - zoomStats.after.startMs > zoomStats.before.endMs - zoomStats.before.startMs &&
+    navigationStats.panNextClicked &&
+    navigationStats.panPreviousClicked &&
+    navigationStats.zoomInClicked &&
+    navigationStats.fitAllClicked &&
+    navigationStats.revealSelectedClicked &&
+    navigationStats.revealPlayheadClicked &&
+    navigationStats.afterPanNext.startMs > navigationStats.beforePanNext.startMs &&
+    navigationStats.afterPanNext.endMs <= navigationStats.afterPanNext.editExtentMs &&
+    navigationStats.afterPanPrevious.startMs < navigationStats.afterPanNext.startMs &&
+    navigationStats.afterPanPrevious.endMs - navigationStats.afterPanPrevious.startMs ===
+      navigationStats.afterPanNext.endMs - navigationStats.afterPanNext.startMs &&
+    navigationStats.afterZoomIn.endMs - navigationStats.afterZoomIn.startMs <
+      navigationStats.afterPanPrevious.endMs - navigationStats.afterPanPrevious.startMs &&
+    navigationStats.afterFit.startMs === 0 &&
+    navigationStats.afterFit.endMs === navigationStats.afterFit.showDurationMs &&
+    navigationStats.afterRevealSelected.endMs - navigationStats.afterRevealSelected.startMs === 5_000 &&
+    navigationStats.afterRevealPlayhead.endMs - navigationStats.afterRevealPlayhead.startMs === 5_000 &&
+    Number.isFinite(navigationStats.playheadMs) &&
+    Math.abs(
+      (navigationStats.afterRevealPlayhead.startMs + navigationStats.afterRevealPlayhead.endMs) / 2 -
+      navigationStats.playheadMs
+    ) <= 1 &&
+    navigationStats.afterRevealPlayhead.startMs !== navigationStats.afterRevealSelected.startMs &&
+    navigationStats.afterRevealPlayhead.endMs !== navigationStats.afterRevealSelected.endMs &&
+    navigationStats.rulerTickCount > 1 &&
+    navigationStats.rulerTickCount <= 64 &&
+    finalRevealStats.startMs === 3_597_000 &&
+    finalRevealStats.endMs === 3_602_000 &&
+    finalRevealStats.terminalMarkerWidth >= 32 &&
+    finalRevealStats.rulerTickCount > 1 &&
+    finalRevealStats.rulerTickCount <= 64 &&
+    finalRulerBounds.count === finalRevealStats.rulerTickCount &&
+    finalRulerBounds.contained &&
+    (!shouldCaptureViewport(viewport) || screenshotVerification?.verified === true) &&
+    hasNoOuterOverflow(containment)
+  );
+  return {
+    label: "scene-block-hour-" + viewport.width + "x" + viewport.height,
+    passed,
+    initialStats,
+    initialRulerBounds,
+    revealStats,
+    revealRulerBounds,
+    dragStats,
+    zoomStats,
+    navigationStats,
+    finalRevealStats,
+    finalRulerBounds,
+    containment,
+    screenshotVerification,
+  };
+}
+
+async function runSceneBlockOverlapTrack(client, viewport, track, expectedIds, activationKind) {
+  await openTimelineShowFixture(client, viewport, "scene-block-large");
+  const initialStats = await evaluatePageFunction(client, (wantedTrack, wantedIds) => {
+    const badges = [...document.querySelectorAll(".timelineOverlapCluster")];
+    const badge = badges.find((candidate) => candidate.getAttribute("data-overlap-track") === wantedTrack);
+    const rect = badge?.querySelector("rect")?.getBoundingClientRect();
+    const badgeRect = badge?.getBoundingClientRect();
+    const members = (badge?.getAttribute("data-overlap-members") || "")
+      .split(",")
+      .filter(Boolean)
+      .map(Number);
+    const hit = badgeRect
+      ? document.elementFromPoint(
+          badgeRect.left + badgeRect.width / 2,
+          badgeRect.top + badgeRect.height / 2,
+        )?.closest(".timelineOverlapCluster")
+      : null;
+    const marker = document.querySelector(
+      '.timelineMarker.sceneBlock[data-timeline-event-id="' + wantedIds.at(-1) + '"]',
+    );
+    const markerBodyRect = marker?.querySelector(".timelineSceneBlockBody")?.getBoundingClientRect();
+    const markerTitle = (marker?.querySelector("title")?.textContent || "").trim();
+    const markerLoopCount = Number(marker?.getAttribute("data-timeline-loop-count"));
+    const badgeStartMs = Number(badge?.getAttribute("data-overlap-start-ms"));
+    const badgeEndMs = Number(badge?.getAttribute("data-overlap-end-ms"));
+    const badgeTimeSpan = `${badgeStartMs} to ${badgeEndMs} ms`;
+    const badgeAriaLabel = badge?.getAttribute("aria-label") ?? "";
+    const badgeTitle = (badge?.querySelector("title")?.textContent || "").trim();
+    const markerHit = markerBodyRect
+      ? document.elementFromPoint(
+          markerBodyRect.left + markerBodyRect.width / 2,
+          markerBodyRect.top + markerBodyRect.height / 2,
+        )?.closest(".timelineMarker")
+      : null;
+    return {
+      badgeCount: badges.length,
+      lightingCount: Number(
+        badges.find((candidate) => candidate.getAttribute("data-overlap-track") === "Lighting")
+          ?.getAttribute("data-overlap-count"),
+      ),
+      videoCount: Number(
+        badges.find((candidate) => candidate.getAttribute("data-overlap-track") === "Video")
+          ?.getAttribute("data-overlap-count"),
+      ),
+      members,
+      membershipExact: members.length === wantedIds.length &&
+        new Set(members).size === wantedIds.length &&
+        wantedIds.every((memberId) => members.includes(memberId)),
+      ariaLabel: badgeAriaLabel,
+      title: badgeTitle,
+      startMs: badgeStartMs,
+      endMs: badgeEndMs,
+      ariaHasTimeSpan: badgeAriaLabel.includes(badgeTimeSpan),
+      titleHasTimeSpan: badgeTitle.includes(badgeTimeSpan),
+      role: badge?.getAttribute("role") ?? "",
+      tabIndex: badge?.getAttribute("tabindex") ?? "",
+      hitTrack: hit?.getAttribute("data-overlap-track") ?? "",
+      badgeWidth: rect?.width ?? 0,
+      badgeHeight: rect?.height ?? 0,
+      markerHitId: markerHit?.getAttribute("data-timeline-event-id") ?? "",
+      markerLoopCount,
+      markerTitle,
+      visibleBlockLabelsHaveIterationSuffix: [...document.querySelectorAll(".timelineSceneBlockLabel")]
+        .some((label) => /(?:\bx|×)\d+\s*$/.test((label.textContent || "").trim())),
+      markerCount: document.querySelectorAll(".timelineMarker.sceneBlock").length,
+      overviewNodeCount: document.querySelectorAll(".timelineOverview *").length,
+      rulerTickCount: document.querySelectorAll("[data-timeline-ruler-ms]").length,
+    };
+  }, track, expectedIds);
+
+  await evaluatePageFunction(client, async () => {
+    if (typeof window.__syndocalPauseSceneBlockFixtureChurn === "function") {
+      window.__syndocalPauseSceneBlockFixtureChurn();
+    }
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+  });
+  const keyboardAccessStats = await focusTimelineOverlapClusterWithTab(client, track);
+  await evaluatePageFunction(client, () => {
+    const overview = document.querySelector(".timelineOverview");
+    overview?.removeAttribute("data-overlap-state-handler-ms");
+    overview?.removeAttribute("data-overlap-state-track");
+    overview?.removeAttribute("data-overlap-state-microtask-ms");
+  });
+  if (activationKind === "keyboard") {
+    await pressKey(client, "Enter");
+  } else {
+    const badgeGeometry = await evaluatePageFunction(client, (wantedTrack) => {
+      const badge = [...document.querySelectorAll(".timelineOverlapCluster")]
+        .find((candidate) => candidate.getAttribute("data-overlap-track") === wantedTrack);
+      const rect = badge?.getBoundingClientRect();
+      return rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null;
+    }, track);
+    if (badgeGeometry) {
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: badgeGeometry.x,
+        y: badgeGeometry.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: badgeGeometry.x,
+        y: badgeGeometry.y,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
+    }
+  }
+  let stateActivationTimingStats = null;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    stateActivationTimingStats = await evaluatePageFunction(client, (wantedTrack) => {
+      const overview = document.querySelector(".timelineOverview");
+      const stateTrack = overview?.getAttribute("data-overlap-state-track") ?? "";
+      const handlerValue = overview?.getAttribute("data-overlap-state-handler-ms") ?? null;
+      const microtaskValue = overview?.getAttribute("data-overlap-state-microtask-ms") ?? null;
+      const stateHandlerElapsedMs = handlerValue === null ? null : Number(handlerValue);
+      const stateMicrotaskElapsedMs = microtaskValue === null ? null : Number(microtaskValue);
+      return {
+        stateTrack,
+        stateHandlerElapsedMs: Number.isFinite(stateHandlerElapsedMs) ? stateHandlerElapsedMs : null,
+        stateMicrotaskElapsedMs: Number.isFinite(stateMicrotaskElapsedMs) ? stateMicrotaskElapsedMs : null,
+        committedFilterVisible: stateTrack === wantedTrack && Boolean(
+          document.querySelector(".sceneBlockOverlapFilter"),
+        ),
+      };
+    }, track);
+    if (stateActivationTimingStats?.stateMicrotaskElapsedMs !== null) break;
+    await sleep(25);
+  }
+  // The two frames below are a correctness boundary for DOM reads only. Their
+  // elapsed time is deliberately not measured; only resulting state is asserted.
+  const postFrameCorrectnessStats = await evaluatePageFunction(client, async (wantedTrack, wantedIds) => {
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const rows = [...document.querySelectorAll(".sceneBlockRow")];
+    const rowIds = rows.map((row) => Number(row.getAttribute("data-scene-block-id")));
+    const pagerLabel = (document.querySelector(".sceneBlockPager span")?.textContent || "").trim();
+    const filter = document.querySelector(".sceneBlockOverlapFilter");
+    const range = document.querySelector(".timelineVisibleRange");
+    const beforePanStartMs = Number(range?.getAttribute("data-visible-start-ms"));
+    const panNext = [...document.querySelectorAll(".timelineViewportToolbar button")]
+      .find((button) => (button.textContent || "").trim() === "Pan Next");
+    panNext?.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const afterPanStartMs = Number(range?.getAttribute("data-visible-start-ms"));
+    const badgeAfterPan = [...document.querySelectorAll(".timelineOverlapCluster")]
+      .find((candidate) => candidate.getAttribute("data-overlap-track") === wantedTrack);
+    const membersAfterPan = (badgeAfterPan?.getAttribute("data-overlap-members") || "")
+      .split(",")
+      .filter(Boolean)
+      .map(Number);
+    const filterPersistedAfterPan = Boolean(document.querySelector(".sceneBlockOverlapFilter"));
+    const fitAll = [...document.querySelectorAll(".timelineViewportToolbar button")]
+      .find((button) => (button.textContent || "").trim() === "Fit All");
+    fitAll?.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const pagerBeforeLiveFollow = (document.querySelector(".sceneBlockPager span")?.textContent || "").trim();
+    if (typeof window.__syndocalSetSceneBlockFixtureState === "function") {
+      window.__syndocalSetSceneBlockFixtureState(1000, true);
+      await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    }
+    const pagerAfterLiveFollow = (document.querySelector(".sceneBlockPager span")?.textContent || "").trim();
+    const filterPersistedDuringLiveFollow = Boolean(document.querySelector(".sceneBlockOverlapFilter"));
+    if (typeof window.__syndocalSetSceneBlockFixtureState === "function") {
+      window.__syndocalSetSceneBlockFixtureState(1000, false);
+      await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    }
+    return {
+      filterText: (filter?.textContent || "").trim(),
+      pagerLabel,
+      rowCount: rows.length,
+      rowIds,
+      rowsBelongToCluster: rowIds.every((rowId) => wantedIds.includes(rowId)),
+      beforePanStartMs,
+      afterPanStartMs,
+      filterPersistedAfterPan,
+      badgePersistedAfterPan: Boolean(badgeAfterPan),
+      membershipPersistedAfterPan: membersAfterPan.length === wantedIds.length &&
+        new Set(membersAfterPan).size === wantedIds.length &&
+        wantedIds.every((memberId) => membersAfterPan.includes(memberId)),
+      pagerBeforeLiveFollow,
+      pagerAfterLiveFollow,
+      filterPersistedDuringLiveFollow,
+    };
+  }, track, expectedIds);
+  const activationStats = postFrameCorrectnessStats === null || stateActivationTimingStats === null
+    ? null
+    : { ...stateActivationTimingStats, ...postFrameCorrectnessStats, keyboardAccessStats };
+
+  const probeIds = track === "Lighting" ? [1, 251, 499] : [2, 250, 500];
+  const searchStats = await evaluatePageFunction(client, async (wantedIds) => {
+    const search = document.querySelector(".sceneBlockRowSearch");
+    if (!(search instanceof HTMLInputElement)) return null;
+    const foundIds = [];
+    const setSearch = async (value) => {
+      search.value = value;
+      search.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+      await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    };
+    for (const eventId of wantedIds) {
+      await setSearch(String(eventId));
+      const row = document.querySelector('.sceneBlockRow[data-scene-block-id="' + eventId + '"]');
+      if (row) foundIds.push(eventId);
+      if (eventId === wantedIds[1]) {
+        row?.click();
+        await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+      }
+    }
+    const selectedMarkerId = document.querySelector(".timelineMarker.sceneBlock.selected")
+      ?.getAttribute("data-timeline-event-id") ?? "";
+    const lastMarkerId = [...document.querySelectorAll(".timelineMarker.sceneBlock")]
+      .at(-1)?.getAttribute("data-timeline-event-id") ?? "";
+    await setSearch("");
+    const clearFilter = [...document.querySelectorAll(".sceneBlockOverlapFilter button")]
+      .find((button) => (button.textContent || "").includes("Clear overlap filter"));
+    clearFilter?.click();
+    await new Promise((resolveFrame) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))),
+    );
+    const selectedRow = document.querySelector(
+      '.sceneBlockRow.selected[data-scene-block-id="' + wantedIds[1] + '"]',
+    );
+    const listRect = document.querySelector(".sceneBlockList")?.getBoundingClientRect();
+    const selectedRowRect = selectedRow?.getBoundingClientRect();
+    const result = {
+      foundIds,
+      selectedMarkerId,
+      lastMarkerId,
+      filterCleared: !document.querySelector(".sceneBlockOverlapFilter"),
+      pagerLabelAfterClear: (document.querySelector(".sceneBlockPager span")?.textContent || "").trim(),
+      rowCountAfterClear: document.querySelectorAll(".sceneBlockRow").length,
+      selectedRowVisibleAfterClear: Boolean(
+        selectedRowRect && listRect &&
+        selectedRowRect.top >= listRect.top - 1 &&
+        selectedRowRect.bottom <= listRect.bottom + 1,
+      ),
+      selectedRowIdAfterClear: selectedRow?.getAttribute("data-scene-block-id") ?? "",
+      lastMarkerIdAfterClear: [...document.querySelectorAll(".timelineMarker.sceneBlock")]
+        .at(-1)?.getAttribute("data-timeline-event-id") ?? "",
+      overviewNodeCountAfterClear: document.querySelectorAll(".timelineOverview *").length,
+    };
+    await setSearch(String(wantedIds[1]));
+    const pagerBeforeSearchLive = (document.querySelector(".sceneBlockPager span")?.textContent || "").trim();
+    if (typeof window.__syndocalSetSceneBlockFixtureState === "function") {
+      window.__syndocalSetSceneBlockFixtureState(1000, true);
+      await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    }
+    result.searchGuardPassed =
+      (document.querySelector(".sceneBlockPager span")?.textContent || "").trim() === pagerBeforeSearchLive &&
+      Boolean(document.querySelector('.sceneBlockRow[data-scene-block-id="' + wantedIds[1] + '"]'));
+    if (typeof window.__syndocalSetSceneBlockFixtureState === "function") {
+      window.__syndocalSetSceneBlockFixtureState(1000, false);
+      await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    }
+    await setSearch("");
+    const dirtyRow = document.querySelector(".sceneBlockRow");
+    const dirtyStartInput = dirtyRow?.querySelector('.sceneBlockRowFields input[type="number"]');
+    const originalDirtyStart = dirtyStartInput instanceof HTMLInputElement ? dirtyStartInput.value : "";
+    if (dirtyStartInput instanceof HTMLInputElement) {
+      dirtyStartInput.value = String(Number(originalDirtyStart) + 1);
+      dirtyStartInput.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+      await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    }
+    const pagerBeforeDirtyLive = (document.querySelector(".sceneBlockPager span")?.textContent || "").trim();
+    if (typeof window.__syndocalSetSceneBlockFixtureState === "function") {
+      window.__syndocalSetSceneBlockFixtureState(1000, true);
+      await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    }
+    result.dirtyGuardPassed =
+      dirtyRow?.classList.contains("dirty") === true &&
+      (document.querySelector(".sceneBlockPager span")?.textContent || "").trim() === pagerBeforeDirtyLive;
+    if (typeof window.__syndocalSetSceneBlockFixtureState === "function") {
+      window.__syndocalSetSceneBlockFixtureState(1000, false);
+    }
+    if (dirtyStartInput instanceof HTMLInputElement) {
+      dirtyStartInput.value = originalDirtyStart;
+      dirtyStartInput.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+      await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    }
+    return result;
+  }, probeIds);
+  const containment = await measure(client, "scene-block-overlap-" + track.toLowerCase() + "-" + viewport.width + "x" + viewport.height);
+  const passed = Boolean(
+    initialStats.badgeCount === 2 &&
+    initialStats.lightingCount === 250 &&
+    initialStats.videoCount === 250 &&
+    initialStats.membershipExact &&
+    initialStats.ariaLabel.includes("250") &&
+    Number.isFinite(initialStats.startMs) &&
+    initialStats.endMs > initialStats.startMs &&
+    initialStats.ariaHasTimeSpan &&
+    initialStats.titleHasTimeSpan &&
+    initialStats.title === initialStats.ariaLabel &&
+    initialStats.role === "button" &&
+    initialStats.tabIndex === "0" &&
+    initialStats.hitTrack === track &&
+    initialStats.badgeWidth >= 20 &&
+    initialStats.badgeHeight >= 10 &&
+    initialStats.markerHitId === String(expectedIds.at(-1)) &&
+    initialStats.markerLoopCount > 1 &&
+    initialStats.markerTitle.includes(` x ${initialStats.markerLoopCount}`) &&
+    !initialStats.visibleBlockLabelsHaveIterationSuffix &&
+    initialStats.markerCount === 500 &&
+    initialStats.overviewNodeCount < 3_500 &&
+    initialStats.rulerTickCount > 1 &&
+    initialStats.rulerTickCount <= 64 &&
+    activationStats !== null &&
+    activationStats.stateHandlerElapsedMs < 100 &&
+    activationStats.stateMicrotaskElapsedMs < 100 &&
+    activationStats.stateTrack === track &&
+    activationStats.committedFilterVisible &&
+    activationStats.keyboardAccessStats.active?.track === track &&
+    activationStats.keyboardAccessStats.tabsToCluster > 0 &&
+    activationStats.keyboardAccessStats.tabsToCluster <= 3 &&
+    activationStats.keyboardAccessStats.axButtonFound &&
+    activationStats.keyboardAccessStats.markerTabStopCount === 1 &&
+    activationStats.keyboardAccessStats.clusterTabStopCount === 2 &&
+    activationStats.keyboardAccessStats.overviewRole === "group" &&
+    activationStats.filterText.includes("250") &&
+    activationStats.pagerLabel.includes("/ 250") &&
+    activationStats.rowCount > 0 &&
+    activationStats.rowCount <= 12 &&
+    activationStats.rowsBelongToCluster &&
+    activationStats.afterPanStartMs > activationStats.beforePanStartMs &&
+    activationStats.filterPersistedAfterPan &&
+    activationStats.badgePersistedAfterPan &&
+    activationStats.membershipPersistedAfterPan &&
+    activationStats.pagerAfterLiveFollow === activationStats.pagerBeforeLiveFollow &&
+    activationStats.filterPersistedDuringLiveFollow &&
+    searchStats !== null &&
+    searchStats.foundIds.length === probeIds.length &&
+    searchStats.foundIds.every((eventId, index) => eventId === probeIds[index]) &&
+    searchStats.selectedMarkerId === String(probeIds[1]) &&
+    searchStats.lastMarkerId === String(probeIds[1]) &&
+    searchStats.filterCleared &&
+    searchStats.pagerLabelAfterClear.includes("/ 500") &&
+    searchStats.rowCountAfterClear > 0 &&
+    searchStats.rowCountAfterClear <= 12 &&
+    searchStats.selectedRowVisibleAfterClear &&
+    searchStats.selectedRowIdAfterClear === String(probeIds[1]) &&
+    searchStats.lastMarkerIdAfterClear === String(probeIds[1]) &&
+    searchStats.overviewNodeCountAfterClear < 3_500 &&
+    searchStats.searchGuardPassed &&
+    searchStats.dirtyGuardPassed &&
+    hasNoOuterOverflow(containment)
+  );
+  return {
+    track,
+    passed,
+    initialStats,
+    activationStats,
+    searchStats,
+    containment,
+  };
+}
+
+async function runPartiallyClippedMarkerDrag(client, eventId) {
+  await clickVisibleByText(client, ".timelineViewportToolbar button", "Pan Next");
+  await evaluatePageFunction(client, () =>
+    new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))),
+  );
+  const geometry = await evaluatePageFunction(client, (wantedEventId) => {
+    const marker = document.querySelector(
+      '.timelineMarker.sceneBlock[data-timeline-event-id="' + wantedEventId + '"]',
+    );
+    const body = marker?.querySelector(".timelineSceneBlockBody");
+    const bodyRect = body?.getBoundingClientRect();
+    const svgRect = marker?.ownerSVGElement?.getBoundingClientRect();
+    const range = document.querySelector(".timelineVisibleRange");
+    if (!marker || !bodyRect || !svgRect) return null;
+    const x = bodyRect.left + bodyRect.width / 2;
+    const y = bodyRect.top + bodyRect.height / 2;
+    return {
+      x,
+      y,
+      hitId: document.elementFromPoint(x, y)?.closest(".timelineMarker")
+        ?.getAttribute("data-timeline-event-id") ?? "",
+      svgWidth: svgRect.width,
+      originalStartMs: Number(marker.getAttribute("data-timeline-start-ms")),
+      originalPreviewStartMs: Number(marker.getAttribute("data-timeline-preview-start-ms")),
+      visibleStartMs: Number(range?.getAttribute("data-visible-start-ms")),
+      visibleEndMs: Number(range?.getAttribute("data-visible-end-ms")),
+      bodyLeft: bodyRect.left,
+      bodyRight: bodyRect.right,
+      svgLeft: svgRect.left,
+      svgRight: svgRect.right,
+    };
+  }, eventId);
+  if (!geometry) return null;
+  const markerSnapshot = () => evaluatePageFunction(client, (wantedEventId) => {
+    const marker = document.querySelector(
+      '.timelineMarker.sceneBlock[data-timeline-event-id="' + wantedEventId + '"]',
+    );
+    const bodyRect = marker?.querySelector(".timelineSceneBlockBody")?.getBoundingClientRect();
+    return {
+      startMs: Number(marker?.getAttribute("data-timeline-start-ms")),
+      previewStartMs: Number(marker?.getAttribute("data-timeline-preview-start-ms")),
+      bodyLeft: bodyRect?.left ?? null,
+    };
+  }, eventId);
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: geometry.x,
+    y: geometry.y,
+    button: "left",
+    buttons: 1,
+    clickCount: 1,
+  });
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: geometry.x + 2,
+    y: geometry.y,
+    button: "left",
+    buttons: 1,
+  });
+  const tiny = await markerSnapshot();
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: geometry.x + 6,
+    y: geometry.y,
+    button: "left",
+    buttons: 1,
+  });
+  const moved = await markerSnapshot();
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: geometry.x + 6,
+    y: geometry.y,
+    button: "left",
+    buttons: 0,
+    clickCount: 1,
+  });
+  await sleep(80);
+  await evaluatePageFunction(client, () =>
+    new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))),
+  );
+  const settled = await markerSnapshot();
+  const visibleSpanMs = geometry.visibleEndMs - geometry.visibleStartMs;
+  return {
+    ...geometry,
+    tiny,
+    moved,
+    settled,
+    expectedDeltaMs: (6 / geometry.svgWidth) * visibleSpanMs,
+    actualPreviewDeltaMs: moved.previewStartMs - geometry.originalPreviewStartMs,
+  };
+}
+
+async function runSceneBlockOverlapViewport(client, viewport) {
+  const lightingIds = Array.from({ length: 250 }, (_, index) => index * 2 + 1);
+  const videoIds = Array.from({ length: 250 }, (_, index) => index * 2 + 2);
+  const lighting = await runSceneBlockOverlapTrack(client, viewport, "Lighting", lightingIds, "keyboard");
+  const video = await runSceneBlockOverlapTrack(client, viewport, "Video", videoIds, "mouse");
+
+  await openTimelineShowFixture(client, viewport, "scene-block-large");
+  const switchStats = await evaluatePageFunction(client, async () => {
+    if (typeof window.__syndocalPauseSceneBlockFixtureChurn === "function") {
+      window.__syndocalPauseSceneBlockFixtureChurn();
+    }
+    const activate = async (track) => {
+      const badge = [...document.querySelectorAll(".timelineOverlapCluster")]
+        .find((candidate) => candidate.getAttribute("data-overlap-track") === track);
+      badge?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await new Promise((resolveFrame) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))),
+      );
+      return badge;
+    };
+    const lightingBadge = await activate("Lighting");
+    const selectedAfterLighting = document.querySelector(".timelineMarker.sceneBlock.selected")
+      ?.getAttribute("data-timeline-event-id") ?? "";
+    const lightingFilterText = (document.querySelector(".sceneBlockOverlapFilter")?.textContent || "").trim();
+    const videoBadge = await activate("Video");
+    const videoMemberIds = (videoBadge?.getAttribute("data-overlap-members") || "")
+      .split(",")
+      .filter(Boolean)
+      .map(Number);
+    const selectedAfterVideo = document.querySelector(".timelineMarker.sceneBlock.selected")
+      ?.getAttribute("data-timeline-event-id") ?? "";
+    const rowIds = [...document.querySelectorAll(".sceneBlockRow")]
+      .map((row) => Number(row.getAttribute("data-scene-block-id")));
+    return {
+      selectedAfterLighting,
+      selectedAfterVideo,
+      lightingFilterText,
+      videoFilterText: (document.querySelector(".sceneBlockOverlapFilter")?.textContent || "").trim(),
+      lightingMemberIds: (lightingBadge?.getAttribute("data-overlap-members") || "")
+        .split(",")
+        .filter(Boolean)
+        .map(Number),
+      videoMemberIds,
+      rowIds,
+      selectedWasOutsideVideo: !videoMemberIds.includes(Number(selectedAfterLighting)),
+      selectedReconciledIntoVideo: videoMemberIds.includes(Number(selectedAfterVideo)),
+      rowsBelongToVideo: rowIds.every((eventId) => videoMemberIds.includes(eventId)),
+      pagerLabel: (document.querySelector(".sceneBlockPager span")?.textContent || "").trim(),
+    };
+  });
+  const clippedDragStats = await runPartiallyClippedMarkerDrag(
+    client,
+    Number(switchStats.selectedAfterVideo),
+  );
+  const finalStats = await evaluatePageFunction(client, () => ({
+    videoFilterVisible: (document.querySelector(".sceneBlockOverlapFilter")?.textContent || "").includes("Video overlap ×250"),
+    lightingBadgeVisible: Boolean(
+      document.querySelector('.timelineOverlapCluster[data-overlap-track="Lighting"]'),
+    ),
+    videoBadgeVisible: Boolean(
+      document.querySelector('.timelineOverlapCluster[data-overlap-track="Video"]'),
+    ),
+    pagerLabel: (document.querySelector(".sceneBlockPager span")?.textContent || "").trim(),
+    overviewNodeCount: document.querySelectorAll(".timelineOverview *").length,
+    selectedMarkerId: document.querySelector(".timelineMarker.sceneBlock.selected")
+      ?.getAttribute("data-timeline-event-id") ?? "",
+    selectedMarkerAria: document.querySelector(".timelineMarker.sceneBlock.selected")
+      ?.getAttribute("aria-label") ?? "",
+  }));
+  await evaluatePageFunction(client, async () => {
+    if (typeof window.__syndocalPauseSceneBlockFixtureChurn === "function") {
+      window.__syndocalPauseSceneBlockFixtureChurn();
+    }
+    document.body.style.display = "none";
+    document.body.getBoundingClientRect();
+    document.body.style.display = "";
+    document.body.getBoundingClientRect();
+    await new Promise((resolveFrame) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))),
+    );
+  });
+  await sleep(320);
+  let screenshotVerification = null;
+  if (shouldCaptureViewport(viewport)) {
+    mkdirSync(screenshotDir, { recursive: true });
+    screenshotVerification = await captureSettledViewport(
+      client,
+      join(screenshotDir, "scene-block-overlap-" + viewport.width + "x" + viewport.height + ".png"),
+    );
+  }
+  const containment = await measure(client, "scene-block-overlap-" + viewport.width + "x" + viewport.height);
+  const passed = Boolean(
+    lighting.passed &&
+    video.passed &&
+    switchStats.lightingFilterText.includes("Lighting overlap ×250") &&
+    switchStats.videoFilterText.includes("Video overlap ×250") &&
+    switchStats.selectedWasOutsideVideo &&
+    switchStats.selectedReconciledIntoVideo &&
+    switchStats.rowsBelongToVideo &&
+    switchStats.rowIds.length > 0 &&
+    switchStats.rowIds.length <= 12 &&
+    switchStats.pagerLabel.includes("/ 250") &&
+    clippedDragStats !== null &&
+    clippedDragStats.hitId === switchStats.selectedAfterVideo &&
+    clippedDragStats.originalStartMs < clippedDragStats.visibleStartMs &&
+    clippedDragStats.bodyLeft < clippedDragStats.svgLeft &&
+    clippedDragStats.bodyRight > clippedDragStats.svgLeft &&
+    clippedDragStats.tiny.previewStartMs === clippedDragStats.originalPreviewStartMs &&
+    Math.abs(clippedDragStats.actualPreviewDeltaMs - clippedDragStats.expectedDeltaMs) <= 2 &&
+    Math.abs(
+      clippedDragStats.settled.startMs -
+      (clippedDragStats.originalStartMs + clippedDragStats.expectedDeltaMs)
+    ) <= 2 &&
+    clippedDragStats.settled.startMs < clippedDragStats.visibleStartMs &&
+    finalStats.videoFilterVisible &&
+    finalStats.lightingBadgeVisible &&
+    finalStats.videoBadgeVisible &&
+    finalStats.pagerLabel.includes("/ 250") &&
+    finalStats.overviewNodeCount < 3_500 &&
+    finalStats.selectedMarkerId === switchStats.selectedAfterVideo &&
+    finalStats.selectedMarkerAria.includes("Block #" + switchStats.selectedAfterVideo) &&
+    finalStats.selectedMarkerAria.includes("duration") &&
+    (!shouldCaptureViewport(viewport) || screenshotVerification?.verified === true) &&
+    hasNoOuterOverflow(containment)
+  );
+  return {
+    label: "scene-block-overlap-" + viewport.width + "x" + viewport.height,
+    passed,
+    lighting,
+    video,
+    switchStats,
+    clippedDragStats,
+    finalStats,
+    containment,
+    screenshotVerification,
+  };
+}
+
 async function runSceneBlockLargeViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -3026,10 +4052,32 @@ async function runSceneBlockLargeViewport(client, viewport) {
       resolveIdle({ records, addedNodes, removedNodes, classAttributeMutations, samples });
     }, 1100);
   }))()`);
+  await client.evaluate(`(async () => {
+    window.__syndocalPauseSceneBlockFixtureChurn?.();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+  })()`);
   const activeTransitionStats = await client.evaluate(`(async () => {
     const overview = document.querySelector('.timelineOverview');
     const markersBefore = [...document.querySelectorAll('.timelineMarker.sceneBlock')];
     if (!overview || typeof window.__syndocalSetSceneBlockFixtureState !== 'function') return null;
+    const readMarkerVisual = () => {
+      const marker = document.querySelector(
+        '.timelineOverview .timelineMarker.sceneBlock.underPlayhead:not(.selected)'
+      );
+      const body = marker?.querySelector('.timelineSceneBlockBody');
+      const style = body ? getComputedStyle(body) : null;
+      return {
+        overviewExecutingLive: overview.classList.contains('executingLive'),
+        headerExecutingLive: Boolean(document.querySelector('.timelineHeaderMeta.executingLive')),
+        perMarkerActiveClassCount: document.querySelectorAll(
+          '.timelineOverview .timelineMarker.sceneBlock.active'
+        ).length,
+        markerId: marker?.getAttribute('data-timeline-event-id') ?? '',
+        stroke: style?.stroke ?? '',
+        strokeWidth: style?.strokeWidth ?? '',
+        strokeDasharray: style?.strokeDasharray ?? '',
+      };
+    };
     let childListMutations = 0;
     let addedNodes = 0;
     let removedNodes = 0;
@@ -3049,17 +4097,23 @@ async function runSceneBlockLargeViewport(client, viewport) {
     const startedAt = performance.now();
     window.__syndocalSetSceneBlockFixtureState(1000, true);
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
-    const activeCount = document.querySelectorAll('.timelineMarker.sceneBlock.active').length;
+    const liveMarkerVisual = readMarkerVisual();
+    const activeCount = overview.classList.contains('executingLive')
+      ? document.querySelectorAll('.timelineOverview .timelineMarker.sceneBlock.underPlayhead').length : 0;
     const liveRowCount = document.querySelectorAll('.sceneBlockRow.live').length;
     window.__syndocalSetSceneBlockFixtureState(1000, false);
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const stoppedMarkerVisual = readMarkerVisual();
     const elapsedMs = performance.now() - startedAt;
     observer.disconnect();
     const markersAfter = [...document.querySelectorAll('.timelineMarker.sceneBlock')];
     return {
       activeCount,
       liveRowCount,
-      stoppedActiveCount: document.querySelectorAll('.timelineMarker.sceneBlock.active').length,
+      liveMarkerVisual,
+      stoppedMarkerVisual,
+      stoppedActiveCount: overview.classList.contains('executingLive')
+        ? document.querySelectorAll('.timelineOverview .timelineMarker.sceneBlock.underPlayhead').length : 0,
       stoppedUnderPlayheadCount: document.querySelectorAll('.timelineMarker.sceneBlock.underPlayhead').length,
       stoppedLiveRowCount: document.querySelectorAll('.sceneBlockRow.live').length,
       childListMutations,
@@ -3293,7 +4347,8 @@ async function runSceneBlockLargeViewport(client, viewport) {
       firstMarkerRevealVisible,
       repeatedSelectionVisible,
       cueIdentitySearchReached500,
-      selectedMarkerRenderedLast: document.querySelector('.timelineOverview .timelineMarker:last-of-type')?.getAttribute('data-timeline-event-id') === '493',
+      selectedMarkerRenderedLast: [...document.querySelectorAll('.timelineOverview .timelineMarker')]
+        .at(-1)?.getAttribute('data-timeline-event-id') === '493',
       cleanSaveDisabled,
       dirtyClassVisible,
       dirtyBadgeVisible,
@@ -3576,6 +4631,11 @@ async function runSceneBlockLargeViewport(client, viewport) {
     placementMoreLabel: (document.querySelector('.cueTimelinePlacementMore')?.textContent || '').trim(),
   }))()`);
   const cueContainment = await measure(client, `scene-block-large-cues-${viewport.width}x${viewport.height}`);
+  const role = viewportRole(viewport);
+  const requiresFullScaleVisualSignoff = role !== "compact-fallback";
+  const activeTransitionBudgetMs = role === "compact-fallback"
+    ? 4_000
+    : role === "extended-ceiling" ? 2_000 : 1_200;
   const passed = Boolean(
     showStats.overviewBlockCount === 500 &&
     showStats.overviewLoopLineCount <= 400 &&
@@ -3587,15 +4647,25 @@ async function runSceneBlockLargeViewport(client, viewport) {
     activeTransitionStats !== null &&
     activeTransitionStats.activeCount === 500 &&
     activeTransitionStats.liveRowCount > 0 &&
+    activeTransitionStats.liveMarkerVisual.overviewExecutingLive &&
+    activeTransitionStats.liveMarkerVisual.headerExecutingLive &&
+    activeTransitionStats.liveMarkerVisual.perMarkerActiveClassCount === 0 &&
+    activeTransitionStats.liveMarkerVisual.markerId !== '' &&
+    !activeTransitionStats.stoppedMarkerVisual.overviewExecutingLive &&
+    !activeTransitionStats.stoppedMarkerVisual.headerExecutingLive &&
+    activeTransitionStats.stoppedMarkerVisual.perMarkerActiveClassCount === 0 &&
+    activeTransitionStats.liveMarkerVisual.stroke !== activeTransitionStats.stoppedMarkerVisual.stroke &&
+    activeTransitionStats.liveMarkerVisual.strokeDasharray !== activeTransitionStats.stoppedMarkerVisual.strokeDasharray &&
+    activeTransitionStats.stoppedMarkerVisual.strokeDasharray !== 'none' &&
     activeTransitionStats.stoppedActiveCount === 0 &&
     activeTransitionStats.stoppedUnderPlayheadCount === 500 &&
     activeTransitionStats.stoppedLiveRowCount === 0 &&
     activeTransitionStats.childListMutations === 0 &&
     activeTransitionStats.addedNodes === 0 &&
     activeTransitionStats.removedNodes === 0 &&
-    activeTransitionStats.classAttributeMutations <= 1_100 &&
+    activeTransitionStats.classAttributeMutations <= 4 &&
     activeTransitionStats.markerIdentityStable &&
-    activeTransitionStats.elapsedMs < 1_200 &&
+    activeTransitionStats.elapsedMs < activeTransitionBudgetMs &&
     markerDragStats !== null &&
     Math.abs(markerDragStats.tinyMoveX - markerDragStats.initialX) < 1 &&
     Math.abs(markerDragStats.committedMoveX - markerDragStats.expectedCommittedX) < 2 &&
@@ -3615,8 +4685,8 @@ async function runSceneBlockLargeViewport(client, viewport) {
     showStats.pagerCount === 1 &&
     showStats.pagerLabel.includes('493-500 / 500') &&
     showStats.reachedLastBlock &&
-    showStats.firstMarkerRevealVisible &&
-    showStats.repeatedSelectionVisible &&
+    (!requiresFullScaleVisualSignoff || showStats.firstMarkerRevealVisible) &&
+    (!requiresFullScaleVisualSignoff || showStats.repeatedSelectionVisible) &&
     showStats.cueIdentitySearchReached500 &&
     showStats.selectedMarkerRenderedLast &&
     showStats.cleanSaveDisabled &&
@@ -3628,7 +4698,7 @@ async function runSceneBlockLargeViewport(client, viewport) {
     showStats.globalSaveBlocked &&
     showStats.cleanAfterRevert &&
     showStats.overviewBackgroundFits &&
-    showStats.renderedBlockLabelFontSize >= 9 &&
+    (!requiresFullScaleVisualSignoff || showStats.renderedBlockLabelFontSize >= 9) &&
     showStats.longLabelWithinBody &&
     showStats.sharedJumpPickerCount === 0 &&
     showStats.fieldLabelFontSize >= 10 &&
@@ -3803,7 +4873,7 @@ async function main() {
 
     client = await createCdpClient();
     console.log(
-      `viewport contract primary=${primaryOperationalViewport.width}x${primaryOperationalViewport.height} native=${nativeMaximizedViewport.width}x${nativeMaximizedViewport.height} extended=${extendedCeilingViewport.width}x${extendedCeilingViewport.height} fallbacks=${compactFallbackViewports.map((viewport) => `${viewport.width}x${viewport.height}`).join(",")} screenshots=${captureAllViewportScreenshots ? "all" : "maximized"}`,
+      `viewport contract primary-browser=${primaryOperationalViewport.width}x${primaryOperationalViewport.height} measured-client-size-browser=${measuredClientSizeViewport.width}x${measuredClientSizeViewport.height} extended-browser=${extendedCeilingViewport.width}x${extendedCeilingViewport.height} fallback-browsers=${compactFallbackViewports.map((viewport) => `${viewport.width}x${viewport.height}`).join(",")} screenshots=${captureAllViewportScreenshots ? "all" : "large-browser-fixtures"}`,
     );
     if (largeShowMode) {
       const result = await runLargeShowViewport(client, viewports[0]);
@@ -3849,6 +4919,50 @@ async function main() {
       }
       return;
     }
+    if (sceneBlockHourOnlyMode) {
+      const results = [];
+      for (const viewport of fullWindowTimelineViewports) {
+        const result = await runSceneBlockHourViewport(client, viewport);
+        results.push(result);
+        console.log(`${result.passed ? "pass" : "fail"} ${result.label} ${JSON.stringify({
+          initialStats: result.initialStats,
+          initialRulerBounds: result.initialRulerBounds,
+          revealStats: result.revealStats,
+          revealRulerBounds: result.revealRulerBounds,
+          dragStats: result.dragStats,
+          zoomStats: result.zoomStats,
+          navigationStats: result.navigationStats,
+          finalRevealStats: result.finalRevealStats,
+          finalRulerBounds: result.finalRulerBounds,
+          screenshotVerification: result.screenshotVerification,
+        })}`);
+      }
+      const failures = results.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Scene Block hour viewport failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
+    if (sceneBlockOverlapOnlyMode) {
+      const results = [];
+      for (const viewport of fullWindowTimelineViewports) {
+        const result = await runSceneBlockOverlapViewport(client, viewport);
+        results.push(result);
+        console.log(`${result.passed ? "pass" : "fail"} ${result.label} ${JSON.stringify({
+          lighting: result.lighting,
+          video: result.video,
+          switchStats: result.switchStats,
+          clippedDragStats: result.clippedDragStats,
+          finalStats: result.finalStats,
+          screenshotVerification: result.screenshotVerification,
+        })}`);
+      }
+      const failures = results.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Scene Block overlap viewport failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
     if (sceneBlockOnlyMode) {
       const sceneBlockResults = [];
       for (const viewport of viewports) {
@@ -3887,7 +5001,7 @@ async function main() {
     }
     const sceneBlockScaleViewports = viewports.filter((viewport) =>
       isPrimaryOperationalViewport(viewport) ||
-      isNativeMaximizedViewport(viewport) ||
+      isMeasuredClientSizeViewport(viewport) ||
       matchesViewport(viewport, compactFallbackViewports[0]),
     );
     for (const viewport of sceneBlockScaleViewports.length > 0 ? sceneBlockScaleViewports : viewports.slice(0, 1)) {

@@ -125,9 +125,12 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
     setCuePage(Math.floor(revealIndex / cuesPerPage));
     if (props.mode === "live") setCueEditing(true);
     queueMicrotask(() => requestAnimationFrame(() => requestAnimationFrame(() => {
-      cuePanelElement
-        ?.querySelector<HTMLElement>(`[data-cue-id="${revealCueId}"]`)
-        ?.scrollIntoView({ block: "start" });
+      const target = cuePanelElement
+        ?.querySelector<HTMLElement>(`[data-cue-id="${revealCueId}"]`);
+      if (!cuePanelElement || !target) return;
+      const panelRect = cuePanelElement.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      cuePanelElement.scrollTop += targetRect.top - panelRect.top;
     })));
   });
 

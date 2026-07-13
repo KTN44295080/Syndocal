@@ -1,13 +1,16 @@
 import { render } from "solid-js/web";
 import App from "./App";
 import { DesktopWindowModeController } from "./components/DesktopWindowModeController";
+import { shouldMountDesktopWindowModeController } from "./desktopWindowMode";
 import "./styles.css";
 
-render(
-  () => (
+const Root = () =>
+  shouldMountDesktopWindowModeController(window.location.search) ? (
     <DesktopWindowModeController>
       <App />
     </DesktopWindowModeController>
-  ),
-  document.getElementById("root") as HTMLElement,
-);
+  ) : (
+    <App />
+  );
+
+render(() => <Root />, document.getElementById("root") as HTMLElement);

@@ -36,6 +36,8 @@ interface TimelineSceneBlocksEditorProps {
   jumpToEventId: number | null;
   cueOptions: TimelineSceneBlockCueOption[];
   eventRows: TimelineSceneBlockRow[];
+  filterEventIds: number[] | null;
+  filterLabel: string | null;
   selectedEventId: number | null;
   selectionRevision: number;
   timelineEventDraft: (event: TimelineCueEventSummary) => TimelineEventDraft;
@@ -51,6 +53,7 @@ interface TimelineSceneBlocksEditorProps {
   onSaveEvent: (event: TimelineCueEventSummary) => void | Promise<void>;
   onRemoveEvent: (event: TimelineCueEventSummary) => void | Promise<void>;
   onSelectEvent: (eventId: number) => void;
+  onClearEventFilter: () => void;
   onOpenSourceCue: (cueId: number) => void;
 }
 
@@ -87,21 +90,34 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
   };
   const blockCount = () => props.eventRows.filter((event) => event.duration_ms > 0).length;
   const pointCount = () => props.eventRows.length - blockCount();
+  const sourceIndexByEventId = createMemo(() => new Map(
+    props.eventRows.map((event, index) => [event.id, index]),
+  ));
+  const filterEventIdSet = createMemo(() => props.filterEventIds === null
+    ? null
+    : new Set(props.filterEventIds));
   const filteredRows = createMemo(() => {
+    const filterIds = filterEventIdSet();
+    const scopedRows = filterIds === null
+      ? props.eventRows
+      : props.eventRows.filter((event) => filterIds.has(event.id));
     const query = rowQuery().trim().toLocaleLowerCase();
-    if (!query) return props.eventRows;
+    if (!query) return scopedRows;
     if (/^\d+$/.test(query)) {
       const numericQuery = Number(query);
-      return props.eventRows.filter((event) =>
+      return scopedRows.filter((event) =>
         event.id === numericQuery || event.cue_id === numericQuery || event.cue_number === query || event.time_ms === numericQuery,
       );
     }
-    return props.eventRows.filter((event) => searchTokensMatch(
+    return scopedRows.filter((event) => searchTokensMatch(
       `#${event.id} list ${event.cue_list_id} l${event.cue_list_id} cue ${event.cue_id} ${event.cue_number} ${event.cue_label} ${event.time_ms}`
         .toLocaleLowerCase(),
       query,
     ));
   });
+  const filteredIndexByEventId = createMemo(() => new Map(
+    filteredRows().map((event, index) => [event.id, index]),
+  ));
   const pageCount = createMemo(() => Math.max(1, Math.ceil(filteredRows().length / sceneBlockRowsPerPage)));
   const visibleRows = createMemo(() => {
     const start = page() * sceneBlockRowsPerPage;
@@ -159,37 +175,44 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
   createEffect(() => {
     if (page() >= pageCount()) setPage(pageCount() - 1);
   });
-  createEffect(() => {
-    rowQuery();
-    setPage(0);
-  });
   let lastSyncedSelectionRevision = -1;
   let lastSyncedSelectedIndex = -1;
+  let lastSyncedFilterEventIds: number[] | null | undefined;
   let selectedPageSyncRevision = 0;
   createEffect(() => {
     const selectedEventId = props.selectedEventId;
     const selectionRevision = props.selectionRevision;
+    const filterEventIds = props.filterEventIds;
+    const filterChanged = filterEventIds !== lastSyncedFilterEventIds;
     const sourceIndex = selectedEventId === null
       ? -1
-      : props.eventRows.findIndex((event) => event.id === selectedEventId);
+      : (sourceIndexByEventId().get(selectedEventId) ?? -1);
     if (
       selectedEventId === null ||
       sourceIndex < 0 ||
-      (selectionRevision === lastSyncedSelectionRevision && sourceIndex === lastSyncedSelectedIndex)
+      (!filterChanged && selectionRevision === lastSyncedSelectionRevision && sourceIndex === lastSyncedSelectedIndex)
     ) return;
     lastSyncedSelectionRevision = selectionRevision;
     lastSyncedSelectedIndex = sourceIndex;
+    lastSyncedFilterEventIds = filterEventIds;
     const scrollSelectedRow = (revision: number) => {
       if (revision === selectedPageSyncRevision) scrollRowIntoView(selectedEventId);
     };
-    const filteredIndex = filteredRows().findIndex((event) => event.id === selectedEventId);
+    const filteredIndex = filteredIndexByEventId().get(selectedEventId) ?? -1;
     if (filteredIndex >= 0) {
       const revision = ++selectedPageSyncRevision;
       setPage(Math.floor(filteredIndex / sceneBlockRowsPerPage));
       queueMicrotask(() => scrollSelectedRow(revision));
       return;
     }
+    if (filterChanged && filterEventIdSet() !== null) {
+      ++selectedPageSyncRevision;
+      setRowQuery("");
+      setPage(0);
+      return;
+    }
     const revision = ++selectedPageSyncRevision;
+    if (filterEventIdSet() !== null) props.onClearEventFilter();
     setRowQuery("");
     queueMicrotask(() => {
       if (revision === selectedPageSyncRevision) {
@@ -214,11 +237,12 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
     }
     if (
       rowQuery().trim() ||
+      props.filterEventIds !== null ||
       props.eventRows.some((event) => !timelineEventDraftMatchesSummary(event, props.timelineEventDraft(event)))
     ) return;
     if (lastFollowedLiveEventId === liveEvent.id) return;
     lastFollowedLiveEventId = liveEvent.id;
-    const index = props.eventRows.findIndex((event) => event.id === liveEvent.id);
+    const index = sourceIndexByEventId().get(liveEvent.id) ?? -1;
     if (index < 0) return;
     setPage(Math.floor(index / sceneBlockRowsPerPage));
     queueMicrotask(() => scrollRowIntoView(liveEvent.id));
@@ -554,7 +578,14 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
         <span>Actions</span>
       </div>
 
-      <Show when={props.eventRows.length > sceneBlockRowsPerPage || rowQuery().length > 0}>
+      <Show when={props.filterEventIds !== null}>
+        <div class="sceneBlockOverlapFilter" role="status">
+          <span>{props.filterLabel ?? "Overlap"} · {props.filterEventIds?.length ?? 0} blocks</span>
+          <button type="button" onClick={props.onClearEventFilter}>Clear overlap filter</button>
+        </div>
+      </Show>
+
+      <Show when={props.eventRows.length > sceneBlockRowsPerPage || rowQuery().length > 0 || props.filterEventIds !== null}>
         <nav class="sceneBlockPager" aria-label="Scene Block pages">
           <input
             class="sceneBlockRowSearch"
@@ -562,9 +593,21 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
             aria-label="Search Scene Blocks"
             placeholder="Find ID, Cue, name, or start"
             value={rowQuery()}
-            onInput={(event) => setRowQuery(event.currentTarget.value)}
+            onInput={(event) => {
+              setRowQuery(event.currentTarget.value);
+              setPage(0);
+            }}
           />
-          <button type="button" onClick={() => setRowQuery("")} disabled={!rowQuery()}>Clear</button>
+          <button
+            type="button"
+            onClick={() => {
+              setRowQuery("");
+              setPage(0);
+            }}
+            disabled={!rowQuery()}
+          >
+            Clear
+          </button>
           <button type="button" onClick={() => setPage(0)} disabled={page() === 0}>First</button>
           <button type="button" onClick={() => setPage(Math.max(0, page() - 1))} disabled={page() === 0}>Prev</button>
           <span>Blocks {pageRangeLabel()}</span>

@@ -6,7 +6,6 @@ import {
   type TimelineAutomationDraft,
   type TimelineVideoAutomationDraft,
 } from "./editorDrafts";
-import { clampRange } from "./numericHelpers";
 import {
   draftRangeFromKeyframes,
   movedTimelineKeyframe,
@@ -21,7 +20,6 @@ type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>
 interface TimelineOverviewAutomationControllerOptions {
   snapshot: Accessor<EngineSnapshot>;
   snapTimeMs: (timeMs: number) => number;
-  timelineOverviewDurationMs: Accessor<number>;
   invoke: Invoke;
   setTimelineAutomationDrafts: Setter<Record<number, TimelineAutomationDraft>>;
   setTimelineVideoAutomationDrafts: Setter<Record<number, TimelineVideoAutomationDraft>>;
@@ -32,14 +30,12 @@ interface TimelineOverviewAutomationControllerOptions {
 export function createTimelineOverviewAutomationController(
   options: TimelineOverviewAutomationControllerOptions,
 ) {
-  const automationBoundsFromResizeRatio = (
+  const automationBoundsFromResizeTime = (
     range: TimelineOverviewAutomationRange,
     edge: "start" | "end",
-    ratio: number,
+    requestedTimeMs: number,
   ) => {
-    const targetMs = options.snapTimeMs(
-      Math.round(clampRange(ratio, 0, 1) * options.timelineOverviewDurationMs()),
-    );
+    const targetMs = options.snapTimeMs(Math.max(0, Math.round(requestedTimeMs)));
     const startMs = Math.max(0, range.start_ms);
     const endMs = Math.max(startMs + 1, range.end_ms);
     return edge === "start"
@@ -47,13 +43,11 @@ export function createTimelineOverviewAutomationController(
       : { startMs, endMs: Math.max(startMs + 1, targetMs) };
   };
 
-  const moveTimelineAutomationRangeToRatio = async (
+  const moveTimelineAutomationRangeToTime = async (
     range: TimelineOverviewAutomationRange,
-    ratio: number,
+    requestedStartMs: number,
   ) => {
-    const nextStartMs = options.snapTimeMs(
-      Math.round(clampRange(ratio, 0, 1) * options.timelineOverviewDurationMs()),
-    );
+    const nextStartMs = options.snapTimeMs(Math.max(0, Math.round(requestedStartMs)));
     if (range.kind === "lighting") {
       const automation = options.snapshot().timeline.automations.find(
         (candidate) => candidate.id === range.automation_id,
@@ -122,12 +116,12 @@ export function createTimelineOverviewAutomationController(
     }
   };
 
-  const resizeTimelineAutomationRangeToRatio = async (
+  const resizeTimelineAutomationRangeToTime = async (
     range: TimelineOverviewAutomationRange,
     edge: "start" | "end",
-    ratio: number,
+    requestedTimeMs: number,
   ) => {
-    const bounds = automationBoundsFromResizeRatio(range, edge, ratio);
+    const bounds = automationBoundsFromResizeTime(range, edge, requestedTimeMs);
     if (range.kind === "lighting") {
       const automation = options.snapshot().timeline.automations.find(
         (candidate) => candidate.id === range.automation_id,
@@ -196,14 +190,12 @@ export function createTimelineOverviewAutomationController(
     }
   };
 
-  const moveTimelineAutomationKeyframeToRatio = async (
+  const moveTimelineAutomationKeyframeToTime = async (
     range: TimelineOverviewAutomationRange,
     keyframeIndex: number,
-    ratio: number,
+    requestedTimeMs: number,
   ) => {
-    const nextTimeMs = options.snapTimeMs(
-      Math.round(clampRange(ratio, 0, 1) * options.timelineOverviewDurationMs()),
-    );
+    const nextTimeMs = options.snapTimeMs(Math.max(0, Math.round(requestedTimeMs)));
     const lighting = range.kind === "lighting";
     const automation = lighting
       ? options.snapshot().timeline.automations.find((candidate) => candidate.id === range.automation_id)
@@ -260,8 +252,8 @@ export function createTimelineOverviewAutomationController(
   };
 
   return {
-    moveTimelineAutomationRangeToRatio,
-    resizeTimelineAutomationRangeToRatio,
-    moveTimelineAutomationKeyframeToRatio,
+    moveTimelineAutomationRangeToTime,
+    resizeTimelineAutomationRangeToTime,
+    moveTimelineAutomationKeyframeToTime,
   };
 }

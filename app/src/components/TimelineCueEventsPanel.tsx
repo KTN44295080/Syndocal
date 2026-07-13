@@ -1,7 +1,17 @@
 import { createEffect, createSignal, For, Show } from "solid-js";
 import type { TimelineEventDraft } from "../editorDrafts";
 import type { AudioAnalysisSummary, TimelineCueEventSummary, TimelineTrackKind } from "../types";
-import { TimelineOverview, type TimelineOverviewAutomationRange, type TimelineOverviewEvent } from "./TimelineOverview";
+import {
+  TIMELINE_MIN_VISIBLE_WINDOW_MS,
+  timelineVisibleWindowSpanMs,
+  type TimelineVisibleWindow,
+} from "../timelineViewport";
+import {
+  TimelineOverview,
+  type TimelineOverviewAutomationRange,
+  type TimelineOverviewEvent,
+  type TimelineOverviewOverlapCluster,
+} from "./TimelineOverview";
 import {
   TimelineSceneBlocksEditor,
   type TimelineSceneBlockCueOption,
@@ -38,9 +48,17 @@ interface TimelineCueEventsPanelProps {
   lightingAutomationCount: number;
   videoAutomationCount: number;
   overviewEvents: TimelineOverviewEvent[];
+  overviewMarkerAriaLabel: (event: TimelineOverviewEvent) => string;
   overviewAutomationRanges: TimelineOverviewAutomationRange[];
+  overviewOverlapClusters: TimelineOverviewOverlapCluster[];
+  overlapClusterMemberships: { id: string; member_ids: number[] }[];
   selectedAutomationRangeId: string | null;
   overviewPlayheadX: number;
+  visibleWindow: TimelineVisibleWindow;
+  overviewShowDurationMs: number;
+  overviewEditExtentMs: number;
+  selectedEventId: number | null;
+  selectionRevision: number;
   audioAnalysis: AudioAnalysisSummary | null;
   audioWaveformPoints: string;
   audioSpectrumPaths: { bass: string; mid: string; high: string };
@@ -59,20 +77,26 @@ interface TimelineCueEventsPanelProps {
   onSeek: (timeMs: number) => void | Promise<void>;
   onPause: () => void | Promise<void>;
   onPlay: () => void | Promise<void>;
-  onSeekRatio: (ratio: number) => void;
-  onMoveEventRatio: (eventId: number, ratio: number) => void | Promise<void>;
+  onSeekOverviewTime: (timeMs: number) => void;
+  onMoveEventTime: (eventId: number, timeMs: number) => void | Promise<void>;
   onSelectAutomationRange: (range: TimelineOverviewAutomationRange) => void;
-  onMoveAutomationRangeRatio: (range: TimelineOverviewAutomationRange, ratio: number) => void | Promise<void>;
-  onResizeAutomationRangeRatio: (
+  onMoveAutomationRangeTime: (range: TimelineOverviewAutomationRange, timeMs: number) => void | Promise<void>;
+  onResizeAutomationRangeTime: (
     range: TimelineOverviewAutomationRange,
     edge: "start" | "end",
-    ratio: number,
+    timeMs: number,
   ) => void | Promise<void>;
-  onMoveAutomationKeyframeRatio: (
+  onMoveAutomationKeyframeTime: (
     range: TimelineOverviewAutomationRange,
     keyframeIndex: number,
-    ratio: number,
+    timeMs: number,
   ) => void | Promise<void>;
+  onSelectEvent: (eventId: number, reveal: boolean) => void;
+  onFitOverview: () => void;
+  onZoomOverview: (scale: number) => void;
+  onPanOverview: (direction: -1 | 1) => void;
+  onRevealSelected: () => void;
+  onRevealPlayhead: () => void;
   onAnalyzeAudio: () => void | Promise<void>;
   onClearAudio: () => void | Promise<void>;
   onApplyAudioBpm: () => void | Promise<void>;
@@ -95,23 +119,53 @@ interface TimelineCueEventsPanelProps {
 }
 
 export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
-  const [selectedSceneBlockEventId, setSelectedSceneBlockEventId] = createSignal<number | null>(null);
-  const [sceneBlockSelectionRevision, setSceneBlockSelectionRevision] = createSignal(0);
-  const selectSceneBlockEvent = (eventId: number) => {
-    setSelectedSceneBlockEventId(eventId);
-    setSceneBlockSelectionRevision((revision) => revision + 1);
+  const [overlapFilter, setOverlapFilter] = createSignal<{
+    eventIds: number[];
+    label: string;
+    clusterIds: string[];
+  } | null>(null);
+  const overlapFilterEventIds = () => overlapFilter()?.eventIds ?? null;
+  const overlapFilterLabel = () => overlapFilter()?.label ?? null;
+  const overlapFilterClusterIds = () => overlapFilter()?.clusterIds ?? null;
+  const inspectOverlapCluster = (cluster: TimelineOverviewOverlapCluster) => {
+    setOverlapFilter({
+      eventIds: cluster.member_ids,
+      label: `${cluster.track} overlap ×${cluster.count}`,
+      clusterIds: cluster.source_cluster_ids ?? [cluster.id],
+    });
+    if (
+      cluster.member_ids.length > 0 &&
+      (props.selectedEventId === null || !cluster.member_ids.includes(props.selectedEventId))
+    ) {
+      props.onSelectEvent(cluster.member_ids[0], false);
+    }
+  };
+  const clearOverlapFilter = () => {
+    setOverlapFilter(null);
   };
   createEffect(() => {
-    const selectedEventId = selectedSceneBlockEventId();
-    if (selectedEventId !== null && !props.eventRows.some((event) => event.id === selectedEventId)) {
-      setSelectedSceneBlockEventId(null);
+    const clusterIds = overlapFilterClusterIds();
+    const eventIds = overlapFilterEventIds();
+    if (clusterIds === null || eventIds === null) return;
+    const liveClusters = clusterIds.map((clusterId) =>
+      props.overlapClusterMemberships.find((cluster) => cluster.id === clusterId));
+    const liveMemberIds = new Set(liveClusters.flatMap((cluster) => cluster?.member_ids ?? []));
+    if (
+      liveClusters.some((cluster) => !cluster) ||
+      liveMemberIds.size !== eventIds.length ||
+      eventIds.some((eventId) => !liveMemberIds.has(eventId))
+    ) {
+      clearOverlapFilter();
     }
   });
   return (
     <>
       <div class="panelHeader">
         <h2>Timeline</h2>
-        <div class="timelineHeaderMeta" aria-label="Timeline summary">
+        <div
+          class={`timelineHeaderMeta ${props.executingLive ? "executingLive" : ""}`}
+          aria-label="Timeline summary"
+        >
           <span>
             <small>Blocks</small>
             <strong>{props.eventRows.filter((event) => event.duration_ms > 0).length}</strong>
@@ -150,21 +204,70 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         value={props.positionMs}
         onInput={(event) => void props.onSeek(Number(event.currentTarget.value))}
       />
+      <nav class="timelineViewportToolbar" aria-label="Timeline visible range controls">
+        <button
+          type="button"
+          onClick={() => props.onPanOverview(-1)}
+          disabled={props.visibleWindow.start_ms <= 0}
+        >
+          Pan Prev
+        </button>
+        <button
+          type="button"
+          onClick={() => props.onZoomOverview(2)}
+          disabled={timelineVisibleWindowSpanMs(props.visibleWindow) >= props.overviewEditExtentMs}
+        >
+          Zoom Out
+        </button>
+        <button type="button" onClick={props.onFitOverview}>Fit All</button>
+        <button
+          type="button"
+          onClick={() => props.onZoomOverview(0.5)}
+          disabled={timelineVisibleWindowSpanMs(props.visibleWindow) <= TIMELINE_MIN_VISIBLE_WINDOW_MS}
+        >
+          Zoom In
+        </button>
+        <button
+          type="button"
+          onClick={() => props.onPanOverview(1)}
+          disabled={props.visibleWindow.end_ms >= props.overviewEditExtentMs}
+        >
+          Pan Next
+        </button>
+        <button type="button" onClick={props.onRevealSelected} disabled={props.selectedEventId === null}>
+          Reveal Selected
+        </button>
+        <button type="button" onClick={props.onRevealPlayhead}>Reveal Playhead</button>
+        <output
+          class="timelineVisibleRange tabularNums"
+          aria-label="Visible timeline range"
+          data-visible-start-ms={props.visibleWindow.start_ms}
+          data-visible-end-ms={props.visibleWindow.end_ms}
+          data-show-duration-ms={props.overviewShowDurationMs}
+          data-edit-extent-ms={props.overviewEditExtentMs}
+        >
+          {formatTimelineHeaderTime(props.visibleWindow.start_ms)} – {formatTimelineHeaderTime(props.visibleWindow.end_ms)}
+        </output>
+      </nav>
       <TimelineOverview
         events={props.overviewEvents}
+        executionLive={props.executingLive}
+        markerAriaLabel={props.overviewMarkerAriaLabel}
         automationRanges={props.overviewAutomationRanges}
+        overlapClusters={props.overviewOverlapClusters}
         selectedRangeId={props.selectedAutomationRangeId}
-        selectedEventId={selectedSceneBlockEventId()}
+        selectedEventId={props.selectedEventId}
         playheadX={props.overviewPlayheadX}
-        onSeekRatio={props.onSeekRatio}
-        onSeekTime={(timeMs) => void props.onSeek(timeMs)}
+        visibleWindow={props.visibleWindow}
+        onSeekTime={props.onSeekOverviewTime}
         onSelectAutomationRange={props.onSelectAutomationRange}
-        onSelectEvent={selectSceneBlockEvent}
-        onMoveEventRatio={(eventId, ratio) => void props.onMoveEventRatio(eventId, ratio)}
-        onMoveAutomationRangeRatio={(range, ratio) => void props.onMoveAutomationRangeRatio(range, ratio)}
-        onResizeAutomationRangeRatio={(range, edge, ratio) => void props.onResizeAutomationRangeRatio(range, edge, ratio)}
-        onMoveAutomationKeyframeRatio={(range, keyframeIndex, ratio) =>
-          void props.onMoveAutomationKeyframeRatio(range, keyframeIndex, ratio)
+        onSelectEvent={(eventId) => props.onSelectEvent(eventId, false)}
+        onInspectOverlapCluster={inspectOverlapCluster}
+        onMoveEventTime={(eventId, timeMs) => void props.onMoveEventTime(eventId, timeMs)}
+        onMoveAutomationRangeTime={(range, timeMs) => void props.onMoveAutomationRangeTime(range, timeMs)}
+        onResizeAutomationRangeTime={(range, edge, timeMs) => void props.onResizeAutomationRangeTime(range, edge, timeMs)}
+        onMoveAutomationKeyframeTime={(range, keyframeIndex, timeMs) =>
+          void props.onMoveAutomationKeyframeTime(range, keyframeIndex, timeMs)
         }
       />
       <div class="audioAnalysisPanel">
@@ -258,8 +361,10 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         jumpToEventId={props.blockJumpToEventId}
         cueOptions={props.cueOptions}
         eventRows={props.eventRows}
-        selectedEventId={selectedSceneBlockEventId()}
-        selectionRevision={sceneBlockSelectionRevision()}
+        filterEventIds={overlapFilterEventIds()}
+        filterLabel={overlapFilterLabel()}
+        selectedEventId={props.selectedEventId}
+        selectionRevision={props.selectionRevision}
         timelineEventDraft={props.timelineEventDraft}
         onSelectedCueId={props.onSelectedCueId}
         onStartMs={props.onEventTimeMs}
@@ -272,7 +377,8 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         onUpdateEventDraft={props.onUpdateEventDraft}
         onSaveEvent={props.onSaveEvent}
         onRemoveEvent={props.onRemoveEvent}
-        onSelectEvent={selectSceneBlockEvent}
+        onSelectEvent={(eventId) => props.onSelectEvent(eventId, true)}
+        onClearEventFilter={clearOverlapFilter}
         onOpenSourceCue={props.onOpenSourceCue}
       />
     </>

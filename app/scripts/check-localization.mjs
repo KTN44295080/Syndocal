@@ -14,6 +14,10 @@ const transpiled = ts.transpileModule(source, {
 const localization = await import(
   `data:text/javascript;base64,${Buffer.from(transpiled.outputText).toString("base64")}`
 );
+const timelineOverviewSource = await readFile(
+  new URL("../src/components/TimelineOverview.tsx", import.meta.url),
+  "utf8",
+);
 
 assert.equal(localization.uiLocaleFromUnknown("ja"), "ja");
 assert.equal(localization.uiLocaleFromUnknown("en"), "en");
@@ -24,6 +28,18 @@ assert.equal(localization.translateUiText("3 steps", "ja"), "3 手順");
 assert.equal(localization.translateUiText("Install v1.2.0", "ja"), "v1.2.0をインストール");
 assert.equal(localization.translateUiText("Jump", "ja"), "ジャンプ");
 assert.equal(localization.translateUiText("Blocks 13-24 / 500", "ja"), "ブロック 13-24 / 500");
+assert.equal(localization.translateUiText("Lighting overlap ×250", "ja"), "照明の重複 ×250");
+assert.equal(
+  localization.translateUiText("Video overlap (250); 0 to 256000 ms; inspect 250 overlapping blocks", "ja"),
+  "映像の重複。0〜256000 ms、250ブロックを確認",
+);
+assert.equal(
+  localization.translateUiText(
+    "Lighting overlap groups (3); 1000 to 9000 ms; inspect 42 blocks across 3 overlap groups",
+    "ja",
+  ),
+  "照明の重複グループ。1000〜9000 ms、3グループ内の42ブロックを確認",
+);
 assert.equal(
   localization.translateUiText("L 3 · V 2 · FX 1 · Fade 320 ms", "ja"),
   "照明 3 · 映像 2 · FX 1 · フェード 320 ms",
@@ -69,6 +85,60 @@ assert.equal(
 );
 assert.equal(localization.translateUiText("Custom fixture", "ja"), "Custom fixture");
 assert.equal(localization.translateUiText("Save", "en"), "Save");
+
+const accessibleSceneBlock = {
+  id: 12,
+  cue_label: "Opening Wash",
+  track: "Lighting",
+  time_ms: 1_500,
+  duration_ms: 750,
+  loop_count: 4,
+  total_duration_ms: 3_000,
+};
+const accessiblePointEvent = {
+  id: 13,
+  cue_label: "Video Hit",
+  track: "Video",
+  time_ms: 4_250,
+  duration_ms: 0,
+  loop_count: 99,
+  total_duration_ms: 0,
+};
+const englishSceneBlockLabel = localization.timelineOverviewMarkerAriaLabel(accessibleSceneBlock, "en");
+assert.equal(
+  englishSceneBlockLabel,
+  "Scene Block #12, Opening Wash, Lighting, starts at 1500 milliseconds, base duration 750 milliseconds, loop count 4, effective span 3000 milliseconds",
+);
+assert.match(englishSceneBlockLabel, /base duration 750 milliseconds/);
+assert.match(englishSceneBlockLabel, /loop count 4/);
+assert.match(englishSceneBlockLabel, /effective span 3000 milliseconds/);
+assert.equal(
+  localization.timelineOverviewMarkerAriaLabel(accessibleSceneBlock, "ja"),
+  "シーンブロック #12、Opening Wash、照明、開始 1500ミリ秒、基本時間 750ミリ秒、ループ回数 4、実効範囲 3000ミリ秒",
+);
+const englishPointEventLabel = localization.timelineOverviewMarkerAriaLabel(accessiblePointEvent, "en");
+assert.equal(englishPointEventLabel, "Point event #13, Video Hit, Video, at 4250 milliseconds");
+assert.doesNotMatch(englishPointEventLabel, /Block|duration|loop|span/);
+assert.equal(
+  localization.timelineOverviewMarkerAriaLabel(accessiblePointEvent, "ja"),
+  "ポイントイベント #13、Video Hit、映像、4250ミリ秒",
+);
+assert.match(
+  timelineOverviewSource,
+  /aria-label=\{props\.markerAriaLabel\(event\)\}/,
+  "TimelineOverview must use the tested localized marker formatter",
+);
+assert.doesNotMatch(
+  timelineOverviewSource,
+  /aria-label=\{`Block #\$\{event\.id\}/,
+  "the old generic Block label must not bypass point/Scene Block semantics",
+);
+const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+assert.match(
+  appSource,
+  /overviewMarkerAriaLabel=\{\(event\) => timelineOverviewMarkerAriaLabel\(event, uiLocale\(\)\)\}/,
+  "App must inject the tested uiLocalization formatter into TimelineOverview",
+);
 
 for (const operatorText of [
   "New",

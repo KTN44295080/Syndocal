@@ -31,7 +31,6 @@ interface TimelineSceneBlockControllerOptions {
   getAddLoopCount: () => number;
   getAddJumpToEventId: () => number | null;
   setNextStartMs: (timeMs: number) => void;
-  getOverviewDurationMs: () => number;
   setMessage: (message: string) => void;
   refreshSnapshot: () => Promise<unknown>;
 }
@@ -354,6 +353,29 @@ export const createTimelineSceneBlockLargeViewportFixture = (baseCue: CueSummary
   return { cues, events };
 };
 
+export const createTimelineSceneBlockHourViewportFixture = (baseCue: CueSummary) => {
+  const showDurationMs = 3_600_000;
+  const cues: CueSummary[] = Array.from({ length: 500 }, (_, index) => ({
+    ...baseCue,
+    id: baseCue.id + index,
+    cue_number: String(index + 1),
+    label: `Hour Cue ${String(index + 1).padStart(3, "0")}`,
+    fade_ms: 120 + (index % 8) * 80,
+    effect_targets: [],
+    node_graph_targets: [],
+  }));
+  const events: TimelineCueEventSummary[] = Array.from({ length: 500 }, (_, index) => ({
+    id: index + 1,
+    cue_id: cues[index].id,
+    time_ms: Math.round((index * (showDurationMs - 1_000)) / 499),
+    track: index % 2 === 0 ? "Lighting" : "Video",
+    duration_ms: 1_000,
+    loop_count: 1,
+    jump_to_event_id: null,
+  }));
+  return { cues, events, showDurationMs };
+};
+
 export const timelineSceneBlockIterationCount = (event: Pick<TimelineCueEventSummary, "loop_count">) =>
   Math.round(clamp(finiteOr(event.loop_count ?? 1, 1), 1, 256));
 
@@ -587,15 +609,13 @@ export const createTimelineSceneBlockController = (options: TimelineSceneBlockCo
       }
     },
 
-    async moveToRatio(eventId: number, ratio: number) {
+    async moveToTime(eventId: number, requestedTimeMs: number) {
       const event = options.getEventById(eventId);
       if (!event) {
         options.setMessage(`Timeline event ${eventId} was not found.`);
         return;
       }
-      const timeMs = options.snapTimeMs(
-        Math.round(clamp(ratio, 0, 1) * options.getOverviewDurationMs()),
-      );
+      const timeMs = options.snapTimeMs(Math.max(0, Math.round(finiteOr(requestedTimeMs, event.time_ms))));
       try {
         const next = await set(event, { ...options.getEventDraft(event), time_ms: timeMs });
         options.setEventDraft(event.id, next);

@@ -41,7 +41,6 @@ interface TimelineAutomationControllerOptions {
   setTimelineAutomationDrafts: Setter<Record<number, TimelineAutomationDraft>>;
   setTimelineVideoAutomationDrafts: Setter<Record<number, TimelineVideoAutomationDraft>>;
   snapTimeMs: (timeMs: number) => number;
-  timelineOverviewDurationMs: Accessor<number>;
   invoke: Invoke;
   setMessage: (message: string) => unknown;
   refreshSnapshot: () => Promise<EngineSnapshot | null>;
@@ -262,8 +261,8 @@ export function createTimelineAutomationController(options: TimelineAutomationCo
     }
   };
 
-  const seekTimelineFromOverviewRatio = (ratio: number) => {
-    void seekTimeline(options.snapTimeMs(Math.round(ratio * options.timelineOverviewDurationMs())));
+  const seekTimelineFromOverviewTime = (timeMs: number) => {
+    void seekTimeline(options.snapTimeMs(Math.max(0, Math.round(timeMs))));
   };
 
   return {
@@ -279,6 +278,6 @@ export function createTimelineAutomationController(options: TimelineAutomationCo
     playTimeline,
     pauseTimeline,
     seekTimeline,
-    seekTimelineFromOverviewRatio,
+    seekTimelineFromOverviewTime,
   };
 }

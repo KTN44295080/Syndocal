@@ -11096,6 +11096,34 @@ input[type="color"] {
   text-transform: uppercase;
 }
 
+.timelineRuler line {
+  stroke: rgba(113, 128, 147, 0.22);
+  stroke-width: 0.22;
+  pointer-events: none;
+}
+
+.timelineRuler line.major {
+  stroke: rgba(143, 160, 178, 0.38);
+  stroke-width: 0.32;
+}
+
+.timelineRuler text {
+  fill: #8290a0;
+  font-size: 4.2px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.timelineLaneLabelPlate {
+  pointer-events: none;
+}
+
+.timelineLaneLabelPlate rect {
+  fill: rgba(13, 20, 28, 0.94);
+  stroke: rgba(40, 49, 61, 0.88);
+  stroke-width: 0.25;
+}
+
 .timelineAutomationRange {
   cursor: grab;
   touch-action: none;
@@ -11204,9 +11232,9 @@ input[type="color"] {
   stroke: #61d64c;
 }
 
-.timelineMarker.active circle {
-  stroke: #ffd27d;
-  stroke-width: 0.9;
+.timelineOverview.executingLive .timelineMarker.underPlayhead circle {
+  stroke: rgba(255, 210, 125, 0.72);
+  stroke-width: 0.78;
 }
 
 .timelineMarker.dragging {
@@ -11218,10 +11246,60 @@ input[type="color"] {
   stroke-width: 1.05;
 }
 
+.timelineMarker:focus-visible {
+  outline: none;
+}
+
+.timelineMarker:focus-visible .timelineSceneBlockBody,
+.timelineMarker:focus-visible circle {
+  stroke: #ffffff;
+  stroke-width: 1.05;
+}
+
+.timelineOverlapCluster {
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.timelineOverlapCluster rect {
+  fill: rgba(13, 20, 28, 0.94);
+  stroke-width: 0.55;
+}
+
+.timelineOverlapCluster.lighting rect {
+  stroke: #83b9e7;
+}
+
+.timelineOverlapCluster.video rect {
+  stroke: #86cf9f;
+}
+
+.timelineOverlapCluster text {
+  fill: #eef4f8;
+  font-size: 4.8px;
+  font-weight: 800;
+  pointer-events: none;
+}
+
+.timelineOverlapCluster:focus-visible {
+  outline: none;
+}
+
+.timelineOverlapCluster:focus-visible rect {
+  stroke: #ffffff;
+  stroke-width: 1;
+}
+
 .timelinePlayhead {
   stroke: #ffcf7a;
   stroke-width: 0.7;
   pointer-events: none;
+}
+
+.timelineHeaderMeta.executingLive .timelineTimeStat {
+  border-color: #8f783e;
+  background: #272112;
+  box-shadow: inset 2px 0 0 #ffd27d;
 }
 
 .timecodeSyncRow {
@@ -17734,6 +17812,12 @@ h3 {
   align-items: stretch;
 }
 
+@media (min-width: 1451px) {
+  .layoutControl.controlModeLive {
+    grid-template-columns: minmax(390px, 1fr) minmax(780px, 1.2fr);
+  }
+}
+
 .layoutControl .liveControlPanel {
   grid-column: 1 / -1;
   grid-row: 1;
@@ -18120,7 +18204,12 @@ h3 {
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
-  padding-right: 3px;
+  padding-right: 1px;
+}
+
+.layoutControl.controlModeLive .faders.timelineDesk-cues > .cuePanel.cuePanelEditing > * {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .layoutControl.controlModeLive .faders.timelineDesk-cues > .cuePanel.cuePanelEditing .cueList {
@@ -18167,6 +18256,33 @@ h3 {
 
 .timelineShowSurface > input[type="range"] {
   min-height: 22px;
+}
+
+.timelineViewportToolbar {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(86px, auto)) minmax(190px, 1fr);
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-gutter: stable;
+}
+
+.timelineViewportToolbar button {
+  min-height: 28px;
+  padding: 3px 7px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.timelineVisibleRange {
+  justify-self: end;
+  min-width: 190px;
+  color: #aab5c2;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .timelineShowSurface > .timelineOverview {
@@ -20687,12 +20803,12 @@ h3 {
   pointer-events: none;
 }
 
-.timelineMarker.sceneBlock.active .timelineSceneBlockBody {
+.timelineOverview.executingLive .timelineMarker.sceneBlock.underPlayhead .timelineSceneBlockBody {
   stroke: #f0c56d;
   stroke-width: 0.75;
 }
 
-.timelineMarker.sceneBlock.underPlayhead:not(.active) .timelineSceneBlockBody {
+.timelineOverview:not(.executingLive) .timelineMarker.sceneBlock.underPlayhead .timelineSceneBlockBody {
   stroke: #94a7b5;
   stroke-dasharray: 1.2 0.8;
   stroke-width: 0.65;
@@ -20710,7 +20826,7 @@ h3 {
 }
 
 .timelineShowSurface {
-  grid-template-rows: auto auto auto minmax(88px, 0.55fr) minmax(230px, 1.45fr);
+  grid-template-rows: auto auto auto auto minmax(88px, 0.55fr) minmax(230px, 1.45fr);
 }
 
 .timelineShowSurface > .sceneBlockWorkspace {
@@ -20847,7 +20963,7 @@ h3 {
   gap: 2px;
   min-width: 0;
   color: #8f989f;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
 }
 
@@ -20938,7 +21054,7 @@ h3 {
 .sceneBlockFieldLabel small {
   flex: 0 0 auto;
   color: #73808a;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.06em;
 }
@@ -20970,11 +21086,30 @@ h3 {
   background: #141618;
   padding: 2px 6px;
   color: #686f74;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   flex: 0 0 auto;
+}
+
+.sceneBlockOverlapFilter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 30px;
+  border-bottom: 1px solid #393530;
+  background: #1b2025;
+  padding: 3px 6px;
+  color: #c4d1dc;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.sceneBlockOverlapFilter button {
+  min-height: 25px;
+  white-space: nowrap;
 }
 
 .sceneBlockList {
@@ -21392,7 +21527,7 @@ h3 {
 
 @media (max-height: 760px) {
   .timelineShowSurface {
-    grid-template-rows: auto auto auto minmax(70px, 0.42fr) minmax(190px, 1.58fr);
+    grid-template-rows: auto auto auto auto minmax(70px, 0.42fr) minmax(190px, 1.58fr);
   }
 
   .sceneBlockWorkspace {
@@ -21410,8 +21545,21 @@ h3 {
 }
 
 @media (max-height: 800px) {
+  .layoutControl.controlModeLive .cueEditRow {
+    grid-template-columns: 60px minmax(82px, 0.7fr) minmax(100px, 1fr) repeat(3, minmax(58px, 0.7fr));
+  }
+
+  .layoutControl.controlModeLive .cueEditRow .cueTrackingToggle {
+    grid-column: auto;
+  }
+
   .timelineShowSurface {
-    grid-template-rows: auto auto auto minmax(64px, 0.48fr) minmax(0, 1.52fr);
+    grid-template-rows: auto auto auto auto 64px minmax(190px, 1fr);
+    align-content: start;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
   }
 
   .timelineShowSurface > .timelineOverview {
@@ -21419,7 +21567,7 @@ h3 {
   }
 
   .sceneBlockWorkspace {
-    min-height: 0;
+    min-height: 190px;
     overflow-x: hidden;
     overflow-y: auto;
     scrollbar-gutter: stable;

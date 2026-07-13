@@ -18,7 +18,16 @@ assert.ok(
   capability.permissions.includes("core:window:allow-set-fullscreen"),
   "the main window must be allowed to change fullscreen state",
 );
-assert.ok(main.includes("<DesktopWindowModeController>"), "desktop window control must wrap the app entrypoint");
+assert.ok(
+  main.includes("shouldMountDesktopWindowModeController(window.location.search)"),
+  "the app entrypoint must scope desktop window control by route",
+);
+assert.ok(main.includes("<DesktopWindowModeController>"), "desktop window control must wrap the primary app");
+assert.match(
+  main,
+  /shouldMountDesktopWindowModeController\(window\.location\.search\)\s*\?\s*\([\s\S]*?<DesktopWindowModeController>[\s\S]*?<App \/>[\s\S]*?<\/DesktopWindowModeController>[\s\S]*?\)\s*:\s*\(\s*<App \/>/,
+  "video output routes must render App directly, outside DesktopWindowModeController",
+);
 assert.ok(controller.includes("appWindow.setFullscreen(next)"), "fullscreen changes must use the Tauri window API");
 assert.ok(controller.includes('window.addEventListener("resize"'), "native window-mode changes must be resynchronized");
 assert.ok(controller.includes('window.removeEventListener("keydown"'), "the global shortcut listener must be cleaned up");
@@ -29,6 +38,13 @@ const transpiled = ts.transpileModule(source, {
   fileName: "desktopWindowMode.ts",
 });
 const shortcuts = await import(`data:text/javascript;base64,${Buffer.from(transpiled.outputText).toString("base64")}`);
+
+assert.equal(shortcuts.shouldMountDesktopWindowModeController(""), true);
+assert.equal(shortcuts.shouldMountDesktopWindowModeController("?syndocalViewportFixture=primary"), true);
+assert.equal(shortcuts.shouldMountDesktopWindowModeController("?videoOutputId=1"), false);
+assert.equal(shortcuts.shouldMountDesktopWindowModeController("?testPattern=1&videoOutputId=12"), false);
+assert.equal(shortcuts.shouldMountDesktopWindowModeController("?videoOutputId=0"), true);
+assert.equal(shortcuts.shouldMountDesktopWindowModeController("?videoOutputId=invalid"), true);
 const event = (overrides = {}) => ({
   code: "KeyA",
   repeat: false,
@@ -63,4 +79,4 @@ for (const guarded of [
   assert.equal(shortcuts.desktopWindowShortcutAction(event(guarded), false), null);
 }
 
-console.log("maximized startup and safe desktop fullscreen shortcuts ok");
+console.log("primary-only window mode controller and safe desktop fullscreen shortcuts ok");

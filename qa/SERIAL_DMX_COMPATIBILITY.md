@@ -32,7 +32,7 @@ QLC+'s plugin architecture should not be confused with arbitrary application ser
 ## Acceptance plan
 
 1. Keep the existing three output modes as the stable serial baseline.
-2. **Complete:** add USB VID/PID/product metadata and a non-destructive protocol recommendation to Scan Serial; manual override remains available. Product-matching tests and the five-reference-viewport contract cover the behavior, with 1920x1080 primary, native 1920x1032, 2048x1152 ceiling and 1366x768/1280x720 fallbacks.
+2. **Complete:** add USB VID/PID/product metadata and a non-destructive protocol recommendation to Scan Serial; manual override remains available. Product-matching tests and the five-reference-browser-viewport contract cover the behavior, with 1920x1080 primary, a 1920x1032 measured-client-size fixture, a 2048x1152 ceiling and 1366x768/1280x720 fallbacks.
 3. Add Pro Mk2/Ultra Pro dual-output profiles using verified vendor protocol documentation and per-port routing.
 4. Add supported serial DMX input modes to the existing HTP/LTP input merge path.
 5. Build packet-codec tests for every profile before allowing a physical port to open.

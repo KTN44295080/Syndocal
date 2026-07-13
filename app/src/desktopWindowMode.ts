@@ -12,6 +12,15 @@ export interface DesktopWindowShortcutEvent {
   editableTarget: boolean;
 }
 
+export const shouldMountDesktopWindowModeController = (search: string): boolean => {
+  const rawOutputId = new URLSearchParams(search).get("videoOutputId");
+  if (!rawOutputId) {
+    return true;
+  }
+  const outputId = Number(rawOutputId);
+  return !Number.isInteger(outputId) || outputId <= 0;
+};
+
 export const desktopWindowShortcutAction = (
   event: DesktopWindowShortcutEvent,
   fullscreen: boolean,

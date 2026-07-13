@@ -278,7 +278,6 @@ const controller = helpers.createTimelineSceneBlockController({
   getAddLoopCount: () => 1,
   getAddJumpToEventId: () => null,
   setNextStartMs: () => {},
-  getOverviewDurationMs: () => 5000,
   setMessage: (message) => messages.push(message),
   refreshSnapshot: async () => {},
 });
