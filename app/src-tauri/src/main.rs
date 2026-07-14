@@ -1114,6 +1114,7 @@ struct LiveAudioInputStatus {
     backend: Option<String>,
     sample_format: Option<String>,
     configured_buffer_frames: Option<u32>,
+    applied_buffer_frames: Option<u32>,
     channel_mix: LiveAudioChannelMix,
     sample_rate: u32,
     channels: u16,
@@ -1141,6 +1142,7 @@ struct LiveAudioInputStatus {
     analyzed_windows: u64,
     dropped_chunks: u64,
     dropped_frames: u64,
+    backend_xruns: u64,
     callback_count: u64,
     last_callback_frames: u64,
     min_callback_frames: u64,
@@ -1269,6 +1271,14 @@ const LIVE_AUDIO_WORKER_STALE_ERROR: &str =
     "Live audio input is stale: FFT worker heartbeat exceeded 250 ms";
 const LIVE_AUDIO_ONSET_QUEUE_OVERFLOW_ERROR: &str =
     "Live audio onset queue exceeded its fixed real-time capacity";
+const LIVE_AUDIO_TERMINAL_SOURCE_WASAPI_STREAM: u32 = 1;
+const LIVE_AUDIO_TERMINAL_SOURCE_WASAPI_ADAPTER: u32 = 2;
+const LIVE_AUDIO_TERMINAL_SOURCE_ASIO_BRIDGE: u32 = 3;
+const LIVE_AUDIO_TERMINAL_SOURCE_ASIO_ADAPTER: u32 = 4;
+const LIVE_AUDIO_TERMINAL_KIND_DEVICE_NOT_AVAILABLE: u32 = 1;
+const LIVE_AUDIO_TERMINAL_KIND_BACKEND_SPECIFIC: u32 = 2;
+const LIVE_AUDIO_TERMINAL_KIND_ADAPTER_PANIC: u32 = 1;
+const LIVE_AUDIO_TERMINAL_EVENT_HANDLED: u64 = u64::MAX;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(tag = "mode", rename_all = "snake_case")]
@@ -1322,12 +1332,30 @@ impl LiveAudioChannelMix {
 #[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
 #[serde(default)]
 struct LiveAudioInputStartRequest {
+    backend: LiveAudioInputBackend,
     device_id: Option<String>,
     sample_rate: Option<u32>,
     stream_channels: Option<u16>,
     sample_format: Option<String>,
     buffer_frames: Option<u32>,
     channel_mix: LiveAudioChannelMix,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum LiveAudioInputBackend {
+    #[default]
+    WasapiShared,
+    Asio,
+}
+
+impl LiveAudioInputBackend {
+    fn label(self) -> &'static str {
+        match self {
+            Self::WasapiShared => "WASAPI",
+            Self::Asio => "ASIO",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -1339,9 +1367,352 @@ struct LiveAudioInputDeviceSummary {
 }
 
 #[derive(Clone)]
+enum LiveAudioInputDevice {
+    Wasapi(rodio::cpal::Device),
+    #[cfg(all(target_os = "windows", feature = "asio"))]
+    Asio(AsioBridgeDevice),
+}
+
+impl LiveAudioInputDevice {
+    fn backend(&self) -> LiveAudioInputBackend {
+        match self {
+            Self::Wasapi(_) => LiveAudioInputBackend::WasapiShared,
+            #[cfg(all(target_os = "windows", feature = "asio"))]
+            Self::Asio(_) => LiveAudioInputBackend::Asio,
+        }
+    }
+}
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+const SYNDOCAL_ASIO_ABI_VERSION: u32 = 1;
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+#[derive(Debug, Clone)]
+struct AsioBridgeDevice {
+    driver_id: String,
+}
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+#[derive(Debug, Clone, Deserialize)]
+struct AsioBridgeDriver {
+    #[serde(alias = "driver_id")]
+    id: String,
+    name: String,
+}
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AsioBridgeBufferRange {
+    min: u32,
+    max: u32,
+}
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AsioBridgeDriverDetails {
+    id: String,
+    name: String,
+    input_channels: u16,
+    sample_formats: Vec<String>,
+    sample_rates_hz: Vec<u32>,
+    buffer_frames: AsioBridgeBufferRange,
+}
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AsioBridgeInputConfig {
+    channels: u16,
+    sample_format: String,
+    sample_rate_hz: u32,
+    buffer_frames: AsioBridgeBufferRange,
+}
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AsioBridgeCapabilities {
+    abi_version: u32,
+    backend: String,
+    built: bool,
+    driver: AsioBridgeDriverDetails,
+    input_configs: Vec<AsioBridgeInputConfig>,
+}
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum AsioBridgeDriverCatalog {
+    Drivers(Vec<AsioBridgeDriver>),
+    Wrapped { drivers: Vec<AsioBridgeDriver> },
+}
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct AsioBridgeString {
+    ptr: *mut u8,
+    len: usize,
+}
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+impl Default for AsioBridgeString {
+    fn default() -> Self {
+        Self {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+        }
+    }
+}
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+type AsioAbiVersionFn = unsafe extern "C" fn() -> u32;
+#[cfg(all(target_os = "windows", feature = "asio"))]
+type AsioBuildFlagsFn = unsafe extern "C" fn() -> u32;
+#[cfg(all(target_os = "windows", feature = "asio"))]
+type AsioDriversJsonFn = unsafe extern "C" fn(*mut AsioBridgeString, *mut AsioBridgeString) -> u32;
+#[cfg(all(target_os = "windows", feature = "asio"))]
+type AsioCapabilitiesJsonFn =
+    unsafe extern "C" fn(*const u8, usize, *mut AsioBridgeString, *mut AsioBridgeString) -> u32;
+#[cfg(all(target_os = "windows", feature = "asio"))]
+type AsioStringFreeFn = unsafe extern "C" fn(AsioBridgeString);
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct AsioBridgeChannelMix {
+    channel_index: u32,
+    gain: f32,
+}
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+#[repr(C)]
+struct AsioBridgeStartConfig {
+    struct_size: u32,
+    abi_version: u32,
+    driver_id: *const u8,
+    driver_id_len: usize,
+    sample_rate_hz: u32,
+    input_channels: u32,
+    sample_format: u32,
+    fixed_buffer_frames: u32,
+    channel_mix: *const AsioBridgeChannelMix,
+    channel_mix_len: usize,
+    flags: u32,
+    reserved: u32,
+}
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+type AsioSampleCallback = unsafe extern "C" fn(*mut std::ffi::c_void, *const f32, usize, u64, u32);
+#[cfg(all(target_os = "windows", feature = "asio"))]
+type AsioEventCallback = unsafe extern "C" fn(*mut std::ffi::c_void, u32, u32, *const u8, usize);
+#[cfg(all(target_os = "windows", feature = "asio"))]
+type AsioStartFn = unsafe extern "C" fn(
+    *const AsioBridgeStartConfig,
+    AsioSampleCallback,
+    AsioEventCallback,
+    *mut std::ffi::c_void,
+    *mut *mut std::ffi::c_void,
+    *mut AsioBridgeString,
+) -> u32;
+#[cfg(all(target_os = "windows", feature = "asio"))]
+type AsioActualBufferFramesFn = unsafe extern "C" fn(*const std::ffi::c_void, *mut u32) -> u32;
+#[cfg(all(target_os = "windows", feature = "asio"))]
+type AsioStopFn = unsafe extern "C" fn(*mut std::ffi::c_void, *mut AsioBridgeString) -> u32;
+#[cfg(all(target_os = "windows", feature = "asio"))]
+type AsioXrunCountFn = unsafe extern "C" fn(*const std::ffi::c_void) -> u64;
+#[cfg(all(target_os = "windows", feature = "asio"))]
+type AsioFreeFn = unsafe extern "C" fn(*mut std::ffi::c_void);
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+#[derive(Clone, Copy)]
+struct AsioBridgeApi {
+    build_flags: AsioBuildFlagsFn,
+    drivers_json: AsioDriversJsonFn,
+    capabilities_json: AsioCapabilitiesJsonFn,
+    string_free: AsioStringFreeFn,
+    start: AsioStartFn,
+    actual_buffer_frames: AsioActualBufferFramesFn,
+    stop: AsioStopFn,
+    xrun_count: AsioXrunCountFn,
+    free: AsioFreeFn,
+}
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+struct AsioBridgeLibrary {
+    _library: libloading::Library,
+    api: AsioBridgeApi,
+}
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+impl AsioBridgeLibrary {
+    fn candidate_path() -> Result<PathBuf, String> {
+        if let Some(path) = std::env::var_os("SYNDOCAL_ASIO_BRIDGE_PATH") {
+            let path = PathBuf::from(path);
+            if !path.is_file() {
+                return Err(format!(
+                    "SYNDOCAL_ASIO_BRIDGE_PATH does not name a bridge DLL: {}",
+                    path.display()
+                ));
+            }
+            return Ok(path);
+        }
+        let executable = std::env::current_exe()
+            .map_err(|error| format!("Failed to locate the Syndocal executable: {error}"))?;
+        let directory = executable
+            .parent()
+            .ok_or_else(|| "Syndocal executable has no parent directory".to_string())?;
+        [
+            directory.join("syndocal_asio_bridge.dll"),
+            directory.join("syndocal-asio-bridge.dll"),
+        ]
+        .into_iter()
+        .find(|path| path.is_file())
+        .ok_or_else(|| {
+            format!(
+                "ASIO bridge DLL is not installed beside Syndocal ({})",
+                directory.display()
+            )
+        })
+    }
+
+    fn load() -> Result<Self, String> {
+        let path = Self::candidate_path()?;
+        let library = unsafe { libloading::Library::new(&path) }
+            .map_err(|error| format!("Failed to load ASIO bridge {}: {error}", path.display()))?;
+        unsafe fn load_symbol<T: Copy>(
+            library: &libloading::Library,
+            symbol: &'static [u8],
+        ) -> Result<T, String> {
+            let loaded = unsafe { library.get::<T>(symbol) }.map_err(|error| {
+                format!(
+                    "ASIO bridge is missing {}: {error}",
+                    String::from_utf8_lossy(symbol).trim_end_matches('\0')
+                )
+            })?;
+            Ok(*loaded)
+        }
+        let abi_version =
+            unsafe { load_symbol::<AsioAbiVersionFn>(&library, b"syndocal_asio_abi_version\0")? };
+        let actual_abi = unsafe { abi_version() };
+        if actual_abi != SYNDOCAL_ASIO_ABI_VERSION {
+            return Err(format!(
+                "ASIO bridge ABI mismatch: Syndocal requires {}, bridge reports {actual_abi}",
+                SYNDOCAL_ASIO_ABI_VERSION
+            ));
+        }
+        let api = AsioBridgeApi {
+            build_flags: unsafe { load_symbol(&library, b"syndocal_asio_build_flags\0")? },
+            drivers_json: unsafe { load_symbol(&library, b"syndocal_asio_drivers_json\0")? },
+            capabilities_json: unsafe {
+                load_symbol(&library, b"syndocal_asio_capabilities_json\0")?
+            },
+            string_free: unsafe { load_symbol(&library, b"syndocal_asio_string_free\0")? },
+            start: unsafe { load_symbol(&library, b"syndocal_asio_start\0")? },
+            actual_buffer_frames: unsafe {
+                load_symbol(&library, b"syndocal_asio_actual_buffer_frames\0")?
+            },
+            stop: unsafe { load_symbol(&library, b"syndocal_asio_stop\0")? },
+            xrun_count: unsafe { load_symbol(&library, b"syndocal_asio_xrun_count\0")? },
+            free: unsafe { load_symbol(&library, b"syndocal_asio_free\0")? },
+        };
+        Ok(Self {
+            _library: library,
+            api,
+        })
+    }
+
+    fn take_string(&self, value: AsioBridgeString) -> String {
+        if value.ptr.is_null() || value.len == 0 {
+            if !value.ptr.is_null() {
+                unsafe { (self.api.string_free)(value) };
+            }
+            return String::new();
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(value.ptr.cast_const(), value.len) };
+        let text = String::from_utf8_lossy(bytes).into_owned();
+        unsafe { (self.api.string_free)(value) };
+        text
+    }
+
+    fn asio_compiled(&self) -> bool {
+        unsafe { (self.api.build_flags)() & 0x1 != 0 }
+    }
+
+    fn result_json(
+        &self,
+        operation: &str,
+        status: u32,
+        output: AsioBridgeString,
+        error: AsioBridgeString,
+    ) -> Result<String, String> {
+        let output = self.take_string(output);
+        let error = self.take_string(error);
+        if status != 0 {
+            let detail = if error.trim().is_empty() {
+                format!("bridge status {status}")
+            } else {
+                error
+            };
+            return Err(format!("ASIO {operation} failed: {detail}"));
+        }
+        if output.trim().is_empty() {
+            return Err(format!("ASIO {operation} returned an empty response"));
+        }
+        Ok(output)
+    }
+
+    fn drivers(&self) -> Result<Vec<AsioBridgeDriver>, String> {
+        if !self.asio_compiled() {
+            return Err("ASIO bridge DLL was built without ASIO support".to_string());
+        }
+        let mut output = AsioBridgeString::default();
+        let mut error = AsioBridgeString::default();
+        let status = unsafe { (self.api.drivers_json)(&mut output, &mut error) };
+        let payload = self.result_json("driver enumeration", status, output, error)?;
+        let catalog: AsioBridgeDriverCatalog = serde_json::from_str(&payload)
+            .map_err(|error| format!("ASIO driver catalog was invalid: {error}"))?;
+        let drivers = match catalog {
+            AsioBridgeDriverCatalog::Drivers(drivers)
+            | AsioBridgeDriverCatalog::Wrapped { drivers } => drivers,
+        };
+        if drivers
+            .iter()
+            .any(|driver| !driver.id.starts_with("asio:") || driver.name.trim().is_empty())
+        {
+            return Err("ASIO bridge returned a malformed or non-ASIO driver identity".to_string());
+        }
+        let mut identities = HashSet::new();
+        if !drivers
+            .iter()
+            .all(|driver| identities.insert(driver.id.clone()))
+        {
+            return Err("ASIO bridge returned duplicate driver identities".to_string());
+        }
+        Ok(drivers)
+    }
+
+    fn capabilities_json(&self, driver_id: &str) -> Result<String, String> {
+        let mut output = AsioBridgeString::default();
+        let mut error = AsioBridgeString::default();
+        let status = unsafe {
+            (self.api.capabilities_json)(
+                driver_id.as_ptr(),
+                driver_id.len(),
+                &mut output,
+                &mut error,
+            )
+        };
+        self.result_json("capability query", status, output, error)
+    }
+}
+
+#[derive(Clone)]
 struct LiveAudioInputDeviceEntry {
     summary: LiveAudioInputDeviceSummary,
-    device: rodio::cpal::Device,
+    device: LiveAudioInputDevice,
 }
 
 #[derive(Default)]
@@ -1397,7 +1768,7 @@ struct ResolvedLiveAudioInputDevice {
     device_id: Option<String>,
     device_name: String,
     backend: String,
-    device: rodio::cpal::Device,
+    device: LiveAudioInputDevice,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1484,6 +1855,7 @@ impl LiveAudioSampleChunk {
 #[derive(Debug, Default)]
 struct LiveAudioInputSafety {
     terminal_fault: AtomicBool,
+    terminal_fault_finalized: AtomicBool,
     clear_pending: AtomicBool,
     shutdown_requested: AtomicBool,
 }
@@ -1495,6 +1867,13 @@ impl LiveAudioInputSafety {
 
     fn mark_terminal_fault(&self) {
         self.terminal_fault.store(true, Ordering::Release);
+    }
+
+    fn claim_terminal_fault_finalization(&self) -> bool {
+        self.mark_terminal_fault();
+        self.terminal_fault_finalized
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
     }
 
     fn request_shutdown(&self) {
@@ -1512,6 +1891,53 @@ impl LiveAudioInputSafety {
 
     fn record_clear_result(&self, result: &Result<(), String>) {
         self.clear_pending.store(result.is_err(), Ordering::Release);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DeferredLiveAudioTerminalFault {
+    source: u32,
+    kind: u32,
+}
+
+#[derive(Debug, Default)]
+struct DeferredLiveAudioTerminalFaultLatch {
+    encoded: AtomicU64,
+}
+
+impl DeferredLiveAudioTerminalFaultLatch {
+    fn latch(&self, source: u32, kind: u32) -> bool {
+        if source == 0 || source == u32::MAX {
+            return false;
+        }
+        let encoded = (u64::from(source) << 32) | u64::from(kind);
+        self.encoded
+            .compare_exchange(0, encoded, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    fn claim(&self) -> Option<DeferredLiveAudioTerminalFault> {
+        loop {
+            let encoded = self.encoded.load(Ordering::Acquire);
+            if encoded == 0 || encoded == LIVE_AUDIO_TERMINAL_EVENT_HANDLED {
+                return None;
+            }
+            if self
+                .encoded
+                .compare_exchange(
+                    encoded,
+                    LIVE_AUDIO_TERMINAL_EVENT_HANDLED,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
+                return Some(DeferredLiveAudioTerminalFault {
+                    source: (encoded >> 32) as u32,
+                    kind: encoded as u32,
+                });
+            }
+        }
     }
 }
 
@@ -1561,10 +1987,20 @@ impl LiveAudioInputWatchdog {
     }
 }
 
+enum LiveAudioCaptureStream {
+    Wasapi {
+        _stream: rodio::cpal::Stream,
+    },
+    #[cfg(all(target_os = "windows", feature = "asio"))]
+    Asio {
+        _stream: AsioBridgeCapture,
+    },
+}
+
 struct LiveAudioInput {
     generation: Arc<AtomicU64>,
     generation_gate: Arc<Mutex<()>>,
-    stream: Option<rodio::cpal::Stream>,
+    stream: Option<LiveAudioCaptureStream>,
     stop: Arc<AtomicBool>,
     worker: Option<std::thread::JoinHandle<()>>,
     status: Arc<Mutex<LiveAudioInputStatus>>,
@@ -7454,34 +7890,119 @@ fn list_audio_output_devices() -> Result<Vec<String>, String> {
     Ok(names)
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct LiveAudioInputBackendSummary {
+    id: String,
+    label: String,
+    built: bool,
+    requires_explicit_device: bool,
+    distribution: String,
+}
+
+#[tauri::command]
+fn live_audio_input_backends() -> Vec<LiveAudioInputBackendSummary> {
+    #[cfg(all(target_os = "windows", feature = "asio"))]
+    let asio_built = AsioBridgeLibrary::load()
+        .map(|bridge| bridge.asio_compiled())
+        .unwrap_or(false);
+    #[cfg(not(all(target_os = "windows", feature = "asio")))]
+    let asio_built = false;
+    vec![
+        LiveAudioInputBackendSummary {
+            id: "wasapi_shared".to_string(),
+            label: "WASAPI Shared".to_string(),
+            built: cfg!(target_os = "windows"),
+            requires_explicit_device: false,
+            distribution: "default".to_string(),
+        },
+        LiveAudioInputBackendSummary {
+            id: "asio".to_string(),
+            label: "ASIO".to_string(),
+            built: asio_built,
+            requires_explicit_device: true,
+            distribution: "separate_artifact".to_string(),
+        },
+    ]
+}
+
 #[tauri::command]
 fn list_audio_input_devices(
     state: State<'_, AppState>,
+    backend: Option<LiveAudioInputBackend>,
 ) -> Result<Vec<LiveAudioInputDeviceSummary>, String> {
     use rodio::cpal::traits::{DeviceTrait, HostTrait};
 
-    let host = rodio::cpal::default_host();
-    let backend = host.id().name().to_string();
-    let mut devices = host
-        .input_devices()
-        .map_err(|error| format!("Failed to list audio input devices: {error}"))?
-        .enumerate()
-        .map(|(ordinal, device)| {
-            let name = device
-                .name()
-                .unwrap_or_else(|_| format!("Unnamed audio input {}", ordinal + 1));
-            (ordinal, name, device)
-        })
-        .collect::<Vec<_>>();
+    if state
+        .live_audio_input
+        .lock()
+        .map_err(|_| "Live audio input state lock was poisoned".to_string())?
+        .is_some()
+    {
+        return Err("Stop live audio input before refreshing its device catalog".to_string());
+    }
+    let backend = backend.unwrap_or_default();
+    let mut devices: Vec<(usize, String, String, LiveAudioInputDevice)> = match backend {
+        LiveAudioInputBackend::WasapiShared => {
+            let host = rodio::cpal::default_host();
+            let host_label = host.id().name().to_string();
+            host.input_devices()
+                .map_err(|error| format!("Failed to list audio input devices: {error}"))?
+                .enumerate()
+                .map(|(ordinal, device)| {
+                    let name = device
+                        .name()
+                        .unwrap_or_else(|_| format!("Unnamed audio input {}", ordinal + 1));
+                    (
+                        ordinal,
+                        name,
+                        host_label.clone(),
+                        LiveAudioInputDevice::Wasapi(device),
+                    )
+                })
+                .collect()
+        }
+        LiveAudioInputBackend::Asio => {
+            #[cfg(all(target_os = "windows", feature = "asio"))]
+            {
+                AsioBridgeLibrary::load()?
+                    .drivers()?
+                    .into_iter()
+                    .enumerate()
+                    .map(|(ordinal, driver)| {
+                        let name = if driver.name.trim().is_empty() {
+                            format!("Unnamed ASIO input {}", ordinal + 1)
+                        } else {
+                            driver.name.clone()
+                        };
+                        (
+                            ordinal,
+                            name,
+                            "ASIO".to_string(),
+                            LiveAudioInputDevice::Asio(AsioBridgeDevice {
+                                driver_id: driver.id,
+                            }),
+                        )
+                    })
+                    .collect()
+            }
+            #[cfg(not(all(target_os = "windows", feature = "asio")))]
+            {
+                return Err(
+                    "ASIO input is not built into this artifact; use the separate ASIO build"
+                        .to_string(),
+                );
+            }
+        }
+    };
     devices.sort_by(|left, right| {
-        left.1
-            .to_lowercase()
-            .cmp(&right.1.to_lowercase())
+        left.2
+            .cmp(&right.2)
+            .then_with(|| left.1.to_lowercase().cmp(&right.1.to_lowercase()))
             .then_with(|| left.0.cmp(&right.0))
     });
     let names = devices
         .iter()
-        .map(|(_, name, _)| name.clone())
+        .map(|(_, name, _, _)| name.clone())
         .collect::<Vec<_>>();
     let labels = disambiguate_live_audio_input_labels(&names);
     let mut catalog = state
@@ -7495,7 +8016,7 @@ fn list_audio_input_devices(
         .into_iter()
         .zip(labels)
         .enumerate()
-        .map(|(index, ((_, name, device), label))| {
+        .map(|(index, ((_, name, backend, device), label))| {
             let id = live_audio_input_device_id(&backend, generation, index);
             let summary = LiveAudioInputDeviceSummary {
                 id: id.clone(),
@@ -7546,6 +8067,7 @@ fn disambiguate_live_audio_input_labels(names: &[String]) -> Vec<String> {
 
 fn resolve_live_audio_input_device(
     state: &AppState,
+    backend: LiveAudioInputBackend,
     device_id: Option<&str>,
 ) -> Result<ResolvedLiveAudioInputDevice, String> {
     use rodio::cpal::traits::{DeviceTrait, HostTrait};
@@ -7558,6 +8080,13 @@ fn resolve_live_audio_input_device(
         let entry = catalog.entries.get(device_id).ok_or_else(|| {
             "Audio input device selection is stale or unknown; refresh the device list".to_string()
         })?;
+        if entry.device.backend() != backend {
+            return Err(format!(
+                "Audio input selection belongs to {}, not the requested {} backend; refresh and select again",
+                entry.summary.backend,
+                backend.label(),
+            ));
+        }
         return Ok(ResolvedLiveAudioInputDevice {
             device_id: Some(entry.summary.id.clone()),
             device_name: entry.summary.name.clone(),
@@ -7566,6 +8095,12 @@ fn resolve_live_audio_input_device(
         });
     }
 
+    if backend == LiveAudioInputBackend::Asio {
+        return Err(
+            "Select an explicit ASIO driver before reading capabilities or starting input"
+                .to_string(),
+        );
+    }
     let host = rodio::cpal::default_host();
     let device = host
         .default_input_device()
@@ -7577,7 +8112,7 @@ fn resolve_live_audio_input_device(
         device_id: None,
         device_name,
         backend: host.id().name().to_string(),
-        device,
+        device: LiveAudioInputDevice::Wasapi(device),
     })
 }
 
@@ -7613,52 +8148,259 @@ fn live_audio_input_config_range(
     }
 }
 
+#[cfg(all(target_os = "windows", feature = "asio"))]
+fn live_audio_input_capabilities_asio(
+    resolved: &ResolvedLiveAudioInputDevice,
+    device: &AsioBridgeDevice,
+    sample_rate: Option<u32>,
+) -> Result<LiveAudioInputCapabilities, String> {
+    let payload = AsioBridgeLibrary::load()?.capabilities_json(&device.driver_id)?;
+    let capabilities: AsioBridgeCapabilities = serde_json::from_str(&payload)
+        .map_err(|error| format!("ASIO capability response was invalid: {error}"))?;
+    if capabilities.abi_version != SYNDOCAL_ASIO_ABI_VERSION
+        || !capabilities.backend.eq_ignore_ascii_case("asio")
+        || !capabilities.built
+        || capabilities.driver.id != device.driver_id
+        || capabilities.driver.name.trim().is_empty()
+    {
+        return Err(
+            "ASIO capability response did not match the selected driver and ABI".to_string(),
+        );
+    }
+    if capabilities.driver.input_channels == 0
+        || capabilities.driver.sample_formats.is_empty()
+        || capabilities.driver.sample_rates_hz.is_empty()
+        || capabilities.driver.buffer_frames.min == 0
+        || capabilities.driver.buffer_frames.min > capabilities.driver.buffer_frames.max
+    {
+        return Err("Selected ASIO driver reported incomplete input capabilities".to_string());
+    }
+    let requested_rate = match sample_rate {
+        Some(0) => return Err("ASIO sample rate must be greater than zero".to_string()),
+        Some(rate) => rate,
+        None => [48_000, 44_100]
+            .into_iter()
+            .find(|rate| capabilities.driver.sample_rates_hz.contains(rate))
+            .or_else(|| capabilities.driver.sample_rates_hz.iter().copied().min())
+            .ok_or_else(|| "Selected ASIO driver reported no usable sample rate".to_string())?,
+    };
+    let format_rank = |format: &str| match format {
+        "f32" => 0_u8,
+        "i16" => 1,
+        "i24" => 2,
+        "i32" => 3,
+        "f64" => 4,
+        _ => u8::MAX,
+    };
+    let selected = capabilities
+        .input_configs
+        .iter()
+        .filter(|config| {
+            config.sample_rate_hz == requested_rate
+                && config.channels > 0
+                && config.channels <= capabilities.driver.input_channels
+                && config.buffer_frames.min > 0
+                && config.buffer_frames.min <= config.buffer_frames.max
+                && format_rank(&config.sample_format) != u8::MAX
+        })
+        .min_by_key(|config| {
+            (
+                std::cmp::Reverse(config.channels),
+                format_rank(&config.sample_format),
+                config.buffer_frames.min,
+            )
+        })
+        .ok_or_else(|| {
+            format!(
+                "Selected ASIO driver does not expose an input configuration at {requested_rate} Hz"
+            )
+        })?;
+    let to_buffer = |range: AsioBridgeBufferRange| LiveAudioBufferCapability::Range {
+        min_frames: range.min,
+        max_frames: range.max,
+    };
+    let mut supported_configs = capabilities
+        .input_configs
+        .iter()
+        .filter(|config| {
+            config.channels > 0
+                && config.sample_rate_hz > 0
+                && config.buffer_frames.min > 0
+                && config.buffer_frames.min <= config.buffer_frames.max
+                && format_rank(&config.sample_format) != u8::MAX
+        })
+        .map(|config| LiveAudioInputConfigRange {
+            channels: config.channels,
+            min_sample_rate: config.sample_rate_hz,
+            max_sample_rate: config.sample_rate_hz,
+            sample_format: config.sample_format.clone(),
+            buffer_size: to_buffer(config.buffer_frames),
+        })
+        .collect::<Vec<_>>();
+    supported_configs.sort();
+    supported_configs.dedup();
+    let default_rate = [48_000, 44_100]
+        .into_iter()
+        .find(|rate| capabilities.driver.sample_rates_hz.contains(rate))
+        .unwrap_or(requested_rate);
+    let default_format = capabilities
+        .driver
+        .sample_formats
+        .iter()
+        .filter(|format| format_rank(format) != u8::MAX)
+        .min_by_key(|format| format_rank(format))
+        .cloned()
+        .ok_or_else(|| "Selected ASIO driver exposes no supported PCM format".to_string())?;
+    Ok(LiveAudioInputCapabilities {
+        device_id: resolved.device_id.clone(),
+        device_name: resolved.device_name.clone(),
+        backend: "ASIO".to_string(),
+        default_config: LiveAudioInputConfig {
+            channels: capabilities.driver.input_channels,
+            sample_rate: default_rate,
+            sample_format: default_format,
+        },
+        supported_configs,
+        resolved_config: LiveAudioInputResolvedConfig {
+            channels: selected.channels,
+            sample_rate: selected.sample_rate_hz,
+            sample_format: selected.sample_format.clone(),
+            buffer_size: to_buffer(selected.buffer_frames),
+        },
+        max_capture_frames: LIVE_AUDIO_CAPTURE_SLOT_COUNT * LIVE_AUDIO_CAPTURE_SLOT_FRAMES,
+    })
+}
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+fn asio_sample_format(format: &str) -> Option<rodio::cpal::SampleFormat> {
+    match format {
+        "f32" => Some(rodio::cpal::SampleFormat::F32),
+        "i16" => Some(rodio::cpal::SampleFormat::I16),
+        "i24" => Some(rodio::cpal::SampleFormat::I24),
+        "i32" => Some(rodio::cpal::SampleFormat::I32),
+        "f64" => Some(rodio::cpal::SampleFormat::F64),
+        _ => None,
+    }
+}
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+fn resolve_asio_live_audio_start_config(
+    resolved: &ResolvedLiveAudioInputDevice,
+    device: &AsioBridgeDevice,
+    request: &LiveAudioInputStartRequest,
+) -> Result<SelectedLiveAudioInputConfig, String> {
+    let sample_rate = request
+        .sample_rate
+        .filter(|rate| *rate > 0)
+        .ok_or_else(|| "Select an explicit ASIO sample rate before Start".to_string())?;
+    let channels = request
+        .stream_channels
+        .filter(|channels| *channels > 0)
+        .ok_or_else(|| {
+            "Select an explicit ASIO input channel configuration before Start".to_string()
+        })?;
+    let sample_format_name = request
+        .sample_format
+        .as_deref()
+        .map(str::trim)
+        .filter(|format| !format.is_empty())
+        .ok_or_else(|| "Select an explicit ASIO sample format before Start".to_string())?;
+    let sample_format = asio_sample_format(sample_format_name)
+        .ok_or_else(|| format!("Unsupported ASIO sample format {sample_format_name}"))?;
+    let buffer_frames = request
+        .buffer_frames
+        .filter(|frames| *frames > 0)
+        .ok_or_else(|| "Select an explicit fixed ASIO buffer before Start".to_string())?;
+    validate_live_audio_configured_buffer(buffer_frames, sample_rate)?;
+    request.channel_mix.validate(channels)?;
+
+    let capabilities = live_audio_input_capabilities_asio(resolved, device, Some(sample_rate))?;
+    let matching = capabilities
+        .supported_configs
+        .iter()
+        .find(|config| {
+            config.channels == channels
+                && config.min_sample_rate == sample_rate
+                && config.max_sample_rate == sample_rate
+                && config.sample_format == sample_format_name
+                && live_audio_buffer_accepts(config.buffer_size, buffer_frames)
+        })
+        .ok_or_else(|| {
+            format!(
+                "ASIO configuration changed or is unsupported: {} Hz, {channels} ch, {sample_format_name}, {buffer_frames} frames",
+                sample_rate
+            )
+        })?;
+    Ok(SelectedLiveAudioInputConfig {
+        stream_config: rodio::cpal::StreamConfig {
+            channels,
+            sample_rate: rodio::cpal::SampleRate(sample_rate),
+            buffer_size: rodio::cpal::BufferSize::Fixed(buffer_frames),
+        },
+        sample_format,
+        buffer_capability: matching.buffer_size,
+        configured_buffer_frames: Some(buffer_frames),
+        channel_mix: request.channel_mix,
+    })
+}
+
 #[tauri::command]
 fn get_live_audio_input_capabilities(
     state: State<'_, AppState>,
+    backend: Option<LiveAudioInputBackend>,
     device_id: Option<String>,
     sample_rate: Option<u32>,
 ) -> Result<LiveAudioInputCapabilities, String> {
     use rodio::cpal::traits::DeviceTrait;
 
-    let resolved = resolve_live_audio_input_device(&state, device_id.as_deref())?;
-    let default_config = resolved
-        .device
-        .default_input_config()
-        .map_err(|error| format!("Failed to read default audio input configuration: {error}"))?;
-    let supported_config_ranges = resolved
-        .device
-        .supported_input_configs()
-        .map_err(|error| format!("Failed to read supported audio input configurations: {error}"))?
-        .collect::<Vec<_>>();
-    let selected = resolve_live_audio_stream_config(
-        &default_config,
-        &supported_config_ranges,
-        &LiveAudioInputStartRequest {
-            sample_rate,
-            ..LiveAudioInputStartRequest::default()
-        },
-    )?;
-    let mut supported_configs = supported_config_ranges
-        .iter()
-        .map(live_audio_input_config_range)
-        .collect::<Vec<_>>();
-    supported_configs.sort();
-    supported_configs.dedup();
-    Ok(LiveAudioInputCapabilities {
-        device_id: resolved.device_id,
-        device_name: resolved.device_name,
-        backend: resolved.backend,
-        default_config: live_audio_input_config(&default_config),
-        supported_configs,
-        resolved_config: LiveAudioInputResolvedConfig {
-            channels: selected.stream_config.channels,
-            sample_rate: selected.stream_config.sample_rate.0,
-            sample_format: selected.sample_format.to_string(),
-            buffer_size: selected.buffer_capability,
-        },
-        max_capture_frames: LIVE_AUDIO_CAPTURE_SLOT_COUNT * LIVE_AUDIO_CAPTURE_SLOT_FRAMES,
-    })
+    let backend = backend.unwrap_or_default();
+    let resolved = resolve_live_audio_input_device(&state, backend, device_id.as_deref())?;
+    match &resolved.device {
+        LiveAudioInputDevice::Wasapi(device) => {
+            let default_config = device.default_input_config().map_err(|error| {
+                format!("Failed to read default audio input configuration: {error}")
+            })?;
+            let supported_config_ranges = device
+                .supported_input_configs()
+                .map_err(|error| {
+                    format!("Failed to read supported audio input configurations: {error}")
+                })?
+                .collect::<Vec<_>>();
+            let selected = resolve_live_audio_stream_config(
+                &default_config,
+                &supported_config_ranges,
+                &LiveAudioInputStartRequest {
+                    backend,
+                    sample_rate,
+                    ..LiveAudioInputStartRequest::default()
+                },
+            )?;
+            let mut supported_configs = supported_config_ranges
+                .iter()
+                .map(live_audio_input_config_range)
+                .collect::<Vec<_>>();
+            supported_configs.sort();
+            supported_configs.dedup();
+            Ok(LiveAudioInputCapabilities {
+                device_id: resolved.device_id,
+                device_name: resolved.device_name,
+                backend: resolved.backend,
+                default_config: live_audio_input_config(&default_config),
+                supported_configs,
+                resolved_config: LiveAudioInputResolvedConfig {
+                    channels: selected.stream_config.channels,
+                    sample_rate: selected.stream_config.sample_rate.0,
+                    sample_format: selected.sample_format.to_string(),
+                    buffer_size: selected.buffer_capability,
+                },
+                max_capture_frames: LIVE_AUDIO_CAPTURE_SLOT_COUNT * LIVE_AUDIO_CAPTURE_SLOT_FRAMES,
+            })
+        }
+        #[cfg(all(target_os = "windows", feature = "asio"))]
+        LiveAudioInputDevice::Asio(device) => {
+            live_audio_input_capabilities_asio(&resolved, device, sample_rate)
+        }
+    }
 }
 
 fn live_audio_buffer_accepts(capability: LiveAudioBufferCapability, buffer_frames: u32) -> bool {
@@ -7874,12 +8616,216 @@ struct LiveAudioCaptureCallbackContext {
 
 #[derive(Clone)]
 struct LiveAudioStreamErrorContext {
-    generation: Arc<AtomicU64>,
-    generation_gate: Arc<Mutex<()>>,
-    engine: EngineHandle,
-    status: Arc<Mutex<LiveAudioInputStatus>>,
+    deferred_terminal_fault: Arc<DeferredLiveAudioTerminalFaultLatch>,
     safety: Arc<LiveAudioInputSafety>,
     worker_wake: std::thread::Thread,
+}
+
+impl LiveAudioStreamErrorContext {
+    fn defer_terminal_fault(&self, source: u32, kind: u32) -> bool {
+        self.safety.mark_terminal_fault();
+        let latched = self.deferred_terminal_fault.latch(source, kind);
+        self.worker_wake.unpark();
+        latched
+    }
+}
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+struct AsioBridgeCallbackContext {
+    sample_rate: u32,
+    capture: LiveAudioCaptureCallbackContext,
+    errors: LiveAudioStreamErrorContext,
+}
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+unsafe extern "C" fn asio_bridge_sample_callback(
+    context: *mut std::ffi::c_void,
+    samples: *const f32,
+    len: usize,
+    capture_delay_ns: u64,
+    _callback_frames: u32,
+) {
+    if context.is_null() || samples.is_null() || len == 0 {
+        return;
+    }
+    let context = unsafe { &*(context.cast::<AsioBridgeCallbackContext>()) };
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let samples = unsafe { std::slice::from_raw_parts(samples, len) };
+        queue_live_audio_samples_with_delay(
+            samples,
+            1,
+            context.sample_rate,
+            LiveAudioChannelMix::AverageAll,
+            Duration::from_nanos(capture_delay_ns),
+            &context.capture.free_capture_slots,
+            &context.capture.ready_capture_chunks,
+            &context.capture.capture_telemetry,
+            &context.capture.safety,
+            &context.capture.worker_wake,
+            |value| value,
+        );
+    }));
+    if result.is_err() {
+        context.errors.defer_terminal_fault(
+            LIVE_AUDIO_TERMINAL_SOURCE_ASIO_ADAPTER,
+            LIVE_AUDIO_TERMINAL_KIND_ADAPTER_PANIC,
+        );
+    }
+}
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+unsafe extern "C" fn asio_bridge_event_callback(
+    context: *mut std::ffi::c_void,
+    severity: u32,
+    kind: u32,
+    _message: *const u8,
+    _message_len: usize,
+) {
+    if context.is_null() || severity != 2 {
+        return;
+    }
+    let context = unsafe { &*(context.cast::<AsioBridgeCallbackContext>()) };
+    context
+        .errors
+        .defer_terminal_fault(LIVE_AUDIO_TERMINAL_SOURCE_ASIO_BRIDGE, kind);
+}
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+struct AsioBridgeCapture {
+    bridge: AsioBridgeLibrary,
+    handle: usize,
+    _callback_context: Box<AsioBridgeCallbackContext>,
+}
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+impl AsioBridgeCapture {
+    fn xrun_count(&self) -> u64 {
+        unsafe { (self.bridge.api.xrun_count)(self.handle as *const std::ffi::c_void) }
+    }
+}
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+impl Drop for AsioBridgeCapture {
+    fn drop(&mut self) {
+        if self.handle == 0 {
+            return;
+        }
+        let handle = self.handle as *mut std::ffi::c_void;
+        let mut error = AsioBridgeString::default();
+        let _ = unsafe { (self.bridge.api.stop)(handle, &mut error) };
+        if !error.ptr.is_null() {
+            let _ = self.bridge.take_string(error);
+        }
+        unsafe { (self.bridge.api.free)(handle) };
+        self.handle = 0;
+    }
+}
+
+#[cfg(all(target_os = "windows", feature = "asio"))]
+fn build_asio_bridge_capture(
+    device: &AsioBridgeDevice,
+    selected: &SelectedLiveAudioInputConfig,
+    capture: LiveAudioCaptureCallbackContext,
+    errors: LiveAudioStreamErrorContext,
+) -> Result<(AsioBridgeCapture, u32), String> {
+    let configured_buffer_frames = selected
+        .configured_buffer_frames
+        .ok_or_else(|| "ASIO requires an explicit fixed buffer size".to_string())?;
+    let sample_format = match selected.sample_format {
+        rodio::cpal::SampleFormat::F32 => 1,
+        rodio::cpal::SampleFormat::I16 => 2,
+        rodio::cpal::SampleFormat::I24 => 3,
+        rodio::cpal::SampleFormat::I32 => 4,
+        rodio::cpal::SampleFormat::F64 => 5,
+        format => return Err(format!("Unsupported ASIO sample format {format}")),
+    };
+    let channels = selected.stream_config.channels;
+    let channel_mix = match selected.channel_mix {
+        LiveAudioChannelMix::AverageAll => (0..channels)
+            .map(|channel_index| AsioBridgeChannelMix {
+                channel_index: u32::from(channel_index),
+                gain: 1.0 / f32::from(channels.max(1)),
+            })
+            .collect::<Vec<_>>(),
+        LiveAudioChannelMix::Single { channel_index } => vec![AsioBridgeChannelMix {
+            channel_index: u32::from(channel_index),
+            gain: 1.0,
+        }],
+        LiveAudioChannelMix::StereoPair {
+            left_channel_index,
+            right_channel_index,
+        } => vec![
+            AsioBridgeChannelMix {
+                channel_index: u32::from(left_channel_index),
+                gain: 0.5,
+            },
+            AsioBridgeChannelMix {
+                channel_index: u32::from(right_channel_index),
+                gain: 0.5,
+            },
+        ],
+    };
+    let bridge = AsioBridgeLibrary::load()?;
+    let mut callback_context = Box::new(AsioBridgeCallbackContext {
+        sample_rate: selected.stream_config.sample_rate.0,
+        capture,
+        errors,
+    });
+    let config = AsioBridgeStartConfig {
+        struct_size: std::mem::size_of::<AsioBridgeStartConfig>() as u32,
+        abi_version: SYNDOCAL_ASIO_ABI_VERSION,
+        driver_id: device.driver_id.as_ptr(),
+        driver_id_len: device.driver_id.len(),
+        sample_rate_hz: selected.stream_config.sample_rate.0,
+        input_channels: u32::from(channels),
+        sample_format,
+        fixed_buffer_frames: configured_buffer_frames,
+        channel_mix: channel_mix.as_ptr(),
+        channel_mix_len: channel_mix.len(),
+        flags: 0,
+        reserved: 0,
+    };
+    let mut handle = std::ptr::null_mut();
+    let mut error = AsioBridgeString::default();
+    let status = unsafe {
+        (bridge.api.start)(
+            &config,
+            asio_bridge_sample_callback,
+            asio_bridge_event_callback,
+            callback_context.as_mut() as *mut AsioBridgeCallbackContext as *mut std::ffi::c_void,
+            &mut handle,
+            &mut error,
+        )
+    };
+    let error = bridge.take_string(error);
+    if status != 0 || handle.is_null() {
+        let detail = if error.trim().is_empty() {
+            format!("bridge status {status}")
+        } else {
+            error
+        };
+        return Err(format!("Failed to open explicit ASIO driver: {detail}"));
+    }
+    let capture = AsioBridgeCapture {
+        bridge,
+        handle: handle as usize,
+        _callback_context: callback_context,
+    };
+    let mut actual_buffer_frames = 0_u32;
+    let status = unsafe {
+        (capture.bridge.api.actual_buffer_frames)(handle.cast_const(), &mut actual_buffer_frames)
+    };
+    if status != 0 || actual_buffer_frames == 0 {
+        return Err(format!(
+            "ASIO bridge could not report the opened buffer size (status {status})"
+        ));
+    }
+    if actual_buffer_frames != configured_buffer_frames {
+        return Err(format!(
+            "ASIO opened {actual_buffer_frames} frames instead of the requested {configured_buffer_frames}; stream was closed"
+        ));
+    }
+    Ok((capture, actual_buffer_frames))
 }
 
 fn build_live_audio_input_stream<T>(
@@ -7894,40 +8840,100 @@ where
 {
     use rodio::cpal::traits::DeviceTrait;
 
+    let data_errors = errors.clone();
     device.build_input_stream(
         config,
         move |data: &[T], callback_info| {
-            queue_live_audio_samples(
-                data,
-                capture.channels,
-                capture.sample_rate,
-                capture.channel_mix,
-                callback_info,
-                &capture.free_capture_slots,
-                &capture.ready_capture_chunks,
-                &capture.capture_telemetry,
-                &capture.safety,
-                &capture.worker_wake,
-                |value| <f32 as rodio::cpal::Sample>::from_sample(value),
-            )
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                queue_live_audio_samples(
+                    data,
+                    capture.channels,
+                    capture.sample_rate,
+                    capture.channel_mix,
+                    callback_info,
+                    &capture.free_capture_slots,
+                    &capture.ready_capture_chunks,
+                    &capture.capture_telemetry,
+                    &capture.safety,
+                    &capture.worker_wake,
+                    |value| <f32 as rodio::cpal::Sample>::from_sample(value),
+                )
+            }));
+            if result.is_err() {
+                data_errors.defer_terminal_fault(
+                    LIVE_AUDIO_TERMINAL_SOURCE_WASAPI_ADAPTER,
+                    LIVE_AUDIO_TERMINAL_KIND_ADAPTER_PANIC,
+                );
+            }
         },
         move |error| {
-            let _generation_gate = errors
-                .generation_gate
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            fail_closed_live_audio(
-                &errors.engine,
-                errors.generation.load(Ordering::Acquire),
-                &errors.status,
-                &errors.safety,
-                true,
-                format!("Live audio input stream failed: {error}"),
-            );
-            errors.worker_wake.unpark();
+            let kind = match error {
+                rodio::cpal::StreamError::DeviceNotAvailable => {
+                    LIVE_AUDIO_TERMINAL_KIND_DEVICE_NOT_AVAILABLE
+                }
+                rodio::cpal::StreamError::BackendSpecific { .. } => {
+                    LIVE_AUDIO_TERMINAL_KIND_BACKEND_SPECIFIC
+                }
+            };
+            errors.defer_terminal_fault(LIVE_AUDIO_TERMINAL_SOURCE_WASAPI_STREAM, kind);
         },
         None,
     )
+}
+
+fn build_wasapi_live_audio_capture(
+    device: &rodio::cpal::Device,
+    config: &rodio::cpal::StreamConfig,
+    sample_format: rodio::cpal::SampleFormat,
+    capture: LiveAudioCaptureCallbackContext,
+    errors: LiveAudioStreamErrorContext,
+) -> Result<LiveAudioCaptureStream, String> {
+    use rodio::cpal::traits::StreamTrait;
+
+    let stream = match sample_format {
+        rodio::cpal::SampleFormat::I8 => {
+            build_live_audio_input_stream::<i8>(device, config, capture.clone(), errors.clone())
+        }
+        rodio::cpal::SampleFormat::I16 => {
+            build_live_audio_input_stream::<i16>(device, config, capture.clone(), errors.clone())
+        }
+        rodio::cpal::SampleFormat::I24 => build_live_audio_input_stream::<rodio::cpal::I24>(
+            device,
+            config,
+            capture.clone(),
+            errors.clone(),
+        ),
+        rodio::cpal::SampleFormat::I32 => {
+            build_live_audio_input_stream::<i32>(device, config, capture.clone(), errors.clone())
+        }
+        rodio::cpal::SampleFormat::I64 => {
+            build_live_audio_input_stream::<i64>(device, config, capture.clone(), errors.clone())
+        }
+        rodio::cpal::SampleFormat::U8 => {
+            build_live_audio_input_stream::<u8>(device, config, capture.clone(), errors.clone())
+        }
+        rodio::cpal::SampleFormat::U16 => {
+            build_live_audio_input_stream::<u16>(device, config, capture.clone(), errors.clone())
+        }
+        rodio::cpal::SampleFormat::U32 => {
+            build_live_audio_input_stream::<u32>(device, config, capture.clone(), errors.clone())
+        }
+        rodio::cpal::SampleFormat::U64 => {
+            build_live_audio_input_stream::<u64>(device, config, capture.clone(), errors.clone())
+        }
+        rodio::cpal::SampleFormat::F32 => {
+            build_live_audio_input_stream::<f32>(device, config, capture.clone(), errors.clone())
+        }
+        rodio::cpal::SampleFormat::F64 => {
+            build_live_audio_input_stream::<f64>(device, config, capture, errors)
+        }
+        format => return Err(format!("Unsupported audio input sample format {format:?}")),
+    }
+    .map_err(|error| format!("Failed to build audio input stream: {error}"))?;
+    stream
+        .play()
+        .map_err(|error| format!("Failed to start audio input stream: {error}"))?;
+    Ok(LiveAudioCaptureStream::Wasapi { _stream: stream })
 }
 
 #[tauri::command]
@@ -7935,7 +8941,7 @@ fn start_live_audio_input(
     state: State<'_, AppState>,
     request: LiveAudioInputStartRequest,
 ) -> Result<LiveAudioInputStatus, String> {
-    use rodio::cpal::traits::{DeviceTrait, StreamTrait};
+    use rodio::cpal::traits::DeviceTrait;
 
     let _lifecycle = state
         .live_audio_input_lifecycle
@@ -7951,23 +8957,31 @@ fn start_live_audio_input(
         );
     }
 
-    let resolved = resolve_live_audio_input_device(&state, request.device_id.as_deref())?;
-    let default_config = resolved
-        .device
-        .default_input_config()
-        .map_err(|error| format!("Failed to read audio input configuration: {error}"))?;
-    let supported_configs = if request.sample_rate.is_some() {
-        resolved
-            .device
-            .supported_input_configs()
-            .map_err(|error| {
-                format!("Failed to read supported audio input configurations: {error}")
-            })?
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
+    let resolved =
+        resolve_live_audio_input_device(&state, request.backend, request.device_id.as_deref())?;
+    let device = resolved.device.clone();
+    let selected = match &device {
+        LiveAudioInputDevice::Wasapi(device) => {
+            let default_config = device
+                .default_input_config()
+                .map_err(|error| format!("Failed to read audio input configuration: {error}"))?;
+            let supported_configs = if request.sample_rate.is_some() {
+                device
+                    .supported_input_configs()
+                    .map_err(|error| {
+                        format!("Failed to read supported audio input configurations: {error}")
+                    })?
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            resolve_live_audio_stream_config(&default_config, &supported_configs, &request)?
+        }
+        #[cfg(all(target_os = "windows", feature = "asio"))]
+        LiveAudioInputDevice::Asio(device) => {
+            resolve_asio_live_audio_start_config(&resolved, device, &request)?
+        }
     };
-    let selected = resolve_live_audio_stream_config(&default_config, &supported_configs, &request)?;
     let sample_format = selected.sample_format;
     let config = selected.stream_config.clone();
     let channels = config.channels.max(1);
@@ -7982,13 +8996,13 @@ fn start_live_audio_input(
         backend: Some(resolved.backend.clone()),
         sample_format: Some(sample_format.to_string()),
         configured_buffer_frames: selected.configured_buffer_frames,
+        applied_buffer_frames: None,
         channel_mix: selected.channel_mix,
         sample_rate,
         channels,
         queue_capacity: LIVE_AUDIO_CAPTURE_SLOT_COUNT,
         ..LiveAudioInputStatus::default()
     }));
-    let device = resolved.device;
     let stop = Arc::new(AtomicBool::new(false));
     let capture_started = Arc::new(AtomicBool::new(false));
     let safety = Arc::new(LiveAudioInputSafety::default());
@@ -8004,6 +9018,7 @@ fn start_live_audio_input(
             .expect("preallocated live audio slot pool must have exact capacity");
     }
     let capture_telemetry = Arc::new(LiveAudioInputCaptureTelemetry::default());
+    let deferred_terminal_fault = Arc::new(DeferredLiveAudioTerminalFaultLatch::default());
     let engine = state.engine.clone();
     let worker_stop = Arc::clone(&stop);
     let worker_capture_started = Arc::clone(&capture_started);
@@ -8014,6 +9029,7 @@ fn start_live_audio_input(
     let worker_telemetry = Arc::clone(&capture_telemetry);
     let worker_generation = Arc::clone(&active_generation);
     let worker_generation_gate = Arc::clone(&generation_gate);
+    let worker_deferred_terminal_fault = Arc::clone(&deferred_terminal_fault);
     let worker_engine = engine.clone();
     let worker = std::thread::Builder::new()
         .name("syndocal-live-audio-fft".to_string())
@@ -8031,6 +9047,7 @@ fn start_live_audio_input(
                     worker_capture_started,
                     Arc::clone(&worker_status),
                     Arc::clone(&worker_safety),
+                    worker_deferred_terminal_fault,
                 )
             }));
             if run_result.is_err() && !worker_stop.load(Ordering::Acquire) {
@@ -8060,98 +9077,42 @@ fn start_live_audio_input(
         worker_wake: worker_wake.clone(),
     };
     let error_context = LiveAudioStreamErrorContext {
-        generation: Arc::clone(&active_generation),
-        generation_gate: Arc::clone(&generation_gate),
-        engine: engine.clone(),
-        status: Arc::clone(&status),
+        deferred_terminal_fault,
         safety: Arc::clone(&safety),
         worker_wake: worker_wake.clone(),
     };
-    let stream_result = match sample_format {
-        rodio::cpal::SampleFormat::I8 => build_live_audio_input_stream::<i8>(
-            &device,
+    let stream_result: Result<(LiveAudioCaptureStream, Option<u32>), String> = match &device {
+        LiveAudioInputDevice::Wasapi(device) => build_wasapi_live_audio_capture(
+            device,
             &config,
-            capture_context.clone(),
-            error_context.clone(),
-        ),
-        rodio::cpal::SampleFormat::I16 => build_live_audio_input_stream::<i16>(
-            &device,
-            &config,
-            capture_context.clone(),
-            error_context.clone(),
-        ),
-        rodio::cpal::SampleFormat::I24 => build_live_audio_input_stream::<rodio::cpal::I24>(
-            &device,
-            &config,
-            capture_context.clone(),
-            error_context.clone(),
-        ),
-        rodio::cpal::SampleFormat::I32 => build_live_audio_input_stream::<i32>(
-            &device,
-            &config,
-            capture_context.clone(),
-            error_context.clone(),
-        ),
-        rodio::cpal::SampleFormat::I64 => build_live_audio_input_stream::<i64>(
-            &device,
-            &config,
-            capture_context.clone(),
-            error_context.clone(),
-        ),
-        rodio::cpal::SampleFormat::U8 => build_live_audio_input_stream::<u8>(
-            &device,
-            &config,
-            capture_context.clone(),
-            error_context.clone(),
-        ),
-        rodio::cpal::SampleFormat::U16 => build_live_audio_input_stream::<u16>(
-            &device,
-            &config,
-            capture_context.clone(),
-            error_context.clone(),
-        ),
-        rodio::cpal::SampleFormat::U32 => build_live_audio_input_stream::<u32>(
-            &device,
-            &config,
-            capture_context.clone(),
-            error_context.clone(),
-        ),
-        rodio::cpal::SampleFormat::U64 => build_live_audio_input_stream::<u64>(
-            &device,
-            &config,
-            capture_context.clone(),
-            error_context.clone(),
-        ),
-        rodio::cpal::SampleFormat::F32 => build_live_audio_input_stream::<f32>(
-            &device,
-            &config,
-            capture_context.clone(),
-            error_context.clone(),
-        ),
-        rodio::cpal::SampleFormat::F64 => {
-            build_live_audio_input_stream::<f64>(&device, &config, capture_context, error_context)
-        }
-        format => {
-            stop.store(true, Ordering::Release);
-            worker_wake.unpark();
-            let _ = worker.join();
-            return Err(format!("Unsupported audio input sample format {format:?}"));
+            sample_format,
+            capture_context,
+            error_context,
+        )
+        .map(|stream| (stream, None)),
+        #[cfg(all(target_os = "windows", feature = "asio"))]
+        LiveAudioInputDevice::Asio(device) => {
+            build_asio_bridge_capture(device, &selected, capture_context, error_context).map(
+                |(stream, applied_buffer_frames)| {
+                    (
+                        LiveAudioCaptureStream::Asio { _stream: stream },
+                        Some(applied_buffer_frames),
+                    )
+                },
+            )
         }
     };
-    let stream = match stream_result {
+    let (stream, applied_buffer_frames) = match stream_result {
         Ok(stream) => stream,
         Err(error) => {
             stop.store(true, Ordering::Release);
             worker_wake.unpark();
             let _ = worker.join();
-            return Err(format!("Failed to build audio input stream: {error}"));
+            return Err(error);
         }
     };
-    if let Err(error) = stream.play() {
-        stop.store(true, Ordering::Release);
-        worker_wake.unpark();
-        let _ = worker.join();
-        return Err(format!("Failed to start audio input stream: {error}"));
+    if let Ok(mut current) = status.lock() {
+        current.applied_buffer_frames = applied_buffer_frames;
     }
     capture_started.store(true, Ordering::Release);
     worker_wake.unpark();
@@ -8238,6 +9199,39 @@ fn queue_live_audio_samples<T: Copy>(
     worker_wake: &std::thread::Thread,
     convert: impl Fn(T) -> f32,
 ) {
+    let timestamp = callback_info.timestamp();
+    let device_delay = timestamp
+        .callback
+        .duration_since(&timestamp.capture)
+        .unwrap_or_default();
+    queue_live_audio_samples_with_delay(
+        data,
+        channels,
+        sample_rate,
+        channel_mix,
+        device_delay,
+        free_capture_slots,
+        ready_capture_chunks,
+        capture_telemetry,
+        safety,
+        worker_wake,
+        convert,
+    );
+}
+
+fn queue_live_audio_samples_with_delay<T: Copy>(
+    data: &[T],
+    channels: u16,
+    sample_rate: u32,
+    channel_mix: LiveAudioChannelMix,
+    device_delay: Duration,
+    free_capture_slots: &crossbeam_queue::ArrayQueue<LiveAudioSampleChunk>,
+    ready_capture_chunks: &crossbeam_queue::ArrayQueue<LiveAudioSampleChunk>,
+    capture_telemetry: &LiveAudioInputCaptureTelemetry,
+    safety: &LiveAudioInputSafety,
+    worker_wake: &std::thread::Thread,
+    convert: impl Fn(T) -> f32,
+) {
     if safety.terminal_faulted() {
         return;
     }
@@ -8255,11 +9249,6 @@ fn queue_live_audio_samples<T: Copy>(
     capture_telemetry
         .max_callback_frames
         .fetch_max(callback_frames as u64, Ordering::Relaxed);
-    let timestamp = callback_info.timestamp();
-    let device_delay = timestamp
-        .callback
-        .duration_since(&timestamp.capture)
-        .unwrap_or_default();
     let callback_at = Instant::now();
     let capture_capacity_frames =
         LIVE_AUDIO_CAPTURE_SLOT_COUNT.saturating_mul(LIVE_AUDIO_CAPTURE_SLOT_FRAMES);
@@ -8343,6 +9332,10 @@ fn sync_live_audio_capture_telemetry(
         status.last_callback_frames = capture_telemetry
             .last_callback_frames
             .load(Ordering::Relaxed);
+        status.applied_buffer_frames = u32::try_from(status.last_callback_frames)
+            .ok()
+            .filter(|frames| *frames > 0)
+            .or(status.applied_buffer_frames);
         let min_callback_frames = capture_telemetry
             .min_callback_frames
             .load(Ordering::Relaxed);
@@ -8405,8 +9398,8 @@ fn fail_closed_live_audio_with(
     if !terminal && safety.terminal_faulted() {
         return;
     }
-    if terminal {
-        safety.mark_terminal_fault();
+    if terminal && !safety.claim_terminal_fault_finalization() {
+        return;
     }
     match status.lock() {
         Ok(mut status) => {
@@ -8435,30 +9428,7 @@ fn latch_terminal_live_audio_fault_with(
     error: String,
     send_clear: impl FnOnce() -> Result<(), String>,
 ) {
-    if safety.terminal_faulted() {
-        return;
-    }
-    match status.lock() {
-        Ok(mut status) => {
-            if safety.terminal_faulted() {
-                return;
-            }
-            safety.mark_terminal_fault();
-            zero_live_audio_input_status(&mut status, error);
-            status.safety_clear_pending = true;
-            let result = send_clear();
-            status.safety_clear_pending = result.is_err();
-            safety.record_clear_result(&result);
-        }
-        Err(_) => {
-            if safety.terminal_faulted() {
-                return;
-            }
-            safety.mark_terminal_fault();
-            let result = send_clear();
-            safety.record_clear_result(&result);
-        }
-    }
+    fail_closed_live_audio_with(status, safety, true, error, send_clear);
 }
 
 fn fail_closed_live_audio(
@@ -8475,6 +9445,81 @@ fn fail_closed_live_audio(
     } else {
         fail_closed_live_audio_with(status, safety, false, error, send_clear);
     }
+}
+
+fn deferred_live_audio_terminal_fault_message(fault: DeferredLiveAudioTerminalFault) -> String {
+    match fault.source {
+        LIVE_AUDIO_TERMINAL_SOURCE_WASAPI_STREAM => match fault.kind {
+            LIVE_AUDIO_TERMINAL_KIND_DEVICE_NOT_AVAILABLE => {
+                "WASAPI input device is no longer available".to_string()
+            }
+            LIVE_AUDIO_TERMINAL_KIND_BACKEND_SPECIFIC => {
+                "WASAPI input stream reported a backend-specific fault".to_string()
+            }
+            kind => format!("WASAPI input stream reported terminal fault kind {kind}"),
+        },
+        LIVE_AUDIO_TERMINAL_SOURCE_WASAPI_ADAPTER => {
+            "WASAPI sample callback panicked inside the application adapter".to_string()
+        }
+        LIVE_AUDIO_TERMINAL_SOURCE_ASIO_BRIDGE => {
+            let detail = match fault.kind {
+                1 => "ASIO input xrun",
+                2 => "ASIO driver requested stream reset",
+                3 => "ASIO driver requested resynchronization",
+                4 => "ASIO driver changed the configured sample rate",
+                5 => "explicit ASIO input device was lost",
+                6 => "ASIO input callback gap exceeded 250 ms",
+                7 => "ASIO realtime scheduling was denied",
+                8 => "terminal ASIO backend error",
+                9 => "ASIO callback payload was malformed",
+                10 => "ASIO callback frame count changed after Start",
+                _ => "ASIO bridge reported a terminal fault",
+            };
+            format!("ASIO terminal fault kind {}: {detail}", fault.kind)
+        }
+        LIVE_AUDIO_TERMINAL_SOURCE_ASIO_ADAPTER => {
+            "ASIO sample callback panicked inside the application adapter".to_string()
+        }
+        source => format!(
+            "Live audio callback reported terminal fault source {source} kind {}",
+            fault.kind
+        ),
+    }
+}
+
+fn finalize_deferred_live_audio_terminal_fault_with(
+    deferred: &DeferredLiveAudioTerminalFaultLatch,
+    generation_gate: &Mutex<()>,
+    status: &Mutex<LiveAudioInputStatus>,
+    safety: &LiveAudioInputSafety,
+    send_clear: impl FnOnce() -> Result<(), String>,
+) -> bool {
+    let Some(fault) = deferred.claim() else {
+        return false;
+    };
+    let error = deferred_live_audio_terminal_fault_message(fault);
+    let _generation_gate = generation_gate
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    fail_closed_live_audio_with(status, safety, true, error, send_clear);
+    true
+}
+
+fn finalize_deferred_live_audio_terminal_fault(
+    deferred: &DeferredLiveAudioTerminalFaultLatch,
+    generation: &AtomicU64,
+    generation_gate: &Mutex<()>,
+    engine: &EngineHandle,
+    status: &Mutex<LiveAudioInputStatus>,
+    safety: &LiveAudioInputSafety,
+) -> bool {
+    finalize_deferred_live_audio_terminal_fault_with(
+        deferred,
+        generation_gate,
+        status,
+        safety,
+        || engine.clear_live_audio_input(generation.load(Ordering::Acquire)),
+    )
 }
 
 fn fail_closed_live_audio_if_worker_heartbeat_stale_with(
@@ -8687,9 +9732,10 @@ fn publish_live_audio_analysis_with(
     send_clear: impl FnOnce() -> Result<(), String>,
 ) -> bool {
     let Ok(mut status) = status.lock() else {
-        safety.mark_terminal_fault();
-        let clear_result = send_clear();
-        safety.record_clear_result(&clear_result);
+        if safety.claim_terminal_fault_finalization() {
+            let clear_result = send_clear();
+            safety.record_clear_result(&clear_result);
+        }
         return false;
     };
     if safety.terminal_faulted() || status.stale {
@@ -8697,6 +9743,9 @@ fn publish_live_audio_analysis_with(
     }
     match send_spectrum() {
         Ok(()) => {
+            if safety.terminal_faulted() {
+                return false;
+            }
             status.safety_clear_pending = false;
             status.bass = finite_live_audio_level(spectrum.bass);
             status.mid = finite_live_audio_level(spectrum.mid);
@@ -8736,7 +9785,9 @@ fn publish_live_audio_analysis_with(
             true
         }
         Err(error) => {
-            safety.mark_terminal_fault();
+            if !safety.claim_terminal_fault_finalization() {
+                return false;
+            }
             zero_live_audio_input_status(
                 &mut status,
                 format!("Live audio spectrum publish failed: {error}"),
@@ -8898,6 +9949,7 @@ fn run_live_audio_fft(
     capture_started: Arc<AtomicBool>,
     status: Arc<Mutex<LiveAudioInputStatus>>,
     safety: Arc<LiveAudioInputSafety>,
+    deferred_terminal_fault: Arc<DeferredLiveAudioTerminalFaultLatch>,
 ) {
     capture_telemetry.mark_worker_heartbeat();
     while !stop.load(Ordering::Acquire) && !capture_started.load(Ordering::Acquire) {
@@ -8921,6 +9973,16 @@ fn run_live_audio_fft(
     let mut watchdog = LiveAudioInputWatchdog::new(Instant::now());
     while !stop.load(Ordering::Acquire) {
         capture_telemetry.mark_worker_heartbeat();
+        if finalize_deferred_live_audio_terminal_fault(
+            &deferred_terminal_fault,
+            &generation,
+            &generation_gate,
+            &engine,
+            &status,
+            &safety,
+        ) {
+            continue;
+        }
         {
             let _generation_gate = generation_gate
                 .lock()
@@ -9206,6 +10268,12 @@ fn live_audio_input_status(state: State<'_, AppState>) -> Result<LiveAudioInputS
         &input.ready_capture_chunks,
         &input.capture_telemetry,
     );
+    #[cfg(all(target_os = "windows", feature = "asio"))]
+    if let Some(LiveAudioCaptureStream::Asio { _stream }) = input.stream.as_ref() {
+        if let Ok(mut status) = input.status.lock() {
+            status.backend_xruns = _stream.xrun_count();
+        }
+    }
     let status = Arc::clone(&input.status);
     let shutdown_ready = input.safety.shutdown_requested()
         && !input.safety.clear_pending()
@@ -30626,6 +31694,59 @@ mod live_audio_input_tests {
     use super::*;
     use std::cell::Cell;
 
+    #[cfg(all(target_os = "windows", feature = "asio"))]
+    #[derive(Default)]
+    struct AsioHardwareSmokeTelemetry {
+        callbacks: AtomicU64,
+        frames: AtomicU64,
+        last_callback_frames: AtomicU64,
+        max_capture_delay_ns: AtomicU64,
+        non_finite_samples: AtomicU64,
+        terminal_event_kind: std::sync::atomic::AtomicU32,
+    }
+
+    #[cfg(all(target_os = "windows", feature = "asio"))]
+    unsafe extern "C" fn asio_hardware_smoke_sample_callback(
+        context: *mut std::ffi::c_void,
+        samples: *const f32,
+        len: usize,
+        capture_delay_ns: u64,
+        callback_frames: u32,
+    ) {
+        if context.is_null() || samples.is_null() {
+            return;
+        }
+        let telemetry = unsafe { &*(context.cast::<AsioHardwareSmokeTelemetry>()) };
+        let samples = unsafe { std::slice::from_raw_parts(samples, len) };
+        telemetry.callbacks.fetch_add(1, Ordering::Relaxed);
+        telemetry.frames.fetch_add(len as u64, Ordering::Relaxed);
+        telemetry
+            .last_callback_frames
+            .store(u64::from(callback_frames), Ordering::Relaxed);
+        telemetry
+            .max_capture_delay_ns
+            .fetch_max(capture_delay_ns, Ordering::Relaxed);
+        telemetry.non_finite_samples.fetch_add(
+            samples.iter().filter(|sample| !sample.is_finite()).count() as u64,
+            Ordering::Relaxed,
+        );
+    }
+
+    #[cfg(all(target_os = "windows", feature = "asio"))]
+    unsafe extern "C" fn asio_hardware_smoke_event_callback(
+        context: *mut std::ffi::c_void,
+        severity: u32,
+        kind: u32,
+        _message: *const u8,
+        _message_len: usize,
+    ) {
+        if context.is_null() || severity != 2 {
+            return;
+        }
+        let telemetry = unsafe { &*(context.cast::<AsioHardwareSmokeTelemetry>()) };
+        telemetry.terminal_event_kind.store(kind, Ordering::Release);
+    }
+
     fn feature_frame(
         bands: [f32; audio::live_features::MAX_LIVE_AUDIO_BANDS],
         band_count: usize,
@@ -31161,6 +32282,7 @@ mod live_audio_input_tests {
     #[test]
     fn live_audio_command_json_contract_uses_tagged_channel_mix_and_snake_case_fields() {
         let request: LiveAudioInputStartRequest = serde_json::from_value(json!({
+            "backend": "asio",
             "device_id": "wasapi:7:0",
             "sample_rate": 48_000,
             "stream_channels": 2,
@@ -31173,6 +32295,7 @@ mod live_audio_input_tests {
             }
         }))
         .unwrap();
+        assert_eq!(request.backend, LiveAudioInputBackend::Asio);
         assert_eq!(request.device_id.as_deref(), Some("wasapi:7:0"));
         assert_eq!(request.sample_rate, Some(48_000));
         assert_eq!(request.stream_channels, Some(2));
@@ -31197,6 +32320,157 @@ mod live_audio_input_tests {
             .unwrap(),
             json!({ "kind": "range", "min_frames": 64, "max_frames": 512 })
         );
+    }
+
+    #[test]
+    fn live_audio_backend_contract_keeps_asio_explicit_and_separate() {
+        let backends = live_audio_input_backends();
+        assert_eq!(backends.len(), 2);
+        assert_eq!(backends[0].id, "wasapi_shared");
+        assert!(!backends[0].requires_explicit_device);
+        assert_eq!(backends[0].distribution, "default");
+        assert_eq!(backends[1].id, "asio");
+        assert!(backends[1].requires_explicit_device);
+        assert_eq!(backends[1].distribution, "separate_artifact");
+        #[cfg(all(target_os = "windows", feature = "asio"))]
+        let expected_asio_built = AsioBridgeLibrary::load()
+            .map(|bridge| bridge.asio_compiled())
+            .unwrap_or(false);
+        #[cfg(not(all(target_os = "windows", feature = "asio")))]
+        let expected_asio_built = false;
+        assert_eq!(backends[1].built, expected_asio_built);
+
+        let default_request: LiveAudioInputStartRequest = serde_json::from_value(json!({
+            "channel_mix": { "mode": "average_all" }
+        }))
+        .unwrap();
+        assert_eq!(default_request.backend, LiveAudioInputBackend::WasapiShared);
+    }
+
+    #[cfg(all(target_os = "windows", feature = "asio"))]
+    #[test]
+    #[ignore = "requires SYNDOCAL_ASIO_BRIDGE_PATH and installed ASIO drivers"]
+    fn asio_bridge_catalog_and_capabilities_match_the_explicit_driver() {
+        let bridge = AsioBridgeLibrary::load().expect("ASIO bridge should load");
+        assert!(bridge.asio_compiled());
+        let drivers = bridge.drivers().expect("ASIO drivers should enumerate");
+        println!("ASIO drivers: {drivers:?}");
+        let driver = drivers
+            .first()
+            .expect("at least one ASIO driver is required");
+        let payload = bridge
+            .capabilities_json(&driver.id)
+            .expect("selected ASIO driver capabilities should resolve");
+        println!("ASIO capabilities: {payload}");
+        let capabilities: AsioBridgeCapabilities =
+            serde_json::from_str(&payload).expect("ASIO capabilities should match ABI v1 JSON");
+        assert_eq!(capabilities.abi_version, SYNDOCAL_ASIO_ABI_VERSION);
+        assert!(capabilities.built);
+        assert_eq!(capabilities.backend, "asio");
+        assert_eq!(capabilities.driver.id, driver.id);
+        assert!(!capabilities.input_configs.is_empty());
+    }
+
+    #[cfg(all(target_os = "windows", feature = "asio"))]
+    #[test]
+    #[ignore = "requires an explicit installed ASIO driver and captures live hardware input"]
+    fn asio_bridge_explicit_driver_stream_smoke() {
+        let driver_id = std::env::var("SYNDOCAL_ASIO_TEST_DRIVER_ID")
+            .expect("set SYNDOCAL_ASIO_TEST_DRIVER_ID=asio:<driver name>");
+        let sample_rate = std::env::var("SYNDOCAL_ASIO_TEST_SAMPLE_RATE")
+            .unwrap_or_else(|_| "48000".to_string())
+            .parse::<u32>()
+            .expect("SYNDOCAL_ASIO_TEST_SAMPLE_RATE must be an integer");
+        let channels = std::env::var("SYNDOCAL_ASIO_TEST_CHANNELS")
+            .unwrap_or_else(|_| "2".to_string())
+            .parse::<u32>()
+            .expect("SYNDOCAL_ASIO_TEST_CHANNELS must be an integer");
+        let buffer_frames = std::env::var("SYNDOCAL_ASIO_TEST_BUFFER_FRAMES")
+            .unwrap_or_else(|_| "1024".to_string())
+            .parse::<u32>()
+            .expect("SYNDOCAL_ASIO_TEST_BUFFER_FRAMES must be an integer");
+        let sample_format_name =
+            std::env::var("SYNDOCAL_ASIO_TEST_SAMPLE_FORMAT").unwrap_or_else(|_| "i16".to_string());
+        let sample_format = match sample_format_name.as_str() {
+            "f32" => 1,
+            "i16" => 2,
+            "i24" => 3,
+            "i32" => 4,
+            "f64" => 5,
+            _ => panic!("unsupported ASIO smoke sample format {sample_format_name}"),
+        };
+        let channel_mix = [AsioBridgeChannelMix {
+            channel_index: 0,
+            gain: 1.0,
+        }];
+        let bridge = AsioBridgeLibrary::load().expect("ASIO bridge should load");
+        assert!(bridge.asio_compiled());
+        let config = AsioBridgeStartConfig {
+            struct_size: std::mem::size_of::<AsioBridgeStartConfig>() as u32,
+            abi_version: SYNDOCAL_ASIO_ABI_VERSION,
+            driver_id: driver_id.as_ptr(),
+            driver_id_len: driver_id.len(),
+            sample_rate_hz: sample_rate,
+            input_channels: channels,
+            sample_format,
+            fixed_buffer_frames: buffer_frames,
+            channel_mix: channel_mix.as_ptr(),
+            channel_mix_len: channel_mix.len(),
+            flags: 0,
+            reserved: 0,
+        };
+        let mut telemetry = Box::<AsioHardwareSmokeTelemetry>::default();
+        let mut handle = std::ptr::null_mut();
+        let mut error = AsioBridgeString::default();
+        let status = unsafe {
+            (bridge.api.start)(
+                &config,
+                asio_hardware_smoke_sample_callback,
+                asio_hardware_smoke_event_callback,
+                telemetry.as_mut() as *mut AsioHardwareSmokeTelemetry as *mut std::ffi::c_void,
+                &mut handle,
+                &mut error,
+            )
+        };
+        let start_error = bridge.take_string(error);
+        assert_eq!(status, 0, "explicit ASIO driver should open: {start_error}");
+        assert!(!handle.is_null());
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while telemetry.callbacks.load(Ordering::Acquire) < 4
+            && telemetry.terminal_event_kind.load(Ordering::Acquire) == 0
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let mut actual_buffer_frames = 0;
+        let buffer_status = unsafe {
+            (bridge.api.actual_buffer_frames)(handle.cast_const(), &mut actual_buffer_frames)
+        };
+        let xrun_count = unsafe { (bridge.api.xrun_count)(handle.cast_const()) };
+        let callbacks = telemetry.callbacks.load(Ordering::Acquire);
+        let frames = telemetry.frames.load(Ordering::Acquire);
+        let last_callback_frames = telemetry.last_callback_frames.load(Ordering::Acquire);
+        let max_capture_delay_ns = telemetry.max_capture_delay_ns.load(Ordering::Acquire);
+        let non_finite_samples = telemetry.non_finite_samples.load(Ordering::Acquire);
+        let terminal_event_kind = telemetry.terminal_event_kind.load(Ordering::Acquire);
+        let mut stop_error = AsioBridgeString::default();
+        let stop_status = unsafe { (bridge.api.stop)(handle, &mut stop_error) };
+        let stop_error = bridge.take_string(stop_error);
+        unsafe { (bridge.api.free)(handle) };
+
+        println!(
+            "ASIO smoke driver={driver_id} rate={sample_rate} channels={channels} format={sample_format_name} requested={buffer_frames} applied={actual_buffer_frames} callbacks={callbacks} frames={frames} callback_frames={last_callback_frames} max_delay_us={:.1} xruns={xrun_count}",
+            max_capture_delay_ns as f64 / 1_000.0,
+        );
+        assert_eq!(buffer_status, 0);
+        assert_eq!(actual_buffer_frames, buffer_frames);
+        assert!(callbacks >= 4, "ASIO callback did not become live");
+        assert_eq!(last_callback_frames, u64::from(buffer_frames));
+        assert_eq!(non_finite_samples, 0);
+        assert_eq!(terminal_event_kind, 0, "ASIO terminal event was observed");
+        assert_eq!(xrun_count, 0);
+        assert_eq!(stop_status, 0, "ASIO stop failed: {stop_error}");
     }
 
     #[test]
@@ -31935,6 +33209,238 @@ mod live_audio_input_tests {
     }
 
     #[test]
+    fn deferred_live_audio_terminal_before_capture_start_is_finalized_once() {
+        let deferred = Arc::new(DeferredLiveAudioTerminalFaultLatch::default());
+        let safety = Arc::new(LiveAudioInputSafety::default());
+        let errors = LiveAudioStreamErrorContext {
+            deferred_terminal_fault: Arc::clone(&deferred),
+            safety: Arc::clone(&safety),
+            worker_wake: std::thread::current(),
+        };
+        let status = Mutex::new(LiveAudioInputStatus {
+            running: true,
+            bass: 0.5,
+            ..LiveAudioInputStatus::default()
+        });
+        let generation_gate = Mutex::new(());
+        let clear_attempts = Cell::new(0_u32);
+
+        assert!(errors.defer_terminal_fault(LIVE_AUDIO_TERMINAL_SOURCE_ASIO_BRIDGE, 5));
+        assert!(safety.terminal_faulted());
+        assert!(finalize_deferred_live_audio_terminal_fault_with(
+            &deferred,
+            &generation_gate,
+            &status,
+            &safety,
+            || {
+                clear_attempts.set(clear_attempts.get() + 1);
+                Ok(())
+            },
+        ));
+        assert!(!finalize_deferred_live_audio_terminal_fault_with(
+            &deferred,
+            &generation_gate,
+            &status,
+            &safety,
+            || panic!("a handled deferred terminal fault must not clear twice"),
+        ));
+
+        assert_eq!(clear_attempts.get(), 1);
+        let current = status.lock().unwrap();
+        assert!(current.running);
+        assert!(current.stale);
+        assert_eq!(current.bass, 0.0);
+        assert_eq!(
+            current.last_error.as_deref(),
+            Some("ASIO terminal fault kind 5: explicit ASIO input device was lost")
+        );
+        assert!(!current.safety_clear_pending);
+    }
+
+    #[test]
+    fn deferred_live_audio_terminal_callback_stays_nonblocking_and_clear_is_exactly_once() {
+        let deferred = Arc::new(DeferredLiveAudioTerminalFaultLatch::default());
+        let safety = Arc::new(LiveAudioInputSafety::default());
+        let errors = LiveAudioStreamErrorContext {
+            deferred_terminal_fault: Arc::clone(&deferred),
+            safety: Arc::clone(&safety),
+            worker_wake: std::thread::current(),
+        };
+        let status = Arc::new(Mutex::new(LiveAudioInputStatus {
+            running: true,
+            ..LiveAudioInputStatus::default()
+        }));
+        let generation_gate = Arc::new(Mutex::new(()));
+        let clear_attempts = Arc::new(AtomicU64::new(0));
+        let (clear_entered_tx, clear_entered_rx) = std::sync::mpsc::channel();
+        let (release_clear_tx, release_clear_rx) = std::sync::mpsc::channel();
+
+        assert!(errors.defer_terminal_fault(LIVE_AUDIO_TERMINAL_SOURCE_ASIO_BRIDGE, 6));
+        let worker_deferred = Arc::clone(&deferred);
+        let worker_status = Arc::clone(&status);
+        let worker_safety = Arc::clone(&safety);
+        let worker_generation_gate = Arc::clone(&generation_gate);
+        let worker_clear_attempts = Arc::clone(&clear_attempts);
+        let worker = std::thread::spawn(move || {
+            finalize_deferred_live_audio_terminal_fault_with(
+                &worker_deferred,
+                &worker_generation_gate,
+                &worker_status,
+                &worker_safety,
+                || {
+                    worker_clear_attempts.fetch_add(1, Ordering::AcqRel);
+                    clear_entered_tx.send(()).unwrap();
+                    release_clear_rx.recv().unwrap();
+                    Ok(())
+                },
+            )
+        });
+        clear_entered_rx.recv().unwrap();
+
+        let duplicate_errors = errors.clone();
+        let (callback_returned_tx, callback_returned_rx) = std::sync::mpsc::channel();
+        let callback = std::thread::spawn(move || {
+            let latched =
+                duplicate_errors.defer_terminal_fault(LIVE_AUDIO_TERMINAL_SOURCE_ASIO_BRIDGE, 1);
+            callback_returned_tx.send(latched).unwrap();
+        });
+        assert_eq!(
+            callback_returned_rx
+                .recv_timeout(Duration::from_millis(250))
+                .expect("callback-side atomic defer must not wait for the blocked engine clear"),
+            false
+        );
+        release_clear_tx.send(()).unwrap();
+        callback.join().unwrap();
+        assert!(worker.join().unwrap());
+
+        assert_eq!(clear_attempts.load(Ordering::Acquire), 1);
+        assert!(!finalize_deferred_live_audio_terminal_fault_with(
+            &deferred,
+            &generation_gate,
+            &status,
+            &safety,
+            || panic!("duplicate terminal callback must not create another clear owner"),
+        ));
+    }
+
+    #[test]
+    fn deferred_live_audio_terminal_races_stop_without_a_second_fail_closed_owner() {
+        let deferred = Arc::new(DeferredLiveAudioTerminalFaultLatch::default());
+        let safety = Arc::new(LiveAudioInputSafety::default());
+        let errors = LiveAudioStreamErrorContext {
+            deferred_terminal_fault: Arc::clone(&deferred),
+            safety: Arc::clone(&safety),
+            worker_wake: std::thread::current(),
+        };
+        let status = Arc::new(Mutex::new(LiveAudioInputStatus {
+            running: true,
+            bass: 0.5,
+            ..LiveAudioInputStatus::default()
+        }));
+        let generation_gate = Arc::new(Mutex::new(()));
+        let clear_attempts = Arc::new(AtomicU64::new(0));
+        let start = Arc::new(std::sync::Barrier::new(3));
+
+        assert!(errors.defer_terminal_fault(
+            LIVE_AUDIO_TERMINAL_SOURCE_WASAPI_STREAM,
+            LIVE_AUDIO_TERMINAL_KIND_DEVICE_NOT_AVAILABLE,
+        ));
+
+        let worker_deferred = Arc::clone(&deferred);
+        let worker_status = Arc::clone(&status);
+        let worker_safety = Arc::clone(&safety);
+        let worker_generation_gate = Arc::clone(&generation_gate);
+        let worker_clear_attempts = Arc::clone(&clear_attempts);
+        let worker_start = Arc::clone(&start);
+        let worker = std::thread::spawn(move || {
+            worker_start.wait();
+            finalize_deferred_live_audio_terminal_fault_with(
+                &worker_deferred,
+                &worker_generation_gate,
+                &worker_status,
+                &worker_safety,
+                || {
+                    worker_clear_attempts.fetch_add(1, Ordering::AcqRel);
+                    Ok(())
+                },
+            )
+        });
+
+        let stop_status = Arc::clone(&status);
+        let stop_safety = Arc::clone(&safety);
+        let stop_generation_gate = Arc::clone(&generation_gate);
+        let stop_clear_attempts = Arc::clone(&clear_attempts);
+        let stop_start = Arc::clone(&start);
+        let stop = std::thread::spawn(move || {
+            stop_start.wait();
+            let _generation_gate = stop_generation_gate.lock().unwrap();
+            request_live_audio_shutdown_with(&stop_status, &stop_safety, || {
+                stop_clear_attempts.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            });
+        });
+
+        start.wait();
+        worker.join().unwrap();
+        stop.join().unwrap();
+
+        assert_eq!(clear_attempts.load(Ordering::Acquire), 1);
+        assert!(safety.shutdown_requested());
+        assert!(safety.terminal_faulted());
+        assert!(status.lock().unwrap().stale);
+        assert!(deferred.claim().is_none());
+    }
+
+    #[test]
+    fn deferred_live_audio_terminal_does_not_reopen_after_final_drop_clear() {
+        let deferred = DeferredLiveAudioTerminalFaultLatch::default();
+        let safety = LiveAudioInputSafety::default();
+        let status = Mutex::new(LiveAudioInputStatus {
+            running: true,
+            ..LiveAudioInputStatus::default()
+        });
+        let generation_gate = Mutex::new(());
+        let event_clears = Cell::new(0_u32);
+        let drop_clears = Cell::new(0_u32);
+        let generation = AtomicU64::new(41);
+
+        safety.mark_terminal_fault();
+        assert!(deferred.latch(LIVE_AUDIO_TERMINAL_SOURCE_ASIO_BRIDGE, 2));
+        assert!(finalize_deferred_live_audio_terminal_fault_with(
+            &deferred,
+            &generation_gate,
+            &status,
+            &safety,
+            || {
+                event_clears.set(event_clears.get() + 1);
+                Ok(())
+            },
+        ));
+        assert!(send_current_live_audio_clear_bounded_with(
+            &generation,
+            Duration::ZERO,
+            Duration::ZERO,
+            |observed_generation| {
+                assert_eq!(observed_generation, 41);
+                drop_clears.set(drop_clears.get() + 1);
+                Ok(())
+            },
+        ));
+
+        assert!(!deferred.latch(LIVE_AUDIO_TERMINAL_SOURCE_ASIO_BRIDGE, 3));
+        assert!(!finalize_deferred_live_audio_terminal_fault_with(
+            &deferred,
+            &generation_gate,
+            &status,
+            &safety,
+            || panic!("a late callback after final drop must stay inert"),
+        ));
+        assert_eq!(event_clears.get(), 1);
+        assert_eq!(drop_clears.get(), 1);
+    }
+
+    #[test]
     fn live_audio_stop_keeps_the_retry_owner_inert_until_clear_is_accepted() {
         let status = Mutex::new(LiveAudioInputStatus {
             running: true,
@@ -32137,6 +33643,48 @@ mod live_audio_input_tests {
         assert!(safety.terminal_faulted());
         assert!(safety.clear_pending());
         assert_eq!(clear_attempts.get(), 1);
+    }
+
+    #[test]
+    fn live_audio_poisoned_status_claims_terminal_clear_once() {
+        let status = Mutex::new(LiveAudioInputStatus {
+            running: true,
+            ..LiveAudioInputStatus::default()
+        });
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _status = status.lock().unwrap();
+            panic!("poison the live audio status lock");
+        }));
+        let safety = LiveAudioInputSafety::default();
+        let spectrum_sends = Cell::new(0_u32);
+        let clear_sends = Cell::new(0_u32);
+        let spectrum = protocol::AudioSpectrumPoint {
+            time_ms: 0,
+            bass: 0.2,
+            mid: 0.4,
+            high: 0.6,
+        };
+
+        for _ in 0..2 {
+            assert!(!publish_live_audio_spectrum_with(
+                &status,
+                &safety,
+                &spectrum,
+                || {
+                    spectrum_sends.set(spectrum_sends.get() + 1);
+                    Ok(())
+                },
+                || {
+                    clear_sends.set(clear_sends.get() + 1);
+                    Ok(())
+                },
+            ));
+        }
+
+        assert_eq!(spectrum_sends.get(), 0);
+        assert_eq!(clear_sends.get(), 1);
+        assert!(safety.terminal_faulted());
+        assert!(!safety.clear_pending());
     }
 
     #[test]
@@ -33069,6 +34617,7 @@ fn main() {
             stop_video_clip,
             play_video_layer_audio_monitor,
             list_audio_output_devices,
+            live_audio_input_backends,
             list_audio_input_devices,
             get_live_audio_input_capabilities,
             start_live_audio_input,

@@ -12491,6 +12491,32 @@ input[type="color"] {
   flex: 0 0 110px;
 }
 
+.liveAudioTelemetry > .liveAudioTelemetryXrun {
+  flex: 0 0 66px;
+}
+
+.liveAudioTelemetry > .liveAudioBackendLiveState {
+  flex: 0 0 58px;
+  color: #a9b5bd;
+  font-weight: 800;
+  text-align: center;
+}
+
+.liveAudioBackendLiveState.open {
+  border-color: #8d7650;
+  color: #d4b982;
+}
+
+.liveAudioBackendLiveState.active {
+  border-color: #3e8b6b;
+  color: #7fc49e;
+}
+
+.liveAudioBackendLiveState.fault {
+  border-color: #c86c42;
+  color: #ffb48f;
+}
+
 .liveAudioTelemetry > .liveAudioTelemetryLatency {
   flex: 0 0 128px;
 }
@@ -12529,7 +12555,7 @@ input[type="color"] {
 .liveAudioConfigControls {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(3, minmax(70px, 1fr)) minmax(70px, auto);
+  grid-template-columns: minmax(86px, 1.2fr) repeat(3, minmax(54px, 0.8fr)) minmax(88px, 1fr);
   align-items: stretch;
   gap: 3px;
   min-width: 0;
@@ -12559,6 +12585,9 @@ input[type="color"] {
 }
 
 .liveAudioConfigFormat {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   overflow: hidden;
   border: 1px solid #303a42;
   border-radius: 2px;
@@ -12568,6 +12597,63 @@ input[type="color"] {
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.liveAudioConfigFormat > b,
+.liveAudioConfigFormat > i,
+.liveAudioConfigFormat > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.liveAudioConfigFormat > b {
+  flex: 0 0 auto;
+  color: #a9b5bd;
+  font: inherit;
+  font-weight: 800;
+}
+
+.liveAudioConfigFormat > i {
+  flex: 0 0 auto;
+  font-style: normal;
+}
+
+.liveAudioConfigFormat > span {
+  min-width: 0;
+}
+
+.liveAudioBackendState.not_built,
+.liveAudioBackendState.fault,
+.liveAudioBackendState.empty {
+  border-color: #9d633c;
+}
+
+.liveAudioBackendState.not_built > b,
+.liveAudioBackendState.fault > b,
+.liveAudioBackendState.empty > b {
+  color: #ffb184;
+}
+
+.liveAudioBackendState.open > b,
+.liveAudioBackendState.checking > b,
+.liveAudioBackendState.select_device > b,
+.liveAudioBackendState.configure > b {
+  color: #d4b982;
+}
+
+.liveAudioBackendState.active > b,
+.liveAudioBackendState.ready > b {
+  color: #7fc49e;
+}
+
+@container (max-width: 410px) {
+  .videoControlPanelMixer .liveAudioConfigControls {
+    grid-template-columns: minmax(74px, 1.1fr) repeat(3, minmax(46px, 0.8fr)) 62px;
+  }
+
+  .videoControlPanelMixer .liveAudioConfigFormat > span {
+    display: none;
+  }
 }
 
 .liveAudioTelemetry > span.warning {

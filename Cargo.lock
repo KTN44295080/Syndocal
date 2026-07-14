@@ -4892,6 +4892,7 @@ dependencies = [
  "gdtf",
  "image",
  "io",
+ "libloading 0.8.9",
  "minisign-verify",
  "protocol",
  "rfd",

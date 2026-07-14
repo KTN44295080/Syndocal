@@ -851,6 +851,7 @@ export interface LiveAudioInputStatus {
   sample_rate: number;
   channels: number;
   configured_buffer_frames?: number | null;
+  applied_buffer_frames?: number | null;
   channel_mix: LiveAudioChannelMix;
   bass: number;
   mid: number;
@@ -876,6 +877,7 @@ export interface LiveAudioInputStatus {
   analyzed_windows: number;
   dropped_chunks: number;
   dropped_frames: number;
+  backend_xruns: number;
   callback_count: number;
   last_callback_frames: number;
   min_callback_frames: number;
@@ -886,6 +888,16 @@ export interface LiveAudioInputStatus {
   queue_capacity: number;
   queue_depth_high_water: number;
   last_error?: string | null;
+}
+
+export type LiveAudioInputBackendId = "wasapi_shared" | "asio";
+
+export interface LiveAudioInputBackendSummary {
+  id: LiveAudioInputBackendId;
+  label: string;
+  built: boolean;
+  requires_explicit_device: boolean;
+  distribution: string;
 }
 
 export interface LiveAudioInputDeviceSummary {
@@ -936,6 +948,7 @@ export interface LiveAudioInputCapabilities {
 }
 
 export interface LiveAudioInputStartRequest {
+  backend: LiveAudioInputBackendId;
   device_id?: string | null;
   sample_rate?: number | null;
   stream_channels?: number | null;

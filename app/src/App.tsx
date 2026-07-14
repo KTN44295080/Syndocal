@@ -176,6 +176,8 @@ import type {
   LearnedOscControl,
   LfoShape,
   LiveAudioChannelMix,
+  LiveAudioInputBackendId,
+  LiveAudioInputBackendSummary,
   LiveAudioInputCapabilities,
   LiveAudioInputDeviceSummary,
   LiveAudioInputStartRequest,
@@ -1091,6 +1093,13 @@ export default function App() {
     last_error: null,
   });
   const [liveAudioInputDevices, setLiveAudioInputDevices] = createSignal<LiveAudioInputDeviceSummary[]>([]);
+  const [liveAudioInputBackends, setLiveAudioInputBackends] =
+    createSignal<LiveAudioInputBackendSummary[]>([]);
+  const [selectedLiveAudioInputBackend, setSelectedLiveAudioInputBackend] =
+    createSignal<LiveAudioInputBackendId>("wasapi_shared");
+  const [liveAudioInputBackendsKnown, setLiveAudioInputBackendsKnown] = createSignal(false);
+  const [liveAudioInputBackendsBusy, setLiveAudioInputBackendsBusy] = createSignal(false);
+  const [liveAudioInputBackendError, setLiveAudioInputBackendError] = createSignal<string | null>(null);
   const [selectedLiveAudioInputDevice, setSelectedLiveAudioInputDevice] = createSignal("");
   const [liveAudioInputCapabilities, setLiveAudioInputCapabilities] =
     createSignal<LiveAudioInputCapabilities | null>(null);
@@ -1111,6 +1120,7 @@ export default function App() {
     sample_rate: 0,
     channels: 0,
     configured_buffer_frames: null,
+    applied_buffer_frames: null,
     channel_mix: { mode: "average_all" },
     bass: 0,
     mid: 0,
@@ -1136,6 +1146,7 @@ export default function App() {
     analyzed_windows: 0,
     dropped_chunks: 0,
     dropped_frames: 0,
+    backend_xruns: 0,
     callback_count: 0,
     last_callback_frames: 0,
     min_callback_frames: 0,
@@ -9332,6 +9343,8 @@ export default function App() {
     if (videoDeckALayerId() !== null && !ids.has(videoDeckALayerId()!)) setVideoDeckALayerId(null);
     if (videoDeckBLayerId() !== null && !ids.has(videoDeckBLayerId()!)) setVideoDeckBLayerId(null);
   });
+  let liveAudioInputBackendsEpoch = 0;
+  let liveAudioInputBackendsRefreshInFlight: Promise<boolean> | null = null;
   let liveAudioInputCapabilitiesEpoch = 0;
   let liveAudioInputDevicesRefreshEpoch = 0;
   let liveAudioInputDevicesRefreshInFlight: Promise<void> | null = null;
@@ -9340,17 +9353,73 @@ export default function App() {
   const invalidateLiveAudioInputLevels = () => {
     liveAudioInputLevelsEpoch += 1;
   };
+  const refreshLiveAudioInputBackends = (announce = true): Promise<boolean> => {
+    if (liveAudioInputBackendsRefreshInFlight) return liveAudioInputBackendsRefreshInFlight;
+    const epoch = ++liveAudioInputBackendsEpoch;
+    setLiveAudioInputBackendsBusy(true);
+
+    let request!: Promise<boolean>;
+    request = (async () => {
+      try {
+        const backends = await invoke<LiveAudioInputBackendSummary[]>("live_audio_input_backends");
+        if (epoch !== liveAudioInputBackendsEpoch) return false;
+        const currentBackend = selectedLiveAudioInputBackend();
+        const nextBackend = backends.find((backend) => backend.id === currentBackend)
+          ?? backends.find((backend) => backend.id === "wasapi_shared")
+          ?? backends[0];
+        setLiveAudioInputBackends(backends);
+        setLiveAudioInputBackendsKnown(true);
+        setLiveAudioInputBackendError(null);
+        if (nextBackend && nextBackend.id !== currentBackend) {
+          setSelectedLiveAudioInputBackend(nextBackend.id);
+          setLiveAudioInputDevices([]);
+          setSelectedLiveAudioInputDevice("");
+          setLiveAudioInputCapabilities(null);
+          setLiveAudioInputSampleRate(null);
+          setLiveAudioInputBufferFrames(null);
+          setLiveAudioInputChannelMix({ mode: "average_all" });
+        }
+        return Boolean(nextBackend?.built);
+      } catch (error) {
+        if (epoch !== liveAudioInputBackendsEpoch) return false;
+        const detail = String(error);
+        setLiveAudioInputBackends([]);
+        setLiveAudioInputBackendsKnown(true);
+        setLiveAudioInputBackendError(detail);
+        setLiveAudioInputDevices([]);
+        setLiveAudioInputCapabilities(null);
+        if (announce) setMessage(detail);
+        return false;
+      }
+    })().finally(() => {
+      if (liveAudioInputBackendsRefreshInFlight === request) {
+        liveAudioInputBackendsRefreshInFlight = null;
+      }
+      if (epoch === liveAudioInputBackendsEpoch) {
+        setLiveAudioInputBackendsBusy(false);
+      }
+    });
+    liveAudioInputBackendsRefreshInFlight = request;
+    return request;
+  };
   const refreshLiveAudioInputCapabilities = async (
     deviceId = selectedLiveAudioInputDevice(),
     announce = true,
     sampleRate = liveAudioInputSampleRate(),
+    backendId = selectedLiveAudioInputBackend(),
   ): Promise<boolean> => {
     const epoch = ++liveAudioInputCapabilitiesEpoch;
+    const backend = liveAudioInputBackends().find((candidate) => candidate.id === backendId);
+    if (!backend?.built || (backend.requires_explicit_device && !deviceId.trim())) {
+      setLiveAudioInputCapabilities(null);
+      setLiveAudioInputCapabilitiesBusy(false);
+      return false;
+    }
     setLiveAudioInputCapabilitiesBusy(true);
     try {
       const capabilities = await invoke<LiveAudioInputCapabilities>(
         "get_live_audio_input_capabilities",
-        { deviceId: deviceId || null, sampleRate },
+        { backend: backendId, deviceId: deviceId || null, sampleRate },
       );
       if (epoch === liveAudioInputCapabilitiesEpoch) {
         setLiveAudioInputCapabilities(capabilities);
@@ -9369,22 +9438,34 @@ export default function App() {
     return false;
   };
   const selectLiveAudioInputDevice = (deviceId: string) => {
-    if (liveAudioInputBusy()) return;
+    if (liveAudioInputBusy() || liveAudioInputBackendsBusy()) return;
     setSelectedLiveAudioInputDevice(deviceId);
     setLiveAudioInputSampleRate(null);
     setLiveAudioInputBufferFrames(null);
     setLiveAudioInputChannelMix({ mode: "average_all" });
-    void refreshLiveAudioInputCapabilities(deviceId, true, null);
+    void refreshLiveAudioInputCapabilities(
+      deviceId,
+      true,
+      null,
+      selectedLiveAudioInputBackend(),
+    );
   };
   const selectLiveAudioInputSampleRate = (sampleRate: number | null) => {
     setLiveAudioInputSampleRate(sampleRate);
     setLiveAudioInputBufferFrames(null);
     setLiveAudioInputChannelMix({ mode: "average_all" });
-    void refreshLiveAudioInputCapabilities(selectedLiveAudioInputDevice(), true, sampleRate);
+    void refreshLiveAudioInputCapabilities(
+      selectedLiveAudioInputDevice(),
+      true,
+      sampleRate,
+      selectedLiveAudioInputBackend(),
+    );
   };
   const refreshLiveAudioInputDevices = (announce = true): Promise<void> => {
     if (liveAudioInputDevicesRefreshInFlight) return liveAudioInputDevicesRefreshInFlight;
-    if (liveAudioInputBusy() || liveAudioInputStatus().running) return Promise.resolve();
+    if (liveAudioInputBusy() || liveAudioInputBackendsBusy() || liveAudioInputStatus().running) {
+      return Promise.resolve();
+    }
 
     const previousDeviceId = selectedLiveAudioInputDevice();
     const previousDevices = liveAudioInputDevices();
@@ -9397,26 +9478,49 @@ export default function App() {
     let request!: Promise<void>;
     request = (async () => {
       try {
-        const devices = await invoke<LiveAudioInputDeviceSummary[]>("list_audio_input_devices");
+        if (!liveAudioInputBackendsKnown() || liveAudioInputBackendError()) {
+          const backendReady = await refreshLiveAudioInputBackends(announce);
+          if (!backendReady) return;
+        }
+        const backendId = selectedLiveAudioInputBackend();
+        const backend = liveAudioInputBackends().find((candidate) => candidate.id === backendId);
+        if (!backend?.built) {
+          setLiveAudioInputDevices([]);
+          setLiveAudioInputCapabilities(null);
+          if (announce && backend) {
+            setMessage("Selected audio capture backend is not built into this application.");
+          }
+          return;
+        }
+        const devices = await invoke<LiveAudioInputDeviceSummary[]>("list_audio_input_devices", {
+          backend: backendId,
+        });
         if (epoch !== liveAudioInputDevicesRefreshEpoch) return;
 
         let selectedDeviceId = "";
         let selectionRequiresConfirmation = false;
         if (previousDeviceId) {
-          const previousIdentityMatches = previousDevice
-            ? previousDevices.filter(
-                (device) =>
-                  device.backend === previousDevice.backend && device.name === previousDevice.name,
-              )
-            : [];
-          const refreshedIdentityMatches = previousDevice
-            ? devices.filter(
-                (device) =>
-                  device.backend === previousDevice.backend && device.name === previousDevice.name,
-              )
-            : [];
-          if (previousIdentityMatches.length === 1 && refreshedIdentityMatches.length === 1) {
-            selectedDeviceId = refreshedIdentityMatches[0].id;
+          if (devices.some((device) => device.id === previousDeviceId)) {
+            selectedDeviceId = previousDeviceId;
+          } else if (backendId === "wasapi_shared") {
+            const previousIdentityMatches = previousDevice
+              ? previousDevices.filter(
+                  (device) =>
+                    device.backend === previousDevice.backend && device.name === previousDevice.name,
+                )
+              : [];
+            const refreshedIdentityMatches = previousDevice
+              ? devices.filter(
+                  (device) =>
+                    device.backend === previousDevice.backend && device.name === previousDevice.name,
+                )
+              : [];
+            if (previousIdentityMatches.length === 1 && refreshedIdentityMatches.length === 1) {
+              selectedDeviceId = refreshedIdentityMatches[0].id;
+            } else {
+              selectionRequiresConfirmation = true;
+              selectedDeviceId = previousDeviceId;
+            }
           } else {
             selectionRequiresConfirmation = true;
             selectedDeviceId = previousDeviceId;
@@ -9440,6 +9544,7 @@ export default function App() {
           selectedDeviceId,
           announce,
           liveAudioInputSampleRate(),
+          backendId,
         );
         if (epoch === liveAudioInputDevicesRefreshEpoch && capabilitiesReady && announce) {
           setMessage(`Found ${devices.length} audio input device(s).`);
@@ -9462,8 +9567,52 @@ export default function App() {
     liveAudioInputDevicesRefreshInFlight = request;
     return request;
   };
+  const selectLiveAudioInputBackend = (backendId: LiveAudioInputBackendId) => {
+    if (
+      backendId === selectedLiveAudioInputBackend() ||
+      liveAudioInputBusy() ||
+      liveAudioInputBackendsBusy() ||
+      liveAudioInputStatus().running
+    ) {
+      return;
+    }
+    liveAudioInputDevicesRefreshEpoch += 1;
+    liveAudioInputCapabilitiesEpoch += 1;
+    setSelectedLiveAudioInputBackend(backendId);
+    setLiveAudioInputDevices([]);
+    setSelectedLiveAudioInputDevice("");
+    setLiveAudioInputCapabilities(null);
+    setLiveAudioInputSampleRate(null);
+    setLiveAudioInputBufferFrames(null);
+    setLiveAudioInputChannelMix({ mode: "average_all" });
+    setLiveAudioInputBackendError(null);
+    const backend = liveAudioInputBackends().find((candidate) => candidate.id === backendId);
+    if (!backend?.built) {
+      if (backend) setMessage("Selected audio capture backend is not built into this application.");
+      return;
+    }
+    void refreshLiveAudioInputDevices(false);
+  };
   const startLiveAudioInput = async () => {
-    if (liveAudioInputBusy()) return;
+    if (liveAudioInputBusy() || liveAudioInputBackendsBusy()) return;
+    const backend = liveAudioInputBackends().find(
+      (candidate) => candidate.id === selectedLiveAudioInputBackend(),
+    );
+    if (!liveAudioInputBackendsKnown() || !backend?.built) {
+      setMessage("Select a built audio input backend before Start.");
+      return;
+    }
+    if (backend.requires_explicit_device && !selectedLiveAudioInputDevice().trim()) {
+      setMessage("Select an ASIO driver before Start. Automatic driver selection is disabled.");
+      return;
+    }
+    if (
+      backend.requires_explicit_device &&
+      (liveAudioInputSampleRate() === null || liveAudioInputBufferFrames() === null)
+    ) {
+      setMessage("Select an explicit ASIO sample rate and fixed buffer before Start.");
+      return;
+    }
     const resolvedConfig = liveAudioInputCapabilities()?.resolved_config;
     if (!resolvedConfig) {
       setMessage("Resolve a supported live audio input configuration before Start.");
@@ -9475,6 +9624,7 @@ export default function App() {
     setLiveAudioInputStatusKnown(false);
     try {
       const request: LiveAudioInputStartRequest = {
+        backend: selectedLiveAudioInputBackend(),
         device_id: selectedLiveAudioInputDevice().trim() || null,
         sample_rate: liveAudioInputSampleRate(),
         stream_channels: resolvedConfig.channels,
@@ -9663,7 +9813,9 @@ export default function App() {
   };
   if (isTauriRuntime()) {
     void refreshLiveAudioInputStatus();
-    void refreshLiveAudioInputDevices(false);
+    void refreshLiveAudioInputBackends(false).then((backendReady) => {
+      if (backendReady) void refreshLiveAudioInputDevices(false);
+    });
   }
   const liveAudioInputLevelsTimer = isTauriRuntime()
     ? window.setInterval(() => void refreshLiveAudioInputLevels(), 33)
@@ -9688,6 +9840,7 @@ export default function App() {
     : null;
   onCleanup(() => {
     liveAudioStatusRequests.invalidate();
+    liveAudioInputBackendsEpoch += 1;
     liveAudioInputCapabilitiesEpoch += 1;
     liveAudioInputDevicesRefreshEpoch += 1;
     invalidateLiveAudioInputLevels();
@@ -12635,6 +12788,11 @@ export default function App() {
             get abMix() { return videoAbMix(); },
             get selectedOutputId() { return selectedVideoOutputId(); },
             get recordingStatus() { return videoRecordingStatus(); },
+            get liveAudioInputBackends() { return liveAudioInputBackends(); },
+            get selectedLiveAudioInputBackend() { return selectedLiveAudioInputBackend(); },
+            get liveAudioInputBackendsKnown() { return liveAudioInputBackendsKnown(); },
+            get liveAudioInputBackendsBusy() { return liveAudioInputBackendsBusy(); },
+            get liveAudioInputBackendError() { return liveAudioInputBackendError(); },
             get liveAudioInputDevices() { return liveAudioInputDevices(); },
             get selectedLiveAudioInputDevice() { return selectedLiveAudioInputDevice(); },
             get liveAudioInputCapabilities() { return liveAudioInputCapabilities(); },
@@ -12664,6 +12822,7 @@ export default function App() {
             onLaunchDeck: launchVideoDeck,
             onStartRecording: startVideoOutputRecording,
             onStopRecording: stopVideoOutputRecording,
+            onSetLiveAudioInputBackend: selectLiveAudioInputBackend,
             onSetLiveAudioInputDevice: selectLiveAudioInputDevice,
             onSetLiveAudioInputSampleRate: selectLiveAudioInputSampleRate,
             onSetLiveAudioInputBufferFrames: setLiveAudioInputBufferFrames,

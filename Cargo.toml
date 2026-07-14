@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["tools/asio-bridge"]
 members = [
     "crates/audio",
     "crates/protocol",
@@ -29,6 +30,7 @@ image = { version = "=0.24.9", default-features = false, features = ["jpeg", "pn
 hap-parser = "=0.2.0"
 ffmpeg-next = { version = "=8.1.0", default-features = false }
 io = { path = "crates/io" }
+libloading = "=0.8.9"
 midir = "0.11"
 minisign-verify = "=0.2.5"
 mp4 = "=0.14.0"

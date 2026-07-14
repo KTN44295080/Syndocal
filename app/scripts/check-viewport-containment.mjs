@@ -534,6 +534,7 @@ function installLiveAudioMockInPage() {
     sample_rate: 0,
     channels: 0,
     configured_buffer_frames: null,
+    applied_buffer_frames: null,
     channel_mix: { mode: "average_all" },
     bass: 0,
     mid: 0,
@@ -552,6 +553,7 @@ function installLiveAudioMockInPage() {
     analyzed_windows: 0,
     dropped_chunks: 0,
     dropped_frames: 0,
+    backend_xruns: 0,
     callback_count: 0,
     last_callback_frames: 0,
     min_callback_frames: 0,
@@ -567,6 +569,7 @@ function installLiveAudioMockInPage() {
     calls: [],
     status: stoppedStatus(),
     deviceGeneration: 0,
+    asioGeneration: 0,
   };
   const invoke = async (command, args = {}) => {
     if (command === "get_live_video_monitor_frame") {
@@ -581,8 +584,37 @@ function installLiveAudioMockInPage() {
       return packet;
     }
     mock.calls.push({ command, args: clone(args) });
+    if (command === "live_audio_input_backends") {
+      await delay(40);
+      return [
+        {
+          id: "wasapi_shared",
+          label: "WASAPI shared",
+          built: true,
+          requires_explicit_device: false,
+          distribution: "MIT default artifact",
+        },
+        {
+          id: "asio",
+          label: "ASIO",
+          built: true,
+          requires_explicit_device: true,
+          distribution: "GPL-3.0-or-proprietary feature build",
+        },
+      ];
+    }
     if (command === "list_audio_input_devices") {
       await delay(120);
+      if (args.backend === "asio") {
+        mock.asioGeneration += 1;
+        const generation = mock.asioGeneration;
+        return [{
+          id: `viewport-asio-studio-g${generation}`,
+          name: "Viewport ASIO Studio Driver",
+          label: "Viewport ASIO Studio Driver · ASIO",
+          backend: "ASIO",
+        }];
+      }
       mock.deviceGeneration += 1;
       if (mock.deviceGeneration === 1) {
         return [
@@ -605,10 +637,13 @@ function installLiveAudioMockInPage() {
     if (command === "get_live_audio_input_capabilities") {
       await delay(100);
       const sampleRate = Number(args.sampleRate) || 48_000;
+      const asio = args.backend === "asio";
       return {
         device_id: args.deviceId ?? null,
-        device_name: args.deviceId ? "Viewport Studio Microphone" : "System default",
-        backend: "WASAPI",
+        device_name: args.deviceId
+          ? (asio ? "Viewport ASIO Studio Driver" : "Viewport Studio Microphone")
+          : "System default",
+        backend: asio ? "ASIO" : "WASAPI",
         default_config: {
           channels: 2,
           sample_rate: 48_000,
@@ -646,6 +681,7 @@ function installLiveAudioMockInPage() {
         sample_rate: request.sample_rate ?? 48_000,
         channels: request.stream_channels ?? 2,
         configured_buffer_frames: request.buffer_frames ?? null,
+        applied_buffer_frames: request.buffer_frames ?? 512,
         channel_mix: request.channel_mix ?? { mode: "average_all" },
         bass: 0.42,
         mid: 0.58,
@@ -664,6 +700,7 @@ function installLiveAudioMockInPage() {
         analyzed_windows: 123_456,
         dropped_chunks: 9_999,
         dropped_frames: 999_999,
+        backend_xruns: 7,
         callback_count: 999_999,
         last_callback_frames: 8_192,
         min_callback_frames: 64,
@@ -689,6 +726,7 @@ function installLiveAudioMockInPage() {
         sample_rate: 192_000,
         channels: 2,
         configured_buffer_frames: 8_192,
+        applied_buffer_frames: 8_192,
         channel_mix: { mode: "stereo_pair", left_channel_index: 0, right_channel_index: 1 },
         callback_count: 999_999,
         last_callback_frames: 8_192,
@@ -738,13 +776,17 @@ async function installLiveAudioInvokeMock(client) {
 function readLiveAudioRailStateInPage() {
   const rail = document.querySelector(".videoMixerClipPane > .liveAudioInputBar");
   if (!rail) return null;
-  const directButtons = [...rail.querySelectorAll(".liveAudioInputControls > button")];
-  const action = directButtons.at(-1);
-  const refresh = directButtons.at(0);
-  const device = rail.querySelector(".liveAudioInputControls select");
-  const configSelects = [...rail.querySelectorAll(".liveAudioConfigControls select")];
+  const action = rail.querySelector('[data-live-audio-action="transport"]');
+  const refresh = rail.querySelector('[data-live-audio-action="refresh"]');
+  const device = rail.querySelector('[data-live-audio-control="device"]');
+  const backend = rail.querySelector('[data-live-audio-control="backend"]');
+  const sampleRate = rail.querySelector('[data-live-audio-control="rate"]');
+  const buffer = rail.querySelector('[data-live-audio-control="buffer"]');
+  const mix = rail.querySelector('[data-live-audio-control="mix"]');
   const optionValues = (select) =>
     select ? [...select.options].map((option) => option.value) : [];
+  const optionLabels = (select) =>
+    select ? [...select.options].map((option) => (option.textContent ?? "").trim()) : [];
   const meters = [...rail.querySelectorAll('.liveAudioMeters [role="meter"]')].map((meter) => ({
     label: meter.getAttribute("aria-label") ?? "",
     now: Number(meter.getAttribute("aria-valuenow") ?? -1),
@@ -758,6 +800,10 @@ function readLiveAudioRailStateInPage() {
   }));
   return {
     health: rail.getAttribute("data-health") ?? "",
+    backend: backend?.value ?? rail.getAttribute("data-live-audio-backend") ?? "",
+    backendState: rail.getAttribute("data-live-audio-backend-state") ?? "",
+    backendBuilt: rail.getAttribute("data-live-audio-backend-built") ?? "",
+    backendOptions: optionValues(backend),
     actionText: (action?.textContent ?? "").trim(),
     actionDisabled: Boolean(action?.disabled),
     refreshDisabled: Boolean(refresh?.disabled),
@@ -766,14 +812,18 @@ function readLiveAudioRailStateInPage() {
     deviceInvalid: device?.getAttribute("aria-invalid") ?? "",
     selectedDevice: device?.value ?? "",
     deviceOptions: optionValues(device),
-    sampleRateOptions: optionValues(configSelects[0]),
-    bufferOptions: optionValues(configSelects[1]),
-    mixOptions: optionValues(configSelects[2]),
+    deviceOptionLabels: optionLabels(device),
+    selectedSampleRate: sampleRate?.value ?? "",
+    sampleRateOptions: optionValues(sampleRate),
+    selectedBuffer: buffer?.value ?? "",
+    bufferOptions: optionValues(buffer),
+    mixOptions: optionValues(mix),
     configFormat: (rail.querySelector(".liveAudioConfigFormat")?.textContent ?? "").trim(),
     meters,
     visualBands,
     onset: rail.querySelector(".liveAudioMeters")?.getAttribute("data-onset") ?? "",
     rhythm: (rail.querySelector(".liveAudioTelemetryRhythm")?.textContent ?? "").trim(),
+    xrunWarning: rail.querySelector(".liveAudioTelemetryXrun")?.classList.contains("warning") ?? false,
     telemetry: [...rail.querySelectorAll(":scope > .liveAudioTelemetry > span")]
       .map((node) => (node.textContent ?? "").trim().replace(/\s+/g, " ")),
     safetyMessage: (rail.querySelector(".liveAudioSafetyMessage")?.textContent ?? "").trim(),
@@ -3296,8 +3346,9 @@ async function checkTouchMomentaryFlash(client) {
 function clickLiveAudioControlInPage(kind) {
   const rail = document.querySelector(".videoMixerClipPane > .liveAudioInputBar");
   if (!rail) return false;
-  const buttons = [...rail.querySelectorAll(".liveAudioInputControls > button")];
-  const button = kind === "refresh" ? buttons[0] : buttons.at(-1);
+  const button = rail.querySelector(
+    `[data-live-audio-action="${kind === "refresh" ? "refresh" : "transport"}"]`,
+  );
   if (!button || button.disabled) return false;
   button.click();
   return true;
@@ -3310,12 +3361,9 @@ async function clickLiveAudioControl(client, kind) {
 }
 
 function setLiveAudioSelectInPage(kind, value) {
-  const indexes = { device: null, rate: 0, buffer: 1, mix: 2 };
   const rail = document.querySelector(".videoMixerClipPane > .liveAudioInputBar");
   if (!rail) return false;
-  const select = kind === "device"
-    ? rail.querySelector(".liveAudioInputControls select")
-    : rail.querySelectorAll(".liveAudioConfigControls select")[indexes[kind]];
+  const select = rail.querySelector(`[data-live-audio-control="${kind}"]`);
   if (!select || select.disabled || ![...select.options].some((option) => option.value === value)) {
     return false;
   }
@@ -3386,6 +3434,64 @@ async function runLiveAudioAcceptance(client, locale, label) {
   await sleep(45);
   const configured = await readLiveAudioRailState(client);
 
+  const asioBackendSelected = await setLiveAudioSelect(client, "backend", "asio");
+  await waitForClientCondition(
+    client,
+    "window.__syndocalLiveAudioMock?.asioGeneration === 1 && document.querySelector('.videoMixerClipPane > .liveAudioInputBar')?.getAttribute('data-live-audio-backend-state') === 'select_device'",
+    "ASIO explicit driver selection gate",
+  );
+  const asioUnselected = await readLiveAudioRailState(client);
+  const asioDriverSelected = await setLiveAudioSelect(client, "device", "viewport-asio-studio-g1");
+  await waitForClientCondition(
+    client,
+    "(() => { const calls = window.__syndocalLiveAudioMock?.calls ?? []; const latest = calls.filter((call) => call.command === 'get_live_audio_input_capabilities').at(-1); const rate = document.querySelector('[data-live-audio-control=\"rate\"]'); return latest?.args?.backend === 'asio' && latest?.args?.deviceId === 'viewport-asio-studio-g1' && Boolean(rate && !rate.disabled); })()",
+    "ASIO driver capability resolution",
+  );
+  await sleep(30);
+  const asioDriverOnly = await readLiveAudioRailState(client);
+  const asioRateSelected = await setLiveAudioSelect(client, "rate", "48000");
+  await waitForClientCondition(
+    client,
+    "(() => { const calls = window.__syndocalLiveAudioMock?.calls ?? []; const latest = calls.filter((call) => call.command === 'get_live_audio_input_capabilities').at(-1); const buffer = document.querySelector('[data-live-audio-control=\"buffer\"]'); return latest?.args?.backend === 'asio' && latest?.args?.sampleRate === 48000 && Boolean(buffer && !buffer.disabled); })()",
+    "ASIO explicit sample-rate gate",
+  );
+  await sleep(30);
+  const asioRateOnly = await readLiveAudioRailState(client);
+  const asioBufferSelected = await setLiveAudioSelect(client, "buffer", "128");
+  await sleep(30);
+  const asioReady = await readLiveAudioRailState(client);
+  const asioRefreshClicked = await clickLiveAudioControl(client, "refresh");
+  await waitForClientCondition(
+    client,
+    "window.__syndocalLiveAudioMock?.asioGeneration === 2",
+    "ASIO generation refresh",
+  );
+  await sleep(45);
+  const asioAfterRefresh = await readLiveAudioRailState(client);
+
+  const wasapiBackendRestored = await setLiveAudioSelect(client, "backend", "wasapi_shared");
+  await waitForClientCondition(
+    client,
+    "window.__syndocalLiveAudioMock?.deviceGeneration === 4 && document.querySelector('.videoMixerClipPane > .liveAudioInputBar')?.getAttribute('data-live-audio-backend-state') === 'ready'",
+    "WASAPI backend restoration",
+  );
+  const restoredDeviceSelected = await setLiveAudioSelect(client, "device", "viewport-wasapi-studio-g3a");
+  await waitForClientCondition(
+    client,
+    "(() => { const calls = window.__syndocalLiveAudioMock?.calls ?? []; const latest = calls.filter((call) => call.command === 'get_live_audio_input_capabilities').at(-1); const rate = document.querySelector('[data-live-audio-control=\"rate\"]'); return latest?.args?.backend === 'wasapi_shared' && latest?.args?.deviceId === 'viewport-wasapi-studio-g3a' && Boolean(rate && !rate.disabled); })()",
+    "Restored WASAPI device capability resolution",
+  );
+  const restoredRateSelected = await setLiveAudioSelect(client, "rate", "192000");
+  await waitForClientCondition(
+    client,
+    "(() => { const calls = window.__syndocalLiveAudioMock?.calls ?? []; const latest = calls.filter((call) => call.command === 'get_live_audio_input_capabilities').at(-1); const buffer = document.querySelector('[data-live-audio-control=\"buffer\"]'); return latest?.args?.backend === 'wasapi_shared' && latest?.args?.sampleRate === 192000 && Boolean(buffer && !buffer.disabled); })()",
+    "Restored WASAPI sample rate",
+  );
+  const restoredBufferSelected = await setLiveAudioSelect(client, "buffer", "8192");
+  const restoredMixSelected = await setLiveAudioSelect(client, "mix", "stereo_pair:0:1");
+  await sleep(30);
+  const restoredWasapi = await readLiveAudioRailState(client);
+
   const startClicked = await clickLiveAudioControl(client, "action");
   await sleep(45);
   const startBusy = await readLiveAudioRailState(client);
@@ -3415,24 +3521,28 @@ async function runLiveAudioAcceptance(client, locale, label) {
   const expected = locale === "ja"
     ? {
         systemDefaultTitle: "システム既定の音声入力",
+        systemDefaultOption: "システム既定",
         reselectTitle: "音声入力を再選択",
         reselectFormat: "入力を再選択",
         checking: "確認中",
         liveAnnouncement: "ライブ音声入力は動作中です。",
         clearingAction: "クリア待ち",
         clearingAnnouncement: "ライブ音声の停止はエンジンの安全クリア待ちです。開始はロックされています。",
+        selectAsioDriver: "ASIOドライバを選択",
         meterLabels: ["低域レベル", "中域レベル", "高域レベル"],
         meterValues: ["42パーセント", "58パーセント", "76パーセント"],
         meterTitles: ["低域 42%", "中域 58%", "高域 76%"],
       }
     : {
         systemDefaultTitle: "System default audio input",
+        systemDefaultOption: "System default",
         reselectTitle: "Reselect audio input",
         reselectFormat: "Reselect input",
         checking: "Checking",
         liveAnnouncement: "Live audio input active.",
         clearingAction: "Clear Pending",
         clearingAnnouncement: "Live audio Stop is waiting for the engine safety clear. Start is locked.",
+        selectAsioDriver: "Select ASIO driver",
         meterLabels: ["Bass level", "Mid level", "High level"],
         meterValues: ["42 percent", "58 percent", "76 percent"],
         meterTitles: ["Bass 42%", "Mid 58%", "High 76%"],
@@ -3465,7 +3575,7 @@ async function runLiveAudioAcceptance(client, locale, label) {
       ambiguousIdentity?.deviceOptions?.includes("viewport-wasapi-studio-g3b") &&
       ambiguousIdentity?.deviceInvalid === "true" &&
       ambiguousIdentity?.deviceTitle === expected.reselectTitle &&
-      ambiguousIdentity?.configFormat === expected.reselectFormat &&
+      ambiguousIdentity?.configFormat?.endsWith(expected.reselectFormat) &&
       ambiguousIdentity?.actionDisabled === true,
     explicitReselectionUnlocksStart:
       finalDeviceSelected &&
@@ -3485,11 +3595,12 @@ async function runLiveAudioAcceptance(client, locale, label) {
       mixSelected &&
       ["average_all", "single:0", "single:1", "stereo_pair:0:1"]
         .every((value) => configured?.mixOptions?.includes(value)),
-    exactResolvedFormat: configured?.configFormat === "WASAPI · f32 · 2ch",
+    exactResolvedFormat: configured?.configFormat?.endsWith("WASAPI · f32 · 2ch"),
     startClicked,
     startShowsChecking:
       startBusy?.actionText === expected.checking && startBusy?.actionDisabled === true,
     exactStartRequest:
+      request?.backend === "wasapi_shared" &&
       request?.device_id === "viewport-wasapi-studio-g3a" &&
       request?.sample_rate === 192_000 &&
       request?.stream_channels === 2 &&
@@ -3500,9 +3611,14 @@ async function runLiveAudioAcceptance(client, locale, label) {
       request?.channel_mix?.right_channel_index === 1,
     liveState:
       live?.health === "live" &&
+      live?.backend === "wasapi_shared" &&
+      live?.backendState === "active" &&
       live?.announcement === expected.liveAnnouncement &&
-      live?.telemetry?.length === 4 &&
-      live.telemetry[0] === "OVR 9999/999999f" &&
+      live?.telemetry?.length === 6 &&
+      live.telemetry[0] === "ACTIVE" &&
+      live.telemetry[1] === "OVR 9999/999999f" &&
+      live.telemetry[2] === "XRUN 7" &&
+      live.xrunWarning === true &&
       live.deviceDisabled === true,
     sixteenBandRhythmPresentation:
       live?.meters?.length === 3 &&
@@ -3533,10 +3649,60 @@ async function runLiveAudioAcceptance(client, locale, label) {
       clearing.visualBands.every((band) => band.transform === "scaleY(0)") &&
       clearing.onset === "false",
     invokeSequence:
-      calls.filter((call) => call.command === "list_audio_input_devices").length === 3 &&
-      calls.filter((call) => call.command === "get_live_audio_input_capabilities").length >= 5 &&
+      calls.filter((call) => call.command === "live_audio_input_backends").length === 1 &&
+      calls.filter(
+        (call) => call.command === "list_audio_input_devices" && call.args?.backend === "wasapi_shared",
+      ).length === 4 &&
+      calls.filter(
+        (call) => call.command === "list_audio_input_devices" && call.args?.backend === "asio",
+      ).length === 2 &&
+      calls.filter((call) => call.command === "get_live_audio_input_capabilities").length >= 10 &&
       calls.filter((call) => call.command === "start_live_audio_input").length === 1 &&
       calls.filter((call) => call.command === "stop_live_audio_input").length === 1,
+    backendContractVisible:
+      configured?.backend === "wasapi_shared" &&
+      configured?.backendBuilt === "true" &&
+      configured?.backendOptions?.includes("wasapi_shared") &&
+      configured?.backendOptions?.includes("asio"),
+    asioRequiresExplicitDriver:
+      asioBackendSelected &&
+      asioUnselected?.backend === "asio" &&
+      asioUnselected?.backendState === "select_device" &&
+      asioUnselected?.selectedDevice === "" &&
+      asioUnselected?.deviceOptionLabels?.[0] === expected.selectAsioDriver &&
+      !asioUnselected?.deviceOptionLabels?.includes(expected.systemDefaultOption) &&
+      asioUnselected?.actionDisabled === true,
+    asioRequiresExplicitRateAndFixedBuffer:
+      asioDriverSelected &&
+      asioDriverOnly?.backendState === "configure" &&
+      asioDriverOnly?.selectedSampleRate === "" &&
+      asioDriverOnly?.selectedBuffer === "" &&
+      asioDriverOnly?.actionDisabled === true &&
+      asioRateSelected &&
+      asioRateOnly?.selectedSampleRate === "48000" &&
+      asioRateOnly?.selectedBuffer === "" &&
+      asioRateOnly?.actionDisabled === true &&
+      asioBufferSelected &&
+      asioReady?.selectedBuffer === "128" &&
+      asioReady?.backendState === "ready" &&
+      asioReady?.actionDisabled === false,
+    asioGenerationNeverNameRemaps:
+      asioRefreshClicked &&
+      asioAfterRefresh?.selectedDevice === "viewport-asio-studio-g1" &&
+      asioAfterRefresh?.deviceOptions?.includes("viewport-asio-studio-g1") &&
+      asioAfterRefresh?.deviceOptions?.includes("viewport-asio-studio-g2") &&
+      asioAfterRefresh?.deviceInvalid === "true" &&
+      asioAfterRefresh?.actionDisabled === true,
+    wasapiRestoresWithoutLosingAutoContract:
+      wasapiBackendRestored &&
+      restoredDeviceSelected &&
+      restoredRateSelected &&
+      restoredBufferSelected &&
+      restoredMixSelected &&
+      restoredWasapi?.backend === "wasapi_shared" &&
+      restoredWasapi?.backendState === "ready" &&
+      restoredWasapi?.selectedDevice === "viewport-wasapi-studio-g3a" &&
+      restoredWasapi?.actionDisabled === false,
   };
   const failedChecks = Object.entries(checks)
     .filter(([, passed]) => !passed)
@@ -3552,6 +3718,12 @@ async function runLiveAudioAcceptance(client, locale, label) {
     uniquelyRemapped,
     ambiguousIdentity,
     configured,
+    asioUnselected,
+    asioDriverOnly,
+    asioRateOnly,
+    asioReady,
+    asioAfterRefresh,
+    restoredWasapi,
     startBusy,
     live,
     stopBusy,
@@ -6401,7 +6573,7 @@ async function main() {
           const passed =
             result.passed &&
             isContained(result.liveContainment) &&
-            result.liveContainment.liveAudioRailTelemetryBadgeCount === 4 &&
+            result.liveContainment.liveAudioRailTelemetryBadgeCount === 6 &&
             result.liveContainment.liveAudioRailCriticalTelemetryOverflowCount === 0 &&
             result.liveContainment.liveAudioRailTelemetryOutsideCount === 0;
           liveAudioResults.push({ viewport, locale, passed, result });

@@ -50,6 +50,7 @@ const status = (overrides = {}) => ({
   analyzed_windows: 0,
   dropped_chunks: 0,
   dropped_frames: 0,
+  backend_xruns: 0,
   callback_count: 0,
   last_callback_frames: 0,
   min_callback_frames: 0,
@@ -80,7 +81,7 @@ assert.equal(
       analyzed_windows: 42,
     }),
   ),
-  "OVR 0/0f · WASAPI shared · f32 48.0kHz · 2→M · REQ BUF default · CB 0/0/0f · FFT 42 · C→W EST 0.0/0.0ms · Q 0/0/0",
+  "OVR 0/0f · XRUN 0 · WASAPI shared · f32 48.0kHz · 2→M · REQ BUF default · APPLIED pending · CB 0/0/0f · FFT 42 · C→W EST 0.0/0.0ms · Q 0/0/0",
 );
 const stale = status({ running: true, stale: true, last_error: "Input timed out." });
 assert.equal(presentation.liveAudioInputHealth(stale), "stale");
@@ -110,6 +111,66 @@ assert.equal(
   "healthy meter polling must not change the live-region announcement",
 );
 
+const asioBackend = {
+  id: "asio",
+  label: "ASIO",
+  built: true,
+  requires_explicit_device: true,
+  distribution: "GPL-3.0-or-proprietary feature build",
+};
+const backendState = (overrides = {}) => presentation.liveAudioInputBackendState({
+  backend: asioBackend,
+  backendKnown: true,
+  backendBusy: false,
+  backendError: null,
+  devicesAvailable: 1,
+  selectedDeviceId: "asio-driver-1",
+  sampleRate: 48_000,
+  bufferFrames: 128,
+  capabilities: {},
+  status: status(),
+  statusKnown: true,
+  ...overrides,
+});
+assert.equal(backendState({ backend: { ...asioBackend, built: false } }), "not_built");
+assert.equal(backendState({ devicesAvailable: 0 }), "empty");
+assert.equal(backendState({ selectedDeviceId: "" }), "select_device");
+assert.equal(backendState({ sampleRate: null }), "configure");
+assert.equal(backendState({ bufferFrames: null }), "configure");
+assert.equal(backendState(), "ready");
+assert.equal(backendState({ status: status({ running: true, backend: "ASIO" }) }), "open");
+assert.equal(
+  backendState({ status: status({ running: true, backend: "ASIO", callback_count: 1 }) }),
+  "active",
+);
+assert.equal(
+  backendState({ status: status({ running: true, stale: true, backend: "ASIO" }) }),
+  "fault",
+);
+assert.equal(presentation.liveAudioInputBackendStateLabel("not_built"), "NOT BUILT");
+assert.match(
+  presentation.liveAudioInputDetail(status({
+    running: true,
+    backend: "ASIO",
+    sample_format: "f32",
+    sample_rate: 48_000,
+    channels: 2,
+    configured_buffer_frames: 128,
+    applied_buffer_frames: 64,
+  })),
+  /BUF 64f · REQ 128f/,
+);
+assert.doesNotMatch(
+  presentation.liveAudioInputDetail(status({
+    running: true,
+    backend: "ASIO",
+    sample_format: "f32",
+    sample_rate: 48_000,
+    channels: 2,
+  })),
+  /ASIO shared/,
+);
+
 const requestGate = statusSync.createLiveAudioInputStatusRequestGate();
 const oldPoll = requestGate.beginPoll();
 assert.equal(oldPoll, 0);
@@ -128,7 +189,12 @@ assert.ok(app.includes("safety_clear_pending: false"));
 assert.ok(app.includes("liveAudioNodeAvailability(liveAudioInputStatus(), liveAudioInputStatusKnown())"));
 assert.ok(app.includes("const requestEpoch = liveAudioStatusRequests.beginPoll()"));
 assert.ok(app.includes("void refreshLiveAudioInputStatus();"), "status discovery must not depend on the stale frontend default");
-assert.ok(app.includes("{ deviceId: deviceId || null, sampleRate }"));
+assert.ok(app.includes("{ backend: backendId, deviceId: deviceId || null, sampleRate }"));
+assert.ok(app.includes('"live_audio_input_backends"'));
+assert.ok(app.includes('{\n          backend: backendId,\n        }'));
+assert.ok(app.includes('backendId === "wasapi_shared"'));
+assert.ok(app.includes('backend: selectedLiveAudioInputBackend()'));
+assert.ok(app.includes('liveAudioInputSampleRate() === null || liveAudioInputBufferFrames() === null'));
 assert.ok(app.includes("const capabilitiesReady = await refreshLiveAudioInputCapabilities("));
 assert.ok(
   app.includes("capabilitiesReady && announce"),
@@ -151,6 +217,11 @@ assert.ok(inputRail.includes("resolved.buffer_size"));
 assert.ok(inputRail.includes("rates.add(config.min_sample_rate)"));
 assert.ok(inputRail.includes("rates.add(config.max_sample_rate)"));
 assert.ok(inputRail.includes("!props.liveAudioInputCapabilities"));
+assert.ok(inputRail.includes('data-live-audio-control="backend"'));
+assert.ok(inputRail.includes('data-live-audio-control="device"'));
+assert.ok(inputRail.includes('data-live-audio-backend-state={backendState()}'));
+assert.ok(inputRail.includes('fallback={<option value="">Select ASIO driver</option>}'));
+assert.ok(inputRail.includes('fallback={<option value="">Select fixed buffer</option>}'));
 assert.ok(!inputRail.includes('<small aria-live="polite">'));
 assert.ok(clipGrid.includes("<Show when={!props.compact}>") && clipGrid.includes("<LiveAudioInputRail"));
 assert.ok(styles.includes(".liveAudioInputBar.stale"));

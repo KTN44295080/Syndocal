@@ -23,6 +23,7 @@ This file records an engineering gate and is not legal advice.
 
 - Keep the default Rodio 0.21.1 / CPAL 0.16 WASAPI path unchanged.
 - Build ASIO only through a non-default Windows feature using a separately named CPAL 0.18.1 dependency.
+- Keep that dependency in `tools/asio-bridge` as an independent workspace and artifact. Directly adding CPAL 0.18.1 to the Rodio/CPAL 0.16 application graph makes Cargo reject their different Linux `alsa-sys` `links = "alsa"` versions even when the new dependency is optional and Windows-only.
 - Select `HostId::Asio` explicitly. Never treat CPAL's default host as ASIO.
 - Report build support, driver enumeration, driver open, and active stream as separate states.
 - ASIO has no safe system-default fallback. Start without an explicit current-generation driver ID must fail.
@@ -35,11 +36,39 @@ CPAL 0.16's ASIO input path does not deliver the stream error callback needed by
 
 ## Build gate
 
-- Pin the official SDK version and SHA-256 in a separate manual Windows workflow.
+- Pin the official SDK version, archive filename and SHA-256 in `qa/ASIO_SDK_PIN.json`; archive acquisition remains manual.
 - Require explicit `CPAL_ASIO_DIR` and `LIBCLANG_PATH`; do not rely on an implicit build-time download.
 - Use an isolated target directory such as `target/asio-qa`.
+- Run the supported local build check as `& .\qa\harnesses\check-asio-build.ps1`; it validates the explicit local SDK and `libclang.dll` before Cargo can execute `asio-sys`'s download fallback.
 - Prove the regular cross-platform workflow never enables the ASIO feature.
 - Package ASIO notices and the selected license path with the ASIO artifact.
+
+Current pin:
+
+- SDK version: `2.3.4`
+- Archive: `ASIO-SDK_2.3.4_2025-10-15.zip`
+- SHA-256: `D5EBF0C20DD2C5F43771FD0C1418F4B361BF52434EE670097CFA6B3A335E2ECA`
+
+## Current implementation status
+
+- Implemented: `tools/asio-bridge` is an independently locked and built Windows DLL. The normal app graph remains on Rodio 0.21.1 / CPAL 0.16; the non-default app feature dynamically loads bridge ABI v1 instead of linking CPAL 0.18.1 into that graph.
+- Implemented: bridge build support, driver enumeration, capability query, explicit stream open, applied buffer reporting, playback, Stop, backend XRUN count, and terminal event delivery are separate states across the bridge, app command layer and UI.
+- Implemented: ASIO offers no system-default selection. Driver IDs are generation-scoped, and Start revalidates the explicit driver, rate, channels, native sample format, fixed buffer, and channel mix. Mismatch or disappearance fails rather than substituting another driver, the first enumerated driver, or WASAPI.
+- Implemented: the realtime callback uses Start-time storage, feeds mono `f32` into the existing fixed capture/FFT path, and performs no heap allocation or lock acquisition in the normal callback. Terminal ASIO events and sample-adapter panics also avoid locks, allocation, formatting and engine calls: they publish a one-shot atomic fault latch and unpark the FFT worker, which owns message construction, generation validation, safety-zero publication and the single final clear. Reset, resync, rate/device loss, xrun, nonfinite samples, callback frame change, or a 250 ms callback gap becomes a terminal event that requires Stop/free and an explicit restart.
+- Implemented: the 64 px live-audio rail exposes WASAPI Shared / ASIO, driver/rate/fixed-buffer/mix configuration, requested/applied buffer frames, callback frames, overflow and backend XRUN state. `NOT BUILT`, empty catalogue, driver selection, configuration, Ready, Open, Active and Fault remain distinguishable.
+- Validated: SDK-free bridge tests 5/5, SDK-enabled bridge tests 4/4, and the app's explicit-driver catalogue/capability integration test pass. Default builds remain ASIO-free.
+- Not approved for distribution: the GPLv3-versus-proprietary license path, notices, corresponding-source obligations where applicable, and installer separation are still undecided.
+
+## Hardware evidence (2026-07-14)
+
+| Driver | Requested / applied configuration | Result | Telemetry | Scope |
+|---|---|---|---|---|
+| `TOPPING Pro USB Audio Device` | 48 kHz, 2 channels, i32, 128 / 128 frames | Start and Stop passed | 7 callbacks, 896 frames, maximum capture delay 4166.7 us, XRUN 0, nonfinite 0, terminal event 0 | Short bridge/app-loader smoke on one working device |
+| `asio:TOPPING Pro USB Audio Device` | Explicit persistent ID, 48 kHz, 2 channels, i32, 128 frames; 100 cycles | Bridge ignored hardware test passed in 27.6767468 s with `--locked --offline` | Actual buffer 128 in all 100 cycles; callbacks 200 and at least 2 per cycle; Stop 100; Free 100; warnings 0; terminal 0; XRUN event/API 0; nonfinite 0; frame mismatch 0; fallback 0 | Completed repeated Start/Stop/Free gate on the same working driver |
+| Current-source native QA app + `TOPPING Pro USB Audio Device` | UI-selected ASIO, explicit driver, 48.0 kHz, 128 frames, Average All → mono | Start reached `ACTIVE`; Stop returned to `READY`; F11 and Esc round-trip passed | Maximized window capture 1913x1080; F11 capture exactly 1920x1080 at 0,0 with no title bar/taskbar; live rail showed OVR 0/0 and XRUN 0 | Full native operator-path smoke, not an endurance or latency-percentile pass |
+| `Realtek ASIO` | Explicit Realtek driver request | Open failed with hardware input/output unavailable | No substitution or silent fallback | Negative fail-closed evidence, not a second accepted driver |
+
+The TOPPING evidence proves that one explicit hardware configuration opens, reports the actual fixed buffer, invokes the capture callback and stops, that the same exact configuration can complete 100 repeated Start/Stop/Free cycles without warning, terminal event, xrun, nonfinite sample, frame mismatch or fallback, and that the production operator path can configure, run and stop it at the primary 1920x1080 full-screen viewport. The 27.6767468-second repeated-open test and short native UI run are still not a one-hour soak or statistical performance result. Callback-duration percentiles, capture-to-engine/pixel latency, physical marker latency, cross-vendor behavior and hot-plug/recovery fault injection were not measured by these runs.
 
 ## Hardware acceptance
 
@@ -48,7 +77,7 @@ Run at least two vendor drivers on this host (for example MOTU plus DDJ-FLX10 or
 - 44.1, 48, and 96 kHz where the driver advertises them.
 - 64, 128, and 256 frame requests where the driver actually opens them.
 - Single-channel and stereo-pair selection.
-- Start/Stop 100 cycles without a leaked or wedged driver.
+- Start/Stop 100 cycles without a leaked or wedged driver. Completed on the explicit TOPPING configuration above; Free was called successfully in all 100 cycles.
 - One-hour 48 kHz / 128 frame ASIO soak and a matched 48 kHz / 256 frame WASAPI soak.
 - Driver already occupied by a DAW.
 - Control-panel buffer and sample-rate change while active.
@@ -64,3 +93,18 @@ Record, per trial:
 - input-to-visible-pixel latency with a physical loopback marker.
 
 Acceptance thresholds are overrun 0, callback p99 below 20% of the hardware buffer duration, callback max below 50%, capture-to-engine p95 at most 40 ms, and loss-to-zero at most 250 ms. TouchDesigner latency parity is not claimed until the same interface, sample rate, buffer, content, and five-trial protocol are run in both applications.
+
+## Gate state
+
+- [x] Isolated non-default ASIO bridge, app integration and operator UI implemented.
+- [x] SDK version/archive/SHA pin recorded; local build requires explicit SDK and libclang paths.
+- [x] One explicit working-driver short smoke with applied buffer and XRUN telemetry.
+- [x] Unavailable explicit driver fails without another-driver or WASAPI fallback.
+- [ ] Distribution license/artifact path selected and notices/source obligations packaged.
+- [ ] A second vendor driver completes a successful stream trial.
+- [ ] 44.1/48/96 kHz, 64/128/256 frames and channel-selection matrix completed where advertised.
+- [x] Start/Stop/Free 100 cycles completed on the explicit TOPPING 48 kHz / 2-channel / i32 / 128-frame configuration with zero warnings, terminal events, XRUNs, nonfinite samples, frame mismatch or fallback.
+- [x] Current-source native VJ Desk configured and ran the explicit TOPPING 48 kHz / 128-frame path in F11 1920x1080, displayed zero overrun/XRUN, stopped to Ready, and returned from full screen with Esc.
+- [ ] Occupied-driver/control-panel/reset/resync/xrun/unplug failure matrix completed.
+- [ ] One-hour matched ASIO/WASAPI soak and callback/capture/engine percentile thresholds passed.
+- [ ] Physical input-to-pixel latency and five matched TouchDesigner trials passed.

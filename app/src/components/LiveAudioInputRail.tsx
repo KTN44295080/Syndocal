@@ -1,6 +1,8 @@
 import { createMemo, For, Show } from "solid-js";
 import type {
   LiveAudioChannelMix,
+  LiveAudioInputBackendId,
+  LiveAudioInputBackendSummary,
   LiveAudioInputCapabilities,
   LiveAudioInputDeviceSummary,
   LiveAudioInputStatus,
@@ -8,12 +10,19 @@ import type {
 import {
   liveAudioChannelMixLabel,
   liveAudioInputAnnouncement,
+  liveAudioInputBackendState,
+  liveAudioInputBackendStateLabel,
   liveAudioInputDetail,
   liveAudioInputHealth,
 } from "../liveAudioInputPresentation";
 
 export interface LiveAudioInputRailProps {
   compact?: boolean;
+  liveAudioInputBackends: LiveAudioInputBackendSummary[];
+  selectedLiveAudioInputBackend: LiveAudioInputBackendId;
+  liveAudioInputBackendsKnown: boolean;
+  liveAudioInputBackendsBusy: boolean;
+  liveAudioInputBackendError: string | null;
   liveAudioInputDevices: LiveAudioInputDeviceSummary[];
   selectedLiveAudioInputDevice: string;
   liveAudioInputCapabilities: LiveAudioInputCapabilities | null;
@@ -24,6 +33,7 @@ export interface LiveAudioInputRailProps {
   liveAudioInputStatus: LiveAudioInputStatus;
   liveAudioInputStatusKnown: boolean;
   liveAudioInputBusy: boolean;
+  onSetLiveAudioInputBackend: (backend: LiveAudioInputBackendId) => void;
   onSetLiveAudioInputDevice: (deviceName: string) => void;
   onSetLiveAudioInputSampleRate: (sampleRate: number | null) => void;
   onSetLiveAudioInputBufferFrames: (bufferFrames: number | null) => void;
@@ -128,13 +138,23 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
       (device) => device.id === props.selectedLiveAudioInputDevice,
     ),
   );
+  const selectedBackend = createMemo(() =>
+    props.liveAudioInputBackends.find(
+      (backend) => backend.id === props.selectedLiveAudioInputBackend,
+    ),
+  );
+  const backendRequiresExplicitDevice = createMemo(
+    () => selectedBackend()?.requires_explicit_device ?? props.selectedLiveAudioInputBackend === "asio",
+  );
   const selectedDeviceRequiresReselection = createMemo(
     () => Boolean(props.selectedLiveAudioInputDevice && !selectedDevice()),
   );
   const selectedDeviceLabel = createMemo(() =>
     selectedDeviceRequiresReselection()
       ? "Reselect audio input"
-      : selectedDevice()?.label ?? "System default audio input",
+      : selectedDevice()?.label ?? (backendRequiresExplicitDevice()
+        ? "Select ASIO driver"
+        : "System default audio input"),
   );
   const configFormat = createMemo(() =>
     selectedDeviceRequiresReselection()
@@ -145,11 +165,54 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
           ? `${props.liveAudioInputCapabilities.backend} · ${props.liveAudioInputCapabilities.resolved_config.sample_format} · ${props.liveAudioInputCapabilities.resolved_config.channels}ch`
           : "I/O unavailable",
   );
+  const backendState = createMemo(() => liveAudioInputBackendState({
+    backend: selectedBackend(),
+    backendKnown: props.liveAudioInputBackendsKnown,
+    backendBusy:
+      props.liveAudioInputBackendsBusy ||
+      props.liveAudioInputBusy ||
+      props.liveAudioInputCapabilitiesBusy,
+    backendError: props.liveAudioInputBackendError,
+    devicesAvailable: props.liveAudioInputDevices.length,
+    selectedDeviceId: props.selectedLiveAudioInputDevice,
+    sampleRate: props.liveAudioInputSampleRate,
+    bufferFrames: props.liveAudioInputBufferFrames,
+    capabilities: props.liveAudioInputCapabilities,
+    status: props.liveAudioInputStatus,
+    statusKnown: props.liveAudioInputStatusKnown,
+  }));
+  const backendStateLabel = createMemo(() => liveAudioInputBackendStateLabel(backendState()));
+  const backendDetail = createMemo(() => {
+    const backend = selectedBackend();
+    if (props.liveAudioInputBackendError?.trim()) return props.liveAudioInputBackendError;
+    if (!backend) return "Audio capture backend unavailable.";
+    if (!backend.built) {
+      return `${backend.label} is not built into this application · ${backend.distribution}`;
+    }
+    if (backendState() === "empty") return `${backend.label} has no available input drivers.`;
+    if (backendState() === "select_device") {
+      return backend.requires_explicit_device
+        ? `Select a ${backend.label} driver. Automatic driver selection is disabled.`
+        : "Resolve an input configuration before Start.";
+    }
+    if (backendState() === "configure") {
+      return "Select an explicit sample rate and fixed buffer for ASIO.";
+    }
+    return `${backend.label} · ${backend.distribution}`;
+  });
   const inputLocked = () =>
     props.liveAudioInputBusy ||
+    props.liveAudioInputBackendsBusy ||
     !props.liveAudioInputStatusKnown ||
     props.liveAudioInputStatus.running ||
     props.liveAudioInputStatus.safety_clear_pending;
+  const backendStartLocked = () =>
+    !props.liveAudioInputBackendsKnown ||
+    !selectedBackend()?.built ||
+    (backendRequiresExplicitDevice() && !props.selectedLiveAudioInputDevice.trim()) ||
+    (backendRequiresExplicitDevice() && props.liveAudioInputSampleRate === null) ||
+    (backendRequiresExplicitDevice() && props.liveAudioInputBufferFrames === null) ||
+    selectedDeviceRequiresReselection();
   const visualBandPercent = (index: number) =>
     Math.round(
       Math.max(0, Math.min(1, props.liveAudioInputStatus.bands?.[index] ?? 0)) * 100,
@@ -161,11 +224,18 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
     );
     return bpm && confidence > 0 ? `${bpm.toFixed(1)} · ${confidence}%` : "—";
   });
+  const appliedBufferLabel = createMemo(() => {
+    const frames = props.liveAudioInputStatus.applied_buffer_frames;
+    return frames === null || frames === undefined ? "pending" : `${frames}f`;
+  });
 
   return (
     <section
       class={`liveAudioInputBar ${props.compact ? "compact" : ""} ${props.liveAudioInputStatus.running ? "active" : ""} ${health()}`}
       data-health={health()}
+      data-live-audio-backend={props.selectedLiveAudioInputBackend}
+      data-live-audio-backend-state={backendState()}
+      data-live-audio-backend-built={selectedBackend()?.built ? "true" : "false"}
       aria-label="Live audio analysis input"
     >
       <div class="liveAudioInputControls">
@@ -173,7 +243,8 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
           <span class="liveAudioInputLabel">Audio input</span>
           <select
             aria-label="Live audio input device"
-            disabled={inputLocked()}
+            data-live-audio-control="device"
+            disabled={inputLocked() || !selectedBackend()?.built}
             value={props.selectedLiveAudioInputDevice}
             title={selectedDeviceLabel()}
             aria-invalid={selectedDeviceRequiresReselection() ? "true" : undefined}
@@ -187,14 +258,20 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
                 Reselect input
               </option>
             </Show>
-            <option value="">System default</option>
+            <Show
+              when={!backendRequiresExplicitDevice()}
+              fallback={<option value="">Select ASIO driver</option>}
+            >
+              <option value="">System default</option>
+            </Show>
             <For each={props.liveAudioInputDevices}>
               {(device) => <option value={device.id} data-no-localize>{device.label}</option>}
             </For>
           </select>
         </label>
         <button
-          disabled={props.liveAudioInputBusy || props.liveAudioInputStatus.running}
+          data-live-audio-action="refresh"
+          disabled={props.liveAudioInputBusy || props.liveAudioInputBackendsBusy || props.liveAudioInputStatus.running}
           aria-label="Refresh audio input devices"
           title="Refresh audio input devices"
           onClick={() => void props.onRefreshLiveAudioInputDevices()}
@@ -203,8 +280,11 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
         </button>
         <button
           class={props.liveAudioInputStatus.running ? "danger" : "primary"}
+          data-live-audio-action="transport"
           disabled={
             props.liveAudioInputBusy ||
+            props.liveAudioInputBackendsBusy ||
+            (!props.liveAudioInputStatus.running && backendStartLocked()) ||
             (!props.liveAudioInputStatus.running && props.liveAudioInputCapabilitiesBusy) ||
             (!props.liveAudioInputStatus.running && !props.liveAudioInputCapabilities) ||
             (!props.liveAudioInputStatusKnown && !props.liveAudioInputStatus.running) ||
@@ -267,10 +347,32 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
       </div>
       <Show when={health() === "stopped"}>
         <div class="liveAudioConfigControls">
+          <label class="liveAudioBackendControl">
+            <span>Backend</span>
+            <select
+              aria-label="Audio input backend"
+              data-live-audio-control="backend"
+              disabled={inputLocked()}
+              value={props.selectedLiveAudioInputBackend}
+              onInput={(event) => props.onSetLiveAudioInputBackend(event.currentTarget.value as LiveAudioInputBackendId)}
+            >
+              <Show when={props.liveAudioInputBackends.length === 0}>
+                <option value={props.selectedLiveAudioInputBackend}>
+                  {props.liveAudioInputBackendsKnown ? "Backend unavailable" : "Checking backends"}
+                </option>
+              </Show>
+              <For each={props.liveAudioInputBackends}>
+                {(backend) => (
+                  <option value={backend.id} data-no-localize>{backend.label}</option>
+                )}
+              </For>
+            </select>
+          </label>
           <label>
             <span>Rate</span>
             <select
               aria-label="Audio input sample rate"
+              data-live-audio-control="rate"
               disabled={inputLocked() || props.liveAudioInputCapabilitiesBusy}
               value={props.liveAudioInputSampleRate ?? ""}
               onInput={(event) =>
@@ -279,7 +381,12 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
                 )
               }
             >
-              <option value="">Rate auto</option>
+              <Show
+                when={!backendRequiresExplicitDevice()}
+                fallback={<option value="">Select rate</option>}
+              >
+                <option value="">Rate auto</option>
+              </Show>
               <For each={selectableSampleRates()}>
                 {(sampleRate) => <option value={sampleRate}>{(sampleRate / 1_000).toFixed(1)} kHz</option>}
               </For>
@@ -289,6 +396,7 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
             <span>Buffer</span>
             <select
               aria-label="Audio input requested buffer frames"
+              data-live-audio-control="buffer"
               disabled={inputLocked() || props.liveAudioInputCapabilitiesBusy}
               value={props.liveAudioInputBufferFrames ?? ""}
               onInput={(event) =>
@@ -297,7 +405,12 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
                 )
               }
             >
-              <option value="">Buffer default</option>
+              <Show
+                when={!backendRequiresExplicitDevice()}
+                fallback={<option value="">Select fixed buffer</option>}
+              >
+                <option value="">Buffer default</option>
+              </Show>
               <For each={selectableBufferFrames()}>
                 {(frames) => <option value={frames}>{frames} frames</option>}
               </For>
@@ -307,6 +420,7 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
             <span>Mix</span>
             <select
               aria-label="Audio input channel mix"
+              data-live-audio-control="mix"
               disabled={inputLocked() || props.liveAudioInputCapabilitiesBusy}
               value={channelMixValue(props.liveAudioInputChannelMix)}
               onInput={(event) => props.onSetLiveAudioInputChannelMix(parseChannelMix(event.currentTarget.value))}
@@ -324,15 +438,27 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
               </For>
             </select>
           </label>
-          <span class="liveAudioConfigFormat" title={configFormat()}>
-            {configFormat()}
+          <span
+            class={`liveAudioConfigFormat liveAudioBackendState ${backendState()}`}
+            data-live-audio-backend-state-label={backendStateLabel()}
+            title={`${backendStateLabel()} · ${backendDetail()} · ${configFormat()}`}
+          >
+            <b>{backendStateLabel()}</b>
+            <i aria-hidden="true">·</i>
+            <span>{configFormat()}</span>
           </span>
         </div>
       </Show>
       <Show when={health() === "live"}>
         <div class="liveAudioTelemetry tabularNums" title={detail()} data-no-localize>
+          <span class={`liveAudioBackendLiveState ${backendState()}`}>
+            {backendStateLabel()}
+          </span>
           <span class={`liveAudioTelemetryOvr ${props.liveAudioInputStatus.dropped_chunks > 0 ? "warning" : ""}`}>
             OVR {props.liveAudioInputStatus.dropped_chunks}/{props.liveAudioInputStatus.dropped_frames}f
+          </span>
+          <span class={`liveAudioTelemetryXrun ${(props.liveAudioInputStatus.backend_xruns ?? 0) > 0 ? "warning" : ""}`}>
+            XRUN {props.liveAudioInputStatus.backend_xruns ?? 0}
           </span>
           <span class="liveAudioTelemetryLatency">
             C→W {(props.liveAudioInputStatus.capture_to_worker_us / 1_000).toFixed(1)}/
@@ -346,7 +472,7 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
               BPM {rhythmLabel()}
             </b>
             <i>
-              I/O {(props.liveAudioInputStatus.sample_rate / 1_000).toFixed(1)}k · {liveAudioChannelMixLabel(props.liveAudioInputStatus)} · CB {props.liveAudioInputStatus.last_callback_frames}/{props.liveAudioInputStatus.min_callback_frames}/{props.liveAudioInputStatus.max_callback_frames}f
+              I/O {(props.liveAudioInputStatus.sample_rate / 1_000).toFixed(1)}k · {liveAudioChannelMixLabel(props.liveAudioInputStatus)} · BUF {appliedBufferLabel()} · CB {props.liveAudioInputStatus.last_callback_frames}/{props.liveAudioInputStatus.min_callback_frames}/{props.liveAudioInputStatus.max_callback_frames}f
             </i>
           </span>
           <span class="liveAudioTelemetryQueue">Q {props.liveAudioInputStatus.queue_depth}/{props.liveAudioInputStatus.queue_depth_high_water}/{props.liveAudioInputStatus.queue_capacity}</span>

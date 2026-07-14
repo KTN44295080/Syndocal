@@ -4726,8 +4726,8 @@ fn finite_or(value: f32, fallback: f32) -> f32 {
 mod tests {
     use super::*;
     use protocol::{
-        CompositionSummary, Transform2D, VideoBlendMode, VideoLayerSummary, VideoMaskPoint,
-        VideoOutputKind, VideoOutputSummary, VideoSourceKind, VideoSourceSummary,
+        AutoVjSnapshot, CompositionSummary, Transform2D, VideoBlendMode, VideoLayerSummary,
+        VideoMaskPoint, VideoOutputKind, VideoOutputSummary, VideoSourceKind, VideoSourceSummary,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -5277,6 +5277,7 @@ mod tests {
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
         };
@@ -5318,6 +5319,7 @@ mod tests {
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
         };
@@ -5362,6 +5364,7 @@ mod tests {
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
         };
@@ -5426,6 +5429,7 @@ mod tests {
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
         };
@@ -5505,6 +5509,7 @@ mod tests {
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
         };
@@ -5569,6 +5574,7 @@ mod tests {
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
         };
@@ -5633,6 +5639,7 @@ mod tests {
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
         };
@@ -5705,6 +5712,7 @@ mod tests {
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
         };
@@ -5794,6 +5802,7 @@ mod tests {
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
         };
@@ -5886,6 +5895,7 @@ mod tests {
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
         };
@@ -6169,6 +6179,7 @@ mod tests {
                 mapping: VideoOutputMapping::default(),
             }],
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
         }
@@ -6482,6 +6493,7 @@ mod tests {
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
         };
@@ -7061,6 +7073,7 @@ mod tests {
                 },
             ],
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
         };
@@ -7146,6 +7159,7 @@ mod tests {
                 mapping: VideoOutputMapping::default(),
             }],
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
         };
@@ -7260,6 +7274,7 @@ mod tests {
                 mapping: VideoOutputMapping::default(),
             }],
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
         };
@@ -7386,6 +7401,7 @@ mod tests {
                 mapping: VideoOutputMapping::default(),
             }],
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
         };
@@ -7488,6 +7504,7 @@ mod tests {
             }],
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 0.5,
             blackout: false,
         };
@@ -7524,6 +7541,7 @@ mod tests {
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: true,
         };
@@ -7579,6 +7597,7 @@ mod tests {
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
         };
@@ -7653,6 +7672,7 @@ mod tests {
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
         };
@@ -7713,6 +7733,7 @@ mod tests {
                 mapping: Default::default(),
             }],
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
         };
@@ -7784,6 +7805,7 @@ mod tests {
                 },
             }],
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
         };
@@ -7865,6 +7887,7 @@ mod tests {
                 mapping: Default::default(),
             }],
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
         };
@@ -7931,6 +7954,7 @@ mod tests {
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 0.0,
             blackout: true,
         };
@@ -8022,6 +8046,7 @@ mod tests {
                 mapping: Default::default(),
             }],
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
         };
@@ -8141,6 +8166,7 @@ mod tests {
                 },
             }],
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
         };
@@ -8331,6 +8357,7 @@ mod tests {
                 mapping: Default::default(),
             }],
             mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
         };

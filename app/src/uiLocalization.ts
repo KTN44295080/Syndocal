@@ -817,6 +817,7 @@ const japaneseText: Record<string, string> = {
   "All → mono": "全チャンネル → モノ",
   "→ mono": "→ モノ",
   "Audio input": "音声入力",
+  "Audio input backend": "音声入力バックエンド",
   "Audio input channel mix": "音声入力チャンネルミックス",
   "Audio input requested buffer frames": "音声入力要求バッファフレーム",
   "Audio input sample rate": "音声入力サンプルレート",
@@ -1149,6 +1150,14 @@ const japaneseText: Record<string, string> = {
     "ライブ音声の停止はエンジンの安全クリア待ちです。開始はロックされています。",
   "Live audio input stale. The engine accepted its zero-source clear request.":
     "ライブ音声入力が途絶しました。エンジンはゼロソースのクリア要求を受け付けました。",
+  "Select a built audio input backend before Start.":
+    "開始する前に、ビルド済みの音声入力バックエンドを選択してください。",
+  "Select an ASIO driver before Start. Automatic driver selection is disabled.":
+    "開始する前にASIOドライバを選択してください。ドライバの自動選択は無効です。",
+  "Select an explicit ASIO sample rate and fixed buffer before Start.":
+    "開始する前にASIOのサンプルレートと固定バッファを明示選択してください。",
+  "Selected audio capture backend is not built into this application.":
+    "選択した音声キャプチャバックエンドは、このアプリケーションに組み込まれていません。",
   "Live audio FFT input started.": "ライブ音声FFT入力を開始しました。",
   "Live audio FFT input stopped.": "ライブ音声FFT入力を停止しました。",
   "Resolve a supported live audio input configuration before Start.":
@@ -1632,6 +1641,20 @@ const japaneseText: Record<string, string> = {
   "Load A": "Aへ読込",
   "Load B": "Bへ読込",
   Ready: "準備完了",
+  Backend: "バックエンド",
+  "Backend unavailable": "バックエンド利用不可",
+  "Checking backends": "バックエンド確認中",
+  "Select ASIO driver": "ASIOドライバを選択",
+  "Select rate": "レートを選択",
+  "Select fixed buffer": "固定バッファを選択",
+  CHECKING: "確認中",
+  "NOT BUILT": "未ビルド",
+  EMPTY: "入力なし",
+  "SELECT DRIVER": "ドライバ選択",
+  CONFIGURE: "設定必須",
+  FAULT: "障害",
+  OPEN: "オープン",
+  ACTIVE: "動作中",
   Checking: "確認中",
   "Clear Pending": "クリア待ち",
   "System default audio input": "システム既定の音声入力",

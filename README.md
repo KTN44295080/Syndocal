@@ -34,7 +34,7 @@ Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPM
 - 照明と映像が混在する共有タイムライン
 - 1キューで灯体値、映像Layer、Output、Node Graphを同時リコール
 - 1つのLFO/位置ウェーブから灯体属性と映像パラメータを同時駆動
-- マイクLive FFTのBass/Mid/Highから照明・映像を同時駆動。WindowsではWASAPI sharedの入力device／sample rate／buffer／channel mixを明示選択でき、切断／250ms無入力時は共有0クリアを要求して未受理を明示する
+- マイクLive FFTの16 band／RMS／Peak／onset／BPM／kick／snareから照明・映像を同時駆動。WindowsではWASAPI sharedに加え、通常MIT版と分離したASIO bridge featureでdriver／sample rate／fixed buffer／channel mixを明示選択できる。切断／250ms無入力時は共有0クリアを要求し、未受理を明示する
 - Tap / MIDI Clock / MTC / LTC / Ableton Link用共有クロック境界
 - MIDI、OSC、WebSocket、iPad/Android向けPWAリモート
 - 10秒間隔の自動Recovery、Recent Project、`.sdc` OS関連付け
@@ -129,6 +129,12 @@ pnpm --dir app tauri build --ci --bundles nsis,msi
 
 Windowsの完全libav bundleでは`FFMPEG_DIR`を共有FFmpeg SDKルートへ設定します。bundle直前にDLLがステージされ、MSI/NSISへ同梱されます。NDIを有効にする場合は別途NDI SDKを導入し、`--features ndi`とSDKのライセンス条件に従ってください。
 
+ASIOは既定buildへ含めません。Windowsのローカル技術検証は、手動取得したSDKを`CPAL_ASIO_DIR`、LLVMの`libclang.dll`を`LIBCLANG_PATH`へ明示してから次を実行します。SDK pinは[qa/ASIO_SDK_PIN.json](qa/ASIO_SDK_PIN.json)、受入と配布境界は[qa/ASIO_INPUT_ACCEPTANCE.md](qa/ASIO_INPUT_ACCEPTANCE.md)を正とします。GPLv3版として分離するかSteinberg proprietary agreementを締結するまで、通常installerへASIO bridgeを同梱しません。
+
+```powershell
+& .\qa\harnesses\check-asio-build.ps1
+```
+
 ## 性能・QA
 
 - Engine: 44Hz、UIとは別スレッド、bounded lock-free command queue
@@ -139,6 +145,9 @@ Windowsの完全libav bundleでは`FFMPEG_DIR`を共有FFmpeg SDKルートへ設
 - Live audio UI: VJ Desk内の64px railでStart／Stop、device／rate／requested buffer／channel mix、16対数band、RMS／Peak、onset、BPM／confidenceとcallback／queue telemetryを常時確認する。軽量feature statusは約30Hz、詳細telemetryは約1Hzでsingle-flight更新し、5 viewport×英日stateful gateで固定する
 - Live-audio viewport gateはDOMを直接改変せず、Tauri invoke mockから実Solid stateを駆動する。5解像度×英日でRefresh、generation ID再対応、同名曖昧時の再選択ロック、capability、192kHz／8192-frame／stereo pair Start request、42/58/76% meter、live telemetry、Stop／clear-pendingまで検証する
 - Windows native live-audio acceptance: 最大化したcurrent-source buildでsystem defaultのWASAPI shared入力を48kHz monoでStart／Stopし、実callback 480/480/480 frames、capture-to-workerの採取時点current 0.1ms／max 10.1ms、OVR 0 chunks／0 frames、queue current/high-water/capacity 0/1/4を確認した。この1構成の測定をASIOや長時間・他deviceの性能証明には読み替えない
+- Windows ASIO short smoke: 分離bridgeとapp loaderから`TOPPING Pro USB Audio Device`を明示指定し、48kHz／2ch／i32／requested・applied 128 framesでStart／Stopした。7 callbacks／896 frames、max capture delay 4166.7us、XRUN 0、nonfinite 0、terminal event 0。`Realtek ASIO`はhardware unavailableとして失敗し、別driverやWASAPIへfallbackしなかった。これは1台・短時間の構成確認であり、第二の正常driver、1時間soak、物理pixel latency、TouchDesigner同条件A/Bを満たさない
+- Windows ASIO 100-cycle: bridgeのignored hardware testを`--locked --offline`で実行し、明示ID `asio:TOPPING Pro USB Audio Device`、48kHz／2ch／i32／128 framesを27.6767468秒で100回Start／Stop／Freeした。actual bufferは全回128、callback 200（各回2以上）、Stop 100、Free 100、warning／terminal／XRUN event・API／nonfinite／frame mismatchは全て0で、別driver／WASAPIへのfallbackも0だった。これは反復open/close gateの合格であり、第二の正常vendor、1時間soak、hot-plug、物理pixel latency、TouchDesigner同条件A/B、配布licenseの合格ではない
+- Windows ASIO native UI: current-source QA buildを最大化し、F11で実1920x1080へ移行してから、VJ DeskでASIO／`TOPPING Pro USB Audio Device`／48.0kHz／128 frames／Average All→monoを明示選択した。Startで`ACTIVE`、OVR 0/0、XRUN 0、Stopで`READY`を確認し、Escで最大化windowへ復帰した。full native operator pathは合格だが、1時間soak、第二vendor、hot-plug、物理pixel latency、TouchDesigner同条件A/B、配布licenseは未合格である
 - Auto VJ: CLOCKまたはLIVE INPUTのonsetをsourceに、seed／show revision／ordered candidateから再現可能なTakeを生成する。手動Take、Hold、blackoutを優先し、Program Audioはbackend coordinatorが世代token付きで一度だけ切り替えるため、device openやdecodeでTake操作を待たせない
 
 検証記録:
@@ -157,7 +166,7 @@ Windowsの完全libav bundleでは`FFMPEG_DIR`を共有FFmpeg SDKルートへ設
 
 - v1.0以降の外部映像I/OはDisplay、feature-gated NDI、Windows x86_64のSpoutに対応しています。Syphonはwgpu世代差とmacOS実装環境が必要なため未実装です。
 - HAP Q Alpha、HAP R/BC7のGPU直接sampling + CPU fallback、安全境界付きsingle-pass ISFは実装済みです。ISF multipass／persistent buffer／imported resource／audio inputは未対応です。
-- Live FFT入力はCPALのdevice catalogとcapabilityを読み、WindowsではWASAPI sharedのsystem defaultまたは列挙device、sample rate、requested buffer、全channel平均／単一channel／stereo pair downmixを選べます。選択rateごとにchannel数／sample format／buffer capabilityを`resolved_config`として先に確定し、Startでも同じ構成を再検証します。更新世代に結び付くopaque device IDを使い、古い／未知IDや非対応構成は別device・rate・bufferへ黙ってfallbackせずStartを拒否します。全11種のCPAL PCM sample formatを正規化し、通常data callbackは4本×2048-frameの事前確保slotへallocation-freeで格納します。workerは16対数band、RMS／Peak、spectral flux、適応onset、60–200 BPM／confidence／beat phaseを生成し、同じframeから旧Node Graph用B/M/Hを派生します。Auto VJはCLOCKまたはLIVE INPUTのonsetを選べ、seed／show revision／candidate順から決定的にTakeし、手動操作・blackout・入力lossを優先します。ASIO、同一deviceのhot-plug自動復帰、engine適用ack、任意parameterへ16 bandを割り当てるAudio Reactive Rack、実機長時間／物理pixel latency比較は次段です。ASIO版は通常MIT buildと分離し、GPLv3またはSteinberg proprietary agreementの配布方針確定後にのみ有効化します。
+- Live FFT入力はCPALのdevice catalogとcapabilityを読み、Windowsの既定buildではWASAPI sharedのsystem defaultまたは列挙device、sample rate、requested buffer、全channel平均／単一channel／stereo pair downmixを選べます。選択rateごとにchannel数／sample format／buffer capabilityを`resolved_config`として先に確定し、Startでも同じ構成を再検証します。更新世代に結び付くopaque device IDを使い、古い／未知IDや非対応構成は別device・rate・bufferへ黙ってfallbackせずStartを拒否します。全11種のCPAL PCM sample formatを正規化し、通常data callbackは4本×2048-frameの事前確保slotへallocation-freeで格納します。workerは16対数band、RMS／Peak、spectral flux、適応onset、60–200 BPM／confidence／beat phase、centroid／density／kick／snareを生成し、同じframeから旧Node Graph用B/M/Hを派生します。Compiled Audio Reactive Rackは任意の対応照明属性／映像parameterへこれらを割り当て、Auto VJはCLOCKまたはLIVE INPUTのonsetを選び、seed／show revision／candidate順から決定的にTakeします。非既定のWindows ASIO featureは独立bridgeを動的loadし、明示driver／rate／channel／native format／fixed bufferをStart時に再検証、実buffer framesとbackend XRUNを表示します。TOPPINGの短時間実機smoke、100回Start／Stop／FreeとF11 1920x1080のfull native UI gateは通過しましたが、ASIOの配布ライセンス選択、第二の正常driver、同一device hot-plug自動復帰、engine出力適用ack、実機1時間／物理pixel latency／TouchDesigner同条件比較は未完です。通常MIT installerへASIO bridgeは同梱しません。
 - Device Refresh後はbackendとdevice名が新旧catalogueの双方で一意な場合だけ明示選択を新IDへ引き継ぎます。曖昧・消失時はsystem defaultへ黙って落とさず、再選択するまでcapabilityを破棄してStartをロックします。
 - 3Dビジュアライザは本体UIへ戻さず、`visualizer`データ境界から外部実装へ接続します。標準UIは2D Stage Mapです。
 - Enttec Open DMXはOS/USBドライバ依存のbreak timingがあるため、最終現場ではUSB PRO系を推奨します。

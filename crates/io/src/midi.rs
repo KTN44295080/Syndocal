@@ -2260,6 +2260,7 @@ mod tests {
                 enabled: true,
                 nodes: Vec::new(),
                 edges: Vec::new(),
+                audio_runtime: Vec::new(),
             }],
             ..EngineSnapshot::default()
         };
