@@ -1,5 +1,10 @@
 use engine::{EngineCommand, EngineHandle};
-use protocol::{EffectPreset, ProjectFile, VideoEffectTarget, VideoParam};
+use protocol::{
+    ChaserDirection, ChaserEffectRequest, ChaserFeature, ChaserStep, ColorEffectAlgorithm,
+    ColorEffectColor, ColorEffectInterpolation, ColorEffectRequest, ColorEffectStop,
+    EffectBlendMode, EffectPreset, MoveCoordinateMode, MoveDirection, MoveEffectRequest,
+    MoveInterpolation, MovePathPoint, ProjectFile, VideoEffectTarget, VideoParam,
+};
 use serde_json::json;
 use std::{
     env, fs,
@@ -30,7 +35,7 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<(), String> {
-    let (duration, report_path) = parse_args()?;
+    let (duration, report_path, mixed_lighting) = parse_args()?;
     let project: ProjectFile = serde_json::from_str(PROJECT_JSON).map_err(|e| e.to_string())?;
     let output = project.snapshot.output.clone();
     let engine = EngineHandle::start(output);
@@ -40,6 +45,9 @@ fn run() -> Result<(), String> {
 
     add_effect(&engine, PULSE_EFFECT_JSON, false)?;
     add_effect(&engine, WAVE_EFFECT_JSON, true)?;
+    if mixed_lighting {
+        add_mixed_lighting_effects(&engine)?;
+    }
     engine
         .send(EngineCommand::TriggerCue(1))
         .map_err(|e| e.to_string())?;
@@ -47,7 +55,7 @@ fn run() -> Result<(), String> {
         .send(EngineCommand::SetTimelinePlaying(true))
         .map_err(|e| e.to_string())?;
 
-    wait_for_loaded_state(&engine)?;
+    wait_for_loaded_state(&engine, if mixed_lighting { 5 } else { 2 })?;
     engine
         .send(EngineCommand::ResetTelemetry)
         .map_err(|e| e.to_string())?;
@@ -139,7 +147,12 @@ fn run() -> Result<(), String> {
         .as_millis();
     let report = json!({
         "app": "Syndocal",
-        "test": "M5 one-hour soak",
+        "test": if mixed_lighting {
+            "M5 one-hour mixed lighting soak"
+        } else {
+            "M5 one-hour soak"
+        },
+        "mixed_lighting": mixed_lighting,
         "passed": passed,
         "captured_at_unix_ms": captured_at_unix_ms,
         "duration_seconds": started_at.elapsed().as_secs_f64(),
@@ -210,12 +223,125 @@ fn add_effect(engine: &EngineHandle, json: &str, target_video: bool) -> Result<(
     engine.send(command).map_err(|e| e.to_string())
 }
 
-fn wait_for_loaded_state(engine: &EngineHandle) -> Result<(), String> {
+fn add_mixed_lighting_effects(engine: &EngineHandle) -> Result<(), String> {
+    let color_request = ColorEffectRequest {
+        label: "Soak Color".to_string(),
+        fixture_ids: vec![1],
+        target_group_ids: Vec::new(),
+        stops: vec![
+            ColorEffectStop {
+                position: 0.0,
+                color: ColorEffectColor {
+                    red: u16::MAX,
+                    green: 0,
+                    blue: 0,
+                },
+            },
+            ColorEffectStop {
+                position: 0.5,
+                color: ColorEffectColor {
+                    red: 0,
+                    green: u16::MAX,
+                    blue: 0,
+                },
+            },
+            ColorEffectStop {
+                position: 1.0,
+                color: ColorEffectColor {
+                    red: 0,
+                    green: 0,
+                    blue: u16::MAX,
+                },
+            },
+        ],
+        algorithm: ColorEffectAlgorithm::Cycle,
+        interpolation: ColorEffectInterpolation::HsvShortest,
+        period_ms: 2_000,
+        clock_sync: None,
+        phase: 0.0,
+        fixture_spread: 0.0,
+        blend_mode: EffectBlendMode::Override,
+    };
+    engine.add_color_effect(engine.allocate_effect_id(), color_request, true)?;
+
+    let chaser_request = ChaserEffectRequest {
+        label: "Soak Chaser".to_string(),
+        steps: vec![
+            ChaserStep {
+                fixture_ids: vec![1],
+                target_group_ids: Vec::new(),
+                level: u16::MAX,
+            },
+            ChaserStep {
+                fixture_ids: Vec::new(),
+                target_group_ids: Vec::new(),
+                level: 0,
+            },
+            ChaserStep {
+                fixture_ids: vec![1],
+                target_group_ids: Vec::new(),
+                level: 49_151,
+            },
+            ChaserStep {
+                fixture_ids: Vec::new(),
+                target_group_ids: Vec::new(),
+                level: 0,
+            },
+        ],
+        features: vec![ChaserFeature {
+            attribute: "Dimmer".to_string(),
+            low: 0,
+            high: u16::MAX,
+        }],
+        step_duration_ms: 125,
+        clock_sync: None,
+        direction: ChaserDirection::Forward,
+        wings: 1,
+        active_step_count: 1,
+        duty_cycle: 1.0,
+        overlap: 0.0,
+        phase: 0.0,
+        fixture_spread: 0.0,
+        random_seed: 0x5eed_cafe,
+        blend_mode: EffectBlendMode::Override,
+    };
+    engine.add_chaser_effect(engine.allocate_effect_id(), chaser_request, true)?;
+
+    let move_request = MoveEffectRequest {
+        label: "Soak Move".to_string(),
+        fixture_ids: vec![1],
+        target_group_ids: Vec::new(),
+        points: vec![
+            MovePathPoint { x: 0.5, y: 0.0 },
+            MovePathPoint { x: 1.0, y: 0.5 },
+            MovePathPoint { x: 0.5, y: 1.0 },
+            MovePathPoint { x: 0.0, y: 0.5 },
+        ],
+        closed: true,
+        interpolation: MoveInterpolation::Smooth,
+        coordinate_mode: MoveCoordinateMode::Absolute,
+        center_x: 0.5,
+        center_y: 0.5,
+        size_x: 0.75,
+        size_y: 0.5,
+        rotation_degrees: 0.0,
+        period_ms: 2_000,
+        clock_sync: None,
+        direction: MoveDirection::Forward,
+        phase: 0.0,
+        fixture_spread: 0.0,
+        blend_mode: EffectBlendMode::Override,
+    };
+    engine.add_move_effect(engine.allocate_effect_id(), move_request, true)?;
+    Ok(())
+}
+
+fn wait_for_loaded_state(engine: &EngineHandle, expected_effects: usize) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
         let snapshot = engine.snapshot();
         if snapshot.fixtures.len() == 1
-            && snapshot.effects.len() == 2
+            && snapshot.effects.len() == expected_effects
             && snapshot.video.layers.len() == 1
         {
             return Ok(());
@@ -225,9 +351,10 @@ fn wait_for_loaded_state(engine: &EngineHandle) -> Result<(), String> {
     Err("engine did not load the soak project within two seconds".to_string())
 }
 
-fn parse_args() -> Result<(Duration, PathBuf), String> {
+fn parse_args() -> Result<(Duration, PathBuf, bool), String> {
     let mut duration_seconds = 3_600_u64;
     let mut report_path = PathBuf::from("target/qa/m5-soak.json");
+    let mut mixed_lighting = false;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -244,11 +371,18 @@ fn parse_args() -> Result<(Duration, PathBuf), String> {
                         .ok_or_else(|| "--report requires a path".to_string())?,
                 );
             }
+            "--mixed-lighting" => {
+                mixed_lighting = true;
+            }
             _ => return Err(format!("unknown argument '{arg}'")),
         }
     }
     if duration_seconds == 0 {
         return Err("duration must be greater than zero".to_string());
     }
-    Ok((Duration::from_secs(duration_seconds), report_path))
+    Ok((
+        Duration::from_secs(duration_seconds),
+        report_path,
+        mixed_lighting,
+    ))
 }

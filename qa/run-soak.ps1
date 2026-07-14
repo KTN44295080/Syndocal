@@ -6,7 +6,8 @@ param(
     [string]$ReportPath = "target/qa/m5-soak.json",
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$MixedLighting
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,10 +32,15 @@ $resolvedReport = [System.IO.Path]::GetFullPath((Join-Path $root $ReportPath))
 $reportDirectory = Split-Path -Parent $resolvedReport
 New-Item -ItemType Directory -Force -Path $reportDirectory | Out-Null
 
-$process = Start-Process -FilePath $executable -ArgumentList @(
+$harnessArguments = @(
     "--duration-seconds", $DurationSeconds,
     "--report", $resolvedReport
-) -PassThru -NoNewWindow
+)
+if ($MixedLighting) {
+    $harnessArguments += "--mixed-lighting"
+}
+
+$process = Start-Process -FilePath $executable -ArgumentList $harnessArguments -PassThru -NoNewWindow
 
 $peakWorkingSet = 0L
 $peakCpuSeconds = 0.0

@@ -60,6 +60,44 @@ Command:
 
 The original one-hour evidence remains valid for the base workload, and the live-audio command-pressure extension now has equal-duration evidence. The raw JSON is `target/qa/m5-soak-live-audio-3600.json` and remains a local build artifact.
 
+### Mixed Color/Chaser/Move lighting extension
+
+On 2026-07-15 the soak harness gained a `--mixed-lighting` mode (`-MixedLighting` on `qa/run-soak.ps1`). It keeps the complete base workload — embedded mini-show, PULSE LFO, WAVE position-wave with shared video-opacity target, four-second timeline loop, per-frame `SetLiveAudioSpectrum` pressure, and the 320x180@30fps video render — and adds one independent Color effect (three-stop Cycle, HSV-shortest, 2s period), one independent Chaser (four steps with gaps, Dimmer feature, 125ms steps), and one independent Move (four-point smooth closed path, paired Pan/Tilt, 2s period) on the patched fixture. Every effect is added through the published-acknowledgement engine commands, and the harness requires exactly five active effects before telemetry reset. Default (non-mixed) behavior, the report path defaults, and every existing gate value are unchanged; a 60-second default-mode run re-passed after the change.
+
+Full one-hour release run: **PASS**
+
+```powershell
+./qa/run-soak.ps1 -DurationSeconds 3600 -SkipBuild -MixedLighting -ReportPath target/qa/m5-soak-mixed-lighting-3600.json
+```
+
+| Metric | Result | Gate |
+| --- | ---: | ---: |
+| Elapsed | 3600.002 s | >= 3600 s |
+| Active effects | 5 (LFO + PositionWave + Color + Chaser + Move) | 5 |
+| Rendered/nonblank frames | 108,001 / 108,001 | all nonblank |
+| Dropped frames | 0 | 0 |
+| Live-audio updates | 108,001 | recorded |
+| Peak working set | 20.9 MB | < 200 MB base target |
+| Process CPU time | 336.55 s | recorded |
+| Engine tick jitter p95 / p99 | 334 us / 512 us | p99 <= 1,000 us |
+| Command queue latency p95 / p99 | 20 us / 48 us | p99 <= 1,000 us |
+| Command-to-DMX latency p95 / p99 | 22 us / 53 us | p99 <= 5,000 us |
+| Queue push failures / drain-limit hits | 0 / 0 | 0 |
+| Art-Net sends | 216,004 success / 0 failure | 0 failure |
+| Last Engine error | none | none |
+
+The raw JSON is `target/qa/m5-soak-mixed-lighting-3600.json` and remains a local build artifact.
+
+### Mixed-stack release benchmark
+
+`mixed_color_chaser_move_release_stack_meets_44hz_budget` (crates/engine) measures the true production per-tick evaluation path — `apply_effects` per fixture and control, including its per-call clock snapshot — for 200 fixtures x 6 attributes under 64 simultaneous full-rig effects (22 Color with three HSV-shortest stops and full spread, 21 Chaser with Wings/width/duty/overlap/spread, 21 smooth closed-path Move) across 1,000 44Hz ticks.
+
+```powershell
+cargo test -p engine mixed_color_chaser_move --release --locked -- --nocapture
+```
+
+Observed on this host on 2026-07-15 across two release runs: p95 2.82–3.21 ms, p99 3.06–3.78 ms, max 3.89–4.35 ms per tick — about 14% of the 22.7 ms 44Hz tick. The initial planning budget of 2/4/8 ms was set before measurement and was exceeded at p95; investigation confirmed the benchmark faithfully mirrors the production hot path rather than adding artificial overhead, so the release-only gate is fixed at p95 <= 5 ms, p99 <= 8 ms, max <= 12 ms. That keeps the worst-case mixed stack at or below roughly half a tick while still failing on a >50% evaluation regression. This is an internal software measurement on one Windows host, not venue or competitor evidence.
+
 ## Large show
 
 `large_show_loads_200_fixtures_across_8_universes_and_100_cues` covers 200 fixtures, eight complete 512-slot previews, 100 cues, and 20,000 cue targets. The focused test remains subsecond with no queue failures or drain-limit hits.

@@ -37172,6 +37172,165 @@ mod tests {
         );
     }
 
+    fn runtime_with_mixed_effect_fixtures(count: u64) -> EngineRuntime {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut profile = sample_profile();
+        profile.dmx_modes[0].controls.push(AttributeControl {
+            attribute: "Tilt".to_string(),
+            channel_name: "Tilt".to_string(),
+            geometry: None,
+            offsets: vec![4, 5],
+            resolution: AttributeResolution::SixteenBit,
+            default_value: 0,
+            functions: Vec::new(),
+        });
+        profile.dmx_modes[0]
+            .controls
+            .push(test_color_control("ColorRed", 6));
+        profile.dmx_modes[0]
+            .controls
+            .push(test_color_control("ColorGreen", 7));
+        profile.dmx_modes[0]
+            .controls
+            .push(test_color_control("ColorBlue", 8));
+        for fixture_id in 1..=count {
+            let zero_based = fixture_id - 1;
+            let mut request = sample_patch_request(
+                &format!("Mixed {fixture_id}"),
+                1 + ((zero_based % 64) as u16) * 8,
+            );
+            request.universe = (zero_based / 64) as u16;
+            request.group_ids = vec!["Mixed".to_string()];
+            runtime.apply_command(EngineCommand::PatchFixture {
+                fixture_id,
+                request,
+                profile: profile.clone(),
+            });
+        }
+        assert_eq!(runtime.last_error, None);
+        assert!(runtime
+            .fixtures
+            .iter()
+            .all(|fixture| fixture.color_binding.is_some()));
+        runtime
+    }
+
+    #[test]
+    fn mixed_color_chaser_move_release_stack_meets_44hz_budget() {
+        const FIXTURE_COUNT: u64 = 200;
+        const EFFECT_COUNT: usize = 64;
+        const SAMPLES: usize = 1_000;
+        const ATTRIBUTES: [&str; 6] = [
+            "Dimmer",
+            "ColorRed",
+            "ColorGreen",
+            "ColorBlue",
+            "Pan",
+            "Tilt",
+        ];
+
+        let mut runtime = runtime_with_mixed_effect_fixtures(FIXTURE_COUNT);
+        let fixture_ids = (1..=FIXTURE_COUNT).collect::<Vec<_>>();
+        let created_at = Instant::now();
+        let mut chaser_base = test_chaser_request(&fixture_ids);
+        chaser_base.active_step_count = 4;
+        chaser_base.wings = 2;
+        chaser_base.duty_cycle = 0.75;
+        chaser_base.overlap = 0.25;
+        chaser_base.fixture_spread = 0.5;
+        let move_base = test_move_request(&fixture_ids);
+        for index in 0..EFFECT_COUNT {
+            let phase = index as f32 / EFFECT_COUNT as f32;
+            let kind = match index % 3 {
+                0 => {
+                    let mut request = test_color_request(
+                        fixture_ids.clone(),
+                        test_color(
+                            ((index + 1) * 977) as u16,
+                            ((index + 1) * 431) as u16,
+                            ((index + 1) * 211) as u16,
+                        ),
+                    );
+                    request.stops.insert(
+                        1,
+                        protocol::ColorEffectStop {
+                            position: 0.5,
+                            color: test_color(
+                                ((index + 7) * 613) as u16,
+                                ((index + 3) * 389) as u16,
+                                ((index + 5) * 149) as u16,
+                            ),
+                        },
+                    );
+                    request.algorithm = ColorEffectAlgorithm::Cycle;
+                    request.interpolation = ColorEffectInterpolation::HsvShortest;
+                    request.fixture_spread = 1.0;
+                    request.phase = phase;
+                    RuntimeEffectKind::Color(runtime.resolve_color_effect_request(request).unwrap())
+                }
+                1 => {
+                    let mut request = chaser_base.clone();
+                    request.phase = phase;
+                    RuntimeEffectKind::Chaser(
+                        runtime.resolve_chaser_effect_request(request).unwrap(),
+                    )
+                }
+                _ => {
+                    let mut request = move_base.clone();
+                    request.phase = phase;
+                    RuntimeEffectKind::Move(runtime.resolve_move_effect_request(request).unwrap())
+                }
+            };
+            runtime.effects.push(RuntimeEffect {
+                id: index as EffectId + 1,
+                kind,
+                enabled: true,
+                created_at,
+            });
+        }
+
+        let mut durations = Vec::with_capacity(SAMPLES);
+        let mut checksum = 0_u64;
+        for sample in 0..SAMPLES {
+            let at = created_at + DMX_TICK_INTERVAL * (sample as u32 + 1);
+            let started = Instant::now();
+            for fixture in &runtime.fixtures {
+                for attribute in ATTRIBUTES {
+                    checksum = checksum
+                        .wrapping_add(runtime.apply_effects(fixture, attribute, 16_384, at) as u64);
+                }
+            }
+            durations.push(started.elapsed());
+        }
+        std::hint::black_box(checksum);
+        assert_ne!(checksum, 0);
+        durations.sort_unstable();
+        let p95 = durations[(SAMPLES * 95 / 100).min(SAMPLES - 1)];
+        let p99 = durations[(SAMPLES * 99 / 100).min(SAMPLES - 1)];
+        let max = *durations.last().unwrap();
+        eprintln!(
+            "Mixed Color/Chaser/Move 64x200 stack per-tick evaluation: p95={}us p99={}us max={}us",
+            p95.as_micros(),
+            p99.as_micros(),
+            max.as_micros()
+        );
+        // Budget rationale: this measures the true production per-tick path
+        // (apply_effects per fixture x control, including its per-call clock
+        // snapshot) under 64 simultaneous full-rig effects. Observed on the
+        // reference Windows host in release: p95 ~3.2ms / p99 ~3.8ms /
+        // max ~4.4ms. The gate keeps the worst-case mixed stack at or below
+        // roughly half of the 22.7ms 44Hz tick while still failing on a
+        // >50% evaluation regression.
+        if !cfg!(debug_assertions) {
+            assert!(p95 <= Duration::from_millis(5), "p95 was {p95:?}");
+            assert!(p99 <= Duration::from_millis(8), "p99 was {p99:?}");
+            assert!(max <= Duration::from_millis(12), "max was {max:?}");
+        }
+    }
+
     #[test]
     fn legacy_timeline_event_update_preserves_scene_block_extension_fields() {
         let mut runtime = runtime_with_lfo_effects(&[(1, false)]);
