@@ -1,8 +1,10 @@
-import { For, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import type { VideoIsfControlSummary, VideoIsfEffectSummary } from "../types";
 
 interface VideoIsfEffectPanelProps {
   layerId: number;
+  layerLabel?: string;
+  compact?: boolean;
   effect?: VideoIsfEffectSummary | null;
   runtimeError?: string | null;
   onImport: (layerId: number) => void | Promise<void>;
@@ -29,6 +31,11 @@ const componentCount = (control: VideoIsfControlSummary) =>
   control.kind === "Color" ? 4 : control.kind === "Point2d" ? 2 : 1;
 
 export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
+  const [advancedOpen, setAdvancedOpen] = createSignal(false);
+  const advancedId = `video-isf-advanced-${props.layerId}`;
+  const advancedMount = { id: advancedId };
+  const layerDescription = () => `${props.layerLabel ?? "Video layer"} (layer ${props.layerId})`;
+
   const setControlComponent = (control: VideoIsfControlSummary, index: number, next: number) => {
     const effect = props.effect;
     if (!effect) return;
@@ -48,115 +55,196 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
     });
   };
 
-  return (
-    <details class="videoIsfPanel" open={!props.effect || Boolean(props.runtimeError)}>
-      <summary>
-        <strong>ISF Shader</strong>
-        <Show when={props.effect} fallback={<span>None</span>}>
-          {(effect) => <span data-no-localize>{effect().label}</span>}
-        </Show>
-      </summary>
-      <div class="videoIsfBody">
-        <label class="builtinIsfLibrary">
-          <span>Built-in FX</span>
-          <select
-            aria-label="Built-in FX"
-            value=""
-            onChange={(event) => {
-              const presetId = event.currentTarget.value;
-              event.currentTarget.value = "";
-              if (presetId) void props.onApplyBuiltin(props.layerId, presetId);
-            }}
-          >
-            <option value="">Choose effect</option>
-            <For each={BUILTIN_FX_GROUPS}>
-              {(group) => (
-                <optgroup label={group.label}>
-                  <For each={group.effects}>{(effect) => <option value={effect[0]}>{effect[1]}</option>}</For>
-                </optgroup>
-              )}
-            </For>
-          </select>
-        </label>
-        <div class="buttonRow">
-          <button onClick={() => void props.onImport(props.layerId)}>{props.effect ? "Replace ISF" : "Import ISF"}</button>
-          <Show when={props.effect}>
-            {(effect) => (
-              <>
-                <button
-                  class={effect().enabled ? "active" : ""}
-                  aria-pressed={effect().enabled}
-                  onClick={() => void props.onSetEffect(props.layerId, { ...effect(), enabled: !effect().enabled })}
-                >
-                  {effect().enabled ? "Enabled" : "Bypassed"}
-                </button>
-                <button onClick={() => void props.onSetEffect(props.layerId, null)}>Clear ISF</button>
-              </>
-            )}
-          </Show>
-        </div>
-        <p class="fieldHint">
-          Portable single-pass ISF is embedded in the project. Unsupported resources and unsafe shader constructs are rejected before GPU use.
-        </p>
-        <Show when={props.runtimeError}>
-          {(runtimeError) => <p class="inlineError" role="alert">{runtimeError()}</p>}
+  const applyBuiltInEffect = (select: HTMLSelectElement) => {
+    const presetId = select.value;
+    select.value = "";
+    if (presetId) void props.onApplyBuiltin(props.layerId, presetId);
+  };
+
+  const BuiltInEffectSelect = () => (
+    <label class="builtinIsfLibrary">
+      <span>Built-in FX</span>
+      <select
+        data-video-isf-action="builtin"
+        aria-label={`Built-in FX for ${layerDescription()}`}
+        value=""
+        onChange={(event) => applyBuiltInEffect(event.currentTarget)}
+      >
+        <option value="">Choose effect</option>
+        <For each={BUILTIN_FX_GROUPS}>
+          {(group) => (
+            <optgroup label={group.label}>
+              <For each={group.effects}>{(effect) => <option value={effect[0]}>{effect[1]}</option>}</For>
+            </optgroup>
+          )}
+        </For>
+      </select>
+    </label>
+  );
+
+  const EnableEffectButton = () => (
+    <Show when={props.effect}>
+      {(effect) => (
+        <button
+          data-video-isf-action="bypass"
+          class={effect().enabled ? "active" : ""}
+          aria-label={`FX enabled for ${layerDescription()}`}
+          aria-pressed={effect().enabled}
+          onClick={() => void props.onSetEffect(props.layerId, { ...effect(), enabled: !effect().enabled })}
+        >
+          {effect().enabled ? "Enabled" : "Bypassed"}
+        </button>
+      )}
+    </Show>
+  );
+
+  const EffectEditor = (editorProps: { includeBuiltInSelect: boolean; includeEnableButton: boolean }) => (
+    <>
+      <Show when={editorProps.includeBuiltInSelect}>
+        <BuiltInEffectSelect />
+      </Show>
+      <div class="buttonRow">
+        <button onClick={() => void props.onImport(props.layerId)}>{props.effect ? "Replace ISF" : "Import ISF"}</button>
+        <Show when={editorProps.includeEnableButton}>
+          <EnableEffectButton />
         </Show>
         <Show when={props.effect}>
-          {(effect) => (
-            <>
-              <Show when={effect().description}>
-                {(description) => <p class="fieldHint">{description()}</p>}
-              </Show>
-              <For each={effect().controls}>
-                {(control) => (
-                  <div class="videoIsfControl">
-                    <span data-no-localize>{control.name}</span>
+          <button onClick={() => void props.onSetEffect(props.layerId, null)}>Clear ISF</button>
+        </Show>
+      </div>
+      <p class="fieldHint">
+        Portable single-pass ISF is embedded in the project. Unsupported resources and unsafe shader constructs are rejected before GPU use.
+      </p>
+      <Show when={props.runtimeError}>
+        {(runtimeError) => (
+          <p class="inlineError" role={props.compact ? undefined : "alert"}>
+            {runtimeError()}
+          </p>
+        )}
+      </Show>
+      <Show when={props.effect}>
+        {(effect) => (
+          <>
+            <Show when={effect().description}>
+              {(description) => <p class="fieldHint">{description()}</p>}
+            </Show>
+            <For each={effect().controls}>
+              {(control) => (
+                <div class="videoIsfControl">
+                  <span data-no-localize>{control.name}</span>
+                  <Show
+                    when={control.kind !== "Event"}
+                    fallback={<button onClick={() => triggerEvent(control)}>Trigger</button>}
+                  >
                     <Show
-                      when={control.kind !== "Event"}
-                      fallback={<button onClick={() => triggerEvent(control)}>Trigger</button>}
+                      when={control.kind !== "Bool"}
+                      fallback={
+                        <label class="checkbox">
+                          <input
+                            type="checkbox"
+                            checked={control.value[0] >= 0.5}
+                            onChange={(event) =>
+                              setControlComponent(control, 0, event.currentTarget.checked ? 1 : 0)
+                            }
+                          />
+                          {control.value[0] >= 0.5 ? "On" : "Off"}
+                        </label>
+                      }
                     >
-                      <Show
-                        when={control.kind !== "Bool"}
-                        fallback={
-                          <label class="checkbox">
-                            <input
-                              type="checkbox"
-                              checked={control.value[0] >= 0.5}
-                              onChange={(event) =>
-                                setControlComponent(control, 0, event.currentTarget.checked ? 1 : 0)
-                              }
-                            />
-                            {control.value[0] >= 0.5 ? "On" : "Off"}
-                          </label>
-                        }
-                      >
-                        <For each={Array.from({ length: componentCount(control) }, (_, index) => index)}>
-                          {(index) => (
-                            <input
-                              type="number"
-                              min={control.minimum[index]}
-                              max={control.maximum[index]}
-                              step={control.kind === "Long" ? 1 : 0.01}
-                              value={control.value[index]}
-                              aria-label={`${control.name} component ${index + 1}`}
-                              onChange={(event) =>
-                                setControlComponent(control, index, Number(event.currentTarget.value))
-                              }
-                            />
-                          )}
-                        </For>
-                      </Show>
+                      <For each={Array.from({ length: componentCount(control) }, (_, index) => index)}>
+                        {(index) => (
+                          <input
+                            type="number"
+                            min={control.minimum[index]}
+                            max={control.maximum[index]}
+                            step={control.kind === "Long" ? 1 : 0.01}
+                            value={control.value[index]}
+                            aria-label={`${control.name} component ${index + 1} for ${layerDescription()}`}
+                            onChange={(event) =>
+                              setControlComponent(control, index, Number(event.currentTarget.value))
+                            }
+                          />
+                        )}
+                      </For>
                     </Show>
-                  </div>
-                )}
-              </For>
-              <Show when={effect().controls.length === 0}>
-                <p class="emptyHint">This shader has no operator controls.</p>
-              </Show>
-            </>
+                  </Show>
+                </div>
+              )}
+            </For>
+            <Show when={effect().controls.length === 0}>
+              <p class="emptyHint">This shader has no operator controls.</p>
+            </Show>
+          </>
+        )}
+      </Show>
+    </>
+  );
+
+  return (
+    <Show
+      when={props.compact}
+      fallback={
+        <details class="videoIsfPanel" open={!props.effect || Boolean(props.runtimeError)}>
+          <summary>
+            <strong>ISF Shader</strong>
+            <Show when={props.effect} fallback={<span>None</span>}>
+              {(effect) => <span data-no-localize>{effect().label}</span>}
+            </Show>
+          </summary>
+          <div class="videoIsfBody">
+            <EffectEditor includeBuiltInSelect includeEnableButton />
+          </div>
+        </details>
+      }
+    >
+      <div class="videoIsfPanel videoIsfPanelCompact" data-video-isf-layer-id={props.layerId}>
+        <div class="videoIsfQuickRack">
+          <div class="videoIsfQuickStatus">
+            <strong>FX</strong>
+            <Show when={props.effect} fallback={<span>None</span>}>
+              {(effect) => (
+                <>
+                  <span data-no-localize>{effect().label}</span>
+                  <span class="videoIsfEffectState">{effect().enabled ? "Enabled" : "Bypassed"}</span>
+                </>
+              )}
+            </Show>
+            <Show when={props.runtimeError}>
+              {(runtimeError) => (
+                <span
+                  class="inlineError videoIsfRuntimeBadge"
+                  role="alert"
+                  aria-label={`FX error for ${layerDescription()}: ${runtimeError()}`}
+                  title={runtimeError()}
+                >
+                  FX error
+                </span>
+              )}
+            </Show>
+          </div>
+          <BuiltInEffectSelect />
+          <div class="buttonRow videoIsfQuickActions">
+            <EnableEffectButton />
+            <button
+              data-video-isf-action="advanced"
+              class={advancedOpen() ? "active" : ""}
+              aria-label={`Advanced FX controls for ${layerDescription()}`}
+              aria-expanded={advancedOpen()}
+              aria-controls={advancedId}
+              onClick={() => setAdvancedOpen((open) => !open)}
+            >
+              Advanced
+            </button>
+          </div>
+        </div>
+        <Show when={advancedOpen() ? advancedMount : undefined}>
+          {(_advanced) => (
+            <div class="videoIsfBody videoIsfAdvanced" id={advancedId}>
+              <EffectEditor includeBuiltInSelect={false} includeEnableButton={false} />
+            </div>
           )}
         </Show>
       </div>
-    </details>
+    </Show>
   );
 }

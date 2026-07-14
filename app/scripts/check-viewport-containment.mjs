@@ -12,6 +12,7 @@ const largeShowMode = process.argv.includes("--large-show");
 const vjEmptyMode = process.argv.includes("--vj-empty");
 const liveAudioOnlyMode = process.argv.includes("--live-audio-only");
 const fullscreenVjOnlyMode = process.argv.includes("--fullscreen-vj");
+const operatorVjOnlyMode = process.argv.includes("--operator-vj-only");
 const autoVjOnlyMode = process.argv.includes("--auto-vj-only");
 const audioReactiveOnlyMode = process.argv.includes("--audio-reactive-only");
 const sceneBlockOnlyMode = process.argv.includes("--scene-block-only");
@@ -20,13 +21,15 @@ const sceneBlockOverlapOnlyMode = process.argv.includes("--scene-block-overlap-o
 const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
   largeShowMode
     ? "large-show"
-    : autoVjOnlyMode
-      ? "auto-vj"
-      : audioReactiveOnlyMode
-        ? "audio-reactive"
-      : vjEmptyMode || liveAudioOnlyMode || fullscreenVjOnlyMode
-        ? "vj-empty"
-        : "timeline"
+    : operatorVjOnlyMode
+      ? "operator-vj"
+      : autoVjOnlyMode
+        ? "auto-vj"
+        : audioReactiveOnlyMode
+          ? "audio-reactive"
+          : vjEmptyMode || liveAudioOnlyMode || fullscreenVjOnlyMode
+            ? "vj-empty"
+            : "timeline"
 );
 const defaultUrl =
   viewportFixture === "none"
@@ -65,14 +68,14 @@ const requestedViewport = requestedViewportMatch
 const viewports = requestedViewport
   ? [requestedViewport]
   : largeShowMode
-  ? [primaryOperationalViewport]
-  : audioReactiveOnlyMode
-    ? [primaryOperationalViewport, compactFallbackViewports[0]]
-  : fullscreenVjOnlyMode
-    ? [primaryOperationalViewport, ...compactFallbackViewports]
-  : process.env.SYNDOCAL_VIEWPORT_SINGLE === "1"
     ? [primaryOperationalViewport]
-    : allViewports;
+    : audioReactiveOnlyMode
+      ? [primaryOperationalViewport, compactFallbackViewports[0]]
+      : fullscreenVjOnlyMode || operatorVjOnlyMode
+        ? [primaryOperationalViewport, ...compactFallbackViewports]
+        : process.env.SYNDOCAL_VIEWPORT_SINGLE === "1"
+          ? [primaryOperationalViewport]
+          : allViewports;
 const fullWindowTimelineViewports = requestedViewport
   ? [requestedViewport]
   : [primaryOperationalViewport, measuredClientSizeViewport];
@@ -836,6 +839,271 @@ function readLiveAudioRailStateInPage() {
 
 async function readLiveAudioRailState(client) {
   return client.evaluate("(" + readLiveAudioRailStateInPage.toString() + ")()");
+}
+
+function installOperatorVjMockInPage() {
+  const clone = (value) => JSON.parse(JSON.stringify(value));
+  const mock = {
+    calls: [],
+    transactionId: 0,
+    effectsByLayerId: {},
+    snapshotReadCount: 0,
+    lastSnapshot: null,
+  };
+  const readSnapshot = () => {
+    const source = window.__syndocalReadOperatorVjFixtureSnapshot?.();
+    if (!source) throw new Error("Operator VJ fixture snapshot bridge is unavailable");
+    const snapshot = clone(source);
+    for (const layer of snapshot.video.layers) {
+      if (Object.prototype.hasOwnProperty.call(mock.effectsByLayerId, layer.id)) {
+        layer.isf_effect = clone(mock.effectsByLayerId[layer.id]);
+      }
+    }
+    mock.snapshotReadCount += 1;
+    mock.lastSnapshot = clone(snapshot);
+    return snapshot;
+  };
+  const monitorPacket = (kind) => {
+    const packet = Array.from({ length: 40 }, () => 0);
+    packet[0] = 0x53;
+    packet[1] = 0x59;
+    packet[2] = 0x4c;
+    packet[3] = 0x56;
+    packet[4] = 1;
+    packet[5] = 1;
+    packet[6] = kind === "preview" ? 1 : 0;
+    return packet;
+  };
+  const invoke = async (command, args = {}) => {
+    mock.calls.push({ command, args: clone(args) });
+    if (command === "begin_project_transaction") {
+      mock.transactionId += 1;
+      return mock.transactionId;
+    }
+    if (command === "commit_project_transaction" || command === "cancel_project_transaction") {
+      return {
+        can_undo: command === "commit_project_transaction",
+        can_redo: false,
+        undo_depth: command === "commit_project_transaction" ? mock.transactionId : 0,
+        redo_depth: 0,
+        undo_label: command === "commit_project_transaction" ? "Set Video Layer Isf Effect" : null,
+        redo_label: null,
+      };
+    }
+    if (command === "set_video_layer_isf_effect") {
+      mock.effectsByLayerId[args.layerId] = clone(args.effect);
+      return null;
+    }
+    if (command === "get_snapshot") return readSnapshot();
+    if (command === "get_video_preview_diagnostics") {
+      return {
+        queue_count: 0,
+        frame_queue_capacity: 0,
+        still_image_cache_len: 0,
+        decoder_cache_len: 0,
+        decoder_diagnostics: {
+          total_requests: 0,
+          hap_requests: 0,
+          hap_successes: 0,
+          hap_failures: 0,
+          libav_requests: 0,
+          libav_successes: 0,
+          libav_failures: 0,
+          cli_fallback_requests: 0,
+          cli_fallback_successes: 0,
+          cli_fallback_failures: 0,
+          deferred_requests: 0,
+          decode_failures: 0,
+          hap_cache_len: 0,
+          libav_cache_len: 0,
+          libav_session_count: 0,
+          libav_session_open_count: 0,
+          libav_session_reset_count: 0,
+          libav_sequential_continue_count: 0,
+          libav_frame_reuse_count: 0,
+          libav_working_set_eviction_count: 0,
+          libav_session_error_count: 0,
+          cli_cache_len: 0,
+        },
+        isf_pipeline_count: 3,
+        last_isf_error: null,
+        prefetch_count: 0,
+        prefetch_interval_ms: 0,
+        bpm: 120,
+        layer_queues: [],
+        output_decode_previews: [],
+      };
+    }
+    if (command === "get_live_video_monitor_frame") return monitorPacket(args.monitorKind);
+    throw new Error("Unexpected Operator VJ viewport invoke: " + command);
+  };
+  Object.defineProperty(window, "__TAURI_INTERNALS__", {
+    configurable: true,
+    writable: true,
+    value: { invoke },
+  });
+  window.__syndocalOperatorVjMock = mock;
+}
+
+async function installOperatorVjInvokeMock(client) {
+  await client.evaluate("(" + installOperatorVjMockInPage.toString() + ")()");
+}
+
+function readOperatorVjStateInPage() {
+  const visible = (element) => {
+    if (!(element instanceof HTMLElement)) return false;
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+  };
+  const layerRoots = [...document.querySelectorAll("[data-video-isf-layer-id]")].filter(visible);
+  const layerOne = document.querySelector('[data-video-isf-layer-id="1"]');
+  const bypass = layerOne?.querySelector('[data-video-isf-action="bypass"]');
+  const advanced = layerOne?.querySelector('[data-video-isf-action="advanced"]');
+  const builtin = layerOne?.querySelector('[data-video-isf-action="builtin"]');
+  const pager = document.querySelector(".videoLayerList.compact > .deckPager");
+  const outputButtons = [...document.querySelectorAll(".videoOutputRailButton[data-video-output-id]")]
+    .filter(visible)
+    .map((button) => ({
+      id: Number(button.getAttribute("data-video-output-id")),
+      selected: button.getAttribute("aria-current") === "true",
+      label: (button.querySelector(".videoOutputRailLabel")?.textContent ?? "").trim(),
+      state: [...(button.querySelector(".videoOutputRailState")?.classList ?? [])]
+        .find((name) => name.startsWith("state-")) ?? "",
+      stateText: (button.querySelector(".videoOutputRailState")?.textContent ?? "").trim(),
+    }));
+  const visibleOutputDetails = [...document.querySelectorAll("[data-video-output-detail-id]")]
+    .filter(visible)
+    .map((item) => ({
+      id: Number(item.getAttribute("data-video-output-detail-id")),
+      label: (item.querySelector(":scope > div:first-child > strong")?.textContent ?? "").trim(),
+    }));
+  const program = document.querySelector('[data-live-video-monitor="program"]');
+  const mock = window.__syndocalOperatorVjMock;
+  return {
+    lang: document.documentElement.lang,
+    windowMode: document.documentElement.getAttribute("data-window-mode") ?? "",
+    layerIds: layerRoots.map((root) => Number(root.getAttribute("data-video-isf-layer-id"))),
+    advancedDomCount: document.querySelectorAll(".videoIsfAdvanced").length,
+    layerOne: layerOne ? {
+      label: (layerOne.querySelector(".videoIsfQuickStatus [data-no-localize]")?.textContent ?? "").trim(),
+      statusText: (layerOne.querySelector(".videoIsfQuickStatus")?.textContent ?? "").trim().replace(/\s+/g, " "),
+      controlCount: layerOne.querySelectorAll(".videoIsfAdvanced .videoIsfControl").length,
+      bypassPressed: bypass?.getAttribute("aria-pressed") ?? "",
+      bypassText: (bypass?.textContent ?? "").trim(),
+      bypassActive: bypass?.classList.contains("active") ?? false,
+      bypassAriaLabel: bypass?.getAttribute("aria-label") ?? "",
+      advancedExpanded: advanced?.getAttribute("aria-expanded") ?? "",
+      advancedText: (advanced?.textContent ?? "").trim(),
+      advancedAriaLabel: advanced?.getAttribute("aria-label") ?? "",
+      builtinAriaLabel: builtin?.getAttribute("aria-label") ?? "",
+    } : null,
+    pagerHeading: (pager?.querySelector("strong")?.textContent ?? "").trim(),
+    pagerText: (pager?.querySelector("span")?.textContent ?? "").trim().replace(/\s+/g, " "),
+    outputButtons,
+    selectedOutputId: outputButtons.find((output) => output.selected)?.id ?? null,
+    visibleOutputDetails,
+    programLabel: (program?.querySelector("header span")?.textContent ?? "").trim(),
+    mock: mock ? {
+      calls: cloneForOperatorVjRead(mock.calls),
+      snapshotReadCount: mock.snapshotReadCount,
+      lastLayerOneEnabled: mock.lastSnapshot?.video?.layers?.find((layer) => layer.id === 1)?.isf_effect?.enabled ?? null,
+      storedLayerOneEnabled: mock.effectsByLayerId?.[1]?.enabled ?? null,
+    } : null,
+  };
+}
+
+function cloneForOperatorVjRead(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+async function readOperatorVjState(client) {
+  return client.evaluate(`(() => {
+    const cloneForOperatorVjRead = ${cloneForOperatorVjRead.toString()};
+    return (${readOperatorVjStateInPage.toString()})();
+  })()`);
+}
+
+function measureOperatorVjLayoutInPage(layerId) {
+  const rect = (element) => {
+    if (!(element instanceof HTMLElement)) return null;
+    const bounds = element.getBoundingClientRect();
+    return { left: bounds.left, top: bounds.top, right: bounds.right, bottom: bounds.bottom, width: bounds.width, height: bounds.height };
+  };
+  const contained = (child, parent) => Boolean(child && parent &&
+    child.left >= parent.left - 1 && child.right <= parent.right + 1 &&
+    child.top >= parent.top - 1 && child.bottom <= parent.bottom + 1);
+  const viewport = { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
+  const containerSelectors = {
+    clipPane: ".videoMixerClipPane",
+    programPane: ".videoMixerProgramPane",
+    layerPane: ".videoMixerLayerPane",
+    layerList: ".videoLayerList.compact",
+    outputList: ".videoOutputControlList.compact",
+    outputRail: ".videoOutputSelectorRail",
+  };
+  const containers = Object.entries(containerSelectors).map(([name, selector]) => {
+    const element = document.querySelector(selector);
+    const style = element ? getComputedStyle(element) : null;
+    const overflowX = element ? Math.max(0, element.scrollWidth - element.clientWidth) : -1;
+    const overflowY = element ? Math.max(0, element.scrollHeight - element.clientHeight) : -1;
+    return {
+      name,
+      found: Boolean(element),
+      overflowX,
+      overflowY,
+      overflowXMode: style?.overflowX ?? "",
+      overflowYMode: style?.overflowY ?? "",
+      unsafeX: overflowX > 1 && !/(auto|scroll)/.test(style?.overflowX ?? ""),
+      unsafeY: overflowY > 1 && !/(auto|scroll)/.test(style?.overflowY ?? ""),
+      rect: rect(element),
+    };
+  });
+  const layerPane = rect(document.querySelector(".videoMixerLayerPane"));
+  const programPane = rect(document.querySelector(".videoMixerProgramPane"));
+  const layerRoot = rect(document.querySelector(`[data-video-isf-layer-id="${layerId}"]`));
+  const advanced = rect(document.querySelector(`[data-video-isf-layer-id="${layerId}"] .videoIsfAdvanced`));
+  const layerActions = [...document.querySelectorAll(
+    `[data-video-isf-layer-id="${layerId}"] [data-video-isf-action]`,
+  )].map(rect);
+  const advancedControls = [...document.querySelectorAll(
+    `[data-video-isf-layer-id="${layerId}"] .videoIsfAdvanced input, ` +
+    `[data-video-isf-layer-id="${layerId}"] .videoIsfAdvanced select, ` +
+    `[data-video-isf-layer-id="${layerId}"] .videoIsfAdvanced button`,
+  )].map(rect);
+  const outputRail = rect(document.querySelector(".videoOutputSelectorRail"));
+  const outputDetail = rect([...document.querySelectorAll("[data-video-output-detail-id]")]
+    .find((element) => element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0));
+  const programMonitor = rect(document.querySelector('[data-live-video-monitor="program"]'));
+  const programLabel = rect(document.querySelector('[data-live-video-monitor="program"] header span'));
+  const railButtons = [...document.querySelectorAll(".videoOutputRailButton[data-video-output-id]")].map(rect);
+  const targets = [
+    ["clipPane", containers.find((entry) => entry.name === "clipPane")?.rect, viewport],
+    ["programPane", programPane, viewport],
+    ["layerPane", layerPane, viewport],
+    ["layerRoot", layerRoot, layerPane],
+    ["advanced", advanced, layerPane],
+    ["outputRail", outputRail, programPane],
+    ["outputDetail", outputDetail, programPane],
+    ["programMonitor", programMonitor, programPane],
+    ["programLabel", programLabel, programMonitor],
+    ...layerActions.map((action, index) => [`layerAction${index + 1}`, action, layerRoot]),
+    ...advancedControls.map((control, index) => [`advancedControl${index + 1}`, control, advanced]),
+    ...railButtons.map((button, index) => [`outputRailButton${index + 1}`, button, outputRail]),
+  ].filter(([, child]) => child);
+  const rectContainment = targets.map(([name, child, parent]) => ({ name, contained: contained(child, parent), rect: child }));
+  return {
+    innerWidth,
+    innerHeight,
+    containers,
+    unsafeOverflowCount: containers.filter((entry) => !entry.found || entry.unsafeX || entry.unsafeY).length,
+    rectContainment,
+    outsideRectCount: rectContainment.filter((entry) => !entry.contained).length,
+  };
+}
+
+async function measureOperatorVjLayout(client, layerId) {
+  return evaluatePageFunction(client, measureOperatorVjLayoutInPage, layerId);
 }
 
 function installAutoVjMockInPage() {
@@ -4041,6 +4309,210 @@ async function runAudioReactiveAcceptanceViewport(client, viewport) {
   return { viewport, passed, mixer, mixerContract, editor, editorContract };
 }
 
+async function prepareOperatorVjAcceptanceViewport(client, viewport, locale) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  const url = fixtureUrl("operator-vj");
+  await client.send("Page.navigate", { url });
+  await waitForApp(client);
+  await client.evaluate(
+    "window.localStorage.setItem('syndocal.uiLocale.v1'," + JSON.stringify(locale) + ")",
+  );
+  await client.send("Page.navigate", { url });
+  await waitForApp(client);
+  await waitForClientCondition(
+    client,
+    `(() =>
+      typeof window.__syndocalReadOperatorVjFixtureSnapshot === 'function' &&
+      document.querySelectorAll('[data-video-isf-layer-id]').length === 6 &&
+      document.querySelectorAll('.videoOutputRailButton[data-video-output-id]').length === 3
+    )()`,
+    "Operator VJ fixture surface",
+  );
+  await client.evaluate("document.documentElement.setAttribute('data-window-mode','fullscreen')");
+  await installOperatorVjInvokeMock(client);
+  await sleep(60);
+}
+
+async function runOperatorVjAcceptanceViewport(client, viewport, locale) {
+  await prepareOperatorVjAcceptanceViewport(client, viewport, locale);
+  await client.evaluate(`document.querySelector('[data-video-isf-layer-id="1"]')?.scrollIntoView({ block: 'nearest' })`);
+  await sleep(40);
+  const initial = await readOperatorVjState(client);
+  const initialLayout = await measureOperatorVjLayout(client, 1);
+  if (screenshotDir && shouldCaptureViewport(viewport)) {
+    mkdirSync(screenshotDir, { recursive: true });
+    const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+    writeFileSync(
+      join(screenshotDir, `vj-operator-${locale}-${viewport.width}x${viewport.height}-initial.png`),
+      screenshot.data,
+      "base64",
+    );
+  }
+
+  await clickVisibleSelector(client, '[data-video-isf-layer-id="1"] [data-video-isf-action="advanced"]');
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const root = document.querySelector('[data-video-isf-layer-id="1"]');
+      return document.querySelectorAll('.videoIsfAdvanced').length === 1 &&
+        root?.querySelectorAll('.videoIsfAdvanced .videoIsfControl').length === 2 &&
+        root?.querySelector('[data-video-isf-action="advanced"]')?.getAttribute('aria-expanded') === 'true';
+    })()`,
+    "Operator VJ layer 1 Advanced controls",
+  );
+  await client.evaluate(`document.querySelector('[data-video-isf-layer-id="1"] .videoIsfAdvanced')?.scrollIntoView({ block: 'nearest' })`);
+  await sleep(40);
+  const expanded = await readOperatorVjState(client);
+  const expandedLayout = await measureOperatorVjLayout(client, 1);
+  if (screenshotDir && shouldCaptureViewport(viewport)) {
+    const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+    writeFileSync(
+      join(screenshotDir, `vj-operator-${locale}-${viewport.width}x${viewport.height}-expanded.png`),
+      screenshot.data,
+      "base64",
+    );
+  }
+
+  await clickVisibleSelector(client, '[data-video-isf-layer-id="1"] [data-video-isf-action="advanced"]');
+  await waitForClientCondition(
+    client,
+    `document.querySelectorAll('.videoIsfAdvanced').length === 0 &&
+      document.querySelector('[data-video-isf-layer-id="1"] [data-video-isf-action="advanced"]')?.getAttribute('aria-expanded') === 'false'`,
+    "Operator VJ Advanced collapse",
+  );
+  const collapsed = await readOperatorVjState(client);
+
+  await clickVisibleSelector(client, '[data-video-isf-layer-id="1"] [data-video-isf-action="bypass"]');
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const mock = window.__syndocalOperatorVjMock;
+      return document.querySelector('[data-video-isf-layer-id="1"] [data-video-isf-action="bypass"]')?.getAttribute('aria-pressed') === 'false' &&
+        mock?.snapshotReadCount === 1 && mock?.effectsByLayerId?.[1]?.enabled === false;
+    })()`,
+    "Operator VJ transactional bypass snapshot",
+  );
+  const bypassed = await readOperatorVjState(client);
+
+  const bankChanged = await client.evaluate(`(() => {
+    const pager = document.querySelector('.videoLayerList.compact > .deckPager');
+    const next = pager?.querySelector('button:last-of-type');
+    if (!next || next.disabled) return false;
+    next.click();
+    return true;
+  })()`);
+  await waitForClientCondition(
+    client,
+    `JSON.stringify([...document.querySelectorAll('[data-video-isf-layer-id]')]
+      .map((node) => Number(node.getAttribute('data-video-isf-layer-id')))) === '[7]'`,
+    "Operator VJ terminal layer bank",
+  );
+  await client.evaluate(`document.querySelector('[data-video-isf-layer-id="7"]')?.scrollIntoView({ block: 'nearest' })`);
+  await sleep(40);
+  const terminalBank = await readOperatorVjState(client);
+  const terminalBankLayout = await measureOperatorVjLayout(client, 7);
+
+  await clickVisibleSelector(client, '.videoOutputRailButton[data-video-output-id="3"]');
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const selected = document.querySelector('.videoOutputRailButton[data-video-output-id="3"]')?.getAttribute('aria-current') === 'true';
+      const detail = document.querySelector('[data-video-output-detail-id="3"]');
+      const detailLabel = (detail?.querySelector(':scope > div:first-child > strong')?.textContent || '').trim();
+      const programLabel = (document.querySelector('[data-live-video-monitor="program"] header span')?.textContent || '').trim();
+      const monitorSynced = window.__syndocalOperatorVjMock?.calls?.some((call) =>
+        call.command === 'get_live_video_monitor_frame' && call.args?.monitorKind === 'program' && call.args?.outputId === 3
+      );
+      return selected && detailLabel === 'Stream Fill' && programLabel === 'Stream Fill' && monitorSynced;
+    })()`,
+    "Operator VJ output rail/detail/Program monitor synchronization",
+  );
+  const outputSelected = await readOperatorVjState(client);
+  const outputLayout = await measureOperatorVjLayout(client, 7);
+  const outerContainment = await measure(client, `operator-vj-${locale}-${viewport.width}x${viewport.height}`);
+
+  const calls = bypassed.mock?.calls ?? [];
+  const beginIndex = calls.findIndex((call) => call.command === "begin_project_transaction");
+  const mutationIndex = calls.findIndex((call) => call.command === "set_video_layer_isf_effect");
+  const commitIndex = calls.findIndex((call) => call.command === "commit_project_transaction");
+  const snapshotIndex = calls.findIndex((call) => call.command === "get_snapshot");
+  const expectedHeading = locale === "ja" ? "レイヤー" : "Layers";
+  const expectedAdvanced = locale === "ja" ? "詳細" : "Advanced";
+  const expectedBypassed = locale === "ja" ? "バイパス" : "Bypassed";
+  const layoutPhases = [initialLayout, expandedLayout, terminalBankLayout, outputLayout];
+  const checks = {
+    fixtureAndLocale:
+      initial.lang === locale && initial.windowMode === "fullscreen" &&
+      initial.layerOne?.label === "Threshold" &&
+      initial.outputButtons.map((output) => output.id).join(",") === "1,2,3",
+    initialAdvancedUnmounted:
+      initial.advancedDomCount === 0 && initial.layerOne?.advancedExpanded === "false",
+    initialFxQuickRack:
+      initial.layerOne?.bypassPressed === "true" && initial.layerOne?.bypassActive === true &&
+      initial.layerOne?.advancedText === expectedAdvanced &&
+      initial.layerOne?.advancedAriaLabel.includes("Threshold Pulse") &&
+      initial.layerOne?.advancedAriaLabel.includes("1") &&
+      initial.layerOne?.builtinAriaLabel.includes("Threshold Pulse") &&
+      initial.layerOne?.builtinAriaLabel.includes("1"),
+    advancedLazyMount:
+      expanded.advancedDomCount === 1 && expanded.layerOne?.controlCount === 2 &&
+      expanded.layerOne?.advancedExpanded === "true",
+    advancedUnmountsOnClose:
+      collapsed.advancedDomCount === 0 && collapsed.layerOne?.advancedExpanded === "false",
+    bypassTransactionSnapshotAndAria:
+      beginIndex >= 0 && mutationIndex > beginIndex && commitIndex > mutationIndex && snapshotIndex > commitIndex &&
+      calls.filter((call) => call.command === "begin_project_transaction").length === 1 &&
+      calls.filter((call) => call.command === "set_video_layer_isf_effect").length === 1 &&
+      calls.filter((call) => call.command === "commit_project_transaction").length === 1 &&
+      calls.filter((call) => call.command === "cancel_project_transaction").length === 0 &&
+      calls.filter((call) => call.command === "get_snapshot").length === 1 &&
+      calls[mutationIndex]?.args?.layerId === 1 && calls[mutationIndex]?.args?.effect?.enabled === false &&
+      bypassed.mock?.snapshotReadCount === 1 && bypassed.mock?.storedLayerOneEnabled === false &&
+      bypassed.mock?.lastLayerOneEnabled === false && bypassed.layerOne?.bypassPressed === "false" &&
+      bypassed.layerOne?.bypassActive === false && bypassed.layerOne?.bypassText === expectedBypassed &&
+      bypassed.layerOne?.statusText.includes(expectedBypassed),
+    sixPlusOneLayerBanks:
+      initial.layerIds.join(",") === "1,2,3,4,5,6" && initial.pagerHeading === expectedHeading &&
+      initial.pagerText === "1-6 / 7" && bankChanged && terminalBank.layerIds.join(",") === "7" &&
+      terminalBank.pagerText === "7-7 / 7" && terminalBank.advancedDomCount === 0,
+    outputRailStates:
+      JSON.stringify(initial.outputButtons.map((output) => [output.id, output.state])) ===
+        JSON.stringify([[1, "state-live"], [2, "state-off"], [3, "state-blackout"]]) &&
+      initial.selectedOutputId === 1 && initial.visibleOutputDetails.length === 1 &&
+      initial.visibleOutputDetails[0]?.id === 1 && initial.visibleOutputDetails[0]?.label === "Main LED" &&
+      initial.programLabel === "Main LED",
+    outputRailDetailProgramMonitorSync:
+      outputSelected.selectedOutputId === 3 && outputSelected.visibleOutputDetails.length === 1 &&
+      outputSelected.visibleOutputDetails[0]?.id === 3 && outputSelected.visibleOutputDetails[0]?.label === "Stream Fill" &&
+      outputSelected.programLabel === "Stream Fill" && outputSelected.mock?.calls.some((call) =>
+        call.command === "get_live_video_monitor_frame" && call.args?.monitorKind === "program" && call.args?.outputId === 3
+      ),
+    internalOverflowAndRectContainment:
+      layoutPhases.every((layout) => layout.unsafeOverflowCount === 0 && layout.outsideRectCount === 0) &&
+      isContained(outerContainment),
+  };
+  const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  return {
+    passed: failedChecks.length === 0,
+    viewport,
+    locale,
+    checks,
+    failedChecks,
+    initial,
+    expanded,
+    bypassed,
+    terminalBank,
+    outputSelected,
+    layoutPhases,
+    outerContainment,
+  };
+}
+
 async function prepareAutoVjAcceptanceViewport(client, viewport, locale) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -6660,6 +7132,43 @@ async function main() {
       );
       console.log(`${passed ? "pass" : "fail"} large-show virtualization ${JSON.stringify(result.stats)}`);
       if (!passed) throw new Error(`Large-show UI virtualization failed: ${JSON.stringify(result)}`);
+      return;
+    }
+    if (operatorVjOnlyMode) {
+      const operatorVjResults = [];
+      for (const viewport of viewports) {
+        for (const locale of ["en", "ja"]) {
+          const result = await runOperatorVjAcceptanceViewport(client, viewport, locale);
+          operatorVjResults.push(result);
+          console.log(
+            `${result.passed ? "pass" : "fail"} VJ operator acceptance ${locale} ${viewport.width}x${viewport.height} ` +
+              JSON.stringify({
+                failedChecks: result.failedChecks,
+                layers: [result.initial.layerIds, result.terminalBank.layerIds],
+                advanced: [result.initial.advancedDomCount, result.expanded.layerOne?.controlCount, result.terminalBank.advancedDomCount],
+                bypass: {
+                  pressed: result.bypassed.layerOne?.bypassPressed,
+                  snapshotReads: result.bypassed.mock?.snapshotReadCount,
+                  snapshotEnabled: result.bypassed.mock?.lastLayerOneEnabled,
+                },
+                output: {
+                  initial: result.initial.selectedOutputId,
+                  selected: result.outputSelected.selectedOutputId,
+                  detail: result.outputSelected.visibleOutputDetails,
+                  program: result.outputSelected.programLabel,
+                },
+                layout: result.layoutPhases.map((phase) => ({
+                  overflow: phase.unsafeOverflowCount,
+                  outside: phase.outsideRectCount,
+                })),
+              }),
+          );
+        }
+      }
+      const failures = operatorVjResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`VJ operator viewport acceptance failed: ${JSON.stringify(failures)}`);
+      }
       return;
     }
     if (audioReactiveOnlyMode) {

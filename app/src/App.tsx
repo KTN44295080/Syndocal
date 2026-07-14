@@ -1587,6 +1587,22 @@ export default function App() {
         }],
       }],
     }));
+  } else if (viewportFixture === "operator-vj") {
+    const layers = structuredClone(viewportFixtureData.operatorVjLayers);
+    const composition = structuredClone(viewportFixtureData.operatorVjComposition);
+    const outputs = structuredClone(viewportFixtureData.operatorVjOutputs);
+    setWorkspaceTab("control");
+    setControlMode("mixer");
+    setSelectedVideoOutputId(outputs[0]?.id ?? null);
+    setSnapshot((current) => ({
+      ...current,
+      video: {
+        ...current.video,
+        layers,
+        compositions: [composition],
+        outputs,
+      },
+    }));
   } else if (viewportFixture === "auto-vj") {
     const labels = ["Video", "Output", "Signal Echo"];
     const layers = labels.map((layerLabel, index) => {
@@ -1680,6 +1696,7 @@ export default function App() {
     __syndocalSetSceneBlockFixtureState?: (positionMs: number, playing: boolean) => void;
     __syndocalPauseSceneBlockFixtureChurn?: () => void;
     __syndocalReadAutoVjFixtureSnapshot?: () => EngineSnapshot;
+    __syndocalReadOperatorVjFixtureSnapshot?: () => EngineSnapshot;
   };
   if (viewportFixture === "scene-block-large") {
     sceneBlockFixtureWindow.__syndocalSetSceneBlockFixtureState = (positionMs, playing) => {
@@ -1697,6 +1714,9 @@ export default function App() {
   if (viewportFixture === "auto-vj") {
     sceneBlockFixtureWindow.__syndocalReadAutoVjFixtureSnapshot = () => snapshot();
   }
+  if (viewportFixture === "operator-vj") {
+    sceneBlockFixtureWindow.__syndocalReadOperatorVjFixtureSnapshot = () => snapshot();
+  }
   onCleanup(() => {
     if (sceneBlockLargeSnapshotCloneTimer !== null) {
       window.clearInterval(sceneBlockLargeSnapshotCloneTimer);
@@ -1704,6 +1724,7 @@ export default function App() {
     delete sceneBlockFixtureWindow.__syndocalSetSceneBlockFixtureState;
     delete sceneBlockFixtureWindow.__syndocalPauseSceneBlockFixtureChurn;
     delete sceneBlockFixtureWindow.__syndocalReadAutoVjFixtureSnapshot;
+    delete sceneBlockFixtureWindow.__syndocalReadOperatorVjFixtureSnapshot;
   });
   let lastRecoverySignature = projectRecoveryCheckpoint()?.signature ?? null;
   let lastDesktopBackupSignature: string | null = null;

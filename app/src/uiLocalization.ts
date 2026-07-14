@@ -939,6 +939,12 @@ const japaneseText: Record<string, string> = {
     "カラー、Hue、ホイール、発光色、または映像カラーのターゲットを選択してください。",
   "Built-in FX": "内蔵FX",
   "Choose effect": "エフェクトを選択",
+  "Import ISF": "ISFを読み込み",
+  "Replace ISF": "ISFを差し替え",
+  Bypassed: "バイパス",
+  Advanced: "詳細",
+  "FX error": "FXエラー",
+  "Video output selection": "映像出力の選択",
   Colorize: "カラーライズ",
   "Glitch Shift": "グリッチシフト",
   Kaleidoscope: "カレイドスコープ",
@@ -1666,6 +1672,10 @@ const japaneseText: Record<string, string> = {
 };
 
 const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
+  [/^Built-in FX for (.+) \(layer (\d+)\)$/, (label, id) => `${label}（レイヤー${id}）の内蔵FX`],
+  [/^FX enabled for (.+) \(layer (\d+)\)$/, (label, id) => `${label}（レイヤー${id}）のFX有効状態`],
+  [/^Advanced FX controls for (.+) \(layer (\d+)\)$/, (label, id) => `${label}（レイヤー${id}）のFX詳細操作`],
+  [/^FX error for (.+) \(layer (\d+)\): (.+)$/, (label, id, detail) => `${label}（レイヤー${id}）のFXエラー: ${detail}`],
   [/^Clips (Not set|\d+\/\d+)$/, (value) => `クリップ ${value === "Not set" ? "未設定" : value}`],
   [/^(\d+) beats?$/, (beats) => `${beats}ビート`],
   [/^(\d+) pulses?$/, (pulses) => `${pulses}パルス`],

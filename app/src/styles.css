@@ -22716,3 +22716,198 @@ h3 {
     text-overflow: clip;
   }
 }
+
+/* Live operator racks keep fast actions visible and mount deep editors on demand. */
+.videoControlPanelMixer .videoLayerItem > .videoIsfPanelCompact {
+  grid-column: 1 / -1;
+  min-width: 0;
+  border-top: 1px solid #30363b;
+  padding-top: 4px;
+}
+
+.videoControlPanelMixer .videoIsfQuickRack {
+  display: grid;
+  grid-template-columns: minmax(64px, 0.62fr) minmax(104px, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.videoControlPanelMixer .videoIsfQuickStatus {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  color: #8e989f;
+  font-size: 10px;
+}
+
+.videoControlPanelMixer .videoIsfQuickStatus strong {
+  flex: 0 0 auto;
+  color: #e6eaed;
+  font-size: 11px;
+}
+
+.videoControlPanelMixer .videoIsfQuickStatus > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.videoControlPanelMixer .videoIsfQuickStatus > .videoIsfEffectState {
+  display: none;
+}
+
+.videoControlPanelMixer .videoIsfRuntimeBadge {
+  flex: 0 0 auto;
+  border: 1px solid rgba(224, 91, 91, 0.6);
+  border-radius: 2px;
+  padding: 1px 4px;
+  color: #ff9a9a;
+}
+
+.videoControlPanelMixer .videoIsfQuickRack .builtinIsfLibrary {
+  display: block;
+  min-width: 0;
+}
+
+.videoControlPanelMixer .videoIsfQuickRack .builtinIsfLibrary > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.videoControlPanelMixer .videoIsfQuickRack select,
+.videoControlPanelMixer .videoIsfQuickActions button {
+  width: 100%;
+  min-width: 0;
+  min-height: 28px;
+  height: 28px;
+  border-radius: 2px;
+  font-size: 10px;
+}
+
+.videoControlPanelMixer .videoIsfQuickActions {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(58px, auto);
+  gap: 3px;
+  min-width: 0;
+}
+
+.videoControlPanelMixer .videoIsfAdvanced {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  max-height: 280px;
+  margin-top: 5px;
+  overflow: hidden auto;
+  border-top: 1px solid #3b4247;
+  padding-top: 6px;
+}
+
+.videoControlPanelMixer .videoIsfAdvanced > * {
+  min-width: 0;
+}
+
+.videoControlPanelMixer .videoIsfAdvanced > .buttonRow {
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.videoControlPanelMixer .videoIsfAdvanced > .buttonRow > button {
+  width: 100%;
+  max-width: 100%;
+}
+
+.videoControlPanelMixer .videoIsfAdvanced .videoIsfControl {
+  min-width: 0;
+  grid-template-columns: minmax(72px, 1fr) repeat(4, minmax(0, 64px));
+  gap: 3px;
+}
+
+.videoControlPanelMixer .videoOutputControlList.compact > .videoOutputSelectorRail {
+  display: flex;
+  gap: 3px;
+  min-width: 0;
+  min-height: 32px;
+  overflow: auto hidden;
+  padding: 2px;
+  border: 1px solid #30363b;
+  background: #111416;
+}
+
+.videoControlPanelMixer .videoOutputRailButton {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  flex: 1 0 108px;
+  min-width: 108px;
+  min-height: 28px;
+  border-color: #363d42;
+  border-radius: 2px;
+  padding: 0 6px;
+  background: #191d20;
+  color: #aeb6bc;
+  font-size: 10px;
+}
+
+.videoControlPanelMixer .videoOutputRailButton.selected {
+  border-color: #e59b4a;
+  box-shadow: inset 2px 0 0 #e59b4a;
+  color: #f3f5f6;
+}
+
+.videoControlPanelMixer .videoOutputRailLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.videoControlPanelMixer .videoOutputRailState {
+  min-width: 30px;
+  border-radius: 2px;
+  padding: 1px 4px;
+  background: #2a2f33;
+  color: #a9b0b5;
+  font-size: 9px;
+  font-weight: 800;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.videoControlPanelMixer .videoOutputRailState.state-live {
+  background: #173122;
+  color: #8ee39a;
+}
+
+.videoControlPanelMixer .videoOutputRailState.state-blackout {
+  background: #392120;
+  color: #f1a09a;
+}
+
+@media (min-width: 1600px) and (min-height: 900px) {
+  html[data-window-mode="fullscreen"] .layoutControl.controlModeMixer .videoMixerProgramPane {
+    grid-template-rows: 40px minmax(420px, 1.7fr) minmax(180px, 0.75fr);
+  }
+
+  html[data-window-mode="fullscreen"] .videoControlPanelMixer .videoMixerLayerDeck button,
+  html[data-window-mode="fullscreen"] .videoControlPanelMixer .videoMixerOutputDeck button,
+  html[data-window-mode="fullscreen"] .videoControlPanelMixer .videoOutputControlList.compact .deckPager button,
+  html[data-window-mode="fullscreen"] .videoControlPanelMixer .videoLayerList.compact > .deckPager button {
+    min-height: 28px;
+  }
+
+  html[data-window-mode="fullscreen"] .videoControlPanelMixer .videoMixerLayerPane .videoLayerItem {
+    min-height: 104px;
+  }
+}

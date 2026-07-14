@@ -95,6 +95,39 @@ export function VideoOutputControlListPanel(props: VideoOutputControlListPanelPr
     if (page() >= pageCount()) setPage(pageCount() - 1);
   });
 
+  createEffect(() => {
+    const selectedOutputId = props.selectedOutputId;
+    if (selectedOutputId === null) return;
+
+    const selectedIndex = props.outputs.findIndex((output) => output.id === selectedOutputId);
+    if (selectedIndex >= 0) setPage(Math.floor(selectedIndex / pageSize()));
+  });
+
+  const selectPage = (nextPage: number) => {
+    const boundedPage = Math.max(0, Math.min(pageCount() - 1, nextPage));
+    setPage(boundedPage);
+    const output = props.outputs[boundedPage * pageSize()];
+    if (output) props.onSelectOutput(output.id);
+  };
+
+  const selectOutputAtIndex = (output: VideoOutputSummary, index: number) => {
+    setPage(Math.floor(index / pageSize()));
+    props.onSelectOutput(output.id);
+  };
+
+  const railState = (output: VideoOutputSummary) => {
+    const renderState = props.renderPlanState(output);
+    if (!output.enabled || output.opacity <= 0 || renderState.stateClass === "disabled") {
+      return { label: "Off", stateClass: "off" };
+    }
+    if (output.blackout || renderState.stateClass === "blackout") {
+      return { label: "BO", stateClass: "blackout" };
+    }
+    return renderState.stateClass === "empty"
+      ? { label: "Off", stateClass: "off" }
+      : { label: "Live", stateClass: "live" };
+  };
+
   const compositionLabel = (output: VideoOutputSummary) =>
     props.compositions.find((composition) => composition.id === output.composition_id)?.label ??
     `Composition ${output.composition_id}`;
@@ -114,15 +147,37 @@ export function VideoOutputControlListPanel(props: VideoOutputControlListPanelPr
           />
         </label>
       </div>
+      <Show when={props.compact}>
+        <nav class="videoOutputSelectorRail" aria-label="Video output selection">
+          <For each={props.outputs}>
+            {(output, index) => {
+              const state = () => railState(output);
+              const selected = () => props.selectedOutputId === output.id;
+              return (
+                <button
+                  type="button"
+                  data-video-output-id={output.id}
+                  class={`videoOutputRailButton state-${state().stateClass} ${selected() ? "selected" : ""}`}
+                  aria-current={selected() ? "true" : undefined}
+                  onClick={() => selectOutputAtIndex(output, index())}
+                >
+                  <span class="videoOutputRailLabel" data-no-localize title={output.label}>{output.label}</span>
+                  <span class={`videoOutputRailState state-${state().stateClass}`}>{state().label}</span>
+                </button>
+              );
+            }}
+          </For>
+        </nav>
+      </Show>
       <Show when={props.compact && props.outputs.length > 0}>
         <div class="deckPager">
           <strong>Output</strong>
           <span>{page() + 1} / {props.outputs.length}</span>
-          <button onClick={() => setPage(Math.max(0, page() - 1))} disabled={page() === 0} aria-label="Previous video output">
+          <button onClick={() => selectPage(page() - 1)} disabled={page() === 0} aria-label="Previous video output">
             Prev
           </button>
           <button
-            onClick={() => setPage(Math.min(pageCount() - 1, page() + 1))}
+            onClick={() => selectPage(page() + 1)}
             disabled={page() >= pageCount() - 1}
             aria-label="Next video output"
           >
@@ -151,6 +206,7 @@ export function VideoOutputControlListPanel(props: VideoOutputControlListPanelPr
             const selectOutput = () => props.onSelectOutput(output.id);
             return (
               <div
+                data-video-output-detail-id={output.id}
                 class={`videoOutputControlItem ${outputLive() ? "active" : ""} ${selected() ? "selected" : ""}`}
               >
                 <div>

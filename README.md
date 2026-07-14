@@ -143,6 +143,7 @@ ASIOは既定buildへ含めません。Windowsのローカル技術検証は、�
 - 大規模Engine gate: 200灯体、8ユニバース、100キュー、20,000ターゲット
 - UI viewport policy: browser 1920x1080とnative F11 1920x1080を運用・見た目の主ゲートにする。Windows最大化は1920x1032の作業領域内で実client 1920x1009（title barを除く）を確認し、Escで同寸法へ復帰させる。1280x720 / 1366x768はcontainment fallback、2048x1152は拡張上限回帰とし、小画面fallbackの通過だけではデザイン合格にしない
 - Fullscreen VJ Focus gate: 1920x1080のfullscreen mode fixtureでは重複する外側headerを除き、Clips／Live Monitors + Outputs／Layersを684／811／405px、Preview／Programを317／476px（Program/Preview 1.502）に配分する。live-audio dockは92px、主操作は32px、設定操作は28pxとし、telemetryの切れ・critical overflowを0に固定する。1366x768／1280x720は従来のheader、64px audio rail、Preview／Program 1:1を維持する。専用identifierのcurrent-source native QA buildでも、最大化1913x1080からF11でexact 1920x1080へ移行し、このFocus配置と実ASIO telemetryを確認後、Escで通常配置へ復帰した
+- Populated VJ operator gate: 7 layerを6+1 bankで扱い、各visible layerへBuilt-in FX／Enable・Bypass／Advancedを固定する。重いISF editorは閉じている間DOM 0件、開いた1 layerだけ2 controlをmountする。3 outputのLive／Off／BO railはdetail、Program label、monitor request output IDと同期する。1920x1080／1366x768／1280x720の英日6ケースで、4操作phaseすべてunsafe overflow 0／owner外rect 0を要求する
 - Live audio UI: VJ Desk内の通常／compact 64px railとfullscreen VJ Focusの92px dockでStart／Stop、device／rate／requested buffer／channel mix、16対数band、RMS／Peak、onset、BPM／confidenceとcallback／queue telemetryを常時確認する。軽量feature statusは約30Hz、詳細telemetryは約1Hzでsingle-flight更新し、5 viewport×英日stateful gateで固定する
 - Live-audio viewport gateはDOMを直接改変せず、Tauri invoke mockから実Solid stateを駆動する。5解像度×英日でRefresh、generation ID再対応、同名曖昧時の再選択ロック、capability、192kHz／8192-frame／stereo pair Start request、42/58/76% meter、live telemetry、Stop／clear-pendingまで検証する
 - Windows native live-audio acceptance: 最大化したcurrent-source buildでsystem defaultのWASAPI shared入力を48kHz monoでStart／Stopし、実callback 480/480/480 frames、capture-to-workerの採取時点current 0.1ms／max 10.1ms、OVR 0 chunks／0 frames、queue current/high-water/capacity 0/1/4を確認した。この1構成の測定をASIOや長時間・他deviceの性能証明には読み替えない
@@ -160,6 +161,7 @@ ASIOは既定buildへ含めません。Windowsのローカル技術検証は、�
 - [qa/LIVE_AUDIO_FAIL_CLOSED.md](qa/LIVE_AUDIO_FAIL_CLOSED.md)
 - [qa/AUDIO_REACTIVE_VJ_ACCEPTANCE.md](qa/AUDIO_REACTIVE_VJ_ACCEPTANCE.md)
 - [qa/ASIO_INPUT_ACCEPTANCE.md](qa/ASIO_INPUT_ACCEPTANCE.md)
+- [qa/VJ_OPERATOR_DESK_ACCEPTANCE.md](qa/VJ_OPERATOR_DESK_ACCEPTANCE.md)
 - [qa/TOUCHDESIGNER_COMPETITIVE_AUDIT.md](qa/TOUCHDESIGNER_COMPETITIVE_AUDIT.md)
 - [RELEASE_STATUS.md](RELEASE_STATUS.md) - v1.0完成判定、外部受入、次スレッド向けバックログ
 

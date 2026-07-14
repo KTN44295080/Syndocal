@@ -35,7 +35,7 @@ interface VideoLayerListPanelProps {
 }
 
 export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
-  const pageSize = () => (props.compact ? 3 : Math.max(1, props.layers.length));
+  const pageSize = () => (props.compact ? 6 : Math.max(1, props.layers.length));
   const [page, setPage] = createSignal(0);
   const pageCount = createMemo(() => Math.max(1, Math.ceil(props.layers.length / pageSize())));
   const visibleLayers = createMemo(() => {
@@ -212,6 +212,8 @@ export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
             </label>
             <VideoIsfEffectPanel
               layerId={layer.id}
+              layerLabel={layer.label}
+              compact={props.compact}
               effect={layer.isf_effect}
               runtimeError={props.isfRuntimeError?.startsWith(`${layer.label}:`) ? props.isfRuntimeError : null}
               onImport={props.onImportIsf}

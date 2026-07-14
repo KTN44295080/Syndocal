@@ -37,6 +37,26 @@ assert.equal(localization.translateUiText("Create Mapping", "ja"), "マッピン
 assert.equal(localization.translateUiText("Audio feature input level", "ja"), "音声特徴量の入力レベル");
 assert.equal(localization.translateUiText("Open Rack", "ja"), "ラックを開く");
 assert.equal(
+  localization.translateUiText("Built-in FX for Program Texture (layer 12)", "ja"),
+  "Program Texture（レイヤー12）の内蔵FX",
+);
+assert.equal(
+  localization.translateUiText("FX enabled for Program Texture (layer 12)", "ja"),
+  "Program Texture（レイヤー12）のFX有効状態",
+);
+assert.equal(
+  localization.translateUiText("Advanced FX controls for Program Texture (layer 12)", "ja"),
+  "Program Texture（レイヤー12）のFX詳細操作",
+);
+assert.equal(
+  localization.translateUiText("FX error for Program Texture (layer 12): shader compile failed", "ja"),
+  "Program Texture（レイヤー12）のFXエラー: shader compile failed",
+);
+assert.equal(localization.translateUiText("Video output selection", "ja"), "映像出力の選択");
+assert.equal(localization.translateUiText("Live", "ja"), "ライブ");
+assert.equal(localization.translateUiText("BO", "ja"), "BO");
+assert.equal(localization.translateUiText("Off", "ja"), "OFF");
+assert.equal(
   localization.translateUiText("Open Audio Reactive Rack", "ja"),
   "オーディオリアクティブ・ラックを開く",
 );

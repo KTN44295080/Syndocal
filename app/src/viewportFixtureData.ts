@@ -8,6 +8,7 @@ import type {
   NodeGraphSummary,
   PatchedFixtureSummary,
   StageObjectSummary,
+  VideoIsfEffectSummary,
   VideoLayerSummary,
   VideoOutputMapping,
   VideoOutputSummary,
@@ -208,6 +209,182 @@ const videoOutput: VideoOutputSummary = {
   mapping: projectorMapping,
 };
 
+const operatorThresholdEffect: VideoIsfEffectSummary = {
+  enabled: true,
+  label: "Threshold",
+  source: "viewport://operator-vj/threshold.fs",
+  source_path: null,
+  description: "Operator fixture threshold with adjustable level and softness.",
+  categories: ["Color", "Viewport Fixture"],
+  controls: [
+    {
+      name: "level",
+      kind: "Float",
+      value: [0.5, 0, 0, 0],
+      default: [0.5, 0, 0, 0],
+      minimum: [0, 0, 0, 0],
+      maximum: [1, 0, 0, 0],
+      labels: [],
+      values: [],
+    },
+    {
+      name: "softness",
+      kind: "Float",
+      value: [0.02, 0, 0, 0],
+      default: [0.02, 0, 0, 0],
+      minimum: [0, 0, 0, 0],
+      maximum: [0.5, 0, 0, 0],
+      labels: [],
+      values: [],
+    },
+  ],
+};
+
+const operatorBypassedMonochromeEffect: VideoIsfEffectSummary = {
+  enabled: false,
+  label: "Monochrome",
+  source: "viewport://operator-vj/monochrome.fs",
+  source_path: null,
+  description: "Bypassed fixture effect for fast-state coverage.",
+  categories: ["Color", "Viewport Fixture"],
+  controls: [
+    {
+      name: "amount",
+      kind: "Float",
+      value: [0.75, 0, 0, 0],
+      default: [1, 0, 0, 0],
+      minimum: [0, 0, 0, 0],
+      maximum: [1, 0, 0, 0],
+      labels: [],
+      values: [],
+    },
+  ],
+};
+
+const operatorRgbSplitEffect: VideoIsfEffectSummary = {
+  enabled: true,
+  label: "RGB Split",
+  source: "viewport://operator-vj/rgb-split.fs",
+  source_path: null,
+  description: "Enabled fixture effect for mixed rack-state coverage.",
+  categories: ["Glitch", "Viewport Fixture"],
+  controls: [
+    {
+      name: "amount",
+      kind: "Float",
+      value: [0.04, 0, 0, 0],
+      default: [0.015, 0, 0, 0],
+      minimum: [0, 0, 0, 0],
+      maximum: [0.2, 0, 0, 0],
+      labels: [],
+      values: [],
+    },
+  ],
+};
+
+const operatorInvertEffect: VideoIsfEffectSummary = {
+  enabled: true,
+  label: "Invert",
+  source: "viewport://operator-vj/invert.fs",
+  source_path: null,
+  description: "Control-free fixture effect for empty advanced-state coverage.",
+  categories: ["Color", "Viewport Fixture"],
+  controls: [],
+};
+
+const operatorVjLayerLabels = [
+  "Threshold Pulse",
+  "Bypassed Mono",
+  "Clean Plate",
+  "RGB Split Echo",
+  "Camera Matte",
+  "Logo Overlay",
+  "Emergency Loop",
+] as const;
+
+const operatorVjLayerEffects: Array<VideoIsfEffectSummary | null> = [
+  operatorThresholdEffect,
+  operatorBypassedMonochromeEffect,
+  null,
+  operatorRgbSplitEffect,
+  null,
+  operatorInvertEffect,
+  null,
+];
+
+const operatorVjLayers: VideoLayerSummary[] = operatorVjLayerLabels.map((layerLabel, index) => ({
+  ...videoLayer,
+  id: index + 1,
+  label: layerLabel,
+  source: {
+    kind: "File",
+    path: `viewport://operator-vj/layer-${index + 1}.mp4`,
+    name: layerLabel,
+    codec: "H264",
+    metadata: {
+      duration_ms: 8_000 + index * 1_000,
+      width: 1_920,
+      height: 1_080,
+      frame_rate: 60,
+      has_audio: index < 2,
+    },
+  },
+  blend_mode: index === 0 || index === 3 ? "Add" : "Normal",
+  state: {
+    ...videoLayer.state,
+    opacity: Math.max(0.4, 1 - index * 0.08),
+    position_ms: 500 + index * 250,
+    loop_end_ms: 8_000 + index * 1_000,
+    bpm_sync: { ...videoLayer.state.bpm_sync },
+    cue_points: videoLayer.state.cue_points.map((cuePoint) => ({ ...cuePoint })),
+    cue_points_ms: [...videoLayer.state.cue_points_ms],
+    transform: { ...videoLayer.state.transform },
+    color: { ...videoLayer.state.color },
+    fx: { ...videoLayer.state.fx },
+  },
+  isf_effect: operatorVjLayerEffects[index],
+}));
+
+const operatorVjComposition: CompositionSummary = {
+  id: 1,
+  label: "Operator Program",
+  layer_ids: operatorVjLayers.map((layer) => layer.id),
+  output_ids: [1, 2, 3],
+};
+
+const operatorVjOutputs: VideoOutputSummary[] = [
+  {
+    ...videoOutput,
+    id: 1,
+    label: "Main LED",
+    enabled: true,
+    opacity: 1,
+    blackout: false,
+    monitor_id: 1,
+    mapping: { ...projectorMapping, stage_x: 0, stage_z: 3.2 },
+  },
+  {
+    ...videoOutput,
+    id: 2,
+    label: "Side Projection",
+    enabled: false,
+    opacity: 1,
+    blackout: false,
+    monitor_id: 2,
+    mapping: { ...projectorMapping, stage_x: -4.5, stage_z: 2.4 },
+  },
+  {
+    ...videoOutput,
+    id: 3,
+    label: "Stream Fill",
+    enabled: true,
+    opacity: 1,
+    blackout: true,
+    monitor_id: 3,
+    mapping: { ...projectorMapping, stage_x: 4.5, stage_z: 2.4 },
+  },
+];
+
 const stageObject: StageObjectSummary = {
   id: 1,
   label: "Viewport Screen",
@@ -284,6 +461,9 @@ export const viewportFixtureData = {
   videoLayer,
   composition,
   videoOutput,
+  operatorVjLayers,
+  operatorVjComposition,
+  operatorVjOutputs,
   stageObject,
   cueRecallEffect,
   cueRecallNodeGraph,
