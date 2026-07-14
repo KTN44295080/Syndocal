@@ -26,6 +26,7 @@ Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPM
 - PNG/JPEG、可変速、リバース、A-Bループ、キューポイント、BPM同期
 - Layer / Composition / Display Output、Normal / Add / Multiply / Screen合成
 - 変形、クロップ、色補正、pixelate / blur / glow / edge / color key
+- レイヤーごとに最大8段のordered ISF 2 stack。14種の内蔵FXまたは単一pass ISFを追加し、段別に選択、並べ替え、bypass、reset、削除、parameter操作して`.sdc`へ埋め込み保存
 - wgpuネイティブ出力、複数Display、投影比率/keystone/lens/corner warp補正
 - feature-gated NDI送受信。SDK未導入時は起動失敗せず`NotBuilt`を表示
 
@@ -143,7 +144,8 @@ ASIOは既定buildへ含めません。Windowsのローカル技術検証は、�
 - 大規模Engine gate: 200灯体、8ユニバース、100キュー、20,000ターゲット
 - UI viewport policy: browser 1920x1080とnative F11 1920x1080を運用・見た目の主ゲートにする。Windows最大化は1920x1032の作業領域内で実client 1920x1009（title barを除く）を確認し、Escで同寸法へ復帰させる。1280x720 / 1366x768はcontainment fallback、2048x1152は拡張上限回帰とし、小画面fallbackの通過だけではデザイン合格にしない
 - Fullscreen VJ Focus gate: 1920x1080のfullscreen mode fixtureでは重複する外側headerを除き、Clips／Live Monitors + Outputs／Layersを684／811／405px、Preview／Programを317／476px（Program/Preview 1.502）に配分する。live-audio dockは92px、主操作は32px、設定操作は28pxとし、telemetryの切れ・critical overflowを0に固定する。1366x768／1280x720は従来のheader、64px audio rail、Preview／Program 1:1を維持する。専用identifierのcurrent-source native QA buildでも、最大化1913x1080からF11でexact 1920x1080へ移行し、このFocus配置と実ASIO telemetryを確認後、Escで通常配置へ復帰した
-- Populated VJ operator gate: 7 layerを6+1 bankで扱い、各visible layerへBuilt-in FX／Enable・Bypass／Advancedを固定する。重いISF editorは閉じている間DOM 0件、開いた1 layerだけ2 controlをmountする。3 outputのLive／Off／BO railはdetail、Program label、monitor request output IDと同期する。1920x1080／1366x768／1280x720の英日6ケースで、4操作phaseすべてunsafe overflow 0／owner外rect 0を要求する
+- Populated VJ operator gate: 7 layerを6+1 bankで扱い、各visible layerへBuilt-in FX／選択段のEnable・Bypass／Advancedを固定する。重いISF editorは閉じている間DOM 0件、開いた1 layerだけ最大8段のstack rowと選択段editorをmountする。Event／Bool／Long／Float／Point2D／Color、8/8 Add lock、Event 1→0と履歴不変／busy interlock、選択・focusを保つMove、Remove後の安全な隣接選択、GPU診断更新、段index付きBypass transaction、3 outputのLive／Off／BO rail同期を1920x1080／1366x768／1280x720の英日6ケースで検証し、全操作phaseでunsafe overflow 0／owner外rect 0を要求する
+- ISF stack runtime: 有効段を最大8段まで一つのcommand encoderへ順番に積み、frameごとのhost upload 1回、GPU内ping-pong、最終readback 1回で処理する。変換shader／GPU pipelineは最大64件を再利用し、実行段数、stack render time、段別compile errorを診断へ出す。現行のheadless rendererは最終RGBAをCPUへreadbackし、別deviceのnative outputへ再uploadするため、outputまでのzero-copyやTouchDesigner級GPU-resident graphを示すものではない
 - Live audio UI: VJ Desk内の通常／compact 64px railとfullscreen VJ Focusの92px dockでStart／Stop、device／rate／requested buffer／channel mix、16対数band、RMS／Peak、onset、BPM／confidenceとcallback／queue telemetryを常時確認する。軽量feature statusは約30Hz、詳細telemetryは約1Hzでsingle-flight更新し、5 viewport×英日stateful gateで固定する
 - Live-audio viewport gateはDOMを直接改変せず、Tauri invoke mockから実Solid stateを駆動する。5解像度×英日でRefresh、generation ID再対応、同名曖昧時の再選択ロック、capability、192kHz／8192-frame／stereo pair Start request、42/58/76% meter、live telemetry、Stop／clear-pendingまで検証する
 - Windows native live-audio acceptance: 最大化したcurrent-source buildでsystem defaultのWASAPI shared入力を48kHz monoでStart／Stopし、実callback 480/480/480 frames、capture-to-workerの採取時点current 0.1ms／max 10.1ms、OVR 0 chunks／0 frames、queue current/high-water/capacity 0/1/4を確認した。この1構成の測定をASIOや長時間・他deviceの性能証明には読み替えない
@@ -168,7 +170,7 @@ ASIOは既定buildへ含めません。Windowsのローカル技術検証は、�
 ## 既知の制限
 
 - v1.0以降の外部映像I/OはDisplay、feature-gated NDI、Windows x86_64のSpoutに対応しています。Syphonはwgpu世代差とmacOS実装環境が必要なため未実装です。
-- HAP Q Alpha、HAP R/BC7のGPU直接sampling + CPU fallback、安全境界付きsingle-pass ISFは実装済みです。ISF multipass／persistent buffer／imported resource／audio inputは未対応です。
+- HAP Q Alpha、HAP R/BC7のGPU直接sampling + CPU fallback、安全境界付き最大8段のordered single-pass ISF stackは実装済みです。1 stackのsource合計は512 KiB、1段16 control、project内ISF source合計16 MiB、`.sdc`全体64 MiBに制限します。ISF multipass／persistent buffer／imported resource／audio input、100種級library、shared texture／任意node graph、headless readback後のnative別device再upload解消、4K multi-layer／実会場long soakは未対応または未受入です。
 - Live FFT入力はCPALのdevice catalogとcapabilityを読み、Windowsの既定buildではWASAPI sharedのsystem defaultまたは列挙device、sample rate、requested buffer、全channel平均／単一channel／stereo pair downmixを選べます。選択rateごとにchannel数／sample format／buffer capabilityを`resolved_config`として先に確定し、Startでも同じ構成を再検証します。更新世代に結び付くopaque device IDを使い、古い／未知IDや非対応構成は別device・rate・bufferへ黙ってfallbackせずStartを拒否します。全11種のCPAL PCM sample formatを正規化し、通常data callbackは4本×2048-frameの事前確保slotへallocation-freeで格納します。workerは16対数band、RMS／Peak、spectral flux、適応onset、60–200 BPM／confidence／beat phase、centroid／density／kick／snareを生成し、同じframeから旧Node Graph用B/M/Hを派生します。Compiled Audio Reactive Rackは任意の対応照明属性／映像parameterへこれらを割り当て、Auto VJはCLOCKまたはLIVE INPUTのonsetを選び、seed／show revision／candidate順から決定的にTakeします。非既定のWindows ASIO featureは独立bridgeを動的loadし、明示driver／rate／channel／native format／fixed bufferをStart時に再検証、実buffer framesとbackend XRUNを表示します。TOPPINGの短時間実機smoke、100回Start／Stop／FreeとF11 1920x1080のfull native UI gateは通過しましたが、ASIOの配布ライセンス選択、第二の正常driver、同一device hot-plug自動復帰、engine出力適用ack、実機1時間／物理pixel latency／TouchDesigner同条件比較は未完です。通常MIT installerへASIO bridgeは同梱しません。
 - Device Refresh後はbackendとdevice名が新旧catalogueの双方で一意な場合だけ明示選択を新IDへ引き継ぎます。曖昧・消失時はsystem defaultへ黙って落とさず、再選択するまでcapabilityを破棄してStartをロックします。
 - 3Dビジュアライザは本体UIへ戻さず、`visualizer`データ境界から外部実装へ接続します。標準UIは2D Stage Mapです。

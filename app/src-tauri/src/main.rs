@@ -18,7 +18,7 @@ use base64::Engine as _;
 use engine::{
     validate_chaser_effect_request as validate_engine_chaser_effect_request,
     validate_move_effect_request as validate_engine_move_effect_request, EngineCommand,
-    EngineHandle, FixtureFlagClearKind,
+    EngineHandle, FixtureFlagClearKind, VideoIsfStackMutation,
 };
 use io::midi::{
     MidiClockEvent, MidiClockInput, MidiControlEvent, MidiControlInput, MidiFeedbackOutput,
@@ -44,10 +44,10 @@ use protocol::{
     SerialPortSummary, StageMapConfig, StageMapPresetFile, StageMapPresetSummary, StageObjectId,
     StageObjectKind, StageObjectSummary, TimelineEventId, TimelineSnapRequest, TimelineTrackKind,
     Vec3, VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode, VideoEffectTarget,
-    VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerTarget, VideoOutputId,
-    VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetFile,
-    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
-    VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
+    VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId, VideoLayerState,
+    VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
+    VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary, VideoOutputSummary,
+    VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -121,6 +121,8 @@ const PROJECT_BACKUP_VERSION: u32 = 1;
 const PROJECT_BACKUP_RETENTION: usize = 30;
 const PROJECT_HISTORY_RETENTION: usize = 100;
 const PROJECT_HISTORY_COALESCE_MS: u64 = 750;
+const PROJECT_FILE_MAX_BYTES: u64 = 64 * 1024 * 1024;
+const PROJECT_ISF_SOURCE_MAX_BYTES: usize = 16 * 1024 * 1024;
 const PROJECT_BACKUP_DIRECTORY: &str = "project-backups";
 const CRASH_REPORT_DIRECTORY: &str = "crash-reports";
 const APPLICATION_UPDATE_PROGRESS_EVENT: &str = "syndocal://application-update-progress";
@@ -2537,7 +2539,10 @@ struct VideoPreviewDiagnostics {
     decoder_cache_len: usize,
     decoder_diagnostics: video::VideoDecoderDiagnostics,
     isf_pipeline_count: usize,
+    isf_last_stack_stage_count: usize,
+    isf_last_stack_render_us: u64,
     last_isf_error: Option<String>,
+    isf_stage_errors: Vec<video::VideoIsfStageError>,
     prefetch_count: usize,
     prefetch_interval_ms: u64,
     bpm: Option<f32>,
@@ -7360,26 +7365,25 @@ fn duplicate_video_layer(
     source_layer_id: VideoLayerId,
     label: String,
 ) -> Result<VideoLayerId, String> {
-    if !state
-        .engine
-        .snapshot()
+    let snapshot = state.engine.snapshot();
+    let source_layer = snapshot
         .video
         .layers
         .iter()
-        .any(|layer| layer.id == source_layer_id)
-    {
-        return Err(format!("Video layer {source_layer_id} was not found"));
-    }
+        .find(|layer| layer.id == source_layer_id)
+        .ok_or_else(|| format!("Video layer {source_layer_id} was not found"))?;
+    let added_source_bytes = source_layer
+        .isf_effect
+        .as_ref()
+        .map(video_isf_effect_source_bytes)
+        .transpose()?
+        .unwrap_or(0);
+    validate_project_isf_source_budget_after_addition(&snapshot, added_source_bytes)?;
     let label = normalize_video_layer_label(label)?;
     let new_layer_id = state.engine.allocate_video_layer_id();
     state
         .engine
-        .send(EngineCommand::DuplicateVideoLayer {
-            source_layer_id,
-            new_layer_id,
-            label,
-        })
-        .map_err(|error| error.to_string())?;
+        .duplicate_video_layer_published(source_layer_id, new_layer_id, label)?;
     Ok(new_layer_id)
 }
 
@@ -7452,12 +7456,13 @@ fn set_video_layer_isf_effect(
     layer_id: VideoLayerId,
     effect: Option<VideoIsfEffectSummary>,
 ) -> Result<(), String> {
-    validate_video_layer_ids(&state.engine.snapshot(), &[layer_id])?;
+    let snapshot = state.engine.snapshot();
+    validate_video_layer_ids(&snapshot, &[layer_id])?;
     let effect = effect.map(sanitize_video_isf_effect).transpose()?;
+    validate_project_isf_source_budget_after_replacement(&snapshot, layer_id, effect.as_ref())?;
     state
         .engine
-        .send(EngineCommand::SetVideoLayerIsfEffect { layer_id, effect })
-        .map_err(|error| error.to_string())
+        .set_video_layer_isf_effect_published(layer_id, effect)
 }
 
 #[tauri::command]
@@ -7466,41 +7471,333 @@ fn apply_builtin_video_isf_effect(
     layer_id: VideoLayerId,
     preset_id: String,
 ) -> Result<VideoIsfEffectSummary, String> {
-    validate_video_layer_ids(&state.engine.snapshot(), &[layer_id])?;
+    let snapshot = state.engine.snapshot();
+    validate_video_layer_ids(&snapshot, &[layer_id])?;
     let preset_id = preset_id.trim();
     let effect = video::builtin_isf_effect(preset_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("Unknown built-in VJ effect '{preset_id}'"))?;
+    validate_project_isf_source_budget_after_replacement(&snapshot, layer_id, Some(&effect))?;
     state
         .engine
-        .send(EngineCommand::SetVideoLayerIsfEffect {
-            layer_id,
-            effect: Some(effect.clone()),
-        })
-        .map_err(|error| error.to_string())?;
+        .set_video_layer_isf_effect_published(layer_id, Some(effect.clone()))?;
     Ok(effect)
 }
 
-fn sanitize_video_isf_effect(
+fn append_video_isf_effect(
+    state: &AppState,
+    layer_id: VideoLayerId,
     effect: VideoIsfEffectSummary,
 ) -> Result<VideoIsfEffectSummary, String> {
+    let effect = sanitize_video_isf_effect(effect)?;
+    if !effect.stack.is_empty() {
+        return Err("Only one ISF stage can be appended at a time".to_string());
+    }
+    let snapshot = state.engine.snapshot();
+    validate_video_layer_ids(&snapshot, &[layer_id])?;
+    validate_project_isf_source_budget_after_addition(
+        &snapshot,
+        video_isf_effect_source_bytes(&effect)?,
+    )?;
+    let stage = video_isf_stage_from_root(effect.clone());
+    state
+        .engine
+        .mutate_video_layer_isf_stack(layer_id, VideoIsfStackMutation::Add(stage))?;
+    Ok(effect)
+}
+
+#[tauri::command]
+fn add_video_layer_isf_effect(
+    state: State<'_, AppState>,
+    layer_id: VideoLayerId,
+    effect: VideoIsfEffectSummary,
+) -> Result<VideoIsfEffectSummary, String> {
+    append_video_isf_effect(state.inner(), layer_id, effect)
+}
+
+#[tauri::command]
+fn add_builtin_video_isf_effect(
+    state: State<'_, AppState>,
+    layer_id: VideoLayerId,
+    preset_id: String,
+) -> Result<VideoIsfEffectSummary, String> {
+    let preset_id = preset_id.trim();
+    let effect = video::builtin_isf_effect(preset_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("Unknown built-in VJ effect '{preset_id}'"))?;
+    append_video_isf_effect(state.inner(), layer_id, effect)
+}
+
+#[tauri::command]
+fn move_video_layer_isf_effect(
+    state: State<'_, AppState>,
+    layer_id: VideoLayerId,
+    stage_index: usize,
+    delta: i32,
+) -> Result<(), String> {
+    state
+        .engine
+        .mutate_video_layer_isf_stack(layer_id, VideoIsfStackMutation::Move { stage_index, delta })
+}
+
+#[tauri::command]
+fn remove_video_layer_isf_effect(
+    state: State<'_, AppState>,
+    layer_id: VideoLayerId,
+    stage_index: usize,
+) -> Result<(), String> {
+    state
+        .engine
+        .mutate_video_layer_isf_stack(layer_id, VideoIsfStackMutation::Remove { stage_index })
+}
+
+#[tauri::command]
+fn set_video_layer_isf_effect_enabled(
+    state: State<'_, AppState>,
+    layer_id: VideoLayerId,
+    stage_index: usize,
+    enabled: bool,
+) -> Result<(), String> {
+    state.engine.mutate_video_layer_isf_stack(
+        layer_id,
+        VideoIsfStackMutation::SetEnabled {
+            stage_index,
+            enabled,
+        },
+    )
+}
+
+#[tauri::command]
+fn reset_video_layer_isf_effect(
+    state: State<'_, AppState>,
+    layer_id: VideoLayerId,
+    stage_index: usize,
+) -> Result<(), String> {
+    state
+        .engine
+        .mutate_video_layer_isf_stack(layer_id, VideoIsfStackMutation::Reset { stage_index })
+}
+
+#[tauri::command]
+fn set_video_layer_isf_control(
+    state: State<'_, AppState>,
+    layer_id: VideoLayerId,
+    stage_index: usize,
+    control_name: String,
+    value: [f32; 4],
+) -> Result<(), String> {
+    state.engine.mutate_video_layer_isf_stack(
+        layer_id,
+        VideoIsfStackMutation::SetControl {
+            stage_index,
+            control_name,
+            value,
+        },
+    )
+}
+
+async fn pulse_video_layer_isf_event_inner(
+    engine: EngineHandle,
+    layer_id: VideoLayerId,
+    stage_index: usize,
+    control_name: String,
+    hold: Duration,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine.pulse_video_layer_isf_event(layer_id, stage_index, control_name, hold)
+    })
+    .await
+    .map_err(|error| format!("ISF Event pulse task failed: {error}"))?
+}
+
+#[tauri::command]
+async fn pulse_video_layer_isf_event(
+    state: State<'_, AppState>,
+    layer_id: VideoLayerId,
+    stage_index: usize,
+    control_name: String,
+) -> Result<(), String> {
+    pulse_video_layer_isf_event_inner(
+        state.engine.clone(),
+        layer_id,
+        stage_index,
+        control_name,
+        Duration::from_millis(50),
+    )
+    .await
+}
+
+fn video_isf_stage_from_root(effect: VideoIsfEffectSummary) -> VideoIsfEffectStageSummary {
+    VideoIsfEffectStageSummary {
+        enabled: effect.enabled,
+        label: effect.label,
+        source: effect.source,
+        source_path: effect.source_path,
+        description: effect.description,
+        categories: effect.categories,
+        controls: effect.controls,
+    }
+}
+
+fn video_isf_root_from_stages(
+    first: VideoIsfEffectStageSummary,
+    stack: Vec<VideoIsfEffectStageSummary>,
+) -> VideoIsfEffectSummary {
+    VideoIsfEffectSummary {
+        enabled: first.enabled,
+        label: first.label,
+        source: first.source,
+        source_path: first.source_path,
+        description: first.description,
+        categories: first.categories,
+        controls: first.controls,
+        stack,
+    }
+}
+
+fn sanitize_video_isf_stage(
+    effect: VideoIsfEffectStageSummary,
+) -> Result<VideoIsfEffectStageSummary, String> {
     let label = effect.label.trim();
     if label.is_empty() || label.chars().count() > 128 {
         return Err("ISF effect label must contain 1-128 characters".to_string());
     }
-    let prepared = video::prepare_isf_shader(&effect.source).map_err(|error| error.to_string())?;
-    let resolved = video::resolved_isf_control_values(&prepared, &effect);
+    let prepared =
+        video::prepare_isf_shader(effect.source.as_ref()).map_err(|error| error.to_string())?;
+    let resolved = video::resolved_isf_control_values_from_controls(&prepared, &effect.controls);
     let source_path = effect.source_path.and_then(|path| {
         let path = path.trim().to_string();
         (!path.is_empty()).then_some(path)
     });
-    let mut canonical =
+    let canonical_root =
         video::isf_effect_from_prepared(label.to_string(), effect.source, source_path, &prepared);
+    let mut canonical = video_isf_stage_from_root(canonical_root);
     canonical.enabled = effect.enabled;
     for (control, value) in canonical.controls.iter_mut().zip(resolved) {
         control.value = value;
     }
     Ok(canonical)
+}
+
+fn sanitize_video_isf_effect(
+    effect: VideoIsfEffectSummary,
+) -> Result<VideoIsfEffectSummary, String> {
+    if 1 + effect.stack.len() > video::VIDEO_ISF_EFFECT_STACK_MAX_STAGES {
+        return Err(format!(
+            "ISF stack contains {} stages; the limit is {}",
+            1 + effect.stack.len(),
+            video::VIDEO_ISF_EFFECT_STACK_MAX_STAGES
+        ));
+    }
+    let total_source_bytes = effect.source.len()
+        + effect
+            .stack
+            .iter()
+            .map(|stage| stage.source.len())
+            .sum::<usize>();
+    if total_source_bytes > video::ISF_MAX_SOURCE_BYTES {
+        return Err(format!(
+            "ISF stack source size is {total_source_bytes} bytes; the limit is {} bytes",
+            video::ISF_MAX_SOURCE_BYTES
+        ));
+    }
+    let VideoIsfEffectSummary {
+        enabled,
+        label,
+        source,
+        source_path,
+        description,
+        categories,
+        controls,
+        stack,
+    } = effect;
+    let first = sanitize_video_isf_stage(VideoIsfEffectStageSummary {
+        enabled,
+        label,
+        source,
+        source_path,
+        description,
+        categories,
+        controls,
+    })?;
+    let stack = stack
+        .into_iter()
+        .enumerate()
+        .map(|(index, stage)| {
+            sanitize_video_isf_stage(stage)
+                .map_err(|error| format!("ISF stage {} is invalid: {error}", index + 2))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(video_isf_root_from_stages(first, stack))
+}
+
+fn video_isf_effect_source_bytes(effect: &VideoIsfEffectSummary) -> Result<usize, String> {
+    effect
+        .stack
+        .iter()
+        .try_fold(effect.source.len(), |total, stage| {
+            total
+                .checked_add(stage.source.len())
+                .ok_or_else(|| "Project ISF source size overflowed".to_string())
+        })
+}
+
+fn project_isf_source_bytes(snapshot: &EngineSnapshot) -> Result<usize, String> {
+    snapshot
+        .video
+        .layers
+        .iter()
+        .filter_map(|layer| layer.isf_effect.as_ref())
+        .try_fold(0_usize, |total, effect| {
+            total
+                .checked_add(video_isf_effect_source_bytes(effect)?)
+                .ok_or_else(|| "Project ISF source size overflowed".to_string())
+        })
+}
+
+fn validate_project_isf_source_budget(total_source_bytes: usize) -> Result<(), String> {
+    if total_source_bytes > PROJECT_ISF_SOURCE_MAX_BYTES {
+        return Err(format!(
+            "Project ISF source size exceeds the {} byte limit",
+            PROJECT_ISF_SOURCE_MAX_BYTES
+        ));
+    }
+    Ok(())
+}
+
+fn validate_project_isf_source_budget_after_addition(
+    snapshot: &EngineSnapshot,
+    added_source_bytes: usize,
+) -> Result<(), String> {
+    let total_source_bytes = project_isf_source_bytes(snapshot)?
+        .checked_add(added_source_bytes)
+        .ok_or_else(|| "Project ISF source size overflowed".to_string())?;
+    validate_project_isf_source_budget(total_source_bytes)
+}
+
+fn validate_project_isf_source_budget_after_replacement(
+    snapshot: &EngineSnapshot,
+    layer_id: VideoLayerId,
+    replacement: Option<&VideoIsfEffectSummary>,
+) -> Result<(), String> {
+    let current_source_bytes = snapshot
+        .video
+        .layers
+        .iter()
+        .find(|layer| layer.id == layer_id)
+        .and_then(|layer| layer.isf_effect.as_ref())
+        .map(video_isf_effect_source_bytes)
+        .transpose()?
+        .unwrap_or(0);
+    let replacement_source_bytes = replacement
+        .map(video_isf_effect_source_bytes)
+        .transpose()?
+        .unwrap_or(0);
+    let total_source_bytes = project_isf_source_bytes(snapshot)?
+        .checked_sub(current_source_bytes)
+        .and_then(|total| total.checked_add(replacement_source_bytes))
+        .ok_or_else(|| "Project ISF source size overflowed".to_string())?;
+    validate_project_isf_source_budget(total_source_bytes)
 }
 
 #[tauri::command]
@@ -11863,8 +12160,20 @@ fn save_project_with_dialog(state: &State<'_, AppState>) -> Result<Option<String
 
 fn write_project_file(state: &State<'_, AppState>, path: &Path) -> Result<(), String> {
     let project = project_file_for_save(state)?;
-    let json = serde_json::to_string_pretty(&project).map_err(|error| error.to_string())?;
+    let json = project_json_for_write(&project)?;
     fs::write(path, json).map_err(|error| error.to_string())
+}
+
+fn project_json_for_write(project: &ProjectFile) -> Result<String, String> {
+    validate_project_file(project)?;
+    let json = serde_json::to_string_pretty(project).map_err(|error| error.to_string())?;
+    if json.len() as u64 > PROJECT_FILE_MAX_BYTES {
+        return Err(format!(
+            "Project JSON is {} bytes; the limit is {PROJECT_FILE_MAX_BYTES} bytes",
+            json.len()
+        ));
+    }
+    Ok(json)
 }
 
 fn project_file_for_save(state: &State<'_, AppState>) -> Result<ProjectFile, String> {
@@ -11960,9 +12269,7 @@ fn commit_project_history_entry(
     after: ProjectFile,
     committed_at_unix_ms: u64,
 ) -> Result<ProjectHistoryStatus, String> {
-    let before_json = serde_json::to_vec(&pending.before).map_err(|error| error.to_string())?;
-    let after_json = serde_json::to_vec(&after).map_err(|error| error.to_string())?;
-    if before_json == after_json {
+    if pending.before == after {
         return Ok(project_history_status(&history));
     }
     let can_coalesce = history.undo.last().is_some_and(|entry| {
@@ -13483,6 +13790,12 @@ fn load_project_from_path(
     state: &State<'_, AppState>,
     path: &Path,
 ) -> Result<ProjectLoadResult, String> {
+    let file_size = fs::metadata(path).map_err(|error| error.to_string())?.len();
+    if file_size > PROJECT_FILE_MAX_BYTES {
+        return Err(format!(
+            "Project file is {file_size} bytes; the limit is {PROJECT_FILE_MAX_BYTES} bytes"
+        ));
+    }
     let json = fs::read_to_string(&path).map_err(|error| error.to_string())?;
     load_project_from_json(state, &json, path.to_string_lossy().to_string(), Some(path))
 }
@@ -13493,6 +13806,12 @@ fn load_project_from_json(
     path_label: String,
     current_path: Option<&Path>,
 ) -> Result<ProjectLoadResult, String> {
+    if json.len() as u64 > PROJECT_FILE_MAX_BYTES {
+        return Err(format!(
+            "Project JSON is {} bytes; the limit is {PROJECT_FILE_MAX_BYTES} bytes",
+            json.len()
+        ));
+    }
     let project: ProjectFile = serde_json::from_str(&json).map_err(|error| error.to_string())?;
     load_project_from_file(state, project, path_label, current_path)
 }
@@ -13518,10 +13837,11 @@ fn load_project_checkpoint(
 
 fn load_project_from_file(
     state: &State<'_, AppState>,
-    project: ProjectFile,
+    mut project: ProjectFile,
     path_label: String,
     current_path: Option<&Path>,
 ) -> Result<ProjectLoadResult, String> {
+    use_authored_video_snapshot(&mut project.snapshot);
     validate_project_file(&project)?;
     let profiles = project.custom_profiles.clone();
     {
@@ -15059,6 +15379,7 @@ fn validate_project_video_graph(snapshot: &EngineSnapshot) -> Result<(), String>
         .map(|graph| graph.id)
         .collect::<HashSet<_>>();
 
+    validate_project_isf_source_budget(project_isf_source_bytes(snapshot)?)?;
     for layer in &snapshot.video.layers {
         if layer.label.trim().is_empty() {
             return Err(format!(
@@ -17367,7 +17688,10 @@ fn get_video_preview_diagnostics(
         decoder_cache_len: provider.decoder().cache_len(),
         decoder_diagnostics: provider.decoder().diagnostics(),
         isf_pipeline_count: renderer.isf_pipeline_count(),
+        isf_last_stack_stage_count: renderer.isf_last_stack_stage_count(),
+        isf_last_stack_render_us: renderer.isf_last_stack_render_us(),
         last_isf_error: renderer.last_isf_error().map(str::to_string),
+        isf_stage_errors: renderer.last_isf_stage_errors().to_vec(),
         prefetch_count,
         prefetch_interval_ms,
         bpm,
@@ -26593,7 +26917,11 @@ f 1 2 3
     #[test]
     fn project_file_v1_preserves_isf_and_defaults_legacy_layers() {
         let mut project = project_with_valid_video_graph();
-        project.snapshot.video.layers[0].isf_effect = Some(test_isf_effect());
+        let mut effect = test_isf_effect();
+        effect.stack.push(video_isf_stage_from_root(
+            video::builtin_isf_effect("invert").unwrap().unwrap(),
+        ));
+        project.snapshot.video.layers[0].isf_effect = Some(effect);
         validate_project_file(&project).unwrap();
 
         let encoded = serde_json::to_value(&project).unwrap();
@@ -26605,6 +26933,30 @@ f 1 2 3
                 .map(|effect| effect.label.as_str()),
             Some("Threshold")
         );
+        assert_eq!(
+            decoded.snapshot.video.layers[0]
+                .isf_effect
+                .as_ref()
+                .unwrap()
+                .stack[0]
+                .label,
+            "Invert"
+        );
+
+        let mut single_effect_legacy = encoded.clone();
+        single_effect_legacy["snapshot"]["video"]["layers"][0]["isf_effect"]
+            .as_object_mut()
+            .unwrap()
+            .remove("stack");
+        let single_effect_legacy: ProjectFile =
+            serde_json::from_value(single_effect_legacy).unwrap();
+        validate_project_file(&single_effect_legacy).unwrap();
+        assert!(single_effect_legacy.snapshot.video.layers[0]
+            .isf_effect
+            .as_ref()
+            .unwrap()
+            .stack
+            .is_empty());
 
         let mut legacy = encoded;
         legacy["snapshot"]["video"]["layers"][0]
@@ -26620,15 +26972,91 @@ f 1 2 3
     fn project_file_validation_rejects_unsafe_isf() {
         let mut project = project_with_valid_video_graph();
         let mut effect = test_isf_effect();
-        effect.source = effect.source.replace(
-            "\"INPUTS\"",
-            "\"PASSES\":[{\"TARGET\":\"buffer\"}],\"INPUTS\"",
-        );
+        effect.source = effect
+            .source
+            .replace(
+                "\"INPUTS\"",
+                "\"PASSES\":[{\"TARGET\":\"buffer\"}],\"INPUTS\"",
+            )
+            .into();
         project.snapshot.video.layers[0].isf_effect = Some(effect);
 
         let error = validate_project_file(&project).unwrap_err();
         assert!(error.contains("ISF effect is invalid"));
         assert!(error.contains("target-buffer"));
+    }
+
+    #[test]
+    fn project_file_validation_rejects_unsafe_isf_tail_and_ninth_stage() {
+        let mut project = project_with_valid_video_graph();
+        let mut effect = test_isf_effect();
+        let mut unsafe_tail = video_isf_stage_from_root(test_isf_effect());
+        unsafe_tail.source = unsafe_tail
+            .source
+            .replace(
+                "\"INPUTS\"",
+                "\"PASSES\":[{\"TARGET\":\"buffer\"}],\"INPUTS\"",
+            )
+            .into();
+        effect.stack.push(unsafe_tail);
+        project.snapshot.video.layers[0].isf_effect = Some(effect.clone());
+        let error = validate_project_file(&project).unwrap_err();
+        assert!(error.contains("ISF stage 2 is invalid"));
+        assert!(error.contains("target-buffer"));
+
+        effect.stack.clear();
+        let stage = video_isf_stage_from_root(test_isf_effect());
+        effect.stack = vec![stage; video::VIDEO_ISF_EFFECT_STACK_MAX_STAGES];
+        project.snapshot.video.layers[0].isf_effect = Some(effect);
+        let error = validate_project_file(&project).unwrap_err();
+        assert!(error.contains("9 stages"));
+        assert!(error.contains("limit is 8"));
+    }
+
+    #[test]
+    fn project_isf_budget_rejects_live_addition_and_replacement_above_load_limit() {
+        let mut project = project_with_valid_video_graph();
+        let base_layer = project.snapshot.video.layers[0].clone();
+        let mut max_size_effect = test_isf_effect();
+        max_size_effect.source = Arc::<str>::from("x".repeat(video::ISF_MAX_SOURCE_BYTES));
+        project.snapshot.video.layers = (0..33)
+            .map(|index| {
+                let mut layer = base_layer.clone();
+                layer.id = index + 1;
+                layer.isf_effect = (index < 32).then(|| max_size_effect.clone());
+                layer
+            })
+            .collect();
+
+        assert_eq!(
+            project_isf_source_bytes(&project.snapshot).unwrap(),
+            PROJECT_ISF_SOURCE_MAX_BYTES
+        );
+        assert!(validate_project_isf_source_budget_after_addition(&project.snapshot, 0).is_ok());
+        assert!(
+            validate_project_isf_source_budget_after_addition(&project.snapshot, 1)
+                .unwrap_err()
+                .contains("Project ISF source size exceeds")
+        );
+        assert!(validate_project_isf_source_budget_after_replacement(
+            &project.snapshot,
+            33,
+            Some(&test_isf_effect()),
+        )
+        .unwrap_err()
+        .contains("Project ISF source size exceeds"));
+    }
+
+    #[test]
+    fn project_writer_rejects_project_that_the_loader_would_reject() {
+        let mut project = project_with_valid_video_graph();
+        let mut effect = test_isf_effect();
+        effect.source =
+            Arc::<str>::from("x".repeat(PROJECT_ISF_SOURCE_MAX_BYTES.saturating_add(1)));
+        project.snapshot.video.layers[0].isf_effect = Some(effect);
+
+        let error = project_json_for_write(&project).unwrap_err();
+        assert!(error.contains("Project ISF source size exceeds"));
     }
 
     #[test]
@@ -34606,6 +35034,14 @@ fn main() {
             set_video_layer_state,
             set_video_layer_isf_effect,
             apply_builtin_video_isf_effect,
+            add_video_layer_isf_effect,
+            add_builtin_video_isf_effect,
+            move_video_layer_isf_effect,
+            remove_video_layer_isf_effect,
+            set_video_layer_isf_effect_enabled,
+            reset_video_layer_isf_effect,
+            set_video_layer_isf_control,
+            pulse_video_layer_isf_event,
             fade_video_layer_opacity,
             launch_video_clip,
             take_video_clip,

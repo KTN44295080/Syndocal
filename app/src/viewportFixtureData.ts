@@ -228,12 +228,52 @@ const operatorThresholdEffect: VideoIsfEffectSummary = {
       values: [],
     },
     {
-      name: "softness",
-      kind: "Float",
-      value: [0.02, 0, 0, 0],
-      default: [0.02, 0, 0, 0],
+      name: "useSourceAlpha",
+      kind: "Bool",
+      value: [1, 0, 0, 0],
+      default: [1, 0, 0, 0],
       minimum: [0, 0, 0, 0],
-      maximum: [0.5, 0, 0, 0],
+      maximum: [1, 0, 0, 0],
+      labels: [],
+      values: [],
+    },
+    {
+      name: "toneCount",
+      kind: "Long",
+      value: [6, 0, 0, 0],
+      default: [4, 0, 0, 0],
+      minimum: [2, 0, 0, 0],
+      maximum: [16, 0, 0, 0],
+      labels: [],
+      values: [],
+    },
+    {
+      name: "center",
+      kind: "Point2d",
+      value: [0.5, 0.5, 0, 0],
+      default: [0.5, 0.5, 0, 0],
+      minimum: [0, 0, 0, 0],
+      maximum: [1, 1, 0, 0],
+      labels: [],
+      values: [],
+    },
+    {
+      name: "tint",
+      kind: "Color",
+      value: [1, 0.75, 0.4, 1],
+      default: [1, 1, 1, 1],
+      minimum: [0, 0, 0, 0],
+      maximum: [1, 1, 1, 1],
+      labels: [],
+      values: [],
+    },
+    {
+      name: "pulse",
+      kind: "Event",
+      value: [0, 0, 0, 0],
+      default: [0, 0, 0, 0],
+      minimum: [0, 0, 0, 0],
+      maximum: [1, 0, 0, 0],
       labels: [],
       values: [],
     },
@@ -292,6 +332,51 @@ const operatorInvertEffect: VideoIsfEffectSummary = {
   controls: [],
 };
 
+const operatorMirrorEffect: VideoIsfEffectSummary = {
+  ...operatorInvertEffect,
+  label: "Mirror",
+  source: "viewport://operator-vj/mirror.fs",
+  description: "Fixture stage four for maximum-stack coverage.",
+  categories: ["Geometry", "Viewport Fixture"],
+};
+
+const operatorScanlinesEffect: VideoIsfEffectSummary = {
+  ...operatorInvertEffect,
+  label: "Scanlines",
+  source: "viewport://operator-vj/scanlines.fs",
+  description: "Fixture stage five for maximum-stack coverage.",
+  categories: ["Glitch", "Viewport Fixture"],
+};
+
+const operatorVignetteEffect: VideoIsfEffectSummary = {
+  ...operatorInvertEffect,
+  label: "Vignette",
+  source: "viewport://operator-vj/vignette.fs",
+  description: "Fixture stage six for maximum-stack coverage.",
+  categories: ["Color", "Viewport Fixture"],
+};
+
+const operatorPosterizeEffect: VideoIsfEffectSummary = {
+  ...operatorInvertEffect,
+  label: "Posterize",
+  source: "viewport://operator-vj/posterize.fs",
+  description: "Fixture stage seven for maximum-stack coverage.",
+  categories: ["Color", "Viewport Fixture"],
+};
+
+const operatorThresholdStackEffect: VideoIsfEffectSummary = {
+  ...operatorThresholdEffect,
+  stack: [
+    operatorBypassedMonochromeEffect,
+    operatorInvertEffect,
+    operatorRgbSplitEffect,
+    operatorMirrorEffect,
+    operatorScanlinesEffect,
+    operatorVignetteEffect,
+    operatorPosterizeEffect,
+  ],
+};
+
 const operatorVjLayerLabels = [
   "Threshold Pulse",
   "Bypassed Mono",
@@ -303,7 +388,7 @@ const operatorVjLayerLabels = [
 ] as const;
 
 const operatorVjLayerEffects: Array<VideoIsfEffectSummary | null> = [
-  operatorThresholdEffect,
+  operatorThresholdStackEffect,
   operatorBypassedMonochromeEffect,
   null,
   operatorRgbSplitEffect,

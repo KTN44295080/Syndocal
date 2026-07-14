@@ -848,6 +848,16 @@ function installOperatorVjMockInPage() {
     transactionId: 0,
     effectsByLayerId: {},
     snapshotReadCount: 0,
+    diagnosticsReadCount: 0,
+    eventPulses: [],
+    historyStatus: {
+      can_undo: true,
+      can_redo: true,
+      undo_depth: 4,
+      redo_depth: 2,
+      undo_label: "Existing edit",
+      redo_label: "Existing redo",
+    },
     lastSnapshot: null,
   };
   const readSnapshot = () => {
@@ -862,6 +872,23 @@ function installOperatorVjMockInPage() {
     mock.snapshotReadCount += 1;
     mock.lastSnapshot = clone(snapshot);
     return snapshot;
+  };
+  const currentEffect = (layerId) => {
+    if (Object.prototype.hasOwnProperty.call(mock.effectsByLayerId, layerId)) {
+      return clone(mock.effectsByLayerId[layerId]);
+    }
+    const source = window.__syndocalReadOperatorVjFixtureSnapshot?.();
+    return clone(source?.video?.layers?.find((layer) => layer.id === layerId)?.isf_effect ?? null);
+  };
+  const effectStages = (effect) => {
+    if (!effect) return [];
+    const { stack, ...first } = effect;
+    return [first, ...(stack ?? [])];
+  };
+  const effectFromStages = (stages) => {
+    if (stages.length === 0) return null;
+    const [first, ...stack] = stages;
+    return { ...first, stack };
   };
   const monitorPacket = (kind) => {
     const packet = Array.from({ length: 40 }, () => 0);
@@ -880,22 +907,69 @@ function installOperatorVjMockInPage() {
       mock.transactionId += 1;
       return mock.transactionId;
     }
-    if (command === "commit_project_transaction" || command === "cancel_project_transaction") {
-      return {
-        can_undo: command === "commit_project_transaction",
+    if (command === "commit_project_transaction") {
+      mock.historyStatus = {
+        can_undo: true,
         can_redo: false,
-        undo_depth: command === "commit_project_transaction" ? mock.transactionId : 0,
+        undo_depth: mock.historyStatus.undo_depth + 1,
         redo_depth: 0,
-        undo_label: command === "commit_project_transaction" ? "Set Video Layer Isf Effect" : null,
+        undo_label: "Set Video Layer Isf Effect",
         redo_label: null,
       };
+      return clone(mock.historyStatus);
+    }
+    if (command === "cancel_project_transaction") {
+      return clone(mock.historyStatus);
     }
     if (command === "set_video_layer_isf_effect") {
       mock.effectsByLayerId[args.layerId] = clone(args.effect);
       return null;
     }
+    if (command === "set_video_layer_isf_effect_enabled") {
+      const effect = currentEffect(args.layerId);
+      if (!effect) throw new Error("Operator VJ fixture effect is unavailable");
+      if (args.stageIndex === 0) effect.enabled = args.enabled;
+      else if (effect.stack?.[args.stageIndex - 1]) effect.stack[args.stageIndex - 1].enabled = args.enabled;
+      else throw new Error("Operator VJ fixture stage is unavailable");
+      mock.effectsByLayerId[args.layerId] = effect;
+      return null;
+    }
+    if (command === "move_video_layer_isf_effect") {
+      const stages = effectStages(currentEffect(args.layerId));
+      const targetIndex = args.stageIndex + args.delta;
+      if (!stages[args.stageIndex] || !stages[targetIndex]) throw new Error("Operator VJ fixture move is unavailable");
+      [stages[args.stageIndex], stages[targetIndex]] = [stages[targetIndex], stages[args.stageIndex]];
+      mock.effectsByLayerId[args.layerId] = effectFromStages(stages);
+      return null;
+    }
+    if (command === "remove_video_layer_isf_effect") {
+      const stages = effectStages(currentEffect(args.layerId));
+      if (!stages[args.stageIndex]) throw new Error("Operator VJ fixture removal is unavailable");
+      stages.splice(args.stageIndex, 1);
+      mock.effectsByLayerId[args.layerId] = effectFromStages(stages);
+      return null;
+    }
+    if (command === "pulse_video_layer_isf_event") {
+      const effect = currentEffect(args.layerId);
+      const stage = args.stageIndex === 0 ? effect : effect?.stack?.[args.stageIndex - 1];
+      const control = stage?.controls?.find((candidate) => candidate.name === args.controlName);
+      if (!control || control.kind !== "Event") throw new Error("Operator VJ fixture Event is unavailable");
+      control.value = [1, 0, 0, 0];
+      mock.eventPulses.push({ ...clone(args), values: [1] });
+      mock.effectsByLayerId[args.layerId] = effect;
+      await new Promise((resolve) => window.setTimeout(resolve, 300));
+      control.value = [0, 0, 0, 0];
+      mock.eventPulses[mock.eventPulses.length - 1].values.push(0);
+      mock.effectsByLayerId[args.layerId] = effect;
+      return null;
+    }
     if (command === "get_snapshot") return readSnapshot();
     if (command === "get_video_preview_diagnostics") {
+      mock.diagnosticsReadCount += 1;
+      const layerOneEffect = currentEffect(1);
+      const layerOneStages = effectStages(layerOneEffect);
+      const monochromeIndex = layerOneStages.findIndex((stage) => stage.label === "Monochrome");
+      const monochromeEnabled = monochromeIndex >= 0 && layerOneStages[monochromeIndex]?.enabled === true;
       return {
         queue_count: 0,
         frame_queue_capacity: 0,
@@ -926,7 +1000,15 @@ function installOperatorVjMockInPage() {
           cli_cache_len: 0,
         },
         isf_pipeline_count: 3,
+        isf_last_stack_stage_count: 3,
+        isf_last_stack_render_us: 620,
         last_isf_error: null,
+        isf_stage_errors: monochromeEnabled ? [{
+          layer_id: 1,
+          stage_index: monochromeIndex,
+          stage_label: "Monochrome",
+          message: "Fixture GPU stage error",
+        }] : [],
         prefetch_count: 0,
         prefetch_interval_ms: 0,
         bpm: 120,
@@ -961,6 +1043,7 @@ function readOperatorVjStateInPage() {
   const bypass = layerOne?.querySelector('[data-video-isf-action="bypass"]');
   const advanced = layerOne?.querySelector('[data-video-isf-action="advanced"]');
   const builtin = layerOne?.querySelector('[data-video-isf-action="builtin"]');
+  const addIsf = layerOne?.querySelector('[data-video-isf-action="add-isf"]');
   const pager = document.querySelector(".videoLayerList.compact > .deckPager");
   const outputButtons = [...document.querySelectorAll(".videoOutputRailButton[data-video-output-id]")]
     .filter(visible)
@@ -979,6 +1062,7 @@ function readOperatorVjStateInPage() {
       label: (item.querySelector(":scope > div:first-child > strong")?.textContent ?? "").trim(),
     }));
   const program = document.querySelector('[data-live-video-monitor="program"]');
+  const focused = document.activeElement;
   const mock = window.__syndocalOperatorVjMock;
   return {
     lang: document.documentElement.lang,
@@ -997,6 +1081,27 @@ function readOperatorVjStateInPage() {
       advancedText: (advanced?.textContent ?? "").trim(),
       advancedAriaLabel: advanced?.getAttribute("aria-label") ?? "",
       builtinAriaLabel: builtin?.getAttribute("aria-label") ?? "",
+      builtinDisabled: builtin?.disabled ?? null,
+      addIsfDisabled: addIsf?.disabled ?? null,
+      stackCountText: (layerOne.querySelector(".videoIsfStackActions > span")?.textContent ?? "").trim(),
+      controlRows: [...layerOne.querySelectorAll(".videoIsfAdvanced .videoIsfControl")]
+        .map((row) => ({
+          kind: row.getAttribute("data-video-isf-control-kind") ?? "",
+          name: row.getAttribute("data-video-isf-control-name") ?? "",
+          controls: [...row.querySelectorAll("input, button")].map((control) => ({
+            tag: control.tagName.toLowerCase(),
+            type: control instanceof HTMLInputElement ? control.type : "button",
+            step: control instanceof HTMLInputElement ? control.step : "",
+            ariaLabel: control.getAttribute("aria-label") ?? "",
+          })),
+        })),
+      stackLabels: [...layerOne.querySelectorAll(".videoIsfStackRow .videoIsfStageSelect strong")]
+        .map((label) => (label.textContent ?? "").trim()),
+      stackRowCount: layerOne.querySelectorAll(".videoIsfStackRow").length,
+      selectedStackIndex: Number(layerOne.querySelector(".videoIsfStackRow.selected")?.getAttribute("data-video-isf-stage-index") ?? -1),
+      runtimeErrorCount: layerOne.querySelectorAll(".videoIsfRuntimeBadge").length,
+      focusedAction: focused?.getAttribute("data-video-isf-action") ?? "",
+      focusedStageIndex: Number(focused?.closest?.("[data-video-isf-stage-index]")?.getAttribute("data-video-isf-stage-index") ?? -1),
     } : null,
     pagerHeading: (pager?.querySelector("strong")?.textContent ?? "").trim(),
     pagerText: (pager?.querySelector("span")?.textContent ?? "").trim().replace(/\s+/g, " "),
@@ -1007,8 +1112,12 @@ function readOperatorVjStateInPage() {
     mock: mock ? {
       calls: cloneForOperatorVjRead(mock.calls),
       snapshotReadCount: mock.snapshotReadCount,
+      diagnosticsReadCount: mock.diagnosticsReadCount,
+      eventPulses: cloneForOperatorVjRead(mock.eventPulses),
+      historyStatus: cloneForOperatorVjRead(mock.historyStatus),
       lastLayerOneEnabled: mock.lastSnapshot?.video?.layers?.find((layer) => layer.id === 1)?.isf_effect?.enabled ?? null,
       storedLayerOneEnabled: mock.effectsByLayerId?.[1]?.enabled ?? null,
+      storedEventValue: mock.effectsByLayerId?.[1]?.controls?.find((control) => control.name === "pulse")?.value?.[0] ?? null,
     } : null,
   };
 }
@@ -1062,10 +1171,16 @@ function measureOperatorVjLayoutInPage(layerId) {
   const layerPane = rect(document.querySelector(".videoMixerLayerPane"));
   const programPane = rect(document.querySelector(".videoMixerProgramPane"));
   const layerRoot = rect(document.querySelector(`[data-video-isf-layer-id="${layerId}"]`));
-  const advanced = rect(document.querySelector(`[data-video-isf-layer-id="${layerId}"] .videoIsfAdvanced`));
+  const advancedElement = document.querySelector(`[data-video-isf-layer-id="${layerId}"] .videoIsfAdvanced`);
+  const advanced = rect(advancedElement);
+  const advancedHorizontalBounds = advanced
+    ? { ...advanced, top: Number.NEGATIVE_INFINITY, bottom: Number.POSITIVE_INFINITY }
+    : null;
   const layerActions = [...document.querySelectorAll(
     `[data-video-isf-layer-id="${layerId}"] [data-video-isf-action]`,
-  )].map(rect);
+  )]
+    .filter((action) => !action.closest(".videoIsfAdvanced"))
+    .map(rect);
   const advancedControls = [...document.querySelectorAll(
     `[data-video-isf-layer-id="${layerId}"] .videoIsfAdvanced input, ` +
     `[data-video-isf-layer-id="${layerId}"] .videoIsfAdvanced select, ` +
@@ -1076,6 +1191,10 @@ function measureOperatorVjLayoutInPage(layerId) {
     .find((element) => element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0));
   const programMonitor = rect(document.querySelector('[data-live-video-monitor="program"]'));
   const programLabel = rect(document.querySelector('[data-live-video-monitor="program"] header span'));
+  const clipGridElement = document.querySelector(".videoMixerClipPane .videoClipGrid");
+  const audioSyncElement = document.querySelector(".videoMixerClipPane .videoAudioSyncStatus");
+  const recordingTelemetryElement = document.querySelector(".videoMixerClipPane .videoRecordingBar span");
+  const recordingTelemetryRect = rect(recordingTelemetryElement);
   const railButtons = [...document.querySelectorAll(".videoOutputRailButton[data-video-output-id]")].map(rect);
   const targets = [
     ["clipPane", containers.find((entry) => entry.name === "clipPane")?.rect, viewport],
@@ -1088,7 +1207,7 @@ function measureOperatorVjLayoutInPage(layerId) {
     ["programMonitor", programMonitor, programPane],
     ["programLabel", programLabel, programMonitor],
     ...layerActions.map((action, index) => [`layerAction${index + 1}`, action, layerRoot]),
-    ...advancedControls.map((control, index) => [`advancedControl${index + 1}`, control, advanced]),
+    ...advancedControls.map((control, index) => [`advancedControl${index + 1}`, control, advancedHorizontalBounds]),
     ...railButtons.map((button, index) => [`outputRailButton${index + 1}`, button, outputRail]),
   ].filter(([, child]) => child);
   const rectContainment = targets.map(([name, child, parent]) => ({ name, contained: contained(child, parent), rect: child }));
@@ -1096,6 +1215,17 @@ function measureOperatorVjLayoutInPage(layerId) {
     innerWidth,
     innerHeight,
     containers,
+    advancedViewport: advanced ? {
+      height: advanced.height,
+      clientHeight: advancedElement?.clientHeight ?? 0,
+      scrollHeight: advancedElement?.scrollHeight ?? 0,
+    } : null,
+    lowHeightClipGrid: {
+      clipGridRow: clipGridElement ? getComputedStyle(clipGridElement).gridRowStart : "",
+      audioSyncRow: audioSyncElement ? getComputedStyle(audioSyncElement).gridRowStart : "",
+      recordingTelemetryText: (recordingTelemetryElement?.textContent ?? "").trim(),
+      recordingTelemetryVisible: Boolean(recordingTelemetryRect && recordingTelemetryRect.width > 0 && recordingTelemetryRect.height > 0),
+    },
     unsafeOverflowCount: containers.filter((entry) => !entry.found || entry.unsafeX || entry.unsafeY).length,
     rectContainment,
     outsideRectCount: rectContainment.filter((entry) => !entry.contained).length,
@@ -2757,7 +2887,7 @@ async function measure(client, label) {
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'sel').length,
       visibleVideoLayerListCount: visibleCount('.videoLayerList'),
       visibleVideoLayerItemCount: visibleCount('.videoLayerItem'),
-      visibleBuiltinVideoFxSelectCount: visibleCount('.videoIsfPanel select[aria-label="Built-in FX"]'),
+      visibleBuiltinVideoFxSelectCount: visibleCount('.videoIsfPanel [data-video-isf-action="builtin"]'),
       visibleVideoMixerLayerDeckCount: visibleCount('.videoMixerLayerDeck'),
       visibleVideoMixerLayerFaderCount: visibleCount('.videoControlPanelMixer .videoMixerLayerDeck input[type="range"]'),
       visibleVideoMixerLayerButtonCount: visibleCount('.videoControlPanelMixer .videoMixerLayerDeck button'),
@@ -3390,73 +3520,89 @@ function hasExpectedControlModeSurface(result) {
     const liveTelemetryExpected = result.label.startsWith("control-mixer-live-");
     const liveTelemetryIsValid =
       !liveTelemetryExpected ||
-      (result.liveAudioRailTelemetryBadgeCount === 4 &&
+      (result.liveAudioRailTelemetryBadgeCount === 6 &&
         result.liveAudioRailCriticalTelemetryOverflowCount === 0 &&
         result.liveAudioRailTelemetryOutsideCount === 0);
-    return (
-      result.visibleLiveControlPanelCount === 0 &&
-      result.visibleControlStagePanelCount === 0 &&
-      result.visibleControlStageCount === 0 &&
-      result.visibleVideoControlPanelCount > 0 &&
-      result.visibleVideoMixerClipPaneCount === 1 &&
-      result.visibleVideoMixerProgramPaneCount === 1 &&
-      result.visibleVideoMixerLayerPaneCount === 1 &&
-      result.visibleVideoMonitorPanelCount === 1 &&
-      result.visibleVideoPreviewBusCount === 1 &&
-      result.visibleVideoProgramBusCount === 1 &&
-      result.visibleVjPreviewTransportCount === 1 &&
-      result.visibleVjPreviewTransportButtonCount === 4 &&
-      result.disabledVjPreviewTransportButtonCount === 4 &&
-      result.undersizedVjPreviewTransportButtonCount === 0 &&
-      result.visibleVjPreviewStageButtonCount > 0 &&
-      result.disabledVjPreviewStageButtonCount === result.visibleVjPreviewStageButtonCount &&
-      result.undersizedVjPreviewStageButtonCount === 0 &&
-      result.visibleVideoProgramRefreshCount === 0 &&
-      result.visibleVideoMasterControlCount > 0 &&
-      result.visibleVideoMasterFaderCount > 0 &&
-      result.visibleVideoClipGridCount > 0 &&
-      result.visibleVideoClipPadCount > 0 &&
-      result.visibleVideoClipTakeButtonCount > 0 &&
-      result.visibleVideoClipAudioButtonCount > 0 &&
-      result.visibleVideoProgramAudioToggleCount > 0 &&
-      result.visibleVideoAbDeckCount > 0 &&
-      result.visibleVideoDeckLoadButtonCount >= 2 &&
-      result.visibleVideoRecordingBarCount > 0 &&
-      result.visibleLiveAudioInputBarCount === 1 &&
-      result.liveAudioInputBarDomCount === 1 &&
-      result.visibleLiveAudioRailCount === 1 &&
-      result.visibleEmbeddedLiveAudioCount === 0 &&
-      result.liveAudioRailHeight > 0 &&
-      result.liveAudioRailHeight <= 70 &&
-      result.liveAudioRailBelowMaster === true &&
-      result.liveAudioRailAboveClipGrid === true &&
-      result.liveAudioRailOverflowX <= 1 &&
-      result.liveAudioRailOverflowY <= 1 &&
-      result.liveAudioRailControlOverflowY <= 1 &&
-      result.liveAudioRailMeterCount === 3 &&
-      result.liveAudioRailPoliteRegionCount === 1 &&
-      liveTelemetryIsValid &&
-      result.videoClipGridClientHeight >= 90 &&
-      result.fullyVisibleVideoClipPadCount >= 1 &&
-      result.visibleVideoOutputControlListCount > 0 &&
-      result.visibleVideoOutputItemCount > 0 &&
-      result.visibleVideoOutputSelectedItemCount > 0 &&
-      result.visibleVideoMixerOutputDeckCount >= result.visibleVideoOutputItemCount &&
-      result.visibleVideoMixerOutputFaderCount >= result.visibleVideoOutputItemCount &&
-      result.visibleVideoMixerOutputSelectButtonCount >= result.visibleVideoOutputItemCount &&
-      result.visibleVideoLayerListCount > 0 &&
-      result.visibleVideoLayerItemCount > 0 &&
-      result.visibleBuiltinVideoFxSelectCount > 0 &&
-      result.visibleVideoMixerLayerDeckCount >= result.visibleVideoLayerItemCount &&
-      result.visibleVideoMixerLayerFaderCount >= result.visibleVideoLayerItemCount &&
-      result.visibleVideoMixerLayerButtonCount >= 5 &&
-      result.visibleVideoDeckPagerCount >= 2 &&
-      result.controlWorkSurfaceUnsafeOverflowCount === 0 &&
-      result.visibleVideoMixerDiagnosticsCount === 0 &&
-      result.visibleVideoMixerSetupToolsCount === 0 &&
-      result.visibleVideoMixerAutomationToolsCount === 0 &&
-      result.visibleOutputPanelCount === 0
-    );
+    const mixerChecks = {
+      exclusiveSurface:
+        result.visibleLiveControlPanelCount === 0 &&
+        result.visibleControlStagePanelCount === 0 &&
+        result.visibleControlStageCount === 0 &&
+        result.visibleVideoControlPanelCount > 0,
+      threePaneMixer:
+        result.visibleVideoMixerClipPaneCount === 1 &&
+        result.visibleVideoMixerProgramPaneCount === 1 &&
+        result.visibleVideoMixerLayerPaneCount === 1,
+      liveMonitors:
+        result.visibleVideoMonitorPanelCount === 1 &&
+        result.visibleVideoPreviewBusCount === 1 &&
+        result.visibleVideoProgramBusCount === 1,
+      previewTransport:
+        result.visibleVjPreviewTransportCount === 1 &&
+        result.visibleVjPreviewTransportButtonCount === 4 &&
+        result.disabledVjPreviewTransportButtonCount === 4 &&
+        result.undersizedVjPreviewTransportButtonCount === 0,
+      previewStage:
+        result.visibleVjPreviewStageButtonCount > 0 &&
+        result.disabledVjPreviewStageButtonCount === result.visibleVjPreviewStageButtonCount &&
+        result.undersizedVjPreviewStageButtonCount === 0 &&
+        result.visibleVideoProgramRefreshCount === 0,
+      masterAndClips:
+        result.visibleVideoMasterControlCount > 0 &&
+        result.visibleVideoMasterFaderCount > 0 &&
+        result.visibleVideoClipGridCount > 0 &&
+        result.visibleVideoClipPadCount > 0 &&
+        result.visibleVideoClipTakeButtonCount > 0,
+      audioAndDecks:
+        result.visibleVideoClipAudioButtonCount > 0 &&
+        result.visibleVideoProgramAudioToggleCount > 0 &&
+        result.visibleVideoAbDeckCount > 0 &&
+        result.visibleVideoDeckLoadButtonCount >= 2 &&
+        result.visibleVideoRecordingBarCount > 0,
+      liveAudioRail:
+        result.visibleLiveAudioInputBarCount === 1 &&
+        result.liveAudioInputBarDomCount === 1 &&
+        result.visibleLiveAudioRailCount === 1 &&
+        result.visibleEmbeddedLiveAudioCount === 0 &&
+        result.liveAudioRailHeight > 0 &&
+        result.liveAudioRailHeight <= 70 &&
+        result.liveAudioRailBelowMaster === true &&
+        result.liveAudioRailAboveClipGrid === true &&
+        result.liveAudioRailOverflowX <= 1 &&
+        result.liveAudioRailOverflowY <= 1 &&
+        result.liveAudioRailControlOverflowY <= 1 &&
+        result.liveAudioRailMeterCount === 3 &&
+        result.liveAudioRailPoliteRegionCount === 1,
+      liveTelemetry: liveTelemetryIsValid,
+      clipGrid:
+        result.videoClipGridClientHeight >= 90 &&
+        result.fullyVisibleVideoClipPadCount >= 1,
+      outputDecks:
+        result.visibleVideoOutputControlListCount > 0 &&
+        result.visibleVideoOutputItemCount > 0 &&
+        result.visibleVideoOutputSelectedItemCount > 0 &&
+        result.visibleVideoMixerOutputDeckCount >= result.visibleVideoOutputItemCount &&
+        result.visibleVideoMixerOutputFaderCount >= result.visibleVideoOutputItemCount &&
+        result.visibleVideoMixerOutputSelectButtonCount >= result.visibleVideoOutputItemCount,
+      layerDecks:
+        result.visibleVideoLayerListCount > 0 &&
+        result.visibleVideoLayerItemCount > 0 &&
+        result.visibleBuiltinVideoFxSelectCount > 0 &&
+        result.visibleVideoMixerLayerDeckCount >= result.visibleVideoLayerItemCount &&
+        result.visibleVideoMixerLayerFaderCount >= result.visibleVideoLayerItemCount &&
+        result.visibleVideoMixerLayerButtonCount >= 5 &&
+        result.visibleVideoDeckPagerCount >= 2,
+      noLegacyPanels:
+        result.controlWorkSurfaceUnsafeOverflowCount === 0 &&
+        result.visibleVideoMixerDiagnosticsCount === 0 &&
+        result.visibleVideoMixerSetupToolsCount === 0 &&
+        result.visibleVideoMixerAutomationToolsCount === 0 &&
+        result.visibleOutputPanelCount === 0,
+    };
+    result.controlModeFailedChecks = Object.entries(mixerChecks)
+      .filter(([, passed]) => !passed)
+      .map(([name]) => name);
+    return result.controlModeFailedChecks.length === 0;
   }
   return true;
 }
@@ -4360,13 +4506,14 @@ async function runOperatorVjAcceptanceViewport(client, viewport, locale) {
     `(() => {
       const root = document.querySelector('[data-video-isf-layer-id="1"]');
       return document.querySelectorAll('.videoIsfAdvanced').length === 1 &&
-        root?.querySelectorAll('.videoIsfAdvanced .videoIsfControl').length === 2 &&
+        root?.querySelectorAll('.videoIsfAdvanced .videoIsfControl').length === 6 &&
+        root?.querySelectorAll('.videoIsfAdvanced .videoIsfStackRow').length === 8 &&
         root?.querySelector('[data-video-isf-action="advanced"]')?.getAttribute('aria-expanded') === 'true';
     })()`,
     "Operator VJ layer 1 Advanced controls",
   );
   await client.evaluate(`document.querySelector('[data-video-isf-layer-id="1"] .videoIsfAdvanced')?.scrollIntoView({ block: 'nearest' })`);
-  await sleep(40);
+  await sleep(500);
   const expanded = await readOperatorVjState(client);
   const expandedLayout = await measureOperatorVjLayout(client, 1);
   if (screenshotDir && shouldCaptureViewport(viewport)) {
@@ -4377,6 +4524,179 @@ async function runOperatorVjAcceptanceViewport(client, viewport, locale) {
       "base64",
     );
   }
+
+  await clickVisibleSelector(
+    client,
+    '[data-video-isf-layer-id="1"] [data-video-isf-action="trigger-event"]',
+  );
+  await client.evaluate("document.querySelector('.appMenuButton')?.click()");
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const root = document.querySelector('[data-video-isf-layer-id="1"]');
+      const undo = document.querySelector('[aria-keyshortcuts^="Control+Z"]');
+      const redo = document.querySelector('[aria-keyshortcuts^="Control+Y"]');
+      return root?.getAttribute('aria-busy') === 'true' &&
+        root.querySelector('[data-video-isf-action="trigger-event"]')?.disabled === true &&
+        root.querySelector('[data-video-isf-stage-index="0"] [data-video-isf-action="move-down"]')?.disabled === true &&
+        undo?.disabled === true && redo?.disabled === true &&
+        window.__syndocalOperatorVjMock?.eventPulses?.[0]?.values?.join(',') === '1';
+    })()`,
+    "Operator VJ Event pulse busy interlock",
+  );
+  await client.evaluate(`(() => {
+    document.querySelector('[data-video-isf-layer-id="1"] [data-video-isf-stage-index="0"] [data-video-isf-action="move-down"]')?.click();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+  })()`);
+  const pulseBusy = await readOperatorVjState(client);
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const root = document.querySelector('[data-video-isf-layer-id="1"]');
+      const mock = window.__syndocalOperatorVjMock;
+      return root?.getAttribute('aria-busy') === 'false' &&
+        root.querySelector('[data-video-isf-action="trigger-event"]')?.disabled === false &&
+        document.querySelector('[aria-keyshortcuts^="Control+Z"]')?.disabled === false &&
+        document.querySelector('[aria-keyshortcuts^="Control+Y"]')?.disabled === false &&
+        mock?.eventPulses?.[0]?.values?.join(',') === '1,0' &&
+        mock?.effectsByLayerId?.[1]?.controls?.find((control) => control.name === 'pulse')?.value?.[0] === 0;
+    })()`,
+    "Operator VJ Event pulse completion",
+  );
+  const pulseCompleted = await readOperatorVjState(client);
+
+  await clickVisibleSelector(
+    client,
+    '[data-video-isf-layer-id="1"] [data-video-isf-stage-index="1"] [data-video-isf-action="select-stage"]',
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const root = document.querySelector('[data-video-isf-layer-id="1"]');
+      return root?.querySelector('.videoIsfStackRow.selected')?.getAttribute('data-video-isf-stage-index') === '1' &&
+        root?.querySelector('.videoIsfSelectedEditor')?.getAttribute('data-video-isf-editor-stage') === '1' &&
+        root?.querySelectorAll('.videoIsfAdvanced .videoIsfControl').length === 1 &&
+        (root?.querySelector('.videoIsfQuickStatus [data-no-localize]')?.textContent || '').trim() === 'Monochrome' &&
+        root?.querySelector('[data-video-isf-action="bypass"]')?.getAttribute('aria-pressed') === 'false';
+    })()`,
+    "Operator VJ selected tail stage editor",
+  );
+  const selectedTail = await readOperatorVjState(client);
+
+  await clickVisibleSelector(
+    client,
+    '[data-video-isf-layer-id="1"] [data-video-isf-stage-index="1"] [data-video-isf-action="toggle-stage"]',
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const root = document.querySelector('[data-video-isf-layer-id="1"]');
+      const toggle = root?.querySelector('[data-video-isf-stage-index="1"] [data-video-isf-action="toggle-stage"]');
+      return root?.querySelector('[data-video-isf-action="advanced"]')?.getAttribute('aria-expanded') === 'true' &&
+        root.querySelector('.videoIsfStackRow.selected')?.getAttribute('data-video-isf-stage-index') === '1' &&
+        toggle?.getAttribute('aria-pressed') === 'true' &&
+        window.__syndocalOperatorVjMock?.snapshotReadCount >= 1 &&
+        window.__syndocalOperatorVjMock?.diagnosticsReadCount >= 2;
+    })()`,
+    "Operator VJ Advanced mutation preserves state and publishes GPU error",
+  );
+  const enabledTail = await readOperatorVjState(client);
+
+  await clickVisibleSelector(
+    client,
+    '[data-video-isf-layer-id="1"] [data-video-isf-stage-index="1"] [data-video-isf-action="toggle-stage"]',
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const root = document.querySelector('[data-video-isf-layer-id="1"]');
+      const toggle = root?.querySelector('[data-video-isf-stage-index="1"] [data-video-isf-action="toggle-stage"]');
+      return root?.querySelector('[data-video-isf-action="advanced"]')?.getAttribute('aria-expanded') === 'true' &&
+        root.querySelector('.videoIsfStackRow.selected')?.getAttribute('data-video-isf-stage-index') === '1' &&
+        toggle?.getAttribute('aria-pressed') === 'false' &&
+        window.__syndocalOperatorVjMock?.snapshotReadCount >= 2 &&
+        window.__syndocalOperatorVjMock?.diagnosticsReadCount >= 3;
+    })()`,
+    "Operator VJ Advanced bypass clears GPU error without remount",
+  );
+  const disabledTail = await readOperatorVjState(client);
+
+  await clickVisibleSelector(
+    client,
+    '[data-video-isf-layer-id="1"] [data-video-isf-stage-index="2"] [data-video-isf-action="move-up"]',
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const root = document.querySelector('[data-video-isf-layer-id="1"]');
+      const focused = document.activeElement;
+      return [...root.querySelectorAll('.videoIsfStackRow .videoIsfStageSelect strong')].map((label) => label.textContent?.trim()).join(',') === 'Threshold,Invert,Monochrome,RGB Split,Mirror,Scanlines,Vignette,Posterize' &&
+        root.querySelector('.videoIsfStackRow.selected')?.getAttribute('data-video-isf-stage-index') === '2' &&
+        (root.querySelector('.videoIsfQuickStatus [data-no-localize]')?.textContent || '').trim() === 'Monochrome' &&
+        focused?.getAttribute('data-video-isf-action') === 'move-up' &&
+        focused?.closest('[data-video-isf-stage-index]')?.getAttribute('data-video-isf-stage-index') === '1' &&
+        window.__syndocalOperatorVjMock?.snapshotReadCount === 3 &&
+        window.__syndocalOperatorVjMock?.diagnosticsReadCount === 4;
+    })()`,
+    "Operator VJ crossing move preserves selected FX identity",
+  );
+  const crossedTail = await readOperatorVjState(client);
+
+  await clickVisibleSelector(
+    client,
+    '[data-video-isf-layer-id="1"] [data-video-isf-stage-index="2"] [data-video-isf-action="move-up"]',
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const root = document.querySelector('[data-video-isf-layer-id="1"]');
+      const focused = document.activeElement;
+      return [...root.querySelectorAll('.videoIsfStackRow .videoIsfStageSelect strong')].map((label) => label.textContent?.trim()).join(',') === 'Threshold,Monochrome,Invert,RGB Split,Mirror,Scanlines,Vignette,Posterize' &&
+        root.querySelector('.videoIsfStackRow.selected')?.getAttribute('data-video-isf-stage-index') === '1' &&
+        (root.querySelector('.videoIsfQuickStatus [data-no-localize]')?.textContent || '').trim() === 'Monochrome' &&
+        focused?.getAttribute('data-video-isf-action') === 'move-up' &&
+        focused?.closest('[data-video-isf-stage-index]')?.getAttribute('data-video-isf-stage-index') === '1' &&
+        window.__syndocalOperatorVjMock?.snapshotReadCount === 4 &&
+        window.__syndocalOperatorVjMock?.diagnosticsReadCount === 5;
+    })()`,
+    "Operator VJ selected move preserves FX identity",
+  );
+  const movedTailRestored = await readOperatorVjState(client);
+
+  await clickVisibleSelector(
+    client,
+    '[data-video-isf-layer-id="1"] [data-video-isf-stage-index="1"] [data-video-isf-action="remove"]',
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const root = document.querySelector('[data-video-isf-layer-id="1"]');
+      return [...root.querySelectorAll('.videoIsfStackRow .videoIsfStageSelect strong')].map((label) => label.textContent?.trim()).join(',') === 'Threshold,Invert,RGB Split,Mirror,Scanlines,Vignette,Posterize' &&
+        root.querySelector('.videoIsfStackRow.selected')?.getAttribute('data-video-isf-stage-index') === '1' &&
+        (root.querySelector('.videoIsfQuickStatus [data-no-localize]')?.textContent || '').trim() === 'Invert' &&
+        window.__syndocalOperatorVjMock?.snapshotReadCount === 5 &&
+        window.__syndocalOperatorVjMock?.diagnosticsReadCount === 6;
+    })()`,
+    "Operator VJ selected removal chooses safe adjacent FX",
+  );
+  const removedTail = await readOperatorVjState(client);
+
+  await clickVisibleSelector(
+    client,
+    '[data-video-isf-layer-id="1"] [data-video-isf-stage-index="0"] [data-video-isf-action="select-stage"]',
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const root = document.querySelector('[data-video-isf-layer-id="1"]');
+      return root?.querySelector('.videoIsfStackRow.selected')?.getAttribute('data-video-isf-stage-index') === '0' &&
+        root?.querySelector('.videoIsfSelectedEditor')?.getAttribute('data-video-isf-editor-stage') === '0' &&
+        root?.querySelectorAll('.videoIsfAdvanced .videoIsfControl').length === 6 &&
+        (root?.querySelector('.videoIsfQuickStatus [data-no-localize]')?.textContent || '').trim() === 'Threshold';
+    })()`,
+    "Operator VJ restored root stage editor",
+  );
+  const selectedRootRestored = await readOperatorVjState(client);
 
   await clickVisibleSelector(client, '[data-video-isf-layer-id="1"] [data-video-isf-action="advanced"]');
   await waitForClientCondition(
@@ -4393,7 +4713,7 @@ async function runOperatorVjAcceptanceViewport(client, viewport, locale) {
     `(() => {
       const mock = window.__syndocalOperatorVjMock;
       return document.querySelector('[data-video-isf-layer-id="1"] [data-video-isf-action="bypass"]')?.getAttribute('aria-pressed') === 'false' &&
-        mock?.snapshotReadCount === 1 && mock?.effectsByLayerId?.[1]?.enabled === false;
+        mock?.snapshotReadCount === 6 && mock?.diagnosticsReadCount === 7 && mock?.effectsByLayerId?.[1]?.enabled === false;
     })()`,
     "Operator VJ transactional bypass snapshot",
   );
@@ -4437,13 +4757,55 @@ async function runOperatorVjAcceptanceViewport(client, viewport, locale) {
   const outerContainment = await measure(client, `operator-vj-${locale}-${viewport.width}x${viewport.height}`);
 
   const calls = bypassed.mock?.calls ?? [];
-  const beginIndex = calls.findIndex((call) => call.command === "begin_project_transaction");
-  const mutationIndex = calls.findIndex((call) => call.command === "set_video_layer_isf_effect");
-  const commitIndex = calls.findIndex((call) => call.command === "commit_project_transaction");
-  const snapshotIndex = calls.findIndex((call) => call.command === "get_snapshot");
+  const mutationIndex = calls.findIndex((call) =>
+    call.command === "set_video_layer_isf_effect_enabled" && call.args?.stageIndex === 0
+  );
+  const beginIndex = calls.reduce((latest, call, index) =>
+    call.command === "begin_project_transaction" && index < mutationIndex ? index : latest
+  , -1);
+  const commitIndex = calls.findIndex((call, index) =>
+    index > mutationIndex && call.command === "commit_project_transaction"
+  );
+  const snapshotIndex = calls.findIndex((call, index) => index > commitIndex && call.command === "get_snapshot");
   const expectedHeading = locale === "ja" ? "レイヤー" : "Layers";
   const expectedAdvanced = locale === "ja" ? "詳細" : "Advanced";
   const expectedBypassed = locale === "ja" ? "バイパス" : "Bypassed";
+  const maximumStackLabels = "Threshold,Monochrome,Invert,RGB Split,Mirror,Scanlines,Vignette,Posterize";
+  const crossedStackLabels = "Threshold,Invert,Monochrome,RGB Split,Mirror,Scanlines,Vignette,Posterize";
+  const removedStackLabels = "Threshold,Invert,RGB Split,Mirror,Scanlines,Vignette,Posterize";
+  const expectedQuickBypassLabel = locale === "ja"
+    ? "Threshold Pulse（レイヤー1）のThreshold FX有効状態"
+    : "Threshold FX enabled for Threshold Pulse (layer 1)";
+  const expectedTailBypassLabel = locale === "ja"
+    ? "Threshold Pulse（レイヤー1）のMonochrome FX有効状態"
+    : "Monochrome FX enabled for Threshold Pulse (layer 1)";
+  const expectedControlLabels = locale === "ja"
+    ? [
+        "Threshold Pulse（レイヤー1）のlevel 成分1",
+        "Threshold Pulse（レイヤー1）のThreshold FXのuseSourceAlpha",
+        "Threshold Pulse（レイヤー1）のtoneCount 成分1",
+        "Threshold Pulse（レイヤー1）のcenter 成分1",
+        "Threshold Pulse（レイヤー1）のcenter 成分2",
+        "Threshold Pulse（レイヤー1）のtint 成分1",
+        "Threshold Pulse（レイヤー1）のtint 成分2",
+        "Threshold Pulse（レイヤー1）のtint 成分3",
+        "Threshold Pulse（レイヤー1）のtint 成分4",
+        "Threshold Pulse（レイヤー1）のpulseをトリガー",
+      ]
+    : [
+        "level component 1 for Threshold Pulse (layer 1)",
+        "useSourceAlpha for Threshold FX on Threshold Pulse (layer 1)",
+        "toneCount component 1 for Threshold Pulse (layer 1)",
+        "center component 1 for Threshold Pulse (layer 1)",
+        "center component 2 for Threshold Pulse (layer 1)",
+        "tint component 1 for Threshold Pulse (layer 1)",
+        "tint component 2 for Threshold Pulse (layer 1)",
+        "tint component 3 for Threshold Pulse (layer 1)",
+        "tint component 4 for Threshold Pulse (layer 1)",
+        "Trigger pulse for Threshold Pulse (layer 1)",
+      ];
+  const expandedControlRows = expanded.layerOne?.controlRows ?? [];
+  const expandedControlLabels = expandedControlRows.flatMap((row) => row.controls.map((control) => control.ariaLabel));
   const layoutPhases = [initialLayout, expandedLayout, terminalBankLayout, outputLayout];
   const checks = {
     fixtureAndLocale:
@@ -4454,28 +4816,88 @@ async function runOperatorVjAcceptanceViewport(client, viewport, locale) {
       initial.advancedDomCount === 0 && initial.layerOne?.advancedExpanded === "false",
     initialFxQuickRack:
       initial.layerOne?.bypassPressed === "true" && initial.layerOne?.bypassActive === true &&
+      initial.layerOne?.bypassAriaLabel === expectedQuickBypassLabel &&
       initial.layerOne?.advancedText === expectedAdvanced &&
       initial.layerOne?.advancedAriaLabel.includes("Threshold Pulse") &&
       initial.layerOne?.advancedAriaLabel.includes("1") &&
       initial.layerOne?.builtinAriaLabel.includes("Threshold Pulse") &&
       initial.layerOne?.builtinAriaLabel.includes("1"),
     advancedLazyMount:
-      expanded.advancedDomCount === 1 && expanded.layerOne?.controlCount === 2 &&
-      expanded.layerOne?.advancedExpanded === "true",
+      expanded.advancedDomCount === 1 && expanded.layerOne?.controlCount === 6 &&
+      expanded.layerOne?.advancedExpanded === "true" && expanded.layerOne?.stackRowCount === 8 &&
+      expanded.layerOne?.stackLabels.join(",") === maximumStackLabels &&
+      expanded.layerOne?.selectedStackIndex === 0,
+    maximumStackAndControlKinds:
+      expanded.layerOne?.builtinDisabled === true && expanded.layerOne?.addIsfDisabled === true &&
+      expanded.layerOne?.stackCountText === "8/8 FX" &&
+      expandedControlRows.map((row) => row.kind).join(",") === "Float,Bool,Long,Point2d,Color,Event" &&
+      expandedControlRows.map((row) => row.name).join(",") === "level,useSourceAlpha,toneCount,center,tint,pulse" &&
+      expandedControlRows.map((row) => row.controls.length).join(",") === "1,1,1,2,4,1" &&
+      expandedControlRows.find((row) => row.kind === "Bool")?.controls[0]?.type === "checkbox" &&
+      expandedControlRows.find((row) => row.kind === "Long")?.controls[0]?.step === "1" &&
+      JSON.stringify(expandedControlLabels) === JSON.stringify(expectedControlLabels),
+    eventPulseNonHistoricalInterlock:
+      pulseBusy.mock?.eventPulses?.[0]?.values?.join(",") === "1" &&
+      pulseBusy.mock?.historyStatus?.undo_depth === 4 && pulseBusy.mock?.historyStatus?.redo_depth === 2 &&
+      pulseCompleted.mock?.eventPulses?.[0]?.values?.join(",") === "1,0" &&
+      pulseCompleted.mock?.storedEventValue === 0 &&
+      pulseCompleted.mock?.historyStatus?.undo_depth === 4 && pulseCompleted.mock?.historyStatus?.redo_depth === 2 &&
+      pulseCompleted.mock?.calls.filter((call) => call.command === "pulse_video_layer_isf_event").length === 1 &&
+      pulseCompleted.mock?.calls.filter((call) => call.command === "begin_project_transaction").length === 0 &&
+      pulseCompleted.mock?.calls.filter((call) => call.command === "commit_project_transaction").length === 0 &&
+      pulseCompleted.mock?.calls.filter((call) => call.command === "get_snapshot").length === 0 &&
+      pulseCompleted.mock?.calls.filter((call) => call.command === "move_video_layer_isf_effect").length === 0,
+    selectedStageEditorLazySwitch:
+      selectedTail.layerOne?.label === "Monochrome" && selectedTail.layerOne?.controlCount === 1 &&
+      selectedTail.layerOne?.selectedStackIndex === 1 && selectedTail.layerOne?.bypassPressed === "false" &&
+      selectedTail.layerOne?.bypassAriaLabel === expectedTailBypassLabel &&
+      selectedRootRestored.layerOne?.label === "Threshold" &&
+      selectedRootRestored.layerOne?.controlCount === 6 &&
+      selectedRootRestored.layerOne?.selectedStackIndex === 0 &&
+      selectedRootRestored.layerOne?.bypassPressed === "true",
+    advancedMutationStateFocusAndDiagnostics:
+      enabledTail.layerOne?.advancedExpanded === "true" && enabledTail.layerOne?.selectedStackIndex === 1 &&
+      enabledTail.layerOne?.label === "Monochrome" && enabledTail.layerOne?.focusedAction === "toggle-stage" &&
+      enabledTail.layerOne?.focusedStageIndex === 1 && enabledTail.layerOne?.runtimeErrorCount === 1 &&
+      disabledTail.layerOne?.advancedExpanded === "true" && disabledTail.layerOne?.selectedStackIndex === 1 &&
+      disabledTail.layerOne?.label === "Monochrome" && disabledTail.layerOne?.focusedAction === "toggle-stage" &&
+      disabledTail.layerOne?.focusedStageIndex === 1 && disabledTail.layerOne?.runtimeErrorCount === 0,
+    moveRemoveSelectionIdentity:
+      crossedTail.layerOne?.stackLabels.join(",") === crossedStackLabels &&
+      crossedTail.layerOne?.selectedStackIndex === 2 && crossedTail.layerOne?.label === "Monochrome" &&
+      movedTailRestored.layerOne?.stackLabels.join(",") === maximumStackLabels &&
+      movedTailRestored.layerOne?.selectedStackIndex === 1 && movedTailRestored.layerOne?.label === "Monochrome" &&
+      removedTail.layerOne?.stackLabels.join(",") === removedStackLabels &&
+      removedTail.layerOne?.selectedStackIndex === 1 && removedTail.layerOne?.label === "Invert" &&
+      removedTail.layerOne?.builtinDisabled === false && removedTail.layerOne?.addIsfDisabled === false &&
+      removedTail.layerOne?.stackCountText === "7/8 FX",
     advancedUnmountsOnClose:
       collapsed.advancedDomCount === 0 && collapsed.layerOne?.advancedExpanded === "false",
     bypassTransactionSnapshotAndAria:
       beginIndex >= 0 && mutationIndex > beginIndex && commitIndex > mutationIndex && snapshotIndex > commitIndex &&
-      calls.filter((call) => call.command === "begin_project_transaction").length === 1 &&
-      calls.filter((call) => call.command === "set_video_layer_isf_effect").length === 1 &&
-      calls.filter((call) => call.command === "commit_project_transaction").length === 1 &&
+      calls.filter((call) => call.command === "begin_project_transaction").length === 6 &&
+      calls.filter((call) => call.command === "set_video_layer_isf_effect_enabled").length === 3 &&
+      calls.filter((call) => call.command === "move_video_layer_isf_effect").length === 2 &&
+      calls.filter((call) => call.command === "remove_video_layer_isf_effect").length === 1 &&
+      calls.filter((call) => call.command === "commit_project_transaction").length === 6 &&
       calls.filter((call) => call.command === "cancel_project_transaction").length === 0 &&
-      calls.filter((call) => call.command === "get_snapshot").length === 1 &&
-      calls[mutationIndex]?.args?.layerId === 1 && calls[mutationIndex]?.args?.effect?.enabled === false &&
-      bypassed.mock?.snapshotReadCount === 1 && bypassed.mock?.storedLayerOneEnabled === false &&
+      calls.filter((call) => call.command === "get_snapshot").length === 6 &&
+      calls[mutationIndex]?.args?.layerId === 1 && calls[mutationIndex]?.args?.stageIndex === 0 &&
+      calls[mutationIndex]?.args?.enabled === false &&
+      bypassed.mock?.snapshotReadCount === 6 && bypassed.mock?.diagnosticsReadCount === 7 &&
+      bypassed.mock?.historyStatus?.undo_depth === 10 && bypassed.mock?.historyStatus?.redo_depth === 0 &&
+      bypassed.mock?.storedLayerOneEnabled === false &&
       bypassed.mock?.lastLayerOneEnabled === false && bypassed.layerOne?.bypassPressed === "false" &&
       bypassed.layerOne?.bypassActive === false && bypassed.layerOne?.bypassText === expectedBypassed &&
       bypassed.layerOne?.statusText.includes(expectedBypassed),
+    recordingTelemetryVisible:
+      initialLayout.lowHeightClipGrid.recordingTelemetryVisible &&
+      initialLayout.lowHeightClipGrid.recordingTelemetryText.includes("2 dropped"),
+    lowHeightClipGridPlacement:
+      viewport.height > 740 || (
+        initialLayout.lowHeightClipGrid.audioSyncRow === "3" &&
+        initialLayout.lowHeightClipGrid.clipGridRow === "4"
+      ),
     sixPlusOneLayerBanks:
       initial.layerIds.join(",") === "1,2,3,4,5,6" && initial.pagerHeading === expectedHeading &&
       initial.pagerText === "1-6 / 7" && bankChanged && terminalBank.layerIds.join(",") === "7" &&
@@ -4505,6 +4927,15 @@ async function runOperatorVjAcceptanceViewport(client, viewport, locale) {
     failedChecks,
     initial,
     expanded,
+    pulseBusy,
+    pulseCompleted,
+    selectedTail,
+    enabledTail,
+    disabledTail,
+    crossedTail,
+    movedTailRestored,
+    removedTail,
+    selectedRootRestored,
     bypassed,
     terminalBank,
     outputSelected,
@@ -7146,6 +7577,7 @@ async function main() {
                 failedChecks: result.failedChecks,
                 layers: [result.initial.layerIds, result.terminalBank.layerIds],
                 advanced: [result.initial.advancedDomCount, result.expanded.layerOne?.controlCount, result.terminalBank.advancedDomCount],
+                advancedViewport: result.layoutPhases[1]?.advancedViewport,
                 bypass: {
                   pressed: result.bypassed.layerOne?.bypassPressed,
                   snapshotReads: result.bypassed.mock?.snapshotReadCount,
@@ -7160,6 +7592,9 @@ async function main() {
                 layout: result.layoutPhases.map((phase) => ({
                   overflow: phase.unsafeOverflowCount,
                   outside: phase.outsideRectCount,
+                  outsideNames: phase.rectContainment
+                    .filter((entry) => !entry.contained)
+                    .map((entry) => entry.name),
                 })),
               }),
           );
@@ -7486,7 +7921,7 @@ async function main() {
         ? ` moveFx=${result.effectTypeValue}/${result.visibleMoveEffectPointRowCount} editor=${result.moveEffectEditorWidth}x${result.moveEffectEditorHeight} path=${result.moveEffectPathDeskWidth}w canvas=${result.moveEffectPathCanvasWidth}x${result.moveEffectPathCanvasHeight} inspector=${result.moveEffectInspectorWidth}w columns=${result.moveEffectColumnsSideBySide ? 2 : 1} coverage=${result.moveEffectSurfaceWidthCoverage}/${result.moveEffectColumnAreaCoverage} unused=${result.moveEffectUnusedRightPx}/${result.moveEffectUnusedBottomPx} scroll=${result.moveEffectFormVerticalOverflowPx}/${result.moveEffectPointListVerticalOverflowPx} reachable=${result.moveEffectLastControlReachable ? 1 : 0}/${result.moveEffectLastPointReachable ? 1 : 0} contained=${result.moveEffectEditorContained ? 1 : 0}/${result.moveEffectCanvasContained ? 1 : 0} overflow=${result.moveEffectEditorHorizontalOverflowPx}/${result.moveEffectFormHorizontalOverflowPx}`
         : "";
       const mixerSuffix = result.label.startsWith("control-mixer-")
-        ? ` mixer=${result.visibleVideoOutputItemCount}/${result.visibleVideoOutputSelectedItemCount}/${result.visibleVideoMixerOutputDeckCount}/${result.visibleVideoMixerOutputFaderCount}/${result.visibleVideoMixerOutputSelectButtonCount}/${result.visibleVideoLayerItemCount}/${result.visibleBuiltinVideoFxSelectCount}/${result.visibleVideoMixerLayerDeckCount}/${result.visibleVideoMixerLayerFaderCount}/${result.visibleVideoMixerLayerButtonCount}`
+        ? ` mixer=${result.visibleVideoOutputItemCount}/${result.visibleVideoOutputSelectedItemCount}/${result.visibleVideoMixerOutputDeckCount}/${result.visibleVideoMixerOutputFaderCount}/${result.visibleVideoMixerOutputSelectButtonCount}/${result.visibleVideoLayerItemCount}/${result.visibleBuiltinVideoFxSelectCount}/${result.visibleVideoMixerLayerDeckCount}/${result.visibleVideoMixerLayerFaderCount}/${result.visibleVideoMixerLayerButtonCount} clip=${result.videoClipGridClientHeight}/${result.fullyVisibleVideoClipPadCount} contract=${result.controlModeFailedChecks?.join(",") || "ok"}`
         : "";
       console.log(
         `${status} [${viewportRole({ width: result.innerWidth, height: result.innerHeight })}] ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${keyboardSuffix}${timelineSuffix}${sceneBlockSuffix}${touchSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${positionVisualSuffix}${colorEffectSuffix}${chaserEffectSuffix}${moveEffectSuffix}${mixerSuffix}`,

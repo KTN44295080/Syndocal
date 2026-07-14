@@ -1000,7 +1000,10 @@ export interface VideoPreviewDiagnostics {
   decoder_cache_len: number;
   decoder_diagnostics: VideoDecoderDiagnostics;
   isf_pipeline_count: number;
+  isf_last_stack_stage_count: number;
+  isf_last_stack_render_us: number;
   last_isf_error?: string | null;
+  isf_stage_errors: VideoIsfStageError[];
   prefetch_count: number;
   prefetch_interval_ms: number;
   bpm?: number | null;
@@ -1192,7 +1195,7 @@ export interface VideoIsfControlSummary {
   values: number[];
 }
 
-export interface VideoIsfEffectSummary {
+export interface VideoIsfEffectStageSummary {
   enabled: boolean;
   label: string;
   source: string;
@@ -1200,6 +1203,17 @@ export interface VideoIsfEffectSummary {
   description?: string | null;
   categories: string[];
   controls: VideoIsfControlSummary[];
+}
+
+export interface VideoIsfEffectSummary extends VideoIsfEffectStageSummary {
+  stack?: VideoIsfEffectStageSummary[];
+}
+
+export interface VideoIsfStageError {
+  layer_id: number;
+  stage_index?: number | null;
+  stage_label?: string | null;
+  message: string;
 }
 
 export interface VideoLayerSummary {

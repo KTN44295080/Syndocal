@@ -45,6 +45,24 @@ assert.equal(
   "Program Texture（レイヤー12）のFX有効状態",
 );
 assert.equal(
+  localization.translateUiText("Threshold FX enabled for Program Texture (layer 12)", "ja"),
+  "Program Texture（レイヤー12）のThreshold FX有効状態",
+);
+assert.equal(
+  localization.translateUiText("useSourceAlpha for Threshold FX on Program Texture (layer 12)", "ja"),
+  "Program Texture（レイヤー12）のThreshold FXのuseSourceAlpha",
+);
+assert.equal(
+  localization.translateUiText("FX stack for Program Texture (layer 12)", "ja"),
+  "Program Texture（レイヤー12）のFXスタック",
+);
+assert.equal(localization.translateUiText("Move FX 3 down", "ja"), "FX 3を下へ移動");
+assert.equal(localization.translateUiText("Reset FX 2", "ja"), "FX 2をリセット");
+assert.equal(
+  localization.translateUiText("Trigger pulse for Program Texture (layer 12)", "ja"),
+  "Program Texture（レイヤー12）のpulseをトリガー",
+);
+assert.equal(
   localization.translateUiText("Advanced FX controls for Program Texture (layer 12)", "ja"),
   "Program Texture（レイヤー12）のFX詳細操作",
 );

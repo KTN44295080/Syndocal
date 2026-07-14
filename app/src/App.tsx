@@ -620,6 +620,13 @@ const projectMutationCommands = new Set([
   "set_video_layer_state",
   "set_video_layer_isf_effect",
   "apply_builtin_video_isf_effect",
+  "add_video_layer_isf_effect",
+  "add_builtin_video_isf_effect",
+  "move_video_layer_isf_effect",
+  "remove_video_layer_isf_effect",
+  "set_video_layer_isf_effect_enabled",
+  "reset_video_layer_isf_effect",
+  "set_video_layer_isf_control",
   "fade_video_layer_opacity",
   "launch_video_clip",
   "take_video_clip",
@@ -691,7 +698,7 @@ const projectMutationCoalesceKey = (command: string, args?: Record<string, unkno
     return "";
   }
   const targetEntries = Object.entries(args).filter(([key]) =>
-    /(id|ids|attribute|field|index|kind|scope|universe|channel|parameter)$/i.test(key),
+    /(id|ids|attribute|field|index|kind|scope|universe|channel|parameter|name)$/i.test(key),
   );
   return targetEntries.length > 0 ? `${command}:${JSON.stringify(Object.fromEntries(targetEntries))}` : "";
 };
@@ -1052,6 +1059,7 @@ export default function App() {
   const [videoPreviewInfo, setVideoPreviewInfo] = createSignal("No preview");
   const [videoPreviewUrl, setVideoPreviewUrl] = createSignal("");
   const [videoPreviewLayerId, setVideoPreviewLayerId] = createSignal<number | null>(null);
+  const [isfEventPulseBusy, setIsfEventPulseBusy] = createSignal(false);
   const [vjPreviewTransport, setVjPreviewTransport] = createSignal<VjPreviewTransportSummary>(
     emptyVjPreviewTransport(),
   );
@@ -1594,6 +1602,38 @@ export default function App() {
     setWorkspaceTab("control");
     setControlMode("mixer");
     setSelectedVideoOutputId(outputs[0]?.id ?? null);
+    setProjectHistoryStatus({
+      can_undo: true,
+      can_redo: true,
+      undo_depth: 4,
+      redo_depth: 2,
+      undo_label: "Existing edit",
+      redo_label: "Existing redo",
+    });
+    setVideoProgramAudioEnabled(true);
+    setVideoAudioMonitorStatus({
+      output_open: true,
+      active_layer_ids: [layers[0]?.id ?? 1],
+      resync_count: 1,
+      last_drift_ms: 2,
+      max_abs_drift_ms: 7,
+      last_sync_error: null,
+    });
+    setVideoRecordingStatus({
+      active: true,
+      output_id: outputs[0]?.id ?? 1,
+      path: "viewport://operator-vj/program-recording.mp4",
+      width: 1_920,
+      height: 1_080,
+      frame_rate: 60,
+      frames_written: 3_600,
+      dropped_frames: 2,
+      audio_requested: true,
+      audio_included: true,
+      audio_track_count: 1,
+      started_unix_ms: 1_700_000_000_000,
+      last_error: null,
+    });
     setSnapshot((current) => ({
       ...current,
       video: {
@@ -3806,7 +3846,7 @@ export default function App() {
     const activeQueues = diagnostics.layer_queues.filter((row) => row.queue_len > 0).length;
     const readyQueues = diagnostics.layer_queues.filter((row) => row.ready).length;
     const bpm = diagnostics.bpm && Number.isFinite(diagnostics.bpm) ? `, bpm ${diagnostics.bpm.toFixed(1)}` : "";
-    const isf = `, ISF pipelines ${diagnostics.isf_pipeline_count}${diagnostics.last_isf_error ? " error" : ""}`;
+    const isf = `, ISF pipelines ${diagnostics.isf_pipeline_count}, stack ${diagnostics.isf_last_stack_stage_count}, render ${diagnostics.isf_last_stack_render_us}us${diagnostics.last_isf_error ? " error" : ""}`;
     return `queues ${activeQueues}/${diagnostics.queue_count}, ready ${readyQueues}/${diagnostics.layer_queues.length}, frames ${queuedFrames}, cap ${diagnostics.frame_queue_capacity}, still ${diagnostics.still_image_cache_len}, decode ${diagnostics.decoder_cache_len}, ${videoDecoderDiagnosticsLabel(diagnostics.decoder_diagnostics)}, prefetch ${diagnostics.prefetch_count}x${diagnostics.prefetch_interval_ms}ms${bpm}${isf}`;
   });
   const videoPreviewLayerDiagnostics = createMemo(() => videoPreviewDiagnostics()?.layer_queues ?? []);
@@ -5620,6 +5660,10 @@ export default function App() {
   };
 
   const undoProject = async () => {
+    if (isfEventPulseBusy()) {
+      setMessage("Wait for the active FX Event pulse to finish before Undo.");
+      return;
+    }
     if (!projectHistoryStatus().can_undo) {
       setMessage("Nothing to undo.");
       return;
@@ -5632,6 +5676,7 @@ export default function App() {
       const status = await invoke<ProjectHistoryStatus>("undo_project_transaction");
       setProjectHistoryStatus(status);
       await refreshSnapshot(true, true);
+      await refreshVideoPreviewDiagnostics(true);
       setMessage(`Undid ${status.redo_label ?? "last edit"}.`);
     } catch (error) {
       setMessage(`Undo failed: ${String(error)}`);
@@ -5639,6 +5684,10 @@ export default function App() {
   };
 
   const redoProject = async () => {
+    if (isfEventPulseBusy()) {
+      setMessage("Wait for the active FX Event pulse to finish before Redo.");
+      return;
+    }
     if (!projectHistoryStatus().can_redo) {
       setMessage("Nothing to redo.");
       return;
@@ -5651,6 +5700,7 @@ export default function App() {
       const status = await invoke<ProjectHistoryStatus>("redo_project_transaction");
       setProjectHistoryStatus(status);
       await refreshSnapshot(true, true);
+      await refreshVideoPreviewDiagnostics(true);
       setMessage(`Redid ${status.undo_label ?? "last edit"}.`);
     } catch (error) {
       setMessage(`Redo failed: ${String(error)}`);
@@ -8891,6 +8941,12 @@ export default function App() {
     importVideoLayerIsf,
     applyBuiltinVideoIsfEffect,
     setVideoLayerIsfEffect,
+    moveVideoLayerIsfEffect,
+    removeVideoLayerIsfEffect,
+    setVideoLayerIsfEffectEnabled,
+    resetVideoLayerIsfEffect,
+    setVideoLayerIsfControl,
+    triggerVideoLayerIsfEvent,
     renderDebugVideoPreview,
     loadVideoLayerThumbnail,
     refreshVideoPreviewDiagnostics,
@@ -8926,6 +8982,8 @@ export default function App() {
     setVideoPreviewUrl,
     setVideoPreviewInfo,
     setVideoPreviewDiagnostics,
+    isIsfEventPulseBusy: isfEventPulseBusy,
+    setIsfEventPulseBusy,
     setVideoOutputRenderPlans,
     setVideoOutputWindowStatuses,
     setVideoRuntimeStatus,
@@ -11664,7 +11722,11 @@ export default function App() {
         recentProjectPaths={recentProjectPaths()}
         recoveryCheckpoint={projectRecoveryCheckpoint()}
         projectBackups={projectBackups()}
-        historyStatus={projectHistoryStatus()}
+        historyStatus={{
+          ...projectHistoryStatus(),
+          can_undo: !isfEventPulseBusy() && projectHistoryStatus().can_undo,
+          can_redo: !isfEventPulseBusy() && projectHistoryStatus().can_redo,
+        }}
         applicationUpdateConfiguration={applicationUpdateConfiguration()}
         applicationUpdateCheck={applicationUpdateCheck()}
         applicationUpdateProgress={applicationUpdateProgress()}
@@ -12875,7 +12937,8 @@ export default function App() {
           }}
           layerList={{
             get layers() { return snapshot().video.layers; },
-            get isfRuntimeError() { return videoPreviewDiagnostics()?.last_isf_error; },
+            get isfRuntimeErrors() { return videoPreviewDiagnostics()?.isf_stage_errors ?? []; },
+            get isfEventPulseBusy() { return isfEventPulseBusy(); },
             onSetLayerLabel: setVideoLayerLabel,
             onMoveLayer: moveVideoLayer,
             onDuplicateLayer: duplicateVideoLayer,
@@ -12888,6 +12951,12 @@ export default function App() {
             onImportIsf: importVideoLayerIsf,
             onApplyBuiltinIsf: applyBuiltinVideoIsfEffect,
             onSetIsfEffect: setVideoLayerIsfEffect,
+            onMoveIsfEffect: moveVideoLayerIsfEffect,
+            onRemoveIsfEffect: removeVideoLayerIsfEffect,
+            onSetIsfEffectEnabled: setVideoLayerIsfEffectEnabled,
+            onResetIsfEffect: resetVideoLayerIsfEffect,
+            onSetIsfControl: setVideoLayerIsfControl,
+            onTriggerIsfEvent: triggerVideoLayerIsfEvent,
             onAddCuePoint: addVideoCuePoint,
             onJumpCuePoint: jumpVideoCuePoint,
             onRemoveCuePoint: removeVideoCuePoint,

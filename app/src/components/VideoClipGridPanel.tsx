@@ -73,6 +73,9 @@ export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
   );
   const deckALayer = createMemo(() => props.layers.find((layer) => layer.id === props.deckALayerId) ?? null);
   const deckBLayer = createMemo(() => props.layers.find((layer) => layer.id === props.deckBLayerId) ?? null);
+  const recordingStatusText = createMemo(() => props.recordingStatus.active
+    ? `${props.recordingStatus.dropped_frames} dropped · ${props.recordingStatus.frames_written} frames · ${props.recordingStatus.width}x${props.recordingStatus.height} @ ${props.recordingStatus.frame_rate}fps · ${props.recordingStatus.audio_included ? `${props.recordingStatus.audio_track_count} audio` : "silent"}`
+    : props.recordingStatus.last_error ?? `Records H.264 MP4${props.programAudioEnabled ? " and active Program audio" : " without audio"}.`);
 
   createEffect(() => {
     const layerCount = props.layers.length;
@@ -210,12 +213,16 @@ export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
           </Show>
         </button>
       </div>
-      <div class={`videoRecordingBar ${props.recordingStatus.active ? "active" : ""}`}>
+      <div class={`videoRecordingBar ${props.recordingStatus.active ? "active" : ""}`} aria-live="polite">
         <div>
           <small>{props.recordingStatus.active ? "● RECORDING" : "OUTPUT RECORD"}</small>
-          <span>{props.recordingStatus.active
-            ? `${props.recordingStatus.width}x${props.recordingStatus.height} @ ${props.recordingStatus.frame_rate}fps · ${props.recordingStatus.frames_written} frames · ${props.recordingStatus.dropped_frames} dropped · ${props.recordingStatus.audio_included ? `${props.recordingStatus.audio_track_count} audio` : "silent"}`
-            : props.recordingStatus.last_error ?? `Records H.264 MP4${props.programAudioEnabled ? " and active Program audio" : " without audio"}.`}</span>
+          <span
+            class={props.recordingStatus.last_error ? "videoRecordingError" : ""}
+            role={props.recordingStatus.last_error ? "alert" : undefined}
+            title={recordingStatusText()}
+          >
+            {recordingStatusText()}
+          </span>
         </div>
         <button
           class={props.recordingStatus.active ? "danger" : ""}

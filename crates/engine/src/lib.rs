@@ -43,11 +43,11 @@ use protocol::{
     TimelineEventId, TimelineSnapRequest, TimelineSnapshot, TimelineTrackKind,
     TimelineVideoAutomationSummary, Transform2D, Vec3, VideoAutomationKeyframeSummary,
     VideoBlendMode, VideoColorAdjust, VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust,
-    VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerSummary, VideoLayerTarget,
-    VideoOutputId, VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetSummary,
-    VideoOutputSummary, VideoOutputTarget, VideoParam, VideoSnapshot, VideoSourceKind,
-    VideoSourceSummary, DEFAULT_CUE_LIST_ID, LIVE_AUDIO_FEATURE_BAND_CAPACITY,
-    MAX_TIMELINE_SCENE_BLOCK_LOOPS,
+    VideoIsfControlKind, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId,
+    VideoLayerState, VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind,
+    VideoOutputMapping, VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget,
+    VideoParam, VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
+    LIVE_AUDIO_FEATURE_BAND_CAPACITY, MAX_TIMELINE_SCENE_BLOCK_LOOPS,
 };
 use thiserror::Error;
 
@@ -65,6 +65,7 @@ const AUTO_VJ_MAX_CANDIDATES: usize = 64;
 const AUTO_VJ_MAX_BEATS_PER_CHANGE: u16 = 256;
 const AUTO_VJ_MAX_TRANSITION_MS: u64 = 60_000;
 const AUDIO_REACTIVE_MAX_ENVELOPE_MS: u32 = 60_000;
+pub const VIDEO_ISF_PROJECT_SOURCE_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 #[cfg(target_os = "windows")]
 mod realtime_thread {
@@ -161,6 +162,30 @@ pub enum FixtureFlagClearKind {
     Solo,
     Park,
     All,
+}
+
+#[derive(Debug)]
+pub enum VideoIsfStackMutation {
+    Add(VideoIsfEffectStageSummary),
+    Move {
+        stage_index: usize,
+        delta: i32,
+    },
+    Remove {
+        stage_index: usize,
+    },
+    SetEnabled {
+        stage_index: usize,
+        enabled: bool,
+    },
+    Reset {
+        stage_index: usize,
+    },
+    SetControl {
+        stage_index: usize,
+        control_name: String,
+        value: [f32; 4],
+    },
 }
 
 #[derive(Debug)]
@@ -680,6 +705,12 @@ pub enum EngineCommand {
         new_layer_id: VideoLayerId,
         label: String,
     },
+    DuplicateVideoLayerPublished {
+        source_layer_id: VideoLayerId,
+        new_layer_id: VideoLayerId,
+        label: String,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     RemoveVideoLayer(VideoLayerId),
     SetVideoLayerOrder(Vec<VideoLayerId>),
     SetVideoLayerLabel {
@@ -693,6 +724,23 @@ pub enum EngineCommand {
     SetVideoLayerIsfEffect {
         layer_id: VideoLayerId,
         effect: Option<VideoIsfEffectSummary>,
+    },
+    SetVideoLayerIsfEffectPublished {
+        layer_id: VideoLayerId,
+        effect: Option<VideoIsfEffectSummary>,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    MutateVideoLayerIsfStack {
+        layer_id: VideoLayerId,
+        mutation: VideoIsfStackMutation,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    PulseVideoLayerIsfEvent {
+        layer_id: VideoLayerId,
+        stage_index: usize,
+        control_name: String,
+        hold: Duration,
+        ack: mpsc::SyncSender<Result<(), String>>,
     },
     SetVideoLayerState {
         layer_id: VideoLayerId,
@@ -1725,6 +1773,80 @@ impl EngineHandle {
             .map_err(|error| format!("Exclusive video Take acknowledgement failed: {error}"))?
     }
 
+    pub fn mutate_video_layer_isf_stack(
+        &self,
+        layer_id: VideoLayerId,
+        mutation: VideoIsfStackMutation,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::MutateVideoLayerIsfStack {
+            layer_id,
+            mutation,
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Video ISF stack acknowledgement failed: {error}"))?
+    }
+
+    pub fn duplicate_video_layer_published(
+        &self,
+        source_layer_id: VideoLayerId,
+        new_layer_id: VideoLayerId,
+        label: String,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::DuplicateVideoLayerPublished {
+            source_layer_id,
+            new_layer_id,
+            label,
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Video layer duplicate acknowledgement failed: {error}"))?
+    }
+
+    pub fn set_video_layer_isf_effect_published(
+        &self,
+        layer_id: VideoLayerId,
+        effect: Option<VideoIsfEffectSummary>,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::SetVideoLayerIsfEffectPublished {
+            layer_id,
+            effect,
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Video ISF effect acknowledgement failed: {error}"))?
+    }
+
+    pub fn pulse_video_layer_isf_event(
+        &self,
+        layer_id: VideoLayerId,
+        stage_index: usize,
+        control_name: String,
+        hold: Duration,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::PulseVideoLayerIsfEvent {
+            layer_id,
+            stage_index,
+            control_name,
+            hold,
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Video ISF Event pulse acknowledgement failed: {error}"))?
+    }
+
     pub fn set_auto_vj_config(&self, config: AutoVjConfig) -> Result<(), String> {
         let (ack, receiver) = mpsc::sync_channel(1);
         self.send(EngineCommand::SetAutoVjConfigPublished {
@@ -2366,6 +2488,20 @@ struct RuntimeVideoLayerFade {
     target_opacity: f32,
 }
 
+#[derive(Clone)]
+struct PendingVideoIsfEventReset {
+    pulse_id: u64,
+    layer_id: VideoLayerId,
+    stage_source: Arc<str>,
+    control_name: String,
+    due_at: Instant,
+}
+
+struct AppliedVideoIsfEventPulse {
+    pulse_id: u64,
+    replaced_resets: Vec<PendingVideoIsfEventReset>,
+}
+
 struct PendingCommandAck {
     ack: mpsc::SyncSender<Result<(), String>>,
     result: Result<(), String>,
@@ -2399,6 +2535,23 @@ enum PendingCommandRollback {
     RestoreExclusiveVideoTake {
         video_layers: Vec<RuntimeVideoLayer>,
         video_layer_fades: Vec<RuntimeVideoLayerFade>,
+        last_error: Option<String>,
+    },
+    RestoreVideoLayersAndCompositions {
+        video_layers: Vec<RuntimeVideoLayer>,
+        video_compositions: Vec<RuntimeVideoComposition>,
+        last_error: Option<String>,
+    },
+    RestoreVideoLayerIsfEffect {
+        layer_id: VideoLayerId,
+        effect: Option<VideoIsfEffectSummary>,
+        last_error: Option<String>,
+    },
+    RestoreVideoLayerIsfEffectAndCancelEventPulse {
+        layer_id: VideoLayerId,
+        effect: Option<VideoIsfEffectSummary>,
+        pulse_id: u64,
+        replaced_resets: Vec<PendingVideoIsfEventReset>,
         last_error: Option<String>,
     },
     RestoreAutoVj {
@@ -2452,6 +2605,9 @@ impl PendingCommandRollback {
                 | Self::RestoreEffectEnabled { .. }
                 | Self::RestoreNodeGraphs { .. }
                 | Self::RestoreExclusiveVideoTake { .. }
+                | Self::RestoreVideoLayersAndCompositions { .. }
+                | Self::RestoreVideoLayerIsfEffect { .. }
+                | Self::RestoreVideoLayerIsfEffectAndCancelEventPulse { .. }
                 | Self::RestoreAutoVj { .. }
                 | Self::RestoreCues { .. }
                 | Self::RestoreCueRemoval { .. }
@@ -2517,6 +2673,8 @@ struct RuntimeAutoVj {
 struct EngineRuntime {
     shared_telemetry: Arc<EngineSharedTelemetry>,
     pending_command_acks: Vec<PendingCommandAck>,
+    pending_video_isf_event_resets: Vec<PendingVideoIsfEventReset>,
+    next_video_isf_event_pulse_id: u64,
     fixtures: Vec<RuntimeFixture>,
     effects: Vec<RuntimeEffect>,
     node_graphs: Vec<RuntimeNodeGraph>,
@@ -2686,6 +2844,8 @@ impl EngineRuntime {
         Self {
             shared_telemetry,
             pending_command_acks: Vec::new(),
+            pending_video_isf_event_resets: Vec::new(),
+            next_video_isf_event_pulse_id: 1,
             fixtures: Vec::new(),
             effects: Vec::new(),
             node_graphs: Vec::new(),
@@ -2809,6 +2969,13 @@ impl EngineRuntime {
         if let Some(authored_video) = snapshot.authored_video.take() {
             snapshot.video = authored_video;
         }
+        let source_budget_result = video_isf_project_summary_source_bytes(&snapshot.video.layers)
+            .and_then(validate_video_isf_project_source_budget);
+        if let Err(error) = source_budget_result {
+            self.last_error = Some(error);
+            return;
+        }
+        self.pending_video_isf_event_resets.clear();
         let now = Instant::now();
         let (loaded_fixtures, loaded_fixture_summaries, dropped_fixture_count) =
             runtime_fixtures_from_snapshot(&snapshot.fixtures);
@@ -3391,6 +3558,7 @@ impl EngineRuntime {
                     | EngineCommand::SetAutoVjConfigPublished { .. }
                     | EngineCommand::SetAutoVjArmedPublished { .. }
                     | EngineCommand::SetAutoVjHoldPublished { .. }
+                    | EngineCommand::PulseVideoLayerIsfEvent { .. }
                     | EngineCommand::AddColorEffect { .. }
                     | EngineCommand::UpdateColorEffect { .. }
                     | EngineCommand::AddChaserEffect { .. }
@@ -6007,7 +6175,29 @@ impl EngineRuntime {
                 new_layer_id,
                 label,
             } => {
-                self.duplicate_video_layer(source_layer_id, new_layer_id, label);
+                let result = self.duplicate_video_layer(source_layer_id, new_layer_id, label);
+                self.last_error = result.as_ref().err().cloned();
+            }
+            EngineCommand::DuplicateVideoLayerPublished {
+                source_layer_id,
+                new_layer_id,
+                label,
+                ack,
+            } => {
+                let rollback = PendingCommandRollback::RestoreVideoLayersAndCompositions {
+                    video_layers: self.video_layers.clone(),
+                    video_compositions: self.video_compositions.clone(),
+                    last_error: self.last_error.clone(),
+                };
+                let result = self.duplicate_video_layer(source_layer_id, new_layer_id, label);
+                self.last_error = result.as_ref().err().cloned();
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; video layer duplicate was rolled back",
+                });
             }
             EngineCommand::RemoveVideoLayer(layer_id) => {
                 self.video_layers.retain(|layer| layer.id != layer_id);
@@ -6043,16 +6233,112 @@ impl EngineRuntime {
                 }
             }
             EngineCommand::SetVideoLayerIsfEffect { layer_id, effect } => {
-                if let Some(layer) = self
+                let result = self.set_video_layer_isf_effect(layer_id, effect);
+                self.last_error = result.as_ref().err().cloned();
+            }
+            EngineCommand::SetVideoLayerIsfEffectPublished {
+                layer_id,
+                effect,
+                ack,
+            } => {
+                let rollback = PendingCommandRollback::RestoreVideoLayerIsfEffect {
+                    layer_id,
+                    effect: self
+                        .video_layers
+                        .iter()
+                        .find(|layer| layer.id == layer_id)
+                        .and_then(|layer| layer.isf_effect.clone()),
+                    last_error: self.last_error.clone(),
+                };
+                let result = self.set_video_layer_isf_effect(layer_id, effect);
+                self.last_error = result.as_ref().err().cloned();
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; video ISF effect update was rolled back",
+                });
+            }
+            EngineCommand::MutateVideoLayerIsfStack {
+                layer_id,
+                mutation,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let previous_effect = self
                     .video_layers
-                    .iter_mut()
+                    .iter()
                     .find(|layer| layer.id == layer_id)
-                {
-                    layer.isf_effect = effect;
-                    self.last_error = None;
-                } else {
-                    self.last_error = Some(format!("Video layer {layer_id} was not found"));
-                }
+                    .and_then(|layer| layer.isf_effect.clone());
+                let result = self
+                    .video_layers
+                    .iter()
+                    .position(|layer| layer.id == layer_id)
+                    .ok_or_else(|| format!("Video layer {layer_id} was not found"))
+                    .and_then(|layer_index| {
+                        let current = self.video_layers[layer_index].isf_effect.clone();
+                        let replacement = mutate_video_isf_effect_stack(current, mutation)?;
+                        validate_video_isf_project_source_budget_after_replacement(
+                            &self.video_layers,
+                            layer_index,
+                            replacement.as_ref(),
+                        )?;
+                        self.video_layers[layer_index].isf_effect = replacement;
+                        Ok(())
+                    });
+                self.last_error = result.as_ref().err().cloned();
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback: PendingCommandRollback::RestoreVideoLayerIsfEffect {
+                        layer_id,
+                        effect: previous_effect,
+                        last_error: previous_last_error,
+                    },
+                    publication_error:
+                        "Engine snapshot was busy; video ISF stack update was rolled back",
+                });
+            }
+            EngineCommand::PulseVideoLayerIsfEvent {
+                layer_id,
+                stage_index,
+                control_name,
+                hold,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let previous_effect = self
+                    .video_layers
+                    .iter()
+                    .find(|layer| layer.id == layer_id)
+                    .and_then(|layer| layer.isf_effect.clone());
+                let pulse_result = self.pulse_video_layer_isf_event(
+                    layer_id,
+                    stage_index,
+                    control_name,
+                    hold,
+                    Instant::now(),
+                );
+                let (result, pulse_id, replaced_resets) = match pulse_result {
+                    Ok(applied) => (Ok(()), applied.pulse_id, applied.replaced_resets),
+                    Err(error) => (Err(error), 0, Vec::new()),
+                };
+                self.last_error = result.as_ref().err().cloned();
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback:
+                        PendingCommandRollback::RestoreVideoLayerIsfEffectAndCancelEventPulse {
+                            layer_id,
+                            effect: previous_effect,
+                            pulse_id,
+                            replaced_resets,
+                            last_error: previous_last_error,
+                        },
+                    publication_error:
+                        "Engine snapshot was busy; video ISF Event pulse was rolled back",
+                });
             }
             EngineCommand::SetVideoLayerState { layer_id, state } => {
                 self.video_layer_fades
@@ -6835,6 +7121,48 @@ impl EngineRuntime {
             } => {
                 self.video_layers = video_layers;
                 self.video_layer_fades = video_layer_fades;
+                self.last_error = last_error;
+            }
+            PendingCommandRollback::RestoreVideoLayersAndCompositions {
+                video_layers,
+                video_compositions,
+                last_error,
+            } => {
+                self.video_layers = video_layers;
+                self.video_compositions = video_compositions;
+                self.last_error = last_error;
+            }
+            PendingCommandRollback::RestoreVideoLayerIsfEffect {
+                layer_id,
+                effect,
+                last_error,
+            } => {
+                if let Some(layer) = self
+                    .video_layers
+                    .iter_mut()
+                    .find(|layer| layer.id == layer_id)
+                {
+                    layer.isf_effect = effect;
+                }
+                self.last_error = last_error;
+            }
+            PendingCommandRollback::RestoreVideoLayerIsfEffectAndCancelEventPulse {
+                layer_id,
+                effect,
+                pulse_id,
+                replaced_resets,
+                last_error,
+            } => {
+                if let Some(layer) = self
+                    .video_layers
+                    .iter_mut()
+                    .find(|layer| layer.id == layer_id)
+                {
+                    layer.isf_effect = effect;
+                }
+                self.pending_video_isf_event_resets
+                    .retain(|pending| pending.pulse_id != pulse_id);
+                self.pending_video_isf_event_resets.extend(replaced_resets);
                 self.last_error = last_error;
             }
             PendingCommandRollback::RestoreAutoVj {
@@ -7740,6 +8068,7 @@ impl EngineRuntime {
         self.record_command_to_dmx_tick_latency(now);
         self.synchronize_requested_live_audio_clear();
         self.expire_live_audio_spectrum(now);
+        self.advance_video_isf_event_resets(now);
         self.advance_timeline(now);
         self.advance_pending_cue(now);
         self.apply_timeline_automations();
@@ -10801,29 +11130,38 @@ impl EngineRuntime {
         source_layer_id: VideoLayerId,
         new_layer_id: VideoLayerId,
         label: String,
-    ) {
+    ) -> Result<(), String> {
         if source_layer_id == new_layer_id
             || self
                 .video_layers
                 .iter()
                 .any(|layer| layer.id == new_layer_id)
         {
-            self.last_error = Some(format!("Video layer {new_layer_id} already exists"));
-            return;
+            return Err(format!("Video layer {new_layer_id} already exists"));
         }
 
-        let Some(source_index) = self
+        let source_index = self
             .video_layers
             .iter()
             .position(|layer| layer.id == source_layer_id)
-        else {
-            self.last_error = Some(format!("Video layer {source_layer_id} was not found"));
-            return;
-        };
+            .ok_or_else(|| format!("Video layer {source_layer_id} was not found"))?;
+        let added_source_bytes = self.video_layers[source_index]
+            .isf_effect
+            .as_ref()
+            .map(video_isf_effect_source_bytes)
+            .transpose()?
+            .unwrap_or(0);
+        validate_video_isf_project_source_budget_after_addition(
+            &self.video_layers,
+            added_source_bytes,
+        )?;
 
         let mut duplicate = self.video_layers[source_index].clone();
         duplicate.id = new_layer_id;
         duplicate.label = sanitize_video_layer_label(label, new_layer_id);
+        if let Some(effect) = &mut duplicate.isf_effect {
+            clear_transient_video_isf_event_controls(effect);
+        }
         self.video_layers.insert(source_index + 1, duplicate);
 
         for composition in &mut self.video_compositions {
@@ -10842,7 +11180,148 @@ impl EngineRuntime {
                     .insert(index + 1, new_layer_id);
             }
         }
-        self.last_error = None;
+        Ok(())
+    }
+
+    fn set_video_layer_isf_effect(
+        &mut self,
+        layer_id: VideoLayerId,
+        mut effect: Option<VideoIsfEffectSummary>,
+    ) -> Result<(), String> {
+        let layer_index = self
+            .video_layers
+            .iter()
+            .position(|layer| layer.id == layer_id)
+            .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
+        if let Some(effect) = &mut effect {
+            clear_transient_video_isf_event_controls(effect);
+        }
+        validate_video_isf_project_source_budget_after_replacement(
+            &self.video_layers,
+            layer_index,
+            effect.as_ref(),
+        )?;
+        self.video_layers[layer_index].isf_effect = effect;
+        Ok(())
+    }
+
+    fn pulse_video_layer_isf_event(
+        &mut self,
+        layer_id: VideoLayerId,
+        stage_index: usize,
+        control_name: String,
+        hold: Duration,
+        now: Instant,
+    ) -> Result<AppliedVideoIsfEventPulse, String> {
+        let due_at = now
+            .checked_add(hold)
+            .ok_or_else(|| "Video ISF Event pulse duration is too large".to_string())?;
+        let layer_index = self
+            .video_layers
+            .iter()
+            .position(|layer| layer.id == layer_id)
+            .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
+        let stage_source = {
+            let effect = self.video_layers[layer_index]
+                .isf_effect
+                .as_ref()
+                .ok_or_else(|| format!("Video layer {layer_id} has no ISF stack"))?;
+            let (source, controls) = if stage_index == 0 {
+                (&effect.source, effect.controls.as_slice())
+            } else {
+                let stage = effect
+                    .stack
+                    .get(stage_index - 1)
+                    .ok_or_else(|| format!("ISF stage {} was not found", stage_index + 1))?;
+                (&stage.source, stage.controls.as_slice())
+            };
+            let control = controls
+                .iter()
+                .find(|control| control.name == control_name)
+                .ok_or_else(|| {
+                    format!(
+                        "ISF stage {} control '{}' was not found",
+                        stage_index + 1,
+                        control_name
+                    )
+                })?;
+            if control.kind != VideoIsfControlKind::Event {
+                return Err(format!(
+                    "ISF stage {} control '{}' is not an Event",
+                    stage_index + 1,
+                    control_name
+                ));
+            }
+            Arc::clone(source)
+        };
+        let current = self.video_layers[layer_index].isf_effect.clone();
+        let replacement = mutate_video_isf_effect_stack(
+            current,
+            VideoIsfStackMutation::SetControl {
+                stage_index,
+                control_name: control_name.clone(),
+                value: [1.0, 0.0, 0.0, 0.0],
+            },
+        )?;
+        validate_video_isf_project_source_budget_after_replacement(
+            &self.video_layers,
+            layer_index,
+            replacement.as_ref(),
+        )?;
+        self.video_layers[layer_index].isf_effect = replacement;
+
+        let pulse_id = self.next_video_isf_event_pulse_id;
+        self.next_video_isf_event_pulse_id =
+            self.next_video_isf_event_pulse_id.wrapping_add(1).max(1);
+        let mut replaced_resets = Vec::new();
+        self.pending_video_isf_event_resets.retain(|pending| {
+            let same_target = pending.layer_id == layer_id
+                && pending.control_name == control_name
+                && Arc::ptr_eq(&pending.stage_source, &stage_source);
+            if same_target {
+                replaced_resets.push(pending.clone());
+            }
+            !same_target
+        });
+        self.pending_video_isf_event_resets
+            .push(PendingVideoIsfEventReset {
+                pulse_id,
+                layer_id,
+                stage_source,
+                control_name,
+                due_at,
+            });
+        Ok(AppliedVideoIsfEventPulse {
+            pulse_id,
+            replaced_resets,
+        })
+    }
+
+    fn advance_video_isf_event_resets(&mut self, now: Instant) {
+        let mut due = Vec::new();
+        self.pending_video_isf_event_resets.retain(|pending| {
+            if pending.due_at <= now {
+                due.push(pending.clone());
+                false
+            } else {
+                true
+            }
+        });
+        for pending in due {
+            let Some(effect) = self
+                .video_layers
+                .iter_mut()
+                .find(|layer| layer.id == pending.layer_id)
+                .and_then(|layer| layer.isf_effect.as_mut())
+            else {
+                continue;
+            };
+            reset_video_isf_event_by_source_identity(
+                effect,
+                &pending.stage_source,
+                &pending.control_name,
+            );
+        }
     }
 
     fn update_video_output<F>(&mut self, output_id: VideoOutputId, update: F)
@@ -11115,7 +11594,13 @@ impl EngineRuntime {
 
     fn build_persistence_snapshot(&self) -> EngineSnapshot {
         let mut snapshot = self.build_snapshot(0);
-        snapshot.authored_video = Some(self.authored_video_snapshot_from_rendered(&snapshot.video));
+        let mut authored_video = self.authored_video_snapshot_from_rendered(&snapshot.video);
+        for layer in &mut authored_video.layers {
+            if let Some(effect) = &mut layer.isf_effect {
+                clear_transient_video_isf_event_controls(effect);
+            }
+        }
+        snapshot.authored_video = Some(authored_video);
         snapshot
     }
 
@@ -11995,13 +12480,17 @@ fn video_layer_summary(layer: &RuntimeVideoLayer) -> VideoLayerSummary {
 }
 
 fn runtime_video_layer_from_summary(layer: &VideoLayerSummary) -> RuntimeVideoLayer {
+    let mut isf_effect = layer.isf_effect.clone();
+    if let Some(effect) = &mut isf_effect {
+        clear_transient_video_isf_event_controls(effect);
+    }
     RuntimeVideoLayer {
         id: layer.id,
         label: sanitize_video_layer_label(layer.label.clone(), layer.id),
         source: layer.source.clone(),
         blend_mode: layer.blend_mode.clone(),
         state: video::sanitize_layer_state(layer.state.clone()),
-        isf_effect: layer.isf_effect.clone(),
+        isf_effect,
     }
 }
 
@@ -16027,6 +16516,291 @@ fn sanitize_video_layer_label(label: String, layer_id: VideoLayerId) -> String {
     }
 }
 
+fn video_isf_effect_into_stages(
+    effect: Option<VideoIsfEffectSummary>,
+) -> Vec<VideoIsfEffectStageSummary> {
+    let Some(effect) = effect else {
+        return Vec::new();
+    };
+    let VideoIsfEffectSummary {
+        enabled,
+        label,
+        source,
+        source_path,
+        description,
+        categories,
+        controls,
+        mut stack,
+    } = effect;
+    stack.insert(
+        0,
+        VideoIsfEffectStageSummary {
+            enabled,
+            label,
+            source,
+            source_path,
+            description,
+            categories,
+            controls,
+        },
+    );
+    stack
+}
+
+fn video_isf_effect_from_stages(
+    mut stages: Vec<VideoIsfEffectStageSummary>,
+) -> Option<VideoIsfEffectSummary> {
+    if stages.is_empty() {
+        return None;
+    }
+    let first = stages.remove(0);
+    Some(VideoIsfEffectSummary {
+        enabled: first.enabled,
+        label: first.label,
+        source: first.source,
+        source_path: first.source_path,
+        description: first.description,
+        categories: first.categories,
+        controls: first.controls,
+        stack: stages,
+    })
+}
+
+fn reset_video_isf_event_by_source_identity(
+    effect: &mut VideoIsfEffectSummary,
+    stage_source: &Arc<str>,
+    control_name: &str,
+) -> bool {
+    if Arc::ptr_eq(&effect.source, stage_source) {
+        if let Some(control) = effect.controls.iter_mut().find(|control| {
+            control.name == control_name && control.kind == VideoIsfControlKind::Event
+        }) {
+            control.value = [0.0; 4];
+            return true;
+        }
+    }
+    for stage in &mut effect.stack {
+        if !Arc::ptr_eq(&stage.source, stage_source) {
+            continue;
+        }
+        if let Some(control) = stage.controls.iter_mut().find(|control| {
+            control.name == control_name && control.kind == VideoIsfControlKind::Event
+        }) {
+            control.value = [0.0; 4];
+            return true;
+        }
+    }
+    false
+}
+
+fn clear_transient_video_isf_event_controls(effect: &mut VideoIsfEffectSummary) {
+    for control in &mut effect.controls {
+        if control.kind == VideoIsfControlKind::Event {
+            control.value = [0.0; 4];
+        }
+    }
+    for stage in &mut effect.stack {
+        for control in &mut stage.controls {
+            if control.kind == VideoIsfControlKind::Event {
+                control.value = [0.0; 4];
+            }
+        }
+    }
+}
+
+fn mutate_video_isf_effect_stack(
+    effect: Option<VideoIsfEffectSummary>,
+    mutation: VideoIsfStackMutation,
+) -> Result<Option<VideoIsfEffectSummary>, String> {
+    let mut stages = video_isf_effect_into_stages(effect);
+    match mutation {
+        VideoIsfStackMutation::Add(stage) => {
+            if stages.len() >= video::VIDEO_ISF_EFFECT_STACK_MAX_STAGES {
+                return Err(format!(
+                    "ISF stack already contains the maximum {} stages",
+                    video::VIDEO_ISF_EFFECT_STACK_MAX_STAGES
+                ));
+            }
+            stages.push(stage);
+        }
+        VideoIsfStackMutation::Move { stage_index, delta } => {
+            if stage_index >= stages.len() {
+                return Err(format!("ISF stage {} was not found", stage_index + 1));
+            }
+            let target = stage_index as i64 + i64::from(delta);
+            if target < 0 || target >= stages.len() as i64 {
+                return Err(format!(
+                    "ISF stage {} cannot move by {delta}",
+                    stage_index + 1
+                ));
+            }
+            stages.swap(stage_index, target as usize);
+        }
+        VideoIsfStackMutation::Remove { stage_index } => {
+            if stage_index >= stages.len() {
+                return Err(format!("ISF stage {} was not found", stage_index + 1));
+            }
+            stages.remove(stage_index);
+        }
+        VideoIsfStackMutation::SetEnabled {
+            stage_index,
+            enabled,
+        } => {
+            let stage = stages
+                .get_mut(stage_index)
+                .ok_or_else(|| format!("ISF stage {} was not found", stage_index + 1))?;
+            stage.enabled = enabled;
+        }
+        VideoIsfStackMutation::Reset { stage_index } => {
+            let stage = stages
+                .get_mut(stage_index)
+                .ok_or_else(|| format!("ISF stage {} was not found", stage_index + 1))?;
+            for control in &mut stage.controls {
+                control.value = control.default;
+            }
+        }
+        VideoIsfStackMutation::SetControl {
+            stage_index,
+            control_name,
+            mut value,
+        } => {
+            if value.iter().any(|component| !component.is_finite()) {
+                return Err("ISF control values must be finite".to_string());
+            }
+            let stage = stages
+                .get_mut(stage_index)
+                .ok_or_else(|| format!("ISF stage {} was not found", stage_index + 1))?;
+            let control = stage
+                .controls
+                .iter_mut()
+                .find(|control| control.name == control_name)
+                .ok_or_else(|| {
+                    format!(
+                        "ISF stage {} control '{}' was not found",
+                        stage_index + 1,
+                        control_name
+                    )
+                })?;
+            for (index, component) in value.iter_mut().enumerate() {
+                let minimum = control.minimum[index];
+                let maximum = control.maximum[index];
+                if !minimum.is_finite() || !maximum.is_finite() {
+                    return Err(format!(
+                        "ISF stage {} control '{}' bounds must be finite",
+                        stage_index + 1,
+                        control_name
+                    ));
+                }
+                let low = minimum.min(maximum);
+                let high = minimum.max(maximum);
+                *component = component.clamp(low, high);
+            }
+            match control.kind {
+                VideoIsfControlKind::Event | VideoIsfControlKind::Bool => {
+                    value[0] = if value[0] >= 0.5 { 1.0 } else { 0.0 };
+                }
+                VideoIsfControlKind::Long => value[0] = value[0].round(),
+                VideoIsfControlKind::Float
+                | VideoIsfControlKind::Point2d
+                | VideoIsfControlKind::Color => {}
+            }
+            control.value = value;
+        }
+    }
+    let total_source_bytes = stages.iter().map(|stage| stage.source.len()).sum::<usize>();
+    if total_source_bytes > video::ISF_MAX_SOURCE_BYTES {
+        return Err(format!(
+            "ISF stack source size is {total_source_bytes} bytes; the limit is {} bytes",
+            video::ISF_MAX_SOURCE_BYTES
+        ));
+    }
+    Ok(video_isf_effect_from_stages(stages))
+}
+
+fn video_isf_effect_source_bytes(effect: &VideoIsfEffectSummary) -> Result<usize, String> {
+    effect
+        .stack
+        .iter()
+        .try_fold(effect.source.len(), |total, stage| {
+            total.checked_add(stage.source.len()).ok_or_else(|| {
+                "Video ISF project source size overflowed the platform limit".to_string()
+            })
+        })
+}
+
+fn video_isf_project_source_bytes(layers: &[RuntimeVideoLayer]) -> Result<usize, String> {
+    layers.iter().try_fold(0_usize, |total, layer| {
+        let layer_source_bytes = layer
+            .isf_effect
+            .as_ref()
+            .map(video_isf_effect_source_bytes)
+            .transpose()?
+            .unwrap_or(0);
+        total.checked_add(layer_source_bytes).ok_or_else(|| {
+            "Video ISF project source size overflowed the platform limit".to_string()
+        })
+    })
+}
+
+fn video_isf_project_summary_source_bytes(layers: &[VideoLayerSummary]) -> Result<usize, String> {
+    layers.iter().try_fold(0_usize, |total, layer| {
+        let layer_source_bytes = layer
+            .isf_effect
+            .as_ref()
+            .map(video_isf_effect_source_bytes)
+            .transpose()?
+            .unwrap_or(0);
+        total.checked_add(layer_source_bytes).ok_or_else(|| {
+            "Video ISF project source size overflowed the platform limit".to_string()
+        })
+    })
+}
+
+fn validate_video_isf_project_source_budget(total_source_bytes: usize) -> Result<(), String> {
+    if total_source_bytes > VIDEO_ISF_PROJECT_SOURCE_MAX_BYTES {
+        return Err(format!(
+            "Video ISF project source size is {total_source_bytes} bytes; the limit is {} bytes",
+            VIDEO_ISF_PROJECT_SOURCE_MAX_BYTES
+        ));
+    }
+    Ok(())
+}
+
+fn validate_video_isf_project_source_budget_after_addition(
+    layers: &[RuntimeVideoLayer],
+    added_source_bytes: usize,
+) -> Result<(), String> {
+    let total_source_bytes = video_isf_project_source_bytes(layers)?
+        .checked_add(added_source_bytes)
+        .ok_or_else(|| "Video ISF project source size overflowed the platform limit".to_string())?;
+    validate_video_isf_project_source_budget(total_source_bytes)
+}
+
+fn validate_video_isf_project_source_budget_after_replacement(
+    layers: &[RuntimeVideoLayer],
+    layer_index: usize,
+    replacement: Option<&VideoIsfEffectSummary>,
+) -> Result<(), String> {
+    let mut total_source_bytes = 0_usize;
+    for (index, layer) in layers.iter().enumerate() {
+        let effect = if index == layer_index {
+            replacement
+        } else {
+            layer.isf_effect.as_ref()
+        };
+        let source_bytes = effect
+            .map(video_isf_effect_source_bytes)
+            .transpose()?
+            .unwrap_or(0);
+        total_source_bytes = total_source_bytes
+            .checked_add(source_bytes)
+            .ok_or_else(|| {
+                "Video ISF project source size overflowed the platform limit".to_string()
+            })?;
+    }
+    validate_video_isf_project_source_budget(total_source_bytes)
+}
+
 fn reorder_video_layers(layers: &mut Vec<RuntimeVideoLayer>, layer_ids: Vec<VideoLayerId>) {
     let mut reordered = Vec::with_capacity(layers.len());
     for layer_id in layer_ids {
@@ -16641,6 +17415,7 @@ mod tests {
     use io::{artnet::parse_art_dmx_packet, sacn::parse_sacn_dmx_packet};
     use protocol::{AudioWaveformPoint, DmxModeSummary, GeometrySummary, Vec3, VideoMediaMetadata};
     use std::net::UdpSocket;
+    use std::sync::Barrier;
 
     fn add_runtime_test_video_layer(
         runtime: &mut EngineRuntime,
@@ -27461,11 +28236,49 @@ mod tests {
         let isf_effect = VideoIsfEffectSummary {
             enabled: true,
             label: "Threshold".to_string(),
-            source: "/*{\"INPUTS\":[{\"NAME\":\"inputImage\",\"TYPE\":\"image\"}]}*/ void main(){ gl_FragColor = IMG_THIS_PIXEL(inputImage); }".to_string(),
+            source: "/*{\"INPUTS\":[{\"NAME\":\"inputImage\",\"TYPE\":\"image\"}]}*/ void main(){ gl_FragColor = IMG_THIS_PIXEL(inputImage); }".into(),
             source_path: Some("filters/threshold.fs".to_string()),
             description: Some("Test filter".to_string()),
             categories: vec!["Test".to_string()],
             controls: Vec::new(),
+            stack: vec![
+                VideoIsfEffectStageSummary {
+                    enabled: false,
+                    label: "Invert".to_string(),
+                    source: "/*{\"INPUTS\":[{\"NAME\":\"inputImage\",\"TYPE\":\"image\"}]}*/ void main(){ gl_FragColor = vec4(1.0) - IMG_THIS_PIXEL(inputImage); }".into(),
+                    source_path: Some("filters/invert.fs".to_string()),
+                    description: Some("Disabled tail stage".to_string()),
+                    categories: vec!["Color".to_string()],
+                    controls: vec![protocol::VideoIsfControlSummary {
+                        name: "amount".to_string(),
+                        kind: VideoIsfControlKind::Float,
+                        value: [0.25, 0.0, 0.0, 0.0],
+                        default: [1.0, 0.0, 0.0, 0.0],
+                        minimum: [0.0; 4],
+                        maximum: [1.0; 4],
+                        labels: Vec::new(),
+                        values: Vec::new(),
+                    }],
+                },
+                VideoIsfEffectStageSummary {
+                    enabled: true,
+                    label: "Posterize".to_string(),
+                    source: "/*{\"INPUTS\":[{\"NAME\":\"inputImage\",\"TYPE\":\"image\"}]}*/ void main(){ gl_FragColor = IMG_THIS_PIXEL(inputImage); }".into(),
+                    source_path: Some("filters/posterize.fs".to_string()),
+                    description: Some("Enabled tail stage".to_string()),
+                    categories: vec!["Stylize".to_string()],
+                    controls: vec![protocol::VideoIsfControlSummary {
+                        name: "levels".to_string(),
+                        kind: VideoIsfControlKind::Long,
+                        value: [6.0, 0.0, 0.0, 0.0],
+                        default: [4.0, 0.0, 0.0, 0.0],
+                        minimum: [2.0, 0.0, 0.0, 0.0],
+                        maximum: [32.0, 0.0, 0.0, 0.0],
+                        labels: Vec::new(),
+                        values: Vec::new(),
+                    }],
+                },
+            ],
         };
         engine
             .send(EngineCommand::SetVideoLayerIsfEffect {
@@ -27534,6 +28347,19 @@ mod tests {
         assert_eq!(duplicate.state.opacity, 0.42);
         assert_eq!(duplicate.state.speed, 2.0);
         assert!(duplicate.state.playing);
+        let duplicate_effect = duplicate.isf_effect.as_ref().unwrap();
+        assert_eq!(
+            duplicate_effect
+                .stack
+                .iter()
+                .map(|stage| stage.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Invert", "Posterize"]
+        );
+        assert!(!duplicate_effect.stack[0].enabled);
+        assert_eq!(duplicate_effect.stack[0].controls[0].value[0], 0.25);
+        assert!(duplicate_effect.stack[1].enabled);
+        assert_eq!(duplicate_effect.stack[1].controls[0].value[0], 6.0);
         assert_eq!(duplicate.isf_effect, Some(isf_effect));
         let aux = snapshot
             .video
@@ -27542,6 +28368,616 @@ mod tests {
             .find(|composition| composition.id == 2)
             .unwrap();
         assert_eq!(aux.layer_ids, vec![source_layer_id, duplicate_layer_id]);
+    }
+
+    fn source_budget_test_effect(source: Arc<str>) -> VideoIsfEffectSummary {
+        VideoIsfEffectSummary {
+            enabled: true,
+            label: "Budget stage".to_string(),
+            source,
+            source_path: None,
+            description: None,
+            categories: Vec::new(),
+            controls: Vec::new(),
+            stack: Vec::new(),
+        }
+    }
+
+    fn source_budget_test_layer(
+        id: VideoLayerId,
+        effect: Option<VideoIsfEffectSummary>,
+    ) -> VideoLayerSummary {
+        VideoLayerSummary {
+            id,
+            label: format!("Budget layer {id}"),
+            source: VideoSourceSummary {
+                kind: protocol::VideoSourceKind::StillImage,
+                path: Some(format!("memory://budget-{id}.png")),
+                name: None,
+                codec: None,
+                metadata: None,
+            },
+            blend_mode: VideoBlendMode::Normal,
+            state: VideoLayerState::default(),
+            isf_effect: effect,
+        }
+    }
+
+    fn near_limit_isf_source_budget_engine() -> (EngineHandle, VideoLayerId, [VideoLayerId; 2]) {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let full_source: Arc<str> = "x".repeat(video::ISF_MAX_SOURCE_BYTES).into();
+        let mut layers = (1..=31)
+            .map(|id| {
+                source_budget_test_layer(
+                    id,
+                    Some(source_budget_test_effect(Arc::clone(&full_source))),
+                )
+            })
+            .collect::<Vec<_>>();
+        layers.push(source_budget_test_layer(
+            32,
+            Some(source_budget_test_effect(
+                "x".repeat(video::ISF_MAX_SOURCE_BYTES - 2).into(),
+            )),
+        ));
+        let unit_source_layer_id = 33;
+        layers.push(source_budget_test_layer(
+            unit_source_layer_id,
+            Some(source_budget_test_effect("x".into())),
+        ));
+        let target_layer_ids = [34, 35];
+        layers.extend(
+            target_layer_ids
+                .into_iter()
+                .map(|id| source_budget_test_layer(id, None)),
+        );
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.video.layers = layers;
+        engine.load_project_snapshot(snapshot).unwrap();
+        let loaded = engine.persistence_snapshot().unwrap();
+        let loaded_source_bytes = loaded
+            .video
+            .layers
+            .iter()
+            .filter_map(|layer| layer.isf_effect.as_ref())
+            .map(|effect| video_isf_effect_source_bytes(effect).unwrap())
+            .sum::<usize>();
+        assert_eq!(loaded_source_bytes, VIDEO_ISF_PROJECT_SOURCE_MAX_BYTES - 1);
+        (engine, unit_source_layer_id, target_layer_ids)
+    }
+
+    fn assert_one_source_budget_race_winner(results: Vec<Result<(), String>>) {
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        let error = results
+            .into_iter()
+            .find_map(Result::err)
+            .expect("one racing mutation must exceed the project source budget");
+        assert!(
+            error.contains("Video ISF project source size"),
+            "unexpected racing mutation error: {error}"
+        );
+    }
+
+    #[test]
+    fn legacy_project_load_cannot_exceed_isf_source_budget() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        add_runtime_test_video_layer(&mut runtime, 999, VideoLayerState::default());
+        let full_source: Arc<str> = "x".repeat(video::ISF_MAX_SOURCE_BYTES).into();
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.video.layers = (1..=33)
+            .map(|id| {
+                source_budget_test_layer(
+                    id,
+                    Some(source_budget_test_effect(Arc::clone(&full_source))),
+                )
+            })
+            .collect();
+
+        runtime.apply_command(EngineCommand::LoadProjectSnapshot(snapshot));
+
+        assert_eq!(runtime.video_layers.len(), 1);
+        assert_eq!(runtime.video_layers[0].id, 999);
+        assert!(runtime
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("Video ISF project source size")));
+    }
+
+    #[test]
+    fn concurrent_isf_stack_additions_atomically_enforce_project_source_budget() {
+        let (engine, _, target_layer_ids) = near_limit_isf_source_budget_engine();
+        let barrier = Arc::new(Barrier::new(3));
+        let threads = target_layer_ids
+            .into_iter()
+            .map(|layer_id| {
+                let engine = engine.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    engine.mutate_video_layer_isf_stack(
+                        layer_id,
+                        VideoIsfStackMutation::Add(VideoIsfEffectStageSummary {
+                            enabled: true,
+                            label: "Unit stage".to_string(),
+                            source: "x".into(),
+                            source_path: None,
+                            description: None,
+                            categories: Vec::new(),
+                            controls: Vec::new(),
+                        }),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+        assert_one_source_budget_race_winner(
+            threads
+                .into_iter()
+                .map(|thread| thread.join().unwrap())
+                .collect(),
+        );
+    }
+
+    #[test]
+    fn concurrent_isf_replacements_atomically_enforce_project_source_budget() {
+        let (engine, _, target_layer_ids) = near_limit_isf_source_budget_engine();
+        let barrier = Arc::new(Barrier::new(3));
+        let threads = target_layer_ids
+            .into_iter()
+            .map(|layer_id| {
+                let engine = engine.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    engine.set_video_layer_isf_effect_published(
+                        layer_id,
+                        Some(source_budget_test_effect("x".into())),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+        assert_one_source_budget_race_winner(
+            threads
+                .into_iter()
+                .map(|thread| thread.join().unwrap())
+                .collect(),
+        );
+    }
+
+    #[test]
+    fn concurrent_isf_layer_duplicates_atomically_enforce_project_source_budget() {
+        let (engine, unit_source_layer_id, _) = near_limit_isf_source_budget_engine();
+        let barrier = Arc::new(Barrier::new(3));
+        let threads = [100, 101]
+            .into_iter()
+            .map(|new_layer_id| {
+                let engine = engine.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    engine.duplicate_video_layer_published(
+                        unit_source_layer_id,
+                        new_layer_id,
+                        format!("Duplicate {new_layer_id}"),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+        assert_one_source_budget_race_winner(
+            threads
+                .into_iter()
+                .map(|thread| thread.join().unwrap())
+                .collect(),
+        );
+    }
+
+    #[test]
+    fn video_isf_stack_mutations_are_published_atomically_and_promote_new_root() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let layer_id = engine.allocate_video_layer_id();
+        engine
+            .send(EngineCommand::AddVideoLayer {
+                layer_id,
+                label: "Stack".to_string(),
+                source: VideoSourceSummary {
+                    kind: protocol::VideoSourceKind::StillImage,
+                    path: Some("memory://stack.png".to_string()),
+                    name: None,
+                    codec: None,
+                    metadata: None,
+                },
+            })
+            .unwrap();
+        let stage = |label: &str| {
+            VideoIsfEffectStageSummary {
+            enabled: true,
+            label: label.to_string(),
+            source: format!(
+                "/*{{\"INPUTS\":[{{\"NAME\":\"inputImage\",\"TYPE\":\"image\"}}]}}*/ void main(){{ gl_FragColor = IMG_THIS_PIXEL(inputImage); }} // {label}"
+            )
+            .into(),
+            source_path: None,
+            description: None,
+            categories: Vec::new(),
+            controls: vec![protocol::VideoIsfControlSummary {
+                name: "amount".to_string(),
+                kind: VideoIsfControlKind::Float,
+                value: [0.5, 0.0, 0.0, 0.0],
+                default: [0.5, 0.0, 0.0, 0.0],
+                minimum: [0.0; 4],
+                maximum: [1.0; 4],
+                labels: Vec::new(),
+                values: Vec::new(),
+            }],
+        }
+        };
+
+        for label in ["A", "B", "C"] {
+            engine
+                .mutate_video_layer_isf_stack(layer_id, VideoIsfStackMutation::Add(stage(label)))
+                .unwrap();
+        }
+        engine
+            .mutate_video_layer_isf_stack(
+                layer_id,
+                VideoIsfStackMutation::SetControl {
+                    stage_index: 1,
+                    control_name: "amount".to_string(),
+                    value: [4.0, 0.0, 0.0, 0.0],
+                },
+            )
+            .unwrap();
+        let after_control = engine.snapshot();
+        assert_eq!(
+            after_control.video.layers[0]
+                .isf_effect
+                .as_ref()
+                .unwrap()
+                .stack[0]
+                .controls[0]
+                .value[0],
+            1.0
+        );
+        engine
+            .mutate_video_layer_isf_stack(layer_id, VideoIsfStackMutation::Reset { stage_index: 1 })
+            .unwrap();
+        engine
+            .mutate_video_layer_isf_stack(
+                layer_id,
+                VideoIsfStackMutation::SetEnabled {
+                    stage_index: 1,
+                    enabled: false,
+                },
+            )
+            .unwrap();
+        engine
+            .mutate_video_layer_isf_stack(
+                layer_id,
+                VideoIsfStackMutation::Move {
+                    stage_index: 2,
+                    delta: -2,
+                },
+            )
+            .unwrap();
+        engine
+            .mutate_video_layer_isf_stack(
+                layer_id,
+                VideoIsfStackMutation::Remove { stage_index: 0 },
+            )
+            .unwrap();
+
+        let snapshot = engine.snapshot();
+        let effect = snapshot.video.layers[0].isf_effect.as_ref().unwrap();
+        assert_eq!(effect.label, "B");
+        assert!(!effect.enabled);
+        assert_eq!(effect.controls[0].value[0], 0.5);
+        assert_eq!(effect.stack.len(), 1);
+        assert_eq!(effect.stack[0].label, "A");
+    }
+
+    #[test]
+    fn video_isf_control_mutation_normalizes_reversed_bounds() {
+        let effect = mutate_video_isf_effect_stack(
+            None,
+            VideoIsfStackMutation::Add(VideoIsfEffectStageSummary {
+                enabled: true,
+                label: "Reversed bounds".to_string(),
+                source: "test shader".into(),
+                source_path: None,
+                description: None,
+                categories: Vec::new(),
+                controls: vec![protocol::VideoIsfControlSummary {
+                    name: "amount".to_string(),
+                    kind: VideoIsfControlKind::Float,
+                    value: [0.5; 4],
+                    default: [0.5; 4],
+                    minimum: [1.0; 4],
+                    maximum: [0.0; 4],
+                    labels: Vec::new(),
+                    values: Vec::new(),
+                }],
+            }),
+        )
+        .unwrap();
+
+        let effect = mutate_video_isf_effect_stack(
+            effect,
+            VideoIsfStackMutation::SetControl {
+                stage_index: 0,
+                control_name: "amount".to_string(),
+                value: [2.0, -1.0, 0.25, 0.75],
+            },
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(effect.controls[0].value, [1.0, 0.0, 0.25, 0.75]);
+    }
+
+    fn test_isf_event_control(value: f32) -> protocol::VideoIsfControlSummary {
+        protocol::VideoIsfControlSummary {
+            name: "trigger".to_string(),
+            kind: VideoIsfControlKind::Event,
+            value: [value, 0.0, 0.0, 0.0],
+            default: [0.0; 4],
+            minimum: [0.0; 4],
+            maximum: [1.0; 4],
+            labels: Vec::new(),
+            values: Vec::new(),
+        }
+    }
+
+    fn runtime_with_two_identity_distinct_isf_event_stages() -> EngineRuntime {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        add_runtime_test_video_layer(&mut runtime, 1, VideoLayerState::default());
+        let root_source: Arc<str> = String::from("identical shader source").into();
+        let target_source: Arc<str> = String::from("identical shader source").into();
+        assert!(!Arc::ptr_eq(&root_source, &target_source));
+        runtime.apply_command(EngineCommand::SetVideoLayerIsfEffect {
+            layer_id: 1,
+            effect: Some(VideoIsfEffectSummary {
+                enabled: true,
+                label: "Root".to_string(),
+                source: root_source,
+                source_path: None,
+                description: None,
+                categories: Vec::new(),
+                controls: vec![test_isf_event_control(1.0)],
+                stack: vec![VideoIsfEffectStageSummary {
+                    enabled: true,
+                    label: "Target".to_string(),
+                    source: target_source,
+                    source_path: None,
+                    description: None,
+                    categories: Vec::new(),
+                    controls: vec![test_isf_event_control(0.0)],
+                }],
+            }),
+        });
+        assert!(runtime.last_error.is_none());
+        runtime.video_layers[0]
+            .isf_effect
+            .as_mut()
+            .unwrap()
+            .controls[0]
+            .value = [1.0, 0.0, 0.0, 0.0];
+        runtime
+    }
+
+    #[test]
+    fn video_isf_event_pulse_reset_follows_stage_source_identity_after_move() {
+        let mut runtime = runtime_with_two_identity_distinct_isf_event_stages();
+        let started_at = Instant::now();
+        let hold = Duration::from_millis(50);
+        runtime
+            .pulse_video_layer_isf_event(1, 1, "trigger".to_string(), hold, started_at)
+            .unwrap();
+        let (ack, _receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::MutateVideoLayerIsfStack {
+            layer_id: 1,
+            mutation: VideoIsfStackMutation::Move {
+                stage_index: 1,
+                delta: -1,
+            },
+            ack,
+        });
+        assert!(runtime.last_error.is_none());
+
+        runtime.advance_video_isf_event_resets(started_at + hold);
+
+        let effect = runtime.video_layers[0].isf_effect.as_ref().unwrap();
+        assert_eq!(effect.label, "Target");
+        assert_eq!(effect.controls[0].value[0], 0.0);
+        assert_eq!(effect.stack[0].label, "Root");
+        assert_eq!(effect.stack[0].controls[0].value[0], 1.0);
+    }
+
+    #[test]
+    fn video_isf_event_pulse_reset_is_noop_after_target_stage_removal() {
+        let mut runtime = runtime_with_two_identity_distinct_isf_event_stages();
+        let started_at = Instant::now();
+        let hold = Duration::from_millis(50);
+        runtime
+            .pulse_video_layer_isf_event(1, 1, "trigger".to_string(), hold, started_at)
+            .unwrap();
+        let (ack, _receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::MutateVideoLayerIsfStack {
+            layer_id: 1,
+            mutation: VideoIsfStackMutation::Remove { stage_index: 1 },
+            ack,
+        });
+        assert!(runtime.last_error.is_none());
+
+        runtime.advance_video_isf_event_resets(started_at + hold);
+
+        let effect = runtime.video_layers[0].isf_effect.as_ref().unwrap();
+        assert_eq!(effect.label, "Root");
+        assert_eq!(effect.controls[0].value[0], 1.0);
+        assert!(effect.stack.is_empty());
+    }
+
+    #[test]
+    fn newer_video_isf_event_pulse_extends_identity_reset_deadline() {
+        let mut runtime = runtime_with_two_identity_distinct_isf_event_stages();
+        let started_at = Instant::now();
+        let hold = Duration::from_millis(50);
+        runtime
+            .pulse_video_layer_isf_event(1, 1, "trigger".to_string(), hold, started_at)
+            .unwrap();
+        runtime
+            .pulse_video_layer_isf_event(
+                1,
+                1,
+                "trigger".to_string(),
+                hold,
+                started_at + Duration::from_millis(30),
+            )
+            .unwrap();
+
+        runtime.advance_video_isf_event_resets(started_at + hold);
+        assert_eq!(
+            runtime.video_layers[0].isf_effect.as_ref().unwrap().stack[0].controls[0].value[0],
+            1.0
+        );
+        runtime.advance_video_isf_event_resets(started_at + Duration::from_millis(80));
+        assert_eq!(
+            runtime.video_layers[0].isf_effect.as_ref().unwrap().stack[0].controls[0].value[0],
+            0.0
+        );
+    }
+
+    #[test]
+    fn failed_overlapping_isf_event_pulse_publication_restores_prior_reset() {
+        let mut runtime = runtime_with_two_identity_distinct_isf_event_stages();
+        let started_at = Instant::now();
+        let hold = Duration::from_millis(50);
+        let first = runtime
+            .pulse_video_layer_isf_event(1, 1, "trigger".to_string(), hold, started_at)
+            .unwrap();
+        assert!(first.replaced_resets.is_empty());
+        assert_eq!(runtime.pending_video_isf_event_resets.len(), 1);
+
+        let busy_snapshot = RwLock::new(runtime.build_snapshot(0));
+        let read_guard = busy_snapshot.read().unwrap();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::PulseVideoLayerIsfEvent {
+            layer_id: 1,
+            stage_index: 1,
+            control_name: "trigger".to_string(),
+            hold: Duration::from_millis(100),
+            ack,
+        });
+        assert_eq!(runtime.pending_video_isf_event_resets.len(), 1);
+        assert_ne!(
+            runtime.pending_video_isf_event_resets[0].pulse_id,
+            first.pulse_id
+        );
+
+        runtime.publish_pending_command_acks(0, &busy_snapshot);
+        drop(read_guard);
+
+        let error = receiver
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap()
+            .unwrap_err();
+        assert!(error.contains("video ISF Event pulse was rolled back"));
+        assert_eq!(runtime.pending_video_isf_event_resets.len(), 1);
+        assert_eq!(
+            runtime.pending_video_isf_event_resets[0].pulse_id,
+            first.pulse_id
+        );
+
+        runtime.advance_video_isf_event_resets(started_at + hold);
+        assert_eq!(
+            runtime.video_layers[0].isf_effect.as_ref().unwrap().stack[0].controls[0].value[0],
+            0.0
+        );
+    }
+
+    #[test]
+    fn persistence_snapshot_zeros_transient_isf_events_during_active_pulse() {
+        let mut runtime = runtime_with_two_identity_distinct_isf_event_stages();
+        runtime
+            .pulse_video_layer_isf_event(
+                1,
+                1,
+                "trigger".to_string(),
+                Duration::from_millis(50),
+                Instant::now(),
+            )
+            .unwrap();
+
+        let persisted = runtime.build_persistence_snapshot();
+        let live_effect = persisted.video.layers[0].isf_effect.as_ref().unwrap();
+        assert_eq!(live_effect.controls[0].value[0], 1.0);
+        assert_eq!(live_effect.stack[0].controls[0].value[0], 1.0);
+        let authored_effect = persisted.authored_video.as_ref().unwrap().layers[0]
+            .isf_effect
+            .as_ref()
+            .unwrap();
+        assert_eq!(authored_effect.controls[0].value[0], 0.0);
+        assert_eq!(authored_effect.stack[0].controls[0].value[0], 0.0);
+    }
+
+    #[test]
+    fn active_isf_event_values_are_not_latched_into_layer_duplicates() {
+        let mut runtime = runtime_with_two_identity_distinct_isf_event_stages();
+        runtime
+            .pulse_video_layer_isf_event(
+                1,
+                1,
+                "trigger".to_string(),
+                Duration::from_millis(50),
+                Instant::now(),
+            )
+            .unwrap();
+
+        runtime
+            .duplicate_video_layer(1, 2, "Duplicate".to_string())
+            .unwrap();
+
+        let duplicate = runtime
+            .video_layers
+            .iter()
+            .find(|layer| layer.id == 2)
+            .unwrap()
+            .isf_effect
+            .as_ref()
+            .unwrap();
+        assert_eq!(duplicate.controls[0].value[0], 0.0);
+        assert_eq!(duplicate.stack[0].controls[0].value[0], 0.0);
+    }
+
+    #[test]
+    fn project_load_clears_latched_isf_event_values() {
+        let runtime = runtime_with_two_identity_distinct_isf_event_stages();
+        let mut snapshot = runtime.build_snapshot(0);
+        snapshot.video.layers[0].isf_effect.as_mut().unwrap().stack[0].controls[0].value =
+            [1.0, 0.0, 0.0, 0.0];
+        let mut loaded = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+
+        loaded.apply_command(EngineCommand::LoadProjectSnapshot(snapshot));
+
+        let effect = loaded.video_layers[0].isf_effect.as_ref().unwrap();
+        assert_eq!(effect.controls[0].value[0], 0.0);
+        assert_eq!(effect.stack[0].controls[0].value[0], 0.0);
     }
 
     #[test]

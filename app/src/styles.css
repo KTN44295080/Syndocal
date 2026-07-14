@@ -642,6 +642,107 @@ h3 {
   font-variant-numeric: tabular-nums;
 }
 
+.videoIsfStack {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  max-height: 176px;
+  overflow: hidden auto;
+  padding-right: 2px;
+}
+
+.videoIsfStackRow {
+  display: grid;
+  grid-template-columns: minmax(92px, 1fr) repeat(5, minmax(30px, auto));
+  gap: 3px;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid #323b44;
+  border-radius: 3px;
+  padding: 3px;
+  background: #11171c;
+}
+
+.videoIsfStackRow.selected {
+  border-color: #b97435;
+  box-shadow: inset 2px 0 0 #e59b4a;
+  background: #171c20;
+}
+
+.videoIsfStackRow > button {
+  min-width: 0;
+  min-height: 26px;
+  padding-inline: 5px;
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.videoIsfStackRow > .videoIsfStageSelect {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 4px;
+  align-items: center;
+  border-color: transparent;
+  background: transparent;
+  color: #b8c2ca;
+  text-align: left;
+}
+
+.videoIsfStageSelect > span {
+  color: #d9914c;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.videoIsfStageSelect > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.videoIsfStackActions {
+  display: grid;
+  grid-template-columns: auto auto minmax(54px, 1fr);
+  align-items: center;
+}
+
+.videoIsfStackActions > span {
+  justify-self: end;
+  color: #8f9caf;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.videoIsfSelectedEditor {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  border-top: 1px solid #303944;
+  padding-top: 6px;
+}
+
+.videoIsfSelectedHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.videoIsfSelectedHeader strong {
+  overflow: hidden;
+  color: #e6eaed;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.videoIsfSelectedHeader span {
+  color: #9aa8b4;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
 .topbarProject {
   display: flex;
   align-items: baseline;
@@ -3512,10 +3613,95 @@ progress {
   }
 }
 
-@media (max-height: 760px) {
+@media (max-height: 800px) {
   .videoControlPanelMixer .videoMixerClipPane .videoClipGridPanel {
+    gap: 2px;
+    padding: 4px;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane .videoClipPreviewBar > div:first-child > span {
+    display: none;
+  }
+}
+
+@media (max-height: 740px) {
+  .videoControlPanelMixer .videoMixerClipPane .videoClipGridPanel {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: auto auto auto minmax(90px, 1fr);
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane .videoClipGridHeader {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane .videoClipGridHeader > div {
+    display: flex;
+    align-items: baseline;
     gap: 4px;
-    padding: 5px;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane .videoClipGridHeader h3 {
+    white-space: nowrap;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane .videoRecordingBar {
+    grid-column: 2;
+    grid-row: 1;
+    padding-block: 2px;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane .videoRecordingBar {
+    gap: 3px;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane .videoRecordingBar small,
+  .videoControlPanelMixer .videoMixerClipPane .videoRecordingBar span {
+    font-size: 9px;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane .videoRecordingBar button {
+    min-height: 24px;
+    padding-inline: 4px;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane .videoClipPreviewBar {
+    grid-column: 1;
+    grid-row: 2;
+    padding: 2px;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane .videoClipProgramTransfer > small {
+    display: none;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane .videoClipProgramTransfer button {
+    min-height: 24px;
+    padding-inline: 4px;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane .videoAbDeck {
+    grid-column: 2;
+    grid-row: 2;
+    grid-template-columns: minmax(44px, 0.7fr) minmax(76px, 1fr) minmax(44px, 0.7fr);
+    gap: 2px;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane .videoAbDeck > button small {
+    display: none;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane .videoAudioSyncStatus,
+  .videoControlPanelMixer .videoMixerClipPane .videoClipGrid {
+    grid-column: 1 / -1;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane .videoAudioSyncStatus {
+    grid-row: 3;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane .videoClipGrid {
+    grid-row: 4;
   }
 }
 
@@ -12306,6 +12492,10 @@ input[type="color"] {
   font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.videoRecordingBar .videoRecordingError {
+  color: #ff8b96;
 }
 
 .videoRecordingBar.active {
@@ -22803,7 +22993,7 @@ h3 {
   display: grid;
   gap: 6px;
   min-width: 0;
-  max-height: 280px;
+  max-height: min(360px, 45vh);
   margin-top: 5px;
   overflow: hidden auto;
   border-top: 1px solid #3b4247;
@@ -22819,6 +23009,15 @@ h3 {
   min-width: 0;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 3px;
+}
+
+.videoControlPanelMixer .videoIsfAdvanced .videoIsfStackRow {
+  grid-template-columns: minmax(84px, 1fr) repeat(5, minmax(28px, auto));
+}
+
+.videoControlPanelMixer .videoIsfAdvanced .videoIsfStackRow > button {
+  padding-inline: 3px;
+  font-size: 9px;
 }
 
 .videoControlPanelMixer .videoIsfAdvanced > .buttonRow > button {

@@ -3,6 +3,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
+    sync::Arc,
     time::{Duration, SystemTime},
 };
 
@@ -29,8 +30,9 @@ pub use gpu_surface::{GpuSurfaceBufferStats, GpuSurfaceError, GpuSurfacePresente
 pub use hap_decoder::{HapMovFrameDecoder, PreferredVideoFrameDecoder, VideoDecoderDiagnostics};
 pub use isf_runtime::{
     isf_effect_from_prepared, prepare_isf_shader, resolved_isf_control_values,
-    IsfControlDefinition, IsfControlKind, IsfGpuRuntime, IsfPrepareError, IsfRuntimeError,
-    PreparedIsfShader, ISF_MAX_CONTROL_INPUTS, ISF_MAX_SOURCE_BYTES,
+    resolved_isf_control_values_from_controls, IsfControlDefinition, IsfControlKind, IsfGpuRuntime,
+    IsfPrepareError, IsfRuntimeError, PreparedIsfShader, ISF_MAX_CONTROL_INPUTS,
+    ISF_MAX_SOURCE_BYTES,
 };
 pub use libav_decoder::LibavFrameDecoder;
 
@@ -53,6 +55,14 @@ pub struct VideoFrame {
     pub duration_ms: u64,
     pub format: VideoPixelFormat,
     pub data: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoIsfStageError {
+    pub layer_id: VideoLayerId,
+    pub stage_index: Option<usize>,
+    pub stage_label: Option<String>,
+    pub message: String,
 }
 
 pub struct FrameQueue {
@@ -1007,13 +1017,31 @@ pub struct DecoderBackedFrameProvider<D = NullVideoDecoder> {
 pub struct VideoPreviewRenderer<P = PreviewFrameProvider> {
     runtime: VideoRuntime,
     frame_provider: P,
-    isf_shader_cache: HashMap<String, Result<PreparedIsfShader, IsfPrepareError>>,
+    isf_shader_cache: HashMap<Arc<str>, Result<Arc<PreparedIsfShader>, IsfPrepareError>>,
     isf_runtime: Option<Result<IsfGpuRuntime, IsfRuntimeError>>,
     last_isf_error: Option<String>,
+    last_isf_stage_errors: Vec<VideoIsfStageError>,
 }
 
 const ISF_SHADER_CACHE_CAPACITY: usize = 64;
+pub const VIDEO_ISF_EFFECT_STACK_MAX_STAGES: usize = 8;
 const FFMPEG_CLI_FRAME_CACHE_CAPACITY: usize = 8;
+
+fn format_video_isf_stage_error(error: &VideoIsfStageError, layer_label: Option<&str>) -> String {
+    let layer = layer_label
+        .map(|label| format!("layer {} '{}'", error.layer_id, label))
+        .unwrap_or_else(|| format!("layer {}", error.layer_id));
+    match (error.stage_index, error.stage_label.as_deref()) {
+        (Some(stage_index), Some(stage_label)) => format!(
+            "{} FX {} '{}': {}",
+            layer,
+            stage_index + 1,
+            stage_label,
+            error.message
+        ),
+        _ => format!("{} FX stack: {}", layer, error.message),
+    }
+}
 
 #[derive(Default)]
 pub struct StillImageFrameCache {
@@ -2191,6 +2219,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             isf_shader_cache: HashMap::new(),
             isf_runtime: None,
             last_isf_error: None,
+            last_isf_stage_errors: Vec::new(),
         }
     }
 
@@ -2364,6 +2393,8 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             .collect::<Vec<_>>();
         self.frame_provider.retain_layers(&layer_ids);
         self.runtime.sync_layers(&layer_ids);
+        self.reset_isf_stack_metrics();
+        let mut isf_stage_errors = Vec::new();
 
         for layer in &snapshot.layers {
             if !requested_layer_ids.contains(&layer.id) {
@@ -2374,10 +2405,30 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 .frames_for_layer(layer, width, height)
                 .map_err(VideoPreviewError::from)?;
             for frame in frames {
-                let frame = self.apply_isf_effect_to_frame(layer, frame);
+                let (frame, frame_errors) = self.apply_isf_effect_to_frame(layer, frame);
+                for error in frame_errors {
+                    if !isf_stage_errors.contains(&error) {
+                        isf_stage_errors.push(error);
+                    }
+                }
                 self.runtime.push_frame(frame);
             }
         }
+        self.last_isf_error = (!isf_stage_errors.is_empty()).then(|| {
+            isf_stage_errors
+                .iter()
+                .map(|error| {
+                    let layer_label = snapshot
+                        .layers
+                        .iter()
+                        .find(|layer| layer.id == error.layer_id)
+                        .map(|layer| layer.label.as_str());
+                    format_video_isf_stage_error(error, layer_label)
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        });
+        self.last_isf_stage_errors = isf_stage_errors;
         Ok(())
     }
 
@@ -2385,54 +2436,114 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         &mut self,
         layer: &VideoLayerSummary,
         frame: VideoFrame,
-    ) -> VideoFrame {
-        let Some(effect) = layer.isf_effect.as_ref().filter(|effect| effect.enabled) else {
-            return frame;
+    ) -> (VideoFrame, Vec<VideoIsfStageError>) {
+        let Some(effect) = layer.isf_effect.as_ref() else {
+            return (frame, Vec::new());
         };
-        if !self.isf_shader_cache.contains_key(&effect.source) {
-            if self.isf_shader_cache.len() >= ISF_SHADER_CACHE_CAPACITY {
-                self.isf_shader_cache.clear();
-            }
-            self.isf_shader_cache
-                .insert(effect.source.clone(), prepare_isf_shader(&effect.source));
+        if 1 + effect.stack.len() > VIDEO_ISF_EFFECT_STACK_MAX_STAGES {
+            return (
+                frame,
+                vec![VideoIsfStageError {
+                    layer_id: layer.id,
+                    stage_index: None,
+                    stage_label: None,
+                    message: format!(
+                        "ISF stack has {} stages; the limit is {}",
+                        1 + effect.stack.len(),
+                        VIDEO_ISF_EFFECT_STACK_MAX_STAGES
+                    ),
+                }],
+            );
         }
-        let shader = match self
-            .isf_shader_cache
-            .get(&effect.source)
-            .expect("ISF shader cache entry inserted")
-            .clone()
-        {
-            Ok(shader) => shader,
-            Err(error) => {
-                self.last_isf_error = Some(format!("{}: {error}", layer.label));
-                return frame;
+        let stages = std::iter::once((
+            0_usize,
+            effect.enabled,
+            effect.label.as_str(),
+            &effect.source,
+            effect.controls.as_slice(),
+        ))
+        .chain(effect.stack.iter().enumerate().map(|(index, stage)| {
+            (
+                index + 1,
+                stage.enabled,
+                stage.label.as_str(),
+                &stage.source,
+                stage.controls.as_slice(),
+            )
+        }))
+        .filter(|(_, enabled, _, _, _)| *enabled)
+        .collect::<Vec<_>>();
+        if stages.is_empty() {
+            return (frame, Vec::new());
+        }
+
+        let mut prepared_stages = Vec::with_capacity(stages.len());
+        let mut stage_errors = Vec::new();
+        for (index, _, label, source, controls) in stages {
+            if !self.isf_shader_cache.contains_key(source.as_ref()) {
+                if self.isf_shader_cache.len() >= ISF_SHADER_CACHE_CAPACITY {
+                    self.isf_shader_cache.clear();
+                }
+                self.isf_shader_cache.insert(
+                    Arc::clone(source),
+                    prepare_isf_shader(source.as_ref()).map(Arc::new),
+                );
             }
-        };
+            match self
+                .isf_shader_cache
+                .get(source.as_ref())
+                .expect("ISF shader cache entry inserted")
+                .clone()
+            {
+                Ok(shader) => {
+                    let values = resolved_isf_control_values_from_controls(&shader, controls);
+                    prepared_stages.push((shader, values));
+                }
+                Err(error) => stage_errors.push(VideoIsfStageError {
+                    layer_id: layer.id,
+                    stage_index: Some(index),
+                    stage_label: Some(label.to_string()),
+                    message: error.to_string(),
+                }),
+            }
+        }
+        if prepared_stages.is_empty() {
+            return (frame, stage_errors);
+        }
         if self.isf_runtime.is_none() {
             self.isf_runtime = Some(IsfGpuRuntime::new());
         }
-        let controls = resolved_isf_control_values(&shader, effect);
         let runtime = match self.isf_runtime.as_mut().expect("ISF runtime initialized") {
             Ok(runtime) => runtime,
             Err(error) => {
-                self.last_isf_error = Some(format!("{}: {error}", layer.label));
-                return frame;
+                stage_errors.push(VideoIsfStageError {
+                    layer_id: layer.id,
+                    stage_index: None,
+                    stage_label: None,
+                    message: error.to_string(),
+                });
+                return (frame, stage_errors);
             }
         };
-        match runtime.apply(
+        let stage_refs = prepared_stages
+            .iter()
+            .map(|(shader, controls)| (shader.as_ref(), controls.as_slice()))
+            .collect::<Vec<_>>();
+        match runtime.apply_stack(
             &frame,
-            &shader,
-            &controls,
+            &stage_refs,
             frame.pts_ms as f32 / 1_000.0,
             frame.duration_ms as f32 / 1_000.0,
         ) {
-            Ok(frame) => {
-                self.last_isf_error = None;
-                frame
-            }
+            Ok(frame) => (frame, stage_errors),
             Err(error) => {
-                self.last_isf_error = Some(format!("{}: {error}", layer.label));
-                frame
+                stage_errors.push(VideoIsfStageError {
+                    layer_id: layer.id,
+                    stage_index: None,
+                    stage_label: None,
+                    message: error.to_string(),
+                });
+                (frame, stage_errors)
             }
         }
     }
@@ -2445,12 +2556,38 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             .unwrap_or(0)
     }
 
+    pub fn isf_last_stack_stage_count(&self) -> usize {
+        self.isf_runtime
+            .as_ref()
+            .and_then(|runtime| runtime.as_ref().ok())
+            .map(IsfGpuRuntime::last_stack_stage_count)
+            .unwrap_or(0)
+    }
+
+    pub fn isf_last_stack_render_us(&self) -> u64 {
+        self.isf_runtime
+            .as_ref()
+            .and_then(|runtime| runtime.as_ref().ok())
+            .map(IsfGpuRuntime::last_stack_render_us)
+            .unwrap_or(0)
+    }
+
+    fn reset_isf_stack_metrics(&mut self) {
+        if let Some(Ok(runtime)) = self.isf_runtime.as_mut() {
+            runtime.reset_last_stack_metrics();
+        }
+    }
+
     pub fn isf_shader_cache_count(&self) -> usize {
         self.isf_shader_cache.len()
     }
 
     pub fn last_isf_error(&self) -> Option<&str> {
         self.last_isf_error.as_deref()
+    }
+
+    pub fn last_isf_stage_errors(&self) -> &[VideoIsfStageError] {
+        &self.last_isf_stage_errors
     }
 
     pub fn queue_count(&self) -> usize {
@@ -5491,7 +5628,7 @@ mod tests {
         let prepared = prepare_isf_shader(SOURCE).unwrap();
         let effect =
             isf_effect_from_prepared("Threshold".to_string(), SOURCE.to_string(), None, &prepared);
-        let snapshot = VideoSnapshot {
+        let mut snapshot = VideoSnapshot {
             layers: vec![VideoLayerSummary {
                 id: 44,
                 label: "ISF Layer".to_string(),
@@ -5529,7 +5666,54 @@ mod tests {
         assert_eq!(second.data, first.data);
         assert_eq!(renderer.isf_shader_cache_count(), 1);
         assert_eq!(renderer.isf_pipeline_count(), 1);
+        assert_eq!(renderer.isf_last_stack_stage_count(), 1);
         assert_eq!(renderer.last_isf_error(), None);
+
+        let invert = builtin_isf_effect("invert").unwrap().unwrap();
+        snapshot.layers[0].isf_effect.as_mut().unwrap().stack.push(
+            protocol::VideoIsfEffectStageSummary {
+                enabled: invert.enabled,
+                label: invert.label,
+                source: invert.source,
+                source_path: invert.source_path,
+                description: invert.description,
+                categories: invert.categories,
+                controls: invert.controls,
+            },
+        );
+        let stacked = renderer.render(&snapshot, 2, 1).unwrap();
+        assert_eq!(stacked.data, vec![255, 255, 255, 255, 55, 55, 55, 255]);
+        assert_eq!(renderer.isf_shader_cache_count(), 2);
+        assert_eq!(renderer.isf_pipeline_count(), 2);
+        assert_eq!(renderer.isf_last_stack_stage_count(), 2);
+        assert!(renderer.isf_last_stack_render_us() > 0);
+
+        snapshot.layers[0].isf_effect.as_mut().unwrap().enabled = false;
+        let root_bypassed = renderer.render(&snapshot, 2, 1).unwrap();
+        assert_eq!(
+            root_bypassed.data,
+            vec![191, 191, 191, 255, 55, 55, 55, 255]
+        );
+        assert_eq!(renderer.isf_last_stack_stage_count(), 1);
+
+        snapshot.layers[0].isf_effect.as_mut().unwrap().enabled = true;
+        let invert = builtin_isf_effect("invert").unwrap().unwrap();
+        snapshot.layers[0].isf_effect.as_mut().unwrap().stack.push(
+            protocol::VideoIsfEffectStageSummary {
+                enabled: invert.enabled,
+                label: invert.label,
+                source: invert.source,
+                source_path: invert.source_path,
+                description: invert.description,
+                categories: invert.categories,
+                controls: invert.controls,
+            },
+        );
+        let three_stage = renderer.render(&snapshot, 2, 1).unwrap();
+        assert_eq!(three_stage.data, first.data);
+        assert_eq!(renderer.isf_shader_cache_count(), 2);
+        assert_eq!(renderer.isf_pipeline_count(), 2);
+        assert_eq!(renderer.isf_last_stack_stage_count(), 3);
     }
 
     #[test]
@@ -5564,11 +5748,12 @@ mod tests {
                 isf_effect: Some(protocol::VideoIsfEffectSummary {
                     enabled: true,
                     label: "Invalid".to_string(),
-                    source: "not an ISF shader".to_string(),
+                    source: "not an ISF shader".into(),
                     source_path: None,
                     description: None,
                     categories: Vec::new(),
                     controls: Vec::new(),
+                    stack: Vec::new(),
                 }),
             }],
             compositions: Vec::new(),

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 pub type FixtureId = u64;
@@ -574,10 +576,10 @@ pub struct VideoIsfControlSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct VideoIsfEffectSummary {
+pub struct VideoIsfEffectStageSummary {
     pub enabled: bool,
     pub label: String,
-    pub source: String,
+    pub source: Arc<str>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -586,6 +588,26 @@ pub struct VideoIsfEffectSummary {
     pub categories: Vec<String>,
     #[serde(default)]
     pub controls: Vec<VideoIsfControlSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VideoIsfEffectSummary {
+    pub enabled: bool,
+    pub label: String,
+    pub source: Arc<str>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub categories: Vec<String>,
+    #[serde(default)]
+    pub controls: Vec<VideoIsfControlSummary>,
+    /// Additional single-pass effects evaluated after this effect. Keeping the
+    /// first stage in the legacy object preserves `.sdc v1` compatibility while
+    /// allowing newer projects to serialize an ordered GPU effect stack.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stack: Vec<VideoIsfEffectStageSummary>,
 }
 
 impl Default for VideoLayerState {

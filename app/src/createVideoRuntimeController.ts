@@ -37,6 +37,8 @@ interface VideoRuntimeControllerOptions {
   setVideoPreviewUrl: Setter<string>;
   setVideoPreviewInfo: Setter<string>;
   setVideoPreviewDiagnostics: Setter<VideoPreviewDiagnostics | null>;
+  isIsfEventPulseBusy: Accessor<boolean>;
+  setIsfEventPulseBusy: Setter<boolean>;
   setVideoOutputRenderPlans: Setter<VideoOutputRenderPlan[] | null>;
   setVideoOutputWindowStatuses: Setter<VideoOutputWindowStatus[] | null>;
   setVideoRuntimeStatus: Setter<VideoRuntimeStatus | null>;
@@ -54,6 +56,11 @@ interface VideoRuntimeControllerOptions {
 }
 
 export function createVideoRuntimeController(options: VideoRuntimeControllerOptions) {
+  const canMutateVideoIsf = () => {
+    if (!options.isIsfEventPulseBusy()) return true;
+    options.setMessage("Wait for the active FX Event pulse to finish.");
+    return false;
+  };
   const addVideoLayer = async () => {
     try {
       const sourceKind = options.videoSourceKind();
@@ -222,6 +229,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     } catch (error) { options.setMessage(String(error)); }
   };
   const setVideoLayerIsfEffect = async (layerId: number, effect: VideoIsfEffectSummary | null) => {
+    if (!canMutateVideoIsf()) return;
     try {
       await options.invoke("set_video_layer_isf_effect", { layerId, effect });
       options.setMessage(effect ? `${effect.enabled ? "Applied" : "Bypassed"} ISF ${effect.label} on layer ${layerId}.` : `Cleared ISF on layer ${layerId}.`);
@@ -232,28 +240,101 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     }
   };
   const importVideoLayerIsf = async (layerId: number) => {
+    if (!canMutateVideoIsf()) return;
     try {
       const effect = await options.invoke<VideoIsfEffectSummary | null>("select_video_isf_file");
       if (!effect) {
         options.setMessage("ISF import canceled.");
         return;
       }
-      await setVideoLayerIsfEffect(layerId, effect);
+      await options.invoke("add_video_layer_isf_effect", { layerId, effect });
+      options.setMessage(`Added imported FX ${effect.label} to layer ${layerId}.`);
+      await options.refreshSnapshot();
+      await refreshVideoPreviewDiagnostics(false);
     } catch (error) {
       options.setMessage(`ISF import failed: ${String(error)}`);
     }
   };
   const applyBuiltinVideoIsfEffect = async (layerId: number, presetId: string) => {
+    if (!canMutateVideoIsf()) return;
     try {
-      const effect = await options.invoke<VideoIsfEffectSummary>("apply_builtin_video_isf_effect", {
+      const effect = await options.invoke<VideoIsfEffectSummary>("add_builtin_video_isf_effect", {
         layerId,
         presetId,
       });
-      options.setMessage(`Applied built-in FX ${effect.label} on layer ${layerId}.`);
+      options.setMessage(`Added built-in FX ${effect.label} to layer ${layerId}.`);
       await options.refreshSnapshot();
       await refreshVideoPreviewDiagnostics(false);
     } catch (error) {
       options.setMessage(`Built-in FX failed: ${String(error)}`);
+    }
+  };
+  const moveVideoLayerIsfEffect = async (layerId: number, stageIndex: number, delta: -1 | 1) => {
+    if (!canMutateVideoIsf()) return;
+    try {
+      await options.invoke("move_video_layer_isf_effect", { layerId, stageIndex, delta });
+      options.setMessage(`Moved FX ${stageIndex + 1} on layer ${layerId}.`);
+      await options.refreshSnapshot();
+      await refreshVideoPreviewDiagnostics(true);
+    } catch (error) { options.setMessage(`FX move failed: ${String(error)}`); }
+  };
+  const removeVideoLayerIsfEffect = async (layerId: number, stageIndex: number) => {
+    if (!canMutateVideoIsf()) return;
+    try {
+      await options.invoke("remove_video_layer_isf_effect", { layerId, stageIndex });
+      options.setMessage(`Removed FX ${stageIndex + 1} from layer ${layerId}.`);
+      await options.refreshSnapshot();
+      await refreshVideoPreviewDiagnostics(false);
+    } catch (error) { options.setMessage(`FX removal failed: ${String(error)}`); }
+  };
+  const setVideoLayerIsfEffectEnabled = async (layerId: number, stageIndex: number, enabled: boolean) => {
+    if (!canMutateVideoIsf()) return;
+    try {
+      await options.invoke("set_video_layer_isf_effect_enabled", { layerId, stageIndex, enabled });
+      options.setMessage(`${enabled ? "Enabled" : "Bypassed"} FX ${stageIndex + 1} on layer ${layerId}.`);
+      await options.refreshSnapshot();
+      await refreshVideoPreviewDiagnostics(true);
+    } catch (error) { options.setMessage(`FX bypass failed: ${String(error)}`); }
+  };
+  const resetVideoLayerIsfEffect = async (layerId: number, stageIndex: number) => {
+    if (!canMutateVideoIsf()) return;
+    try {
+      await options.invoke("reset_video_layer_isf_effect", { layerId, stageIndex });
+      options.setMessage(`Reset FX ${stageIndex + 1} on layer ${layerId}.`);
+      await options.refreshSnapshot();
+      await refreshVideoPreviewDiagnostics(true);
+    } catch (error) { options.setMessage(`FX reset failed: ${String(error)}`); }
+  };
+  const setVideoLayerIsfControl = async (
+    layerId: number,
+    stageIndex: number,
+    controlName: string,
+    value: [number, number, number, number],
+  ) => {
+    if (!canMutateVideoIsf()) return;
+    try {
+      await options.invoke("set_video_layer_isf_control", { layerId, stageIndex, controlName, value });
+      await options.refreshSnapshot();
+      await refreshVideoPreviewDiagnostics(true);
+    } catch (error) { options.setMessage(`FX control failed: ${String(error)}`); }
+  };
+  const triggerVideoLayerIsfEvent = async (
+    layerId: number,
+    stageIndex: number,
+    controlName: string,
+  ) => {
+    if (options.isIsfEventPulseBusy()) {
+      options.setMessage("Another FX Event pulse is still active.");
+      return;
+    }
+    options.setIsfEventPulseBusy(true);
+    try {
+      await options.invoke("pulse_video_layer_isf_event", { layerId, stageIndex, controlName });
+      await refreshVideoPreviewDiagnostics(true);
+    } catch (error) {
+      options.setMessage(`FX event failed: ${String(error)}`);
+    } finally {
+      options.setIsfEventPulseBusy(false);
     }
   };
 
@@ -470,7 +551,10 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     refreshAudioOutputDevices,
     startVideoOutputRecording, stopVideoOutputRecording, refreshVideoRecordingStatus,
     removeVideoLayer, duplicateVideoLayer, moveVideoLayer, setVideoLayerLabel,
-    refreshVideoLayerMetadata, importVideoLayerIsf, applyBuiltinVideoIsfEffect, setVideoLayerIsfEffect, renderDebugVideoPreview, loadVideoLayerThumbnail, refreshVideoPreviewDiagnostics,
+    refreshVideoLayerMetadata, importVideoLayerIsf, applyBuiltinVideoIsfEffect, setVideoLayerIsfEffect,
+    moveVideoLayerIsfEffect, removeVideoLayerIsfEffect, setVideoLayerIsfEffectEnabled,
+    resetVideoLayerIsfEffect, setVideoLayerIsfControl, triggerVideoLayerIsfEvent,
+    renderDebugVideoPreview, loadVideoLayerThumbnail, refreshVideoPreviewDiagnostics,
     refreshVideoOutputRenderPlans, refreshVideoOutputWindowStatuses, refreshSnapshotAndVideoOutputRenderPlans,
     syncOpenVideoOutputWindows, closeOpenVideoOutputWindows, openAllVideoOutputWindows,
     refreshVideoRuntimeStatus, refreshExternalVideoIoPlans, syncExternalVideoTransports,

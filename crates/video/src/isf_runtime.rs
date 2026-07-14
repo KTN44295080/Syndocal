@@ -2,7 +2,7 @@ use std::{
     collections::{hash_map::DefaultHasher, HashMap, HashSet},
     fmt,
     hash::{Hash, Hasher},
-    sync::mpsc,
+    sync::{mpsc, Arc},
 };
 
 use naga::{
@@ -20,6 +20,7 @@ use protocol::{VideoIsfControlKind, VideoIsfControlSummary, VideoIsfEffectSummar
 
 pub const ISF_MAX_SOURCE_BYTES: usize = 512 * 1024;
 pub const ISF_MAX_CONTROL_INPUTS: usize = 16;
+const ISF_GPU_PIPELINE_CAPACITY: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IsfControlKind {
@@ -83,6 +84,8 @@ pub struct IsfGpuRuntime {
     vertex_shader: wgpu::ShaderModule,
     pipelines: HashMap<u64, IsfGpuPipeline>,
     frame_index: u32,
+    last_stack_stage_count: usize,
+    last_stack_render_us: u64,
 }
 
 struct IsfGpuPipeline {
@@ -114,6 +117,8 @@ impl IsfGpuRuntime {
             vertex_shader,
             pipelines: HashMap::new(),
             frame_index: 0,
+            last_stack_stage_count: 0,
+            last_stack_render_us: 0,
         })
     }
 
@@ -125,6 +130,28 @@ impl IsfGpuRuntime {
         time_seconds: f32,
         time_delta_seconds: f32,
     ) -> Result<VideoFrame, IsfRuntimeError> {
+        self.apply_stack(
+            frame,
+            &[(shader, controls)],
+            time_seconds,
+            time_delta_seconds,
+        )
+    }
+
+    /// Applies an ordered set of independent single-pass ISF filters with one
+    /// host upload, GPU-local ping-pong textures, and one final readback.
+    pub fn apply_stack(
+        &mut self,
+        frame: &VideoFrame,
+        stages: &[(&PreparedIsfShader, &[[f32; 4]])],
+        time_seconds: f32,
+        time_delta_seconds: f32,
+    ) -> Result<VideoFrame, IsfRuntimeError> {
+        self.last_stack_stage_count = stages.len();
+        self.last_stack_render_us = 0;
+        if stages.is_empty() {
+            return Ok(frame.clone());
+        }
         if frame.width == 0 || frame.height == 0 {
             return Err(runtime_error("ISF input frame has an invalid size"));
         }
@@ -140,15 +167,20 @@ impl IsfGpuRuntime {
             ));
         }
 
-        let shader_key = source_hash(&shader.wgsl);
-        if !self.pipelines.contains_key(&shader_key) {
-            let pipeline = self.create_pipeline(&shader.wgsl)?;
-            self.pipelines.insert(shader_key, pipeline);
+        let missing_pipeline_count = stages
+            .iter()
+            .filter(|(shader, _)| !self.pipelines.contains_key(&source_hash(&shader.wgsl)))
+            .count();
+        if self.pipelines.len() + missing_pipeline_count > ISF_GPU_PIPELINE_CAPACITY {
+            self.pipelines.clear();
         }
-        let pipeline = self
-            .pipelines
-            .get(&shader_key)
-            .expect("ISF pipeline inserted before rendering");
+        for (shader, _) in stages {
+            let shader_key = source_hash(&shader.wgsl);
+            if !self.pipelines.contains_key(&shader_key) {
+                let pipeline = self.create_pipeline(&shader.wgsl)?;
+                self.pipelines.insert(shader_key, pipeline);
+            }
+        }
         let input_texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Syndocal ISF input"),
             size: wgpu::Extent3d {
@@ -191,54 +223,83 @@ impl IsfGpuRuntime {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        let uniform_data = isf_uniform_data(
-            frame.width,
-            frame.height,
-            time_seconds,
-            time_delta_seconds,
-            self.frame_index,
-            controls,
-        );
-        let uniform_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Syndocal ISF uniforms"),
-                contents: &uniform_data,
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Syndocal ISF bind group"),
-            layout: &pipeline.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&input_view),
+        let create_work_texture = |label| {
+            self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: frame.width,
+                    height: frame.height,
+                    depth_or_array_layers: 1,
                 },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            })
+        };
+        let ping_texture = create_work_texture("Syndocal ISF stack ping");
+        let pong_texture = create_work_texture("Syndocal ISF stack pong");
+        let ping_view = ping_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let pong_view = pong_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut uniform_buffers = Vec::with_capacity(stages.len());
+        for (_, controls) in stages {
+            let uniform_data = isf_uniform_data(
+                frame.width,
+                frame.height,
+                time_seconds,
+                time_delta_seconds,
+                self.frame_index,
+                controls,
+            );
+            uniform_buffers.push(self.device.create_buffer_init(
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("Syndocal ISF stack uniforms"),
+                    contents: &uniform_data,
+                    usage: wgpu::BufferUsages::UNIFORM,
                 },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: uniform_buffer.as_entire_binding(),
-                },
-            ],
-        });
-        let output_texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Syndocal ISF output"),
-            size: wgpu::Extent3d {
-                width: frame.width,
-                height: frame.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            ));
+        }
+        let mut bind_groups = Vec::with_capacity(stages.len());
+        for (index, ((shader, _), uniform_buffer)) in
+            stages.iter().zip(uniform_buffers.iter()).enumerate()
+        {
+            let shader_key = source_hash(&shader.wgsl);
+            let pipeline = self
+                .pipelines
+                .get(&shader_key)
+                .expect("ISF stack pipeline inserted before rendering");
+            let stage_input_view = if index == 0 {
+                &input_view
+            } else if index % 2 == 1 {
+                &ping_view
+            } else {
+                &pong_view
+            };
+            bind_groups.push(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Syndocal ISF stack bind group"),
+                layout: &pipeline.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(stage_input_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: uniform_buffer.as_entire_binding(),
+                    },
+                ],
+            }));
+        }
+
         let padded_bytes_per_row = (frame.width * 4).div_ceil(256) * 256;
         let readback_size = u64::from(padded_bytes_per_row) * u64::from(frame.height);
         let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -250,13 +311,24 @@ impl IsfGpuRuntime {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Syndocal ISF encoder"),
+                label: Some("Syndocal ISF stack encoder"),
             });
+        for (index, ((shader, _), bind_group)) in stages.iter().zip(bind_groups.iter()).enumerate()
         {
+            let shader_key = source_hash(&shader.wgsl);
+            let pipeline = self
+                .pipelines
+                .get(&shader_key)
+                .expect("ISF stack pipeline inserted before encoding");
+            let stage_output_view = if index % 2 == 0 {
+                &ping_view
+            } else {
+                &pong_view
+            };
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Syndocal ISF pass"),
+                label: Some("Syndocal ISF stack pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &output_view,
+                    view: stage_output_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -268,12 +340,17 @@ impl IsfGpuRuntime {
                 occlusion_query_set: None,
             });
             pass.set_pipeline(&pipeline.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_bind_group(0, bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
+        let final_texture = if stages.len() % 2 == 1 {
+            &ping_texture
+        } else {
+            &pong_texture
+        };
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: &output_texture,
+                texture: final_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -292,6 +369,7 @@ impl IsfGpuRuntime {
                 depth_or_array_layers: 1,
             },
         );
+        let render_started = std::time::Instant::now();
         self.queue.submit(Some(encoder.finish()));
         let (sender, receiver) = mpsc::sync_channel(1);
         readback
@@ -306,6 +384,10 @@ impl IsfGpuRuntime {
             .recv()
             .map_err(|error| runtime_error(format!("ISF readback channel failed: {error}")))?
             .map_err(|error| runtime_error(format!("ISF readback failed: {error}")))?;
+        self.last_stack_render_us = render_started
+            .elapsed()
+            .as_micros()
+            .min(u128::from(u64::MAX)) as u64;
         let mapped = readback.slice(..).get_mapped_range();
         let mut data = Vec::with_capacity(expected_len);
         for row in mapped.chunks_exact(padded_bytes_per_row as usize) {
@@ -327,6 +409,19 @@ impl IsfGpuRuntime {
 
     pub fn pipeline_count(&self) -> usize {
         self.pipelines.len()
+    }
+
+    pub fn last_stack_stage_count(&self) -> usize {
+        self.last_stack_stage_count
+    }
+
+    pub fn last_stack_render_us(&self) -> u64 {
+        self.last_stack_render_us
+    }
+
+    pub fn reset_last_stack_metrics(&mut self) {
+        self.last_stack_stage_count = 0;
+        self.last_stack_render_us = 0;
     }
 
     fn create_pipeline(&self, wgsl: &str) -> Result<IsfGpuPipeline, IsfRuntimeError> {
@@ -420,12 +515,18 @@ pub fn resolved_isf_control_values(
     shader: &PreparedIsfShader,
     effect: &VideoIsfEffectSummary,
 ) -> Vec<[f32; 4]> {
+    resolved_isf_control_values_from_controls(shader, &effect.controls)
+}
+
+pub fn resolved_isf_control_values_from_controls(
+    shader: &PreparedIsfShader,
+    controls: &[VideoIsfControlSummary],
+) -> Vec<[f32; 4]> {
     shader
         .controls
         .iter()
         .map(|definition| {
-            let candidate = effect
-                .controls
+            let candidate = controls
                 .iter()
                 .find(|control| control.name == definition.name)
                 .map(|control| control.value)
@@ -442,14 +543,14 @@ pub fn resolved_isf_control_values(
 
 pub fn isf_effect_from_prepared(
     label: String,
-    source: String,
+    source: impl Into<Arc<str>>,
     source_path: Option<String>,
     shader: &PreparedIsfShader,
 ) -> VideoIsfEffectSummary {
     VideoIsfEffectSummary {
         enabled: true,
         label,
-        source,
+        source: source.into(),
         source_path,
         description: shader.description.clone(),
         categories: shader.categories.clone(),
@@ -467,6 +568,7 @@ pub fn isf_effect_from_prepared(
                 values: control.values.clone(),
             })
             .collect(),
+        stack: Vec::new(),
     }
 }
 

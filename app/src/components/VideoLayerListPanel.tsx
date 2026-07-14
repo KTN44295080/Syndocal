@@ -1,5 +1,6 @@
-import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
-import type { VideoBlendMode, VideoColorAdjust, VideoFxAdjust, VideoIsfEffectSummary, VideoLayerState, VideoLayerSummary } from "../types";
+import { createEffect, createMemo, createSignal, For, Show, untrack } from "solid-js";
+import { createStore, reconcile } from "solid-js/store";
+import type { VideoBlendMode, VideoColorAdjust, VideoFxAdjust, VideoIsfEffectSummary, VideoIsfStageError, VideoLayerState, VideoLayerSummary } from "../types";
 import { videoSourceMetadataLabel } from "../videoHelpers";
 import { defaultColorAdjust, defaultFxAdjust } from "../videoLayerDefaults";
 import { VideoIsfEffectPanel } from "./VideoIsfEffectPanel";
@@ -24,10 +25,26 @@ interface VideoLayerListPanelProps {
     colorPatch: Partial<VideoColorAdjust>,
   ) => void | Promise<void>;
   onSetLayerFx: (layerId: number, state: VideoLayerState, fxPatch: Partial<VideoFxAdjust>) => void | Promise<void>;
-  isfRuntimeError?: string | null;
+  isfRuntimeErrors?: VideoIsfStageError[];
+  isfEventPulseBusy?: boolean;
   onImportIsf: (layerId: number) => void | Promise<void>;
   onApplyBuiltinIsf: (layerId: number, presetId: string) => void | Promise<void>;
   onSetIsfEffect: (layerId: number, effect: VideoIsfEffectSummary | null) => void | Promise<void>;
+  onMoveIsfEffect: (layerId: number, stageIndex: number, delta: -1 | 1) => void | Promise<void>;
+  onRemoveIsfEffect: (layerId: number, stageIndex: number) => void | Promise<void>;
+  onSetIsfEffectEnabled: (layerId: number, stageIndex: number, enabled: boolean) => void | Promise<void>;
+  onResetIsfEffect: (layerId: number, stageIndex: number) => void | Promise<void>;
+  onSetIsfControl: (
+    layerId: number,
+    stageIndex: number,
+    controlName: string,
+    value: [number, number, number, number],
+  ) => void | Promise<void>;
+  onTriggerIsfEvent: (
+    layerId: number,
+    stageIndex: number,
+    controlName: string,
+  ) => void | Promise<void>;
   onAddCuePoint: (layerId: number) => void | Promise<void>;
   onJumpCuePoint: (layerId: number, cuePointIndex: number) => void | Promise<void>;
   onRemoveCuePoint: (layerId: number, positionMs: number) => void | Promise<void>;
@@ -38,9 +55,30 @@ export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
   const pageSize = () => (props.compact ? 6 : Math.max(1, props.layers.length));
   const [page, setPage] = createSignal(0);
   const pageCount = createMemo(() => Math.max(1, Math.ceil(props.layers.length / pageSize())));
-  const visibleLayers = createMemo(() => {
+  const visibleLayerRows = () => {
     const start = page() * pageSize();
-    return props.layers.slice(start, start + pageSize()).map((layer, offset) => ({ layer, index: start + offset }));
+    return props.layers.slice(start, start + pageSize()).map((layer, offset) => ({
+      id: layer.id,
+      layer,
+      index: start + offset,
+    }));
+  };
+  const [visibleLayers, setVisibleLayers] = createStore(visibleLayerRows());
+
+  createEffect(() => {
+    const nextRows = visibleLayerRows();
+    const existingLayers = untrack(() => new Map(
+      visibleLayers.map((entry) => [entry.id, entry.layer] as const),
+    ));
+    setVisibleLayers(reconcile(nextRows.map((entry) => ({
+      ...entry,
+      layer: existingLayers.get(entry.id) ?? entry.layer,
+    })), { key: "id" }));
+    nextRows.forEach((entry, index) => {
+      setVisibleLayers(index, "index", entry.index);
+      setVisibleLayers(index, "layer", reconcile(entry.layer, { merge: true }));
+      setVisibleLayers(index, "layer", "isf_effect", entry.layer.isf_effect);
+    });
   });
 
   createEffect(() => {
@@ -68,7 +106,7 @@ export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
         </div>
       </Show>
       <Show when={props.layers.length > 0} fallback={<span class="emptyState">No video layers. Add a file, still, or input above.</span>}>
-        <For each={visibleLayers()}>
+        <For each={visibleLayers}>
           {(entry) => {
             const layer = entry.layer;
             const index = () => entry.index;
@@ -215,10 +253,17 @@ export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
               layerLabel={layer.label}
               compact={props.compact}
               effect={layer.isf_effect}
-              runtimeError={props.isfRuntimeError?.startsWith(`${layer.label}:`) ? props.isfRuntimeError : null}
+              runtimeErrors={props.isfRuntimeErrors?.filter((error) => error.layer_id === layer.id) ?? []}
+              eventPulseBusy={props.isfEventPulseBusy}
               onImport={props.onImportIsf}
               onApplyBuiltin={props.onApplyBuiltinIsf}
               onSetEffect={props.onSetIsfEffect}
+              onMoveEffect={props.onMoveIsfEffect}
+              onRemoveEffect={props.onRemoveIsfEffect}
+              onSetEffectEnabled={props.onSetIsfEffectEnabled}
+              onResetEffect={props.onResetIsfEffect}
+              onSetControl={props.onSetIsfControl}
+              onTriggerEvent={props.onTriggerIsfEvent}
             />
             <div class="split">
               <label>
