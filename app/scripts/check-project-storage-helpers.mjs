@@ -158,6 +158,41 @@ assert.deepEqual(
   "Auto VJ persistence normalization is idempotent",
 );
 
+const audioRuntimeSnapshot = JSON.parse(JSON.stringify(autoVjProjectSnapshot));
+audioRuntimeSnapshot.video.layers = [{ id: 1, opacity: 0.92 }];
+audioRuntimeSnapshot.authored_video = {
+  ...audioRuntimeSnapshot.video,
+  layers: [{ id: 1, opacity: 0.4 }],
+};
+audioRuntimeSnapshot.node_graphs = [{
+  id: 7,
+  label: "Kick opacity",
+  enabled: true,
+  nodes: [],
+  edges: [],
+  audio_runtime: [{
+    node_id: 1,
+    input_value: 0.8,
+    output_value: 0.6,
+    source_available: true,
+    safety_zeroed: false,
+    held: false,
+    feature_sequence: 42,
+  }],
+}];
+const storedAudioRuntimeSnapshot = projectSnapshot.normalizeProjectSnapshotForStorage(audioRuntimeSnapshot);
+assert.equal(storedAudioRuntimeSnapshot.video.layers[0].opacity, 0.4, "authored video replaces rendered modulation at the save boundary");
+assert.equal("authored_video" in storedAudioRuntimeSnapshot, false, "authored transport copy is not nested into project data");
+assert.equal("audio_runtime" in storedAudioRuntimeSnapshot.node_graphs[0], false, "audio meters are not project data");
+const changedAudioRuntimeSnapshot = JSON.parse(JSON.stringify(audioRuntimeSnapshot));
+changedAudioRuntimeSnapshot.video.layers[0].opacity = 0.1;
+changedAudioRuntimeSnapshot.node_graphs[0].audio_runtime[0].output_value = 0.05;
+assert.equal(
+  projectSnapshot.projectSnapshotSignature(audioRuntimeSnapshot),
+  projectSnapshot.projectSnapshotSignature(changedAudioRuntimeSnapshot),
+  "rendered audio modulation and meters must not dirty the project",
+);
+
 const dirtySceneBlockDraft = {
   cue_id: 500,
   time_ms: 123_456,

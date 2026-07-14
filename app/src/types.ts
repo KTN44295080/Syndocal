@@ -230,6 +230,25 @@ export type MoveDirection = "Forward" | "Reverse" | "Bounce";
 export type NodeGraphNodeKind = "Lfo" | "PositionWave" | "Audio" | "Transform" | "Output";
 export type AudioSpectrumBand = "Bass" | "Mid" | "High";
 export type AudioSpectrumSource = "Timeline" | "Live";
+export type AudioReactiveFeature =
+  | "LegacyBand"
+  | "Band"
+  | "Rms"
+  | "Peak"
+  | "SpectralFlux"
+  | "Onset"
+  | "OnsetStrength"
+  | "BeatPhase"
+  | "Bpm"
+  | "BpmConfidence"
+  | "SpectralCentroid"
+  | "SpectralDensitySlow"
+  | "SpectralDensityFast"
+  | "Kick"
+  | "KickStrength"
+  | "Snare"
+  | "SnareStrength";
+export type AudioReactiveCurve = "Linear" | "Smoothstep" | "Exponential" | "Logarithmic";
 export type NodeGraphTransformOp = "Scale" | "Offset" | "Clamp" | "Invert" | "Abs";
 
 export interface DmxModeSummary {
@@ -622,6 +641,17 @@ export interface NodeGraphSummary {
   enabled: boolean;
   nodes: NodeGraphNodeSummary[];
   edges: NodeGraphEdgeSummary[];
+  audio_runtime?: NodeGraphAudioRuntimeStatus[];
+}
+
+export interface NodeGraphAudioRuntimeStatus {
+  node_id: number;
+  input_value: number;
+  output_value: number;
+  source_available: boolean;
+  safety_zeroed: boolean;
+  held: boolean;
+  feature_sequence: number;
 }
 
 export interface NodeGraphPresetFile {
@@ -651,8 +681,16 @@ export interface UserTemplateLoadResult extends ProjectLoadResult {
 export interface NodeGraphAudioNode {
   source?: AudioSpectrumSource;
   band: AudioSpectrumBand;
+  feature: AudioReactiveFeature;
+  band_index: number;
   gain: number;
   bias: number;
+  attack_ms: number;
+  release_ms: number;
+  gate: number;
+  curve: AudioReactiveCurve;
+  invert: boolean;
+  hold_ms: number;
 }
 
 export interface ProjectBackupSummary {
@@ -822,6 +860,13 @@ export interface LiveAudioInputStatus {
   rms: number;
   peak: number;
   spectral_flux: number;
+  spectral_centroid: number;
+  spectral_density_fast: number;
+  spectral_density_slow: number;
+  kick_strength: number;
+  snare_strength: number;
+  kick_event: boolean;
+  snare_event: boolean;
   onset: boolean;
   onset_strength: number;
   bpm?: number | null;
@@ -1952,6 +1997,7 @@ export interface EngineSnapshot {
   programmer: ProgrammerSnapshot;
   timeline: TimelineSnapshot;
   video: VideoSnapshot;
+  authored_video?: VideoSnapshot | null;
   effects: EffectSummary[];
   node_graphs: NodeGraphSummary[];
   output: DmxOutputConfig;

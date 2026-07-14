@@ -3007,7 +3007,7 @@ progress {
 .videoMixerClipPane {
   grid-column: 1;
   grid-row: 2;
-  grid-template-rows: 40px auto minmax(56px, 64px) minmax(56px, 64px) minmax(0, 1fr);
+  grid-template-rows: 40px auto minmax(56px, 64px) minmax(56px, 64px) minmax(46px, 54px) minmax(0, 1fr);
 }
 
 .videoMixerProgramPane {
@@ -15176,6 +15176,243 @@ input[type="color"] {
   stroke: #6bd4ff;
 }
 
+.nodeGraphPanel .panelHeader h3 {
+  text-wrap: balance;
+}
+
+.tabularReadout {
+  font-variant-numeric: tabular-nums;
+}
+
+.audioReactiveRack {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.audioReactiveSection {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  border: 1px solid #30383f;
+  border-radius: 2px;
+  background: #15191c;
+  padding: 7px;
+}
+
+.audioReactiveSection > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.audioReactiveSection > header strong,
+.audioReactiveSection > header span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audioReactiveSection > header strong {
+  color: #eef2f4;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.audioReactiveSection > header span {
+  color: #8f999f;
+  font-size: 11px;
+}
+
+.audioReactiveInputGrid,
+.audioReactiveControlGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.audioReactiveInputGrid > label,
+.audioReactiveControlGrid > label {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  color: #949da3;
+  font-size: 11px;
+}
+
+.audioReactiveInputGrid input,
+.audioReactiveInputGrid select,
+.audioReactiveControlGrid input,
+.audioReactiveControlGrid select {
+  width: 100%;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.audioReactiveControlGrid .audioReactiveCheck {
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  align-self: end;
+  min-height: 30px;
+  border: 1px solid #343c42;
+  background: #1a1f22;
+  padding: 4px 7px;
+}
+
+.audioReactiveControlGrid .audioReactiveCheck input {
+  width: auto;
+}
+
+.audioReactiveControlGrid .audioReactiveCheck span {
+  overflow: hidden;
+  color: #d8dddf;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audioReactiveMonitorRow {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.audioReactiveMonitorRow label {
+  display: grid;
+  grid-template-columns: auto minmax(120px, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: #949da3;
+  font-size: 11px;
+}
+
+.audioReactiveMonitorRow select {
+  width: 100%;
+  min-width: 0;
+}
+
+.audioReactiveMonitorRow > span {
+  min-width: 0;
+  overflow: hidden;
+  color: #78848b;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audioReactiveMeters {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border-top: 1px solid #2d3439;
+  padding-top: 6px;
+}
+
+.audioReactiveMeters > div {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.audioReactiveMeters span,
+.audioReactiveMeters strong,
+.audioReactiveMeters b {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.audioReactiveMeters span {
+  color: #8f999f;
+}
+
+.audioReactiveMeters strong {
+  color: #e8ecee;
+  text-align: right;
+}
+
+.audioReactiveMeters b,
+.nodeGraphAudioRuntime b,
+.audioReactiveVjRow b {
+  min-width: 0;
+  color: #8f999f;
+  font-size: 10px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.audioReactiveMeters b.ready,
+.nodeGraphAudioRuntime b.ready,
+.audioReactiveVjRow b.ready {
+  color: #83d6aa;
+}
+
+.audioReactiveMeters b.safe,
+.nodeGraphAudioRuntime b.safe,
+.audioReactiveVjRow b.safe {
+  color: #e39599;
+}
+
+.audioReactiveMeters b.held,
+.nodeGraphAudioRuntime b.held,
+.audioReactiveVjRow b.held {
+  color: #e7c66f;
+}
+
+.audioReactiveMeters meter,
+.nodeGraphAudioRuntime meter,
+.audioReactiveVjRow meter {
+  width: 100%;
+  min-width: 0;
+  height: 8px;
+  accent-color: #4ea879;
+}
+
+.audioReactiveSignalPath {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  border: 1px solid #30383f;
+  background: #111518;
+  padding: 6px 8px;
+}
+
+.audioReactiveSignalPath span {
+  min-width: 0;
+  overflow: hidden;
+  color: #c8ced1;
+  font-size: 10px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audioReactiveSignalPath b {
+  color: #657078;
+  font-size: 11px;
+}
+
+.nodeGraphInlineError {
+  margin: 0;
+  border-left: 3px solid #c85c62;
+  background: #2a1719;
+  color: #f2b5b8;
+  padding: 6px 8px;
+  font-size: 11px;
+  text-wrap: pretty;
+}
+
 .nodeGraphNode.audio rect {
   stroke: #d08cff;
 }
@@ -15606,6 +15843,31 @@ input[type="color"] {
 .nodeGraphMetaChip.wave {
   border-color: #2b6174;
   color: #a6e6ff;
+}
+
+.nodeGraphMetaChip.audio {
+  border-color: #3d7161;
+  color: #9ce1c0;
+}
+
+.nodeGraphMetaChip.audioFeature {
+  max-width: 42%;
+  border-color: #4a555d;
+  color: #c5cdd2;
+}
+
+.nodeGraphAudioRuntime {
+  display: grid;
+  grid-template-columns: minmax(80px, 1fr) 34px minmax(64px, auto);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.nodeGraphAudioRuntime > span {
+  color: #cbd2d7;
+  font-size: 10px;
+  text-align: right;
 }
 
 .nodeGraphMetaChip.sync {
@@ -19628,6 +19890,134 @@ h3 {
   border-radius: 0;
   background: #1b1f22;
   padding: 5px 6px;
+}
+
+.effectRackPane .nodeGraphList .effectItem {
+  grid-template-columns: minmax(0, 1fr) 58px 58px 72px;
+}
+
+.audioReactiveVjStrip {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 5px;
+  min-width: 0;
+  min-height: 46px;
+  overflow: hidden;
+  border-top: 1px solid #343b40;
+  border-bottom: 1px solid #343b40;
+  background: #161a1d;
+  padding: 4px 6px;
+}
+
+.audioReactiveVjIdentity {
+  display: grid;
+  align-content: center;
+  gap: 1px;
+  min-width: 0;
+  border-right: 1px solid #343b40;
+  padding-right: 5px;
+}
+
+.audioReactiveVjIdentity small,
+.audioReactiveVjIdentity strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audioReactiveVjIdentity small {
+  color: #89949b;
+  font-size: 9px;
+}
+
+.audioReactiveVjIdentity strong {
+  color: #dfe5e8;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.audioReactiveVjRows {
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.audioReactiveVjRow {
+  display: grid;
+  grid-template-columns: minmax(64px, 0.8fr) minmax(38px, 1fr) 62px 32px;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.audioReactiveVjRow > span {
+  min-width: 0;
+  overflow: hidden;
+  color: #cfd5d8;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audioReactiveVjRow > button,
+.audioReactiveVjActions button,
+.audioReactiveVjEmpty button {
+  min-width: 0;
+  min-height: 20px;
+  border-radius: 1px;
+  padding: 2px 5px;
+  font-size: 9px;
+}
+
+.audioReactiveVjRow > button[aria-pressed="true"] {
+  border-color: #4a775f;
+  background: #1c3327;
+  color: #9ce1c0;
+}
+
+.audioReactiveVjActions {
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  min-width: 54px;
+}
+
+.audioReactiveVjActions span {
+  color: #89949b;
+  font-size: 9px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.audioReactiveVjEmpty {
+  grid-column: 2 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.audioReactiveVjEmpty span {
+  overflow: hidden;
+  color: #89949b;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1450px) {
+  .audioReactiveInputGrid,
+  .audioReactiveControlGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .audioReactiveVjRow {
+    grid-template-columns: minmax(42px, 0.8fr) minmax(28px, 1fr) 56px 30px;
+    gap: 3px;
+  }
 }
 
 .effectRackPane .effectItem.disabled {

@@ -12,6 +12,7 @@ const largeShowMode = process.argv.includes("--large-show");
 const vjEmptyMode = process.argv.includes("--vj-empty");
 const liveAudioOnlyMode = process.argv.includes("--live-audio-only");
 const autoVjOnlyMode = process.argv.includes("--auto-vj-only");
+const audioReactiveOnlyMode = process.argv.includes("--audio-reactive-only");
 const sceneBlockOnlyMode = process.argv.includes("--scene-block-only");
 const sceneBlockHourOnlyMode = process.argv.includes("--scene-block-hour-only");
 const sceneBlockOverlapOnlyMode = process.argv.includes("--scene-block-overlap-only");
@@ -20,6 +21,8 @@ const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
     ? "large-show"
     : autoVjOnlyMode
       ? "auto-vj"
+      : audioReactiveOnlyMode
+        ? "audio-reactive"
       : vjEmptyMode || liveAudioOnlyMode
         ? "vj-empty"
         : "timeline"
@@ -62,6 +65,8 @@ const viewports = requestedViewport
   ? [requestedViewport]
   : largeShowMode
   ? [primaryOperationalViewport]
+  : audioReactiveOnlyMode
+    ? [primaryOperationalViewport, compactFallbackViewports[0]]
   : process.env.SYNDOCAL_VIEWPORT_SINGLE === "1"
     ? [primaryOperationalViewport]
     : allViewports;
@@ -2181,9 +2186,13 @@ async function measure(client, label) {
         : -1,
       visibleNodeGraphPanelCount: visibleCount('.nodeGraphPanel'),
       nodeGraphAudioSourceOptionCount: [...document.querySelectorAll('.nodeGraphPanel option')]
-        .filter((option) => (option.textContent || '').trim().toLowerCase() === 'audio fft').length,
+        .filter((option) => (option.textContent || '').trim().toLowerCase() === 'audio reactive').length,
       nodeGraphLiveAudioOptionCount: [...document.querySelectorAll('.nodeGraphPanel option')]
         .filter((option) => (option.textContent || '').trim().toLowerCase() === 'live input').length,
+      visibleAudioReactiveRackCount: visibleCount('.audioReactiveRack'),
+      visibleAudioReactiveRackMeterCount: visibleCount('.audioReactiveRack meter'),
+      visibleAudioReactiveCanvasCount: visibleCount('.audioReactiveMode .nodeGraphCanvas'),
+      visibleAudioReactiveVjStripCount: visibleCount('.audioReactiveVjStrip'),
       visiblePanTiltPadCount: visibleCount('.panTiltPad'),
       visibleColorPlaneCount: visibleCount('.colorPlane'),
       visiblePositionReadoutCount: visibleCount('.positionReadoutStrip'),
@@ -3589,6 +3598,136 @@ async function runLiveAudioAcceptanceViewport(client, viewport, locale) {
     locale,
     "live-audio-" + locale + "-" + viewport.width + "x" + viewport.height,
   );
+}
+
+async function runAudioReactiveAcceptanceViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  const url = fixtureUrl("audio-reactive");
+  await client.send("Page.navigate", { url });
+  await waitForApp(client);
+  await client.evaluate("window.localStorage.setItem('syndocal.uiLocale.v1','en')");
+  await client.send("Page.navigate", { url });
+  await waitForApp(client);
+  await waitForClientCondition(
+    client,
+    "Boolean(document.querySelector('.videoMixerClipPane > .audioReactiveVjStrip'))",
+    "Audio Reactive VJ strip",
+  );
+  const mixer = await measure(client, `audio-reactive-mixer-${viewport.width}x${viewport.height}`);
+  const mixerContract = await client.evaluate(`(() => {
+    const strip = document.querySelector('.audioReactiveVjStrip');
+    const clipPane = document.querySelector('.videoMixerClipPane');
+    const programPane = document.querySelector('.videoMixerProgramPane');
+    const clipGrid = document.querySelector('.videoClipGridPanel');
+    if (!strip || !clipPane || !programPane || !clipGrid) return null;
+    const stripRect = strip.getBoundingClientRect();
+    const paneRect = clipPane.getBoundingClientRect();
+    const gridRect = clipGrid.getBoundingClientRect();
+    return {
+      stripCount: document.querySelectorAll('.audioReactiveVjStrip').length,
+      rowCount: document.querySelectorAll('.audioReactiveVjRow').length,
+      meterCount: document.querySelectorAll('.audioReactiveVjRow meter').length,
+      toggleCount: document.querySelectorAll('.audioReactiveVjRow button[aria-pressed]').length,
+      identityText: (document.querySelector('.audioReactiveVjIdentity strong')?.textContent || '').trim(),
+      rowState: document.querySelector('.audioReactiveVjRow')?.getAttribute('data-runtime-state') || '',
+      rowStatusText: (document.querySelector('.audioReactiveVjRow b')?.textContent || '').trim(),
+      outputValue: Number(document.querySelector('.audioReactiveVjRow meter')?.value ?? -1),
+      openRackText: (document.querySelector('.audioReactiveVjActions button')?.textContent || '').trim(),
+      openRackAriaLabel: document.querySelector('.audioReactiveVjActions button')?.getAttribute('aria-label') || '',
+      stripInsideClipPane: stripRect.left >= paneRect.left - 1 && stripRect.right <= paneRect.right + 1,
+      stripAboveClipGrid: stripRect.bottom <= gridRect.top + 1,
+      stripHeight: Math.round(stripRect.height),
+      programWidth: Math.round(programPane.getBoundingClientRect().width),
+      clipGridHeight: Math.round(gridRect.height),
+      overflowX: Math.max(0, strip.scrollWidth - strip.clientWidth),
+      overflowY: Math.max(0, strip.scrollHeight - strip.clientHeight),
+    };
+  })()`);
+
+  await clickByText(client, "Live Edit");
+  await sleep(120);
+  await clickVisibleByText(client, ".editDeskTabs button", "Effects");
+  await sleep(120);
+  await clickVisibleByText(client, ".effectRackTabs button", "Graphs");
+  await waitForClientCondition(client, "Boolean(document.querySelector('.audioReactiveRack'))", "Audio Reactive editor rack");
+  const editor = await measure(client, `audio-reactive-editor-${viewport.width}x${viewport.height}`);
+  const editorContract = await client.evaluate(`(() => {
+    const rack = document.querySelector('.audioReactiveRack');
+    const panel = document.querySelector('.nodeGraphPanel');
+    if (!rack || !panel) return null;
+    const panelRect = panel.getBoundingClientRect();
+    const rackRect = rack.getBoundingClientRect();
+    const fields = [...rack.querySelectorAll('input, select, button')];
+    const meters = [...rack.querySelectorAll('meter')];
+    const runtimeMeters = rack.querySelector('.audioReactiveMeters');
+    const runtimeStatus = rack.querySelector('.audioReactiveMeters > b');
+    const monitor = rack.querySelector('[data-audio-runtime-monitor]');
+    return {
+      rackCount: document.querySelectorAll('.audioReactiveRack').length,
+      canvasCount: document.querySelectorAll('.audioReactiveMode .nodeGraphCanvas').length,
+      sectionCount: rack.querySelectorAll('.audioReactiveSection').length,
+      meterCount: meters.length,
+      featureOptionCount: rack.querySelectorAll('select option').length,
+      signalPathCount: rack.querySelectorAll('.audioReactiveSignalPath').length,
+      runtimeAuthoritative: runtimeMeters?.getAttribute('data-runtime-authoritative') || '',
+      runtimeNodeId: runtimeMeters?.getAttribute('data-runtime-node-id') || '',
+      runtimeStatusText: (runtimeStatus?.textContent || '').trim(),
+      runtimeInputValue: Number(meters[0]?.value ?? -1),
+      runtimeOutputValue: Number(meters[1]?.value ?? -1),
+      monitorValue: monitor?.value || '',
+      monitorOptionCount: monitor?.querySelectorAll('option').length ?? 0,
+      panelHorizontalOverflow: Math.max(0, panel.scrollWidth - panel.clientWidth),
+      rackInsidePanelHorizontally: rackRect.left >= panelRect.left - 1 && rackRect.right <= panelRect.right + 1,
+      firstFieldReachable: fields.length > 0 && fields[0].getBoundingClientRect().width > 0,
+      lastFieldReachable: fields.length > 0 && fields.at(-1).getBoundingClientRect().width > 0,
+    };
+  })()`);
+  const passed = Boolean(
+    isContained(mixer) &&
+    isContained(editor) &&
+    mixerContract &&
+    mixerContract.stripCount === 1 &&
+    mixerContract.rowCount === 1 &&
+    mixerContract.meterCount === 1 &&
+    mixerContract.toggleCount === 1 &&
+    mixerContract.identityText === "SAFE ZERO" &&
+    mixerContract.rowState === "safe" &&
+    mixerContract.rowStatusText === "SAFE ZERO" &&
+    mixerContract.outputValue === 0 &&
+    mixerContract.openRackText === "Open Rack" &&
+    mixerContract.openRackAriaLabel === "Open Audio Reactive Rack" &&
+    mixerContract.stripInsideClipPane &&
+    mixerContract.stripAboveClipGrid &&
+    mixerContract.stripHeight <= 56 &&
+    mixerContract.programWidth >= 360 &&
+    mixerContract.clipGridHeight >= 90 &&
+    mixerContract.overflowX <= 1 &&
+    mixerContract.overflowY <= 1 &&
+    editorContract &&
+    editorContract.rackCount === 1 &&
+    editorContract.canvasCount === 0 &&
+    editorContract.sectionCount === 2 &&
+    editorContract.meterCount === 2 &&
+    editorContract.featureOptionCount >= 18 &&
+    editorContract.signalPathCount === 1 &&
+    editorContract.runtimeAuthoritative === "true" &&
+    editorContract.runtimeNodeId === "1" &&
+    editorContract.runtimeStatusText === "SAFE ZERO" &&
+    editorContract.runtimeInputValue === 0.78 &&
+    editorContract.runtimeOutputValue === 0 &&
+    editorContract.monitorValue === "301" &&
+    editorContract.monitorOptionCount === 1 &&
+    editorContract.panelHorizontalOverflow <= 1 &&
+    editorContract.rackInsidePanelHorizontally &&
+    editorContract.firstFieldReachable &&
+    editorContract.lastFieldReachable
+  );
+  return { viewport, passed, mixer, mixerContract, editor, editorContract };
 }
 
 async function prepareAutoVjAcceptanceViewport(client, viewport, locale) {
@@ -6210,6 +6349,22 @@ async function main() {
       );
       console.log(`${passed ? "pass" : "fail"} large-show virtualization ${JSON.stringify(result.stats)}`);
       if (!passed) throw new Error(`Large-show UI virtualization failed: ${JSON.stringify(result)}`);
+      return;
+    }
+    if (audioReactiveOnlyMode) {
+      const audioReactiveResults = [];
+      for (const viewport of viewports) {
+        const result = await runAudioReactiveAcceptanceViewport(client, viewport);
+        audioReactiveResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} Audio Reactive Rack ${viewport.width}x${viewport.height} ` +
+            JSON.stringify({ mixer: result.mixerContract, editor: result.editorContract }),
+        );
+      }
+      const failures = audioReactiveResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Audio Reactive viewport acceptance failed: ${JSON.stringify(failures)}`);
+      }
       return;
     }
     if (autoVjOnlyMode) {

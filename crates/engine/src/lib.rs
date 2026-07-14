@@ -23,29 +23,30 @@ use io::{
 use protocol::StageObjectKind;
 use protocol::{
     set_video_output_mapping_field_value, ActiveFadeSummary, AttributeControl, AttributeResolution,
-    AttributeValueSummary, AudioAnalysisSummary, AudioSpectrumBand, AudioSpectrumPoint,
-    AudioSpectrumSource, AutoVjAction, AutoVjConfig, AutoVjMode, AutoVjRhythmSource,
-    AutoVjSnapshot, AutoVjStatus, AutoVjTrigger, AutomationId, AutomationInterpolation,
-    AutomationKeyframeSummary, ChaserDirection, ChaserEffectRequest, ClockSnapshot, ClockSource,
-    ColorEffectAlgorithm, ColorEffectColor, ColorEffectInterpolation, ColorEffectRequest,
-    CompositionId, CompositionSummary, CueEffectTarget, CueFixtureTarget, CueId, CueIfcbTiming,
-    CueListId, CueListSummary, CueNodeGraphTarget, CuePaletteTarget, CuePartSummary, CueSummary,
-    DmxMergeMode, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, DmxOutputRouteTelemetry,
-    DmxUniversePreview, EffectBlendMode, EffectId, EffectKind, EffectSummary, EngineSnapshot,
-    EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId, FixtureId, FixtureLimits,
-    FixtureProfileSummary, LfoEffectRequest, LfoShape, LiveAudioFrame, MoveCoordinateMode,
-    MoveDirection, MoveEffectRequest, MovePathPoint, NodeGraphId, NodeGraphNodeKind,
-    NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId, PatchFixtureRequest,
-    PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot,
-    ProgrammerValueSummary, ReferencePaletteSummary, Rotation3, StageMapConfig,
-    StageMapPresetSummary, StageObjectId, StageObjectSummary, SubmasterSummary,
-    TimelineAutomationSummary, TimelineCueEventSummary, TimelineEventId, TimelineSnapRequest,
-    TimelineSnapshot, TimelineTrackKind, TimelineVideoAutomationSummary, Transform2D, Vec3,
-    VideoAutomationKeyframeSummary, VideoBlendMode, VideoColorAdjust, VideoCuePointSummary,
-    VideoEffectTarget, VideoFxAdjust, VideoIsfEffectSummary, VideoLayerId, VideoLayerState,
-    VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
-    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
-    VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
+    AttributeValueSummary, AudioAnalysisSummary, AudioReactiveCurve, AudioReactiveFeature,
+    AudioSpectrumBand, AudioSpectrumPoint, AudioSpectrumSource, AutoVjAction, AutoVjConfig,
+    AutoVjMode, AutoVjRhythmSource, AutoVjSnapshot, AutoVjStatus, AutoVjTrigger, AutomationId,
+    AutomationInterpolation, AutomationKeyframeSummary, ChaserDirection, ChaserEffectRequest,
+    ClockSnapshot, ClockSource, ColorEffectAlgorithm, ColorEffectColor, ColorEffectInterpolation,
+    ColorEffectRequest, CompositionId, CompositionSummary, CueEffectTarget, CueFixtureTarget,
+    CueId, CueIfcbTiming, CueListId, CueListSummary, CueNodeGraphTarget, CuePaletteTarget,
+    CuePartSummary, CueSummary, DmxMergeMode, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol,
+    DmxOutputRouteTelemetry, DmxUniversePreview, EffectBlendMode, EffectId, EffectKind,
+    EffectSummary, EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId,
+    FixtureId, FixtureLimits, FixtureProfileSummary, LfoEffectRequest, LfoShape, LiveAudioFrame,
+    LiveAudioReactiveFeatures, MoveCoordinateMode, MoveDirection, MoveEffectRequest, MovePathPoint,
+    NodeGraphAudioRuntimeStatus, NodeGraphId, NodeGraphNodeKind, NodeGraphNodeSummary,
+    NodeGraphSummary, NodeGraphTransformOp, PaletteId, PatchFixtureRequest, PatchedFixtureSummary,
+    PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot, ProgrammerValueSummary,
+    ReferencePaletteSummary, Rotation3, StageMapConfig, StageMapPresetSummary, StageObjectId,
+    StageObjectSummary, SubmasterSummary, TimelineAutomationSummary, TimelineCueEventSummary,
+    TimelineEventId, TimelineSnapRequest, TimelineSnapshot, TimelineTrackKind,
+    TimelineVideoAutomationSummary, Transform2D, Vec3, VideoAutomationKeyframeSummary,
+    VideoBlendMode, VideoColorAdjust, VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust,
+    VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerSummary, VideoLayerTarget,
+    VideoOutputId, VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetSummary,
+    VideoOutputSummary, VideoOutputTarget, VideoParam, VideoSnapshot, VideoSourceKind,
+    VideoSourceSummary, DEFAULT_CUE_LIST_ID, LIVE_AUDIO_FEATURE_BAND_CAPACITY,
     MAX_TIMELINE_SCENE_BLOCK_LOOPS,
 };
 use thiserror::Error;
@@ -63,6 +64,7 @@ const AUTO_VJ_ACTION_LOG_LIMIT: usize = 64;
 const AUTO_VJ_MAX_CANDIDATES: usize = 64;
 const AUTO_VJ_MAX_BEATS_PER_CHANGE: u16 = 256;
 const AUTO_VJ_MAX_TRANSITION_MS: u64 = 60_000;
+const AUDIO_REACTIVE_MAX_ENVELOPE_MS: u32 = 60_000;
 
 #[cfg(target_os = "windows")]
 mod realtime_thread {
@@ -248,6 +250,9 @@ pub enum EngineCommand {
         values: Vec<AttributeValueSummary>,
     },
     LoadProjectSnapshot(EngineSnapshot),
+    RequestPersistenceSnapshot {
+        response: mpsc::SyncSender<EngineSnapshot>,
+    },
     SetStageMapConfig(StageMapConfig),
     SaveStageMapPreset {
         label: String,
@@ -363,11 +368,27 @@ pub enum EngineCommand {
     },
     RemoveEffect(EffectId),
     UpsertNodeGraph(NodeGraphSummary),
+    UpsertNodeGraphPublished {
+        graph: NodeGraphSummary,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     SetNodeGraphEnabled {
         graph_id: NodeGraphId,
         enabled: bool,
     },
+    SetNodeGraphEnabledPublished {
+        graph_id: NodeGraphId,
+        enabled: bool,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     RemoveNodeGraph(NodeGraphId),
+    RemoveNodeGraphPublished {
+        graph_id: NodeGraphId,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     CreateCue {
         cue_id: CueId,
         label: String,
@@ -857,8 +878,11 @@ impl EngineCommand {
                 | EngineCommand::MoveEffect { .. }
                 | EngineCommand::RemoveEffect(_)
                 | EngineCommand::UpsertNodeGraph(_)
+                | EngineCommand::UpsertNodeGraphPublished { .. }
                 | EngineCommand::SetNodeGraphEnabled { .. }
+                | EngineCommand::SetNodeGraphEnabledPublished { .. }
                 | EngineCommand::RemoveNodeGraph(_)
+                | EngineCommand::RemoveNodeGraphPublished { .. }
                 | EngineCommand::CreateCue { .. }
                 | EngineCommand::CreateCuePublished { .. }
                 | EngineCommand::UpdateCue { .. }
@@ -1177,6 +1201,50 @@ impl EngineHandle {
 
     pub fn allocate_node_graph_id(&self) -> NodeGraphId {
         self.next_node_graph_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    pub fn upsert_node_graph(&self, graph: NodeGraphSummary) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::UpsertNodeGraphPublished {
+            graph,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Node graph save acknowledgement failed: {error}"))?
+    }
+
+    pub fn set_node_graph_enabled(
+        &self,
+        graph_id: NodeGraphId,
+        enabled: bool,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::SetNodeGraphEnabledPublished {
+            graph_id,
+            enabled,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Node graph enable acknowledgement failed: {error}"))?
+    }
+
+    pub fn remove_node_graph(&self, graph_id: NodeGraphId) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::RemoveNodeGraphPublished {
+            graph_id,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Node graph removal acknowledgement failed: {error}"))?
     }
 
     pub fn allocate_stage_object_id(&self) -> StageObjectId {
@@ -1708,6 +1776,17 @@ impl EngineHandle {
             .unwrap_or_default()
     }
 
+    /// Returns an on-demand persistence view containing unmodulated authored video state.
+    /// The normal 44 Hz published snapshot intentionally omits that duplicate payload.
+    pub fn persistence_snapshot(&self) -> Result<EngineSnapshot, String> {
+        let (response, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::RequestPersistenceSnapshot { response })
+            .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Persistence snapshot request failed: {error}"))
+    }
+
     pub fn video_audio_runtime_snapshot(&self) -> VideoAudioRuntimeSnapshot {
         self.snapshot
             .read()
@@ -1933,9 +2012,69 @@ struct RuntimeEffect {
     created_at: Instant,
 }
 
+#[derive(Clone)]
 struct RuntimeNodeGraph {
     summary: NodeGraphSummary,
     created_at: Instant,
+    audio_nodes: Vec<RuntimeAudioReactiveNode>,
+    outputs: Vec<CompiledNodeGraphOutput>,
+}
+
+#[derive(Debug, Clone)]
+struct CompiledNodeGraphOutput {
+    output: protocol::NodeGraphOutputNode,
+    source: CompiledNodeGraphSource,
+    transforms: Vec<protocol::NodeGraphTransformNode>,
+}
+
+#[derive(Debug, Clone)]
+enum CompiledNodeGraphSource {
+    Lfo(protocol::NodeGraphLfoNode),
+    PositionWave(protocol::NodeGraphPositionWaveNode),
+    Audio { node_id: u64 },
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeAudioReactiveNode {
+    node_id: u64,
+    input_value: f32,
+    output_value: f32,
+    source_available: bool,
+    safety_zeroed: bool,
+    held: bool,
+    feature_sequence: Option<u64>,
+    last_updated_at: Option<Instant>,
+    hold_until: Option<Instant>,
+    hold_value: f32,
+}
+
+impl RuntimeAudioReactiveNode {
+    fn new(node_id: u64) -> Self {
+        Self {
+            node_id,
+            input_value: 0.0,
+            output_value: 0.0,
+            source_available: false,
+            safety_zeroed: true,
+            held: false,
+            feature_sequence: None,
+            last_updated_at: None,
+            hold_until: None,
+            hold_value: 0.0,
+        }
+    }
+
+    fn status(&self) -> NodeGraphAudioRuntimeStatus {
+        NodeGraphAudioRuntimeStatus {
+            node_id: self.node_id,
+            input_value: self.input_value,
+            output_value: self.output_value,
+            source_available: self.source_available,
+            safety_zeroed: self.safety_zeroed,
+            held: self.held,
+            feature_sequence: self.feature_sequence,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -2252,6 +2391,11 @@ enum PendingCommandRollback {
         enabled: bool,
         last_error: Option<String>,
     },
+    RestoreNodeGraphs {
+        node_graphs: Vec<RuntimeNodeGraph>,
+        cues: Vec<RuntimeCue>,
+        last_error: Option<String>,
+    },
     RestoreExclusiveVideoTake {
         video_layers: Vec<RuntimeVideoLayer>,
         video_layer_fades: Vec<RuntimeVideoLayerFade>,
@@ -2306,6 +2450,7 @@ impl PendingCommandRollback {
             Self::RemoveAddedEffect { .. }
                 | Self::RestoreEffect { .. }
                 | Self::RestoreEffectEnabled { .. }
+                | Self::RestoreNodeGraphs { .. }
                 | Self::RestoreExclusiveVideoTake { .. }
                 | Self::RestoreAutoVj { .. }
                 | Self::RestoreCues { .. }
@@ -2385,6 +2530,11 @@ struct EngineRuntime {
     timeline_video_automations: Vec<RuntimeTimelineVideoAutomation>,
     timeline_audio: Option<AudioAnalysisSummary>,
     live_audio_spectrum: Option<AudioSpectrumPoint>,
+    live_audio_features: Option<LiveAudioReactiveFeatures>,
+    live_audio_onset_latched: bool,
+    live_audio_onset_strength_latched: f32,
+    live_audio_kick_latched: bool,
+    live_audio_snare_latched: bool,
     live_audio_spectrum_updated_at: Option<Instant>,
     live_audio_frame_verified: bool,
     live_audio_generation: Option<u64>,
@@ -2549,6 +2699,11 @@ impl EngineRuntime {
             timeline_video_automations: Vec::new(),
             timeline_audio: None,
             live_audio_spectrum: None,
+            live_audio_features: None,
+            live_audio_onset_latched: false,
+            live_audio_onset_strength_latched: 0.0,
+            live_audio_kick_latched: false,
+            live_audio_snare_latched: false,
             live_audio_spectrum_updated_at: None,
             live_audio_frame_verified: false,
             live_audio_generation: None,
@@ -2650,7 +2805,10 @@ impl EngineRuntime {
         }
     }
 
-    fn load_project_snapshot(&mut self, snapshot: EngineSnapshot) {
+    fn load_project_snapshot(&mut self, mut snapshot: EngineSnapshot) {
+        if let Some(authored_video) = snapshot.authored_video.take() {
+            snapshot.video = authored_video;
+        }
         let now = Instant::now();
         let (loaded_fixtures, loaded_fixture_summaries, dropped_fixture_count) =
             runtime_fixtures_from_snapshot(&snapshot.fixtures);
@@ -2734,6 +2892,11 @@ impl EngineRuntime {
             .collect();
         self.timeline_audio = snapshot.timeline.audio.clone();
         self.live_audio_spectrum = None;
+        self.live_audio_features = None;
+        self.live_audio_onset_latched = false;
+        self.live_audio_onset_strength_latched = 0.0;
+        self.live_audio_kick_latched = false;
+        self.live_audio_snare_latched = false;
         self.live_audio_spectrum_updated_at = None;
         self.live_audio_frame_verified = false;
         self.live_audio_generation = None;
@@ -2786,10 +2949,7 @@ impl EngineRuntime {
             .collect();
         self.node_graphs = sanitize_node_graphs(&snapshot.node_graphs)
             .into_iter()
-            .map(|summary| RuntimeNodeGraph {
-                summary,
-                created_at: now,
-            })
+            .map(|summary| runtime_node_graph_from_summary(summary, now))
             .collect();
         self.sanitize_loaded_show_references(now);
         self.cue_lists = sanitize_cue_lists(&self.cue_lists, &self.cues);
@@ -3094,38 +3254,49 @@ impl EngineRuntime {
             .collect::<Vec<_>>();
 
         self.node_graphs.retain_mut(|runtime_graph| {
-            let graph = &mut runtime_graph.summary;
-            let mut has_output_node = false;
-            let mut has_valid_output_node = false;
-            for node in &mut graph.nodes {
-                if let Some(output) = &mut node.output {
-                    has_output_node = true;
-                    output
-                        .fixture_ids
-                        .retain(|fixture_id| fixture_ids.contains(fixture_id));
-                    output.target_group_ids.retain(|group_id| {
-                        valid_groups
-                            .iter()
-                            .any(|candidate| group_matches(candidate, group_id))
-                    });
-                    for target in &mut output.video_targets {
-                        target
-                            .layer_ids
-                            .retain(|layer_id| video_layer_ids.contains(layer_id));
-                    }
-                    output
-                        .video_targets
-                        .retain(|target| !target.layer_ids.is_empty());
-                    if !output.fixture_ids.is_empty()
-                        || !output.target_group_ids.is_empty()
-                        || !output.video_targets.is_empty()
-                    {
-                        has_valid_output_node = true;
+            let keep = {
+                let graph = &mut runtime_graph.summary;
+                let mut has_output_node = false;
+                let mut has_valid_output_node = false;
+                for node in &mut graph.nodes {
+                    if let Some(output) = &mut node.output {
+                        has_output_node = true;
+                        output
+                            .fixture_ids
+                            .retain(|fixture_id| fixture_ids.contains(fixture_id));
+                        output.target_group_ids.retain(|group_id| {
+                            valid_groups
+                                .iter()
+                                .any(|candidate| group_matches(candidate, group_id))
+                        });
+                        for target in &mut output.video_targets {
+                            target
+                                .layer_ids
+                                .retain(|layer_id| video_layer_ids.contains(layer_id));
+                        }
+                        output
+                            .video_targets
+                            .retain(|target| !target.layer_ids.is_empty());
+                        if !output.fixture_ids.is_empty()
+                            || !output.target_group_ids.is_empty()
+                            || !output.video_targets.is_empty()
+                        {
+                            has_valid_output_node = true;
+                        }
                     }
                 }
+                has_output_node && has_valid_output_node
+            };
+            if !keep {
+                return false;
             }
-
-            has_output_node && has_valid_output_node
+            match compile_node_graph_outputs(&runtime_graph.summary) {
+                Ok(outputs) => {
+                    runtime_graph.outputs = outputs;
+                    true
+                }
+                Err(_) => false,
+            }
         });
         self.sanitize_cue_node_graph_targets();
     }
@@ -3227,6 +3398,9 @@ impl EngineRuntime {
                     | EngineCommand::AddMoveEffect { .. }
                     | EngineCommand::UpdateMoveEffect { .. }
                     | EngineCommand::SetEffectEnabledPublished { .. }
+                    | EngineCommand::UpsertNodeGraphPublished { .. }
+                    | EngineCommand::SetNodeGraphEnabledPublished { .. }
+                    | EngineCommand::RemoveNodeGraphPublished { .. }
                     | EngineCommand::CreateCuePublished { .. }
                     | EngineCommand::UpdateCuePublished { .. }
                     | EngineCommand::SetCueEffectTargetsPublished { .. }
@@ -3652,6 +3826,9 @@ impl EngineRuntime {
             }
             EngineCommand::LoadProjectSnapshot(snapshot) => {
                 self.load_project_snapshot(snapshot);
+            }
+            EngineCommand::RequestPersistenceSnapshot { response } => {
+                let _ = response.send(self.build_persistence_snapshot());
             }
             EngineCommand::SetStageMapConfig(config) => {
                 self.stage_map = sanitize_stage_map_config(config);
@@ -4335,51 +4512,103 @@ impl EngineRuntime {
                 }
             }
             EngineCommand::UpsertNodeGraph(graph) => {
-                let graph = match sanitize_node_graph(&graph) {
-                    Ok(graph) => graph,
-                    Err(error) => {
-                        self.last_error = Some(error);
-                        return;
-                    }
+                self.last_error = self.upsert_node_graph_state(graph).err();
+            }
+            EngineCommand::UpsertNodeGraphPublished {
+                graph,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreNodeGraphs {
+                    node_graphs: self.node_graphs.clone(),
+                    cues: self.cues.clone(),
+                    last_error: previous_last_error.clone(),
                 };
-                if let Some(existing) = self
-                    .node_graphs
-                    .iter_mut()
-                    .find(|existing| existing.summary.id == graph.id)
-                {
-                    existing.summary = graph;
-                    existing.created_at = Instant::now();
+                let expired = Instant::now() > expires_at;
+                let result = if expired {
+                    Err("Node graph save expired before engine execution".to_string())
                 } else {
-                    self.node_graphs.push(RuntimeNodeGraph {
-                        summary: graph,
-                        created_at: Instant::now(),
-                    });
-                }
-                self.sanitize_node_graph_references();
-                self.last_error = None;
+                    self.upsert_node_graph_state(graph)
+                };
+                self.last_error = if expired {
+                    previous_last_error
+                } else {
+                    result.as_ref().err().cloned()
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error: "Node graph save could not publish an acknowledged snapshot",
+                });
             }
             EngineCommand::SetNodeGraphEnabled { graph_id, enabled } => {
-                if let Some(graph) = self
-                    .node_graphs
-                    .iter_mut()
-                    .find(|graph| graph.summary.id == graph_id)
-                {
-                    graph.summary.enabled = enabled;
-                    self.last_error = None;
+                self.last_error = self.set_node_graph_enabled_state(graph_id, enabled).err();
+            }
+            EngineCommand::SetNodeGraphEnabledPublished {
+                graph_id,
+                enabled,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreNodeGraphs {
+                    node_graphs: self.node_graphs.clone(),
+                    cues: self.cues.clone(),
+                    last_error: previous_last_error.clone(),
+                };
+                let expired = Instant::now() > expires_at;
+                let result = if expired {
+                    Err("Node graph enable update expired before engine execution".to_string())
                 } else {
-                    self.last_error = Some(format!("Node graph {graph_id} was not found"));
-                }
+                    self.set_node_graph_enabled_state(graph_id, enabled)
+                };
+                self.last_error = if expired {
+                    previous_last_error
+                } else {
+                    result.as_ref().err().cloned()
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Node graph enable update could not publish an acknowledged snapshot",
+                });
             }
             EngineCommand::RemoveNodeGraph(graph_id) => {
-                let before = self.node_graphs.len();
-                self.node_graphs
-                    .retain(|graph| graph.summary.id != graph_id);
-                if self.node_graphs.len() == before {
-                    self.last_error = Some(format!("Node graph {graph_id} was not found"));
+                self.last_error = self.remove_node_graph_state(graph_id).err();
+            }
+            EngineCommand::RemoveNodeGraphPublished {
+                graph_id,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreNodeGraphs {
+                    node_graphs: self.node_graphs.clone(),
+                    cues: self.cues.clone(),
+                    last_error: previous_last_error.clone(),
+                };
+                let expired = Instant::now() > expires_at;
+                let result = if expired {
+                    Err("Node graph removal expired before engine execution".to_string())
                 } else {
-                    self.sanitize_cue_node_graph_targets();
-                    self.last_error = None;
-                }
+                    self.remove_node_graph_state(graph_id)
+                };
+                self.last_error = if expired {
+                    previous_last_error
+                } else {
+                    result.as_ref().err().cloned()
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Node graph removal could not publish an acknowledged snapshot",
+                });
             }
             EngineCommand::CreateCue {
                 cue_id,
@@ -5573,6 +5802,11 @@ impl EngineRuntime {
             }
             EngineCommand::SetLiveAudioSpectrum(spectrum) => {
                 let input_cleared = spectrum.is_none();
+                self.live_audio_features = None;
+                self.live_audio_onset_latched = false;
+                self.live_audio_onset_strength_latched = 0.0;
+                self.live_audio_kick_latched = false;
+                self.live_audio_snare_latched = false;
                 self.live_audio_spectrum_updated_at = spectrum.as_ref().map(|_| Instant::now());
                 self.live_audio_frame_verified = false;
                 self.live_audio_spectrum = spectrum.map(|mut point| {
@@ -6434,6 +6668,51 @@ impl EngineRuntime {
         }
     }
 
+    fn upsert_node_graph_state(&mut self, graph: NodeGraphSummary) -> Result<(), String> {
+        let graph = sanitize_node_graph(&graph)?;
+        if let Some(existing) = self
+            .node_graphs
+            .iter_mut()
+            .find(|existing| existing.summary.id == graph.id)
+        {
+            *existing = runtime_node_graph_from_summary(graph, Instant::now());
+        } else {
+            self.node_graphs
+                .push(runtime_node_graph_from_summary(graph, Instant::now()));
+        }
+        self.sanitize_node_graph_references();
+        Ok(())
+    }
+
+    fn set_node_graph_enabled_state(
+        &mut self,
+        graph_id: NodeGraphId,
+        enabled: bool,
+    ) -> Result<(), String> {
+        let now = Instant::now();
+        let graph = self
+            .node_graphs
+            .iter_mut()
+            .find(|graph| graph.summary.id == graph_id)
+            .ok_or_else(|| format!("Node graph {graph_id} was not found"))?;
+        graph.summary.enabled = enabled;
+        for runtime in &mut graph.audio_nodes {
+            reset_audio_reactive_runtime(runtime, now);
+        }
+        Ok(())
+    }
+
+    fn remove_node_graph_state(&mut self, graph_id: NodeGraphId) -> Result<(), String> {
+        let before = self.node_graphs.len();
+        self.node_graphs
+            .retain(|graph| graph.summary.id != graph_id);
+        if self.node_graphs.len() == before {
+            return Err(format!("Node graph {graph_id} was not found"));
+        }
+        self.sanitize_cue_node_graph_targets();
+        Ok(())
+    }
+
     fn publish_pending_command_acks(
         &mut self,
         queue_depth: usize,
@@ -6538,6 +6817,15 @@ impl EngineRuntime {
                 {
                     effect.enabled = enabled;
                 }
+                self.last_error = last_error;
+            }
+            PendingCommandRollback::RestoreNodeGraphs {
+                node_graphs,
+                cues,
+                last_error,
+            } => {
+                self.node_graphs = node_graphs;
+                self.cues = cues;
                 self.last_error = last_error;
             }
             PendingCommandRollback::RestoreExclusiveVideoTake {
@@ -7035,6 +7323,11 @@ impl EngineRuntime {
 
     fn invalidate_live_audio_source(&mut self) {
         self.live_audio_spectrum = None;
+        self.live_audio_features = None;
+        self.live_audio_onset_latched = false;
+        self.live_audio_onset_strength_latched = 0.0;
+        self.live_audio_kick_latched = false;
+        self.live_audio_snare_latched = false;
         self.live_audio_spectrum_updated_at = None;
         self.live_audio_frame_verified = false;
         self.hold_auto_vj_for_live_audio_loss();
@@ -7147,6 +7440,15 @@ impl EngineRuntime {
         spectrum.mid = finite_or(spectrum.mid, 0.0).clamp(0.0, 1.0);
         spectrum.high = finite_or(spectrum.high, 0.0).clamp(0.0, 1.0);
         self.live_audio_spectrum = Some(spectrum);
+        let mut features = sanitize_live_audio_reactive_features(frame.features.clone());
+        features.onset |= onset_count > 0;
+        self.live_audio_onset_latched |= features.onset;
+        self.live_audio_onset_strength_latched = self
+            .live_audio_onset_strength_latched
+            .max(features.onset_strength);
+        self.live_audio_kick_latched |= features.kick_event;
+        self.live_audio_snare_latched |= features.snare_event;
+        self.live_audio_features = Some(features);
         self.live_audio_spectrum_updated_at = Some(captured_at);
         self.live_audio_frame_verified = true;
         self.recover_auto_vj_live_audio_source();
@@ -7321,12 +7623,109 @@ impl EngineRuntime {
                 now.saturating_duration_since(updated_at) >= LIVE_AUDIO_SPECTRUM_TTL
             });
         if expired {
-            self.live_audio_spectrum = None;
-            self.live_audio_spectrum_updated_at = None;
-            self.live_audio_frame_verified = false;
-            self.hold_auto_vj_for_live_audio_loss();
+            self.invalidate_live_audio_source();
         }
         expired
+    }
+
+    fn update_audio_reactive_nodes(&mut self, now: Instant) {
+        let live_source_available =
+            self.live_audio_frame_verified && self.live_audio_source_is_fresh(now);
+        let live_onset = std::mem::take(&mut self.live_audio_onset_latched);
+        let live_onset_strength = std::mem::take(&mut self.live_audio_onset_strength_latched);
+        let live_kick = std::mem::take(&mut self.live_audio_kick_latched);
+        let live_snare = std::mem::take(&mut self.live_audio_snare_latched);
+        let live_feature_sequence = self.last_live_audio_frame_sequence;
+        let default_delta = if self.last_tick_interval.is_zero() {
+            DMX_TICK_INTERVAL
+        } else {
+            self.last_tick_interval.min(Duration::from_millis(100))
+        };
+        let timeline_audio = self.timeline_audio.as_ref();
+        let timeline_position_ms = self.timeline_position_ms;
+        let live_spectrum = self.live_audio_spectrum.as_ref();
+        let live_features = self.live_audio_features.as_ref();
+
+        for graph in &mut self.node_graphs {
+            for runtime in &mut graph.audio_nodes {
+                let source = graph
+                    .summary
+                    .nodes
+                    .iter()
+                    .find(|node| node.id == runtime.node_id)
+                    .and_then(|node| node.audio.as_ref());
+                let Some(source) = source.filter(|_| graph.summary.enabled) else {
+                    reset_audio_reactive_runtime(runtime, now);
+                    continue;
+                };
+                let sampled = sample_audio_reactive_feature(
+                    source,
+                    timeline_audio,
+                    timeline_position_ms,
+                    live_source_available,
+                    live_spectrum,
+                    live_features,
+                    live_onset,
+                    live_onset_strength,
+                    live_kick,
+                    live_snare,
+                );
+                let Some(input_value) = sampled else {
+                    reset_audio_reactive_runtime(runtime, now);
+                    continue;
+                };
+
+                let input_value = finite_or(input_value, 0.0).clamp(0.0, 1.0);
+                let adjusted = (input_value * source.gain + source.bias).clamp(0.0, 1.0);
+                let mut target = if adjusted < source.gate {
+                    0.0
+                } else {
+                    let adjusted = if source.invert {
+                        1.0 - adjusted
+                    } else {
+                        adjusted
+                    };
+                    apply_audio_reactive_curve(adjusted, source.curve)
+                };
+
+                runtime.held = false;
+                if source.hold_ms == 0 {
+                    runtime.hold_until = None;
+                    runtime.hold_value = target;
+                } else if target >= runtime.hold_value {
+                    runtime.hold_value = target;
+                    runtime.hold_until =
+                        now.checked_add(Duration::from_millis(u64::from(source.hold_ms)));
+                } else if runtime.hold_until.is_some_and(|until| now < until) {
+                    target = runtime.hold_value;
+                    runtime.held = true;
+                } else {
+                    runtime.hold_until = None;
+                    runtime.hold_value = target;
+                }
+
+                let delta = runtime
+                    .last_updated_at
+                    .map(|updated_at| now.saturating_duration_since(updated_at))
+                    .unwrap_or(default_delta)
+                    .min(Duration::from_millis(100));
+                let envelope_ms = if target > runtime.output_value {
+                    source.attack_ms
+                } else {
+                    source.release_ms
+                };
+                runtime.input_value = input_value;
+                runtime.output_value =
+                    audio_reactive_envelope_step(runtime.output_value, target, envelope_ms, delta);
+                runtime.source_available = true;
+                runtime.safety_zeroed = false;
+                runtime.feature_sequence = match source.source {
+                    AudioSpectrumSource::Timeline => None,
+                    AudioSpectrumSource::Live => live_feature_sequence,
+                };
+                runtime.last_updated_at = Some(now);
+            }
+        }
     }
 
     fn tick(&mut self, queue_depth: usize, snapshot: &RwLock<EngineSnapshot>) {
@@ -7347,6 +7746,7 @@ impl EngineRuntime {
         self.apply_timeline_video_automations();
         self.advance_auto_vj(now);
         self.apply_active_fade(now);
+        self.update_audio_reactive_nodes(now);
         self.advance_video_layers(self.last_tick_interval);
         self.advance_video_layer_fades(now);
         self.advance_video_output_fades(now);
@@ -9137,34 +9537,19 @@ impl EngineRuntime {
             if !graph.summary.enabled {
                 continue;
             }
-            for output_node in graph
-                .summary
-                .nodes
-                .iter()
-                .filter(|node| matches!(node.kind, NodeGraphNodeKind::Output))
-            {
-                let Some(output) = output_node.output.as_ref() else {
-                    continue;
-                };
+            for output_node in &graph.outputs {
+                let output = &output_node.output;
                 if !output.attribute.eq_ignore_ascii_case(attribute)
-                    || !request_targets_fixture(
-                        output.fixture_ids.as_slice(),
-                        output.target_group_ids.as_slice(),
-                        fixture,
-                    )
+                    || !compiled_node_graph_output_targets_fixture(output, fixture)
                 {
                     continue;
                 }
                 let Some(normalized) = evaluate_node_graph_output_normalized(
-                    &graph.summary,
-                    output_node.id,
+                    graph,
+                    output_node,
                     fixture.request.position,
-                    graph.created_at,
                     now,
                     &clock,
-                    self.timeline_audio.as_ref(),
-                    self.live_audio_spectrum.as_ref(),
-                    self.timeline_position_ms,
                 ) else {
                     continue;
                 };
@@ -9811,18 +10196,34 @@ impl EngineRuntime {
 
     fn advance_video_layers(&mut self, delta: Duration) {
         let clock = self.clock.snapshot(self.last_tick);
-        for layer in &mut self.video_layers {
-            let source_duration_ms = layer
-                .source
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.duration_ms);
-            layer.state = video::advance_layer_state_with_clock_and_duration(
-                layer.state.clone(),
+        for index in 0..self.video_layers.len() {
+            let (mut effective_state, source_duration_ms) = {
+                let layer = &self.video_layers[index];
+                let mut effective_state = layer.state.clone();
+                self.apply_video_transport_effects(layer, &mut effective_state, self.last_tick);
+
+                // Effects that change transport rate or BPM sync must drive the
+                // real playhead, while the authored transport position remains
+                // the source of truth. Position effects are presentation-only
+                // and must not be accumulated into the authored state.
+                effective_state.position_ms = layer.state.position_ms;
+                effective_state.playing = layer.state.playing;
+                let source_duration_ms = layer
+                    .source
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.duration_ms);
+                (effective_state, source_duration_ms)
+            };
+            effective_state = video::advance_layer_state_with_clock_and_duration(
+                effective_state,
                 delta,
                 Some(&clock),
                 source_duration_ms,
             );
+            let layer = &mut self.video_layers[index];
+            layer.state.position_ms = effective_state.position_ms;
+            layer.state.playing = effective_state.playing;
         }
     }
 
@@ -10375,6 +10776,18 @@ impl EngineRuntime {
         }
     }
 
+    fn authored_video_snapshot_from_rendered(&self, rendered: &VideoSnapshot) -> VideoSnapshot {
+        VideoSnapshot {
+            layers: self.video_layers.iter().map(video_layer_summary).collect(),
+            compositions: rendered.compositions.clone(),
+            outputs: rendered.outputs.clone(),
+            mapping_presets: rendered.mapping_presets.clone(),
+            master_opacity: rendered.master_opacity,
+            blackout: rendered.blackout,
+            auto_vj: rendered.auto_vj.clone(),
+        }
+    }
+
     fn video_composition_exists(&self, composition_id: CompositionId) -> bool {
         composition_id == 1
             || self
@@ -10465,6 +10878,25 @@ impl EngineRuntime {
         state: &mut VideoLayerState,
         now: Instant,
     ) {
+        self.apply_video_effects_matching(layer, state, now, |_| true);
+    }
+
+    fn apply_video_transport_effects(
+        &self,
+        layer: &RuntimeVideoLayer,
+        state: &mut VideoLayerState,
+        now: Instant,
+    ) {
+        self.apply_video_effects_matching(layer, state, now, video_param_affects_transport);
+    }
+
+    fn apply_video_effects_matching(
+        &self,
+        layer: &RuntimeVideoLayer,
+        state: &mut VideoLayerState,
+        now: Instant,
+        include_param: impl Fn(&VideoParam) -> bool,
+    ) {
         let clock = self.clock.snapshot(now);
         for effect in &self.effects {
             if !effect.enabled {
@@ -10472,11 +10904,9 @@ impl EngineRuntime {
             }
             match &effect.kind {
                 RuntimeEffectKind::Lfo(request) => {
-                    for target in request
-                        .video_targets
-                        .iter()
-                        .filter(|target| target.layer_ids.contains(&layer.id))
-                    {
+                    for target in request.video_targets.iter().filter(|target| {
+                        target.layer_ids.contains(&layer.id) && include_param(&target.param)
+                    }) {
                         let value = evaluate_lfo_video_effect(
                             request,
                             target,
@@ -10488,11 +10918,9 @@ impl EngineRuntime {
                     }
                 }
                 RuntimeEffectKind::PositionWave(request) => {
-                    for target in request
-                        .video_targets
-                        .iter()
-                        .filter(|target| target.layer_ids.contains(&layer.id))
-                    {
+                    for target in request.video_targets.iter().filter(|target| {
+                        target.layer_ids.contains(&layer.id) && include_param(&target.param)
+                    }) {
                         let layer_position = target.position.unwrap_or_default();
                         let value = evaluate_position_wave_video_effect(
                             request,
@@ -10514,31 +10942,19 @@ impl EngineRuntime {
             if !graph.summary.enabled {
                 continue;
             }
-            for output_node in graph
-                .summary
-                .nodes
-                .iter()
-                .filter(|node| matches!(node.kind, NodeGraphNodeKind::Output))
-            {
-                let Some(output) = output_node.output.as_ref() else {
-                    continue;
-                };
-                for target in output
-                    .video_targets
-                    .iter()
-                    .filter(|target| target.layer_ids.contains(&layer.id))
-                {
+            for output_node in &graph.outputs {
+                let output = &output_node.output;
+                for target in output.video_targets.iter().filter(|target| {
+                    target.layer_ids.binary_search(&layer.id).is_ok()
+                        && include_param(&target.param)
+                }) {
                     let position = target.position.unwrap_or_default();
                     let Some(normalized) = evaluate_node_graph_output_normalized(
-                        &graph.summary,
-                        output_node.id,
+                        graph,
+                        output_node,
                         position,
-                        graph.created_at,
                         now,
                         &clock,
-                        self.timeline_audio.as_ref(),
-                        self.live_audio_spectrum.as_ref(),
-                        self.timeline_position_ms,
                     ) else {
                         continue;
                     };
@@ -10611,11 +11027,20 @@ impl EngineRuntime {
             programmer: self.programmer_snapshot(),
             timeline: self.timeline_snapshot(),
             video: self.video_snapshot(),
+            authored_video: None,
             effects: self.effects.iter().map(effect_summary).collect(),
             node_graphs: self
                 .node_graphs
                 .iter()
-                .map(|graph| graph.summary.clone())
+                .map(|graph| {
+                    let mut summary = graph.summary.clone();
+                    summary.audio_runtime = graph
+                        .audio_nodes
+                        .iter()
+                        .map(RuntimeAudioReactiveNode::status)
+                        .collect();
+                    summary
+                })
                 .collect(),
             output: self.output.clone(),
             dmx_outputs: self.dmx_output_snapshot(),
@@ -10686,6 +11111,12 @@ impl EngineRuntime {
                 last_error: self.last_error.clone(),
             },
         }
+    }
+
+    fn build_persistence_snapshot(&self) -> EngineSnapshot {
+        let mut snapshot = self.build_snapshot(0);
+        snapshot.authored_video = Some(self.authored_video_snapshot_from_rendered(&snapshot.video));
+        snapshot
     }
 
     fn tick_jitter_stddev_us(&self) -> f32 {
@@ -12376,11 +12807,295 @@ fn request_targets_fixture(
         })
 }
 
+fn compiled_node_graph_output_targets_fixture(
+    output: &protocol::NodeGraphOutputNode,
+    fixture: &RuntimeFixture,
+) -> bool {
+    output.fixture_ids.binary_search(&fixture.id).is_ok()
+        || output.target_group_ids.iter().any(|group_id| {
+            fixture
+                .request
+                .group_ids
+                .iter()
+                .any(|fixture_group| group_matches(fixture_group, group_id))
+        })
+}
+
 fn remove_video_effect_layer_targets(targets: &mut Vec<VideoEffectTarget>, layer_id: VideoLayerId) {
     for target in targets.iter_mut() {
         target.layer_ids.retain(|candidate| *candidate != layer_id);
     }
     targets.retain(|target| !target.layer_ids.is_empty());
+}
+
+fn runtime_node_graph_from_summary(
+    mut summary: NodeGraphSummary,
+    created_at: Instant,
+) -> RuntimeNodeGraph {
+    summary.audio_runtime.clear();
+    let audio_nodes = summary
+        .nodes
+        .iter()
+        .filter(|node| matches!(node.kind, NodeGraphNodeKind::Audio))
+        .map(|node| RuntimeAudioReactiveNode::new(node.id))
+        .collect();
+    let outputs = compile_node_graph_outputs(&summary)
+        .expect("runtime node graphs must be sanitized before compilation");
+    RuntimeNodeGraph {
+        summary,
+        created_at,
+        audio_nodes,
+        outputs,
+    }
+}
+
+fn compile_node_graph_outputs(
+    graph: &NodeGraphSummary,
+) -> Result<Vec<CompiledNodeGraphOutput>, String> {
+    let mut compiled = Vec::new();
+    for output_node in graph
+        .nodes
+        .iter()
+        .filter(|node| matches!(node.kind, NodeGraphNodeKind::Output))
+    {
+        let mut output = output_node.output.clone().ok_or_else(|| {
+            format!(
+                "Node graph '{}' output node {} is missing its body",
+                graph.label, output_node.id
+            )
+        })?;
+        output.fixture_ids.sort_unstable();
+        output.fixture_ids.dedup();
+        for target in &mut output.video_targets {
+            target.layer_ids.sort_unstable();
+            target.layer_ids.dedup();
+        }
+        let mut current_node_id = output_node.id;
+        let mut transforms = Vec::new();
+        let mut visited = HashSet::new();
+        let source = loop {
+            if !visited.insert(current_node_id) {
+                return Err(format!(
+                    "Node graph '{}' contains a cycle feeding output node {}",
+                    graph.label, output_node.id
+                ));
+            }
+            let edge = graph
+                .edges
+                .iter()
+                .find(|edge| {
+                    edge.to_node == current_node_id && edge.to_port.eq_ignore_ascii_case("input")
+                })
+                .or_else(|| {
+                    graph
+                        .edges
+                        .iter()
+                        .find(|edge| edge.to_node == current_node_id)
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "Node graph '{}' output path {} is missing an input",
+                        graph.label, output_node.id
+                    )
+                })?;
+            let node = graph
+                .nodes
+                .iter()
+                .find(|node| node.id == edge.from_node)
+                .ok_or_else(|| {
+                    format!(
+                        "Node graph '{}' output path {} references a missing node",
+                        graph.label, output_node.id
+                    )
+                })?;
+            match node.kind {
+                NodeGraphNodeKind::Lfo => {
+                    break CompiledNodeGraphSource::Lfo(node.lfo.clone().ok_or_else(|| {
+                        format!(
+                            "Node graph '{}' LFO node {} is incomplete",
+                            graph.label, node.id
+                        )
+                    })?)
+                }
+                NodeGraphNodeKind::PositionWave => {
+                    break CompiledNodeGraphSource::PositionWave(
+                        node.position_wave.clone().ok_or_else(|| {
+                            format!(
+                                "Node graph '{}' position wave node {} is incomplete",
+                                graph.label, node.id
+                            )
+                        })?,
+                    )
+                }
+                NodeGraphNodeKind::Audio => {
+                    break CompiledNodeGraphSource::Audio { node_id: node.id }
+                }
+                NodeGraphNodeKind::Transform => {
+                    transforms.push(node.transform.clone().ok_or_else(|| {
+                        format!(
+                            "Node graph '{}' transform node {} is incomplete",
+                            graph.label, node.id
+                        )
+                    })?);
+                    current_node_id = node.id;
+                }
+                NodeGraphNodeKind::Output => {
+                    return Err(format!(
+                        "Node graph '{}' output node {} cannot feed output node {}",
+                        graph.label, node.id, output_node.id
+                    ));
+                }
+            }
+        };
+        transforms.reverse();
+        compiled.push(CompiledNodeGraphOutput {
+            output,
+            source,
+            transforms,
+        });
+    }
+    if compiled.is_empty() {
+        return Err(format!(
+            "Node graph '{}' requires at least one output node",
+            graph.label
+        ));
+    }
+    Ok(compiled)
+}
+
+fn reset_audio_reactive_runtime(runtime: &mut RuntimeAudioReactiveNode, now: Instant) {
+    runtime.input_value = 0.0;
+    runtime.output_value = 0.0;
+    runtime.source_available = false;
+    runtime.safety_zeroed = true;
+    runtime.held = false;
+    runtime.feature_sequence = None;
+    runtime.last_updated_at = Some(now);
+    runtime.hold_until = None;
+    runtime.hold_value = 0.0;
+}
+
+fn sanitize_live_audio_reactive_features(
+    mut features: LiveAudioReactiveFeatures,
+) -> LiveAudioReactiveFeatures {
+    let band_count = usize::from(features.band_count).min(LIVE_AUDIO_FEATURE_BAND_CAPACITY);
+    features.band_count = band_count as u8;
+    for (index, band) in features.bands.iter_mut().enumerate() {
+        *band = if index < band_count {
+            finite_or(*band, 0.0).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+    }
+    features.rms = finite_or(features.rms, 0.0).clamp(0.0, 1.0);
+    features.peak = finite_or(features.peak, 0.0).clamp(0.0, 1.0);
+    features.spectral_flux = finite_or(features.spectral_flux, 0.0).clamp(0.0, 1.0);
+    features.spectral_centroid = finite_or(features.spectral_centroid, 0.0).clamp(0.0, 1.0);
+    features.spectral_density_fast = finite_or(features.spectral_density_fast, 0.0).clamp(0.0, 1.0);
+    features.spectral_density_slow = finite_or(features.spectral_density_slow, 0.0).clamp(0.0, 1.0);
+    features.kick_strength = finite_or(features.kick_strength, 0.0).clamp(0.0, 1.0);
+    features.snare_strength = finite_or(features.snare_strength, 0.0).clamp(0.0, 1.0);
+    features.onset_strength = finite_or(features.onset_strength, 0.0).clamp(0.0, 1.0);
+    features.bpm = features
+        .bpm
+        .filter(|value| value.is_finite())
+        .map(|value| value.clamp(60.0, 200.0));
+    features.bpm_confidence = finite_or(features.bpm_confidence, 0.0).clamp(0.0, 1.0);
+    features.beat_phase = finite_or(features.beat_phase, 0.0).rem_euclid(1.0);
+    features
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sample_audio_reactive_feature(
+    source: &protocol::NodeGraphAudioNode,
+    timeline_audio: Option<&AudioAnalysisSummary>,
+    timeline_position_ms: u64,
+    live_source_available: bool,
+    live_spectrum: Option<&AudioSpectrumPoint>,
+    live_features: Option<&LiveAudioReactiveFeatures>,
+    live_onset: bool,
+    live_onset_strength: f32,
+    live_kick: bool,
+    live_snare: bool,
+) -> Option<f32> {
+    match source.source {
+        AudioSpectrumSource::Timeline => {
+            let audio = timeline_audio?;
+            Some(sample_audio_spectrum(
+                audio,
+                timeline_position_ms,
+                source.band,
+            ))
+        }
+        AudioSpectrumSource::Live => {
+            if !live_source_available {
+                return None;
+            }
+            if matches!(source.feature, AudioReactiveFeature::LegacyBand) {
+                return live_spectrum.map(|point| sample_live_audio_spectrum(point, source.band));
+            }
+            let features = live_features?;
+            Some(match source.feature {
+                AudioReactiveFeature::LegacyBand => unreachable!("handled above"),
+                AudioReactiveFeature::Band => {
+                    let index = usize::from(source.band_index);
+                    if index >= usize::from(features.band_count) {
+                        return None;
+                    }
+                    features.bands[index]
+                }
+                AudioReactiveFeature::Rms => features.rms,
+                AudioReactiveFeature::Peak => features.peak,
+                AudioReactiveFeature::SpectralFlux => features.spectral_flux,
+                AudioReactiveFeature::Onset => f32::from(live_onset),
+                AudioReactiveFeature::OnsetStrength => {
+                    if live_onset {
+                        live_onset_strength
+                    } else {
+                        0.0
+                    }
+                }
+                AudioReactiveFeature::BeatPhase => features.beat_phase,
+                AudioReactiveFeature::Bpm => features
+                    .bpm
+                    .map(|bpm| ((bpm - 60.0) / 140.0).clamp(0.0, 1.0))
+                    .unwrap_or(0.0),
+                AudioReactiveFeature::BpmConfidence => features.bpm_confidence,
+                AudioReactiveFeature::SpectralCentroid => features.spectral_centroid,
+                AudioReactiveFeature::SpectralDensitySlow => features.spectral_density_slow,
+                AudioReactiveFeature::SpectralDensityFast => features.spectral_density_fast,
+                AudioReactiveFeature::Kick => f32::from(live_kick),
+                AudioReactiveFeature::KickStrength => features.kick_strength,
+                AudioReactiveFeature::Snare => f32::from(live_snare),
+                AudioReactiveFeature::SnareStrength => features.snare_strength,
+            })
+        }
+    }
+}
+
+fn apply_audio_reactive_curve(value: f32, curve: AudioReactiveCurve) -> f32 {
+    let value = finite_or(value, 0.0).clamp(0.0, 1.0);
+    match curve {
+        AudioReactiveCurve::Linear => value,
+        AudioReactiveCurve::Smoothstep => value * value * (3.0 - 2.0 * value),
+        AudioReactiveCurve::Exponential => value * value,
+        AudioReactiveCurve::Logarithmic => value.sqrt(),
+    }
+    .clamp(0.0, 1.0)
+}
+
+fn audio_reactive_envelope_step(
+    current: f32,
+    target: f32,
+    duration_ms: u32,
+    delta: Duration,
+) -> f32 {
+    if duration_ms == 0 {
+        return target.clamp(0.0, 1.0);
+    }
+    let duration_seconds = duration_ms as f32 / 1_000.0;
+    let alpha = 1.0 - (-delta.as_secs_f32() / duration_seconds).exp();
+    (current + (target - current) * alpha.clamp(0.0, 1.0)).clamp(0.0, 1.0)
 }
 
 fn sanitize_node_graphs(graphs: &[NodeGraphSummary]) -> Vec<NodeGraphSummary> {
@@ -12450,7 +13165,10 @@ fn sanitize_node_graph(graph: &NodeGraphSummary) -> Result<NodeGraphSummary, Str
         }
     }
 
-    Ok(graph.clone())
+    let mut graph = graph.clone();
+    graph.audio_runtime.clear();
+    compile_node_graph_outputs(&graph)?;
+    Ok(graph)
 }
 
 fn validate_node_graph_lfo_node(
@@ -12568,10 +13286,43 @@ fn validate_node_graph_audio_node(
             graph.label, node.id
         ));
     };
-    if !audio.gain.is_finite() || !audio.bias.is_finite() {
+    if !audio.gain.is_finite() || !audio.bias.is_finite() || !audio.gate.is_finite() {
         return Err(format!(
             "Node graph '{}' audio node {} has non-finite values",
             graph.label, node.id
+        ));
+    }
+    if !(0.0..=1.0).contains(&audio.gate) {
+        return Err(format!(
+            "Node graph '{}' audio node {} gate must be between 0 and 1",
+            graph.label, node.id
+        ));
+    }
+    if audio.attack_ms > AUDIO_REACTIVE_MAX_ENVELOPE_MS
+        || audio.release_ms > AUDIO_REACTIVE_MAX_ENVELOPE_MS
+        || audio.hold_ms > AUDIO_REACTIVE_MAX_ENVELOPE_MS
+    {
+        return Err(format!(
+            "Node graph '{}' audio node {} attack/release/hold must be at most {}ms",
+            graph.label, node.id, AUDIO_REACTIVE_MAX_ENVELOPE_MS
+        ));
+    }
+    if matches!(audio.feature, AudioReactiveFeature::Band)
+        && usize::from(audio.band_index) >= LIVE_AUDIO_FEATURE_BAND_CAPACITY
+    {
+        return Err(format!(
+            "Node graph '{}' audio node {} band index must be 0-{}",
+            graph.label,
+            node.id,
+            LIVE_AUDIO_FEATURE_BAND_CAPACITY - 1
+        ));
+    }
+    if matches!(audio.source, AudioSpectrumSource::Timeline)
+        && !matches!(audio.feature, AudioReactiveFeature::LegacyBand)
+    {
+        return Err(format!(
+            "Node graph '{}' audio node {} requires Live Input for {:?}",
+            graph.label, node.id, audio.feature
         ));
     }
     Ok(())
@@ -14559,64 +15310,32 @@ fn evaluate_chaser_effect_normalized(
 }
 
 fn evaluate_node_graph_output_normalized(
-    graph: &NodeGraphSummary,
-    output_node_id: u64,
+    graph: &RuntimeNodeGraph,
+    output: &CompiledNodeGraphOutput,
     position: Vec3,
-    created_at: Instant,
     now: Instant,
     clock: &ClockSnapshot,
-    audio: Option<&AudioAnalysisSummary>,
-    live_audio: Option<&AudioSpectrumPoint>,
-    timeline_position_ms: u64,
 ) -> Option<f32> {
-    evaluate_node_graph_input_value(
-        graph,
-        output_node_id,
-        position,
-        created_at,
-        now,
-        clock,
-        audio,
-        live_audio,
-        timeline_position_ms,
-        0,
-    )
-}
-
-fn evaluate_node_graph_node_value(
-    graph: &NodeGraphSummary,
-    node_id: u64,
-    position: Vec3,
-    created_at: Instant,
-    now: Instant,
-    clock: &ClockSnapshot,
-    audio: Option<&AudioAnalysisSummary>,
-    live_audio: Option<&AudioSpectrumPoint>,
-    timeline_position_ms: u64,
-    depth: usize,
-) -> Option<f32> {
-    if depth > graph.nodes.len() {
-        return None;
-    }
-    let node = graph.nodes.iter().find(|node| node.id == node_id)?;
-    match node.kind {
-        NodeGraphNodeKind::Lfo => {
-            let lfo = node.lfo.as_ref()?;
+    let mut value = match &output.source {
+        CompiledNodeGraphSource::Lfo(lfo) => {
             let phase = if let Some(clock_sync) = lfo.clock_sync {
                 let beats = clock_sync.beats.max(0.000_1);
                 let beat_position = clock.beat_counter as f32 + clock.beat_phase;
                 (beat_position / beats + lfo.phase).rem_euclid(1.0)
             } else {
                 let period = lfo.period_ms.max(10) as f32 / 1000.0;
-                let elapsed = now.saturating_duration_since(created_at).as_secs_f32();
+                let elapsed = now
+                    .saturating_duration_since(graph.created_at)
+                    .as_secs_f32();
                 (elapsed / period + lfo.phase).rem_euclid(1.0)
             };
-            Some(evaluate_lfo_shape(&lfo.shape, phase) * lfo.amplitude + lfo.bias)
+            evaluate_lfo_shape(&lfo.shape, phase) * lfo.amplitude + lfo.bias
         }
-        NodeGraphNodeKind::PositionWave => {
-            let wave = node.position_wave.as_ref()?;
+        CompiledNodeGraphSource::PositionWave(wave) => {
             let wavelength = wave.wavelength.abs().max(0.001);
-            let elapsed = now.saturating_duration_since(created_at).as_secs_f32();
+            let elapsed = now
+                .saturating_duration_since(graph.created_at)
+                .as_secs_f32();
             let distance_phase =
                 projected_distance(position, wave.origin, wave.direction) / wavelength;
             let time_phase = wave
@@ -14628,84 +15347,26 @@ fn evaluate_node_graph_node_value(
                 })
                 .unwrap_or_else(|| elapsed * wave.speed / wavelength);
             let phase = (wave.phase + time_phase - distance_phase).rem_euclid(1.0);
-            Some(evaluate_lfo_shape(&wave.shape, phase))
+            evaluate_lfo_shape(&wave.shape, phase)
         }
-        NodeGraphNodeKind::Audio => {
-            let source = node.audio.as_ref()?;
-            let value = match source.source {
-                AudioSpectrumSource::Timeline => {
-                    sample_audio_spectrum(audio?, timeline_position_ms, source.band)
-                }
-                AudioSpectrumSource::Live => sample_live_audio_spectrum(live_audio?, source.band),
-            };
-            Some((value * source.gain + source.bias).clamp(0.0, 1.0))
-        }
-        NodeGraphNodeKind::Transform => {
-            let transform = node.transform.as_ref()?;
-            let input = evaluate_node_graph_input_value(
-                graph,
-                node_id,
-                position,
-                created_at,
-                now,
-                clock,
-                audio,
-                live_audio,
-                timeline_position_ms,
-                depth + 1,
-            )?;
-            Some(match transform.op {
-                NodeGraphTransformOp::Scale => input * transform.amount,
-                NodeGraphTransformOp::Offset => input + transform.amount,
-                NodeGraphTransformOp::Clamp => input.clamp(transform.min, transform.max),
-                NodeGraphTransformOp::Invert => 1.0 - input,
-                NodeGraphTransformOp::Abs => input.abs(),
+        CompiledNodeGraphSource::Audio { node_id } => graph
+            .audio_nodes
+            .iter()
+            .find(|runtime| {
+                runtime.node_id == *node_id && runtime.source_available && !runtime.safety_zeroed
             })
-        }
-        NodeGraphNodeKind::Output => evaluate_node_graph_input_value(
-            graph,
-            node_id,
-            position,
-            created_at,
-            now,
-            clock,
-            audio,
-            live_audio,
-            timeline_position_ms,
-            depth + 1,
-        ),
+            .map(|runtime| runtime.output_value)?,
+    };
+    for transform in &output.transforms {
+        value = match transform.op {
+            NodeGraphTransformOp::Scale => value * transform.amount,
+            NodeGraphTransformOp::Offset => value + transform.amount,
+            NodeGraphTransformOp::Clamp => value.clamp(transform.min, transform.max),
+            NodeGraphTransformOp::Invert => 1.0 - value,
+            NodeGraphTransformOp::Abs => value.abs(),
+        };
     }
-}
-
-fn evaluate_node_graph_input_value(
-    graph: &NodeGraphSummary,
-    node_id: u64,
-    position: Vec3,
-    created_at: Instant,
-    now: Instant,
-    clock: &ClockSnapshot,
-    audio: Option<&AudioAnalysisSummary>,
-    live_audio: Option<&AudioSpectrumPoint>,
-    timeline_position_ms: u64,
-    depth: usize,
-) -> Option<f32> {
-    let edge = graph
-        .edges
-        .iter()
-        .find(|edge| edge.to_node == node_id && edge.to_port.eq_ignore_ascii_case("input"))
-        .or_else(|| graph.edges.iter().find(|edge| edge.to_node == node_id))?;
-    evaluate_node_graph_node_value(
-        graph,
-        edge.from_node,
-        position,
-        created_at,
-        now,
-        clock,
-        audio,
-        live_audio,
-        timeline_position_ms,
-        depth + 1,
-    )
+    Some(value)
 }
 
 fn sample_live_audio_spectrum(point: &AudioSpectrumPoint, band: AudioSpectrumBand) -> f32 {
@@ -14759,6 +15420,16 @@ fn scale_effect_float(low: f32, high: f32, normalized: f32) -> f32 {
     let low_value = low.min(high);
     let high_value = low.max(high);
     low_value + (high_value - low_value) * normalized.clamp(0.0, 1.0)
+}
+
+fn video_param_affects_transport(param: &VideoParam) -> bool {
+    matches!(
+        param,
+        VideoParam::Speed
+            | VideoParam::BpmSyncEnabled
+            | VideoParam::BpmSyncRatio
+            | VideoParam::BpmSyncLoopBars
+    )
 }
 
 fn apply_video_effect_param(
@@ -16047,6 +16718,7 @@ mod tests {
                 mid: 0.5,
                 high: 0.75,
             },
+            features: LiveAudioReactiveFeatures::default(),
             onset_feature_sequences,
             onset_count: u8::try_from(onsets.len()).unwrap(),
         }
@@ -17044,6 +17716,7 @@ mod tests {
                     to_port: "input".to_string(),
                 },
             ],
+            audio_runtime: Vec::new(),
         }
     }
 
@@ -18212,6 +18885,7 @@ mod tests {
             band: AudioSpectrumBand::Bass,
             gain: 1.0,
             bias: 0.0,
+            ..protocol::NodeGraphAudioNode::default()
         });
         engine.send(EngineCommand::UpsertNodeGraph(graph)).unwrap();
 
@@ -18224,6 +18898,86 @@ mod tests {
             snapshot = engine.snapshot();
         }
         assert_eq!(snapshot.dmx_preview[0], 128);
+    }
+
+    #[test]
+    fn node_graph_handle_returns_only_after_published_state_is_visible() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let fixture_id = engine.allocate_fixture_id();
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id,
+                request: sample_patch_request("Published graph fixture", 1),
+                profile: sample_profile(),
+            })
+            .unwrap();
+        let graph_id = engine.allocate_node_graph_id();
+        engine
+            .upsert_node_graph(sample_node_graph(graph_id, fixture_id))
+            .unwrap();
+        assert!(engine
+            .snapshot()
+            .node_graphs
+            .iter()
+            .any(|graph| graph.id == graph_id && graph.enabled));
+
+        engine.set_node_graph_enabled(graph_id, false).unwrap();
+        assert!(engine
+            .snapshot()
+            .node_graphs
+            .iter()
+            .any(|graph| graph.id == graph_id && !graph.enabled));
+
+        engine.remove_node_graph(graph_id).unwrap();
+        assert!(engine
+            .snapshot()
+            .node_graphs
+            .iter()
+            .all(|graph| graph.id != graph_id));
+    }
+
+    #[test]
+    fn published_node_graph_remove_rolls_back_graph_and_cue_when_snapshot_is_busy() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig::default());
+        runtime.node_graphs.push(runtime_node_graph_from_summary(
+            sample_node_graph(1, 1),
+            Instant::now(),
+        ));
+        let cue = CueSummary {
+            id: 1,
+            label: "Audio cue".to_string(),
+            node_graph_targets: vec![CueNodeGraphTarget {
+                graph_id: 1,
+                enabled: true,
+            }],
+            ..CueSummary::default()
+        };
+        runtime.cues.push(runtime_cue_from_summary(&cue));
+        runtime.last_error = Some("previous".to_string());
+
+        let snapshot = RwLock::new(EngineSnapshot::default());
+        let read_guard = snapshot.read().unwrap();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::RemoveNodeGraphPublished {
+            graph_id: 1,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        assert!(runtime.node_graphs.is_empty());
+        assert!(runtime.cues[0].node_graph_targets.is_empty());
+
+        runtime.publish_pending_command_acks(0, &snapshot);
+        assert!(receiver
+            .recv_timeout(Duration::from_millis(50))
+            .unwrap()
+            .is_err());
+        assert_eq!(runtime.node_graphs.len(), 1);
+        assert_eq!(runtime.cues[0].node_graph_targets[0].graph_id, 1);
+        assert_eq!(runtime.last_error.as_deref(), Some("previous"));
+        drop(read_guard);
     }
 
     #[test]
@@ -18262,7 +19016,7 @@ mod tests {
     }
 
     #[test]
-    fn live_audio_node_graph_uses_ephemeral_spectrum_without_timeline_audio() {
+    fn unverified_legacy_live_audio_cannot_drive_node_graph() {
         let engine = EngineHandle::start(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
@@ -18284,6 +19038,7 @@ mod tests {
             band: AudioSpectrumBand::Mid,
             gain: 1.0,
             bias: 0.0,
+            ..protocol::NodeGraphAudioNode::default()
         });
         engine.send(EngineCommand::UpsertNodeGraph(graph)).unwrap();
         engine
@@ -18298,14 +19053,12 @@ mod tests {
             .unwrap();
 
         let mut snapshot = engine.snapshot();
-        for _ in 0..20 {
-            if snapshot.dmx_preview[0] == 191 {
-                break;
-            }
+        for _ in 0..4 {
             std::thread::sleep(DMX_TICK_INTERVAL);
             snapshot = engine.snapshot();
         }
-        assert_eq!(snapshot.dmx_preview[0], 191);
+        assert_eq!(snapshot.dmx_preview[0], 0);
+        assert!(snapshot.node_graphs[0].audio_runtime[0].safety_zeroed);
 
         engine
             .send(EngineCommand::SetLiveAudioSpectrum(None))
@@ -18318,33 +19071,449 @@ mod tests {
             }
         }
         assert_eq!(snapshot.dmx_preview[0], 0);
+    }
 
-        engine
-            .send(EngineCommand::SetLiveAudioSpectrum(Some(
-                AudioSpectrumPoint {
-                    time_ms: 0,
-                    bass: 0.0,
-                    mid: 0.5,
-                    high: 0.0,
+    #[test]
+    fn audio_reactive_band_is_sanitized_cached_once_and_published_per_node() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig::default());
+        let base = Instant::now();
+        let mut graph = sample_node_graph(1, 1);
+        graph.nodes[0].kind = NodeGraphNodeKind::Audio;
+        graph.nodes[0].label = "Band 16".to_string();
+        graph.nodes[0].lfo = None;
+        graph.nodes[0].audio = Some(protocol::NodeGraphAudioNode {
+            source: AudioSpectrumSource::Live,
+            feature: AudioReactiveFeature::Band,
+            band_index: 15,
+            gain: 1.0,
+            ..protocol::NodeGraphAudioNode::default()
+        });
+        runtime
+            .node_graphs
+            .push(runtime_node_graph_from_summary(graph, base));
+
+        let mut features = LiveAudioReactiveFeatures {
+            band_count: LIVE_AUDIO_FEATURE_BAND_CAPACITY as u8,
+            ..LiveAudioReactiveFeatures::default()
+        };
+        features.bands[15] = 0.8;
+        let mut frame = test_live_audio_frame(1, 7, &[]);
+        frame.features = features;
+        runtime.apply_live_audio_frame(frame, base, base);
+        runtime.update_audio_reactive_nodes(base + DMX_TICK_INTERVAL);
+
+        let graph = &runtime.node_graphs[0];
+        let audio = &graph.audio_nodes[0];
+        assert!((audio.input_value - 0.8).abs() < 0.000_1);
+        assert!((audio.output_value - 0.8).abs() < 0.000_1);
+        assert!(audio.source_available);
+        assert!(!audio.safety_zeroed);
+        assert_eq!(audio.feature_sequence, Some(7));
+        assert_eq!(audio.status().node_id, 1);
+        let evaluated = evaluate_node_graph_output_normalized(
+            graph,
+            &graph.outputs[0],
+            Vec3::default(),
+            base + DMX_TICK_INTERVAL,
+            &runtime.clock.snapshot(base + DMX_TICK_INTERVAL),
+        )
+        .unwrap();
+        assert!((evaluated - 0.8).abs() < 0.000_1);
+    }
+
+    #[test]
+    fn audio_reactive_hold_release_and_ttl_loss_restore_base_immediately() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig::default());
+        let base = Instant::now();
+        let mut graph = sample_node_graph(1, 1);
+        graph.nodes[0].kind = NodeGraphNodeKind::Audio;
+        graph.nodes[0].lfo = None;
+        graph.nodes[0].audio = Some(protocol::NodeGraphAudioNode {
+            source: AudioSpectrumSource::Live,
+            feature: AudioReactiveFeature::Rms,
+            gain: 1.0,
+            release_ms: 1_000,
+            hold_ms: 100,
+            ..protocol::NodeGraphAudioNode::default()
+        });
+        runtime
+            .node_graphs
+            .push(runtime_node_graph_from_summary(graph, base));
+
+        let mut frame = test_live_audio_frame(1, 1, &[]);
+        frame.features.rms = 0.5;
+        runtime.apply_live_audio_frame(frame, base, base);
+        runtime.update_audio_reactive_nodes(base + DMX_TICK_INTERVAL);
+        assert!((runtime.node_graphs[0].audio_nodes[0].output_value - 0.5).abs() < 0.000_1);
+
+        runtime.live_audio_features.as_mut().unwrap().rms = 0.0;
+        runtime.update_audio_reactive_nodes(base + Duration::from_millis(50));
+        let held = &runtime.node_graphs[0].audio_nodes[0];
+        assert!(held.held);
+        assert!((held.output_value - 0.5).abs() < 0.000_1);
+
+        runtime.update_audio_reactive_nodes(base + Duration::from_millis(125));
+        let releasing = runtime.node_graphs[0].audio_nodes[0].output_value;
+        assert!(releasing > 0.0 && releasing < 0.5);
+
+        runtime.invalidate_live_audio_source();
+        runtime.update_audio_reactive_nodes(base + Duration::from_millis(126));
+        let zeroed = &runtime.node_graphs[0].audio_nodes[0];
+        assert_eq!(zeroed.output_value, 0.0);
+        assert!(!zeroed.source_available);
+        assert!(zeroed.safety_zeroed);
+        assert!(evaluate_node_graph_output_normalized(
+            &runtime.node_graphs[0],
+            &runtime.node_graphs[0].outputs[0],
+            Vec3::default(),
+            base + Duration::from_millis(126),
+            &runtime.clock.snapshot(base + Duration::from_millis(126)),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn audio_reactive_speed_drives_playhead_and_source_loss_restores_authored_speed() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig::default());
+        let base = runtime.last_tick;
+        add_runtime_test_video_layer(
+            &mut runtime,
+            1,
+            VideoLayerState {
+                playing: true,
+                speed: 0.5,
+                ..VideoLayerState::default()
+            },
+        );
+        let mut graph = sample_node_graph(1, 1);
+        graph.nodes[0].kind = NodeGraphNodeKind::Audio;
+        graph.nodes[0].lfo = None;
+        graph.nodes[0].audio = Some(protocol::NodeGraphAudioNode {
+            source: AudioSpectrumSource::Live,
+            feature: AudioReactiveFeature::Rms,
+            gain: 1.0,
+            ..protocol::NodeGraphAudioNode::default()
+        });
+        graph.nodes[2]
+            .output
+            .as_mut()
+            .unwrap()
+            .video_targets
+            .push(VideoEffectTarget {
+                layer_ids: vec![1],
+                param: VideoParam::Speed,
+                low: 0.0,
+                high: 2.0,
+                position: None,
+            });
+        runtime
+            .node_graphs
+            .push(runtime_node_graph_from_summary(graph, base));
+
+        let mut frame = test_live_audio_frame(1, 1, &[]);
+        frame.features.rms = 1.0;
+        runtime.apply_live_audio_frame(frame, base, base);
+        runtime.last_tick = base + DMX_TICK_INTERVAL;
+        runtime.update_audio_reactive_nodes(runtime.last_tick);
+        runtime.advance_video_layers(Duration::from_millis(100));
+
+        let state = runtime_video_layer_state(&runtime, 1);
+        assert_eq!(state.position_ms, 200);
+        assert!((state.speed - 0.5).abs() < f32::EPSILON);
+
+        runtime.invalidate_live_audio_source();
+        runtime.last_tick += DMX_TICK_INTERVAL;
+        runtime.update_audio_reactive_nodes(runtime.last_tick);
+        runtime.advance_video_layers(Duration::from_millis(100));
+
+        let state = runtime_video_layer_state(&runtime, 1);
+        assert_eq!(state.position_ms, 250);
+        assert!((state.speed - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn audio_reactive_bpm_sync_drives_playhead_without_mutating_authored_sync() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig::default());
+        let base = runtime.last_tick;
+        runtime.clock = BpmClock::new(120.0, base);
+        let authored_bpm_sync = protocol::VideoBpmSync {
+            enabled: false,
+            ratio: 0.75,
+            loop_bars: 2.0,
+        };
+        add_runtime_test_video_layer(
+            &mut runtime,
+            1,
+            VideoLayerState {
+                playing: true,
+                speed: 0.5,
+                loop_enabled: true,
+                loop_start_ms: 0,
+                loop_end_ms: 1_000,
+                bpm_sync: authored_bpm_sync,
+                ..VideoLayerState::default()
+            },
+        );
+        let mut graph = sample_node_graph(1, 1);
+        graph.nodes[0].kind = NodeGraphNodeKind::Audio;
+        graph.nodes[0].lfo = None;
+        graph.nodes[0].audio = Some(protocol::NodeGraphAudioNode {
+            source: AudioSpectrumSource::Live,
+            feature: AudioReactiveFeature::Rms,
+            gain: 1.0,
+            ..protocol::NodeGraphAudioNode::default()
+        });
+        graph.nodes[2]
+            .output
+            .as_mut()
+            .unwrap()
+            .video_targets
+            .extend([
+                VideoEffectTarget {
+                    layer_ids: vec![1],
+                    param: VideoParam::BpmSyncEnabled,
+                    low: 1.0,
+                    high: 1.0,
+                    position: None,
                 },
-            )))
-            .unwrap();
-        for _ in 0..20 {
-            std::thread::sleep(DMX_TICK_INTERVAL);
-            snapshot = engine.snapshot();
-            if snapshot.dmx_preview[0] == 128 {
-                break;
-            }
+                VideoEffectTarget {
+                    layer_ids: vec![1],
+                    param: VideoParam::BpmSyncRatio,
+                    low: 2.0,
+                    high: 2.0,
+                    position: None,
+                },
+                VideoEffectTarget {
+                    layer_ids: vec![1],
+                    param: VideoParam::BpmSyncLoopBars,
+                    low: 0.5,
+                    high: 0.5,
+                    position: None,
+                },
+            ]);
+        runtime
+            .node_graphs
+            .push(runtime_node_graph_from_summary(graph, base));
+
+        let mut frame = test_live_audio_frame(1, 1, &[]);
+        frame.features.rms = 1.0;
+        runtime.apply_live_audio_frame(frame, base, base);
+        runtime.last_tick = base + Duration::from_millis(125);
+        runtime.update_audio_reactive_nodes(runtime.last_tick);
+        runtime.advance_video_layers(Duration::from_millis(100));
+
+        let authored = runtime_video_layer_state(&runtime, 1);
+        assert_eq!(authored.position_ms, 250);
+        assert_eq!(authored.bpm_sync, authored_bpm_sync);
+        let rendered = runtime.video_snapshot();
+        let rendered_sync = rendered.layers[0].state.bpm_sync;
+        assert!(rendered_sync.enabled);
+        assert_eq!(rendered_sync.ratio, 2.0);
+        assert_eq!(rendered_sync.loop_bars, 0.5);
+
+        runtime.invalidate_live_audio_source();
+        runtime.last_tick += DMX_TICK_INTERVAL;
+        runtime.update_audio_reactive_nodes(runtime.last_tick);
+        runtime.advance_video_layers(Duration::from_millis(100));
+
+        let restored = runtime_video_layer_state(&runtime, 1);
+        assert_eq!(restored.position_ms, 300);
+        assert_eq!(restored.bpm_sync, authored_bpm_sync);
+        assert_eq!(
+            runtime.video_snapshot().layers[0].state.bpm_sync,
+            authored_bpm_sync
+        );
+    }
+
+    #[test]
+    fn audio_reactive_event_latch_reaches_all_graphs_exactly_once_per_tick() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig::default());
+        let base = Instant::now();
+        for graph_id in 1..=2 {
+            let mut graph = sample_node_graph(graph_id, 1);
+            graph.nodes[0].kind = NodeGraphNodeKind::Audio;
+            graph.nodes[0].lfo = None;
+            graph.nodes[0].audio = Some(protocol::NodeGraphAudioNode {
+                source: AudioSpectrumSource::Live,
+                feature: AudioReactiveFeature::Kick,
+                gain: 1.0,
+                ..protocol::NodeGraphAudioNode::default()
+            });
+            runtime
+                .node_graphs
+                .push(runtime_node_graph_from_summary(graph, base));
         }
-        assert_eq!(snapshot.dmx_preview[0], 128);
-        for _ in 0..20 {
-            std::thread::sleep(DMX_TICK_INTERVAL);
-            snapshot = engine.snapshot();
-            if snapshot.dmx_preview[0] == 0 {
-                break;
-            }
+        let mut frame = test_live_audio_frame(1, 9, &[]);
+        frame.features.kick_event = true;
+        runtime.apply_live_audio_frame(frame, base, base);
+
+        runtime.update_audio_reactive_nodes(base + DMX_TICK_INTERVAL);
+        assert!(runtime
+            .node_graphs
+            .iter()
+            .all(|graph| graph.audio_nodes[0].output_value == 1.0));
+        runtime.update_audio_reactive_nodes(base + DMX_TICK_INTERVAL * 2);
+        assert!(runtime
+            .node_graphs
+            .iter()
+            .all(|graph| graph.audio_nodes[0].output_value == 0.0));
+    }
+
+    #[test]
+    fn persistence_snapshot_keeps_rendered_video_separate_from_authored_state() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig::default());
+        let base = Instant::now();
+        add_runtime_test_video_layer(
+            &mut runtime,
+            1,
+            VideoLayerState {
+                opacity: 0.8,
+                ..VideoLayerState::default()
+            },
+        );
+        let mut graph = sample_node_graph(1, 1);
+        graph.nodes[0].kind = NodeGraphNodeKind::Audio;
+        graph.nodes[0].lfo = None;
+        graph.nodes[0].audio = Some(protocol::NodeGraphAudioNode {
+            source: AudioSpectrumSource::Live,
+            feature: AudioReactiveFeature::Rms,
+            gain: 1.0,
+            ..protocol::NodeGraphAudioNode::default()
+        });
+        graph.nodes[2]
+            .output
+            .as_mut()
+            .unwrap()
+            .video_targets
+            .push(VideoEffectTarget {
+                layer_ids: vec![1],
+                param: VideoParam::Opacity,
+                low: 0.0,
+                high: 0.25,
+                position: None,
+            });
+        runtime
+            .node_graphs
+            .push(runtime_node_graph_from_summary(graph, base));
+        let mut frame = test_live_audio_frame(1, 1, &[]);
+        frame.features.rms = 1.0;
+        runtime.apply_live_audio_frame(frame, base, base);
+        runtime.update_audio_reactive_nodes(base + DMX_TICK_INTERVAL);
+
+        let persisted = runtime.build_persistence_snapshot();
+        assert!((persisted.video.layers[0].state.opacity - 0.25).abs() < 0.000_1);
+        let authored_video = persisted.authored_video.as_ref().unwrap();
+        assert!((authored_video.layers[0].state.opacity - 0.8).abs() < 0.000_1);
+        assert_eq!(authored_video.compositions, persisted.video.compositions);
+        assert_eq!(authored_video.outputs, persisted.video.outputs);
+        assert_eq!(
+            authored_video.mapping_presets,
+            persisted.video.mapping_presets
+        );
+        assert_eq!(
+            authored_video.master_opacity,
+            persisted.video.master_opacity
+        );
+        assert_eq!(authored_video.blackout, persisted.video.blackout);
+        assert_eq!(authored_video.auto_vj, persisted.video.auto_vj);
+
+        let mut reloaded = EngineRuntime::new(DmxOutputConfig::default());
+        reloaded.load_project_snapshot(persisted);
+        reloaded.update_audio_reactive_nodes(base + DMX_TICK_INTERVAL * 2);
+        assert!((reloaded.video_snapshot().layers[0].state.opacity - 0.8).abs() < 0.000_1);
+    }
+
+    #[test]
+    fn audio_reactive_curves_are_finite_and_monotonic() {
+        let input = 0.25;
+        assert_eq!(
+            apply_audio_reactive_curve(input, AudioReactiveCurve::Linear),
+            input
+        );
+        assert!(apply_audio_reactive_curve(input, AudioReactiveCurve::Exponential) < input);
+        assert!(apply_audio_reactive_curve(input, AudioReactiveCurve::Logarithmic) > input);
+        assert!(
+            (apply_audio_reactive_curve(0.5, AudioReactiveCurve::Smoothstep) - 0.5).abs() < 0.000_1
+        );
+        for curve in [
+            AudioReactiveCurve::Linear,
+            AudioReactiveCurve::Smoothstep,
+            AudioReactiveCurve::Exponential,
+            AudioReactiveCurve::Logarithmic,
+        ] {
+            assert_eq!(apply_audio_reactive_curve(f32::NAN, curve), 0.0);
+            assert_eq!(apply_audio_reactive_curve(f32::INFINITY, curve), 0.0);
         }
-        assert_eq!(snapshot.dmx_preview[0], 0);
+    }
+
+    #[test]
+    #[ignore = "manual release-mode Audio Rack routing benchmark"]
+    fn audio_reactive_64x200_routing_meets_release_budget() {
+        const GRAPH_COUNT: usize = 64;
+        const FIXTURE_COUNT: u64 = 200;
+        const SAMPLES: usize = 1_000;
+
+        let mut runtime = EngineRuntime::new(DmxOutputConfig::default());
+        let base = Instant::now();
+        for graph_index in 0..GRAPH_COUNT {
+            let mut graph = sample_node_graph(graph_index as u64 + 1, 1);
+            graph.nodes[0].kind = NodeGraphNodeKind::Audio;
+            graph.nodes[0].lfo = None;
+            graph.nodes[0].audio = Some(protocol::NodeGraphAudioNode {
+                source: AudioSpectrumSource::Live,
+                feature: AudioReactiveFeature::Band,
+                band_index: (graph_index % LIVE_AUDIO_FEATURE_BAND_CAPACITY) as u8,
+                gain: 1.0,
+                ..protocol::NodeGraphAudioNode::default()
+            });
+            graph.nodes[2].output.as_mut().unwrap().fixture_ids = (1..=FIXTURE_COUNT).collect();
+            runtime
+                .node_graphs
+                .push(runtime_node_graph_from_summary(graph, base));
+        }
+        let mut frame = test_live_audio_frame(1, 1, &[]);
+        frame.features.band_count = LIVE_AUDIO_FEATURE_BAND_CAPACITY as u8;
+        frame.features.bands.fill(0.5);
+        runtime.apply_live_audio_frame(frame, base, base);
+        let sample_at = base + DMX_TICK_INTERVAL;
+        runtime.update_audio_reactive_nodes(sample_at);
+        let clock = runtime.clock.snapshot(sample_at);
+
+        let mut durations = Vec::with_capacity(SAMPLES);
+        let mut checksum = 0.0_f32;
+        for _ in 0..SAMPLES {
+            let started = Instant::now();
+            runtime.update_audio_reactive_nodes(sample_at);
+            for fixture_id in 1..=FIXTURE_COUNT {
+                for graph in &runtime.node_graphs {
+                    let output = &graph.outputs[0];
+                    if output.output.fixture_ids.binary_search(&fixture_id).is_ok() {
+                        checksum += evaluate_node_graph_output_normalized(
+                            graph,
+                            output,
+                            Vec3::default(),
+                            sample_at,
+                            &clock,
+                        )
+                        .unwrap_or_default();
+                    }
+                }
+            }
+            durations.push(started.elapsed());
+        }
+        std::hint::black_box(checksum);
+        durations.sort_unstable();
+        let p99 = durations[(SAMPLES * 99 / 100).min(SAMPLES - 1)];
+        let max = *durations.last().unwrap();
+        eprintln!(
+            "Audio Rack 64x200 routing: p99={}us max={}us",
+            p99.as_micros(),
+            max.as_micros()
+        );
+        if !cfg!(debug_assertions) {
+            assert!(p99 <= Duration::from_millis(1), "p99 was {p99:?}");
+            assert!(max <= Duration::from_millis(2), "max was {max:?}");
+        }
     }
 
     #[test]

@@ -38,8 +38,22 @@ export const normalizeProjectAutoVjForPersistence = (snapshot: EngineSnapshot): 
   };
 };
 
+/**
+ * Collapse the engine's live/rendered transport shape into authored project data.
+ * Audio meters and rendered modulation are operational state, not save data.
+ */
+export const normalizeProjectSnapshotForStorage = (snapshot: EngineSnapshot): EngineSnapshot => {
+  const { authored_video: authoredVideo, ...snapshotWithoutTransport } = snapshot;
+  const authoredSnapshot: EngineSnapshot = {
+    ...snapshotWithoutTransport,
+    video: authoredVideo ?? snapshot.video,
+    node_graphs: (snapshot.node_graphs ?? []).map(({ audio_runtime: _audioRuntime, ...graph }) => graph),
+  };
+  return normalizeProjectAutoVjForPersistence(authoredSnapshot);
+};
+
 export const projectComparableSnapshot = (snapshot: EngineSnapshot) => {
-  const comparable = normalizeProjectAutoVjForPersistence(
+  const comparable = normalizeProjectSnapshotForStorage(
     JSON.parse(JSON.stringify(snapshot)) as EngineSnapshot,
   );
   comparable.active_cue_id = null;

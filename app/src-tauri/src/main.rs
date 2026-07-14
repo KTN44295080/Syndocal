@@ -1125,6 +1125,13 @@ struct LiveAudioInputStatus {
     rms: f32,
     peak: f32,
     spectral_flux: f32,
+    spectral_centroid: f32,
+    spectral_density_fast: f32,
+    spectral_density_slow: f32,
+    kick_strength: f32,
+    snare_strength: f32,
+    kick_event: bool,
+    snare_event: bool,
     onset: bool,
     onset_strength: f32,
     bpm: Option<f32>,
@@ -1159,6 +1166,13 @@ struct LiveAudioInputLevels {
     rms: f32,
     peak: f32,
     spectral_flux: f32,
+    spectral_centroid: f32,
+    spectral_density_fast: f32,
+    spectral_density_slow: f32,
+    kick_strength: f32,
+    snare_strength: f32,
+    kick_event: bool,
+    snare_event: bool,
     onset: bool,
     onset_strength: f32,
     bpm: Option<f32>,
@@ -1200,6 +1214,13 @@ impl LiveAudioInputLevels {
             rms: level(status.rms),
             peak: level(status.peak),
             spectral_flux: level(status.spectral_flux),
+            spectral_centroid: level(status.spectral_centroid),
+            spectral_density_fast: level(status.spectral_density_fast),
+            spectral_density_slow: level(status.spectral_density_slow),
+            kick_strength: level(status.kick_strength),
+            snare_strength: level(status.snare_strength),
+            kick_event: safe && status.kick_event,
+            snare_event: safe && status.snare_event,
             onset: safe && status.onset,
             onset_strength: level(status.onset_strength),
             bpm: safe
@@ -1225,6 +1246,8 @@ const LIVE_AUDIO_STOP_CLEAR_RETRY_INTERVAL: Duration = Duration::from_millis(2);
 const LIVE_AUDIO_CAPTURE_SLOT_COUNT: usize = 4;
 const LIVE_AUDIO_CAPTURE_SLOT_FRAMES: usize = 2_048;
 const _: [(); LIVE_AUDIO_CAPTURE_SLOT_COUNT] = [(); protocol::MAX_LIVE_AUDIO_FRAME_ONSETS];
+const _: [(); audio::live_features::MAX_LIVE_AUDIO_BANDS] =
+    [(); protocol::LIVE_AUDIO_FEATURE_BAND_CAPACITY];
 static NEXT_LIVE_AUDIO_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 fn allocate_live_audio_generation() -> Result<u64, String> {
@@ -1579,6 +1602,13 @@ impl Drop for LiveAudioInput {
             status.rms = 0.0;
             status.peak = 0.0;
             status.spectral_flux = 0.0;
+            status.spectral_centroid = 0.0;
+            status.spectral_density_fast = 0.0;
+            status.spectral_density_slow = 0.0;
+            status.kick_strength = 0.0;
+            status.snare_strength = 0.0;
+            status.kick_event = false;
+            status.snare_event = false;
             status.onset = false;
             status.onset_strength = 0.0;
             status.bpm = None;
@@ -5257,7 +5287,8 @@ fn create_cue_from_current(
     if label.is_empty() {
         return Err("Cue label is required".to_string());
     }
-    let mut snapshot = state.engine.snapshot();
+    let mut snapshot = state.engine.persistence_snapshot()?;
+    use_authored_video_snapshot(&mut snapshot);
     apply_programmer_preview_to_snapshot(&mut snapshot);
     let cue_list_id = cue_list_id.unwrap_or(protocol::DEFAULT_CUE_LIST_ID);
     if !snapshot
@@ -5731,7 +5762,8 @@ fn update_cue_from_current(
     if label.is_empty() {
         return Err("Cue label is required".to_string());
     }
-    let mut snapshot = state.engine.snapshot();
+    let mut snapshot = state.engine.persistence_snapshot()?;
+    use_authored_video_snapshot(&mut snapshot);
     apply_programmer_preview_to_snapshot(&mut snapshot);
     let existing_cue = snapshot
         .cues
@@ -8347,6 +8379,13 @@ fn zero_live_audio_input_status(status: &mut LiveAudioInputStatus, error: String
     status.rms = 0.0;
     status.peak = 0.0;
     status.spectral_flux = 0.0;
+    status.spectral_centroid = 0.0;
+    status.spectral_density_fast = 0.0;
+    status.spectral_density_slow = 0.0;
+    status.kick_strength = 0.0;
+    status.snare_strength = 0.0;
+    status.kick_event = false;
+    status.snare_event = false;
     status.onset = false;
     status.onset_strength = 0.0;
     status.bpm = None;
@@ -8675,6 +8714,13 @@ fn publish_live_audio_analysis_with(
                 status.rms = finite_live_audio_level(frame.rms);
                 status.peak = finite_live_audio_level(frame.peak);
                 status.spectral_flux = finite_live_audio_level(frame.spectral_flux);
+                status.spectral_centroid = finite_live_audio_level(frame.spectral_centroid);
+                status.spectral_density_fast = finite_live_audio_level(frame.spectral_density_fast);
+                status.spectral_density_slow = finite_live_audio_level(frame.spectral_density_slow);
+                status.kick_strength = finite_live_audio_level(frame.kick_strength);
+                status.snare_strength = finite_live_audio_level(frame.snare_strength);
+                status.kick_event = frame.kick_pulse;
+                status.snare_event = frame.snare_pulse;
                 status.onset = frame.onset;
                 status.onset_strength = finite_live_audio_level(frame.onset_strength);
                 status.bpm = frame.bpm.filter(|bpm| bpm.is_finite() && *bpm > 0.0);
@@ -8727,6 +8773,7 @@ fn publish_live_audio_features(
 ) -> bool {
     let published_spectrum = spectrum.clone();
     let feature_sequence = features.frame.sequence;
+    let reactive_features = live_audio_reactive_features(features);
     publish_live_audio_analysis_with(
         status,
         safety,
@@ -8740,6 +8787,7 @@ fn publish_live_audio_features(
                             generation,
                             feature_sequence,
                             spectrum: published_spectrum,
+                            features: reactive_features,
                             onset_feature_sequences,
                             onset_count,
                         },
@@ -8750,6 +8798,56 @@ fn publish_live_audio_features(
         },
         || engine.clear_live_audio_input(generation),
     )
+}
+
+fn live_audio_reactive_features(
+    presentation: &LiveAudioFeaturePresentation,
+) -> protocol::LiveAudioReactiveFeatures {
+    let frame = presentation.frame;
+    let band_count = frame
+        .band_count
+        .min(audio::live_features::MAX_LIVE_AUDIO_BANDS)
+        .min(protocol::LIVE_AUDIO_FEATURE_BAND_CAPACITY);
+    let mut bands = [0.0; protocol::LIVE_AUDIO_FEATURE_BAND_CAPACITY];
+    for (target, source) in bands[..band_count].iter_mut().zip(frame.bands) {
+        *target = finite_live_audio_level(source);
+    }
+    protocol::LiveAudioReactiveFeatures {
+        band_count: u8::try_from(band_count)
+            .expect("fixed live audio band capacity must fit in u8"),
+        bands,
+        rms: finite_live_audio_level(frame.rms),
+        peak: finite_live_audio_level(frame.peak),
+        spectral_flux: finite_live_audio_level(frame.spectral_flux),
+        spectral_centroid: finite_live_audio_level(frame.spectral_centroid),
+        spectral_density_fast: finite_live_audio_level(frame.spectral_density_fast),
+        spectral_density_slow: finite_live_audio_level(frame.spectral_density_slow),
+        kick_strength: finite_live_audio_level(frame.kick_strength),
+        snare_strength: finite_live_audio_level(frame.snare_strength),
+        kick_event: frame.kick_pulse,
+        snare_event: frame.snare_pulse,
+        onset: frame.onset,
+        onset_strength: finite_live_audio_level(frame.onset_strength),
+        bpm: frame.bpm.filter(|bpm| bpm.is_finite() && *bpm > 0.0),
+        bpm_confidence: finite_live_audio_level(frame.bpm_confidence),
+        beat_phase: if presentation.beat_phase.is_finite() {
+            presentation.beat_phase.rem_euclid(1.0)
+        } else {
+            0.0
+        },
+    }
+}
+
+fn coalesce_live_audio_feature_pulses(
+    frame: &mut audio::live_features::LiveAudioFeatureFrame,
+    previous: Option<&audio::live_features::LiveAudioFeatureFrame>,
+) {
+    if let Some(previous) = previous {
+        // The wire format exposes one pulse bit per published analysis frame. Preserve at
+        // least one event while the worker coalesces analysis frames without allocating.
+        frame.kick_pulse |= previous.kick_pulse;
+        frame.snare_pulse |= previous.snare_pulse;
+    }
 }
 
 fn live_audio_feature_spectrum(
@@ -8859,6 +8957,7 @@ fn run_live_audio_fft(
             if capture_to_worker < LIVE_AUDIO_STALE_AFTER {
                 received_samples |= chunk.len > 0;
                 analyzer.push_samples(&chunk.samples[..chunk.len], |mut frame| {
+                    coalesce_live_audio_feature_pulses(&mut frame, latest_feature.as_ref());
                     if frame.onset {
                         if pending_real_onsets.push(frame.sequence).is_err() {
                             onset_queue_overflowed = true;
@@ -9869,11 +9968,9 @@ fn save_node_graph(
     if graph.id == 0 {
         graph.id = state.engine.allocate_node_graph_id();
     }
+    graph.audio_runtime.clear();
     validate_node_graph_summary(&graph, &state.engine.snapshot())?;
-    state
-        .engine
-        .send(EngineCommand::UpsertNodeGraph(graph.clone()))
-        .map_err(|error| error.to_string())?;
+    state.engine.upsert_node_graph(graph.clone())?;
     Ok(graph.id)
 }
 
@@ -9892,18 +9989,12 @@ fn set_node_graph_enabled(
     {
         return Err(format!("Node graph {graph_id} was not found"));
     }
-    state
-        .engine
-        .send(EngineCommand::SetNodeGraphEnabled { graph_id, enabled })
-        .map_err(|error| error.to_string())
+    state.engine.set_node_graph_enabled(graph_id, enabled)
 }
 
 #[tauri::command]
 fn remove_node_graph(state: State<'_, AppState>, graph_id: NodeGraphId) -> Result<(), String> {
-    state
-        .engine
-        .send(EngineCommand::RemoveNodeGraph(graph_id))
-        .map_err(|error| error.to_string())
+    state.engine.remove_node_graph(graph_id)
 }
 
 #[tauri::command]
@@ -9917,14 +10008,15 @@ fn save_node_graph_preset_file(
         .iter()
         .find(|graph| graph.id == graph_id)
         .ok_or_else(|| format!("Node graph {graph_id} was not found"))?;
+    let graph = node_graph_for_persistence(graph.clone());
     let file = NodeGraphPresetFile {
         version: 1,
         app: APP_NAME.to_string(),
-        graph: graph.clone(),
+        graph,
     };
     let Some(path) = rfd::FileDialog::new()
         .add_filter("Syndocal Node Graph", &["graph"])
-        .set_file_name(format!("{}.graph", safe_file_stem(&graph.label)))
+        .set_file_name(format!("{}.graph", safe_file_stem(&file.graph.label)))
         .save_file()
     else {
         return Ok(None);
@@ -9948,10 +10040,8 @@ fn load_node_graph_preset_file(state: State<'_, AppState>) -> Result<Option<Node
     validate_node_graph_preset_file(&file, &state.engine.snapshot())?;
     let mut graph = file.graph;
     graph.id = state.engine.allocate_node_graph_id();
-    state
-        .engine
-        .send(EngineCommand::UpsertNodeGraph(graph.clone()))
-        .map_err(|error| error.to_string())?;
+    graph = node_graph_for_persistence(graph);
+    state.engine.upsert_node_graph(graph.clone())?;
     Ok(Some(graph.id))
 }
 
@@ -10722,7 +10812,7 @@ fn project_file_for_save(state: &State<'_, AppState>) -> Result<ProjectFile, Str
         version: 1,
         app: APP_NAME.to_string(),
         custom_profiles,
-        snapshot: project_snapshot_for_save(state.engine.snapshot()),
+        snapshot: project_snapshot_for_save(state.engine.persistence_snapshot()?),
     })
 }
 
@@ -12106,7 +12196,22 @@ fn clear_current_project_path(state: &State<'_, AppState>) -> Result<(), String>
     Ok(())
 }
 
+fn use_authored_video_snapshot(snapshot: &mut EngineSnapshot) {
+    if let Some(authored_video) = snapshot.authored_video.take() {
+        snapshot.video = authored_video;
+    }
+}
+
+fn node_graph_for_persistence(mut graph: NodeGraphSummary) -> NodeGraphSummary {
+    graph.audio_runtime.clear();
+    graph
+}
+
 fn project_snapshot_for_save(mut snapshot: EngineSnapshot) -> EngineSnapshot {
+    use_authored_video_snapshot(&mut snapshot);
+    for graph in &mut snapshot.node_graphs {
+        graph.audio_runtime.clear();
+    }
     snapshot.active_fade = None;
     snapshot.timeline.playing = false;
     snapshot.video.auto_vj.status = protocol::AutoVjStatus::default();
@@ -24836,6 +24941,148 @@ f 1 2 3
     }
 
     #[test]
+    fn project_save_reload_uses_authored_video_and_strips_audio_runtime() {
+        let mut rendered_layer = project_video_layer(10);
+        rendered_layer.state.opacity = 0.9;
+        let mut authored_layer = rendered_layer.clone();
+        authored_layer.state.opacity = 0.35;
+
+        let mut graph = project_node_graph(3, 1);
+        graph.audio_runtime = vec![protocol::NodeGraphAudioRuntimeStatus {
+            node_id: 1,
+            input_value: 0.8,
+            output_value: 0.9,
+            source_available: true,
+            safety_zeroed: false,
+            held: true,
+            feature_sequence: Some(42),
+        }];
+        let rendered_video = protocol::VideoSnapshot {
+            layers: vec![rendered_layer],
+            ..protocol::VideoSnapshot::default()
+        };
+        let authored_video = protocol::VideoSnapshot {
+            layers: vec![authored_layer],
+            ..protocol::VideoSnapshot::default()
+        };
+        let snapshot = EngineSnapshot {
+            video: rendered_video,
+            authored_video: Some(authored_video),
+            node_graphs: vec![graph],
+            ..EngineSnapshot::default()
+        };
+
+        let saved = project_snapshot_for_save(snapshot);
+        let json = serde_json::to_string(&saved).unwrap();
+        let reloaded: EngineSnapshot = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(reloaded.video.layers[0].state.opacity, 0.35);
+        assert_eq!(reloaded.authored_video, None);
+        assert!(reloaded.node_graphs[0].audio_runtime.is_empty());
+        assert!(!json.contains("authored_video"));
+        assert!(!json.contains("audio_runtime"));
+    }
+
+    #[test]
+    fn cue_capture_uses_authored_video_instead_of_rendered_modulation() {
+        let mut rendered_layer = project_video_layer(10);
+        rendered_layer.state.opacity = 0.85;
+        let mut authored_layer = rendered_layer.clone();
+        authored_layer.state.opacity = 0.25;
+        let mut snapshot = EngineSnapshot {
+            video: protocol::VideoSnapshot {
+                layers: vec![rendered_layer],
+                ..protocol::VideoSnapshot::default()
+            },
+            authored_video: Some(protocol::VideoSnapshot {
+                layers: vec![authored_layer],
+                ..protocol::VideoSnapshot::default()
+            }),
+            ..EngineSnapshot::default()
+        };
+
+        use_authored_video_snapshot(&mut snapshot);
+        let (_, video_targets, _, _, _) = cue_targets_from_snapshot(&snapshot);
+
+        assert_eq!(video_targets.len(), 1);
+        assert_eq!(video_targets[0].state.opacity, 0.25);
+        assert_eq!(snapshot.authored_video, None);
+    }
+
+    #[test]
+    fn node_graph_preset_persistence_never_serializes_audio_runtime() {
+        let mut graph = project_node_graph(3, 1);
+        graph.audio_runtime = vec![protocol::NodeGraphAudioRuntimeStatus {
+            node_id: 1,
+            output_value: 0.75,
+            source_available: true,
+            ..protocol::NodeGraphAudioRuntimeStatus::default()
+        }];
+
+        let persisted = node_graph_for_persistence(graph);
+        let json = serde_json::to_string(&persisted).unwrap();
+
+        assert!(persisted.audio_runtime.is_empty());
+        assert!(!json.contains("audio_runtime"));
+    }
+
+    #[test]
+    fn rendered_modulation_and_runtime_telemetry_do_not_create_history_changes() {
+        let mut before_rendered = project_video_layer(10);
+        before_rendered.state.opacity = 0.6;
+        let mut after_rendered = before_rendered.clone();
+        after_rendered.state.opacity = 0.95;
+        let mut authored = before_rendered.clone();
+        authored.state.opacity = 0.3;
+
+        let mut before_graph = project_node_graph(3, 1);
+        before_graph.audio_runtime = vec![protocol::NodeGraphAudioRuntimeStatus {
+            node_id: 1,
+            output_value: 0.4,
+            source_available: true,
+            feature_sequence: Some(10),
+            ..protocol::NodeGraphAudioRuntimeStatus::default()
+        }];
+        let mut after_graph = before_graph.clone();
+        after_graph.audio_runtime[0].output_value = 0.9;
+        after_graph.audio_runtime[0].feature_sequence = Some(11);
+        let authored_video = protocol::VideoSnapshot {
+            layers: vec![authored],
+            ..protocol::VideoSnapshot::default()
+        };
+        let snapshot = |rendered_layer, graph| EngineSnapshot {
+            video: protocol::VideoSnapshot {
+                layers: vec![rendered_layer],
+                ..protocol::VideoSnapshot::default()
+            },
+            authored_video: Some(authored_video.clone()),
+            node_graphs: vec![graph],
+            ..EngineSnapshot::default()
+        };
+        let before = ProjectFile {
+            version: PROJECT_FILE_VERSION,
+            app: APP_NAME.to_string(),
+            custom_profiles: Vec::new(),
+            snapshot: project_snapshot_for_save(snapshot(before_rendered, before_graph)),
+        };
+        let after = ProjectFile {
+            snapshot: project_snapshot_for_save(snapshot(after_rendered, after_graph)),
+            ..before.clone()
+        };
+        let pending = PendingProjectTransaction {
+            label: "Runtime audio modulation".to_string(),
+            coalesce_key: "audio-runtime".to_string(),
+            before,
+        };
+        let mut history = ProjectHistory::default();
+
+        commit_project_history_entry(&mut history, pending, after, 1).unwrap();
+
+        assert!(history.undo.is_empty());
+        assert!(history.redo.is_empty());
+    }
+
+    #[test]
     fn startup_project_path_from_args_uses_first_sdc_argument() {
         let args = vec![
             OsString::from("syndocal.exe"),
@@ -25468,6 +25715,7 @@ f 1 2 3
                     to_port: "input".to_string(),
                 },
             ],
+            audio_runtime: Vec::new(),
         }
     }
 
@@ -25643,6 +25891,7 @@ f 1 2 3
             band: protocol::AudioSpectrumBand::Mid,
             gain: 1.5,
             bias: -0.1,
+            ..protocol::NodeGraphAudioNode::default()
         });
         project.snapshot.node_graphs = vec![audio_graph.clone()];
         validate_project_file(&project).unwrap();
@@ -30390,6 +30639,13 @@ mod live_audio_input_tests {
             bands,
             band_count,
             spectral_flux: 0.3,
+            spectral_centroid: 0.55,
+            spectral_density_fast: 0.6,
+            spectral_density_slow: 0.45,
+            kick_strength: 0.9,
+            snare_strength: 0.2,
+            kick_pulse: true,
+            snare_pulse: false,
             onset: true,
             onset_strength: 0.6,
             bpm: Some(120.0),
@@ -30405,6 +30661,18 @@ mod live_audio_input_tests {
             (levels.rms, levels.peak, levels.spectral_flux),
             (0.0, 0.0, 0.0)
         );
+        assert_eq!(
+            (
+                levels.spectral_centroid,
+                levels.spectral_density_fast,
+                levels.spectral_density_slow,
+                levels.kick_strength,
+                levels.snare_strength,
+            ),
+            (0.0, 0.0, 0.0, 0.0, 0.0)
+        );
+        assert!(!levels.kick_event);
+        assert!(!levels.snare_event);
         assert!(!levels.onset);
         assert_eq!(levels.onset_strength, 0.0);
         assert_eq!(levels.bpm, None);
@@ -30430,6 +30698,13 @@ mod live_audio_input_tests {
             rms: f32::NAN,
             peak: 1.5,
             spectral_flux: -0.5,
+            spectral_centroid: 0.75,
+            spectral_density_fast: 1.5,
+            spectral_density_slow: f32::NAN,
+            kick_strength: 0.9,
+            snare_strength: -0.5,
+            kick_event: true,
+            snare_event: true,
             onset: true,
             onset_strength: 0.6,
             bpm: Some(120.0),
@@ -30442,6 +30717,18 @@ mod live_audio_input_tests {
         assert_eq!(&live.bands[..5], &[0.0, 0.0, 0.5, 0.0, 1.0]);
         assert_eq!(live.band_count, audio::live_features::MAX_LIVE_AUDIO_BANDS);
         assert_eq!((live.rms, live.peak, live.spectral_flux), (0.0, 1.0, 0.0));
+        assert_eq!(
+            (
+                live.spectral_centroid,
+                live.spectral_density_fast,
+                live.spectral_density_slow,
+                live.kick_strength,
+                live.snare_strength,
+            ),
+            (0.75, 1.0, 0.0, 0.9, 0.0)
+        );
+        assert!(live.kick_event);
+        assert!(live.snare_event);
         assert!(live.onset);
         assert_eq!(live.onset_strength, 0.6);
         assert_eq!(live.bpm, Some(120.0));
@@ -30467,6 +30754,13 @@ mod live_audio_input_tests {
                 rms: 1.0,
                 peak: 1.0,
                 spectral_flux: 1.0,
+                spectral_centroid: 1.0,
+                spectral_density_fast: 1.0,
+                spectral_density_slow: 1.0,
+                kick_strength: 1.0,
+                snare_strength: 1.0,
+                kick_event: true,
+                snare_event: true,
                 onset: true,
                 onset_strength: 1.0,
                 bpm: Some(120.0),
@@ -30486,6 +30780,13 @@ mod live_audio_input_tests {
                 rms: 1.0,
                 peak: 1.0,
                 spectral_flux: 1.0,
+                spectral_centroid: 1.0,
+                spectral_density_fast: 1.0,
+                spectral_density_slow: 1.0,
+                kick_strength: 1.0,
+                snare_strength: 1.0,
+                kick_event: true,
+                snare_event: true,
                 onset: true,
                 onset_strength: 1.0,
                 bpm: Some(120.0),
@@ -30504,6 +30805,13 @@ mod live_audio_input_tests {
                 rms: 1.0,
                 peak: 1.0,
                 spectral_flux: 1.0,
+                spectral_centroid: 1.0,
+                spectral_density_fast: 1.0,
+                spectral_density_slow: 1.0,
+                kick_strength: 1.0,
+                snare_strength: 1.0,
+                kick_event: true,
+                snare_event: true,
                 onset: true,
                 onset_strength: 1.0,
                 bpm: Some(120.0),
@@ -30541,6 +30849,72 @@ mod live_audio_input_tests {
     }
 
     #[test]
+    fn live_audio_reactive_transport_carries_and_sanitizes_every_descriptor() {
+        let mut bands = std::array::from_fn(|index| index as f32 / 15.0);
+        bands[0] = f32::NAN;
+        let mut frame = feature_frame(bands, usize::MAX);
+        frame.rms = -1.0;
+        frame.peak = 2.0;
+        frame.spectral_flux = f32::INFINITY;
+        frame.spectral_centroid = 0.55;
+        frame.spectral_density_fast = 0.65;
+        frame.spectral_density_slow = 0.45;
+        frame.kick_strength = 0.9;
+        frame.snare_strength = 0.25;
+        frame.kick_pulse = true;
+        frame.snare_pulse = false;
+        frame.onset = true;
+        frame.onset_strength = 0.7;
+        frame.bpm = Some(128.0);
+        frame.bpm_confidence = 0.85;
+
+        let features = live_audio_reactive_features(&LiveAudioFeaturePresentation {
+            frame,
+            beat_phase: 1.25,
+        });
+
+        assert_eq!(
+            usize::from(features.band_count),
+            protocol::LIVE_AUDIO_FEATURE_BAND_CAPACITY
+        );
+        assert_eq!(features.bands[0], 0.0);
+        assert_eq!(features.bands[15], 1.0);
+        assert_eq!(
+            (features.rms, features.peak, features.spectral_flux),
+            (0.0, 1.0, 0.0)
+        );
+        assert_eq!(features.spectral_centroid, 0.55);
+        assert_eq!(features.spectral_density_fast, 0.65);
+        assert_eq!(features.spectral_density_slow, 0.45);
+        assert_eq!(
+            (features.kick_strength, features.snare_strength),
+            (0.9, 0.25)
+        );
+        assert!(features.kick_event);
+        assert!(!features.snare_event);
+        assert!(features.onset);
+        assert_eq!(features.onset_strength, 0.7);
+        assert_eq!(features.bpm, Some(128.0));
+        assert_eq!(features.bpm_confidence, 0.85);
+        assert_eq!(features.beat_phase, 0.25);
+    }
+
+    #[test]
+    fn coalesced_drum_pulses_are_not_lost_before_the_next_publish() {
+        let mut previous = feature_frame([0.0; audio::live_features::MAX_LIVE_AUDIO_BANDS], 16);
+        previous.kick_pulse = true;
+        previous.snare_pulse = false;
+        let mut current = feature_frame([0.0; audio::live_features::MAX_LIVE_AUDIO_BANDS], 16);
+        current.kick_pulse = false;
+        current.snare_pulse = true;
+
+        coalesce_live_audio_feature_pulses(&mut current, Some(&previous));
+
+        assert!(current.kick_pulse);
+        assert!(current.snare_pulse);
+    }
+
+    #[test]
     fn live_audio_feature_beat_phase_is_relative_to_the_last_real_onset() {
         let frame = feature_frame([0.0; audio::live_features::MAX_LIVE_AUDIO_BANDS], 16);
         assert_eq!(live_audio_feature_beat_phase(&frame, Some(90_000)), 0.25);
@@ -30569,6 +30943,13 @@ mod live_audio_input_tests {
         frame.rms = f32::NAN;
         frame.peak = f32::INFINITY;
         frame.spectral_flux = -1.0;
+        frame.spectral_centroid = 1.5;
+        frame.spectral_density_fast = f32::NAN;
+        frame.spectral_density_slow = 0.4;
+        frame.kick_strength = -0.25;
+        frame.snare_strength = 0.65;
+        frame.kick_pulse = true;
+        frame.snare_pulse = true;
         frame.onset_strength = 2.0;
         frame.bpm = Some(-120.0);
         frame.bpm_confidence = f32::NAN;
@@ -30604,6 +30985,18 @@ mod live_audio_input_tests {
             (current.rms, current.peak, current.spectral_flux),
             (0.0, 0.0, 0.0)
         );
+        assert_eq!(
+            (
+                current.spectral_centroid,
+                current.spectral_density_fast,
+                current.spectral_density_slow,
+                current.kick_strength,
+                current.snare_strength,
+            ),
+            (1.0, 0.0, 0.4, 0.0, 0.65)
+        );
+        assert!(current.kick_event);
+        assert!(current.snare_event);
         assert!(current.onset);
         assert_eq!(current.onset_strength, 1.0);
         assert_eq!(current.bpm, None);
@@ -30624,6 +31017,13 @@ mod live_audio_input_tests {
             rms: 0.3,
             peak: 0.9,
             spectral_flux: 0.5,
+            spectral_centroid: 0.7,
+            spectral_density_fast: 0.8,
+            spectral_density_slow: 0.6,
+            kick_strength: 0.9,
+            snare_strength: 0.4,
+            kick_event: true,
+            snare_event: true,
             onset: true,
             onset_strength: 0.7,
             bpm: Some(128.0),
@@ -31673,6 +32073,7 @@ mod live_audio_input_tests {
                         mid: 0.5,
                         high: 0.75,
                     },
+                    features: protocol::LiveAudioReactiveFeatures::default(),
                     onset_feature_sequences: [0; protocol::MAX_LIVE_AUDIO_FRAME_ONSETS],
                     onset_count: 0,
                 },

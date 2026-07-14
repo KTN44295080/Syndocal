@@ -13,6 +13,7 @@ import { VideoClipGridPanel } from "./VideoClipGridPanel";
 import { LiveVideoMonitorPanel } from "./LiveVideoMonitorPanel";
 import { LiveAudioInputRail } from "./LiveAudioInputRail";
 import { AutoVjStrip } from "./AutoVjStrip";
+import { AudioReactiveVjStrip } from "./AudioReactiveVjStrip";
 
 interface VideoControlPanelProps {
   mixer: boolean;
@@ -29,6 +30,7 @@ interface VideoControlPanelProps {
   layerList: ComponentProps<typeof VideoLayerListPanel>;
   timelineAutomation: ComponentProps<typeof VideoTimelineAutomationPanel>;
   autoVj: ComponentProps<typeof AutoVjStrip>;
+  audioReactive: ComponentProps<typeof AudioReactiveVjStrip>;
 }
 
 export function VideoControlPanel(props: VideoControlPanelProps) {
@@ -56,6 +58,7 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
         <Show when={props.mixer}>
           <LiveAudioInputRail {...props.clipGrid} compact />
           <AutoVjStrip {...props.autoVj} />
+          <AudioReactiveVjStrip {...props.audioReactive} />
         </Show>
         <VideoClipGridPanel {...props.clipGrid} compact={props.mixer} />
       </section>

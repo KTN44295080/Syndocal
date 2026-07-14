@@ -19,6 +19,15 @@ const FLUX_HISTORY_LEN: usize = 64;
 const TEMPO_INTERVAL_HISTORY_LEN: usize = 32;
 const MIN_TEMPO_INTERVALS: usize = 3;
 const TEMPO_STALE_SECONDS: f32 = 4.0;
+const FAST_SPECTRAL_DENSITY_MS: f32 = 80.0;
+const SLOW_SPECTRAL_DENSITY_MS: f32 = 800.0;
+const KICK_MIN_FREQUENCY_HZ: f32 = 35.0;
+const KICK_MAX_FREQUENCY_HZ: f32 = 180.0;
+const SNARE_BODY_MIN_FREQUENCY_HZ: f32 = 180.0;
+const SNARE_BODY_MAX_FREQUENCY_HZ: f32 = 450.0;
+const SNARE_NOISE_MIN_FREQUENCY_HZ: f32 = 700.0;
+const SNARE_NOISE_MAX_FREQUENCY_HZ: f32 = 8_000.0;
+const DRUM_EVENT_STRENGTH_FLOOR: f32 = 0.08;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LiveAudioFeatureConfig {
@@ -105,6 +114,22 @@ pub struct LiveAudioFeatureFrame {
     pub band_count: usize,
     /// Half-wave spectral change normalized by current spectral magnitude, 0..=1.
     pub spectral_flux: f32,
+    /// Magnitude-weighted centroid linearly normalized to the configured frequency span, 0..=1.
+    pub spectral_centroid: f32,
+    /// Effective occupied-band density with a fast 80 ms response, 0..=1.
+    pub spectral_density_fast: f32,
+    /// Effective occupied-band density with a slow 800 ms response, 0..=1.
+    pub spectral_density_slow: f32,
+    /// Low-frequency transient energy associated with a kick drum, 0..=1.
+    pub kick_strength: f32,
+    /// Broad upper-mid transient energy associated with a snare drum, 0..=1.
+    pub snare_strength: f32,
+    /// Independent one-frame kick pulse using the configured refractory period.
+    /// It does not feed the general onset or tempo trackers.
+    pub kick_pulse: bool,
+    /// Independent one-frame snare pulse using the configured refractory period.
+    /// It does not feed the general onset or tempo trackers.
+    pub snare_pulse: bool,
     /// True once for an adaptive-threshold crossing outside the refractory period.
     pub onset: bool,
     /// Adaptive onset margin in the range 0..=1, or zero when no onset was emitted.
@@ -142,14 +167,20 @@ pub struct LiveAudioFeatureAnalyzer {
     band_for_bin: Vec<u8>,
     band_edges_hz: [f32; MAX_LIVE_AUDIO_BANDS + 1],
     smoothed_bands: [f32; MAX_LIVE_AUDIO_BANDS],
+    spectral_density_fast: f32,
+    spectral_density_slow: f32,
     fft_coherent_scale: f32,
     attack_coefficient: f32,
     release_coefficient: f32,
+    spectral_density_fast_coefficient: f32,
+    spectral_density_slow_coefficient: f32,
     onset_gate_linear: f32,
     onset_refractory_samples: u64,
     flux_history: FluxHistory,
     previous_flux: f32,
     last_onset_sample: Option<u64>,
+    kick_event_tracker: TransientEventTracker,
+    snare_event_tracker: TransientEventTracker,
     tempo: TempoTracker,
 }
 
@@ -219,9 +250,13 @@ impl LiveAudioFeatureAnalyzer {
             band_for_bin,
             band_edges_hz,
             smoothed_bands: [0.0; MAX_LIVE_AUDIO_BANDS],
+            spectral_density_fast: 0.0,
+            spectral_density_slow: 0.0,
             fft_coherent_scale,
             attack_coefficient: coefficient(config.attack_ms),
             release_coefficient: coefficient(config.release_ms),
+            spectral_density_fast_coefficient: coefficient(FAST_SPECTRAL_DENSITY_MS),
+            spectral_density_slow_coefficient: coefficient(SLOW_SPECTRAL_DENSITY_MS),
             onset_gate_linear: 10.0_f32.powf(config.onset_gate_db / 20.0),
             onset_refractory_samples: (config.sample_rate as f32
                 * config.onset_refractory_ms
@@ -230,6 +265,8 @@ impl LiveAudioFeatureAnalyzer {
             flux_history: FluxHistory::default(),
             previous_flux: 0.0,
             last_onset_sample: None,
+            kick_event_tracker: TransientEventTracker::default(),
+            snare_event_tracker: TransientEventTracker::default(),
             tempo: TempoTracker::default(),
         })
     }
@@ -292,9 +329,13 @@ impl LiveAudioFeatureAnalyzer {
         self.magnitudes.fill(0.0);
         self.previous_magnitudes.fill(0.0);
         self.smoothed_bands.fill(0.0);
+        self.spectral_density_fast = 0.0;
+        self.spectral_density_slow = 0.0;
         self.flux_history = FluxHistory::default();
         self.previous_flux = 0.0;
         self.last_onset_sample = None;
+        self.kick_event_tracker = TransientEventTracker::default();
+        self.snare_event_tracker = TransientEventTracker::default();
         self.tempo = TempoTracker::default();
     }
 
@@ -311,6 +352,7 @@ impl LiveAudioFeatureAnalyzer {
         let rms = (sum_squares / self.config.fft_size as f32)
             .sqrt()
             .clamp(0.0, 1.0);
+        let gate_open = rms >= self.onset_gate_linear;
 
         super::fft_in_place(&mut self.fft_real, &mut self.fft_imaginary);
         for bin in 0..self.magnitudes.len() {
@@ -322,33 +364,69 @@ impl LiveAudioFeatureAnalyzer {
 
         let mut positive_change = 0.0_f32;
         let mut current_magnitude = 0.0_f32;
+        let mut current_power = 0.0_f32;
+        let mut weighted_frequency = 0.0_f32;
         let mut band_squares = [0.0_f32; MAX_LIVE_AUDIO_BANDS];
         let mut band_bins = [0_u32; MAX_LIVE_AUDIO_BANDS];
+        let mut kick_region = SpectralRegionAccumulator::default();
+        let mut snare_body_region = SpectralRegionAccumulator::default();
+        let mut snare_noise_region = SpectralRegionAccumulator::default();
         for bin in 1..self.magnitudes.len() {
             let band = self.band_for_bin[bin];
             if band == u8::MAX {
                 continue;
             }
             let magnitude = self.magnitudes[bin];
-            positive_change += (magnitude - self.previous_magnitudes[bin]).max(0.0);
+            let previous_magnitude = self.previous_magnitudes[bin];
+            let magnitude_squared = magnitude * magnitude;
+            let frequency =
+                bin as f32 * self.config.sample_rate as f32 / self.config.fft_size as f32;
+            positive_change += (magnitude - previous_magnitude).max(0.0);
             current_magnitude += magnitude;
+            current_power += magnitude_squared;
+            weighted_frequency += frequency * magnitude;
             let band = band as usize;
-            band_squares[band] += magnitude * magnitude;
+            band_squares[band] += magnitude_squared;
             band_bins[band] += 1;
+
+            if (KICK_MIN_FREQUENCY_HZ..KICK_MAX_FREQUENCY_HZ).contains(&frequency) {
+                kick_region.push(magnitude, previous_magnitude);
+            } else if (SNARE_BODY_MIN_FREQUENCY_HZ..SNARE_BODY_MAX_FREQUENCY_HZ)
+                .contains(&frequency)
+            {
+                snare_body_region.push(magnitude, previous_magnitude);
+            } else if (SNARE_NOISE_MIN_FREQUENCY_HZ..=SNARE_NOISE_MAX_FREQUENCY_HZ)
+                .contains(&frequency)
+            {
+                snare_noise_region.push(magnitude, previous_magnitude);
+            }
         }
         let spectral_flux = if current_magnitude <= f32::EPSILON {
             0.0
         } else {
             (positive_change / current_magnitude).clamp(0.0, 1.0)
         };
+        let spectral_centroid = if !gate_open || current_magnitude <= f32::EPSILON {
+            0.0
+        } else {
+            let centroid_hz = weighted_frequency / current_magnitude;
+            ((centroid_hz - self.config.min_frequency_hz)
+                / (self.config.max_frequency_hz - self.config.min_frequency_hz))
+                .clamp(0.0, 1.0)
+        };
         self.previous_magnitudes.copy_from_slice(&self.magnitudes);
 
+        let mut band_energy_sum = 0.0_f32;
+        let mut band_energy_squared_sum = 0.0_f32;
         for band in 0..self.config.band_count {
-            let magnitude = if band_bins[band] == 0 {
+            let mean_power = if band_bins[band] == 0 {
                 0.0
             } else {
-                (band_squares[band] / band_bins[band] as f32).sqrt()
+                band_squares[band] / band_bins[band] as f32
             };
+            band_energy_sum += mean_power;
+            band_energy_squared_sum += mean_power * mean_power;
+            let magnitude = mean_power.sqrt();
             let db = 20.0 * magnitude.max(1.0e-12).log10();
             let target = ((db - self.config.db_floor) / -self.config.db_floor).clamp(0.0, 1.0);
             let coefficient = if target > self.smoothed_bands[band] {
@@ -360,6 +438,49 @@ impl LiveAudioFeatureAnalyzer {
                 + (1.0 - coefficient) * target)
                 .clamp(0.0, 1.0);
         }
+        let raw_spectral_density = if !gate_open || band_energy_squared_sum <= f32::MIN_POSITIVE {
+            0.0
+        } else {
+            let effective_band_count = band_energy_sum * band_energy_sum / band_energy_squared_sum;
+            ((effective_band_count - 1.0) / (self.config.band_count as f32 - 1.0)).clamp(0.0, 1.0)
+        };
+        self.spectral_density_fast = (self.spectral_density_fast_coefficient
+            * self.spectral_density_fast
+            + (1.0 - self.spectral_density_fast_coefficient) * raw_spectral_density)
+            .clamp(0.0, 1.0);
+        self.spectral_density_slow = (self.spectral_density_slow_coefficient
+            * self.spectral_density_slow
+            + (1.0 - self.spectral_density_slow_coefficient) * raw_spectral_density)
+            .clamp(0.0, 1.0);
+
+        let (kick_strength, snare_strength) = if gate_open {
+            let snare_body_strength = snare_body_region.transient_level(self.config.db_floor);
+            let snare_noise_strength = snare_noise_region.transient_level(self.config.db_floor);
+            let kick_body_power = kick_region.power + snare_body_region.power;
+            let kick_body_dominance = if kick_body_power <= f32::MIN_POSITIVE {
+                0.0
+            } else {
+                (kick_region.power / kick_body_power).clamp(0.0, 1.0)
+            };
+            let kick_strength = (kick_region.transient_level(self.config.db_floor)
+                * kick_region.energy_share(current_power).sqrt()
+                * kick_body_dominance)
+                .clamp(0.0, 1.0);
+            let snare_balance = 2.0 * snare_body_strength * snare_noise_strength
+                / (snare_body_strength + snare_noise_strength).max(f32::EPSILON);
+            let snare_power = snare_body_region.power + snare_noise_region.power;
+            let snare_power_share = if current_power <= f32::MIN_POSITIVE {
+                0.0
+            } else {
+                (snare_power / current_power).clamp(0.0, 1.0)
+            };
+            (
+                kick_strength,
+                (snare_balance * snare_power_share.sqrt()).clamp(0.0, 1.0),
+            )
+        } else {
+            (0.0, 0.0)
+        };
 
         let (flux_mean, flux_deviation) = self.flux_history.mean_and_deviation();
         let threshold = self
@@ -374,7 +495,7 @@ impl LiveAudioFeatureAnalyzer {
             })
             .unwrap_or(true);
         let crossed_threshold = spectral_flux > threshold && self.previous_flux <= threshold;
-        let onset = rms >= self.onset_gate_linear && outside_refractory && crossed_threshold;
+        let onset = gate_open && outside_refractory && crossed_threshold;
         let onset_strength = if onset {
             ((spectral_flux - threshold) / (1.0 - threshold).max(f32::EPSILON))
                 .sqrt()
@@ -382,6 +503,31 @@ impl LiveAudioFeatureAnalyzer {
         } else {
             0.0
         };
+        let drum_strength_sum = kick_strength + snare_strength;
+        let (kick_pulse_strength, snare_pulse_strength) = if drum_strength_sum <= f32::EPSILON {
+            (0.0, 0.0)
+        } else {
+            (
+                kick_strength * kick_strength / drum_strength_sum,
+                snare_strength * snare_strength / drum_strength_sum,
+            )
+        };
+        let kick_pulse = self.kick_event_tracker.detect(
+            kick_pulse_strength,
+            gate_open,
+            self.total_samples,
+            self.onset_refractory_samples,
+            self.config.onset_sensitivity,
+            DRUM_EVENT_STRENGTH_FLOOR,
+        );
+        let snare_pulse = self.snare_event_tracker.detect(
+            snare_pulse_strength,
+            gate_open,
+            self.total_samples,
+            self.onset_refractory_samples,
+            self.config.onset_sensitivity,
+            DRUM_EVENT_STRENGTH_FLOOR,
+        );
         if onset {
             self.last_onset_sample = Some(self.total_samples);
             self.tempo
@@ -405,6 +551,13 @@ impl LiveAudioFeatureAnalyzer {
             bands,
             band_count: self.config.band_count,
             spectral_flux,
+            spectral_centroid,
+            spectral_density_fast: self.spectral_density_fast,
+            spectral_density_slow: self.spectral_density_slow,
+            kick_strength,
+            snare_strength,
+            kick_pulse,
+            snare_pulse,
             onset,
             onset_strength,
             bpm,
@@ -412,6 +565,83 @@ impl LiveAudioFeatureAnalyzer {
         };
         self.sequence = self.sequence.saturating_add(1);
         frame
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct SpectralRegionAccumulator {
+    magnitude: f32,
+    positive_change: f32,
+    power: f32,
+    bins: u32,
+}
+
+impl SpectralRegionAccumulator {
+    fn push(&mut self, magnitude: f32, previous_magnitude: f32) {
+        self.magnitude += magnitude;
+        self.positive_change += (magnitude - previous_magnitude).max(0.0);
+        self.power += magnitude * magnitude;
+        self.bins += 1;
+    }
+
+    fn transient_level(&self, db_floor: f32) -> f32 {
+        if self.bins == 0 || self.magnitude <= f32::EPSILON {
+            return 0.0;
+        }
+        let magnitude = (self.power / self.bins as f32).sqrt();
+        let db = 20.0 * magnitude.max(1.0e-12).log10();
+        let level = ((db - db_floor) / -db_floor).clamp(0.0, 1.0);
+        let positive_flux = (self.positive_change / self.magnitude).clamp(0.0, 1.0);
+        (level * positive_flux.sqrt()).clamp(0.0, 1.0)
+    }
+
+    fn energy_share(&self, total_power: f32) -> f32 {
+        if total_power <= f32::MIN_POSITIVE {
+            0.0
+        } else {
+            (self.power / total_power).clamp(0.0, 1.0)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct TransientEventTracker {
+    history: FluxHistory,
+    previous_strength: f32,
+    last_event_sample: Option<u64>,
+}
+
+impl TransientEventTracker {
+    fn detect(
+        &mut self,
+        strength: f32,
+        gate_open: bool,
+        sample: u64,
+        refractory_samples: u64,
+        sensitivity: f32,
+        strength_floor: f32,
+    ) -> bool {
+        let strength = if strength.is_finite() {
+            strength.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let (mean, deviation) = self.history.mean_and_deviation();
+        let threshold = strength_floor
+            .max(mean + sensitivity * deviation)
+            .clamp(0.0, 0.95);
+        let outside_refractory = self
+            .last_event_sample
+            .map(|previous| sample.saturating_sub(previous) >= refractory_samples)
+            .unwrap_or(true);
+        let crossed_threshold = strength > threshold && self.previous_strength <= threshold;
+        let event = gate_open && outside_refractory && crossed_threshold;
+        if event {
+            self.last_event_sample = Some(sample);
+        }
+        self.history.push(strength);
+        self.previous_strength = strength;
+        event
     }
 }
 
@@ -663,6 +893,58 @@ mod tests {
         samples
     }
 
+    fn deterministic_noise(sample_count: usize, amplitude: f32, seed: u32) -> Vec<f32> {
+        let mut state = seed;
+        (0..sample_count)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let unit = (state >> 8) as f32 / 16_777_215.0;
+                (unit * 2.0 - 1.0) * amplitude
+            })
+            .collect()
+    }
+
+    fn kick_hit(sample_rate: u32) -> Vec<f32> {
+        let mut samples = vec![0.0; sample_rate as usize * 3 / 4];
+        let start = sample_rate as usize / 4;
+        let length = sample_rate as usize / 10;
+        for offset in 0..length {
+            let time = offset as f32 / sample_rate as f32;
+            let envelope = (-time / 0.035).exp();
+            samples[start + offset] = (std::f32::consts::TAU * 70.0 * time).sin() * envelope * 0.9;
+        }
+        samples
+    }
+
+    fn snare_hit(sample_rate: u32) -> Vec<f32> {
+        let mut samples = vec![0.0; sample_rate as usize * 3 / 4];
+        let start = sample_rate as usize / 4;
+        let length = sample_rate as usize / 10;
+        for offset in 0..length {
+            let time = offset as f32 / sample_rate as f32;
+            let envelope = (-time / 0.04).exp();
+            let body = (std::f32::consts::TAU * 280.0 * time).sin() * 0.5;
+            let noise_partials = (std::f32::consts::TAU * 1_200.0 * time).sin() * 0.18
+                + (std::f32::consts::TAU * 2_500.0 * time).sin() * 0.16
+                + (std::f32::consts::TAU * 4_800.0 * time).sin() * 0.14;
+            samples[start + offset] = ((body + noise_partials) * envelope).clamp(-1.0, 1.0);
+        }
+        samples
+    }
+
+    fn assert_high_order_features_normalized(frame: &LiveAudioFeatureFrame) {
+        for (name, value) in [
+            ("spectral centroid", frame.spectral_centroid),
+            ("fast spectral density", frame.spectral_density_fast),
+            ("slow spectral density", frame.spectral_density_slow),
+            ("kick strength", frame.kick_strength),
+            ("snare strength", frame.snare_strength),
+        ] {
+            assert!(value.is_finite(), "{name} was {value}");
+            assert!((0.0..=1.0).contains(&value), "{name} was {value}");
+        }
+    }
+
     #[test]
     fn default_configuration_has_stable_low_latency_geometry() {
         for sample_rate in [44_100_u32, 48_000, 96_000, 192_000] {
@@ -730,6 +1012,7 @@ mod tests {
                 .bands()
                 .iter()
                 .all(|value| (0.0..=1.0).contains(value)));
+            assert_high_order_features_normalized(&frame);
         }
     }
 
@@ -753,6 +1036,128 @@ mod tests {
                 .0;
             assert_eq!(dominant_band, expected_band, "frequency {frequency}");
         }
+    }
+
+    #[test]
+    fn spectral_shape_distinguishes_tonal_and_noise_content() {
+        let config = LiveAudioFeatureConfig::for_sample_rate(48_000);
+        let tone = sine(48_000, 1_000.0, 2.0, 0.5);
+        let noise = deterministic_noise(48_000 * 2, 0.5, 0xa11c_e5ed);
+        let mut tone_analyzer = LiveAudioFeatureAnalyzer::new(config).unwrap();
+        let mut noise_analyzer = LiveAudioFeatureAnalyzer::new(config).unwrap();
+        let mut tone_frame = None;
+        let mut noise_frame = None;
+        tone_analyzer.push_samples(&tone, |frame| tone_frame = Some(frame));
+        noise_analyzer.push_samples(&noise, |frame| noise_frame = Some(frame));
+        let tone_frame = tone_frame.unwrap();
+        let noise_frame = noise_frame.unwrap();
+
+        assert_high_order_features_normalized(&tone_frame);
+        assert_high_order_features_normalized(&noise_frame);
+        assert!(
+            noise_frame.spectral_centroid > tone_frame.spectral_centroid + 0.25,
+            "tone {tone_frame:?}, noise {noise_frame:?}"
+        );
+        assert!(
+            noise_frame.spectral_density_fast > tone_frame.spectral_density_fast + 0.45,
+            "tone {tone_frame:?}, noise {noise_frame:?}"
+        );
+        assert!(
+            noise_frame.spectral_density_slow > tone_frame.spectral_density_slow + 0.4,
+            "tone {tone_frame:?}, noise {noise_frame:?}"
+        );
+
+        let before_transition = tone_frame;
+        let mut after_transition = None;
+        tone_analyzer.push_samples(&noise[..config.fft_size], |frame| {
+            after_transition = Some(frame)
+        });
+        let after_transition = after_transition.unwrap();
+        let fast_change =
+            after_transition.spectral_density_fast - before_transition.spectral_density_fast;
+        let slow_change =
+            after_transition.spectral_density_slow - before_transition.spectral_density_slow;
+        assert!(
+            fast_change > 0.01 && fast_change > slow_change * 4.0,
+            "before {before_transition:?}, after {after_transition:?}"
+        );
+
+        let silence = vec![0.0; config.fft_size + config.hop_size * 4];
+        let mut after_silence = None;
+        noise_analyzer.push_samples(&silence, |frame| after_silence = Some(frame));
+        let after_silence = after_silence.unwrap();
+        assert!(
+            after_silence.spectral_density_fast < after_silence.spectral_density_slow,
+            "before {noise_frame:?}, after {after_silence:?}"
+        );
+    }
+
+    #[test]
+    fn kick_and_snare_descriptors_separate_deterministic_drum_hits() {
+        let config = LiveAudioFeatureConfig::for_sample_rate(48_000);
+        let mut kick_analyzer = LiveAudioFeatureAnalyzer::new(config).unwrap();
+        let mut snare_analyzer = LiveAudioFeatureAnalyzer::new(config).unwrap();
+        let mut kick_frames = Vec::new();
+        let mut snare_frames = Vec::new();
+        kick_analyzer.push_samples(&kick_hit(48_000), |frame| kick_frames.push(frame));
+        snare_analyzer.push_samples(&snare_hit(48_000), |frame| snare_frames.push(frame));
+
+        let kick_strength = kick_frames
+            .iter()
+            .map(|frame| frame.kick_strength)
+            .fold(0.0_f32, f32::max);
+        let kick_as_snare_strength = kick_frames
+            .iter()
+            .map(|frame| frame.snare_strength)
+            .fold(0.0_f32, f32::max);
+        let snare_strength = snare_frames
+            .iter()
+            .map(|frame| frame.snare_strength)
+            .fold(0.0_f32, f32::max);
+        let snare_as_kick_strength = snare_frames
+            .iter()
+            .map(|frame| frame.kick_strength)
+            .fold(0.0_f32, f32::max);
+        let kick_pulses = kick_frames.iter().filter(|frame| frame.kick_pulse).count();
+        let kick_snare_pulses = kick_frames.iter().filter(|frame| frame.snare_pulse).count();
+        let snare_pulses = snare_frames
+            .iter()
+            .filter(|frame| frame.snare_pulse)
+            .count();
+        let snare_kick_pulses = snare_frames.iter().filter(|frame| frame.kick_pulse).count();
+
+        for frame in &kick_frames {
+            assert_high_order_features_normalized(frame);
+        }
+        for frame in &snare_frames {
+            assert_high_order_features_normalized(frame);
+        }
+        assert!(
+            kick_strength > kick_as_snare_strength * 2.0 && kick_strength > 0.1,
+            "kick strength {kick_strength}, snare leakage {kick_as_snare_strength}"
+        );
+        assert!(
+            snare_strength > snare_as_kick_strength * 2.0 && snare_strength > 0.1,
+            "snare strength {snare_strength}, kick leakage {snare_as_kick_strength}"
+        );
+        assert_eq!(kick_pulses, 1);
+        assert_eq!(kick_snare_pulses, 0);
+        assert_eq!(snare_pulses, 1);
+        assert_eq!(snare_kick_pulses, 0);
+    }
+
+    #[test]
+    fn drum_pulse_tracker_honors_the_exact_refractory_boundary() {
+        let refractory_samples = 100;
+        let mut before_boundary = TransientEventTracker::default();
+        assert!(before_boundary.detect(0.5, true, 100, refractory_samples, 0.0, 0.08));
+        assert!(!before_boundary.detect(0.0, true, 150, refractory_samples, 0.0, 0.08));
+        assert!(!before_boundary.detect(0.5, true, 199, refractory_samples, 0.0, 0.08));
+
+        let mut at_boundary = TransientEventTracker::default();
+        assert!(at_boundary.detect(0.5, true, 100, refractory_samples, 0.0, 0.08));
+        assert!(!at_boundary.detect(0.0, true, 150, refractory_samples, 0.0, 0.08));
+        assert!(at_boundary.detect(0.5, true, 200, refractory_samples, 0.0, 0.08));
     }
 
     #[test]
@@ -887,8 +1292,16 @@ mod tests {
             assert_eq!(frame.rms, 0.0);
             assert_eq!(frame.peak, 0.0);
             assert_eq!(frame.spectral_flux, 0.0);
+            assert_eq!(frame.spectral_centroid, 0.0);
+            assert_eq!(frame.spectral_density_fast, 0.0);
+            assert_eq!(frame.spectral_density_slow, 0.0);
+            assert_eq!(frame.kick_strength, 0.0);
+            assert_eq!(frame.snare_strength, 0.0);
+            assert!(!frame.kick_pulse);
+            assert!(!frame.snare_pulse);
             assert!(!frame.onset);
             assert!(frame.bands().iter().all(|level| *level == 0.0));
+            assert_high_order_features_normalized(&frame);
         });
         assert_eq!(frames, 5);
         assert_eq!(
@@ -911,13 +1324,25 @@ mod tests {
         let mut analyzer = LiveAudioFeatureAnalyzer::new(config).unwrap();
         let ring = analyzer.sample_ring.as_ptr();
         let samples = sine(48_000, 1_000.0, 0.1, 0.5);
-        analyzer.push_samples(&samples, |_| {});
+        let mut before_reset = None;
+        analyzer.push_samples(&samples, |frame| {
+            before_reset.get_or_insert(frame);
+        });
+        let before_reset = before_reset.unwrap();
         analyzer.reset();
         assert_eq!(ring, analyzer.sample_ring.as_ptr());
-        let mut first = None;
+        assert_eq!(analyzer.spectral_density_fast, 0.0);
+        assert_eq!(analyzer.spectral_density_slow, 0.0);
+        assert_eq!(analyzer.kick_event_tracker.previous_strength, 0.0);
+        assert_eq!(analyzer.kick_event_tracker.last_event_sample, None);
+        assert_eq!(analyzer.snare_event_tracker.previous_strength, 0.0);
+        assert_eq!(analyzer.snare_event_tracker.last_event_sample, None);
+        let mut after_reset = None;
         analyzer.push_samples(&samples, |frame| {
-            first.get_or_insert(frame);
+            after_reset.get_or_insert(frame);
         });
-        assert_eq!(first.unwrap().sequence, 0);
+        let after_reset = after_reset.unwrap();
+        assert_eq!(after_reset.sequence, 0);
+        assert_eq!(before_reset, after_reset);
     }
 }

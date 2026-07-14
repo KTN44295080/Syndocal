@@ -144,8 +144,10 @@ exact engine tick/output publication that applies an accepted clear, nor does
 it expose a separate post-open OS/driver applied-configuration acknowledgement;
 the rail therefore keeps requested buffer and delivered callback size distinct.
 Same-device hot-plug recovery, capture-to-analysis/engine/pixel percentiles,
-ASIO, 8/16-band analysis, onset/live BPM tracking, an Audio Reactive Rack and a
-deterministic Auto VJ policy remain separate measured tranches. TouchDesigner
-parity is not claimed. The terminal CPAL error callback may allocate while
-formatting its one-shot fault detail; the real-time normal data callback does
-not.
+ASIO, post-open applied-configuration reporting, one-hour hardware soak and
+matched TouchDesigner trials remain open. The later rich-audio tranche adds 16
+bands, onset/live BPM, centroid/density, kick/snare, a compiled Audio Reactive
+Rack and deterministic Auto VJ while retaining this fail-closed contract.
+TouchDesigner parity is not claimed. The terminal CPAL error callback may
+allocate while formatting its one-shot fault detail; the real-time normal data
+callback does not.

@@ -13,7 +13,7 @@ Primary references:
 - Analyze CHOP: <https://docs.derivative.ca/Analyze_CHOP>
 - Palette audioAnalysis: <https://docs.derivative.ca/Palette%3AaudioAnalysis>
 
-Syndocal does not claim general TouchDesigner parity from a fixed VJ rack. The target here is a faster, safer show-operation path for audio-reactive VJ while keeping the procedural Node Graph available for custom mappings.
+Syndocal does not claim general TouchDesigner parity from a fixed VJ rack. The target here is a purpose-built, fail-closed show-operation path for audio-reactive VJ while keeping the procedural Node Graph available for custom mappings.
 
 ## Feature-frame contract
 
@@ -22,6 +22,7 @@ Every live analysis frame must expose:
 - 16 stable logarithmic frequency bands covering the useful music range up to Nyquist;
 - linear RMS and peak;
 - positive spectral flux and an onset pulse with a refractory interval;
+- spectral centroid, independent slow/fast spectral density, and kick/snare event plus strength values;
 - estimated BPM, confidence, and beat phase when the evidence is sufficient;
 - a monotonic sequence/timestamp so an onset cannot trigger twice;
 - the existing bass/mid/high compatibility values derived from the same window.
@@ -34,7 +35,7 @@ The capture callback stays bounded and allocation-free. FFT, history, onset, and
 - RMS, peak, onset, BPM/confidence, input health, and active backend are readable without opening diagnostics.
 - A mapping declares source, attack, release, gain, bias, curve, target parameter, low/high range, and blend mode.
 - Mappings can target video opacity/speed/transform/color/FX and lighting attributes supported by Node Graph outputs.
-- Live edits are reversible and do not write reactive values into the operator's base layer/fixture state.
+- Mapping creation is explicit; saved mappings can be enabled/disabled, removed, and saved/loaded as presets. Reactive runtime values do not write into the operator's base layer/fixture state. Editing an existing mapping in place is not yet claimed.
 - Missing input, stale input, or manual bypass returns modulation to neutral within 250 ms.
 
 ## Deterministic Auto VJ director
@@ -65,11 +66,17 @@ Passing unit or synthetic-tone tests proves algorithm behavior, not production p
 ## Current implementation status (2026-07-14)
 
 - Implemented: fixed-allocation 16-band feature extraction, RMS/peak, spectral flux, adaptive onset, BPM/confidence, beat phase, and legacy B/M/H derivation.
+- Implemented: spectral centroid, 80 ms/800 ms fast/slow spectral density, kick/snare strength, and independently refractory kick/snare pulses. The normal analysis path reuses its construction-time FFT/window/history storage.
+- Implemented: a compiled Audio Reactive Rack over the saved Node Graph model. Live Input exposes 16 bands, RMS, peak, flux, onset/strength, BPM/confidence/phase, centroid, both densities, kick/snare events and strengths; response controls include gain, bias, gate, attack, release, hold, four curves and invert. Lighting and video outputs read a cached value once per engine tick instead of recursively walking nodes per target. Reactive video Speed and BPM-sync parameters drive the real playhead while leaving authored transport values unchanged; source loss resumes the authored speed immediately.
+- Implemented: stale, unverified, cleared, or older-than-250-ms Live Input immediately returns the rack to safe zero and restores authored fixture/video state. Onset, kick and snare pulses are latched for every graph exactly once per tick. Project save, checkpoint/history and Cue capture use an on-demand authored-video snapshot, so live modulation is not baked into the project or applied twice after reload.
+- Implemented: graph create/update, enable and remove use a publication acknowledgement and roll back the complete graph/cue state if publication fails.
 - Implemented: deterministic Auto VJ with Clock or Live Audio onset source, exact-once feature sequence consumption, quantized change interval, avoid-repeat, action evidence, manual-Take Hold latch, blackout preservation, published-snapshot acknowledgement, rollback, and safe project-load Off state.
 - Implemented: the compact live rail exposes all 16 bands and rhythm telemetry without adding more than the existing three accessible compatibility meters.
 - Implemented: Program Audio handoff is owned by a generation-tokened backend coordinator. Auto and manual Takes share one exactly-once path; slow device open/decode/sink work does not block Take, while Off, gain/device reconfiguration, direct Launch/Deck monitoring, and project load are reconciled explicitly.
-- Automated evidence: audio 19/19, protocol 19/19, engine 275/275, Tauri live-input 30/30, Program Audio 10/10, frontend build/storage/localization, and English/Japanese Auto VJ and live-audio viewport gates at five sizes pass. Final static review reports zero remaining P0/P1 findings in this tranche.
+- Automated evidence: audio 22/22, protocol 19/19, engine 284/284 with one manual benchmark ignored in the normal suite, and Tauri 262/262 with four hardware/manual cases ignored. Frontend build, project-storage and 2291/2291 localization checks pass. Audio Rack containment passes at 1920x1080 and 1366x768 with zero rail/rack overflow and no decorative canvas; its monitor selects a saved Audio graph and shows only the matching engine node's authoritative IN/OUT/safety telemetry. English/Japanese Auto VJ and live-audio gates pass at five sizes.
+- Release benchmark evidence: 64 live mappings routed to 200 lighting targets each completed 1000 release-mode samples at p99 196 us and maximum 502 us, below the rack-only p99 1 ms / maximum 2 ms gate. This is a CPU routing microbenchmark, not capture-to-pixel or whole-renderer evidence.
 - Native smoke evidence: the current-source VJ Desk was inspected maximized in the 1920x1032 Windows work area, reached Ready without a command mismatch, and started/stopped the system-default 48 kHz WASAPI shared microphone. The sampled callback was 480/480/480 frames, capture-to-worker current/maximum 0.1/10.1 ms, overrun 0/0, and queue 0/1/4. This is a single stopped/silent-microphone smoke run, not an accuracy or endurance result.
-- Pending: arbitrary 16-band Audio Reactive Rack mappings, kick/snare separation, spectral centroid/density, ASIO, post-open applied-config reporting, physical latency, one-hour hardware soak, and matched TouchDesigner trials.
+- Native UI evidence: a separately identified current-source QA build was inspected maximized at 1920x1032 without closing the existing Syndocal or Daslight windows. The 54 px REACTIVE strip preserved both Preview and Program monitors, Create Mapping opened the production Effects desk, Live Input enabled the rich feature selector, `Snare strength` could be selected, and stopped input remained visibly `SAFE ZERO`. After the P1 telemetry correction, the QA binary was rebuilt and rechecked at the same maximized size: an empty rack showed `0/0 READY`, and its editor showed `No saved mapping` plus `SAVE TO MONITOR` rather than presenting draft arithmetic as engine output. No clipping or horizontal overlap was observed.
+- Pending: ASIO, same-device hot-plug recovery, post-open applied-config reporting, capture-to-analysis/engine/pixel latency percentiles, frozen-dataset onset/BPM/kick/snare accuracy, physical latency, a one-hour hardware soak, large-show save/checkpoint/warm-standby tick-jitter evidence, and matched five-trial TouchDesigner runs.
 
 This status is an implementation inventory, not an acceptance pass. Check off performance and parity gates only when their recorded evidence is added below.

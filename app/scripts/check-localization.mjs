@@ -32,6 +32,15 @@ assert.equal(localization.translateUiText("Bass level", "ja"), "低域レベル"
 assert.equal(localization.translateUiText("0 percent", "ja"), "0パーセント");
 assert.equal(localization.translateUiText("Checking", "ja"), "確認中");
 assert.equal(localization.translateUiText("Clear Pending", "ja"), "クリア待ち");
+assert.equal(localization.translateUiText("Audio Reactive", "ja"), "オーディオリアクティブ");
+assert.equal(localization.translateUiText("Create Mapping", "ja"), "マッピングを作成");
+assert.equal(localization.translateUiText("Audio feature input level", "ja"), "音声特徴量の入力レベル");
+assert.equal(localization.translateUiText("Open Rack", "ja"), "ラックを開く");
+assert.equal(
+  localization.translateUiText("Open Audio Reactive Rack", "ja"),
+  "オーディオリアクティブ・ラックを開く",
+);
+assert.equal(localization.translateUiText("SAFE ZERO", "ja"), "安全ゼロ");
 assert.equal(
   localization.translateUiText("System default audio input", "ja"),
   "システム既定の音声入力",

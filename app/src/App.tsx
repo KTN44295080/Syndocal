@@ -133,6 +133,8 @@ import type {
   ArtRdmRequest,
   ArtRdmResponse,
   AudioAnalysisSummary,
+  AudioReactiveCurve,
+  AudioReactiveFeature,
   AudioSpectrumBand,
   AudioSpectrumSource,
   AutoVjConfig,
@@ -770,6 +772,13 @@ interface LiveAudioInputLevels {
   rms: number;
   peak: number;
   spectral_flux: number;
+  spectral_centroid: number;
+  spectral_density_fast: number;
+  spectral_density_slow: number;
+  kick_strength: number;
+  snare_strength: number;
+  kick_event: boolean;
+  snare_event: boolean;
   onset: boolean;
   onset_strength: number;
   bpm?: number | null;
@@ -1111,6 +1120,13 @@ export default function App() {
     rms: 0,
     peak: 0,
     spectral_flux: 0,
+    spectral_centroid: 0,
+    spectral_density_fast: 0,
+    spectral_density_slow: 0,
+    kick_strength: 0,
+    snare_strength: 0,
+    kick_event: false,
+    snare_event: false,
     onset: false,
     onset_strength: 0,
     bpm: null,
@@ -1242,8 +1258,16 @@ export default function App() {
   const [nodeGraphSourceMode, setNodeGraphSourceMode] = createSignal<"Effect" | "Audio">("Effect");
   const [nodeGraphAudioBand, setNodeGraphAudioBand] = createSignal<AudioSpectrumBand>("Bass");
   const [nodeGraphAudioSource, setNodeGraphAudioSource] = createSignal<AudioSpectrumSource>("Timeline");
+  const [nodeGraphAudioFeature, setNodeGraphAudioFeature] = createSignal<AudioReactiveFeature>("LegacyBand");
+  const [nodeGraphAudioBandIndex, setNodeGraphAudioBandIndex] = createSignal(0);
   const [nodeGraphAudioGain, setNodeGraphAudioGain] = createSignal(1);
   const [nodeGraphAudioBias, setNodeGraphAudioBias] = createSignal(0);
+  const [nodeGraphAudioGate, setNodeGraphAudioGate] = createSignal(0);
+  const [nodeGraphAudioAttackMs, setNodeGraphAudioAttackMs] = createSignal(20);
+  const [nodeGraphAudioReleaseMs, setNodeGraphAudioReleaseMs] = createSignal(180);
+  const [nodeGraphAudioHoldMs, setNodeGraphAudioHoldMs] = createSignal(0);
+  const [nodeGraphAudioCurve, setNodeGraphAudioCurve] = createSignal<AudioReactiveCurve>("Linear");
+  const [nodeGraphAudioInvert, setNodeGraphAudioInvert] = createSignal(false);
   const [nodeGraphTransformOp, setNodeGraphTransformOp] = createSignal<NodeGraphTransformOp>("Scale");
   const [nodeGraphTransformAmount, setNodeGraphTransformAmount] = createSignal(1);
   const [nodeGraphTransformMin, setNodeGraphTransformMin] = createSignal(0);
@@ -1418,6 +1442,139 @@ export default function App() {
           },
         ],
       },
+    }));
+  } else if (viewportFixture === "audio-reactive") {
+    const layer = structuredClone(viewportFixtureData.videoLayer);
+    layer.id = 1;
+    layer.label = "Reactive Program";
+    layer.source = {
+      kind: "File",
+      path: "viewport://audio-reactive.mp4",
+      name: layer.label,
+      codec: "H264",
+      metadata: { duration_ms: 4_000, width: 1_920, height: 1_080, frame_rate: 60, has_audio: true },
+    };
+    setWorkspaceTab("control");
+    setControlMode("mixer");
+    setNodeGraphSourceMode("Audio");
+    setNodeGraphAudioSource("Live");
+    setNodeGraphAudioFeature("KickStrength");
+    setLiveAudioInputStatus((current) => ({
+      ...current,
+      running: true,
+      stale: false,
+      safety_clear_pending: false,
+      backend: "WASAPI",
+      sample_rate: 48_000,
+      channels: 2,
+      bass: 0.64,
+      mid: 0.38,
+      high: 0.22,
+      bands: [0.7, 0.64, 0.58, 0.5, 0.42, 0.36, 0.3, 0.25, 0.2, 0.17, 0.14, 0.12, 0.1, 0.08, 0.06, 0.04],
+      band_count: 16,
+      rms: 0.44,
+      peak: 0.72,
+      spectral_flux: 0.58,
+      spectral_centroid: 0.35,
+      spectral_density_fast: 0.55,
+      spectral_density_slow: 0.32,
+      kick_strength: 0.78,
+      snare_strength: 0.41,
+      kick_event: true,
+      snare_event: false,
+      onset: true,
+      onset_strength: 0.67,
+      bpm: 128,
+      bpm_confidence: 0.86,
+      beat_phase: 0.25,
+      feature_sequence: 42,
+    }));
+    setLiveAudioInputStatusKnown(true);
+    setSnapshot((current) => ({
+      ...current,
+      video: {
+        ...current.video,
+        layers: [layer],
+        compositions: [{ ...viewportFixtureData.composition, layer_ids: [layer.id] }],
+        outputs: [viewportFixtureData.videoOutput],
+      },
+      node_graphs: [{
+        id: 301,
+        label: "Kick → Program Opacity",
+        enabled: true,
+        nodes: [
+          {
+            id: 1,
+            label: "Kick strength",
+            kind: "Audio",
+            x: 18,
+            y: 26,
+            lfo: null,
+            position_wave: null,
+            audio: {
+              source: "Live",
+              band: "Bass",
+              feature: "KickStrength",
+              band_index: 0,
+              gain: 1.2,
+              bias: 0,
+              attack_ms: 20,
+              release_ms: 180,
+              gate: 0.08,
+              curve: "Smoothstep",
+              invert: false,
+              hold_ms: 60,
+            },
+            transform: null,
+            output: null,
+          },
+          {
+            id: 2,
+            label: "Scale",
+            kind: "Transform",
+            x: 50,
+            y: 26,
+            lfo: null,
+            position_wave: null,
+            audio: null,
+            transform: { op: "Scale", amount: 1, min: 0, max: 1 },
+            output: null,
+          },
+          {
+            id: 3,
+            label: "Program opacity",
+            kind: "Output",
+            x: 82,
+            y: 26,
+            lfo: null,
+            position_wave: null,
+            audio: null,
+            transform: null,
+            output: {
+              fixture_ids: [],
+              target_group_ids: [],
+              attribute: "",
+              video_targets: [{ layer_ids: [1], param: "Opacity", low: 0, high: 1, position: null }],
+              low: 0,
+              high: 65_535,
+              blend_mode: "Override",
+            },
+          },
+        ],
+        edges: [
+          { from_node: 1, from_port: "value", to_node: 2, to_port: "input" },
+          { from_node: 2, from_port: "value", to_node: 3, to_port: "input" },
+        ],
+        audio_runtime: [{
+          node_id: 1,
+          input_value: 0.78,
+          output_value: 0,
+          source_available: false,
+          safety_zeroed: true,
+          held: false,
+          feature_sequence: 42,
+        }],
+      }],
     }));
   } else if (viewportFixture === "auto-vj") {
     const labels = ["Video", "Output", "Signal Echo"];
@@ -9397,6 +9554,13 @@ export default function App() {
           rms: 0,
           peak: 0,
           spectral_flux: 0,
+          spectral_centroid: 0,
+          spectral_density_fast: 0,
+          spectral_density_slow: 0,
+          kick_strength: 0,
+          snare_strength: 0,
+          kick_event: false,
+          snare_event: false,
           onset: false,
           onset_strength: 0,
           bpm: null,
@@ -9447,6 +9611,13 @@ export default function App() {
           rms: presentationSafe ? levels.rms : 0,
           peak: presentationSafe ? levels.peak : 0,
           spectral_flux: presentationSafe ? levels.spectral_flux : 0,
+          spectral_centroid: presentationSafe ? levels.spectral_centroid : 0,
+          spectral_density_fast: presentationSafe ? levels.spectral_density_fast : 0,
+          spectral_density_slow: presentationSafe ? levels.spectral_density_slow : 0,
+          kick_strength: presentationSafe ? levels.kick_strength : 0,
+          snare_strength: presentationSafe ? levels.snare_strength : 0,
+          kick_event: presentationSafe && levels.kick_event,
+          snare_event: presentationSafe && levels.snare_event,
           onset: presentationSafe && levels.onset,
           onset_strength: presentationSafe ? levels.onset_strength : 0,
           bpm: presentationSafe ? levels.bpm : null,
@@ -9469,6 +9640,13 @@ export default function App() {
                 rms: 0,
                 peak: 0,
                 spectral_flux: 0,
+                spectral_centroid: 0,
+                spectral_density_fast: 0,
+                spectral_density_slow: 0,
+                kick_strength: 0,
+                snare_strength: 0,
+                kick_event: false,
+                snare_event: false,
                 onset: false,
                 onset_strength: 0,
                 bpm: null,
@@ -10687,7 +10865,7 @@ export default function App() {
 
   const nodeGraphSourceLabel = () =>
     nodeGraphSourceMode() === "Audio"
-      ? `${nodeGraphAudioSource() === "Live" ? "Live" : "Timeline"} Audio ${nodeGraphAudioBand()}`
+      ? `${nodeGraphAudioSource() === "Live" ? "Live" : "Timeline"} Audio ${nodeGraphAudioFeature() === "LegacyBand" ? nodeGraphAudioBand() : nodeGraphAudioFeature()}`
       : nodeGraphEffectType() === "PositionWave"
         ? "Position Wave"
         : "LFO";
@@ -10743,8 +10921,16 @@ export default function App() {
             audio: {
               source: nodeGraphAudioSource(),
               band: nodeGraphAudioBand(),
+              feature: nodeGraphAudioFeature(),
+              band_index: nodeGraphAudioBandIndex(),
               gain: nodeGraphAudioGain(),
               bias: nodeGraphAudioBias(),
+              attack_ms: Math.max(0, Math.min(60_000, Math.round(nodeGraphAudioAttackMs()))),
+              release_ms: Math.max(0, Math.min(60_000, Math.round(nodeGraphAudioReleaseMs()))),
+              gate: Math.max(0, Math.min(1, nodeGraphAudioGate())),
+              curve: nodeGraphAudioCurve(),
+              invert: nodeGraphAudioInvert(),
+              hold_ms: Math.max(0, Math.min(60_000, Math.round(nodeGraphAudioHoldMs()))),
             },
             transform: null,
             output: null,
@@ -10805,10 +10991,10 @@ export default function App() {
           position_wave: null,
           audio: null,
           transform: {
-            op: nodeGraphTransformOp(),
-            amount: nodeGraphTransformAmount(),
-            min: nodeGraphTransformMin(),
-            max: nodeGraphTransformMax(),
+            op: nodeGraphSourceMode() === "Audio" ? "Scale" : nodeGraphTransformOp(),
+            amount: nodeGraphSourceMode() === "Audio" ? 1 : nodeGraphTransformAmount(),
+            min: nodeGraphSourceMode() === "Audio" ? 0 : nodeGraphTransformMin(),
+            max: nodeGraphSourceMode() === "Audio" ? 1 : nodeGraphTransformMax(),
           },
           output: null,
         },
@@ -10854,6 +11040,13 @@ export default function App() {
     } catch (error) {
       setMessage(String(error));
     }
+  };
+
+  const openAudioReactiveRack = () => {
+    setControlMode("edit");
+    setEditDeskSurface("effects");
+    setEffectRackSurface("graphs");
+    setNodeGraphSourceMode("Audio");
   };
 
   const setNodeGraphEnabled = async (graphId: number, enabled: boolean) => {
@@ -12495,6 +12688,11 @@ export default function App() {
             onSetArmed: setAutoVjArmed,
             onSetHold: setAutoVjHold,
           }}
+          audioReactive={{
+            get graphs() { return snapshot().node_graphs; },
+            onOpenRack: openAudioReactiveRack,
+            onSetEnabled: setNodeGraphEnabled,
+          }}
           layerList={{
             get layers() { return snapshot().video.layers; },
             get isfRuntimeError() { return videoPreviewDiagnostics()?.last_isf_error; },
@@ -13310,13 +13508,22 @@ export default function App() {
               sourceMode={nodeGraphSourceMode()}
               audioBand={nodeGraphAudioBand()}
               audioSource={nodeGraphAudioSource()}
+              audioFeature={nodeGraphAudioFeature()}
+              audioBandIndex={nodeGraphAudioBandIndex()}
               audioGain={nodeGraphAudioGain()}
               audioBias={nodeGraphAudioBias()}
+              audioGate={nodeGraphAudioGate()}
+              audioAttackMs={nodeGraphAudioAttackMs()}
+              audioReleaseMs={nodeGraphAudioReleaseMs()}
+              audioHoldMs={nodeGraphAudioHoldMs()}
+              audioCurve={nodeGraphAudioCurve()}
+              audioInvert={nodeGraphAudioInvert()}
               sourceLabel={nodeGraphSourceLabel()}
               sourceDetail={nodeGraphSourceDetail()}
               transformLabel={nodeGraphTransformLabel()}
               targetMode={effectTargetMode()}
               canSave={!effectTargetOverrideError()}
+              saveError={effectTargetOverrideError()}
               graphs={snapshot().node_graphs}
               targetLabel={nodeGraphTargetLabel}
               onLoadPreset={loadNodeGraphPreset}
@@ -13324,8 +13531,16 @@ export default function App() {
               onSourceMode={setNodeGraphSourceMode}
               onAudioBand={setNodeGraphAudioBand}
               onAudioSource={setNodeGraphAudioSource}
+              onAudioFeature={setNodeGraphAudioFeature}
+              onAudioBandIndex={setNodeGraphAudioBandIndex}
               onAudioGain={setNodeGraphAudioGain}
               onAudioBias={setNodeGraphAudioBias}
+              onAudioGate={setNodeGraphAudioGate}
+              onAudioAttackMs={setNodeGraphAudioAttackMs}
+              onAudioReleaseMs={setNodeGraphAudioReleaseMs}
+              onAudioHoldMs={setNodeGraphAudioHoldMs}
+              onAudioCurve={setNodeGraphAudioCurve}
+              onAudioInvert={setNodeGraphAudioInvert}
               onTransformOp={setNodeGraphTransformOp}
               onTransformAmount={setNodeGraphTransformAmount}
               onTransformMin={setNodeGraphTransformMin}
@@ -13336,6 +13551,14 @@ export default function App() {
                 setNodeGraphTransformAmount(1);
                 setNodeGraphTransformMin(0);
                 setNodeGraphTransformMax(1);
+                setNodeGraphAudioGain(1);
+                setNodeGraphAudioBias(0);
+                setNodeGraphAudioGate(0);
+                setNodeGraphAudioAttackMs(20);
+                setNodeGraphAudioReleaseMs(180);
+                setNodeGraphAudioHoldMs(0);
+                setNodeGraphAudioCurve("Linear");
+                setNodeGraphAudioInvert(false);
               }}
               onSetGraphEnabled={setNodeGraphEnabled}
               onSaveGraphPreset={saveNodeGraphPreset}

@@ -202,6 +202,53 @@ pub struct AudioSpectrumPoint {
     pub high: f32,
 }
 
+pub const LIVE_AUDIO_FEATURE_BAND_CAPACITY: usize = 16;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LiveAudioReactiveFeatures {
+    pub band_count: u8,
+    pub bands: [f32; LIVE_AUDIO_FEATURE_BAND_CAPACITY],
+    pub rms: f32,
+    pub peak: f32,
+    pub spectral_flux: f32,
+    pub spectral_centroid: f32,
+    pub spectral_density_fast: f32,
+    pub spectral_density_slow: f32,
+    pub kick_strength: f32,
+    pub snare_strength: f32,
+    pub kick_event: bool,
+    pub snare_event: bool,
+    pub onset: bool,
+    pub onset_strength: f32,
+    pub bpm: Option<f32>,
+    pub bpm_confidence: f32,
+    pub beat_phase: f32,
+}
+
+impl Default for LiveAudioReactiveFeatures {
+    fn default() -> Self {
+        Self {
+            band_count: 0,
+            bands: [0.0; LIVE_AUDIO_FEATURE_BAND_CAPACITY],
+            rms: 0.0,
+            peak: 0.0,
+            spectral_flux: 0.0,
+            spectral_centroid: 0.0,
+            spectral_density_fast: 0.0,
+            spectral_density_slow: 0.0,
+            kick_strength: 0.0,
+            snare_strength: 0.0,
+            kick_event: false,
+            snare_event: false,
+            onset: false,
+            onset_strength: 0.0,
+            bpm: None,
+            bpm_confidence: 0.0,
+            beat_phase: 0.0,
+        }
+    }
+}
+
 pub const MAX_LIVE_AUDIO_FRAME_ONSETS: usize = 4;
 
 /// One atomic analysis publication from a live input generation.
@@ -213,6 +260,8 @@ pub struct LiveAudioFrame {
     pub generation: u64,
     pub feature_sequence: u64,
     pub spectrum: AudioSpectrumPoint,
+    #[serde(default)]
+    pub features: LiveAudioReactiveFeatures,
     pub onset_feature_sequences: [u64; MAX_LIVE_AUDIO_FRAME_ONSETS],
     pub onset_count: u8,
 }
@@ -1497,11 +1546,46 @@ pub enum NodeGraphNodeKind {
     Output,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum AudioSpectrumBand {
+    #[default]
     Bass,
     Mid,
     High,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum AudioReactiveFeature {
+    /// Backward-compatible Bass/Mid/High selection from `band`.
+    #[default]
+    LegacyBand,
+    /// One of the fixed logarithmic bands selected by `band_index`.
+    Band,
+    Rms,
+    Peak,
+    SpectralFlux,
+    Onset,
+    OnsetStrength,
+    BeatPhase,
+    /// BPM normalized from the supported 60-200 range to 0-1.
+    Bpm,
+    BpmConfidence,
+    SpectralCentroid,
+    SpectralDensitySlow,
+    SpectralDensityFast,
+    Kick,
+    KickStrength,
+    Snare,
+    SnareStrength,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum AudioReactiveCurve {
+    #[default]
+    Linear,
+    Smoothstep,
+    Exponential,
+    Logarithmic,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -1511,13 +1595,29 @@ pub enum AudioSpectrumSource {
     Live,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct NodeGraphAudioNode {
     #[serde(default)]
     pub source: AudioSpectrumSource,
     pub band: AudioSpectrumBand,
+    #[serde(default)]
+    pub feature: AudioReactiveFeature,
+    #[serde(default)]
+    pub band_index: u8,
     pub gain: f32,
     pub bias: f32,
+    #[serde(default)]
+    pub attack_ms: u32,
+    #[serde(default)]
+    pub release_ms: u32,
+    #[serde(default)]
+    pub gate: f32,
+    #[serde(default)]
+    pub curve: AudioReactiveCurve,
+    #[serde(default)]
+    pub invert: bool,
+    #[serde(default)]
+    pub hold_ms: u32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1598,6 +1698,17 @@ pub struct NodeGraphEdgeSummary {
     pub to_port: String,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
+pub struct NodeGraphAudioRuntimeStatus {
+    pub node_id: u64,
+    pub input_value: f32,
+    pub output_value: f32,
+    pub source_available: bool,
+    pub safety_zeroed: bool,
+    pub held: bool,
+    pub feature_sequence: Option<u64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NodeGraphSummary {
     pub id: NodeGraphId,
@@ -1605,6 +1716,9 @@ pub struct NodeGraphSummary {
     pub enabled: bool,
     pub nodes: Vec<NodeGraphNodeSummary>,
     pub edges: Vec<NodeGraphEdgeSummary>,
+    /// Ephemeral engine telemetry. Project/preset writers strip this field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub audio_runtime: Vec<NodeGraphAudioRuntimeStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -2477,6 +2591,10 @@ pub struct EngineSnapshot {
     pub programmer: ProgrammerSnapshot,
     pub timeline: TimelineSnapshot,
     pub video: VideoSnapshot,
+    /// Raw authored layer state before ephemeral Effect/Node Graph modulation.
+    /// Project and cue writers consume this value, then strip it from persisted data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authored_video: Option<VideoSnapshot>,
     pub effects: Vec<EffectSummary>,
     #[serde(default)]
     pub node_graphs: Vec<NodeGraphSummary>,
@@ -2512,6 +2630,7 @@ impl Default for EngineSnapshot {
             programmer: ProgrammerSnapshot::default(),
             timeline: TimelineSnapshot::default(),
             video: VideoSnapshot::default(),
+            authored_video: None,
             effects: Vec::new(),
             node_graphs: Vec::new(),
             output: DmxOutputConfig::default(),
@@ -2642,11 +2761,22 @@ mod tests {
         let node: NodeGraphAudioNode =
             serde_json::from_str(r#"{"band":"Bass","gain":1.0,"bias":0.0}"#).unwrap();
         assert_eq!(node.source, AudioSpectrumSource::Timeline);
+        assert_eq!(node.feature, super::AudioReactiveFeature::LegacyBand);
+        assert_eq!(node.attack_ms, 0);
+        assert_eq!(node.release_ms, 0);
         let live = NodeGraphAudioNode {
             source: AudioSpectrumSource::Live,
             band: AudioSpectrumBand::High,
             gain: 2.0,
             bias: -0.1,
+            feature: super::AudioReactiveFeature::Band,
+            band_index: 15,
+            attack_ms: 25,
+            release_ms: 180,
+            gate: 0.08,
+            curve: super::AudioReactiveCurve::Smoothstep,
+            invert: true,
+            hold_ms: 120,
         };
         let roundtrip: NodeGraphAudioNode =
             serde_json::from_str(&serde_json::to_string(&live).unwrap()).unwrap();
@@ -2864,6 +2994,25 @@ mod tests {
                 mid: 0.5,
                 high: 0.75,
             },
+            features: super::LiveAudioReactiveFeatures {
+                band_count: 16,
+                bands: std::array::from_fn(|index| index as f32 / 15.0),
+                rms: 0.4,
+                peak: 0.8,
+                spectral_flux: 0.3,
+                spectral_centroid: 0.55,
+                spectral_density_fast: 0.6,
+                spectral_density_slow: 0.45,
+                kick_strength: 0.9,
+                snare_strength: 0.2,
+                kick_event: true,
+                snare_event: false,
+                onset: true,
+                onset_strength: 0.7,
+                bpm: Some(128.0),
+                bpm_confidence: 0.85,
+                beat_phase: 0.25,
+            },
             onset_feature_sequences: [8, 10, 13, 0],
             onset_count: 3,
         };
@@ -2872,6 +3021,11 @@ mod tests {
         let decoded: super::LiveAudioFrame = serde_json::from_value(encoded).unwrap();
 
         assert_eq!(decoded, frame);
+
+        let mut legacy = serde_json::to_value(&frame).unwrap();
+        legacy.as_object_mut().unwrap().remove("features");
+        let legacy: super::LiveAudioFrame = serde_json::from_value(legacy).unwrap();
+        assert_eq!(legacy.features, super::LiveAudioReactiveFeatures::default());
     }
 
     #[test]
