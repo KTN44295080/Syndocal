@@ -817,6 +817,17 @@ export interface LiveAudioInputStatus {
   bass: number;
   mid: number;
   high: number;
+  bands: number[];
+  band_count: number;
+  rms: number;
+  peak: number;
+  spectral_flux: number;
+  onset: boolean;
+  onset_strength: number;
+  bpm?: number | null;
+  bpm_confidence: number;
+  beat_phase: number;
+  feature_sequence: number;
   analyzed_windows: number;
   dropped_chunks: number;
   dropped_frames: number;
@@ -1319,6 +1330,53 @@ export interface VideoSnapshot {
   mapping_presets: VideoOutputMappingPresetSummary[];
   master_opacity: number;
   blackout: boolean;
+  auto_vj?: AutoVjSnapshot;
+}
+
+export interface AutoVjConfig {
+  eligible_layer_ids: number[];
+  seed: number;
+  beats_per_change: number;
+  transition_ms: number;
+  avoid_immediate_repeat: boolean;
+  rhythm_source: AutoVjRhythmSource;
+}
+
+export type AutoVjRhythmSource = "Clock" | "LiveAudio";
+
+export type AutoVjMode = "Off" | "Armed" | "Running" | "Hold" | "Fault";
+
+export interface AutoVjAction {
+  sequence: number;
+  boundary_index: number;
+  beat: number;
+  layer_id: number;
+  transition_ms: number;
+  selection_token: number;
+  seed: number;
+  show_revision: number;
+  trigger: "ClockBoundary" | "LiveAudioOnset";
+  live_audio_feature_sequence?: number | null;
+}
+
+export interface AutoVjStatus {
+  mode: AutoVjMode;
+  armed: boolean;
+  hold: boolean;
+  show_revision: number;
+  action_sequence: number;
+  last_consumed_boundary?: number | null;
+  next_boundary_beat?: number | null;
+  last_action?: AutoVjAction | null;
+  action_log: AutoVjAction[];
+  fault?: string | null;
+  live_audio_beat_counter: number;
+  last_live_audio_feature_sequence?: number | null;
+}
+
+export interface AutoVjSnapshot {
+  config: AutoVjConfig;
+  status: AutoVjStatus;
 }
 
 /**

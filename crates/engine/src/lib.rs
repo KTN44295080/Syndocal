@@ -24,27 +24,29 @@ use protocol::StageObjectKind;
 use protocol::{
     set_video_output_mapping_field_value, ActiveFadeSummary, AttributeControl, AttributeResolution,
     AttributeValueSummary, AudioAnalysisSummary, AudioSpectrumBand, AudioSpectrumPoint,
-    AudioSpectrumSource, AutomationId, AutomationInterpolation, AutomationKeyframeSummary,
-    ChaserDirection, ChaserEffectRequest, ClockSnapshot, ClockSource, ColorEffectAlgorithm,
-    ColorEffectColor, ColorEffectInterpolation, ColorEffectRequest, CompositionId,
-    CompositionSummary, CueEffectTarget, CueFixtureTarget, CueId, CueIfcbTiming, CueListId,
-    CueListSummary, CueNodeGraphTarget, CuePaletteTarget, CuePartSummary, CueSummary, DmxMergeMode,
-    DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, DmxOutputRouteTelemetry,
+    AudioSpectrumSource, AutoVjAction, AutoVjConfig, AutoVjMode, AutoVjRhythmSource,
+    AutoVjSnapshot, AutoVjStatus, AutoVjTrigger, AutomationId, AutomationInterpolation,
+    AutomationKeyframeSummary, ChaserDirection, ChaserEffectRequest, ClockSnapshot, ClockSource,
+    ColorEffectAlgorithm, ColorEffectColor, ColorEffectInterpolation, ColorEffectRequest,
+    CompositionId, CompositionSummary, CueEffectTarget, CueFixtureTarget, CueId, CueIfcbTiming,
+    CueListId, CueListSummary, CueNodeGraphTarget, CuePaletteTarget, CuePartSummary, CueSummary,
+    DmxMergeMode, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, DmxOutputRouteTelemetry,
     DmxUniversePreview, EffectBlendMode, EffectId, EffectKind, EffectSummary, EngineSnapshot,
     EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId, FixtureId, FixtureLimits,
-    FixtureProfileSummary, LfoEffectRequest, LfoShape, MoveCoordinateMode, MoveDirection,
-    MoveEffectRequest, MovePathPoint, NodeGraphId, NodeGraphNodeKind, NodeGraphNodeSummary,
-    NodeGraphSummary, NodeGraphTransformOp, PaletteId, PatchFixtureRequest, PatchedFixtureSummary,
-    PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot, ProgrammerValueSummary,
-    ReferencePaletteSummary, Rotation3, StageMapConfig, StageMapPresetSummary, StageObjectId,
-    StageObjectSummary, SubmasterSummary, TimelineAutomationSummary, TimelineCueEventSummary,
-    TimelineEventId, TimelineSnapRequest, TimelineSnapshot, TimelineTrackKind,
-    TimelineVideoAutomationSummary, Transform2D, Vec3, VideoAutomationKeyframeSummary,
-    VideoBlendMode, VideoColorAdjust, VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust,
-    VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerSummary, VideoLayerTarget,
-    VideoOutputId, VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetSummary,
-    VideoOutputSummary, VideoOutputTarget, VideoParam, VideoSnapshot, VideoSourceSummary,
-    DEFAULT_CUE_LIST_ID, MAX_TIMELINE_SCENE_BLOCK_LOOPS,
+    FixtureProfileSummary, LfoEffectRequest, LfoShape, LiveAudioFrame, MoveCoordinateMode,
+    MoveDirection, MoveEffectRequest, MovePathPoint, NodeGraphId, NodeGraphNodeKind,
+    NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId, PatchFixtureRequest,
+    PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot,
+    ProgrammerValueSummary, ReferencePaletteSummary, Rotation3, StageMapConfig,
+    StageMapPresetSummary, StageObjectId, StageObjectSummary, SubmasterSummary,
+    TimelineAutomationSummary, TimelineCueEventSummary, TimelineEventId, TimelineSnapRequest,
+    TimelineSnapshot, TimelineTrackKind, TimelineVideoAutomationSummary, Transform2D, Vec3,
+    VideoAutomationKeyframeSummary, VideoBlendMode, VideoColorAdjust, VideoCuePointSummary,
+    VideoEffectTarget, VideoFxAdjust, VideoIsfEffectSummary, VideoLayerId, VideoLayerState,
+    VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
+    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
+    VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
+    MAX_TIMELINE_SCENE_BLOCK_LOOPS,
 };
 use thiserror::Error;
 
@@ -57,6 +59,10 @@ const LIVE_AUDIO_SPECTRUM_TTL: Duration = Duration::from_millis(250);
 const JITTER_PERCENTILE_WINDOW: usize = 256;
 const DMX_RECONNECT_BASE_DELAY: Duration = Duration::from_millis(250);
 const DMX_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(10);
+const AUTO_VJ_ACTION_LOG_LIMIT: usize = 64;
+const AUTO_VJ_MAX_CANDIDATES: usize = 64;
+const AUTO_VJ_MAX_BEATS_PER_CHANGE: u16 = 256;
+const AUTO_VJ_MAX_TRANSITION_MS: u64 = 60_000;
 
 #[cfg(target_os = "windows")]
 mod realtime_thread {
@@ -599,6 +605,23 @@ pub enum EngineCommand {
     RemoveTimelineAutomation(AutomationId),
     SetTimelineAudio(Option<AudioAnalysisSummary>),
     SetLiveAudioSpectrum(Option<AudioSpectrumPoint>),
+    PublishLiveAudioFrame {
+        frame: LiveAudioFrame,
+        captured_at: Instant,
+    },
+    ClearLiveAudioInput {
+        generation: u64,
+    },
+    ClearLiveAudioInputPublished {
+        generation: u64,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    ReportLiveAudioOnset {
+        feature_sequence: u64,
+        generation: u64,
+        captured_at: Instant,
+    },
     SetTimelinePlaying(bool),
     SeekTimeline(u64),
     SeekTimelineBeat {
@@ -607,6 +630,24 @@ pub enum EngineCommand {
     SyncTimelineTimecode {
         position_ms: u64,
         source: ClockSource,
+    },
+    SetAutoVjConfig(AutoVjConfig),
+    SetAutoVjArmed(bool),
+    SetAutoVjHold(bool),
+    SetAutoVjConfigPublished {
+        config: AutoVjConfig,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    SetAutoVjArmedPublished {
+        armed: bool,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    SetAutoVjHoldPublished {
+        hold: bool,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
     },
     AddVideoLayer {
         layer_id: VideoLayerId,
@@ -853,6 +894,10 @@ impl EngineCommand {
                 | EngineCommand::RemoveCuePublished { .. }
                 | EngineCommand::SetTimelinePlaying(_)
                 | EngineCommand::SetLiveAudioSpectrum(_)
+                | EngineCommand::PublishLiveAudioFrame { .. }
+                | EngineCommand::ClearLiveAudioInput { .. }
+                | EngineCommand::ClearLiveAudioInputPublished { .. }
+                | EngineCommand::ReportLiveAudioOnset { .. }
                 | EngineCommand::SeekTimeline(_)
                 | EngineCommand::SeekTimelineBeat { .. }
                 | EngineCommand::SyncTimelineTimecode { .. }
@@ -880,6 +925,12 @@ pub struct EngineHandle {
     next_video_output_id: Arc<AtomicU64>,
     next_node_graph_id: Arc<AtomicU64>,
     next_stage_object_id: Arc<AtomicU64>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct VideoAudioRuntimeSnapshot {
+    pub layers: Vec<VideoLayerSummary>,
+    pub auto_vj_status: AutoVjStatus,
 }
 
 struct QueuedEngineCommand {
@@ -924,12 +975,16 @@ impl Drop for EngineLifetime {
 
 struct EngineSharedTelemetry {
     queue_push_failure_count: AtomicU64,
+    requested_live_audio_clear_generation: AtomicU64,
+    live_audio_take_gate: Mutex<()>,
 }
 
 impl EngineSharedTelemetry {
     fn new() -> Self {
         Self {
             queue_push_failure_count: AtomicU64::new(0),
+            requested_live_audio_clear_generation: AtomicU64::new(0),
+            live_audio_take_gate: Mutex::new(()),
         }
     }
 
@@ -940,6 +995,20 @@ impl EngineSharedTelemetry {
 
     fn queue_push_failure_count(&self) -> u64 {
         self.queue_push_failure_count.load(Ordering::Relaxed)
+    }
+
+    fn request_live_audio_clear(&self, generation: u64) {
+        let _take_gate = self
+            .live_audio_take_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.requested_live_audio_clear_generation
+            .fetch_max(generation, Ordering::Release);
+    }
+
+    fn requested_live_audio_clear_generation(&self) -> u64 {
+        self.requested_live_audio_clear_generation
+            .load(Ordering::Acquire)
     }
 
     fn reset(&self) {
@@ -1115,6 +1184,11 @@ impl EngineHandle {
     }
 
     pub fn send(&self, command: EngineCommand) -> Result<(), EngineError> {
+        if let EngineCommand::ClearLiveAudioInput { generation }
+        | EngineCommand::ClearLiveAudioInputPublished { generation, .. } = &command
+        {
+            self.shared_telemetry.request_live_audio_clear(*generation);
+        }
         self.sync_allocator_counters_for_command(&command);
         match self.queue.push(QueuedEngineCommand {
             command,
@@ -1129,6 +1203,19 @@ impl EngineHandle {
                 Err(EngineError::QueueFull)
             }
         }
+    }
+
+    pub fn clear_live_audio_input(&self, generation: u64) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::ClearLiveAudioInputPublished {
+            generation,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Live audio clear acknowledgement failed: {error}"))?
     }
 
     pub fn add_color_effect(
@@ -1570,6 +1657,45 @@ impl EngineHandle {
             .map_err(|error| format!("Exclusive video Take acknowledgement failed: {error}"))?
     }
 
+    pub fn set_auto_vj_config(&self, config: AutoVjConfig) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::SetAutoVjConfigPublished {
+            config,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Auto VJ config acknowledgement failed: {error}"))?
+    }
+
+    pub fn set_auto_vj_armed(&self, armed: bool) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::SetAutoVjArmedPublished {
+            armed,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Auto VJ armed acknowledgement failed: {error}"))?
+    }
+
+    pub fn set_auto_vj_hold(&self, hold: bool) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::SetAutoVjHoldPublished {
+            hold,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Auto VJ Hold acknowledgement failed: {error}"))?
+    }
+
     pub fn load_project_snapshot(&self, snapshot: EngineSnapshot) -> Result<(), EngineError> {
         self.sync_allocator_counters(&snapshot);
         self.send(EngineCommand::LoadProjectSnapshot(snapshot))
@@ -1579,6 +1705,16 @@ impl EngineHandle {
         self.snapshot
             .read()
             .map(|snapshot| snapshot.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn video_audio_runtime_snapshot(&self) -> VideoAudioRuntimeSnapshot {
+        self.snapshot
+            .read()
+            .map(|snapshot| VideoAudioRuntimeSnapshot {
+                layers: snapshot.video.layers.clone(),
+                auto_vj_status: snapshot.video.auto_vj.status.clone(),
+            })
             .unwrap_or_default()
     }
 
@@ -2100,6 +2236,7 @@ struct PendingCommandAck {
 
 #[derive(Clone)]
 enum PendingCommandRollback {
+    KeepApplied,
     ClearBootstrappedVjShow,
     RemoveAddedEffect {
         effect_id: EffectId,
@@ -2118,6 +2255,10 @@ enum PendingCommandRollback {
     RestoreExclusiveVideoTake {
         video_layers: Vec<RuntimeVideoLayer>,
         video_layer_fades: Vec<RuntimeVideoLayerFade>,
+        last_error: Option<String>,
+    },
+    RestoreAutoVj {
+        auto_vj: RuntimeAutoVj,
         last_error: Option<String>,
     },
     RestoreCues {
@@ -2166,6 +2307,7 @@ impl PendingCommandRollback {
                 | Self::RestoreEffect { .. }
                 | Self::RestoreEffectEnabled { .. }
                 | Self::RestoreExclusiveVideoTake { .. }
+                | Self::RestoreAutoVj { .. }
                 | Self::RestoreCues { .. }
                 | Self::RestoreCueRemoval { .. }
                 | Self::RestoreTimelineEvents { .. }
@@ -2218,6 +2360,15 @@ struct RuntimeDmxInputFrame {
     merge_mode: DmxMergeMode,
 }
 
+#[derive(Debug, Clone, Default)]
+struct RuntimeAutoVj {
+    config: AutoVjConfig,
+    status: AutoVjStatus,
+    last_selected_layer_id: Option<VideoLayerId>,
+    manual_override_this_tick: bool,
+    manual_hold: bool,
+}
+
 struct EngineRuntime {
     shared_telemetry: Arc<EngineSharedTelemetry>,
     pending_command_acks: Vec<PendingCommandAck>,
@@ -2235,6 +2386,9 @@ struct EngineRuntime {
     timeline_audio: Option<AudioAnalysisSummary>,
     live_audio_spectrum: Option<AudioSpectrumPoint>,
     live_audio_spectrum_updated_at: Option<Instant>,
+    live_audio_frame_verified: bool,
+    live_audio_generation: Option<u64>,
+    last_live_audio_frame_sequence: Option<u64>,
     timeline_playing: bool,
     timeline_position_ms: u64,
     timeline_playhead_boundary_armed: bool,
@@ -2250,6 +2404,7 @@ struct EngineRuntime {
     video_output_mapping_presets: Vec<VideoOutputMappingPresetSummary>,
     video_master_opacity: f32,
     video_blackout: bool,
+    auto_vj: RuntimeAutoVj,
     lighting_master: f32,
     group_submaster_levels: HashMap<String, f32>,
     highlighted_fixtures: HashSet<FixtureId>,
@@ -2395,6 +2550,9 @@ impl EngineRuntime {
             timeline_audio: None,
             live_audio_spectrum: None,
             live_audio_spectrum_updated_at: None,
+            live_audio_frame_verified: false,
+            live_audio_generation: None,
+            last_live_audio_frame_sequence: None,
             timeline_playing: false,
             timeline_position_ms: 0,
             timeline_playhead_boundary_armed: false,
@@ -2410,6 +2568,7 @@ impl EngineRuntime {
             video_output_mapping_presets: Vec::new(),
             video_master_opacity: 1.0,
             video_blackout: false,
+            auto_vj: RuntimeAutoVj::default(),
             lighting_master: 1.0,
             group_submaster_levels: HashMap::new(),
             highlighted_fixtures: HashSet::new(),
@@ -2576,6 +2735,9 @@ impl EngineRuntime {
         self.timeline_audio = snapshot.timeline.audio.clone();
         self.live_audio_spectrum = None;
         self.live_audio_spectrum_updated_at = None;
+        self.live_audio_frame_verified = false;
+        self.live_audio_generation = None;
+        self.last_live_audio_frame_sequence = None;
         self.timeline_playing = snapshot.timeline.playing;
         self.timeline_playhead_boundary_armed = false;
         self.timeline_evaluated_boundary_position_ms = None;
@@ -2603,6 +2765,19 @@ impl EngineRuntime {
             1.0
         };
         self.video_blackout = snapshot.video.blackout;
+        let auto_vj_config = snapshot.video.auto_vj.config.clone();
+        let auto_vj_show_revision =
+            auto_vj_show_revision(&auto_vj_config, self.video_layers.as_slice());
+        self.auto_vj = RuntimeAutoVj {
+            config: auto_vj_config,
+            status: AutoVjStatus {
+                show_revision: auto_vj_show_revision,
+                ..AutoVjStatus::default()
+            },
+            last_selected_layer_id: None,
+            manual_override_this_tick: false,
+            manual_hold: false,
+        };
 
         self.effects = snapshot
             .effects
@@ -3041,6 +3216,10 @@ impl EngineRuntime {
                 queued_command.command,
                 EngineCommand::BootstrapVjShow { .. }
                     | EngineCommand::ExclusiveVideoTake { .. }
+                    | EngineCommand::ClearLiveAudioInputPublished { .. }
+                    | EngineCommand::SetAutoVjConfigPublished { .. }
+                    | EngineCommand::SetAutoVjArmedPublished { .. }
+                    | EngineCommand::SetAutoVjHoldPublished { .. }
                     | EngineCommand::AddColorEffect { .. }
                     | EngineCommand::UpdateColorEffect { .. }
                     | EngineCommand::AddChaserEffect { .. }
@@ -3081,6 +3260,17 @@ impl EngineRuntime {
     }
 
     fn apply_command(&mut self, command: EngineCommand) {
+        if auto_vj_manual_override_command(&command) {
+            self.auto_vj.manual_override_this_tick = true;
+            if self.auto_vj.status.armed {
+                self.auto_vj.manual_hold = true;
+                self.auto_vj.status.hold = true;
+                self.auto_vj.status.mode = AutoVjMode::Hold;
+            }
+            if let EngineCommand::ExclusiveVideoTake { request, .. } = &command {
+                self.auto_vj.last_selected_layer_id = Some(request.target_layer_id);
+            }
+        }
         match command {
             EngineCommand::PatchFixture {
                 fixture_id,
@@ -5382,7 +5572,9 @@ impl EngineRuntime {
                 self.last_error = None;
             }
             EngineCommand::SetLiveAudioSpectrum(spectrum) => {
+                let input_cleared = spectrum.is_none();
                 self.live_audio_spectrum_updated_at = spectrum.as_ref().map(|_| Instant::now());
+                self.live_audio_frame_verified = false;
                 self.live_audio_spectrum = spectrum.map(|mut point| {
                     point.time_ms = 0;
                     point.bass = finite_or(point.bass, 0.0).clamp(0.0, 1.0);
@@ -5390,7 +5582,48 @@ impl EngineRuntime {
                     point.high = finite_or(point.high, 0.0).clamp(0.0, 1.0);
                     point
                 });
-                self.last_error = None;
+                if input_cleared {
+                    if self.live_audio_generation.is_some() {
+                        self.last_live_audio_frame_sequence = Some(u64::MAX);
+                    }
+                    self.invalidate_live_audio_source();
+                }
+            }
+            EngineCommand::PublishLiveAudioFrame { frame, captured_at } => {
+                self.apply_live_audio_frame(frame, captured_at, Instant::now());
+            }
+            EngineCommand::ClearLiveAudioInput { generation } => {
+                self.clear_live_audio_generation(generation);
+            }
+            EngineCommand::ClearLiveAudioInputPublished {
+                generation,
+                expires_at,
+                ack,
+            } => {
+                self.clear_live_audio_generation(generation);
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result: if Instant::now() > expires_at {
+                        Err("Live audio clear expired before snapshot publication".to_string())
+                    } else {
+                        Ok(())
+                    },
+                    rollback: PendingCommandRollback::KeepApplied,
+                    publication_error:
+                        "Engine snapshot was busy; live audio clear remains applied and must be acknowledged again",
+                });
+            }
+            EngineCommand::ReportLiveAudioOnset {
+                feature_sequence,
+                generation,
+                captured_at,
+            } => {
+                self.apply_live_audio_onset(
+                    feature_sequence,
+                    generation,
+                    captured_at,
+                    Instant::now(),
+                );
             }
             EngineCommand::SetTimelinePlaying(playing) => {
                 let was_playing = self.timeline_playing;
@@ -5439,6 +5672,83 @@ impl EngineRuntime {
                 self.clock.mark_timecode_sync(source, now);
                 self.apply_timeline_automations();
                 self.apply_timeline_video_automations();
+            }
+            EngineCommand::SetAutoVjConfig(config) => {
+                let _ = self.set_auto_vj_config(config);
+            }
+            EngineCommand::SetAutoVjArmed(armed) => {
+                let _ = self.set_auto_vj_armed(armed, Instant::now());
+            }
+            EngineCommand::SetAutoVjHold(hold) => {
+                let _ = self.set_auto_vj_hold(hold, Instant::now());
+            }
+            EngineCommand::SetAutoVjConfigPublished {
+                config,
+                expires_at,
+                ack,
+            } => {
+                let rollback = PendingCommandRollback::RestoreAutoVj {
+                    auto_vj: self.auto_vj.clone(),
+                    last_error: self.last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Auto VJ config expired before engine execution".to_string())
+                } else {
+                    self.set_auto_vj_config(config)
+                };
+                self.last_error = result.as_ref().err().cloned();
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error: "Engine snapshot was busy; Auto VJ config was rolled back",
+                });
+            }
+            EngineCommand::SetAutoVjArmedPublished {
+                armed,
+                expires_at,
+                ack,
+            } => {
+                let rollback = PendingCommandRollback::RestoreAutoVj {
+                    auto_vj: self.auto_vj.clone(),
+                    last_error: self.last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Auto VJ armed change expired before engine execution".to_string())
+                } else {
+                    self.set_auto_vj_armed(armed, Instant::now())
+                };
+                self.last_error = result.as_ref().err().cloned();
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Auto VJ armed change was rolled back",
+                });
+            }
+            EngineCommand::SetAutoVjHoldPublished {
+                hold,
+                expires_at,
+                ack,
+            } => {
+                let rollback = PendingCommandRollback::RestoreAutoVj {
+                    auto_vj: self.auto_vj.clone(),
+                    last_error: self.last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Auto VJ Hold change expired before engine execution".to_string())
+                } else {
+                    self.set_auto_vj_hold(hold, Instant::now())
+                };
+                self.last_error = result.as_ref().err().cloned();
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Auto VJ Hold change was rolled back",
+                });
             }
             EngineCommand::AddVideoLayer {
                 layer_id,
@@ -6180,6 +6490,7 @@ impl EngineRuntime {
 
     fn rollback_pending_command(&mut self, rollback: PendingCommandRollback) {
         match rollback {
+            PendingCommandRollback::KeepApplied => {}
             PendingCommandRollback::ClearBootstrappedVjShow => {
                 self.video_layers.clear();
                 self.video_layer_fades.clear();
@@ -6236,6 +6547,13 @@ impl EngineRuntime {
             } => {
                 self.video_layers = video_layers;
                 self.video_layer_fades = video_layer_fades;
+                self.last_error = last_error;
+            }
+            PendingCommandRollback::RestoreAutoVj {
+                auto_vj,
+                last_error,
+            } => {
+                self.auto_vj = auto_vj;
                 self.last_error = last_error;
             }
             PendingCommandRollback::RestoreCues {
@@ -6527,6 +6845,475 @@ impl EngineRuntime {
                 .any(|output| output.config.enabled)
     }
 
+    fn set_auto_vj_config(&mut self, config: AutoVjConfig) -> Result<(), String> {
+        if let Err(error) = validate_auto_vj_config_shape(&config) {
+            self.last_error = Some(error.clone());
+            return Err(error);
+        }
+        let show_revision = auto_vj_show_revision(&config, self.video_layers.as_slice());
+        self.auto_vj = RuntimeAutoVj {
+            config,
+            status: AutoVjStatus {
+                show_revision,
+                ..AutoVjStatus::default()
+            },
+            last_selected_layer_id: None,
+            manual_override_this_tick: false,
+            manual_hold: false,
+        };
+        self.last_error = None;
+        Ok(())
+    }
+
+    fn set_auto_vj_armed(&mut self, armed: bool, now: Instant) -> Result<(), String> {
+        if !armed {
+            let show_revision =
+                auto_vj_show_revision(&self.auto_vj.config, self.video_layers.as_slice());
+            self.auto_vj.status = AutoVjStatus {
+                show_revision,
+                ..AutoVjStatus::default()
+            };
+            self.auto_vj.last_selected_layer_id = None;
+            self.auto_vj.manual_override_this_tick = false;
+            self.auto_vj.manual_hold = false;
+            self.last_error = None;
+            return Ok(());
+        }
+
+        if let Err(error) = self.validate_auto_vj_candidates() {
+            self.last_error = Some(error.clone());
+            return Err(error);
+        }
+
+        self.expire_live_audio_spectrum(now);
+        let waiting_for_live_audio = self.auto_vj.config.rhythm_source
+            == AutoVjRhythmSource::LiveAudio
+            && !self.live_audio_source_is_fresh(now);
+        let beats_per_change = u64::from(self.auto_vj.config.beats_per_change);
+        let boundary_index = self.auto_vj_beat_counter(now) / beats_per_change;
+        let show_revision =
+            auto_vj_show_revision(&self.auto_vj.config, self.video_layers.as_slice());
+        self.auto_vj.status = AutoVjStatus {
+            mode: if waiting_for_live_audio {
+                AutoVjMode::Hold
+            } else {
+                AutoVjMode::Armed
+            },
+            armed: true,
+            hold: waiting_for_live_audio,
+            show_revision,
+            action_sequence: 0,
+            last_consumed_boundary: Some(boundary_index),
+            next_boundary_beat: Some(
+                boundary_index
+                    .saturating_add(1)
+                    .saturating_mul(beats_per_change),
+            ),
+            last_action: None,
+            action_log: Vec::with_capacity(AUTO_VJ_ACTION_LOG_LIMIT),
+            fault: None,
+            live_audio_beat_counter: 0,
+            last_live_audio_feature_sequence: None,
+            live_audio_waiting: waiting_for_live_audio,
+            live_audio_generation: self.live_audio_generation,
+        };
+        self.auto_vj.last_selected_layer_id = None;
+        self.auto_vj.manual_override_this_tick = false;
+        self.auto_vj.manual_hold = false;
+        self.last_error = None;
+        Ok(())
+    }
+
+    fn set_auto_vj_hold(&mut self, hold: bool, now: Instant) -> Result<(), String> {
+        if !self.auto_vj.status.armed {
+            let error = "Auto VJ must be armed before Hold can change".to_string();
+            self.last_error = Some(error.clone());
+            return Err(error);
+        }
+        self.expire_live_audio_spectrum(now);
+        self.auto_vj.manual_hold = hold;
+        let waiting_for_live_audio = self.auto_vj.config.rhythm_source
+            == AutoVjRhythmSource::LiveAudio
+            && !self.live_audio_source_is_fresh(now);
+        let effective_hold = hold || waiting_for_live_audio;
+        let beats_per_change = u64::from(self.auto_vj.config.beats_per_change.max(1));
+        let boundary_index = self.auto_vj_beat_counter(now) / beats_per_change;
+        self.auto_vj.status.hold = effective_hold;
+        self.auto_vj.status.live_audio_waiting = waiting_for_live_audio;
+        self.auto_vj.status.live_audio_generation = self.live_audio_generation;
+        self.auto_vj.status.mode = if effective_hold {
+            AutoVjMode::Hold
+        } else if self.auto_vj.status.action_sequence == 0 {
+            AutoVjMode::Armed
+        } else {
+            AutoVjMode::Running
+        };
+        self.auto_vj.status.last_consumed_boundary = Some(boundary_index);
+        self.auto_vj.status.next_boundary_beat = Some(
+            boundary_index
+                .saturating_add(1)
+                .saturating_mul(beats_per_change),
+        );
+        self.auto_vj.manual_override_this_tick = false;
+        self.last_error = None;
+        Ok(())
+    }
+
+    fn validate_auto_vj_candidates(&self) -> Result<(), String> {
+        validate_auto_vj_config_shape(&self.auto_vj.config)?;
+        for layer_id in &self.auto_vj.config.eligible_layer_ids {
+            if !self.video_layers.iter().any(|layer| layer.id == *layer_id) {
+                return Err(format!(
+                    "Auto VJ candidate video layer {layer_id} was not found"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn auto_vj_beat_counter(&self, now: Instant) -> u64 {
+        match self.auto_vj.config.rhythm_source {
+            AutoVjRhythmSource::Clock => self.clock.snapshot(now).beat_counter,
+            AutoVjRhythmSource::LiveAudio => self.auto_vj.status.live_audio_beat_counter,
+        }
+    }
+
+    fn live_audio_source_is_fresh(&self, now: Instant) -> bool {
+        self.live_audio_frame_verified
+            && self.live_audio_generation.is_some_and(|generation| {
+                generation
+                    > self
+                        .shared_telemetry
+                        .requested_live_audio_clear_generation()
+            })
+            && self.live_audio_spectrum.is_some()
+            && self
+                .live_audio_spectrum_updated_at
+                .is_some_and(|captured_at| {
+                    captured_at <= now
+                        && now.saturating_duration_since(captured_at) < LIVE_AUDIO_SPECTRUM_TTL
+                })
+    }
+
+    fn recover_auto_vj_live_audio_source(&mut self) {
+        self.auto_vj.status.live_audio_generation = self.live_audio_generation;
+        if !self.auto_vj.status.armed
+            || self.auto_vj.config.rhythm_source != AutoVjRhythmSource::LiveAudio
+        {
+            return;
+        }
+        self.auto_vj.status.live_audio_waiting = false;
+        self.auto_vj.status.hold = self.auto_vj.manual_hold;
+        self.auto_vj.status.mode = if self.auto_vj.manual_hold {
+            AutoVjMode::Hold
+        } else if self.auto_vj.status.action_sequence == 0 {
+            AutoVjMode::Armed
+        } else {
+            AutoVjMode::Running
+        };
+    }
+
+    fn hold_auto_vj_for_live_audio_loss(&mut self) {
+        self.auto_vj.status.last_live_audio_feature_sequence = None;
+        self.auto_vj.status.live_audio_generation = self.live_audio_generation;
+        if self.auto_vj.status.armed
+            && self.auto_vj.config.rhythm_source == AutoVjRhythmSource::LiveAudio
+        {
+            let beats_per_change = u64::from(self.auto_vj.config.beats_per_change.max(1));
+            let boundary_index = self.auto_vj.status.live_audio_beat_counter / beats_per_change;
+            self.auto_vj.status.last_consumed_boundary = Some(boundary_index);
+            self.auto_vj.status.next_boundary_beat = Some(
+                boundary_index
+                    .saturating_add(1)
+                    .saturating_mul(beats_per_change),
+            );
+            self.auto_vj.status.hold = true;
+            self.auto_vj.status.mode = AutoVjMode::Hold;
+            self.auto_vj.status.live_audio_waiting = true;
+        }
+    }
+
+    fn invalidate_live_audio_source(&mut self) {
+        self.live_audio_spectrum = None;
+        self.live_audio_spectrum_updated_at = None;
+        self.live_audio_frame_verified = false;
+        self.hold_auto_vj_for_live_audio_loss();
+    }
+
+    fn record_live_audio_onset(&mut self, feature_sequence: u64) {
+        if self.auto_vj.status.armed
+            && self.auto_vj.config.rhythm_source == AutoVjRhythmSource::LiveAudio
+            && self
+                .auto_vj
+                .status
+                .last_live_audio_feature_sequence
+                .is_none_or(|previous| feature_sequence > previous)
+        {
+            self.auto_vj.status.last_live_audio_feature_sequence = Some(feature_sequence);
+            self.auto_vj.status.live_audio_beat_counter = self
+                .auto_vj
+                .status
+                .live_audio_beat_counter
+                .saturating_add(1);
+        }
+    }
+
+    fn clear_live_audio_generation(&mut self, generation: u64) {
+        self.shared_telemetry.request_live_audio_clear(generation);
+        if generation == 0
+            || self
+                .live_audio_generation
+                .is_some_and(|active_generation| generation < active_generation)
+        {
+            return;
+        }
+        self.live_audio_generation = Some(generation);
+        self.last_live_audio_frame_sequence = Some(u64::MAX);
+        self.auto_vj.status.live_audio_generation = Some(generation);
+        self.invalidate_live_audio_source();
+    }
+
+    fn synchronize_requested_live_audio_clear(&mut self) {
+        let generation = self
+            .shared_telemetry
+            .requested_live_audio_clear_generation();
+        if generation == 0
+            || self
+                .live_audio_generation
+                .is_some_and(|active_generation| active_generation > generation)
+            || (self.live_audio_generation == Some(generation)
+                && self.live_audio_spectrum.is_none()
+                && self.last_live_audio_frame_sequence == Some(u64::MAX))
+        {
+            return;
+        }
+        self.clear_live_audio_generation(generation);
+    }
+
+    fn apply_live_audio_frame(
+        &mut self,
+        frame: LiveAudioFrame,
+        captured_at: Instant,
+        now: Instant,
+    ) {
+        let requested_clear_generation = self
+            .shared_telemetry
+            .requested_live_audio_clear_generation();
+        if requested_clear_generation != 0 && frame.generation <= requested_clear_generation {
+            self.synchronize_requested_live_audio_clear();
+            return;
+        }
+        if frame.generation == 0
+            || self
+                .live_audio_generation
+                .is_some_and(|generation| frame.generation < generation)
+        {
+            return;
+        }
+
+        let generation_changed = self.live_audio_generation != Some(frame.generation);
+        if generation_changed {
+            self.live_audio_generation = Some(frame.generation);
+            self.last_live_audio_frame_sequence = None;
+            self.auto_vj.status.last_live_audio_feature_sequence = None;
+        } else if self
+            .last_live_audio_frame_sequence
+            .is_some_and(|sequence| frame.feature_sequence <= sequence)
+        {
+            return;
+        }
+        self.last_live_audio_frame_sequence = Some(frame.feature_sequence);
+        self.auto_vj.status.live_audio_generation = self.live_audio_generation;
+
+        let onset_count = usize::from(frame.onset_count);
+        let onsets = frame.onset_feature_sequences.get(..onset_count);
+        let onsets_valid = onsets.is_some_and(|sequences| {
+            sequences
+                .iter()
+                .all(|sequence| *sequence <= frame.feature_sequence)
+                && sequences.windows(2).all(|pair| pair[0] < pair[1])
+        });
+        if captured_at > now
+            || now.saturating_duration_since(captured_at) >= LIVE_AUDIO_SPECTRUM_TTL
+            || !onsets_valid
+        {
+            self.invalidate_live_audio_source();
+            return;
+        }
+
+        let mut spectrum = frame.spectrum;
+        spectrum.time_ms = 0;
+        spectrum.bass = finite_or(spectrum.bass, 0.0).clamp(0.0, 1.0);
+        spectrum.mid = finite_or(spectrum.mid, 0.0).clamp(0.0, 1.0);
+        spectrum.high = finite_or(spectrum.high, 0.0).clamp(0.0, 1.0);
+        self.live_audio_spectrum = Some(spectrum);
+        self.live_audio_spectrum_updated_at = Some(captured_at);
+        self.live_audio_frame_verified = true;
+        self.recover_auto_vj_live_audio_source();
+        for feature_sequence in onsets.expect("validated onset slice must exist") {
+            self.record_live_audio_onset(*feature_sequence);
+        }
+    }
+
+    fn apply_live_audio_onset(
+        &mut self,
+        feature_sequence: u64,
+        generation: u64,
+        captured_at: Instant,
+        now: Instant,
+    ) {
+        let requested_clear_generation = self
+            .shared_telemetry
+            .requested_live_audio_clear_generation();
+        if requested_clear_generation != 0 && generation <= requested_clear_generation {
+            self.synchronize_requested_live_audio_clear();
+            return;
+        }
+        if generation == 0
+            || self
+                .live_audio_generation
+                .is_some_and(|active_generation| generation < active_generation)
+        {
+            return;
+        }
+        if self.live_audio_generation != Some(generation)
+            || captured_at > now
+            || now.saturating_duration_since(captured_at) >= LIVE_AUDIO_SPECTRUM_TTL
+            || !self.live_audio_source_is_fresh(now)
+        {
+            if self
+                .live_audio_generation
+                .is_none_or(|active_generation| generation >= active_generation)
+            {
+                if self.live_audio_generation != Some(generation) {
+                    self.last_live_audio_frame_sequence = None;
+                }
+                self.live_audio_generation = Some(generation);
+                self.auto_vj.status.live_audio_generation = Some(generation);
+                self.invalidate_live_audio_source();
+            }
+            return;
+        }
+        self.record_live_audio_onset(feature_sequence);
+    }
+
+    fn fault_auto_vj(&mut self, error: String) {
+        self.auto_vj.status.mode = AutoVjMode::Fault;
+        self.auto_vj.status.armed = false;
+        self.auto_vj.status.hold = false;
+        self.auto_vj.status.next_boundary_beat = None;
+        self.auto_vj.status.fault = Some(error.clone());
+        self.auto_vj.manual_override_this_tick = false;
+        self.auto_vj.manual_hold = false;
+        self.last_error = Some(error);
+    }
+
+    fn advance_auto_vj(&mut self, now: Instant) {
+        let manual_override = std::mem::take(&mut self.auto_vj.manual_override_this_tick);
+        if !self.auto_vj.status.armed {
+            return;
+        }
+        if self.auto_vj.config.rhythm_source == AutoVjRhythmSource::LiveAudio
+            && !self.live_audio_source_is_fresh(now)
+        {
+            self.hold_auto_vj_for_live_audio_loss();
+            return;
+        }
+
+        let beats_per_change = u64::from(self.auto_vj.config.beats_per_change.max(1));
+        let boundary_index = self.auto_vj_beat_counter(now) / beats_per_change;
+        let previous_boundary = self
+            .auto_vj
+            .status
+            .last_consumed_boundary
+            .unwrap_or(boundary_index);
+        if boundary_index <= previous_boundary {
+            return;
+        }
+
+        self.auto_vj.status.last_consumed_boundary = Some(boundary_index);
+        self.auto_vj.status.next_boundary_beat = Some(
+            boundary_index
+                .saturating_add(1)
+                .saturating_mul(beats_per_change),
+        );
+        if self.auto_vj.status.hold || manual_override || self.video_blackout {
+            return;
+        }
+        if let Err(error) = self.validate_auto_vj_candidates() {
+            self.fault_auto_vj(error);
+            return;
+        }
+
+        let show_revision =
+            auto_vj_show_revision(&self.auto_vj.config, self.video_layers.as_slice());
+        let selection_token =
+            auto_vj_selection_token(self.auto_vj.config.seed, show_revision, boundary_index);
+        let candidate_count = self.auto_vj.config.eligible_layer_ids.len();
+        let mut candidate_index = (selection_token % candidate_count as u64) as usize;
+        if self.auto_vj.config.avoid_immediate_repeat && candidate_count > 1 {
+            if self.auto_vj.config.eligible_layer_ids[candidate_index]
+                == self.auto_vj.last_selected_layer_id.unwrap_or(0)
+            {
+                let offset = 1 + ((selection_token >> 32) as usize % (candidate_count - 1));
+                candidate_index = (candidate_index + offset) % candidate_count;
+            }
+        }
+        let layer_id = self.auto_vj.config.eligible_layer_ids[candidate_index];
+        let transition_ms = self.auto_vj.config.transition_ms;
+        let shared_telemetry = Arc::clone(&self.shared_telemetry);
+        let _live_audio_take_gate =
+            (self.auto_vj.config.rhythm_source == AutoVjRhythmSource::LiveAudio).then(|| {
+                shared_telemetry
+                    .live_audio_take_gate
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+            });
+        if self.auto_vj.config.rhythm_source == AutoVjRhythmSource::LiveAudio
+            && !self.live_audio_source_is_fresh(now)
+        {
+            self.hold_auto_vj_for_live_audio_loss();
+            return;
+        }
+        if let Err(error) = self.apply_exclusive_video_take(ExclusiveVideoTakeRequest {
+            target_layer_id: layer_id,
+            fade_ms: transition_ms,
+            preview_position_ms: None,
+            preview_speed: None,
+        }) {
+            self.fault_auto_vj(error);
+            return;
+        }
+
+        let sequence = self.auto_vj.status.action_sequence.saturating_add(1);
+        let action = AutoVjAction {
+            sequence,
+            boundary_index,
+            beat: boundary_index.saturating_mul(beats_per_change),
+            layer_id,
+            transition_ms,
+            selection_token,
+            seed: self.auto_vj.config.seed,
+            show_revision,
+            trigger: match self.auto_vj.config.rhythm_source {
+                AutoVjRhythmSource::Clock => AutoVjTrigger::ClockBoundary,
+                AutoVjRhythmSource::LiveAudio => AutoVjTrigger::LiveAudioOnset,
+            },
+            live_audio_feature_sequence: self.auto_vj.status.last_live_audio_feature_sequence,
+        };
+        if self.auto_vj.status.action_log.len() == AUTO_VJ_ACTION_LOG_LIMIT {
+            self.auto_vj.status.action_log.remove(0);
+        }
+        self.auto_vj.status.action_log.push(action.clone());
+        self.auto_vj.status.mode = AutoVjMode::Running;
+        self.auto_vj.status.show_revision = show_revision;
+        self.auto_vj.status.action_sequence = sequence;
+        self.auto_vj.status.last_action = Some(action);
+        self.auto_vj.status.fault = None;
+        self.auto_vj.last_selected_layer_id = Some(layer_id);
+        self.last_error = None;
+    }
+
     fn expire_live_audio_spectrum(&mut self, now: Instant) -> bool {
         let expired = self
             .live_audio_spectrum_updated_at
@@ -6536,6 +7323,8 @@ impl EngineRuntime {
         if expired {
             self.live_audio_spectrum = None;
             self.live_audio_spectrum_updated_at = None;
+            self.live_audio_frame_verified = false;
+            self.hold_auto_vj_for_live_audio_loss();
         }
         expired
     }
@@ -6550,11 +7339,13 @@ impl EngineRuntime {
             self.record_tick_jitter();
         }
         self.record_command_to_dmx_tick_latency(now);
+        self.synchronize_requested_live_audio_clear();
         self.expire_live_audio_spectrum(now);
         self.advance_timeline(now);
         self.advance_pending_cue(now);
         self.apply_timeline_automations();
         self.apply_timeline_video_automations();
+        self.advance_auto_vj(now);
         self.apply_active_fade(now);
         self.advance_video_layers(self.last_tick_interval);
         self.advance_video_layer_fades(now);
@@ -9577,6 +10368,10 @@ impl EngineRuntime {
             mapping_presets: self.video_output_mapping_presets.clone(),
             master_opacity: self.video_master_opacity,
             blackout: self.video_blackout,
+            auto_vj: AutoVjSnapshot {
+                config: self.auto_vj.config.clone(),
+                status: self.auto_vj.status.clone(),
+            },
         }
     }
 
@@ -10038,6 +10833,130 @@ impl EngineRuntime {
             })
             .collect()
     }
+}
+
+fn validate_auto_vj_config_shape(config: &AutoVjConfig) -> Result<(), String> {
+    if config.eligible_layer_ids.is_empty() {
+        return Err("Auto VJ requires at least one candidate video layer".to_string());
+    }
+    if config.eligible_layer_ids.len() > AUTO_VJ_MAX_CANDIDATES {
+        return Err(format!(
+            "Auto VJ supports at most {AUTO_VJ_MAX_CANDIDATES} candidate video layers"
+        ));
+    }
+    if config.beats_per_change == 0 || config.beats_per_change > AUTO_VJ_MAX_BEATS_PER_CHANGE {
+        return Err(format!(
+            "Auto VJ beats per change must be from 1 to {AUTO_VJ_MAX_BEATS_PER_CHANGE}"
+        ));
+    }
+    if config.transition_ms > AUTO_VJ_MAX_TRANSITION_MS {
+        return Err(format!(
+            "Auto VJ transition must not exceed {AUTO_VJ_MAX_TRANSITION_MS} ms"
+        ));
+    }
+    let mut seen = HashSet::with_capacity(config.eligible_layer_ids.len());
+    for layer_id in &config.eligible_layer_ids {
+        if *layer_id == 0 {
+            return Err("Auto VJ candidate video layer IDs must be non-zero".to_string());
+        }
+        if !seen.insert(*layer_id) {
+            return Err(format!(
+                "Auto VJ candidate video layer {layer_id} is duplicated"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn auto_vj_selection_token(seed: u64, show_revision: u64, boundary_index: u64) -> u64 {
+    let mut value =
+        seed ^ show_revision.rotate_left(17) ^ boundary_index.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    value = value.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    value ^ (value >> 31)
+}
+
+fn auto_vj_show_revision(config: &AutoVjConfig, layers: &[RuntimeVideoLayer]) -> u64 {
+    const FNV_OFFSET: u64 = 0xCBF2_9CE4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01B3;
+
+    fn hash_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(FNV_PRIME);
+        }
+        hash
+    }
+
+    let mut hash = FNV_OFFSET;
+    hash = hash_bytes(hash, &config.beats_per_change.to_le_bytes());
+    hash = hash_bytes(hash, &config.transition_ms.to_le_bytes());
+    hash = hash_bytes(hash, &[u8::from(config.avoid_immediate_repeat)]);
+    hash = hash_bytes(
+        hash,
+        &[match config.rhythm_source {
+            AutoVjRhythmSource::Clock => 0,
+            AutoVjRhythmSource::LiveAudio => 1,
+        }],
+    );
+    for layer_id in &config.eligible_layer_ids {
+        hash = hash_bytes(hash, &layer_id.to_le_bytes());
+        let Some(layer) = layers.iter().find(|layer| layer.id == *layer_id) else {
+            continue;
+        };
+        hash = hash_bytes(hash, layer.label.as_bytes());
+        let source_tag = match layer.source.kind {
+            VideoSourceKind::File => 0,
+            VideoSourceKind::Camera => 1,
+            VideoSourceKind::ScreenCapture => 2,
+            VideoSourceKind::Ndi => 3,
+            VideoSourceKind::Spout => 4,
+            VideoSourceKind::Syphon => 5,
+            VideoSourceKind::StillImage => 6,
+        };
+        hash = hash_bytes(hash, &[source_tag]);
+        if let Some(path) = &layer.source.path {
+            hash = hash_bytes(hash, path.as_bytes());
+        }
+        if let Some(name) = &layer.source.name {
+            hash = hash_bytes(hash, name.as_bytes());
+        }
+    }
+    hash
+}
+
+fn auto_vj_manual_override_command(command: &EngineCommand) -> bool {
+    matches!(
+        command,
+        EngineCommand::SetAllBlackout(_)
+            | EngineCommand::TriggerPlaybackExecutorNext(_)
+            | EngineCommand::TriggerPlaybackExecutorPrevious(_)
+            | EngineCommand::TriggerCue(_)
+            | EngineCommand::TriggerNextCue
+            | EngineCommand::TriggerPreviousCue
+            | EngineCommand::TriggerCueListNext(_)
+            | EngineCommand::TriggerCueListPrevious(_)
+            | EngineCommand::SetVideoLayerState { .. }
+            | EngineCommand::ExclusiveVideoTake { .. }
+            | EngineCommand::SetVideoLayerParam { .. }
+            | EngineCommand::FadeVideoLayerOpacity { .. }
+            | EngineCommand::SetVideoLayerEnabled { .. }
+            | EngineCommand::SetVideoLayerSolo { .. }
+            | EngineCommand::SetVideoLayerPlaying { .. }
+            | EngineCommand::SetVideoLayerLoop { .. }
+            | EngineCommand::AddVideoCuePoint { .. }
+            | EngineCommand::RemoveVideoCuePoint { .. }
+            | EngineCommand::SetVideoCuePoint { .. }
+            | EngineCommand::JumpVideoCuePoint { .. }
+            | EngineCommand::JumpVideoCuePointRelative { .. }
+            | EngineCommand::SetVideoLayerBlendMode { .. }
+            | EngineCommand::SetVideoMasterOpacity(_)
+            | EngineCommand::SetVideoBlackout(_)
+            | EngineCommand::SetVideoOutputOpacity { .. }
+            | EngineCommand::FadeVideoOutputOpacity { .. }
+            | EngineCommand::SetVideoOutputBlackout { .. }
+    )
 }
 
 fn record_percentile_window_sample(
@@ -15089,6 +16008,757 @@ mod tests {
             .state
     }
 
+    fn auto_vj_test_runtime(seed: u64) -> (EngineRuntime, Instant) {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        for layer_id in 1..=3 {
+            add_runtime_test_video_layer(&mut runtime, layer_id, VideoLayerState::default());
+        }
+        let base = Instant::now();
+        runtime.clock = BpmClock::new(120.0, base);
+        runtime.apply_command(EngineCommand::SetAutoVjConfig(AutoVjConfig {
+            eligible_layer_ids: vec![1, 2, 3],
+            seed,
+            beats_per_change: 4,
+            transition_ms: 0,
+            avoid_immediate_repeat: true,
+            rhythm_source: AutoVjRhythmSource::Clock,
+        }));
+        runtime.set_auto_vj_armed(true, base).unwrap();
+        assert!(runtime.auto_vj.status.armed);
+        (runtime, base)
+    }
+
+    fn test_live_audio_frame(
+        generation: u64,
+        feature_sequence: u64,
+        onsets: &[u64],
+    ) -> LiveAudioFrame {
+        let mut onset_feature_sequences = [0; protocol::MAX_LIVE_AUDIO_FRAME_ONSETS];
+        onset_feature_sequences[..onsets.len()].copy_from_slice(onsets);
+        LiveAudioFrame {
+            generation,
+            feature_sequence,
+            spectrum: AudioSpectrumPoint {
+                time_ms: feature_sequence,
+                bass: 0.25,
+                mid: 0.5,
+                high: 0.75,
+            },
+            onset_feature_sequences,
+            onset_count: u8::try_from(onsets.len()).unwrap(),
+        }
+    }
+
+    #[test]
+    fn auto_vj_seed_and_show_revision_produce_identical_action_logs() {
+        let (mut first, first_base) = auto_vj_test_runtime(0xA11C_E55E);
+        let (mut second, second_base) = auto_vj_test_runtime(0xA11C_E55E);
+
+        for beat in [4_u64, 8, 12, 16, 20, 24] {
+            first.advance_auto_vj(first_base + Duration::from_secs_f64(beat as f64 * 60.0 / 120.0));
+            second
+                .advance_auto_vj(second_base + Duration::from_secs_f64(beat as f64 * 60.0 / 120.0));
+        }
+
+        assert_eq!(
+            first.auto_vj.status.show_revision,
+            second.auto_vj.status.show_revision
+        );
+        assert_eq!(
+            first.auto_vj.status.action_log,
+            second.auto_vj.status.action_log
+        );
+        assert_eq!(first.auto_vj.status.action_sequence, 6);
+        assert!(first
+            .auto_vj
+            .status
+            .action_log
+            .windows(2)
+            .all(|actions| actions[0].layer_id != actions[1].layer_id));
+    }
+
+    #[test]
+    fn auto_vj_consumes_each_quantized_boundary_exactly_once() {
+        let (mut runtime, base) = auto_vj_test_runtime(7);
+        let boundary = base + Duration::from_secs(2);
+
+        runtime.advance_auto_vj(boundary);
+        runtime.advance_auto_vj(boundary + Duration::from_millis(200));
+        runtime.advance_auto_vj(boundary + Duration::from_millis(499));
+
+        assert_eq!(runtime.auto_vj.status.action_sequence, 1);
+        assert_eq!(runtime.auto_vj.status.action_log[0].boundary_index, 1);
+        assert_eq!(runtime.auto_vj.status.action_log[0].beat, 4);
+        assert_eq!(runtime.auto_vj.status.last_consumed_boundary, Some(1));
+        assert_eq!(runtime.auto_vj.status.next_boundary_beat, Some(8));
+
+        runtime.advance_auto_vj(base + Duration::from_secs(4));
+        assert_eq!(runtime.auto_vj.status.action_sequence, 2);
+        assert_eq!(runtime.auto_vj.status.action_log[1].boundary_index, 2);
+    }
+
+    #[test]
+    fn auto_vj_live_audio_onsets_advance_quantized_boundaries_exactly_once() {
+        let (mut runtime, base) = auto_vj_test_runtime(11);
+        runtime.set_auto_vj_armed(false, base).unwrap();
+        runtime
+            .set_auto_vj_config(AutoVjConfig {
+                eligible_layer_ids: vec![1, 2, 3],
+                seed: 11,
+                beats_per_change: 2,
+                transition_ms: 0,
+                avoid_immediate_repeat: true,
+                rhythm_source: AutoVjRhythmSource::LiveAudio,
+            })
+            .unwrap();
+        runtime.set_auto_vj_armed(true, base).unwrap();
+        assert_eq!(runtime.auto_vj.status.mode, AutoVjMode::Hold);
+        assert!(runtime.auto_vj.status.live_audio_waiting);
+
+        runtime.apply_live_audio_frame(test_live_audio_frame(1, 7, &[7]), base, base);
+        runtime.advance_auto_vj(base);
+        runtime.apply_live_audio_frame(
+            test_live_audio_frame(1, 8, &[7]),
+            base + Duration::from_millis(10),
+            base + Duration::from_millis(10),
+        );
+        runtime.advance_auto_vj(base + Duration::from_millis(10));
+        runtime.apply_live_audio_frame(
+            test_live_audio_frame(1, 9, &[6]),
+            base + Duration::from_millis(15),
+            base + Duration::from_millis(15),
+        );
+        runtime.advance_auto_vj(base + Duration::from_millis(15));
+
+        assert_eq!(runtime.auto_vj.status.live_audio_beat_counter, 1);
+        assert_eq!(runtime.auto_vj.status.action_sequence, 0);
+
+        runtime.apply_live_audio_frame(
+            test_live_audio_frame(1, 10, &[8]),
+            base + Duration::from_millis(20),
+            base + Duration::from_millis(20),
+        );
+        runtime.advance_auto_vj(base + Duration::from_millis(20));
+
+        assert_eq!(runtime.auto_vj.status.live_audio_beat_counter, 2);
+        assert_eq!(runtime.auto_vj.status.action_sequence, 1);
+        assert_eq!(runtime.auto_vj.status.action_log[0].boundary_index, 1);
+        assert_eq!(runtime.auto_vj.status.action_log[0].beat, 2);
+        assert_eq!(
+            runtime.auto_vj.status.action_log[0].trigger,
+            AutoVjTrigger::LiveAudioOnset
+        );
+        assert_eq!(
+            runtime.auto_vj.status.action_log[0].live_audio_feature_sequence,
+            Some(8)
+        );
+        assert_eq!(runtime.auto_vj.status.action_log[0].seed, 11);
+        assert_eq!(
+            runtime.auto_vj.status.action_log[0].show_revision,
+            runtime.auto_vj.status.show_revision
+        );
+        assert_eq!(runtime.auto_vj.status.next_boundary_beat, Some(4));
+    }
+
+    #[test]
+    fn live_audio_telemetry_does_not_clear_an_unrelated_engine_error() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig::default());
+        runtime.last_error = Some("unrelated output error".to_string());
+
+        let now = Instant::now();
+        runtime.apply_live_audio_frame(test_live_audio_frame(1, 1, &[]), now, now);
+        assert_eq!(
+            runtime.last_error.as_deref(),
+            Some("unrelated output error")
+        );
+
+        runtime.apply_command(EngineCommand::ReportLiveAudioOnset {
+            feature_sequence: 1,
+            generation: 1,
+            captured_at: now,
+        });
+
+        assert_eq!(
+            runtime.last_error.as_deref(),
+            Some("unrelated output error")
+        );
+    }
+
+    #[test]
+    fn clearing_live_audio_latches_live_synced_auto_vj_hold() {
+        let (mut runtime, base) = auto_vj_test_runtime(12);
+        runtime.set_auto_vj_armed(false, base).unwrap();
+        runtime
+            .set_auto_vj_config(AutoVjConfig {
+                eligible_layer_ids: vec![1],
+                seed: 12,
+                beats_per_change: 1,
+                transition_ms: 0,
+                avoid_immediate_repeat: true,
+                rhythm_source: AutoVjRhythmSource::LiveAudio,
+            })
+            .unwrap();
+        runtime.set_auto_vj_armed(true, base).unwrap();
+        runtime.apply_live_audio_frame(test_live_audio_frame(1, 1, &[1]), base, base);
+        runtime.advance_auto_vj(base);
+        assert_eq!(runtime.auto_vj.status.action_sequence, 1);
+
+        runtime.apply_command(EngineCommand::ClearLiveAudioInput { generation: 1 });
+
+        assert_eq!(runtime.auto_vj.status.mode, AutoVjMode::Hold);
+        assert!(runtime.auto_vj.status.hold);
+        assert_eq!(
+            runtime.auto_vj.status.last_live_audio_feature_sequence,
+            None
+        );
+        runtime.apply_command(EngineCommand::ReportLiveAudioOnset {
+            feature_sequence: 2,
+            generation: 1,
+            captured_at: base + Duration::from_millis(10),
+        });
+        runtime.advance_auto_vj(base + Duration::from_secs(1));
+        assert_eq!(runtime.auto_vj.status.live_audio_beat_counter, 1);
+        assert_eq!(runtime.auto_vj.status.action_sequence, 1);
+    }
+
+    #[test]
+    fn live_audio_arm_and_resume_wait_for_a_fresh_generation() {
+        let (mut runtime, base) = auto_vj_test_runtime(14);
+        runtime.set_auto_vj_armed(false, base).unwrap();
+        runtime
+            .set_auto_vj_config(AutoVjConfig {
+                eligible_layer_ids: vec![1],
+                seed: 14,
+                beats_per_change: 1,
+                transition_ms: 0,
+                avoid_immediate_repeat: true,
+                rhythm_source: AutoVjRhythmSource::LiveAudio,
+            })
+            .unwrap();
+
+        runtime.set_auto_vj_armed(true, base).unwrap();
+        assert_eq!(runtime.auto_vj.status.mode, AutoVjMode::Hold);
+        assert!(runtime.auto_vj.status.hold);
+        assert!(runtime.auto_vj.status.live_audio_waiting);
+
+        runtime.set_auto_vj_hold(false, base).unwrap();
+        assert_eq!(runtime.auto_vj.status.mode, AutoVjMode::Hold);
+        assert!(runtime.auto_vj.status.hold);
+        assert!(runtime.auto_vj.status.live_audio_waiting);
+
+        runtime.apply_command(EngineCommand::ReportLiveAudioOnset {
+            feature_sequence: 1,
+            generation: 1,
+            captured_at: base,
+        });
+        assert_eq!(runtime.auto_vj.status.live_audio_beat_counter, 0);
+        assert!(runtime.auto_vj.status.live_audio_waiting);
+
+        runtime.apply_live_audio_frame(test_live_audio_frame(2, 1, &[]), base, base);
+        assert_eq!(runtime.auto_vj.status.mode, AutoVjMode::Armed);
+        assert!(!runtime.auto_vj.status.hold);
+        assert!(!runtime.auto_vj.status.live_audio_waiting);
+        assert_eq!(runtime.auto_vj.status.live_audio_generation, Some(2));
+    }
+
+    #[test]
+    fn stale_live_audio_frame_and_onset_fail_closed_at_250_ms() {
+        let (mut runtime, base) = auto_vj_test_runtime(15);
+        runtime.set_auto_vj_armed(false, base).unwrap();
+        runtime
+            .set_auto_vj_config(AutoVjConfig {
+                eligible_layer_ids: vec![1],
+                seed: 15,
+                beats_per_change: 1,
+                transition_ms: 0,
+                avoid_immediate_repeat: true,
+                rhythm_source: AutoVjRhythmSource::LiveAudio,
+            })
+            .unwrap();
+        runtime.set_auto_vj_armed(true, base).unwrap();
+
+        runtime.apply_live_audio_frame(
+            test_live_audio_frame(1, 1, &[1]),
+            base,
+            base + LIVE_AUDIO_SPECTRUM_TTL,
+        );
+        assert!(runtime.live_audio_spectrum.is_none());
+        assert_eq!(runtime.auto_vj.status.live_audio_beat_counter, 0);
+        assert!(runtime.auto_vj.status.live_audio_waiting);
+
+        let recovered_at = base + LIVE_AUDIO_SPECTRUM_TTL + Duration::from_millis(1);
+        runtime.apply_live_audio_frame(
+            test_live_audio_frame(2, 1, &[]),
+            recovered_at,
+            recovered_at,
+        );
+        assert!(!runtime.auto_vj.status.live_audio_waiting);
+        runtime.apply_live_audio_onset(2, 2, recovered_at, recovered_at + LIVE_AUDIO_SPECTRUM_TTL);
+        assert_eq!(runtime.auto_vj.status.live_audio_beat_counter, 0);
+        assert!(runtime.live_audio_spectrum.is_none());
+        assert!(runtime.auto_vj.status.live_audio_waiting);
+    }
+
+    #[test]
+    fn clear_consumes_old_boundary_and_new_generation_waits_for_a_new_onset() {
+        let (mut runtime, base) = auto_vj_test_runtime(16);
+        runtime.set_auto_vj_armed(false, base).unwrap();
+        runtime
+            .set_auto_vj_config(AutoVjConfig {
+                eligible_layer_ids: vec![1],
+                seed: 16,
+                beats_per_change: 1,
+                transition_ms: 0,
+                avoid_immediate_repeat: true,
+                rhythm_source: AutoVjRhythmSource::LiveAudio,
+            })
+            .unwrap();
+        runtime.set_auto_vj_armed(true, base).unwrap();
+
+        runtime.apply_live_audio_frame(test_live_audio_frame(1, 1, &[1]), base, base);
+        assert_eq!(runtime.auto_vj.status.live_audio_beat_counter, 1);
+        runtime.clear_live_audio_generation(1);
+        assert_eq!(runtime.auto_vj.status.last_consumed_boundary, Some(1));
+
+        runtime.apply_live_audio_frame(
+            test_live_audio_frame(1, 2, &[2]),
+            base + Duration::from_millis(1),
+            base + Duration::from_millis(1),
+        );
+        assert_eq!(runtime.auto_vj.status.live_audio_beat_counter, 1);
+
+        runtime.apply_live_audio_frame(
+            test_live_audio_frame(2, 1, &[]),
+            base + Duration::from_millis(2),
+            base + Duration::from_millis(2),
+        );
+        runtime.advance_auto_vj(base + Duration::from_millis(2));
+        assert_eq!(runtime.auto_vj.status.action_sequence, 0);
+
+        runtime.apply_live_audio_frame(
+            test_live_audio_frame(2, 2, &[2]),
+            base + Duration::from_millis(3),
+            base + Duration::from_millis(3),
+        );
+        runtime.advance_auto_vj(base + Duration::from_millis(3));
+        assert_eq!(runtime.auto_vj.status.action_sequence, 1);
+        assert_eq!(runtime.auto_vj.status.last_action.as_ref().unwrap().beat, 2);
+    }
+
+    #[test]
+    fn published_clear_is_a_barrier_and_rejects_queued_old_generation_frames() {
+        let (mut runtime, base) = auto_vj_test_runtime(18);
+        runtime.set_auto_vj_armed(false, base).unwrap();
+        runtime
+            .set_auto_vj_config(AutoVjConfig {
+                eligible_layer_ids: vec![1],
+                seed: 18,
+                beats_per_change: 1,
+                transition_ms: 0,
+                avoid_immediate_repeat: true,
+                rhythm_source: AutoVjRhythmSource::LiveAudio,
+            })
+            .unwrap();
+        runtime.set_auto_vj_armed(true, base).unwrap();
+
+        let queue = ArrayQueue::new(4);
+        let queued_at = Instant::now();
+        assert!(queue
+            .push(QueuedEngineCommand {
+                command: EngineCommand::PublishLiveAudioFrame {
+                    frame: test_live_audio_frame(1, 1, &[1]),
+                    captured_at: queued_at,
+                },
+                queued_at,
+            })
+            .is_ok());
+        let (ack, receiver) = mpsc::sync_channel(1);
+        assert!(queue
+            .push(QueuedEngineCommand {
+                command: EngineCommand::ClearLiveAudioInputPublished {
+                    generation: 1,
+                    expires_at: queued_at + Duration::from_secs(1),
+                    ack,
+                },
+                queued_at,
+            })
+            .is_ok());
+        assert!(queue
+            .push(QueuedEngineCommand {
+                command: EngineCommand::PublishLiveAudioFrame {
+                    frame: test_live_audio_frame(1, 2, &[2]),
+                    captured_at: queued_at,
+                },
+                queued_at,
+            })
+            .is_ok());
+
+        runtime.consume_commands(&queue);
+        assert_eq!(queue.len(), 1);
+        assert!(runtime.auto_vj.status.live_audio_waiting);
+        let snapshot = RwLock::new(EngineSnapshot::default());
+        runtime.publish_pending_command_acks(queue.len(), &snapshot);
+        assert_eq!(
+            receiver.recv_timeout(Duration::from_millis(50)).unwrap(),
+            Ok(())
+        );
+        assert!(
+            snapshot
+                .read()
+                .unwrap()
+                .video
+                .auto_vj
+                .status
+                .live_audio_waiting
+        );
+
+        runtime.consume_commands(&queue);
+        runtime.advance_auto_vj(Instant::now());
+        assert_eq!(runtime.auto_vj.status.live_audio_beat_counter, 1);
+        assert_eq!(runtime.auto_vj.status.action_sequence, 0);
+        assert!(runtime.auto_vj.status.live_audio_waiting);
+    }
+
+    #[test]
+    fn requested_clear_blocks_auto_vj_before_a_backlogged_clear_command_is_drained() {
+        let (mut runtime, base) = auto_vj_test_runtime(20);
+        runtime.set_auto_vj_armed(false, base).unwrap();
+        runtime
+            .set_auto_vj_config(AutoVjConfig {
+                eligible_layer_ids: vec![1],
+                seed: 20,
+                beats_per_change: 1,
+                transition_ms: 0,
+                avoid_immediate_repeat: true,
+                rhythm_source: AutoVjRhythmSource::LiveAudio,
+            })
+            .unwrap();
+        runtime.set_auto_vj_armed(true, base).unwrap();
+        runtime.apply_live_audio_frame(test_live_audio_frame(1, 1, &[1]), base, base);
+        assert_eq!(runtime.auto_vj.status.live_audio_beat_counter, 1);
+
+        let queue = ArrayQueue::new(COMMANDS_PER_TICK_LIMIT + 2);
+        let queued_at = Instant::now();
+        for sequence in 2..=COMMANDS_PER_TICK_LIMIT as u64 + 2 {
+            assert!(queue
+                .push(QueuedEngineCommand {
+                    command: EngineCommand::PublishLiveAudioFrame {
+                        frame: test_live_audio_frame(1, sequence, &[sequence]),
+                        captured_at: queued_at,
+                    },
+                    queued_at,
+                })
+                .is_ok());
+        }
+        let (ack, receiver) = mpsc::sync_channel(1);
+        assert!(queue
+            .push(QueuedEngineCommand {
+                command: EngineCommand::ClearLiveAudioInputPublished {
+                    generation: 1,
+                    expires_at: queued_at + Duration::from_secs(1),
+                    ack,
+                },
+                queued_at,
+            })
+            .is_ok());
+        runtime.shared_telemetry.request_live_audio_clear(1);
+
+        runtime.consume_commands(&queue);
+        assert_eq!(queue.len(), 2);
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        runtime.advance_auto_vj(Instant::now());
+
+        assert_eq!(runtime.auto_vj.status.live_audio_beat_counter, 1);
+        assert_eq!(runtime.auto_vj.status.action_sequence, 0);
+        assert_eq!(runtime.auto_vj.status.last_consumed_boundary, Some(1));
+        assert!(runtime.auto_vj.status.live_audio_waiting);
+    }
+
+    #[test]
+    fn live_audio_clear_handle_returns_only_after_the_generation_is_published() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+
+        engine.clear_live_audio_input(7).unwrap();
+
+        assert_eq!(
+            engine.snapshot().video.auto_vj.status.live_audio_generation,
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn published_clear_ack_requires_snapshot_publication_but_never_rolls_back_safety() {
+        let (mut runtime, base) = auto_vj_test_runtime(19);
+        runtime.live_audio_generation = Some(1);
+        runtime.live_audio_spectrum = Some(AudioSpectrumPoint {
+            time_ms: 0,
+            bass: 1.0,
+            mid: 1.0,
+            high: 1.0,
+        });
+        runtime.live_audio_spectrum_updated_at = Some(base);
+        let snapshot = RwLock::new(EngineSnapshot::default());
+        let read_guard = snapshot.read().unwrap();
+        let (ack, receiver) = mpsc::sync_channel(1);
+
+        runtime.apply_command(EngineCommand::ClearLiveAudioInputPublished {
+            generation: 1,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &snapshot);
+
+        assert!(receiver
+            .recv_timeout(Duration::from_millis(50))
+            .unwrap()
+            .is_err());
+        assert!(runtime.live_audio_spectrum.is_none());
+        assert_eq!(runtime.last_live_audio_frame_sequence, Some(u64::MAX));
+        drop(read_guard);
+
+        let (retry_ack, retry_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::ClearLiveAudioInputPublished {
+            generation: 1,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: retry_ack,
+        });
+        runtime.publish_pending_command_acks(0, &snapshot);
+        assert_eq!(
+            retry_receiver
+                .recv_timeout(Duration::from_millis(50))
+                .unwrap(),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn manual_exclusive_take_wins_when_auto_vj_boundary_arrives_in_same_tick() {
+        let (mut runtime, base) = auto_vj_test_runtime(13);
+        let _ack = apply_runtime_exclusive_video_take(
+            &mut runtime,
+            ExclusiveVideoTakeRequest {
+                target_layer_id: 2,
+                fade_ms: 0,
+                preview_position_ms: None,
+                preview_speed: None,
+            },
+        );
+
+        runtime.advance_auto_vj(base + Duration::from_secs(2));
+
+        assert_eq!(runtime.auto_vj.status.action_sequence, 0);
+        assert_eq!(runtime.auto_vj.status.mode, AutoVjMode::Hold);
+        assert!(runtime.auto_vj.status.hold);
+        assert_eq!(runtime.auto_vj.status.last_consumed_boundary, Some(1));
+        assert!(runtime_video_layer_state(&runtime, 2).playing);
+        assert_eq!(runtime_video_layer_state(&runtime, 2).opacity, 1.0);
+        assert!(!runtime_video_layer_state(&runtime, 1).playing);
+        assert_eq!(runtime_video_layer_state(&runtime, 1).opacity, 0.0);
+    }
+
+    #[test]
+    fn manual_take_between_boundaries_latches_hold_until_explicit_resume() {
+        let (mut runtime, base) = auto_vj_test_runtime(17);
+        let _ack = apply_runtime_exclusive_video_take(
+            &mut runtime,
+            ExclusiveVideoTakeRequest {
+                target_layer_id: 3,
+                fade_ms: 0,
+                preview_position_ms: None,
+                preview_speed: None,
+            },
+        );
+
+        runtime.advance_auto_vj(base + Duration::from_secs(2));
+        runtime.advance_auto_vj(base + Duration::from_secs(4));
+
+        assert_eq!(runtime.auto_vj.status.mode, AutoVjMode::Hold);
+        assert!(runtime.auto_vj.status.hold);
+        assert_eq!(runtime.auto_vj.status.action_sequence, 0);
+        assert!(runtime_video_layer_state(&runtime, 3).playing);
+
+        runtime
+            .set_auto_vj_hold(false, base + Duration::from_millis(4_100))
+            .unwrap();
+        runtime.advance_auto_vj(base + Duration::from_secs(6));
+
+        assert_eq!(runtime.auto_vj.status.mode, AutoVjMode::Running);
+        assert!(!runtime.auto_vj.status.hold);
+        assert_eq!(runtime.auto_vj.status.action_sequence, 1);
+        assert_eq!(runtime.auto_vj.status.action_log[0].boundary_index, 3);
+    }
+
+    #[test]
+    fn auto_vj_hold_consumes_boundaries_without_actions_until_released() {
+        let (mut runtime, base) = auto_vj_test_runtime(29);
+        runtime
+            .set_auto_vj_hold(true, base + Duration::from_millis(100))
+            .unwrap();
+
+        runtime.advance_auto_vj(base + Duration::from_secs(2));
+
+        assert_eq!(runtime.auto_vj.status.mode, AutoVjMode::Hold);
+        assert_eq!(runtime.auto_vj.status.action_sequence, 0);
+        assert_eq!(runtime.auto_vj.status.last_consumed_boundary, Some(1));
+
+        runtime
+            .set_auto_vj_hold(false, base + Duration::from_millis(2_100))
+            .unwrap();
+        runtime.advance_auto_vj(base + Duration::from_secs(4));
+
+        assert_eq!(runtime.auto_vj.status.mode, AutoVjMode::Running);
+        assert_eq!(runtime.auto_vj.status.action_sequence, 1);
+        assert_eq!(runtime.auto_vj.status.action_log[0].boundary_index, 2);
+    }
+
+    #[test]
+    fn auto_vj_never_clears_video_blackout() {
+        let (mut runtime, base) = auto_vj_test_runtime(31);
+        runtime.apply_command(EngineCommand::SetVideoBlackout(true));
+
+        runtime.advance_auto_vj(base + Duration::from_secs(2));
+
+        assert!(runtime.video_blackout);
+        assert!(runtime.video_snapshot().blackout);
+        assert_eq!(runtime.auto_vj.status.action_sequence, 0);
+        assert_eq!(runtime.auto_vj.status.last_consumed_boundary, Some(1));
+    }
+
+    #[test]
+    fn auto_vj_faults_closed_when_a_configured_candidate_disappears() {
+        let (mut runtime, base) = auto_vj_test_runtime(37);
+        runtime.apply_command(EngineCommand::RemoveVideoLayer(2));
+
+        runtime.advance_auto_vj(base + Duration::from_secs(2));
+
+        assert_eq!(runtime.auto_vj.status.mode, AutoVjMode::Fault);
+        assert!(!runtime.auto_vj.status.armed);
+        assert_eq!(runtime.auto_vj.status.action_sequence, 0);
+        assert!(runtime
+            .auto_vj
+            .status
+            .fault
+            .as_deref()
+            .is_some_and(|error| error.contains("candidate video layer 2 was not found")));
+    }
+
+    #[test]
+    fn auto_vj_config_persists_but_runtime_status_resets_on_project_load() {
+        let (mut runtime, base) = auto_vj_test_runtime(41);
+        runtime.advance_auto_vj(base + Duration::from_secs(2));
+        let snapshot = runtime.build_snapshot(0);
+        assert_eq!(snapshot.video.auto_vj.config.seed, 41);
+        assert_eq!(snapshot.video.auto_vj.status.action_sequence, 1);
+
+        let mut loaded = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        loaded.load_project_snapshot(snapshot);
+
+        assert_eq!(loaded.auto_vj.config.seed, 41);
+        assert_eq!(loaded.auto_vj.status.mode, AutoVjMode::Off);
+        assert!(!loaded.auto_vj.status.armed);
+        assert!(loaded.auto_vj.status.action_log.is_empty());
+        assert_eq!(loaded.video_snapshot().auto_vj.config.seed, 41);
+    }
+
+    #[test]
+    fn auto_vj_handle_waits_for_published_snapshot_and_returns_validation_errors() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine
+            .send(EngineCommand::AddVideoLayer {
+                layer_id: 1,
+                label: "Auto VJ clip".to_string(),
+                source: VideoSourceSummary {
+                    kind: protocol::VideoSourceKind::File,
+                    path: Some("memory://auto-vj-handle.mp4".to_string()),
+                    name: None,
+                    codec: Some("h264".to_string()),
+                    metadata: None,
+                },
+            })
+            .unwrap();
+        let config = AutoVjConfig {
+            eligible_layer_ids: vec![1],
+            seed: 0xA170,
+            beats_per_change: 8,
+            transition_ms: 250,
+            avoid_immediate_repeat: true,
+            rhythm_source: AutoVjRhythmSource::Clock,
+        };
+
+        engine.set_auto_vj_config(config.clone()).unwrap();
+        assert_eq!(engine.snapshot().video.auto_vj.config, config);
+
+        engine.set_auto_vj_armed(true).unwrap();
+        let armed = engine.snapshot();
+        assert!(armed.video.auto_vj.status.armed);
+        assert_eq!(armed.video.auto_vj.status.mode, AutoVjMode::Armed);
+
+        engine.set_auto_vj_hold(true).unwrap();
+        let held = engine.snapshot();
+        assert!(held.video.auto_vj.status.hold);
+        assert_eq!(held.video.auto_vj.status.mode, AutoVjMode::Hold);
+
+        let error = engine
+            .set_auto_vj_config(AutoVjConfig {
+                eligible_layer_ids: Vec::new(),
+                ..AutoVjConfig::default()
+            })
+            .unwrap_err();
+        assert!(error.contains("at least one candidate video layer"));
+    }
+
+    #[test]
+    fn auto_vj_published_config_rolls_back_when_snapshot_is_busy() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        add_runtime_test_video_layer(&mut runtime, 1, VideoLayerState::default());
+        let previous = runtime.auto_vj.clone();
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetAutoVjConfigPublished {
+            config: AutoVjConfig {
+                eligible_layer_ids: vec![1],
+                seed: 99,
+                beats_per_change: 4,
+                transition_ms: 100,
+                avoid_immediate_repeat: true,
+                rhythm_source: AutoVjRhythmSource::Clock,
+            },
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        assert_eq!(runtime.auto_vj.config.seed, 99);
+
+        let read_guard = published.read().unwrap();
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("rolled back"));
+        assert_eq!(runtime.auto_vj.config, previous.config);
+        assert_eq!(runtime.auto_vj.status, previous.status);
+        assert_eq!(runtime.last_error, None);
+        drop(read_guard);
+    }
+
     fn apply_runtime_exclusive_video_take(
         runtime: &mut EngineRuntime,
         request: ExclusiveVideoTakeRequest,
@@ -16154,6 +17824,7 @@ mod tests {
                 }],
                 master_opacity: 0.8,
                 blackout: true,
+                auto_vj: AutoVjSnapshot::default(),
             },
             effects: vec![EffectSummary {
                 id: 47,
@@ -16559,6 +18230,18 @@ mod tests {
     fn live_audio_spectrum_expires_inside_the_engine_at_the_ttl_boundary() {
         let mut runtime = EngineRuntime::new(DmxOutputConfig::default());
         let updated_at = Instant::now();
+        add_runtime_test_video_layer(&mut runtime, 1, VideoLayerState::default());
+        runtime
+            .set_auto_vj_config(AutoVjConfig {
+                eligible_layer_ids: vec![1],
+                seed: 0,
+                beats_per_change: 1,
+                transition_ms: 0,
+                avoid_immediate_repeat: true,
+                rhythm_source: AutoVjRhythmSource::LiveAudio,
+            })
+            .unwrap();
+        runtime.set_auto_vj_armed(true, updated_at).unwrap();
         runtime.live_audio_spectrum = Some(AudioSpectrumPoint {
             time_ms: 0,
             bass: 0.1,
@@ -16574,6 +18257,8 @@ mod tests {
         assert!(runtime.expire_live_audio_spectrum(updated_at + LIVE_AUDIO_SPECTRUM_TTL));
         assert!(runtime.live_audio_spectrum.is_none());
         assert!(runtime.live_audio_spectrum_updated_at.is_none());
+        assert_eq!(runtime.auto_vj.status.mode, AutoVjMode::Hold);
+        assert!(runtime.auto_vj.status.hold);
     }
 
     #[test]

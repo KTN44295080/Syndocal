@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     env,
     ffi::{OsStr, OsString},
     fs,
@@ -9,7 +9,7 @@ use std::{
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
-        Arc, Mutex, TryLockError,
+        Arc, Condvar, Mutex, TryLockError,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -29,24 +29,25 @@ use io::sacn::is_sacn_multicast_target;
 use minisign_verify::PublicKey;
 use protocol::{
     canonical_video_output_mapping_field, AttributeControl, AttributeResolution,
-    AudioAnalysisSummary, AutomationId, AutomationKeyframeSummary, ChaserEffectRequest, ChaserStep,
-    ClockSnapshot, ColorEffectRequest, CompositionId, CompositionSummary, CueEffectTarget,
-    CueFixtureTarget, CueId, CueNodeGraphTarget, CustomFixtureProfileFile,
-    CustomFixtureProfileRequest, DmxInputConfig, DmxInputProtocol, DmxInputStatus, DmxModeSummary,
-    DmxOutputConfig, DmxOutputProtocol, EffectId, EffectKind, EffectPreset, EffectSummary,
-    EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, FixtureId, FixtureLimits,
-    FixturePreset, FixtureProfileSummary, GeometrySummary, LearnedMidiControl, LearnedOscControl,
-    LfoEffectRequest, MidiControlAction, MidiControlMapping, MidiInputSummary, MidiOutputSummary,
-    MoveEffectRequest, NodeGraphId, NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary,
-    NodeGraphTransformOp, OscControlAction, OscControlMapping, OscInputConfig, PatchFixtureRequest,
-    PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RemoteControlConfig,
-    RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile,
-    StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary, TimelineEventId,
-    TimelineSnapRequest, TimelineTrackKind, Vec3, VideoAutomationKeyframeSummary,
-    VideoBackendState, VideoBlendMode, VideoEffectTarget, VideoIsfEffectSummary, VideoLayerId,
-    VideoLayerState, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
-    VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary, VideoOutputSummary,
-    VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
+    AudioAnalysisSummary, AutoVjConfig, AutomationId, AutomationKeyframeSummary,
+    ChaserEffectRequest, ChaserStep, ClockSnapshot, ColorEffectRequest, CompositionId,
+    CompositionSummary, CueEffectTarget, CueFixtureTarget, CueId, CueNodeGraphTarget,
+    CustomFixtureProfileFile, CustomFixtureProfileRequest, DmxInputConfig, DmxInputProtocol,
+    DmxInputStatus, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, EffectId, EffectKind,
+    EffectPreset, EffectSummary, EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest,
+    FixtureId, FixtureLimits, FixturePreset, FixtureProfileSummary, GeometrySummary,
+    LearnedMidiControl, LearnedOscControl, LfoEffectRequest, MidiControlAction, MidiControlMapping,
+    MidiInputSummary, MidiOutputSummary, MoveEffectRequest, NodeGraphId, NodeGraphNodeKind,
+    NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp, OscControlAction,
+    OscControlMapping, OscInputConfig, PatchFixtureRequest, PatchedFixtureSummary,
+    PositionWaveEffectRequest, ProjectFile, RemoteControlConfig, RemoteControlStatus, Rotation3,
+    SerialPortSummary, StageMapConfig, StageMapPresetFile, StageMapPresetSummary, StageObjectId,
+    StageObjectKind, StageObjectSummary, TimelineEventId, TimelineSnapRequest, TimelineTrackKind,
+    Vec3, VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode, VideoEffectTarget,
+    VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerTarget, VideoOutputId,
+    VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetFile,
+    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
+    VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -149,6 +150,7 @@ struct AppState {
     vj_preview_renderer: Mutex<AppVideoPreviewRenderer>,
     vj_preview_renderer_reset_pending: AtomicBool,
     media_audio: Arc<Mutex<MediaAudioPlayback>>,
+    program_audio_handoff: Arc<ProgramAudioHandoffCoordinator>,
     _media_audio_sync: MediaAudioSyncRuntime,
     live_audio_input_lifecycle: Mutex<()>,
     live_audio_input_devices: Mutex<LiveAudioInputDeviceCatalog>,
@@ -679,44 +681,260 @@ const MEDIA_AUDIO_RESYNC_COOLDOWN: Duration = Duration::from_millis(250);
 const MEDIA_AUDIO_SYNC_INTERVAL: Duration = Duration::from_millis(25);
 const MEDIA_AUDIO_SYNC_IDLE_INTERVAL: Duration = Duration::from_millis(250);
 
+#[derive(Debug, Clone, PartialEq)]
+struct ProgramAudioHandoffConfig {
+    enabled: bool,
+    volume: f32,
+    device_name: Option<String>,
+}
+
+impl Default for ProgramAudioHandoffConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            volume: 0.8,
+            device_name: None,
+        }
+    }
+}
+
+impl ProgramAudioHandoffConfig {
+    fn validated(enabled: bool, volume: f32, device_name: Option<String>) -> Result<Self, String> {
+        if !volume.is_finite() {
+            return Err("Program audio monitor volume must be finite".to_string());
+        }
+        Ok(Self {
+            enabled,
+            volume: volume.clamp(0.0, 2.0),
+            device_name: device_name
+                .map(|name| name.trim().to_string())
+                .filter(|name| !name.is_empty()),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ProgramAudioHandoffPlan {
+    layer_id: VideoLayerId,
+    volume: f32,
+    device_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum ProgramAudioJobKind {
+    Handoff(ProgramAudioHandoffPlan),
+    StopAll,
+    ReconfigureActive {
+        previous_volume: f32,
+        volume: f32,
+        device_name: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ProgramAudioJob {
+    generation: u64,
+    kind: ProgramAudioJobKind,
+}
+
+#[derive(Debug, Default)]
+struct ProgramAudioHandoffState {
+    config: ProgramAudioHandoffConfig,
+    last_action: Option<protocol::AutoVjAction>,
+    owned_layer_id: Option<VideoLayerId>,
+    desired_layer_id: Option<VideoLayerId>,
+    pending_job: Option<ProgramAudioJob>,
+    suspended: bool,
+}
+
+impl ProgramAudioHandoffState {
+    fn configure(
+        &mut self,
+        config: ProgramAudioHandoffConfig,
+        current_action: Option<&protocol::AutoVjAction>,
+    ) {
+        let was_enabled = self.config.enabled;
+        self.config = config;
+        // Enabling Program Audio never replays an action that already reached Program.
+        if !was_enabled && self.config.enabled {
+            self.last_action = current_action.cloned();
+        }
+    }
+
+    fn next_plan(&mut self, status: &protocol::AutoVjStatus) -> Option<ProgramAudioHandoffPlan> {
+        if self.suspended {
+            return None;
+        }
+        let Some(action) = status.last_action.as_ref() else {
+            if !status.armed {
+                self.last_action = None;
+            }
+            return None;
+        };
+        if self.last_action.as_ref() == Some(action) {
+            return None;
+        }
+        self.last_action = Some(action.clone());
+        self.config.enabled.then(|| ProgramAudioHandoffPlan {
+            layer_id: action.layer_id,
+            volume: self.config.volume,
+            device_name: self.config.device_name.clone(),
+        })
+    }
+
+    fn suppress_through(&mut self, action: Option<&protocol::AutoVjAction>) {
+        self.last_action = action.cloned();
+    }
+
+    fn suppress_stopped_layer_action(
+        &mut self,
+        layer_id: VideoLayerId,
+        action: Option<&protocol::AutoVjAction>,
+    ) {
+        if action.is_some_and(|action| action.layer_id == layer_id) {
+            self.suppress_through(action);
+        }
+    }
+
+    fn manual_take_plan(&self, layer_id: VideoLayerId) -> Option<ProgramAudioHandoffPlan> {
+        self.config.enabled.then(|| ProgramAudioHandoffPlan {
+            layer_id,
+            volume: self.config.volume,
+            device_name: self.config.device_name.clone(),
+        })
+    }
+
+    fn reset_for_project_change(&mut self) {
+        self.last_action = None;
+        self.owned_layer_id = None;
+        self.desired_layer_id = None;
+        self.pending_job = None;
+        self.suspended = false;
+    }
+
+    fn needs_low_latency_poll(&self, status: &protocol::AutoVjStatus) -> bool {
+        self.pending_job.is_some() || (self.config.enabled && status.armed && !self.suspended)
+    }
+}
+
+#[derive(Debug, Default)]
+struct ProgramAudioHandoffCoordinator {
+    state: Mutex<ProgramAudioHandoffState>,
+    generation: AtomicU64,
+    wake: Condvar,
+}
+
+impl ProgramAudioHandoffCoordinator {
+    fn invalidate_in_flight(&self) -> u64 {
+        let generation = self
+            .generation
+            .fetch_add(1, Ordering::AcqRel)
+            .saturating_add(1);
+        self.wake.notify_all();
+        generation
+    }
+
+    fn queue_locked(&self, state: &mut ProgramAudioHandoffState, kind: ProgramAudioJobKind) -> u64 {
+        let generation = self.invalidate_in_flight();
+        if let ProgramAudioJobKind::Handoff(plan) = &kind {
+            state.desired_layer_id = Some(plan.layer_id);
+        }
+        state.pending_job = Some(ProgramAudioJob { generation, kind });
+        generation
+    }
+}
+
 fn media_audio_resync_required(drift_ms: i64, cooldown_elapsed: Duration) -> bool {
     drift_ms.unsigned_abs() > MEDIA_AUDIO_RESYNC_THRESHOLD_MS
         && cooldown_elapsed >= MEDIA_AUDIO_RESYNC_COOLDOWN
 }
 
+fn reconfigured_program_audio_volume(
+    current_volume: f32,
+    previous_base_volume: f32,
+    next_base_volume: f32,
+    layer_opacity: f32,
+) -> f32 {
+    let next_base_volume = next_base_volume.clamp(0.0, 2.0);
+    if previous_base_volume > f32::EPSILON {
+        (current_volume * (next_base_volume / previous_base_volume)).clamp(0.0, 2.0)
+    } else {
+        (next_base_volume * layer_opacity.clamp(0.0, 1.0).sqrt()).clamp(0.0, 2.0)
+    }
+}
+
 struct MediaAudioSyncRuntime {
     stop: Arc<AtomicBool>,
+    program_handoff: Arc<ProgramAudioHandoffCoordinator>,
     worker: Option<std::thread::JoinHandle<()>>,
 }
 
 impl MediaAudioSyncRuntime {
-    fn start(engine: EngineHandle, audio: Arc<Mutex<MediaAudioPlayback>>) -> Self {
+    fn start(
+        engine: EngineHandle,
+        audio: Arc<Mutex<MediaAudioPlayback>>,
+        program_handoff: Arc<ProgramAudioHandoffCoordinator>,
+    ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
+        let worker_handoff = Arc::clone(&program_handoff);
         let worker = std::thread::Builder::new()
             .name("syndocal-media-audio-sync".to_string())
             .spawn(move || {
                 while !worker_stop.load(Ordering::Acquire) {
+                    let mut snapshot = engine.video_audio_runtime_snapshot();
+                    let job = worker_handoff.state.lock().ok().and_then(|mut state| {
+                        if state.pending_job.is_none() {
+                            if let Some(plan) = state.next_plan(&snapshot.auto_vj_status) {
+                                worker_handoff
+                                    .queue_locked(&mut state, ProgramAudioJobKind::Handoff(plan));
+                            }
+                        }
+                        state.pending_job.take()
+                    });
+                    if let Some(job) = job {
+                        execute_program_audio_job(
+                            &worker_handoff,
+                            &audio,
+                            snapshot.layers.as_slice(),
+                            job,
+                        );
+                        // Device open and decode can take longer than one sync interval.
+                        snapshot = engine.video_audio_runtime_snapshot();
+                    }
+
                     let active = audio
                         .lock()
-                        .map(|audio| !audio.sinks.is_empty())
+                        .map(|mut audio| {
+                            if !audio.sinks.is_empty() {
+                                audio.sync_to_video_layers(&snapshot.layers);
+                            }
+                            !audio.sinks.is_empty()
+                        })
                         .unwrap_or(false);
-                    if active {
-                        let layers = engine.snapshot().video.layers;
-                        if let Ok(mut audio) = audio.lock() {
-                            audio.sync_to_video_layers(&layers);
-                        }
-                    }
-                    std::thread::sleep(if active {
+                    let low_latency_poll = worker_handoff
+                        .state
+                        .lock()
+                        .map(|state| state.needs_low_latency_poll(&snapshot.auto_vj_status))
+                        .unwrap_or(false);
+                    let wait_for = if active || low_latency_poll {
                         MEDIA_AUDIO_SYNC_INTERVAL
                     } else {
                         MEDIA_AUDIO_SYNC_IDLE_INTERVAL
-                    });
+                    };
+                    match worker_handoff.state.lock() {
+                        Ok(state) if state.pending_job.is_none() => {
+                            let _ = worker_handoff.wake.wait_timeout(state, wait_for);
+                        }
+                        Ok(_) => {}
+                        Err(_) => std::thread::sleep(wait_for),
+                    }
                 }
             })
             .expect("failed to start media audio sync worker");
         Self {
             stop,
+            program_handoff,
             worker: Some(worker),
         }
     }
@@ -725,8 +943,73 @@ impl MediaAudioSyncRuntime {
 impl Drop for MediaAudioSyncRuntime {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
+        self.program_handoff.wake.notify_all();
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
+        }
+    }
+}
+
+fn execute_program_audio_job(
+    coordinator: &ProgramAudioHandoffCoordinator,
+    audio: &Mutex<MediaAudioPlayback>,
+    layers: &[protocol::VideoLayerSummary],
+    job: ProgramAudioJob,
+) {
+    let generation = job.generation;
+    if coordinator.generation.load(Ordering::Acquire) != generation {
+        return;
+    }
+    let ownership = match job.kind {
+        ProgramAudioJobKind::Handoff(plan) => {
+            let active = audio
+                .lock()
+                .map(|mut audio| {
+                    if coordinator.generation.load(Ordering::Acquire) != generation {
+                        return false;
+                    }
+                    let active = audio.apply_program_handoff(layers, &plan);
+                    if coordinator.generation.load(Ordering::Acquire) != generation {
+                        audio.stop(plan.layer_id);
+                        false
+                    } else {
+                        active
+                    }
+                })
+                .unwrap_or(false);
+            Some((active.then_some(plan.layer_id), Some(plan.layer_id)))
+        }
+        ProgramAudioJobKind::StopAll => {
+            if let Ok(mut audio) = audio.lock() {
+                if coordinator.generation.load(Ordering::Acquire) != generation {
+                    return;
+                }
+                audio.stop_all();
+            }
+            Some((None, None))
+        }
+        ProgramAudioJobKind::ReconfigureActive {
+            previous_volume,
+            volume,
+            device_name,
+        } => {
+            if let Ok(mut audio) = audio.lock() {
+                if coordinator.generation.load(Ordering::Acquire) != generation {
+                    return;
+                }
+                audio.reconfigure_active(layers, previous_volume, volume, device_name.as_deref());
+            }
+            None
+        }
+    };
+    if let Some((owned_layer_id, desired_layer_id)) = ownership {
+        if let Ok(mut state) = coordinator.state.lock() {
+            // The generation must be rechecked while holding the state lock.
+            // Otherwise a newer queued job can be overwritten by this completion.
+            if coordinator.generation.load(Ordering::Acquire) == generation {
+                state.owned_layer_id = owned_layer_id;
+                state.desired_layer_id = desired_layer_id;
+            }
         }
     }
 }
@@ -837,6 +1120,17 @@ struct LiveAudioInputStatus {
     bass: f32,
     mid: f32,
     high: f32,
+    bands: [f32; audio::live_features::MAX_LIVE_AUDIO_BANDS],
+    band_count: usize,
+    rms: f32,
+    peak: f32,
+    spectral_flux: f32,
+    onset: bool,
+    onset_strength: f32,
+    bpm: Option<f32>,
+    bpm_confidence: f32,
+    beat_phase: f32,
+    feature_sequence: u64,
     analyzed_windows: u64,
     dropped_chunks: u64,
     dropped_frames: u64,
@@ -860,6 +1154,17 @@ struct LiveAudioInputLevels {
     bass: f32,
     mid: f32,
     high: f32,
+    bands: [f32; audio::live_features::MAX_LIVE_AUDIO_BANDS],
+    band_count: usize,
+    rms: f32,
+    peak: f32,
+    spectral_flux: f32,
+    onset: bool,
+    onset_strength: f32,
+    bpm: Option<f32>,
+    bpm_confidence: f32,
+    beat_phase: f32,
+    feature_sequence: u64,
 }
 
 impl LiveAudioInputLevels {
@@ -872,6 +1177,17 @@ impl LiveAudioInputLevels {
                 0.0
             }
         };
+        let band_count = if safe {
+            status
+                .band_count
+                .min(audio::live_features::MAX_LIVE_AUDIO_BANDS)
+        } else {
+            0
+        };
+        let mut bands = [0.0; audio::live_features::MAX_LIVE_AUDIO_BANDS];
+        for (target, source) in bands.iter_mut().zip(status.bands).take(band_count) {
+            *target = level(source);
+        }
         Self {
             running: status.running,
             stale: status.stale,
@@ -879,6 +1195,24 @@ impl LiveAudioInputLevels {
             bass: level(status.bass),
             mid: level(status.mid),
             high: level(status.high),
+            bands,
+            band_count,
+            rms: level(status.rms),
+            peak: level(status.peak),
+            spectral_flux: level(status.spectral_flux),
+            onset: safe && status.onset,
+            onset_strength: level(status.onset_strength),
+            bpm: safe
+                .then_some(status.bpm)
+                .flatten()
+                .filter(|bpm| bpm.is_finite() && *bpm > 0.0),
+            bpm_confidence: level(status.bpm_confidence),
+            beat_phase: if safe && status.beat_phase.is_finite() {
+                status.beat_phase.rem_euclid(1.0)
+            } else {
+                0.0
+            },
+            feature_sequence: if safe { status.feature_sequence } else { 0 },
         }
     }
 }
@@ -890,9 +1224,28 @@ const LIVE_AUDIO_STOP_CLEAR_RETRY: Duration = Duration::from_millis(100);
 const LIVE_AUDIO_STOP_CLEAR_RETRY_INTERVAL: Duration = Duration::from_millis(2);
 const LIVE_AUDIO_CAPTURE_SLOT_COUNT: usize = 4;
 const LIVE_AUDIO_CAPTURE_SLOT_FRAMES: usize = 2_048;
+const _: [(); LIVE_AUDIO_CAPTURE_SLOT_COUNT] = [(); protocol::MAX_LIVE_AUDIO_FRAME_ONSETS];
+static NEXT_LIVE_AUDIO_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+fn allocate_live_audio_generation() -> Result<u64, String> {
+    let generation = NEXT_LIVE_AUDIO_GENERATION.fetch_add(1, Ordering::Relaxed);
+    if generation == 0 {
+        Err("Live audio input generation counter was exhausted".to_string())
+    } else {
+        Ok(generation)
+    }
+}
+
+fn rotate_live_audio_generation(active: &AtomicU64) -> Result<u64, String> {
+    let generation = allocate_live_audio_generation()?;
+    active.store(generation, Ordering::Release);
+    Ok(generation)
+}
 const LIVE_AUDIO_STALE_ERROR: &str = "Live audio input is stale: no samples received for 250 ms";
 const LIVE_AUDIO_WORKER_STALE_ERROR: &str =
     "Live audio input is stale: FFT worker heartbeat exceeded 250 ms";
+const LIVE_AUDIO_ONSET_QUEUE_OVERFLOW_ERROR: &str =
+    "Live audio onset queue exceeded its fixed real-time capacity";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(tag = "mode", rename_all = "snake_case")]
@@ -1186,6 +1539,8 @@ impl LiveAudioInputWatchdog {
 }
 
 struct LiveAudioInput {
+    generation: Arc<AtomicU64>,
+    generation_gate: Arc<Mutex<()>>,
     stream: Option<rodio::cpal::Stream>,
     stop: Arc<AtomicBool>,
     worker: Option<std::thread::JoinHandle<()>>,
@@ -1198,7 +1553,6 @@ struct LiveAudioInput {
 
 impl Drop for LiveAudioInput {
     fn drop(&mut self) {
-        let clear_required = !self.safety.terminal_faulted() || self.safety.clear_pending();
         self.safety.mark_terminal_fault();
         self.stream.take();
         self.stop.store(true, Ordering::Relaxed);
@@ -1208,7 +1562,11 @@ impl Drop for LiveAudioInput {
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
-        let clear_pending = clear_required && !send_live_audio_clear_bounded(&self.engine);
+        let _generation_gate = self
+            .generation_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let clear_pending = !send_current_live_audio_clear_bounded(&self.engine, &self.generation);
         if let Ok(mut status) = self.status.lock() {
             status.running = false;
             status.stale = false;
@@ -1216,6 +1574,17 @@ impl Drop for LiveAudioInput {
             status.bass = 0.0;
             status.mid = 0.0;
             status.high = 0.0;
+            status.bands.fill(0.0);
+            status.band_count = 0;
+            status.rms = 0.0;
+            status.peak = 0.0;
+            status.spectral_flux = 0.0;
+            status.onset = false;
+            status.onset_strength = 0.0;
+            status.bpm = None;
+            status.bpm_confidence = 0.0;
+            status.beat_phase = 0.0;
+            status.feature_sequence = 0;
             status.last_error = clear_pending.then(|| {
                 "Live audio stopped, but the engine safety clear is still pending".to_string()
             });
@@ -1224,6 +1593,71 @@ impl Drop for LiveAudioInput {
 }
 
 impl MediaAudioPlayback {
+    fn apply_program_handoff(
+        &mut self,
+        layers: &[protocol::VideoLayerSummary],
+        plan: &ProgramAudioHandoffPlan,
+    ) -> bool {
+        let active_layer_ids = self.sinks.keys().copied().collect::<Vec<_>>();
+        for layer_id in active_layer_ids {
+            if layer_id != plan.layer_id {
+                self.stop(layer_id);
+            }
+        }
+
+        let Some(layer) = layers.iter().find(|layer| layer.id == plan.layer_id) else {
+            self.stop(plan.layer_id);
+            self.last_sync_error = Some(format!(
+                "Auto VJ Program audio target layer {} was not found",
+                plan.layer_id
+            ));
+            return false;
+        };
+        let has_monitorable_audio = layer.source.kind == VideoSourceKind::File
+            && layer
+                .source
+                .metadata
+                .map(|metadata| metadata.has_audio)
+                .unwrap_or(true);
+        let Some(path) = layer
+            .source
+            .path
+            .as_deref()
+            .filter(|path| !path.trim().is_empty())
+            .filter(|_| has_monitorable_audio)
+        else {
+            self.stop(plan.layer_id);
+            self.last_sync_error = None;
+            return false;
+        };
+        if layer.state.speed < 0.0 {
+            self.stop(plan.layer_id);
+            self.last_sync_error = Some(
+                "Reverse video audio monitoring is not supported for Auto VJ Program audio"
+                    .to_string(),
+            );
+            return false;
+        }
+        match self.play(
+            plan.layer_id,
+            Path::new(path),
+            layer.state.position_ms,
+            layer.state.speed,
+            plan.volume,
+            plan.device_name.as_deref(),
+        ) {
+            Ok(()) => {
+                self.last_sync_error = None;
+                true
+            }
+            Err(error) => {
+                self.stop(plan.layer_id);
+                self.last_sync_error = Some(error);
+                false
+            }
+        }
+    }
+
     fn play(
         &mut self,
         layer_id: VideoLayerId,
@@ -1308,6 +1742,82 @@ impl MediaAudioPlayback {
         }
         self.sources.remove(&layer_id);
         self.last_resync_at.remove(&layer_id);
+    }
+
+    fn stop_all(&mut self) {
+        let layer_ids = self.sinks.keys().copied().collect::<Vec<_>>();
+        for layer_id in layer_ids {
+            self.stop(layer_id);
+        }
+    }
+
+    fn reconfigure_active(
+        &mut self,
+        layers: &[protocol::VideoLayerSummary],
+        previous_volume: f32,
+        volume: f32,
+        device_name: Option<&str>,
+    ) {
+        let device_name = device_name.map(str::trim).filter(|name| !name.is_empty());
+        let requested_device_changed = self.requested_device_name.as_deref() != device_name;
+        let active = self
+            .sources
+            .iter()
+            .filter_map(|(layer_id, source)| {
+                let layer = layers.iter().find(|layer| layer.id == *layer_id)?;
+                let next_volume = reconfigured_program_audio_volume(
+                    source.volume,
+                    previous_volume,
+                    volume,
+                    layer.state.opacity,
+                );
+                Some((
+                    *layer_id,
+                    source.path.clone(),
+                    layer.state.position_ms,
+                    layer.state.speed,
+                    next_volume,
+                ))
+            })
+            .collect::<Vec<_>>();
+
+        if !requested_device_changed {
+            for (layer_id, _, _, _, next_volume) in active {
+                if let Some(sink) = self.sinks.get(&layer_id) {
+                    sink.set_volume(next_volume);
+                }
+                if let Some(source) = self.sources.get_mut(&layer_id) {
+                    source.volume = next_volume;
+                    source.requested_device_name = device_name.map(str::to_string);
+                }
+            }
+            return;
+        }
+
+        self.stop_all();
+        self.stream = None;
+        self.device_name = None;
+        self.requested_device_name = None;
+        let mut errors = Vec::new();
+        for (layer_id, path, position_ms, speed, next_volume) in active {
+            if speed < 0.0 {
+                errors.push(format!(
+                    "Reverse video audio monitoring is not supported for layer {layer_id}"
+                ));
+                continue;
+            }
+            if let Err(error) = self.play(
+                layer_id,
+                &path,
+                position_ms,
+                speed,
+                next_volume,
+                device_name,
+            ) {
+                errors.push(error);
+            }
+        }
+        self.last_sync_error = (!errors.is_empty()).then(|| errors.join("; "));
     }
 
     fn set_volume(&mut self, layer_id: VideoLayerId, volume: f32) -> Result<(), String> {
@@ -6605,14 +7115,135 @@ fn take_video_clip(
     let preview_take_state = preview_take_state.ok_or_else(|| {
         format!("Stage video layer {layer_id} in Preview before sending it to Program")
     })?;
-    state
+    // Manual Program video must never wait for audio device/file I/O. Invalidating
+    // the current generation is lock-free; any in-flight Auto audio job verifies
+    // the token again after opening/decoding and rolls itself back if it lost.
+    state.program_audio_handoff.invalidate_in_flight();
+    let result = state
         .engine
         .exclusive_video_take(ExclusiveVideoTakeRequest {
             target_layer_id: layer_id,
             fade_ms,
             preview_position_ms: Some(preview_take_state.position_ms),
             preview_speed: Some(preview_take_state.speed),
-        })
+        });
+    let published = state.engine.snapshot();
+    let mut program_handoff = state
+        .program_audio_handoff
+        .state
+        .lock()
+        .map_err(|_| "Program audio handoff lock was poisoned".to_string())?;
+    if result.is_ok() {
+        program_handoff.suppress_through(published.video.auto_vj.status.last_action.as_ref());
+        if let Some(plan) = program_handoff.manual_take_plan(layer_id) {
+            state
+                .program_audio_handoff
+                .queue_locked(&mut program_handoff, ProgramAudioJobKind::Handoff(plan));
+        }
+    } else if program_handoff.config.enabled {
+        // The visual Take was rejected. Restore the audio that still belongs to
+        // the published Program/Auto action instead of leaving a cancelled job silent.
+        let recovery_layer_id = program_handoff
+            .desired_layer_id
+            .or(program_handoff.owned_layer_id)
+            .or_else(|| {
+                published
+                    .video
+                    .auto_vj
+                    .status
+                    .last_action
+                    .as_ref()
+                    .map(|action| action.layer_id)
+            });
+        program_handoff.suppress_through(published.video.auto_vj.status.last_action.as_ref());
+        if let Some(recovery_layer_id) = recovery_layer_id {
+            if let Some(plan) = program_handoff.manual_take_plan(recovery_layer_id) {
+                state
+                    .program_audio_handoff
+                    .queue_locked(&mut program_handoff, ProgramAudioJobKind::Handoff(plan));
+            }
+        }
+    }
+    result
+}
+
+fn set_auto_vj_config_engine(engine: &EngineHandle, config: AutoVjConfig) -> Result<(), String> {
+    engine.set_auto_vj_config(config)
+}
+
+#[tauri::command]
+fn set_auto_vj_config(state: State<'_, AppState>, config: AutoVjConfig) -> Result<(), String> {
+    let result = set_auto_vj_config_engine(&state.engine, config);
+    state.program_audio_handoff.wake.notify_all();
+    result
+}
+
+fn set_auto_vj_armed_engine(engine: &EngineHandle, armed: bool) -> Result<(), String> {
+    engine.set_auto_vj_armed(armed)
+}
+
+#[tauri::command]
+fn set_auto_vj_armed(state: State<'_, AppState>, armed: bool) -> Result<(), String> {
+    let result = set_auto_vj_armed_engine(&state.engine, armed);
+    state.program_audio_handoff.wake.notify_all();
+    result
+}
+
+fn set_auto_vj_hold_engine(engine: &EngineHandle, hold: bool) -> Result<(), String> {
+    engine.set_auto_vj_hold(hold)
+}
+
+#[tauri::command]
+fn set_auto_vj_hold(state: State<'_, AppState>, hold: bool) -> Result<(), String> {
+    let result = set_auto_vj_hold_engine(&state.engine, hold);
+    state.program_audio_handoff.wake.notify_all();
+    result
+}
+
+#[tauri::command]
+fn set_program_audio_handoff_config(
+    state: State<'_, AppState>,
+    enabled: bool,
+    volume: f32,
+    device_name: Option<String>,
+) -> Result<(), String> {
+    let config = ProgramAudioHandoffConfig::validated(enabled, volume, device_name)?;
+    let snapshot = state.engine.video_audio_runtime_snapshot();
+    let mut program_handoff = state
+        .program_audio_handoff
+        .state
+        .lock()
+        .map_err(|_| "Program audio handoff lock was poisoned".to_string())?;
+    let previous_config = program_handoff.config.clone();
+    let active_target = program_handoff
+        .desired_layer_id
+        .or(program_handoff.owned_layer_id);
+    program_handoff.configure(config.clone(), snapshot.auto_vj_status.last_action.as_ref());
+    if previous_config.enabled && !config.enabled {
+        state
+            .program_audio_handoff
+            .queue_locked(&mut program_handoff, ProgramAudioJobKind::StopAll);
+        program_handoff.owned_layer_id = None;
+        program_handoff.desired_layer_id = None;
+    } else if previous_config.enabled && config.enabled && previous_config != config {
+        let unseen_action_plan = program_handoff.next_plan(&snapshot.auto_vj_status);
+        let exclusive_plan = unseen_action_plan.or_else(|| {
+            active_target.and_then(|layer_id| program_handoff.manual_take_plan(layer_id))
+        });
+        let job = exclusive_plan.map_or_else(
+            || ProgramAudioJobKind::ReconfigureActive {
+                previous_volume: previous_config.volume,
+                volume: config.volume,
+                device_name: config.device_name.clone(),
+            },
+            ProgramAudioJobKind::Handoff,
+        );
+        state
+            .program_audio_handoff
+            .queue_locked(&mut program_handoff, job);
+    }
+    state.program_audio_handoff.wake.notify_all();
+    Ok(())
 }
 
 #[tauri::command]
@@ -6719,19 +7350,62 @@ fn play_video_layer_audio_monitor(
         .as_deref()
         .filter(|_| layer.source.kind == VideoSourceKind::File)
         .ok_or_else(|| "Audio monitoring requires a local video file layer".to_string())?;
-    let mut audio = state
+    let (direct_generation, recovery_target) = {
+        let mut handoff = state
+            .program_audio_handoff
+            .state
+            .lock()
+            .map_err(|_| "Program audio handoff lock was poisoned".to_string())?;
+        let recovery_target = handoff
+            .desired_layer_id
+            .or(handoff.owned_layer_id)
+            .filter(|target| *target != layer_id);
+        let generation = state.program_audio_handoff.invalidate_in_flight();
+        handoff.pending_job = None;
+        handoff.owned_layer_id = None;
+        handoff.desired_layer_id = None;
+        handoff.suppress_through(snapshot.video.auto_vj.status.last_action.as_ref());
+        (generation, recovery_target)
+    };
+    let result = state
         .media_audio
         .lock()
-        .map_err(|_| "Media audio monitor lock was poisoned".to_string())?;
-    audio.play(
-        layer_id,
-        Path::new(path),
-        layer.state.position_ms,
-        layer.state.speed,
-        volume,
-        device_name.as_deref(),
-    )?;
-    Ok(audio.status())
+        .map_err(|_| "Media audio monitor lock was poisoned".to_string())
+        .and_then(|mut audio| {
+            audio.play(
+                layer_id,
+                Path::new(path),
+                layer.state.position_ms,
+                layer.state.speed,
+                volume,
+                device_name.as_deref(),
+            )?;
+            Ok(audio.status())
+        });
+    if result.is_err()
+        && state
+            .program_audio_handoff
+            .generation
+            .load(Ordering::Acquire)
+            == direct_generation
+    {
+        if let Some(recovery_target) = recovery_target {
+            if let Ok(mut handoff) = state.program_audio_handoff.state.lock() {
+                if handoff.config.enabled
+                    && handoff.pending_job.is_none()
+                    && handoff.desired_layer_id.is_none()
+                {
+                    if let Some(plan) = handoff.manual_take_plan(recovery_target) {
+                        state
+                            .program_audio_handoff
+                            .queue_locked(&mut handoff, ProgramAudioJobKind::Handoff(plan));
+                        state.program_audio_handoff.wake.notify_all();
+                    }
+                }
+            }
+        }
+    }
+    result
 }
 
 #[tauri::command]
@@ -7168,6 +7842,8 @@ struct LiveAudioCaptureCallbackContext {
 
 #[derive(Clone)]
 struct LiveAudioStreamErrorContext {
+    generation: Arc<AtomicU64>,
+    generation_gate: Arc<Mutex<()>>,
     engine: EngineHandle,
     status: Arc<Mutex<LiveAudioInputStatus>>,
     safety: Arc<LiveAudioInputSafety>,
@@ -7204,8 +7880,13 @@ where
             )
         },
         move |error| {
+            let _generation_gate = errors
+                .generation_gate
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             fail_closed_live_audio(
                 &errors.engine,
+                errors.generation.load(Ordering::Acquire),
                 &errors.status,
                 &errors.safety,
                 true,
@@ -7259,6 +7940,9 @@ fn start_live_audio_input(
     let config = selected.stream_config.clone();
     let channels = config.channels.max(1);
     let sample_rate = config.sample_rate.0;
+    let generation = allocate_live_audio_generation()?;
+    let active_generation = Arc::new(AtomicU64::new(generation));
+    let generation_gate = Arc::new(Mutex::new(()));
     let status = Arc::new(Mutex::new(LiveAudioInputStatus {
         running: true,
         device_id: resolved.device_id.clone(),
@@ -7296,6 +7980,8 @@ fn start_live_audio_input(
     let worker_free_slots = Arc::clone(&free_capture_slots);
     let worker_ready_chunks = Arc::clone(&ready_capture_chunks);
     let worker_telemetry = Arc::clone(&capture_telemetry);
+    let worker_generation = Arc::clone(&active_generation);
+    let worker_generation_gate = Arc::clone(&generation_gate);
     let worker_engine = engine.clone();
     let worker = std::thread::Builder::new()
         .name("syndocal-live-audio-fft".to_string())
@@ -7306,6 +7992,8 @@ fn start_live_audio_input(
                     worker_ready_chunks,
                     worker_telemetry,
                     sample_rate,
+                    Arc::clone(&worker_generation),
+                    Arc::clone(&worker_generation_gate),
                     worker_engine.clone(),
                     Arc::clone(&worker_stop),
                     worker_capture_started,
@@ -7314,8 +8002,12 @@ fn start_live_audio_input(
                 )
             }));
             if run_result.is_err() && !worker_stop.load(Ordering::Acquire) {
+                let _generation_gate = worker_generation_gate
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 fail_closed_live_audio(
                     &worker_engine,
+                    worker_generation.load(Ordering::Acquire),
                     &worker_status,
                     &worker_safety,
                     true,
@@ -7336,6 +8028,8 @@ fn start_live_audio_input(
         worker_wake: worker_wake.clone(),
     };
     let error_context = LiveAudioStreamErrorContext {
+        generation: Arc::clone(&active_generation),
+        generation_gate: Arc::clone(&generation_gate),
         engine: engine.clone(),
         status: Arc::clone(&status),
         safety: Arc::clone(&safety),
@@ -7430,6 +8124,8 @@ fn start_live_audio_input(
     capture_started.store(true, Ordering::Release);
     worker_wake.unpark();
     *active = Some(LiveAudioInput {
+        generation: active_generation,
+        generation_gate,
         stream: Some(stream),
         stop,
         worker: Some(worker),
@@ -7646,6 +8342,17 @@ fn zero_live_audio_input_status(status: &mut LiveAudioInputStatus, error: String
     status.bass = 0.0;
     status.mid = 0.0;
     status.high = 0.0;
+    status.bands.fill(0.0);
+    status.band_count = 0;
+    status.rms = 0.0;
+    status.peak = 0.0;
+    status.spectral_flux = 0.0;
+    status.onset = false;
+    status.onset_strength = 0.0;
+    status.bpm = None;
+    status.bpm_confidence = 0.0;
+    status.beat_phase = 0.0;
+    status.feature_sequence = 0;
     status.last_error = Some(error);
 }
 
@@ -7717,21 +8424,52 @@ fn latch_terminal_live_audio_fault_with(
 
 fn fail_closed_live_audio(
     engine: &EngineHandle,
+    generation: u64,
     status: &Mutex<LiveAudioInputStatus>,
     safety: &LiveAudioInputSafety,
     terminal: bool,
     error: String,
 ) {
-    let send_clear = || {
-        engine
-            .send(EngineCommand::SetLiveAudioSpectrum(None))
-            .map_err(|error| error.to_string())
-    };
+    let send_clear = || engine.clear_live_audio_input(generation);
     if terminal {
         latch_terminal_live_audio_fault_with(status, safety, error, send_clear);
     } else {
         fail_closed_live_audio_with(status, safety, false, error, send_clear);
     }
+}
+
+fn fail_closed_live_audio_if_worker_heartbeat_stale_with(
+    generation: &AtomicU64,
+    generation_gate: &Mutex<()>,
+    status: &Mutex<LiveAudioInputStatus>,
+    safety: &LiveAudioInputSafety,
+    mut worker_heartbeat_is_stale: impl FnMut() -> bool,
+    send_clear: impl FnOnce(u64) -> Result<(), String>,
+) -> Result<bool, String> {
+    if !worker_heartbeat_is_stale() || safety.terminal_faulted() {
+        return Ok(false);
+    }
+
+    let _generation_gate = generation_gate
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let status_already_stale = status
+        .lock()
+        .map_err(|_| "Live audio input status lock was poisoned".to_string())?
+        .stale;
+    if !worker_heartbeat_is_stale() || status_already_stale || safety.terminal_faulted() {
+        return Ok(false);
+    }
+
+    let generation = generation.load(Ordering::Acquire);
+    fail_closed_live_audio_with(
+        status,
+        safety,
+        false,
+        LIVE_AUDIO_WORKER_STALE_ERROR.to_string(),
+        || send_clear(generation),
+    );
+    Ok(true)
 }
 
 fn request_live_audio_shutdown_with(
@@ -7751,14 +8489,11 @@ fn request_live_audio_shutdown_with(
 
 fn request_live_audio_shutdown(
     engine: &EngineHandle,
+    generation: u64,
     status: &Mutex<LiveAudioInputStatus>,
     safety: &LiveAudioInputSafety,
 ) {
-    request_live_audio_shutdown_with(status, safety, || {
-        engine
-            .send(EngineCommand::SetLiveAudioSpectrum(None))
-            .map_err(|error| error.to_string())
-    });
+    request_live_audio_shutdown_with(status, safety, || engine.clear_live_audio_input(generation));
 }
 
 fn retry_live_audio_clear_with(
@@ -7784,14 +8519,11 @@ fn retry_live_audio_clear_with(
 
 fn retry_live_audio_clear(
     engine: &EngineHandle,
+    generation: u64,
     status: &Mutex<LiveAudioInputStatus>,
     safety: &LiveAudioInputSafety,
 ) -> bool {
-    retry_live_audio_clear_with(status, safety, || {
-        engine
-            .send(EngineCommand::SetLiveAudioSpectrum(None))
-            .map_err(|error| error.to_string())
-    })
+    retry_live_audio_clear_with(status, safety, || engine.clear_live_audio_input(generation))
 }
 
 fn send_live_audio_clear_bounded_with(
@@ -7812,15 +8544,22 @@ fn send_live_audio_clear_bounded_with(
     }
 }
 
-fn send_live_audio_clear_bounded(engine: &EngineHandle) -> bool {
-    send_live_audio_clear_bounded_with(
+fn send_current_live_audio_clear_bounded_with(
+    generation: &AtomicU64,
+    timeout: Duration,
+    retry_interval: Duration,
+    mut send_clear: impl FnMut(u64) -> Result<(), String>,
+) -> bool {
+    let generation = generation.load(Ordering::Acquire);
+    send_live_audio_clear_bounded_with(timeout, retry_interval, || send_clear(generation))
+}
+
+fn send_current_live_audio_clear_bounded(engine: &EngineHandle, generation: &AtomicU64) -> bool {
+    send_current_live_audio_clear_bounded_with(
+        generation,
         LIVE_AUDIO_STOP_CLEAR_RETRY,
         LIVE_AUDIO_STOP_CLEAR_RETRY_INTERVAL,
-        || {
-            engine
-                .send(EngineCommand::SetLiveAudioSpectrum(None))
-                .map_err(|error| error.to_string())
-        },
+        |generation| engine.clear_live_audio_input(generation),
     )
 }
 
@@ -7848,10 +8587,63 @@ fn recover_live_audio_input_status(
     true
 }
 
-fn publish_live_audio_spectrum_with(
+#[derive(Debug, Clone, Copy)]
+struct LiveAudioFeaturePresentation {
+    frame: audio::live_features::LiveAudioFeatureFrame,
+    beat_phase: f32,
+}
+
+#[derive(Debug, Default)]
+struct PendingLiveAudioOnsets {
+    sequences: [u64; protocol::MAX_LIVE_AUDIO_FRAME_ONSETS],
+    len: usize,
+}
+
+impl PendingLiveAudioOnsets {
+    fn push(&mut self, sequence: u64) -> Result<(), &'static str> {
+        let Some(slot) = self.sequences.get_mut(self.len) else {
+            return Err(LIVE_AUDIO_ONSET_QUEUE_OVERFLOW_ERROR);
+        };
+        *slot = sequence;
+        self.len += 1;
+        Ok(())
+    }
+
+    fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    fn frame_payload(&self) -> ([u64; protocol::MAX_LIVE_AUDIO_FRAME_ONSETS], u8) {
+        (
+            self.sequences,
+            u8::try_from(self.len).expect("fixed live audio onset capacity must fit in u8"),
+        )
+    }
+
+    fn publish_frame_with(
+        &mut self,
+        publish: impl FnOnce([u64; protocol::MAX_LIVE_AUDIO_FRAME_ONSETS], u8) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let (sequences, count) = self.frame_payload();
+        publish(sequences, count)?;
+        self.clear();
+        Ok(())
+    }
+}
+
+fn finite_live_audio_level(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
+fn publish_live_audio_analysis_with(
     status: &Mutex<LiveAudioInputStatus>,
     safety: &LiveAudioInputSafety,
     spectrum: &protocol::AudioSpectrumPoint,
+    features: Option<&LiveAudioFeaturePresentation>,
     send_spectrum: impl FnOnce() -> Result<(), String>,
     send_clear: impl FnOnce() -> Result<(), String>,
 ) -> bool {
@@ -7867,9 +8659,33 @@ fn publish_live_audio_spectrum_with(
     match send_spectrum() {
         Ok(()) => {
             status.safety_clear_pending = false;
-            status.bass = spectrum.bass;
-            status.mid = spectrum.mid;
-            status.high = spectrum.high;
+            status.bass = finite_live_audio_level(spectrum.bass);
+            status.mid = finite_live_audio_level(spectrum.mid);
+            status.high = finite_live_audio_level(spectrum.high);
+            if let Some(features) = features {
+                let frame = features.frame;
+                let band_count = frame
+                    .band_count
+                    .min(audio::live_features::MAX_LIVE_AUDIO_BANDS);
+                status.band_count = band_count;
+                status.bands.fill(0.0);
+                for (target, source) in status.bands[..band_count].iter_mut().zip(frame.bands) {
+                    *target = finite_live_audio_level(source);
+                }
+                status.rms = finite_live_audio_level(frame.rms);
+                status.peak = finite_live_audio_level(frame.peak);
+                status.spectral_flux = finite_live_audio_level(frame.spectral_flux);
+                status.onset = frame.onset;
+                status.onset_strength = finite_live_audio_level(frame.onset_strength);
+                status.bpm = frame.bpm.filter(|bpm| bpm.is_finite() && *bpm > 0.0);
+                status.bpm_confidence = finite_live_audio_level(frame.bpm_confidence);
+                status.beat_phase = if features.beat_phase.is_finite() {
+                    features.beat_phase.rem_euclid(1.0)
+                } else {
+                    0.0
+                };
+                status.feature_sequence = frame.sequence;
+            }
             status.analyzed_windows = status.analyzed_windows.saturating_add(1);
             true
         }
@@ -7888,39 +8704,88 @@ fn publish_live_audio_spectrum_with(
     }
 }
 
-fn publish_live_audio_spectrum(
-    engine: &EngineHandle,
+#[cfg(test)]
+fn publish_live_audio_spectrum_with(
     status: &Mutex<LiveAudioInputStatus>,
     safety: &LiveAudioInputSafety,
     spectrum: &protocol::AudioSpectrumPoint,
+    send_spectrum: impl FnOnce() -> Result<(), String>,
+    send_clear: impl FnOnce() -> Result<(), String>,
+) -> bool {
+    publish_live_audio_analysis_with(status, safety, spectrum, None, send_spectrum, send_clear)
+}
+
+fn publish_live_audio_features(
+    engine: &EngineHandle,
+    generation: u64,
+    captured_at: Instant,
+    status: &Mutex<LiveAudioInputStatus>,
+    safety: &LiveAudioInputSafety,
+    spectrum: &protocol::AudioSpectrumPoint,
+    features: &LiveAudioFeaturePresentation,
+    pending_onsets: &mut PendingLiveAudioOnsets,
 ) -> bool {
     let published_spectrum = spectrum.clone();
-    publish_live_audio_spectrum_with(
+    let feature_sequence = features.frame.sequence;
+    publish_live_audio_analysis_with(
         status,
         safety,
         spectrum,
+        Some(features),
         || {
-            engine
-                .send(EngineCommand::SetLiveAudioSpectrum(Some(
-                    published_spectrum,
-                )))
-                .map_err(|error| error.to_string())
+            pending_onsets.publish_frame_with(|onset_feature_sequences, onset_count| {
+                engine
+                    .send(EngineCommand::PublishLiveAudioFrame {
+                        frame: protocol::LiveAudioFrame {
+                            generation,
+                            feature_sequence,
+                            spectrum: published_spectrum,
+                            onset_feature_sequences,
+                            onset_count,
+                        },
+                        captured_at,
+                    })
+                    .map_err(|error| error.to_string())
+            })
         },
-        || {
-            engine
-                .send(EngineCommand::SetLiveAudioSpectrum(None))
-                .map_err(|error| error.to_string())
-        },
+        || engine.clear_live_audio_input(generation),
     )
 }
 
-fn empty_live_audio_spectrum() -> protocol::AudioSpectrumPoint {
+fn live_audio_feature_spectrum(
+    frame: &audio::live_features::LiveAudioFeatureFrame,
+) -> protocol::AudioSpectrumPoint {
+    let band_count = frame
+        .band_count
+        .min(audio::live_features::MAX_LIVE_AUDIO_BANDS);
+    let maximum = |range: std::ops::Range<usize>| {
+        range
+            .take_while(|index| *index < band_count)
+            .fold(0.0_f32, |level, index| {
+                level.max(finite_live_audio_level(frame.bands[index]))
+            })
+    };
     protocol::AudioSpectrumPoint {
-        time_ms: 0,
-        bass: 0.0,
-        mid: 0.0,
-        high: 0.0,
+        time_ms: (frame.end_sample as f64 / f64::from(frame.sample_rate.max(1)) * 1_000.0) as u64,
+        bass: maximum(0..5),
+        mid: maximum(5..10),
+        high: maximum(10..audio::live_features::MAX_LIVE_AUDIO_BANDS),
     }
+}
+
+fn live_audio_feature_beat_phase(
+    frame: &audio::live_features::LiveAudioFeatureFrame,
+    last_onset_end_sample: Option<u64>,
+) -> f32 {
+    let Some(bpm) = frame.bpm.filter(|bpm| bpm.is_finite() && *bpm > 0.0) else {
+        return 0.0;
+    };
+    let Some(last_onset_end_sample) = last_onset_end_sample else {
+        return 0.0;
+    };
+    let elapsed_samples = frame.end_sample.saturating_sub(last_onset_end_sample);
+    let elapsed_seconds = elapsed_samples as f32 / frame.sample_rate.max(1) as f32;
+    (elapsed_seconds * bpm / 60.0).rem_euclid(1.0)
 }
 
 fn run_live_audio_fft(
@@ -7928,6 +8793,8 @@ fn run_live_audio_fft(
     ready_capture_chunks: Arc<crossbeam_queue::ArrayQueue<LiveAudioSampleChunk>>,
     capture_telemetry: Arc<LiveAudioInputCaptureTelemetry>,
     sample_rate: u32,
+    generation: Arc<AtomicU64>,
+    generation_gate: Arc<Mutex<()>>,
     engine: EngineHandle,
     stop: Arc<AtomicBool>,
     capture_started: Arc<AtomicBool>,
@@ -7942,15 +8809,31 @@ fn run_live_audio_fft(
     if stop.load(Ordering::Acquire) {
         return;
     }
-    let mut samples = VecDeque::<f32>::with_capacity(4_096);
-    let mut fft_window = Vec::<f32>::with_capacity(1_024);
-    let mut analyzer = audio::LiveSpectrumAnalyzer::default();
-    let mut last_analysis = Instant::now() - Duration::from_millis(34);
-    let mut smoothed = empty_live_audio_spectrum();
+    let mut feature_config =
+        audio::live_features::LiveAudioFeatureConfig::for_sample_rate(sample_rate);
+    feature_config.hop_size = (sample_rate as usize / 30).clamp(1, feature_config.fft_size);
+    let mut analyzer = audio::live_features::LiveAudioFeatureAnalyzer::new(feature_config)
+        .expect("validated live audio stream configuration must support feature analysis");
+    let mut latest_feature = None;
+    let mut latest_feature_captured_at: Option<Instant> = None;
+    let mut last_onset_end_sample = None;
+    let mut last_onset_strength = 0.0_f32;
+    let mut pending_real_onsets = PendingLiveAudioOnsets::default();
+    let mut onset_queue_overflowed = false;
     let mut watchdog = LiveAudioInputWatchdog::new(Instant::now());
     while !stop.load(Ordering::Acquire) {
         capture_telemetry.mark_worker_heartbeat();
-        retry_live_audio_clear(&engine, &status, &safety);
+        {
+            let _generation_gate = generation_gate
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            retry_live_audio_clear(
+                &engine,
+                generation.load(Ordering::Acquire),
+                &status,
+                &safety,
+            );
+        }
         sync_live_audio_capture_telemetry(&status, &ready_capture_chunks, &capture_telemetry);
         if safety.terminal_faulted() {
             std::thread::park_timeout(LIVE_AUDIO_RECEIVE_POLL_INTERVAL);
@@ -7958,6 +8841,10 @@ fn run_live_audio_fft(
         }
         let mut received_samples = false;
         while let Some(mut chunk) = ready_capture_chunks.pop() {
+            let chunk_captured_at = chunk
+                .callback_at
+                .checked_sub(chunk.device_delay)
+                .unwrap_or(chunk.callback_at);
             let capture_to_worker = chunk
                 .callback_at
                 .elapsed()
@@ -7971,17 +8858,51 @@ fn run_live_audio_fft(
                 .fetch_max(capture_to_worker_us, Ordering::Relaxed);
             if capture_to_worker < LIVE_AUDIO_STALE_AFTER {
                 received_samples |= chunk.len > 0;
-                for sample in chunk.samples[..chunk.len].iter().copied() {
-                    if samples.len() == 4_096 {
-                        samples.pop_front();
+                analyzer.push_samples(&chunk.samples[..chunk.len], |mut frame| {
+                    if frame.onset {
+                        if pending_real_onsets.push(frame.sequence).is_err() {
+                            onset_queue_overflowed = true;
+                        }
+                        last_onset_end_sample = Some(frame.end_sample);
+                        last_onset_strength = frame.onset_strength;
                     }
-                    samples.push_back(sample);
-                }
+                    let onset_age = last_onset_end_sample
+                        .map(|sample| frame.end_sample.saturating_sub(sample))
+                        .unwrap_or(u64::MAX);
+                    let onset_hold_samples = u64::from(frame.sample_rate) / 10;
+                    if onset_age <= onset_hold_samples {
+                        frame.onset = true;
+                        let release = 1.0 - onset_age as f32 / onset_hold_samples.max(1) as f32;
+                        frame.onset_strength = frame
+                            .onset_strength
+                            .max(last_onset_strength * release.clamp(0.0, 1.0));
+                    }
+                    latest_feature = Some(frame);
+                    latest_feature_captured_at = Some(
+                        latest_feature_captured_at
+                            .map_or(chunk_captured_at, |oldest| oldest.min(chunk_captured_at)),
+                    );
+                });
             }
             chunk.len = 0;
             free_capture_slots
                 .push(chunk)
                 .expect("live audio worker must return each capture slot exactly once");
+        }
+        if onset_queue_overflowed {
+            pending_real_onsets.clear();
+            let _generation_gate = generation_gate
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            fail_closed_live_audio(
+                &engine,
+                generation.load(Ordering::Acquire),
+                &status,
+                &safety,
+                true,
+                LIVE_AUDIO_ONSET_QUEUE_OVERFLOW_ERROR.to_string(),
+            );
+            continue;
         }
         sync_live_audio_capture_telemetry(&status, &ready_capture_chunks, &capture_telemetry);
         if !received_samples {
@@ -7990,11 +8911,18 @@ fn run_live_audio_fft(
             }
             let now = Instant::now();
             if watchdog.mark_stale_if_due(now) {
-                samples.clear();
-                smoothed = empty_live_audio_spectrum();
-                last_analysis = now - Duration::from_millis(34);
+                analyzer.reset();
+                latest_feature = None;
+                latest_feature_captured_at = None;
+                last_onset_end_sample = None;
+                last_onset_strength = 0.0;
+                pending_real_onsets.clear();
+                let _generation_gate = generation_gate
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 fail_closed_live_audio(
                     &engine,
+                    generation.load(Ordering::Acquire),
                     &status,
                     &safety,
                     false,
@@ -8007,30 +8935,67 @@ fn run_live_audio_fft(
         if safety.terminal_faulted() {
             continue;
         }
-        if watchdog.record_chunk(Instant::now()) {
-            samples.clear();
-            smoothed = empty_live_audio_spectrum();
-            last_analysis = Instant::now() - Duration::from_millis(34);
+        let status_requires_recovery = status.lock().map(|status| status.stale).unwrap_or(true);
+        if watchdog.record_chunk(Instant::now()) || status_requires_recovery {
+            analyzer.reset();
+            latest_feature = None;
+            latest_feature_captured_at = None;
+            last_onset_end_sample = None;
+            last_onset_strength = 0.0;
+            pending_real_onsets.clear();
+            let _generation_gate = generation_gate
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if safety.terminal_faulted() {
+                continue;
+            }
+            if rotate_live_audio_generation(&generation).is_err() {
+                fail_closed_live_audio(
+                    &engine,
+                    generation.load(Ordering::Acquire),
+                    &status,
+                    &safety,
+                    true,
+                    "Live audio input generation counter was exhausted".to_string(),
+                );
+                continue;
+            }
             if !recover_live_audio_input_status(&status, &safety) {
                 watchdog.defer_recovery();
                 continue;
             }
         }
-        if samples.len() < 1_024 || last_analysis.elapsed() < Duration::from_millis(33) {
-            continue;
+        if let Some(frame) = latest_feature.take() {
+            let Some(captured_at) = latest_feature_captured_at.take() else {
+                let _generation_gate = generation_gate
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                fail_closed_live_audio(
+                    &engine,
+                    generation.load(Ordering::Acquire),
+                    &status,
+                    &safety,
+                    true,
+                    "Live audio feature timestamp was unavailable".to_string(),
+                );
+                continue;
+            };
+            let spectrum = live_audio_feature_spectrum(&frame);
+            let beat_phase = live_audio_feature_beat_phase(&frame, last_onset_end_sample);
+            let presentation = LiveAudioFeaturePresentation { frame, beat_phase };
+            if !publish_live_audio_features(
+                &engine,
+                generation.load(Ordering::Acquire),
+                captured_at,
+                &status,
+                &safety,
+                &spectrum,
+                &presentation,
+                &mut pending_real_onsets,
+            ) {
+                continue;
+            }
         }
-        fft_window.clear();
-        fft_window.extend(samples.iter().rev().take(1_024).copied());
-        fft_window.reverse();
-        let measured = analyzer.analyze(&fft_window, sample_rate);
-        let smooth = |previous: f32, next: f32| previous * 0.65 + next * 0.35;
-        smoothed.bass = smooth(smoothed.bass, measured.bass);
-        smoothed.mid = smooth(smoothed.mid, measured.mid);
-        smoothed.high = smooth(smoothed.high, measured.high);
-        if !publish_live_audio_spectrum(&engine, &status, &safety, &smoothed) {
-            continue;
-        }
-        last_analysis = Instant::now();
     }
 }
 
@@ -8040,7 +9005,7 @@ fn stop_live_audio_input(state: State<'_, AppState>) -> Result<LiveAudioInputSta
         .live_audio_input_lifecycle
         .lock()
         .map_err(|_| "Live audio input lifecycle lock was poisoned".to_string())?;
-    let (status, safety, engine) = {
+    let (status, safety, engine, generation, generation_gate) = {
         let active = state
             .live_audio_input
             .lock()
@@ -8052,9 +9017,21 @@ fn stop_live_audio_input(state: State<'_, AppState>) -> Result<LiveAudioInputSta
             Arc::clone(&input.status),
             Arc::clone(&input.safety),
             input.engine.clone(),
+            Arc::clone(&input.generation),
+            Arc::clone(&input.generation_gate),
         )
     };
-    request_live_audio_shutdown(&engine, &status, &safety);
+    {
+        let _generation_gate = generation_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        request_live_audio_shutdown(
+            &engine,
+            generation.load(Ordering::Acquire),
+            &status,
+            &safety,
+        );
+    }
     let pending_status = status
         .lock()
         .map_err(|_| "Live audio input status lock was poisoned".to_string())?
@@ -8092,31 +9069,38 @@ fn live_audio_input_status(state: State<'_, AppState>) -> Result<LiveAudioInputS
         .as_ref()
         .is_some_and(|worker| worker.is_finished());
     if worker_finished && !input.safety.terminal_faulted() {
+        let _generation_gate = input
+            .generation_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         fail_closed_live_audio(
             &input.engine,
+            input.generation.load(Ordering::Acquire),
             &input.status,
             &input.safety,
             true,
             "Live audio FFT worker stopped unexpectedly".to_string(),
         );
     }
-    let worker_heartbeat_stale = input.capture_telemetry.worker_heartbeat_is_stale();
-    let status_already_stale = input
-        .status
-        .lock()
-        .map_err(|_| "Live audio input status lock was poisoned".to_string())?
-        .stale;
-    if worker_heartbeat_stale && !status_already_stale && !input.safety.terminal_faulted() {
-        fail_closed_live_audio(
+    fail_closed_live_audio_if_worker_heartbeat_stale_with(
+        &input.generation,
+        &input.generation_gate,
+        &input.status,
+        &input.safety,
+        || input.capture_telemetry.worker_heartbeat_is_stale(),
+        |generation| input.engine.clear_live_audio_input(generation),
+    )?;
+    if input.safety.clear_pending() {
+        let _generation_gate = input
+            .generation_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        retry_live_audio_clear(
             &input.engine,
+            input.generation.load(Ordering::Acquire),
             &input.status,
             &input.safety,
-            false,
-            LIVE_AUDIO_WORKER_STALE_ERROR.to_string(),
         );
-    }
-    if input.safety.clear_pending() {
-        retry_live_audio_clear(&input.engine, &input.status, &input.safety);
     }
     sync_live_audio_capture_telemetry(
         &input.status,
@@ -8166,6 +9150,29 @@ fn stop_video_layer_audio_monitor(
     state: State<'_, AppState>,
     layer_id: VideoLayerId,
 ) -> Result<VideoAudioMonitorStatus, String> {
+    let current_action = state
+        .engine
+        .video_audio_runtime_snapshot()
+        .auto_vj_status
+        .last_action;
+    {
+        let mut handoff = state
+            .program_audio_handoff
+            .state
+            .lock()
+            .map_err(|_| "Program audio handoff lock was poisoned".to_string())?;
+        if handoff.desired_layer_id == Some(layer_id) {
+            state.program_audio_handoff.invalidate_in_flight();
+            handoff.pending_job = None;
+            handoff.desired_layer_id = None;
+            if handoff.owned_layer_id == Some(layer_id) {
+                handoff.owned_layer_id = None;
+            }
+            handoff.suppress_stopped_layer_action(layer_id, current_action.as_ref());
+        } else if handoff.owned_layer_id == Some(layer_id) {
+            handoff.owned_layer_id = None;
+        }
+    }
     let mut audio = state
         .media_audio
         .lock()
@@ -9573,10 +10580,7 @@ fn new_project(state: State<'_, AppState>) -> Result<(), String> {
             .map_err(|_| "Current project path lock was poisoned".to_string())?;
         *current_path = None;
     }
-    state
-        .engine
-        .load_project_snapshot(EngineSnapshot::default())
-        .map_err(|error| error.to_string())?;
+    load_project_snapshot_with_runtime_reset(&state, EngineSnapshot::default())?;
     reset_vj_preview_after_project_change(&state);
     Ok(())
 }
@@ -11105,6 +12109,7 @@ fn clear_current_project_path(state: &State<'_, AppState>) -> Result<(), String>
 fn project_snapshot_for_save(mut snapshot: EngineSnapshot) -> EngineSnapshot {
     snapshot.active_fade = None;
     snapshot.timeline.playing = false;
+    snapshot.video.auto_vj.status = protocol::AutoVjStatus::default();
     snapshot.dmx_preview.clear();
     snapshot.dmx_previews.clear();
     snapshot.telemetry = EngineTelemetry::default();
@@ -11356,10 +12361,7 @@ fn load_project_from_file(
             custom_profiles.insert(profile.source_path.clone(), profile.clone());
         }
     }
-    state
-        .engine
-        .load_project_snapshot(project.snapshot)
-        .map_err(|error| error.to_string())?;
+    load_project_snapshot_with_runtime_reset(state, project.snapshot)?;
     reset_vj_preview_after_project_change(state);
     if let Some(path) = current_path {
         set_current_project_path(state, path)?;
@@ -11370,6 +12372,69 @@ fn load_project_from_file(
         path: path_label,
         profiles,
     })
+}
+
+fn load_project_snapshot_with_runtime_reset(
+    state: &State<'_, AppState>,
+    snapshot: EngineSnapshot,
+) -> Result<(), String> {
+    {
+        let mut program_handoff = state
+            .program_audio_handoff
+            .state
+            .lock()
+            .map_err(|_| "Program audio handoff lock was poisoned".to_string())?;
+        // Hold the coordinator lock while retiring the generation so the worker
+        // cannot publish a fresh old-project job in the barrier gap.
+        state.program_audio_handoff.invalidate_in_flight();
+        program_handoff.suspended = true;
+        program_handoff.pending_job = None;
+    }
+    let result = state
+        .engine
+        .load_project_snapshot(snapshot)
+        .map_err(|error| error.to_string());
+    if let Err(error) = result {
+        let mut program_handoff = state
+            .program_audio_handoff
+            .state
+            .lock()
+            .map_err(|_| "Program audio handoff lock was poisoned".to_string())?;
+        program_handoff.suspended = false;
+        if program_handoff.config.enabled {
+            if let Some(layer_id) = program_handoff
+                .desired_layer_id
+                .or(program_handoff.owned_layer_id)
+            {
+                if let Some(plan) = program_handoff.manual_take_plan(layer_id) {
+                    state
+                        .program_audio_handoff
+                        .queue_locked(&mut program_handoff, ProgramAudioJobKind::Handoff(plan));
+                }
+            }
+        }
+        state.program_audio_handoff.wake.notify_all();
+        return Err(error);
+    }
+    {
+        let mut audio = state
+            .media_audio
+            .lock()
+            .map_err(|_| "Media audio monitor lock was poisoned".to_string())?;
+        audio.stop_all();
+        audio.last_sync_error = None;
+    }
+    let published = state.engine.snapshot();
+    let mut program_handoff = state
+        .program_audio_handoff
+        .state
+        .lock()
+        .map_err(|_| "Program audio handoff lock was poisoned".to_string())?;
+    program_handoff.reset_for_project_change();
+    program_handoff.suppress_through(published.video.auto_vj.status.last_action.as_ref());
+    drop(program_handoff);
+    state.program_audio_handoff.wake.notify_all();
+    Ok(())
 }
 
 fn reset_vj_preview_after_project_change(state: &State<'_, AppState>) {
@@ -15862,6 +16927,7 @@ fn vj_preview_render_snapshot(
         compositions: Vec::new(),
         outputs: Vec::new(),
         mapping_presets: Vec::new(),
+        auto_vj: protocol::AutoVjSnapshot::default(),
         master_opacity: 1.0,
         blackout: false,
     })
@@ -22966,6 +24032,7 @@ f 1 2 3
                 mapping: VideoOutputMapping::default(),
             }],
             mapping_presets: Vec::new(),
+            auto_vj: protocol::AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
         };
@@ -23710,6 +24777,37 @@ f 1 2 3
         snapshot.timeline.playing = true;
         snapshot.timeline.position_ms = 12_345;
         snapshot.video.master_opacity = 0.5;
+        snapshot.video.auto_vj.config.seed = 42;
+        snapshot.video.auto_vj.config.eligible_layer_ids = vec![5, 7];
+        let auto_vj_action = protocol::AutoVjAction {
+            sequence: 3,
+            boundary_index: 2,
+            beat: 8,
+            layer_id: 7,
+            transition_ms: 500,
+            selection_token: 99,
+            seed: 42,
+            show_revision: 4,
+            trigger: protocol::AutoVjTrigger::LiveAudioOnset,
+            live_audio_feature_sequence: Some(17),
+        };
+        snapshot.video.auto_vj.status = protocol::AutoVjStatus {
+            mode: protocol::AutoVjMode::Running,
+            armed: true,
+            hold: false,
+            show_revision: 4,
+            action_sequence: 3,
+            last_consumed_boundary: Some(2),
+            next_boundary_beat: Some(12),
+            last_action: Some(auto_vj_action.clone()),
+            action_log: vec![auto_vj_action],
+            fault: None,
+            live_audio_beat_counter: 8,
+            last_live_audio_feature_sequence: Some(17),
+            live_audio_waiting: false,
+            live_audio_generation: Some(2),
+        };
+        let auto_vj_config = snapshot.video.auto_vj.config.clone();
         snapshot.dmx_preview = vec![127; 512];
         snapshot.dmx_previews = vec![protocol::DmxUniversePreview {
             universe: 2,
@@ -23726,6 +24824,12 @@ f 1 2 3
         assert!(!saved.timeline.playing);
         assert_eq!(saved.timeline.position_ms, 12_345);
         assert_eq!(saved.video.master_opacity, 0.5);
+        assert_eq!(saved.video.auto_vj.config, auto_vj_config);
+        assert_eq!(
+            saved.video.auto_vj.status,
+            protocol::AutoVjStatus::default()
+        );
+        assert!(saved.video.auto_vj.status.action_log.is_empty());
         assert!(saved.dmx_preview.is_empty());
         assert!(saved.dmx_previews.is_empty());
         assert_eq!(saved.telemetry, EngineTelemetry::default());
@@ -29034,6 +30138,21 @@ mod art_rdm_request_tests {
 mod media_audio_playback_tests {
     use super::*;
 
+    fn auto_vj_action(sequence: u64, layer_id: VideoLayerId) -> protocol::AutoVjAction {
+        protocol::AutoVjAction {
+            sequence,
+            boundary_index: sequence,
+            beat: sequence.saturating_mul(4),
+            layer_id,
+            transition_ms: 250,
+            selection_token: sequence.saturating_mul(17),
+            seed: 42,
+            show_revision: 7,
+            trigger: protocol::AutoVjTrigger::LiveAudioOnset,
+            live_audio_feature_sequence: Some(sequence),
+        }
+    }
+
     #[test]
     fn empty_audio_monitor_status_does_not_open_an_output_device() {
         let mut playback = MediaAudioPlayback::default();
@@ -29066,6 +30185,191 @@ mod media_audio_playback_tests {
             Duration::MAX
         ));
     }
+
+    #[test]
+    fn program_audio_handoff_plans_each_auto_action_exactly_once() {
+        let config =
+            ProgramAudioHandoffConfig::validated(true, 1.25, Some("  ASIO Main  ".to_string()))
+                .unwrap();
+        let mut handoff = ProgramAudioHandoffState::default();
+        handoff.configure(config, None);
+        let first = auto_vj_action(1, 5);
+        let mut status = protocol::AutoVjStatus {
+            armed: true,
+            last_action: Some(first.clone()),
+            ..protocol::AutoVjStatus::default()
+        };
+
+        assert_eq!(
+            handoff.next_plan(&status),
+            Some(ProgramAudioHandoffPlan {
+                layer_id: 5,
+                volume: 1.25,
+                device_name: Some("ASIO Main".to_string()),
+            })
+        );
+        assert_eq!(handoff.next_plan(&status), None);
+
+        status.last_action = Some(auto_vj_action(2, 9));
+        assert_eq!(handoff.next_plan(&status).unwrap().layer_id, 9);
+        assert_eq!(handoff.next_plan(&status), None);
+    }
+
+    #[test]
+    fn manual_take_barrier_suppresses_an_unobserved_auto_audio_action() {
+        let mut handoff = ProgramAudioHandoffState::default();
+        handoff.configure(
+            ProgramAudioHandoffConfig::validated(true, 0.8, None).unwrap(),
+            None,
+        );
+        let action = auto_vj_action(3, 7);
+        handoff.suppress_through(Some(&action));
+        let status = protocol::AutoVjStatus {
+            armed: true,
+            hold: true,
+            last_action: Some(action),
+            ..protocol::AutoVjStatus::default()
+        };
+
+        assert_eq!(handoff.next_plan(&status), None);
+    }
+
+    #[test]
+    fn stopping_one_layer_does_not_consume_another_layers_unseen_action() {
+        let previous = auto_vj_action(3, 7);
+        let unseen = auto_vj_action(4, 9);
+        let mut handoff = ProgramAudioHandoffState::default();
+        handoff.configure(
+            ProgramAudioHandoffConfig::validated(true, 0.8, None).unwrap(),
+            Some(&previous),
+        );
+        handoff.suppress_stopped_layer_action(previous.layer_id, Some(&unseen));
+        let status = protocol::AutoVjStatus {
+            armed: true,
+            last_action: Some(unseen),
+            ..protocol::AutoVjStatus::default()
+        };
+
+        assert_eq!(handoff.next_plan(&status).unwrap().layer_id, 9);
+    }
+
+    #[test]
+    fn program_audio_config_rejects_non_finite_volume_and_does_not_replay_current_action() {
+        assert!(ProgramAudioHandoffConfig::validated(true, f32::NAN, None).is_err());
+        let action = auto_vj_action(4, 11);
+        let mut handoff = ProgramAudioHandoffState::default();
+        handoff.configure(
+            ProgramAudioHandoffConfig::validated(true, 3.0, Some("  ".to_string())).unwrap(),
+            Some(&action),
+        );
+        let status = protocol::AutoVjStatus {
+            armed: true,
+            last_action: Some(action),
+            ..protocol::AutoVjStatus::default()
+        };
+
+        assert_eq!(handoff.config.volume, 2.0);
+        assert_eq!(handoff.config.device_name, None);
+        assert_eq!(handoff.next_plan(&status), None);
+        assert_eq!(
+            handoff.manual_take_plan(12),
+            Some(ProgramAudioHandoffPlan {
+                layer_id: 12,
+                volume: 2.0,
+                device_name: None,
+            })
+        );
+    }
+
+    #[test]
+    fn enabled_program_audio_config_change_preserves_an_unseen_action() {
+        let previous_action = auto_vj_action(5, 3);
+        let unseen_action = auto_vj_action(6, 8);
+        let mut handoff = ProgramAudioHandoffState::default();
+        handoff.configure(
+            ProgramAudioHandoffConfig::validated(true, 0.8, None).unwrap(),
+            Some(&previous_action),
+        );
+        handoff.configure(
+            ProgramAudioHandoffConfig::validated(true, 1.1, Some("Main".to_string())).unwrap(),
+            Some(&unseen_action),
+        );
+        let status = protocol::AutoVjStatus {
+            armed: true,
+            last_action: Some(unseen_action),
+            ..protocol::AutoVjStatus::default()
+        };
+
+        let plan = handoff.next_plan(&status).unwrap();
+        assert_eq!(plan.layer_id, 8);
+        assert_eq!(plan.volume, 1.1);
+        assert_eq!(plan.device_name.as_deref(), Some("Main"));
+    }
+
+    #[test]
+    fn program_audio_gain_reconfiguration_preserves_mix_ratio() {
+        assert_eq!(reconfigured_program_audio_volume(0.4, 0.8, 1.6, 1.0), 0.8);
+        assert_eq!(reconfigured_program_audio_volume(0.0, 0.0, 1.0, 0.25), 0.5);
+        assert_eq!(reconfigured_program_audio_volume(2.0, 0.5, 2.0, 1.0), 2.0);
+    }
+
+    #[test]
+    fn newer_program_audio_job_retires_the_previous_generation() {
+        let coordinator = ProgramAudioHandoffCoordinator::default();
+        let mut handoff = coordinator.state.lock().unwrap();
+        let first_generation = coordinator.queue_locked(
+            &mut handoff,
+            ProgramAudioJobKind::Handoff(ProgramAudioHandoffPlan {
+                layer_id: 5,
+                volume: 0.8,
+                device_name: None,
+            }),
+        );
+        let second_generation =
+            coordinator.queue_locked(&mut handoff, ProgramAudioJobKind::StopAll);
+
+        assert!(second_generation > first_generation);
+        assert_eq!(
+            coordinator.generation.load(Ordering::Acquire),
+            second_generation
+        );
+        assert_eq!(
+            handoff.pending_job,
+            Some(ProgramAudioJob {
+                generation: second_generation,
+                kind: ProgramAudioJobKind::StopAll,
+            })
+        );
+    }
+
+    #[test]
+    fn rapid_program_audio_reenable_keeps_the_pending_stop_barrier() {
+        let current = auto_vj_action(8, 13);
+        let coordinator = ProgramAudioHandoffCoordinator::default();
+        let mut handoff = coordinator.state.lock().unwrap();
+        handoff.configure(
+            ProgramAudioHandoffConfig::validated(true, 0.8, None).unwrap(),
+            None,
+        );
+        handoff.configure(
+            ProgramAudioHandoffConfig::validated(false, 0.8, None).unwrap(),
+            Some(&current),
+        );
+        let generation = coordinator.queue_locked(&mut handoff, ProgramAudioJobKind::StopAll);
+        handoff.configure(
+            ProgramAudioHandoffConfig::validated(true, 0.8, None).unwrap(),
+            Some(&current),
+        );
+
+        assert_eq!(coordinator.generation.load(Ordering::Acquire), generation);
+        assert_eq!(
+            handoff.pending_job,
+            Some(ProgramAudioJob {
+                generation,
+                kind: ProgramAudioJobKind::StopAll,
+            })
+        );
+    }
 }
 
 #[cfg(test)]
@@ -29073,16 +30377,83 @@ mod live_audio_input_tests {
     use super::*;
     use std::cell::Cell;
 
+    fn feature_frame(
+        bands: [f32; audio::live_features::MAX_LIVE_AUDIO_BANDS],
+        band_count: usize,
+    ) -> audio::live_features::LiveAudioFeatureFrame {
+        audio::live_features::LiveAudioFeatureFrame {
+            sequence: 7,
+            end_sample: 96_000,
+            sample_rate: 48_000,
+            rms: 0.4,
+            peak: 0.8,
+            bands,
+            band_count,
+            spectral_flux: 0.3,
+            onset: true,
+            onset_strength: 0.6,
+            bpm: Some(120.0),
+            bpm_confidence: 0.75,
+        }
+    }
+
+    fn assert_reactive_levels_zero(levels: &LiveAudioInputLevels) {
+        assert_eq!((levels.bass, levels.mid, levels.high), (0.0, 0.0, 0.0));
+        assert!(levels.bands.iter().all(|level| *level == 0.0));
+        assert_eq!(levels.band_count, 0);
+        assert_eq!(
+            (levels.rms, levels.peak, levels.spectral_flux),
+            (0.0, 0.0, 0.0)
+        );
+        assert!(!levels.onset);
+        assert_eq!(levels.onset_strength, 0.0);
+        assert_eq!(levels.bpm, None);
+        assert_eq!((levels.bpm_confidence, levels.beat_phase), (0.0, 0.0));
+        assert_eq!(levels.feature_sequence, 0);
+    }
+
     #[test]
     fn live_audio_levels_are_clamped_and_zeroed_when_unsafe() {
+        let mut bands = [0.0; audio::live_features::MAX_LIVE_AUDIO_BANDS];
+        bands[0] = f32::NAN;
+        bands[1] = -0.25;
+        bands[2] = 0.5;
+        bands[3] = f32::INFINITY;
+        bands[4] = 1.25;
         let live = LiveAudioInputLevels::from_status(&LiveAudioInputStatus {
             running: true,
             bass: -0.25,
             mid: 0.5,
             high: 1.25,
+            bands,
+            band_count: usize::MAX,
+            rms: f32::NAN,
+            peak: 1.5,
+            spectral_flux: -0.5,
+            onset: true,
+            onset_strength: 0.6,
+            bpm: Some(120.0),
+            bpm_confidence: 1.5,
+            beat_phase: 1.25,
+            feature_sequence: 42,
             ..LiveAudioInputStatus::default()
         });
         assert_eq!((live.bass, live.mid, live.high), (0.0, 0.5, 1.0));
+        assert_eq!(&live.bands[..5], &[0.0, 0.0, 0.5, 0.0, 1.0]);
+        assert_eq!(live.band_count, audio::live_features::MAX_LIVE_AUDIO_BANDS);
+        assert_eq!((live.rms, live.peak, live.spectral_flux), (0.0, 1.0, 0.0));
+        assert!(live.onset);
+        assert_eq!(live.onset_strength, 0.6);
+        assert_eq!(live.bpm, Some(120.0));
+        assert_eq!((live.bpm_confidence, live.beat_phase), (1.0, 0.25));
+        assert_eq!(live.feature_sequence, 42);
+
+        let invalid_bpm = LiveAudioInputLevels::from_status(&LiveAudioInputStatus {
+            running: true,
+            bpm: Some(-120.0),
+            ..LiveAudioInputStatus::default()
+        });
+        assert_eq!(invalid_bpm.bpm, None);
 
         for status in [
             LiveAudioInputStatus {
@@ -29091,6 +30462,17 @@ mod live_audio_input_tests {
                 bass: 0.25,
                 mid: 0.5,
                 high: 0.75,
+                bands: [1.0; audio::live_features::MAX_LIVE_AUDIO_BANDS],
+                band_count: audio::live_features::MAX_LIVE_AUDIO_BANDS,
+                rms: 1.0,
+                peak: 1.0,
+                spectral_flux: 1.0,
+                onset: true,
+                onset_strength: 1.0,
+                bpm: Some(120.0),
+                bpm_confidence: 1.0,
+                beat_phase: 0.5,
+                feature_sequence: 42,
                 ..LiveAudioInputStatus::default()
             },
             LiveAudioInputStatus {
@@ -29099,6 +30481,17 @@ mod live_audio_input_tests {
                 bass: 0.25,
                 mid: 0.5,
                 high: 0.75,
+                bands: [1.0; audio::live_features::MAX_LIVE_AUDIO_BANDS],
+                band_count: audio::live_features::MAX_LIVE_AUDIO_BANDS,
+                rms: 1.0,
+                peak: 1.0,
+                spectral_flux: 1.0,
+                onset: true,
+                onset_strength: 1.0,
+                bpm: Some(120.0),
+                bpm_confidence: 1.0,
+                beat_phase: 0.5,
+                feature_sequence: 42,
                 ..LiveAudioInputStatus::default()
             },
             LiveAudioInputStatus {
@@ -29106,12 +30499,195 @@ mod live_audio_input_tests {
                 bass: 0.25,
                 mid: 0.5,
                 high: 0.75,
+                bands: [1.0; audio::live_features::MAX_LIVE_AUDIO_BANDS],
+                band_count: audio::live_features::MAX_LIVE_AUDIO_BANDS,
+                rms: 1.0,
+                peak: 1.0,
+                spectral_flux: 1.0,
+                onset: true,
+                onset_strength: 1.0,
+                bpm: Some(120.0),
+                bpm_confidence: 1.0,
+                beat_phase: 0.5,
+                feature_sequence: 42,
                 ..LiveAudioInputStatus::default()
             },
         ] {
             let levels = LiveAudioInputLevels::from_status(&status);
-            assert_eq!((levels.bass, levels.mid, levels.high), (0.0, 0.0, 0.0));
+            assert_reactive_levels_zero(&levels);
         }
+    }
+
+    #[test]
+    fn live_audio_feature_spectrum_groups_all_sixteen_bands_and_honors_band_count() {
+        let mut bands = [0.0; audio::live_features::MAX_LIVE_AUDIO_BANDS];
+        bands[0] = 0.1;
+        bands[4] = 0.5;
+        bands[5] = 0.2;
+        bands[9] = 0.7;
+        bands[10] = 0.3;
+        bands[14] = f32::NAN;
+        bands[15] = 1.25;
+
+        let spectrum = live_audio_feature_spectrum(&feature_frame(bands, 16));
+        assert_eq!(spectrum.time_ms, 2_000);
+        assert_eq!(
+            (spectrum.bass, spectrum.mid, spectrum.high),
+            (0.5, 0.7, 1.0)
+        );
+
+        let partial = live_audio_feature_spectrum(&feature_frame(bands, 8));
+        assert_eq!((partial.bass, partial.mid, partial.high), (0.5, 0.2, 0.0));
+    }
+
+    #[test]
+    fn live_audio_feature_beat_phase_is_relative_to_the_last_real_onset() {
+        let frame = feature_frame([0.0; audio::live_features::MAX_LIVE_AUDIO_BANDS], 16);
+        assert_eq!(live_audio_feature_beat_phase(&frame, Some(90_000)), 0.25);
+        assert_eq!(
+            live_audio_feature_beat_phase(&frame, Some(frame.end_sample)),
+            0.0
+        );
+        assert_eq!(live_audio_feature_beat_phase(&frame, None), 0.0);
+
+        for bpm in [None, Some(f32::NAN), Some(0.0), Some(-120.0)] {
+            let invalid = audio::live_features::LiveAudioFeatureFrame { bpm, ..frame };
+            assert_eq!(live_audio_feature_beat_phase(&invalid, Some(90_000)), 0.0);
+        }
+    }
+
+    #[test]
+    fn live_audio_feature_publish_sanitizes_the_full_status_contract() {
+        let mut bands = [0.0; audio::live_features::MAX_LIVE_AUDIO_BANDS];
+        bands[0] = f32::NAN;
+        bands[1] = -1.0;
+        bands[2] = 0.5;
+        bands[3] = f32::INFINITY;
+        bands[4] = 2.0;
+        bands[5] = 0.75;
+        let mut frame = feature_frame(bands, 6);
+        frame.rms = f32::NAN;
+        frame.peak = f32::INFINITY;
+        frame.spectral_flux = -1.0;
+        frame.onset_strength = 2.0;
+        frame.bpm = Some(-120.0);
+        frame.bpm_confidence = f32::NAN;
+        let status = Mutex::new(LiveAudioInputStatus {
+            running: true,
+            ..LiveAudioInputStatus::default()
+        });
+        let safety = LiveAudioInputSafety::default();
+
+        assert!(publish_live_audio_analysis_with(
+            &status,
+            &safety,
+            &protocol::AudioSpectrumPoint {
+                time_ms: 0,
+                bass: f32::NAN,
+                mid: -1.0,
+                high: f32::INFINITY,
+            },
+            Some(&LiveAudioFeaturePresentation {
+                frame,
+                beat_phase: f32::NAN,
+            }),
+            || Ok(()),
+            || Ok(()),
+        ));
+
+        let current = status.lock().unwrap().clone();
+        assert_eq!((current.bass, current.mid, current.high), (0.0, 0.0, 0.0));
+        assert_eq!(&current.bands[..6], &[0.0, 0.0, 0.5, 0.0, 1.0, 0.75]);
+        assert!(current.bands[6..].iter().all(|level| *level == 0.0));
+        assert_eq!(current.band_count, 6);
+        assert_eq!(
+            (current.rms, current.peak, current.spectral_flux),
+            (0.0, 0.0, 0.0)
+        );
+        assert!(current.onset);
+        assert_eq!(current.onset_strength, 1.0);
+        assert_eq!(current.bpm, None);
+        assert_eq!((current.bpm_confidence, current.beat_phase), (0.0, 0.0));
+        assert_eq!(current.feature_sequence, 7);
+        assert!(serde_json::to_value(current).is_ok());
+    }
+
+    #[test]
+    fn zero_live_audio_status_clears_every_reactive_feature() {
+        let mut status = LiveAudioInputStatus {
+            running: true,
+            bass: 0.2,
+            mid: 0.4,
+            high: 0.6,
+            bands: [0.8; audio::live_features::MAX_LIVE_AUDIO_BANDS],
+            band_count: audio::live_features::MAX_LIVE_AUDIO_BANDS,
+            rms: 0.3,
+            peak: 0.9,
+            spectral_flux: 0.5,
+            onset: true,
+            onset_strength: 0.7,
+            bpm: Some(128.0),
+            bpm_confidence: 0.85,
+            beat_phase: 0.25,
+            feature_sequence: 99,
+            ..LiveAudioInputStatus::default()
+        };
+
+        zero_live_audio_input_status(&mut status, "stale".to_string());
+
+        let levels = LiveAudioInputLevels::from_status(&status);
+        assert!(status.stale);
+        assert_eq!(status.last_error.as_deref(), Some("stale"));
+        assert_reactive_levels_zero(&levels);
+        assert!(status.bands.iter().all(|level| *level == 0.0));
+        assert_eq!(status.band_count, 0);
+        assert_eq!(status.bpm, None);
+        assert_eq!(status.feature_sequence, 0);
+    }
+
+    #[test]
+    fn pending_live_audio_onsets_publish_as_one_atomic_retryable_payload() {
+        let mut pending = PendingLiveAudioOnsets::default();
+        for sequence in 10..10 + LIVE_AUDIO_CAPTURE_SLOT_COUNT as u64 {
+            pending.push(sequence).unwrap();
+        }
+        assert_eq!(pending.push(99), Err(LIVE_AUDIO_ONSET_QUEUE_OVERFLOW_ERROR));
+
+        assert_eq!(
+            pending.publish_frame_with(|sequences, count| {
+                assert_eq!(usize::from(count), LIVE_AUDIO_CAPTURE_SLOT_COUNT);
+                assert_eq!(&sequences[..usize::from(count)], &[10, 11, 12, 13]);
+                Err("frame queue full".to_string())
+            }),
+            Err("frame queue full".to_string())
+        );
+        assert_eq!(pending.len, LIVE_AUDIO_CAPTURE_SLOT_COUNT);
+        assert_eq!(&pending.sequences[..pending.len], &[10, 11, 12, 13]);
+
+        let mut delivered = [0_u64; LIVE_AUDIO_CAPTURE_SLOT_COUNT];
+        let delivered_len = Cell::new(0_usize);
+        pending
+            .publish_frame_with(|sequences, count| {
+                let len = usize::from(count);
+                delivered[..len].copy_from_slice(&sequences[..len]);
+                delivered_len.set(len);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(&delivered[..delivered_len.get()], &[10, 11, 12, 13]);
+        assert_eq!(pending.len, 0);
+    }
+
+    #[test]
+    fn recoverable_stale_rotates_the_generation_shared_with_stop_and_fault_paths() {
+        let initial = allocate_live_audio_generation().unwrap();
+        let active = Arc::new(AtomicU64::new(initial));
+        let stop_owner = Arc::clone(&active);
+
+        let recovered = rotate_live_audio_generation(&active).unwrap();
+
+        assert!(recovered > initial);
+        assert_eq!(stop_owner.load(Ordering::Acquire), recovered);
     }
 
     fn callback_info(device_delay: Duration) -> rodio::cpal::InputCallbackInfo {
@@ -29871,6 +31447,59 @@ mod live_audio_input_tests {
     }
 
     #[test]
+    fn heartbeat_stale_recheck_does_not_clear_a_generation_that_just_recovered() {
+        let initial = allocate_live_audio_generation().unwrap();
+        let recovered = allocate_live_audio_generation().unwrap();
+        let generation = AtomicU64::new(initial);
+        let generation_gate = Mutex::new(());
+        let status = Mutex::new(LiveAudioInputStatus {
+            running: true,
+            ..LiveAudioInputStatus::default()
+        });
+        let safety = LiveAudioInputSafety::default();
+        let heartbeat_stale = Cell::new(true);
+        let heartbeat_checks = Cell::new(0_u8);
+        let cleared_generation = Cell::new(None);
+
+        let failed_closed = fail_closed_live_audio_if_worker_heartbeat_stale_with(
+            &generation,
+            &generation_gate,
+            &status,
+            &safety,
+            || {
+                let check = heartbeat_checks.get();
+                heartbeat_checks.set(check + 1);
+                if check == 0 {
+                    let observed_stale = heartbeat_stale.get();
+                    // Model the worker winning the generation gate after the status call
+                    // sampled a stale heartbeat but before it can act on that sample.
+                    let _worker_generation_gate = generation_gate.lock().unwrap();
+                    generation.store(recovered, Ordering::Release);
+                    heartbeat_stale.set(false);
+                    observed_stale
+                } else {
+                    heartbeat_stale.get()
+                }
+            },
+            |generation| {
+                cleared_generation.set(Some(generation));
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert!(!failed_closed);
+        assert_eq!(heartbeat_checks.get(), 2);
+        assert_eq!(generation.load(Ordering::Acquire), recovered);
+        assert_eq!(cleared_generation.get(), None);
+        let current = status.lock().unwrap();
+        assert!(!current.stale);
+        assert!(current.last_error.is_none());
+        assert!(!current.safety_clear_pending);
+        assert!(!safety.clear_pending());
+    }
+
+    #[test]
     fn live_audio_stream_fault_zeroes_meters_and_retries_a_full_clear_queue() {
         let status = Mutex::new(LiveAudioInputStatus {
             running: true,
@@ -30017,6 +31646,56 @@ mod live_audio_input_tests {
             },
         ));
         assert_eq!(attempts.get(), 1);
+    }
+
+    #[test]
+    fn final_drop_clear_publishes_the_generation_recovered_after_stop_observation() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let initial = allocate_live_audio_generation().unwrap();
+        let generation = AtomicU64::new(initial);
+        let stop_observed_generation = generation.load(Ordering::Acquire);
+        engine
+            .clear_live_audio_input(stop_observed_generation)
+            .unwrap();
+
+        let recovered = rotate_live_audio_generation(&generation).unwrap();
+        engine
+            .send(EngineCommand::PublishLiveAudioFrame {
+                frame: protocol::LiveAudioFrame {
+                    generation: recovered,
+                    feature_sequence: 1,
+                    spectrum: protocol::AudioSpectrumPoint {
+                        time_ms: 0,
+                        bass: 0.25,
+                        mid: 0.5,
+                        high: 0.75,
+                    },
+                    onset_feature_sequences: [0; protocol::MAX_LIVE_AUDIO_FRAME_ONSETS],
+                    onset_count: 0,
+                },
+                captured_at: Instant::now(),
+            })
+            .unwrap();
+
+        let published_clear_generation = Cell::new(None);
+        assert!(send_current_live_audio_clear_bounded_with(
+            &generation,
+            LIVE_AUDIO_STOP_CLEAR_RETRY,
+            LIVE_AUDIO_STOP_CLEAR_RETRY_INTERVAL,
+            |generation| {
+                published_clear_generation.set(Some(generation));
+                engine.clear_live_audio_input(generation)
+            },
+        ));
+
+        assert_eq!(published_clear_generation.get(), Some(recovered));
+        assert_eq!(
+            engine.snapshot().video.auto_vj.status.live_audio_generation,
+            Some(recovered)
+        );
     }
 
     #[test]
@@ -30654,7 +32333,12 @@ fn main() {
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     let app_video_decoder = app_video_decoder.with_spout_inputs(Arc::clone(&spout_inputs));
     let media_audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
-    let media_audio_sync = MediaAudioSyncRuntime::start(engine.clone(), Arc::clone(&media_audio));
+    let program_audio_handoff = Arc::new(ProgramAudioHandoffCoordinator::default());
+    let media_audio_sync = MediaAudioSyncRuntime::start(
+        engine.clone(),
+        Arc::clone(&media_audio),
+        Arc::clone(&program_audio_handoff),
+    );
     tauri::Builder::default()
         .setup(move |app| {
             #[cfg(target_os = "windows")]
@@ -30763,6 +32447,7 @@ fn main() {
             vj_preview_renderer: Mutex::new(new_vj_preview_renderer()),
             vj_preview_renderer_reset_pending: AtomicBool::new(false),
             media_audio,
+            program_audio_handoff,
             _media_audio_sync: media_audio_sync,
             live_audio_input_lifecycle: Mutex::new(()),
             live_audio_input_devices: Mutex::new(LiveAudioInputDeviceCatalog::default()),
@@ -30975,6 +32660,10 @@ fn main() {
             fade_video_layer_opacity,
             launch_video_clip,
             take_video_clip,
+            set_auto_vj_config,
+            set_auto_vj_armed,
+            set_auto_vj_hold,
+            set_program_audio_handoff_config,
             set_video_ab_mix,
             stop_video_clip,
             play_video_layer_audio_monitor,

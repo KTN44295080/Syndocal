@@ -38,6 +38,7 @@ const meterBands = [
   ["M", "Mid", "mid"],
   ["H", "High", "high"],
 ] as const;
+const liveAudioBandIndices = Array.from({ length: 16 }, (_, index) => index);
 
 const COMMON_SAMPLE_RATES = [44_100, 48_000, 88_200, 96_000, 176_400, 192_000] as const;
 const COMMON_BUFFER_FRAMES = [32, 64, 128, 256, 512, 1_024, 2_048, 4_096, 8_192] as const;
@@ -149,6 +150,17 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
     !props.liveAudioInputStatusKnown ||
     props.liveAudioInputStatus.running ||
     props.liveAudioInputStatus.safety_clear_pending;
+  const visualBandPercent = (index: number) =>
+    Math.round(
+      Math.max(0, Math.min(1, props.liveAudioInputStatus.bands?.[index] ?? 0)) * 100,
+    );
+  const rhythmLabel = createMemo(() => {
+    const bpm = props.liveAudioInputStatus.bpm;
+    const confidence = Math.round(
+      Math.max(0, Math.min(1, props.liveAudioInputStatus.bpm_confidence ?? 0)) * 100,
+    );
+    return bpm && confidence > 0 ? `${bpm.toFixed(1)} · ${confidence}%` : "—";
+  });
 
   return (
     <section
@@ -215,7 +227,23 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
                   : "Checking"}
         </button>
       </div>
-      <div class="liveAudioMeters" aria-label="Live audio frequency levels">
+      <div
+        class={`liveAudioMeters ${props.liveAudioInputStatus.onset ? "onset" : ""}`}
+        aria-label="Live audio frequency levels"
+        data-onset={props.liveAudioInputStatus.onset ? "true" : "false"}
+      >
+        <div class="liveAudioBandSpectrum" aria-hidden="true" data-no-localize>
+          <For each={liveAudioBandIndices}>
+            {(index) => {
+              const percent = () => visualBandPercent(index);
+              return (
+                <em title={`Band ${index + 1} ${percent()}%`}>
+                  <i style={{ transform: `scaleY(${percent() / 100})` }} />
+                </em>
+              );
+            }}
+          </For>
+        </div>
         <For each={meterBands}>
           {([label, name, field]) => {
             const percent = () =>
@@ -311,7 +339,15 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
             {(props.liveAudioInputStatus.max_capture_to_worker_us / 1_000).toFixed(1)} ms
           </span>
           <span class="liveAudioTelemetryIo">
-            I/O {(props.liveAudioInputStatus.sample_rate / 1_000).toFixed(1)}k · {liveAudioChannelMixLabel(props.liveAudioInputStatus)} · CB {props.liveAudioInputStatus.last_callback_frames}/{props.liveAudioInputStatus.min_callback_frames}/{props.liveAudioInputStatus.max_callback_frames}f
+            <b
+              class={`liveAudioTelemetryRhythm ${props.liveAudioInputStatus.onset ? "onset" : ""}`}
+              title={`BPM ${rhythmLabel()} · RMS ${Math.round((props.liveAudioInputStatus.rms ?? 0) * 100)}% · Peak ${Math.round((props.liveAudioInputStatus.peak ?? 0) * 100)}%`}
+            >
+              BPM {rhythmLabel()}
+            </b>
+            <i>
+              I/O {(props.liveAudioInputStatus.sample_rate / 1_000).toFixed(1)}k · {liveAudioChannelMixLabel(props.liveAudioInputStatus)} · CB {props.liveAudioInputStatus.last_callback_frames}/{props.liveAudioInputStatus.min_callback_frames}/{props.liveAudioInputStatus.max_callback_frames}f
+            </i>
           </span>
           <span class="liveAudioTelemetryQueue">Q {props.liveAudioInputStatus.queue_depth}/{props.liveAudioInputStatus.queue_depth_high_water}/{props.liveAudioInputStatus.queue_capacity}</span>
         </div>

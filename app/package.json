@@ -17,6 +17,7 @@
     "check:cue-effect-recall": "node scripts/check-cue-effect-recall.mjs",
     "check:effect-draft": "node scripts/check-effect-draft-helpers.mjs",
     "check:localization": "node scripts/check-localization.mjs",
+    "check:auto-vj-viewport": "node scripts/check-viewport-containment.mjs --auto-vj-only",
     "check:live-audio": "node scripts/check-live-audio-input.mjs",
     "check:live-audio-viewport": "node scripts/check-viewport-containment.mjs --live-audio-only",
     "check:project-storage": "node scripts/check-project-storage-helpers.mjs",

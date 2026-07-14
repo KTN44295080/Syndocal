@@ -11,10 +11,19 @@ const appRoot = resolve(scriptDir, "..");
 const largeShowMode = process.argv.includes("--large-show");
 const vjEmptyMode = process.argv.includes("--vj-empty");
 const liveAudioOnlyMode = process.argv.includes("--live-audio-only");
+const autoVjOnlyMode = process.argv.includes("--auto-vj-only");
 const sceneBlockOnlyMode = process.argv.includes("--scene-block-only");
 const sceneBlockHourOnlyMode = process.argv.includes("--scene-block-hour-only");
 const sceneBlockOverlapOnlyMode = process.argv.includes("--scene-block-overlap-only");
-const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (largeShowMode ? "large-show" : vjEmptyMode || liveAudioOnlyMode ? "vj-empty" : "timeline");
+const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
+  largeShowMode
+    ? "large-show"
+    : autoVjOnlyMode
+      ? "auto-vj"
+      : vjEmptyMode || liveAudioOnlyMode
+        ? "vj-empty"
+        : "timeline"
+);
 const defaultUrl =
   viewportFixture === "none"
     ? "http://127.0.0.1:5173/"
@@ -524,6 +533,17 @@ function installLiveAudioMockInPage() {
     bass: 0,
     mid: 0,
     high: 0,
+    bands: Array.from({ length: 16 }, () => 0),
+    band_count: 0,
+    rms: 0,
+    peak: 0,
+    spectral_flux: 0,
+    onset: false,
+    onset_strength: 0,
+    bpm: null,
+    bpm_confidence: 0,
+    beat_phase: 0,
+    feature_sequence: 0,
     analyzed_windows: 0,
     dropped_chunks: 0,
     dropped_frames: 0,
@@ -544,6 +564,17 @@ function installLiveAudioMockInPage() {
     deviceGeneration: 0,
   };
   const invoke = async (command, args = {}) => {
+    if (command === "get_live_video_monitor_frame") {
+      const packet = Array.from({ length: 40 }, () => 0);
+      packet[0] = 0x53;
+      packet[1] = 0x59;
+      packet[2] = 0x4c;
+      packet[3] = 0x56;
+      packet[4] = 1;
+      packet[5] = 1;
+      packet[6] = args.monitorKind === "preview" ? 1 : 0;
+      return packet;
+    }
     mock.calls.push({ command, args: clone(args) });
     if (command === "list_audio_input_devices") {
       await delay(120);
@@ -614,6 +645,17 @@ function installLiveAudioMockInPage() {
         bass: 0.42,
         mid: 0.58,
         high: 0.76,
+        bands: Array.from({ length: 16 }, (_, index) => (index + 1) * 0.05),
+        band_count: 16,
+        rms: 0.64,
+        peak: 0.91,
+        spectral_flux: 0.33,
+        onset: true,
+        onset_strength: 0.82,
+        bpm: 128,
+        bpm_confidence: 0.87,
+        beat_phase: 0.25,
+        feature_sequence: 123,
         analyzed_windows: 123_456,
         dropped_chunks: 9_999,
         dropped_frames: 999_999,
@@ -661,6 +703,17 @@ function installLiveAudioMockInPage() {
         bass: mock.status.bass,
         mid: mock.status.mid,
         high: mock.status.high,
+        bands: clone(mock.status.bands),
+        band_count: mock.status.band_count,
+        rms: mock.status.rms,
+        peak: mock.status.peak,
+        spectral_flux: mock.status.spectral_flux,
+        onset: mock.status.onset,
+        onset_strength: mock.status.onset_strength,
+        bpm: mock.status.bpm,
+        bpm_confidence: mock.status.bpm_confidence,
+        beat_phase: mock.status.beat_phase,
+        feature_sequence: mock.status.feature_sequence,
       };
     }
     throw new Error("Unexpected live-audio viewport invoke: " + command);
@@ -693,6 +746,11 @@ function readLiveAudioRailStateInPage() {
     valueText: meter.getAttribute("aria-valuetext") ?? "",
     title: meter.getAttribute("title") ?? "",
   }));
+  const visualBands = [...rail.querySelectorAll(".liveAudioBandSpectrum > em")].map((band) => ({
+    title: band.getAttribute("title") ?? "",
+    transform: band.querySelector("i")?.style.transform ?? "",
+    role: band.getAttribute("role") ?? "",
+  }));
   return {
     health: rail.getAttribute("data-health") ?? "",
     actionText: (action?.textContent ?? "").trim(),
@@ -708,6 +766,9 @@ function readLiveAudioRailStateInPage() {
     mixOptions: optionValues(configSelects[2]),
     configFormat: (rail.querySelector(".liveAudioConfigFormat")?.textContent ?? "").trim(),
     meters,
+    visualBands,
+    onset: rail.querySelector(".liveAudioMeters")?.getAttribute("data-onset") ?? "",
+    rhythm: (rail.querySelector(".liveAudioTelemetryRhythm")?.textContent ?? "").trim(),
     telemetry: [...rail.querySelectorAll(":scope > .liveAudioTelemetry > span")]
       .map((node) => (node.textContent ?? "").trim().replace(/\s+/g, " ")),
     safetyMessage: (rail.querySelector(".liveAudioSafetyMessage")?.textContent ?? "").trim(),
@@ -717,6 +778,322 @@ function readLiveAudioRailStateInPage() {
 
 async function readLiveAudioRailState(client) {
   return client.evaluate("(" + readLiveAudioRailStateInPage.toString() + ")()");
+}
+
+function installAutoVjMockInPage() {
+  const delay = (ms) => new Promise((resolveDelay) => window.setTimeout(resolveDelay, ms));
+  const clone = (value) => JSON.parse(JSON.stringify(value));
+  const offStatus = (showRevision = 0) => ({
+    mode: "Off",
+    armed: false,
+    hold: false,
+    show_revision: showRevision,
+    action_sequence: 0,
+    last_consumed_boundary: null,
+    next_boundary_beat: null,
+    last_action: null,
+    action_log: [],
+    fault: null,
+    live_audio_beat_counter: 0,
+    last_live_audio_feature_sequence: null,
+  });
+  const mock = {
+    calls: [],
+    transactionId: 0,
+    audioActiveLayerIds: [1],
+    programAudioHandoffConfig: null,
+    autoVj: {
+      config: {
+        eligible_layer_ids: [],
+        seed: 0,
+        beats_per_change: 4,
+        transition_ms: 500,
+        avoid_immediate_repeat: true,
+        rhythm_source: "Clock",
+      },
+      status: offStatus(),
+    },
+  };
+  const validateConfig = (config) => {
+    const ids = config?.eligible_layer_ids;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      throw new Error("Auto VJ requires at least one candidate video layer");
+    }
+    if (new Set(ids).size !== ids.length || ids.some((id) => !Number.isInteger(id) || id <= 0)) {
+      throw new Error("Auto VJ candidate video layer IDs must be unique and non-zero");
+    }
+    if (config.rhythm_source !== "Clock" && config.rhythm_source !== "LiveAudio") {
+      throw new Error("Auto VJ rhythm source is invalid");
+    }
+  };
+  const readSnapshot = () => {
+    const source = window.__syndocalReadAutoVjFixtureSnapshot?.();
+    if (!source) throw new Error("Auto VJ fixture snapshot bridge is unavailable");
+    const snapshot = clone(source);
+    snapshot.video.auto_vj = clone(mock.autoVj);
+    return snapshot;
+  };
+  const invoke = async (command, args = {}) => {
+    if (command === "get_live_video_monitor_frame") {
+      const packet = Array.from({ length: 40 }, () => 0);
+      packet[0] = 0x53;
+      packet[1] = 0x59;
+      packet[2] = 0x4c;
+      packet[3] = 0x56;
+      packet[4] = 1;
+      packet[5] = 1;
+      packet[6] = args.monitorKind === "preview" ? 1 : 0;
+      return packet;
+    }
+    mock.calls.push({ command, args: clone(args) });
+    if (command === "begin_project_transaction") {
+      mock.transactionId += 1;
+      return mock.transactionId;
+    }
+    if (command === "commit_project_transaction" || command === "cancel_project_transaction") {
+      return {
+        can_undo: command === "commit_project_transaction",
+        can_redo: false,
+        undo_depth: command === "commit_project_transaction" ? mock.transactionId : 0,
+        redo_depth: 0,
+        undo_label: command === "commit_project_transaction" ? "Set Auto Vj Config" : null,
+        redo_label: null,
+      };
+    }
+    if (command === "set_auto_vj_config") {
+      await delay(45);
+      validateConfig(args.config);
+      const revision = mock.autoVj.status.show_revision + 1;
+      mock.autoVj = { config: clone(args.config), status: offStatus(revision) };
+      return null;
+    }
+    if (command === "set_auto_vj_armed") {
+      await delay(45);
+      if (args.armed) {
+        validateConfig(mock.autoVj.config);
+        mock.autoVj.status = {
+          ...offStatus(mock.autoVj.status.show_revision),
+          mode: "Armed",
+          armed: true,
+          last_consumed_boundary: 0,
+          next_boundary_beat: mock.autoVj.config.beats_per_change,
+        };
+      } else {
+        mock.autoVj.status = offStatus(mock.autoVj.status.show_revision);
+      }
+      return null;
+    }
+    if (command === "set_auto_vj_hold") {
+      await delay(45);
+      if (!mock.autoVj.status.armed) throw new Error("Auto VJ must be armed before Hold can change");
+      if (args.hold) {
+        mock.autoVj.status = { ...mock.autoVj.status, mode: "Hold", hold: true };
+      } else {
+        const beat = mock.autoVj.config.beats_per_change;
+        const action = {
+          sequence: 1,
+          boundary_index: 1,
+          beat,
+          layer_id: mock.autoVj.config.eligible_layer_ids[1] ?? mock.autoVj.config.eligible_layer_ids[0],
+          transition_ms: mock.autoVj.config.transition_ms,
+          selection_token: 1_234_567,
+          seed: mock.autoVj.config.seed,
+          show_revision: mock.autoVj.status.show_revision,
+          trigger: mock.autoVj.config.rhythm_source === "LiveAudio" ? "LiveAudioOnset" : "ClockBoundary",
+          live_audio_feature_sequence: mock.autoVj.config.rhythm_source === "LiveAudio" ? 77 : null,
+        };
+        mock.autoVj.status = {
+          ...mock.autoVj.status,
+          mode: "Running",
+          hold: false,
+          action_sequence: 1,
+          last_consumed_boundary: 1,
+          next_boundary_beat: beat * 2,
+          last_action: action,
+          action_log: [action],
+          live_audio_beat_counter: mock.autoVj.config.rhythm_source === "LiveAudio" ? beat : 0,
+          last_live_audio_feature_sequence: action.live_audio_feature_sequence,
+        };
+      }
+      return null;
+    }
+    if (command === "get_snapshot") {
+      await delay(20);
+      return readSnapshot();
+    }
+    if (command === "get_video_layer_thumbnail") {
+      return {
+        layer_id: args.layerId,
+        width: 1,
+        height: 1,
+        pts_ms: 0,
+        duration_ms: 1,
+        format: "Rgba8",
+        data: [32, 38, 42, 255],
+      };
+    }
+    if (command === "list_audio_output_devices") {
+      await delay(15);
+      return ["Viewport ASIO Program Output"];
+    }
+    if (command === "set_program_audio_handoff_config") {
+      await delay(15);
+      if (
+        typeof args.enabled !== "boolean" ||
+        typeof args.volume !== "number" ||
+        !Number.isFinite(args.volume) ||
+        (args.deviceName !== null && typeof args.deviceName !== "string")
+      ) {
+        throw new Error("Invalid Program audio handoff config: " + JSON.stringify(args));
+      }
+      mock.programAudioHandoffConfig = clone(args);
+      return null;
+    }
+    if (command === "stop_video_layer_audio_monitor") {
+      await delay(15);
+      mock.audioActiveLayerIds = mock.audioActiveLayerIds.filter((layerId) => layerId !== args.layerId);
+      return {
+        output_open: mock.audioActiveLayerIds.length > 0,
+        active_layer_ids: clone(mock.audioActiveLayerIds),
+        resync_count: 0,
+        last_drift_ms: 0,
+        max_abs_drift_ms: 0,
+        last_sync_error: null,
+      };
+    }
+    if (command === "play_video_layer_audio_monitor") {
+      await delay(15);
+      mock.audioActiveLayerIds = [args.layerId];
+      return {
+        output_open: true,
+        active_layer_ids: clone(mock.audioActiveLayerIds),
+        resync_count: 1,
+        last_drift_ms: 0,
+        max_abs_drift_ms: 0,
+        last_sync_error: null,
+      };
+    }
+    throw new Error("Unexpected Auto VJ viewport invoke: " + command);
+  };
+  Object.defineProperty(window, "__TAURI_INTERNALS__", {
+    configurable: true,
+    writable: true,
+    value: { invoke },
+  });
+  window.__syndocalAutoVjMock = mock;
+}
+
+async function installAutoVjInvokeMock(client) {
+  await client.evaluate("(" + installAutoVjMockInPage.toString() + ")()");
+}
+
+async function setProgramAudioMonitorVolume(client, volume) {
+  return client.evaluate(`(() => {
+    const input = document.querySelector('.videoClipGridSettings input[type="number"][max="2"]');
+    if (!input) return false;
+    input.value = ${JSON.stringify(volume)};
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+    return true;
+  })()`);
+}
+
+async function refreshProgramAudioOutputDevices(client) {
+  return client.evaluate(`(() => {
+    const button = document.querySelector('.videoAudioDeviceField button');
+    if (!button) return false;
+    button.click();
+    return true;
+  })()`);
+}
+
+async function setProgramAudioOutputDevice(client, deviceName) {
+  return client.evaluate(`(() => {
+    const select = document.querySelector('.videoAudioDeviceField select');
+    if (!select) return false;
+    select.value = ${JSON.stringify(deviceName)};
+    select.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+    return select.value === ${JSON.stringify(deviceName)};
+  })()`);
+}
+
+async function setProgramAudioEnabled(client, enabled) {
+  return client.evaluate(`(() => {
+    const input = document.querySelector('.videoProgramAudioToggle input[type="checkbox"]');
+    if (!input) return false;
+    input.checked = ${JSON.stringify(enabled)};
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return input.checked === ${JSON.stringify(enabled)};
+  })()`);
+}
+
+function readAutoVjStateInPage() {
+  const strip = document.querySelector(".videoMixerClipPane > .autoVjStrip");
+  if (!strip) return null;
+  const buttons = [...strip.querySelectorAll(":scope > button")];
+  const arm = buttons[0];
+  const hold = buttons[1];
+  const rhythm = strip.querySelector(".autoVjRhythm select");
+  const configControls = [...strip.querySelectorAll("select, input, .autoVjEligiblePicker > div > button")];
+  const rect = strip.getBoundingClientRect();
+  const readout = strip.querySelector(".autoVjReadout");
+  return {
+    mode: strip.getAttribute("data-mode") ?? "",
+    modeText: (strip.querySelector(".autoVjIdentity strong")?.textContent ?? "").trim(),
+    rhythmSource: strip.getAttribute("data-rhythm-source") ?? "",
+    rhythmValue: rhythm?.value ?? "",
+    rhythmOptions: rhythm ? [...rhythm.options].map((option) => option.value) : [],
+    armText: (arm?.textContent ?? "").trim(),
+    armDisabled: Boolean(arm?.disabled),
+    armPressed: arm?.getAttribute("aria-pressed") ?? "",
+    holdText: (hold?.textContent ?? "").trim(),
+    holdDisabled: Boolean(hold?.disabled),
+    holdPressed: hold?.getAttribute("aria-pressed") ?? "",
+    clipSummary: (strip.querySelector(".autoVjEligiblePicker > summary")?.textContent ?? "").trim().replace(/\s+/g, " "),
+    clipSummaryTitle: strip.querySelector(".autoVjEligiblePicker > summary")?.getAttribute("title") ?? "",
+    selectedClipCount: strip.querySelectorAll('.autoVjEligiblePicker input[type="checkbox"]:checked').length,
+    configControlCount: configControls.length,
+    disabledConfigControlCount: configControls.filter((control) => control.disabled).length,
+    readout: (readout?.querySelector("span")?.textContent ?? "").trim(),
+    secondaryReadout: (readout?.querySelector("small")?.textContent ?? "").trim(),
+    statusCount: strip.querySelectorAll('[role="status"]').length,
+    accessibleMeterCount: document.querySelectorAll('.videoMixerClipPane > .liveAudioInputBar [role="meter"]').length,
+    visualBandCount: document.querySelectorAll(".videoMixerClipPane > .liveAudioInputBar .liveAudioBandSpectrum > em").length,
+    horizontalOverflowPx: Math.max(0, strip.scrollWidth - strip.clientWidth),
+    outsideViewport:
+      rect.left < -0.5 ||
+      rect.top < -0.5 ||
+      rect.right > window.innerWidth + 0.5 ||
+      rect.bottom > window.innerHeight + 0.5,
+  };
+}
+
+async function readAutoVjState(client) {
+  return client.evaluate("(" + readAutoVjStateInPage.toString() + ")()");
+}
+
+function setAutoVjRhythmSourceInPage(value) {
+  const select = document.querySelector(".videoMixerClipPane > .autoVjStrip .autoVjRhythm select");
+  if (!select || select.disabled || ![...select.options].some((option) => option.value === value)) return false;
+  select.value = value;
+  select.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertReplacementText" }));
+  return true;
+}
+
+async function setAutoVjRhythmSource(client, value) {
+  return client.evaluate(
+    "(" + setAutoVjRhythmSourceInPage.toString() + ")(" + JSON.stringify(value) + ")",
+  );
+}
+
+function clickAutoVjButtonInPage(index) {
+  const button = document.querySelectorAll(".videoMixerClipPane > .autoVjStrip > button")[index];
+  if (!button || button.disabled) return false;
+  button.click();
+  return true;
+}
+
+async function clickAutoVjButton(client, index) {
+  return client.evaluate("(" + clickAutoVjButtonInPage.toString() + ")(" + index + ")");
 }
 
 async function seedViewportLocalStorage(client) {
@@ -3118,6 +3495,14 @@ async function runLiveAudioAcceptance(client, locale, label) {
       live?.telemetry?.length === 4 &&
       live.telemetry[0] === "OVR 9999/999999f" &&
       live.deviceDisabled === true,
+    sixteenBandRhythmPresentation:
+      live?.meters?.length === 3 &&
+      live?.visualBands?.length === 16 &&
+      live.visualBands.every((band) => band.role === "") &&
+      live.visualBands[0]?.transform === "scaleY(0.05)" &&
+      live.visualBands[15]?.transform === "scaleY(0.8)" &&
+      live.onset === "true" &&
+      live.rhythm === "BPM 128.0 · 87%",
     localizedNonzeroMeters:
       JSON.stringify(live?.meters?.map((meter) => meter.label)) === JSON.stringify(expected.meterLabels) &&
       JSON.stringify(live?.meters?.map((meter) => meter.now)) === JSON.stringify([42, 58, 76]) &&
@@ -3133,7 +3518,11 @@ async function runLiveAudioAcceptance(client, locale, label) {
       clearing?.deviceDisabled === true &&
       clearing?.announcement === expected.clearingAnnouncement &&
       clearing?.safetyMessage?.length > 0 &&
-      clearing?.meters?.every((meter) => meter.now === 0),
+      clearing?.meters?.length === 3 &&
+      clearing.meters.every((meter) => meter.now === 0) &&
+      clearing?.visualBands?.length === 16 &&
+      clearing.visualBands.every((band) => band.transform === "scaleY(0)") &&
+      clearing.onset === "false",
     invokeSequence:
       calls.filter((call) => call.command === "list_audio_input_devices").length === 3 &&
       calls.filter((call) => call.command === "get_live_audio_input_capabilities").length >= 5 &&
@@ -3200,6 +3589,300 @@ async function runLiveAudioAcceptanceViewport(client, viewport, locale) {
     locale,
     "live-audio-" + locale + "-" + viewport.width + "x" + viewport.height,
   );
+}
+
+async function prepareAutoVjAcceptanceViewport(client, viewport, locale) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  const url = fixtureUrl("auto-vj");
+  await client.send("Page.navigate", { url });
+  await waitForApp(client);
+  await client.evaluate(
+    "window.localStorage.setItem('syndocal.uiLocale.v1'," + JSON.stringify(locale) + ")",
+  );
+  await client.send("Page.navigate", { url });
+  await waitForApp(client);
+  await waitForClientCondition(
+    client,
+    "Boolean(document.querySelector('.videoMixerClipPane > .autoVjStrip'))",
+    "Auto VJ fixture strip",
+  );
+  await installAutoVjInvokeMock(client);
+}
+
+async function runAutoVjAcceptanceViewport(client, viewport, locale) {
+  await prepareAutoVjAcceptanceViewport(client, viewport, locale);
+  const initial = await readAutoVjState(client);
+
+  const programAudioVolumeChanged = await setProgramAudioMonitorVolume(client, 0.65);
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const calls = window.__syndocalAutoVjMock?.calls?.filter(
+        (call) => call.command === 'set_program_audio_handoff_config',
+      ) ?? [];
+      return calls.length === 1 && JSON.stringify(calls[0].args) === JSON.stringify({
+        enabled: true,
+        volume: 0.65,
+        deviceName: null,
+      });
+    })()`,
+    "Program audio default-device config registration",
+  );
+  const programAudioOutputRefreshClicked = await refreshProgramAudioOutputDevices(client);
+  await waitForClientCondition(
+    client,
+    `(() => [...document.querySelectorAll('.videoAudioDeviceField select option')]
+      .some((option) => option.value === 'Viewport ASIO Program Output'))()`,
+    "Program audio output-device refresh",
+  );
+  const programAudioOutputChanged = await setProgramAudioOutputDevice(
+    client,
+    "Viewport ASIO Program Output",
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const calls = window.__syndocalAutoVjMock?.calls?.filter(
+        (call) => call.command === 'set_program_audio_handoff_config',
+      ) ?? [];
+      return calls.length === 2 && JSON.stringify(calls[1].args) === JSON.stringify({
+        enabled: true,
+        volume: 0.65,
+        deviceName: 'Viewport ASIO Program Output',
+      });
+    })()`,
+    "Program audio explicit-device config registration",
+  );
+  const programAudioDisabled = await setProgramAudioEnabled(client, false);
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const calls = window.__syndocalAutoVjMock?.calls?.filter(
+        (call) => call.command === 'set_program_audio_handoff_config',
+      ) ?? [];
+      return calls.length === 3 && calls[2].args?.enabled === false;
+    })()`,
+    "Program audio disabled config registration",
+  );
+  const programAudioEnabled = await setProgramAudioEnabled(client, true);
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const mock = window.__syndocalAutoVjMock;
+      const calls = mock?.calls?.filter(
+        (call) => call.command === 'set_program_audio_handoff_config',
+      ) ?? [];
+      return calls.length === 4 && calls[3].args?.enabled === true &&
+        mock?.programAudioHandoffConfig?.enabled === true;
+    })()`,
+    "Program audio enabled config registration",
+  );
+
+  const rhythmChanged = await setAutoVjRhythmSource(client, "LiveAudio");
+  await waitForClientCondition(
+    client,
+    "(() => { const strip = document.querySelector('.videoMixerClipPane > .autoVjStrip'); return strip?.getAttribute('data-rhythm-source') === 'LiveAudio' && strip.querySelectorAll('.autoVjEligiblePicker input[type=checkbox]:checked').length === 3; })()",
+    "Auto VJ candidate defaulting and Live Input configuration",
+  );
+  await sleep(50);
+  const configured = await readAutoVjState(client);
+
+  const armClicked = await clickAutoVjButton(client, 0);
+  await waitForClientCondition(
+    client,
+    "document.querySelector('.videoMixerClipPane > .autoVjStrip')?.getAttribute('data-mode') === 'Armed'",
+    "Auto VJ Arm state",
+  );
+  await sleep(50);
+  const armed = await readAutoVjState(client);
+
+  const holdClicked = await clickAutoVjButton(client, 1);
+  await waitForClientCondition(
+    client,
+    "document.querySelector('.videoMixerClipPane > .autoVjStrip')?.getAttribute('data-mode') === 'Hold'",
+    "Auto VJ Hold state",
+  );
+  await sleep(50);
+  const held = await readAutoVjState(client);
+
+  const resumeClicked = await clickAutoVjButton(client, 1);
+  await waitForClientCondition(
+    client,
+    "(() => { const mock = window.__syndocalAutoVjMock; return document.querySelector('.videoMixerClipPane > .autoVjStrip')?.getAttribute('data-mode') === 'Running' && mock?.programAudioHandoffConfig?.enabled === true; })()",
+    "Auto VJ Resume action with backend-owned Program audio handoff",
+  );
+  await sleep(50);
+  const running = await readAutoVjState(client);
+  const runningContainment = await measure(
+    client,
+    `auto-vj-${locale}-${viewport.width}x${viewport.height}`,
+  );
+
+  const disarmClicked = await clickAutoVjButton(client, 0);
+  await waitForClientCondition(
+    client,
+    "document.querySelector('.videoMixerClipPane > .autoVjStrip')?.getAttribute('data-mode') === 'Off'",
+    "Auto VJ Disarm state",
+  );
+  await sleep(50);
+  const disarmed = await readAutoVjState(client);
+  const calls = await client.evaluate(
+    "JSON.parse(JSON.stringify(window.__syndocalAutoVjMock?.calls ?? []))",
+  );
+  const configCallIndex = calls.findIndex((call) => call.command === "set_auto_vj_config");
+  const armCallIndex = calls.findIndex(
+    (call) => call.command === "set_auto_vj_armed" && call.args?.armed === true,
+  );
+  const configCall = calls[configCallIndex];
+  const expected = locale === "ja"
+    ? {
+        initialMode: "OFF",
+        armedMode: "待機",
+        holdMode: "ホールド",
+        runningMode: "実行中",
+        initialArm: "有効化",
+        disarm: "解除",
+        hold: "ホールド",
+        resume: "再開",
+        emptyClips: "クリップ 未設定",
+        configuredClips: "クリップ 3/3",
+        lockedTitle: "設定を編集するにはAuto VJを解除してください",
+        action: "#1 · Output · 入力パルス 4",
+        progress: "入力パルス 4 · ステップ 0/4 · FSEQ 77",
+      }
+    : {
+        initialMode: "Off",
+        armedMode: "Armed",
+        holdMode: "Hold",
+        runningMode: "Running",
+        initialArm: "Arm",
+        disarm: "Disarm",
+        hold: "Hold",
+        resume: "Resume",
+        emptyClips: "Clips Not set",
+        configuredClips: "Clips 3/3",
+        lockedTitle: "Disarm Auto VJ to edit configuration",
+        action: "#1 · Output · INPUT PULSE 4",
+        progress: "INPUT PULSE 4 · STEP 0/4 · FSEQ 77",
+      };
+  const stopAudioCalls = calls.filter((call) => call.command === "stop_video_layer_audio_monitor");
+  const playAudioCalls = calls.filter((call) => call.command === "play_video_layer_audio_monitor");
+  const programAudioHandoffCalls = calls.filter(
+    (call) => call.command === "set_program_audio_handoff_config",
+  );
+  const expectedProgramAudioHandoffConfigs = [
+    { enabled: true, volume: 0.65, deviceName: null },
+    { enabled: true, volume: 0.65, deviceName: "Viewport ASIO Program Output" },
+    { enabled: false, volume: 0.65, deviceName: "Viewport ASIO Program Output" },
+    { enabled: true, volume: 0.65, deviceName: "Viewport ASIO Program Output" },
+  ];
+  const checks = {
+    emptyCandidateState:
+      initial?.mode === "Off" &&
+      initial?.modeText === expected.initialMode &&
+      initial?.armText === expected.initialArm &&
+      initial?.armDisabled === false &&
+      initial?.holdDisabled === true &&
+      initial?.clipSummary === expected.emptyClips &&
+      initial?.selectedClipCount === 0 &&
+      initial?.disabledConfigControlCount === 0,
+    rhythmSourcesExplicit:
+      rhythmChanged &&
+      JSON.stringify(initial?.rhythmOptions) === JSON.stringify(["Clock", "LiveAudio"]) &&
+      initial?.rhythmValue === "Clock" &&
+      configured?.rhythmValue === "LiveAudio" &&
+      configured?.rhythmSource === "LiveAudio",
+    emptyCandidatesDefaultBeforeConfig:
+      configCallIndex >= 0 &&
+      armCallIndex > configCallIndex &&
+      JSON.stringify(configCall?.args?.config?.eligible_layer_ids) === JSON.stringify([1, 2, 3]) &&
+      configCall?.args?.config?.rhythm_source === "LiveAudio" &&
+      configured?.clipSummary === expected.configuredClips &&
+      configured?.selectedClipCount === 3,
+    armedStateLocksConfiguration:
+      armClicked &&
+      armed?.mode === "Armed" &&
+      armed?.modeText === expected.armedMode &&
+      armed?.armText === expected.disarm &&
+      armed?.armPressed === "true" &&
+      armed?.holdText === expected.hold &&
+      armed?.holdDisabled === false &&
+      armed?.configControlCount > 0 &&
+      armed?.disabledConfigControlCount === armed?.configControlCount &&
+      armed?.clipSummaryTitle === expected.lockedTitle,
+    holdState:
+      holdClicked &&
+      held?.mode === "Hold" &&
+      held?.modeText === expected.holdMode &&
+      held?.holdText === expected.resume &&
+      held?.holdPressed === "true",
+    resumeRunsLiveInputAction:
+      resumeClicked &&
+      running?.mode === "Running" &&
+      running?.modeText === expected.runningMode &&
+      running?.holdText === expected.hold &&
+      running?.holdPressed === "false" &&
+      running?.readout === expected.action &&
+      running?.secondaryReadout === expected.progress,
+    userLayerLabelBoundary:
+      running?.readout?.includes("Output") &&
+      !running?.readout?.includes("出力"),
+    programAudioSettingsRegisteredExactlyOnce:
+      programAudioVolumeChanged &&
+      programAudioOutputRefreshClicked &&
+      programAudioOutputChanged &&
+      programAudioDisabled &&
+      programAudioEnabled &&
+      JSON.stringify(programAudioHandoffCalls.map((call) => call.args)) ===
+        JSON.stringify(expectedProgramAudioHandoffConfigs),
+    programAudioPlaybackOwnedByBackend:
+      stopAudioCalls.length === 0 &&
+      playAudioCalls.length === 0,
+    disarmedStateUnlocksConfiguration:
+      disarmClicked &&
+      disarmed?.mode === "Off" &&
+      disarmed?.modeText === expected.initialMode &&
+      disarmed?.armText === expected.initialArm &&
+      disarmed?.holdDisabled === true &&
+      disarmed?.disabledConfigControlCount === 0,
+    stableAccessibleMetersAndBands:
+      running?.accessibleMeterCount === 3 &&
+      running?.visualBandCount === 16 &&
+      running?.statusCount === 1,
+    fullWindowContainment:
+      running?.horizontalOverflowPx === 0 &&
+      running?.outsideViewport === false &&
+      isContained(runningContainment),
+    commandCounts:
+      calls.filter((call) => call.command === "set_auto_vj_config").length === 1 &&
+      calls.filter((call) => call.command === "set_auto_vj_armed").length === 2 &&
+      calls.filter((call) => call.command === "set_auto_vj_hold").length === 2 &&
+      calls.filter((call) => call.command === "list_audio_output_devices").length === 1 &&
+      programAudioHandoffCalls.length === expectedProgramAudioHandoffConfigs.length,
+  };
+  const failedChecks = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  return {
+    passed: failedChecks.length === 0,
+    locale,
+    viewport,
+    checks,
+    failedChecks,
+    initial,
+    configured,
+    armed,
+    held,
+    running,
+    disarmed,
+    calls,
+    runningContainment,
+  };
 }
 
 async function runViewport(client, viewport) {
@@ -5529,6 +6212,32 @@ async function main() {
       if (!passed) throw new Error(`Large-show UI virtualization failed: ${JSON.stringify(result)}`);
       return;
     }
+    if (autoVjOnlyMode) {
+      const autoVjResults = [];
+      for (const viewport of viewports) {
+        for (const locale of ["en", "ja"]) {
+          const result = await runAutoVjAcceptanceViewport(client, viewport, locale);
+          autoVjResults.push(result);
+          console.log(
+            `${result.passed ? "pass" : "fail"} Auto VJ stateful acceptance ${locale} ${viewport.width}x${viewport.height} ` +
+              JSON.stringify({
+                failedChecks: result.failedChecks,
+                initial: result.initial,
+                running: result.running,
+                audioCalls: result.calls.filter((call) =>
+                  call.command === "play_video_layer_audio_monitor" ||
+                  call.command === "stop_video_layer_audio_monitor"
+                ),
+              }),
+          );
+        }
+      }
+      const failures = autoVjResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Auto VJ stateful viewport acceptance failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
     if (liveAudioOnlyMode) {
       const liveAudioResults = [];
       for (const viewport of viewports) {
@@ -5551,6 +6260,15 @@ async function main() {
                   health: result.clearing.health,
                   action: result.clearing.actionText,
                   announcement: result.clearing.announcement,
+                },
+                telemetryLayout: {
+                  badges: result.liveContainment.liveAudioRailTelemetryBadgeCount,
+                  criticalOverflow: result.liveContainment.liveAudioRailCriticalTelemetryOverflowCount,
+                  outside: result.liveContainment.liveAudioRailTelemetryOutsideCount,
+                  railOverflow: [
+                    result.liveContainment.liveAudioRailOverflowX,
+                    result.liveContainment.liveAudioRailOverflowY,
+                  ],
                 },
               }),
           );

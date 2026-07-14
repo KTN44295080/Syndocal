@@ -202,6 +202,21 @@ pub struct AudioSpectrumPoint {
     pub high: f32,
 }
 
+pub const MAX_LIVE_AUDIO_FRAME_ONSETS: usize = 4;
+
+/// One atomic analysis publication from a live input generation.
+///
+/// Spectrum and onset sequences intentionally share one payload so the engine can
+/// never accept a reactive frame without also accepting every onset derived from it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LiveAudioFrame {
+    pub generation: u64,
+    pub feature_sequence: u64,
+    pub spectrum: AudioSpectrumPoint,
+    pub onset_feature_sequences: [u64; MAX_LIVE_AUDIO_FRAME_ONSETS],
+    pub onset_count: u8,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AudioAnalysisSummary {
     pub path: String,
@@ -940,6 +955,120 @@ pub struct CompositionSummary {
     pub output_ids: Vec<VideoOutputId>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AutoVjConfig {
+    #[serde(default)]
+    pub eligible_layer_ids: Vec<VideoLayerId>,
+    #[serde(default)]
+    pub seed: u64,
+    #[serde(default = "default_auto_vj_beats_per_change")]
+    pub beats_per_change: u16,
+    #[serde(default = "default_auto_vj_transition_ms")]
+    pub transition_ms: u64,
+    #[serde(default = "default_auto_vj_avoid_immediate_repeat")]
+    pub avoid_immediate_repeat: bool,
+    #[serde(default)]
+    pub rhythm_source: AutoVjRhythmSource,
+}
+
+impl Default for AutoVjConfig {
+    fn default() -> Self {
+        Self {
+            eligible_layer_ids: Vec::new(),
+            seed: 0,
+            beats_per_change: default_auto_vj_beats_per_change(),
+            transition_ms: default_auto_vj_transition_ms(),
+            avoid_immediate_repeat: default_auto_vj_avoid_immediate_repeat(),
+            rhythm_source: AutoVjRhythmSource::default(),
+        }
+    }
+}
+
+fn default_auto_vj_beats_per_change() -> u16 {
+    4
+}
+
+fn default_auto_vj_transition_ms() -> u64 {
+    500
+}
+
+fn default_auto_vj_avoid_immediate_repeat() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AutoVjRhythmSource {
+    #[default]
+    Clock,
+    LiveAudio,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AutoVjMode {
+    #[default]
+    Off,
+    Armed,
+    Running,
+    Hold,
+    Fault,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AutoVjTrigger {
+    #[default]
+    ClockBoundary,
+    LiveAudioOnset,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AutoVjAction {
+    pub sequence: u64,
+    pub boundary_index: u64,
+    pub beat: u64,
+    pub layer_id: VideoLayerId,
+    pub transition_ms: u64,
+    pub selection_token: u64,
+    #[serde(default)]
+    pub seed: u64,
+    #[serde(default)]
+    pub show_revision: u64,
+    #[serde(default)]
+    pub trigger: AutoVjTrigger,
+    #[serde(default)]
+    pub live_audio_feature_sequence: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AutoVjStatus {
+    pub mode: AutoVjMode,
+    pub armed: bool,
+    pub hold: bool,
+    pub show_revision: u64,
+    pub action_sequence: u64,
+    pub last_consumed_boundary: Option<u64>,
+    pub next_boundary_beat: Option<u64>,
+    pub last_action: Option<AutoVjAction>,
+    #[serde(default)]
+    pub action_log: Vec<AutoVjAction>,
+    pub fault: Option<String>,
+    #[serde(default)]
+    pub live_audio_beat_counter: u64,
+    #[serde(default)]
+    pub last_live_audio_feature_sequence: Option<u64>,
+    #[serde(default)]
+    pub live_audio_waiting: bool,
+    #[serde(default)]
+    pub live_audio_generation: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AutoVjSnapshot {
+    #[serde(default)]
+    pub config: AutoVjConfig,
+    #[serde(default)]
+    pub status: AutoVjStatus,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VideoSnapshot {
     pub layers: Vec<VideoLayerSummary>,
@@ -949,6 +1078,8 @@ pub struct VideoSnapshot {
     pub mapping_presets: Vec<VideoOutputMappingPresetSummary>,
     pub master_opacity: f32,
     pub blackout: bool,
+    #[serde(default)]
+    pub auto_vj: AutoVjSnapshot,
 }
 
 impl Default for VideoSnapshot {
@@ -960,6 +1091,7 @@ impl Default for VideoSnapshot {
             mapping_presets: Vec::new(),
             master_opacity: 1.0,
             blackout: false,
+            auto_vj: AutoVjSnapshot::default(),
         }
     }
 }
@@ -2671,6 +2803,75 @@ mod tests {
 
         assert_eq!(parsed.external_sync_age_ms, None);
         assert!(!parsed.external_sync_locked);
+    }
+
+    #[test]
+    fn legacy_video_snapshot_defaults_auto_vj_to_safe_off_state() {
+        let mut value = serde_json::to_value(super::VideoSnapshot::default()).unwrap();
+        value.as_object_mut().unwrap().remove("auto_vj");
+
+        let parsed: super::VideoSnapshot = serde_json::from_value(value).unwrap();
+
+        assert_eq!(parsed.auto_vj, super::AutoVjSnapshot::default());
+        assert!(!parsed.auto_vj.status.armed);
+        assert!(matches!(parsed.auto_vj.status.mode, super::AutoVjMode::Off));
+    }
+
+    #[test]
+    fn legacy_auto_vj_defaults_to_clock_without_live_audio_runtime_state() {
+        let mut value = serde_json::to_value(super::AutoVjSnapshot::default()).unwrap();
+        value["config"]
+            .as_object_mut()
+            .unwrap()
+            .remove("rhythm_source");
+        value["status"]
+            .as_object_mut()
+            .unwrap()
+            .remove("live_audio_beat_counter");
+        value["status"]
+            .as_object_mut()
+            .unwrap()
+            .remove("last_live_audio_feature_sequence");
+        value["status"]
+            .as_object_mut()
+            .unwrap()
+            .remove("live_audio_waiting");
+        value["status"]
+            .as_object_mut()
+            .unwrap()
+            .remove("live_audio_generation");
+
+        let parsed: super::AutoVjSnapshot = serde_json::from_value(value).unwrap();
+
+        assert_eq!(
+            parsed.config.rhythm_source,
+            super::AutoVjRhythmSource::Clock
+        );
+        assert_eq!(parsed.status.live_audio_beat_counter, 0);
+        assert_eq!(parsed.status.last_live_audio_feature_sequence, None);
+        assert!(!parsed.status.live_audio_waiting);
+        assert_eq!(parsed.status.live_audio_generation, None);
+    }
+
+    #[test]
+    fn live_audio_frame_round_trips_as_one_fixed_capacity_payload() {
+        let frame = super::LiveAudioFrame {
+            generation: 7,
+            feature_sequence: 13,
+            spectrum: super::AudioSpectrumPoint {
+                time_ms: 41,
+                bass: 0.25,
+                mid: 0.5,
+                high: 0.75,
+            },
+            onset_feature_sequences: [8, 10, 13, 0],
+            onset_count: 3,
+        };
+
+        let encoded = serde_json::to_value(&frame).unwrap();
+        let decoded: super::LiveAudioFrame = serde_json::from_value(encoded).unwrap();
+
+        assert_eq!(decoded, frame);
     }
 
     #[test]

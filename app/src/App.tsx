@@ -47,6 +47,7 @@ import { SetupMappingWorkspace } from "./components/SetupMappingWorkspace";
 import { SetupVideoPanel } from "./components/SetupVideoPanel";
 import { StagePreview2D } from "./components/StagePreview2D";
 import { VideoControlPanel } from "./components/VideoControlPanel";
+import { defaultAutoVjSnapshot } from "./components/AutoVjStrip";
 import { VideoEffectTargetPanel } from "./components/VideoEffectTargetPanel";
 import { readVideoOutputTestPattern, readVideoOutputWindowId, VideoOutputWindow } from "./components/VideoOutputWindow";
 import { TimelineCueEventsPanel } from "./components/TimelineCueEventsPanel";
@@ -134,6 +135,7 @@ import type {
   AudioAnalysisSummary,
   AudioSpectrumBand,
   AudioSpectrumSource,
+  AutoVjConfig,
   AutomationKeyframeSummary,
   AutomationInterpolation,
   CompositionSummary,
@@ -542,6 +544,8 @@ const emptyVjPreviewTransport = (): VjPreviewTransportSummary => ({
   source_name: null,
 });
 
+const emptyAutoVjSnapshot = defaultAutoVjSnapshot();
+
 const isTauriRuntime = () =>
   typeof window !== "undefined" && Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
 
@@ -615,6 +619,7 @@ const projectMutationCommands = new Set([
   "fade_video_layer_opacity",
   "launch_video_clip",
   "take_video_clip",
+  "set_auto_vj_config",
   "set_video_ab_mix",
   "stop_video_clip",
   "add_video_cue_point",
@@ -760,6 +765,17 @@ interface LiveAudioInputLevels {
   bass: number;
   mid: number;
   high: number;
+  bands: number[];
+  band_count: number;
+  rms: number;
+  peak: number;
+  spectral_flux: number;
+  onset: boolean;
+  onset_strength: number;
+  bpm?: number | null;
+  bpm_confidence: number;
+  beat_phase: number;
+  feature_sequence: number;
 }
 
 interface EffectTargetOverride {
@@ -1033,6 +1049,7 @@ export default function App() {
   const [vjFirstRunBusy, setVjFirstRunBusy] = createSignal(false);
   const [vjFirstRunError, setVjFirstRunError] = createSignal<string | null>(null);
   const [vjFirstRunAwaitingSync, setVjFirstRunAwaitingSync] = createSignal(false);
+  const [autoVjBusy, setAutoVjBusy] = createSignal(false);
   const [videoClipThumbnails, setVideoClipThumbnails] = createSignal<Record<number, string>>({});
   const [videoAudioMonitorStatus, setVideoAudioMonitorStatus] = createSignal<VideoAudioMonitorStatus>({
     output_open: false,
@@ -1089,6 +1106,17 @@ export default function App() {
     bass: 0,
     mid: 0,
     high: 0,
+    bands: Array.from({ length: 16 }, () => 0),
+    band_count: 0,
+    rms: 0,
+    peak: 0,
+    spectral_flux: 0,
+    onset: false,
+    onset_strength: 0,
+    bpm: null,
+    bpm_confidence: 0,
+    beat_phase: 0,
+    feature_sequence: 0,
     analyzed_windows: 0,
     dropped_chunks: 0,
     dropped_frames: 0,
@@ -1391,6 +1419,51 @@ export default function App() {
         ],
       },
     }));
+  } else if (viewportFixture === "auto-vj") {
+    const labels = ["Video", "Output", "Signal Echo"];
+    const layers = labels.map((layerLabel, index) => {
+      const layer = structuredClone(viewportFixtureData.videoLayer);
+      layer.id = index + 1;
+      layer.label = layerLabel;
+      layer.source = {
+        kind: "File",
+        path: `viewport://auto-vj-${index + 1}.mp4`,
+        name: layerLabel,
+        codec: "H264",
+        metadata: {
+          duration_ms: 4_000,
+          width: 1_920,
+          height: 1_080,
+          frame_rate: 60,
+          has_audio: index < 2,
+        },
+      };
+      return layer;
+    });
+    setWorkspaceTab("control");
+    setControlMode("mixer");
+    setVideoProgramAudioEnabled(true);
+    setVideoAudioMonitorStatus({
+      output_open: true,
+      active_layer_ids: [1],
+      resync_count: 0,
+      last_drift_ms: 0,
+      max_abs_drift_ms: 0,
+      last_sync_error: null,
+    });
+    setSnapshot((current) => ({
+      ...current,
+      video: {
+        ...current.video,
+        layers,
+        compositions: [{
+          ...viewportFixtureData.composition,
+          layer_ids: layers.map((layer) => layer.id),
+        }],
+        outputs: [viewportFixtureData.videoOutput],
+        auto_vj: defaultAutoVjSnapshot(),
+      },
+    }));
   } else if (viewportFixture === "large-show") {
     const fixtures = Array.from({ length: 2_000 }, (_, index) => {
       const id = index + 1;
@@ -1438,6 +1511,7 @@ export default function App() {
   const sceneBlockFixtureWindow = window as Window & {
     __syndocalSetSceneBlockFixtureState?: (positionMs: number, playing: boolean) => void;
     __syndocalPauseSceneBlockFixtureChurn?: () => void;
+    __syndocalReadAutoVjFixtureSnapshot?: () => EngineSnapshot;
   };
   if (viewportFixture === "scene-block-large") {
     sceneBlockFixtureWindow.__syndocalSetSceneBlockFixtureState = (positionMs, playing) => {
@@ -1452,12 +1526,16 @@ export default function App() {
       }
     };
   }
+  if (viewportFixture === "auto-vj") {
+    sceneBlockFixtureWindow.__syndocalReadAutoVjFixtureSnapshot = () => snapshot();
+  }
   onCleanup(() => {
     if (sceneBlockLargeSnapshotCloneTimer !== null) {
       window.clearInterval(sceneBlockLargeSnapshotCloneTimer);
     }
     delete sceneBlockFixtureWindow.__syndocalSetSceneBlockFixtureState;
     delete sceneBlockFixtureWindow.__syndocalPauseSceneBlockFixtureChurn;
+    delete sceneBlockFixtureWindow.__syndocalReadAutoVjFixtureSnapshot;
   });
   let lastRecoverySignature = projectRecoveryCheckpoint()?.signature ?? null;
   let lastDesktopBackupSignature: string | null = null;
@@ -8933,14 +9011,7 @@ export default function App() {
   const takeVideoClipFromGrid = async (layerId: number, fadeMs: number) => {
     const taken = await takeVideoClip(layerId, fadeMs);
     if (taken && videoProgramAudioEnabled()) {
-      for (const activeLayerId of videoAudioMonitorStatus().active_layer_ids) {
-        if (activeLayerId !== layerId) await stopVideoLayerAudioMonitor(activeLayerId);
-      }
-      if (videoLayerHasMonitorableAudio(layerId)) {
-        await playVideoLayerAudioMonitor(layerId, videoAudioMonitorVolume(), selectedAudioOutputDevice());
-      } else if (videoAudioMonitorStatus().active_layer_ids.includes(layerId)) {
-        await stopVideoLayerAudioMonitor(layerId);
-      }
+      await refreshVideoAudioMonitorStatus(true);
     }
   };
   const stopVideoClipFromGrid = async (layerId: number, fadeMs: number) => {
@@ -8949,6 +9020,111 @@ export default function App() {
       await stopVideoLayerAudioMonitor(layerId);
     }
   };
+  const updateAutoVj = async (
+    command: "set_auto_vj_config" | "set_auto_vj_armed" | "set_auto_vj_hold",
+    args: Record<string, unknown>,
+  ) => {
+    if (autoVjBusy()) return;
+    setAutoVjBusy(true);
+    try {
+      await invoke(command, args);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    } finally {
+      setAutoVjBusy(false);
+    }
+  };
+  const setAutoVjConfig = (config: AutoVjConfig) => {
+    const eligibleLayerIds = config.eligible_layer_ids.length > 0
+      ? config.eligible_layer_ids
+      : snapshot().video.layers.map((layer) => layer.id);
+    if (eligibleLayerIds.length === 0) {
+      setMessage("Add at least one video clip before configuring Auto VJ.");
+      return Promise.resolve();
+    }
+    return updateAutoVj("set_auto_vj_config", {
+      config: { ...config, eligible_layer_ids: eligibleLayerIds },
+    });
+  };
+  const setAutoVjArmed = async (armed: boolean) => {
+    if (autoVjBusy()) return;
+    setAutoVjBusy(true);
+    try {
+      if (armed) {
+        const current = snapshot().video.auto_vj?.config ?? emptyAutoVjSnapshot.config;
+        if (current.eligible_layer_ids.length === 0) {
+          const eligibleLayerIds = snapshot().video.layers.map((layer) => layer.id);
+          if (eligibleLayerIds.length === 0) {
+            setMessage("Add at least one video clip before arming Auto VJ.");
+            return;
+          }
+          await invoke("set_auto_vj_config", {
+            config: { ...current, eligible_layer_ids: eligibleLayerIds },
+          });
+        }
+      }
+      await invoke("set_auto_vj_armed", { armed });
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    } finally {
+      setAutoVjBusy(false);
+    }
+  };
+  const setAutoVjHold = (hold: boolean) =>
+    updateAutoVj("set_auto_vj_hold", { hold });
+  let desiredProgramAudioHandoffConfig: {
+    enabled: boolean;
+    volume: number;
+    deviceName: string | null;
+  } | null = null;
+  let desiredProgramAudioHandoffSignature: string | null = null;
+  let appliedProgramAudioHandoffSignature: string | null = null;
+  let programAudioHandoffSyncInFlight = false;
+  let programAudioHandoffDisposed = false;
+  const syncProgramAudioHandoffConfig = async () => {
+    if (programAudioHandoffSyncInFlight || programAudioHandoffDisposed || !isTauriRuntime()) return;
+    programAudioHandoffSyncInFlight = true;
+    let failed = false;
+    try {
+      while (
+        !programAudioHandoffDisposed &&
+        desiredProgramAudioHandoffConfig &&
+        desiredProgramAudioHandoffSignature !== appliedProgramAudioHandoffSignature
+      ) {
+        const config = desiredProgramAudioHandoffConfig;
+        const signature = desiredProgramAudioHandoffSignature;
+        await invoke("set_program_audio_handoff_config", config);
+        appliedProgramAudioHandoffSignature = signature;
+      }
+    } catch (error) {
+      failed = true;
+      if (!programAudioHandoffDisposed) setMessage(String(error));
+    } finally {
+      programAudioHandoffSyncInFlight = false;
+      if (
+        !failed &&
+        !programAudioHandoffDisposed &&
+        desiredProgramAudioHandoffSignature !== appliedProgramAudioHandoffSignature
+      ) {
+        void syncProgramAudioHandoffConfig();
+      }
+    }
+  };
+  createEffect(() => {
+    const config = {
+      enabled: videoProgramAudioEnabled(),
+      volume: videoAudioMonitorVolume(),
+      deviceName: selectedAudioOutputDevice().trim() || null,
+    };
+    desiredProgramAudioHandoffConfig = config;
+    desiredProgramAudioHandoffSignature = JSON.stringify(config);
+    if (isTauriRuntime()) void syncProgramAudioHandoffConfig();
+  });
+  onCleanup(() => {
+    programAudioHandoffDisposed = true;
+  });
   const assignVideoDeck = (deck: "A" | "B", layerId: number) => {
     if (deck === "A") {
       setVideoDeckALayerId(layerId);
@@ -9216,6 +9392,17 @@ export default function App() {
           bass: 0,
           mid: 0,
           high: 0,
+          bands: Array.from({ length: 16 }, () => 0),
+          band_count: 0,
+          rms: 0,
+          peak: 0,
+          spectral_flux: 0,
+          onset: false,
+          onset_strength: 0,
+          bpm: null,
+          bpm_confidence: 0,
+          beat_phase: 0,
+          feature_sequence: 0,
           last_error: `Live audio status unavailable: ${String(error)}`,
         }));
         setLiveAudioInputStatusKnown(false);
@@ -9255,12 +9442,41 @@ export default function App() {
           bass: presentationSafe ? levels.bass : 0,
           mid: presentationSafe ? levels.mid : 0,
           high: presentationSafe ? levels.high : 0,
+          bands: presentationSafe ? levels.bands : Array.from({ length: 16 }, () => 0),
+          band_count: presentationSafe ? levels.band_count : 0,
+          rms: presentationSafe ? levels.rms : 0,
+          peak: presentationSafe ? levels.peak : 0,
+          spectral_flux: presentationSafe ? levels.spectral_flux : 0,
+          onset: presentationSafe && levels.onset,
+          onset_strength: presentationSafe ? levels.onset_strength : 0,
+          bpm: presentationSafe ? levels.bpm : null,
+          bpm_confidence: presentationSafe ? levels.bpm_confidence : 0,
+          beat_phase: presentationSafe ? levels.beat_phase : 0,
+          feature_sequence: presentationSafe ? levels.feature_sequence : 0,
         };
       });
     } catch {
       if (epoch === liveAudioInputLevelsEpoch) {
         setLiveAudioInputStatus((status) =>
-          status.running ? { ...status, bass: 0, mid: 0, high: 0 } : status,
+          status.running
+            ? {
+                ...status,
+                bass: 0,
+                mid: 0,
+                high: 0,
+                bands: Array.from({ length: 16 }, () => 0),
+                band_count: 0,
+                rms: 0,
+                peak: 0,
+                spectral_flux: 0,
+                onset: false,
+                onset_strength: 0,
+                bpm: null,
+                bpm_confidence: 0,
+                beat_phase: 0,
+                feature_sequence: 0,
+              }
+            : status,
         );
       }
     } finally {
@@ -9279,7 +9495,11 @@ export default function App() {
         if (videoOutputWindowStatuses()?.some((status) => status.live_open)) {
           void refreshVideoOutputWindowStatuses(true);
         }
-        if (videoAudioMonitorStatus().active_layer_ids.length > 0) {
+        if (
+          videoProgramAudioEnabled() ||
+          videoAudioMonitorStatus().active_layer_ids.length > 0 ||
+          videoAudioMonitorStatus().last_sync_error
+        ) {
           void refreshVideoAudioMonitorStatus(true);
         }
         if (videoRecordingStatus().active) {
@@ -12266,6 +12486,14 @@ export default function App() {
             onStop: stopVideoClipFromGrid,
             onMonitorAudio: (layerId, volume) => playVideoLayerAudioMonitor(layerId, volume, selectedAudioOutputDevice()),
             onStopAudio: stopVideoLayerAudioMonitor,
+          }}
+          autoVj={{
+            get snapshot() { return snapshot().video.auto_vj ?? emptyAutoVjSnapshot; },
+            get layers() { return snapshot().video.layers; },
+            get busy() { return autoVjBusy(); },
+            onSetConfig: setAutoVjConfig,
+            onSetArmed: setAutoVjArmed,
+            onSetHold: setAutoVjHold,
           }}
           layerList={{
             get layers() { return snapshot().video.layers; },

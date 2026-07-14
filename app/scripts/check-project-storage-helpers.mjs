@@ -17,6 +17,7 @@ async function importTsModule(path) {
 
 const recent = await importTsModule("../src/projectRecentStorage.ts");
 const recovery = await importTsModule("../src/projectRecoveryStorage.ts");
+const projectSnapshot = await importTsModule("../src/projectSnapshot.ts");
 const workspaceLayout = await importTsModule("../src/workspaceLayoutStorage.ts");
 
 assert.equal(recent.recentProjectFileName("C:\\shows\\main.sdc"), "main.sdc");
@@ -68,6 +69,94 @@ assert.equal(recovery.recoveryCheckpointFromUnknown({ ...checkpoint, project: { 
 assert.equal(recovery.recoveryCheckpointFromUnknown({ ...checkpoint, project: { ...project, snapshot: {} } }), null);
 assert.equal(recovery.projectRecoverySourceLabel({ ...checkpoint, source_path: null }), "Untitled.sdc");
 assert.equal(recovery.projectRecoveryTimeLabel({ ...checkpoint, saved_at: "bad-date" }), "Recovery");
+
+const autoVjConfig = {
+  eligible_layer_ids: [5, 7],
+  seed: 42,
+  beats_per_change: 4,
+  transition_ms: 500,
+  avoid_immediate_repeat: true,
+  rhythm_source: "LiveAudio",
+};
+const runtimeAutoVjAction = {
+  sequence: 3,
+  boundary_index: 2,
+  beat: 8,
+  layer_id: 7,
+  transition_ms: 500,
+  selection_token: 99,
+  seed: 42,
+  show_revision: 4,
+  trigger: "LiveAudioOnset",
+  live_audio_feature_sequence: 17,
+};
+const runtimeAutoVjStatus = {
+  mode: "Running",
+  armed: true,
+  hold: false,
+  show_revision: 4,
+  action_sequence: 3,
+  last_consumed_boundary: 2,
+  next_boundary_beat: 12,
+  last_action: runtimeAutoVjAction,
+  action_log: [runtimeAutoVjAction],
+  fault: null,
+  live_audio_beat_counter: 8,
+  last_live_audio_feature_sequence: 17,
+};
+const autoVjProjectSnapshot = {
+  fixtures: [],
+  cues: [],
+  active_cue_id: null,
+  active_fade: null,
+  timeline: { playing: false, position_ms: 0 },
+  video: {
+    layers: [],
+    auto_vj: { config: autoVjConfig, status: runtimeAutoVjStatus },
+  },
+  clock: { beat_phase: 0, beat_counter: 0, tap_count: 0 },
+  dmx_preview: [],
+  dmx_previews: [],
+  telemetry: {},
+};
+const runtimeOnlyAutoVjChange = JSON.parse(JSON.stringify(autoVjProjectSnapshot));
+runtimeOnlyAutoVjChange.video.auto_vj.status = {
+  ...runtimeOnlyAutoVjChange.video.auto_vj.status,
+  mode: "Hold",
+  hold: true,
+  action_sequence: 99,
+  action_log: [
+    ...runtimeOnlyAutoVjChange.video.auto_vj.status.action_log,
+    { ...runtimeAutoVjAction, sequence: 99, boundary_index: 98 },
+  ],
+  fault: "runtime-only fault",
+  live_audio_beat_counter: 200,
+};
+assert.equal(
+  projectSnapshot.projectSnapshotSignature(autoVjProjectSnapshot),
+  projectSnapshot.projectSnapshotSignature(runtimeOnlyAutoVjChange),
+  "Auto VJ runtime status must not dirty a project or rotate recovery/autosave signatures",
+);
+const changedAutoVjConfig = JSON.parse(JSON.stringify(autoVjProjectSnapshot));
+changedAutoVjConfig.video.auto_vj.config.seed = 43;
+assert.notEqual(
+  projectSnapshot.projectSnapshotSignature(autoVjProjectSnapshot),
+  projectSnapshot.projectSnapshotSignature(changedAutoVjConfig),
+  "Auto VJ deterministic configuration remains project data",
+);
+const persistedAutoVjSnapshot = projectSnapshot.normalizeProjectAutoVjForPersistence(autoVjProjectSnapshot);
+assert.deepEqual(persistedAutoVjSnapshot.video.auto_vj.config, autoVjConfig);
+assert.deepEqual(
+  persistedAutoVjSnapshot.video.auto_vj.status,
+  projectSnapshot.defaultPersistedAutoVjStatus(),
+  "frontend persistence normalization matches backend project_snapshot_for_save",
+);
+assert.equal(autoVjProjectSnapshot.video.auto_vj.status.mode, "Running", "normalization must not mutate live state");
+assert.deepEqual(
+  projectSnapshot.normalizeProjectAutoVjForPersistence(persistedAutoVjSnapshot),
+  persistedAutoVjSnapshot,
+  "Auto VJ persistence normalization is idempotent",
+);
 
 const dirtySceneBlockDraft = {
   cue_id: 500,

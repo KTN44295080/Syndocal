@@ -1,3 +1,5 @@
+pub mod live_features;
+
 use std::{
     fs,
     path::{Path, PathBuf},

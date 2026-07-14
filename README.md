@@ -136,9 +136,10 @@ Windowsの完全libav bundleでは`FFMPEG_DIR`を共有FFmpeg SDKルートへ設
 - 1時間release soak: 108,001フレーム、drop 0、tick jitter p99 0.535ms、command-to-DMX p99 0.476ms、最大13.3MB (ハーネス構成)
 - 大規模Engine gate: 200灯体、8ユニバース、100キュー、20,000ターゲット
 - UI viewport policy: browser 1920x1080とnative F11 1920x1080を運用・見た目の主ゲートにする。Windows最大化は1920x1032の作業領域内で実client 1920x1009（title barを除く）を確認し、Escで同寸法へ復帰させる。1280x720 / 1366x768はcontainment fallback、2048x1152は拡張上限回帰とし、小画面fallbackの通過だけではデザイン合格にしない
-- Live audio UI: VJ Desk内の64px railでStart／Stop、device／rate／requested buffer／channel mix、B/M/H meterとcallback／queue telemetryを常時確認する。meterは軽量statusを約30Hz、詳細telemetryは約1Hzでsingle-flight更新し、1280x720と1920x1080のstopped／live表示をviewport gateで固定する
+- Live audio UI: VJ Desk内の64px railでStart／Stop、device／rate／requested buffer／channel mix、16対数band、RMS／Peak、onset、BPM／confidenceとcallback／queue telemetryを常時確認する。軽量feature statusは約30Hz、詳細telemetryは約1Hzでsingle-flight更新し、5 viewport×英日stateful gateで固定する
 - Live-audio viewport gateはDOMを直接改変せず、Tauri invoke mockから実Solid stateを駆動する。5解像度×英日でRefresh、generation ID再対応、同名曖昧時の再選択ロック、capability、192kHz／8192-frame／stereo pair Start request、42/58/76% meter、live telemetry、Stop／clear-pendingまで検証する
-- Windows native live-audio acceptance: 最大化したcurrent-source buildでsystem defaultのWASAPI shared入力を48kHz monoでStart／Stopし、実callback 480/480/480 frames、capture-to-workerの採取時点current 10.0ms／max 10.2ms、OVR 0 chunks／0 frames、queue current/high-water/capacity 0/1/4を確認した。この1構成の測定をASIOや長時間・他deviceの性能証明には読み替えない
+- Windows native live-audio acceptance: 最大化したcurrent-source buildでsystem defaultのWASAPI shared入力を48kHz monoでStart／Stopし、実callback 480/480/480 frames、capture-to-workerの採取時点current 0.1ms／max 10.1ms、OVR 0 chunks／0 frames、queue current/high-water/capacity 0/1/4を確認した。この1構成の測定をASIOや長時間・他deviceの性能証明には読み替えない
+- Auto VJ: CLOCKまたはLIVE INPUTのonsetをsourceに、seed／show revision／ordered candidateから再現可能なTakeを生成する。手動Take、Hold、blackoutを優先し、Program Audioはbackend coordinatorが世代token付きで一度だけ切り替えるため、device openやdecodeでTake操作を待たせない
 
 検証記録:
 
@@ -147,6 +148,8 @@ Windowsの完全libav bundleでは`FFMPEG_DIR`を共有FFmpeg SDKルートへ設
 - [qa/M6_RELEASE_VALIDATION.md](qa/M6_RELEASE_VALIDATION.md)
 - [qa/NATIVE_WINDOW_ACCEPTANCE.md](qa/NATIVE_WINDOW_ACCEPTANCE.md)
 - [qa/LIVE_AUDIO_FAIL_CLOSED.md](qa/LIVE_AUDIO_FAIL_CLOSED.md)
+- [qa/AUDIO_REACTIVE_VJ_ACCEPTANCE.md](qa/AUDIO_REACTIVE_VJ_ACCEPTANCE.md)
+- [qa/ASIO_INPUT_ACCEPTANCE.md](qa/ASIO_INPUT_ACCEPTANCE.md)
 - [qa/TOUCHDESIGNER_COMPETITIVE_AUDIT.md](qa/TOUCHDESIGNER_COMPETITIVE_AUDIT.md)
 - [RELEASE_STATUS.md](RELEASE_STATUS.md) - v1.0完成判定、外部受入、次スレッド向けバックログ
 
@@ -154,7 +157,7 @@ Windowsの完全libav bundleでは`FFMPEG_DIR`を共有FFmpeg SDKルートへ設
 
 - v1.0以降の外部映像I/OはDisplay、feature-gated NDI、Windows x86_64のSpoutに対応しています。Syphonはwgpu世代差とmacOS実装環境が必要なため未実装です。
 - HAP Q Alpha、HAP R/BC7のGPU直接sampling + CPU fallback、安全境界付きsingle-pass ISFは実装済みです。ISF multipass／persistent buffer／imported resource／audio inputは未対応です。
-- Live FFT入力はCPALのdevice catalogとcapabilityを読み、WindowsではWASAPI sharedのsystem defaultまたは列挙device、sample rate、requested buffer、全channel平均／単一channel／stereo pair downmixを選べます。選択rateごとにchannel数／sample format／buffer capabilityを`resolved_config`として先に確定し、Startでも同じ構成を再検証します。更新世代に結び付くopaque device IDを使い、古い／未知IDや非対応構成は別device・rate・bufferへ黙ってfallbackせずStartを拒否します。全11種のCPAL PCM sample formatを正規化し、通常data callbackは4本×2048-frameの事前確保slotへallocation-freeで格納します。実callback frameのcurrent/min/max、CPAL時刻由来のcapture-to-worker推定値、drop／queue high-waterを表示し、Engine側の250ms TTLもcapture worker停止時の値保持を防ぎます。ASIO、同一deviceのhot-plug自動復帰、engine適用ack、8–16 band／onset／live BPM、Audio Reactive Rackと決定的Auto VJは次段の実装・実機受入です。
+- Live FFT入力はCPALのdevice catalogとcapabilityを読み、WindowsではWASAPI sharedのsystem defaultまたは列挙device、sample rate、requested buffer、全channel平均／単一channel／stereo pair downmixを選べます。選択rateごとにchannel数／sample format／buffer capabilityを`resolved_config`として先に確定し、Startでも同じ構成を再検証します。更新世代に結び付くopaque device IDを使い、古い／未知IDや非対応構成は別device・rate・bufferへ黙ってfallbackせずStartを拒否します。全11種のCPAL PCM sample formatを正規化し、通常data callbackは4本×2048-frameの事前確保slotへallocation-freeで格納します。workerは16対数band、RMS／Peak、spectral flux、適応onset、60–200 BPM／confidence／beat phaseを生成し、同じframeから旧Node Graph用B/M/Hを派生します。Auto VJはCLOCKまたはLIVE INPUTのonsetを選べ、seed／show revision／candidate順から決定的にTakeし、手動操作・blackout・入力lossを優先します。ASIO、同一deviceのhot-plug自動復帰、engine適用ack、任意parameterへ16 bandを割り当てるAudio Reactive Rack、実機長時間／物理pixel latency比較は次段です。ASIO版は通常MIT buildと分離し、GPLv3またはSteinberg proprietary agreementの配布方針確定後にのみ有効化します。
 - Device Refresh後はbackendとdevice名が新旧catalogueの双方で一意な場合だけ明示選択を新IDへ引き継ぎます。曖昧・消失時はsystem defaultへ黙って落とさず、再選択するまでcapabilityを破棄してStartをロックします。
 - 3Dビジュアライザは本体UIへ戻さず、`visualizer`データ境界から外部実装へ接続します。標準UIは2D Stage Mapです。
 - Enttec Open DMXはOS/USBドライバ依存のbreak timingがあるため、最終現場ではUSB PRO系を推奨します。
