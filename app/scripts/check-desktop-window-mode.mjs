@@ -110,12 +110,30 @@ assert.ok(
 assert.ok(controller.includes('window.addEventListener("resize"'), "native window-mode changes must be resynchronized");
 assert.ok(controller.includes('window.removeEventListener("keydown"'), "the global shortcut listener must be cleaned up");
 assert.ok(controller.includes('aria-live="polite"'), "window-mode feedback must be announced accessibly");
+assert.ok(
+  controller.includes("const documentRoot = document.documentElement") &&
+    controller.includes("documentRoot.setAttribute(") &&
+    controller.includes("documentRoot.setAttribute(DESKTOP_WINDOW_MODE_ATTRIBUTE, nextMode)") &&
+    controller.includes("documentRoot.removeAttribute(DESKTOP_WINDOW_MODE_ATTRIBUTE)"),
+  "the controller must publish window mode on the document root and remove an attribute it owns",
+);
+assert.match(
+  controller,
+  /if \(hadPreviousWindowMode\) \{[\s\S]*?documentRoot\.setAttribute\(DESKTOP_WINDOW_MODE_ATTRIBUTE, previousWindowMode \?\? ""\);[\s\S]*?\} else \{[\s\S]*?documentRoot\.removeAttribute\(DESKTOP_WINDOW_MODE_ATTRIBUTE\);/,
+  "cleanup must restore a pre-existing document window-mode value instead of overwriting it",
+);
 
 const transpiled = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
   fileName: "desktopWindowMode.ts",
 });
 const shortcuts = await import(`data:text/javascript;base64,${Buffer.from(transpiled.outputText).toString("base64")}`);
+
+assert.equal(shortcuts.DESKTOP_WINDOW_MODE_ATTRIBUTE, "data-window-mode");
+assert.equal(shortcuts.desktopWindowModeFromWindowState(false, false), "windowed");
+assert.equal(shortcuts.desktopWindowModeFromWindowState(false, true), "maximized");
+assert.equal(shortcuts.desktopWindowModeFromWindowState(true, false), "fullscreen");
+assert.equal(shortcuts.desktopWindowModeFromWindowState(true, true), "fullscreen");
 
 assert.equal(shortcuts.shouldMountDesktopWindowModeController(""), true);
 assert.equal(shortcuts.shouldMountDesktopWindowModeController("?syndocalViewportFixture=primary"), true);

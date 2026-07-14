@@ -1,6 +1,6 @@
 # VJ Live Monitor Acceptance
 
-Updated: 2026-07-13
+Updated: 2026-07-14
 
 ## Implemented contract
 
@@ -29,6 +29,8 @@ The Preview bus now has an ephemeral transport that is separate from project and
 - `pnpm check:localization`: static UI coverage remains 100%, including the Preview transport and Program-transfer labels.
 - `pnpm check:viewport`: all Control, Setup and Touch surfaces use 1920x1080 as the primary operational/visual gate, 2048x1152 as the extended ceiling, and 1366x768 plus 1280x720 as compact containment fallbacks. VJ acceptance requires exactly one Preview bus, one Program bus, one independent Preview transport and zero normal Refresh buttons at every size.
 - The sign-off screenshot is the maximized 1920x1080 VJ Desk, where both 16:9 buses must remain visible beside Clips, Outputs and Layers without document scrolling. Compact screenshots are diagnostic-only and do not substitute for this density review.
+- `pnpm --dir app run check:fullscreen-vj`: the 1920x1080 browser fullscreen-mode fixture removes the duplicate outer header and measures Clips / Live Monitors + Outputs / Layers at 684 / 811 / 405 px. Preview / Program measure 317 / 476 px, a 1.502 Program-to-Preview ratio. The audio dock is 92 px; primary and configuration controls are 32 / 28 px. Required audio labels and telemetry remain visible with zero truncation, critical overflow, or viewport escape. The 1366x768 and 1280x720 fallback fixtures retain the normal 36 px header, 64 px audio rail, and 1:1 monitor split.
+- Native Focus evidence uses the separate `tauri.f11-focus-qa.conf.json` identifier so existing Syndocal and Daslight windows remain untouched. The current-source ASIO build was checked maximized at 1913x1080, then at exact 1920x1080 F11: title bar/taskbar and the duplicate outer header were absent, Program was visibly prioritized over Preview, the expanded audio configuration labels and two telemetry rows remained readable, and real 48 kHz / 128-frame ASIO input held OVR 0/0 and XRUN 0. Stop plus Esc restored the normal maximized header, compact rail, and monitor split.
 - Focused backend tests cover explicit staging, Program-state independence, pause/seek, forward and reverse looping, speed sanitization, unsupported sources, source replacement/removal, in-point rewind and stale-frame generation checks.
 
 ## Claim boundary and remaining performance work

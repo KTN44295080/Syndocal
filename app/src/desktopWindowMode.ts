@@ -1,5 +1,14 @@
 export type DesktopWindowShortcutAction = "toggleFullscreen" | "exitFullscreen";
 
+export type DesktopWindowMode = "unknown" | "windowed" | "maximized" | "fullscreen" | "error";
+
+export const DESKTOP_WINDOW_MODE_ATTRIBUTE = "data-window-mode";
+
+export const desktopWindowModeFromWindowState = (
+  fullscreen: boolean,
+  maximized: boolean,
+): DesktopWindowMode => (fullscreen ? "fullscreen" : maximized ? "maximized" : "windowed");
+
 export interface DesktopWindowShortcutEvent {
   code: string;
   repeat: boolean;

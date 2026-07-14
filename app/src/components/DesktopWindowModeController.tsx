@@ -1,10 +1,13 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Show, createSignal, onCleanup, onMount, type ParentComponent } from "solid-js";
-import { desktopWindowShortcutAction } from "../desktopWindowMode";
+import {
+  DESKTOP_WINDOW_MODE_ATTRIBUTE,
+  desktopWindowModeFromWindowState,
+  desktopWindowShortcutAction,
+  type DesktopWindowMode,
+} from "../desktopWindowMode";
 import { isEditableShortcutTarget } from "../hotkeyHelpers";
 import "../desktopWindowMode.css";
-
-type DesktopWindowMode = "unknown" | "windowed" | "maximized" | "fullscreen" | "error";
 
 const NOTICE_DURATION_MS = 4_000;
 const RESIZE_SETTLE_MS = 120;
@@ -36,6 +39,8 @@ export const DesktopWindowModeController: ParentComponent = (props) => {
   let resizeTimer: number | undefined;
   let unlistenNativeFullscreen: (() => void) | undefined;
   let unlistenNativeEscape: (() => void) | undefined;
+  let handleKeyDown: ((event: KeyboardEvent) => void) | undefined;
+  let handleResize: (() => void) | undefined;
   let transitionInFlight = false;
   let disposed = false;
 
@@ -46,6 +51,31 @@ export const DesktopWindowModeController: ParentComponent = (props) => {
   };
 
   onMount(() => {
+    const documentRoot = document.documentElement;
+    const hadPreviousWindowMode = documentRoot.hasAttribute(DESKTOP_WINDOW_MODE_ATTRIBUTE);
+    const previousWindowMode = documentRoot.getAttribute(DESKTOP_WINDOW_MODE_ATTRIBUTE);
+    const updateMode = (nextMode: DesktopWindowMode) => {
+      setMode(nextMode);
+      documentRoot.setAttribute(DESKTOP_WINDOW_MODE_ATTRIBUTE, nextMode);
+    };
+
+    updateMode("unknown");
+
+    onCleanup(() => {
+      disposed = true;
+      window.clearTimeout(noticeTimer);
+      window.clearTimeout(resizeTimer);
+      unlistenNativeFullscreen?.();
+      unlistenNativeEscape?.();
+      if (handleKeyDown) window.removeEventListener("keydown", handleKeyDown);
+      if (handleResize) window.removeEventListener("resize", handleResize);
+      if (hadPreviousWindowMode) {
+        documentRoot.setAttribute(DESKTOP_WINDOW_MODE_ATTRIBUTE, previousWindowMode ?? "");
+      } else {
+        documentRoot.removeAttribute(DESKTOP_WINDOW_MODE_ATTRIBUTE);
+      }
+    });
+
     if (!isTauriRuntime()) {
       return;
     }
@@ -53,10 +83,11 @@ export const DesktopWindowModeController: ParentComponent = (props) => {
     const appWindow = getCurrentWindow();
 
     const readMode = async (): Promise<DesktopWindowMode> => {
-      if (await appWindow.isFullscreen()) {
-        return "fullscreen";
-      }
-      return (await appWindow.isMaximized()) ? "maximized" : "windowed";
+      const fullscreen = await appWindow.isFullscreen();
+      return desktopWindowModeFromWindowState(
+        fullscreen,
+        fullscreen ? false : await appWindow.isMaximized(),
+      );
     };
 
     const syncMode = async (announceChange: boolean) => {
@@ -64,11 +95,11 @@ export const DesktopWindowModeController: ParentComponent = (props) => {
         const nextMode = await readMode();
         if (disposed) return;
         const changed = mode() !== nextMode;
-        setMode(nextMode);
+        updateMode(nextMode);
         if (announceChange && changed) showNotice();
       } catch {
         if (disposed) return;
-        setMode("error");
+        updateMode("error");
         showNotice();
       }
     };
@@ -81,7 +112,7 @@ export const DesktopWindowModeController: ParentComponent = (props) => {
         await syncMode(false);
       } catch {
         if (disposed) return;
-        setMode("error");
+        updateMode("error");
         showNotice();
       }
     };
@@ -96,18 +127,18 @@ export const DesktopWindowModeController: ParentComponent = (props) => {
           await appWindow.setFullscreen(next);
         }
         if (disposed) return;
-        setMode(await readMode());
+        updateMode(await readMode());
         showNotice();
       } catch {
         if (disposed) return;
-        setMode("error");
+        updateMode("error");
         showNotice();
       } finally {
         transitionInFlight = false;
       }
     };
 
-    const handleKeyDown = (event: KeyboardEvent) => {
+    handleKeyDown = (event: KeyboardEvent) => {
       const action = desktopWindowShortcutAction(
         {
           code: event.code,
@@ -128,7 +159,7 @@ export const DesktopWindowModeController: ParentComponent = (props) => {
       void setFullscreen(action === "exitFullscreen" ? false : undefined);
     };
 
-    const handleResize = () => {
+    handleResize = () => {
       window.clearTimeout(resizeTimer);
       resizeTimer = window.setTimeout(() => void syncMode(true), RESIZE_SETTLE_MS);
     };
@@ -156,7 +187,7 @@ export const DesktopWindowModeController: ParentComponent = (props) => {
       })
       .catch(() => {
         if (disposed) return;
-        setMode("error");
+        updateMode("error");
         showNotice();
       });
     void appWindow
@@ -170,22 +201,12 @@ export const DesktopWindowModeController: ParentComponent = (props) => {
       })
       .catch(() => {
         if (disposed) return;
-        setMode("error");
+        updateMode("error");
         showNotice();
       });
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("resize", handleResize, { passive: true });
     void enterOperationalWindowMode();
-
-    onCleanup(() => {
-      disposed = true;
-      window.clearTimeout(noticeTimer);
-      window.clearTimeout(resizeTimer);
-      unlistenNativeFullscreen?.();
-      unlistenNativeEscape?.();
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("resize", handleResize);
-    });
   });
 
   const notice = () => noticeForMode(mode());

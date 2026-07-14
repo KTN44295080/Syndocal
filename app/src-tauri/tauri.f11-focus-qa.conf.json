@@ -1,0 +1,25 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Syndocal F11 Focus QA",
+  "identifier": "jp.seraf.ktn.syndocal.qa.f11-focus",
+  "build": {
+    "beforeDevCommand": "pnpm dev --host 127.0.0.1 --port 5188 --strictPort",
+    "devUrl": "http://127.0.0.1:5188"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Syndocal QA - F11 Focus",
+        "width": 1920,
+        "height": 1080,
+        "minWidth": 960,
+        "minHeight": 640,
+        "maximized": true,
+        "resizable": true
+      }
+    ]
+  },
+  "bundle": {
+    "active": false
+  }
+}

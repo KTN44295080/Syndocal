@@ -22577,3 +22577,142 @@ h3 {
     grid-template-columns: minmax(440px, 0.92fr) minmax(600px, 1.28fr) minmax(340px, 0.8fr);
   }
 }
+
+/*
+ * F11 VJ focus surface. The desktop controller owns data-window-mode; keeping
+ * the size gate here preserves the established compact fallback geometry.
+ */
+@media (min-width: 1600px) and (min-height: 900px) {
+  html[data-window-mode="fullscreen"] .layoutControl.controlModeMixer .videoControlPanelMixer {
+    grid-template-columns: minmax(640px, 1.08fr) minmax(720px, 1.28fr) minmax(300px, 0.64fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  html[data-window-mode="fullscreen"] .layoutControl.controlModeMixer .videoControlPanelMixer > .panelHeader {
+    display: none;
+  }
+
+  html[data-window-mode="fullscreen"] .layoutControl.controlModeMixer .videoMixerClipPane,
+  html[data-window-mode="fullscreen"] .layoutControl.controlModeMixer .videoMixerProgramPane,
+  html[data-window-mode="fullscreen"] .layoutControl.controlModeMixer .videoMixerLayerPane {
+    grid-row: 1;
+  }
+
+  html[data-window-mode="fullscreen"] .layoutControl.controlModeMixer .videoMixerClipPane {
+    grid-template-rows: 40px auto 92px minmax(56px, 64px) minmax(46px, 54px) minmax(0, 1fr);
+  }
+
+  html[data-window-mode="fullscreen"] .layoutControl.controlModeMixer .liveVideoMonitorBuses {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  }
+
+  html[data-window-mode="fullscreen"] .videoControlPanelMixer .liveAudioInputBar {
+    height: 92px;
+    max-height: 92px;
+    grid-template-columns: minmax(0, 1fr) minmax(196px, 0.34fr);
+    grid-template-rows: 34px 42px;
+    gap: 4px 6px;
+    padding: 5px 7px;
+  }
+
+  html[data-window-mode="fullscreen"] .videoControlPanelMixer .liveAudioInputControls {
+    grid-template-columns: minmax(0, 1fr) 32px minmax(64px, 76px);
+  }
+
+  html[data-window-mode="fullscreen"] .videoControlPanelMixer .liveAudioInputControls select,
+  html[data-window-mode="fullscreen"] .videoControlPanelMixer .liveAudioInputControls button {
+    height: 32px;
+    min-height: 32px;
+  }
+
+  html[data-window-mode="fullscreen"] .videoControlPanelMixer .liveAudioConfigControls {
+    grid-template-columns: minmax(104px, 1.2fr) repeat(3, minmax(74px, 0.82fr)) minmax(118px, 1fr);
+    gap: 4px;
+    overflow: visible;
+  }
+
+  html[data-window-mode="fullscreen"] .videoControlPanelMixer .liveAudioConfigControls label {
+    display: grid;
+    grid-template-rows: 12px 28px;
+    min-height: 40px;
+  }
+
+  html[data-window-mode="fullscreen"] .videoControlPanelMixer .liveAudioConfigControls label > span {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: hidden;
+    clip-path: none;
+    color: #98a3aa;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  html[data-window-mode="fullscreen"] .videoControlPanelMixer .liveAudioConfigControls select {
+    height: 28px;
+    min-height: 28px;
+  }
+
+  html[data-window-mode="fullscreen"] .videoControlPanelMixer .liveAudioConfigFormat {
+    align-self: end;
+    min-height: 28px;
+    box-sizing: border-box;
+  }
+
+  html[data-window-mode="fullscreen"] .videoControlPanelMixer .liveAudioTelemetry {
+    display: grid;
+    grid-template-columns: 58px 110px 66px 132px 52px;
+    grid-template-rows: repeat(2, 19px);
+    align-content: center;
+    gap: 3px;
+    overflow: hidden;
+    font-size: 11px;
+  }
+
+  html[data-window-mode="fullscreen"] .videoControlPanelMixer .liveAudioTelemetry > span {
+    min-width: 0;
+    box-sizing: border-box;
+    overflow: visible;
+    text-overflow: clip;
+  }
+
+  html[data-window-mode="fullscreen"] .videoControlPanelMixer .liveAudioTelemetry > .liveAudioBackendLiveState {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  html[data-window-mode="fullscreen"] .videoControlPanelMixer .liveAudioTelemetry > .liveAudioTelemetryOvr {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  html[data-window-mode="fullscreen"] .videoControlPanelMixer .liveAudioTelemetry > .liveAudioTelemetryXrun {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  html[data-window-mode="fullscreen"] .videoControlPanelMixer .liveAudioTelemetry > .liveAudioTelemetryLatency {
+    grid-column: 4;
+    grid-row: 1;
+  }
+
+  html[data-window-mode="fullscreen"] .videoControlPanelMixer .liveAudioTelemetry > .liveAudioTelemetryQueue {
+    grid-column: 5;
+    grid-row: 1;
+  }
+
+  html[data-window-mode="fullscreen"] .videoControlPanelMixer .liveAudioTelemetry > .liveAudioTelemetryIo {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    overflow: visible;
+    text-overflow: clip;
+  }
+
+  html[data-window-mode="fullscreen"] .videoControlPanelMixer .liveAudioTelemetryIo > i {
+    overflow: visible;
+    text-overflow: clip;
+  }
+}

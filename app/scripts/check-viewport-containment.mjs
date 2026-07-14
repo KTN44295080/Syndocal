@@ -11,6 +11,7 @@ const appRoot = resolve(scriptDir, "..");
 const largeShowMode = process.argv.includes("--large-show");
 const vjEmptyMode = process.argv.includes("--vj-empty");
 const liveAudioOnlyMode = process.argv.includes("--live-audio-only");
+const fullscreenVjOnlyMode = process.argv.includes("--fullscreen-vj");
 const autoVjOnlyMode = process.argv.includes("--auto-vj-only");
 const audioReactiveOnlyMode = process.argv.includes("--audio-reactive-only");
 const sceneBlockOnlyMode = process.argv.includes("--scene-block-only");
@@ -23,7 +24,7 @@ const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
       ? "auto-vj"
       : audioReactiveOnlyMode
         ? "audio-reactive"
-      : vjEmptyMode || liveAudioOnlyMode
+      : vjEmptyMode || liveAudioOnlyMode || fullscreenVjOnlyMode
         ? "vj-empty"
         : "timeline"
 );
@@ -67,6 +68,8 @@ const viewports = requestedViewport
   ? [primaryOperationalViewport]
   : audioReactiveOnlyMode
     ? [primaryOperationalViewport, compactFallbackViewports[0]]
+  : fullscreenVjOnlyMode
+    ? [primaryOperationalViewport, ...compactFallbackViewports]
   : process.env.SYNDOCAL_VIEWPORT_SINGLE === "1"
     ? [primaryOperationalViewport]
     : allViewports;
@@ -1650,6 +1653,7 @@ async function measure(client, label) {
     await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
     return {
       label: ${JSON.stringify(label)},
+      windowMode: documentElement.getAttribute('data-window-mode') ?? '',
       innerWidth,
       innerHeight,
       documentClientWidth: documentElement.clientWidth,
@@ -2322,6 +2326,30 @@ async function measure(client, label) {
       visibleVideoMonitorPanelCount: visibleCount('.liveVideoMonitorPanel'),
       visibleVideoPreviewBusCount: visibleCount('[data-live-video-monitor="preview"]'),
       visibleVideoProgramBusCount: visibleCount('[data-live-video-monitor="program"]'),
+      visibleVideoMixerOuterHeaderCount: visibleCount('.videoControlPanelMixer > .panelHeader'),
+      videoMixerOuterHeaderHeight: Math.round(
+        document.querySelector('.videoControlPanelMixer > .panelHeader')?.getBoundingClientRect().height ?? 0,
+      ),
+      videoMixerBodyTopGap: (() => {
+        const panel = document.querySelector('.videoControlPanelMixer')?.getBoundingClientRect();
+        const pane = document.querySelector('.videoMixerClipPane')?.getBoundingClientRect();
+        return panel && pane ? Math.round(pane.top - panel.top) : -1;
+      })(),
+      videoMixerClipPaneWidth: Math.round(
+        document.querySelector('.videoMixerClipPane')?.getBoundingClientRect().width ?? 0,
+      ),
+      videoMixerProgramPaneWidth: Math.round(
+        document.querySelector('.videoMixerProgramPane')?.getBoundingClientRect().width ?? 0,
+      ),
+      videoMixerLayerPaneWidth: Math.round(
+        document.querySelector('.videoMixerLayerPane')?.getBoundingClientRect().width ?? 0,
+      ),
+      videoMonitorPreviewWidth: Math.round(
+        document.querySelector('[data-live-video-monitor="preview"]')?.getBoundingClientRect().width ?? 0,
+      ),
+      videoMonitorProgramWidth: Math.round(
+        document.querySelector('[data-live-video-monitor="program"]')?.getBoundingClientRect().width ?? 0,
+      ),
       visibleVjPreviewTransportCount: visibleCount('.vjPreviewTransport'),
       visibleVjPreviewTransportButtonCount: visibleCount('.vjPreviewTransportControls button'),
       disabledVjPreviewTransportButtonCount: [...document.querySelectorAll('.vjPreviewTransportControls button')]
@@ -2393,11 +2421,43 @@ async function measure(client, label) {
         const controls = document.querySelector('.videoMixerClipPane > .liveAudioInputBar .liveAudioInputControls');
         return controls ? Math.max(0, controls.scrollHeight - controls.clientHeight) : 0;
       })(),
+      liveAudioRailPrimaryControlMinHeight: (() => {
+        const controls = [...document.querySelectorAll(
+          '.videoMixerClipPane > .liveAudioInputBar .liveAudioInputControls select, .videoMixerClipPane > .liveAudioInputBar .liveAudioInputControls button',
+        )];
+        return controls.length > 0
+          ? Math.round(Math.min(...controls.map((element) => element.getBoundingClientRect().height)))
+          : 0;
+      })(),
+      liveAudioRailConfigControlMinHeight: (() => {
+        const controls = [...document.querySelectorAll(
+          '.videoMixerClipPane > .liveAudioInputBar .liveAudioConfigControls select',
+        )];
+        return controls.length > 0
+          ? Math.round(Math.min(...controls.map((element) => element.getBoundingClientRect().height)))
+          : 0;
+      })(),
+      visibleLiveAudioConfigLabelCount: [...document.querySelectorAll(
+        '.videoMixerClipPane > .liveAudioInputBar .liveAudioConfigControls label > span',
+      )].filter((element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return rect.width >= 8 && rect.height >= 8 && style.visibility !== 'hidden' && style.clipPath === 'none';
+      }).length,
       liveAudioRailMeterCount: visibleCount('.videoMixerClipPane > .liveAudioInputBar [role="meter"]'),
       liveAudioRailPoliteRegionCount: visibleCount('.videoMixerClipPane > .liveAudioInputBar [aria-live="polite"]'),
       liveAudioRailTelemetryBadgeCount: visibleCount('.videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetry > span'),
+      liveAudioRailTelemetryText: [...document.querySelectorAll(
+        '.videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetry > span',
+      )].map((element) => (element.textContent || '').trim().replace(/\\s+/g, ' ')).join(' | '),
+      liveAudioRailTelemetryTruncatedCount: [...document.querySelectorAll(
+        '.videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetry > span, .videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetryIo > i',
+      )].filter((element) => element.scrollWidth - element.clientWidth > 1).length,
       liveAudioRailCriticalTelemetryOverflowCount: [...document.querySelectorAll(
         '.videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetryOvr, .videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetryLatency, .videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetryQueue',
+      )].filter((element) => element.scrollWidth - element.clientWidth > 1).length,
+      liveAudioRailFullscreenCriticalOverflowCount: [...document.querySelectorAll(
+        '.videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetryOvr, .videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetryXrun, .videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetryLatency, .videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetryIo, .videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetryIo > i, .videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetryQueue',
       )].filter((element) => element.scrollWidth - element.clientWidth > 1).length,
       liveAudioRailTelemetryOutsideCount: (() => {
         const telemetry = document.querySelector('.videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetry');
@@ -3743,7 +3803,7 @@ async function runLiveAudioAcceptance(client, locale, label) {
   };
 }
 
-async function prepareLiveAudioAcceptanceViewport(client, viewport, locale) {
+async function prepareLiveAudioAcceptanceViewport(client, viewport, locale, fullscreen = false) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
     height: viewport.height,
@@ -3761,6 +3821,10 @@ async function prepareLiveAudioAcceptanceViewport(client, viewport, locale) {
   await sleep(120);
   await clickByText(client, locale === "ja" ? "VJデスク" : "VJ Desk");
   await sleep(120);
+  if (fullscreen) {
+    await client.evaluate("document.documentElement.setAttribute('data-window-mode','fullscreen')");
+    await sleep(60);
+  }
 }
 
 async function runLiveAudioAcceptanceViewport(client, viewport, locale) {
@@ -3770,6 +3834,81 @@ async function runLiveAudioAcceptanceViewport(client, viewport, locale) {
     locale,
     "live-audio-" + locale + "-" + viewport.width + "x" + viewport.height,
   );
+}
+
+async function runFullscreenVjAcceptanceViewport(client, viewport) {
+  await prepareLiveAudioAcceptanceViewport(client, viewport, "en", true);
+  const stopped = await measure(
+    client,
+    "fullscreen-vj-stopped-" + viewport.width + "x" + viewport.height,
+  );
+  const acceptance = await runLiveAudioAcceptance(
+    client,
+    "en",
+    "fullscreen-vj-live-" + viewport.width + "x" + viewport.height,
+  );
+  const live = acceptance.liveContainment;
+  const focusViewport = viewport.width >= 1_600 && viewport.height >= 900;
+  const monitorRatio = live.videoMonitorPreviewWidth > 0
+    ? live.videoMonitorProgramWidth / live.videoMonitorPreviewWidth
+    : 0;
+  const requiredTelemetryTokens = ["OVR ", "XRUN ", "C→W ", "I/O ", "BUF ", "CB ", "Q "];
+  const checks = focusViewport
+    ? {
+        statefulAcceptance: acceptance.passed,
+        containedStopped: isContained(stopped),
+        containedLive: isContained(live),
+        fullscreenModeApplied: stopped.windowMode === "fullscreen" && live.windowMode === "fullscreen",
+        duplicateHeaderRemoved:
+          stopped.visibleVideoMixerOuterHeaderCount === 0 &&
+          stopped.videoMixerOuterHeaderHeight === 0 &&
+          stopped.videoMixerBodyTopGap <= 1,
+        focusColumnWidths:
+          live.videoMixerClipPaneWidth >= 680 &&
+          live.videoMixerProgramPaneWidth >= 760 &&
+          live.videoMixerLayerPaneWidth >= 300,
+        programMonitorPriority: monitorRatio >= 1.45 && monitorRatio <= 1.58,
+        audioDockHeight: live.liveAudioRailHeight >= 84 && live.liveAudioRailHeight <= 96,
+        primaryControlTargets: stopped.liveAudioRailPrimaryControlMinHeight >= 32,
+        configurationTargets: stopped.liveAudioRailConfigControlMinHeight >= 28,
+        configurationLabelsVisible: stopped.visibleLiveAudioConfigLabelCount >= 4,
+        telemetryPresent: live.liveAudioRailTelemetryBadgeCount === 6,
+        telemetryUnabridged:
+          live.liveAudioRailTelemetryTruncatedCount === 0 &&
+          live.liveAudioRailFullscreenCriticalOverflowCount === 0 &&
+          requiredTelemetryTokens.every((token) => live.liveAudioRailTelemetryText.includes(token)),
+        telemetryContained: live.liveAudioRailTelemetryOutsideCount === 0,
+      }
+    : {
+        statefulAcceptance: acceptance.passed,
+        containedStopped: isContained(stopped),
+        containedLive: isContained(live),
+        fullscreenModeApplied: stopped.windowMode === "fullscreen" && live.windowMode === "fullscreen",
+        compactHeaderPreserved:
+          stopped.visibleVideoMixerOuterHeaderCount === 1 &&
+          stopped.videoMixerOuterHeaderHeight >= 35 &&
+          stopped.videoMixerBodyTopGap >= 35,
+        compactAudioDockPreserved: live.liveAudioRailHeight >= 56 && live.liveAudioRailHeight <= 64,
+        compactMonitorBalance: Math.abs(live.videoMonitorProgramWidth - live.videoMonitorPreviewWidth) <= 2,
+        telemetryPresent: live.liveAudioRailTelemetryBadgeCount === 6,
+        telemetryContained:
+          live.liveAudioRailCriticalTelemetryOverflowCount === 0 &&
+          live.liveAudioRailTelemetryOutsideCount === 0,
+      };
+  const failedChecks = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  return {
+    viewport,
+    focusViewport,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    stopped,
+    live,
+    monitorRatio: Number(monitorRatio.toFixed(3)),
+    acceptance,
+  };
 }
 
 async function runAudioReactiveAcceptanceViewport(client, viewport) {
@@ -6562,6 +6701,49 @@ async function main() {
       const failures = autoVjResults.filter((result) => !result.passed);
       if (failures.length > 0) {
         throw new Error(`Auto VJ stateful viewport acceptance failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
+    if (fullscreenVjOnlyMode) {
+      const fullscreenVjResults = [];
+      for (const viewport of viewports) {
+        const result = await runFullscreenVjAcceptanceViewport(client, viewport);
+        fullscreenVjResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} fullscreen VJ focus ${viewport.width}x${viewport.height} ` +
+            JSON.stringify({
+              failedChecks: result.failedChecks,
+              columns: [
+                result.live.videoMixerClipPaneWidth,
+                result.live.videoMixerProgramPaneWidth,
+                result.live.videoMixerLayerPaneWidth,
+              ],
+              monitorWidths: [result.live.videoMonitorPreviewWidth, result.live.videoMonitorProgramWidth],
+              monitorRatio: result.monitorRatio,
+              outerHeader: [
+                result.stopped.visibleVideoMixerOuterHeaderCount,
+                result.stopped.videoMixerOuterHeaderHeight,
+                result.stopped.videoMixerBodyTopGap,
+              ],
+              audioDock: {
+                height: result.live.liveAudioRailHeight,
+                primaryControl: result.stopped.liveAudioRailPrimaryControlMinHeight,
+                configControl: result.stopped.liveAudioRailConfigControlMinHeight,
+                labels: result.stopped.visibleLiveAudioConfigLabelCount,
+              },
+              telemetry: {
+                badges: result.live.liveAudioRailTelemetryBadgeCount,
+                truncated: result.live.liveAudioRailTelemetryTruncatedCount,
+                criticalOverflow: result.live.liveAudioRailFullscreenCriticalOverflowCount,
+                outside: result.live.liveAudioRailTelemetryOutsideCount,
+                text: result.live.liveAudioRailTelemetryText,
+              },
+            }),
+        );
+      }
+      const failures = fullscreenVjResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Fullscreen VJ focus acceptance failed: ${JSON.stringify(failures)}`);
       }
       return;
     }
