@@ -31,6 +31,7 @@ import { LightingRuntimeControlsPanel } from "./components/LightingRuntimeContro
 import { LoadedProfileSummaryPanel } from "./components/LoadedProfileSummaryPanel";
 import { MidiControlMappingPanel } from "./components/MidiControlMappingPanel";
 import { MoveEffectEditorPanel } from "./components/MoveEffectEditorPanel";
+import { ValueEffectEditorPanel } from "./components/ValueEffectEditorPanel";
 import { NodeGraphEditorPanel } from "./components/NodeGraphEditorPanel";
 import { OscControlMappingPanel } from "./components/OscControlMappingPanel";
 import { OutputDiagnosticsPanel } from "./components/OutputDiagnosticsPanel";
@@ -193,6 +194,11 @@ import type {
   MoveEffectRequest,
   MoveInterpolation,
   MovePathPoint,
+  ValueEffectDirection,
+  ValueEffectInterpolation,
+  ValueEffectMode,
+  ValueEffectPoint,
+  ValueEffectRequest,
   NodeGraphSummary,
   NodeGraphTransformOp,
   OscControlAction,
@@ -658,11 +664,13 @@ const projectMutationCommands = new Set([
   "add_color_effect",
   "add_chaser_effect",
   "add_move_effect",
+  "add_value_effect",
   "update_lfo_effect",
   "update_position_wave_effect",
   "update_color_effect",
   "update_chaser_effect",
   "update_move_effect",
+  "update_value_effect",
   "save_node_graph",
   "set_node_graph_enabled",
   "remove_node_graph",
@@ -1268,6 +1276,15 @@ export default function App() {
   const [moveDirection, setMoveDirection] = createSignal<MoveDirection>("Forward");
   const [moveFixtureSpread, setMoveFixtureSpread] = createSignal(0);
   const [movePathRecipe, setMovePathRecipe] = createSignal<MovePathRecipe>("Circle");
+  const [valuePoints, setValuePoints] = createSignal<ValueEffectPoint[]>([
+    { position: 0, value: 0 },
+    { position: 0.5, value: 1 },
+    { position: 1, value: 0 },
+  ]);
+  const [valueInterpolation, setValueInterpolation] = createSignal<ValueEffectInterpolation>("Smooth");
+  const [valueMode, setValueMode] = createSignal<ValueEffectMode>("Absolute");
+  const [valueDirection, setValueDirection] = createSignal<ValueEffectDirection>("Forward");
+  const [valueFixtureSpread, setValueFixtureSpread] = createSignal(0);
   const [effectLow, setEffectLow] = createSignal(0);
   const [effectHigh, setEffectHigh] = createSignal(65535);
   const [effectPhase, setEffectPhase] = createSignal(0);
@@ -3159,7 +3176,31 @@ export default function App() {
       const clock = sync === null ? `${effectPeriod()}ms` : `${sync} beat`;
       return `Move ${movePathPoints().length} points / ${moveInterpolation()} / ${moveDirection()} / ${clock}`;
     }
+    if (effectType() === "Value") {
+      const clock = sync === null ? `${effectPeriod()}ms` : `${sync} beat`;
+      return `Value ${valuePoints().length} points / ${valueInterpolation()} / ${valueMode()} / ${valueDirection()} / ${clock}`;
+    }
     return sync === null ? `LFO ${effectShape()} / ${effectPeriod()}ms` : `LFO ${effectShape()} / ${sync} beat`;
+  });
+  const currentValueDraftError = createMemo<string>(() => {
+    const points = valuePoints();
+    if (points.length < 2 || points.length > 32) {
+      return "Value effect requires between 2 and 32 envelope points.";
+    }
+    let previous: number | null = null;
+    for (const point of points) {
+      if (!Number.isFinite(point.position) || point.position < 0 || point.position > 1) {
+        return "Value envelope positions must be within 0..1.";
+      }
+      if (!Number.isFinite(point.value) || point.value < 0 || point.value > 1) {
+        return "Value envelope values must be within 0..1.";
+      }
+      if (previous !== null && point.position <= previous) {
+        return "Value envelope positions must be strictly increasing.";
+      }
+      previous = point.position;
+    }
+    return "";
   });
   const editingEffectSummary = createMemo<EffectSummary | null>(() => {
     const effectId = editingEffectId();
@@ -10564,6 +10605,18 @@ export default function App() {
           return !selectedFixture();
       }
     }
+    if (effectType() === "Value") {
+      if (currentValueDraftError()) return true;
+      switch (effectTargetMode()) {
+        case "selection":
+          return selectedMappingFixtures().length === 0 || !selectedEffectAttribute();
+        case "group":
+          return parseGroupIds(effectTargetGroups()).length === 0 || !selectedEffectAttribute();
+        case "fixture":
+        default:
+          return !selectedFixture() || !selectedEffectAttribute();
+      }
+    }
     switch (effectTargetMode()) {
       case "video":
         return snapshot().video.layers.length === 0;
@@ -10582,7 +10635,8 @@ export default function App() {
     | { effectType: "PositionWave"; request: PositionWaveEffectRequest }
     | { effectType: "Color"; request: ColorEffectRequest }
     | { effectType: "Chaser"; request: ChaserEffectRequest }
-    | { effectType: "Move"; request: MoveEffectRequest };
+    | { effectType: "Move"; request: MoveEffectRequest }
+    | { effectType: "Value"; request: ValueEffectRequest };
 
   const buildEffectRequestFromForm = (): EffectRequestDraft | null => {
     const fixture = selectedFixture();
@@ -10711,6 +10765,33 @@ export default function App() {
       phase: effectPhase(),
       blend_mode: effectBlendMode(),
     };
+    if (effectType() === "Value") {
+      const error = currentValueDraftError();
+      if (error) {
+        setMessage(error);
+        return null;
+      }
+      return {
+        effectType: "Value",
+        request: {
+          label: `${lightAttribute} Value`,
+          fixture_ids: requestBase.fixture_ids,
+          target_group_ids: requestBase.target_group_ids,
+          attribute: lightAttribute,
+          points: valuePoints().map((point) => ({ ...point })),
+          interpolation: valueInterpolation(),
+          mode: valueMode(),
+          direction: valueDirection(),
+          period_ms: Math.round(effectPeriod()),
+          clock_sync: requestBase.clock_sync,
+          low: effectLow(),
+          high: effectHigh(),
+          phase: effectPhase(),
+          fixture_spread: valueFixtureSpread(),
+          blend_mode: effectBlendMode(),
+        },
+      };
+    }
     if (colorEffect) {
       if (!colorEffectDraftValid()) {
         setMessage("Color effects require 2 to 8 ordered palette stops with valid colors.");
@@ -10768,9 +10849,11 @@ export default function App() {
             ? await invoke<number>("add_color_effect", { request: draft.request })
             : draft.effectType === "Chaser"
               ? await invoke<number>("add_chaser_effect", { request: draft.request })
-              : await invoke<number>("add_move_effect", { request: draft.request });
+              : draft.effectType === "Value"
+                ? await invoke<number>("add_value_effect", { request: draft.request })
+                : await invoke<number>("add_move_effect", { request: draft.request });
       setEditingEffectId(null);
-      setMessage(`Added ${draft.effectType === "PositionWave" ? "position wave" : draft.effectType === "Color" ? "color" : draft.effectType === "Chaser" ? "Chaser" : draft.effectType === "Move" ? "Move" : "LFO"} effect ${effectId}`);
+      setMessage(`Added ${draft.effectType === "PositionWave" ? "position wave" : draft.effectType === "Color" ? "color" : draft.effectType === "Chaser" ? "Chaser" : draft.effectType === "Move" ? "Move" : draft.effectType === "Value" ? "Value" : "LFO"} effect ${effectId}`);
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
@@ -10796,6 +10879,8 @@ export default function App() {
         await invoke("update_color_effect", { effectId, request: draft.request });
       } else if (draft.effectType === "Chaser") {
         await invoke("update_chaser_effect", { effectId, request: draft.request });
+      } else if (draft.effectType === "Value") {
+        await invoke("update_value_effect", { effectId, request: draft.request });
       } else {
         await invoke("update_move_effect", { effectId, request: draft.request });
       }
@@ -10909,6 +10994,24 @@ export default function App() {
       setMoveFixtureSpread(move.fixture_spread);
       setEffectBlendMode(move.blend_mode);
       setMovePathRecipe("Custom");
+      setEffectVideoTargetLinked(false);
+    }
+    if (effect.effect_type === "Value") {
+      const value = effect.value;
+      if (!value) {
+        setEditingEffectId(null);
+        setMessage(`Value effect ${effect.id} is missing its editor body.`);
+        return;
+      }
+      setValuePoints(value.points.map((point) => ({ ...point })));
+      setValueInterpolation(value.interpolation);
+      setValueMode(value.mode);
+      setValueDirection(value.direction);
+      setValueFixtureSpread(value.fixture_spread);
+      setEffectPeriod(value.period_ms);
+      setEffectClockSyncBeats(value.clock_sync?.beats ?? null);
+      setEffectPhase(value.phase);
+      setEffectBlendMode(value.blend_mode);
       setEffectVideoTargetLinked(false);
     }
     setEffectShape(effect.shape);
@@ -13414,7 +13517,7 @@ export default function App() {
                 <strong>Inspector</strong>
                 <span>{editingEffectId() === null ? "New effect" : `Editing #${editingEffectId()}`}</span>
               </div>
-              <span>{effectType() === "PositionWave" ? "SPATIAL" : effectType() === "Color" ? "MULTI-COLOR" : effectType() === "Chaser" ? "CHASE" : effectType() === "Move" ? "PAN/TILT PATH" : "MODULATOR"}</span>
+              <span>{effectType() === "PositionWave" ? "SPATIAL" : effectType() === "Color" ? "MULTI-COLOR" : effectType() === "Chaser" ? "CHASE" : effectType() === "Move" ? "PAN/TILT PATH" : effectType() === "Value" ? "ENVELOPE" : "MODULATOR"}</span>
             </header>
             <div class="effectForm">
               <div class="effectTargetHint">
@@ -13453,7 +13556,7 @@ export default function App() {
                     <option value="fixture">Selected fixture</option>
                     <option value="selection">Map selection ({selectedMappingFixtures().length})</option>
                     <option value="group">Group</option>
-                    <option value="video" disabled={effectType() === "Color" || effectType() === "Chaser" || effectType() === "Move"}>Video layer</option>
+                    <option value="video" disabled={effectType() === "Color" || effectType() === "Chaser" || effectType() === "Move" || effectType() === "Value"}>Video layer</option>
                   </select>
                 </label>
                 <label>
@@ -13482,6 +13585,10 @@ export default function App() {
                       } else if (nextType === "Move") {
                         prepareMoveDraft(nextType !== previousType);
                         if (!startsNewEffect) setMessage("Prepared an independent paired Pan/Tilt Move path from the current target.");
+                      } else if (nextType === "Value") {
+                        setEffectVideoTargetLinked(false);
+                        if (effectTargetMode() === "video") setEffectTargetMode("fixture");
+                        if (!startsNewEffect) setMessage("Prepared an envelope Value draft for the current scalar attribute.");
                       }
                     }}
                   >
@@ -13490,10 +13597,11 @@ export default function App() {
                     <option value="Color">Multi-color</option>
                     <option value="Chaser">Chaser</option>
                     <option value="Move">Move (Pan/Tilt path)</option>
+                    <option value="Value">Value (envelope)</option>
                   </select>
                 </label>
               </div>
-              <Show when={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "Chaser" && effectType() !== "Move"}>
+              <Show when={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "Chaser" && effectType() !== "Move" && effectType() !== "Value"}>
                 <label class="checkbox inlineCheckbox effectLinkedVideoToggle">
                   <input
                     type="checkbox"
@@ -13513,7 +13621,7 @@ export default function App() {
                   onToggleGroup={toggleEffectTargetGroup}
                 />
               </Show>
-              <Show when={effectType() !== "Color" && effectType() !== "Chaser" && effectType() !== "Move" && (effectTargetMode() === "video" || effectVideoTargetLinked())}>
+              <Show when={effectType() !== "Color" && effectType() !== "Chaser" && effectType() !== "Move" && effectType() !== "Value" && (effectTargetMode() === "video" || effectVideoTargetLinked())}>
                 <VideoEffectTargetPanel
                   layers={snapshot().video.layers}
                   outputsCount={snapshot().video.outputs.length}
@@ -13713,10 +13821,34 @@ export default function App() {
                   onSpread={setMoveFixtureSpread}
                 />
               </Show>
+              <Show when={effectType() === "Value"}>
+                <Show when={currentValueDraftError()}>
+                  {(error) => <p class="moveEffectDraftError" role="status">{error()}</p>}
+                </Show>
+                <ValueEffectEditorPanel
+                  points={valuePoints()}
+                  interpolation={valueInterpolation()}
+                  mode={valueMode()}
+                  direction={valueDirection()}
+                  periodMs={effectPeriod()}
+                  bpm={snapshot().clock.bpm}
+                  clockSyncBeats={effectClockSyncBeats()}
+                  phase={effectPhase()}
+                  spread={valueFixtureSpread()}
+                  onPoints={setValuePoints}
+                  onInterpolation={setValueInterpolation}
+                  onMode={setValueMode}
+                  onDirection={setValueDirection}
+                  onPeriodMs={setEffectPeriod}
+                  onClockSyncBeats={setEffectClockSyncPreset}
+                  onPhase={setEffectPhase}
+                  onSpread={setValueFixtureSpread}
+                />
+              </Show>
             </div>
             <EffectActionControlsPanel
               showLightRange={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "Chaser" && effectType() !== "Move"}
-              showPhase={effectType() !== "Move"}
+              showPhase={effectType() !== "Move" && effectType() !== "Value"}
               lockBlendMode={effectType() === "Move"}
               low={effectLow()}
               high={effectHigh()}

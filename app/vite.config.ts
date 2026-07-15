@@ -104,6 +104,9 @@ export default defineConfig({
             normalizedId.includes("/src/components/EffectGroupTargetPanel") ||
             normalizedId.includes("/src/components/EffectListPanel") ||
             normalizedId.includes("/src/components/MoveEffectEditorPanel") ||
+            normalizedId.includes("/src/components/ValueEffectEditorPanel") ||
+            normalizedId.includes("/src/components/ChaserEffectEditorPanel") ||
+            normalizedId.includes("/src/components/ColorEffectEditorPanel") ||
             normalizedId.includes("/src/components/EffectSourceControlsPanel") ||
             normalizedId.includes("/src/components/SampleEffectPresetPanel") ||
             normalizedId.includes("/src/components/VideoEffectTargetPanel") ||
