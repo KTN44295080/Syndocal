@@ -1,7 +1,8 @@
 # UI Competitive Redesign Plan (Timeline-first)
 
 作成: 2026-07-15 / 計画: Fable（実機比較・多段Workflow分析・敵対検証込み）/ 実装: Opus委任
-状態: **承認済み（2026-07-15）** — 実施順: T1✅ → T2 → **T9（Mapping、追加承認）** → T8 → T3 → T4 → T5 → T6 → T7
+状態: **承認済み（2026-07-15）** — 実施順:
+T1✅ → T2✅ → T9 → **T10統一シェル（追加承認）** → T8 → T3 → T4 → T5（T10へ部分吸収）→ T6 → T7 → T11 Touchデザイナー
 承認内容: (1) 計画全体 (2) T8をT2直後へ前倒し（Control構造契約の変更を承認） (3) T7のprotocol変更
 （frontend-only制約の当該範囲での緩和を承認） (4) T3のページ式フォーム行編集置換 (5) Opus委任即時開始
 
@@ -95,9 +96,30 @@ SynapseRack式フローティングパネルは一画面契約維持のため不
   Setup > Videoで完結すること / Mappingに投影面ハンドルDOMが存在しないこと / 全ゲートpass。
 - 契約変更: mapping系ハーネス（投影面レイヤー期待値）の再交渉 — 変更断言を全列挙。
 
-### T8:（契約変更・要明示承認）Timeline Focusレイアウト
+### T10: 統一ワークスペースシェル（契約変更・承認済み 2026-07-15）（risk: high / XL）
+Daslight 3画面比較で実証された不変条項をSyndocalへ移植する最大の構造変更。
+**下半分を全ワークスペース常設**にする: GROUPSリボン + 2D Stage Map（T9後の照明床面図、
+ツールレール込み）+ SELECTIONS列 + 右下コンテキストペイン。**上半分だけをワークスペースで交換**:
+Setup=Library/Patch系タブ、Control=Cueマトリクス+プロパティ、Touch=レイアウトデザイナー（T11）。
+右下コンテキストの内容はワークスペース従属: Setup=リミット/パッチ詳細、Control=Timeline/Mixer
+（Daslight同配置）、Touch=属性エディタ。ヘッダー（GO/BPM）は現行どおり常設。
+- T5のTransportCluster統一はここへ吸収（シェルが1つになるため自然に達成）。
+- Touchの実演奏面（Safety Deck 48pxターゲット）は独立の全画面面として維持し、
+  Webリモートへ配信。TouchタブはデザイナーへT11で置換。
+- 契約変更: 現行回帰契約のワークスペース別レイアウト定義（Control 3面構造、Touch構造）を
+  「統一シェル+上半分交換」契約へ全面置換。viewport/touch系ハーネスの大規模再交渉を伴う。
+- 受入: 3ワークスペース間の切替で下半分のDOMジオメトリが不変（ハーネスでrect一致断言）/
+  全ゲートpass / 1280x720〜2048x1152 containment維持。
+
+### T11: Touchレイアウトデザイナー（risk: medium / XL、T10後）
+監査ギャップ#4の解消: ボタン/フェーダー/ダイヤル/カラーホイール/XYグリッドを配置できる
+編集可能Touchサーフェス（Daslight TOUCH同等）。統一シェル上半分に配置エディタ、
+成果物は実演奏面+Webリモートへ配信。詳細設計はT10完了後に固定。
+
+### T8:（契約変更・要明示承認→T10に統合検討）Timeline Focusレイアウト
 VJ fullscreen focus（コミット`7ab0795`）と同型の、全幅Showサーフェス+2Dステージ折りたたみ+Esc復帰。
-Control構造契約（上段Cue/Transport+左下Stage+右下タブ）の再交渉。
+T10統一シェル下では「右下Timelineペインの一時全幅化トグル」として実装（Daslightのペイン展開
+ボタンと同型）。実施はT10直後。
 
 ## 実装体制
 
