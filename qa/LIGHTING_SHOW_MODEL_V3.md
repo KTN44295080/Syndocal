@@ -208,3 +208,27 @@ Daslightパリティ: Cueが内部ステップ列（各ステップ = 属性値�
   the running playhead; engine command-drain path, never the 44Hz tick).
 - Multi-step static scenes: approved as F8.
 - Video: stays on the single shared timeline as a layer kind; F6 nesting is lighting-only in v3.
+
+## Amendment: Premiere-style typed sections + placeable audio (user, 2026-07-16)
+
+ユーザー指示: 「同一タイムラインにあるが、分かれていることが明確化されている」（Premiere Pro型）。
+音源もDaslight同様にタイムラインへ置けること。メディア3種 = 音 / 映像 / 照明。
+
+1. **F1修正 — レイヤーkindとセクション**: `TimelineLayerSummary.kind: Lighting | Video | Audio`
+   を追加（serde default = Lighting; legacy track からの導出は既存設計どおり）。レイヤーは
+   kind別セクションにグループ化され、セクション順は固定: **Audio（最上段、波形=整列基準、
+   Daslight同配置）→ Lighting → Video**。順序変更は将来のオプション。
+2. **F2修正 — セクションの視覚分離**: セクション見出し行（kind名+レイヤー数+折りたたみ）、
+   セクション間の太い区切り線、kind別の背景ティント（照明=graphite基調、映像=青系微差、
+   音声=波形色）。ドラッグでのレイヤー移動はセクション内のみ（kind跨ぎ不可）。
+   Cueドロップは照明セクションのみ受け付け、映像レイヤーは映像ソース、音声レイヤーは
+   音声ファイルを受け付ける（kind別ドロップ検証）。
+3. **F7昇格 — 音声クリップをブロックとして配置**: 「マスター1トラック」ではなく、
+   音声レイヤー上に複数の音声クリップブロック（file参照、start/offset/duration、
+   ブロック内波形描画=既存audio analysis+T2ピクセルキャンバス、per-block gain、
+   下半分ドラッグでfade in/out=F2ゾーン設計と同一）。再生はタイムライン位置に追従。
+   これは旧Open Question「音声スコープ」への回答確定を意味する（複数クリップ配置=採用）。
+   Protocol: TimelineAudioClipSummary { id, layer_id, path, start_ms, offset_ms, duration_ms,
+   gain, fade_in_ms, fade_out_ms } を Vec で TimelineSnapshot へ #[serde(default)] 追加。
+   既存の単一 audio analysis はクリップ単位の解析へ拡張（互換: 旧projectの解析は
+   クリップ0扱いで読み込み）。
