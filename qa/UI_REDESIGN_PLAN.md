@@ -104,17 +104,24 @@ Setup=Library/Patch系タブ、Control=Cueマトリクス+プロパティ、Touc
 右下コンテキストの内容はワークスペース従属: Setup=リミット/パッチ詳細、Control=Timeline/Mixer
 （Daslight同配置）、Touch=属性エディタ。ヘッダー（GO/BPM）は現行どおり常設。
 - T5のTransportCluster統一はここへ吸収（シェルが1つになるため自然に達成）。
-- Touchの実演奏面（Safety Deck 48pxターゲット）は独立の全画面面として維持し、
-  Webリモートへ配信。TouchタブはデザイナーへT11で置換。
+- Touch上半分はT11の「配置と実操作を同一面で行うタッチサーフェス」（下記、ユーザー訂正済み）。
 - 契約変更: 現行回帰契約のワークスペース別レイアウト定義（Control 3面構造、Touch構造）を
   「統一シェル+上半分交換」契約へ全面置換。viewport/touch系ハーネスの大規模再交渉を伴う。
 - 受入: 3ワークスペース間の切替で下半分のDOMジオメトリが不変（ハーネスでrect一致断言）/
   全ゲートpass / 1280x720〜2048x1152 containment維持。
 
-### T11: Touchレイアウトデザイナー（risk: medium / XL、T10後）
-監査ギャップ#4の解消: ボタン/フェーダー/ダイヤル/カラーホイール/XYグリッドを配置できる
-編集可能Touchサーフェス（Daslight TOUCH同等）。統一シェル上半分に配置エディタ、
-成果物は実演奏面+Webリモートへ配信。詳細設計はT10完了後に固定。
+### T11: 編集可能Touchサーフェス（risk: medium / XL、T10後）— 2026-07-15ユーザー訂正反映
+監査ギャップ#4の解消。Daslight TOUCH実機確認（ユーザー提供スクリーンショット）による正しい構造:
+**同一面がEDIT/LIVEトグルで「配置モード」と「実操作モード」を切り替える** — 配置した
+カラーホイール/フェーダー/ボタン等はその場でそのまま操作できる（デザイナーと演奏面は分離しない）。
+- 統一シェル（T10）のTouch上半分 = グリッド配置のタッチサーフェス。ADD CONTROLS相当の
+  パレット（Label/Image/Button/Fader/Dial/Incremental Wheel/Color Wheel/XY Grid）+ ページ管理。
+- EDITモード: 配置/リサイズ/割当。LIVEモード: 直接操作、ターゲット≥48px（既存Touch安全契約を継承）。
+- 現行の固定Touchデスクは「既定プリセットページ」へ移行し、Safety Deck（GO/BO群）は
+  composedレイアウトでも常設ストリップとして残す（安全契約維持）。
+- 同じcomposed surfaceをWebリモートへ配信。
+- 詳細設計はT10完了後に固定。`.sdc`へのレイアウト保存 or 端末ローカルかは設計時に決定
+  （Daslightはショーファイル保存 — 会場持ち回りを考えるとproject保存が有力、protocol変更を伴う）。
 
 ### T8:（契約変更・要明示承認→T10に統合検討）Timeline Focusレイアウト
 VJ fullscreen focus（コミット`7ab0795`）と同型の、全幅Showサーフェス+2Dステージ折りたたみ+Esc復帰。
