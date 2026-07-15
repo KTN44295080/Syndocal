@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import type {
   ValueEffectDirection,
   ValueEffectInterpolation,
@@ -98,9 +98,30 @@ const sampleEnvelope = (
   return clampUnit(catmullRom(previous, left.value, right.value, next, local));
 };
 
+// Fixed radius of the point handles, in screen pixels. The canvas uses a
+// pixel-space viewBox so circles stay round instead of stretching with width.
+const pointHandleRadius = 4.5;
+
 export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
   const [selectedPoint, setSelectedPoint] = createSignal(0);
   const [draggingPoint, setDraggingPoint] = createSignal<{ index: number; pointerId: number } | null>(null);
+  const [canvasSize, setCanvasSize] = createSignal({ width: 600, height: 150 });
+  let canvasEl: SVGSVGElement | undefined;
+
+  onMount(() => {
+    if (!canvasEl || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      if (rect && rect.width > 0 && rect.height > 0) {
+        setCanvasSize({ width: rect.width, height: rect.height });
+      }
+    });
+    observer.observe(canvasEl);
+    onCleanup(() => observer.disconnect());
+  });
+
+  const canvasWidth = createMemo(() => canvasSize().width);
+  const canvasHeight = createMemo(() => canvasSize().height);
 
   const activePointIndex = createMemo<number | null>(() => {
     if (props.points.length === 0) return null;
@@ -120,13 +141,15 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
   );
 
   const pointToCanvas = (point: ValueEffectPoint): CanvasPoint => ({
-    x: clampUnit(point.position) * 100,
-    y: (1 - clampUnit(point.value)) * 100,
+    x: clampUnit(point.position) * canvasWidth(),
+    y: (1 - clampUnit(point.value)) * canvasHeight(),
   });
 
   // Output preview follows the envelope, then Reverse/Bounce reshaping of the read progress.
   const previewPath = createMemo(() => {
     if (props.points.length < 2) return "";
+    const width = canvasWidth();
+    const height = canvasHeight();
     const samples: string[] = [];
     for (let step = 0; step <= 64; step += 1) {
       const readProgress = step / 64;
@@ -137,13 +160,15 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
         progress = doubled <= 1 ? doubled : 2 - doubled;
       }
       const value = sampleEnvelope(props.points, props.interpolation, progress);
-      const x = pathNumber(readProgress * 100);
-      const y = pathNumber((1 - value) * 100);
+      const x = pathNumber(readProgress * width);
+      const y = pathNumber((1 - value) * height);
       samples.push(`${step === 0 ? "M" : "L"} ${x} ${y}`);
     }
     return samples.join(" ");
   });
   const canvasPoints = createMemo(() => props.points.map(pointToCanvas));
+  const gridLinesX = createMemo(() => [0.25, 0.5, 0.75].map((fraction) => fraction * canvasWidth()));
+  const gridLineY = createMemo(() => 0.5 * canvasHeight());
 
   const normalizePoint = (index: number, point: ValueEffectPoint): ValueEffectPoint => {
     // Keep positions strictly increasing by clamping between neighbors.
@@ -306,8 +331,9 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
           </button>
         </div>
         <svg
+          ref={canvasEl}
           class="valueEffectCanvas"
-          viewBox="0 0 100 100"
+          viewBox={`0 0 ${pathNumber(canvasWidth())} ${pathNumber(canvasHeight())}`}
           preserveAspectRatio="none"
           role="group"
           aria-label={`${props.mode} ${props.interpolation} value envelope with ${props.points.length} points. Double-click to add. Focus a point and use Arrow keys to nudge, Shift coarse, Alt fine, Delete to remove.`}
@@ -316,12 +342,12 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
           onPointerUp={endPointDrag}
           onPointerCancel={endPointDrag}
         >
-          <rect class="valueEffectCanvasBackground" x="0" y="0" width="100" height="100" />
+          <rect class="valueEffectCanvasBackground" x="0" y="0" width={pathNumber(canvasWidth())} height={pathNumber(canvasHeight())} />
           <g class="valueEffectCanvasGrid" aria-hidden="true">
-            <line x1="25" y1="0" x2="25" y2="100" />
-            <line x1="50" y1="0" x2="50" y2="100" />
-            <line x1="75" y1="0" x2="75" y2="100" />
-            <line x1="0" y1="50" x2="100" y2="50" />
+            <For each={gridLinesX()}>
+              {(x) => <line x1={pathNumber(x)} y1="0" x2={pathNumber(x)} y2={pathNumber(canvasHeight())} />}
+            </For>
+            <line x1="0" y1={pathNumber(gridLineY())} x2={pathNumber(canvasWidth())} y2={pathNumber(gridLineY())} />
           </g>
           <path class="valueEffectCanvasPath" d={previewPath()} />
           <For each={canvasPoints()}>
@@ -339,7 +365,7 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
                 onKeyDown={(event) => handlePointKeyDown(event, index())}
               >
                 <title>{`Point ${index() + 1}: ${props.points[index()]?.position ?? 0}, ${props.points[index()]?.value ?? 0}`}</title>
-                <circle r="3" vector-effect="non-scaling-stroke" />
+                <circle r={pointHandleRadius} />
               </g>
             )}
           </For>
