@@ -3986,6 +3986,7 @@ progress {
 }
 
 .liveCuePad {
+  position: relative;
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr);
   grid-template-rows: auto auto;
@@ -3994,6 +3995,30 @@ progress {
   gap: 2px 8px;
   padding: 7px 8px;
   text-align: left;
+}
+
+/* Show-identity hue bar: one deterministic hue per cue, repeated everywhere. */
+.liveCuePad::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  border-top-left-radius: inherit;
+  border-bottom-left-radius: inherit;
+  background: var(--identity, transparent);
+  pointer-events: none;
+}
+
+/* Keep active/next state (accent) visually dominant over the identity bar. */
+.liveCuePad.active::before,
+.liveCuePad.next::before {
+  background: transparent;
+}
+
+.liveCuePad strong {
+  color: var(--identity, inherit);
 }
 
 .liveCuePad span {
@@ -10399,6 +10424,7 @@ input[type="color"] {
 }
 
 .cueItem {
+  position: relative;
   display: grid;
   gap: 6px;
   min-height: 72px;
@@ -10406,6 +10432,24 @@ input[type="color"] {
   border-radius: 6px;
   background: #111820;
   padding: 6px 8px;
+}
+
+/* Leading show-identity hue chip; accent takes the edge when the cue is active. */
+.cueItem::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-top-left-radius: inherit;
+  border-bottom-left-radius: inherit;
+  background: var(--identity, transparent);
+  pointer-events: none;
+}
+
+.cueItem.active::before {
+  background: transparent;
 }
 
 .cueItem.active {
@@ -11403,14 +11447,14 @@ input[type="color"] {
 
 .timelineMarker.lighting line,
 .timelineMarker.lighting circle {
-  fill: #58a7f6;
-  stroke: #58a7f6;
+  fill: var(--identity, #58a7f6);
+  stroke: var(--identity, #58a7f6);
 }
 
 .timelineMarker.video line,
 .timelineMarker.video circle {
-  fill: #61d64c;
-  stroke: #61d64c;
+  fill: var(--identity, #61d64c);
+  stroke: var(--identity, #61d64c);
 }
 
 .timelineOverview.executingLive .timelineMarker.underPlayhead circle {
@@ -18511,6 +18555,11 @@ h3 {
   box-shadow: inset 2px 0 0 var(--ray-accent);
 }
 
+/* Persistent show-identity hue bar per group; the active accent overrides it. */
+.groupChip {
+  box-shadow: inset 3px 0 0 var(--identity, transparent);
+}
+
 .fixtureList {
   gap: 4px;
 }
@@ -22154,13 +22203,13 @@ h3 {
 }
 
 .timelineMarker.sceneBlock.lighting .timelineSceneBlockBody {
-  fill: #4d91cd;
-  stroke: #83b9e7;
+  fill: var(--identity, #4d91cd);
+  stroke: var(--identity, #83b9e7);
 }
 
 .timelineMarker.sceneBlock.video .timelineSceneBlockBody {
-  fill: #4f9f70;
-  stroke: #86cf9f;
+  fill: var(--identity, #4f9f70);
+  stroke: var(--identity, #86cf9f);
 }
 
 .timelineSceneBlockStart {
@@ -22635,13 +22684,15 @@ h3 {
   min-height: 58px;
   border: 1px solid #34312e;
   border-left-width: 3px;
+  /* The 3px left border doubles as the show-identity hue chip for the row. */
+  border-left-color: var(--identity, #34312e);
   border-radius: 1px;
   background: #1a1c1e;
   padding: 4px 5px;
 }
 
 .sceneBlockRow.linkedBlock {
-  border-left-color: #548eb8;
+  border-left-color: var(--identity, #548eb8);
 }
 
 .sceneBlockRow.selected {

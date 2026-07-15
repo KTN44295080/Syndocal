@@ -377,6 +377,7 @@ import {
   type WaveStageDragMode,
 } from "./mappingRuntime";
 import { stageObjectDefaultColor } from "./stageObjects";
+import { cueIdentityHue, identityCssColor } from "./identityColor";
 import {
   defaultVideoOutputMapping,
   outputAspectRatio,
@@ -12013,6 +12014,7 @@ export default function App() {
                   class={`liveCuePad ${pad.cue?.id === snapshot().active_cue_id ? "active" : ""} ${
                     pad.cue?.id === nextCue()?.id ? "next" : ""
                   }`}
+                  style={pad.cue ? { "--identity": identityCssColor(cueIdentityHue(pad.cue.id), "text") } : undefined}
                   disabled={!pad.cue}
                   onClick={() => {
                     if (pad.cue) {

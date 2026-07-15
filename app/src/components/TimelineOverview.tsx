@@ -13,6 +13,7 @@ import {
   type TimelineVisibleWindow,
 } from "../timelineViewport";
 import { packTimelineOverlapClusterBadges } from "../timelineOverlapClusters";
+import { cueIdentityHue, identityCssColor } from "../identityColor";
 import type { TimelineTrackKind } from "../types";
 
 export interface TimelineOverviewEvent {
@@ -784,6 +785,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
             data-timeline-event-id={event.id}
             data-timeline-start-ms={event.time_ms}
             data-timeline-loop-count={event.loop_count}
+            style={{ "--identity": identityCssColor(cueIdentityHue(event.cue_id), "fill") }}
             data-timeline-preview-start-ms={markerDrag()?.eventId === event.id
               ? markerDrag()!.timeMs
               : event.time_ms}

@@ -1,6 +1,7 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
 import type { PatchedFixtureSummary } from "../types";
 import { virtualListRange } from "../virtualList";
+import { groupIdentityHue, identityCssColor } from "../identityColor";
 
 export interface SetupFixtureGroupRow {
   groupId: string;
@@ -98,6 +99,7 @@ export function SetupFixtureListPanel(props: SetupFixtureListPanelProps) {
           {(group) => (
             <button
               class={props.selectedGroupId === group.groupId ? "groupChip active" : "groupChip"}
+              style={{ "--identity": identityCssColor(groupIdentityHue(group.groupId), "fill") }}
               onClick={() => props.onSelectGroup(group.groupId)}
             >
               <span data-no-localize>{group.groupId}</span>

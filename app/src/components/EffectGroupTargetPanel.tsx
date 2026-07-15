@@ -1,4 +1,5 @@
 import { For, Show } from "solid-js";
+import { groupIdentityHue, identityCssColor } from "../identityColor";
 
 interface EffectGroupRow {
   groupId: string;
@@ -26,7 +27,11 @@ export function EffectGroupTargetPanel(props: EffectGroupTargetPanelProps) {
             {(group) => {
               const isActive = () => props.activeGroupIds.includes(group.groupId);
               return (
-                <button class={isActive() ? "groupChip active" : "groupChip"} onClick={() => props.onToggleGroup(group.groupId)}>
+                <button
+                  class={isActive() ? "groupChip active" : "groupChip"}
+                  style={{ "--identity": identityCssColor(groupIdentityHue(group.groupId), "fill") }}
+                  onClick={() => props.onToggleGroup(group.groupId)}
+                >
                   <span data-no-localize>{group.groupId}</span>
                   <span>{group.count}</span>
                 </button>

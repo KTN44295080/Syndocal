@@ -1,6 +1,7 @@
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import type { TimelineEventDraft } from "../editorDrafts";
 import { confirmTimelinePlacementRemoval } from "../destructiveActions";
+import { cueIdentityHue, identityCssColor } from "../identityColor";
 import {
   reconcileTimelineSceneBlockJumpTarget,
   reconcileTimelineSceneBlockPickerTarget,
@@ -652,6 +653,7 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
                 <article
                   class={`sceneBlockRow ${isBlock() ? "linkedBlock" : "legacyPoint"} ${playbackStatus().under_playhead ? "underPlayhead" : ""} ${playbackStatus().live ? "live" : ""} ${isDirty() ? "dirty" : ""} ${props.selectedEventId === event.id ? "selected" : ""}`}
                   role="listitem"
+                  style={{ "--identity": identityCssColor(cueIdentityHue(event.cue_id), "fill") }}
                   data-scene-block-id={event.id}
                   data-source-cue-id={draft().cue_id}
                   data-dirty={isDirty() ? "true" : "false"}

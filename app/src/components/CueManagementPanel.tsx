@@ -12,6 +12,7 @@ import type {
 } from "../types";
 import { canSaveCueEffectTargets } from "../cueEffectRecall";
 import type { CueEffectRecallChange } from "../cueEffectRecall";
+import { cueIdentityHue, identityCssColor } from "../identityColor";
 import { CueCapturePreviewPanel, type CueCapturePreviewModel } from "./CueCapturePreviewPanel";
 import { CueEffectRecallEditor } from "./CueEffectRecallEditor";
 
@@ -359,6 +360,7 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
             return (
               <div
                 class={cue.id === props.activeCueId ? "cueItem active" : "cueItem"}
+                style={{ "--identity": identityCssColor(cueIdentityHue(cue.id), "fill") }}
                 data-cue-id={cue.id}
                 role="listitem"
                 aria-posinset={cueIndex() + 1}
