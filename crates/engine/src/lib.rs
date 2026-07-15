@@ -41,7 +41,8 @@ use protocol::{
     ReferencePaletteSummary, Rotation3, StageMapConfig, StageMapPresetSummary, StageObjectId,
     StageObjectSummary, SubmasterSummary, TimelineAutomationSummary, TimelineCueEventSummary,
     TimelineEventId, TimelineSnapRequest, TimelineSnapshot, TimelineTrackKind,
-    TimelineVideoAutomationSummary, Transform2D, Vec3, VideoAutomationKeyframeSummary,
+    TimelineVideoAutomationSummary, Transform2D, ValueEffectDirection, ValueEffectInterpolation,
+    ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
     VideoBlendMode, VideoColorAdjust, VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust,
     VideoIsfControlKind, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId,
     VideoLayerState, VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind,
@@ -346,6 +347,13 @@ pub enum EngineCommand {
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
+    AddValueEffect {
+        effect_id: EffectId,
+        request: ValueEffectRequest,
+        enabled: bool,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     UpdateLfoEffect {
         effect_id: EffectId,
         request: LfoEffectRequest,
@@ -369,6 +377,12 @@ pub enum EngineCommand {
     UpdateMoveEffect {
         effect_id: EffectId,
         request: MoveEffectRequest,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    UpdateValueEffect {
+        effect_id: EffectId,
+        request: ValueEffectRequest,
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
@@ -1448,6 +1462,44 @@ impl EngineHandle {
             .map_err(|error| format!("Move effect update acknowledgement failed: {error}"))?
     }
 
+    pub fn add_value_effect(
+        &self,
+        effect_id: EffectId,
+        request: ValueEffectRequest,
+        enabled: bool,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::AddValueEffect {
+            effect_id,
+            request,
+            enabled,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Value effect add acknowledgement failed: {error}"))?
+    }
+
+    pub fn update_value_effect(
+        &self,
+        effect_id: EffectId,
+        request: ValueEffectRequest,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::UpdateValueEffect {
+            effect_id,
+            request,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Value effect update acknowledgement failed: {error}"))?
+    }
+
     pub fn set_effect_enabled_published(
         &self,
         effect_id: EffectId,
@@ -2206,6 +2258,106 @@ enum RuntimeEffectKind {
     Color(RuntimeColorEffect),
     Chaser(RuntimeChaserEffect),
     Move(RuntimeMoveEffect),
+    Value(RuntimeValueEffect),
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeValueEffect {
+    request: ValueEffectRequest,
+    envelope: CompiledValueEnvelope,
+    targets: Vec<RuntimeValueTarget>,
+    target_indices: HashMap<FixtureId, usize>,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeValueTarget {
+    fixture_id: FixtureId,
+    phase_offset: f32,
+    cached: Cell<Option<RuntimeValueEvaluation>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct RuntimeValueEvaluation {
+    at: Instant,
+    normalized: f32,
+}
+
+/// Sorted, interpolation-aware envelope compiled once per effect resolution.
+#[derive(Debug, Clone)]
+struct CompiledValueEnvelope {
+    points: Vec<ValueEffectPoint>,
+    interpolation: ValueEffectInterpolation,
+}
+
+impl CompiledValueEnvelope {
+    fn compile(request: &ValueEffectRequest) -> Self {
+        let mut points = request.points.clone();
+        points.sort_by(|a, b| {
+            a.position
+                .partial_cmp(&b.position)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        Self {
+            points,
+            interpolation: request.interpolation,
+        }
+    }
+
+    /// Sample the envelope at a normalized progress in 0..1, returning a 0..1 value.
+    fn sample(&self, progress: f32) -> f32 {
+        if self.points.is_empty() {
+            return 0.0;
+        }
+        let progress = progress.clamp(0.0, 1.0);
+        let first = &self.points[0];
+        if progress <= first.position {
+            return first.value.clamp(0.0, 1.0);
+        }
+        let last = &self.points[self.points.len() - 1];
+        if progress >= last.position {
+            return last.value.clamp(0.0, 1.0);
+        }
+        let mut index = 0;
+        for candidate in 0..self.points.len() - 1 {
+            if progress >= self.points[candidate].position
+                && progress < self.points[candidate + 1].position
+            {
+                index = candidate;
+                break;
+            }
+        }
+        let left = &self.points[index];
+        let right = &self.points[index + 1];
+        let span = (right.position - left.position).max(f32::EPSILON);
+        let local = ((progress - left.position) / span).clamp(0.0, 1.0);
+        let value = match self.interpolation {
+            ValueEffectInterpolation::Step => left.value,
+            ValueEffectInterpolation::Line => left.value + (right.value - left.value) * local,
+            ValueEffectInterpolation::Smooth => {
+                let previous = if index == 0 {
+                    left.value
+                } else {
+                    self.points[index - 1].value
+                };
+                let next = if index + 2 < self.points.len() {
+                    self.points[index + 2].value
+                } else {
+                    right.value
+                };
+                catmull_rom_value(previous, left.value, right.value, next, local)
+            }
+        };
+        value.clamp(0.0, 1.0)
+    }
+}
+
+fn catmull_rom_value(p0: f32, p1: f32, p2: f32, p3: f32, t: f32) -> f32 {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    0.5 * ((2.0 * p1)
+        + (-p0 + p2) * t
+        + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+        + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
 }
 
 #[derive(Clone)]
@@ -3389,6 +3541,15 @@ impl EngineRuntime {
                         created_at: now,
                     })
                 }
+                RuntimeEffectKind::Value(runtime) => {
+                    let runtime = self.restore_value_effect_request(runtime.request).ok()?;
+                    Some(RuntimeEffect {
+                        id: effect.id,
+                        kind: RuntimeEffectKind::Value(runtime),
+                        enabled: effect.enabled,
+                        created_at: now,
+                    })
+                }
                 RuntimeEffectKind::Move(runtime) => {
                     let runtime = self.restore_move_effect_request(runtime.request).ok()?;
                     Some(RuntimeEffect {
@@ -3673,6 +3834,7 @@ impl EngineRuntime {
                 self.rebuild_color_effect_targets();
                 self.rebuild_chaser_effect_targets();
                 self.rebuild_move_effect_targets();
+                self.rebuild_value_effect_targets();
                 self.last_error = None;
             }
             EngineCommand::RemoveFixture(fixture_id) => {
@@ -3917,6 +4079,7 @@ impl EngineRuntime {
                     self.rebuild_color_effect_targets();
                     self.rebuild_chaser_effect_targets();
                     self.rebuild_move_effect_targets();
+                    self.rebuild_value_effect_targets();
                     self.last_error = None;
                 } else {
                     self.last_error = Some(format!("Fixture {fixture_id} was not found"));
@@ -4353,6 +4516,45 @@ impl EngineRuntime {
                     publication_error: "Engine snapshot was busy; Move effect add was rolled back",
                 });
             }
+            EngineCommand::AddValueEffect {
+                effect_id,
+                request,
+                enabled,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RemoveAddedEffect {
+                    effect_id,
+                    last_error: previous_last_error.clone(),
+                };
+                let expired = Instant::now() > expires_at;
+                let result = if expired {
+                    Err("Value effect add expired before engine execution".to_string())
+                } else if self.effects.iter().any(|effect| effect.id == effect_id) {
+                    Err(format!("Effect {effect_id} already exists"))
+                } else {
+                    self.resolve_value_effect_request(request).map(|request| {
+                        self.effects.push(RuntimeEffect {
+                            id: effect_id,
+                            kind: RuntimeEffectKind::Value(request),
+                            enabled,
+                            created_at: Instant::now(),
+                        });
+                    })
+                };
+                self.last_error = if expired {
+                    previous_last_error
+                } else {
+                    result.as_ref().err().cloned()
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error: "Engine snapshot was busy; Value effect add was rolled back",
+                });
+            }
             EngineCommand::UpdateLfoEffect { effect_id, request } => {
                 let request = match self.resolve_lfo_effect_request(request) {
                     Ok(request) => request,
@@ -4546,6 +4748,54 @@ impl EngineRuntime {
                         "Engine snapshot was busy; Move effect update was rolled back",
                 });
             }
+            EngineCommand::UpdateValueEffect {
+                effect_id,
+                request,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let previous_index = self
+                    .effects
+                    .iter()
+                    .position(|effect| effect.id == effect_id);
+                let rollback = PendingCommandRollback::RestoreEffect {
+                    index: previous_index,
+                    effect: previous_index.map(|index| self.effects[index].clone()),
+                    last_error: previous_last_error.clone(),
+                };
+                let expired = Instant::now() > expires_at;
+                let result = if expired {
+                    Err("Value effect update expired before engine execution".to_string())
+                } else {
+                    self.resolve_value_effect_request(request)
+                        .and_then(|request| {
+                            let effect = self
+                                .effects
+                                .iter_mut()
+                                .find(|effect| effect.id == effect_id)
+                                .ok_or_else(|| format!("Effect {effect_id} was not found"))?;
+                            if !matches!(&effect.kind, RuntimeEffectKind::Value(_)) {
+                                return Err(format!("Effect {effect_id} is not a Value effect"));
+                            }
+                            effect.kind = RuntimeEffectKind::Value(request);
+                            effect.created_at = Instant::now();
+                            Ok(())
+                        })
+                };
+                self.last_error = if expired {
+                    previous_last_error
+                } else {
+                    result.as_ref().err().cloned()
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Value effect update was rolled back",
+                });
+            }
             EngineCommand::SetEffectEnabled { effect_id, enabled } => {
                 if let Some(effect) = self
                     .effects
@@ -4628,7 +4878,8 @@ impl EngineRuntime {
                     RuntimeEffectKind::PositionWave(request) => &mut request.video_targets,
                     RuntimeEffectKind::Color(_)
                     | RuntimeEffectKind::Chaser(_)
-                    | RuntimeEffectKind::Move(_) => {
+                    | RuntimeEffectKind::Move(_)
+                    | RuntimeEffectKind::Value(_) => {
                         self.last_error = Some(format!(
                             "Lighting-only effect {effect_id} cannot target video layers"
                         ));
@@ -7316,10 +7567,16 @@ impl EngineRuntime {
                 !runtime.request.fixture_ids.is_empty()
                     || !runtime.request.target_group_ids.is_empty()
             }
+            RuntimeEffectKind::Value(runtime) => {
+                runtime.request.fixture_ids.retain(|id| *id != fixture_id);
+                !runtime.request.fixture_ids.is_empty()
+                    || !runtime.request.target_group_ids.is_empty()
+            }
         });
         self.rebuild_color_effect_targets();
         self.rebuild_chaser_effect_targets();
         self.rebuild_move_effect_targets();
+        self.rebuild_value_effect_targets();
         self.sanitize_node_graph_references();
         self.clear_empty_active_fade();
         self.last_error = None;
@@ -7363,7 +7620,8 @@ impl EngineRuntime {
             }
             RuntimeEffectKind::Color(_)
             | RuntimeEffectKind::Chaser(_)
-            | RuntimeEffectKind::Move(_) => true,
+            | RuntimeEffectKind::Move(_)
+            | RuntimeEffectKind::Value(_) => true,
         });
         self.sanitize_cue_effect_targets();
         self.sanitize_node_graph_references();
@@ -9210,6 +9468,68 @@ impl EngineRuntime {
         )
     }
 
+    fn resolve_value_effect_request(
+        &self,
+        request: ValueEffectRequest,
+    ) -> Result<RuntimeValueEffect, String> {
+        self.resolve_value_effect_request_with_policy(request, false)
+    }
+
+    fn restore_value_effect_request(
+        &self,
+        request: ValueEffectRequest,
+    ) -> Result<RuntimeValueEffect, String> {
+        self.resolve_value_effect_request_with_policy(request, true)
+    }
+
+    fn resolve_value_effect_request_with_policy(
+        &self,
+        mut request: ValueEffectRequest,
+        allow_unresolved_groups: bool,
+    ) -> Result<RuntimeValueEffect, String> {
+        validate_value_effect_request(&request)?;
+        request.fixture_ids = self.normalize_effect_fixture_ids(request.fixture_ids)?;
+        request.target_group_ids = normalize_runtime_group_ids(request.target_group_ids)?;
+
+        let has_group_reference = !request.target_group_ids.is_empty();
+        for group_id in &request.target_group_ids {
+            if self.fixture_ids_in_group(group_id).is_empty() {
+                if allow_unresolved_groups {
+                    continue;
+                }
+                return Err(format!(
+                    "Group '{group_id}' was not found or has no fixtures"
+                ));
+            }
+        }
+        if request.fixture_ids.is_empty() && request.target_group_ids.is_empty() {
+            return Err("Value effect must target at least one fixture or group".to_string());
+        }
+        runtime_value_effect_from_request(
+            request,
+            &self.fixtures,
+            !(allow_unresolved_groups && has_group_reference),
+        )
+    }
+
+    fn rebuild_value_effect_targets(&mut self) {
+        let fixtures = &self.fixtures;
+        self.effects.retain_mut(|effect| {
+            let RuntimeEffectKind::Value(runtime) = &mut effect.kind else {
+                return true;
+            };
+            let has_group_reference = !runtime.request.target_group_ids.is_empty();
+            match runtime_value_effect_from_request(runtime.request.clone(), fixtures, false) {
+                Ok(rebuilt) => {
+                    *runtime = rebuilt;
+                    !runtime.targets.is_empty() || has_group_reference
+                }
+                Err(_) => has_group_reference,
+            }
+        });
+        self.sanitize_cue_effect_targets();
+    }
+
     fn rebuild_color_effect_targets(&mut self) {
         let fixtures = &self.fixtures;
         self.effects.retain_mut(|effect| {
@@ -9858,6 +10178,19 @@ impl EngineRuntime {
                         &clock,
                     ) {
                         value = next;
+                    }
+                }
+                RuntimeEffectKind::Value(runtime) => {
+                    if let Some(evaluated) = evaluate_runtime_value_attribute(
+                        runtime,
+                        fixture.id,
+                        attribute,
+                        value,
+                        effect.created_at,
+                        now,
+                        &clock,
+                    ) {
+                        value = blend_effect_value(value, evaluated, &runtime.request.blend_mode);
                     }
                 }
             }
@@ -11414,7 +11747,8 @@ impl EngineRuntime {
                 }
                 RuntimeEffectKind::Color(_)
                 | RuntimeEffectKind::Chaser(_)
-                | RuntimeEffectKind::Move(_) => {}
+                | RuntimeEffectKind::Move(_)
+                | RuntimeEffectKind::Value(_) => {}
             }
         }
         for graph in &self.node_graphs {
@@ -13275,6 +13609,14 @@ fn effect_targets_fixture_attribute(
                     fixture,
                 )
         }
+        RuntimeEffectKind::Value(runtime) => {
+            runtime.request.attribute.eq_ignore_ascii_case(attribute)
+                && request_targets_fixture(
+                    runtime.request.fixture_ids.as_slice(),
+                    runtime.request.target_group_ids.as_slice(),
+                    fixture,
+                )
+        }
         RuntimeEffectKind::Color(_) | RuntimeEffectKind::Chaser(_) | RuntimeEffectKind::Move(_) => {
             false
         }
@@ -13936,6 +14278,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             color: None,
             chaser: None,
             move_effect: None,
+            value: None,
         },
         RuntimeEffectKind::PositionWave(request) => EffectSummary {
             id: effect.id,
@@ -13960,6 +14303,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             color: None,
             chaser: None,
             move_effect: None,
+            value: None,
         },
         RuntimeEffectKind::Color(runtime) => EffectSummary {
             id: effect.id,
@@ -13984,6 +14328,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             color: Some(runtime.request.clone()),
             chaser: None,
             move_effect: None,
+            value: None,
         },
         RuntimeEffectKind::Chaser(runtime) => {
             let mut fixture_ids = Vec::new();
@@ -14028,6 +14373,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
                 color: None,
                 chaser: Some(runtime.request.clone()),
                 move_effect: None,
+                value: None,
             }
         }
         RuntimeEffectKind::Move(runtime) => EffectSummary {
@@ -14053,6 +14399,32 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             color: None,
             chaser: None,
             move_effect: Some(runtime.request.clone()),
+            value: None,
+        },
+        RuntimeEffectKind::Value(runtime) => EffectSummary {
+            id: effect.id,
+            label: runtime.request.label.clone(),
+            effect_type: EffectKind::Value,
+            fixture_ids: runtime.request.fixture_ids.clone(),
+            target_group_ids: runtime.request.target_group_ids.clone(),
+            attribute: runtime.request.attribute.clone(),
+            video_targets: Vec::new(),
+            shape: LfoShape::Sine,
+            period_ms: Some(runtime.request.period_ms),
+            clock_sync: runtime.request.clock_sync,
+            low: runtime.request.low,
+            high: runtime.request.high,
+            phase: runtime.request.phase,
+            blend_mode: runtime.request.blend_mode.clone(),
+            origin: None,
+            direction: None,
+            speed: None,
+            wavelength: None,
+            enabled: effect.enabled,
+            color: None,
+            chaser: None,
+            move_effect: None,
+            value: Some(runtime.request.clone()),
         },
     }
 }
@@ -14115,6 +14487,16 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
                 target_indices: HashMap::new(),
                 rotation_cosine,
                 rotation_sine,
+            })
+        }
+        EffectKind::Value => {
+            let request = effect.value.clone()?;
+            let envelope = CompiledValueEnvelope::compile(&request);
+            RuntimeEffectKind::Value(RuntimeValueEffect {
+                request,
+                envelope,
+                targets: Vec::new(),
+                target_indices: HashMap::new(),
             })
         }
     };
@@ -14401,6 +14783,184 @@ fn move_effect_progress(
         MoveDirection::Forward => phase,
         MoveDirection::Reverse => 1.0 - phase,
         MoveDirection::Bounce => {
+            let doubled = phase * 2.0;
+            if doubled <= 1.0 {
+                doubled
+            } else {
+                2.0 - doubled
+            }
+        }
+    }
+}
+
+pub fn validate_value_effect_request(request: &ValueEffectRequest) -> Result<(), String> {
+    if request.label.trim().is_empty() {
+        return Err("Value effect label is required".to_string());
+    }
+    if request.attribute.trim().is_empty() {
+        return Err("Value effect attribute is required".to_string());
+    }
+    if request.fixture_ids.is_empty() && request.target_group_ids.is_empty() {
+        return Err("Value effect must target at least one fixture or group".to_string());
+    }
+    if !(2..=32).contains(&request.points.len()) {
+        return Err("Value effect requires between 2 and 32 envelope points".to_string());
+    }
+    let mut previous = None;
+    for point in &request.points {
+        if !point.position.is_finite() || !(0.0..=1.0).contains(&point.position) {
+            return Err("Value effect point positions must be finite and within 0..1".to_string());
+        }
+        if !point.value.is_finite() || !(0.0..=1.0).contains(&point.value) {
+            return Err("Value effect point values must be finite and within 0..1".to_string());
+        }
+        if previous.is_some_and(|previous| point.position <= previous) {
+            return Err("Value effect point positions must be strictly increasing".to_string());
+        }
+        previous = Some(point.position);
+    }
+    if request.period_ms < 10 {
+        return Err("Value effect period must be at least 10 ms".to_string());
+    }
+    if let Some(clock_sync) = request.clock_sync {
+        if !clock_sync.beats.is_finite() || clock_sync.beats <= 0.0 {
+            return Err(
+                "Value effect clock sync beats must be finite and greater than 0".to_string(),
+            );
+        }
+    }
+    if !request.phase.is_finite() || !request.fixture_spread.is_finite() {
+        return Err("Value effect phase and fixture spread must be finite".to_string());
+    }
+    if !(0.0..=1.0).contains(&request.fixture_spread) {
+        return Err("Value effect fixture spread must be within 0..1".to_string());
+    }
+    Ok(())
+}
+
+fn runtime_value_effect_from_request(
+    request: ValueEffectRequest,
+    fixtures: &[RuntimeFixture],
+    require_resolved_target: bool,
+) -> Result<RuntimeValueEffect, String> {
+    validate_value_effect_request(&request)?;
+    let envelope = CompiledValueEnvelope::compile(&request);
+    let mut fixture_ids = Vec::new();
+    let mut seen = HashSet::new();
+    for fixture_id in &request.fixture_ids {
+        if fixtures.iter().any(|fixture| fixture.id == *fixture_id) && seen.insert(*fixture_id) {
+            fixture_ids.push(*fixture_id);
+        }
+    }
+    for group_id in &request.target_group_ids {
+        for fixture in fixtures.iter().filter(|fixture| {
+            fixture
+                .request
+                .group_ids
+                .iter()
+                .any(|fixture_group| group_matches(fixture_group, group_id))
+        }) {
+            if seen.insert(fixture.id) {
+                fixture_ids.push(fixture.id);
+            }
+        }
+    }
+    if require_resolved_target && fixture_ids.is_empty() {
+        return Err("Value effect must resolve at least one fixture".to_string());
+    }
+
+    let count = fixture_ids.len().max(1) as f32;
+    let targets = fixture_ids
+        .into_iter()
+        .enumerate()
+        .map(|(index, fixture_id)| RuntimeValueTarget {
+            fixture_id,
+            phase_offset: index as f32 / count * request.fixture_spread,
+            cached: Cell::new(None),
+        })
+        .collect::<Vec<_>>();
+    let target_indices = targets
+        .iter()
+        .enumerate()
+        .map(|(index, target)| (target.fixture_id, index))
+        .collect();
+    Ok(RuntimeValueEffect {
+        request,
+        envelope,
+        targets,
+        target_indices,
+    })
+}
+
+fn evaluate_runtime_value_attribute(
+    runtime: &RuntimeValueEffect,
+    fixture_id: FixtureId,
+    attribute: &str,
+    base_value: u16,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+) -> Option<u16> {
+    if !runtime.request.attribute.eq_ignore_ascii_case(attribute) {
+        return None;
+    }
+    let target = runtime
+        .target_indices
+        .get(&fixture_id)
+        .and_then(|index| runtime.targets.get(*index))?;
+    let normalized = target
+        .cached
+        .get()
+        .filter(|evaluation| evaluation.at == now)
+        .map(|evaluation| evaluation.normalized)
+        .unwrap_or_else(|| {
+            let progress = value_effect_progress(
+                &runtime.request,
+                target.phase_offset,
+                created_at,
+                now,
+                clock,
+            );
+            let normalized = runtime.envelope.sample(progress);
+            target.cached.set(Some(RuntimeValueEvaluation {
+                at: now,
+                normalized,
+            }));
+            normalized
+        });
+    let value = match runtime.request.mode {
+        ValueEffectMode::Absolute => {
+            scale_effect_u16(runtime.request.low, runtime.request.high, normalized)
+        }
+        ValueEffectMode::Relative => {
+            let span = runtime.request.low.max(runtime.request.high) as f32
+                - runtime.request.low.min(runtime.request.high) as f32;
+            let offset = (normalized - 0.5) * 2.0 * span;
+            (base_value as f32 + offset).round().clamp(0.0, 65_535.0) as u16
+        }
+    };
+    Some(value)
+}
+
+fn value_effect_progress(
+    request: &ValueEffectRequest,
+    fixture_phase_offset: f32,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+) -> f32 {
+    let cycle = if let Some(clock_sync) = request.clock_sync {
+        let beat_position = clock.beat_counter as f32 + clock.beat_phase;
+        beat_position / clock_sync.beats.max(0.000_1)
+    } else {
+        let period = request.period_ms.max(10) as f32 / 1_000.0;
+        now.saturating_duration_since(created_at).as_secs_f32() / period
+    };
+    let phase = (cycle + request.phase + fixture_phase_offset).rem_euclid(1.0);
+    match request.direction {
+        ValueEffectDirection::Forward => phase,
+        ValueEffectDirection::Reverse => 1.0 - phase,
+        ValueEffectDirection::Bounce => {
             let doubled = phase * 2.0;
             if doubled <= 1.0 {
                 doubled
@@ -19297,6 +19857,7 @@ mod tests {
                 color: None,
                 chaser: None,
                 move_effect: None,
+                value: None,
             }],
             node_graphs: vec![sample_node_graph(48, 40)],
             output: DmxOutputConfig {
@@ -20753,6 +21314,7 @@ mod tests {
                     color: None,
                     chaser: None,
                     move_effect: None,
+                    value: None,
                 },
                 EffectSummary {
                     id: 51,
@@ -20777,6 +21339,7 @@ mod tests {
                     color: None,
                     chaser: None,
                     move_effect: None,
+                    value: None,
                 },
                 EffectSummary {
                     id: 52,
@@ -20801,6 +21364,7 @@ mod tests {
                     color: None,
                     chaser: None,
                     move_effect: None,
+                    value: None,
                 },
             ],
             ..EngineSnapshot::default()
@@ -20967,6 +21531,7 @@ mod tests {
                     color: None,
                     chaser: None,
                     move_effect: None,
+                    value: None,
                 },
                 EffectSummary {
                     id: 41,
@@ -20991,6 +21556,7 @@ mod tests {
                     color: None,
                     chaser: None,
                     move_effect: None,
+                    value: None,
                 },
             ],
             ..EngineSnapshot::default()
@@ -37168,6 +37734,385 @@ mod tests {
         assert!(
             started.elapsed() < Duration::from_secs(5),
             "200-fixture, 64-effect Chaser venue regression took {:?}",
+            started.elapsed()
+        );
+    }
+
+    fn test_value_request(fixture_ids: &[FixtureId]) -> ValueEffectRequest {
+        ValueEffectRequest {
+            label: "Production Value".to_string(),
+            fixture_ids: fixture_ids.to_vec(),
+            target_group_ids: Vec::new(),
+            attribute: "Dimmer".to_string(),
+            points: vec![
+                ValueEffectPoint {
+                    position: 0.0,
+                    value: 0.0,
+                },
+                ValueEffectPoint {
+                    position: 1.0,
+                    value: 1.0,
+                },
+            ],
+            interpolation: ValueEffectInterpolation::Line,
+            mode: ValueEffectMode::Absolute,
+            direction: ValueEffectDirection::Forward,
+            period_ms: 1_000,
+            clock_sync: None,
+            low: 0,
+            high: u16::MAX,
+            phase: 0.0,
+            fixture_spread: 0.0,
+            blend_mode: EffectBlendMode::Override,
+        }
+    }
+
+    #[test]
+    fn value_validation_enforces_envelope_bounds() {
+        let valid = test_value_request(&[1]);
+        validate_value_effect_request(&valid).unwrap();
+
+        let mut empty_label = valid.clone();
+        empty_label.label = "  ".to_string();
+        assert!(validate_value_effect_request(&empty_label)
+            .unwrap_err()
+            .contains("label"));
+
+        let mut no_target = valid.clone();
+        no_target.fixture_ids.clear();
+        assert!(validate_value_effect_request(&no_target)
+            .unwrap_err()
+            .contains("at least one fixture"));
+
+        let mut too_few = valid.clone();
+        too_few.points.truncate(1);
+        assert!(validate_value_effect_request(&too_few)
+            .unwrap_err()
+            .contains("between 2 and 32"));
+
+        let mut out_of_range = valid.clone();
+        out_of_range.points[1].position = 1.5;
+        assert!(validate_value_effect_request(&out_of_range)
+            .unwrap_err()
+            .contains("within 0..1"));
+
+        let mut not_increasing = valid.clone();
+        not_increasing.points = vec![
+            ValueEffectPoint {
+                position: 0.5,
+                value: 0.0,
+            },
+            ValueEffectPoint {
+                position: 0.5,
+                value: 1.0,
+            },
+        ];
+        assert!(validate_value_effect_request(&not_increasing)
+            .unwrap_err()
+            .contains("strictly increasing"));
+
+        let mut short_period = valid.clone();
+        short_period.period_ms = 5;
+        assert!(validate_value_effect_request(&short_period)
+            .unwrap_err()
+            .contains("at least 10"));
+
+        let mut bad_spread = valid;
+        bad_spread.fixture_spread = 1.5;
+        assert!(validate_value_effect_request(&bad_spread)
+            .unwrap_err()
+            .contains("within 0..1"));
+    }
+
+    #[test]
+    fn value_absolute_line_maps_envelope_into_range_and_ignores_other_attributes() {
+        let runtime = runtime_with_move_fixtures(1);
+        let effect = runtime
+            .resolve_value_effect_request(test_value_request(&[1]))
+            .unwrap();
+        let created_at = Instant::now();
+        let clock = ClockSnapshot::default();
+        let value = evaluate_runtime_value_attribute(
+            &effect,
+            1,
+            "Dimmer",
+            0,
+            created_at,
+            created_at + Duration::from_millis(500),
+            &clock,
+        )
+        .unwrap();
+        assert_eq!(value, scale_effect_u16(0, u16::MAX, 0.5));
+        assert!(evaluate_runtime_value_attribute(
+            &effect,
+            1,
+            "Pan",
+            0,
+            created_at,
+            created_at + Duration::from_millis(500),
+            &clock,
+        )
+        .is_none());
+        assert!(evaluate_runtime_value_attribute(
+            &effect, 999, "Dimmer", 0, created_at, created_at, &clock,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn value_relative_mode_offsets_the_incoming_value() {
+        let runtime = runtime_with_move_fixtures(1);
+        let mut request = test_value_request(&[1]);
+        request.mode = ValueEffectMode::Relative;
+        request.low = 0;
+        request.high = 10_000;
+        let effect = runtime.resolve_value_effect_request(request).unwrap();
+        let created_at = Instant::now();
+        let clock = ClockSnapshot::default();
+
+        // Envelope midpoint (0.5) means no change under Relative mode.
+        let unchanged = evaluate_runtime_value_attribute(
+            &effect,
+            1,
+            "Dimmer",
+            20_000,
+            created_at,
+            created_at + Duration::from_millis(500),
+            &clock,
+        )
+        .unwrap();
+        assert_eq!(unchanged, 20_000);
+
+        // Envelope start (0.0) subtracts the whole span from the incoming value.
+        let subtracted = evaluate_runtime_value_attribute(
+            &effect, 1, "Dimmer", 20_000, created_at, created_at, &clock,
+        )
+        .unwrap();
+        assert_eq!(subtracted, 10_000);
+    }
+
+    #[test]
+    fn value_reverse_and_step_interpolation_reshape_output() {
+        let runtime = runtime_with_move_fixtures(1);
+        let created_at = Instant::now();
+        let clock = ClockSnapshot::default();
+
+        let mut reverse = test_value_request(&[1]);
+        reverse.direction = ValueEffectDirection::Reverse;
+        let reverse_effect = runtime.resolve_value_effect_request(reverse).unwrap();
+        let reversed = evaluate_runtime_value_attribute(
+            &reverse_effect,
+            1,
+            "Dimmer",
+            0,
+            created_at,
+            created_at + Duration::from_millis(250),
+            &clock,
+        )
+        .unwrap();
+        assert_eq!(reversed, scale_effect_u16(0, u16::MAX, 0.75));
+
+        let mut stepped = test_value_request(&[1]);
+        stepped.interpolation = ValueEffectInterpolation::Step;
+        stepped.points = vec![
+            ValueEffectPoint {
+                position: 0.0,
+                value: 0.2,
+            },
+            ValueEffectPoint {
+                position: 0.5,
+                value: 0.9,
+            },
+            ValueEffectPoint {
+                position: 1.0,
+                value: 0.2,
+            },
+        ];
+        let step_effect = runtime.resolve_value_effect_request(stepped).unwrap();
+        // Progress 0.25 holds the left point value 0.2 under Step interpolation.
+        let held = evaluate_runtime_value_attribute(
+            &step_effect,
+            1,
+            "Dimmer",
+            0,
+            created_at,
+            created_at + Duration::from_millis(250),
+            &clock,
+        )
+        .unwrap();
+        assert_eq!(held, scale_effect_u16(0, u16::MAX, 0.2));
+    }
+
+    #[test]
+    fn value_published_add_update_roundtrip_and_busy_rollback_are_atomic() {
+        let mut runtime = runtime_with_move_fixtures(2);
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let request = test_value_request(&[1, 2]);
+        let (add_ack, add_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::AddValueEffect {
+            effect_id: 300,
+            request: request.clone(),
+            enabled: false,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: add_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(add_receiver.recv().unwrap(), Ok(()));
+        let snapshot = published.read().unwrap().clone();
+        assert_eq!(snapshot.effects[0].effect_type, EffectKind::Value);
+        assert!(!snapshot.effects[0].enabled);
+        assert_eq!(snapshot.effects[0].value, Some(request.clone()));
+
+        let mut updated = request.clone();
+        updated.direction = ValueEffectDirection::Bounce;
+        updated.mode = ValueEffectMode::Relative;
+        let (update_ack, update_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::UpdateValueEffect {
+            effect_id: 300,
+            request: updated.clone(),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: update_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(update_receiver.recv().unwrap(), Ok(()));
+        assert_eq!(
+            published.read().unwrap().effects[0].value,
+            Some(updated.clone())
+        );
+
+        let before_busy = effect_summary(&runtime.effects[0]);
+        let guard = published.write().unwrap();
+        let mut rejected = updated;
+        rejected.phase = 0.25;
+        let (busy_ack, busy_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::UpdateValueEffect {
+            effect_id: 300,
+            request: rejected,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: busy_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(busy_receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("rolled back"));
+        assert_eq!(effect_summary(&runtime.effects[0]), before_busy);
+        drop(guard);
+
+        let roundtrip = runtime.build_snapshot(0);
+        let mut loaded = runtime_with_move_fixtures(2);
+        loaded.load_project_snapshot(roundtrip.clone());
+        assert_eq!(loaded.build_snapshot(0).effects, roundtrip.effects);
+    }
+
+    #[test]
+    fn value_group_reference_survives_dormancy_and_rebinds_a_replacement_fixture() {
+        let mut runtime = runtime_with_move_fixtures(1);
+        let replacement_profile = runtime.fixtures[0].profile.clone();
+        let mut replacement_request = runtime.fixtures[0].request.clone();
+        replacement_request.label = "Replacement Value Fixture".to_string();
+        replacement_request.address = 17;
+
+        let mut request = test_value_request(&[]);
+        request.target_group_ids = vec!["Moving".to_string()];
+        let resolved = runtime.resolve_value_effect_request(request).unwrap();
+        assert_eq!(resolved.targets.len(), 1);
+        assert_eq!(resolved.targets[0].fixture_id, 1);
+        runtime.effects.push(RuntimeEffect {
+            id: 320,
+            kind: RuntimeEffectKind::Value(resolved),
+            enabled: true,
+            created_at: Instant::now(),
+        });
+
+        runtime.remove_fixture(1);
+        assert_eq!(runtime.effects.len(), 1);
+        let RuntimeEffectKind::Value(dormant) = &runtime.effects[0].kind else {
+            panic!("effect should remain a Value while its group is dormant");
+        };
+        assert!(dormant.targets.is_empty());
+        assert_eq!(dormant.request.target_group_ids, vec!["Moving".to_string()]);
+
+        runtime.apply_command(EngineCommand::PatchFixture {
+            fixture_id: 2,
+            request: replacement_request,
+            profile: replacement_profile,
+        });
+        assert_eq!(runtime.last_error, None);
+        let RuntimeEffectKind::Value(rebound) = &runtime.effects[0].kind else {
+            panic!("effect should remain a Value after rebinding");
+        };
+        assert_eq!(rebound.targets.len(), 1);
+        assert_eq!(rebound.targets[0].fixture_id, 2);
+    }
+
+    #[test]
+    fn value_venue_stack_200_fixtures_64_effects_stays_bounded() {
+        let runtime = runtime_with_move_fixtures(200);
+        let fixture_ids = (1..=200).collect::<Vec<_>>();
+        let mut base = test_value_request(&fixture_ids);
+        base.interpolation = ValueEffectInterpolation::Smooth;
+        base.fixture_spread = 0.5;
+        base.points = vec![
+            ValueEffectPoint {
+                position: 0.0,
+                value: 0.1,
+            },
+            ValueEffectPoint {
+                position: 0.35,
+                value: 0.9,
+            },
+            ValueEffectPoint {
+                position: 0.7,
+                value: 0.4,
+            },
+            ValueEffectPoint {
+                position: 1.0,
+                value: 0.1,
+            },
+        ];
+        let stack = (0..64)
+            .map(|index| {
+                let mut request = base.clone();
+                request.phase = index as f32 / 64.0;
+                runtime.resolve_value_effect_request(request).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let created_at = Instant::now();
+        let clock = ClockSnapshot::default();
+        let started = Instant::now();
+        let mut checksum = 0_u64;
+
+        for frame in 0..10 {
+            let at = created_at + Duration::from_millis(frame * 10);
+            for effect in &stack {
+                for fixture_id in &fixture_ids {
+                    checksum = checksum.wrapping_add(
+                        evaluate_runtime_value_attribute(
+                            effect,
+                            *fixture_id,
+                            "Dimmer",
+                            32_768,
+                            created_at,
+                            at,
+                            &clock,
+                        )
+                        .unwrap() as u64,
+                    );
+                    let target_index = effect.target_indices[fixture_id];
+                    assert!(effect.targets[target_index]
+                        .cached
+                        .get()
+                        .is_some_and(|cached| cached.at == at));
+                }
+            }
+        }
+
+        assert_ne!(checksum, 0);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "200-fixture, 64-effect Value venue regression took {:?}",
             started.elapsed()
         );
     }

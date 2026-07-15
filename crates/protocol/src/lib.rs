@@ -1931,6 +1931,62 @@ pub struct MoveEffectRequest {
     pub blend_mode: EffectBlendMode,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct ValueEffectPoint {
+    /// Normalized position in the envelope, 0..1, strictly increasing across the point list.
+    pub position: f32,
+    /// Normalized envelope value, 0..1.
+    pub value: f32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ValueEffectInterpolation {
+    /// Hold the left point's value until the next point.
+    Step,
+    /// Linear ramp between adjacent points.
+    Line,
+    /// Centripetal Catmull-Rom smoothing across the point values.
+    Smooth,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ValueEffectMode {
+    /// The envelope maps directly into the low..high output range.
+    Absolute,
+    /// The envelope is a bipolar offset around the incoming value; 0.5 means no change.
+    Relative,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ValueEffectDirection {
+    Forward,
+    Reverse,
+    Bounce,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ValueEffectRequest {
+    pub label: String,
+    pub fixture_ids: Vec<FixtureId>,
+    pub target_group_ids: Vec<String>,
+    pub attribute: String,
+    /// Operator-drawn value envelope points, 2..32, strictly increasing positions.
+    pub points: Vec<ValueEffectPoint>,
+    pub interpolation: ValueEffectInterpolation,
+    pub mode: ValueEffectMode,
+    pub direction: ValueEffectDirection,
+    /// Free-running duration of one envelope pass. Ignored while `clock_sync` is active.
+    pub period_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_sync: Option<EffectClockSync>,
+    pub low: u16,
+    pub high: u16,
+    pub phase: f32,
+    /// Distributes stable target-order phase offsets across a fraction of the envelope.
+    pub fixture_spread: f32,
+    pub blend_mode: EffectBlendMode,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum EffectKind {
     Lfo,
@@ -1938,6 +1994,7 @@ pub enum EffectKind {
     Color,
     Chaser,
     Move,
+    Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1968,6 +2025,8 @@ pub struct EffectSummary {
     pub chaser: Option<ChaserEffectRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub move_effect: Option<MoveEffectRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<ValueEffectRequest>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1983,6 +2042,8 @@ pub struct EffectPreset {
     pub chaser: Option<ChaserEffectRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub move_effect: Option<MoveEffectRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<ValueEffectRequest>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -3164,6 +3225,7 @@ mod tests {
             color: Some(request),
             chaser: None,
             move_effect: None,
+            value: None,
         };
 
         let json = serde_json::to_string(&preset).unwrap();
@@ -3221,6 +3283,7 @@ mod tests {
             color: None,
             chaser: Some(request),
             move_effect: None,
+            value: None,
         };
 
         let json = serde_json::to_string(&preset).unwrap();
@@ -3265,6 +3328,7 @@ mod tests {
             color: None,
             chaser: None,
             move_effect: Some(request),
+            value: None,
         };
 
         let json = serde_json::to_string(&preset).unwrap();

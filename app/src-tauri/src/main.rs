@@ -17,7 +17,8 @@ use std::{
 use base64::Engine as _;
 use engine::{
     validate_chaser_effect_request as validate_engine_chaser_effect_request,
-    validate_move_effect_request as validate_engine_move_effect_request, EngineCommand,
+    validate_move_effect_request as validate_engine_move_effect_request,
+    validate_value_effect_request as validate_engine_value_effect_request, EngineCommand,
     EngineHandle, FixtureFlagClearKind, VideoIsfStackMutation,
 };
 use io::midi::{
@@ -43,9 +44,9 @@ use protocol::{
     PositionWaveEffectRequest, ProjectFile, RemoteControlConfig, RemoteControlStatus, Rotation3,
     SerialPortSummary, StageMapConfig, StageMapPresetFile, StageMapPresetSummary, StageObjectId,
     StageObjectKind, StageObjectSummary, TimelineEventId, TimelineSnapRequest, TimelineTrackKind,
-    Vec3, VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode, VideoEffectTarget,
-    VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId, VideoLayerState,
-    VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
+    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode,
+    VideoEffectTarget, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId,
+    VideoLayerState, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
     VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary, VideoOutputSummary,
     VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
 };
@@ -11495,6 +11496,11 @@ fn relabel_effect_preset(mut preset: EffectPreset, label: String) -> EffectPrese
                 request.label = label;
             }
         }
+        EffectKind::Value => {
+            if let Some(request) = &mut preset.value {
+                request.label = label;
+            }
+        }
     }
     preset
 }
@@ -11715,11 +11721,25 @@ fn add_effect_preset_to_engine(
             validate_effect_target_references(&snapshot, &request.fixture_ids, &[])?;
             engine.add_move_effect(effect_id, request, enabled)?;
         }
+        EffectKind::Value => {
+            let request = preset
+                .value
+                .ok_or_else(|| "Value effect preset is missing its request body".to_string())?;
+            let request = match target_override {
+                Some(target_override) => {
+                    apply_value_effect_target_override(request, target_override)
+                }
+                None => request,
+            };
+            validate_value_effect_request(&request)?;
+            validate_effect_target_references(&snapshot, &request.fixture_ids, &[])?;
+            engine.add_value_effect(effect_id, request, enabled)?;
+        }
     }
     if !enabled
         && !matches!(
             preset.effect_type,
-            EffectKind::Color | EffectKind::Chaser | EffectKind::Move
+            EffectKind::Color | EffectKind::Chaser | EffectKind::Move | EffectKind::Value
         )
     {
         engine
@@ -15724,7 +15744,11 @@ fn validate_project_video_keyframes(
 fn validate_project_effect_body(effect: &EffectSummary) -> Result<(), String> {
     match effect.effect_type {
         EffectKind::Lfo | EffectKind::PositionWave => {
-            if effect.color.is_some() || effect.chaser.is_some() || effect.move_effect.is_some() {
+            if effect.color.is_some()
+                || effect.chaser.is_some()
+                || effect.move_effect.is_some()
+                || effect.value.is_some()
+            {
                 return Err(format!(
                     "Project effect {} contains a body for another effect kind",
                     effect.id
@@ -15744,6 +15768,12 @@ fn validate_project_effect_body(effect: &EffectSummary) -> Result<(), String> {
                     effect.id
                 ));
             }
+            if effect.value.is_some() {
+                return Err(format!(
+                    "Project Color effect {} contains a Value body",
+                    effect.id
+                ));
+            }
         }
         EffectKind::Chaser => {
             if effect.color.is_some() {
@@ -15755,6 +15785,12 @@ fn validate_project_effect_body(effect: &EffectSummary) -> Result<(), String> {
             if effect.move_effect.is_some() {
                 return Err(format!(
                     "Project Chaser effect {} contains a Move body",
+                    effect.id
+                ));
+            }
+            if effect.value.is_some() {
+                return Err(format!(
+                    "Project Chaser effect {} contains a Value body",
                     effect.id
                 ));
             }
@@ -15801,6 +15837,12 @@ fn validate_project_effect_body(effect: &EffectSummary) -> Result<(), String> {
                     effect.id
                 ));
             }
+            if effect.value.is_some() {
+                return Err(format!(
+                    "Project Move effect {} contains a Value body",
+                    effect.id
+                ));
+            }
             let request = effect.move_effect.as_ref().ok_or_else(|| {
                 format!(
                     "Project Move effect {} is missing its request body",
@@ -15826,6 +15868,54 @@ fn validate_project_effect_body(effect: &EffectSummary) -> Result<(), String> {
             if !scalar_body_matches {
                 return Err(format!(
                     "Project Move effect {} summary fields do not match its request body",
+                    effect.id
+                ));
+            }
+        }
+        EffectKind::Value => {
+            if effect.color.is_some() {
+                return Err(format!(
+                    "Project Value effect {} contains a Color body",
+                    effect.id
+                ));
+            }
+            if effect.chaser.is_some() {
+                return Err(format!(
+                    "Project Value effect {} contains a Chaser body",
+                    effect.id
+                ));
+            }
+            if effect.move_effect.is_some() {
+                return Err(format!(
+                    "Project Value effect {} contains a Move body",
+                    effect.id
+                ));
+            }
+            let request = effect.value.as_ref().ok_or_else(|| {
+                format!(
+                    "Project Value effect {} is missing its request body",
+                    effect.id
+                )
+            })?;
+            let scalar_body_matches = effect.label == request.label
+                && effect.fixture_ids == request.fixture_ids
+                && effect.target_group_ids == request.target_group_ids
+                && effect.attribute == request.attribute
+                && effect.video_targets.is_empty()
+                && effect.shape == protocol::LfoShape::Sine
+                && effect.period_ms == Some(request.period_ms)
+                && effect.clock_sync == request.clock_sync
+                && effect.low == request.low
+                && effect.high == request.high
+                && effect.phase == request.phase
+                && effect.blend_mode == request.blend_mode
+                && effect.origin.is_none()
+                && effect.direction.is_none()
+                && effect.speed.is_none()
+                && effect.wavelength.is_none();
+            if !scalar_body_matches {
+                return Err(format!(
+                    "Project Value effect {} summary fields do not match its request body",
                     effect.id
                 ));
             }
@@ -15960,6 +16050,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 color: None,
                 chaser: None,
                 move_effect: None,
+                value: None,
             })
         }
         EffectKind::PositionWave => {
@@ -16000,6 +16091,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 color: None,
                 chaser: None,
                 move_effect: None,
+                value: None,
             })
         }
         EffectKind::Color => {
@@ -16016,6 +16108,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 color: Some(request),
                 chaser: None,
                 move_effect: None,
+                value: None,
             })
         }
         EffectKind::Chaser => {
@@ -16032,6 +16125,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 color: None,
                 chaser: Some(request),
                 move_effect: None,
+                value: None,
             })
         }
         EffectKind::Move => {
@@ -16048,6 +16142,24 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 color: None,
                 chaser: None,
                 move_effect: Some(request),
+                value: None,
+            })
+        }
+        EffectKind::Value => {
+            let request = effect
+                .value
+                .clone()
+                .ok_or_else(|| "Value effect summary is missing its request body".to_string())?;
+            Ok(EffectPreset {
+                version: 1,
+                effect_type: EffectKind::Value,
+                enabled: effect.enabled,
+                lfo: None,
+                position_wave: None,
+                color: None,
+                chaser: None,
+                move_effect: None,
+                value: Some(request),
             })
         }
     }
@@ -16135,6 +16247,16 @@ fn apply_move_effect_target_override(
     request.fixture_ids = target_override.fixture_ids.clone();
     request.target_group_ids = target_override.target_group_ids.clone();
     Ok(request)
+}
+
+fn apply_value_effect_target_override(
+    mut request: ValueEffectRequest,
+    target_override: &EffectTargetOverride,
+) -> ValueEffectRequest {
+    request.fixture_ids = target_override.fixture_ids.clone();
+    request.target_group_ids = target_override.target_group_ids.clone();
+    request.attribute = overridden_light_attribute(target_override);
+    request
 }
 
 fn apply_fixture_index_chaser_effect_target_override(
@@ -16301,6 +16423,13 @@ fn validate_effect_target_override_for_preset(
                 .as_ref()
                 .ok_or_else(|| "Move effect preset is missing its request body".to_string())?;
             validate_move_effect_target_override(target_override)
+        }
+        EffectKind::Value => {
+            preset
+                .value
+                .as_ref()
+                .ok_or_else(|| "Value effect preset is missing its request body".to_string())?;
+            validate_effect_target_override(target_override)
         }
         EffectKind::Lfo | EffectKind::PositionWave => {
             validate_effect_target_override(target_override)
@@ -16591,6 +16720,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.color.is_some()
                 || preset.chaser.is_some()
                 || preset.move_effect.is_some()
+                || preset.value.is_some()
             {
                 return Err("LFO effect preset must not contain another effect body".to_string());
             }
@@ -16605,6 +16735,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.color.is_some()
                 || preset.chaser.is_some()
                 || preset.move_effect.is_some()
+                || preset.value.is_some()
             {
                 return Err(
                     "Position wave effect preset must not contain another effect body".to_string(),
@@ -16620,6 +16751,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.position_wave.is_some()
                 || preset.chaser.is_some()
                 || preset.move_effect.is_some()
+                || preset.value.is_some()
             {
                 return Err("Color effect preset must not contain another effect body".to_string());
             }
@@ -16634,6 +16766,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.position_wave.is_some()
                 || preset.color.is_some()
                 || preset.move_effect.is_some()
+                || preset.value.is_some()
             {
                 return Err("Chaser effect preset must not contain another effect body".to_string());
             }
@@ -16648,6 +16781,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.position_wave.is_some()
                 || preset.color.is_some()
                 || preset.chaser.is_some()
+                || preset.value.is_some()
             {
                 return Err("Move effect preset must not contain another effect body".to_string());
             }
@@ -16656,6 +16790,21 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 .as_ref()
                 .ok_or_else(|| "Move effect preset is missing its request body".to_string())?;
             validate_move_effect_request(request)?;
+        }
+        EffectKind::Value => {
+            if preset.lfo.is_some()
+                || preset.position_wave.is_some()
+                || preset.color.is_some()
+                || preset.chaser.is_some()
+                || preset.move_effect.is_some()
+            {
+                return Err("Value effect preset must not contain another effect body".to_string());
+            }
+            let request = preset
+                .value
+                .as_ref()
+                .ok_or_else(|| "Value effect preset is missing its request body".to_string())?;
+            validate_value_effect_request(request)?;
         }
     }
     Ok(())
@@ -21470,6 +21619,11 @@ fn validate_chaser_effect_request(request: &ChaserEffectRequest) -> Result<(), S
 
 fn validate_move_effect_request(request: &MoveEffectRequest) -> Result<(), String> {
     validate_engine_move_effect_request(request)?;
+    validate_group_ids(&request.target_group_ids)
+}
+
+fn validate_value_effect_request(request: &ValueEffectRequest) -> Result<(), String> {
+    validate_engine_value_effect_request(request)?;
     validate_group_ids(&request.target_group_ids)
 }
 
@@ -27601,6 +27755,7 @@ f 1 2 3
             color: None,
             chaser: None,
             move_effect: None,
+            value: None,
         }
     }
 
@@ -27665,6 +27820,7 @@ f 1 2 3
             color: Some(request),
             chaser: None,
             move_effect: None,
+            value: None,
         }
     }
 
@@ -27903,6 +28059,7 @@ f 1 2 3
             color: None,
             chaser: None,
             move_effect: None,
+            value: None,
         }];
         assert!(validate_project_file(&project)
             .unwrap_err()
@@ -27967,6 +28124,7 @@ f 1 2 3
             color: None,
             chaser: None,
             move_effect: None,
+            value: None,
         }];
         assert!(validate_project_file(&project)
             .unwrap_err()
@@ -28107,6 +28265,7 @@ f 1 2 3
             color: None,
             chaser: Some(request.clone()),
             move_effect: None,
+            value: None,
         };
         let mut project = ProjectFile {
             version: 1,
@@ -29997,6 +30156,7 @@ f 1 2 3
             color: None,
             chaser: None,
             move_effect: Some(request),
+            value: None,
         }
     }
 
@@ -30041,6 +30201,7 @@ f 1 2 3
             color: None,
             chaser: Some(request),
             move_effect: None,
+            value: None,
         }
     }
 
@@ -30226,6 +30387,7 @@ f 1 2 3
             color: None,
             chaser: None,
             move_effect: None,
+            value: None,
         };
 
         let preset = effect_summary_to_preset(&effect).unwrap();
@@ -30289,6 +30451,7 @@ f 1 2 3
             color: None,
             chaser: None,
             move_effect: None,
+            value: None,
         };
 
         let preset = effect_summary_to_preset(&effect).unwrap();
@@ -30320,6 +30483,122 @@ f 1 2 3
         assert_eq!(wave.blend_mode, protocol::EffectBlendMode::Multiply);
     }
 
+    fn sample_value_effect_request() -> ValueEffectRequest {
+        ValueEffectRequest {
+            label: "Envelope pulse".to_string(),
+            fixture_ids: vec![4],
+            target_group_ids: vec!["Front".to_string()],
+            attribute: "Dimmer".to_string(),
+            points: vec![
+                protocol::ValueEffectPoint {
+                    position: 0.0,
+                    value: 0.1,
+                },
+                protocol::ValueEffectPoint {
+                    position: 0.5,
+                    value: 0.9,
+                },
+                protocol::ValueEffectPoint {
+                    position: 1.0,
+                    value: 0.2,
+                },
+            ],
+            interpolation: protocol::ValueEffectInterpolation::Smooth,
+            mode: protocol::ValueEffectMode::Relative,
+            direction: protocol::ValueEffectDirection::Bounce,
+            period_ms: 1_500,
+            clock_sync: Some(protocol::EffectClockSync { beats: 2.0 }),
+            low: 4_096,
+            high: 61_440,
+            phase: 0.2,
+            fixture_spread: 0.5,
+            blend_mode: protocol::EffectBlendMode::Add,
+        }
+    }
+
+    fn value_effect_summary(id: EffectId, request: &ValueEffectRequest) -> EffectSummary {
+        EffectSummary {
+            id,
+            label: request.label.clone(),
+            effect_type: EffectKind::Value,
+            fixture_ids: request.fixture_ids.clone(),
+            target_group_ids: request.target_group_ids.clone(),
+            attribute: request.attribute.clone(),
+            video_targets: Vec::new(),
+            shape: protocol::LfoShape::Sine,
+            period_ms: Some(request.period_ms),
+            clock_sync: request.clock_sync,
+            low: request.low,
+            high: request.high,
+            phase: request.phase,
+            blend_mode: request.blend_mode.clone(),
+            origin: None,
+            direction: None,
+            speed: None,
+            wavelength: None,
+            enabled: true,
+            color: None,
+            chaser: None,
+            move_effect: None,
+            value: Some(request.clone()),
+        }
+    }
+
+    #[test]
+    fn effect_summary_serializes_value_preset_and_validates_project_body() {
+        let request = sample_value_effect_request();
+        let effect = value_effect_summary(21, &request);
+
+        // The Tauri project-body validator accepts a well-formed Value effect.
+        validate_project_effect_body(&effect).unwrap();
+
+        let preset = effect_summary_to_preset(&effect).unwrap();
+        validate_effect_preset(&preset).unwrap();
+        let json = serde_json::to_string_pretty(&preset).unwrap();
+        let roundtrip: EffectPreset = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtrip, preset);
+        assert_eq!(roundtrip.effect_type, EffectKind::Value);
+        assert!(roundtrip.lfo.is_none());
+        assert!(roundtrip.move_effect.is_none());
+        assert_eq!(roundtrip.value, Some(request.clone()));
+
+        // A Value summary carrying another kind's body is rejected.
+        let mut cross_body = effect.clone();
+        cross_body.move_effect = Some(MoveEffectRequest {
+            label: request.label.clone(),
+            fixture_ids: request.fixture_ids.clone(),
+            target_group_ids: request.target_group_ids.clone(),
+            points: vec![
+                protocol::MovePathPoint { x: 0.0, y: 0.0 },
+                protocol::MovePathPoint { x: 1.0, y: 1.0 },
+            ],
+            closed: false,
+            interpolation: protocol::MoveInterpolation::Line,
+            coordinate_mode: protocol::MoveCoordinateMode::Absolute,
+            center_x: 0.5,
+            center_y: 0.5,
+            size_x: 1.0,
+            size_y: 1.0,
+            rotation_degrees: 0.0,
+            period_ms: 1_000,
+            clock_sync: None,
+            direction: protocol::MoveDirection::Forward,
+            phase: 0.0,
+            fixture_spread: 0.0,
+            blend_mode: protocol::EffectBlendMode::Override,
+        });
+        assert!(validate_project_effect_body(&cross_body)
+            .unwrap_err()
+            .contains("Move body"));
+
+        // A summary whose scalar fields drift from its request body is rejected.
+        let mut drifted = effect;
+        drifted.attribute = "Zoom".to_string();
+        assert!(validate_project_effect_body(&drifted)
+            .unwrap_err()
+            .contains("do not match"));
+    }
+
     #[test]
     fn effect_summary_serializes_color_preset_without_scalar_bodies() {
         let request = sample_color_effect_request();
@@ -30346,6 +30625,7 @@ f 1 2 3
             color: Some(request.clone()),
             chaser: None,
             move_effect: None,
+            value: None,
         };
 
         let preset = effect_summary_to_preset(&effect).unwrap();
@@ -30386,6 +30666,7 @@ f 1 2 3
             color: None,
             chaser: Some(request.clone()),
             move_effect: None,
+            value: None,
         };
 
         let preset = effect_summary_to_preset(&effect).unwrap();
@@ -30621,6 +30902,7 @@ f 1 2 3
             color: None,
             chaser: None,
             move_effect: None,
+            value: None,
         };
 
         let error = validate_effect_preset(&preset).unwrap_err();
@@ -30636,6 +30918,7 @@ f 1 2 3
             color: Some(sample_color_effect_request()),
             chaser: None,
             move_effect: None,
+            value: None,
         };
         assert!(validate_effect_preset(&color_with_scalar_body)
             .unwrap_err()
@@ -30650,6 +30933,7 @@ f 1 2 3
             color: Some(sample_color_effect_request()),
             chaser: Some(sample_chaser_effect_request()),
             move_effect: None,
+            value: None,
         };
         assert!(validate_effect_preset(&chaser_with_color_body)
             .unwrap_err()
@@ -31664,6 +31948,7 @@ f 1 2 3
                 color: None,
                 chaser: None,
                 move_effect: None,
+                value: None,
             },
             None,
         )
