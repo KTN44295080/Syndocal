@@ -5917,16 +5917,18 @@ progress {
 }
 
 .mappingViewControls {
-  display: grid;
-  grid-template-columns: 44px repeat(6, minmax(58px, auto));
+  display: flex;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 6px;
   min-width: 0;
+  overflow-x: auto;
   color: #cfc7be;
 }
 
 .mappingViewControls span,
 .mappingViewControls strong {
+  flex: 0 0 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5934,6 +5936,7 @@ progress {
 }
 
 .mappingViewControls strong {
+  min-width: 48px;
   min-height: 26px;
   border: 1px solid #332d28;
   border-radius: 4px;
@@ -5944,8 +5947,17 @@ progress {
 }
 
 .mappingViewControls button {
+  flex: 0 0 auto;
   min-height: 26px;
   padding: 0 8px;
+}
+
+.mappingZoomSlider {
+  flex: 1 1 60px;
+  min-width: 44px;
+  max-width: 130px;
+  min-height: 26px;
+  accent-color: #8c8178;
 }
 
 .mappingStageSnapControls {
@@ -6316,6 +6328,17 @@ progress {
 .mappingVisualizer .visualizerStage pattern path {
   stroke: #2b2622;
   stroke-width: 0.32;
+}
+
+/* Daslight-grade grid hierarchy: faint 1m minor lines, brighter 4m major lines. */
+.mappingVisualizer .visualizerStage .stageGridMinor {
+  stroke: #2a2521;
+  stroke-width: 0.26;
+}
+
+.mappingVisualizer .visualizerStage .stageGridMajor {
+  stroke: #3b342d;
+  stroke-width: 0.4;
 }
 
 .mappingSelectionPanel {
@@ -7077,6 +7100,37 @@ progress {
   padding: 8px;
 }
 
+.mappingProjectorSummary {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.mappingProjectorSummary strong {
+  color: #ffffff;
+  font-size: 12px;
+}
+
+.mappingProjectorSummary span {
+  color: #9f948b;
+  font-size: 11px;
+}
+
+.mappingSelectionPanel .mappingProjectorEditProjection {
+  min-height: 30px;
+  border: 1px solid #4a433d;
+  border-radius: 4px;
+  background: #23201c;
+  color: #d8d2cb;
+  padding: 0 8px;
+  text-align: center;
+}
+
+.mappingSelectionPanel .mappingProjectorEditProjection:hover {
+  border-color: #6a6058;
+  background: #2a251f;
+}
+
 .mappingProjectorPreview {
   display: grid;
   grid-template-columns: 58px minmax(0, 1fr);
@@ -7402,10 +7456,10 @@ progress {
 }
 
 .mappingMarquee {
-  fill: rgba(255, 255, 255, 0.1);
-  stroke: #ffffff;
-  stroke-dasharray: 1.8 1.2;
-  stroke-width: 0.55;
+  fill: rgba(120, 170, 235, 0.14);
+  stroke: #eef6ff;
+  stroke-dasharray: 1.6 1;
+  stroke-width: 0.5;
   pointer-events: none;
 }
 
@@ -7658,11 +7712,77 @@ progress {
   stroke: #ffffff;
 }
 
+/* T9: projection surfaces are reference-only on the lighting floor plan — a line segment
+   with a facing tick, not a warped rectangle. Warp editing lives in Setup > Video. */
+.stageVideoSurface2d.reference {
+  cursor: pointer;
+}
+
+.stageVideoSurfaceHit {
+  stroke: transparent;
+  stroke-width: 3.4;
+  stroke-linecap: round;
+  pointer-events: stroke;
+}
+
+.stageVideoSurfaceLine {
+  stroke: #22d3ee;
+  stroke-width: 0.9;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+
+.stageVideoSurfaceEndCap {
+  stroke: #22d3ee;
+  stroke-width: 0.65;
+  pointer-events: none;
+}
+
+.stageVideoSurfaceFacing {
+  stroke: rgba(160, 235, 245, 0.72);
+  stroke-width: 0.42;
+  stroke-dasharray: 1 0.8;
+  pointer-events: none;
+}
+
+.stageVideoSurfaceFacingMark {
+  fill: #22d3ee;
+  pointer-events: none;
+}
+
+.stageVideoSurface2d.reference.selected .stageVideoSurfaceLine {
+  stroke: #ffffff;
+  stroke-width: 1.2;
+}
+
+.stageVideoSurface2d.reference.selected .stageVideoSurfaceEndCap {
+  stroke: #ffffff;
+}
+
+.stageVideoSurface2d.reference.inactive .stageVideoSurfaceLine,
+.stageVideoSurface2d.reference.inactive .stageVideoSurfaceEndCap {
+  stroke: #768393;
+}
+
+.stageVideoSurface2d.reference.inactive .stageVideoSurfaceFacing {
+  stroke: rgba(118, 131, 147, 0.6);
+}
+
+.stageVideoSurface2d.reference.inactive .stageVideoSurfaceFacingMark {
+  fill: #768393;
+}
+
 .stageFixture {
   stroke: #eef6ff;
   stroke-width: 0.8;
   cursor: grab;
   transition: r 120ms ease, stroke-width 120ms ease;
+}
+
+.stageFixtureHitTarget {
+  fill: transparent;
+  stroke: none;
+  pointer-events: all;
 }
 
 .stageFixtureBlock {
@@ -7802,6 +7922,66 @@ progress {
 .stageFixture3d.selected {
   stroke: #ffdd74;
   stroke-width: 1.5;
+}
+
+/* T9: compact Daslight-style mapping glyphs. Thin outline + subtle hover + thin white
+   selection, scoped to the editable Mapping stage so Control/Touch stages are untouched.
+   Live-DMX color fill is preserved; only the outline/marks change. */
+.editableStage .stageFixture {
+  stroke: #d8e4f1;
+  stroke-width: 0.4;
+}
+
+.editableStage .stageFixture:hover {
+  stroke: #ffffff;
+  stroke-width: 0.68;
+}
+
+.editableStage .stageFixture.groupMatch {
+  stroke: #5dd64c;
+  stroke-width: 0.7;
+  filter: none;
+}
+
+.editableStage .stageFixture.typeMatch {
+  stroke: #ff2d83;
+  stroke-width: 0.75;
+  filter: none;
+}
+
+.editableStage .stageFixture.picked,
+.editableStage .stageFixture.selected {
+  stroke: #ffffff;
+  stroke-width: 0.95;
+  filter: none;
+}
+
+.editableStage .stageFixture.highlighted {
+  stroke: #77ff6b;
+  stroke-width: 0.85;
+  filter: none;
+}
+
+.editableStage .stageFixture.soloed {
+  stroke-width: 1.05;
+  filter: none;
+}
+
+.editableStage .stageFixture.parked {
+  stroke: #9f948b;
+  stroke-dasharray: 1 0.8;
+  opacity: 0.6;
+}
+
+.editableStage .stageFixtureCenterLine {
+  stroke: rgba(231, 238, 246, 0.72);
+  stroke-width: 0.4;
+}
+
+.editableStage .stageFixtureLaserMark {
+  fill: #e7eef6;
+  stroke: #10161d;
+  stroke-width: 0.35;
 }
 
 .stageGeometryNode {
@@ -19591,14 +19771,8 @@ h3 {
   opacity: 0.34 !important;
 }
 
-.controlStage .stageVideoSurface2d .stageVideoSurfaceShape {
-  fill: rgba(114, 143, 155, 0.06);
-  stroke: #77868b;
-  stroke-width: 0.42;
-}
-
-.controlStage .stageVideoSurface2d line {
-  opacity: 0.24;
+.controlStage .stageVideoSurface2d.reference line {
+  opacity: 1;
 }
 
 .controlStage .stageBeam {
@@ -19611,23 +19785,8 @@ h3 {
   filter: none;
 }
 
-.controlStage .stageFixtureHitTarget {
-  fill: transparent;
-  stroke: none;
-  pointer-events: all;
-}
-
-.controlStage .stageFixtureSelectionRing {
-  fill: #181715;
-  fill-opacity: 0.82;
-  stroke: #6f6962;
-  stroke-width: 0.42;
-  pointer-events: none;
-}
-
 .controlStage .stageFixtureShape {
   fill-opacity: 0.95;
-  stroke-width: 0.9;
 }
 
 .controlStage .stageFixtureCenterLine {
@@ -19646,27 +19805,12 @@ h3 {
   stroke-width: 1.25;
 }
 
-.controlStage .stageFixture.picked .stageFixtureSelectionRing {
-  fill: #27231e;
-  stroke: #ffb23f;
-  stroke-width: 1.05;
-}
-
-.controlStage .stageFixture.groupMatch:not(.picked) .stageFixtureSelectionRing {
-  stroke: #7bbf68;
-  stroke-width: 0.75;
-}
-
 .controlStage .stageFixture.groupMatch,
 .controlStage .stageFixture.typeMatch,
 .controlStage .stageFixture.picked,
 .controlStage .stageFixture.highlighted,
 .controlStage .stageFixture.soloed {
   filter: none;
-}
-
-.controlStage .stageFixture.parked .stageFixtureSelectionRing {
-  stroke-dasharray: 1.2 0.9;
 }
 
 .controlStage .stageGrid {

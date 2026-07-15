@@ -95,6 +95,7 @@ interface MappingSelectionSidebarPanelProps {
   onSyncOutputWindow: (outputId: number) => MaybePromise;
   onFitOutputToStageObject: (output: VideoOutputSummary, object: StageObjectSummary) => MaybePromise;
   onSetOutputMapping: (outputId: number, mapping: VideoOutputMapping) => MaybePromise;
+  onEditOutputProjection: (outputId: number) => void;
 }
 
 export function MappingSelectionSidebarPanel(props: MappingSelectionSidebarPanelProps) {
@@ -189,6 +190,7 @@ export function MappingSelectionSidebarPanel(props: MappingSelectionSidebarPanel
         onSyncWindow={props.onSyncOutputWindow}
         onFitStageObject={props.onFitOutputToStageObject}
         onSetMapping={props.onSetOutputMapping}
+        onEditProjection={props.onEditOutputProjection}
       />
     </aside>
   );

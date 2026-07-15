@@ -25,14 +25,21 @@ export const fixtureVisualKind = (fixture: PatchedFixtureSummary): MappingFixtur
   return "point";
 };
 
+// Compact, Daslight-grade stage glyph footprints (stage units on the 100-unit viewBox).
+// Type-differentiated so par/wash squares, moving-head circles, and bars/strips read
+// distinctly while staying small enough to stay legible at 2,000 fixtures.
 export const mappingFixtureStageSize = (visualKind: MappingFixtureVisualKind) =>
   visualKind === "bar"
-    ? { width: 5.8, height: 1.4 }
+    ? { width: 5.2, height: 1.0 }
     : visualKind === "panel"
-      ? { width: 4.8, height: 3.2 }
+      ? { width: 3.8, height: 2.6 }
       : visualKind === "laser"
-        ? { width: 3.4, height: 3.4 }
-        : { width: 3.2, height: 3.2 };
+        ? { width: 2.6, height: 2.6 }
+        : visualKind === "moving"
+          ? { width: 2.6, height: 2.6 }
+          : visualKind === "point"
+            ? { width: 2.2, height: 2.2 }
+            : { width: 2.4, height: 2.4 };
 
 export const fixtureTypeKey = (fixture: PatchedFixtureSummary) =>
   `${fixture.manufacturer}::${fixture.profile_name}::${fixture.mode_name}`;

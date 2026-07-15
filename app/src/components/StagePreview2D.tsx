@@ -1,8 +1,9 @@
-import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, onMount } from "solid-js";
 import type { MappingFixtureVisualKind } from "../fixtureVisuals";
 import { stageViewBoxSize } from "../stageGeometry";
 import { stageObjectClass } from "../stageObjects";
 import type { StageObjectKind } from "../types";
+import { StageFixtureGlyph, StageObjectGlyph, StageProjectionSurfaceGlyph } from "./StageGlyphs";
 
 export interface StagePreviewFixture {
   id: number;
@@ -64,7 +65,6 @@ type StagePreview2DProps = {
   surfaceMinOpacity: number;
   beamMinOpacity: number;
   beamIntensityScale: number;
-  fixtureRadiusIntensityScale: number;
   compact?: boolean;
   viewAspectRatio?: number;
   onSelectFixture: (fixtureId: number) => void;
@@ -198,18 +198,14 @@ export function StagePreview2D(props: StagePreview2DProps) {
             class={`${stageObjectClass(object)} ${props.stageObjectClassName}`}
             transform={`translate(${object.x} ${object.z}) rotate(${object.rotationDeg})`}
           >
-            <rect
-              x={-object.width / 2}
-              y={-object.depth / 2}
+            <StageObjectGlyph
+              kind={object.kind}
               width={object.width}
-              height={object.depth}
-              fill={object.color}
+              depth={object.depth}
+              color={object.color}
+              label={object.label}
+              showLabel={object.kind === "Screen" || !props.compact}
             />
-            <line x1={-object.width / 2} y1="0" x2={object.width / 2} y2="0" />
-            <line x1="0" y1={-object.depth / 2} x2="0" y2={object.depth / 2} />
-            <Show when={!props.compact}>
-              <text data-no-localize x={-object.width / 2 + 1} y={-object.depth / 2 - 1}>{object.label}</text>
-            </Show>
           </g>
         )}
       </For>
@@ -218,6 +214,7 @@ export function StagePreview2D(props: StagePreview2DProps) {
           <g
             class={[
               "stageVideoSurface2d",
+              "reference",
               props.selectedVideoOutputId === surface.id ? "selected" : "",
               surface.active ? "" : "inactive",
             ].filter(Boolean).join(" ")}
@@ -228,18 +225,7 @@ export function StagePreview2D(props: StagePreview2DProps) {
               props.onSelectVideoOutput(surface.id);
             }}
           >
-            <rect
-              class="stageVideoSurfaceShape"
-              x={-surface.width / 2}
-              y={-surface.height / 2}
-              width={surface.width}
-              height={surface.height}
-            />
-            <line x1={-surface.width / 2} y1="0" x2={surface.width / 2} y2="0" />
-            <line x1="0" y1={-surface.height / 2} x2="0" y2={surface.height / 2} />
-            <Show when={!props.compact}>
-              <text data-no-localize x={-surface.width / 2 + 1.2} y={-surface.height / 2 - 1.6}>{surface.label}</text>
-            </Show>
+            <StageProjectionSurfaceGlyph width={surface.width} label={surface.label} />
           </g>
         )}
       </For>
@@ -275,53 +261,18 @@ export function StagePreview2D(props: StagePreview2DProps) {
                 props.onSelectFixture(fixture.id);
               }}
             >
-              <circle
-                class="stageFixtureHitTarget"
-                cx="0"
-                cy="0"
-                r={Math.max(props.compact ? 3.2 : 3.8, fixture.width / 2 + 1.5, fixture.height / 2 + 1.5)}
+              <StageFixtureGlyph
+                visualKind={fixture.visualKind}
+                width={fixture.width}
+                height={fixture.height}
+                color={fixture.color}
+                hitTargetRadius={Math.max(
+                  props.compact ? 3.2 : 3.8,
+                  fixture.width / 2 + 1.5,
+                  fixture.height / 2 + 1.5,
+                )}
+                title={`${fixture.label} / ${fixture.dmxLabel} / ${fixture.groupLabel}`}
               />
-              <circle
-                class="stageFixtureSelectionRing"
-                cx="0"
-                cy="0"
-                r={Math.max(props.compact ? 2.35 : 3.1, fixture.width / 2 + 0.8, fixture.height / 2 + 0.8)}
-              />
-              <Show
-                when={fixture.visualKind === "bar" || fixture.visualKind === "panel"}
-                fallback={
-                  <Show
-                    when={fixture.visualKind === "laser"}
-                    fallback={
-                      <circle
-                        class="stageFixtureShape"
-                        cx="0"
-                        cy="0"
-                        r={Math.max(fixture.width, fixture.height) / 2 + fixture.intensity * props.fixtureRadiusIntensityScale}
-                        fill={fixture.color}
-                      />
-                    }
-                  >
-                    <polygon
-                      class="stageFixtureShape"
-                      points={`0,${-fixture.height / 2} ${fixture.width / 2},${fixture.height / 2} ${-fixture.width / 2},${fixture.height / 2}`}
-                      fill={fixture.color}
-                    />
-                  </Show>
-                }
-              >
-                <rect
-                  class="stageFixtureShape"
-                  x={-fixture.width / 2}
-                  y={-fixture.height / 2}
-                  width={fixture.width}
-                  height={fixture.height}
-                  fill={fixture.color}
-                />
-              </Show>
-              <line class="stageFixtureCenterLine" x1="0" y1="0" x2="0" y2={props.compact ? -3.6 : -7} />
-              <circle class="stageFixtureLaserMark" cx="0" cy={props.compact ? -3.6 : -7} r={props.compact ? 0.62 : 0.9} />
-              <title>{`${fixture.label} / ${fixture.dmxLabel} / ${fixture.groupLabel}`}</title>
             </g>
           );
         }}

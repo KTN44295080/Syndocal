@@ -68,6 +68,8 @@ const japaneseText: Record<string, string> = {
   "Pan Next": "次の範囲へ",
   "Zoom Out": "縮小",
   "Zoom In": "拡大",
+  "Zoom level": "ズームレベル",
+  "Edit Projection in Video Setup": "映像セットアップで投影を編集",
   "Reveal Selected": "選択位置を表示",
   "Reveal Playhead": "再生位置を表示",
   "Clear overlap filter": "重複フィルターを解除",

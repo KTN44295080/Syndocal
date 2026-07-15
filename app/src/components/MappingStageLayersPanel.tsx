@@ -1,16 +1,10 @@
 import { Show } from "solid-js";
 import type { MappingStageTool } from "../mappingViewPresets";
-import type { VideoOutputMapping } from "../types";
-import type { MappingVideoOutputCornerKey } from "../videoOutputMapping";
 import { MappingBeamsLayer, type MappingBeamFixture } from "./MappingBeamsLayer";
 import { MappingFixturesLayer, type MappingFixture2D, type MappingPlacePreview2D } from "./MappingFixturesLayer";
 import { MappingGeometryLayer, type MappingGeometryNode2D } from "./MappingGeometryLayer";
 import { MappingStageObjectsLayer, type MappingStageObject2D } from "./MappingStageObjectsLayer";
-import {
-  MappingVideoSurfacesLayer,
-  type MappingVideoSurface2D,
-  type MappingVideoSurfaceCorner,
-} from "./MappingVideoSurfacesLayer";
+import { MappingVideoSurfacesLayer, type MappingVideoSurface2D } from "./MappingVideoSurfacesLayer";
 
 interface MappingStageLayersPanelProps {
   showStageObjects: boolean;
@@ -32,24 +26,12 @@ interface MappingStageLayersPanelProps {
   selectedVideoOutputId: number | null;
   placePreview: MappingPlacePreview2D | null;
   isDraggingStageObject: (objectId: number) => boolean;
-  isDraggingVideoOutput: (outputId: number) => boolean;
   isDraggingFixture: (fixtureId: number) => boolean;
   isYawDragging: (fixtureId: number) => boolean;
-  surfaceMapping: (surface: MappingVideoSurface2D) => VideoOutputMapping;
-  cornerLocals: (surface: MappingVideoSurface2D, mapping: VideoOutputMapping) => MappingVideoSurfaceCorner[];
-  cornerPointList: (surface: MappingVideoSurface2D, mapping: VideoOutputMapping) => string;
   onBeginStageObjectDrag: (event: PointerEvent, objectId: number) => void;
   onBeginStageObjectRotate: (event: PointerEvent, objectId: number) => void;
   onBeginStageObjectResize: (event: PointerEvent, objectId: number, axis: "width" | "depth" | "both") => void;
   onSelectVideoOutput: (outputId: number) => void;
-  onBeginVideoOutputDrag: (event: PointerEvent, outputId: number) => void;
-  onBeginVideoOutputCornerDrag: (
-    event: PointerEvent,
-    outputId: number,
-    corner: MappingVideoOutputCornerKey,
-  ) => void;
-  onBeginVideoOutputRotate: (event: PointerEvent, outputId: number) => void;
-  onBeginVideoOutputScale: (event: PointerEvent, outputId: number) => void;
   onBeginFixtureYawDrag: (event: PointerEvent, fixtureId: number) => void;
   onFixturePointerDown: (event: PointerEvent, fixtureId: number) => void;
 }
@@ -71,15 +53,7 @@ export function MappingStageLayersPanel(props: MappingStageLayersPanelProps) {
           surfaces={props.videoSurfaces}
           selectedVideoOutputId={props.selectedVideoOutputId}
           stageTool={props.stageTool}
-          isDragging={props.isDraggingVideoOutput}
-          surfaceMapping={props.surfaceMapping}
-          cornerLocals={props.cornerLocals}
-          cornerPointList={props.cornerPointList}
           onSelectOutput={props.onSelectVideoOutput}
-          onBeginDrag={props.onBeginVideoOutputDrag}
-          onBeginCornerDrag={props.onBeginVideoOutputCornerDrag}
-          onBeginRotate={props.onBeginVideoOutputRotate}
-          onBeginScale={props.onBeginVideoOutputScale}
         />
       </Show>
       <Show when={props.showBeams}>

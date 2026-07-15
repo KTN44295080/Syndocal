@@ -918,7 +918,9 @@ export default function App() {
   const [selectedVideoOutputId, setSelectedVideoOutputId] = createSignal<number | null>(null);
   const [mappingShowLabels, setMappingShowLabels] = createSignal(true);
   const [mappingShowBeams, setMappingShowBeams] = createSignal(true);
-  const [mappingShowProjectors, setMappingShowProjectors] = createSignal(true);
+  // Projection surfaces are reference-only on the lighting floor plan and default OFF;
+  // the V hotkey and the toolbar/viewport toggles still turn them on.
+  const [mappingShowProjectors, setMappingShowProjectors] = createSignal(false);
   const [mappingShowLevels, setMappingShowLevels] = createSignal(false);
   const [mappingShowGeometry, setMappingShowGeometry] = createSignal(false);
   const [mappingShowStageObjects, setMappingShowStageObjects] = createSignal(true);
@@ -12122,7 +12124,6 @@ export default function App() {
             surfaceMinOpacity={0.22}
             beamMinOpacity={0.08}
             beamIntensityScale={0.55}
-            fixtureRadiusIntensityScale={1.4}
             onSelectVideoOutput={setSelectedVideoOutputId}
             onSelectFixture={(fixtureId) => {
               const fixture = snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
@@ -12188,7 +12189,6 @@ export default function App() {
             surfaceMinOpacity={0.2}
             beamMinOpacity={0.06}
             beamIntensityScale={0.48}
-            fixtureRadiusIntensityScale={1.2}
             onSelectVideoOutput={setSelectedVideoOutputId}
             onSelectFixture={(fixtureId) => {
               const patchedFixture = snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
@@ -12599,6 +12599,7 @@ export default function App() {
             canFitVisible: canFitMappingViewportToVisible(),
             canFitSelection: canFitMappingViewportToSelection(),
             zoomLabel: mappingViewportZoomLabel(),
+            zoomValue: normalizedMappingViewportZoom(),
             canZoomOut: normalizedMappingViewportZoom() > 1.001,
             canZoomIn: normalizedMappingViewportZoom() < 3.999,
             canResetZoom: normalizedMappingViewportZoom() > 1.001,
@@ -12614,6 +12615,7 @@ export default function App() {
             onFitSelection: fitMappingViewportToSelection,
             onZoomOut: () => zoomMappingViewport(-1),
             onZoomIn: () => zoomMappingViewport(1),
+            onZoomLevel: (zoom) => setMappingViewport(zoom),
             onResetZoom: resetMappingViewport,
             onSnapOff: () => setMappingSnapEnabled(false),
             onSnapPreset: (preset) => {
@@ -12696,26 +12698,15 @@ export default function App() {
             selectedVideoOutputId: selectedVideoOutputId(),
             placePreview: mappingPlacePreview(),
             isDraggingStageObject: isDraggingMappingStageObject,
-            isDraggingVideoOutput: isDraggingMappingVideoOutput,
             isDraggingFixture: isDraggingMappingFixture,
             isYawDragging: (fixtureId) => {
               const drag = mappingDrag();
               return drag?.kind === "fixtureYaw" && drag.fixtureId === fixtureId;
             },
-            surfaceMapping: (surface) => {
-              const output = snapshot().video.outputs.find((candidate) => candidate.id === surface.id);
-              return output ? mappingVideoOutputMapping(output) : defaultVideoOutputMapping;
-            },
-            cornerLocals: mappingVideoSurfaceCornerLocals,
-            cornerPointList: mappingVideoSurfaceCornerPointList,
             onBeginStageObjectDrag: beginMappingStageObjectDrag,
             onBeginStageObjectRotate: beginMappingStageObjectRotate,
             onBeginStageObjectResize: beginMappingStageObjectResize,
             onSelectVideoOutput: setSelectedVideoOutputId,
-            onBeginVideoOutputDrag: beginMappingVideoOutputDrag,
-            onBeginVideoOutputCornerDrag: beginMappingVideoOutputCornerDrag,
-            onBeginVideoOutputRotate: beginMappingVideoOutputRotate,
-            onBeginVideoOutputScale: beginMappingVideoOutputScale,
             onBeginFixtureYawDrag: beginMappingFixtureYawDrag,
             onFixturePointerDown: (event, fixtureId) => {
               if (mappingStageTool() === "pan") return;
@@ -12794,6 +12785,10 @@ export default function App() {
             onSyncOutputWindow: syncVideoOutputWindow,
             onFitOutputToStageObject: fitVideoOutputToStageObject,
             onSetOutputMapping: setVideoOutputMapping,
+            onEditOutputProjection: (outputId) => {
+              setSelectedVideoOutputId(outputId);
+              selectSetupMode("video");
+            },
           }}
           hotkeyHelpOpen={mappingHotkeyHelpOpen()}
           onCloseHotkeyHelp={() => setMappingHotkeyHelpOpen(false)}

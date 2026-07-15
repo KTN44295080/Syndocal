@@ -1,23 +1,5 @@
-import { For } from "solid-js";
-import type {
-  StageObjectSummary,
-  VideoOutputAspectMode,
-  VideoOutputMapping,
-  VideoOutputSummary,
-} from "../types";
-import {
-  defaultVideoOutputMapping,
-  mappingCorrectionReadout,
-  outputAspectRatio,
-  resetVideoOutputCornerOffsets,
-  resetVideoOutputLensKeystone,
-  resetVideoOutputPose,
-  resetVideoOutputStagePosition,
-  resetVideoOutputWarp,
-  videoOutputAspectPresets,
-  videoOutputAspectModes,
-} from "../videoOutputMapping";
-import { ProjectorMapEditor, ProjectorMapPreview } from "./ProjectorMapEditor";
+import type { StageObjectSummary, VideoOutputMapping, VideoOutputSummary } from "../types";
+import { mappingCorrectionReadout } from "../videoOutputMapping";
 
 type MaybePromise = void | Promise<unknown>;
 
@@ -30,30 +12,21 @@ type MappingProjectorControlsPanelProps = {
   onSyncWindow: (outputId: number) => MaybePromise;
   onFitStageObject: (output: VideoOutputSummary, object: StageObjectSummary) => MaybePromise;
   onSetMapping: (outputId: number, mapping: VideoOutputMapping) => MaybePromise;
+  onEditProjection: (outputId: number) => void;
 };
 
+// Mapping keeps only floor-plan-legitimate output properties: stage X/Z/rotation and
+// enable/blackout/window state. Keystone, corner-pin, lens, and aspect editing lives in
+// Setup > Video's Projection Map; this panel jumps there instead of duplicating it.
 export function MappingProjectorControlsPanel(props: MappingProjectorControlsPanelProps) {
   const patchMapping = (patch: Partial<VideoOutputMapping>) =>
     props.onSetMapping(props.output.id, { ...props.output.mapping, ...patch });
 
-  const setAspectPreset = (aspectRatio: number) =>
-    patchMapping({
-      aspect_ratio: aspectRatio,
-      aspect_mode: "Fit",
-    });
-
   return (
     <div class="mappingProjectorControls">
-      <div class="mappingProjectorPreview">
-        <ProjectorMapPreview
-          mapping={props.output.mapping}
-          outputId={props.output.id}
-          class="projectorMapSurface outputMappingMiniSurface"
-        />
-        <div>
-          <strong data-no-localize>{props.output.label}</strong>
-          <span>{mappingCorrectionReadout(props.output.mapping)}</span>
-        </div>
+      <div class="mappingProjectorSummary">
+        <strong data-no-localize>{props.output.label}</strong>
+        <span>{props.output.width}x{props.output.height} / {mappingCorrectionReadout(props.output.mapping)}</span>
       </div>
       <div class="mappingProjectorActionRow">
         <button onClick={() => void props.onSetEnabled(props.output.id, !props.output.enabled)}>
@@ -76,12 +49,6 @@ export function MappingProjectorControlsPanel(props: MappingProjectorControlsPan
           Fit Object
         </button>
       </div>
-      <ProjectorMapEditor
-        mapping={props.output.mapping}
-        outputId={props.output.id}
-        label={props.output.label}
-        onPatch={(patch) => void patchMapping(patch)}
-      />
       <div class="mappingProjectorFieldGrid">
         <label>
           X
@@ -102,15 +69,6 @@ export function MappingProjectorControlsPanel(props: MappingProjectorControlsPan
           />
         </label>
         <label>
-          Y
-          <input
-            type="number"
-            step="0.1"
-            value={props.output.mapping.stage_y}
-            onChange={(event) => void patchMapping({ stage_y: Number(event.currentTarget.value) })}
-          />
-        </label>
-        <label>
           Rot
           <input
             type="number"
@@ -120,94 +78,12 @@ export function MappingProjectorControlsPanel(props: MappingProjectorControlsPan
           />
         </label>
       </div>
-      <div class="mappingProjectorWarpGrid">
-        <label>
-          Aspect
-          <input
-            type="number"
-            step="0.01"
-            min="0.1"
-            value={props.output.mapping.aspect_ratio}
-            onChange={(event) => void patchMapping({ aspect_ratio: Number(event.currentTarget.value) })}
-          />
-        </label>
-        <label>
-          Mode
-          <select
-            value={props.output.mapping.aspect_mode}
-            onChange={(event) =>
-              void patchMapping({ aspect_mode: event.currentTarget.value as VideoOutputAspectMode })
-            }
-          >
-            <For each={videoOutputAspectModes}>
-              {(mode) => <option value={mode}>{mode}</option>}
-            </For>
-          </select>
-        </label>
-        <label>
-          Lens
-          <input
-            type="number"
-            step="0.01"
-            min="-1"
-            max="1"
-            value={props.output.mapping.lens_distortion}
-            onChange={(event) => void patchMapping({ lens_distortion: Number(event.currentTarget.value) })}
-          />
-        </label>
-        <label>
-          Keystone X
-          <input
-            type="number"
-            step="0.01"
-            min="-1"
-            max="1"
-            value={props.output.mapping.keystone_x}
-            onChange={(event) => void patchMapping({ keystone_x: Number(event.currentTarget.value) })}
-          />
-        </label>
-        <label>
-          Keystone Y
-          <input
-            type="number"
-            step="0.01"
-            min="-1"
-            max="1"
-            value={props.output.mapping.keystone_y}
-            onChange={(event) => void patchMapping({ keystone_y: Number(event.currentTarget.value) })}
-          />
-        </label>
-        <div class="mappingProjectorPresetGrid">
-          <button onClick={() => void props.onSetMapping(props.output.id, defaultVideoOutputMapping)}>
-            Reset
-          </button>
-          <button onClick={() => void props.onSetMapping(props.output.id, resetVideoOutputStagePosition(props.output.mapping))}>
-            Reset Stage
-          </button>
-          <button onClick={() => void props.onSetMapping(props.output.id, resetVideoOutputPose(props.output.mapping))}>
-            Reset Pose
-          </button>
-          <button onClick={() => void props.onSetMapping(props.output.id, resetVideoOutputWarp(props.output.mapping))}>
-            Clear Warp
-          </button>
-          <button onClick={() => void props.onSetMapping(props.output.id, resetVideoOutputLensKeystone(props.output.mapping))}>
-            Clear Lens/Key
-          </button>
-          <button onClick={() => void props.onSetMapping(props.output.id, resetVideoOutputCornerOffsets(props.output.mapping))}>
-            Clear Corners
-          </button>
-          <button onClick={() => void setAspectPreset(outputAspectRatio(props.output.width, props.output.height))}>
-            Output Ratio
-          </button>
-          <For each={videoOutputAspectPresets}>
-            {(preset) => (
-              <button onClick={() => void setAspectPreset(preset.ratio)}>
-                {preset.label}
-              </button>
-            )}
-          </For>
-        </div>
-      </div>
+      <button
+        class="mappingProjectorEditProjection"
+        onClick={() => props.onEditProjection(props.output.id)}
+      >
+        Edit Projection in Video Setup
+      </button>
     </div>
   );
 }

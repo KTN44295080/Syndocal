@@ -2275,12 +2275,24 @@ async function measure(client, label) {
         if (!stageRect || !gridRect || stageRect.width <= 0 || stageRect.height <= 0) return 0;
         return Math.min(gridRect.width / stageRect.width, gridRect.height / stageRect.height);
       })(),
-      controlStageFixtureMinSize: Math.min(
-        ...[...document.querySelectorAll('.controlStage .stageFixture')].map((fixture) => {
-          const rect = fixture.getBoundingClientRect();
+      controlStageFixtureMinSize: (() => {
+        const sizes = [...document.querySelectorAll('.controlStage .stageFixtureHitTarget')].map((target) => {
+          const rect = target.getBoundingClientRect();
           return Math.min(rect.width, rect.height);
-        }),
-      ),
+        });
+        return sizes.length > 0 ? Math.min(...sizes) : 0;
+      })(),
+      controlStageFixtureGlyphMetrics: [...document.querySelectorAll('.controlStage .stageFixture')].map((fixture) => {
+        const shapeRect = fixture.querySelector('.stageFixtureShape')?.getBoundingClientRect();
+        const hitRect = fixture.querySelector('.stageFixtureHitTarget')?.getBoundingClientRect();
+        return {
+          kind: [...fixture.classList].find((className) => className.startsWith('kind-'))?.slice(5) ?? 'unknown',
+          glyphWidth: Math.round((shapeRect?.width ?? 0) * 100) / 100,
+          glyphHeight: Math.round((shapeRect?.height ?? 0) * 100) / 100,
+          hitWidth: Math.round((hitRect?.width ?? 0) * 100) / 100,
+          hitHeight: Math.round((hitRect?.height ?? 0) * 100) / 100,
+        };
+      }),
       visibleControlStageReferenceLabelCount: visibleCount('.controlStage .controlStageObject text, .controlStage .stageVideoSurface2d text'),
       controlWorkSurfaceOverflowCount: [...document.querySelectorAll(
         '.layoutControl .faders, .layoutControl .videoControlPanel, .layoutControl .videoOutputControlList, .layoutControl .videoLayerList'
@@ -3165,7 +3177,9 @@ function hasExpectedControlModeSurface(result) {
       result.controlStageViewBoxAspect < (result.label.startsWith("control-live-") ? 1.44 : 2) ||
       result.controlStageGridCoverage < 0.95 ||
       result.controlStageFixtureMinSize < 12 ||
-      result.visibleControlStageReferenceLabelCount > 1
+      // T9 extension: the compact Control map now keeps both required reference labels
+      // visible (one Screen band + one projection-surface line) instead of hiding them.
+      result.visibleControlStageReferenceLabelCount !== 2
     )
   ) {
     return false;
@@ -3682,10 +3696,13 @@ function hasExpectedSetupSurface(result) {
       result.mappingWaveDraftButtonCount >= 1 &&
       result.visibleMappingProjectorButtonCount >= 1 &&
       result.visibleMappingProjectorControlsCount >= 1 &&
-      result.visibleMappingProjectorWarpGridCount >= 1 &&
+      // T9: Mapping is a lighting-only floor plan. Projection warp/keystone/corner editing
+      // moved to Setup > Video, so the Mapping sidebar has no warp grid and no Reset Pose,
+      // and the projection-surfaces layer defaults OFF (0 surface DOM nodes on the stage).
+      result.visibleMappingProjectorWarpGridCount === 0 &&
       result.visibleMappingProjectorActionButtonCount >= 4 &&
-      result.visibleMappingProjectorResetPoseButtonCount >= 1 &&
-      result.visibleStageVideoSurfaceCount >= 1 &&
+      result.visibleMappingProjectorResetPoseButtonCount === 0 &&
+      result.visibleStageVideoSurfaceCount === 0 &&
       result.mappingFilterVerticalClipCount === 0 &&
       result.mappingViewportChildOverlapCount === 0 &&
       result.mappingStageHeight >= 180 &&
@@ -7898,6 +7915,9 @@ async function main() {
       const touchSuffix = result.label.startsWith("touch-")
         ? ` touch=${result.visibleTouchCuePanelCount}/${result.visibleTouchGoDeckCount}/${result.visibleTouchCuePadCount}/${result.visibleTouchStagePanelCount}/${result.visibleTouchStageCount}/${result.visibleTouchFixturePanelCount}/${result.visibleTouchFixtureScrollerCount}/${result.visibleTouchRemotePanelCount}/${result.visibleTouchRemoteUrlItemCount}/${result.visibleTouchRemoteCopyButtonCount}/${result.visibleTouchRemoteOpenButtonCount}/${result.visibleTouchVideoPanelCount}/${result.visibleTouchVideoOutputDeckCount}/${result.visibleTouchVideoSelectedOutputDeckCount}/${result.visibleTouchVideoOutputFaderCount}/${result.visibleTouchVideoOutputButtonCount}/${result.visibleTouchVideoOutputSelectButtonCount}/${result.visibleTouchVideoDeckCount}/${result.visibleTouchVideoLayerFaderCount}/${result.visibleTouchMasterGridCount}`
         : "";
+      const controlStageGlyphSuffix = /^control-live-\d+x\d+$/.test(result.label)
+        ? ` controlStageGlyphs=${JSON.stringify(result.controlStageFixtureGlyphMetrics)} hitMin=${result.controlStageFixtureMinSize}`
+        : "";
       const mappingSuffix = result.label.startsWith("setup-mapping-")
         ? ` mapping=${result.mappingUseInEffectsButtonCount}/${result.mappingWaveDraftButtonCount}/${result.visibleMappingProjectorButtonCount}/${result.visibleMappingProjectorControlsCount}/${result.visibleMappingProjectorWarpGridCount}/${result.visibleMappingProjectorActionButtonCount}/${result.visibleMappingProjectorResetPoseButtonCount}/${result.visibleStageVideoSurfaceCount}`
         : "";
@@ -7932,7 +7952,7 @@ async function main() {
         ? ` mixer=${result.visibleVideoOutputItemCount}/${result.visibleVideoOutputSelectedItemCount}/${result.visibleVideoMixerOutputDeckCount}/${result.visibleVideoMixerOutputFaderCount}/${result.visibleVideoMixerOutputSelectButtonCount}/${result.visibleVideoLayerItemCount}/${result.visibleBuiltinVideoFxSelectCount}/${result.visibleVideoMixerLayerDeckCount}/${result.visibleVideoMixerLayerFaderCount}/${result.visibleVideoMixerLayerButtonCount} clip=${result.videoClipGridClientHeight}/${result.fullyVisibleVideoClipPadCount} contract=${result.controlModeFailedChecks?.join(",") || "ok"}`
         : "";
       console.log(
-        `${status} [${viewportRole({ width: result.innerWidth, height: result.innerHeight })}] ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${keyboardSuffix}${timelineSuffix}${sceneBlockSuffix}${touchSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${positionVisualSuffix}${colorEffectSuffix}${chaserEffectSuffix}${moveEffectSuffix}${mixerSuffix}`,
+        `${status} [${viewportRole({ width: result.innerWidth, height: result.innerHeight })}] ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${keyboardSuffix}${timelineSuffix}${sceneBlockSuffix}${touchSuffix}${controlStageGlyphSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${positionVisualSuffix}${colorEffectSuffix}${chaserEffectSuffix}${moveEffectSuffix}${mixerSuffix}`,
       );
     }
     for (const result of cueRecallResults) {

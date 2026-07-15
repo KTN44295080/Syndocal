@@ -16,6 +16,7 @@ type MappingProjectorSelectionPanelProps = {
   onSyncWindow: (outputId: number) => MaybePromise;
   onFitStageObject: (output: VideoOutputSummary, object: StageObjectSummary) => MaybePromise;
   onSetMapping: (outputId: number, mapping: VideoOutputMapping) => MaybePromise;
+  onEditProjection: (outputId: number) => void;
 };
 
 export function MappingProjectorSelectionPanel(props: MappingProjectorSelectionPanelProps) {
@@ -48,6 +49,7 @@ export function MappingProjectorSelectionPanel(props: MappingProjectorSelectionP
             onSyncWindow={props.onSyncWindow}
             onFitStageObject={props.onFitStageObject}
             onSetMapping={props.onSetMapping}
+            onEditProjection={props.onEditProjection}
           />
         )}
       </Show>

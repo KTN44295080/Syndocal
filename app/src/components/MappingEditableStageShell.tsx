@@ -72,8 +72,12 @@ export function MappingEditableStageShell(props: MappingEditableStageShellProps)
       onWheel={(event) => props.onWheel(event)}
     >
       <defs>
-        <pattern id="stage-grid" width="10" height="10" patternUnits="userSpaceOnUse">
-          <path d="M 10 0 L 0 0 0 10" />
+        <pattern id="stage-grid-minor" width="5" height="5" patternUnits="userSpaceOnUse">
+          <path class="stageGridMinor" d="M 5 0 L 0 0 0 5" />
+        </pattern>
+        <pattern id="stage-grid" width="20" height="20" patternUnits="userSpaceOnUse">
+          <rect width="20" height="20" fill="url(#stage-grid-minor)" />
+          <path class="stageGridMajor" d="M 20 0 L 0 0 0 20" />
         </pattern>
       </defs>
       <rect class="stageFloor" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />

@@ -11,6 +11,7 @@ type MappingViewportControlsProps = {
   canFitVisible: boolean;
   canFitSelection: boolean;
   zoomLabel: string;
+  zoomValue: number;
   canZoomOut: boolean;
   canZoomIn: boolean;
   canResetZoom: boolean;
@@ -26,6 +27,7 @@ type MappingViewportControlsProps = {
   onFitSelection: () => void;
   onZoomOut: () => void;
   onZoomIn: () => void;
+  onZoomLevel: (zoom: number) => void;
   onResetZoom: () => void;
   onSnapOff: () => void;
   onSnapPreset: (size: number) => void;
@@ -65,6 +67,17 @@ export function MappingViewportControls(props: MappingViewportControlsProps) {
         <button onClick={props.onZoomOut} disabled={!props.canZoomOut} title="Zoom out (-)">
           Zoom -
         </button>
+        <input
+          class="mappingZoomSlider"
+          type="range"
+          min="1"
+          max="4"
+          step="0.05"
+          value={props.zoomValue}
+          aria-label="Zoom level"
+          title="Zoom level"
+          onInput={(event) => props.onZoomLevel(Number(event.currentTarget.value))}
+        />
         <strong>{props.zoomLabel}</strong>
         <button onClick={props.onZoomIn} disabled={!props.canZoomIn} title="Zoom in (+)">
           Zoom +

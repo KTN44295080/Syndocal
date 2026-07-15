@@ -1,5 +1,6 @@
 import { For, Show } from "solid-js";
 import type { MappingFixtureVisualKind } from "../fixtureVisuals";
+import { StageFixtureGlyph } from "./StageGlyphs";
 
 export interface MappingFixture2D {
   id: number;
@@ -70,41 +71,13 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
                 transform={`translate(${fixture.x} ${fixture.z}) rotate(${fixture.yaw})`}
                 onPointerDown={(event) => props.onFixturePointerDown(event, fixture.id)}
               >
-                <Show
-                  when={fixture.visualKind === "bar" || fixture.visualKind === "panel"}
-                  fallback={
-                    <Show
-                      when={fixture.visualKind === "laser"}
-                      fallback={
-                        <circle
-                          class="stageFixtureShape"
-                          cx="0"
-                          cy="0"
-                          r={Math.max(fixture.width, fixture.height) / 2 + fixture.intensity * 1.5}
-                          fill={fixture.color}
-                        />
-                      }
-                    >
-                      <polygon
-                        class="stageFixtureShape"
-                        points={`0,${-fixture.height / 2} ${fixture.width / 2},${fixture.height / 2} ${-fixture.width / 2},${fixture.height / 2}`}
-                        fill={fixture.color}
-                      />
-                    </Show>
-                  }
-                >
-                  <rect
-                    class="stageFixtureShape"
-                    x={-fixture.width / 2}
-                    y={-fixture.height / 2}
-                    width={fixture.width}
-                    height={fixture.height}
-                    fill={fixture.color}
-                  />
-                </Show>
-                <line class="stageFixtureCenterLine" x1="0" y1="0" x2="0" y2="-7" />
-                <circle class="stageFixtureLaserMark" cx="0" cy="-7" r="0.9" />
-                <title>{`${fixture.label} / ${fixture.dmxLabel} / ${fixture.groupLabel}`}</title>
+                <StageFixtureGlyph
+                  visualKind={fixture.visualKind}
+                  width={fixture.width}
+                  height={fixture.height}
+                  color={fixture.color}
+                  title={`${fixture.label} / ${fixture.dmxLabel} / ${fixture.groupLabel}`}
+                />
               </g>
               <Show when={showYawHandle()}>
                 <line
@@ -144,48 +117,16 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
             class={`stagePlacePreview kind-${preview().visualKind}`}
             transform={`translate(${preview().x} ${preview().z}) rotate(${preview().yaw})`}
           >
-            <Show
-              when={preview().visualKind === "bar" || preview().visualKind === "panel"}
-              fallback={
-                <Show
-                  when={preview().visualKind === "laser"}
-                  fallback={
-                    <circle
-                      r={Math.max(preview().width, preview().height) / 2}
-                      fill={preview().color}
-                    >
-                      <title>Place {preview().label} / {preview().dmxLabel} / {preview().groupLabel}</title>
-                    </circle>
-                  }
-                >
-                  <polygon
-                    class="stagePlacePreviewShape"
-                    points={`0,${-preview().height / 2} ${preview().width / 2},${preview().height / 2} ${-preview().width / 2},${preview().height / 2}`}
-                    fill={preview().color}
-                  >
-                    <title>Place {preview().label} / {preview().dmxLabel} / {preview().groupLabel}</title>
-                  </polygon>
-                </Show>
-              }
-            >
-              <rect
-                class="stagePlacePreviewShape"
-                x={-preview().width / 2}
-                y={-preview().height / 2}
-                width={preview().width}
-                height={preview().height}
-                fill={preview().color}
-              >
-                <title>Place {preview().label} / {preview().dmxLabel} / {preview().groupLabel}</title>
-              </rect>
-              <line
-                class="stagePlacePreviewCenterLine"
-                x1="0"
-                y1="0"
-                x2="0"
-                y2={-Math.max(5, preview().height / 2 + 2)}
-              />
-            </Show>
+            <StageFixtureGlyph
+              visualKind={preview().visualKind}
+              width={preview().width}
+              height={preview().height}
+              color={preview().color}
+              shapeClass="stagePlacePreviewShape"
+              facingLineClass="stagePlacePreviewCenterLine"
+              showFacingMark={false}
+              title={`Place ${preview().label} / ${preview().dmxLabel} / ${preview().groupLabel}`}
+            />
             <text x={preview().width / 2 + 1.6} y={-preview().height / 2 - 1}>
               Place {preview().label}
             </text>
