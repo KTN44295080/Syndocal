@@ -1,8 +1,5 @@
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
-import {
-  shouldCommitTimelineMarkerDrag,
-  timelineSceneBlockLoopDivisionPositions,
-} from "../timelineSceneBlocks";
+import { shouldCommitTimelineMarkerDrag } from "../timelineSceneBlocks";
 import {
   beginTimelineAbsoluteDragProjection,
   buildTimelineRulerTicks,
@@ -14,6 +11,7 @@ import {
 } from "../timelineViewport";
 import { packTimelineOverlapClusterBadges } from "../timelineOverlapClusters";
 import { cueIdentityHue, identityCssColor } from "../identityColor";
+import { formatCompactClock } from "../clockDisplay";
 import type { TimelineTrackKind } from "../types";
 
 export interface TimelineOverviewEvent {
@@ -25,6 +23,7 @@ export interface TimelineOverviewEvent {
   duration_ms: number;
   loop_count: number;
   total_duration_ms: number;
+  fade_in_ms: number;
   x: number;
   width: number;
   y: number;
@@ -122,7 +121,6 @@ interface TimelineAutomationKeyframeDrag {
 }
 
 const clampRatio = (value: number) => Math.min(1, Math.max(0, value));
-const maxSceneBlockLoopLines = 400;
 const sameNumberSet = (left: Set<number>, right: Set<number>) =>
   left.size === right.size && [...left].every((value) => right.has(value));
 
@@ -135,6 +133,7 @@ const sameOverviewEvent = (left: TimelineOverviewEvent, right: TimelineOverviewE
   left.duration_ms === right.duration_ms &&
   left.loop_count === right.loop_count &&
   left.total_duration_ms === right.total_duration_ms &&
+  left.fade_in_ms === right.fade_in_ms &&
   left.x === right.x &&
   left.width === right.width &&
   left.y === right.y;
@@ -167,8 +166,13 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   const [suppressClickEventId, setSuppressClickEventId] = createSignal<number | null>(null);
   const [suppressClickRangeId, setSuppressClickRangeId] = createSignal<string | null>(null);
   const [keyboardMarkerEventId, setKeyboardMarkerEventId] = createSignal<number | null>(null);
-  const [viewBoxWidth, setViewBoxWidth] = createSignal(100);
+  // True pixel-space canvas: the SVG viewBox mirrors the measured client box
+  // (0 0 width height), so every user unit equals one rendered pixel and text
+  // renders undistorted at any aspect ratio (mirrors ValueEffectEditorPanel).
   const [overviewPixelWidth, setOverviewPixelWidth] = createSignal(1);
+  const [overviewPixelHeight, setOverviewPixelHeight] = createSignal(78);
+  const [lightingLaneVisible, setLightingLaneVisible] = createSignal(true);
+  const [videoLaneVisible, setVideoLaneVisible] = createSignal(true);
   let overviewElement: SVGSVGElement | undefined;
   onMount(() => {
     const updateViewBox = () => {
@@ -176,8 +180,8 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       const width = overviewElement.clientWidth;
       const height = overviewElement.clientHeight;
       if (width > 0 && height > 0) {
-        setViewBoxWidth(44 * (width / height));
         setOverviewPixelWidth(width);
+        setOverviewPixelHeight(height);
       }
     };
     updateViewBox();
@@ -185,6 +189,10 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     if (overviewElement) observer.observe(overviewElement);
     onCleanup(() => observer.disconnect());
   });
+  const overviewW = () => Math.max(1, overviewPixelWidth());
+  const overviewH = () => Math.max(1, overviewPixelHeight());
+  const laneVisible = (track: TimelineTrackKind) =>
+    track === "Lighting" ? lightingLaneVisible() : videoLaneVisible();
   let cachedEventsById = new Map<number, TimelineOverviewEvent>();
   const stableEvents = createMemo(() => {
     const nextCache = new Map<number, TimelineOverviewEvent>();
@@ -582,94 +590,162 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     const localRatio = clampRatio((timeMs - range.start_ms) / spanMs);
     return automationRangeX(range) + localRatio * automationRangeWidth(range);
   };
-  const viewBoxX = (percent: number) => (percent / 100) * viewBoxWidth();
+  // ---- Pixel-space layout ------------------------------------------------
+  // Every x is `percent (0..100 of the visible window) -> pixel`; every y and
+  // height is derived from the measured overview height so the two lanes and
+  // two-band blocks scale with the panel instead of a fixed 44-unit grid.
+  const viewBoxX = (percent: number) => (percent / 100) * overviewW();
+  const laneHeightPx = () => overviewH() / 2;
+  const laneTopPx = (track: TimelineTrackKind) => track === "Lighting" ? 0 : laneHeightPx();
+  const laneBottomPx = (track: TimelineTrackKind) => laneTopPx(track) + laneHeightPx();
+  const blockHeightPx = () => Math.max(9, laneHeightPx() * 0.52);
+  // The Lighting lane clears the ruler labels at the very top of the canvas.
+  const blockTopPx = (track: TimelineTrackKind) =>
+    laneTopPx(track) + laneHeightPx() * (track === "Lighting" ? 0.30 : 0.18);
+  const blockCenterYPx = (track: TimelineTrackKind) => blockTopPx(track) + blockHeightPx() / 2;
+  const identityBandHeightPx = () => blockHeightPx() * 0.54;
+  const automationBarHeightPx = (track: TimelineTrackKind) => Math.max(
+    3,
+    Math.min(9, (laneBottomPx(track) - (blockTopPx(track) + blockHeightPx())) * 0.72),
+  );
+  const automationBarTopPx = (track: TimelineTrackKind) =>
+    blockTopPx(track) + blockHeightPx() - automationBarHeightPx(track) * 0.3;
+  const rulerLabelBaselineY = () => Math.max(9, Math.min(14, overviewH() * 0.12));
+  const rulerLineTopPx = () => rulerLabelBaselineY() + 2;
+  const rulerLineBottomPx = () => overviewH() - 1;
+  const clusterBadgeWidthPx = 24;
+  // Keep the aggregate ×N badge in the upper strip of its lane, strictly above
+  // the block centers, so it never intercepts pointer hit-testing on the
+  // scene-block bodies (which would break block selection and dragging).
+  const clusterBadgeTopPx = (track: TimelineTrackKind) => laneTopPx(track) + 2;
+  const clusterBadgeHeightPx = (track: TimelineTrackKind) => {
+    const roomAboveBlockCenter = blockCenterYPx(track) - clusterBadgeTopPx(track) - 2;
+    return Math.max(10, Math.min(15, roomAboveBlockCenter));
+  };
+
+  const nameInsetPx = 4;
+  const nameCharWidthPx = 6.6;
+  const sceneBlockPixelWidth = (event: TimelineOverviewEvent) => Math.max(viewBoxX(event.width), 0.8);
+  const sceneBlockHasBands = (event: TimelineOverviewEvent) => sceneBlockPixelWidth(event) >= 16;
+  const sceneBlockShowsDuration = (event: TimelineOverviewEvent) => sceneBlockPixelWidth(event) >= 80;
+  const sceneBlockName = (event: TimelineOverviewEvent) => {
+    // Identity name only; loop/× semantics stay in the marker title and the
+    // aggregate overlap badge so the two counts never read ambiguously.
+    const label = event.cue_label;
+    const available = Math.max(0, sceneBlockPixelWidth(event) - nameInsetPx * 2);
+    const maxCharacters = Math.floor(available / nameCharWidthPx);
+    if (maxCharacters < 1) return "";
+    return label.length <= maxCharacters
+      ? label
+      : `${label.slice(0, Math.max(1, maxCharacters - 1))}…`;
+  };
+  const sceneBlockDurationStamp = (event: TimelineOverviewEvent) =>
+    formatCompactClock(event.total_duration_ms);
+  const sceneBlockFadeWedgePoints = (event: TimelineOverviewEvent) => {
+    const widthPx = sceneBlockPixelWidth(event);
+    if (event.total_duration_ms <= 0) return null;
+    const fadePx = Math.min(widthPx, (event.fade_in_ms / event.total_duration_ms) * widthPx);
+    if (fadePx < 6) return null;
+    const halfHeight = blockHeightPx() / 2;
+    return `0,${-halfHeight} ${fadePx},${-halfHeight} 0,${halfHeight}`;
+  };
+  const laneCounts = createMemo(() => {
+    let lighting = 0;
+    let video = 0;
+    for (const event of props.events) {
+      if (event.track === "Lighting") lighting += 1;
+      else video += 1;
+    }
+    return { lighting, video };
+  });
+
   const packedOverlapClusters = createMemo(() => packTimelineOverlapClusterBadges(
     props.overlapClusters.map((cluster) => ({
       ...cluster,
       x: viewBoxX(cluster.x),
       width: viewBoxX(cluster.width),
     })),
-    viewBoxWidth(),
+    overviewW(),
   ));
   const rulerTicks = createMemo(() => buildTimelineRulerTicks(props.visibleWindow, overviewPixelWidth()));
+  const rulerLabelInsetPx = () => Math.max(2, overviewW() * 0.004);
   const rulerLabelX = (ratio: number) => Math.min(
-    Math.max(1.2, ratio * viewBoxWidth()),
-    Math.max(1.2, viewBoxWidth() - 1.2),
+    Math.max(rulerLabelInsetPx(), ratio * overviewW()),
+    Math.max(rulerLabelInsetPx(), overviewW() - rulerLabelInsetPx()),
   );
   const rulerLabelAnchor = (ratio: number) => ratio <= 0.04 ? "start" : ratio >= 0.96 ? "end" : "middle";
-  const desiredSceneBlockLoopDivisions = (event: TimelineOverviewEvent) => {
-    const divisions = Math.max(0, event.loop_count - 1);
-    const divisionsAllowedByWidth = Math.max(0, Math.min(8, Math.floor(event.width / 2.5) - 1));
-    return Math.min(divisions, divisionsAllowedByWidth);
-  };
-  const sceneBlockLoopDivisionCounts = createMemo(() => {
-    const eligible = stableEvents()
-      .map((event) => ({ event, desired: desiredSceneBlockLoopDivisions(event) }))
-      .filter(({ desired }) => desired > 0);
-    const counts = new Map<number, number>();
-    if (eligible.length > maxSceneBlockLoopLines) {
-      for (let sample = 0; sample < maxSceneBlockLoopLines; sample += 1) {
-        const index = Math.floor((sample * eligible.length) / maxSceneBlockLoopLines);
-        counts.set(eligible[index].event.id, 1);
-      }
-      return counts;
-    }
-    let remaining = maxSceneBlockLoopLines;
-    for (let level = 0; remaining > 0; level += 1) {
-      let allocated = false;
-      for (const { event, desired } of eligible) {
-        if (desired <= level || remaining === 0) continue;
-        counts.set(event.id, level + 1);
-        remaining -= 1;
-        allocated = true;
-      }
-      if (!allocated) break;
-    }
-    return counts;
-  });
-  const sceneBlockLoopDivisions = (event: TimelineOverviewEvent) => {
-    const visibleDivisions = sceneBlockLoopDivisionCounts().get(event.id) ?? 0;
-    return timelineSceneBlockLoopDivisionPositions(event.width, event.loop_count, visibleDivisions);
-  };
-  const sceneBlockLabel = (event: TimelineOverviewEvent) => {
-    // Keep the dense overview label focused on identity. Loop semantics remain
-    // available through the marker title and data attributes; repeating a nearby
-    // `x256` beside an aggregate `×250` badge made the two counts ambiguous.
-    const label = event.cue_label;
-    const availableWidth = Math.max(0, viewBoxX(event.width) - 2.4);
-    const maxCharacters = Math.floor(availableWidth / 5.5);
-    if (maxCharacters < 3) return "";
-    return label.length <= maxCharacters
-      ? label
-      : `${label.slice(0, Math.max(1, maxCharacters - 1))}…`;
-  };
+
+  const toggleLightingLane = () => setLightingLaneVisible((visible) => !visible);
+  const toggleVideoLane = () => setVideoLaneVisible((visible) => !visible);
 
   return (
-    <svg
+    <div class="timelineOverviewFrame">
+      <div class="timelineOverviewGutter" aria-hidden="false">
+        <div class="timelineLaneGutter" data-lane="lighting" classList={{ laneHidden: !lightingLaneVisible() }}>
+          <span class="timelineLaneGutterName">Light</span>
+          <span class="timelineLaneGutterCount" data-no-localize>{laneCounts().lighting}</span>
+          <button
+            type="button"
+            class="timelineLaneEye"
+            aria-pressed={lightingLaneVisible()}
+            aria-label="Light lane visibility"
+            onClick={toggleLightingLane}
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path class="timelineLaneEyeShape" d="M1 8 C 3.5 3.5, 12.5 3.5, 15 8 C 12.5 12.5, 3.5 12.5, 1 8 Z" />
+              <circle cx="8" cy="8" r="2.4" />
+              <Show when={!lightingLaneVisible()}>
+                <line class="timelineLaneEyeSlash" x1="2.5" y1="13.5" x2="13.5" y2="2.5" />
+              </Show>
+            </svg>
+          </button>
+        </div>
+        <div class="timelineLaneGutter" data-lane="video" classList={{ laneHidden: !videoLaneVisible() }}>
+          <span class="timelineLaneGutterName">Video</span>
+          <span class="timelineLaneGutterCount" data-no-localize>{laneCounts().video}</span>
+          <button
+            type="button"
+            class="timelineLaneEye"
+            aria-pressed={videoLaneVisible()}
+            aria-label="Video lane visibility"
+            onClick={toggleVideoLane}
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path class="timelineLaneEyeShape" d="M1 8 C 3.5 3.5, 12.5 3.5, 15 8 C 12.5 12.5, 3.5 12.5, 1 8 Z" />
+              <circle cx="8" cy="8" r="2.4" />
+              <Show when={!videoLaneVisible()}>
+                <line class="timelineLaneEyeSlash" x1="2.5" y1="13.5" x2="13.5" y2="2.5" />
+              </Show>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <svg
       class={`timelineOverview ${props.executionLive ? "executingLive" : ""}`}
       ref={(element) => { overviewElement = element; }}
-      viewBox={`0 0 ${viewBoxWidth()} 44`}
-      data-viewbox-width={viewBoxWidth()}
+      viewBox={`0 0 ${overviewW()} ${overviewH()}`}
+      data-viewbox-width={overviewW()}
+      preserveAspectRatio="none"
       role="group"
       aria-label="Timeline overview"
       onClick={seekFromPointer}
     >
-      <rect class="timelineOverviewBg" x="0" y="0" width={viewBoxWidth()} height="44" />
-      <line class="timelineLaneDivider" x1="0" y1="22" x2={viewBoxWidth()} y2="22" />
+      <rect class="timelineOverviewBg" x="0" y="0" width={overviewW()} height={overviewH()} />
+      <line class="timelineLaneDivider" x1="0" y1={laneHeightPx()} x2={overviewW()} y2={laneHeightPx()} />
       <g class="timelineRuler" aria-hidden="true">
         <For each={rulerTicks()}>
           {(tick) => (
             <g data-timeline-ruler-ms={tick.time_ms}>
               <line
                 class={tick.major ? "major" : ""}
-                x1={tick.ratio * viewBoxWidth()}
-                x2={tick.ratio * viewBoxWidth()}
-                y1="6"
-                y2="42"
+                x1={tick.ratio * overviewW()}
+                x2={tick.ratio * overviewW()}
+                y1={rulerLineTopPx()}
+                y2={rulerLineBottomPx()}
               />
               <text
                 x={rulerLabelX(tick.ratio)}
-                y="5"
+                y={rulerLabelBaselineY()}
                 text-anchor={rulerLabelAnchor(tick.ratio)}
               >
                 {tick.label}
@@ -687,6 +763,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               range.enabled ? "" : "disabled",
               props.selectedRangeId === range.id ? "selected" : "",
               rangeDrag()?.rangeId === range.id ? "dragging" : "",
+              laneVisible(range.track) ? "" : "laneDimmed",
             ].filter(Boolean).join(" ")}
             onPointerDown={(pointerEvent) => beginRangeDrag(pointerEvent, range)}
             onPointerMove={moveRangeDrag}
@@ -704,10 +781,10 @@ export function TimelineOverview(props: TimelineOverviewProps) {
           >
             <rect
               x={viewBoxX(automationRangeX(range))}
-              y={range.y}
+              y={automationBarTopPx(range.track)}
               width={viewBoxX(automationRangeWidth(range))}
-              height="3.2"
-              rx="1.1"
+              height={automationBarHeightPx(range.track)}
+              rx="1.6"
             />
             <For each={range.keyframes}>
               {(keyframe) => (
@@ -735,14 +812,14 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                   <circle
                     class="timelineAutomationKeyframeHit"
                     cx={viewBoxX(automationKeyframeX(range, keyframe.keyframe_index, keyframe.time_ms))}
-                    cy={range.y + 1.6}
-                    r="2.1"
+                    cy={automationBarTopPx(range.track) + automationBarHeightPx(range.track) / 2}
+                    r="3.2"
                   />
                   <circle
                     class="timelineAutomationKeyframe"
                     cx={viewBoxX(automationKeyframeX(range, keyframe.keyframe_index, keyframe.time_ms))}
-                    cy={range.y + 1.6}
-                    r="0.6"
+                    cy={automationBarTopPx(range.track) + automationBarHeightPx(range.track) / 2}
+                    r="1.1"
                   />
                 </g>
               )}
@@ -750,19 +827,19 @@ export function TimelineOverview(props: TimelineOverviewProps) {
             <rect
               class="timelineAutomationHandle start"
               x={viewBoxX(automationRangeX(range))}
-              y={range.y - 0.65}
-              width="1.05"
-              height="4.5"
-              rx="0.3"
+              y={automationBarTopPx(range.track) - 0.8}
+              width="2.1"
+              height={automationBarHeightPx(range.track) + 1.6}
+              rx="0.6"
               onPointerDown={(pointerEvent) => beginRangeResize(pointerEvent, range, "start")}
             />
             <rect
               class="timelineAutomationHandle end"
-              x={Math.max(0, viewBoxX(automationRangeX(range) + automationRangeWidth(range)) - 1.05)}
-              y={range.y - 0.65}
-              width="1.05"
-              height="4.5"
-              rx="0.3"
+              x={Math.max(0, viewBoxX(automationRangeX(range) + automationRangeWidth(range)) - 2.1)}
+              y={automationBarTopPx(range.track) - 0.8}
+              width="2.1"
+              height={automationBarHeightPx(range.track) + 1.6}
+              rx="0.6"
               onPointerDown={(pointerEvent) => beginRangeResize(pointerEvent, range, "end")}
             />
             <title>
@@ -777,15 +854,20 @@ export function TimelineOverview(props: TimelineOverviewProps) {
             class={[
               "timelineMarker",
               event.duration_ms > 0 ? "sceneBlock" : "pointEvent",
+              event.duration_ms > 0 && sceneBlockHasBands(event) ? "hasBands" : "",
               event.track === "Lighting" ? "lighting" : "video",
               underPlayheadEventIds().has(event.id) ? "underPlayhead" : "",
               props.selectedEventId === event.id ? "selected" : "",
               markerDrag()?.eventId === event.id ? "dragging" : "",
+              laneVisible(event.track) ? "" : "laneDimmed",
             ].filter(Boolean).join(" ")}
             data-timeline-event-id={event.id}
             data-timeline-start-ms={event.time_ms}
             data-timeline-loop-count={event.loop_count}
-            style={{ "--identity": identityCssColor(cueIdentityHue(event.cue_id), "fill") }}
+            style={{
+              "--identity": identityCssColor(cueIdentityHue(event.cue_id), "fill"),
+              "--identity-band": identityCssColor(cueIdentityHue(event.cue_id), "band"),
+            }}
             data-timeline-preview-start-ms={markerDrag()?.eventId === event.id
               ? markerDrag()!.timeMs
               : event.time_ms}
@@ -794,7 +876,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
             aria-label={props.markerAriaLabel(event)}
             transform={`translate(${viewBoxX(markerDrag()?.eventId === event.id
               ? timelineTimeToVisibleRawRatio(markerDrag()!.timeMs, props.visibleWindow) * 100
-              : event.x)} ${event.y})`}
+              : event.x)} ${blockCenterYPx(event.track)})`}
             onPointerDown={(pointerEvent) => beginMarkerDrag(pointerEvent, event)}
             onPointerMove={moveMarkerDrag}
             onPointerUp={endMarkerDrag}
@@ -838,28 +920,81 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               when={event.duration_ms > 0}
               fallback={
                 <>
-                  <line x1="0" y1="-6" x2="0" y2="6" />
-                  <circle cx="0" cy="0" r="1.8" />
+                  <line
+                    class="timelinePointStem"
+                    x1="0"
+                    y1={-blockHeightPx() / 2}
+                    x2="0"
+                    y2={blockHeightPx() / 2}
+                  />
+                  <polygon
+                    class="timelinePointFlag"
+                    points={`0,${-blockHeightPx() / 2} ${Math.max(5, blockHeightPx() * 0.5)},${-blockHeightPx() / 2 + blockHeightPx() * 0.22} 0,${-blockHeightPx() / 2 + blockHeightPx() * 0.44}`}
+                  />
                 </>
               }
             >
-              <rect class="timelineSceneBlockHit" x="0" y="-5.5" width={Math.max(viewBoxX(event.width), 0.8)} height="11" rx="0.8" />
-              <rect class="timelineSceneBlockBody" x="0" y="-4" width={Math.max(viewBoxX(event.width), 0.8)} height="8" rx="0.8" />
-              <line class="timelineSceneBlockStart" x1="0" y1="-5" x2="0" y2="5" />
-              <For each={sceneBlockLoopDivisions(event)}>
-                {(divisionX) => (
-                  <line class="timelineSceneBlockLoop" x1={viewBoxX(divisionX)} y1="-3.4" x2={viewBoxX(divisionX)} y2="3.4" />
-                )}
-              </For>
-              <Show when={event.width >= 7 && sceneBlockLabel(event)}>
+              <Show
+                when={sceneBlockHasBands(event)}
+                fallback={
+                  <>
+                    <rect
+                      class="timelineSceneBlockHit"
+                      x="0"
+                      y={-blockHeightPx() / 2}
+                      width={Math.max(sceneBlockPixelWidth(event), 6)}
+                      height={blockHeightPx()}
+                      rx="1"
+                    />
+                    <rect
+                      class="timelineSceneBlockBody"
+                      x="0"
+                      y={-blockHeightPx() / 2}
+                      width={sceneBlockPixelWidth(event)}
+                      height={blockHeightPx()}
+                      rx="1"
+                    />
+                  </>
+                }
+              >
+                <rect
+                  class="timelineSceneBlockBody"
+                  x="0"
+                  y={-blockHeightPx() / 2}
+                  width={sceneBlockPixelWidth(event)}
+                  height={blockHeightPx()}
+                  rx="1.6"
+                />
+                <rect
+                  class="timelineSceneBlockIdentityBand"
+                  x="0"
+                  y={-blockHeightPx() / 2}
+                  width={sceneBlockPixelWidth(event)}
+                  height={identityBandHeightPx()}
+                />
+                <Show when={sceneBlockFadeWedgePoints(event)}>
+                  {(points) => <polygon class="timelineSceneBlockFade" points={points()} />}
+                </Show>
                 <text
                   class="timelineSceneBlockLabel"
-                  x="1.1"
-                  y="1.25"
+                  x={nameInsetPx}
+                  y={-blockHeightPx() / 2 + identityBandHeightPx() / 2}
+                  dominant-baseline="central"
                   data-full-label={event.cue_label}
                 >
-                  {sceneBlockLabel(event)}
+                  {sceneBlockName(event)}
                 </text>
+                <Show when={sceneBlockShowsDuration(event)}>
+                  <text
+                    class="timelineSceneBlockDuration"
+                    x={nameInsetPx}
+                    y={-blockHeightPx() / 2 + identityBandHeightPx() + (blockHeightPx() - identityBandHeightPx()) / 2}
+                    dominant-baseline="central"
+                    data-no-localize
+                  >
+                    {sceneBlockDurationStamp(event)}
+                  </text>
+                </Show>
               </Show>
             </Show>
             <title>
@@ -907,7 +1042,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               data-overlap-cluster-ids={cluster.source_cluster_ids.join(",")}
               data-overlap-group-count={cluster.group_count}
               data-overlap-aggregated={cluster.aggregated ? "true" : "false"}
-              transform={`translate(${cluster.x} ${cluster.track === "Lighting" ? 6 : 24})`}
+              transform={`translate(${cluster.x} ${clusterBadgeTopPx(cluster.track)})`}
               onClick={(event) => {
                 event.stopPropagation();
                 activate();
@@ -919,22 +1054,29 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                 activate();
               }}
             >
-              <rect width="18" height="6" rx="1" />
-              <text x="1.2" y="4.6">×{cluster.count}</text>
+              <rect width={clusterBadgeWidthPx} height={clusterBadgeHeightPx(cluster.track)} rx="2" />
+              <text x={clusterBadgeWidthPx / 2} y={clusterBadgeHeightPx(cluster.track) / 2} text-anchor="middle" dominant-baseline="central">×{cluster.count}</text>
               <title>{accessibleLabel}</title>
             </g>
           );
         }}
       </For>
-      <g class="timelineLaneLabelPlate" aria-hidden="true">
-        <rect x="0" y="6" width="26" height="13" rx="1" />
-        <rect x="0" y="24" width="26" height="13" rx="1" />
-        <text class="timelineLaneLabel" x="1.2" y="14">Light</text>
-        <text class="timelineLaneLabel" x="1.2" y="32">Video</text>
-      </g>
       <Show when={props.playheadX >= 0 && props.playheadX <= 100}>
-        <line class="timelinePlayhead" x1={viewBoxX(props.playheadX)} y1="2" x2={viewBoxX(props.playheadX)} y2="42" />
+        <g class="timelinePlayheadGroup" aria-hidden="true">
+          <line
+            class="timelinePlayhead"
+            x1={viewBoxX(props.playheadX)}
+            y1={rulerLineTopPx()}
+            x2={viewBoxX(props.playheadX)}
+            y2={overviewH() - 1}
+          />
+          <polygon
+            class="timelinePlayheadHandle"
+            points={`${viewBoxX(props.playheadX) - 4},${rulerLineTopPx()} ${viewBoxX(props.playheadX) + 4},${rulerLineTopPx()} ${viewBoxX(props.playheadX)},${rulerLineTopPx() + 5}`}
+          />
+        </g>
       </Show>
     </svg>
+    </div>
   );
 }

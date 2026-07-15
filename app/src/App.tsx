@@ -3481,6 +3481,7 @@ export default function App() {
     const visibleWindow = timelineVisibleWindow();
     const visibleSpanMs = timelineVisibleWindowSpanMs(visibleWindow);
     const currentPositionMs = timelinePositionMs();
+    const cueFadeById = new Map(snapshotCues().map((cue) => [cue.id, cue.fade_ms]));
     return timelineEventRows().filter((event) => timelineRangeIntersectsVisibleWindow(
       event.time_ms,
       event.duration_ms > 0 ? event.time_ms + timelineSceneBlockSpanMs(event) : event.time_ms,
@@ -3498,6 +3499,7 @@ export default function App() {
         duration_ms: event.duration_ms,
         loop_count: event.loop_count,
         total_duration_ms: timelineSceneBlockSpanMs(event),
+        fade_in_ms: Math.max(0, cueFadeById.get(event.cue_id) ?? 0),
         x: timelineTimeToVisibleRawRatio(event.time_ms, visibleWindow) * 100,
         width: event.duration_ms > 0
           ? (timelineSceneBlockSpanMs(event) / visibleSpanMs) * 100

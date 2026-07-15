@@ -789,6 +789,8 @@ const japaneseText: Record<string, string> = {
   "Tilt Min": "Tilt最小",
   Track: "トラック",
   Lane: "レーン",
+  "Light lane visibility": "照明レーンの表示",
+  "Video lane visibility": "映像レーンの表示",
   "Video Layer": "映像レイヤー",
   View: "表示",
   "2D map fixture flags": "2Dマップ灯体フラグ",
