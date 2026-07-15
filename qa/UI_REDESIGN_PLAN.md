@@ -1,7 +1,7 @@
 # UI Competitive Redesign Plan (Timeline-first)
 
 作成: 2026-07-15 / 計画: Fable（実機比較・多段Workflow分析・敵対検証込み）/ 実装: Opus委任
-状態: **承認済み（2026-07-15）** — 実施順: T1 → T2 → **T8（前倒し承認）** → T3 → T4 → T5 → T6 → T7
+状態: **承認済み（2026-07-15）** — 実施順: T1✅ → T2 → **T9（Mapping、追加承認）** → T8 → T3 → T4 → T5 → T6 → T7
 承認内容: (1) 計画全体 (2) T8をT2直後へ前倒し（Control構造契約の変更を承認） (3) T7のprotocol変更
 （frontend-only制約の当該範囲での緩和を承認） (4) T3のページ式フォーム行編集置換 (5) Opus委任即時開始
 
@@ -80,6 +80,20 @@ SynapseRack式フローティングパネルは一画面契約維持のため不
 ### T7:（オプション・要明示承認）永続identity色 — protocol変更
 `CueSummary.color: Option<String>` + `EngineSnapshot.group_colors`（serde default、`.sdc` v1互換維持、前例: StageObjectSummary.color / VideoCuePointSummary.color）。set-cue-color / set-group-colorコマンド、カラーピッカーUI。永続色優先・ハッシュfallback。
 **「frontend-only」制約の明示的緩和が必要。**
+
+### T9: 2D Mapping 照明専用化 + 灯体グリフ再設計（risk: medium / L）— 2026-07-15追加承認
+ユーザー指摘（実キャプチャ比較）: 投影面のワープ矩形（XY面の概念）がXZ床面図に矩形描画されて
+おり幾何学的に誤り。同一スクリーンがStage Object("Screen")とProjection Surfaceで二重描画。
+灯体グリフが過大（大円+太リング）でDaslightの12-16px角形に比べ視覚ノイズ大。
+- (a) 平面分離: 投影面の編集ハンドル（コーナーピン/回転/スケール）をMappingから削除し
+  Setup > Video Projection Mapへ一本化。Mapping上は**線分+向きマーク+ラベルの参照表示のみ、
+  レイヤー既定OFF**（承認済み）。Screen種Stage Objectは薄い帯+ラベル表現へ。
+- (b) 灯体グリフ: タイプ別コンパクトグリフ（par=角形 / moving=円+ヨーティック / bar=横長矩形、
+  基準12-16px、ズームスケール上限付き）、細枠選択・薄枠ホバー（Daslight流）。ライブDMX色表示は維持。
+- (c) 操作性: マーキー視認性、グリッド階調（メジャー/マイナー）、スナップ表示、ズーム操作の改善。
+- 受入: 灯体ヒットターゲット≥12pxゲート維持 / 2,000灯windowingゲート維持 / 投影面編集が
+  Setup > Videoで完結すること / Mappingに投影面ハンドルDOMが存在しないこと / 全ゲートpass。
+- 契約変更: mapping系ハーネス（投影面レイヤー期待値）の再交渉 — 変更断言を全列挙。
 
 ### T8:（契約変更・要明示承認）Timeline Focusレイアウト
 VJ fullscreen focus（コミット`7ab0795`）と同型の、全幅Showサーフェス+2Dステージ折りたたみ+Esc復帰。
