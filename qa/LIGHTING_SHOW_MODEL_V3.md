@@ -2,7 +2,12 @@
 
 作成: 2026-07-16 / 設計: Fable Workflow（Inventory×2→Design→敵対検証14主張全CONFIRMED）
 / 実装: Codex gpt-5.6-sol（tranche-cycleスキル準拠）
-状態: ユーザー承認待ち（未解決の意味論は文末のOpen Questions）
+状態: **F1-F3意味論確定・承認済み（2026-07-16）**。確定事項:
+- レイヤー競合 = **上のレイヤーが勝つ**（top-layer-wins、決定論的優先順位）
+- BPM変更時 = **即時再適合**（再生中もブロックが伸縮、ライブ運用優先）
+- マルチステップStaticシーン = **採用**（F8として追加、Daslight完全パリティ）
+- 映像レイヤー = **同一タイムラインに混在**（layer kindとして共存、F6入れ子はv3照明専用）
+残るOpen Questions（グループ列排他/FX削除時所有権/入れ子ループ音声/音声スコープ）はF5/F6着手時に確認
 
 根拠: Daslight 5実機操作観察（target/qa/ui-comparison/PRIMARY_OBSERVATIONS.md）+
 ユーザー確認済み意味論（Static/FXシーン、レイヤー式Timeline、入れ子、BPM管理、
@@ -187,3 +192,19 @@ risk: low / est: M / depends: none
    (no tree conflict rule: one tranche at a time). F2 requires T10+F1. T8/T3/T4 from the
    UI plan interleave naturally: T3's Block Properties inspector should include the
    Conform/Loop-fill toggles and rate badge from F3.
+
+## F8: マルチステップStaticシーン（ユーザー承認 2026-07-16、F3/F4後）
+Daslightパリティ: Cueが内部ステップ列（各ステップ = 属性値スナップショット + fade + hold）を持てる。
+- Protocol: CueSummary.steps: Vec<CueStepSummary> #[serde(default)] 空（CueStepSummary =
+  { values: Vec<CueFixtureTarget相当>, fade_ms, hold_ms }）。空 = 現行の単一状態Cue（完全互換）。
+- Engine: ブロックローカル時間×rate（F3/F4）でステップを進行。activation-scoped（F4と同じ
+  ライフサイクル）。authored_beatsをステップ合計から導出可能に（F3のcapture UIを拡張）。
+- UI: Cueエディタにステップ列（追加/複製/並べ替え/fade/hold）、T3インスペクタにステップ数表示。
+- 受入: ステップ進行のengine test、rate=2で2倍速進行、legacy Cue（steps空）不変、.sdc round-trip。
+
+## Approved semantics (2026-07-16)
+- Layer conflict: top-layer-wins (deterministic; HTP-for-intensity may be revisited later).
+- Conform re-stretch: immediate on BPM change, including during Play (blocks may move under
+  the running playhead; engine command-drain path, never the 44Hz tick).
+- Multi-step static scenes: approved as F8.
+- Video: stays on the single shared timeline as a layer kind; F6 nesting is lighting-only in v3.
