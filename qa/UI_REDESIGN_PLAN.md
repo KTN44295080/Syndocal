@@ -2,7 +2,7 @@
 
 作成: 2026-07-15 / 計画: Fable（実機比較・多段Workflow分析・敵対検証込み）/ 実装: Opus委任
 状態: **承認済み（2026-07-15）** — 実施順:
-T1✅ → T2✅ → T9✅ → T10✅（e0e2e3e）→ **T8（次）** → T3 → T4 → T5（T10へ吸収済み）→ T6 → T7 → T11編集可能Touchサーフェス
+T1✅ → T2✅ → T9✅ → T10✅（e0e2e3e）→ T8✅（41aaaaf）→ **F1系（照明ショーモデル、LIGHTING_SHOW_MODEL_V3参照）と並走: T3（次のUIトランシェ）** → T4 → T5（T10へ吸収済み）→ T6 → T7 → T11編集可能Touchサーフェス
 実装体制（2026-07-16更新）: 実装=Codex gpt-5.6-sol（ローカルCLI、ユーザー指定）/ 計画・検証・コミット=Fable。
 T9はOpus（Mapping再設計）+Codex（StageGlyphs.tsx共有レンダラー統一）の合作で`1db7af5`として着地。
 承認内容: (1) 計画全体 (2) T8をT2直後へ前倒し（Control構造契約の変更を承認） (3) T7のprotocol変更
@@ -136,10 +136,16 @@ Setup=Library/Patch系タブ、Control=Cueマトリクス+プロパティ、Touc
 - 詳細設計はT10完了後に固定。`.sdc`へのレイアウト保存 or 端末ローカルかは設計時に決定
   （Daslightはショーファイル保存 — 会場持ち回りを考えるとproject保存が有力、protocol変更を伴う）。
 
-### T8:（契約変更・要明示承認→T10に統合検討）Timeline Focusレイアウト
+### T8: Timeline Focusレイアウト（✅完了 2026-07-16 コミット41aaaaf）
 VJ fullscreen focus（コミット`7ab0795`）と同型の、全幅Showサーフェス+2Dステージ折りたたみ+Esc復帰。
-T10統一シェル下では「右下Timelineペインの一時全幅化トグル」として実装（Daslightのペイン展開
-ボタンと同型）。実施はT10直後。
+T10統一シェル下で「右下Timelineペインの一時全幅化トグル」として実装（Daslightのペイン展開
+ボタンと同型）。
+完了実績: コンテキストタブバー右端のトグルでTimelineペインがバンド全幅化（1920: 715→1910px /
+1366: 540→1356px）、stage/selectionsは非表示・GROUPS帯は維持、Esc/トグル/ワークスペース離脱で
+自動復元（4領域rectが0.01px精度で完全復元）。振動対策契約維持（展開時240px・コンパクト148px固定 +
+contain: size layout）。状態はコンポーネントローカルの一時信号でApp.tsx非接触・非永続。
+ハーネスはpersistent-band-invarianceに展開チェック（14断言）を統合、全5解像度で合否ゲート化。
+フルマトリクス212件green。
 
 ## 実装体制
 
