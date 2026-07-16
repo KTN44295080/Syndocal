@@ -2,7 +2,7 @@
 
 作成: 2026-07-15 / 計画: Fable（実機比較・多段Workflow分析・敵対検証込み）/ 実装: Opus委任
 状態: **承認済み（2026-07-15）** — 実施順:
-T1✅ → T2✅ → T9✅ → **T10統一シェル（Codex実装中）** → T8 → T3 → T4 → T5（T10へ部分吸収）→ T6 → T7 → T11編集可能Touchサーフェス
+T1✅ → T2✅ → T9✅ → T10✅（e0e2e3e）→ **T8（次）** → T3 → T4 → T5（T10へ吸収済み）→ T6 → T7 → T11編集可能Touchサーフェス
 実装体制（2026-07-16更新）: 実装=Codex gpt-5.6-sol（ローカルCLI、ユーザー指定）/ 計画・検証・コミット=Fable。
 T9はOpus（Mapping再設計）+Codex（StageGlyphs.tsx共有レンダラー統一）の合作で`1db7af5`として着地。
 承認内容: (1) 計画全体 (2) T8をT2直後へ前倒し（Control構造契約の変更を承認） (3) T7のprotocol変更
@@ -103,7 +103,13 @@ SynapseRack式フローティングパネルは一画面契約維持のため不
   Setup > Videoで完結すること / Mappingに投影面ハンドルDOMが存在しないこと / 全ゲートpass。
 - 契約変更: mapping系ハーネス（投影面レイヤー期待値）の再交渉 — 変更断言を全列挙。
 
-### T10: 統一ワークスペースシェル（契約変更・承認済み 2026-07-15）（risk: high / XL）
+### T10: 統一ワークスペースシェル（✅完了 2026-07-16 コミットe0e2e3e）（risk: high / XL）
+完了実績: 下半分4領域（GROUPS/2Dステージ/SELECTIONS/コンテキストペイン）のrectがSetup→Control→Setup
+切替で全5解像度delta 0。フルviewportマトリクス213件green。付随修正: Timelineキャンバスの
+ResizeObserverレイアウト振動（143s→0.1ms、contain: size layout）、コンパクト高でのキャンバス
+クリップ外ドラッグ死（max-height:800pxで148px化、1366x768/1280x720で+60pxドラッグ正確コミット）、
+scene-block reveal（有界8フレームリトライ）、行コンパクト化（334→117px）。ハーネスは122条件の
+名前付き配列 + FAILED CONDITIONS/DRAG STATSログ化。CDP診断ツール2本を追加。
 Daslight 3画面比較で実証された不変条項をSyndocalへ移植する最大の構造変更。
 **下半分を全ワークスペース常設**にする: GROUPSリボン + 2D Stage Map（T9後の照明床面図、
 ツールレール込み）+ SELECTIONS列 + 右下コンテキストペイン。**上半分だけをワークスペースで交換**:
