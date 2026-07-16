@@ -175,6 +175,16 @@ function comparePersistentBandMeasurements(setupBefore, control, setupAfter) {
   };
 }
 
+function persistentBandRectsExactlyEqual(left, right) {
+  if (!left || !right) return false;
+  return (
+    left.x === right.x &&
+    left.y === right.y &&
+    left.width === right.width &&
+    left.height === right.height
+  );
+}
+
 const paethPredictor = (left, up, upperLeft) => {
   const estimate = left + up - upperLeft;
   const leftDistance = Math.abs(estimate - left);
@@ -1918,6 +1928,138 @@ async function measurePersistentBand(client, label) {
   })()`);
 }
 
+async function measureTimelinePaneExpansionState(client) {
+  return await client.evaluate(`(async () => {
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const isVisible = (element) => {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const measuredRect = (selector) => {
+      const element = [...document.querySelectorAll(selector)].find(isVisible);
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      const precision = (value) => Math.round(value * 100) / 100;
+      return {
+        x: precision(rect.x),
+        y: precision(rect.y),
+        width: precision(rect.width),
+        height: precision(rect.height),
+      };
+    };
+    const documentElement = document.documentElement;
+    const body = document.body;
+    const app = document.querySelector('.app');
+    const band = document.querySelector('.mappingPersistentWorkspaceBand');
+    const toggle = document.querySelector('[data-timeline-pane-expand-toggle]');
+    return {
+      persistentBandRect: measuredRect('.mappingPersistentWorkspaceBand'),
+      persistentBandRects: {
+        groups: measuredRect('[data-persistent-band-part="groups"]'),
+        stage: measuredRect('[data-persistent-band-part="stage"]'),
+        selections: measuredRect('[data-persistent-band-part="selections"]'),
+        context: measuredRect('[data-persistent-band-part="context"]'),
+      },
+      timelinePaneExpanded: band?.classList.contains('timelinePaneExpanded') ?? false,
+      timelinePaneExpandToggleVisible: isVisible(toggle),
+      documentAndAppScrollZero:
+        window.scrollX === 0 && window.scrollY === 0 &&
+        documentElement.scrollWidth === documentElement.clientWidth &&
+        documentElement.scrollHeight === documentElement.clientHeight &&
+        body.scrollWidth === documentElement.clientWidth &&
+        body.scrollHeight === documentElement.clientHeight &&
+        (!app || (app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight)),
+      scrollMetrics: {
+        window: [window.scrollX, window.scrollY],
+        document: [
+          documentElement.scrollWidth,
+          documentElement.clientWidth,
+          documentElement.scrollHeight,
+          documentElement.clientHeight,
+        ],
+        app: app ? [app.scrollWidth, app.clientWidth, app.scrollHeight, app.clientHeight] : null,
+      },
+    };
+  })()`);
+}
+
+async function runTimelinePaneExpansionCheck(client, viewport) {
+  await clickVisibleByText(client, '.workspaceTabs button', 'Control');
+  await clickVisibleByText(client, '.controlModeTabs button', 'Timeline');
+  await sleep(120);
+  const before = await measureTimelinePaneExpansionState(client);
+  const expandToggleClicked = await client.evaluate(`(() => {
+    const toggle = document.querySelector('[data-timeline-pane-expand-toggle]');
+    if (!toggle || toggle.disabled) return false;
+    const rect = toggle.getBoundingClientRect();
+    const style = getComputedStyle(toggle);
+    if (rect.width <= 0 || rect.height <= 0 || style.display === 'none' || style.visibility === 'hidden') {
+      return false;
+    }
+    toggle.click();
+    return true;
+  })()`);
+  await sleep(120);
+  const expanded = await measureTimelinePaneExpansionState(client);
+  await pressKey(client, 'Escape', 'Escape');
+  await sleep(120);
+  const restored = await measureTimelinePaneExpansionState(client);
+  const beforeContextWidth = before.persistentBandRects.context?.width ?? 0;
+  const expandedContextWidth = expanded.persistentBandRects.context?.width ?? 0;
+  const expandedBandWidth = expanded.persistentBandRect?.width ?? 0;
+  const timelinePaneExpansionConditions = [
+    ['timelineExpandToggleVisible', () => Boolean(before.timelinePaneExpandToggleVisible)],
+    ['expandToggleClicked', () => Boolean(expandToggleClicked)],
+    ['expandedStateApplied', () => Boolean(expanded.timelinePaneExpanded)],
+    ['expandedContextWidthGrew', () => Boolean(expandedContextWidth > beforeContextWidth + 1)],
+    ['expandedContextApproximatelyFullBandWidth', () => Boolean(
+      expandedBandWidth > 0 && Math.abs(expandedBandWidth - expandedContextWidth) <= 4
+    )],
+    ['expandedStageAndSelectionsHidden', () => Boolean(
+      expanded.persistentBandRects.stage === null && expanded.persistentBandRects.selections === null
+    )],
+    ['expandedGroupsStripKept', () => Boolean(expanded.persistentBandRects.groups !== null)],
+    ['expandedDocumentAndAppScrollZero', () => Boolean(expanded.documentAndAppScrollZero)],
+    ['escapeClearedExpandedState', () => Boolean(!restored.timelinePaneExpanded)],
+    ['escapeRestoredGroupsRectExactly', () => persistentBandRectsExactlyEqual(
+      before.persistentBandRects.groups,
+      restored.persistentBandRects.groups,
+    )],
+    ['escapeRestoredStageRectExactly', () => persistentBandRectsExactlyEqual(
+      before.persistentBandRects.stage,
+      restored.persistentBandRects.stage,
+    )],
+    ['escapeRestoredSelectionsRectExactly', () => persistentBandRectsExactlyEqual(
+      before.persistentBandRects.selections,
+      restored.persistentBandRects.selections,
+    )],
+    ['escapeRestoredContextRectExactly', () => persistentBandRectsExactlyEqual(
+      before.persistentBandRects.context,
+      restored.persistentBandRects.context,
+    )],
+    ['restoredDocumentAndAppScrollZero', () => Boolean(restored.documentAndAppScrollZero)],
+  ];
+  const checks = Object.fromEntries(timelinePaneExpansionConditions.map(([name, check]) => {
+    try {
+      return [name, check()];
+    } catch {
+      return [name, false];
+    }
+  }));
+  const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  return {
+    label: `timeline-pane-expansion-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    before,
+    expanded,
+    restored,
+  };
+}
+
 async function measure(client, label) {
   return await client.evaluate(`(async () => {
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
@@ -3340,6 +3482,10 @@ function hasExpectedPersistentWorkspaceBand(result) {
 
 function hasExpectedPersistentBandInvariance(result) {
   return !result.label.startsWith("persistent-band-invariance-") || result.persistentBandInvariant === true;
+}
+
+function hasExpectedTimelinePaneExpansion(result) {
+  return !result.label.startsWith("persistent-band-invariance-") || result.timelinePaneExpansion?.passed === true;
 }
 
 function hasExpectedControlModeSurface(result) {
@@ -5544,6 +5690,7 @@ async function runViewport(client, viewport) {
     persistentControl,
     persistentSetupAfter,
   );
+  const timelinePaneExpansion = await runTimelinePaneExpansionCheck(client, viewport);
   results.push({
     ...(setupMappingContainment ?? {}),
     ...persistentSetupAfter,
@@ -5551,6 +5698,7 @@ async function runViewport(client, viewport) {
     persistentBandInvariant: persistentBandComparison.invariant,
     persistentBandRectsByWorkspace: persistentBandComparison.rectsByWorkspace,
     persistentBandRectDeltas: persistentBandComparison.deltas,
+    timelinePaneExpansion,
   });
   traceViewport(`persistent band compared ${viewport.width}x${viewport.height}`);
   await clickByText(client, "Setup");
@@ -5775,12 +5923,14 @@ async function runPersistentBandInvarianceViewport(client, viewport) {
   await sleep(120);
   const setupAfter = await measurePersistentBand(client, `persistent-band-setup-after-${viewport.width}x${viewport.height}`);
   const comparison = comparePersistentBandMeasurements(setupBefore, control, setupAfter);
+  const timelinePaneExpansion = await runTimelinePaneExpansionCheck(client, viewport);
   const containment = {
     ...setupAfter,
     label: `persistent-band-invariance-${viewport.width}x${viewport.height}`,
     persistentBandInvariant: comparison.invariant,
     persistentBandRectsByWorkspace: comparison.rectsByWorkspace,
     persistentBandRectDeltas: comparison.deltas,
+    timelinePaneExpansion,
   };
   return {
     passed:
@@ -5790,7 +5940,8 @@ async function runPersistentBandInvarianceViewport(client, viewport) {
       hasExpectedPersistentWorkspaceBand(setupBefore) &&
       hasExpectedPersistentWorkspaceBand(control) &&
       hasExpectedPersistentWorkspaceBand(containment) &&
-      hasExpectedPersistentBandInvariance(containment),
+      hasExpectedPersistentBandInvariance(containment) &&
+      hasExpectedTimelinePaneExpansion(containment),
     containment,
   };
 }
@@ -7848,7 +7999,9 @@ async function main() {
         console.log(
           `${result.passed ? "pass" : "fail"} ${result.containment.label} ` +
             `rects=${JSON.stringify(result.containment.persistentBandRectsByWorkspace)} ` +
-            `deltas=${JSON.stringify(result.containment.persistentBandRectDeltas)}`,
+            `deltas=${JSON.stringify(result.containment.persistentBandRectDeltas)} ` +
+            `timelineExpansion=${result.containment.timelinePaneExpansion?.passed ? "pass" : "fail"} ` +
+            `failedChecks=${JSON.stringify(result.containment.timelinePaneExpansion?.failedChecks ?? [])}`,
         );
       }
       const failures = persistentBandResults.filter((result) => !result.passed);
@@ -8171,6 +8324,7 @@ async function main() {
     const setupSurfaceFailures = results.filter((result) => !hasExpectedSetupSurface(result));
     const persistentBandFailures = results.filter((result) => !hasExpectedPersistentWorkspaceBand(result));
     const persistentBandInvarianceFailures = results.filter((result) => !hasExpectedPersistentBandInvariance(result));
+    const timelinePaneExpansionFailures = results.filter((result) => !hasExpectedTimelinePaneExpansion(result));
     const projectMenuFailures = results.filter((result) => !hasExpectedProjectMenu(result));
     const localizationFailures = results.filter((result) => !hasExpectedLocalization(result));
     const keyboardNavigationFailures = results.filter((result) => !hasExpectedKeyboardNavigation(result));
@@ -8241,7 +8395,7 @@ async function main() {
         ? ` mixer=${result.visibleVideoOutputItemCount}/${result.visibleVideoOutputSelectedItemCount}/${result.visibleVideoMixerOutputDeckCount}/${result.visibleVideoMixerOutputFaderCount}/${result.visibleVideoMixerOutputSelectButtonCount}/${result.visibleVideoLayerItemCount}/${result.visibleBuiltinVideoFxSelectCount}/${result.visibleVideoMixerLayerDeckCount}/${result.visibleVideoMixerLayerFaderCount}/${result.visibleVideoMixerLayerButtonCount} clip=${result.videoClipGridClientHeight}/${result.fullyVisibleVideoClipPadCount} contract=${result.controlModeFailedChecks?.join(",") || "ok"}`
         : "";
       const persistentBandSuffix = result.label.startsWith("persistent-band-invariance-")
-        ? ` persistentBand=${result.persistentBandInvariant ? "stable" : "moved"} rects=${JSON.stringify(result.persistentBandRectsByWorkspace)} deltas=${JSON.stringify(result.persistentBandRectDeltas)}`
+        ? ` persistentBand=${result.persistentBandInvariant ? "stable" : "moved"} rects=${JSON.stringify(result.persistentBandRectsByWorkspace)} deltas=${JSON.stringify(result.persistentBandRectDeltas)} timelineExpansion=${result.timelinePaneExpansion?.passed ? "pass" : "fail"} timelineExpansionFailed=${JSON.stringify(result.timelinePaneExpansion?.failedChecks ?? [])}`
         : "";
       console.log(
         `${status} [${viewportRole({ width: result.innerWidth, height: result.innerHeight })}] ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${keyboardSuffix}${timelineSuffix}${sceneBlockSuffix}${touchSuffix}${controlStageGlyphSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${positionVisualSuffix}${colorEffectSuffix}${chaserEffectSuffix}${moveEffectSuffix}${mixerSuffix}${persistentBandSuffix}`,
@@ -8283,6 +8437,7 @@ async function main() {
       setupSurfaceFailures.length > 0 ||
       persistentBandFailures.length > 0 ||
       persistentBandInvarianceFailures.length > 0 ||
+      timelinePaneExpansionFailures.length > 0 ||
       projectMenuFailures.length > 0 ||
       localizationFailures.length > 0 ||
       mappingHotkeyHelpFailures.length > 0 ||
@@ -8299,6 +8454,10 @@ async function main() {
           setupSurface: setupSurfaceFailures.map((result) => result.label),
           persistentBand: persistentBandFailures.map((result) => result.label),
           persistentBandInvariance: persistentBandInvarianceFailures.map((result) => result.label),
+          timelinePaneExpansion: timelinePaneExpansionFailures.map((result) => ({
+            label: result.timelinePaneExpansion?.label ?? result.label,
+            failedChecks: result.timelinePaneExpansion?.failedChecks ?? [],
+          })),
           localization: localizationFailures.map((result) => ({
             label: result.label,
             language: result.documentLanguage,
@@ -8338,6 +8497,7 @@ async function main() {
             setupSurface: setupSurfaceFailures,
             persistentBand: persistentBandFailures,
             persistentBandInvariance: persistentBandInvarianceFailures,
+            timelinePaneExpansion: timelinePaneExpansionFailures.map((result) => result.timelinePaneExpansion),
             projectMenu: projectMenuFailures,
             localization: localizationFailures,
             mappingHotkeyHelp: mappingHotkeyHelpFailures,
@@ -8353,7 +8513,7 @@ async function main() {
         ),
       );
       throw new Error(
-        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${effectStackLargeFailures.length} large live-effect DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${statusLineFailures.length} status line check(s) failed.`,
+        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${effectStackLargeFailures.length} large live-effect DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${statusLineFailures.length} status line check(s) failed.`,
       );
     }
   } finally {

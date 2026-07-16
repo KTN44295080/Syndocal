@@ -64,6 +64,8 @@ const japaneseText: Record<string, string> = {
   blocks: "ブロック",
   "Timeline visible range controls": "タイムライン表示範囲の操作",
   "Visible timeline range": "タイムライン表示範囲",
+  "Expand Timeline pane": "タイムラインペインを全幅表示",
+  "Restore Timeline pane (Esc)": "タイムラインペインを元に戻す（Esc）",
   "Pan Prev": "前の範囲へ",
   "Pan Next": "次の範囲へ",
   "Zoom Out": "縮小",

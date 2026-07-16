@@ -24003,6 +24003,45 @@ h3 {
   font-size: 10px;
 }
 
+.controlContextPane > .contextModeTabs .timelinePaneExpandToggle {
+  display: grid;
+  flex: 0 0 31px;
+  place-items: center;
+  width: 31px;
+  border-left: 1px solid #3b3732;
+  padding: 0;
+  color: #aaa19a;
+}
+
+.controlContextPane > .contextModeTabs .timelinePaneExpandToggle:hover,
+.controlContextPane > .contextModeTabs .timelinePaneExpandToggle.expanded {
+  background: #2c2925;
+  color: #eee8e2;
+}
+
+.timelinePaneExpandToggle svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+  stroke-width: 1.5;
+}
+
+.mappingPersistentWorkspaceBand.timelinePaneExpanded .mappingPersistentWorkspaceGrid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.mappingPersistentWorkspaceBand.timelinePaneExpanded .mappingPersistentStage,
+.mappingPersistentWorkspaceBand.timelinePaneExpanded .mappingSelectionsColumn {
+  display: none;
+}
+
+.mappingPersistentWorkspaceBand.timelinePaneExpanded .controlContextPane {
+  grid-column: 1 / -1;
+}
+
 .layoutSharedWorkspace.layoutControl .controlContextPane > .faders {
   display: grid;
   grid-column: 1;
@@ -24058,6 +24097,12 @@ h3 {
   contain: size layout;
 }
 
+.layoutSharedWorkspace.layoutControl.controlModeLive .timelinePaneExpanded .controlContextPane .timelineShowSurface > .timelineOverviewFrame {
+  height: 240px;
+  min-height: 240px;
+  contain: size layout;
+}
+
 /* Compact heights: the rows above the canvas consume enough of the pane that a
    190px canvas pokes below the pane clip, leaving its lower lane outside the
    initial view - pointer events there fall through and marker drags go dead
@@ -24068,6 +24113,12 @@ h3 {
   .layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelineShowSurface > .timelineOverviewFrame {
     height: 148px;
     min-height: 148px;
+  }
+
+  .layoutSharedWorkspace.layoutControl.controlModeLive .timelinePaneExpanded .controlContextPane .timelineShowSurface > .timelineOverviewFrame {
+    height: 148px;
+    min-height: 148px;
+    contain: size layout;
   }
 }
 
