@@ -29,6 +29,10 @@ description: >
 4. **完全性契約**: 全ゲートpassまで完了報告禁止、ハーネス断言の変更は全列挙
 5. **構造化報告契約**: 変更ファイル一覧 / ゲート結果verbatim / 再交渉断言(旧vs新vs理由) / 実測値
 6. **`git commit`禁止**（コミットは監督検証後にこちらで行う）
+7. **Codexに`check:viewport`（フルマトリクス）を実行させない** — サンドボックスのCDP Chromium
+   は病的に遅く、T10では検証待ちだけで2時間超を浪費した実績がある。Codexは実装+高速ゲート
+   （tsc / build --configLoader runner / localization / 焦点スクリプト）まで。重いハーネスは
+   監督側ローカルで実行する。vite buildはサンドボックスで偽FAILするので`--configLoader runner`を指定。
 
 起動後、rescueエージェントがCodexジョブID（`task-xxxx`）を返す。完了検知は:
 
@@ -97,7 +101,24 @@ pwsh -NoProfile -File qa/harnesses/click-window-point.ps1 -TitlePattern "Dasligh
   計画に使う主張は必ずキャプチャ実物で裏取りする（伝聞・記憶で書かない）
 - 機能の意味論が画面から読めないときは推測せずユーザーに聞く（ユーザーが回答すると明言済み）
 
-## 5. 分析・設計が必要なとき
+## 5. 性能・レイアウト異常の診断ツールキット
+
+- `app/scripts/profile-marker-click.mjs` — V8サンプリングプロファイル（self time上位）。
+  `(program)`支配ならネイティブ（style/layout）側、JS関数が上位ならJS側。
+- `app/scripts/trace-marker-flip.mjs` — Chromeトレースで `Blink.Layout.UpdateTime` vs
+  style recalc を切り分け。SVGテキストは `InlineNode::FindSvgTextChunks` 等で見える。
+- 既知の地雷: **ResizeObserver駆動のピクセルviewBox SVG（TimelineOverview等）を
+  `auto`グリッド行やコンテンツ駆動サイズの中に置くと、行サイズ⇄viewBox書換の
+  レイアウト発振で1操作が数十秒〜数分になる**（T10で実測143秒）。対処は
+  ホストの高さ固定 + `contain: size layout`。新しいスクロールコンテナには
+  `scrollbar-gutter: stable`。
+- `check-viewport-containment.mjs`のscene-block-largeは失敗時に
+  `FAILED CONDITIONS: [...]` を出力する（監督が計装済み）。
+- 偽陰性に注意: 存在しない環境変数でシナリオがスキップされ「PASS」に見えることがある。
+  疑わしいpassはシナリオが本当に実行されたか（実行時間・出力量）で裏取りする。
+- grepは大文字小文字に注意（`setXxx`セッターは`xxx`の検索に掛からない）。
+
+## 6. 分析・設計が必要なとき
 
 大きな設計判断（新トランシェ系列、構造変更）は Workflow ツールで
 Inventory(並列) → Design(複数レンズ) → Judge → Adversarial Verify を回し、
