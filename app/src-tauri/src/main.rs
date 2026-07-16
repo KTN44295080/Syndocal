@@ -43,12 +43,13 @@ use protocol::{
     OscControlMapping, OscInputConfig, PatchFixtureRequest, PatchedFixtureSummary,
     PositionWaveEffectRequest, ProjectFile, RemoteControlConfig, RemoteControlStatus, Rotation3,
     SerialPortSummary, StageMapConfig, StageMapPresetFile, StageMapPresetSummary, StageObjectId,
-    StageObjectKind, StageObjectSummary, TimelineEventId, TimelineSnapRequest, TimelineTrackKind,
-    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode,
-    VideoEffectTarget, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId,
-    VideoLayerState, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
-    VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary, VideoOutputSummary,
-    VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
+    StageObjectKind, StageObjectSummary, TimelineEventId, TimelineLayerKind, TimelineSnapRequest,
+    TimelineTrackKind, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBackendState,
+    VideoBlendMode, VideoEffectTarget, VideoIsfEffectStageSummary, VideoIsfEffectSummary,
+    VideoLayerId, VideoLayerState, VideoLayerTarget, VideoOutputId, VideoOutputKind,
+    VideoOutputMapping, VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary,
+    VideoOutputSummary, VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind,
+    VideoSourceSummary,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -6549,6 +6550,7 @@ fn add_timeline_cue_event(
     cue_id: CueId,
     time_ms: u64,
     track: TimelineTrackKind,
+    layer_id: Option<u32>,
 ) -> Result<TimelineEventId, String> {
     let snapshot = state.engine.snapshot();
     if !snapshot.cues.iter().any(|cue| cue.id == cue_id) {
@@ -6557,7 +6559,7 @@ fn add_timeline_cue_event(
     let event_id = state.engine.allocate_timeline_event_id();
     state
         .engine
-        .add_timeline_cue_event_published(event_id, cue_id, time_ms, track)?;
+        .add_timeline_cue_event_published(event_id, cue_id, time_ms, track, layer_id)?;
     Ok(event_id)
 }
 
@@ -6568,6 +6570,7 @@ fn set_timeline_cue_event(
     cue_id: CueId,
     time_ms: u64,
     track: TimelineTrackKind,
+    layer_id: Option<u32>,
 ) -> Result<(), String> {
     let snapshot = state.engine.snapshot();
     if !snapshot.cues.iter().any(|cue| cue.id == cue_id) {
@@ -6583,7 +6586,7 @@ fn set_timeline_cue_event(
     }
     state
         .engine
-        .set_timeline_cue_event_published(event_id, cue_id, time_ms, track)
+        .set_timeline_cue_event_published(event_id, cue_id, time_ms, track, layer_id)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6657,12 +6660,14 @@ fn validate_timeline_scene_block_request(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 fn add_timeline_scene_block(
     state: State<'_, AppState>,
     cue_id: CueId,
     time_ms: u64,
     track: TimelineTrackKind,
+    layer_id: Option<u32>,
     duration_ms: u64,
     loop_count: u16,
     jump_to_event_id: Option<TimelineEventId>,
@@ -6683,6 +6688,7 @@ fn add_timeline_scene_block(
         cue_id,
         time_ms,
         track,
+        layer_id,
         duration_ms,
         loop_count,
         jump_to_event_id,
@@ -6698,6 +6704,7 @@ fn set_timeline_scene_block(
     cue_id: CueId,
     time_ms: u64,
     track: TimelineTrackKind,
+    layer_id: Option<u32>,
     duration_ms: u64,
     loop_count: u16,
     jump_to_event_id: Option<TimelineEventId>,
@@ -6725,6 +6732,7 @@ fn set_timeline_scene_block(
         cue_id,
         time_ms,
         track,
+        layer_id,
         duration_ms,
         loop_count,
         jump_to_event_id,
@@ -13602,8 +13610,43 @@ fn node_graph_for_persistence(mut graph: NodeGraphSummary) -> NodeGraphSummary {
     graph
 }
 
+fn normalize_project_timeline_layers(snapshot: &mut EngineSnapshot) {
+    if snapshot.timeline.layers.is_empty() {
+        return;
+    }
+
+    snapshot
+        .timeline
+        .layers
+        .sort_by_key(|layer| (layer.kind.display_section_rank(), layer.order, layer.id));
+    for (index, layer) in snapshot.timeline.layers.iter_mut().enumerate() {
+        layer.order = u32::try_from(index).unwrap_or(u32::MAX);
+    }
+
+    let layer_kinds = snapshot
+        .timeline
+        .layers
+        .iter()
+        .map(|layer| (layer.id, layer.kind))
+        .collect::<HashMap<_, _>>();
+    for event in &mut snapshot.timeline.events {
+        let Some(kind) = event
+            .layer_id
+            .and_then(|layer_id| layer_kinds.get(&layer_id).copied())
+        else {
+            continue;
+        };
+        match kind {
+            TimelineLayerKind::Lighting => event.track = TimelineTrackKind::Lighting,
+            TimelineLayerKind::Video => event.track = TimelineTrackKind::Video,
+            TimelineLayerKind::Audio => {}
+        }
+    }
+}
+
 fn project_snapshot_for_save(mut snapshot: EngineSnapshot) -> EngineSnapshot {
     use_authored_video_snapshot(&mut snapshot);
+    normalize_project_timeline_layers(&mut snapshot);
     for graph in &mut snapshot.node_graphs {
         graph.audio_runtime.clear();
     }
@@ -13862,6 +13905,7 @@ fn load_project_from_file(
     current_path: Option<&Path>,
 ) -> Result<ProjectLoadResult, String> {
     use_authored_video_snapshot(&mut project.snapshot);
+    normalize_project_timeline_layers(&mut project.snapshot);
     validate_project_file(&project)?;
     let profiles = project.custom_profiles.clone();
     {
@@ -14275,6 +14319,23 @@ fn validate_project_file(project: &ProjectFile) -> Result<(), String> {
             .iter()
             .map(|event| event.id),
     )?;
+    validate_unique_ids(
+        "timeline layer",
+        project
+            .snapshot
+            .timeline
+            .layers
+            .iter()
+            .map(|layer| u64::from(layer.id)),
+    )?;
+    for layer in &project.snapshot.timeline.layers {
+        if layer.label.trim().is_empty() {
+            return Err(format!(
+                "Project timeline layer {} has an empty label",
+                layer.id
+            ));
+        }
+    }
     validate_project_timeline_scene_blocks(&project.snapshot)?;
     validate_unique_ids(
         "timeline automation",
@@ -14355,6 +14416,48 @@ fn validate_project_timeline_scene_blocks(snapshot: &EngineSnapshot) -> Result<(
                 "Project timeline event {} references missing cue {}",
                 event.id, event.cue_id
             ));
+        }
+        if let Some(layer_id) = event.layer_id {
+            let Some(layer) = snapshot
+                .timeline
+                .layers
+                .iter()
+                .find(|layer| layer.id == layer_id)
+            else {
+                return Err(format!(
+                    "Project timeline event {} references missing timeline layer {layer_id}",
+                    event.id
+                ));
+            };
+            let expected_track = match layer.kind {
+                TimelineLayerKind::Lighting => TimelineTrackKind::Lighting,
+                TimelineLayerKind::Video => TimelineTrackKind::Video,
+                TimelineLayerKind::Audio => {
+                    return Err(format!(
+                        "Project timeline event {} references Audio timeline layer {layer_id}; cue events can only target Lighting or Video layers",
+                        event.id
+                    ));
+                }
+            };
+            if event.track != expected_track {
+                return Err(format!(
+                    "Project timeline event {} uses legacy track {:?}, but timeline layer {layer_id} is {:?}; update the event track to {:?}",
+                    event.id, event.track, layer.kind, expected_track
+                ));
+            }
+        } else if !snapshot.timeline.layers.is_empty() {
+            let legacy_kind = TimelineLayerKind::from(&event.track);
+            if !snapshot
+                .timeline
+                .layers
+                .iter()
+                .any(|layer| layer.kind == legacy_kind)
+            {
+                return Err(format!(
+                    "Project timeline event {} has no layer_id and no {:?} timeline layer exists for its legacy track",
+                    event.id, legacy_kind
+                ));
+            }
         }
         validate_timeline_scene_block_fields(
             &snapshot.timeline.events,
@@ -28396,6 +28499,7 @@ f 1 2 3
                 cue_id: 7,
                 time_ms: 1_000,
                 track: TimelineTrackKind::Lighting,
+                layer_id: None,
                 duration_ms: 2_000,
                 loop_count: 3,
                 jump_to_event_id: Some(21),
@@ -28405,12 +28509,30 @@ f 1 2 3
                 cue_id: 7,
                 time_ms: 8_000,
                 track: TimelineTrackKind::Lighting,
+                layer_id: None,
                 duration_ms: 1_000,
                 loop_count: 1,
                 jump_to_event_id: None,
             },
         ];
         project
+    }
+
+    fn project_timeline_layer(
+        id: u32,
+        label: &str,
+        order: u32,
+        kind: TimelineLayerKind,
+    ) -> protocol::TimelineLayerSummary {
+        protocol::TimelineLayerSummary {
+            id,
+            label: label.to_string(),
+            order,
+            muted: false,
+            locked: false,
+            solo: false,
+            kind,
+        }
     }
 
     #[test]
@@ -28433,20 +28555,206 @@ f 1 2 3
         validate_project_file(&roundtrip).unwrap();
 
         let mut legacy = serde_json::to_value(project).unwrap();
+        legacy["snapshot"]["timeline"]
+            .as_object_mut()
+            .unwrap()
+            .remove("layers");
         for event in legacy["snapshot"]["timeline"]["events"]
             .as_array_mut()
             .unwrap()
         {
             let event = event.as_object_mut().unwrap();
+            event.remove("layer_id");
             event.remove("duration_ms");
             event.remove("loop_count");
             event.remove("jump_to_event_id");
         }
         let legacy: ProjectFile = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.snapshot.timeline.layers.is_empty());
         assert!(legacy.snapshot.timeline.events.iter().all(|event| {
-            event.duration_ms == 0 && event.loop_count == 1 && event.jump_to_event_id.is_none()
+            event.layer_id.is_none()
+                && event.duration_ms == 0
+                && event.loop_count == 1
+                && event.jump_to_event_id.is_none()
         }));
         validate_project_file(&legacy).unwrap();
+    }
+
+    #[test]
+    fn project_timeline_layers_legacy_load_and_typed_roundtrip_preserve_track() {
+        let mut legacy: ProjectFile = serde_json::from_str(PHASE1_SAMPLE_PROJECT_JSON).unwrap();
+        assert!(legacy.snapshot.timeline.layers.is_empty());
+        assert!(legacy
+            .snapshot
+            .timeline
+            .events
+            .iter()
+            .all(|event| event.layer_id.is_none()));
+        legacy.snapshot.timeline.events[1].track = TimelineTrackKind::Video;
+        validate_project_file(&legacy).unwrap();
+
+        let mut snapshot_to_load = legacy.snapshot.clone();
+        snapshot_to_load.output.enabled = false;
+        for output in &mut snapshot_to_load.dmx_outputs {
+            output.enabled = false;
+        }
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine.load_project_snapshot(snapshot_to_load).unwrap();
+
+        let persisted_legacy = engine.persistence_snapshot().unwrap();
+        assert!(persisted_legacy.timeline.layers.is_empty());
+        assert!(persisted_legacy
+            .timeline
+            .events
+            .iter()
+            .all(|event| event.layer_id.is_none()));
+        assert_eq!(
+            persisted_legacy.timeline.events[0].track,
+            TimelineTrackKind::Lighting
+        );
+        assert_eq!(
+            persisted_legacy.timeline.events[1].track,
+            TimelineTrackKind::Video
+        );
+
+        let mut display = engine.snapshot();
+        for _ in 0..30 {
+            if display.timeline.layers.len() == 2
+                && display
+                    .timeline
+                    .events
+                    .iter()
+                    .all(|event| event.layer_id.is_some())
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+            display = engine.snapshot();
+        }
+        assert_eq!(
+            display
+                .timeline
+                .layers
+                .iter()
+                .map(|layer| (layer.id, layer.label.as_str(), layer.order, layer.kind))
+                .collect::<Vec<_>>(),
+            vec![
+                (0, "Lighting", 0, TimelineLayerKind::Lighting),
+                (1, "Video", 1, TimelineLayerKind::Video),
+            ]
+        );
+        assert_eq!(display.timeline.events[0].layer_id, Some(0));
+        assert_eq!(display.timeline.events[1].layer_id, Some(1));
+
+        let mut typed = legacy;
+        typed.snapshot.timeline.layers = vec![
+            project_timeline_layer(12, "Video Main", 40, TimelineLayerKind::Video),
+            project_timeline_layer(13, "Audio Reference", 20, TimelineLayerKind::Audio),
+            project_timeline_layer(11, "Lighting Main", 30, TimelineLayerKind::Lighting),
+        ];
+        typed.snapshot.timeline.events[0].layer_id = Some(11);
+        typed.snapshot.timeline.events[0].track = TimelineTrackKind::Video;
+        typed.snapshot.timeline.events[1].layer_id = Some(12);
+        typed.snapshot.timeline.events[1].track = TimelineTrackKind::Lighting;
+        typed.snapshot = project_snapshot_for_save(typed.snapshot);
+
+        assert_eq!(
+            typed
+                .snapshot
+                .timeline
+                .layers
+                .iter()
+                .map(|layer| (layer.id, layer.order, layer.kind))
+                .collect::<Vec<_>>(),
+            vec![
+                (13, 0, TimelineLayerKind::Audio),
+                (11, 1, TimelineLayerKind::Lighting),
+                (12, 2, TimelineLayerKind::Video),
+            ]
+        );
+        assert_eq!(
+            typed.snapshot.timeline.events[0].track,
+            TimelineTrackKind::Lighting
+        );
+        assert_eq!(
+            typed.snapshot.timeline.events[1].track,
+            TimelineTrackKind::Video
+        );
+        validate_project_file(&typed).unwrap();
+
+        let json = project_json_for_write(&typed).unwrap();
+        let json_value: Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            json_value["snapshot"]["timeline"]["events"][0]["layer_id"],
+            11
+        );
+        assert_eq!(
+            json_value["snapshot"]["timeline"]["events"][0]["track"],
+            "Lighting"
+        );
+        assert_eq!(
+            json_value["snapshot"]["timeline"]["events"][1]["layer_id"],
+            12
+        );
+        assert_eq!(
+            json_value["snapshot"]["timeline"]["events"][1]["track"],
+            "Video"
+        );
+        let roundtrip: ProjectFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            roundtrip.snapshot.timeline.layers,
+            typed.snapshot.timeline.layers
+        );
+        assert_eq!(
+            roundtrip.snapshot.timeline.events,
+            typed.snapshot.timeline.events
+        );
+    }
+
+    #[test]
+    fn project_file_validation_rejects_missing_timeline_layer_reference() {
+        let mut project = project_with_timeline_scene_blocks();
+        project.snapshot.timeline.layers = vec![project_timeline_layer(
+            7,
+            "Lighting Main",
+            0,
+            TimelineLayerKind::Lighting,
+        )];
+        project.snapshot.timeline.events[0].layer_id = Some(99);
+
+        assert_eq!(
+            validate_project_file(&project).unwrap_err(),
+            "Project timeline event 20 references missing timeline layer 99"
+        );
+
+        project.snapshot.timeline.events[0].layer_id = Some(7);
+        project.snapshot.timeline.layers[0].label = "  ".to_string();
+        assert_eq!(
+            validate_project_file(&project).unwrap_err(),
+            "Project timeline layer 7 has an empty label"
+        );
+
+        project.snapshot.timeline.layers[0].label = "Audio Reference".to_string();
+        project.snapshot.timeline.layers[0].kind = TimelineLayerKind::Audio;
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("cue events can only target Lighting or Video layers"));
+
+        project.snapshot.timeline.layers[0].kind = TimelineLayerKind::Lighting;
+        project.snapshot.timeline.events[0].track = TimelineTrackKind::Video;
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("update the event track to Lighting"));
+
+        project.snapshot.timeline.layers[0].kind = TimelineLayerKind::Video;
+        project.snapshot.timeline.events[0].layer_id = None;
+        project.snapshot.timeline.events[0].track = TimelineTrackKind::Lighting;
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("no Lighting timeline layer exists for its legacy track"));
     }
 
     #[test]

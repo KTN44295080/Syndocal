@@ -1387,12 +1387,56 @@ pub enum TimelineTrackKind {
     Video,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum TimelineLayerKind {
+    #[default]
+    Lighting,
+    Video,
+    Audio,
+}
+
+impl TimelineLayerKind {
+    pub const fn display_section_rank(self) -> u8 {
+        match self {
+            Self::Audio => 0,
+            Self::Lighting => 1,
+            Self::Video => 2,
+        }
+    }
+}
+
+impl From<&TimelineTrackKind> for TimelineLayerKind {
+    fn from(track: &TimelineTrackKind) -> Self {
+        match track {
+            TimelineTrackKind::Lighting => Self::Lighting,
+            TimelineTrackKind::Video => Self::Video,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimelineLayerSummary {
+    pub id: u32,
+    pub label: String,
+    pub order: u32,
+    #[serde(default)]
+    pub muted: bool,
+    #[serde(default)]
+    pub locked: bool,
+    #[serde(default)]
+    pub solo: bool,
+    #[serde(default)]
+    pub kind: TimelineLayerKind,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TimelineCueEventSummary {
     pub id: TimelineEventId,
     pub cue_id: CueId,
     pub time_ms: u64,
     pub track: TimelineTrackKind,
+    #[serde(default)]
+    pub layer_id: Option<u32>,
     #[serde(default)]
     pub duration_ms: u64,
     #[serde(default = "default_timeline_scene_block_loop_count")]
@@ -1485,6 +1529,8 @@ pub struct TimelineEventPlacementUpdate {
     pub time_ms: u64,
     pub track: TimelineTrackKind,
     #[serde(default)]
+    pub layer_id: Option<u32>,
+    #[serde(default)]
     pub duration_ms: u64,
     #[serde(default = "default_timeline_scene_block_loop_count")]
     pub loop_count: u16,
@@ -1516,6 +1562,8 @@ pub struct TimelineSnapRequest {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct TimelineSnapshot {
+    #[serde(default)]
+    pub layers: Vec<TimelineLayerSummary>,
     pub events: Vec<TimelineCueEventSummary>,
     pub automations: Vec<TimelineAutomationSummary>,
     pub video_automations: Vec<TimelineVideoAutomationSummary>,
@@ -2901,9 +2949,59 @@ mod tests {
         }))
         .unwrap();
 
+        assert_eq!(event.layer_id, None);
         assert_eq!(event.duration_ms, 0);
         assert_eq!(event.loop_count, 1);
         assert_eq!(event.jump_to_event_id, None);
+    }
+
+    #[test]
+    fn timeline_layer_kind_defaults_derives_from_track_and_has_fixed_section_rank() {
+        assert_eq!(
+            super::TimelineLayerKind::default(),
+            super::TimelineLayerKind::Lighting
+        );
+        assert_eq!(
+            super::TimelineLayerKind::from(&super::TimelineTrackKind::Lighting),
+            super::TimelineLayerKind::Lighting
+        );
+        assert_eq!(
+            super::TimelineLayerKind::from(&super::TimelineTrackKind::Video),
+            super::TimelineLayerKind::Video
+        );
+        assert_eq!(super::TimelineLayerKind::Audio.display_section_rank(), 0);
+        assert_eq!(super::TimelineLayerKind::Lighting.display_section_rank(), 1);
+        assert_eq!(super::TimelineLayerKind::Video.display_section_rank(), 2);
+    }
+
+    #[test]
+    fn timeline_layer_summary_defaults_flags_and_kind() {
+        let layer: super::TimelineLayerSummary = serde_json::from_value(serde_json::json!({
+            "id": 7,
+            "label": "Front Wash",
+            "order": 3
+        }))
+        .unwrap();
+
+        assert!(!layer.muted);
+        assert!(!layer.locked);
+        assert!(!layer.solo);
+        assert_eq!(layer.kind, super::TimelineLayerKind::Lighting);
+    }
+
+    #[test]
+    fn legacy_timeline_snapshot_defaults_layers_to_empty() {
+        let snapshot: super::TimelineSnapshot = serde_json::from_value(serde_json::json!({
+            "events": [],
+            "automations": [],
+            "video_automations": [],
+            "playing": false,
+            "position_ms": 0,
+            "duration_ms": 0
+        }))
+        .unwrap();
+
+        assert!(snapshot.layers.is_empty());
     }
 
     #[test]
@@ -2913,6 +3011,7 @@ mod tests {
             cue_id: 3,
             time_ms: 1_250,
             track: super::TimelineTrackKind::Lighting,
+            layer_id: Some(7),
             duration_ms: 2_000,
             loop_count: 4,
             jump_to_event_id: Some(2),
@@ -2922,6 +3021,9 @@ mod tests {
         let decoded: super::TimelineCueEventSummary = serde_json::from_str(&encoded).unwrap();
 
         assert_eq!(decoded, event);
+        let encoded_value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(encoded_value["track"], "Lighting");
+        assert_eq!(encoded_value["layer_id"], 7);
     }
 
     #[test]
@@ -2932,6 +3034,7 @@ mod tests {
                 cue_id: 3,
                 time_ms: 1_250,
                 track: super::TimelineTrackKind::Lighting,
+                layer_id: Some(7),
                 duration_ms: 2_000,
                 loop_count: 4,
                 jump_to_event_id: Some(2),

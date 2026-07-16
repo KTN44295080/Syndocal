@@ -1514,11 +1514,24 @@ export interface ActiveFadeSummary {
 
 export type TimelineTrackKind = "Lighting" | "Video";
 
+export type TimelineLayerKind = "Lighting" | "Video" | "Audio";
+
+export interface TimelineLayerSummary {
+  id: number;
+  label: string;
+  order: number;
+  muted: boolean;
+  locked: boolean;
+  solo: boolean;
+  kind: TimelineLayerKind;
+}
+
 export interface TimelineCueEventSummary {
   id: number;
   cue_id: number;
   time_ms: number;
   track: TimelineTrackKind;
+  layer_id?: number | null;
   /** Length of one linked Cue iteration. Zero preserves the legacy point-event behavior. */
   duration_ms: number;
   /** Number of Cue iterations within the placed block. */
@@ -1590,6 +1603,7 @@ export interface TimelineVideoAutomationSummary {
 }
 
 export interface TimelineSnapshot {
+  layers?: TimelineLayerSummary[];
   events: TimelineCueEventSummary[];
   automations: TimelineAutomationSummary[];
   video_automations: TimelineVideoAutomationSummary[];
