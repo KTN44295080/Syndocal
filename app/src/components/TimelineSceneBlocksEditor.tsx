@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import type { TimelineEventDraft } from "../editorDrafts";
 import { confirmTimelinePlacementRemoval } from "../destructiveActions";
 import { cueIdentityHue, identityCssColor } from "../identityColor";
@@ -62,6 +62,7 @@ const totalDurationMs = (event: Pick<TimelineCueEventSummary, "duration_ms" | "l
   Math.max(0, event.duration_ms) * Math.max(1, event.loop_count);
 const sceneBlockRowsPerPage = 12;
 const sourcePickerResultLimit = 80;
+const selectedRowScrollAttemptLimit = 8;
 
 const jumpOptionLabel = (event: TimelineSceneBlockRow) =>
   `${event.duration_ms > 0 ? "Block" : "Point"} ${event.id} · L${event.cue_list_id} / Cue #${event.cue_id} · ${event.cue_number} ${event.cue_label} @ ${event.time_ms}ms`;
@@ -81,6 +82,7 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
   const [sourcePickerEventId, setSourcePickerEventId] = createSignal<number | null>(null);
   const [sourcePickerCueId, setSourcePickerCueId] = createSignal<number | null>(null);
   const [sourcePickerQuery, setSourcePickerQuery] = createSignal("");
+  let workspaceElement: HTMLElement | undefined;
   let listElement: HTMLDivElement | undefined;
   const scrollRowIntoView = (eventId: number) => {
     requestAnimationFrame(() => {
@@ -89,6 +91,64 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
         ?.scrollIntoView({ block: "nearest" });
     });
   };
+  let selectedRowScrollTargetId: number | null = null;
+  let selectedRowScrollFrame: number | null = null;
+  let selectedRowScrollAttempts = 0;
+  let lastSelectedRowScrollTargetId: number | null = null;
+  let lastSelectedRowScrollTargetRevision = -1;
+  const cancelSelectedRowScroll = () => {
+    if (selectedRowScrollFrame !== null) cancelAnimationFrame(selectedRowScrollFrame);
+    selectedRowScrollTargetId = null;
+    selectedRowScrollFrame = null;
+    selectedRowScrollAttempts = 0;
+  };
+  const selectedRowIsFullyVisible = (row: HTMLElement) => {
+    if (!listElement || !workspaceElement) return false;
+    const rowRect = row.getBoundingClientRect();
+    const listRect = listElement.getBoundingClientRect();
+    const workspaceRect = workspaceElement.getBoundingClientRect();
+    return rowRect.left >= Math.max(0, listRect.left, workspaceRect.left) - 1 &&
+      rowRect.top >= Math.max(0, listRect.top, workspaceRect.top) - 1 &&
+      rowRect.right <= Math.min(window.innerWidth, listRect.right, workspaceRect.right) + 1 &&
+      rowRect.bottom <= Math.min(window.innerHeight, listRect.bottom, workspaceRect.bottom) + 1;
+  };
+  const scheduleSelectedRowScroll = (eventId: number, selectionRevision: number) => {
+    if (selectedRowScrollTargetId === eventId) {
+      lastSelectedRowScrollTargetRevision = selectionRevision;
+      return;
+    }
+    if (
+      lastSelectedRowScrollTargetId === eventId &&
+      lastSelectedRowScrollTargetRevision === selectionRevision
+    ) return;
+    cancelSelectedRowScroll();
+    selectedRowScrollTargetId = eventId;
+    selectedRowScrollAttempts = 0;
+    lastSelectedRowScrollTargetId = eventId;
+    lastSelectedRowScrollTargetRevision = selectionRevision;
+    const attemptScroll = () => {
+      selectedRowScrollFrame = null;
+      if (selectedRowScrollTargetId !== eventId || props.selectedEventId !== eventId) {
+        if (selectedRowScrollTargetId === eventId) cancelSelectedRowScroll();
+        return;
+      }
+      const row = listElement
+        ?.querySelector<HTMLElement>(`[data-scene-block-id="${eventId}"]`);
+      if (!row) {
+        selectedRowScrollAttempts += 1;
+        if (selectedRowScrollAttempts >= selectedRowScrollAttemptLimit) {
+          cancelSelectedRowScroll();
+          return;
+        }
+        selectedRowScrollFrame = requestAnimationFrame(attemptScroll);
+        return;
+      }
+      if (!selectedRowIsFullyVisible(row)) row.scrollIntoView({ block: "nearest" });
+      cancelSelectedRowScroll();
+    };
+    selectedRowScrollFrame = requestAnimationFrame(attemptScroll);
+  };
+  onCleanup(cancelSelectedRowScroll);
   const blockCount = () => props.eventRows.filter((event) => event.duration_ms > 0).length;
   const pointCount = () => props.eventRows.length - blockCount();
   const sourceIndexByEventId = createMemo(() => new Map(
@@ -188,22 +248,24 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
     const sourceIndex = selectedEventId === null
       ? -1
       : (sourceIndexByEventId().get(selectedEventId) ?? -1);
+    if (selectedEventId === null) {
+      cancelSelectedRowScroll();
+      lastSelectedRowScrollTargetId = null;
+      lastSelectedRowScrollTargetRevision = -1;
+      return;
+    }
     if (
-      selectedEventId === null ||
       sourceIndex < 0 ||
       (!filterChanged && selectionRevision === lastSyncedSelectionRevision && sourceIndex === lastSyncedSelectedIndex)
     ) return;
     lastSyncedSelectionRevision = selectionRevision;
     lastSyncedSelectedIndex = sourceIndex;
     lastSyncedFilterEventIds = filterEventIds;
-    const scrollSelectedRow = (revision: number) => {
-      if (revision === selectedPageSyncRevision) scrollRowIntoView(selectedEventId);
-    };
     const filteredIndex = filteredIndexByEventId().get(selectedEventId) ?? -1;
     if (filteredIndex >= 0) {
-      const revision = ++selectedPageSyncRevision;
+      ++selectedPageSyncRevision;
       setPage(Math.floor(filteredIndex / sceneBlockRowsPerPage));
-      queueMicrotask(() => scrollSelectedRow(revision));
+      scheduleSelectedRowScroll(selectedEventId, selectionRevision);
       return;
     }
     if (filterChanged && filterEventIdSet() !== null) {
@@ -218,7 +280,7 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
     queueMicrotask(() => {
       if (revision === selectedPageSyncRevision) {
         setPage(Math.floor(sourceIndex / sceneBlockRowsPerPage));
-        scrollSelectedRow(revision);
+        scheduleSelectedRowScroll(selectedEventId, selectionRevision);
       }
     });
   });
@@ -371,7 +433,11 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
   };
 
   return (
-    <section class="sceneBlockWorkspace" aria-label="Linked Scene Blocks">
+    <section
+      class="sceneBlockWorkspace"
+      aria-label="Linked Scene Blocks"
+      ref={(element) => { workspaceElement = element; }}
+    >
       <header class="sceneBlockWorkspaceHeader">
         <div class="sceneBlockHeading">
           <small>SHOW SEQUENCE</small>

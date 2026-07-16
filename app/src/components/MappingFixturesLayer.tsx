@@ -76,6 +76,7 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
                   width={fixture.width}
                   height={fixture.height}
                   color={fixture.color}
+                  hitTargetRadius={Math.max(6, fixture.width / 2 + 1.5, fixture.height / 2 + 1.5)}
                   title={`${fixture.label} / ${fixture.dmxLabel} / ${fixture.groupLabel}`}
                 />
               </g>

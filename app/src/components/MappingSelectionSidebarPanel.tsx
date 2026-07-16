@@ -1,3 +1,4 @@
+import type { ComponentProps } from "solid-js";
 import type {
   PatchedFixtureSummary,
   StageObjectKind,
@@ -5,6 +6,7 @@ import type {
   VideoOutputMapping,
   VideoOutputSummary,
 } from "../types";
+import { MappingFixtureTypeStrip } from "./MappingFilterStrips";
 import { MappingFixtureInspectorPanel, type MappingFixtureGeometryRow } from "./MappingFixtureInspectorPanel";
 import { MappingFixtureListPanel, MappingFixtureSelectionToolsPanel } from "./MappingFixtureSelectionPanel";
 import { MappingProjectorSelectionPanel } from "./MappingProjectorSelectionPanel";
@@ -23,7 +25,7 @@ type StageObjectLayoutMode = "line" | "grid";
 type StageObjectPickMode = "replace" | "add";
 type MappingSelectionEvent = Pick<MouseEvent, "ctrlKey" | "metaKey" | "shiftKey">;
 
-interface MappingSelectionSidebarPanelProps {
+export interface MappingSelectionPanelProps {
   selectedFixtureCount: number;
   filteredFixtureCount: number;
   fixtureSearch: string;
@@ -98,9 +100,18 @@ interface MappingSelectionSidebarPanelProps {
   onEditOutputProjection: (outputId: number) => void;
 }
 
-export function MappingSelectionSidebarPanel(props: MappingSelectionSidebarPanelProps) {
+type MappingSelectionsColumnProps = MappingSelectionPanelProps & {
+  typeFilters: ComponentProps<typeof MappingFixtureTypeStrip>;
+};
+
+export function MappingSelectionsColumn(props: MappingSelectionsColumnProps) {
   return (
-    <aside class="mappingSelectionPanel">
+    <aside
+      class="mappingSelectionPanel mappingSelectionsColumn"
+      data-persistent-band-part="selections"
+      aria-label="Fixture selections"
+    >
+      <MappingFixtureTypeStrip {...props.typeFilters} />
       <MappingFixtureSelectionToolsPanel
         selectedCount={props.selectedFixtureCount}
         filteredCount={props.filteredFixtureCount}
@@ -115,6 +126,18 @@ export function MappingSelectionSidebarPanel(props: MappingSelectionSidebarPanel
         onClearSelection={props.onClearSelection}
         onApplyGroups={props.onApplyGroups}
       />
+      <MappingFixtureListPanel
+        fixtures={props.filteredFixtures}
+        selectedFixtureIds={props.selectedFixtureIds}
+        onSelectFixture={props.onSelectFixture}
+      />
+    </aside>
+  );
+}
+
+export function MappingSetupContextPanel(props: MappingSelectionPanelProps) {
+  return (
+    <div class="mappingSelectionPanel mappingSetupContextContent">
       <MappingStageObjectPanel
         stageObjects={props.stageObjects}
         stageObjectFixtureCounts={props.stageObjectFixtureCounts}
@@ -173,11 +196,6 @@ export function MappingSelectionSidebarPanel(props: MappingSelectionSidebarPanel
         onDuplicate={props.onDuplicateSelected}
         onRemove={props.onRemoveSelected}
       />
-      <MappingFixtureListPanel
-        fixtures={props.filteredFixtures}
-        selectedFixtureIds={props.selectedFixtureIds}
-        onSelectFixture={props.onSelectFixture}
-      />
       <MappingProjectorSelectionPanel
         outputs={props.outputs}
         selectedOutput={props.selectedOutput}
@@ -192,6 +210,6 @@ export function MappingSelectionSidebarPanel(props: MappingSelectionSidebarPanel
         onSetMapping={props.onSetOutputMapping}
         onEditProjection={props.onEditOutputProjection}
       />
-    </aside>
+    </div>
   );
 }

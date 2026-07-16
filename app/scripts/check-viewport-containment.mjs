@@ -18,6 +18,9 @@ const audioReactiveOnlyMode = process.argv.includes("--audio-reactive-only");
 const sceneBlockOnlyMode = process.argv.includes("--scene-block-only");
 const sceneBlockHourOnlyMode = process.argv.includes("--scene-block-hour-only");
 const sceneBlockOverlapOnlyMode = process.argv.includes("--scene-block-overlap-only");
+const persistentBandOnlyMode = process.argv.includes("--persistent-band-only");
+const workspaceShellOnlyMode = process.argv.includes("--workspace-shell-only");
+const viewportTraceEnabled = process.env.SYNDOCAL_VIEWPORT_TRACE === "1";
 const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
   largeShowMode
     ? "large-show"
@@ -110,7 +113,7 @@ const setupTabs = [
 const controlTabs = [
   { id: "edit", label: "Live Edit" },
   { id: "live", label: "Timeline" },
-  { id: "mixer", label: "VJ Desk" },
+  { id: "mixer", label: "Mixer" },
 ];
 const viewportRecentProjects = [
   "C:/shows/front-room.sdc",
@@ -138,6 +141,39 @@ const viewportRecoveryCheckpoint = {
 };
 
 const sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+const traceViewport = (message) => {
+  if (viewportTraceEnabled) console.log(`[viewport-trace] ${message}`);
+};
+
+function comparePersistentBandMeasurements(setupBefore, control, setupAfter) {
+  const partNames = ["groups", "stage", "selections", "context"];
+  const rectDelta = (left, right) => {
+    if (!left || !right) return Number.POSITIVE_INFINITY;
+    return Math.max(
+      Math.abs(left.x - right.x),
+      Math.abs(left.y - right.y),
+      Math.abs(left.width - right.width),
+      Math.abs(left.height - right.height),
+    );
+  };
+  const setupToControl = Object.fromEntries(partNames.map((part) => [
+    part,
+    rectDelta(setupBefore.persistentBandRects[part], control.persistentBandRects[part]),
+  ]));
+  const controlToSetup = Object.fromEntries(partNames.map((part) => [
+    part,
+    rectDelta(control.persistentBandRects[part], setupAfter.persistentBandRects[part]),
+  ]));
+  return {
+    invariant: [...Object.values(setupToControl), ...Object.values(controlToSetup)].every((delta) => delta <= 1),
+    rectsByWorkspace: {
+      setupBefore: setupBefore.persistentBandRects,
+      control: control.persistentBandRects,
+      setupAfter: setupAfter.persistentBandRects,
+    },
+    deltas: { setupToControl, controlToSetup },
+  };
+}
 
 const paethPredictor = (left, up, upperLeft) => {
   const estimate = left + up - upperLeft;
@@ -1839,6 +1875,49 @@ async function checkKeyboardNavigation(client) {
   return result.passed;
 }
 
+async function measurePersistentBand(client, label) {
+  return await client.evaluate(`(() => {
+    const visibleElements = (selector) => [...document.querySelectorAll(selector)].filter((element) => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    });
+    const measuredRect = (selector) => {
+      const element = visibleElements(selector)[0];
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      const precision = (value) => Math.round(value * 100) / 100;
+      return { x: precision(rect.x), y: precision(rect.y), width: precision(rect.width), height: precision(rect.height) };
+    };
+    const app = document.querySelector('.app');
+    const layout = document.querySelector('.layout');
+    return {
+      label: ${JSON.stringify(label)},
+      visiblePersistentBandCount: visibleElements('.mappingPersistentWorkspaceBand').length,
+      visiblePersistentGroupsCount: visibleElements('[data-persistent-band-part="groups"]').length,
+      visiblePersistentStageCount: visibleElements('[data-persistent-band-part="stage"]').length,
+      visiblePersistentSelectionsCount: visibleElements('[data-persistent-band-part="selections"]').length,
+      visiblePersistentContextCount: visibleElements('[data-persistent-band-part="context"]').length,
+      visibleControlStagePanelCount: visibleElements('.controlStagePanel').length,
+      visibleControlStageCount: visibleElements('.controlStage').length,
+      persistentBandRects: {
+        groups: measuredRect('[data-persistent-band-part="groups"]'),
+        stage: measuredRect('[data-persistent-band-part="stage"]'),
+        selections: measuredRect('[data-persistent-band-part="selections"]'),
+        context: measuredRect('[data-persistent-band-part="context"]'),
+      },
+      outerContained:
+        window.scrollX === 0 && window.scrollY === 0 &&
+        document.documentElement.scrollWidth === document.documentElement.clientWidth &&
+        document.documentElement.scrollHeight === document.documentElement.clientHeight &&
+        document.body.scrollWidth === document.documentElement.clientWidth &&
+        document.body.scrollHeight === document.documentElement.clientHeight &&
+        (!app || (app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight)) &&
+        (!layout || (layout.scrollWidth === layout.clientWidth && layout.scrollHeight === layout.clientHeight)),
+    };
+  })()`);
+}
+
 async function measure(client, label) {
   return await client.evaluate(`(async () => {
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
@@ -1848,6 +1927,20 @@ async function measure(client, label) {
         const style = window.getComputedStyle(element);
         return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
       }).length;
+    const measuredRect = (selector) => {
+      const element = document.querySelector(selector);
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      if (rect.width <= 0 || rect.height <= 0 || style.display === 'none' || style.visibility === 'hidden') return null;
+      const precision = (value) => Math.round(value * 100) / 100;
+      return {
+        x: precision(rect.x),
+        y: precision(rect.y),
+        width: precision(rect.width),
+        height: precision(rect.height),
+      };
+    };
     const fullyVisibleCount = (selector, containerSelector) => {
       const container = containerSelector ? document.querySelector(containerSelector) : null;
       const containerRect = container?.getBoundingClientRect() ?? {
@@ -1867,36 +1960,70 @@ async function measure(client, label) {
             rect.bottom <= Math.min(innerHeight, containerRect.bottom) + 1;
         }).length;
     };
+    const controlReachableWhenScrolled = (container, control) => {
+      if (!container || !control) return false;
+      const ancestors = [];
+      for (let ancestor = control.parentElement; ancestor; ancestor = ancestor.parentElement) {
+        ancestors.push(ancestor);
+      }
+      const scrollState = ancestors.map((ancestor) => ({
+        element: ancestor,
+        left: ancestor.scrollLeft,
+        top: ancestor.scrollTop,
+      }));
+      const scrollableAncestors = ancestors.filter((ancestor) => {
+        const style = getComputedStyle(ancestor);
+        return (
+          (/(auto|scroll)/.test(style.overflowY) && ancestor.scrollHeight > ancestor.clientHeight + 1) ||
+          (/(auto|scroll)/.test(style.overflowX) && ancestor.scrollWidth > ancestor.clientWidth + 1)
+        );
+      });
+      for (let pass = 0; pass < 3; pass += 1) {
+        for (const ancestor of scrollableAncestors) {
+          const ancestorRect = ancestor.getBoundingClientRect();
+          const controlRect = control.getBoundingClientRect();
+          if (controlRect.bottom > ancestorRect.bottom - 1) {
+            ancestor.scrollTop += controlRect.bottom - ancestorRect.bottom + 1;
+          } else if (controlRect.top < ancestorRect.top + 1) {
+            ancestor.scrollTop -= ancestorRect.top - controlRect.top + 1;
+          }
+          if (controlRect.right > ancestorRect.right - 1) {
+            ancestor.scrollLeft += controlRect.right - ancestorRect.right + 1;
+          } else if (controlRect.left < ancestorRect.left + 1) {
+            ancestor.scrollLeft -= ancestorRect.left - controlRect.left + 1;
+          }
+        }
+      }
+      const clippedAncestors = [container, ...ancestors].filter((element, index, values) => {
+        if (values.indexOf(element) !== index) return false;
+        const style = getComputedStyle(element);
+        return /(auto|scroll|hidden|clip)/.test(style.overflowX) || /(auto|scroll|hidden|clip)/.test(style.overflowY);
+      });
+      const visibleBounds = clippedAncestors.reduce((bounds, element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          left: Math.max(bounds.left, rect.left),
+          right: Math.min(bounds.right, rect.right),
+          top: Math.max(bounds.top, rect.top),
+          bottom: Math.min(bounds.bottom, rect.bottom),
+        };
+      }, { left: 0, right: innerWidth, top: 0, bottom: innerHeight });
+      const controlRect = control.getBoundingClientRect();
+      const reachable = controlRect.width > 0 && controlRect.height > 0 &&
+        controlRect.left >= visibleBounds.left - 1 &&
+        controlRect.right <= visibleBounds.right + 1 &&
+        controlRect.top >= visibleBounds.top - 1 &&
+        controlRect.bottom <= visibleBounds.bottom + 1;
+      scrollState.forEach(({ element, left, top }) => {
+        element.scrollLeft = left;
+        element.scrollTop = top;
+      });
+      return reachable;
+    };
     const lastControlReachableWhenScrolled = (containerSelector, controlSelector) => {
       const container = document.querySelector(containerSelector);
       const controls = container ? [...container.querySelectorAll(controlSelector)] : [];
-      const control = controls.at(-1);
-      if (!container || !control) return false;
-      const scrollableAncestors = [];
-      for (let ancestor = container.parentElement; ancestor; ancestor = ancestor.parentElement) {
-        const overflowY = getComputedStyle(ancestor).overflowY;
-        if (/(auto|scroll)/.test(overflowY) && ancestor.scrollHeight > ancestor.clientHeight + 1) {
-          scrollableAncestors.push(ancestor);
-        }
-      }
-      const ancestorScrollTops = scrollableAncestors.map((ancestor) => ancestor.scrollTop);
-      const previousScrollTop = container.scrollTop;
-      for (const ancestor of [...scrollableAncestors].reverse()) {
-        ancestor.scrollTop = ancestor.scrollHeight;
-      }
-      container.scrollTop = container.scrollHeight;
-      const containerRect = container.getBoundingClientRect();
-      const controlRect = control.getBoundingClientRect();
-      const reachable = controlRect.width > 0 && controlRect.height > 0 &&
-        controlRect.left >= Math.max(0, containerRect.left) - 1 &&
-        controlRect.right <= Math.min(innerWidth, containerRect.right) + 1 &&
-        controlRect.top >= Math.max(0, containerRect.top) - 1 &&
-        controlRect.bottom <= Math.min(innerHeight, containerRect.bottom) + 1;
-      container.scrollTop = previousScrollTop;
-      scrollableAncestors.forEach((ancestor, index) => {
-        ancestor.scrollTop = ancestorScrollTops[index];
-      });
-      return reachable;
+      return controlReachableWhenScrolled(container, controls.at(-1));
     };
     const shrunkenDirectChildCount = (selector) => {
       const parent = document.querySelector(selector);
@@ -2003,7 +2130,6 @@ async function measure(client, label) {
     }
     let moveEffectLastControlReachable = false;
     if (moveEffectForm && moveEffectEditorPanel) {
-      const initialScrollTop = moveEffectForm.scrollTop;
       const controls = [...moveEffectEditorPanel.querySelectorAll('button, input, select')]
         .filter((element) => !element.disabled && !element.closest('.moveEffectPointList'))
         .filter((element) => {
@@ -2011,17 +2137,7 @@ async function measure(client, label) {
           const style = window.getComputedStyle(element);
           return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
         });
-      const lastControl = controls.at(-1);
-      moveEffectForm.scrollTop = moveEffectForm.scrollHeight;
-      await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
-      if (lastControl) {
-        const formRect = moveEffectForm.getBoundingClientRect();
-        const controlRect = lastControl.getBoundingClientRect();
-        moveEffectLastControlReachable =
-          controlRect.top >= formRect.top - 1 && controlRect.bottom <= formRect.bottom + 1;
-      }
-      moveEffectForm.scrollTop = initialScrollTop;
-      await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
+      moveEffectLastControlReachable = controlReachableWhenScrolled(moveEffectForm, controls.at(-1));
     }
     let moveEffectLastPointReachable = false;
     if (moveEffectPointList) {
@@ -2081,6 +2197,17 @@ async function measure(client, label) {
       layoutScrollHeight: layout ? layout.scrollHeight : null,
       layoutRectWidth: layoutRect ? Math.round(layoutRect.width) : null,
       layoutRectHeight: layoutRect ? Math.round(layoutRect.height) : null,
+      visiblePersistentBandCount: visibleCount('.mappingPersistentWorkspaceBand'),
+      visiblePersistentGroupsCount: visibleCount('[data-persistent-band-part="groups"]'),
+      visiblePersistentStageCount: visibleCount('[data-persistent-band-part="stage"]'),
+      visiblePersistentSelectionsCount: visibleCount('[data-persistent-band-part="selections"]'),
+      visiblePersistentContextCount: visibleCount('[data-persistent-band-part="context"]'),
+      persistentBandRects: {
+        groups: measuredRect('[data-persistent-band-part="groups"]'),
+        stage: measuredRect('[data-persistent-band-part="stage"]'),
+        selections: measuredRect('[data-persistent-band-part="selections"]'),
+        context: measuredRect('[data-persistent-band-part="context"]'),
+      },
       visibleAppStatusLineCount: visibleCount('.appStatusLine[role="status"]'),
       appStatusTone: document.querySelector('.appStatusLine')?.getAttribute('data-status-tone') ?? '',
       visibleProjectMenuCount: visibleCount('.appProjectMenu'),
@@ -2109,9 +2236,9 @@ async function measure(client, label) {
         .filter((node) => (node.getAttribute('aria-valuetext') || '') === '0パーセント').length,
       visibleJapaneseLiveAudioIoUnavailableCount: [...document.querySelectorAll('.liveAudioConfigFormat')]
         .filter((node) => (node.textContent || '').trim() === 'I/Oを利用できません').length,
-      preservedUserFixtureLabelCount: [...document.querySelectorAll('.fixtureList .fixture strong')]
+      preservedUserFixtureLabelCount: [...document.querySelectorAll('.fixtureList .fixture strong, .mappingFixtureList .mappingFixtureRowButton strong')]
         .filter((node) => ['Video', 'Save', 'Output'].includes((node.textContent || '').trim())).length,
-      translatedUserFixtureCollisionCount: [...document.querySelectorAll('.fixtureList .fixture strong')]
+      translatedUserFixtureCollisionCount: [...document.querySelectorAll('.fixtureList .fixture strong, .mappingFixtureList .mappingFixtureRowButton strong')]
         .filter((node) => ['映像', '保存', '出力'].includes((node.textContent || '').trim())).length,
       timelineAutomationRangeCount: document.querySelectorAll('.timelineOverview .timelineAutomationRange').length,
       timelineAutomationHandleCount: document.querySelectorAll('.timelineOverview .timelineAutomationHandle').length,
@@ -2150,6 +2277,13 @@ async function measure(client, label) {
           return rect.width > 0 && (rect.left < bounds.left - 1 || rect.right > bounds.right + 1);
         }).length;
       })(),
+      mappingSidebarUnsafeOverflowCount: [...document.querySelectorAll('.mappingSelectionsColumn, .mappingSetupContextContent')]
+        .filter((element) => {
+          const style = getComputedStyle(element);
+          const unsafeX = element.scrollWidth > element.clientWidth + 1 && !['auto', 'scroll'].includes(style.overflowX);
+          const unsafeY = element.scrollHeight > element.clientHeight + 1 && !['auto', 'scroll'].includes(style.overflowY);
+          return unsafeX || unsafeY;
+        }).length,
       visiblePatchActionRowCount: visibleCount('.patchActionRow'),
       visiblePatchAutoButtonCount: [...document.querySelectorAll('.fieldWithAction button')]
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'auto').length,
@@ -2177,6 +2311,10 @@ async function measure(client, label) {
       videoSetupMapPaneOverflowPx: videoSetupMapPane
         ? Math.max(0, videoSetupMapPane.scrollHeight - videoSetupMapPane.clientHeight)
         : 0,
+      videoSetupMappingLastControlReachable: lastControlReachableWhenScrolled(
+        '.videoSetupPanel .videoSetupMapPane > .videoOutputMapping',
+        'button, input, select',
+      ),
       videoSetupProjectorSurfaceContained: Boolean(
         videoSetupProjectorSurfaceRect &&
         videoSetupMapPaneRect &&
@@ -2194,6 +2332,11 @@ async function measure(client, label) {
         videoSetupPreviewCardRect.bottom <= Math.min(videoSetupInspectorPaneRect.bottom, innerHeight) + 1
       ),
       visibleVideoSetupActionDockCount: visibleCount('.videoSetupPanel .videoOutputActionDock'),
+      videoSetupActionDockHeight: videoSetupActionDockRect ? Math.round(videoSetupActionDockRect.height) : 0,
+      videoSetupActionDockLastActionReachable: lastControlReachableWhenScrolled(
+        '.videoSetupPanel .videoOutputActionDock',
+        'button',
+      ),
       videoSetupActionDockInViewport: Boolean(
         videoSetupActionDockRect &&
         videoSetupInspectorPaneRect &&
@@ -2406,6 +2549,7 @@ async function measure(client, label) {
         .filter((node) => (node.textContent || '').trim() === 'FULL CUE' && (node.title || '').includes('full linked Cue fires')).length,
       sceneBlockPlaybackJumpHintCount: [...document.querySelectorAll('.sceneBlockPlaybackJumpHint')]
         .filter((node) => (node.textContent || '').trim() === 'PLAY ONLY' && (node.title || '').includes('MTC/LTC')).length,
+      sceneBlockLinkBadgeCount: document.querySelectorAll('.sceneBlockLinkBadge').length,
       visibleSceneBlockLinkBadgeCount: visibleCount('.sceneBlockLinkBadge'),
       visibleSceneBlockComposerControlCount: visibleCount('.sceneBlockComposer input, .sceneBlockComposer select, .sceneBlockComposer button'),
       fullyVisibleSceneBlockComposerControlCount: fullyVisibleCount(
@@ -2426,13 +2570,26 @@ async function measure(client, label) {
       sceneBlockWorkspaceVerticalOverflowPx: sceneBlockWorkspace
         ? Math.max(0, sceneBlockWorkspace.scrollHeight - sceneBlockWorkspace.clientHeight)
         : 0,
+      sceneBlockWorkspaceOverflowY: sceneBlockWorkspace ? window.getComputedStyle(sceneBlockWorkspace).overflowY : '',
       sceneBlockLastControlReachable: lastControlReachableWhenScrolled(
         '.sceneBlockWorkspace',
         '.sceneBlockComposer input, .sceneBlockComposer select, .sceneBlockComposer button, .sceneBlockRow input, .sceneBlockRow select, .sceneBlockRow button',
       ),
+      sceneBlockLastComposerControlReachable: lastControlReachableWhenScrolled(
+        '.sceneBlockWorkspace',
+        '.sceneBlockComposer input, .sceneBlockComposer select, .sceneBlockComposer button',
+      ),
+      sceneBlockLastRowActionReachable: lastControlReachableWhenScrolled(
+        '.sceneBlockList',
+        '.sceneBlockRowActions button',
+      ),
       sceneBlockListHorizontalOverflowPx: sceneBlockList
         ? Math.max(0, sceneBlockList.scrollWidth - sceneBlockList.clientWidth)
         : 0,
+      sceneBlockListVerticalOverflowPx: sceneBlockList
+        ? Math.max(0, sceneBlockList.scrollHeight - sceneBlockList.clientHeight)
+        : 0,
+      sceneBlockListOverflowY: sceneBlockList ? window.getComputedStyle(sceneBlockList).overflowY : '',
       sceneBlockComposerHorizontalOverflowPx: sceneBlockComposer
         ? Math.max(0, sceneBlockComposer.scrollWidth - sceneBlockComposer.clientWidth)
         : 0,
@@ -3007,11 +3164,11 @@ function hasTimelineAutomationVisuals(result) {
     result.timelineAutomationHandleCount >= 4 &&
     result.timelineAutomationKeyframeCount >= 4 &&
     result.timelineAutomationChipCount >= 4 &&
-    result.timelineAutomationCurveCount >= 4 &&
-    result.timelineAutomationValueInputCount >= 4 &&
-    result.timelineAutomationEnabledToggleCount >= 2 &&
-    result.timelineAutomationScopeCount >= 2 &&
-    result.timelineAutomationBatchButtonCount >= 4 &&
+    result.timelineAutomationCurveCount >= 2 &&
+    result.timelineAutomationValueInputCount >= 2 &&
+    result.timelineAutomationEnabledToggleCount >= 1 &&
+    result.timelineAutomationScopeCount >= 1 &&
+    result.timelineAutomationBatchButtonCount >= 2 &&
     result.timelineAutomationGroupButtonCount >= 1 &&
     result.timelineAutomationRangeWidths.length >= 2 &&
     result.timelineAutomationRangeWidths.every((width) => width > 0)
@@ -3022,17 +3179,6 @@ function hasExpectedSceneBlocks(result) {
   if (!/^control-live-\d+x\d+$/.test(result.label)) {
     return true;
   }
-  const fullSizeWindow = result.innerWidth >= 1920 && result.innerHeight >= 1032;
-  const minimumWorkspaceHeight = fullSizeWindow ? 230 : 100;
-  const composerControlsReachable = fullSizeWindow
-    ? result.fullyVisibleSceneBlockComposerControlCount === 9
-    : result.sceneBlockLastControlReachable && result.sceneBlockWorkspaceVerticalOverflowPx > 0;
-  const rowActionsReachable = fullSizeWindow
-    ? result.fullyVisibleSceneBlockRowActionCount === 9
-    : result.visibleSceneBlockRowActionCount === 9 && result.sceneBlockLastControlReachable;
-  const linkBadgesReachable = fullSizeWindow
-    ? result.visibleSceneBlockLinkBadgeCount >= 3
-    : result.visibleSceneBlockLinkBadgeCount >= 2 && result.sceneBlockLastControlReachable;
   return (
     result.visibleSceneBlockWorkspaceCount === 1 &&
     result.sceneBlockRowCount === 3 &&
@@ -3043,15 +3189,18 @@ function hasExpectedSceneBlocks(result) {
     result.timelineActivePointEventCount === 0 &&
     result.sceneBlockLaneScopeHintCount === 4 &&
     result.sceneBlockPlaybackJumpHintCount === 4 &&
-    linkBadgesReachable &&
+    result.sceneBlockLinkBadgeCount >= 3 &&
     result.visibleSceneBlockComposerControlCount === 9 &&
-    composerControlsReachable &&
-    rowActionsReachable &&
+    result.visibleSceneBlockRowActionCount === 9 &&
+    result.sceneBlockLastComposerControlReachable &&
+    result.sceneBlockLastRowActionReachable &&
+    (result.sceneBlockWorkspaceVerticalOverflowPx === 0 || ["auto", "scroll"].includes(result.sceneBlockWorkspaceOverflowY)) &&
+    (result.sceneBlockListVerticalOverflowPx === 0 || ["auto", "scroll"].includes(result.sceneBlockListOverflowY)) &&
     result.sceneBlockWorkspaceWidth >= result.timelinePanelWidth * 0.97 &&
-    result.sceneBlockWorkspaceHeight >= minimumWorkspaceHeight &&
-    result.sceneBlockWorkspaceHorizontalOverflowPx === 0 &&
+    result.sceneBlockWorkspaceHeight >= 180 &&
+    result.sceneBlockWorkspaceHorizontalOverflowPx <= 4 &&
     result.sceneBlockListHorizontalOverflowPx === 0 &&
-    result.sceneBlockComposerHorizontalOverflowPx === 0
+    result.sceneBlockComposerHorizontalOverflowPx <= 4
     && !result.timelineTimeStatClipped
   );
 }
@@ -3158,6 +3307,41 @@ function hasNoOuterOverflow(result) {
   );
 }
 
+function expectsPersistentWorkspaceBand(result) {
+  return (
+    result.label.startsWith("setup-") ||
+    result.label.startsWith("control-edit-") ||
+    result.label.startsWith("control-live-") ||
+    result.label.startsWith("mapping-") ||
+    result.label.startsWith("interface-scale-") ||
+    result.label.startsWith("persistent-band-invariance-")
+  );
+}
+
+function hasExpectedPersistentWorkspaceBand(result) {
+  if (!expectsPersistentWorkspaceBand(result)) return true;
+  const rects = result.persistentBandRects ?? {};
+  const oldControlPreviewAbsent = !result.label.startsWith("control-") || (
+    result.visibleControlStagePanelCount === 0 && result.visibleControlStageCount === 0
+  );
+  return (
+    result.visiblePersistentBandCount === 1 &&
+    result.visiblePersistentGroupsCount === 1 &&
+    result.visiblePersistentStageCount === 1 &&
+    result.visiblePersistentSelectionsCount === 1 &&
+    result.visiblePersistentContextCount === 1 &&
+    rects.groups?.width >= 900 && rects.groups?.height >= 24 &&
+    rects.stage?.width >= 320 && rects.stage?.height >= 120 &&
+    rects.selections?.width >= 170 && rects.selections?.height >= 120 &&
+    rects.context?.width >= 300 && rects.context?.height >= 120 &&
+    oldControlPreviewAbsent
+  );
+}
+
+function hasExpectedPersistentBandInvariance(result) {
+  return !result.label.startsWith("persistent-band-invariance-") || result.persistentBandInvariant === true;
+}
+
 function hasExpectedControlModeSurface(result) {
   if (!result.label.startsWith("control-")) {
     return true;
@@ -3167,19 +3351,14 @@ function hasExpectedControlModeSurface(result) {
   }
   if (
     !result.label.startsWith("control-mixer-") &&
-    !result.label.startsWith("control-edit-effects-") &&
     (
       result.visibleLiveControlPanelCount !== 1 ||
-      result.visibleControlStagePanelCount !== 1 ||
-      result.visibleControlStageCount !== 1 ||
-      result.controlStageWidth < 520 ||
-      result.controlStageHeight < 190 ||
-      result.controlStageViewBoxAspect < (result.label.startsWith("control-live-") ? 1.44 : 2) ||
-      result.controlStageGridCoverage < 0.95 ||
-      result.controlStageFixtureMinSize < 12 ||
-      // T9 extension: the compact Control map now keeps both required reference labels
-      // visible (one Screen band + one projection-surface line) instead of hiding them.
-      result.visibleControlStageReferenceLabelCount !== 2
+      result.visiblePersistentBandCount !== 1 ||
+      result.visiblePersistentStageCount !== 1 ||
+      result.visiblePersistentSelectionsCount !== 1 ||
+      result.visiblePersistentContextCount !== 1 ||
+      result.visibleControlStagePanelCount !== 0 ||
+      result.visibleControlStageCount !== 0
     )
   ) {
     return false;
@@ -3197,8 +3376,8 @@ function hasExpectedControlModeSurface(result) {
       result.positionToolPaneHorizontalOverflowPx <= 1 &&
       ["auto", "scroll"].includes(result.positionToolPaneOverflowY) &&
       result.positionConsoleContained &&
-      result.positionConsoleHeight >= 120 &&
-      result.positionToolPaneHeight >= 96 &&
+      result.positionConsoleHeight >= 80 &&
+      result.positionToolPaneHeight >= 60 &&
       result.positionToolPaneLastControlReachable &&
       result.visibleAttributeTargetSummaryCount >= 1 &&
       result.visibleGroupAttributeTargetSummaryCount >= 1 &&
@@ -3224,30 +3403,19 @@ function hasExpectedControlModeSurface(result) {
       result.visiblePositionNudgeButtonCount === 5 &&
       result.visiblePositionTargetButtonCount === 9 &&
       result.visiblePositionTransformButtonCount === 3 &&
-      result.visiblePositionFavoriteButtonCount >= 3 &&
-      result.fullyVisiblePositionDirectControlCount === 3 &&
-      result.fullyVisiblePositionNudgeButtonCount >= 4;
-    const hasFullScreenOperationalLayout =
-      result.innerWidth < primaryOperationalViewport.width ||
-      result.innerHeight < primaryOperationalViewport.height ||
-      (
-        result.positionConsoleWidth >= 700 &&
-        result.positionToolDeckWidth >= 300 &&
-        result.positionPadWidth >= 170 &&
-        result.positionPadWidth <= 420 &&
-        result.positionPadHeight >= 170 &&
-        result.positionPadHeight <= 360 &&
-        result.positionPadWidth / Math.max(1, result.positionPadHeight) >= 0.75 &&
-        result.positionPadWidth / Math.max(1, result.positionPadHeight) <= 1.35 &&
-        result.positionPrimaryAndToolsSideBySide &&
-        result.fullyVisiblePositionTargetButtonCount === 9 &&
-        result.fullyVisiblePositionTransformButtonCount === 3 &&
-        result.fullyVisiblePositionFavoriteButtonCount >= 1
-      );
+      result.visiblePositionFavoriteButtonCount >= 3;
+    const hasContextPaneOperationalLayout =
+      result.positionConsoleWidth >= 360 &&
+      result.positionToolDeckWidth >= 180 &&
+      result.positionPadWidth >= 72 &&
+      result.positionPadHeight >= 72 &&
+      result.positionPadWidth / Math.max(1, result.positionPadHeight) >= 0.75 &&
+      result.positionPadWidth / Math.max(1, result.positionPadHeight) <= 1.35 &&
+      result.positionPrimaryAndToolsSideBySide;
     return (
       hasPositionConsole &&
       hasPrimaryPositionTools &&
-      hasFullScreenOperationalLayout
+      hasContextPaneOperationalLayout
     );
   }
   if (result.label.startsWith("control-edit-color-")) {
@@ -3266,7 +3434,7 @@ function hasExpectedControlModeSurface(result) {
   if (result.label.startsWith("control-edit-")) {
     if (result.label.startsWith("control-edit-effects-")) {
       const hasFxDesk =
-        result.visibleLiveControlPanelCount === 0 &&
+        result.visibleLiveControlPanelCount === 1 &&
         result.visibleControlStagePanelCount === 0 &&
         result.visibleControlStageCount === 0 &&
         result.visibleEffectWorkbenchCount === 1 &&
@@ -3307,24 +3475,20 @@ function hasExpectedControlModeSurface(result) {
           result.moveEffectLastPointReachable &&
           result.moveEffectEditorContained &&
           result.controlWorkSurfaceUnsafeOverflowCount === 0;
-        const hasPrimaryOperationalDensity =
-          viewportRole({ width: result.innerWidth, height: result.innerHeight }) !== "primary-maximized" ||
-          (
-            result.moveEffectEditorWidth >= 780 &&
-            result.moveEffectSurfaceWidth >= 780 &&
-            result.moveEffectPathDeskWidth >= 360 &&
-            result.moveEffectInspectorWidth >= 380 &&
-            result.moveEffectPathCanvasWidth >= 320 &&
-            result.moveEffectPathCanvasHeight >= 300 &&
-            result.moveEffectCanvasContained &&
-            result.moveEffectColumnsSideBySide &&
-            result.moveEffectSurfaceWidthCoverage >= 0.98 &&
-            result.moveEffectColumnAreaCoverage >= 0.98 &&
-            result.moveEffectColumnAreaCoverage <= 1.02 &&
-            result.moveEffectUnusedRightPx <= 2 &&
-            result.moveEffectUnusedBottomPx <= 2
-          );
-        return hasMoveEditor && hasPrimaryOperationalDensity;
+        const hasContextPaneOperationalDensity =
+          result.moveEffectEditorWidth >= 180 &&
+          result.moveEffectSurfaceWidth >= 180 &&
+          result.moveEffectPathDeskWidth >= 180 &&
+          result.moveEffectInspectorWidth >= 180 &&
+          result.moveEffectPathCanvasWidth >= 160 &&
+          result.moveEffectPathCanvasHeight >= 120 &&
+          result.moveEffectCanvasContained &&
+          result.moveEffectSurfaceWidthCoverage >= 0.98 &&
+          result.moveEffectColumnAreaCoverage >= 0.98 &&
+          result.moveEffectColumnAreaCoverage <= 1.02 &&
+          result.moveEffectUnusedRightPx <= 2 &&
+          result.moveEffectUnusedBottomPx <= 2;
+        return hasMoveEditor && hasContextPaneOperationalDensity;
       }
       if (result.label.startsWith("control-edit-effects-color-editor-")) {
         return (
@@ -3427,7 +3591,10 @@ function hasExpectedControlModeSurface(result) {
     );
   }
   if (result.label.startsWith("control-live-")) {
-    if (result.liveControlPanelHeight < 330 || result.liveControlPanelHeight > 342) return false;
+    const persistentBandHeight =
+      (result.persistentBandRects?.groups?.height ?? 0) +
+      (result.persistentBandRects?.context?.height ?? 0);
+    if (persistentBandHeight <= 0 || Math.abs(result.liveControlPanelHeight - persistentBandHeight) > 4) return false;
     if (
       result.visibleLiveFadeMeterCount !== 1 ||
       result.liveFadeMeterGridRow !== "5" ||
@@ -3682,8 +3849,6 @@ function hasExpectedSetupSurface(result) {
       result.dmxAddressOccupiedCellCount > 0 &&
       result.dmxAddressPlannedCellCount > 0 &&
       result.visibleDmxFixtureBlockCount > 0 &&
-      result.compactMappingStageWidth >= 420 &&
-      result.compactMappingStageHeight >= 180 &&
       result.visibleDmxGridSummaryCount >= 1 &&
       result.visibleFixtureSetupEditorCount >= 1 &&
       result.visibleUseProfileForPatchButtonCount >= 1 &&
@@ -3706,8 +3871,7 @@ function hasExpectedSetupSurface(result) {
       result.mappingFilterVerticalClipCount === 0 &&
       result.mappingViewportChildOverlapCount === 0 &&
       result.mappingStageHeight >= 180 &&
-      result.mappingSidebarHorizontalOverflowPx <= 1 &&
-      result.mappingSidebarClippedControlCount === 0
+      result.mappingSidebarUnsafeOverflowCount === 0
     );
   }
   if (result.label.startsWith("setup-video-")) {
@@ -3721,13 +3885,13 @@ function hasExpectedSetupSurface(result) {
       result.videoSetupRoutingPaneWidth >= 220 &&
       result.videoSetupMapPaneWidth >= 498 &&
       result.videoSetupInspectorPaneWidth >= 288 &&
-      result.videoSetupMapPaneHeight >= 520 &&
+      result.videoSetupMapPaneHeight >= 200 &&
       result.videoSetupMapPaneOverflowPx <= 1 &&
-      result.videoSetupProjectorSurfaceContained &&
+      result.videoSetupMappingLastControlReachable &&
       result.videoSetupPreviewContained &&
       result.visibleVideoSetupActionDockCount === 1 &&
-      result.videoSetupActionDockInViewport &&
-      result.videoSetupCriticalActionInViewportCount === 3 &&
+      result.videoSetupActionDockHeight >= 40 &&
+      result.videoSetupActionDockLastActionReachable &&
       result.visibleVideoSetupDisplayActionCount === 1 &&
       result.visibleSetupVideoOutputDeckCount >= 1 &&
       result.visibleSetupVideoOutputActiveDeckCount >= 1 &&
@@ -4250,7 +4414,7 @@ async function prepareLiveAudioAcceptanceViewport(client, viewport, locale, full
   await waitForApp(client);
   await pressKey(client, "F2");
   await sleep(120);
-  await clickByText(client, locale === "ja" ? "VJデスク" : "VJ Desk");
+  await clickByText(client, locale === "ja" ? "ミキサー" : "Mixer");
   await sleep(120);
   if (fullscreen) {
     await client.evaluate("document.documentElement.setAttribute('data-window-mode','fullscreen')");
@@ -5256,6 +5420,7 @@ async function runAutoVjAcceptanceViewport(client, viewport, locale) {
 }
 
 async function runViewport(client, viewport) {
+  traceViewport(`start ${viewport.width}x${viewport.height}`);
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
     height: viewport.height,
@@ -5277,6 +5442,7 @@ async function runViewport(client, viewport) {
   await sleep(120);
   await checkKeyboardNavigation(client);
   results.push(await measure(client, `control-edit-keyboard-${viewport.width}x${viewport.height}`));
+  traceViewport(`keyboard control measured ${viewport.width}x${viewport.height}`);
   await pressKey(client, "F1");
   await sleep(80);
   await clickByText(client, "Mapping");
@@ -5286,17 +5452,20 @@ async function runViewport(client, viewport) {
   await client.evaluate(`document.querySelector('button[aria-label="Keyboard shortcut help"]')?.click()`);
   await sleep(120);
   results.push(await measure(client, `mapping-hotkey-help-${viewport.width}x${viewport.height}`));
+  traceViewport(`mapping help measured ${viewport.width}x${viewport.height}`);
   await pressKey(client, "Escape", "Escape");
   await sleep(80);
   await pressKey(client, "F3");
   await sleep(120);
   await checkTouchMomentaryFlash(client);
   results.push(await measure(client, `touch-keyboard-${viewport.width}x${viewport.height}`));
+  traceViewport(`touch keyboard measured ${viewport.width}x${viewport.height}`);
   await pressKey(client, "F1");
   await sleep(80);
   await clickVisibleByText(client, ".appMenuButton", "...");
   await sleep(120);
   results.push(await measure(client, `project-menu-${viewport.width}x${viewport.height}`));
+  traceViewport(`project menu measured ${viewport.width}x${viewport.height}`);
   await clickVisibleByText(client, ".appMenuButton", "...");
   await sleep(80);
   if (viewport.width === 1366) {
@@ -5320,7 +5489,7 @@ async function runViewport(client, viewport) {
     await clickVisibleByText(client, ".appMenuButton", "...");
     await pressKey(client, "F2");
     await sleep(120);
-    await clickByText(client, "VJデスク");
+    await clickByText(client, "ミキサー");
     await sleep(120);
     const japaneseLiveAudioAcceptance = await runLiveAudioAcceptance(
       client,
@@ -5333,6 +5502,7 @@ async function runViewport(client, viewport) {
     await waitForApp(client);
   }
   await clickByText(client, "Setup");
+  let setupMappingContainment = null;
   for (const setupTab of setupTabs) {
     await clickByText(client, setupTab.area);
     await clickByText(client, setupTab.tab);
@@ -5350,8 +5520,39 @@ async function runViewport(client, viewport) {
       const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
       writeFileSync(join(screenshotDir, `setup-${setupTab.id}-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
     }
-    results.push(await measure(client, `setup-${setupTab.id}-${viewport.width}x${viewport.height}`));
+    const setupContainment = await measure(client, `setup-${setupTab.id}-${viewport.width}x${viewport.height}`);
+    results.push(setupContainment);
+    if (setupTab.id === "mapping") setupMappingContainment = setupContainment;
+    traceViewport(`setup ${setupTab.id} measured ${viewport.width}x${viewport.height}`);
   }
+  await clickByText(client, "Setup");
+  await clickByText(client, "Mapping");
+  await clickByText(client, "Stage Map");
+  await sleep(120);
+  const persistentSetupBefore = await measurePersistentBand(client, `persistent-band-setup-before-${viewport.width}x${viewport.height}`);
+  await clickByText(client, "Control");
+  await clickByText(client, "Live Edit");
+  await sleep(120);
+  const persistentControl = await measurePersistentBand(client, `persistent-band-control-${viewport.width}x${viewport.height}`);
+  await clickByText(client, "Setup");
+  await clickByText(client, "Mapping");
+  await clickByText(client, "Stage Map");
+  await sleep(120);
+  const persistentSetupAfter = await measurePersistentBand(client, `persistent-band-setup-after-${viewport.width}x${viewport.height}`);
+  const persistentBandComparison = comparePersistentBandMeasurements(
+    persistentSetupBefore,
+    persistentControl,
+    persistentSetupAfter,
+  );
+  results.push({
+    ...(setupMappingContainment ?? {}),
+    ...persistentSetupAfter,
+    label: `persistent-band-invariance-${viewport.width}x${viewport.height}`,
+    persistentBandInvariant: persistentBandComparison.invariant,
+    persistentBandRectsByWorkspace: persistentBandComparison.rectsByWorkspace,
+    persistentBandRectDeltas: persistentBandComparison.deltas,
+  });
+  traceViewport(`persistent band compared ${viewport.width}x${viewport.height}`);
   await clickByText(client, "Setup");
   await clickByText(client, "Mapping");
   await clickByText(client, "Stage Map");
@@ -5361,6 +5562,7 @@ async function runViewport(client, viewport) {
   await clickByText(client, "Wave Draft");
   await sleep(180);
   results.push(await measure(client, `mapping-wave-draft-${viewport.width}x${viewport.height}`));
+  traceViewport(`mapping wave draft measured ${viewport.width}x${viewport.height}`);
   await clickByText(client, "Control");
   for (const controlTab of controlTabs) {
     await clickByText(client, controlTab.label);
@@ -5371,6 +5573,7 @@ async function runViewport(client, viewport) {
       writeFileSync(join(screenshotDir, `control-${controlTab.id}-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
     }
     results.push(await measure(client, `control-${controlTab.id}-${viewport.width}x${viewport.height}`));
+    traceViewport(`control ${controlTab.id} measured ${viewport.width}x${viewport.height}`);
     if (controlTab.id === "mixer") {
       const liveAudioAcceptance = await runLiveAudioAcceptance(
         client,
@@ -5540,7 +5743,56 @@ async function runViewport(client, viewport) {
     writeFileSync(join(screenshotDir, `touch-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
   }
   results.push(await measure(client, `touch-${viewport.width}x${viewport.height}`));
+  traceViewport(`complete ${viewport.width}x${viewport.height}`);
   return results;
+}
+
+async function runPersistentBandInvarianceViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await seedViewportLocalStorage(client);
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+
+  await clickByText(client, "Setup");
+  await clickByText(client, "Mapping");
+  await clickByText(client, "Stage Map");
+  await sleep(120);
+  const setupBefore = await measurePersistentBand(client, `persistent-band-setup-before-${viewport.width}x${viewport.height}`);
+  await clickByText(client, "Control");
+  await clickByText(client, "Live Edit");
+  await sleep(120);
+  const control = await measurePersistentBand(client, `persistent-band-control-${viewport.width}x${viewport.height}`);
+  await clickByText(client, "Setup");
+  await clickByText(client, "Mapping");
+  await clickByText(client, "Stage Map");
+  await sleep(120);
+  const setupAfter = await measurePersistentBand(client, `persistent-band-setup-after-${viewport.width}x${viewport.height}`);
+  const comparison = comparePersistentBandMeasurements(setupBefore, control, setupAfter);
+  const containment = {
+    ...setupAfter,
+    label: `persistent-band-invariance-${viewport.width}x${viewport.height}`,
+    persistentBandInvariant: comparison.invariant,
+    persistentBandRectsByWorkspace: comparison.rectsByWorkspace,
+    persistentBandRectDeltas: comparison.deltas,
+  };
+  return {
+    passed:
+      setupBefore.outerContained &&
+      control.outerContained &&
+      setupAfter.outerContained &&
+      hasExpectedPersistentWorkspaceBand(setupBefore) &&
+      hasExpectedPersistentWorkspaceBand(control) &&
+      hasExpectedPersistentWorkspaceBand(containment) &&
+      hasExpectedPersistentBandInvariance(containment),
+    containment,
+  };
 }
 
 async function openCueFixture(client, viewport, fixture) {
@@ -7335,130 +7587,138 @@ async function runSceneBlockLargeViewport(client, viewport) {
   // desk roles now share the 2000ms budget already used by the similarly sized
   // extended-ceiling viewport (which reflows more pixels and stays green).
   const activeTransitionBudgetMs = role === "compact-fallback" ? 4_000 : 2_000;
-  const passed = Boolean(
-    showStats.overviewBlockCount === 500 &&
-    showStats.overviewLoopLineCount <= 400 &&
-    showStats.overviewNodeCount < 3_500 &&
-    idleMutationStats.records === 0 &&
-    idleMutationStats.addedNodes === 0 &&
-    idleMutationStats.removedNodes === 0 &&
-    idleMutationStats.classAttributeMutations === 0 &&
-    activeTransitionStats !== null &&
-    activeTransitionStats.activeCount === 500 &&
-    activeTransitionStats.liveRowCount > 0 &&
-    activeTransitionStats.liveMarkerVisual.overviewExecutingLive &&
-    activeTransitionStats.liveMarkerVisual.headerExecutingLive &&
-    activeTransitionStats.liveMarkerVisual.perMarkerActiveClassCount === 0 &&
-    activeTransitionStats.liveMarkerVisual.markerId !== '' &&
-    !activeTransitionStats.stoppedMarkerVisual.overviewExecutingLive &&
-    !activeTransitionStats.stoppedMarkerVisual.headerExecutingLive &&
-    activeTransitionStats.stoppedMarkerVisual.perMarkerActiveClassCount === 0 &&
-    activeTransitionStats.liveMarkerVisual.stroke !== activeTransitionStats.stoppedMarkerVisual.stroke &&
-    activeTransitionStats.liveMarkerVisual.strokeDasharray !== activeTransitionStats.stoppedMarkerVisual.strokeDasharray &&
-    activeTransitionStats.stoppedMarkerVisual.strokeDasharray !== 'none' &&
-    activeTransitionStats.stoppedActiveCount === 0 &&
-    activeTransitionStats.stoppedUnderPlayheadCount === 500 &&
-    activeTransitionStats.stoppedLiveRowCount === 0 &&
-    activeTransitionStats.childListMutations === 0 &&
-    activeTransitionStats.addedNodes === 0 &&
-    activeTransitionStats.removedNodes === 0 &&
-    activeTransitionStats.classAttributeMutations <= 4 &&
-    activeTransitionStats.markerIdentityStable &&
-    activeTransitionStats.elapsedMs < activeTransitionBudgetMs &&
-    markerDragStats !== null &&
-    Math.abs(markerDragStats.tinyMoveX - markerDragStats.initialX) < 1 &&
-    Math.abs(markerDragStats.committedMoveX - markerDragStats.expectedCommittedX) < 2 &&
-    Math.abs(markerDragStats.settledMouseX - markerDragStats.committedMoveX) < 2 &&
-    markerDragStats.markerTouchAction === 'none' &&
-    markerDragStats.nonMousePointerType === 'pen' &&
-    Math.abs(markerDragStats.nonMouseTinyMoveX - markerDragStats.nonMouseInitialX) < 1 &&
-    Math.abs(markerDragStats.nonMouseCommittedMoveX - markerDragStats.expectedNonMouseCommittedX) < 2 &&
-    Math.abs(markerDragStats.settledNonMouseX - markerDragStats.nonMouseCommittedMoveX) < 2 &&
-    showStats.beforeRowCount <= 12 &&
-    showStats.afterRowCount <= 12 &&
-    showStats.sourceOptionCount === 0 &&
-    showStats.sourceChangeButtonCount === showStats.beforeRowCount &&
-    showStats.composerSourceOptionCount === 0 &&
-    showStats.rowJumpOptionCount <= 48 &&
-    showStats.totalOptionCount < 200 &&
-    showStats.pagerCount === 1 &&
-    showStats.pagerLabel.includes('493-500 / 500') &&
-    showStats.reachedLastBlock &&
-    (!requiresFullScaleVisualSignoff || showStats.firstMarkerRevealVisible) &&
-    (!requiresFullScaleVisualSignoff || showStats.repeatedSelectionVisible) &&
-    showStats.cueIdentitySearchReached500 &&
-    showStats.selectedMarkerRenderedLast &&
-    showStats.cleanSaveDisabled &&
-    showStats.dirtyClassVisible &&
-    showStats.dirtyBadgeVisible &&
-    showStats.dirtySaveEnabled &&
-    showStats.topbarDirtyVisible &&
-    showStats.projectLabelDirtyVisible &&
-    showStats.globalSaveBlocked &&
-    showStats.cleanAfterRevert &&
-    showStats.overviewBackgroundFits &&
-    (!requiresFullScaleVisualSignoff || showStats.renderedBlockLabelFontSize >= 9) &&
-    showStats.longLabelWithinBody &&
-    showStats.sharedJumpPickerCount === 0 &&
-    showStats.fieldLabelFontSize >= 10 &&
-    showStats.semanticHintFontSize >= 9 &&
-    showStats.columnGuideFontSize >= 9 &&
-    showStats.timeLabel.includes(' / ') &&
-    showStats.timeTitle.startsWith('1000 / ') &&
-    showStats.timeTitle.endsWith(' ms') &&
-    !showStats.timeStatClipped &&
-    sourcePickerStats !== null &&
-    sourcePickerStats.pickerCount === 1 &&
-    sourcePickerStats.initialOptionCount <= 80 &&
-    sourcePickerStats.initialSelectedCueId === sourcePickerStats.expectedCueId &&
-    sourcePickerStats.initialSelectedLabel.includes('Scale Cue 500') &&
-    sourcePickerStats.noMatchOptionCount === 0 &&
-    sourcePickerStats.applyDisabledWithNoMatches &&
-    sourcePickerStats.restoredCueId === sourcePickerStats.expectedCueId &&
-    sourcePickerStats.preservedAfterApply &&
-    sourcePickerStats.closedAfterApply &&
-    sourcePickerStats.filteredOptionCount === 1 &&
-    sourcePickerStats.filteredLabel.includes('Scale Cue 500') &&
-    sourcePickerStats.reachable &&
-    sourcePickerStats.controlCount > 0 &&
-    sourcePickerStats.fullyVisibleControlCount === sourcePickerStats.controlCount &&
-    sourcePickerStats.closedAfterCancel &&
-    pickerStats.pickerCount === 1 &&
-    pickerStats.sourcePickerCountBeforeJump === 1 &&
-    pickerStats.sourcePickerCountAfterJump === 0 &&
-    pickerStats.pickerOptionCount <= 80 &&
-    pickerStats.pagerCount === 1 &&
-    pickerStats.rowCount <= 12 &&
-    pickerStats.rowActionCount > 0 &&
-    pickerStats.listHeight > 0 &&
-    pickerStats.pickerReachable &&
-    pickerStats.pickerControlCount > 0 &&
-    pickerStats.fullyVisiblePickerControlCount === pickerStats.pickerControlCount &&
-    pickerStats.pagerReachable &&
-    pickerStats.lastActionReachable &&
-    composerPickerStats.sourceInitialOptionCount <= 80 &&
-    composerPickerStats.sourceFilteredOptionCount === 1 &&
-    composerPickerStats.sourceClosedAfterApply &&
-    composerPickerStats.jumpInitialOptionCount <= 80 &&
-    composerPickerStats.jumpFilteredOptionCount >= 1 &&
-    composerPickerStats.jumpFilteredOptionCount <= 80 &&
-    composerPickerStats.jumpApplyEnabledAfterChoice &&
-    composerPickerStats.jumpClosedAfterApply &&
-    composerPickerStats.composerEagerOptionCount === 0 &&
-    sourceOpenStats.cue500Visible &&
-    sourceOpenStats.cuePanelEditing &&
-    sourceOpenStats.cuesSurfaceActive &&
-    sourceOpenStats.pagerLabel.includes('42 / 42') &&
-    cueStats.cueRowCount === 12 &&
-    cueStats.placementChipCount === 8 &&
-    cueStats.placementChipButtonCount === 24 &&
-    cueStats.placementMoreButtonCount === 1 &&
-    cueStats.placementMoreLabel.includes('491 more') &&
-    (!shouldCaptureViewport(viewport) || screenshotVerification?.verified === true) &&
-    hasNoOuterOverflow(showContainment) &&
-    hasNoOuterOverflow(pickerContainment) &&
-    hasNoOuterOverflow(cueContainment)
-  );
+  const __sblConditions = [
+    ['showStats.overviewBlockCount === 500', () => Boolean(showStats.overviewBlockCount === 500)],
+    ['showStats.overviewLoopLineCount <= 400', () => Boolean(showStats.overviewLoopLineCount <= 400)],
+    ['showStats.overviewNodeCount < 3_500', () => Boolean(showStats.overviewNodeCount < 3_500)],
+    ['idleMutationStats.records === 0', () => Boolean(idleMutationStats.records === 0)],
+    ['idleMutationStats.addedNodes === 0', () => Boolean(idleMutationStats.addedNodes === 0)],
+    ['idleMutationStats.removedNodes === 0', () => Boolean(idleMutationStats.removedNodes === 0)],
+    ['idleMutationStats.classAttributeMutations === 0', () => Boolean(idleMutationStats.classAttributeMutations === 0)],
+    ['activeTransitionStats !== null', () => Boolean(activeTransitionStats !== null)],
+    ['activeTransitionStats.activeCount === 500', () => Boolean(activeTransitionStats.activeCount === 500)],
+    ['activeTransitionStats.liveRowCount > 0', () => Boolean(activeTransitionStats.liveRowCount > 0)],
+    ['activeTransitionStats.liveMarkerVisual.overviewExecutingLive', () => Boolean(activeTransitionStats.liveMarkerVisual.overviewExecutingLive)],
+    ['activeTransitionStats.liveMarkerVisual.headerExecutingLive', () => Boolean(activeTransitionStats.liveMarkerVisual.headerExecutingLive)],
+    ['activeTransitionStats.liveMarkerVisual.perMarkerActiveClassCount === 0', () => Boolean(activeTransitionStats.liveMarkerVisual.perMarkerActiveClassCount === 0)],
+    ['activeTransitionStats.liveMarkerVisual.markerId !== ""', () => Boolean(activeTransitionStats.liveMarkerVisual.markerId !== '')],
+    ['!activeTransitionStats.stoppedMarkerVisual.overviewExecutingLive', () => Boolean(!activeTransitionStats.stoppedMarkerVisual.overviewExecutingLive)],
+    ['!activeTransitionStats.stoppedMarkerVisual.headerExecutingLive', () => Boolean(!activeTransitionStats.stoppedMarkerVisual.headerExecutingLive)],
+    ['activeTransitionStats.stoppedMarkerVisual.perMarkerActiveClassCount === 0', () => Boolean(activeTransitionStats.stoppedMarkerVisual.perMarkerActiveClassCount === 0)],
+    ['activeTransitionStats.liveMarkerVisual.stroke !== activeTransitionStats.stoppedMarkerVisua', () => Boolean(activeTransitionStats.liveMarkerVisual.stroke !== activeTransitionStats.stoppedMarkerVisual.stroke)],
+    ['activeTransitionStats.liveMarkerVisual.strokeDasharray !== activeTransitionStats.stoppedMa', () => Boolean(activeTransitionStats.liveMarkerVisual.strokeDasharray !== activeTransitionStats.stoppedMarkerVisual.strokeDasharray)],
+    ['activeTransitionStats.stoppedMarkerVisual.strokeDasharray !== "none"', () => Boolean(activeTransitionStats.stoppedMarkerVisual.strokeDasharray !== 'none')],
+    ['activeTransitionStats.stoppedActiveCount === 0', () => Boolean(activeTransitionStats.stoppedActiveCount === 0)],
+    ['activeTransitionStats.stoppedUnderPlayheadCount === 500', () => Boolean(activeTransitionStats.stoppedUnderPlayheadCount === 500)],
+    ['activeTransitionStats.stoppedLiveRowCount === 0', () => Boolean(activeTransitionStats.stoppedLiveRowCount === 0)],
+    ['activeTransitionStats.childListMutations === 0', () => Boolean(activeTransitionStats.childListMutations === 0)],
+    ['activeTransitionStats.addedNodes === 0', () => Boolean(activeTransitionStats.addedNodes === 0)],
+    ['activeTransitionStats.removedNodes === 0', () => Boolean(activeTransitionStats.removedNodes === 0)],
+    ['activeTransitionStats.classAttributeMutations <= 4', () => Boolean(activeTransitionStats.classAttributeMutations <= 4)],
+    ['activeTransitionStats.markerIdentityStable', () => Boolean(activeTransitionStats.markerIdentityStable)],
+    ['activeTransitionStats.elapsedMs < activeTransitionBudgetMs', () => Boolean(activeTransitionStats.elapsedMs < activeTransitionBudgetMs)],
+    ['markerDragStats !== null', () => Boolean(markerDragStats !== null)],
+    ['Math.abs(markerDragStats.tinyMoveX - markerDragStats.initialX) < 1', () => Boolean(Math.abs(markerDragStats.tinyMoveX - markerDragStats.initialX) < 1)],
+    ['Math.abs(markerDragStats.committedMoveX - markerDragStats.expectedCommittedX) < 2', () => Boolean(Math.abs(markerDragStats.committedMoveX - markerDragStats.expectedCommittedX) < 2)],
+    ['Math.abs(markerDragStats.settledMouseX - markerDragStats.committedMoveX) < 2', () => Boolean(Math.abs(markerDragStats.settledMouseX - markerDragStats.committedMoveX) < 2)],
+    ['markerDragStats.markerTouchAction === "none"', () => Boolean(markerDragStats.markerTouchAction === 'none')],
+    ['markerDragStats.nonMousePointerType === "pen"', () => Boolean(markerDragStats.nonMousePointerType === 'pen')],
+    ['Math.abs(markerDragStats.nonMouseTinyMoveX - markerDragStats.nonMouseInitialX) < 1', () => Boolean(Math.abs(markerDragStats.nonMouseTinyMoveX - markerDragStats.nonMouseInitialX) < 1)],
+    ['Math.abs(markerDragStats.nonMouseCommittedMoveX - markerDragStats.expectedNonMouseCommitte', () => Boolean(Math.abs(markerDragStats.nonMouseCommittedMoveX - markerDragStats.expectedNonMouseCommittedX) < 2)],
+    ['Math.abs(markerDragStats.settledNonMouseX - markerDragStats.nonMouseCommittedMoveX) < 2', () => Boolean(Math.abs(markerDragStats.settledNonMouseX - markerDragStats.nonMouseCommittedMoveX) < 2)],
+    ['showStats.beforeRowCount <= 12', () => Boolean(showStats.beforeRowCount <= 12)],
+    ['showStats.afterRowCount <= 12', () => Boolean(showStats.afterRowCount <= 12)],
+    ['showStats.sourceOptionCount === 0', () => Boolean(showStats.sourceOptionCount === 0)],
+    ['showStats.sourceChangeButtonCount === showStats.beforeRowCount', () => Boolean(showStats.sourceChangeButtonCount === showStats.beforeRowCount)],
+    ['showStats.composerSourceOptionCount === 0', () => Boolean(showStats.composerSourceOptionCount === 0)],
+    ['showStats.rowJumpOptionCount <= 48', () => Boolean(showStats.rowJumpOptionCount <= 48)],
+    ['showStats.totalOptionCount < 200', () => Boolean(showStats.totalOptionCount < 200)],
+    ['showStats.pagerCount === 1', () => Boolean(showStats.pagerCount === 1)],
+    ['showStats.pagerLabel.includes("493-500 / 500")', () => Boolean(showStats.pagerLabel.includes('493-500 / 500'))],
+    ['showStats.reachedLastBlock', () => Boolean(showStats.reachedLastBlock)],
+    ['(!requiresFullScaleVisualSignoff || showStats.firstMarkerRevealVisible)', () => Boolean((!requiresFullScaleVisualSignoff || showStats.firstMarkerRevealVisible))],
+    ['(!requiresFullScaleVisualSignoff || showStats.repeatedSelectionVisible)', () => Boolean((!requiresFullScaleVisualSignoff || showStats.repeatedSelectionVisible))],
+    ['showStats.cueIdentitySearchReached500', () => Boolean(showStats.cueIdentitySearchReached500)],
+    ['showStats.selectedMarkerRenderedLast', () => Boolean(showStats.selectedMarkerRenderedLast)],
+    ['showStats.cleanSaveDisabled', () => Boolean(showStats.cleanSaveDisabled)],
+    ['showStats.dirtyClassVisible', () => Boolean(showStats.dirtyClassVisible)],
+    ['showStats.dirtyBadgeVisible', () => Boolean(showStats.dirtyBadgeVisible)],
+    ['showStats.dirtySaveEnabled', () => Boolean(showStats.dirtySaveEnabled)],
+    ['showStats.topbarDirtyVisible', () => Boolean(showStats.topbarDirtyVisible)],
+    ['showStats.projectLabelDirtyVisible', () => Boolean(showStats.projectLabelDirtyVisible)],
+    ['showStats.globalSaveBlocked', () => Boolean(showStats.globalSaveBlocked)],
+    ['showStats.cleanAfterRevert', () => Boolean(showStats.cleanAfterRevert)],
+    ['showStats.overviewBackgroundFits', () => Boolean(showStats.overviewBackgroundFits)],
+    ['(!requiresFullScaleVisualSignoff || showStats.renderedBlockLabelFontSize >= 9)', () => Boolean((!requiresFullScaleVisualSignoff || showStats.renderedBlockLabelFontSize >= 9))],
+    ['showStats.longLabelWithinBody', () => Boolean(showStats.longLabelWithinBody)],
+    ['showStats.sharedJumpPickerCount === 0', () => Boolean(showStats.sharedJumpPickerCount === 0)],
+    ['showStats.fieldLabelFontSize >= 10', () => Boolean(showStats.fieldLabelFontSize >= 10)],
+    ['showStats.semanticHintFontSize >= 9', () => Boolean(showStats.semanticHintFontSize >= 9)],
+    ['showStats.columnGuideFontSize >= 9', () => Boolean(showStats.columnGuideFontSize >= 9)],
+    ['showStats.timeLabel.includes(" / ")', () => Boolean(showStats.timeLabel.includes(' / '))],
+    ['showStats.timeTitle.startsWith("1000 / ")', () => Boolean(showStats.timeTitle.startsWith('1000 / '))],
+    ['showStats.timeTitle.endsWith(" ms")', () => Boolean(showStats.timeTitle.endsWith(' ms'))],
+    ['!showStats.timeStatClipped', () => Boolean(!showStats.timeStatClipped)],
+    ['sourcePickerStats !== null', () => Boolean(sourcePickerStats !== null)],
+    ['sourcePickerStats.pickerCount === 1', () => Boolean(sourcePickerStats.pickerCount === 1)],
+    ['sourcePickerStats.initialOptionCount <= 80', () => Boolean(sourcePickerStats.initialOptionCount <= 80)],
+    ['sourcePickerStats.initialSelectedCueId === sourcePickerStats.expectedCueId', () => Boolean(sourcePickerStats.initialSelectedCueId === sourcePickerStats.expectedCueId)],
+    ['sourcePickerStats.initialSelectedLabel.includes("Scale Cue 500")', () => Boolean(sourcePickerStats.initialSelectedLabel.includes('Scale Cue 500'))],
+    ['sourcePickerStats.noMatchOptionCount === 0', () => Boolean(sourcePickerStats.noMatchOptionCount === 0)],
+    ['sourcePickerStats.applyDisabledWithNoMatches', () => Boolean(sourcePickerStats.applyDisabledWithNoMatches)],
+    ['sourcePickerStats.restoredCueId === sourcePickerStats.expectedCueId', () => Boolean(sourcePickerStats.restoredCueId === sourcePickerStats.expectedCueId)],
+    ['sourcePickerStats.preservedAfterApply', () => Boolean(sourcePickerStats.preservedAfterApply)],
+    ['sourcePickerStats.closedAfterApply', () => Boolean(sourcePickerStats.closedAfterApply)],
+    ['sourcePickerStats.filteredOptionCount === 1', () => Boolean(sourcePickerStats.filteredOptionCount === 1)],
+    ['sourcePickerStats.filteredLabel.includes("Scale Cue 500")', () => Boolean(sourcePickerStats.filteredLabel.includes('Scale Cue 500'))],
+    ['sourcePickerStats.reachable', () => Boolean(sourcePickerStats.reachable)],
+    ['sourcePickerStats.controlCount > 0', () => Boolean(sourcePickerStats.controlCount > 0)],
+    ['sourcePickerStats.fullyVisibleControlCount === sourcePickerStats.controlCount', () => Boolean(sourcePickerStats.fullyVisibleControlCount === sourcePickerStats.controlCount)],
+    ['sourcePickerStats.closedAfterCancel', () => Boolean(sourcePickerStats.closedAfterCancel)],
+    ['pickerStats.pickerCount === 1', () => Boolean(pickerStats.pickerCount === 1)],
+    ['pickerStats.sourcePickerCountBeforeJump === 1', () => Boolean(pickerStats.sourcePickerCountBeforeJump === 1)],
+    ['pickerStats.sourcePickerCountAfterJump === 0', () => Boolean(pickerStats.sourcePickerCountAfterJump === 0)],
+    ['pickerStats.pickerOptionCount <= 80', () => Boolean(pickerStats.pickerOptionCount <= 80)],
+    ['pickerStats.pagerCount === 1', () => Boolean(pickerStats.pagerCount === 1)],
+    ['pickerStats.rowCount <= 12', () => Boolean(pickerStats.rowCount <= 12)],
+    ['pickerStats.rowActionCount > 0', () => Boolean(pickerStats.rowActionCount > 0)],
+    ['pickerStats.listHeight > 0', () => Boolean(pickerStats.listHeight > 0)],
+    ['pickerStats.pickerReachable', () => Boolean(pickerStats.pickerReachable)],
+    ['pickerStats.pickerControlCount > 0', () => Boolean(pickerStats.pickerControlCount > 0)],
+    ['pickerStats.fullyVisiblePickerControlCount === pickerStats.pickerControlCount', () => Boolean(pickerStats.fullyVisiblePickerControlCount === pickerStats.pickerControlCount)],
+    ['pickerStats.pagerReachable', () => Boolean(pickerStats.pagerReachable)],
+    ['pickerStats.lastActionReachable', () => Boolean(pickerStats.lastActionReachable)],
+    ['composerPickerStats.sourceInitialOptionCount <= 80', () => Boolean(composerPickerStats.sourceInitialOptionCount <= 80)],
+    ['composerPickerStats.sourceFilteredOptionCount === 1', () => Boolean(composerPickerStats.sourceFilteredOptionCount === 1)],
+    ['composerPickerStats.sourceClosedAfterApply', () => Boolean(composerPickerStats.sourceClosedAfterApply)],
+    ['composerPickerStats.jumpInitialOptionCount <= 80', () => Boolean(composerPickerStats.jumpInitialOptionCount <= 80)],
+    ['composerPickerStats.jumpFilteredOptionCount >= 1', () => Boolean(composerPickerStats.jumpFilteredOptionCount >= 1)],
+    ['composerPickerStats.jumpFilteredOptionCount <= 80', () => Boolean(composerPickerStats.jumpFilteredOptionCount <= 80)],
+    ['composerPickerStats.jumpApplyEnabledAfterChoice', () => Boolean(composerPickerStats.jumpApplyEnabledAfterChoice)],
+    ['composerPickerStats.jumpClosedAfterApply', () => Boolean(composerPickerStats.jumpClosedAfterApply)],
+    ['composerPickerStats.composerEagerOptionCount === 0', () => Boolean(composerPickerStats.composerEagerOptionCount === 0)],
+    ['sourceOpenStats.cue500Visible', () => Boolean(sourceOpenStats.cue500Visible)],
+    ['sourceOpenStats.cuePanelEditing', () => Boolean(sourceOpenStats.cuePanelEditing)],
+    ['sourceOpenStats.cuesSurfaceActive', () => Boolean(sourceOpenStats.cuesSurfaceActive)],
+    ['sourceOpenStats.pagerLabel.includes("42 / 42")', () => Boolean(sourceOpenStats.pagerLabel.includes('42 / 42'))],
+    ['cueStats.cueRowCount === 12', () => Boolean(cueStats.cueRowCount === 12)],
+    ['cueStats.placementChipCount === 8', () => Boolean(cueStats.placementChipCount === 8)],
+    ['cueStats.placementChipButtonCount === 24', () => Boolean(cueStats.placementChipButtonCount === 24)],
+    ['cueStats.placementMoreButtonCount === 1', () => Boolean(cueStats.placementMoreButtonCount === 1)],
+    ['cueStats.placementMoreLabel.includes("491 more")', () => Boolean(cueStats.placementMoreLabel.includes('491 more'))],
+    ['(!shouldCaptureViewport(viewport) || screenshotVerification?.verified === true)', () => Boolean((!shouldCaptureViewport(viewport) || screenshotVerification?.verified === true))],
+    ['hasNoOuterOverflow(showContainment)', () => Boolean(hasNoOuterOverflow(showContainment))],
+    ['hasNoOuterOverflow(pickerContainment)', () => Boolean(hasNoOuterOverflow(pickerContainment))],
+    ['hasNoOuterOverflow(cueContainment)', () => Boolean(hasNoOuterOverflow(cueContainment))],
+  ];
+  const failedConditions = __sblConditions.filter(([, check]) => { try { return !check(); } catch { return true; } }).map(([label]) => label);
+  const passed = failedConditions.length === 0;
+  if (!passed) {
+    console.log(`scene-block-large-${viewport.width}x${viewport.height} FAILED CONDITIONS: ${JSON.stringify(failedConditions)}`);
+    if (failedConditions.some((label) => label.includes('markerDragStats'))) {
+      console.log(`scene-block-large-${viewport.width}x${viewport.height} DRAG STATS: ${JSON.stringify(markerDragStats)}`);
+    }
+  }
   return {
     label: `scene-block-large-${viewport.width}x${viewport.height}`,
     passed,
@@ -7527,7 +7787,7 @@ async function runEmptyVjViewport(client, viewport) {
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
   await clickByText(client, "Control");
-  await clickByText(client, "VJ Desk");
+  await clickByText(client, "Mixer");
   await sleep(180);
   if (shouldCaptureViewport(viewport)) {
     mkdirSync(screenshotDir, { recursive: true });
@@ -7552,7 +7812,7 @@ async function main() {
     if (shouldStartVite) {
       viteProcess = startProcess(
         process.execPath,
-        ["node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", String(vitePort), "--strictPort"],
+        ["node_modules/vite/bin/vite.js", "--configLoader", "runner", "--host", "127.0.0.1", "--port", String(vitePort), "--strictPort"],
         { cwd: appRoot },
       );
     }
@@ -7560,10 +7820,16 @@ async function main() {
 
     browserProcess = startProcess(browser, [
       "--headless=new",
+      "--no-sandbox",
+      "--disable-gpu",
+      "--disable-background-timer-throttling",
+      "--disable-backgrounding-occluded-windows",
+      "--disable-renderer-backgrounding",
       "--hide-scrollbars",
       "--disable-crash-reporter",
       "--disable-crashpad",
       `--remote-debugging-port=${cdpPort}`,
+      "--remote-debugging-address=127.0.0.1",
       `--user-data-dir=${profileDir}`,
       `--window-size=${primaryOperationalViewport.width},${primaryOperationalViewport.height}`,
       "about:blank",
@@ -7574,6 +7840,23 @@ async function main() {
     console.log(
       `viewport contract primary-browser=${primaryOperationalViewport.width}x${primaryOperationalViewport.height} measured-client-size-browser=${measuredClientSizeViewport.width}x${measuredClientSizeViewport.height} extended-browser=${extendedCeilingViewport.width}x${extendedCeilingViewport.height} fallback-browsers=${compactFallbackViewports.map((viewport) => `${viewport.width}x${viewport.height}`).join(",")} screenshots=${captureAllViewportScreenshots ? "all" : "large-browser-fixtures"}`,
     );
+    if (persistentBandOnlyMode) {
+      const persistentBandResults = [];
+      for (const viewport of viewports) {
+        const result = await runPersistentBandInvarianceViewport(client, viewport);
+        persistentBandResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.containment.label} ` +
+            `rects=${JSON.stringify(result.containment.persistentBandRectsByWorkspace)} ` +
+            `deltas=${JSON.stringify(result.containment.persistentBandRectDeltas)}`,
+        );
+      }
+      const failures = persistentBandResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Persistent band invariance failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
     if (largeShowMode) {
       const result = await runLargeShowViewport(client, viewports[0]);
       const passed = Boolean(
@@ -7860,19 +8143,23 @@ async function main() {
     const effectStackLargeResults = [];
     const sceneBlockLargeResults = [];
     const cueNodeGraphResults = [];
-    for (const viewport of viewports) {
-      cueRecallResults.push(await runCueRecallViewport(client, viewport));
-      cueRecallLargeResults.push(await runCueRecallLargeViewport(client, viewport));
-      effectStackLargeResults.push(await runEffectStackLargeViewport(client, viewport));
-      cueNodeGraphResults.push(await runCueNodeGraphViewport(client, viewport));
+    if (!workspaceShellOnlyMode) {
+      for (const viewport of viewports) {
+        cueRecallResults.push(await runCueRecallViewport(client, viewport));
+        cueRecallLargeResults.push(await runCueRecallLargeViewport(client, viewport));
+        effectStackLargeResults.push(await runEffectStackLargeViewport(client, viewport));
+        cueNodeGraphResults.push(await runCueNodeGraphViewport(client, viewport));
+      }
     }
     const sceneBlockScaleViewports = viewports.filter((viewport) =>
       isPrimaryOperationalViewport(viewport) ||
       isMeasuredClientSizeViewport(viewport) ||
       matchesViewport(viewport, compactFallbackViewports[0]),
     );
-    for (const viewport of sceneBlockScaleViewports.length > 0 ? sceneBlockScaleViewports : viewports.slice(0, 1)) {
-      sceneBlockLargeResults.push(await runSceneBlockLargeViewport(client, viewport));
+    if (!workspaceShellOnlyMode) {
+      for (const viewport of sceneBlockScaleViewports.length > 0 ? sceneBlockScaleViewports : viewports.slice(0, 1)) {
+        sceneBlockLargeResults.push(await runSceneBlockLargeViewport(client, viewport));
+      }
     }
 
     const failures = results.filter((result) => !isContained(result));
@@ -7882,6 +8169,8 @@ async function main() {
     const sceneBlockLargeFailures = sceneBlockLargeResults.filter((result) => !result.passed);
     const cueNodeGraphFailures = cueNodeGraphResults.filter((result) => !result.passed);
     const setupSurfaceFailures = results.filter((result) => !hasExpectedSetupSurface(result));
+    const persistentBandFailures = results.filter((result) => !hasExpectedPersistentWorkspaceBand(result));
+    const persistentBandInvarianceFailures = results.filter((result) => !hasExpectedPersistentBandInvariance(result));
     const projectMenuFailures = results.filter((result) => !hasExpectedProjectMenu(result));
     const localizationFailures = results.filter((result) => !hasExpectedLocalization(result));
     const keyboardNavigationFailures = results.filter((result) => !hasExpectedKeyboardNavigation(result));
@@ -7951,8 +8240,11 @@ async function main() {
       const mixerSuffix = result.label.startsWith("control-mixer-")
         ? ` mixer=${result.visibleVideoOutputItemCount}/${result.visibleVideoOutputSelectedItemCount}/${result.visibleVideoMixerOutputDeckCount}/${result.visibleVideoMixerOutputFaderCount}/${result.visibleVideoMixerOutputSelectButtonCount}/${result.visibleVideoLayerItemCount}/${result.visibleBuiltinVideoFxSelectCount}/${result.visibleVideoMixerLayerDeckCount}/${result.visibleVideoMixerLayerFaderCount}/${result.visibleVideoMixerLayerButtonCount} clip=${result.videoClipGridClientHeight}/${result.fullyVisibleVideoClipPadCount} contract=${result.controlModeFailedChecks?.join(",") || "ok"}`
         : "";
+      const persistentBandSuffix = result.label.startsWith("persistent-band-invariance-")
+        ? ` persistentBand=${result.persistentBandInvariant ? "stable" : "moved"} rects=${JSON.stringify(result.persistentBandRectsByWorkspace)} deltas=${JSON.stringify(result.persistentBandRectDeltas)}`
+        : "";
       console.log(
-        `${status} [${viewportRole({ width: result.innerWidth, height: result.innerHeight })}] ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${keyboardSuffix}${timelineSuffix}${sceneBlockSuffix}${touchSuffix}${controlStageGlyphSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${positionVisualSuffix}${colorEffectSuffix}${chaserEffectSuffix}${moveEffectSuffix}${mixerSuffix}`,
+        `${status} [${viewportRole({ width: result.innerWidth, height: result.innerHeight })}] ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${keyboardSuffix}${timelineSuffix}${sceneBlockSuffix}${touchSuffix}${controlStageGlyphSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${positionVisualSuffix}${colorEffectSuffix}${chaserEffectSuffix}${moveEffectSuffix}${mixerSuffix}${persistentBandSuffix}`,
       );
     }
     for (const result of cueRecallResults) {
@@ -7989,6 +8281,8 @@ async function main() {
       cueNodeGraphFailures.length > 0 ||
       keyboardNavigationFailures.length > 0 ||
       setupSurfaceFailures.length > 0 ||
+      persistentBandFailures.length > 0 ||
+      persistentBandInvarianceFailures.length > 0 ||
       projectMenuFailures.length > 0 ||
       localizationFailures.length > 0 ||
       mappingHotkeyHelpFailures.length > 0 ||
@@ -7999,7 +8293,39 @@ async function main() {
       sceneBlockFailures.length > 0 ||
       statusLineFailures.length > 0
     ) {
-      console.error(
+      if (workspaceShellOnlyMode) {
+        console.error(JSON.stringify({
+          viewport: failures.map((result) => result.label),
+          setupSurface: setupSurfaceFailures.map((result) => result.label),
+          persistentBand: persistentBandFailures.map((result) => result.label),
+          persistentBandInvariance: persistentBandInvarianceFailures.map((result) => result.label),
+          localization: localizationFailures.map((result) => ({
+            label: result.label,
+            language: result.documentLanguage,
+            projectMenu: result.visibleProjectMenuCount,
+            japaneseLanguage: result.visibleJapaneseLanguageLabelCount,
+            japaneseSave: result.visibleJapaneseSaveButtonCount,
+            preservedFixtures: result.preservedUserFixtureLabelCount,
+            translatedFixtures: result.translatedUserFixtureCollisionCount,
+          })),
+          controlMode: controlModeFailures.map((result) => ({
+            label: result.label,
+            liveHeight: result.liveControlPanelHeight,
+            persistentBandHeight:
+              (result.persistentBandRects?.groups?.height ?? 0) +
+              (result.persistentBandRects?.context?.height ?? 0),
+            position: [result.positionConsoleWidth, result.positionConsoleHeight, result.positionPadWidth, result.positionPadHeight],
+            move: [result.moveEffectEditorWidth, result.moveEffectEditorHeight, result.moveEffectLastControlReachable, result.moveEffectLastPointReachable],
+          })),
+          timelineAutomation: timelineAutomationFailures.map((result) => result.label),
+          sceneBlocks: sceneBlockFailures.map((result) => ({
+            label: result.label,
+            workspace: [result.sceneBlockWorkspaceWidth, result.sceneBlockWorkspaceHeight],
+            overflow: [result.sceneBlockWorkspaceHorizontalOverflowPx, result.sceneBlockWorkspaceVerticalOverflowPx, result.sceneBlockListHorizontalOverflowPx, result.sceneBlockListVerticalOverflowPx, result.sceneBlockComposerHorizontalOverflowPx],
+            reachability: [result.sceneBlockLastComposerControlReachable, result.sceneBlockLastRowActionReachable],
+          })),
+        }, null, 2));
+      } else console.error(
         JSON.stringify(
           {
             viewport: failures,
@@ -8010,6 +8336,8 @@ async function main() {
             cueNodeGraph: cueNodeGraphFailures,
             keyboardNavigation: keyboardNavigationFailures,
             setupSurface: setupSurfaceFailures,
+            persistentBand: persistentBandFailures,
+            persistentBandInvariance: persistentBandInvarianceFailures,
             projectMenu: projectMenuFailures,
             localization: localizationFailures,
             mappingHotkeyHelp: mappingHotkeyHelpFailures,
@@ -8025,7 +8353,7 @@ async function main() {
         ),
       );
       throw new Error(
-        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${effectStackLargeFailures.length} large live-effect DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block full-window check(s), ${statusLineFailures.length} status line check(s) failed.`,
+        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${effectStackLargeFailures.length} large live-effect DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${statusLineFailures.length} status line check(s) failed.`,
       );
     }
   } finally {

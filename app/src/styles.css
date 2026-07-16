@@ -23642,3 +23642,825 @@ h3 {
     min-height: 104px;
   }
 }
+
+/* T10: Setup and Control share one fixed lower workspace composition. */
+.controlWorkspaceHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 33px;
+  overflow: hidden;
+  border: 1px solid var(--ray-border);
+  background: #282521;
+  padding: 0 10px;
+  color: #eee8e2;
+}
+
+.controlWorkspaceHeader strong,
+.controlWorkspaceHeader span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.controlWorkspaceHeader strong {
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.controlWorkspaceHeader span {
+  color: #9b928a;
+  font-size: 11px;
+}
+
+.layoutSharedWorkspace {
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: stretch;
+}
+
+.layout.layoutSharedWorkspace {
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) !important;
+  gap: 4px !important;
+}
+
+.layoutSharedWorkspace.layoutSetup.setupMode-library,
+.layoutSharedWorkspace.layoutSetup.setupMode-profiles,
+.layoutSharedWorkspace.layoutSetup.setupMode-video,
+.layoutSharedWorkspace.layoutSetup.setupMode-dmx,
+.layoutSharedWorkspace.layoutSetup.setupMode-midi,
+.layoutSharedWorkspace.layoutSetup.setupMode-osc,
+.layoutSharedWorkspace.layoutSetup.setupMode-remote,
+.layoutSharedWorkspace.layoutSetup.setupMode-mapping,
+.layoutSharedWorkspace.layoutControl.controlModeEdit,
+.layoutSharedWorkspace.layoutControl.controlModeLive,
+.layoutSharedWorkspace.layoutControl.controlModeEdit.editDesk-effects {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.layoutSharedWorkspace.layoutSetup.setupMode-patch {
+  grid-template-columns: minmax(270px, 0.34fr) minmax(0, 1.66fr);
+}
+
+.layoutSharedWorkspace > .mappingPersistentWorkspaceBand {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+.layoutSharedWorkspace.layoutControl > .liveControlPanel {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-row: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.layoutSharedWorkspace.layoutSetup > .setupPanel,
+.layoutSharedWorkspace.layoutSetup > .videoSetupPanel,
+.layoutSharedWorkspace.layoutSetup > .setupIoPanel {
+  grid-row: 1;
+  min-height: 0;
+}
+
+.mappingPersistentWorkspaceBand {
+  display: grid;
+  grid-template-rows: 31px minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid #3b3732;
+  background: #171513;
+}
+
+.mappingPersistentWorkspaceBand > .mappingGroupStrip {
+  min-height: 31px;
+  overflow: auto hidden;
+  border: 0;
+  border-bottom: 1px solid #3b3732;
+  padding: 2px 5px;
+}
+
+.mappingPersistentWorkspaceBand > .mappingGroupStrip button {
+  min-height: 25px;
+  padding-inline: 8px;
+  font-size: 11px;
+}
+
+.mappingPersistentWorkspaceGrid {
+  display: grid;
+  grid-template-columns: minmax(420px, 1.05fr) minmax(190px, 0.42fr) minmax(410px, 0.88fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.mappingPersistentWorkspaceGrid > * {
+  min-width: 0;
+  min-height: 0;
+}
+
+.mappingPersistentStage {
+  display: grid;
+  position: relative;
+  grid-template-columns: 34px minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid #3b3732;
+  background: #181512;
+}
+
+.mappingPersistentStage > .mappingToolRail {
+  grid-column: 1;
+  min-width: 0;
+  min-height: 0;
+  align-content: start;
+  gap: 2px;
+  overflow: hidden auto;
+  padding: 3px 2px;
+}
+
+.mappingPersistentStage > .mappingToolRail button {
+  width: 27px;
+  height: 25px;
+  min-height: 25px;
+  font-size: 14px;
+}
+
+.mappingPersistentStage > .mappingToolRail .mappingToolDivider {
+  margin-block: 1px;
+}
+
+.mappingPersistentStage > .mappingStageViewport {
+  display: grid;
+  grid-column: 2;
+  grid-template-rows: 84px minmax(0, 1fr);
+  gap: 3px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 3px;
+}
+
+.mappingViewportToolbar {
+  display: grid;
+  grid-template-columns: minmax(205px, 0.78fr) minmax(190px, 1fr);
+  grid-template-rows: repeat(3, 26px);
+  gap: 2px 4px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.mappingViewportToolbar > * {
+  min-width: 0;
+  min-height: 0;
+}
+
+.mappingViewportToolbar > .mappingViewportControls {
+  grid-column: 1;
+  grid-row: 1;
+  grid-template-columns: repeat(4, auto minmax(20px, 1fr));
+  gap: 3px;
+  overflow: hidden;
+}
+
+.mappingViewportToolbar > .mappingViewportControls span,
+.mappingViewportToolbar > .mappingViewportControls strong {
+  font-size: 9px;
+}
+
+.mappingViewportToolbar > .mappingCursorReadout {
+  grid-column: 2;
+  grid-row: 1;
+  min-height: 26px;
+  overflow: hidden;
+  padding: 4px 6px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+}
+
+.mappingViewportToolbar > .mappingViewControls {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  gap: 3px;
+  overflow: auto hidden;
+}
+
+.mappingViewportToolbar > .mappingStageSnapControls {
+  grid-column: 1;
+  grid-row: 3;
+  gap: 3px;
+  overflow: auto hidden;
+}
+
+.mappingViewportToolbar > .mappingLayerToggles {
+  grid-column: 2;
+  grid-row: 3;
+  gap: 3px;
+  overflow: auto hidden;
+}
+
+.mappingViewportToolbar .mappingViewControls button,
+.mappingViewportToolbar .mappingStageSnapControls button,
+.mappingViewportToolbar .mappingLayerToggles label,
+.mappingViewportToolbar .mappingLabelMode,
+.mappingViewportToolbar .mappingLabelMode button {
+  min-height: 24px;
+  height: 24px;
+  padding-inline: 5px;
+  font-size: 9px;
+}
+
+.mappingViewportToolbar .mappingViewControls strong {
+  min-height: 24px;
+  padding: 4px 5px;
+  font-size: 9px;
+}
+
+.mappingViewportToolbar .mappingZoomSlider {
+  min-height: 22px;
+}
+
+.mappingViewportToolbar .mappingStageSnapControls label {
+  grid-template-columns: auto 48px;
+  min-height: 24px;
+  padding-inline: 4px;
+  font-size: 9px;
+}
+
+.mappingViewportToolbar .mappingStageSnapControls input {
+  width: 48px;
+  min-height: 20px;
+  font-size: 10px;
+}
+
+.mappingPersistentStage .visualizerStage {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  aspect-ratio: auto;
+  border-color: #29241f;
+  border-radius: 0;
+  background: #1c1814;
+}
+
+.mappingPersistentStage .stageFloor {
+  fill: #1b1815;
+}
+
+.mappingPersistentStage .stageGridMinor {
+  stroke: #2a2521;
+  stroke-width: 0.26;
+}
+
+.mappingPersistentStage .stageGridMajor {
+  stroke: #3b342d;
+  stroke-width: 0.4;
+}
+
+.mappingPersistentStage > .mappingHotkeyHelp {
+  z-index: 6;
+  inset: 4px 4px 4px 38px;
+  max-height: none;
+}
+
+.mappingSelectionsColumn {
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden auto;
+  border-right: 1px solid #3b3732;
+  background: #1b1917;
+  overscroll-behavior: contain;
+}
+
+.mappingSelectionsColumn > .mappingTypeStrip {
+  min-height: 29px;
+  overflow: auto hidden;
+  border-bottom-color: #3b3732;
+  padding: 2px 4px;
+}
+
+.mappingSelectionsColumn > .mappingTypeStrip button {
+  min-height: 24px;
+  padding-inline: 6px;
+  font-size: 10px;
+}
+
+.mappingSelectionsColumn .mappingSelectionHeader {
+  min-height: 29px;
+  padding-inline: 6px;
+}
+
+.mappingSelectionsColumn .mappingSearchPanel,
+.mappingSelectionsColumn .mappingSelectionAssign {
+  padding: 5px;
+}
+
+.mappingSelectionsColumn .mappingFixtureList,
+.mappingSelectionsColumn .virtualizedMappingFixtureList {
+  height: auto;
+  min-height: 120px;
+  max-height: 240px;
+}
+
+.workspaceContextPane {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #1d1a17;
+}
+
+.mappingSetupContextContent {
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+}
+
+.controlContextPane {
+  display: grid;
+  grid-template-rows: 31px minmax(0, 1fr);
+}
+
+.controlContextPane > .contextModeTabs {
+  grid-row: 1;
+  min-width: 0;
+  min-height: 31px;
+  overflow: hidden;
+  border: 0;
+  border-bottom: 1px solid #3b3732;
+}
+
+.controlContextPane > .contextModeTabs button {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 30px;
+  padding-inline: 5px;
+  font-size: 10px;
+}
+
+.layoutSharedWorkspace.layoutControl .controlContextPane > .faders {
+  display: grid;
+  grid-column: 1;
+  grid-row: 2;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden auto;
+  border: 0;
+  border-radius: 0;
+  padding: 5px;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeEdit .controlContextPane > .faders,
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane > .faders {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeEdit.editDesk-effects > .liveControlPanel {
+  display: grid;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeEdit .controlContextPane .fixtureEditSurface {
+  min-height: 0;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeEdit .controlContextPane .effectEditor,
+.layoutSharedWorkspace.layoutControl.controlModeEdit .controlContextPane .fixtureEditSurface,
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelinePanel {
+  overflow: auto;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelineShowSurface {
+  grid-template-rows: auto auto auto auto 78px minmax(190px, 1fr);
+  align-content: start;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+/* The overview frame hosts a ResizeObserver-driven pixel-space SVG (T2). Inside
+   this scrolling pane its height must never derive from its own content, or
+   observer viewBox writes and intrinsic row sizing oscillate into an
+    ~85ms-per-pass full-layout storm (measured: one class flip cost 60-140s at
+   the 500-block fixture). Pin the height and sever intrinsic participation. */
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelineShowSurface > .timelineOverviewFrame {
+  height: 190px;
+  min-height: 190px;
+  contain: size layout;
+}
+
+/* Compact heights: the rows above the canvas consume enough of the pane that a
+   190px canvas pokes below the pane clip, leaving its lower lane outside the
+   initial view - pointer events there fall through and marker drags go dead
+   (measured at 1366x768: svg bottom 794 vs window 768). Shrink the canvas so it
+   is fully visible without scrolling; the pixel-space SVG adapts via its
+   ResizeObserver. */
+@media (max-height: 800px) {
+  .layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelineShowSurface > .timelineOverviewFrame {
+    height: 148px;
+    min-height: 148px;
+  }
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelinePanel {
+  scrollbar-gutter: stable;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .sceneBlockWorkspace {
+  min-height: 190px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .sceneBlockList {
+  flex: 0 0 auto;
+  min-height: max-content;
+  overflow: visible;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .sceneBlockRow {
+  grid-template-columns: minmax(132px, 0.72fr) minmax(0, 1.6fr);
+  grid-template-rows: auto auto;
+  align-items: start;
+  gap: 3px 4px;
+  padding: 3px 4px;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .sceneBlockSource {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  align-self: start;
+  gap: 0;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .sceneBlockSourceBadges {
+  flex-wrap: wrap;
+  gap: 2px;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .sceneBlockRowFields {
+  grid-column: 2;
+  grid-row: 1;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .sceneBlockRowFields label,
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .sceneBlockRowFields .sceneBlockSourceField {
+  gap: 1px;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .sceneBlockRowFields .sceneBlockSourceField,
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .sceneBlockRowFields .sceneBlockAfterField {
+  grid-column: auto;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .sceneBlockRowActions {
+  grid-column: 2;
+  grid-row: 2;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  justify-content: stretch;
+  gap: 2px;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .sceneBlockRow button,
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .sceneBlockRow input,
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .sceneBlockRow select {
+  min-height: 24px;
+  padding: 1px 4px;
+  font-size: 11px;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .sceneBlockRow,
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .sceneBlockRow label,
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .sceneBlockRow small,
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .sceneBlockRow span,
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .sceneBlockRow strong,
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .sceneBlockLiveStatus,
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .sceneBlockLiveOutput {
+  font-size: 11px;
+}
+
+.controlContextPane .positionConsoleSurface {
+  grid-template-columns: minmax(170px, 0.9fr) minmax(190px, 1.1fr);
+  gap: 4px;
+}
+
+.controlContextPane .positionPadRow {
+  grid-template-columns: minmax(100px, 1fr) 58px;
+  gap: 3px;
+}
+
+.controlContextPane .axisSliderRack {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.controlContextPane .effectWorkbench {
+  grid-template-columns: minmax(90px, 0.65fr) minmax(180px, 1.35fr) minmax(100px, 0.8fr);
+  overflow: hidden;
+}
+
+.controlContextPane .effectPaneHeader,
+.controlContextPane .sampleEffectPresetHeader {
+  gap: 4px;
+  padding-inline: 5px;
+}
+
+.controlContextPane .effectPaneHeader span,
+.controlContextPane .sampleEffectPresetHeader span {
+  display: none;
+}
+
+.controlContextPane .effectInspectorPane {
+  grid-template-rows: 32px minmax(42px, 1fr) minmax(58px, 68px);
+}
+
+.controlContextPane .effectInspectorPane > .effectPaneHeader {
+  min-height: 32px;
+  padding-block: 3px;
+}
+
+.controlContextPane .effectInspectorPane > .effectForm {
+  gap: 5px;
+  padding: 5px;
+}
+
+.controlContextPane .effectInspectorPane > .effectActionDock {
+  max-height: 68px;
+  gap: 3px;
+  overflow: hidden auto;
+  padding: 4px;
+}
+
+.layoutSharedWorkspace.layoutSetup > .mappingSetupTopPanel {
+  display: block;
+  grid-column: 1 / -1;
+  grid-row: 1;
+  overflow: hidden auto;
+}
+
+.layoutSharedWorkspace.layoutSetup > .mappingSetupTopPanel > .mappingStageBoundsPanel {
+  min-height: 100%;
+  overflow: auto;
+  grid-template-columns: minmax(180px, 0.5fr) minmax(180px, auto) minmax(320px, 1fr);
+  align-content: start;
+}
+
+.layoutSharedWorkspace.layoutSetup > .mappingSetupTopPanel .mappingStageBoundsGrid {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.layoutSharedWorkspace.layoutSetup > .mappingSetupTopPanel .mappingStagePresetPanel {
+  grid-column: 1 / span 2;
+}
+
+.layoutSharedWorkspace.layoutSetup > .mappingSetupTopPanel .mappingViewPresetPanel {
+  grid-column: 3;
+  grid-row: 2;
+  border-top: 0;
+  padding-top: 0;
+}
+
+.layoutSharedWorkspace.layoutSetup > .setupPatchTopPanel {
+  display: grid;
+  grid-column: 2;
+  grid-row: 1;
+  grid-template-columns: minmax(0, 1.3fr) minmax(230px, 0.7fr);
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.layoutSharedWorkspace.layoutSetup > .setupPatchTopPanel > .setupPatchAddressDesk {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden auto;
+}
+
+.layoutSharedWorkspace.layoutSetup > .setupPatchTopPanel > .setupPatchAddressDesk > .dmxPatchMap {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+}
+
+.layoutSharedWorkspace.layoutSetup > .setupPatchTopPanel > .fixtureSetupEditor {
+  display: grid;
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.layoutSharedWorkspace.layoutSetup.setupMode-patch .mappingPersistentWorkspaceBand > .mappingGroupStrip,
+.layoutSharedWorkspace.layoutSetup.setupMode-patch .mappingPersistentWorkspaceBand .mappingTypeStrip {
+  display: flex;
+}
+
+.layoutSharedWorkspace.layoutSetup.setupMode-patch .mappingPersistentWorkspaceBand .mappingToolRail,
+.layoutSharedWorkspace.layoutSetup.setupMode-patch .mappingPersistentWorkspaceBand .mappingViewportControls {
+  display: grid;
+}
+
+.layoutSharedWorkspace.layoutSetup.setupMode-patch .mappingPersistentWorkspaceBand .mappingSelectionPanel {
+  display: block;
+}
+
+.layoutSharedWorkspace.layoutSetup.setupMode-patch .mappingPersistentWorkspaceBand .mappingStageViewport {
+  grid-template-rows: 84px minmax(0, 1fr);
+  gap: 3px;
+  padding: 3px;
+}
+
+@media (max-width: 1450px) {
+  .mappingPersistentWorkspaceGrid {
+    grid-template-columns: minmax(400px, 1fr) minmax(180px, 0.42fr) minmax(390px, 0.94fr);
+  }
+
+  .mappingViewportToolbar {
+    grid-template-columns: minmax(190px, 0.8fr) minmax(175px, 1fr);
+  }
+
+  .layoutSharedWorkspace.layoutSetup > .mappingSetupTopPanel > .mappingStageBoundsPanel {
+    grid-template-columns: minmax(150px, 0.55fr) minmax(160px, auto) minmax(280px, 1fr);
+  }
+}
+
+/* Compact the inherited full-canvas desks inside T10's fixed context slot. */
+.layoutSharedWorkspace.layoutSetup.setupMode-video .videoSetupInspectorPane {
+  grid-template-rows: 34px minmax(58px, 0.7fr) minmax(78px, 1fr) minmax(72px, 0.85fr);
+}
+
+.layoutSharedWorkspace.layoutSetup.setupMode-video .videoSetupInspectorPane > .videoOutputPreviewCard,
+.layoutSharedWorkspace.layoutSetup.setupMode-video .videoSetupInspectorPane > .videoOutputConfig,
+.layoutSharedWorkspace.layoutSetup.setupMode-video .videoSetupInspectorPane > .videoOutputActionDock {
+  min-height: 0;
+  overflow: hidden auto;
+}
+
+.layoutSharedWorkspace.layoutSetup.setupMode-video .videoSetupInspectorPane > .videoOutputPreviewCard .emptyState {
+  min-height: 42px;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeEdit .controlContextPane .positionConsoleSurface {
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeEdit .controlContextPane .positionPadRow {
+  grid-template-columns: minmax(0, 1fr) 58px;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeEdit .controlContextPane .positionConsolePrimary .panTiltPad {
+  width: 100%;
+  height: auto;
+  max-height: 100%;
+}
+
+.controlContextPane .positionToolPane .positionQuickGrid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.controlContextPane .positionToolPane .visualNumberGrid,
+.controlContextPane .positionToolPane .positionNudgeGrid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.controlContextPane .positionToolPane .controlLimitRow {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.controlContextPane .positionToolPane .controlMovementLimitEditor {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+}
+
+.controlContextPane .positionToolPane .controlLimitActions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.controlContextPane .colorEffectStopRow {
+  grid-template-columns: 16px 22px minmax(42px, 1fr) 40px repeat(3, 22px);
+  gap: 2px;
+}
+
+.controlContextPane .effectInspectorPane .colorEffectStopPicker,
+.controlContextPane .colorEffectStopAction {
+  width: 22px;
+  min-width: 22px;
+  height: 28px;
+  min-height: 28px;
+}
+
+.controlContextPane .colorEffectPeriodInput,
+.controlContextPane .chaserStepDurationInput {
+  grid-template-columns: minmax(0, 1fr) 70px;
+  gap: 4px;
+}
+
+.controlContextPane .colorEffectClockPresets,
+.controlContextPane .chaserClockPresets {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.controlContextPane .colorEffectSpreadControl {
+  grid-template-columns: 54px minmax(34px, 1fr) 34px 10px;
+  gap: 3px;
+}
+
+.controlContextPane .chaserPreviewPanel,
+.controlContextPane .chaserFlowPanel,
+.controlContextPane .chaserFeaturesPanel,
+.controlContextPane .chaserStepsPanel {
+  gap: 4px;
+  padding: 4px;
+}
+
+.controlContextPane .chaserParameterGrid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.controlContextPane .chaserPercentControl {
+  grid-template-columns: 54px minmax(34px, 1fr) 34px;
+  gap: 3px;
+}
+
+.controlContextPane .chaserFeatureRow {
+  grid-template-columns: 16px minmax(0, 1fr) minmax(0, 0.72fr) minmax(0, 0.72fr);
+  gap: 2px;
+}
+
+.controlContextPane .chaserFeatureRow > button {
+  min-width: 22px;
+  min-height: 28px;
+}
+
+.controlContextPane .chaserFeatureRow > button:nth-of-type(1) {
+  grid-column: 2;
+}
+
+.controlContextPane .chaserFeatureRow > button:nth-of-type(2) {
+  grid-column: 3;
+}
+
+.controlContextPane .chaserFeatureRow > button:nth-of-type(3) {
+  grid-column: 4;
+}
+
+.controlContextPane .chaserTargetDock {
+  grid-template-columns: minmax(0, 1fr) minmax(58px, auto) minmax(48px, auto);
+  gap: 2px;
+}
+
+.controlContextPane .chaserStepRow {
+  grid-template-columns: 16px repeat(4, minmax(0, 1fr));
+  gap: 2px;
+}
+
+.controlContextPane .chaserStepRow > .chaserStepTarget {
+  grid-column: 2 / span 2;
+}
+
+.controlContextPane .chaserStepRow > label {
+  grid-column: 4 / span 2;
+}
+
+.controlContextPane .chaserStepRow > button {
+  min-width: 22px;
+  min-height: 28px;
+}
+
+.controlContextPane .chaserStepRow > button:nth-of-type(1) {
+  grid-column: 2;
+}
+
+.controlContextPane .chaserStepRow > button:nth-of-type(2) {
+  grid-column: 3;
+}
+
+.controlContextPane .chaserStepRow > button:nth-of-type(3) {
+  grid-column: 4;
+}
+
+.controlContextPane .chaserStepRow > button:nth-of-type(4) {
+  grid-column: 5;
+}
+
+.controlContextPane .chaserStepPager {
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+}
+
+.controlContextPane .effectWorkbench.moveEffectWorkbench .moveEffectEditorPanel {
+  min-height: 960px;
+}

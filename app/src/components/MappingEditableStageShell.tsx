@@ -61,6 +61,7 @@ export function MappingEditableStageShell(props: MappingEditableStageShellProps)
     <svg
       ref={props.svgRef}
       class={className()}
+      data-persistent-band-part="stage"
       viewBox={props.viewBox}
       role="img"
       aria-label="2D fixture and projection surface mapping stage"

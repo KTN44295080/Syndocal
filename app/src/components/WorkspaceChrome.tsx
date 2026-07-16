@@ -456,21 +456,31 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
         </div>
       </Show>
       <Show when={props.workspaceTab === "control"}>
-        <nav class="controlModeTabs" aria-label="Control mode">
-          <For each={controlModes}>
-            {(mode) => (
-              <button
-                class={props.controlMode === mode.id ? "active" : ""}
-                title={mode.description}
-                aria-keyshortcuts={mode.label[0]}
-                onClick={() => props.onControlMode(mode.id)}
-                aria-pressed={props.controlMode === mode.id}
-              >
-                {mode.label}
-              </button>
-            )}
-          </For>
-        </nav>
+        <Show
+          when={props.controlMode === "mixer"}
+          fallback={
+            <div class="controlWorkspaceHeader" aria-label="Control workspace header">
+              <strong>Live Desk</strong>
+              <span>{controlModes.find((mode) => mode.id === props.controlMode)?.label}</span>
+            </div>
+          }
+        >
+          <nav class="controlModeTabs" aria-label="Control mode">
+            <For each={controlModes}>
+              {(mode) => (
+                <button
+                  class={props.controlMode === mode.id ? "active" : ""}
+                  title={mode.description}
+                  aria-keyshortcuts={mode.label[0]}
+                  onClick={() => props.onControlMode(mode.id)}
+                  aria-pressed={props.controlMode === mode.id}
+                >
+                  {mode.label}
+                </button>
+              )}
+            </For>
+          </nav>
+        </Show>
       </Show>
     </div>
   );
