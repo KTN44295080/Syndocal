@@ -4,8 +4,12 @@ import type { ClockSource, CueSummary, TimelineCueEventSummary, TimelineTrackKin
 export interface TimelineSceneBlockAddDraft {
   cue_id: number;
   time_ms: number;
+  time_beats: number | null;
   track: TimelineTrackKind;
   duration_ms: number;
+  duration_beats: number | null;
+  conform_to_tempo: boolean;
+  loop_fill: boolean;
   loop_count: number;
   jump_to_event_id: number | null;
 }
@@ -14,8 +18,12 @@ export interface TimelineSceneBlockPlacementUpdate {
   event_id: number;
   cue_id: number;
   time_ms: number;
+  time_beats: number | null;
   track: TimelineTrackKind;
   duration_ms: number;
+  duration_beats: number | null;
+  conform_to_tempo: boolean;
+  loop_fill: boolean;
   loop_count: number;
   jump_to_event_id: number | null;
 }
@@ -23,6 +31,10 @@ export interface TimelineSceneBlockPlacementUpdate {
 interface TimelineSceneBlockControllerOptions {
   invoke: <T = unknown>(command: string, args?: Record<string, unknown>) => Promise<T>;
   snapTimeMs: (timeMs: number) => number;
+  /** Returns beat intent for Beat/Bar snap, or undefined when the current snap mode is not musical. */
+  snappedTimeBeats: (timeMs: number) => number | null | undefined;
+  /** Converts a direct millisecond edit into beat intent at the engine's current BPM. */
+  timeBeatsAtCurrentBpm: (timeMs: number) => number | null;
   hasEventId: (eventId: number) => boolean;
   getEventById: (eventId: number) => TimelineCueEventSummary | undefined;
   getEventDraft: (event: TimelineCueEventSummary) => TimelineEventDraft;
@@ -47,8 +59,12 @@ export const timelineExecutionIsLive = (
 const timelineEventDraftFromEvent = (event: TimelineCueEventSummary): TimelineEventDraft => ({
   cue_id: event.cue_id,
   time_ms: event.time_ms,
+  time_beats: event.time_beats ?? null,
   track: event.track,
   duration_ms: event.duration_ms ?? 0,
+  duration_beats: event.duration_beats ?? null,
+  conform_to_tempo: event.conform_to_tempo ?? false,
+  loop_fill: event.loop_fill ?? false,
   loop_count: event.loop_count ?? 1,
   jump_to_event_id: event.jump_to_event_id ?? null,
 });
@@ -150,6 +166,7 @@ export const buildTimelineSceneBlockCueOptions = (cues: CueSummary[]) => cues.ma
   cue_list_id: cue.cue_list_id,
   cue_number: cue.cue_number || String(cue.id),
   label: cue.label,
+  authored_beats: cue.authored_beats ?? null,
   source_summary: timelineSceneBlockSourceSummary(cue),
 }));
 
@@ -158,6 +175,7 @@ export const timelineSceneBlockSourcePickerOptions = <T extends {
   cue_list_id: number;
   cue_number: string;
   label: string;
+  authored_beats: number | null;
   source_summary: string;
 }>(
   cueOptions: T[],
@@ -193,6 +211,7 @@ export const timelineSceneBlockCueOptionsEqual = (
     option.cue_list_id === candidate.cue_list_id &&
     option.cue_number === candidate.cue_number &&
     option.label === candidate.label &&
+    option.authored_beats === candidate.authored_beats &&
     option.source_summary === candidate.source_summary;
 });
 
@@ -221,8 +240,13 @@ export const timelineSceneBlockRowsEqual = (
   return event.id === candidate.id &&
     event.cue_id === candidate.cue_id &&
     event.time_ms === candidate.time_ms &&
+    (event.time_beats ?? null) === (candidate.time_beats ?? null) &&
     event.track === candidate.track &&
     event.duration_ms === candidate.duration_ms &&
+    (event.duration_beats ?? null) === (candidate.duration_beats ?? null) &&
+    (event.conform_to_tempo ?? false) === (candidate.conform_to_tempo ?? false) &&
+    (event.loop_fill ?? false) === (candidate.loop_fill ?? false) &&
+    (event.rate ?? null) === (candidate.rate ?? null) &&
     event.loop_count === candidate.loop_count &&
     event.jump_to_event_id === candidate.jump_to_event_id &&
     event.cue_number === candidate.cue_number &&
@@ -257,8 +281,12 @@ export const timelineEventDraftMatchesSummary = (
   draft: TimelineEventDraft,
 ) => draft.cue_id === event.cue_id &&
   draft.time_ms === event.time_ms &&
+  draft.time_beats === (event.time_beats ?? null) &&
   draft.track === event.track &&
   draft.duration_ms === (event.duration_ms ?? 0) &&
+  draft.duration_beats === (event.duration_beats ?? null) &&
+  draft.conform_to_tempo === (event.conform_to_tempo ?? false) &&
+  draft.loop_fill === (event.loop_fill ?? false) &&
   draft.loop_count === (event.loop_count ?? 1) &&
   draft.jump_to_event_id === (event.jump_to_event_id ?? null);
 
@@ -380,24 +408,58 @@ export const timelineSceneBlockIterationCount = (event: Pick<TimelineCueEventSum
   Math.round(clamp(finiteOr(event.loop_count ?? 1, 1), 1, 256));
 
 export const timelineSceneBlockSpanMs = (
-  event: Pick<TimelineCueEventSummary, "duration_ms" | "loop_count">,
-) => Math.max(0, finiteOr(event.duration_ms ?? 0, 0)) * timelineSceneBlockIterationCount(event);
+  event: Pick<TimelineCueEventSummary, "duration_ms" | "loop_count" | "conform_to_tempo">,
+) => {
+  const durationMs = Math.max(0, finiteOr(event.duration_ms ?? 0, 0));
+  return event.conform_to_tempo ? durationMs : durationMs * timelineSceneBlockIterationCount(event);
+};
+
+export const timelineConformRateBadge = (
+  event: Pick<TimelineCueEventSummary, "conform_to_tempo" | "rate">,
+) => {
+  if (
+    !event.conform_to_tempo
+    || event.rate === null
+    || event.rate === undefined
+    || !Number.isFinite(event.rate)
+    || event.rate <= 0
+  ) return null;
+  return `[${event.rate.toFixed(2)}x]`;
+};
+
+export interface TimelineSceneBlockPlaybackTiming {
+  authoredBeats?: number | null;
+  bpm?: number | null;
+}
 
 export const timelineSceneBlockPlaybackStatus = (
   event: TimelineCueEventSummary,
   positionMs: number,
   executionLive: boolean,
+  timing: TimelineSceneBlockPlaybackTiming = {},
 ) => {
   const startMs = Math.max(0, event.time_ms);
   const durationMs = Math.max(0, event.duration_ms ?? 0);
   const loopCount = timelineSceneBlockIterationCount(event);
-  const spanMs = durationMs * loopCount;
+  const spanMs = timelineSceneBlockSpanMs(event);
+  const conformedIterationMs = event.conform_to_tempo
+    && timing.authoredBeats !== null
+    && timing.authoredBeats !== undefined
+    && Number.isFinite(timing.authoredBeats)
+    && timing.authoredBeats > 0
+    && timing.bpm !== null
+    && timing.bpm !== undefined
+    && Number.isFinite(timing.bpm)
+    && timing.bpm > 0
+      ? timing.authoredBeats * 60_000 / timing.bpm
+      : null;
+  const iterationDurationMs = conformedIterationMs ?? durationMs;
   const underPlayhead = durationMs > 0
     ? positionMs >= startMs && positionMs < startMs + spanMs
     : positionMs === startMs;
   const elapsedMs = underPlayhead ? Math.max(0, positionMs - startMs) : 0;
   const iteration = durationMs > 0
-    ? Math.min(loopCount, Math.floor(elapsedMs / Math.max(1, durationMs)) + 1)
+    ? Math.min(loopCount, Math.floor(elapsedMs / Math.max(1, iterationDurationMs)) + 1)
     : 1;
   return {
     under_playhead: underPlayhead,
@@ -423,7 +485,7 @@ export const growTimelineSceneBlockViewportDurationMs = (
   : currentDurationMs;
 
 export const timelinePlacementDisplayEndMs = (
-  event: Pick<TimelineCueEventSummary, "time_ms" | "duration_ms" | "loop_count">,
+  event: Pick<TimelineCueEventSummary, "time_ms" | "duration_ms" | "loop_count" | "conform_to_tempo">,
 ) => event.time_ms + (event.duration_ms > 0 ? timelineSceneBlockSpanMs(event) : 1000);
 
 export const normalizeTimelineEventDraft = (
@@ -431,12 +493,18 @@ export const normalizeTimelineEventDraft = (
   patch: Partial<TimelineEventDraft>,
   snapTimeMs: (timeMs: number) => number,
   hasEventId: (eventId: number) => boolean,
+  snappedTimeBeats: (timeMs: number) => number | null | undefined = () => undefined,
+  timeBeatsAtCurrentBpm: (timeMs: number) => number | null = () => null,
 ): TimelineEventDraft => {
   const source: TimelineEventDraft = {
     cue_id: event.cue_id,
     time_ms: event.time_ms,
+    time_beats: event.time_beats ?? null,
     track: event.track,
     duration_ms: event.duration_ms ?? 0,
+    duration_beats: event.duration_beats ?? null,
+    conform_to_tempo: event.conform_to_tempo ?? false,
+    loop_fill: event.loop_fill ?? false,
     loop_count: event.loop_count ?? 1,
     jump_to_event_id: event.jump_to_event_id ?? null,
     ...patch,
@@ -452,11 +520,27 @@ export const normalizeTimelineEventDraft = (
   const jumpToEventId = durationMs > 0 && requestedJumpId !== null && hasEventId(requestedJumpId)
     ? requestedJumpId
     : null;
+  const timeMs = snapTimeMs(source.time_ms);
+  const snappedBeats = snappedTimeBeats(timeMs);
+  const conformToTempo = durationMs > 0 && source.conform_to_tempo;
+  const timeBeats = snappedBeats !== undefined
+    ? snappedBeats
+    : timeMs !== event.time_ms && conformToTempo
+      ? timeBeatsAtCurrentBpm(timeMs)
+      : timeMs === event.time_ms
+      ? (source.time_beats !== null && Number.isFinite(source.time_beats) ? source.time_beats : null)
+      : null;
   return {
     cue_id: Math.max(0, Math.round(finiteOr(source.cue_id, event.cue_id))),
-    time_ms: snapTimeMs(source.time_ms),
+    time_ms: timeMs,
+    time_beats: timeBeats,
     track: source.track,
     duration_ms: durationMs,
+    duration_beats: source.duration_beats !== null && Number.isFinite(source.duration_beats)
+      ? Math.max(0, source.duration_beats)
+      : null,
+    conform_to_tempo: conformToTempo,
+    loop_fill: conformToTempo && source.loop_fill,
     loop_count: loopCount,
     jump_to_event_id: jumpToEventId,
   };
@@ -466,15 +550,23 @@ export const normalizeTimelineSceneBlockAddDraft = (
   draft: TimelineSceneBlockAddDraft,
   snapTimeMs: (timeMs: number) => number,
   hasEventId: (eventId: number) => boolean,
+  snappedTimeBeats: (timeMs: number) => number | null | undefined = () => undefined,
 ): TimelineSceneBlockAddDraft => {
   const requestedJumpId = draft.jump_to_event_id === null
     ? null
     : Math.max(0, Math.round(draft.jump_to_event_id));
+  const timeMs = snapTimeMs(draft.time_ms);
   return {
     cue_id: Math.max(0, Math.round(finiteOr(draft.cue_id, 0))),
-    time_ms: snapTimeMs(draft.time_ms),
+    time_ms: timeMs,
+    time_beats: snappedTimeBeats(timeMs) ?? null,
     track: draft.track,
     duration_ms: Math.max(1, Math.round(finiteOr(draft.duration_ms, 1000))),
+    duration_beats: draft.duration_beats !== null && Number.isFinite(draft.duration_beats)
+      ? Math.max(0, draft.duration_beats)
+      : null,
+    conform_to_tempo: draft.conform_to_tempo,
+    loop_fill: draft.conform_to_tempo && draft.loop_fill,
     loop_count: Math.round(clamp(finiteOr(draft.loop_count, 1), 1, 256)),
     jump_to_event_id: requestedJumpId !== null && hasEventId(requestedJumpId) ? requestedJumpId : null,
   };
@@ -485,20 +577,32 @@ export const buildTimelineSceneBlockSnapPlacements = (
   getDraft: (event: TimelineCueEventSummary) => TimelineEventDraft,
   snapTimeMs: (timeMs: number) => number,
   hasEventId: (eventId: number) => boolean,
+  snappedTimeBeats: (timeMs: number) => number | null | undefined = () => undefined,
 ) => events.map((event) => {
   const currentDraft = getDraft(event);
-  const draft = normalizeTimelineEventDraft(
+  const normalizedDraft = normalizeTimelineEventDraft(
     event,
     { ...currentDraft, time_ms: snapTimeMs(currentDraft.time_ms) },
     snapTimeMs,
     hasEventId,
+    snappedTimeBeats,
   );
+  // Bulk Snap retains beat-domain intent only for Beat/Bar. Grid and Off are
+  // millisecond-domain commits and must explicitly clear any older beat intent.
+  const draft = {
+    ...normalizedDraft,
+    time_beats: snappedTimeBeats(normalizedDraft.time_ms) ?? null,
+  };
   const request: TimelineSceneBlockPlacementUpdate = {
     event_id: event.id,
     cue_id: draft.cue_id,
     time_ms: draft.time_ms,
+    time_beats: draft.time_beats,
     track: draft.track,
     duration_ms: draft.duration_ms,
+    duration_beats: draft.duration_beats,
+    conform_to_tempo: draft.conform_to_tempo,
+    loop_fill: draft.loop_fill,
     loop_count: draft.loop_count,
     jump_to_event_id: draft.jump_to_event_id,
   };
@@ -507,12 +611,21 @@ export const buildTimelineSceneBlockSnapPlacements = (
 
 export const createTimelineSceneBlockController = (options: TimelineSceneBlockControllerOptions) => {
   const add = async (draft: TimelineSceneBlockAddDraft) => {
-    const next = normalizeTimelineSceneBlockAddDraft(draft, options.snapTimeMs, options.hasEventId);
+    const next = normalizeTimelineSceneBlockAddDraft(
+      draft,
+      options.snapTimeMs,
+      options.hasEventId,
+      options.snappedTimeBeats,
+    );
     const eventId = await options.invoke<number>("add_timeline_scene_block", {
       cueId: next.cue_id,
       timeMs: next.time_ms,
+      timeBeats: next.time_beats,
       track: next.track,
       durationMs: next.duration_ms,
+      durationBeats: next.duration_beats,
+      conformToTempo: next.conform_to_tempo,
+      loopFill: next.loop_fill,
       loopCount: next.loop_count,
       jumpToEventId: next.jump_to_event_id,
     });
@@ -520,14 +633,25 @@ export const createTimelineSceneBlockController = (options: TimelineSceneBlockCo
   };
 
   const set = async (event: TimelineCueEventSummary, patch: Partial<TimelineEventDraft> = {}) => {
-    const next = normalizeTimelineEventDraft(event, patch, options.snapTimeMs, options.hasEventId);
+    const next = normalizeTimelineEventDraft(
+      event,
+      patch,
+      options.snapTimeMs,
+      options.hasEventId,
+      options.snappedTimeBeats,
+      options.timeBeatsAtCurrentBpm,
+    );
     if (next.duration_ms > 0) {
       await options.invoke("set_timeline_scene_block", {
         eventId: event.id,
         cueId: next.cue_id,
         timeMs: next.time_ms,
+        timeBeats: next.time_beats,
         track: next.track,
         durationMs: next.duration_ms,
+        durationBeats: next.duration_beats,
+        conformToTempo: next.conform_to_tempo,
+        loopFill: next.loop_fill,
         loopCount: next.loop_count,
         jumpToEventId: next.jump_to_event_id,
       });
@@ -536,6 +660,7 @@ export const createTimelineSceneBlockController = (options: TimelineSceneBlockCo
         eventId: event.id,
         cueId: next.cue_id,
         timeMs: next.time_ms,
+        timeBeats: next.time_beats,
         track: next.track,
       });
     }
@@ -566,16 +691,22 @@ export const createTimelineSceneBlockController = (options: TimelineSceneBlockCo
         const { eventId, draft } = await add({
           cue_id: cueId,
           time_ms: timeMs,
+          time_beats: null,
           track,
           duration_ms: options.getAddDurationMs(),
+          duration_beats: null,
+          conform_to_tempo: false,
+          loop_fill: false,
           loop_count: options.getAddLoopCount(),
           jump_to_event_id: options.getAddJumpToEventId(),
         });
         options.setNextStartMs(nextDraftTime
-          ? options.snapTimeMs(draft.time_ms + draft.duration_ms * draft.loop_count)
+          ? options.snapTimeMs(draft.time_ms + timelineSceneBlockSpanMs(draft))
           : draft.time_ms);
         options.setMessage(
-          `Added linked Scene Block ${eventId} at ${draft.time_ms} ms (${draft.duration_ms} ms × ${draft.loop_count})`,
+          draft.conform_to_tempo
+            ? `Added linked Scene Block ${eventId} at ${draft.time_ms} ms (${draft.duration_ms} ms window · ${draft.loop_count} ${draft.loop_fill ? "fill loops" : "tempo iterations"})`
+            : `Added linked Scene Block ${eventId} at ${draft.time_ms} ms (${draft.duration_ms} ms × ${draft.loop_count})`,
         );
         await options.refreshSnapshot();
       } catch (error) {

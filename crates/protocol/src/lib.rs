@@ -17,6 +17,8 @@ pub type NodeGraphId = u64;
 pub type StageObjectId = u64;
 
 pub const MAX_TIMELINE_SCENE_BLOCK_LOOPS: u16 = 256;
+pub const MIN_CUE_AUTHORED_BEATS: f32 = 0.25;
+pub const MAX_CUE_AUTHORED_BEATS: f32 = 1024.0;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct Vec3 {
@@ -1177,6 +1179,8 @@ pub struct CueSummary {
     pub label: String,
     pub fade_ms: u64,
     #[serde(default)]
+    pub authored_beats: Option<f32>,
+    #[serde(default)]
     pub pre_wait_ms: u64,
     #[serde(default)]
     pub follow_ms: Option<u64>,
@@ -1330,6 +1334,7 @@ impl Default for CueSummary {
             cue_number: String::new(),
             label: String::new(),
             fade_ms: 0,
+            authored_beats: None,
             pre_wait_ms: 0,
             follow_ms: None,
             ifcb_timing: CueIfcbTiming::default(),
@@ -1434,11 +1439,21 @@ pub struct TimelineCueEventSummary {
     pub id: TimelineEventId,
     pub cue_id: CueId,
     pub time_ms: u64,
+    #[serde(default)]
+    pub time_beats: Option<f64>,
     pub track: TimelineTrackKind,
     #[serde(default)]
     pub layer_id: Option<u32>,
     #[serde(default)]
     pub duration_ms: u64,
+    #[serde(default)]
+    pub duration_beats: Option<f64>,
+    #[serde(default)]
+    pub conform_to_tempo: bool,
+    #[serde(default)]
+    pub loop_fill: bool,
+    #[serde(default)]
+    pub rate: Option<f32>,
     #[serde(default = "default_timeline_scene_block_loop_count")]
     pub loop_count: u16,
     #[serde(default)]
@@ -1522,16 +1537,24 @@ pub struct TimelineVideoAutomationSummary {
     pub enabled: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TimelineEventPlacementUpdate {
     pub event_id: TimelineEventId,
     pub cue_id: CueId,
     pub time_ms: u64,
+    #[serde(default)]
+    pub time_beats: Option<f64>,
     pub track: TimelineTrackKind,
     #[serde(default)]
     pub layer_id: Option<u32>,
     #[serde(default)]
     pub duration_ms: u64,
+    #[serde(default)]
+    pub duration_beats: Option<f64>,
+    #[serde(default)]
+    pub conform_to_tempo: bool,
+    #[serde(default)]
+    pub loop_fill: bool,
     #[serde(default = "default_timeline_scene_block_loop_count")]
     pub loop_count: u16,
     #[serde(default)]
@@ -2920,6 +2943,7 @@ mod tests {
         let mut value = serde_json::to_value(cue).unwrap();
         value.as_object_mut().unwrap().remove("ifcb_timing");
         value.as_object_mut().unwrap().remove("cue_list_id");
+        value.as_object_mut().unwrap().remove("authored_beats");
         value.as_object_mut().unwrap().remove("parts");
         value.as_object_mut().unwrap().remove("mark");
         value.as_object_mut().unwrap().remove("mib_fixture_ids");
@@ -2932,11 +2956,25 @@ mod tests {
         assert_eq!(parsed.ifcb_timing.intensity_fade_ms, None);
         assert_eq!(parsed.ifcb_timing.focus_delay_ms, 0);
         assert_eq!(parsed.cue_list_id, super::DEFAULT_CUE_LIST_ID);
+        assert_eq!(parsed.authored_beats, None);
         assert!(parsed.parts.is_empty());
         assert!(!parsed.mark);
         assert!(parsed.mib_fixture_ids.is_empty());
         assert!(parsed.palette_targets.is_empty());
         assert!(parsed.effect_targets.is_empty());
+    }
+
+    #[test]
+    fn cue_authored_beats_roundtrip() {
+        let mut cue = super::CueSummary::default();
+        cue.id = 17;
+        cue.authored_beats = Some(4.0);
+
+        let encoded = serde_json::to_string(&cue).unwrap();
+        let decoded: super::CueSummary = serde_json::from_str(&encoded).unwrap();
+
+        assert_eq!(decoded.authored_beats, Some(4.0));
+        assert_eq!(decoded, cue);
     }
 
     #[test]
@@ -2950,7 +2988,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(event.layer_id, None);
+        assert_eq!(event.time_beats, None);
         assert_eq!(event.duration_ms, 0);
+        assert_eq!(event.duration_beats, None);
+        assert!(!event.conform_to_tempo);
+        assert!(!event.loop_fill);
+        assert_eq!(event.rate, None);
         assert_eq!(event.loop_count, 1);
         assert_eq!(event.jump_to_event_id, None);
     }
@@ -3010,9 +3053,14 @@ mod tests {
             id: 9,
             cue_id: 3,
             time_ms: 1_250,
+            time_beats: Some(2.5),
             track: super::TimelineTrackKind::Lighting,
             layer_id: Some(7),
             duration_ms: 2_000,
+            duration_beats: Some(4.0),
+            conform_to_tempo: true,
+            loop_fill: true,
+            rate: Some(1.25),
             loop_count: 4,
             jump_to_event_id: Some(2),
         };
@@ -3033,9 +3081,13 @@ mod tests {
                 event_id: 9,
                 cue_id: 3,
                 time_ms: 1_250,
+                time_beats: Some(2.5),
                 track: super::TimelineTrackKind::Lighting,
                 layer_id: Some(7),
                 duration_ms: 2_000,
+                duration_beats: Some(4.0),
+                conform_to_tempo: true,
+                loop_fill: true,
                 loop_count: 4,
                 jump_to_event_id: Some(2),
             }],
@@ -3060,6 +3112,19 @@ mod tests {
         let encoded = serde_json::to_string(&request).unwrap();
         let decoded: super::TimelineSnapRequest = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded, request);
+
+        let legacy_placement: super::TimelineEventPlacementUpdate =
+            serde_json::from_value(serde_json::json!({
+                "event_id": 9,
+                "cue_id": 3,
+                "time_ms": 1_250,
+                "track": "Lighting"
+            }))
+            .unwrap();
+        assert_eq!(legacy_placement.time_beats, None);
+        assert_eq!(legacy_placement.duration_beats, None);
+        assert!(!legacy_placement.conform_to_tempo);
+        assert!(!legacy_placement.loop_fill);
 
         let defaults: super::TimelineSnapRequest = serde_json::from_str("{}").unwrap();
         assert_eq!(defaults, super::TimelineSnapRequest::default());

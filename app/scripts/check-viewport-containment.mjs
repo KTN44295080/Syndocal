@@ -421,6 +421,37 @@ function findBrowser() {
   return [...envCandidates, ...platformCandidates].find((candidate) => candidate && executableExists(candidate)) ?? null;
 }
 
+async function failIfPortOccupied(port, description) {
+  // A stale listener makes this run silently attach to a leftover instance
+  // (stale Vite serves old code; a wedged Chromium never completes the CDP
+  // WebSocket handshake), which presents as an indefinite low-CPU hang.
+  // Failing fast with the owning pid is always cheaper than that hang.
+  let occupied = false;
+  try {
+    await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(1500) });
+    occupied = true;
+  } catch (error) {
+    occupied = error?.name === "TimeoutError";
+  }
+  if (!occupied) {
+    return;
+  }
+  let owner = "unknown";
+  try {
+    const { execSync } = await import("node:child_process");
+    const lines = execSync(`netstat -ano -p tcp | findstr :${port}`, { encoding: "utf8" })
+      .split(/\r?\n/)
+      .filter((line) => line.includes("LISTENING"));
+    owner = lines.map((line) => line.trim().split(/\s+/).at(-1)).join(",") || "unknown";
+  } catch {
+    // netstat parsing is best-effort; the error below is still actionable.
+  }
+  throw new Error(
+    `${description} port ${port} is already in use (pid ${owner}) - a previous harness run leaked. ` +
+      `Kill it first: taskkill /PID ${owner} /T /F`,
+  );
+}
+
 function startProcess(command, args, options = {}) {
   const child = spawn(command, args, {
     cwd: options.cwd,
@@ -438,6 +469,17 @@ function startProcess(command, args, options = {}) {
 async function stopProcess(child) {
   if (!child || child.killed) {
     return;
+  }
+  if (process.platform === "win32" && typeof child.pid === "number") {
+    // child.kill() only reaches the direct child on Windows; Vite/Chromium
+    // grandchildren survive and keep ports 5173/9227, poisoning the next run.
+    try {
+      const { execSync } = await import("node:child_process");
+      execSync(`taskkill /PID ${child.pid} /T /F`, { stdio: "ignore" });
+      return;
+    } catch {
+      // Fall through to the portable path below.
+    }
   }
   try {
     child.kill("SIGTERM");
@@ -7958,18 +8000,21 @@ async function main() {
   let browserProcess = null;
   let client = null;
   const profileDir = mkdtempSync(join(tmpdir(), "syndocal-cdp-"));
+  const extraProfileDirs = [];
 
   try {
     if (shouldStartVite) {
+      await failIfPortOccupied(vitePort, "Syndocal dev server");
       viteProcess = startProcess(
         process.execPath,
         ["node_modules/vite/bin/vite.js", "--configLoader", "runner", "--host", "127.0.0.1", "--port", String(vitePort), "--strictPort"],
         { cwd: appRoot },
       );
     }
+    await failIfPortOccupied(cdpPort, "Chrome DevTools Protocol");
     await waitForHttp(appUrl, "Syndocal dev server");
 
-    browserProcess = startProcess(browser, [
+    const browserArgs = [
       "--headless=new",
       "--no-sandbox",
       "--disable-gpu",
@@ -7984,10 +8029,37 @@ async function main() {
       `--user-data-dir=${profileDir}`,
       `--window-size=${primaryOperationalViewport.width},${primaryOperationalViewport.height}`,
       "about:blank",
-    ]);
+    ];
+    browserProcess = startProcess(browser, browserArgs);
     await waitForHttp(`http://127.0.0.1:${cdpPort}/json/version`, "Chrome DevTools Protocol");
 
     client = await createCdpClient();
+    // Long-lived headless sessions freeze their renderer main thread after
+    // dozens of heavy fixture navigations (zero-CPU block, browser-side CDP
+    // fine, Runtime.evaluate dead - reproduced 3x on this machine, isolated
+    // fresh-browser runs of the same scenarios pass 6/6). Recycling the
+    // browser between phases isolates each phase from that failure class.
+    const recycleBrowser = async () => {
+      try {
+        client?.close();
+      } catch {
+        // Ignore close races on a possibly-wedged client.
+      }
+      await stopProcess(browserProcess);
+      // A force-killed Chrome leaves singleton locks in its profile; reusing
+      // the directory makes the next instance recover state unpredictably.
+      // Each recycled browser gets a fresh profile instead.
+      const recycledProfileDir = mkdtempSync(join(tmpdir(), "syndocal-cdp-"));
+      extraProfileDirs.push(recycledProfileDir);
+      browserProcess = startProcess(
+        browser,
+        browserArgs.map((arg) => (arg.startsWith("--user-data-dir=") ? `--user-data-dir=${recycledProfileDir}` : arg)),
+      );
+      await waitForHttp(`http://127.0.0.1:${cdpPort}/json/version`, "Chrome DevTools Protocol");
+      client = await createCdpClient();
+      await waitForApp(client);
+      traceViewport("browser recycled for next phase");
+    };
     console.log(
       `viewport contract primary-browser=${primaryOperationalViewport.width}x${primaryOperationalViewport.height} measured-client-size-browser=${measuredClientSizeViewport.width}x${measuredClientSizeViewport.height} extended-browser=${extendedCeilingViewport.width}x${extendedCeilingViewport.height} fallback-browsers=${compactFallbackViewports.map((viewport) => `${viewport.width}x${viewport.height}`).join(",")} screenshots=${captureAllViewportScreenshots ? "all" : "large-browser-fixtures"}`,
     );
@@ -8298,6 +8370,7 @@ async function main() {
     const cueNodeGraphResults = [];
     if (!workspaceShellOnlyMode) {
       for (const viewport of viewports) {
+        await recycleBrowser();
         cueRecallResults.push(await runCueRecallViewport(client, viewport));
         cueRecallLargeResults.push(await runCueRecallLargeViewport(client, viewport));
         effectStackLargeResults.push(await runEffectStackLargeViewport(client, viewport));
@@ -8311,6 +8384,7 @@ async function main() {
     );
     if (!workspaceShellOnlyMode) {
       for (const viewport of sceneBlockScaleViewports.length > 0 ? sceneBlockScaleViewports : viewports.slice(0, 1)) {
+        await recycleBrowser();
         sceneBlockLargeResults.push(await runSceneBlockLargeViewport(client, viewport));
       }
     }
@@ -8520,10 +8594,12 @@ async function main() {
     client?.close();
     await stopProcess(browserProcess);
     await stopProcess(viteProcess);
-    try {
-      rmSync(profileDir, { recursive: true, force: true });
-    } catch (error) {
-      console.warn(`Viewport check passed, but cleanup could not remove ${profileDir}: ${error.message}`);
+    for (const dir of [profileDir, ...extraProfileDirs]) {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch (error) {
+        console.warn(`Viewport check passed, but cleanup could not remove ${dir}: ${error.message}`);
+      }
     }
   }
 }

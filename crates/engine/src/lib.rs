@@ -49,7 +49,8 @@ use protocol::{
     VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
     VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
     VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
-    LIVE_AUDIO_FEATURE_BAND_CAPACITY, MAX_TIMELINE_SCENE_BLOCK_LOOPS,
+    LIVE_AUDIO_FEATURE_BAND_CAPACITY, MAX_CUE_AUTHORED_BEATS, MAX_TIMELINE_SCENE_BLOCK_LOOPS,
+    MIN_CUE_AUTHORED_BEATS,
 };
 use thiserror::Error;
 
@@ -433,6 +434,7 @@ pub enum EngineCommand {
         cue_id: CueId,
         label: String,
         fade_ms: u64,
+        authored_beats: Option<f32>,
         targets: Vec<CueFixtureTarget>,
         video_targets: Vec<VideoLayerTarget>,
         video_output_targets: Vec<VideoOutputTarget>,
@@ -444,6 +446,7 @@ pub enum EngineCommand {
         cue_list_id: CueListId,
         label: String,
         fade_ms: u64,
+        authored_beats: Option<f32>,
         targets: Vec<CueFixtureTarget>,
         video_targets: Vec<VideoLayerTarget>,
         video_output_targets: Vec<VideoOutputTarget>,
@@ -485,6 +488,7 @@ pub enum EngineCommand {
         cue_number: String,
         label: String,
         fade_ms: u64,
+        authored_beats: Option<f32>,
         pre_wait_ms: u64,
         follow_ms: Option<u64>,
         ifcb_timing: CueIfcbTiming,
@@ -573,6 +577,7 @@ pub enum EngineCommand {
         event_id: TimelineEventId,
         cue_id: CueId,
         time_ms: u64,
+        time_beats: Option<f64>,
         track: TimelineTrackKind,
         layer_id: Option<u32>,
     },
@@ -580,6 +585,7 @@ pub enum EngineCommand {
         event_id: TimelineEventId,
         cue_id: CueId,
         time_ms: u64,
+        time_beats: Option<f64>,
         track: TimelineTrackKind,
         layer_id: Option<u32>,
     },
@@ -588,6 +594,7 @@ pub enum EngineCommand {
         event_id: TimelineEventId,
         cue_id: CueId,
         time_ms: u64,
+        time_beats: Option<f64>,
         track: TimelineTrackKind,
         layer_id: Option<u32>,
         expires_at: Instant,
@@ -597,6 +604,7 @@ pub enum EngineCommand {
         event_id: TimelineEventId,
         cue_id: CueId,
         time_ms: u64,
+        time_beats: Option<f64>,
         track: TimelineTrackKind,
         layer_id: Option<u32>,
         expires_at: Instant,
@@ -611,9 +619,13 @@ pub enum EngineCommand {
         event_id: TimelineEventId,
         cue_id: CueId,
         time_ms: u64,
+        time_beats: Option<f64>,
         track: TimelineTrackKind,
         layer_id: Option<u32>,
         duration_ms: u64,
+        duration_beats: Option<f64>,
+        conform_to_tempo: bool,
+        loop_fill: bool,
         loop_count: u16,
         jump_to_event_id: Option<TimelineEventId>,
         expires_at: Instant,
@@ -623,9 +635,13 @@ pub enum EngineCommand {
         event_id: TimelineEventId,
         cue_id: CueId,
         time_ms: u64,
+        time_beats: Option<f64>,
         track: TimelineTrackKind,
         layer_id: Option<u32>,
         duration_ms: u64,
+        duration_beats: Option<f64>,
+        conform_to_tempo: bool,
+        loop_fill: bool,
         loop_count: u16,
         jump_to_event_id: Option<TimelineEventId>,
         expires_at: Instant,
@@ -638,6 +654,10 @@ pub enum EngineCommand {
     },
     SnapTimelineItemsPublished {
         request: TimelineSnapRequest,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    ReconformTimelineToBpm {
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
@@ -1560,6 +1580,7 @@ impl EngineHandle {
         cue_list_id: CueListId,
         label: String,
         fade_ms: u64,
+        authored_beats: Option<f32>,
         targets: Vec<CueFixtureTarget>,
         video_targets: Vec<VideoLayerTarget>,
         video_output_targets: Vec<VideoOutputTarget>,
@@ -1572,6 +1593,7 @@ impl EngineHandle {
             cue_list_id,
             label,
             fade_ms,
+            authored_beats,
             targets,
             video_targets,
             video_output_targets,
@@ -1642,6 +1664,7 @@ impl EngineHandle {
         cue_number: String,
         label: String,
         fade_ms: u64,
+        authored_beats: Option<f32>,
         pre_wait_ms: u64,
         follow_ms: Option<u64>,
         ifcb_timing: CueIfcbTiming,
@@ -1657,6 +1680,7 @@ impl EngineHandle {
             cue_number,
             label,
             fade_ms,
+            authored_beats,
             pre_wait_ms,
             follow_ms,
             ifcb_timing,
@@ -1692,6 +1716,7 @@ impl EngineHandle {
         event_id: TimelineEventId,
         cue_id: CueId,
         time_ms: u64,
+        time_beats: Option<f64>,
         track: TimelineTrackKind,
         layer_id: Option<u32>,
     ) -> Result<(), String> {
@@ -1700,6 +1725,7 @@ impl EngineHandle {
             event_id,
             cue_id,
             time_ms,
+            time_beats,
             track,
             layer_id,
             expires_at: Instant::now() + Duration::from_secs(2),
@@ -1716,6 +1742,7 @@ impl EngineHandle {
         event_id: TimelineEventId,
         cue_id: CueId,
         time_ms: u64,
+        time_beats: Option<f64>,
         track: TimelineTrackKind,
         layer_id: Option<u32>,
     ) -> Result<(), String> {
@@ -1724,6 +1751,7 @@ impl EngineHandle {
             event_id,
             cue_id,
             time_ms,
+            time_beats,
             track,
             layer_id,
             expires_at: Instant::now() + Duration::from_secs(2),
@@ -1754,9 +1782,13 @@ impl EngineHandle {
         event_id: TimelineEventId,
         cue_id: CueId,
         time_ms: u64,
+        time_beats: Option<f64>,
         track: TimelineTrackKind,
         layer_id: Option<u32>,
         duration_ms: u64,
+        duration_beats: Option<f64>,
+        conform_to_tempo: bool,
+        loop_fill: bool,
         loop_count: u16,
         jump_to_event_id: Option<TimelineEventId>,
     ) -> Result<(), String> {
@@ -1765,9 +1797,13 @@ impl EngineHandle {
             event_id,
             cue_id,
             time_ms,
+            time_beats,
             track,
             layer_id,
             duration_ms,
+            duration_beats,
+            conform_to_tempo,
+            loop_fill,
             loop_count,
             jump_to_event_id,
             expires_at: Instant::now() + Duration::from_secs(2),
@@ -1785,9 +1821,13 @@ impl EngineHandle {
         event_id: TimelineEventId,
         cue_id: CueId,
         time_ms: u64,
+        time_beats: Option<f64>,
         track: TimelineTrackKind,
         layer_id: Option<u32>,
         duration_ms: u64,
+        duration_beats: Option<f64>,
+        conform_to_tempo: bool,
+        loop_fill: bool,
         loop_count: u16,
         jump_to_event_id: Option<TimelineEventId>,
     ) -> Result<(), String> {
@@ -1796,9 +1836,13 @@ impl EngineHandle {
             event_id,
             cue_id,
             time_ms,
+            time_beats,
             track,
             layer_id,
             duration_ms,
+            duration_beats,
+            conform_to_tempo,
+            loop_fill,
             loop_count,
             jump_to_event_id,
             expires_at: Instant::now() + Duration::from_secs(2),
@@ -1834,6 +1878,18 @@ impl EngineHandle {
         receiver
             .recv_timeout(Duration::from_secs(3))
             .map_err(|error| format!("Timeline snap acknowledgement failed: {error}"))?
+    }
+
+    pub fn reconform_timeline_to_bpm(&self) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::ReconformTimelineToBpm {
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Timeline re-conform acknowledgement failed: {error}"))?
     }
 
     pub fn add_timeline_layer(&self, layer: TimelineLayerSummary) -> Result<(), String> {
@@ -2637,6 +2693,7 @@ struct RuntimeCue {
     cue_number: String,
     label: String,
     fade_ms: u64,
+    authored_beats: Option<f32>,
     pre_wait_ms: u64,
     follow_ms: Option<u64>,
     ifcb_timing: CueIfcbTiming,
@@ -2709,14 +2766,27 @@ struct RuntimeTimelineEvent {
     id: TimelineEventId,
     cue_id: CueId,
     time_ms: u64,
+    time_beats: Option<f64>,
     track: TimelineTrackKind,
     layer_id: Option<u32>,
     resolved_layer_id: u32,
     layer_order: u32,
     layer_muted_effective: bool,
     duration_ms: u64,
+    duration_beats: Option<f64>,
+    conform_to_tempo: bool,
+    loop_fill: bool,
+    iteration_period_ms: u64,
+    rate: Option<f32>,
     loop_count: u16,
     jump_to_event_id: Option<TimelineEventId>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum CueFreeRunPeriodResolution {
+    NoCandidate,
+    Unique(f64),
+    Ambiguous,
 }
 
 type TimelineCueOccurrence = (u64, TimelineEventId, CueId, u32);
@@ -2792,6 +2862,7 @@ enum PendingCommandRollback {
     RestoreEffect {
         index: Option<usize>,
         effect: Option<RuntimeEffect>,
+        timeline_events: Option<Vec<RuntimeTimelineEvent>>,
         last_error: Option<String>,
     },
     RestoreEffectEnabled {
@@ -2828,11 +2899,6 @@ enum PendingCommandRollback {
     },
     RestoreAutoVj {
         auto_vj: RuntimeAutoVj,
-        last_error: Option<String>,
-    },
-    RestoreCues {
-        cues: Vec<RuntimeCue>,
-        cue_lists: Vec<CueListSummary>,
         last_error: Option<String>,
     },
     RestoreCueRemoval {
@@ -2886,7 +2952,6 @@ impl PendingCommandRollback {
                 | Self::RestoreVideoLayerIsfEffect { .. }
                 | Self::RestoreVideoLayerIsfEffectAndCancelEventPulse { .. }
                 | Self::RestoreAutoVj { .. }
-                | Self::RestoreCues { .. }
                 | Self::RestoreCueRemoval { .. }
                 | Self::RestoreTimelineEvents { .. }
                 | Self::RestoreTimelineItems { .. }
@@ -2983,6 +3048,8 @@ struct EngineRuntime {
     timeline_jump_landed_event_id: Option<TimelineEventId>,
     timeline_external_sync_source: Option<ClockSource>,
     timeline_due_cues: Vec<TimelineCueOccurrence>,
+    #[cfg(test)]
+    timeline_reconform_count: u64,
     video_layers: Vec<RuntimeVideoLayer>,
     video_layer_fades: Vec<RuntimeVideoLayerFade>,
     video_compositions: Vec<RuntimeVideoComposition>,
@@ -3155,6 +3222,8 @@ impl EngineRuntime {
             timeline_jump_landed_event_id: None,
             timeline_external_sync_source: None,
             timeline_due_cues: Vec::with_capacity(64),
+            #[cfg(test)]
+            timeline_reconform_count: 0,
             video_layers: Vec::new(),
             video_layer_fades: Vec::new(),
             video_compositions: Vec::new(),
@@ -3409,6 +3478,14 @@ impl EngineRuntime {
             .collect();
         self.sanitize_loaded_show_references(now);
         self.cue_lists = sanitize_cue_lists(&self.cue_lists, &self.cues);
+        if self.timeline_has_conformed_events() {
+            if let Err(error) = self.reconform_timeline_events_to_bpm(snapshot.clock.bpm) {
+                self.last_error = Some(error);
+                return;
+            }
+        } else {
+            self.sort_timeline_events();
+        }
         let mut outputs = if snapshot.dmx_outputs.is_empty() {
             vec![snapshot.output.clone()]
         } else {
@@ -3556,6 +3633,7 @@ impl EngineRuntime {
                     cue_number: cue.cue_number,
                     label: cue.label,
                     fade_ms: cue.fade_ms,
+                    authored_beats: cue.authored_beats,
                     pre_wait_ms: cue.pre_wait_ms,
                     follow_ms: cue.follow_ms,
                     ifcb_timing: cue.ifcb_timing,
@@ -3871,6 +3949,7 @@ impl EngineRuntime {
                     | EngineCommand::UpdateCuePublished { .. }
                     | EngineCommand::SetCueEffectTargetsPublished { .. }
                     | EngineCommand::SetCueDetailsPublished { .. }
+                    | EngineCommand::ReconformTimelineToBpm { .. }
             );
             if queued_command.command.requests_low_latency_dmx_tick() {
                 self.low_latency_dmx_tick_request_count =
@@ -4471,9 +4550,17 @@ impl EngineRuntime {
             }
             EngineCommand::SetBpm(bpm) => {
                 self.clock.set_bpm(bpm, Instant::now());
+                if self.timeline_has_conformed_events() {
+                    let current_bpm = self.clock.bpm;
+                    self.last_error = self.reconform_timeline_events_to_bpm(current_bpm).err();
+                }
             }
             EngineCommand::TapBpm => {
                 self.clock.tap(Instant::now());
+                if self.timeline_has_conformed_events() {
+                    let current_bpm = self.clock.bpm;
+                    self.last_error = self.reconform_timeline_events_to_bpm(current_bpm).err();
+                }
             }
             EngineCommand::MidiClockPulse => {
                 self.clock.midi_clock_pulse(Instant::now());
@@ -4700,15 +4787,30 @@ impl EngineRuntime {
                         return;
                     }
                 };
-                if let Some(effect) = self
+                if let Some(index) = self
                     .effects
-                    .iter_mut()
-                    .find(|effect| effect.id == effect_id)
+                    .iter()
+                    .position(|effect| effect.id == effect_id)
                 {
-                    if matches!(&effect.kind, RuntimeEffectKind::Lfo(_)) {
-                        effect.kind = RuntimeEffectKind::Lfo(request);
-                        effect.created_at = Instant::now();
-                        self.last_error = None;
+                    if matches!(&self.effects[index].kind, RuntimeEffectKind::Lfo(_)) {
+                        let reconform_referenced_events =
+                            self.timeline_has_conformed_events_for_effect(effect_id);
+                        let previous_effect = self.effects[index].clone();
+                        let previous_timeline_events =
+                            reconform_referenced_events.then(|| self.timeline_events.clone());
+                        self.effects[index].kind = RuntimeEffectKind::Lfo(request);
+                        self.effects[index].created_at = Instant::now();
+                        let bpm = self.clock.bpm;
+                        self.last_error = if reconform_referenced_events {
+                            self.reconform_timeline_events_to_bpm(bpm).err()
+                        } else {
+                            None
+                        };
+                        if self.last_error.is_some() {
+                            self.effects[index] = previous_effect;
+                            self.timeline_events = previous_timeline_events
+                                .expect("referenced LFO rollback must preserve timeline events");
+                        }
                     } else {
                         self.last_error = Some(format!("Effect {effect_id} is not an LFO"));
                     }
@@ -4724,15 +4826,34 @@ impl EngineRuntime {
                         return;
                     }
                 };
-                if let Some(effect) = self
+                if let Some(index) = self
                     .effects
-                    .iter_mut()
-                    .find(|effect| effect.id == effect_id)
+                    .iter()
+                    .position(|effect| effect.id == effect_id)
                 {
-                    if matches!(&effect.kind, RuntimeEffectKind::PositionWave(_)) {
-                        effect.kind = RuntimeEffectKind::PositionWave(request);
-                        effect.created_at = Instant::now();
-                        self.last_error = None;
+                    if matches!(
+                        &self.effects[index].kind,
+                        RuntimeEffectKind::PositionWave(_)
+                    ) {
+                        let reconform_referenced_events =
+                            self.timeline_has_conformed_events_for_effect(effect_id);
+                        let previous_effect = self.effects[index].clone();
+                        let previous_timeline_events =
+                            reconform_referenced_events.then(|| self.timeline_events.clone());
+                        self.effects[index].kind = RuntimeEffectKind::PositionWave(request);
+                        self.effects[index].created_at = Instant::now();
+                        let bpm = self.clock.bpm;
+                        self.last_error = if reconform_referenced_events {
+                            self.reconform_timeline_events_to_bpm(bpm).err()
+                        } else {
+                            None
+                        };
+                        if self.last_error.is_some() {
+                            self.effects[index] = previous_effect;
+                            self.timeline_events = previous_timeline_events.expect(
+                                "referenced Position Wave rollback must preserve timeline events",
+                            );
+                        }
                     } else {
                         self.last_error =
                             Some(format!("Effect {effect_id} is not a Position Wave"));
@@ -4752,9 +4873,13 @@ impl EngineRuntime {
                     .effects
                     .iter()
                     .position(|effect| effect.id == effect_id);
+                let reconform_referenced_events =
+                    self.timeline_has_conformed_events_for_effect(effect_id);
                 let rollback = PendingCommandRollback::RestoreEffect {
                     index: previous_index,
                     effect: previous_index.map(|index| self.effects[index].clone()),
+                    timeline_events: reconform_referenced_events
+                        .then(|| self.timeline_events.clone()),
                     last_error: previous_last_error.clone(),
                 };
                 let expired = Instant::now() > expires_at;
@@ -4774,6 +4899,14 @@ impl EngineRuntime {
                             effect.kind = RuntimeEffectKind::Color(runtime);
                             effect.created_at = Instant::now();
                             Ok(())
+                        })
+                        .and_then(|()| {
+                            if reconform_referenced_events {
+                                let bpm = self.clock.bpm;
+                                self.reconform_timeline_events_to_bpm(bpm)
+                            } else {
+                                Ok(())
+                            }
                         })
                 };
                 self.last_error = if expired {
@@ -4800,9 +4933,13 @@ impl EngineRuntime {
                     .effects
                     .iter()
                     .position(|effect| effect.id == effect_id);
+                let reconform_referenced_events =
+                    self.timeline_has_conformed_events_for_effect(effect_id);
                 let rollback = PendingCommandRollback::RestoreEffect {
                     index: previous_index,
                     effect: previous_index.map(|index| self.effects[index].clone()),
+                    timeline_events: reconform_referenced_events
+                        .then(|| self.timeline_events.clone()),
                     last_error: previous_last_error.clone(),
                 };
                 let expired = Instant::now() > expires_at;
@@ -4822,6 +4959,14 @@ impl EngineRuntime {
                             effect.kind = RuntimeEffectKind::Chaser(runtime);
                             effect.created_at = Instant::now();
                             Ok(())
+                        })
+                        .and_then(|()| {
+                            if reconform_referenced_events {
+                                let bpm = self.clock.bpm;
+                                self.reconform_timeline_events_to_bpm(bpm)
+                            } else {
+                                Ok(())
+                            }
                         })
                 };
                 self.last_error = if expired {
@@ -4848,9 +4993,13 @@ impl EngineRuntime {
                     .effects
                     .iter()
                     .position(|effect| effect.id == effect_id);
+                let reconform_referenced_events =
+                    self.timeline_has_conformed_events_for_effect(effect_id);
                 let rollback = PendingCommandRollback::RestoreEffect {
                     index: previous_index,
                     effect: previous_index.map(|index| self.effects[index].clone()),
+                    timeline_events: reconform_referenced_events
+                        .then(|| self.timeline_events.clone()),
                     last_error: previous_last_error.clone(),
                 };
                 let expired = Instant::now() > expires_at;
@@ -4870,6 +5019,14 @@ impl EngineRuntime {
                             effect.kind = RuntimeEffectKind::Move(request);
                             effect.created_at = Instant::now();
                             Ok(())
+                        })
+                        .and_then(|()| {
+                            if reconform_referenced_events {
+                                let bpm = self.clock.bpm;
+                                self.reconform_timeline_events_to_bpm(bpm)
+                            } else {
+                                Ok(())
+                            }
                         })
                 };
                 self.last_error = if expired {
@@ -4896,9 +5053,13 @@ impl EngineRuntime {
                     .effects
                     .iter()
                     .position(|effect| effect.id == effect_id);
+                let reconform_referenced_events =
+                    self.timeline_has_conformed_events_for_effect(effect_id);
                 let rollback = PendingCommandRollback::RestoreEffect {
                     index: previous_index,
                     effect: previous_index.map(|index| self.effects[index].clone()),
+                    timeline_events: reconform_referenced_events
+                        .then(|| self.timeline_events.clone()),
                     last_error: previous_last_error.clone(),
                 };
                 let expired = Instant::now() > expires_at;
@@ -4918,6 +5079,14 @@ impl EngineRuntime {
                             effect.kind = RuntimeEffectKind::Value(request);
                             effect.created_at = Instant::now();
                             Ok(())
+                        })
+                        .and_then(|()| {
+                            if reconform_referenced_events {
+                                let bpm = self.clock.bpm;
+                                self.reconform_timeline_events_to_bpm(bpm)
+                            } else {
+                                Ok(())
+                            }
                         })
                 };
                 self.last_error = if expired {
@@ -5061,10 +5230,44 @@ impl EngineRuntime {
                 }
             }
             EngineCommand::RemoveEffect(effect_id) => {
+                let referenced_cue_ids = self
+                    .cues
+                    .iter()
+                    .filter(|cue| {
+                        cue.effect_targets
+                            .iter()
+                            .any(|target| target.enabled && target.effect_id == effect_id)
+                    })
+                    .map(|cue| cue.id)
+                    .collect::<Vec<_>>();
+                let reconform_referenced_events = referenced_cue_ids
+                    .iter()
+                    .any(|cue_id| self.timeline_has_conformed_events_for_cue(*cue_id));
+                let previous_effects = reconform_referenced_events.then(|| self.effects.clone());
+                let previous_cues = reconform_referenced_events.then(|| self.cues.clone());
+                let previous_timeline_events =
+                    reconform_referenced_events.then(|| self.timeline_events.clone());
                 self.effects.retain(|effect| effect.id != effect_id);
                 for cue in &mut self.cues {
                     cue.effect_targets
                         .retain(|target| target.effect_id != effect_id);
+                }
+                if reconform_referenced_events {
+                    for event in &mut self.timeline_events {
+                        if referenced_cue_ids.contains(&event.cue_id) && event.conform_to_tempo {
+                            event.rate = None;
+                        }
+                    }
+                    let bpm = self.clock.bpm;
+                    if let Err(error) = self.reconform_timeline_events_to_bpm(bpm) {
+                        self.effects = previous_effects
+                            .expect("Effect removal rollback must preserve effects");
+                        self.cues =
+                            previous_cues.expect("Effect removal rollback must preserve Cues");
+                        self.timeline_events = previous_timeline_events
+                            .expect("Effect removal rollback must preserve timeline events");
+                        self.last_error = Some(error);
+                    }
                 }
             }
             EngineCommand::UpsertNodeGraph(graph) => {
@@ -5170,6 +5373,7 @@ impl EngineRuntime {
                 cue_id,
                 label,
                 fade_ms,
+                authored_beats,
                 targets,
                 video_targets,
                 video_output_targets,
@@ -5179,6 +5383,7 @@ impl EngineRuntime {
                 let result = self.create_cue_state(
                     cue_id,
                     DEFAULT_CUE_LIST_ID,
+                    authored_beats,
                     CueBody {
                         label,
                         fade_ms,
@@ -5197,6 +5402,7 @@ impl EngineRuntime {
                 cue_list_id,
                 label,
                 fade_ms,
+                authored_beats,
                 targets,
                 video_targets,
                 video_output_targets,
@@ -5206,9 +5412,18 @@ impl EngineRuntime {
                 ack,
             } => {
                 let previous_last_error = self.last_error.clone();
-                let rollback = PendingCommandRollback::RestoreCues {
+                let rollback = PendingCommandRollback::RestoreCueRemoval {
                     cues: self.cues.clone(),
                     cue_lists: self.cue_lists.clone(),
+                    timeline_events: self.timeline_events.clone(),
+                    active_cue_id: self.active_cue_id,
+                    active_fade: self.active_fade.clone(),
+                    pending_cues: self.pending_cues.clone(),
+                    timeline_position_ms: self.timeline_position_ms,
+                    timeline_playhead_boundary_armed: self.timeline_playhead_boundary_armed,
+                    timeline_evaluated_boundary_position_ms: self
+                        .timeline_evaluated_boundary_position_ms,
+                    timeline_jump_landed_event_id: self.timeline_jump_landed_event_id,
                     last_error: previous_last_error.clone(),
                 };
                 let result = if Instant::now() > expires_at {
@@ -5217,6 +5432,7 @@ impl EngineRuntime {
                     self.create_cue_state(
                         cue_id,
                         cue_list_id,
+                        authored_beats,
                         CueBody {
                             label,
                             fade_ms,
@@ -5278,9 +5494,18 @@ impl EngineRuntime {
                 ack,
             } => {
                 let previous_last_error = self.last_error.clone();
-                let rollback = PendingCommandRollback::RestoreCues {
+                let rollback = PendingCommandRollback::RestoreCueRemoval {
                     cues: self.cues.clone(),
                     cue_lists: self.cue_lists.clone(),
+                    timeline_events: self.timeline_events.clone(),
+                    active_cue_id: self.active_cue_id,
+                    active_fade: self.active_fade.clone(),
+                    pending_cues: self.pending_cues.clone(),
+                    timeline_position_ms: self.timeline_position_ms,
+                    timeline_playhead_boundary_armed: self.timeline_playhead_boundary_armed,
+                    timeline_evaluated_boundary_position_ms: self
+                        .timeline_evaluated_boundary_position_ms,
+                    timeline_jump_landed_event_id: self.timeline_jump_landed_event_id,
                     last_error: previous_last_error.clone(),
                 };
                 let result = if Instant::now() > expires_at {
@@ -5318,9 +5543,18 @@ impl EngineRuntime {
                 ack,
             } => {
                 let previous_last_error = self.last_error.clone();
-                let rollback = PendingCommandRollback::RestoreCues {
+                let rollback = PendingCommandRollback::RestoreCueRemoval {
                     cues: self.cues.clone(),
                     cue_lists: self.cue_lists.clone(),
+                    timeline_events: self.timeline_events.clone(),
+                    active_cue_id: self.active_cue_id,
+                    active_fade: self.active_fade.clone(),
+                    pending_cues: self.pending_cues.clone(),
+                    timeline_position_ms: self.timeline_position_ms,
+                    timeline_playhead_boundary_armed: self.timeline_playhead_boundary_armed,
+                    timeline_evaluated_boundary_position_ms: self
+                        .timeline_evaluated_boundary_position_ms,
+                    timeline_jump_landed_event_id: self.timeline_jump_landed_event_id,
                     last_error: previous_last_error.clone(),
                 };
                 let result = if Instant::now() > expires_at {
@@ -5346,6 +5580,7 @@ impl EngineRuntime {
                 cue_number,
                 label,
                 fade_ms,
+                authored_beats,
                 pre_wait_ms,
                 follow_ms,
                 ifcb_timing,
@@ -5358,9 +5593,18 @@ impl EngineRuntime {
                 ack,
             } => {
                 let previous_last_error = self.last_error.clone();
-                let rollback = PendingCommandRollback::RestoreCues {
+                let rollback = PendingCommandRollback::RestoreCueRemoval {
                     cues: self.cues.clone(),
                     cue_lists: self.cue_lists.clone(),
+                    timeline_events: self.timeline_events.clone(),
+                    active_cue_id: self.active_cue_id,
+                    active_fade: self.active_fade.clone(),
+                    pending_cues: self.pending_cues.clone(),
+                    timeline_position_ms: self.timeline_position_ms,
+                    timeline_playhead_boundary_armed: self.timeline_playhead_boundary_armed,
+                    timeline_evaluated_boundary_position_ms: self
+                        .timeline_evaluated_boundary_position_ms,
+                    timeline_jump_landed_event_id: self.timeline_jump_landed_event_id,
                     last_error: previous_last_error.clone(),
                 };
                 let result = if Instant::now() > expires_at {
@@ -5371,6 +5615,7 @@ impl EngineRuntime {
                         cue_number,
                         label,
                         fade_ms,
+                        authored_beats,
                         pre_wait_ms,
                         follow_ms,
                         ifcb_timing,
@@ -5920,22 +6165,28 @@ impl EngineRuntime {
                 event_id,
                 cue_id,
                 time_ms,
+                time_beats,
                 track,
                 layer_id,
             } => {
                 self.last_error = self
-                    .add_timeline_cue_event_state(event_id, cue_id, time_ms, track, layer_id)
+                    .add_timeline_cue_event_state(
+                        event_id, cue_id, time_ms, time_beats, track, layer_id,
+                    )
                     .err();
             }
             EngineCommand::SetTimelineCueEvent {
                 event_id,
                 cue_id,
                 time_ms,
+                time_beats,
                 track,
                 layer_id,
             } => {
                 self.last_error = self
-                    .set_timeline_cue_event_state(event_id, cue_id, time_ms, track, layer_id)
+                    .set_timeline_cue_event_state(
+                        event_id, cue_id, time_ms, time_beats, track, layer_id,
+                    )
                     .err();
             }
             EngineCommand::RemoveTimelineEvent(event_id) => {
@@ -5945,6 +6196,7 @@ impl EngineRuntime {
                 event_id,
                 cue_id,
                 time_ms,
+                time_beats,
                 track,
                 layer_id,
                 expires_at,
@@ -5963,7 +6215,9 @@ impl EngineRuntime {
                 let result = if Instant::now() > expires_at {
                     Err("Timeline point add expired before engine execution".to_string())
                 } else {
-                    self.add_timeline_cue_event_state(event_id, cue_id, time_ms, track, layer_id)
+                    self.add_timeline_cue_event_state(
+                        event_id, cue_id, time_ms, time_beats, track, layer_id,
+                    )
                 };
                 self.last_error = if result.is_ok() {
                     None
@@ -5982,6 +6236,7 @@ impl EngineRuntime {
                 event_id,
                 cue_id,
                 time_ms,
+                time_beats,
                 track,
                 layer_id,
                 expires_at,
@@ -6000,7 +6255,9 @@ impl EngineRuntime {
                 let result = if Instant::now() > expires_at {
                     Err("Timeline point update expired before engine execution".to_string())
                 } else {
-                    self.set_timeline_cue_event_state(event_id, cue_id, time_ms, track, layer_id)
+                    self.set_timeline_cue_event_state(
+                        event_id, cue_id, time_ms, time_beats, track, layer_id,
+                    )
                 };
                 self.last_error = if result.is_ok() {
                     None
@@ -6052,9 +6309,13 @@ impl EngineRuntime {
                 event_id,
                 cue_id,
                 time_ms,
+                time_beats,
                 track,
                 layer_id,
                 duration_ms,
+                duration_beats,
+                conform_to_tempo,
+                loop_fill,
                 loop_count,
                 jump_to_event_id,
                 expires_at,
@@ -6077,12 +6338,18 @@ impl EngineRuntime {
                         id: event_id,
                         cue_id,
                         time_ms,
+                        time_beats,
                         track,
                         layer_id,
                         resolved_layer_id: 0,
                         layer_order: 0,
                         layer_muted_effective: false,
                         duration_ms,
+                        duration_beats,
+                        conform_to_tempo,
+                        loop_fill,
+                        iteration_period_ms: duration_ms,
+                        rate: None,
                         loop_count,
                         jump_to_event_id,
                     })
@@ -6103,9 +6370,13 @@ impl EngineRuntime {
                 event_id,
                 cue_id,
                 time_ms,
+                time_beats,
                 track,
                 layer_id,
                 duration_ms,
+                duration_beats,
+                conform_to_tempo,
+                loop_fill,
                 loop_count,
                 jump_to_event_id,
                 expires_at,
@@ -6128,12 +6399,18 @@ impl EngineRuntime {
                         id: event_id,
                         cue_id,
                         time_ms,
+                        time_beats,
                         track,
                         layer_id,
                         resolved_layer_id: 0,
                         layer_order: 0,
                         layer_muted_effective: false,
                         duration_ms,
+                        duration_beats,
+                        conform_to_tempo,
+                        loop_fill,
+                        iteration_period_ms: duration_ms,
+                        rate: None,
                         loop_count,
                         jump_to_event_id,
                     })
@@ -6216,6 +6493,36 @@ impl EngineRuntime {
                     result,
                     rollback,
                     publication_error: "Engine snapshot was busy; Timeline snap was rolled back",
+                });
+            }
+            EngineCommand::ReconformTimelineToBpm { expires_at, ack } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreTimelineEvents {
+                    timeline_events: self.timeline_events.clone(),
+                    timeline_position_ms: self.timeline_position_ms,
+                    timeline_playhead_boundary_armed: self.timeline_playhead_boundary_armed,
+                    timeline_evaluated_boundary_position_ms: self
+                        .timeline_evaluated_boundary_position_ms,
+                    timeline_jump_landed_event_id: self.timeline_jump_landed_event_id,
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Timeline re-conform expired before engine execution".to_string())
+                } else {
+                    let bpm = self.clock.bpm;
+                    self.reconform_timeline_events_to_bpm(bpm)
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Timeline re-conform was rolled back",
                 });
             }
             EngineCommand::AddTimelineLayer {
@@ -7592,6 +7899,7 @@ impl EngineRuntime {
             PendingCommandRollback::RestoreEffect {
                 index,
                 effect,
+                timeline_events,
                 last_error,
             } => {
                 if let Some(effect) = effect {
@@ -7607,6 +7915,9 @@ impl EngineRuntime {
                             effect,
                         );
                     }
+                }
+                if let Some(timeline_events) = timeline_events {
+                    self.timeline_events = timeline_events;
                 }
                 self.last_error = last_error;
             }
@@ -7689,15 +8000,6 @@ impl EngineRuntime {
                 last_error,
             } => {
                 self.auto_vj = auto_vj;
-                self.last_error = last_error;
-            }
-            PendingCommandRollback::RestoreCues {
-                cues,
-                cue_lists,
-                last_error,
-            } => {
-                self.cues = cues;
-                self.cue_lists = cue_lists;
                 self.last_error = last_error;
             }
             PendingCommandRollback::RestoreCueRemoval {
@@ -9233,6 +9535,7 @@ impl EngineRuntime {
         &mut self,
         cue_id: CueId,
         cue_list_id: CueListId,
+        authored_beats: Option<f32>,
         body: CueBody,
         replace_existing: bool,
     ) -> Result<(), String> {
@@ -9246,6 +9549,7 @@ impl EngineRuntime {
         if !replace_existing && self.cues.iter().any(|cue| cue.id == cue_id) {
             return Err(format!("Cue {cue_id} already exists"));
         }
+        let authored_beats = validate_cue_authored_beats(authored_beats)?;
         let CueBody {
             label,
             fade_ms,
@@ -9255,6 +9559,11 @@ impl EngineRuntime {
             node_graph_targets,
             effect_targets,
         } = self.resolve_cue_body(body)?;
+        let reconform_referenced_events =
+            replace_existing && self.timeline_has_conformed_events_for_cue(cue_id);
+        let previous_cues = reconform_referenced_events.then(|| self.cues.clone());
+        let previous_timeline_events =
+            reconform_referenced_events.then(|| self.timeline_events.clone());
         if replace_existing {
             self.cues.retain(|cue| cue.id != cue_id);
         }
@@ -9264,6 +9573,7 @@ impl EngineRuntime {
             cue_number: cue_id.to_string(),
             label,
             fade_ms,
+            authored_beats,
             pre_wait_ms: 0,
             follow_ms: None,
             ifcb_timing: CueIfcbTiming::default(),
@@ -9279,6 +9589,15 @@ impl EngineRuntime {
             node_graph_targets,
             effect_targets,
         });
+        if reconform_referenced_events {
+            let bpm = self.clock.bpm;
+            if let Err(error) = self.reconform_timeline_events_to_bpm(bpm) {
+                self.cues = previous_cues.expect("Cue replacement rollback must preserve Cues");
+                self.timeline_events = previous_timeline_events
+                    .expect("Cue replacement rollback must preserve timeline events");
+                return Err(error);
+            }
+        }
         Ok(())
     }
 
@@ -9297,6 +9616,10 @@ impl EngineRuntime {
             node_graph_targets,
             effect_targets,
         } = self.resolve_cue_body(body)?;
+        let reconform_referenced_events = self.timeline_has_conformed_events_for_cue(cue_id);
+        let previous_cue = reconform_referenced_events.then(|| self.cues[cue_index].clone());
+        let previous_timeline_events =
+            reconform_referenced_events.then(|| self.timeline_events.clone());
         let cue = self
             .cues
             .get_mut(cue_index)
@@ -9321,6 +9644,16 @@ impl EngineRuntime {
         cue.effect_targets = effect_targets;
         cue.parts = parts;
         cue.mib_fixture_ids = mib_fixture_ids;
+        if reconform_referenced_events {
+            let bpm = self.clock.bpm;
+            if let Err(error) = self.reconform_timeline_events_to_bpm(bpm) {
+                self.cues[cue_index] =
+                    previous_cue.expect("Cue update rollback must preserve the prior Cue");
+                self.timeline_events = previous_timeline_events
+                    .expect("Cue update rollback must preserve timeline events");
+                return Err(error);
+            }
+        }
         Ok(())
     }
 
@@ -9349,10 +9682,25 @@ impl EngineRuntime {
                 "Cue {cue_id} must keep at least one fixture, palette, video, output, node graph, or effect target"
             ));
         }
+        let reconform_referenced_events = self.timeline_has_conformed_events_for_cue(cue_id);
+        let previous_effect_targets =
+            reconform_referenced_events.then(|| self.cues[cue_index].effect_targets.clone());
+        let previous_timeline_events =
+            reconform_referenced_events.then(|| self.timeline_events.clone());
         self.cues
             .get_mut(cue_index)
             .expect("resolved Cue index must remain valid")
             .effect_targets = effect_targets;
+        if reconform_referenced_events {
+            let bpm = self.clock.bpm;
+            if let Err(error) = self.reconform_timeline_events_to_bpm(bpm) {
+                self.cues[cue_index].effect_targets = previous_effect_targets
+                    .expect("Cue effect-target rollback must preserve prior targets");
+                self.timeline_events = previous_timeline_events
+                    .expect("Cue effect-target rollback must preserve timeline events");
+                return Err(error);
+            }
+        }
         Ok(())
     }
 
@@ -9363,6 +9711,7 @@ impl EngineRuntime {
         cue_number: String,
         label: String,
         fade_ms: u64,
+        authored_beats: Option<f32>,
         pre_wait_ms: u64,
         follow_ms: Option<u64>,
         ifcb_timing: CueIfcbTiming,
@@ -9385,6 +9734,7 @@ impl EngineRuntime {
         if label.is_empty() {
             return Err("Cue label is required".to_string());
         }
+        let authored_beats = validate_cue_authored_beats(authored_beats)?;
         let cue_list_id = self.cues[cue_index].cue_list_id;
         if self.cues.iter().any(|cue| {
             cue.id != cue_id && cue.cue_list_id == cue_list_id && cue.cue_number == cue_number
@@ -9403,6 +9753,13 @@ impl EngineRuntime {
             &cue.targets,
             &cue.palette_targets,
         )?;
+        let reconform_referenced_events = self
+            .timeline_events
+            .iter()
+            .any(|event| event.cue_id == cue_id && event.conform_to_tempo);
+        let previous_cue = reconform_referenced_events.then(|| self.cues[cue_index].clone());
+        let previous_timeline_events =
+            reconform_referenced_events.then(|| self.timeline_events.clone());
         let cue = self
             .cues
             .get_mut(cue_index)
@@ -9410,6 +9767,7 @@ impl EngineRuntime {
         cue.cue_number = cue_number;
         cue.label = label;
         cue.fade_ms = fade_ms;
+        cue.authored_beats = authored_beats;
         cue.pre_wait_ms = pre_wait_ms;
         cue.follow_ms = follow_ms;
         cue.ifcb_timing = ifcb_timing;
@@ -9418,6 +9776,16 @@ impl EngineRuntime {
         cue.mib_fixture_ids = mib_fixture_ids;
         cue.tracking = tracking;
         cue.notes = notes.trim().chars().take(500).collect();
+        if reconform_referenced_events {
+            let bpm = self.clock.bpm;
+            if let Err(error) = self.reconform_timeline_events_to_bpm(bpm) {
+                self.cues[cue_index] =
+                    previous_cue.expect("referenced Cue rollback must preserve the prior Cue");
+                self.timeline_events = previous_timeline_events
+                    .expect("referenced Cue rollback must preserve prior timeline events");
+                return Err(error);
+            }
+        }
         Ok(())
     }
 
@@ -10262,11 +10630,197 @@ impl EngineRuntime {
         })
     }
 
+    fn timeline_has_conformed_events(&self) -> bool {
+        self.timeline_events
+            .iter()
+            .any(|event| event.conform_to_tempo)
+    }
+
+    fn timeline_has_conformed_events_for_cue(&self, cue_id: CueId) -> bool {
+        self.timeline_events
+            .iter()
+            .any(|event| event.cue_id == cue_id && event.conform_to_tempo)
+    }
+
+    fn timeline_has_conformed_events_for_effect(&self, effect_id: EffectId) -> bool {
+        self.cues.iter().any(|cue| {
+            cue.effect_targets
+                .iter()
+                .any(|target| target.enabled && target.effect_id == effect_id)
+                && self.timeline_has_conformed_events_for_cue(cue.id)
+        })
+    }
+
+    fn cue_free_run_period_ms(&self, cue_id: CueId) -> CueFreeRunPeriodResolution {
+        let Some(cue) = self.cues.iter().find(|cue| cue.id == cue_id) else {
+            return CueFreeRunPeriodResolution::NoCandidate;
+        };
+        let mut resolved = None;
+        for target in cue.effect_targets.iter().filter(|target| target.enabled) {
+            let Some(effect) = self
+                .effects
+                .iter()
+                .find(|effect| effect.id == target.effect_id)
+            else {
+                continue;
+            };
+            let Some(period_ms) = runtime_effect_free_run_period_ms(&effect.kind) else {
+                continue;
+            };
+            if resolved.is_some_and(|current: f64| {
+                let tolerance_ms = current.abs().max(period_ms.abs()) * 1.0e-6 + 0.001;
+                (current - period_ms).abs() > tolerance_ms
+            }) {
+                return CueFreeRunPeriodResolution::Ambiguous;
+            }
+            resolved = Some(period_ms);
+        }
+        resolved.map_or(
+            CueFreeRunPeriodResolution::NoCandidate,
+            CueFreeRunPeriodResolution::Unique,
+        )
+    }
+
+    fn resolve_timeline_event_timing(
+        &self,
+        mut event: RuntimeTimelineEvent,
+        bpm: f32,
+    ) -> Result<RuntimeTimelineEvent, String> {
+        if !event.conform_to_tempo {
+            event.iteration_period_ms = event.duration_ms;
+            event.rate = None;
+            return Ok(event);
+        }
+        if event.duration_ms == 0 {
+            return Err(format!(
+                "Timeline point {} cannot conform to tempo",
+                event.id
+            ));
+        }
+        let cue = self
+            .cues
+            .iter()
+            .find(|cue| cue.id == event.cue_id)
+            .ok_or_else(|| format!("Cue {} was not found", event.cue_id))?;
+        let authored_beats = validate_cue_authored_beats(cue.authored_beats)?.ok_or_else(|| {
+            format!(
+                "Cue {} requires authored beats before its Scene Block can conform to tempo",
+                event.cue_id
+            )
+        })?;
+        let bpm = f64::from(clamp_bpm(bpm));
+        let conformed_iteration_ms = f64::from(authored_beats) * 60_000.0 / bpm;
+        event.iteration_period_ms = rounded_timeline_milliseconds(
+            conformed_iteration_ms,
+            "Conformed Scene Block iteration period",
+        )?;
+        if let Some(time_beats) = event.time_beats {
+            if !time_beats.is_finite() || time_beats < 0.0 {
+                return Err(
+                    "Scene Block beat placement must be finite and non-negative".to_string()
+                );
+            }
+            event.time_ms = if time_beats == 0.0 {
+                0
+            } else {
+                rounded_timeline_milliseconds(
+                    time_beats * 60_000.0 / bpm,
+                    "Scene Block beat placement",
+                )?
+            };
+        }
+        if event.loop_fill {
+            let numerator = event
+                .duration_ms
+                .saturating_add(event.iteration_period_ms.saturating_sub(1));
+            event.loop_count = (numerator / event.iteration_period_ms)
+                .clamp(1, u64::from(MAX_TIMELINE_SCENE_BLOCK_LOOPS))
+                as u16;
+        } else {
+            let duration_beats = event.duration_beats.ok_or_else(|| {
+                format!(
+                    "Conformed Scene Block {} requires a beat-domain duration",
+                    event.id
+                )
+            })?;
+            if !duration_beats.is_finite() || duration_beats <= 0.0 {
+                return Err(
+                    "Scene Block beat duration must be finite and greater than zero".to_string(),
+                );
+            }
+            event.duration_ms = rounded_timeline_milliseconds(
+                duration_beats * 60_000.0 / bpm,
+                "Scene Block beat duration",
+            )?;
+        }
+        event.rate = match self.cue_free_run_period_ms(event.cue_id) {
+            CueFreeRunPeriodResolution::Unique(period_ms) => {
+                timeline_conform_rate(period_ms, conformed_iteration_ms)
+            }
+            CueFreeRunPeriodResolution::NoCandidate => Some(1.0),
+            CueFreeRunPeriodResolution::Ambiguous => None,
+        };
+        Ok(event)
+    }
+
+    fn reconform_timeline_events_to_bpm(&mut self, bpm: f32) -> Result<(), String> {
+        let mut next_events = Vec::with_capacity(self.timeline_events.len());
+        for event in &self.timeline_events {
+            let mut resolved = if event.conform_to_tempo {
+                self.resolve_timeline_event_timing(event.clone(), bpm)?
+            } else {
+                event.clone()
+            };
+            if !resolved.conform_to_tempo {
+                if let Some(time_beats) = resolved.time_beats {
+                    if !time_beats.is_finite() || time_beats < 0.0 {
+                        return Err(
+                            "Timeline beat placement must be finite and non-negative".to_string()
+                        );
+                    }
+                    resolved.time_ms = if time_beats == 0.0 {
+                        0
+                    } else {
+                        rounded_timeline_milliseconds(
+                            time_beats * 60_000.0 / f64::from(clamp_bpm(bpm)),
+                            "Timeline beat placement",
+                        )?
+                    };
+                }
+            }
+            if resolved.duration_ms == 0 {
+                if !self.cues.iter().any(|cue| cue.id == resolved.cue_id) {
+                    return Err(format!("Cue {} was not found", resolved.cue_id));
+                }
+                if resolved.loop_count != 1 || resolved.jump_to_event_id.is_some() {
+                    return Err(format!(
+                        "Timeline point {} has invalid Scene Block fields",
+                        resolved.id
+                    ));
+                }
+            } else {
+                self.validate_timeline_scene_block(&resolved)?;
+            }
+            next_events.push(resolved);
+        }
+        // BPM re-conform is a transport-wide operation, not an operator edit. Deliberately do
+        // not consult layer locks: conformed blocks on locked layers move with the show tempo.
+        self.timeline_events = next_events;
+        self.sort_timeline_events();
+        self.clamp_timeline_position_after_edit();
+        #[cfg(test)]
+        {
+            self.timeline_reconform_count = self.timeline_reconform_count.saturating_add(1);
+        }
+        Ok(())
+    }
+
     fn add_timeline_cue_event_state(
         &mut self,
         event_id: TimelineEventId,
         cue_id: CueId,
         time_ms: u64,
+        time_beats: Option<f64>,
         track: TimelineTrackKind,
         layer_id: Option<u32>,
     ) -> Result<(), String> {
@@ -10284,12 +10838,18 @@ impl EngineRuntime {
             id: event_id,
             cue_id,
             time_ms,
+            time_beats,
             track,
             layer_id,
             resolved_layer_id: 0,
             layer_order: 0,
             layer_muted_effective: false,
             duration_ms: 0,
+            duration_beats: None,
+            conform_to_tempo: false,
+            loop_fill: false,
+            iteration_period_ms: 0,
+            rate: None,
             loop_count: 1,
             jump_to_event_id: None,
         };
@@ -10304,6 +10864,7 @@ impl EngineRuntime {
         event_id: TimelineEventId,
         cue_id: CueId,
         time_ms: u64,
+        time_beats: Option<f64>,
         track: TimelineTrackKind,
         layer_id: Option<u32>,
     ) -> Result<(), String> {
@@ -10326,9 +10887,11 @@ impl EngineRuntime {
         let mut next = self.timeline_events[index].clone();
         next.cue_id = cue_id;
         next.time_ms = time_ms;
+        next.time_beats = time_beats;
         next.track = track;
         next.layer_id = layer_id.or(next.layer_id);
-        self.validate_timeline_event_target_layer(&next)?;
+        let next = self.resolve_timeline_event_timing(next, self.clock.bpm)?;
+        self.validate_timeline_event_placement(&next)?;
         self.timeline_events[index] = next;
         self.recompute_timeline_event_layers()?;
         self.clamp_timeline_position_after_edit();
@@ -10434,15 +10997,22 @@ impl EngineRuntime {
                 id: update.event_id,
                 cue_id: update.cue_id,
                 time_ms: update.time_ms,
+                time_beats: update.time_beats,
                 track: update.track,
                 layer_id: update.layer_id.or(self.timeline_events[index].layer_id),
                 resolved_layer_id: 0,
                 layer_order: 0,
                 layer_muted_effective: false,
                 duration_ms: update.duration_ms,
+                duration_beats: update.duration_beats,
+                conform_to_tempo: update.conform_to_tempo,
+                loop_fill: update.loop_fill,
+                iteration_period_ms: update.duration_ms,
+                rate: None,
                 loop_count: update.loop_count,
                 jump_to_event_id: update.jump_to_event_id,
             };
+            let event = self.resolve_timeline_event_timing(event, self.clock.bpm)?;
             self.validate_timeline_event_placement(&event)?;
             resolved_events.push((index, event));
         }
@@ -10516,11 +11086,15 @@ impl EngineRuntime {
                 "Scene Block loop count must be between 1 and {MAX_TIMELINE_SCENE_BLOCK_LOOPS}"
             ));
         }
-        event
-            .duration_ms
-            .checked_mul(u64::from(event.loop_count))
-            .and_then(|span_ms| event.time_ms.checked_add(span_ms))
-            .ok_or_else(|| "Scene Block end time exceeds the timeline range".to_string())?;
+        let end_ms = if event.conform_to_tempo {
+            event.time_ms.checked_add(event.duration_ms)
+        } else {
+            event
+                .duration_ms
+                .checked_mul(u64::from(event.loop_count))
+                .and_then(|span_ms| event.time_ms.checked_add(span_ms))
+        };
+        end_ms.ok_or_else(|| "Scene Block end time exceeds the timeline range".to_string())?;
         if let Some(target_id) = event.jump_to_event_id {
             if target_id != event.id
                 && !self
@@ -10545,6 +11119,7 @@ impl EngineRuntime {
         {
             return Err(format!("Timeline event {} already exists", event.id));
         }
+        let event = self.resolve_timeline_event_timing(event, self.clock.bpm)?;
         self.validate_timeline_scene_block(&event)?;
         self.validate_timeline_event_target_layer(&event)?;
         self.timeline_events.push(event);
@@ -10570,6 +11145,7 @@ impl EngineRuntime {
             ));
         }
         event.layer_id = event.layer_id.or(self.timeline_events[index].layer_id);
+        event = self.resolve_timeline_event_timing(event, self.clock.bpm)?;
         self.validate_timeline_scene_block(&event)?;
         self.validate_timeline_event_target_layer(&event)?;
         self.timeline_events[index] = event;
@@ -12861,6 +13437,7 @@ fn cue_summary(cue: &RuntimeCue) -> CueSummary {
         cue_number: cue.cue_number.clone(),
         label: cue.label.clone(),
         fade_ms: cue.fade_ms,
+        authored_beats: cue.authored_beats,
         pre_wait_ms: cue.pre_wait_ms,
         follow_ms: cue.follow_ms,
         ifcb_timing: cue.ifcb_timing,
@@ -12991,6 +13568,7 @@ fn runtime_cue_from_summary(cue: &CueSummary) -> RuntimeCue {
         },
         label: cue.label.clone(),
         fade_ms: cue.fade_ms,
+        authored_beats: cue.authored_beats,
         pre_wait_ms: cue.pre_wait_ms,
         follow_ms: cue.follow_ms,
         ifcb_timing: cue.ifcb_timing,
@@ -13619,14 +14197,66 @@ fn normalize_and_validate_timeline_layers(
     Ok(())
 }
 
+fn validate_cue_authored_beats(authored_beats: Option<f32>) -> Result<Option<f32>, String> {
+    match authored_beats {
+        Some(beats)
+            if !beats.is_finite()
+                || !(MIN_CUE_AUTHORED_BEATS..=MAX_CUE_AUTHORED_BEATS).contains(&beats) =>
+        {
+            Err(format!(
+                "Cue authored beats must be between {MIN_CUE_AUTHORED_BEATS} and {MAX_CUE_AUTHORED_BEATS}"
+            ))
+        }
+        _ => Ok(authored_beats),
+    }
+}
+
+fn rounded_timeline_milliseconds(value: f64, label: &str) -> Result<u64, String> {
+    if !value.is_finite() || value <= 0.0 || value > u64::MAX as f64 {
+        return Err(format!("{label} exceeds the supported timeline range"));
+    }
+    Ok(value.round().clamp(1.0, u64::MAX as f64) as u64)
+}
+
+fn timeline_conform_rate(free_run_period_ms: f64, conformed_period_ms: f64) -> Option<f32> {
+    let rate = free_run_period_ms / conformed_period_ms;
+    (rate.is_finite() && rate > 0.0 && rate <= f64::from(f32::MAX)).then_some(rate as f32)
+}
+
+fn runtime_effect_free_run_period_ms(kind: &RuntimeEffectKind) -> Option<f64> {
+    let period_ms = match kind {
+        RuntimeEffectKind::Lfo(request) => request.period_ms as f64,
+        RuntimeEffectKind::PositionWave(request) => {
+            let speed = f64::from(request.speed).abs();
+            let wavelength = f64::from(request.wavelength).abs();
+            if !speed.is_finite() || !wavelength.is_finite() || speed <= f64::EPSILON {
+                return None;
+            }
+            wavelength / speed * 1_000.0
+        }
+        RuntimeEffectKind::Color(runtime) => runtime.request.period_ms as f64,
+        RuntimeEffectKind::Chaser(runtime) => {
+            runtime.request.step_duration_ms as f64 * runtime.step_order.len().max(1) as f64
+        }
+        RuntimeEffectKind::Move(runtime) => runtime.request.period_ms as f64,
+        RuntimeEffectKind::Value(runtime) => runtime.request.period_ms as f64,
+    };
+    (period_ms.is_finite() && period_ms > 0.0).then_some(period_ms)
+}
+
 fn timeline_event_summary(event: &RuntimeTimelineEvent) -> TimelineCueEventSummary {
     TimelineCueEventSummary {
         id: event.id,
         cue_id: event.cue_id,
         time_ms: event.time_ms,
+        time_beats: event.time_beats,
         track: event.track.clone(),
         layer_id: Some(event.resolved_layer_id),
         duration_ms: event.duration_ms,
+        duration_beats: event.duration_beats,
+        conform_to_tempo: event.conform_to_tempo,
+        loop_fill: event.loop_fill,
+        rate: event.rate,
         loop_count: event.loop_count,
         jump_to_event_id: event.jump_to_event_id,
     }
@@ -13645,23 +14275,41 @@ fn runtime_timeline_event_from_summary(event: &TimelineCueEventSummary) -> Runti
         id: event.id,
         cue_id: event.cue_id,
         time_ms: event.time_ms,
+        time_beats: event.time_beats,
         track: event.track.clone(),
         layer_id: event.layer_id,
         resolved_layer_id: 0,
         layer_order: 0,
         layer_muted_effective: false,
         duration_ms: event.duration_ms,
+        duration_beats: event.duration_beats,
+        conform_to_tempo: event.conform_to_tempo,
+        loop_fill: event.loop_fill,
+        iteration_period_ms: event.duration_ms,
+        // `rate` is derived runtime state. Never trust a persisted display value.
+        rate: None,
         loop_count,
         jump_to_event_id,
     }
 }
 
 fn timeline_event_end_ms(event: &RuntimeTimelineEvent) -> u64 {
-    event.time_ms.saturating_add(
+    let span_ms = if event.conform_to_tempo {
+        event.duration_ms
+    } else {
         event
             .duration_ms
-            .saturating_mul(u64::from(event.loop_count)),
-    )
+            .saturating_mul(u64::from(event.loop_count))
+    };
+    event.time_ms.saturating_add(span_ms)
+}
+
+fn timeline_event_iteration_period_ms(event: &RuntimeTimelineEvent) -> u64 {
+    if event.conform_to_tempo {
+        event.iteration_period_ms
+    } else {
+        event.duration_ms
+    }
 }
 
 fn timeline_block_iteration_range(
@@ -13669,21 +14317,27 @@ fn timeline_block_iteration_range(
     lower_bound: u64,
     upper_bound: u64,
 ) -> Option<(u64, u64)> {
-    if event.duration_ms == 0 || upper_bound < event.time_ms {
+    let iteration_period_ms = timeline_event_iteration_period_ms(event);
+    if event.duration_ms == 0 || iteration_period_ms == 0 || upper_bound < event.time_ms {
         return None;
     }
     let iteration_count = u64::from(event.loop_count);
     if iteration_count == 0 {
         return None;
     }
+    let event_end_ms = timeline_event_end_ms(event);
+    if lower_bound >= event_end_ms {
+        return None;
+    }
+    let upper_bound = upper_bound.min(event_end_ms.saturating_sub(1));
     let first_iteration = if lower_bound <= event.time_ms {
         0
     } else {
         let delta = lower_bound - event.time_ms;
-        1 + (delta - 1) / event.duration_ms
+        1 + (delta - 1) / iteration_period_ms
     };
-    let last_iteration =
-        ((upper_bound - event.time_ms) / event.duration_ms).min(iteration_count.saturating_sub(1));
+    let last_iteration = ((upper_bound - event.time_ms) / iteration_period_ms)
+        .min(iteration_count.saturating_sub(1));
     (first_iteration < iteration_count && first_iteration <= last_iteration)
         .then_some((first_iteration, last_iteration))
 }
@@ -13723,7 +14377,7 @@ fn try_collect_aligned_timeline_block_occurrences(
         };
         let event_grid = (
             event.time_ms,
-            event.duration_ms,
+            timeline_event_iteration_period_ms(event),
             first_iteration,
             last_iteration,
         );
@@ -13737,7 +14391,7 @@ fn try_collect_aligned_timeline_block_occurrences(
         last_dispatch_key = Some(dispatch_key);
         relevant_event_count += 1;
     }
-    let Some((time_ms, duration_ms, first_iteration, last_iteration)) = grid else {
+    let Some((time_ms, iteration_period_ms, first_iteration, last_iteration)) = grid else {
         return false;
     };
     if relevant_event_count < 2 {
@@ -13745,11 +14399,11 @@ fn try_collect_aligned_timeline_block_occurrences(
     }
 
     for iteration in first_iteration..=last_iteration {
-        let occurrence_ms = time_ms + iteration * duration_ms;
+        let occurrence_ms = time_ms + iteration * iteration_period_ms;
         for event in events {
             if !event.layer_muted_effective
                 && event.time_ms == time_ms
-                && event.duration_ms == duration_ms
+                && timeline_event_iteration_period_ms(event) == iteration_period_ms
                 && timeline_block_iteration_range(event, lower_bound, upper_bound)
                     == Some((first_iteration, last_iteration))
             {
@@ -13821,7 +14475,8 @@ fn collect_timeline_cue_occurrences_between(
             continue;
         };
         if skip_landed_event_id == Some(event.id)
-            && event.time_ms + first_iteration * event.duration_ms == previous_position
+            && event.time_ms + first_iteration * timeline_event_iteration_period_ms(event)
+                == previous_position
         {
             first_iteration = first_iteration.saturating_add(1);
         }
@@ -13829,7 +14484,8 @@ fn collect_timeline_cue_occurrences_between(
             continue;
         }
         for iteration in first_iteration..=last_iteration {
-            let occurrence_ms = event.time_ms + iteration * event.duration_ms;
+            let occurrence_ms =
+                event.time_ms + iteration * timeline_event_iteration_period_ms(event);
             due.push((occurrence_ms, event.id, event.cue_id, event.layer_order));
         }
     }
@@ -19741,6 +20397,7 @@ mod tests {
         targets: Vec<CueEffectTarget>,
     ) {
         runtime.apply_command(EngineCommand::CreateCue {
+            authored_beats: None,
             cue_id,
             label: format!("Cue {cue_id}"),
             fade_ms: 0,
@@ -20544,6 +21201,11 @@ mod tests {
             timeline: TimelineSnapshot {
                 layers: Vec::new(),
                 events: vec![TimelineCueEventSummary {
+                    time_beats: None,
+                    duration_beats: None,
+                    conform_to_tempo: false,
+                    loop_fill: false,
+                    rate: None,
                     id: 42,
                     cue_id: 41,
                     time_ms: 500,
@@ -20824,6 +21486,7 @@ mod tests {
         let cue_id = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id,
                 label: "Graph Cue".to_string(),
                 fade_ms: 0,
@@ -21959,6 +22622,11 @@ mod tests {
                 layers: Vec::new(),
                 events: vec![
                     TimelineCueEventSummary {
+                        time_beats: None,
+                        duration_beats: None,
+                        conform_to_tempo: false,
+                        loop_fill: false,
+                        rate: None,
                         id: 20,
                         cue_id: 10,
                         time_ms: 500,
@@ -21969,6 +22637,11 @@ mod tests {
                         jump_to_event_id: None,
                     },
                     TimelineCueEventSummary {
+                        time_beats: None,
+                        duration_beats: None,
+                        conform_to_tempo: false,
+                        loop_fill: false,
+                        rate: None,
                         id: 21,
                         cue_id: 11,
                         time_ms: 250,
@@ -22272,6 +22945,11 @@ mod tests {
                 layers: Vec::new(),
                 events: vec![
                     TimelineCueEventSummary {
+                        time_beats: None,
+                        duration_beats: None,
+                        conform_to_tempo: false,
+                        loop_fill: false,
+                        rate: None,
                         id: 20,
                         cue_id: 10,
                         time_ms: 100,
@@ -22282,6 +22960,11 @@ mod tests {
                         jump_to_event_id: None,
                     },
                     TimelineCueEventSummary {
+                        time_beats: None,
+                        duration_beats: None,
+                        conform_to_tempo: false,
+                        loop_fill: false,
+                        rate: None,
                         id: 21,
                         cue_id: 11,
                         time_ms: 200,
@@ -23416,6 +24099,7 @@ mod tests {
             .unwrap();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id: 1,
                 label: "Cue".to_string(),
                 fade_ms: 0,
@@ -23521,6 +24205,7 @@ mod tests {
         let cue_id = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id,
                 label: "Old".to_string(),
                 fade_ms: 100,
@@ -23791,6 +24476,7 @@ mod tests {
         assert!(runtime.cues[0].effect_targets.is_empty());
 
         runtime.apply_command(EngineCommand::CreateCue {
+            authored_beats: None,
             cue_id: 2,
             label: "Missing".to_string(),
             fade_ms: 0,
@@ -23917,6 +24603,7 @@ mod tests {
                 cue_list_id,
                 "Atomic Create".to_string(),
                 250,
+                None,
                 vec![CueFixtureTarget {
                     fixture_id,
                     values: vec![AttributeValueSummary {
@@ -24000,6 +24687,7 @@ mod tests {
                 "2.5".to_string(),
                 "Published Details".to_string(),
                 750,
+                None,
                 125,
                 Some(2_000),
                 CueIfcbTiming {
@@ -24053,6 +24741,7 @@ mod tests {
 
         let (missing_list_ack, missing_list_receiver) = mpsc::sync_channel(1);
         runtime.apply_command(EngineCommand::CreateCuePublished {
+            authored_beats: None,
             cue_id: 10,
             cue_list_id: 404,
             label: "Missing list".to_string(),
@@ -24083,6 +24772,7 @@ mod tests {
 
         let (missing_effect_ack, missing_effect_receiver) = mpsc::sync_channel(1);
         runtime.apply_command(EngineCommand::CreateCuePublished {
+            authored_beats: None,
             cue_id: 11,
             cue_list_id: DEFAULT_CUE_LIST_ID,
             label: "Missing effect".to_string(),
@@ -24112,6 +24802,7 @@ mod tests {
 
         let (expired_ack, expired_receiver) = mpsc::sync_channel(1);
         runtime.apply_command(EngineCommand::CreateCuePublished {
+            authored_beats: None,
             cue_id: 12,
             cue_list_id: DEFAULT_CUE_LIST_ID,
             label: "Expired".to_string(),
@@ -24197,6 +24888,7 @@ mod tests {
     fn published_effect_enable_and_cue_details_are_atomic_and_roll_back_when_snapshot_is_busy() {
         let mut runtime = runtime_with_lfo_effects(&[(1, false)]);
         runtime.apply_command(EngineCommand::CreateCue {
+            authored_beats: None,
             cue_id: 1,
             label: "Original Details".to_string(),
             fade_ms: 100,
@@ -24238,6 +24930,7 @@ mod tests {
 
         let (invalid_ack, invalid_receiver) = mpsc::sync_channel(1);
         runtime.apply_command(EngineCommand::SetCueDetailsPublished {
+            authored_beats: None,
             cue_id: 1,
             cue_number: "9".to_string(),
             label: "Must stay atomic".to_string(),
@@ -24266,6 +24959,7 @@ mod tests {
 
         let (details_ack, details_receiver) = mpsc::sync_channel(1);
         runtime.apply_command(EngineCommand::SetCueDetailsPublished {
+            authored_beats: None,
             cue_id: 1,
             cue_number: "2".to_string(),
             label: "Must roll back".to_string(),
@@ -24302,6 +24996,7 @@ mod tests {
     fn published_effect_target_clear_preserves_non_effect_targets_and_rejects_targetless_cue() {
         let mut runtime = runtime_with_lfo_effects(&[(1, false)]);
         runtime.apply_command(EngineCommand::CreateCue {
+            authored_beats: None,
             cue_id: 1,
             label: "Fixture plus effect".to_string(),
             fade_ms: 0,
@@ -24445,6 +25140,7 @@ mod tests {
         let cue_id = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id,
                 label: "Palette Cue".to_string(),
                 fade_ms: 0,
@@ -24558,6 +25254,7 @@ mod tests {
         let cue_id = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id,
                 label: "Full".to_string(),
                 fade_ms: 0,
@@ -24671,6 +25368,7 @@ mod tests {
         let cue_id = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id,
                 label: "Old".to_string(),
                 fade_ms: 100,
@@ -24743,6 +25441,7 @@ mod tests {
         let cue_id = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id,
                 label: "IFCB".to_string(),
                 fade_ms: 500,
@@ -24875,6 +25574,7 @@ mod tests {
         for (cue_id, dimmer, pan) in [(1, 0, 0), (2, 65_535, 50_000)] {
             engine
                 .send(EngineCommand::CreateCue {
+                    authored_beats: None,
                     cue_id,
                     label: format!("Cue {cue_id}"),
                     fade_ms: 0,
@@ -24969,6 +25669,7 @@ mod tests {
         for (cue_id, dimmer, pan) in [(1, 0, 0), (2, 65_535, 48_000)] {
             engine
                 .send(EngineCommand::CreateCue {
+                    authored_beats: None,
                     cue_id,
                     label: format!("Cue {cue_id}"),
                     fade_ms: 0,
@@ -25075,6 +25776,7 @@ mod tests {
         let cue_id = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id,
                 label: "Block".to_string(),
                 fade_ms: 0,
@@ -25143,6 +25845,7 @@ mod tests {
         for (cue_id, label) in [(first_id, "First"), (second_id, "Second")] {
             engine
                 .send(EngineCommand::CreateCue {
+                    authored_beats: None,
                     cue_id,
                     label: label.to_string(),
                     fade_ms: 0,
@@ -25367,6 +26070,7 @@ mod tests {
         let valid_cue = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id: valid_cue,
                 label: "Valid".to_string(),
                 fade_ms: 0,
@@ -25404,6 +26108,7 @@ mod tests {
         let invalid_cue = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id: invalid_cue,
                 label: "Invalid".to_string(),
                 fade_ms: 0,
@@ -25441,6 +26146,7 @@ mod tests {
         let unknown_attribute_cue = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id: unknown_attribute_cue,
                 label: "Invalid Attribute".to_string(),
                 fade_ms: 0,
@@ -25506,6 +26212,7 @@ mod tests {
         let cue_id = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id,
                 label: "Original".to_string(),
                 fade_ms: 100,
@@ -25606,6 +26313,7 @@ mod tests {
         let valid_cue = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id: valid_cue,
                 label: "Video Cue".to_string(),
                 fade_ms: 0,
@@ -25646,6 +26354,7 @@ mod tests {
         let missing_layer_cue = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id: missing_layer_cue,
                 label: "Missing Layer".to_string(),
                 fade_ms: 0,
@@ -25680,6 +26389,7 @@ mod tests {
         let missing_output_cue = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id: missing_output_cue,
                 label: "Missing Output".to_string(),
                 fade_ms: 0,
@@ -25722,6 +26432,7 @@ mod tests {
         for cue_id in [1, 2, 3] {
             engine
                 .send(EngineCommand::CreateCue {
+                    authored_beats: None,
                     cue_id,
                     label: format!("Cue {cue_id}"),
                     fade_ms: 0,
@@ -25794,6 +26505,7 @@ mod tests {
         let cue_id = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id,
                 label: "Slow Cue".to_string(),
                 fade_ms: 1_000,
@@ -25813,6 +26525,7 @@ mod tests {
             .unwrap();
         engine
             .send(EngineCommand::AddTimelineCueEvent {
+                time_beats: None,
                 event_id: 31,
                 cue_id,
                 time_ms: 500,
@@ -25876,6 +26589,7 @@ mod tests {
         let cue_id = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id,
                 label: "Cue".to_string(),
                 fade_ms: 0,
@@ -25889,6 +26603,7 @@ mod tests {
             .unwrap();
         engine
             .send(EngineCommand::AddTimelineCueEvent {
+                time_beats: None,
                 event_id: 41,
                 cue_id,
                 time_ms: 500,
@@ -25937,6 +26652,7 @@ mod tests {
         for cue_id in 1..=3 {
             engine
                 .send(EngineCommand::CreateCue {
+                    authored_beats: None,
                     cue_id,
                     label: format!("Cue {cue_id}"),
                     fade_ms: 0,
@@ -26048,6 +26764,7 @@ mod tests {
         for (cue_id, label, value) in [(1, "One", 1_000), (2, "Two", 2_000)] {
             engine
                 .send(EngineCommand::CreateCue {
+                    authored_beats: None,
                     cue_id,
                     label: label.to_string(),
                     fade_ms: 100,
@@ -26102,6 +26819,7 @@ mod tests {
         for cue_id in [1, 2] {
             engine
                 .send(EngineCommand::CreateCue {
+                    authored_beats: None,
                     cue_id,
                     label: format!("Cue {cue_id}"),
                     fade_ms: 0,
@@ -26116,6 +26834,7 @@ mod tests {
         }
         engine
             .send(EngineCommand::AddTimelineCueEvent {
+                time_beats: None,
                 event_id: 10,
                 cue_id: 1,
                 time_ms: 2_000,
@@ -26125,6 +26844,7 @@ mod tests {
             .unwrap();
         engine
             .send(EngineCommand::AddTimelineCueEvent {
+                time_beats: None,
                 event_id: 11,
                 cue_id: 1,
                 time_ms: 4_000,
@@ -26134,6 +26854,7 @@ mod tests {
             .unwrap();
         engine
             .send(EngineCommand::SetTimelineCueEvent {
+                time_beats: None,
                 event_id: 11,
                 cue_id: 2,
                 time_ms: 1_000,
@@ -28881,6 +29602,7 @@ mod tests {
         for (cue_id, label, value) in [(cue_one, "Cue 1", 0), (cue_two, "Cue 2", 65_535)] {
             engine
                 .send(EngineCommand::CreateCue {
+                    authored_beats: None,
                     cue_id,
                     label: label.to_string(),
                     fade_ms: 0,
@@ -28965,6 +29687,7 @@ mod tests {
         let cue_id = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id,
                 label: "Slow Fade".to_string(),
                 fade_ms: 1_000,
@@ -29058,6 +29781,7 @@ mod tests {
         let cue_id = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id,
                 label: "Flash".to_string(),
                 fade_ms: 0,
@@ -29077,6 +29801,7 @@ mod tests {
             .unwrap();
         engine
             .send(EngineCommand::AddTimelineCueEvent {
+                time_beats: None,
                 event_id: engine.allocate_timeline_event_id(),
                 cue_id,
                 time_ms: 45,
@@ -29140,6 +29865,7 @@ mod tests {
         let cue_id = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id,
                 label: "Timecode Flash".to_string(),
                 fade_ms: 0,
@@ -29159,6 +29885,7 @@ mod tests {
             .unwrap();
         engine
             .send(EngineCommand::AddTimelineCueEvent {
+                time_beats: None,
                 event_id: engine.allocate_timeline_event_id(),
                 cue_id,
                 time_ms: 1_000,
@@ -29526,6 +30253,7 @@ mod tests {
         let cue_id = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id,
                 label: "Video Cue".to_string(),
                 fade_ms: 0,
@@ -30866,6 +31594,7 @@ mod tests {
         let cue_id = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id,
                 label: "Video Fade".to_string(),
                 fade_ms: 1_000,
@@ -31006,6 +31735,7 @@ mod tests {
         let cue_id = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id,
                 label: "Delayed Video Part".to_string(),
                 fade_ms: 1_000,
@@ -32626,6 +33356,7 @@ mod tests {
         let snap_cue = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id: snap_cue,
                 label: "Output Snap".to_string(),
                 fade_ms: 0,
@@ -32666,6 +33397,7 @@ mod tests {
         let fade_cue = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id: fade_cue,
                 label: "Output Fade".to_string(),
                 fade_ms: 90,
@@ -33097,6 +33829,7 @@ mod tests {
         let cue_id = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id,
                 label: "Video Fade".to_string(),
                 fade_ms: 1_000,
@@ -33209,6 +33942,7 @@ mod tests {
         let cue_id = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id,
                 label: "Output Fade".to_string(),
                 fade_ms: 1_000,
@@ -33273,6 +34007,7 @@ mod tests {
         let cue_id = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id,
                 label: "Video Only".to_string(),
                 fade_ms: 0,
@@ -33294,6 +34029,7 @@ mod tests {
             .unwrap();
         engine
             .send(EngineCommand::AddTimelineCueEvent {
+                time_beats: None,
                 event_id: engine.allocate_timeline_event_id(),
                 cue_id,
                 time_ms: 45,
@@ -33352,6 +34088,7 @@ mod tests {
         let cue_id = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id,
                 label: "Graph Only".to_string(),
                 fade_ms: 0,
@@ -33367,6 +34104,7 @@ mod tests {
             .unwrap();
         engine
             .send(EngineCommand::AddTimelineCueEvent {
+                time_beats: None,
                 event_id: engine.allocate_timeline_event_id(),
                 cue_id,
                 time_ms: 45,
@@ -33467,6 +34205,7 @@ mod tests {
         let cue_id = engine.allocate_cue_id();
         engine
             .send(EngineCommand::CreateCue {
+                authored_beats: None,
                 cue_id,
                 label: "Light + Video".to_string(),
                 fade_ms: 0,
@@ -33497,6 +34236,7 @@ mod tests {
             .unwrap();
         engine
             .send(EngineCommand::AddTimelineCueEvent {
+                time_beats: None,
                 event_id: engine.allocate_timeline_event_id(),
                 cue_id,
                 time_ms: 50,
@@ -38193,6 +38933,7 @@ mod tests {
             created_at: Instant::now(),
         });
         runtime.cues.push(RuntimeCue {
+            authored_beats: None,
             id: 88,
             cue_list_id: DEFAULT_CUE_LIST_ID,
             cue_number: "1".to_string(),
@@ -39112,6 +39853,12 @@ mod tests {
             }],
         );
         runtime.timeline_events.push(RuntimeTimelineEvent {
+            time_beats: None,
+            duration_beats: None,
+            conform_to_tempo: false,
+            loop_fill: false,
+            iteration_period_ms: 0,
+            rate: None,
             id: 10,
             cue_id: 1,
             time_ms: 100,
@@ -39126,6 +39873,7 @@ mod tests {
         });
 
         runtime.apply_command(EngineCommand::SetTimelineCueEvent {
+            time_beats: None,
             event_id: 10,
             cue_id: 1,
             time_ms: 250,
@@ -39141,6 +39889,7 @@ mod tests {
         assert_eq!(updated.jump_to_event_id, Some(10));
 
         runtime.apply_command(EngineCommand::AddTimelineCueEvent {
+            time_beats: None,
             event_id: 11,
             cue_id: 1,
             time_ms: 300,
@@ -39186,6 +39935,12 @@ mod tests {
         );
         runtime.timeline_events = vec![
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 10,
                 cue_id: 1,
                 time_ms: 0,
@@ -39199,6 +39954,12 @@ mod tests {
                 jump_to_event_id: None,
             },
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 20,
                 cue_id: 2,
                 time_ms: 100,
@@ -39212,6 +39973,12 @@ mod tests {
                 jump_to_event_id: None,
             },
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 30,
                 cue_id: 3,
                 time_ms: 300,
@@ -39225,6 +39992,12 @@ mod tests {
                 jump_to_event_id: None,
             },
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 40,
                 cue_id: 1,
                 time_ms: 500,
@@ -39318,6 +40091,12 @@ mod tests {
         );
         runtime.timeline_events = vec![
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 10,
                 cue_id: 1,
                 time_ms: 100,
@@ -39331,6 +40110,12 @@ mod tests {
                 jump_to_event_id: None,
             },
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 20,
                 cue_id: 2,
                 time_ms: 0,
@@ -39399,6 +40184,12 @@ mod tests {
             }],
         );
         runtime.timeline_events.push(RuntimeTimelineEvent {
+            time_beats: None,
+            duration_beats: None,
+            conform_to_tempo: false,
+            loop_fill: false,
+            iteration_period_ms: 0,
+            rate: None,
             id: 10,
             cue_id: 1,
             time_ms: 100,
@@ -39464,6 +40255,12 @@ mod tests {
         );
         runtime.timeline_events = vec![
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 20,
                 cue_id: 1,
                 time_ms: 0,
@@ -39477,6 +40274,12 @@ mod tests {
                 jump_to_event_id: None,
             },
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 10,
                 cue_id: 1,
                 time_ms: 100,
@@ -39490,6 +40293,12 @@ mod tests {
                 jump_to_event_id: Some(20),
             },
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 30,
                 cue_id: 2,
                 time_ms: 500,
@@ -39585,6 +40394,12 @@ mod tests {
         create_effect_only_cue(&mut runtime, 2, Vec::new());
         runtime.timeline_events = vec![
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 20,
                 cue_id: 2,
                 time_ms: 0,
@@ -39598,6 +40413,12 @@ mod tests {
                 jump_to_event_id: None,
             },
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 10,
                 cue_id: 1,
                 time_ms: 100,
@@ -39611,6 +40432,12 @@ mod tests {
                 jump_to_event_id: Some(20),
             },
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 30,
                 cue_id: 1,
                 time_ms: 500,
@@ -39705,6 +40532,12 @@ mod tests {
         );
         runtime.timeline_events = vec![
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 10,
                 cue_id: 1,
                 time_ms: 0,
@@ -39718,6 +40551,12 @@ mod tests {
                 jump_to_event_id: Some(20),
             },
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 20,
                 cue_id: 2,
                 time_ms: 500,
@@ -39731,6 +40570,12 @@ mod tests {
                 jump_to_event_id: None,
             },
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 30,
                 cue_id: 1,
                 time_ms: 1_000,
@@ -39785,6 +40630,12 @@ mod tests {
     fn scene_block_occurrence_hot_path_is_bounded_for_2000_max_loop_blocks() {
         let events = (0..2_000_u64)
             .map(|index| RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: index + 1,
                 cue_id: 1,
                 time_ms: 0,
@@ -39829,6 +40680,12 @@ mod tests {
     fn aligned_scene_block_fast_path_preserves_time_event_and_aba_order() {
         let events = vec![
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 10,
                 cue_id: 1,
                 time_ms: 0,
@@ -39842,6 +40699,12 @@ mod tests {
                 jump_to_event_id: None,
             },
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 20,
                 cue_id: 2,
                 time_ms: 0,
@@ -39855,6 +40718,12 @@ mod tests {
                 jump_to_event_id: None,
             },
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 30,
                 cue_id: 1,
                 time_ms: 0,
@@ -39917,6 +40786,12 @@ mod tests {
         runtime.cues[1].pre_wait_ms = 100;
         runtime.timeline_events = vec![
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 10,
                 cue_id: 1,
                 time_ms: 0,
@@ -39930,6 +40805,12 @@ mod tests {
                 jump_to_event_id: None,
             },
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 20,
                 cue_id: 2,
                 time_ms: 10,
@@ -40086,6 +40967,386 @@ mod tests {
         assert_eq!(coalesced.last_error, expanded.last_error);
     }
 
+    fn add_conformed_loop_fill_test_block(
+        runtime: &mut EngineRuntime,
+        event_id: TimelineEventId,
+        cue_id: CueId,
+        time_beats: f64,
+        duration_ms: u64,
+        layer_id: Option<u32>,
+    ) {
+        runtime
+            .add_timeline_scene_block_state(RuntimeTimelineEvent {
+                id: event_id,
+                cue_id,
+                time_ms: 0,
+                time_beats: Some(time_beats),
+                track: TimelineTrackKind::Lighting,
+                layer_id,
+                resolved_layer_id: 0,
+                layer_order: 0,
+                layer_muted_effective: false,
+                duration_ms,
+                duration_beats: None,
+                conform_to_tempo: true,
+                loop_fill: true,
+                iteration_period_ms: duration_ms,
+                rate: None,
+                loop_count: 1,
+                jump_to_event_id: None,
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn conformed_loop_fill_retriggers_at_authored_period_and_moves_boundaries_after_bpm_reconform()
+    {
+        let mut runtime = runtime_with_lfo_effects(&[(1, false)]);
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![CueEffectTarget {
+                effect_id: 1,
+                enabled: true,
+            }],
+        );
+        runtime.cues[0].authored_beats = Some(4.0);
+        add_conformed_loop_fill_test_block(&mut runtime, 10, 1, 2.0, 9_000, None);
+
+        let event = runtime.timeline_events[0].clone();
+        assert_eq!(event.time_ms, 1_000);
+        assert_eq!(event.iteration_period_ms, 2_000);
+        assert_eq!(event.loop_count, 5);
+        assert_eq!(timeline_event_end_ms(&event), 10_000);
+        assert_eq!(event.rate, Some(0.5));
+        let mut due = Vec::new();
+        collect_timeline_cue_occurrences_between(
+            std::slice::from_ref(&event),
+            0,
+            10_000,
+            true,
+            true,
+            None,
+            &mut due,
+        );
+        assert_eq!(
+            due.iter()
+                .map(|occurrence| occurrence.0)
+                .collect::<Vec<_>>(),
+            vec![1_000, 3_000, 5_000, 7_000, 9_000]
+        );
+
+        runtime.apply_command(EngineCommand::SetBpm(60.0));
+        let event = runtime.timeline_events[0].clone();
+        assert_eq!(event.time_ms, 2_000);
+        assert_eq!(event.iteration_period_ms, 4_000);
+        assert_eq!(event.loop_count, 3);
+        assert_eq!(timeline_event_end_ms(&event), 11_000);
+        assert_eq!(event.rate, Some(0.25));
+        collect_timeline_cue_occurrences_between(
+            std::slice::from_ref(&event),
+            0,
+            11_000,
+            true,
+            true,
+            None,
+            &mut due,
+        );
+        assert_eq!(
+            due.iter()
+                .map(|occurrence| occurrence.0)
+                .collect::<Vec<_>>(),
+            vec![2_000, 6_000, 10_000]
+        );
+    }
+
+    #[test]
+    fn conformed_non_loop_fill_rewrites_window_from_duration_beats() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        create_effect_only_cue(&mut runtime, 1, Vec::new());
+        runtime.cues[0].authored_beats = Some(4.0);
+        runtime
+            .add_timeline_scene_block_state(RuntimeTimelineEvent {
+                id: 10,
+                cue_id: 1,
+                time_ms: 0,
+                time_beats: Some(1.0),
+                track: TimelineTrackKind::Lighting,
+                layer_id: None,
+                resolved_layer_id: 0,
+                layer_order: 0,
+                layer_muted_effective: false,
+                duration_ms: 1_000,
+                duration_beats: Some(8.0),
+                conform_to_tempo: true,
+                loop_fill: false,
+                iteration_period_ms: 1_000,
+                rate: None,
+                loop_count: 1,
+                jump_to_event_id: None,
+            })
+            .unwrap();
+        assert_eq!(runtime.timeline_events[0].time_ms, 500);
+        assert_eq!(runtime.timeline_events[0].duration_ms, 4_000);
+        assert_eq!(runtime.timeline_events[0].iteration_period_ms, 2_000);
+        assert_eq!(timeline_event_end_ms(&runtime.timeline_events[0]), 4_500);
+
+        runtime.apply_command(EngineCommand::SetBpm(60.0));
+        assert_eq!(runtime.timeline_events[0].time_ms, 1_000);
+        assert_eq!(runtime.timeline_events[0].duration_ms, 8_000);
+        assert_eq!(runtime.timeline_events[0].iteration_period_ms, 4_000);
+        assert_eq!(timeline_event_end_ms(&runtime.timeline_events[0]), 9_000);
+    }
+
+    #[test]
+    fn timeline_reconform_is_command_drain_only_and_tick_does_not_recompute() {
+        let mut runtime = runtime_with_lfo_effects(&[(1, false)]);
+        create_effect_only_cue(&mut runtime, 1, Vec::new());
+        runtime.cues[0].authored_beats = Some(4.0);
+        add_conformed_loop_fill_test_block(&mut runtime, 10, 1, 2.0, 9_000, None);
+        let queue = ArrayQueue::new(1);
+        assert!(queue
+            .push(QueuedEngineCommand {
+                command: EngineCommand::SetBpm(60.0),
+                queued_at: Instant::now(),
+            })
+            .is_ok());
+        let published = RwLock::new(runtime.build_snapshot(queue.len()));
+
+        runtime.tick(queue.len(), &published);
+        assert_eq!(runtime.timeline_events[0].time_ms, 1_000);
+        assert_eq!(runtime.timeline_events[0].iteration_period_ms, 2_000);
+        assert_eq!(runtime.timeline_reconform_count, 0);
+        assert_eq!(queue.len(), 1);
+
+        runtime.consume_commands(&queue);
+        assert_eq!(runtime.timeline_events[0].time_ms, 2_000);
+        assert_eq!(runtime.timeline_events[0].iteration_period_ms, 4_000);
+        assert_eq!(runtime.timeline_reconform_count, 1);
+    }
+
+    #[test]
+    fn set_bpm_auto_reconforms_during_play_including_locked_layers_but_skips_when_none() {
+        let mut runtime = runtime_with_lfo_effects(&[(1, false)]);
+        create_effect_only_cue(&mut runtime, 1, Vec::new());
+        runtime.cues[0].authored_beats = Some(4.0);
+        runtime.timeline_layers = vec![TimelineLayerSummary {
+            id: 10,
+            label: "Locked lighting".to_string(),
+            order: 0,
+            muted: false,
+            locked: false,
+            solo: false,
+            kind: TimelineLayerKind::Lighting,
+        }];
+        add_conformed_loop_fill_test_block(&mut runtime, 10, 1, 2.0, 9_000, Some(10));
+        runtime.timeline_layers[0].locked = true;
+        runtime.recompute_timeline_event_layers().unwrap();
+        runtime.timeline_playing = true;
+        runtime.timeline_position_ms = 1_500;
+
+        runtime.apply_command(EngineCommand::SetBpm(60.0));
+        assert!(runtime.timeline_playing);
+        assert_eq!(runtime.timeline_position_ms, 1_500);
+        assert_eq!(runtime.timeline_events[0].time_ms, 2_000);
+        assert_eq!(runtime.timeline_events[0].iteration_period_ms, 4_000);
+        assert!(runtime.timeline_layers[0].locked);
+        assert_eq!(runtime.timeline_reconform_count, 1);
+
+        let mut no_conform = runtime_with_lfo_effects(&[]);
+        create_effect_only_cue(&mut no_conform, 1, Vec::new());
+        no_conform
+            .add_timeline_cue_event_state(
+                20,
+                1,
+                1_000,
+                Some(2.0),
+                TimelineTrackKind::Lighting,
+                None,
+            )
+            .unwrap();
+        no_conform.apply_command(EngineCommand::SetBpm(60.0));
+        assert_eq!(no_conform.timeline_events[0].time_ms, 1_000);
+        assert_eq!(no_conform.timeline_reconform_count, 0);
+    }
+
+    #[test]
+    fn explicit_reconform_updates_beat_placements_without_conformed_blocks() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        create_effect_only_cue(&mut runtime, 1, Vec::new());
+        runtime
+            .add_timeline_cue_event_state(
+                20,
+                1,
+                1_000,
+                Some(2.0),
+                TimelineTrackKind::Lighting,
+                None,
+            )
+            .unwrap();
+        runtime.apply_command(EngineCommand::SetBpm(60.0));
+        assert_eq!(runtime.timeline_events[0].time_ms, 1_000);
+
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::ReconformTimelineToBpm {
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        let published = RwLock::new(runtime.build_snapshot(0));
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(receiver.recv().unwrap(), Ok(()));
+        assert_eq!(runtime.timeline_events[0].time_ms, 2_000);
+        assert_eq!(runtime.timeline_reconform_count, 1);
+
+        let queue = ArrayQueue::new(2);
+        let (barrier_ack, barrier_receiver) = mpsc::sync_channel(1);
+        assert!(queue
+            .push(QueuedEngineCommand {
+                command: EngineCommand::ReconformTimelineToBpm {
+                    expires_at: Instant::now() + Duration::from_secs(1),
+                    ack: barrier_ack,
+                },
+                queued_at: Instant::now(),
+            })
+            .is_ok());
+        assert!(queue
+            .push(QueuedEngineCommand {
+                command: EngineCommand::SetBpm(120.0),
+                queued_at: Instant::now(),
+            })
+            .is_ok());
+        runtime.consume_commands(&queue);
+        assert_eq!(queue.len(), 1, "re-conform must be a publication barrier");
+        assert_eq!(runtime.clock.bpm, 60.0);
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(barrier_receiver.recv().unwrap(), Ok(()));
+    }
+
+    #[test]
+    fn tap_bpm_auto_reconforms_conformed_blocks_on_command_drain() {
+        let mut runtime = runtime_with_lfo_effects(&[(1, false)]);
+        create_effect_only_cue(&mut runtime, 1, Vec::new());
+        runtime.cues[0].authored_beats = Some(4.0);
+        add_conformed_loop_fill_test_block(&mut runtime, 10, 1, 0.0, 9_000, None);
+        let first_tap = Instant::now() - Duration::from_secs(1);
+        runtime.clock.tap(first_tap);
+
+        runtime.apply_command(EngineCommand::TapBpm);
+        assert!((59.9..=60.1).contains(&runtime.clock.bpm));
+        assert!((3_995..=4_005).contains(&runtime.timeline_events[0].iteration_period_ms));
+        assert_eq!(runtime.timeline_reconform_count, 1);
+    }
+
+    #[test]
+    fn project_load_recomputes_conform_rate_and_ignores_stale_saved_rate() {
+        let mut source = runtime_with_lfo_effects(&[(1, false)]);
+        create_effect_only_cue(
+            &mut source,
+            1,
+            vec![CueEffectTarget {
+                effect_id: 1,
+                enabled: true,
+            }],
+        );
+        source.cues[0].authored_beats = Some(4.0);
+        add_conformed_loop_fill_test_block(&mut source, 10, 1, 0.0, 4_000, None);
+        let mut snapshot = source.build_snapshot(0);
+        snapshot.timeline.events[0].rate = Some(99.0);
+
+        let mut loaded = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        loaded.apply_command(EngineCommand::LoadProjectSnapshot(snapshot));
+        let event = &loaded.timeline_events[0];
+        assert_eq!(event.iteration_period_ms, 2_000);
+        assert_eq!(event.loop_count, 2);
+        assert_eq!(event.rate, Some(0.5));
+        assert_eq!(timeline_event_summary(event).rate, Some(0.5));
+    }
+
+    #[test]
+    fn no_effect_conform_rate_is_stable_across_cue_change_and_project_load() {
+        let mut source = runtime_with_lfo_effects(&[(1, false)]);
+        create_effect_only_cue(
+            &mut source,
+            1,
+            vec![CueEffectTarget {
+                effect_id: 1,
+                enabled: true,
+            }],
+        );
+        create_effect_only_cue(&mut source, 2, Vec::new());
+        source.cues[0].authored_beats = Some(4.0);
+        source.cues[1].authored_beats = Some(4.0);
+        add_conformed_loop_fill_test_block(&mut source, 10, 1, 0.0, 4_000, None);
+        assert_eq!(source.timeline_events[0].rate, Some(0.5));
+
+        let mut changed = source.timeline_events[0].clone();
+        changed.cue_id = 2;
+        source.set_timeline_scene_block_state(changed).unwrap();
+        assert_eq!(source.timeline_events[0].rate, Some(1.0));
+
+        let snapshot = source.build_snapshot(0);
+        let mut loaded = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        loaded.apply_command(EngineCommand::LoadProjectSnapshot(snapshot));
+        assert_eq!(loaded.timeline_events[0].cue_id, 2);
+        assert_eq!(loaded.timeline_events[0].rate, Some(1.0));
+    }
+
+    #[test]
+    fn cue_authored_beats_and_effect_period_edits_refresh_pre_resolved_conform_timing() {
+        let mut runtime = runtime_with_lfo_effects(&[(1, false)]);
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![CueEffectTarget {
+                effect_id: 1,
+                enabled: true,
+            }],
+        );
+        runtime.cues[0].authored_beats = Some(4.0);
+        add_conformed_loop_fill_test_block(&mut runtime, 10, 1, 0.0, 9_000, None);
+        assert_eq!(runtime.timeline_events[0].iteration_period_ms, 2_000);
+        assert_eq!(runtime.timeline_events[0].rate, Some(0.5));
+
+        let cue = runtime.cues[0].clone();
+        runtime
+            .set_cue_details_state(
+                cue.id,
+                cue.cue_number,
+                cue.label,
+                cue.fade_ms,
+                Some(8.0),
+                cue.pre_wait_ms,
+                cue.follow_ms,
+                cue.ifcb_timing,
+                cue.parts,
+                cue.mark,
+                cue.mib_fixture_ids,
+                cue.tracking,
+                cue.notes,
+            )
+            .unwrap();
+        assert_eq!(runtime.timeline_events[0].iteration_period_ms, 4_000);
+        assert_eq!(runtime.timeline_events[0].rate, Some(0.25));
+
+        let RuntimeEffectKind::Lfo(mut request) = runtime.effects[0].kind.clone() else {
+            panic!("test effect must be an LFO");
+        };
+        request.period_ms = 2_000;
+        runtime.apply_command(EngineCommand::UpdateLfoEffect {
+            effect_id: 1,
+            request,
+        });
+        assert_eq!(runtime.last_error, None);
+        assert_eq!(runtime.timeline_events[0].iteration_period_ms, 4_000);
+        assert_eq!(runtime.timeline_events[0].rate, Some(0.5));
+    }
+
     #[test]
     fn max_loop_pre_wait_and_follow_dispatch_128000_occurrences_without_loss() {
         const BLOCK_COUNT: u64 = 500;
@@ -40096,6 +41357,12 @@ mod tests {
         runtime.cues[0].follow_ms = Some(200);
         runtime.timeline_events = (0..BLOCK_COUNT)
             .map(|index| RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: index + 1,
                 cue_id: 1,
                 time_ms: 0,
@@ -40169,6 +41436,12 @@ mod tests {
             .collect();
         runtime.timeline_events = (0..BLOCK_COUNT)
             .map(|index| RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: index + 1,
                 cue_id: index % CUE_COUNT + 1,
                 time_ms: 0,
@@ -40214,6 +41487,12 @@ mod tests {
     #[test]
     fn scene_block_large_tick_schedules_each_loop_and_extends_timeline_duration() {
         let event = RuntimeTimelineEvent {
+            time_beats: None,
+            duration_beats: None,
+            conform_to_tempo: false,
+            loop_fill: false,
+            iteration_period_ms: 0,
+            rate: None,
             id: 7,
             cue_id: 3,
             time_ms: 100,
@@ -40269,6 +41548,7 @@ mod tests {
     fn scene_block_resolves_the_latest_source_cue_body_at_playback_time() {
         let mut runtime = runtime_with_lfo_effects(&[]);
         runtime.apply_command(EngineCommand::CreateCue {
+            authored_beats: None,
             cue_id: 1,
             label: "Linked source".to_string(),
             fade_ms: 0,
@@ -40286,6 +41566,12 @@ mod tests {
         });
         runtime
             .add_timeline_scene_block_state(RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 10,
                 cue_id: 1,
                 time_ms: 0,
@@ -40356,6 +41642,12 @@ mod tests {
         );
         runtime.timeline_events = vec![
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 20,
                 cue_id: 2,
                 time_ms: 0,
@@ -40369,6 +41661,12 @@ mod tests {
                 jump_to_event_id: Some(30),
             },
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 10,
                 cue_id: 1,
                 time_ms: 200,
@@ -40382,6 +41680,12 @@ mod tests {
                 jump_to_event_id: Some(20),
             },
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 30,
                 cue_id: 3,
                 time_ms: 1_000,
@@ -40438,6 +41742,10 @@ mod tests {
 
         let (target_ack, target_receiver) = mpsc::sync_channel(1);
         runtime.apply_command(EngineCommand::AddTimelineSceneBlockPublished {
+            time_beats: None,
+            duration_beats: None,
+            conform_to_tempo: false,
+            loop_fill: false,
             event_id: 20,
             cue_id: 1,
             time_ms: 1_000,
@@ -40454,6 +41762,10 @@ mod tests {
 
         let (add_ack, add_receiver) = mpsc::sync_channel(1);
         runtime.apply_command(EngineCommand::AddTimelineSceneBlockPublished {
+            time_beats: None,
+            duration_beats: None,
+            conform_to_tempo: false,
+            loop_fill: false,
             event_id: 10,
             cue_id: 1,
             time_ms: 100,
@@ -40474,6 +41786,10 @@ mod tests {
         runtime.last_error = Some("preserve me".to_string());
         let (update_ack, update_receiver) = mpsc::sync_channel(1);
         runtime.apply_command(EngineCommand::SetTimelineSceneBlockPublished {
+            time_beats: None,
+            duration_beats: None,
+            conform_to_tempo: false,
+            loop_fill: false,
             event_id: 10,
             cue_id: 1,
             time_ms: 999,
@@ -40520,6 +41836,12 @@ mod tests {
         assert_eq!(
             runtime
                 .add_timeline_scene_block_state(RuntimeTimelineEvent {
+                    time_beats: None,
+                    duration_beats: None,
+                    conform_to_tempo: false,
+                    loop_fill: false,
+                    iteration_period_ms: 0,
+                    rate: None,
                     id: 99,
                     cue_id: 1,
                     time_ms: u64::MAX,
@@ -40548,6 +41870,7 @@ mod tests {
 
         let (busy_add_ack, busy_add_receiver) = mpsc::sync_channel(1);
         runtime.apply_command(EngineCommand::AddTimelineCueEventPublished {
+            time_beats: None,
             event_id: 10,
             cue_id: 1,
             time_ms: 100,
@@ -40570,6 +41893,7 @@ mod tests {
 
         let (add_ack, add_receiver) = mpsc::sync_channel(1);
         runtime.apply_command(EngineCommand::AddTimelineCueEventPublished {
+            time_beats: None,
             event_id: 10,
             cue_id: 1,
             time_ms: 100,
@@ -40595,6 +41919,7 @@ mod tests {
             .collect::<Vec<_>>();
         let (set_ack, set_receiver) = mpsc::sync_channel(1);
         runtime.apply_command(EngineCommand::SetTimelineCueEventPublished {
+            time_beats: None,
             event_id: 10,
             cue_id: 2,
             time_ms: 25,
@@ -40664,6 +41989,7 @@ mod tests {
     fn published_remove_cue_restores_or_commits_all_runtime_references() {
         let mut runtime = runtime_with_lfo_effects(&[(1, false)]);
         runtime.apply_command(EngineCommand::CreateCue {
+            authored_beats: None,
             cue_id: 1,
             label: "Fade source".to_string(),
             fade_ms: 1_000,
@@ -40682,6 +42008,12 @@ mod tests {
         create_effect_only_cue(&mut runtime, 2, Vec::new());
         runtime.timeline_events = vec![
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 10,
                 cue_id: 1,
                 time_ms: 100,
@@ -40695,6 +42027,12 @@ mod tests {
                 jump_to_event_id: None,
             },
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 20,
                 cue_id: 2,
                 time_ms: 500,
@@ -40827,6 +42165,12 @@ mod tests {
         add_runtime_test_video_layer(&mut runtime, 1, VideoLayerState::default());
         runtime.timeline_events = vec![
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 10,
                 cue_id: 1,
                 time_ms: 100,
@@ -40840,6 +42184,12 @@ mod tests {
                 jump_to_event_id: Some(20),
             },
             RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 20,
                 cue_id: 2,
                 time_ms: 1_000,
@@ -40895,6 +42245,10 @@ mod tests {
         let successful_request = TimelineSnapRequest {
             event_placements: vec![
                 protocol::TimelineEventPlacementUpdate {
+                    time_beats: None,
+                    duration_beats: None,
+                    conform_to_tempo: false,
+                    loop_fill: false,
                     event_id: 10,
                     cue_id: 2,
                     time_ms: 400,
@@ -40905,6 +42259,10 @@ mod tests {
                     jump_to_event_id: Some(20),
                 },
                 protocol::TimelineEventPlacementUpdate {
+                    time_beats: None,
+                    duration_beats: None,
+                    conform_to_tempo: false,
+                    loop_fill: false,
                     event_id: 20,
                     cue_id: 1,
                     time_ms: 50,
@@ -40977,6 +42335,10 @@ mod tests {
         runtime.apply_command(EngineCommand::SnapTimelineItemsPublished {
             request: TimelineSnapRequest {
                 event_placements: vec![protocol::TimelineEventPlacementUpdate {
+                    time_beats: None,
+                    duration_beats: None,
+                    conform_to_tempo: false,
+                    loop_fill: false,
                     event_id: 10,
                     cue_id: 1,
                     time_ms: 999,
@@ -41015,6 +42377,10 @@ mod tests {
             request: TimelineSnapRequest {
                 event_placements: vec![
                     protocol::TimelineEventPlacementUpdate {
+                        time_beats: None,
+                        duration_beats: None,
+                        conform_to_tempo: false,
+                        loop_fill: false,
                         event_id: 10,
                         cue_id: 1,
                         time_ms: 10,
@@ -41025,6 +42391,10 @@ mod tests {
                         jump_to_event_id: Some(20),
                     },
                     protocol::TimelineEventPlacementUpdate {
+                        time_beats: None,
+                        duration_beats: None,
+                        conform_to_tempo: false,
+                        loop_fill: false,
                         event_id: 20,
                         cue_id: 2,
                         time_ms: 30,
@@ -41085,6 +42455,12 @@ mod tests {
         create_effect_only_cue(&mut runtime, 2, Vec::new());
         runtime.timeline_events = (0..2_000_u64)
             .map(|index| RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: index + 1,
                 cue_id: 1,
                 time_ms: index,
@@ -41098,6 +42474,12 @@ mod tests {
                 jump_to_event_id: None,
             })
             .chain((0..2_000_u64).map(|index| RuntimeTimelineEvent {
+                time_beats: None,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                iteration_period_ms: 0,
+                rate: None,
                 id: 2_001 + index,
                 cue_id: 2,
                 time_ms: 10_000 + index,
@@ -41153,6 +42535,12 @@ mod tests {
         loop_count: u16,
     ) -> RuntimeTimelineEvent {
         RuntimeTimelineEvent {
+            time_beats: None,
+            duration_beats: None,
+            conform_to_tempo: false,
+            loop_fill: false,
+            iteration_period_ms: 0,
+            rate: None,
             id,
             cue_id,
             time_ms,
@@ -41195,7 +42583,7 @@ mod tests {
             TimelineLayerKind::Lighting,
         )];
         runtime
-            .add_timeline_cue_event_state(100, 1, 0, TimelineTrackKind::Lighting, Some(10))
+            .add_timeline_cue_event_state(100, 1, 0, None, TimelineTrackKind::Lighting, Some(10))
             .unwrap();
         runtime.timeline_playing = true;
         runtime.timeline_playhead_boundary_armed = true;
@@ -41231,10 +42619,10 @@ mod tests {
             timeline_test_layer(11, 1, false, false, false, TimelineLayerKind::Lighting),
         ];
         runtime
-            .add_timeline_cue_event_state(100, 1, 0, TimelineTrackKind::Lighting, Some(10))
+            .add_timeline_cue_event_state(100, 1, 0, None, TimelineTrackKind::Lighting, Some(10))
             .unwrap();
         runtime
-            .add_timeline_cue_event_state(200, 2, 0, TimelineTrackKind::Lighting, Some(11))
+            .add_timeline_cue_event_state(200, 2, 0, None, TimelineTrackKind::Lighting, Some(11))
             .unwrap();
         runtime.timeline_playing = true;
         runtime.timeline_playhead_boundary_armed = true;
@@ -41319,6 +42707,10 @@ mod tests {
 
         let (update_ack, update_receiver) = mpsc::sync_channel(1);
         runtime.apply_command(EngineCommand::SetTimelineSceneBlockPublished {
+            time_beats: None,
+            duration_beats: None,
+            conform_to_tempo: false,
+            loop_fill: false,
             event_id: 100,
             cue_id: 1,
             time_ms: 200,
@@ -41342,6 +42734,10 @@ mod tests {
         runtime.apply_command(EngineCommand::SnapTimelineItemsPublished {
             request: TimelineSnapRequest {
                 event_placements: vec![protocol::TimelineEventPlacementUpdate {
+                    time_beats: None,
+                    duration_beats: None,
+                    conform_to_tempo: false,
+                    loop_fill: false,
                     event_id: 100,
                     cue_id: 1,
                     time_ms: 300,
@@ -41563,7 +42959,7 @@ mod tests {
         let mut runtime = runtime_with_lfo_effects(&[]);
         create_effect_only_cue(&mut runtime, 1, Vec::new());
         runtime
-            .add_timeline_cue_event_state(100, 1, 0, TimelineTrackKind::Lighting, None)
+            .add_timeline_cue_event_state(100, 1, 0, None, TimelineTrackKind::Lighting, None)
             .unwrap();
         let published = RwLock::new(runtime.build_snapshot(0));
 
@@ -41648,7 +43044,7 @@ mod tests {
             TimelineLayerKind::Lighting,
         )];
         runtime
-            .add_timeline_cue_event_state(100, 1, 0, TimelineTrackKind::Lighting, None)
+            .add_timeline_cue_event_state(100, 1, 0, None, TimelineTrackKind::Lighting, None)
             .unwrap();
         let before_layers = runtime.timeline_layers.clone();
         let before_events = runtime
@@ -41706,10 +43102,10 @@ mod tests {
         create_effect_only_cue(&mut runtime, 1, Vec::new());
         create_effect_only_cue(&mut runtime, 2, Vec::new());
         runtime
-            .add_timeline_cue_event_state(100, 1, 0, TimelineTrackKind::Lighting, None)
+            .add_timeline_cue_event_state(100, 1, 0, None, TimelineTrackKind::Lighting, None)
             .unwrap();
         runtime
-            .add_timeline_cue_event_state(200, 2, 10, TimelineTrackKind::Video, None)
+            .add_timeline_cue_event_state(200, 2, 10, None, TimelineTrackKind::Video, None)
             .unwrap();
 
         let display = runtime.build_snapshot(0);

@@ -10350,7 +10350,7 @@ input[type="color"] {
 
 .cueForm {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 92px minmax(126px, 0.45fr) minmax(116px, auto);
+  grid-template-columns: minmax(0, 1fr) 84px 100px minmax(126px, 0.45fr) minmax(116px, auto);
   align-items: end;
   gap: 8px;
 }
@@ -10952,10 +10952,23 @@ input[type="color"] {
 }
 
 .cueEditRow {
-  display: grid;
-  grid-template-columns: 70px minmax(90px, 0.7fr) minmax(110px, 1fr) repeat(3, 78px) auto auto;
+  /* Wrapping flex instead of a fixed-column grid: the column count changes as
+     cue fields are added (F3 added Authored beats and overflowed the old
+     9-column template by 40px); wrapping keeps the dense row contained at any
+     panel width while extra fields flow to the next line. */
+  display: flex;
+  flex-wrap: wrap;
   align-items: end;
   gap: 6px;
+}
+
+.cueEditRow > label {
+  flex: 1 1 78px;
+}
+
+.cueEditRow > .cueTrackingToggle,
+.cueEditRow > button {
+  flex: 0 0 auto;
 }
 
 .cueEditRow input,
@@ -10989,6 +11002,11 @@ input[type="color"] {
 .cueEditRow textarea {
   min-height: 44px;
   resize: vertical;
+}
+
+.cueFieldError {
+  color: #ffb4b4;
+  font-size: 9px;
 }
 
 .cueIfcbTiming {
@@ -23082,6 +23100,20 @@ h3 {
   font-variant-numeric: tabular-nums;
 }
 
+.sceneBlockRateBadge {
+  display: inline-flex;
+  min-height: 16px;
+  align-items: center;
+  border: 1px solid #597789;
+  border-radius: 2px;
+  background: #1d2a31;
+  color: #b9d5e4;
+  padding: 1px 4px;
+  font-size: 9px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
 .sceneBlockSource > strong,
 .sceneBlockSource > span,
 .sceneBlockSource > small {
@@ -23109,10 +23141,53 @@ h3 {
 
 .sceneBlockRowFields {
   display: grid;
-  grid-template-columns: minmax(130px, 1.25fr) 74px 82px 54px 78px minmax(124px, 1fr);
+  grid-template-columns: minmax(115px, 1.15fr) 64px 72px 48px minmax(132px, 1fr) 68px minmax(108px, 0.9fr);
   align-items: end;
   gap: 3px;
   min-width: 0;
+}
+
+.sceneBlockConformControls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: center;
+  gap: 1px 4px;
+  min-width: 0;
+  min-height: 42px;
+  margin: 0;
+  border: 1px solid #343b40;
+  border-radius: 2px;
+  background: #161a1d;
+  padding: 2px 4px 3px;
+}
+
+.sceneBlockConformControls legend {
+  color: #8f989f;
+  padding: 0 2px;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.sceneBlockRowFields .sceneBlockConformToggle {
+  display: flex;
+  min-height: 16px;
+  align-items: center;
+  gap: 3px;
+  color: #b8c0c6;
+  font-size: 9px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.sceneBlockRowFields .sceneBlockConformToggle input {
+  width: auto;
+  min-height: 0;
+  margin: 0;
+}
+
+.sceneBlockConformControls .sceneBlockRateBadge {
+  grid-column: 1 / -1;
+  justify-self: start;
 }
 
 .sceneBlockRowActions {
@@ -23242,7 +23317,7 @@ h3 {
 
 @media (max-height: 800px) {
   .layoutControl.controlModeLive .cueEditRow {
-    grid-template-columns: 60px minmax(82px, 0.7fr) minmax(100px, 1fr) repeat(3, minmax(58px, 0.7fr));
+    grid-template-columns: 60px minmax(82px, 0.7fr) minmax(100px, 1fr) repeat(4, minmax(58px, 0.7fr));
   }
 
   .layoutControl.controlModeLive .cueEditRow .cueTrackingToggle {
@@ -24083,7 +24158,10 @@ h3 {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-gutter: stable;
+  /* No scrollbar-gutter: the overview frame is fixed-height with
+     contain: size layout, so scrollbar appearance cannot feed back into the
+     SVG sizing loop, and the reservation cost the scene-block workspace the
+     >=97%-of-panel width contract at compact viewports. */
 }
 
 /* The overview frame hosts a ResizeObserver-driven pixel-space SVG (T2). Inside
@@ -24123,14 +24201,20 @@ h3 {
 }
 
 .layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelinePanel {
-  scrollbar-gutter: stable;
+  /* scrollbar-gutter removed: the panel itself never scrolls (the show
+     surface inside it does), so the reservation only narrowed every child by
+     ~10px; the anti-oscillation guarantee lives in the overview frame's
+     fixed height + contain: size layout, not here. */
 }
 
 .layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .sceneBlockWorkspace {
   min-height: 190px;
   overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-gutter: stable;
+  /* No scrollbar-gutter here: the enclosing timelineShowSurface already
+     reserves one, and a second inner reservation leaves the workspace ~20px
+     narrower than the panel - below the >=97% width contract at compact
+     viewports once F3's taller rows engage the scrollbar. */
 }
 
 .layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .sceneBlockList {

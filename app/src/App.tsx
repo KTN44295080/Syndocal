@@ -824,6 +824,51 @@ type CueCaptureScopeRequest =
 const cuePadSize = 10;
 const defaultCustomAttributesText = "Dimmer@1:8, Pan@2:16, Tilt@4:16, ColorRed@6:8, ColorGreen@7:8, ColorBlue@8:8";
 
+const chaserTraversalStepCount = (effect: EffectSummary) => {
+  const chaser = effect.chaser;
+  if (!chaser) return 0;
+  const stepCount = chaser.steps.length;
+  if (stepCount <= 1) return Math.max(1, stepCount);
+  return chaser.direction === "Bounce" ? stepCount * 2 - 2 : stepCount;
+};
+
+const authoredBeatsForEffectClock = (effect: EffectSummary) => {
+  switch (effect.effect_type) {
+    case "Color":
+      return effect.color?.clock_sync?.beats ?? effect.clock_sync?.beats ?? null;
+    case "Chaser":
+      return effect.chaser?.clock_sync?.beats ?? effect.clock_sync?.beats ?? null;
+    case "Move":
+      return effect.move_effect?.clock_sync?.beats ?? effect.clock_sync?.beats ?? null;
+    case "Value":
+      return effect.value?.clock_sync?.beats ?? effect.clock_sync?.beats ?? null;
+    default:
+      return effect.clock_sync?.beats ?? null;
+  }
+};
+
+const inferredCueAuthoredBeats = (effects: EffectSummary[], targets: CueEffectTarget[]) => {
+  const effectsById = new Map(effects.map((effect) => [effect.id, effect]));
+  const candidates = targets.filter((target) => target.enabled).flatMap((target) => {
+    const effect = effectsById.get(target.effect_id);
+    if (!effect) return [];
+    if (effect.effect_type === "Chaser") {
+      const traversalSteps = chaserTraversalStepCount(effect);
+      if (traversalSteps <= 0) return [];
+      const syncBeats = authoredBeatsForEffectClock(effect);
+      return [(syncBeats ?? 1) * traversalSteps];
+    }
+    const syncBeats = authoredBeatsForEffectClock(effect);
+    return syncBeats === null ? [] : [syncBeats];
+  });
+  if (candidates.length === 0) return null;
+  if (candidates.some((candidate) => !Number.isFinite(candidate) || candidate < 0.25 || candidate > 1024)) {
+    return null;
+  }
+  const first = candidates[0];
+  return candidates.every((candidate) => Math.abs(candidate - first) <= 1e-6) ? first : null;
+};
+
 
 export default function App() {
   const outputWindowId = readVideoOutputWindowId();
@@ -1036,6 +1081,8 @@ export default function App() {
   });
   const [cueLabel, setCueLabel] = createSignal("Cue 1");
   const [cueFadeMs, setCueFadeMs] = createSignal(1000);
+  const [cueAuthoredBeats, setCueAuthoredBeats] = createSignal<number | null>(null);
+  const [cueAuthoredBeatsManual, setCueAuthoredBeatsManual] = createSignal(false);
   const [cueCaptureScope, setCueCaptureScope] = createSignal<CueCaptureScopeMode>("all");
   const [cueEffectCaptureTargets, setCueEffectCaptureTargets] = createSignal<CueEffectTarget[]>([]);
   const [cueEffectCaptureStateOverrideIds, setCueEffectCaptureStateOverrideIds] = createSignal<number[]>([]);
@@ -3325,6 +3372,15 @@ export default function App() {
         return Math.round(clamped);
     }
   };
+  const snappedTimeBeats = (timeMs: number) => {
+    if (timelineSnapMode() !== "Beat" && timelineSnapMode() !== "Bar") return undefined;
+    const beatMs = Math.max(1, beatIntervalMs());
+    return Number((Math.max(0, timeMs) / beatMs).toFixed(6));
+  };
+  const timeBeatsAtCurrentBpm = (timeMs: number) => {
+    const beatMs = 60_000 / Math.max(1, snapshot().clock.bpm);
+    return Number((Math.max(0, timeMs) / beatMs).toFixed(6));
+  };
   const timelineCueOptions = createMemo(
     () => buildTimelineSceneBlockCueOptions(snapshotCues()),
     [],
@@ -3501,6 +3557,9 @@ export default function App() {
         time_ms: event.time_ms,
         duration_ms: event.duration_ms,
         loop_count: event.loop_count,
+        conform_to_tempo: event.conform_to_tempo ?? false,
+        loop_fill: event.loop_fill ?? false,
+        rate: event.rate ?? null,
         total_duration_ms: timelineSceneBlockSpanMs(event),
         fade_in_ms: Math.max(0, cueFadeById.get(event.cue_id) ?? 0),
         x: timelineTimeToVisibleRawRatio(event.time_ms, visibleWindow) * 100,
@@ -4406,6 +4465,51 @@ export default function App() {
       return current.filter((effectId) => targetIds.has(effectId));
     });
   };
+  const inferredCueCaptureAuthoredBeats = createMemo(() => inferredCueAuthoredBeats(
+    snapshot().effects,
+    cueEffectCaptureTargets(),
+  ));
+  let lastCueAuthoredBeatsSeedSignature = "";
+  createEffect(() => {
+    const effectsById = new Map(snapshot().effects.map((effect) => [effect.id, effect]));
+    const signature = JSON.stringify(cueEffectCaptureTargets().map((target) => {
+      const effect = effectsById.get(target.effect_id);
+      return [
+        target.effect_id,
+        target.enabled,
+        effect?.effect_type ?? null,
+        effect ? authoredBeatsForEffectClock(effect) : null,
+        effect?.chaser?.steps.length ?? null,
+        effect?.chaser?.direction ?? null,
+      ];
+    }));
+    if (signature === lastCueAuthoredBeatsSeedSignature) return;
+    lastCueAuthoredBeatsSeedSignature = signature;
+    const inferred = inferredCueCaptureAuthoredBeats();
+    if (inferred !== null) {
+      setCueAuthoredBeats(inferred);
+      setCueAuthoredBeatsManual(false);
+    } else if (!cueAuthoredBeatsManual()) {
+      setCueAuthoredBeats(null);
+    }
+  });
+  const updateCueAuthoredBeats = (value: number | null) => {
+    setCueAuthoredBeats(value);
+    setCueAuthoredBeatsManual(true);
+  };
+  const cueAuthoredBeatsSeeded = createMemo(() => {
+    const inferred = inferredCueCaptureAuthoredBeats();
+    return !cueAuthoredBeatsManual()
+      && inferred !== null
+      && cueAuthoredBeats() !== null
+      && Math.abs(cueAuthoredBeats()! - inferred) <= 1e-6;
+  });
+  const cueAuthoredBeatsError = createMemo(() => {
+    const value = cueAuthoredBeats();
+    return value !== null && (!Number.isFinite(value) || value < 0.25 || value > 1024)
+      ? "Authored beats must be from 0.25 to 1024."
+      : null;
+  });
   const hasCueEffectCaptureTargets = createMemo(() => cueEffectCaptureTargets().length > 0);
   const selectedCueList = createMemo<CueListSummary>(() =>
     snapshot().cue_lists.find((cueList) => cueList.id === selectedCueListId())
@@ -5492,10 +5596,24 @@ export default function App() {
                 ...event,
                 cue_id: Number(args?.cueId ?? event.cue_id),
                 time_ms: Number(args?.timeMs ?? event.time_ms),
+                time_beats: args?.timeBeats === null || args?.timeBeats === undefined
+                  ? null
+                  : Number(args.timeBeats),
                 track: (args?.track ?? event.track) as TimelineTrackKind,
                 duration_ms: command === "set_timeline_scene_block"
                   ? Number(args?.durationMs ?? event.duration_ms)
                   : 0,
+                duration_beats: command === "set_timeline_scene_block"
+                  ? (args?.durationBeats === null || args?.durationBeats === undefined
+                      ? null
+                      : Number(args.durationBeats))
+                  : null,
+                conform_to_tempo: command === "set_timeline_scene_block"
+                  ? Boolean(args?.conformToTempo)
+                  : false,
+                loop_fill: command === "set_timeline_scene_block"
+                  ? Boolean(args?.loopFill)
+                  : false,
                 loop_count: command === "set_timeline_scene_block"
                   ? Number(args?.loopCount ?? event.loop_count)
                   : 1,
@@ -5516,6 +5634,8 @@ export default function App() {
   const timelineSceneBlocks = createTimelineSceneBlockController({
     invoke: invokeTimelineSceneBlockCommand,
     snapTimeMs,
+    snappedTimeBeats,
+    timeBeatsAtCurrentBpm,
     hasEventId: (eventId) => snapshot().timeline.events.some((event) => event.id === eventId),
     getEventById: (eventId) => timelineEventRowById().get(eventId),
     getEventDraft: timelineEventDraft,
@@ -8368,10 +8488,16 @@ export default function App() {
       setMessage("Select a valid cue capture scope.");
       return;
     }
+    const authoredBeatsError = cueAuthoredBeatsError();
+    if (authoredBeatsError) {
+      setMessage(authoredBeatsError);
+      return;
+    }
     try {
       const cueId = await invoke<number>("create_cue_from_current", {
         label: cueLabel(),
         fadeMs: cueFadeMs(),
+        authoredBeats: cueAuthoredBeats(),
         captureScope,
         cueListId: selectedCueList().id,
         effectTargets: cueEffectCaptureTargets(),
@@ -8584,6 +8710,13 @@ export default function App() {
   const setCueMetadata = async (cue: CueSummary) => {
     const draft = cueMetadataDraft(cue);
     const fadeMs = Math.max(0, Math.round(Number.isFinite(draft.fade_ms) ? draft.fade_ms : cue.fade_ms));
+    const authoredBeats = draft.authored_beats === null || !Number.isFinite(draft.authored_beats)
+      ? null
+      : draft.authored_beats;
+    if (authoredBeats !== null && (authoredBeats < 0.25 || authoredBeats > 1024)) {
+      setMessage("Authored beats must be from 0.25 to 1024.");
+      return;
+    }
     const preWaitMs = Math.max(0, Math.round(Number.isFinite(draft.pre_wait_ms) ? draft.pre_wait_ms : 0));
     const followMs = draft.follow_ms === null || !Number.isFinite(draft.follow_ms)
       ? null
@@ -8621,6 +8754,7 @@ export default function App() {
         cueNumber: draft.cue_number,
         label: draft.label,
         fadeMs,
+        authoredBeats,
         preWaitMs,
         followMs,
         ifcbTiming,
@@ -8636,6 +8770,7 @@ export default function App() {
           cue_number: draft.cue_number,
           label: draft.label,
           fade_ms: fadeMs,
+          authored_beats: authoredBeats,
           pre_wait_ms: preWaitMs,
           follow_ms: followMs,
           ifcb_timing: ifcbTiming,
@@ -8767,6 +8902,7 @@ export default function App() {
       timelineEventDraft,
       snapTimeMs,
       (eventId) => timeline.events.some((event) => event.id === eventId),
+      snappedTimeBeats,
     );
     const lightingAutomationUpdates = timeline.automations.map((automation) => ({
       automation,
@@ -13262,6 +13398,9 @@ export default function App() {
             timelineTrack={timelineTrack()}
             cueLabel={cueLabel()}
             cueFadeMs={cueFadeMs()}
+            cueAuthoredBeats={cueAuthoredBeats()}
+            cueAuthoredBeatsSeeded={cueAuthoredBeatsSeeded()}
+            cueAuthoredBeatsError={cueAuthoredBeatsError()}
             cueCaptureScope={cueCaptureScope()}
             cueCaptureScopeError={cueCaptureScopeError()}
             hasCueSources={hasCueSources()}
@@ -13275,6 +13414,7 @@ export default function App() {
             cueTimelinePlacementsForCue={cueTimelinePlacementsForCue}
             onCueLabel={setCueLabel}
             onCueFadeMs={setCueFadeMs}
+            onCueAuthoredBeats={updateCueAuthoredBeats}
             onCueCaptureScope={setCueCaptureScope}
             onCueEffectCaptureTargets={updateCueEffectCaptureTargets}
             onSelectCueList={setSelectedCueListId}
@@ -13308,6 +13448,7 @@ export default function App() {
             <div class="timelineShowSurface">
             <TimelineCueEventsPanel
               positionMs={snapshot().timeline.position_ms}
+              bpm={snapshot().clock.bpm}
               durationMs={snapshot().timeline.duration_ms}
               playing={snapshot().timeline.playing}
               executingLive={timelineExecutionLive()}

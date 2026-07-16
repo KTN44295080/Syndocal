@@ -1,5 +1,5 @@
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
-import { shouldCommitTimelineMarkerDrag } from "../timelineSceneBlocks";
+import { shouldCommitTimelineMarkerDrag, timelineConformRateBadge } from "../timelineSceneBlocks";
 import {
   beginTimelineAbsoluteDragProjection,
   buildTimelineRulerTicks,
@@ -22,6 +22,9 @@ export interface TimelineOverviewEvent {
   time_ms: number;
   duration_ms: number;
   loop_count: number;
+  conform_to_tempo: boolean;
+  loop_fill: boolean;
+  rate: number | null;
   total_duration_ms: number;
   fade_in_ms: number;
   x: number;
@@ -132,6 +135,9 @@ const sameOverviewEvent = (left: TimelineOverviewEvent, right: TimelineOverviewE
   left.time_ms === right.time_ms &&
   left.duration_ms === right.duration_ms &&
   left.loop_count === right.loop_count &&
+  left.conform_to_tempo === right.conform_to_tempo &&
+  left.loop_fill === right.loop_fill &&
+  left.rate === right.rate &&
   left.total_duration_ms === right.total_duration_ms &&
   left.fade_in_ms === right.fade_in_ms &&
   left.x === right.x &&
@@ -632,12 +638,19 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     // Identity name only; loop/× semantics stay in the marker title and the
     // aggregate overlap badge so the two counts never read ambiguously.
     const label = event.cue_label;
+    const rateBadge = timelineConformRateBadge(event);
     const available = Math.max(0, sceneBlockPixelWidth(event) - nameInsetPx * 2);
     const maxCharacters = Math.floor(available / nameCharWidthPx);
     if (maxCharacters < 1) return "";
-    return label.length <= maxCharacters
-      ? label
-      : `${label.slice(0, Math.max(1, maxCharacters - 1))}…`;
+    if (rateBadge && maxCharacters >= rateBadge.length) {
+      const labelCharacters = maxCharacters - rateBadge.length - 1;
+      if (labelCharacters <= 0) return rateBadge;
+      const visibleLabel = label.length <= labelCharacters
+        ? label
+        : `${label.slice(0, Math.max(1, labelCharacters - 1))}…`;
+      return `${visibleLabel} ${rateBadge}`;
+    }
+    return label.length <= maxCharacters ? label : `${label.slice(0, Math.max(1, maxCharacters - 1))}…`;
   };
   const sceneBlockDurationStamp = (event: TimelineOverviewEvent) =>
     formatCompactClock(event.total_duration_ms);
@@ -864,6 +877,8 @@ export function TimelineOverview(props: TimelineOverviewProps) {
             data-timeline-event-id={event.id}
             data-timeline-start-ms={event.time_ms}
             data-timeline-loop-count={event.loop_count}
+            data-timeline-conform={event.conform_to_tempo ? "true" : "false"}
+            data-timeline-rate={event.rate ?? undefined}
             style={{
               "--identity": identityCssColor(cueIdentityHue(event.cue_id), "fill"),
               "--identity-band": identityCssColor(cueIdentityHue(event.cue_id), "band"),
@@ -999,7 +1014,9 @@ export function TimelineOverview(props: TimelineOverviewProps) {
             </Show>
             <title>
               {event.duration_ms > 0
-                ? `${event.cue_label} / ${event.track} / ${event.time_ms} ms / ${event.duration_ms} ms x ${event.loop_count}`
+                ? event.conform_to_tempo
+                  ? `${event.cue_label}${timelineConformRateBadge(event) ? ` ${timelineConformRateBadge(event)}` : ""} / ${event.track} / ${event.time_ms} ms / ${event.duration_ms} ms window / ${event.loop_count} ${event.loop_fill ? "fill loops" : "tempo iterations"}`
+                  : `${event.cue_label} / ${event.track} / ${event.time_ms} ms / ${event.duration_ms} ms x ${event.loop_count}`
                 : `${event.cue_label} / ${event.track} / ${event.time_ms} ms / legacy point`}
             </title>
           </g>

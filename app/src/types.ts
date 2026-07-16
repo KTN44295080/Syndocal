@@ -1479,6 +1479,8 @@ export interface CueSummary {
   cue_number: string;
   label: string;
   fade_ms: number;
+  /** Intrinsic musical length used when a placed Scene Block conforms to tempo. */
+  authored_beats?: number | null;
   pre_wait_ms: number;
   follow_ms?: number | null;
   ifcb_timing: CueIfcbTiming;
@@ -1530,11 +1532,21 @@ export interface TimelineCueEventSummary {
   id: number;
   cue_id: number;
   time_ms: number;
+  /** Beat-domain placement intent; time_ms remains playback truth. */
+  time_beats?: number | null;
   track: TimelineTrackKind;
   layer_id?: number | null;
-  /** Length of one linked Cue iteration. Zero preserves the legacy point-event behavior. */
+  /** Legacy iteration length; for conformed blocks this is the fixed playback window. Zero preserves a point event. */
   duration_ms: number;
-  /** Number of Cue iterations within the placed block. */
+  /** Beat-domain block-window intent used by tempo reconform. */
+  duration_beats?: number | null;
+  /** Rewrites placement/window milliseconds from beat intent on BPM changes. */
+  conform_to_tempo?: boolean;
+  /** Keeps duration_ms as the block window and derives retrigger count to fill it. */
+  loop_fill?: boolean;
+  /** Derived display/cadence multiplier; recomputed by the engine on load. */
+  rate?: number | null;
+  /** Number of Cue iterations; derived by the engine when loop_fill is enabled. */
   loop_count: number;
   /** Optional placement to seek to after the final iteration completes. */
   jump_to_event_id: number | null;

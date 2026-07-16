@@ -5,6 +5,8 @@ import { cueIdentityHue, identityCssColor } from "../identityColor";
 import {
   reconcileTimelineSceneBlockJumpTarget,
   reconcileTimelineSceneBlockPickerTarget,
+  timelineConformRateBadge,
+  timelineSceneBlockSpanMs,
   timelineSceneBlockPlaybackStatus,
   timelineEventDraftMatchesSummary,
   timelineSceneBlockSourcePickerOptions,
@@ -16,6 +18,7 @@ export interface TimelineSceneBlockCueOption {
   cue_list_id: number;
   cue_number: string;
   label: string;
+  authored_beats: number | null;
   source_summary: string;
 }
 
@@ -28,6 +31,7 @@ export interface TimelineSceneBlockRow extends TimelineCueEventSummary {
 
 interface TimelineSceneBlocksEditorProps {
   positionMs: number;
+  bpm: number;
   executionLive: boolean;
   selectedCueId: number | null;
   startMs: number;
@@ -58,8 +62,9 @@ interface TimelineSceneBlocksEditorProps {
   onOpenSourceCue: (cueId: number) => void;
 }
 
-const totalDurationMs = (event: Pick<TimelineCueEventSummary, "duration_ms" | "loop_count">) =>
-  Math.max(0, event.duration_ms) * Math.max(1, event.loop_count);
+const totalDurationMs = (
+  event: Pick<TimelineCueEventSummary, "duration_ms" | "loop_count" | "conform_to_tempo">,
+) => timelineSceneBlockSpanMs(event);
 const sceneBlockRowsPerPage = 12;
 const sourcePickerResultLimit = 80;
 const selectedRowScrollAttemptLimit = 8;
@@ -154,6 +159,11 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
   const sourceIndexByEventId = createMemo(() => new Map(
     props.eventRows.map((event, index) => [event.id, index]),
   ));
+  const cueOptionById = createMemo(() => new Map(props.cueOptions.map((cue) => [cue.id, cue])));
+  const playbackTimingForEvent = (event: TimelineCueEventSummary) => ({
+    authoredBeats: cueOptionById().get(event.cue_id)?.authored_beats ?? null,
+    bpm: props.bpm,
+  });
   const filterEventIdSet = createMemo(() => props.filterEventIds === null
     ? null
     : new Set(props.filterEventIds));
@@ -210,6 +220,8 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
   const composerJumpTarget = createMemo(() =>
     props.eventRows.find((event) => event.id === props.jumpToEventId) ?? null,
   );
+  const beatDurationMs = () => 60_000 / Math.max(1, Number.isFinite(props.bpm) ? props.bpm : 120);
+  const millisecondsToBeats = (timeMs: number) => Number((Math.max(0, timeMs) / beatDurationMs()).toFixed(6));
   const matchingJumpRows = createMemo(() => {
     const query = jumpPickerQuery().trim().toLocaleLowerCase();
     const filtered = !query
@@ -287,7 +299,7 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
   const liveFollowEvent = createMemo(() => {
     if (!props.executionLive) return null;
     const liveEvents = props.eventRows.filter((event) =>
-      timelineSceneBlockPlaybackStatus(event, props.positionMs, true).live,
+      timelineSceneBlockPlaybackStatus(event, props.positionMs, true, playbackTimingForEvent(event)).live,
     );
     return liveEvents.at(-1) ?? null;
   });
@@ -414,7 +426,13 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
     if (sourcePickerEventId() === 0) {
       props.onSelectedCueId(cueId);
     } else if (event) {
-      props.onUpdateEventDraft(event, { cue_id: cueId });
+      const sourceCue = props.cueOptions.find((cue) => cue.id === cueId);
+      props.onUpdateEventDraft(event, {
+        cue_id: cueId,
+        ...(sourceCue?.authored_beats === null
+          ? { conform_to_tempo: false, loop_fill: false, loop_count: 1 }
+          : {}),
+      });
     } else {
       return;
     }
@@ -697,9 +715,48 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
             {(event) => {
               const draft = () => props.timelineEventDraft(event);
               const isDirty = () => !timelineEventDraftMatchesSummary(event, draft());
-              const playbackStatus = () => timelineSceneBlockPlaybackStatus(event, props.positionMs, props.executionLive);
+              const playbackStatus = () => timelineSceneBlockPlaybackStatus(
+                event,
+                props.positionMs,
+                props.executionLive,
+                playbackTimingForEvent(event),
+              );
               const isBlock = () => event.duration_ms > 0 || draft().duration_ms > 0;
               const currentSourceCue = () => props.cueOptions.find((cue) => cue.id === draft().cue_id);
+              const canConform = () => currentSourceCue()?.authored_beats !== null
+                && currentSourceCue()?.authored_beats !== undefined;
+              const rateBadge = () => timelineConformRateBadge({
+                conform_to_tempo: draft().conform_to_tempo,
+                rate: event.rate ?? null,
+              });
+              const setConformToTempo = (enabled: boolean) => {
+                if (!enabled) {
+                  props.onUpdateEventDraft(event, {
+                    conform_to_tempo: false,
+                    loop_fill: false,
+                    loop_count: 1,
+                  });
+                  return;
+                }
+                const windowMs = Math.max(1, Math.round(totalDurationMs(draft())));
+                props.onUpdateEventDraft(event, {
+                  time_beats: millisecondsToBeats(draft().time_ms),
+                  duration_ms: windowMs,
+                  duration_beats: millisecondsToBeats(windowMs),
+                  conform_to_tempo: true,
+                  loop_fill: false,
+                  loop_count: 1,
+                });
+              };
+              const setLoopFill = (enabled: boolean) => props.onUpdateEventDraft(event, {
+                loop_fill: enabled,
+                ...(!enabled
+                  ? {
+                      duration_beats: millisecondsToBeats(draft().duration_ms),
+                      loop_count: 1,
+                    }
+                  : {}),
+              });
               const savedSourceCue = () => props.cueOptions.find((cue) => cue.id === event.cue_id);
               const currentJumpTarget = () => props.eventRows.find(
                 (candidate) => candidate.id === draft().jump_to_event_id && candidate.id !== event.id,
@@ -739,6 +796,17 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
                       <Show when={playbackStatus().under_playhead && !playbackStatus().live}>
                         <span class="sceneBlockPlayheadBadge">PLAYHEAD</span>
                       </Show>
+                      <Show when={rateBadge()}>
+                        {(badge) => (
+                          <span
+                            class="sceneBlockRateBadge tabularNums"
+                            title="Tempo conform rate"
+                            data-no-localize
+                          >
+                            {badge()}
+                          </span>
+                        )}
+                      </Show>
                       <small>#{event.id}</small>
                     </div>
                     <strong data-no-localize>
@@ -749,7 +817,9 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
                     <span>{currentSourceCue()?.source_summary ?? "Source Cue is unavailable"}</span>
                     <small>
                       {isBlock()
-                        ? `${draft().duration_ms} ms × ${draft().loop_count} = ${totalDurationMs(draft())} ms span`
+                        ? draft().conform_to_tempo
+                          ? `${draft().duration_ms} ms window · ${draft().loop_count} ${draft().loop_fill ? "fill loops" : "tempo iterations"}`
+                          : `${draft().duration_ms} ms × ${draft().loop_count} = ${totalDurationMs(draft())} ms span`
                         : "Legacy instant trigger · set Duration to upgrade"}
                     </small>
                     <Show when={playbackStatus().under_playhead}>
@@ -766,7 +836,9 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
                       <div class="sceneBlockLiveOutput">
                         OUTPUT: {savedSourceCue()
                           ? sourceCueOptionLabel(savedSourceCue()!)
-                          : `Cue #${event.cue_id}`} · {event.duration_ms} ms × {event.loop_count}
+                          : `Cue #${event.cue_id}`} · {event.duration_ms} ms {event.conform_to_tempo
+                            ? `window · ${event.loop_count} ${event.loop_fill ? "fill loops" : "tempo iterations"}`
+                            : `× ${event.loop_count}`}
                       </div>
                     </Show>
                   </div>
@@ -794,7 +866,13 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
                         type="number"
                         min="0"
                         value={draft().time_ms}
-                        onInput={(inputEvent) => props.onUpdateEventDraft(event, { time_ms: Number(inputEvent.currentTarget.value) })}
+                        onInput={(inputEvent) => {
+                          const timeMs = Number(inputEvent.currentTarget.value);
+                          props.onUpdateEventDraft(event, {
+                            time_ms: timeMs,
+                            ...(draft().conform_to_tempo ? { time_beats: millisecondsToBeats(timeMs) } : {}),
+                          });
+                        }}
                       />
                     </label>
                     <label>
@@ -803,11 +881,17 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
                         type="number"
                         min={event.duration_ms > 0 ? "1" : "0"}
                         value={draft().duration_ms}
-                        onInput={(inputEvent) => props.onUpdateEventDraft(event, {
-                          duration_ms: event.duration_ms > 0
+                        onInput={(inputEvent) => {
+                          const durationMs = event.duration_ms > 0
                             ? Math.max(1, Number(inputEvent.currentTarget.value))
-                            : Number(inputEvent.currentTarget.value),
-                        })}
+                            : Number(inputEvent.currentTarget.value);
+                          props.onUpdateEventDraft(event, {
+                            duration_ms: durationMs,
+                            ...(draft().conform_to_tempo && !draft().loop_fill
+                              ? { duration_beats: millisecondsToBeats(durationMs) }
+                              : {}),
+                          });
+                        }}
                       />
                     </label>
                     <label>
@@ -817,10 +901,37 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
                         min="1"
                         max="256"
                         value={draft().loop_count}
-                        disabled={!isBlock()}
+                        disabled={!isBlock() || draft().loop_fill}
                         onInput={(inputEvent) => props.onUpdateEventDraft(event, { loop_count: Number(inputEvent.currentTarget.value) })}
                       />
                     </label>
+                    <fieldset class="sceneBlockConformControls">
+                      <legend>Tempo</legend>
+                      <label
+                        class="sceneBlockConformToggle"
+                        title={canConform() ? "Conform to tempo" : "Set Authored beats on the source Cue first."}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={draft().conform_to_tempo}
+                          disabled={!isBlock() || !canConform()}
+                          onChange={(inputEvent) => setConformToTempo(inputEvent.currentTarget.checked)}
+                        />
+                        Conform
+                      </label>
+                      <label class="sceneBlockConformToggle" title="Fill the current block window with tempo-sized iterations.">
+                        <input
+                          type="checkbox"
+                          checked={draft().loop_fill}
+                          disabled={!draft().conform_to_tempo}
+                          onChange={(inputEvent) => setLoopFill(inputEvent.currentTarget.checked)}
+                        />
+                        Loop fill
+                      </label>
+                      <Show when={rateBadge()}>
+                        {(badge) => <span class="sceneBlockRateBadge tabularNums" data-no-localize>{badge()}</span>}
+                      </Show>
+                    </fieldset>
                     <label>
                       <span class="sceneBlockFieldLabel">
                         Lane

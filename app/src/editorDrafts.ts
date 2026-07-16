@@ -29,6 +29,7 @@ export interface CueMetadataDraft {
   cue_number: string;
   label: string;
   fade_ms: number;
+  authored_beats: number | null;
   pre_wait_ms: number;
   follow_ms: number | null;
   ifcb_timing: CueIfcbTiming;
@@ -43,8 +44,12 @@ export interface CueMetadataDraft {
 export interface TimelineEventDraft {
   cue_id: number;
   time_ms: number;
+  time_beats: number | null;
   track: TimelineTrackKind;
   duration_ms: number;
+  duration_beats: number | null;
+  conform_to_tempo: boolean;
+  loop_fill: boolean;
   loop_count: number;
   jump_to_event_id: number | null;
 }
@@ -83,6 +88,7 @@ export const cueMetadataDraftFromSummary = (cue: CueSummary): CueMetadataDraft =
   cue_number: cue.cue_number || String(cue.id),
   label: cue.label,
   fade_ms: cue.fade_ms,
+  authored_beats: cue.authored_beats ?? null,
   pre_wait_ms: cue.pre_wait_ms ?? 0,
   follow_ms: cue.follow_ms ?? null,
   ifcb_timing: {
@@ -111,8 +117,12 @@ export const cueMetadataDraftFromSummary = (cue: CueSummary): CueMetadataDraft =
 export const timelineEventDraftFromSummary = (event: TimelineCueEventSummary): TimelineEventDraft => ({
   cue_id: event.cue_id,
   time_ms: event.time_ms,
+  time_beats: event.time_beats ?? null,
   track: event.track,
   duration_ms: event.duration_ms ?? 0,
+  duration_beats: event.duration_beats ?? null,
+  conform_to_tempo: event.conform_to_tempo ?? false,
+  loop_fill: event.loop_fill ?? false,
   loop_count: event.loop_count ?? 1,
   jump_to_event_id: event.jump_to_event_id ?? null,
 });

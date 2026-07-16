@@ -12,6 +12,7 @@ import type {
 } from "../types";
 import { canSaveCueEffectTargets } from "../cueEffectRecall";
 import type { CueEffectRecallChange } from "../cueEffectRecall";
+import { timelineConformRateBadge } from "../timelineSceneBlocks";
 import { cueIdentityHue, identityCssColor } from "../identityColor";
 import { CueCapturePreviewPanel, type CueCapturePreviewModel } from "./CueCapturePreviewPanel";
 import { CueEffectRecallEditor } from "./CueEffectRecallEditor";
@@ -48,6 +49,9 @@ interface CueManagementPanelProps {
   timelineTrack: TimelineTrackKind;
   cueLabel: string;
   cueFadeMs: number;
+  cueAuthoredBeats: number | null;
+  cueAuthoredBeatsSeeded: boolean;
+  cueAuthoredBeatsError: string | null;
   cueCaptureScope: CueCaptureScopeMode;
   cueCaptureScopeError: string | null;
   hasCueSources: boolean;
@@ -61,6 +65,7 @@ interface CueManagementPanelProps {
   cueTimelinePlacementsForCue: (cueId: number) => TimelineCueEventSummary[];
   onCueLabel: (value: string) => void;
   onCueFadeMs: (value: number) => void;
+  onCueAuthoredBeats: (value: number | null) => void;
   onCueCaptureScope: (scope: CueCaptureScopeMode) => void;
   onCueEffectCaptureTargets: (targets: CueEffectTarget[], change: CueEffectRecallChange) => void;
   onSelectCueList: (cueListId: number) => void;
@@ -211,6 +216,23 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
           <input type="number" min="0" value={props.cueFadeMs} onInput={(event) => props.onCueFadeMs(Number(event.currentTarget.value))} />
         </label>
         <label>
+          Authored beats
+          <input
+            type="number"
+            min="0.25"
+            max="1024"
+            step="0.25"
+            placeholder="Optional"
+            value={props.cueAuthoredBeats ?? ""}
+            aria-invalid={Boolean(props.cueAuthoredBeatsError)}
+            aria-describedby={props.cueAuthoredBeatsError ? "cue-authored-beats-error" : undefined}
+            title={props.cueAuthoredBeatsSeeded ? "Seeded from enabled Effect timing." : "Scene length in beats."}
+            onInput={(event) => props.onCueAuthoredBeats(
+              event.currentTarget.value === "" ? null : Number(event.currentTarget.value),
+            )}
+          />
+        </label>
+        <label>
           Scope
           <select value={props.cueCaptureScope} onInput={(event) => props.onCueCaptureScope(event.currentTarget.value as CueCaptureScopeMode)}>
             <option value="all">All Sources</option>
@@ -224,12 +246,19 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
         <button
           class="primary"
           onClick={() => void props.onCreateCue()}
-          disabled={(!props.hasCueSources && props.cueEffectCaptureTargets.length === 0) || Boolean(props.cueCaptureScopeError)}
+          disabled={
+            (!props.hasCueSources && props.cueEffectCaptureTargets.length === 0)
+            || Boolean(props.cueCaptureScopeError)
+            || Boolean(props.cueAuthoredBeatsError)
+          }
         >
           Store Cue
         </button>
         <Show when={props.cueCaptureScopeError}>
           {(error) => <span class="cueScopeHint invalid">{error()}</span>}
+        </Show>
+        <Show when={props.cueAuthoredBeatsError}>
+          {(error) => <span id="cue-authored-beats-error" class="cueScopeHint invalid">{error()}</span>}
         </Show>
       </div>
       <CueEffectRecallEditor
@@ -293,6 +322,10 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
           {(cue, index) => {
             const cueIndex = () => cuePage() * cuesPerPage + index();
             const draft = () => props.cueMetadataDraft(cue);
+            const authoredBeatsInvalid = () => draft().authored_beats !== null
+              && (!Number.isFinite(draft().authored_beats)
+                || draft().authored_beats! < 0.25
+                || draft().authored_beats! > 1024);
             const canSaveRecall = () => canSaveCueEffectTargets(cue, draft().effect_targets);
             const recallSaveHintId = `cue-${cue.id}-recall-save-hint`;
             const placements = () => props.cueTimelinePlacementsForCue(cue.id);
@@ -397,6 +430,24 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                     value={draft().fade_ms}
                     onInput={(event) => props.onUpdateCueMetadataDraft(cue, { fade_ms: Number(event.currentTarget.value) })}
                   />
+                  </label>
+                  <label>
+                    Authored beats
+                    <input
+                      type="number"
+                      min="0.25"
+                      max="1024"
+                      step="0.25"
+                      placeholder="Optional"
+                      value={draft().authored_beats ?? ""}
+                      aria-invalid={authoredBeatsInvalid()}
+                      onInput={(event) => props.onUpdateCueMetadataDraft(cue, {
+                        authored_beats: event.currentTarget.value === "" ? null : Number(event.currentTarget.value),
+                      })}
+                    />
+                    <Show when={authoredBeatsInvalid()}>
+                      <small class="cueFieldError">Use 0.25 to 1024.</small>
+                    </Show>
                   </label>
                   <label>
                     Pre-wait ms
@@ -610,6 +661,7 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                   <button
                     class="cueEditOnly cueSaveDetails"
                     title="Saves Cue details only. Effect Recall uses Save Recall."
+                    disabled={authoredBeatsInvalid()}
                     onClick={() => void props.onSetCueMetadata(cue)}
                   >
                     Save Details
@@ -661,13 +713,19 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                           <button
                             class="cueTimelinePlacementMain"
                             title={placement.duration_ms > 0
-                              ? `Linked Scene Block · ${placement.time_ms} ms / ${placement.duration_ms} ms × ${placement.loop_count} / ${placement.track}`
+                              ? placement.conform_to_tempo
+                                ? `Linked Scene Block${timelineConformRateBadge(placement) ? ` ${timelineConformRateBadge(placement)}` : ""} · ${placement.time_ms} ms / ${placement.duration_ms} ms window / ${placement.loop_count} ${placement.loop_fill ? "fill loops" : "tempo iterations"} / ${placement.track}`
+                                : `Linked Scene Block · ${placement.time_ms} ms / ${placement.duration_ms} ms × ${placement.loop_count} / ${placement.track}`
                               : `Legacy point · ${placement.time_ms} ms / ${placement.track}`}
                             onClick={() => void props.onSeekTimeline(placement.time_ms)}
                           >
                             <b>{placement.track === "Lighting" ? "L" : "V"}</b>
                             <small>
-                              {placement.time_ms} · {placement.duration_ms > 0 ? `${placement.duration_ms}×${placement.loop_count}` : "Point"}
+                              {placement.time_ms} · {placement.duration_ms > 0
+                                ? placement.conform_to_tempo
+                                  ? `${timelineConformRateBadge(placement) ? `${timelineConformRateBadge(placement)} ` : ""}${placement.duration_ms} window/${placement.loop_count} ${placement.loop_fill ? "fill" : "tempo"}`
+                                  : `${placement.duration_ms}×${placement.loop_count}`
+                                : "Point"}
                             </small>
                           </button>
                           <button

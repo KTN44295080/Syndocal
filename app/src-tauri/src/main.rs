@@ -5722,6 +5722,7 @@ fn create_cue_from_current(
     state: State<'_, AppState>,
     label: String,
     fade_ms: u64,
+    authored_beats: Option<f32>,
     capture_scope: Option<CueCaptureScope>,
     cue_list_id: Option<protocol::CueListId>,
     effect_targets: Option<Vec<CueEffectTarget>>,
@@ -5730,6 +5731,7 @@ fn create_cue_from_current(
     if label.is_empty() {
         return Err("Cue label is required".to_string());
     }
+    validate_cue_authored_beats(authored_beats)?;
     let mut snapshot = state.engine.persistence_snapshot()?;
     use_authored_video_snapshot(&mut snapshot);
     apply_programmer_preview_to_snapshot(&mut snapshot);
@@ -5766,6 +5768,7 @@ fn create_cue_from_current(
         cue_list_id,
         label,
         fade_ms,
+        authored_beats,
         targets,
         video_targets,
         video_output_targets,
@@ -6290,6 +6293,7 @@ fn set_cue_metadata(
     cue_number: String,
     label: String,
     fade_ms: u64,
+    authored_beats: Option<f32>,
     pre_wait_ms: u64,
     follow_ms: Option<u64>,
     ifcb_timing: protocol::CueIfcbTiming,
@@ -6307,6 +6311,7 @@ fn set_cue_metadata(
     if label.is_empty() {
         return Err("Cue label is required".to_string());
     }
+    validate_cue_authored_beats(authored_beats)?;
     let snapshot = state.engine.snapshot();
     if !snapshot.cues.iter().any(|cue| cue.id == cue_id) {
         return Err(format!("Cue {cue_id} was not found"));
@@ -6335,6 +6340,7 @@ fn set_cue_metadata(
         cue_number,
         label,
         fade_ms,
+        authored_beats,
         pre_wait_ms,
         follow_ms,
         ifcb_timing,
@@ -6344,6 +6350,23 @@ fn set_cue_metadata(
         tracking,
         notes,
     )
+}
+
+fn validate_cue_authored_beats(authored_beats: Option<f32>) -> Result<(), String> {
+    let Some(authored_beats) = authored_beats else {
+        return Ok(());
+    };
+    if !authored_beats.is_finite()
+        || !(protocol::MIN_CUE_AUTHORED_BEATS..=protocol::MAX_CUE_AUTHORED_BEATS)
+            .contains(&authored_beats)
+    {
+        return Err(format!(
+            "Cue authored beats must be a finite value from {} to {} (received {authored_beats})",
+            protocol::MIN_CUE_AUTHORED_BEATS,
+            protocol::MAX_CUE_AUTHORED_BEATS
+        ));
+    }
+    Ok(())
 }
 
 fn validate_cue_mib_fixture_ids(
@@ -6549,9 +6572,11 @@ fn add_timeline_cue_event(
     state: State<'_, AppState>,
     cue_id: CueId,
     time_ms: u64,
+    time_beats: Option<f64>,
     track: TimelineTrackKind,
     layer_id: Option<u32>,
 ) -> Result<TimelineEventId, String> {
+    validate_timeline_time_beats("Timeline cue event", time_beats)?;
     let snapshot = state.engine.snapshot();
     if !snapshot.cues.iter().any(|cue| cue.id == cue_id) {
         return Err(format!("Cue {cue_id} was not found"));
@@ -6559,7 +6584,7 @@ fn add_timeline_cue_event(
     let event_id = state.engine.allocate_timeline_event_id();
     state
         .engine
-        .add_timeline_cue_event_published(event_id, cue_id, time_ms, track, layer_id)?;
+        .add_timeline_cue_event_published(event_id, cue_id, time_ms, time_beats, track, layer_id)?;
     Ok(event_id)
 }
 
@@ -6569,9 +6594,11 @@ fn set_timeline_cue_event(
     event_id: TimelineEventId,
     cue_id: CueId,
     time_ms: u64,
+    time_beats: Option<f64>,
     track: TimelineTrackKind,
     layer_id: Option<u32>,
 ) -> Result<(), String> {
+    validate_timeline_time_beats(&format!("Timeline event {event_id}"), time_beats)?;
     let snapshot = state.engine.snapshot();
     if !snapshot.cues.iter().any(|cue| cue.id == cue_id) {
         return Err(format!("Cue {cue_id} was not found"));
@@ -6586,7 +6613,16 @@ fn set_timeline_cue_event(
     }
     state
         .engine
-        .set_timeline_cue_event_published(event_id, cue_id, time_ms, track, layer_id)
+        .set_timeline_cue_event_published(event_id, cue_id, time_ms, time_beats, track, layer_id)
+}
+
+fn validate_timeline_time_beats(owner: &str, time_beats: Option<f64>) -> Result<(), String> {
+    if time_beats.is_some_and(|beats| !beats.is_finite() || beats < 0.0) {
+        return Err(format!(
+            "{owner} beat-domain start must be a finite non-negative value"
+        ));
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6594,12 +6630,45 @@ fn validate_timeline_scene_block_fields(
     events: &[protocol::TimelineCueEventSummary],
     owner: &str,
     time_ms: u64,
+    time_beats: Option<f64>,
     duration_ms: u64,
+    duration_beats: Option<f64>,
+    conform_to_tempo: bool,
+    loop_fill: bool,
     loop_count: u16,
     jump_to_event_id: Option<TimelineEventId>,
     allow_legacy_point: bool,
+    cue_authored_beats: Option<f32>,
 ) -> Result<(), String> {
+    validate_timeline_time_beats(owner, time_beats)?;
+    if duration_beats.is_some_and(|beats| !beats.is_finite() || beats < 0.0) {
+        return Err(format!(
+            "{owner} beat-domain duration must be a finite non-negative value"
+        ));
+    }
+    if loop_fill && !conform_to_tempo {
+        return Err(format!(
+            "{owner} Loop-fill requires Conform-to-tempo to be enabled"
+        ));
+    }
+    if conform_to_tempo {
+        if cue_authored_beats.is_none() {
+            return Err(format!(
+                "{owner} uses Conform-to-tempo, but its cue has no authored beat length"
+            ));
+        }
+        if !loop_fill && !duration_beats.is_some_and(|beats| beats > 0.0) {
+            return Err(format!(
+                "{owner} uses Conform-to-tempo without Loop-fill and requires a positive beat-domain duration"
+            ));
+        }
+    }
     if duration_ms == 0 {
+        if conform_to_tempo {
+            return Err(format!(
+                "{owner} uses Conform-to-tempo and must have a duration greater than zero"
+            ));
+        }
         if !allow_legacy_point {
             return Err(format!("{owner} duration must be greater than zero"));
         }
@@ -6620,9 +6689,13 @@ fn validate_timeline_scene_block_fields(
             protocol::MAX_TIMELINE_SCENE_BLOCK_LOOPS
         ));
     }
-    let total_duration_ms = duration_ms
-        .checked_mul(u64::from(loop_count))
-        .ok_or_else(|| format!("{owner} total duration overflows the timeline"))?;
+    let total_duration_ms = if conform_to_tempo {
+        duration_ms
+    } else {
+        duration_ms
+            .checked_mul(u64::from(loop_count))
+            .ok_or_else(|| format!("{owner} total duration overflows the timeline"))?
+    };
     time_ms
         .checked_add(total_duration_ms)
         .ok_or_else(|| format!("{owner} end time overflows the timeline"))?;
@@ -6642,21 +6715,32 @@ fn validate_timeline_scene_block_request(
     owner: &str,
     cue_id: CueId,
     time_ms: u64,
+    time_beats: Option<f64>,
     duration_ms: u64,
+    duration_beats: Option<f64>,
+    conform_to_tempo: bool,
+    loop_fill: bool,
     loop_count: u16,
     jump_to_event_id: Option<TimelineEventId>,
 ) -> Result<(), String> {
-    if !snapshot.cues.iter().any(|cue| cue.id == cue_id) {
-        return Err(format!("Cue {cue_id} was not found"));
-    }
+    let cue = snapshot
+        .cues
+        .iter()
+        .find(|cue| cue.id == cue_id)
+        .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
     validate_timeline_scene_block_fields(
         &snapshot.timeline.events,
         owner,
         time_ms,
+        time_beats,
         duration_ms,
+        duration_beats,
+        conform_to_tempo,
+        loop_fill,
         loop_count,
         jump_to_event_id,
         false,
+        cue.authored_beats,
     )
 }
 
@@ -6666,9 +6750,13 @@ fn add_timeline_scene_block(
     state: State<'_, AppState>,
     cue_id: CueId,
     time_ms: u64,
+    time_beats: Option<f64>,
     track: TimelineTrackKind,
     layer_id: Option<u32>,
     duration_ms: u64,
+    duration_beats: Option<f64>,
+    conform_to_tempo: bool,
+    loop_fill: bool,
     loop_count: u16,
     jump_to_event_id: Option<TimelineEventId>,
 ) -> Result<TimelineEventId, String> {
@@ -6678,7 +6766,11 @@ fn add_timeline_scene_block(
         "Timeline scene block",
         cue_id,
         time_ms,
+        time_beats,
         duration_ms,
+        duration_beats,
+        conform_to_tempo,
+        loop_fill,
         loop_count,
         jump_to_event_id,
     )?;
@@ -6687,9 +6779,13 @@ fn add_timeline_scene_block(
         event_id,
         cue_id,
         time_ms,
+        time_beats,
         track,
         layer_id,
         duration_ms,
+        duration_beats,
+        conform_to_tempo,
+        loop_fill,
         loop_count,
         jump_to_event_id,
     )?;
@@ -6703,9 +6799,13 @@ fn set_timeline_scene_block(
     event_id: TimelineEventId,
     cue_id: CueId,
     time_ms: u64,
+    time_beats: Option<f64>,
     track: TimelineTrackKind,
     layer_id: Option<u32>,
     duration_ms: u64,
+    duration_beats: Option<f64>,
+    conform_to_tempo: bool,
+    loop_fill: bool,
     loop_count: u16,
     jump_to_event_id: Option<TimelineEventId>,
 ) -> Result<(), String> {
@@ -6723,7 +6823,11 @@ fn set_timeline_scene_block(
         &format!("Timeline scene block {event_id}"),
         cue_id,
         time_ms,
+        time_beats,
         duration_ms,
+        duration_beats,
+        conform_to_tempo,
+        loop_fill,
         loop_count,
         jump_to_event_id,
     )?;
@@ -6731,9 +6835,13 @@ fn set_timeline_scene_block(
         event_id,
         cue_id,
         time_ms,
+        time_beats,
         track,
         layer_id,
         duration_ms,
+        duration_beats,
+        conform_to_tempo,
+        loop_fill,
         loop_count,
         jump_to_event_id,
     )
@@ -6939,6 +7047,11 @@ fn remove_timeline_automation(
         .engine
         .send(EngineCommand::RemoveTimelineAutomation(automation_id))
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn reconform_timeline_to_bpm(state: State<'_, AppState>) -> Result<(), String> {
+    state.engine.reconform_timeline_to_bpm()
 }
 
 #[tauri::command]
@@ -14309,6 +14422,12 @@ fn validate_project_file(project: &ProjectFile) -> Result<(), String> {
                 cue.id, cue.cue_list_id
             ));
         }
+        validate_cue_authored_beats(cue.authored_beats).map_err(|error| {
+            format!(
+                "Project cue {} '{}' has invalid authored length: {error}",
+                cue.id, cue.label
+            )
+        })?;
     }
     validate_unique_ids(
         "timeline event",
@@ -14411,12 +14530,12 @@ fn validate_unique_ids(label: &str, ids: impl IntoIterator<Item = u64>) -> Resul
 
 fn validate_project_timeline_scene_blocks(snapshot: &EngineSnapshot) -> Result<(), String> {
     for event in &snapshot.timeline.events {
-        if !snapshot.cues.iter().any(|cue| cue.id == event.cue_id) {
+        let Some(cue) = snapshot.cues.iter().find(|cue| cue.id == event.cue_id) else {
             return Err(format!(
                 "Project timeline event {} references missing cue {}",
                 event.id, event.cue_id
             ));
-        }
+        };
         if let Some(layer_id) = event.layer_id {
             let Some(layer) = snapshot
                 .timeline
@@ -14463,10 +14582,15 @@ fn validate_project_timeline_scene_blocks(snapshot: &EngineSnapshot) -> Result<(
             &snapshot.timeline.events,
             &format!("Project timeline event {}", event.id),
             event.time_ms,
+            event.time_beats,
             event.duration_ms,
+            event.duration_beats,
+            event.conform_to_tempo,
+            event.loop_fill,
             event.loop_count,
             event.jump_to_event_id,
             true,
+            cue.authored_beats,
         )?;
     }
     Ok(())
@@ -26478,6 +26602,18 @@ f 1 2 3
             .insert("future_fixture_field".to_string(), json!("ignored"));
         let sample_project: ProjectFile = serde_json::from_value(sample_value).unwrap();
         validate_project_file(&sample_project).unwrap();
+        assert!(sample_project
+            .snapshot
+            .cues
+            .iter()
+            .all(|cue| cue.authored_beats.is_none()));
+        assert!(sample_project.snapshot.timeline.events.iter().all(|event| {
+            event.time_beats.is_none()
+                && event.duration_beats.is_none()
+                && !event.conform_to_tempo
+                && !event.loop_fill
+                && event.rate.is_none()
+        }));
 
         let mut legacy_value = serde_json::to_value(ProjectFile {
             version: PROJECT_FILE_VERSION,
@@ -28491,6 +28627,7 @@ f 1 2 3
         project.snapshot.cues = vec![protocol::CueSummary {
             id: 7,
             label: "Source look".to_string(),
+            authored_beats: Some(4.0),
             ..protocol::CueSummary::default()
         }];
         project.snapshot.timeline.events = vec![
@@ -28498,9 +28635,14 @@ f 1 2 3
                 id: 20,
                 cue_id: 7,
                 time_ms: 1_000,
+                time_beats: Some(2.0),
                 track: TimelineTrackKind::Lighting,
                 layer_id: None,
                 duration_ms: 2_000,
+                duration_beats: Some(4.0),
+                conform_to_tempo: true,
+                loop_fill: true,
+                rate: Some(1.5),
                 loop_count: 3,
                 jump_to_event_id: Some(21),
             },
@@ -28508,9 +28650,14 @@ f 1 2 3
                 id: 21,
                 cue_id: 7,
                 time_ms: 8_000,
+                time_beats: None,
                 track: TimelineTrackKind::Lighting,
                 layer_id: None,
                 duration_ms: 1_000,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                rate: None,
                 loop_count: 1,
                 jump_to_event_id: None,
             },
@@ -28555,6 +28702,9 @@ f 1 2 3
         validate_project_file(&roundtrip).unwrap();
 
         let mut legacy = serde_json::to_value(project).unwrap();
+        for cue in legacy["snapshot"]["cues"].as_array_mut().unwrap() {
+            cue.as_object_mut().unwrap().remove("authored_beats");
+        }
         legacy["snapshot"]["timeline"]
             .as_object_mut()
             .unwrap()
@@ -28565,19 +28715,179 @@ f 1 2 3
         {
             let event = event.as_object_mut().unwrap();
             event.remove("layer_id");
+            event.remove("time_beats");
             event.remove("duration_ms");
+            event.remove("duration_beats");
+            event.remove("conform_to_tempo");
+            event.remove("loop_fill");
+            event.remove("rate");
             event.remove("loop_count");
             event.remove("jump_to_event_id");
         }
         let legacy: ProjectFile = serde_json::from_value(legacy).unwrap();
         assert!(legacy.snapshot.timeline.layers.is_empty());
+        assert!(legacy
+            .snapshot
+            .cues
+            .iter()
+            .all(|cue| cue.authored_beats.is_none()));
         assert!(legacy.snapshot.timeline.events.iter().all(|event| {
             event.layer_id.is_none()
+                && event.time_beats.is_none()
                 && event.duration_ms == 0
+                && event.duration_beats.is_none()
+                && !event.conform_to_tempo
+                && !event.loop_fill
+                && event.rate.is_none()
                 && event.loop_count == 1
                 && event.jump_to_event_id.is_none()
         }));
         validate_project_file(&legacy).unwrap();
+    }
+
+    #[test]
+    fn project_conform_fields_roundtrip_and_legacy_defaults() {
+        let project = project_with_timeline_scene_blocks();
+        let json = project_json_for_write(&project).unwrap();
+        let roundtrip: ProjectFile = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(roundtrip.snapshot.cues[0].authored_beats, Some(4.0));
+        let event = &roundtrip.snapshot.timeline.events[0];
+        assert_eq!(event.time_beats, Some(2.0));
+        assert_eq!(event.duration_beats, Some(4.0));
+        assert!(event.conform_to_tempo);
+        assert!(event.loop_fill);
+        assert_eq!(event.rate, Some(1.5));
+
+        let mut legacy = serde_json::to_value(project).unwrap();
+        legacy["snapshot"]["cues"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("authored_beats");
+        for event in legacy["snapshot"]["timeline"]["events"]
+            .as_array_mut()
+            .unwrap()
+        {
+            let event = event.as_object_mut().unwrap();
+            event.remove("time_beats");
+            event.remove("duration_beats");
+            event.remove("conform_to_tempo");
+            event.remove("loop_fill");
+            event.remove("rate");
+        }
+        let legacy: ProjectFile = serde_json::from_value(legacy).unwrap();
+        assert_eq!(legacy.snapshot.cues[0].authored_beats, None);
+        assert!(legacy.snapshot.timeline.events.iter().all(|event| {
+            event.time_beats.is_none()
+                && event.duration_beats.is_none()
+                && !event.conform_to_tempo
+                && !event.loop_fill
+                && event.rate.is_none()
+        }));
+        validate_project_file(&legacy).unwrap();
+    }
+
+    #[test]
+    fn project_file_validation_rejects_authored_beats_outside_supported_range() {
+        let mut project = project_with_timeline_scene_blocks();
+        project.snapshot.cues[0].authored_beats = Some(protocol::MIN_CUE_AUTHORED_BEATS);
+        validate_project_file(&project).unwrap();
+        project.snapshot.cues[0].authored_beats = Some(protocol::MAX_CUE_AUTHORED_BEATS);
+        validate_project_file(&project).unwrap();
+
+        project.snapshot.cues[0].authored_beats = Some(protocol::MIN_CUE_AUTHORED_BEATS - 0.01);
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("authored beats must be a finite value from 0.25 to 1024"));
+
+        project.snapshot.cues[0].authored_beats = Some(protocol::MAX_CUE_AUTHORED_BEATS + 0.01);
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("authored beats must be a finite value from 0.25 to 1024"));
+
+        project.snapshot.cues[0].authored_beats = Some(f32::NAN);
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("authored beats must be a finite value from 0.25 to 1024"));
+    }
+
+    #[test]
+    fn project_conformed_scene_block_validation_uses_window_duration_and_requires_beat_intent() {
+        let mut project = project_with_timeline_scene_blocks();
+        let event = &mut project.snapshot.timeline.events[0];
+        event.time_ms = u64::MAX - 2_000;
+        event.duration_ms = 1_000;
+        event.loop_count = 3;
+        event.jump_to_event_id = None;
+        validate_project_file(&project).unwrap();
+
+        project.snapshot.timeline.events[0].conform_to_tempo = false;
+        project.snapshot.timeline.events[0].loop_fill = false;
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("end time overflows the timeline"));
+
+        let event = &mut project.snapshot.timeline.events[0];
+        event.conform_to_tempo = true;
+        event.loop_fill = true;
+        project.snapshot.cues[0].authored_beats = None;
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("cue has no authored beat length"));
+
+        project.snapshot.cues[0].authored_beats = Some(4.0);
+        let event = &mut project.snapshot.timeline.events[0];
+        event.loop_fill = false;
+        event.duration_beats = None;
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("requires a positive beat-domain duration"));
+
+        project.snapshot.timeline.events[0].duration_beats = Some(4.0);
+        validate_project_file(&project).unwrap();
+        project.snapshot.timeline.events[0].time_beats = Some(-0.25);
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("beat-domain start must be a finite non-negative value"));
+    }
+
+    #[test]
+    fn project_load_recomputes_stale_conform_rate_from_authored_effect_period() {
+        let mut project = project_with_effect_only_cue();
+        project.snapshot.cues[0].authored_beats = Some(4.0);
+        project.snapshot.cues[0].effect_targets[0].enabled = true;
+        project.snapshot.timeline.events = vec![protocol::TimelineCueEventSummary {
+            id: 20,
+            cue_id: 7,
+            time_ms: 0,
+            time_beats: Some(0.0),
+            track: TimelineTrackKind::Lighting,
+            layer_id: None,
+            duration_ms: 4_000,
+            duration_beats: Some(8.0),
+            conform_to_tempo: true,
+            loop_fill: true,
+            rate: Some(99.0),
+            loop_count: 1,
+            jump_to_event_id: None,
+        }];
+        project.snapshot.timeline.duration_ms = 4_000;
+        validate_project_file(&project).unwrap();
+
+        project.snapshot.output.enabled = false;
+        for output in &mut project.snapshot.dmx_outputs {
+            output.enabled = false;
+        }
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine.load_project_snapshot(project.snapshot).unwrap();
+
+        let loaded = engine.persistence_snapshot().unwrap();
+        let event = loaded.timeline.events.first().unwrap();
+        assert_eq!(event.loop_count, 2);
+        assert_eq!(event.rate, Some(0.25));
     }
 
     #[test]
@@ -28865,6 +29175,9 @@ f 1 2 3
             .unwrap_err()
             .contains("references missing cue 99"));
         project.snapshot.timeline.events[0].cue_id = 7;
+        project.snapshot.timeline.events[0].conform_to_tempo = false;
+        project.snapshot.timeline.events[0].loop_fill = false;
+        project.snapshot.timeline.events[0].duration_beats = None;
 
         project.snapshot.timeline.events[0].duration_ms = 0;
         assert!(validate_project_file(&project)
@@ -28911,7 +29224,11 @@ f 1 2 3
             "Timeline scene block",
             7,
             12_000,
+            None,
             1_000,
+            None,
+            false,
+            false,
             2,
             Some(20),
         )
@@ -28921,7 +29238,11 @@ f 1 2 3
             "Timeline scene block",
             7,
             12_000,
+            None,
             0,
+            None,
+            false,
+            false,
             1,
             None,
         )
@@ -28932,7 +29253,11 @@ f 1 2 3
             "Timeline scene block",
             99,
             12_000,
+            None,
             1_000,
+            None,
+            false,
+            false,
             1,
             None,
         )
@@ -35610,6 +35935,7 @@ fn main() {
             set_timeline_video_automation,
             set_timeline_automation_enabled,
             remove_timeline_automation,
+            reconform_timeline_to_bpm,
             set_timeline_playing,
             seek_timeline,
             seek_timeline_beat,

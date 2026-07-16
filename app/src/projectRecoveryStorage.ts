@@ -37,7 +37,13 @@ const editorDraftsFromUnknown = (candidate: unknown): ProjectRecoveryCheckpoint[
   for (const [eventId, draft] of Object.entries(source.timeline_events)) {
     const numericEventId = Number(eventId);
     if (!Number.isInteger(numericEventId) || numericEventId <= 0 || !isTimelineEventDraft(draft)) continue;
-    timelineEvents[numericEventId] = draft;
+    timelineEvents[numericEventId] = {
+      ...draft,
+      time_beats: draft.time_beats ?? null,
+      duration_beats: draft.duration_beats ?? null,
+      conform_to_tempo: draft.conform_to_tempo ?? false,
+      loop_fill: draft.loop_fill ?? false,
+    };
   }
   return { version: 1, timeline_events: timelineEvents };
 };
