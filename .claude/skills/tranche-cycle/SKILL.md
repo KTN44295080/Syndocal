@@ -110,15 +110,44 @@ pwsh -NoProfile -File qa/harnesses/click-window-point.ps1 -TitlePattern "Dasligh
 - 既知の地雷: **ResizeObserver駆動のピクセルviewBox SVG（TimelineOverview等）を
   `auto`グリッド行やコンテンツ駆動サイズの中に置くと、行サイズ⇄viewBox書換の
   レイアウト発振で1操作が数十秒〜数分になる**（T10で実測143秒）。対処は
-  ホストの高さ固定 + `contain: size layout`。新しいスクロールコンテナには
-  `scrollbar-gutter: stable`。
+  ホストの高さ固定 + `contain: size layout` **のみで十分**。
+  `scrollbar-gutter: stable`を保険で重ねない — 実際にスクロールしない要素や
+  入れ子の各層に付けると1層あたり~10px幅を食い、scene-blockの
+  「workspace≥パネル幅97%」契約を割る（F3検証で実測: 三重gutterで20px損失）。
+  gutterは「その要素自身が実スクロールし、かつ出現/消失の往復が観測に影響する」
+  場合だけ。
 - `check-viewport-containment.mjs`のscene-block-largeは失敗時に
   `FAILED CONDITIONS: [...]` を出力する（監督が計装済み）。
 - 偽陰性に注意: 存在しない環境変数でシナリオがスキップされ「PASS」に見えることがある。
   疑わしいpassはシナリオが本当に実行されたか（実行時間・出力量）で裏取りする。
 - grepは大文字小文字に注意（`setXxx`セッターは`xxx`の検索に掛からない）。
 
-## 6. 分析・設計が必要なとき
+## 6. ローカル検証インフラの運用規律（341分事件の教訓、2026-07-16）
+
+- **番犬なしで長時間ジョブを走らせない。** ローカルのviewportマトリクス/スライスも
+  必ずラッパ（ライブログファイル + N分無成長で報告するウォッチドッグ）経由で実行する。
+  `| grep`でパイプすると完了まで出力が見えず、ハングと正常が区別不能になる。
+- **ハーネスは固定ポート（Vite 5173 / CDP 9227）**。前回runの死に残りが占有していると
+  次のrunが古いインスタンスへ半接続して無限awaitに落ちる（CPUゼロ・HTTP応答あり・
+  WS確立不可）。ハーネス自体に`failIfPortOccupied`（fail-fast）と Windows
+  `taskkill /T /F`ツリーkillを実装済み — 消さないこと。
+- **長寿命headless Chromeは多数の重量ナビゲーション後にレンダラのメインスレッドが
+  CPUゼロで凍結することがある**（孤立新品ブラウザ6/6パス vs 同一セッション3/3凍結で実証、
+  Chrome 150）。ハーネスはフィクスチャフェーズ毎に`recycleBrowser()`（新品ブラウザ+
+  新品プロファイル+waitForApp復帰）を挟む — 消さないこと。強制kill後のプロファイル
+  再利用はロック残骸で挙動不定になるため、リサイクルは必ず新品mkdtempプロファイル。
+- **凍結の検死手順**: ①CPU脈拍（数秒デルタ; 発振=高CPU、待ちボケ/凍結=ほぼゼロ）
+  ②ブラウザレベルWS（/json/versionのwebSocketDebuggerUrl）+ Target.attachToTarget
+  flatセッションで`Runtime.evaluate 1+1`（タイムアウト=メインスレッド死）
+  ③`Page.handleJavaScriptDialog`（ブラウザ側処理なので凍結中でも応答; "No dialog"なら
+  ダイアログ説棄却）④スレッドサスペンド検査（PowerShell Threads.WaitReason）。
+  ページWS直結は既存クライアントと排他なので使わない。
+- **bashラッパのpidはMSYS空間**。taskkillに渡すpidはPowerShellの
+  `Get-CimInstance Win32_Process`のCommandLineマッチで取ること。
+- 帰属判断に迷ったら**git stashでプレ変更ツリーとのN連A/B**が最速の裁定者
+  （クリーン環境の作り直しをrun間に挟むこと）。
+
+## 7. 分析・設計が必要なとき
 
 大きな設計判断（新トランシェ系列、構造変更）は Workflow ツールで
 Inventory(並列) → Design(複数レンズ) → Judge → Adversarial Verify を回し、

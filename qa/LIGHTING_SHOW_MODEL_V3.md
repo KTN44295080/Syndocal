@@ -60,6 +60,11 @@ risk: medium / est: L / depends: F1, T10
 
 ## F3: Conform-to-tempo — authored scene length, beat-domain placement, re-conform pass, [N.NNx] badge
 risk: medium / est: M / depends: F1
+**✅完了 2026-07-16 コミット09fc18c** — 即時re-conform（再生中含む、ロック層にも適用=トランスポート
+操作扱い）、loop_fill上限256、rateはロード時再計算、Chaserのbounce走査(2n-2)シード対応。
+engine conform 9 / timeline 44 / project_ 64 / protocol 23 / フルviewportマトリクス212全緑
+（監督独立再実行済み）。付随してcueEditRowのflex-wrap化とT10冗長scrollbar-gutter除去、
+ハーネス基盤強化（ポートfail-fast/ツリーkill/フェーズ間ブラウザリサイクル）を同梱。
 
 **Problem**: Scene Blocks are fixed-milliseconds: Beat/Bar snap is frontend-only ms rounding discarded at commit (App.tsx snapTimeMs), so BPM changes leave stale placements; cues have no authored period to conform against; no conform flag, no rate multiplier, no badge. The exact rate math already exists for video (effective_speed = loop_length_ms / (240000/bpm * loop_bars / ratio), video lib.rs:4828) but nothing on the block->cue path uses it.
 
