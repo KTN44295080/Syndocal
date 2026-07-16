@@ -15,6 +15,10 @@ RATE/WINDOWストレッチ、下半分フェードドラッグ）。優先方針
 
 ## F1: Timeline Layers v3 — N user layers with functional mute/solo/lock (protocol + engine)
 risk: medium / est: L / depends: none
+**✅完了 2026-07-16 コミット63a9ce1** — kind条項込みで設計どおり実装。16新テスト+2000ブロック
+予算テストの8レイヤー化、protocol 22 / engine timeline_layer 11 / timeline 43 / syndocal
+project_ 60 / tsc 全green（監督独立再実行済み）。TimelineEventPlacementUpdate.layer_idも
+追加済みでF2の原子的レイヤー移動に使える。
 
 **Problem**: Syndocal has exactly two hard-coded visual-only lanes (TimelineTrackKind::Lighting|Video, protocol lib.rs:1385-1388). The eye toggle in TimelineOverview only dims pixels; the engine ignores `track` entirely when firing ('placement always recalls the complete source Cue', engine lib.rs:11167-11168). Daslight's model — and the user's Shin show — needs 1..N user-created ordered layers whose mute actually gates cue dispatch, whose lock rejects edits, and whose ordering gives a deterministic result when blocks overlap.
 
