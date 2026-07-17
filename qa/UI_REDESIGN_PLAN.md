@@ -2,7 +2,7 @@
 
 作成: 2026-07-15 / 計画: Fable（実機比較・多段Workflow分析・敵対検証込み）/ 実装: Opus委任
 状態: **承認済み（2026-07-15）** — 実施順:
-T1✅ → T2✅ → T9✅ → T10✅（e0e2e3e）→ T8✅（41aaaaf）→ **F1系（照明ショーモデル、LIGHTING_SHOW_MODEL_V3参照）と並走: T3（次のUIトランシェ）** → T4 → T5（T10へ吸収済み）→ T6 → T7 → T11編集可能Touchサーフェス
+T1✅ → T2✅ → T9✅ → T10✅ → T8✅ → F1✅ → F3✅ → F2✅ → F4✅ → T4✅（86ca79e）→ F5✅（243aaea）+ T3✅（f5cc523、Fable直接実装・合議マージf64ef96）→ **次: T5/F6以降** → T6 → T7 → F7/F8 → T11 → T12
 実装体制（2026-07-16更新）: 実装=Codex gpt-5.6-sol（ローカルCLI、ユーザー指定）/ 計画・検証・コミット=Fable。
 T9はOpus（Mapping再設計）+Codex（StageGlyphs.tsx共有レンダラー統一）の合作で`1db7af5`として着地。
 承認内容: (1) 計画全体 (2) T8をT2直後へ前倒し（Control構造契約の変更を承認） (3) T7のprotocol変更
