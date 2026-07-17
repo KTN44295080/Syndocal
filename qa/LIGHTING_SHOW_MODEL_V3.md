@@ -96,6 +96,12 @@ engine conform 9 / timeline 44 / project_ 64 / protocol 23 / フルviewportマ�
 
 ## F4: Cue-owned FX parameters + activation-scoped effect instances with rate
 risk: high / est: L / depends: F3
+**✅完了 2026-07-17 コミットb8de22d** — EffectParamsSnapshot（6種request形状）、copy-on-capture、
+activation-scopedインスタンス（rateは全6評価器へ乗算1回、ループ毎位相リセット、ブロック終端/
+手動releaseで消滅、jump/seek/逆行/rollbackの整理まで網羅）、release_cueコマンド追加。
+44Hzティックへの追加ゼロ（ドレイン時プリビルド）。18新テスト+回帰全緑+フルマトリクス212緑
+（監督独立再実行済み）。**削除ポリシー（要ユーザー確認）**: params保持シーンはグローバル
+スタックのエフェクト削除後も自分のlookを維持する既定で実装済み。
 
 **Problem**: FX scenes are only enable-flag flips on a shared global effect stack: CueEffectTarget is { effect_id, enabled } (protocol lib.rs:342-345) and apply_cue_effect_targets mutates the shared instance's enabled bit (engine lib.rs:10734-10744). Two FX scenes cannot carry different parameters of the same effect; recalling scene B silently changes what scene A meant; two blocks placing the same FX scene at different conform rates would fight over one instance and one created_at; nothing stops a cue's effects at block end.
 
