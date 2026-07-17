@@ -205,6 +205,15 @@ risk: low / est: M / depends: none
   recall_mode（Coexist既定 / ReplaceGroup）を追加する設計へ変更。F5のper-group active-cue map
   はこの per-cue モードを参照する。
 
+## F6確定事項（2026-07-17ユーザー回答、Open Questions解消）
+
+- **概念確認**: スーパーシーン＝タイムライン・イン・タイムライン（QLC+と同型）。タイムラインBを
+  タイムラインAのレーンへブロックとして配置。子は再利用可能（複数配置・複数レート、編集は全配置へ反映）、
+  ストレッチ/ループ/フェード/レーン移動は通常ブロックと同じ操作。
+- **入れ子深度: 1段で確定**（AにBまで。BにCは validation エラーのまま）。将来拡張可能な設計を維持。
+- **音声**: タイムラインでの音再生はF7（Audioレーンの音声クリップブロック+再生追従）として実装中。
+  子タイムラインもF6でAudioレーンを持ち、F7と同じクリップモデルで鳴らす。
+
 ## Open Questions（ユーザー回答待ち）
 - Layer conflict policy: when overlapping blocks on different layers drive the same fixture attributes, which wins — top layer by order (Daslight-like priority), latest trigger regardless of layer (LTP), or HTP for intensity only? F1 ships deterministic top-layer-wins on simultaneous triggers and last-trigger-wins otherwise as the interim; confirm or redirect before F2 UI bakes expectations.
 - Group-column exclusivity scope: should activating a scene in a group column always auto-release the previous scene of that group (Daslight behavior) everywhere (pads, MIDI/OSC, timeline blocks too), only from the matrix surface, or stay off by default? And should the release snap or fade using the released cue's fade_ms?
