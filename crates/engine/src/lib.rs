@@ -27,31 +27,31 @@ use protocol::{
     AudioSpectrumBand, AudioSpectrumPoint, AudioSpectrumSource, AutoVjAction, AutoVjConfig,
     AutoVjMode, AutoVjRhythmSource, AutoVjSnapshot, AutoVjStatus, AutoVjTrigger, AutomationId,
     AutomationInterpolation, AutomationKeyframeSummary, ChaserDirection, ChaserEffectRequest,
-    ClockSnapshot, ClockSource, ColorEffectAlgorithm, ColorEffectColor, ColorEffectInterpolation,
-    ColorEffectRequest, CompositionId, CompositionSummary, CueEffectTarget, CueFixtureTarget,
-    CueId, CueIfcbTiming, CueListId, CueListSummary, CueNodeGraphTarget, CuePaletteTarget,
-    CuePartSummary, CueSummary, DmxMergeMode, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol,
-    DmxOutputRouteTelemetry, DmxUniversePreview, EffectBlendMode, EffectId, EffectKind,
-    EffectParamsSnapshot, EffectSummary, EngineSnapshot, EngineTelemetry,
-    ExclusiveVideoTakeRequest, ExecutorId, FixtureId, FixtureLimits, FixtureProfileSummary,
-    LfoEffectRequest, LfoShape, LiveAudioFrame, LiveAudioReactiveFeatures, MoveCoordinateMode,
-    MoveDirection, MoveEffectRequest, MovePathPoint, NodeGraphAudioRuntimeStatus, NodeGraphId,
-    NodeGraphNodeKind, NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId,
-    PatchFixtureRequest, PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest,
-    ProgrammerSnapshot, ProgrammerValueSummary, RecallMode, ReferencePaletteSummary, Rotation3,
-    StageMapConfig, StageMapPresetSummary, StageObjectId, StageObjectSummary, SubmasterSummary,
-    TimelineAudioClipId, TimelineAudioClipSummary, TimelineAutomationSummary,
-    TimelineCueEventSummary, TimelineEventId, TimelineLayerKind, TimelineLayerSummary,
-    TimelineSnapRequest, TimelineSnapshot, TimelineTrackKind, TimelineVideoAutomationSummary,
-    Transform2D, ValueEffectDirection, ValueEffectInterpolation, ValueEffectMode, ValueEffectPoint,
-    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBlendMode, VideoColorAdjust,
-    VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust, VideoIsfControlKind,
-    VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId, VideoLayerState,
-    VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
-    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
-    VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
-    LIVE_AUDIO_FEATURE_BAND_CAPACITY, MAX_CUE_AUTHORED_BEATS, MAX_TIMELINE_SCENE_BLOCK_LOOPS,
-    MIN_CUE_AUTHORED_BEATS,
+    ChildTimelineSummary, ClockSnapshot, ClockSource, ColorEffectAlgorithm, ColorEffectColor,
+    ColorEffectInterpolation, ColorEffectRequest, CompositionId, CompositionSummary,
+    CueEffectTarget, CueFixtureTarget, CueId, CueIfcbTiming, CueListId, CueListSummary,
+    CueNodeGraphTarget, CuePaletteTarget, CuePartSummary, CueSummary, DmxMergeMode, DmxModeSummary,
+    DmxOutputConfig, DmxOutputProtocol, DmxOutputRouteTelemetry, DmxUniversePreview,
+    EffectBlendMode, EffectId, EffectKind, EffectParamsSnapshot, EffectSummary, EngineSnapshot,
+    EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId, FixtureId, FixtureLimits,
+    FixtureProfileSummary, LfoEffectRequest, LfoShape, LiveAudioFrame, LiveAudioReactiveFeatures,
+    MoveCoordinateMode, MoveDirection, MoveEffectRequest, MovePathPoint,
+    NodeGraphAudioRuntimeStatus, NodeGraphId, NodeGraphNodeKind, NodeGraphNodeSummary,
+    NodeGraphSummary, NodeGraphTransformOp, PaletteId, PatchFixtureRequest, PatchedFixtureSummary,
+    PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot, ProgrammerValueSummary,
+    RecallMode, ReferencePaletteSummary, Rotation3, StageMapConfig, StageMapPresetSummary,
+    StageObjectId, StageObjectSummary, SubmasterSummary, TimelineAudioClipId,
+    TimelineAudioClipSummary, TimelineAutomationSummary, TimelineCueEventSummary, TimelineEventId,
+    TimelineLayerKind, TimelineLayerSummary, TimelineSnapRequest, TimelineSnapshot,
+    TimelineTrackKind, TimelineVideoAutomationSummary, Transform2D, ValueEffectDirection,
+    ValueEffectInterpolation, ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3,
+    VideoAutomationKeyframeSummary, VideoBlendMode, VideoColorAdjust, VideoCuePointSummary,
+    VideoEffectTarget, VideoFxAdjust, VideoIsfControlKind, VideoIsfEffectStageSummary,
+    VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerSummary, VideoLayerTarget,
+    VideoOutputId, VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetSummary,
+    VideoOutputSummary, VideoOutputTarget, VideoParam, VideoSnapshot, VideoSourceKind,
+    VideoSourceSummary, DEFAULT_CUE_LIST_ID, LIVE_AUDIO_FEATURE_BAND_CAPACITY,
+    MAX_CUE_AUTHORED_BEATS, MAX_TIMELINE_SCENE_BLOCK_LOOPS, MIN_CUE_AUTHORED_BEATS,
 };
 use thiserror::Error;
 
@@ -502,6 +502,12 @@ pub enum EngineCommand {
         mib_fixture_ids: Vec<FixtureId>,
         tracking: bool,
         notes: String,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    SetCueChildTimeline {
+        cue_id: CueId,
+        child_timeline: Option<ChildTimelineSummary>,
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
@@ -1105,10 +1111,19 @@ pub struct VideoAudioRuntimeSnapshot {
 #[derive(Debug, Clone, Default)]
 pub struct TimelineAudioRuntimeSnapshot {
     pub clips: Vec<TimelineAudioClipSummary>,
+    pub child_clips: Vec<ChildTimelineAudioRuntimeClip>,
     pub playing: bool,
     pub position_ms: u64,
     pub muted: bool,
     pub transport_revision: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChildTimelineAudioRuntimeClip {
+    pub parent_event_id: TimelineEventId,
+    pub parent_iteration: u64,
+    pub position_ms: u64,
+    pub clip: TimelineAudioClipSummary,
 }
 
 struct QueuedEngineCommand {
@@ -1756,6 +1771,24 @@ impl EngineHandle {
             .map_err(|error| format!("Cue details acknowledgement failed: {error}"))?
     }
 
+    pub fn set_cue_child_timeline(
+        &self,
+        cue_id: CueId,
+        child_timeline: Option<ChildTimelineSummary>,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::SetCueChildTimeline {
+            cue_id,
+            child_timeline,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Cue child-timeline acknowledgement failed: {error}"))?
+    }
+
     pub fn remove_cue_published(&self, cue_id: CueId) -> Result<(), String> {
         let (ack, receiver) = mpsc::sync_channel(1);
         self.send(EngineCommand::RemoveCuePublished {
@@ -2248,6 +2281,7 @@ impl EngineHandle {
                 auto_vj_status: snapshot.video.auto_vj.status.clone(),
                 timeline_audio: TimelineAudioRuntimeSnapshot {
                     clips: snapshot.timeline.audio_clips.clone(),
+                    child_clips: child_timeline_audio_runtime_clips(&snapshot),
                     playing: snapshot.timeline.playing,
                     position_ms: snapshot.timeline.position_ms,
                     muted: snapshot.timeline.audio_muted,
@@ -2531,6 +2565,13 @@ impl RuntimeEffectActivationRange {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RuntimeEffectActivationKey {
     Timeline {
+        event_id: TimelineEventId,
+        cue_id: CueId,
+        iteration: u64,
+    },
+    ChildTimeline {
+        parent_event_id: TimelineEventId,
+        parent_iteration: u64,
         event_id: TimelineEventId,
         cue_id: CueId,
         iteration: u64,
@@ -2926,6 +2967,7 @@ struct RuntimeCue {
     video_output_targets: Vec<VideoOutputTarget>,
     node_graph_targets: Vec<CueNodeGraphTarget>,
     effect_targets: Vec<CueEffectTarget>,
+    child_timeline: Option<ChildTimelineSummary>,
     effect_activation_range: RuntimeEffectActivationRange,
 }
 
@@ -2977,6 +3019,7 @@ struct PendingTimelineEffectActivation {
     event_id: TimelineEventId,
     cue_id: CueId,
     iteration: u64,
+    child_parent: Option<(TimelineEventId, u64)>,
     range: RuntimeEffectActivationRange,
     rate: f32,
     created_at: Instant,
@@ -3046,6 +3089,28 @@ struct TimelineCueOccurrence {
     layer_order: u32,
     iteration: u64,
     kind: TimelineCueOccurrenceKind,
+}
+
+#[derive(Clone)]
+struct RuntimeChildTransport {
+    parent_event_id: TimelineEventId,
+    window_start_ms: u64,
+    window_end_ms: u64,
+    iteration_period_ms: u64,
+    rate: f32,
+    loop_fill: bool,
+    duration_ms: u64,
+    active: bool,
+    boundary_armed: bool,
+    parent_iteration: u64,
+    previous_position_ms: u64,
+    position_ms: u64,
+    events: Vec<RuntimeTimelineEvent>,
+    automations: Vec<RuntimeTimelineAutomation>,
+    video_automations: Vec<RuntimeTimelineVideoAutomation>,
+    due: Vec<TimelineCueOccurrence>,
+    dispatch: Vec<Option<CueDispatchEntry>>,
+    effect_activation_ranges: Vec<RuntimeEffectActivationRange>,
 }
 
 #[derive(Clone)]
@@ -3298,6 +3363,8 @@ struct EngineRuntime {
     effect_activations: Vec<RuntimeEffectActivation>,
     active_effect_activation_indices: Vec<usize>,
     timeline_effect_activation_ranges: Vec<RuntimeEffectActivationRange>,
+    child_transports: Vec<RuntimeChildTransport>,
+    child_transport_by_parent_event: Vec<Option<usize>>,
     node_graphs: Vec<RuntimeNodeGraph>,
     cues: Vec<RuntimeCue>,
     cue_lists: Vec<CueListSummary>,
@@ -3484,6 +3551,8 @@ impl EngineRuntime {
             effect_activations: Vec::new(),
             active_effect_activation_indices: Vec::new(),
             timeline_effect_activation_ranges: Vec::new(),
+            child_transports: Vec::new(),
+            child_transport_by_parent_event: Vec::new(),
             node_graphs: Vec::new(),
             cues: Vec::new(),
             cue_lists: vec![CueListSummary::default()],
@@ -4025,6 +4094,7 @@ impl EngineRuntime {
                     video_output_targets,
                     node_graph_targets,
                     effect_targets,
+                    child_timeline: cue.child_timeline,
                     effect_activation_range: RuntimeEffectActivationRange::default(),
                 })
             })
@@ -4322,6 +4392,7 @@ impl EngineRuntime {
                     | EngineCommand::UpdateCuePublished { .. }
                     | EngineCommand::SetCueEffectTargetsPublished { .. }
                     | EngineCommand::SetCueDetailsPublished { .. }
+                    | EngineCommand::SetCueChildTimeline { .. }
                     | EngineCommand::ReconformTimelineToBpm { .. }
             );
             if queued_command.command.requests_low_latency_dmx_tick() {
@@ -4963,11 +5034,22 @@ impl EngineRuntime {
                 self.timeline_jump_landed_event_id = None;
                 self.timeline_playhead_boundary_armed = false;
                 let source_changed = self.timeline_external_sync_source.as_ref() != Some(&source);
+                let reestablish_child = source_changed || position_ms < self.timeline_position_ms;
+                if reestablish_child {
+                    self.deactivate_all_timeline_effect_activations();
+                    self.deactivate_all_child_transports();
+                }
                 self.timeline_external_sync_source = Some(source);
                 self.sync_timeline_position(position_ms, source_changed, now);
                 self.clock.mark_timecode_sync(ClockSource::MidiClock, now);
                 self.apply_timeline_automations();
                 self.apply_timeline_video_automations();
+                if reestablish_child {
+                    self.establish_child_transports_at_position(now);
+                } else {
+                    self.advance_child_transports(now);
+                }
+                self.apply_child_timeline_automations();
             }
             EngineCommand::ResetTelemetry => {
                 self.reset_telemetry();
@@ -6043,6 +6125,48 @@ impl EngineRuntime {
                     rollback,
                     publication_error:
                         "Engine snapshot was busy; Cue details update was rolled back",
+                });
+            }
+            EngineCommand::SetCueChildTimeline {
+                cue_id,
+                child_timeline,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreCueRemoval {
+                    cues: self.cues.clone(),
+                    cue_lists: self.cue_lists.clone(),
+                    cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
+                    active_group_cue_ids: self.active_group_cue_ids.clone(),
+                    cue_release_values: self.cue_release_values.clone(),
+                    timeline_events: self.timeline_events.clone(),
+                    active_cue_id: self.active_cue_id,
+                    active_fade: self.active_fade.clone(),
+                    pending_cues: self.pending_cues.clone(),
+                    timeline_position_ms: self.timeline_position_ms,
+                    timeline_playhead_boundary_armed: self.timeline_playhead_boundary_armed,
+                    timeline_evaluated_boundary_position_ms: self
+                        .timeline_evaluated_boundary_position_ms,
+                    timeline_jump_landed_event_id: self.timeline_jump_landed_event_id,
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Cue child-timeline update expired before engine execution".to_string())
+                } else {
+                    self.set_cue_child_timeline_state(cue_id, child_timeline)
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Cue child-timeline update was rolled back",
                 });
             }
             EngineCommand::SetCueParts { cue_id, parts } => {
@@ -7478,6 +7602,7 @@ impl EngineRuntime {
             }
             EngineCommand::SeekTimeline(position_ms) => {
                 self.deactivate_all_timeline_effect_activations();
+                self.deactivate_all_child_transports();
                 self.timeline_jump_landed_event_id = None;
                 self.timeline_external_sync_source = None;
                 self.timeline_position_ms = position_ms.min(self.timeline_duration_ms());
@@ -7487,10 +7612,15 @@ impl EngineRuntime {
                 self.timeline_playhead_boundary_armed = self.timeline_playing;
                 self.apply_timeline_automations();
                 self.apply_timeline_video_automations();
+                self.establish_child_transports_at_position(Instant::now());
+                self.apply_child_timeline_automations();
             }
             EngineCommand::SeekTimelineBeat { direction } => {
                 self.deactivate_all_timeline_effect_activations();
+                self.deactivate_all_child_transports();
                 self.seek_timeline_adjacent_beat(direction);
+                self.establish_child_transports_at_position(Instant::now());
+                self.apply_child_timeline_automations();
                 self.timeline_audio_transport_revision =
                     self.timeline_audio_transport_revision.wrapping_add(1);
             }
@@ -7502,14 +7632,22 @@ impl EngineRuntime {
                 self.timeline_jump_landed_event_id = None;
                 self.timeline_playhead_boundary_armed = false;
                 let source_changed = self.timeline_external_sync_source.as_ref() != Some(&source);
-                if source_changed || position_ms < self.timeline_position_ms {
+                let reestablish_child = source_changed || position_ms < self.timeline_position_ms;
+                if reestablish_child {
                     self.deactivate_all_timeline_effect_activations();
+                    self.deactivate_all_child_transports();
                 }
                 self.timeline_external_sync_source = Some(source.clone());
                 self.sync_timeline_position(position_ms, source_changed, now);
                 self.clock.mark_timecode_sync(source, now);
                 self.apply_timeline_automations();
                 self.apply_timeline_video_automations();
+                if reestablish_child {
+                    self.establish_child_transports_at_position(now);
+                } else {
+                    self.advance_child_transports(now);
+                }
+                self.apply_child_timeline_automations();
             }
             EngineCommand::SetAutoVjConfig(config) => {
                 let _ = self.set_auto_vj_config(config);
@@ -9554,6 +9692,7 @@ impl EngineRuntime {
         self.advance_pending_cue(now);
         self.apply_timeline_automations();
         self.apply_timeline_video_automations();
+        self.apply_child_timeline_automations();
         self.advance_auto_vj(now);
         self.apply_active_fade(now);
         self.update_audio_reactive_nodes(now);
@@ -10236,6 +10375,7 @@ impl EngineRuntime {
             video_output_targets,
             node_graph_targets,
             effect_targets,
+            child_timeline: None,
             effect_activation_range: RuntimeEffectActivationRange::default(),
         });
         if reconform_referenced_events {
@@ -10454,6 +10594,104 @@ impl EngineRuntime {
         Ok(())
     }
 
+    fn child_reference_reaches(&self, start_cue_id: CueId, target_cue_id: CueId) -> bool {
+        let mut pending = vec![start_cue_id];
+        let mut visited = HashSet::new();
+        while let Some(cue_id) = pending.pop() {
+            if cue_id == target_cue_id {
+                return true;
+            }
+            if !visited.insert(cue_id) {
+                continue;
+            }
+            let Some(child) = self
+                .cues
+                .iter()
+                .find(|cue| cue.id == cue_id)
+                .and_then(|cue| cue.child_timeline.as_ref())
+            else {
+                continue;
+            };
+            pending.extend(child.events.iter().map(|event| event.cue_id));
+        }
+        false
+    }
+
+    fn normalize_and_validate_child_timeline(
+        &self,
+        owner_cue_id: CueId,
+        child: &mut ChildTimelineSummary,
+    ) -> Result<(), String> {
+        normalize_and_validate_timeline_layers(&mut child.layers, &child.events)
+            .map_err(|error| format!("Cue {owner_cue_id} child timeline: {error}"))?;
+        normalize_and_validate_timeline_audio_clips(&child.layers, &mut child.audio_clips)
+            .map_err(|error| format!("Cue {owner_cue_id} child timeline: {error}"))?;
+        let mut event_ids = HashSet::with_capacity(child.events.len());
+        for event in &child.events {
+            if !event_ids.insert(event.id) {
+                return Err(format!(
+                    "Cue {owner_cue_id} child timeline contains duplicate event {}",
+                    event.id
+                ));
+            }
+            if event.cue_id == owner_cue_id {
+                return Err(format!(
+                    "Cue {owner_cue_id} child timeline contains a self reference"
+                ));
+            }
+            let referenced = self
+                .cues
+                .iter()
+                .find(|cue| cue.id == event.cue_id)
+                .ok_or_else(|| {
+                    format!(
+                        "Cue {owner_cue_id} child event {} references missing Cue {}",
+                        event.id, event.cue_id
+                    )
+                })?;
+            if referenced.child_timeline.is_some() {
+                if self.child_reference_reaches(event.cue_id, owner_cue_id) {
+                    return Err(format!(
+                        "Cue {owner_cue_id} child timeline contains a cyclic reference through Cue {}",
+                        event.cue_id
+                    ));
+                }
+                return Err(format!(
+                    "Cue {owner_cue_id} child event {} references Super Scene Cue {}; nesting depth greater than 1 is not supported",
+                    event.id, event.cue_id
+                ));
+            }
+        }
+        for event in &child.events {
+            if let Some(target) = event.jump_to_event_id {
+                if !event_ids.contains(&target) {
+                    return Err(format!(
+                        "Cue {owner_cue_id} child event {} jumps to missing child event {target}",
+                        event.id
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn set_cue_child_timeline_state(
+        &mut self,
+        cue_id: CueId,
+        mut child_timeline: Option<ChildTimelineSummary>,
+    ) -> Result<(), String> {
+        let cue_index = self
+            .cues
+            .iter()
+            .position(|cue| cue.id == cue_id)
+            .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
+        if let Some(child) = child_timeline.as_mut() {
+            self.normalize_and_validate_child_timeline(cue_id, child)?;
+        }
+        self.cues[cue_index].child_timeline = child_timeline;
+        Ok(())
+    }
+
     fn resolve_cue_targets(
         &self,
         targets: Vec<CueFixtureTarget>,
@@ -10600,7 +10838,163 @@ impl EngineRuntime {
         })
     }
 
+    fn rebuild_child_transports(&mut self) {
+        self.child_transports.clear();
+        self.child_transport_by_parent_event.clear();
+        self.child_transport_by_parent_event
+            .resize(self.timeline_events.len(), None);
+        let cue_dispatch = self.build_cue_dispatch_index();
+        let bpm = self.clock.bpm;
+        let mut first_error = None;
+
+        for parent_event_index in 0..self.timeline_events.len() {
+            let parent_event = self.timeline_events[parent_event_index].clone();
+            if parent_event.duration_ms == 0 || parent_event.layer_muted_effective {
+                continue;
+            }
+            let Some(mut child) = self
+                .cues
+                .iter()
+                .find(|cue| cue.id == parent_event.cue_id)
+                .and_then(|cue| cue.child_timeline.clone())
+            else {
+                continue;
+            };
+            if let Err(error) =
+                self.normalize_and_validate_child_timeline(parent_event.cue_id, &mut child)
+            {
+                first_error.get_or_insert(error);
+                continue;
+            }
+
+            let any_solo = child.layers.iter().any(|layer| layer.solo);
+            let mut events = Vec::with_capacity(child.events.len());
+            let mut valid = true;
+            for summary in &child.events {
+                let mut event = runtime_timeline_event_from_summary(summary);
+                match resolve_timeline_event_layer(&child.layers, &event, any_solo) {
+                    Ok(layer) => {
+                        event.resolved_layer_id = layer.id;
+                        event.layer_order = layer.order;
+                        event.layer_muted_effective = layer.muted_effective;
+                        event.track = timeline_track_for_layer_kind(layer.kind)
+                            .expect("validated child Cue event cannot use an Audio layer");
+                    }
+                    Err(error) => {
+                        first_error.get_or_insert(format!(
+                            "Cue {} child event {} has an invalid layer: {error}",
+                            parent_event.cue_id, event.id
+                        ));
+                        valid = false;
+                        break;
+                    }
+                }
+                match self.resolve_timeline_event_timing(event, bpm) {
+                    Ok(event) => events.push(event),
+                    Err(error) => {
+                        first_error.get_or_insert(format!(
+                            "Cue {} child timeline timing is invalid: {error}",
+                            parent_event.cue_id
+                        ));
+                        valid = false;
+                        break;
+                    }
+                }
+            }
+            if !valid {
+                continue;
+            }
+            events.sort_by(|left, right| {
+                left.time_ms
+                    .cmp(&right.time_ms)
+                    .then_with(|| right.layer_order.cmp(&left.layer_order))
+                    .then_with(|| left.id.cmp(&right.id))
+            });
+            let required_due_capacity = events.iter().fold(0_usize, |total, event| {
+                total.saturating_add(
+                    usize::from(event.loop_count.max(1))
+                        .saturating_add(usize::from(event.duration_ms > 0)),
+                )
+            });
+            let duration_ms = child
+                .duration_ms
+                .max(events.iter().map(timeline_event_end_ms).max().unwrap_or(0))
+                .max(
+                    child
+                        .audio_clips
+                        .iter()
+                        .map(|clip| clip.start_ms.saturating_add(clip.duration_ms))
+                        .max()
+                        .unwrap_or(0),
+                )
+                .max(
+                    child
+                        .audio
+                        .as_ref()
+                        .map(|audio| audio.duration_ms)
+                        .unwrap_or(0),
+                );
+            let dispatch = events
+                .iter()
+                .map(|event| cue_dispatch.get(&event.cue_id).copied())
+                .collect();
+            let transport_index = self.child_transports.len();
+            self.child_transport_by_parent_event[parent_event_index] = Some(transport_index);
+            self.child_transports.push(RuntimeChildTransport {
+                parent_event_id: parent_event.id,
+                window_start_ms: parent_event.time_ms,
+                window_end_ms: timeline_event_end_ms(&parent_event),
+                iteration_period_ms: timeline_event_iteration_period_ms(&parent_event).max(1),
+                rate: valid_effect_rate(parent_event.rate.unwrap_or(1.0)),
+                loop_fill: parent_event.loop_fill,
+                duration_ms,
+                active: false,
+                boundary_armed: false,
+                parent_iteration: 0,
+                previous_position_ms: 0,
+                position_ms: 0,
+                events,
+                automations: child
+                    .automations
+                    .iter()
+                    .map(runtime_timeline_automation_from_summary)
+                    .collect(),
+                video_automations: child
+                    .video_automations
+                    .iter()
+                    .map(runtime_timeline_video_automation_from_summary)
+                    .collect(),
+                due: Vec::with_capacity(required_due_capacity),
+                dispatch,
+                effect_activation_ranges: Vec::new(),
+            });
+        }
+        let required_pending_capacity = self
+            .timeline_events
+            .iter()
+            .fold(0_usize, |total, event| {
+                total.saturating_add(
+                    usize::from(event.loop_count.max(1))
+                        .saturating_add(usize::from(event.duration_ms > 0)),
+                )
+            })
+            .saturating_add(
+                self.child_transports
+                    .iter()
+                    .map(|transport| transport.due.capacity())
+                    .fold(0_usize, usize::saturating_add),
+            );
+        if self.pending_cues.capacity() < required_pending_capacity {
+            self.pending_cues
+                .reserve(required_pending_capacity.saturating_sub(self.pending_cues.capacity()));
+        }
+        if let Some(error) = first_error {
+            self.last_error = Some(error);
+        }
+    }
+
     fn rebuild_effect_activations(&mut self, now: Instant) {
+        self.rebuild_child_transports();
         self.cue_list_effect_activation_cues.reserve(
             self.cue_lists
                 .len()
@@ -10641,10 +11035,21 @@ impl EngineRuntime {
                     .map(|cue_index| cue_owned_counts[cue_index])
             })
             .fold(0_usize, usize::saturating_add);
-        let required_capacity = cue_owned_counts
+        let child_owned_count = self
+            .child_transports
             .iter()
-            .copied()
-            .fold(timeline_owned_count, usize::saturating_add);
+            .flat_map(|transport| transport.events.iter())
+            .filter_map(|event| {
+                self.cues
+                    .iter()
+                    .position(|cue| cue.id == event.cue_id)
+                    .map(|cue_index| cue_owned_counts[cue_index])
+            })
+            .fold(0_usize, usize::saturating_add);
+        let required_capacity = cue_owned_counts.iter().copied().fold(
+            timeline_owned_count.saturating_add(child_owned_count),
+            usize::saturating_add,
+        );
 
         self.effect_activations.clear();
         if self.effect_activations.capacity() < required_capacity {
@@ -10727,6 +11132,51 @@ impl EngineRuntime {
                     start,
                     len: self.effect_activations.len() - start,
                 });
+        }
+
+        for transport_index in 0..self.child_transports.len() {
+            self.child_transports[transport_index]
+                .effect_activation_ranges
+                .clear();
+            let event_count = self.child_transports[transport_index].events.len();
+            self.child_transports[transport_index]
+                .effect_activation_ranges
+                .reserve(event_count);
+            for event_index in 0..event_count {
+                let start = self.effect_activations.len();
+                let cue_id = self.child_transports[transport_index].events[event_index].cue_id;
+                let cue_index = self.cues.iter().position(|cue| cue.id == cue_id);
+                if let Some(cue_index) = cue_index {
+                    for target_index in 0..self.cues[cue_index].effect_targets.len() {
+                        let (effect_id, params) = {
+                            let target = &self.cues[cue_index].effect_targets[target_index];
+                            if !target.enabled {
+                                continue;
+                            }
+                            let Some(params) = target.params.clone() else {
+                                continue;
+                            };
+                            (target.effect_id, params)
+                        };
+                        match self.runtime_effect_from_params_snapshot(effect_id, &params, now) {
+                            Ok(effect) => self.effect_activations.push(RuntimeEffectActivation {
+                                effect,
+                                key: None,
+                                rate: 1.0,
+                            }),
+                            Err(error) => {
+                                first_error.get_or_insert(error);
+                            }
+                        }
+                    }
+                }
+                self.child_transports[transport_index]
+                    .effect_activation_ranges
+                    .push(RuntimeEffectActivationRange {
+                        start,
+                        len: self.effect_activations.len() - start,
+                    });
+            }
         }
 
         let mut cue_list_activations = self
@@ -11001,6 +11451,9 @@ impl EngineRuntime {
                 Some(RuntimeEffectActivationKey::Timeline {
                     cue_id: candidate,
                     ..
+                } | RuntimeEffectActivationKey::ChildTimeline {
+                    cue_id: candidate,
+                    ..
                 } | RuntimeEffectActivationKey::CueList {
                     cue_id: candidate,
                     ..
@@ -11017,7 +11470,10 @@ impl EngineRuntime {
         for activation in &mut self.effect_activations {
             if matches!(
                 activation.key,
-                Some(RuntimeEffectActivationKey::Timeline { .. })
+                Some(
+                    RuntimeEffectActivationKey::Timeline { .. }
+                        | RuntimeEffectActivationKey::ChildTimeline { .. }
+                )
             ) {
                 activation.key = None;
             }
@@ -12989,6 +13445,7 @@ impl EngineRuntime {
                 event_id,
                 cue_id,
                 iteration: 0,
+                child_parent: None,
                 range,
                 rate,
                 created_at: if dispatch.pre_wait_ms == 0 {
@@ -13205,13 +13662,24 @@ impl EngineRuntime {
         }
         self.apply_cue_effect_targets(&cue.effect_targets);
         if let Some(activation) = timeline_effect_activation {
-            self.activate_effect_range(
-                activation.range,
+            let key = if let Some((parent_event_id, parent_iteration)) = activation.child_parent {
+                RuntimeEffectActivationKey::ChildTimeline {
+                    parent_event_id,
+                    parent_iteration,
+                    event_id: activation.event_id,
+                    cue_id: activation.cue_id,
+                    iteration: activation.iteration,
+                }
+            } else {
                 RuntimeEffectActivationKey::Timeline {
                     event_id: activation.event_id,
                     cue_id: activation.cue_id,
                     iteration: activation.iteration,
-                },
+                }
+            };
+            self.activate_effect_range(
+                activation.range,
+                key,
                 activation.created_at,
                 activation.rate,
             );
@@ -13958,6 +14426,317 @@ impl EngineRuntime {
         self.last_error = None;
     }
 
+    fn activate_child_transport(&mut self, parent_event_index: usize, parent_iteration: u64) {
+        let Some(transport_index) = self
+            .child_transport_by_parent_event
+            .get(parent_event_index)
+            .copied()
+            .flatten()
+        else {
+            return;
+        };
+        if self.child_transports[transport_index].active {
+            self.deactivate_child_transport_effects(transport_index);
+        }
+        let parent_position = self.timeline_position_ms;
+        let transport = &mut self.child_transports[transport_index];
+        let position_ms = child_transport_position_ms(transport, parent_position);
+        transport.active = true;
+        transport.boundary_armed = true;
+        transport.parent_iteration = parent_iteration;
+        transport.previous_position_ms = position_ms;
+        transport.position_ms = position_ms;
+    }
+
+    fn deactivate_child_transport_effects(&mut self, transport_index: usize) {
+        let range_count = self
+            .child_transports
+            .get(transport_index)
+            .map(|transport| transport.effect_activation_ranges.len())
+            .unwrap_or(0);
+        for range_index in 0..range_count {
+            let range =
+                self.child_transports[transport_index].effect_activation_ranges[range_index];
+            self.deactivate_effect_range(range);
+        }
+        let parent_event_id = self.child_transports[transport_index].parent_event_id;
+        self.pending_cues.retain(|pending| {
+            pending.timeline_effect_activation.is_none_or(|activation| {
+                activation
+                    .child_parent
+                    .is_none_or(|(candidate, _)| candidate != parent_event_id)
+            })
+        });
+    }
+
+    fn deactivate_child_transport(&mut self, transport_index: usize) {
+        self.deactivate_child_transport_effects(transport_index);
+        if let Some(transport) = self.child_transports.get_mut(transport_index) {
+            transport.active = false;
+            transport.boundary_armed = false;
+            transport.previous_position_ms = 0;
+            transport.position_ms = 0;
+            transport.due.clear();
+        }
+    }
+
+    fn deactivate_all_child_transports(&mut self) {
+        for transport_index in 0..self.child_transports.len() {
+            self.deactivate_child_transport(transport_index);
+        }
+    }
+
+    fn establish_child_transports_at_position(&mut self, now: Instant) {
+        self.deactivate_all_child_transports();
+        let parent_position = self.timeline_position_ms;
+        for parent_event_index in 0..self.timeline_events.len() {
+            let event = &self.timeline_events[parent_event_index];
+            if event.layer_muted_effective
+                || event.duration_ms == 0
+                || parent_position < event.time_ms
+                || parent_position >= timeline_event_end_ms(event)
+            {
+                continue;
+            }
+            let Some(transport_index) = self
+                .child_transport_by_parent_event
+                .get(parent_event_index)
+                .copied()
+                .flatten()
+            else {
+                continue;
+            };
+            let position_ms = child_transport_position_ms(
+                &self.child_transports[transport_index],
+                parent_position,
+            );
+            let transport = &mut self.child_transports[transport_index];
+            transport.active = true;
+            transport.boundary_armed = true;
+            transport.parent_iteration = parent_position.saturating_sub(event.time_ms)
+                / timeline_event_iteration_period_ms(event).max(1);
+            transport.previous_position_ms = 0;
+            transport.position_ms = position_ms;
+        }
+        self.advance_child_transports(now);
+    }
+
+    fn collect_and_dispatch_child_transport_range(
+        &mut self,
+        transport_index: usize,
+        previous_position_ms: u64,
+        current_position_ms: u64,
+        include_previous: bool,
+        now: Instant,
+    ) -> bool {
+        {
+            let transport = &mut self.child_transports[transport_index];
+            collect_timeline_cue_occurrences_between(
+                &transport.events,
+                previous_position_ms,
+                current_position_ms,
+                include_previous,
+                true,
+                None,
+                &mut transport.due,
+            );
+        }
+        let mut has_immediate_trigger = false;
+        let due_count = self.child_transports[transport_index].due.len();
+        for due_index in 0..due_count {
+            let occurrence = self.child_transports[transport_index].due[due_index];
+            let range = self.child_transports[transport_index]
+                .effect_activation_ranges
+                .get(occurrence.event_index)
+                .copied()
+                .unwrap_or_default();
+            if matches!(occurrence.kind, TimelineCueOccurrenceKind::End) {
+                self.deactivate_effect_range(range);
+                self.pending_cues.retain(|pending| {
+                    pending.timeline_effect_activation.is_none_or(|activation| {
+                        activation.child_parent
+                            != Some((
+                                self.child_transports[transport_index].parent_event_id,
+                                self.child_transports[transport_index].parent_iteration,
+                            ))
+                            || activation.event_id != occurrence.event_id
+                    })
+                });
+                continue;
+            }
+            if matches!(occurrence.kind, TimelineCueOccurrenceKind::FadeOutStart) {
+                self.deactivate_effect_range(range);
+                continue;
+            }
+            let Some(dispatch) = self.child_transports[transport_index]
+                .dispatch
+                .get(occurrence.event_index)
+                .copied()
+                .flatten()
+            else {
+                continue;
+            };
+            let event_rate = self.child_transports[transport_index]
+                .events
+                .get(occurrence.event_index)
+                .and_then(|event| event.rate)
+                .unwrap_or(1.0);
+            let parent_rate = self.child_transports[transport_index].rate;
+            let due_at = now + Duration::from_millis(dispatch.pre_wait_ms);
+            let elapsed_child_ms = current_position_ms.saturating_sub(occurrence.time_ms);
+            let elapsed_parent_ms = ((elapsed_child_ms as f64) / f64::from(parent_rate))
+                .floor()
+                .clamp(0.0, u64::MAX as f64) as u64;
+            let timeline_effect_activation = self.child_transports[transport_index]
+                .events
+                .get(occurrence.event_index)
+                .filter(|event| event.duration_ms > 0 && !range.is_empty())
+                .map(|_| PendingTimelineEffectActivation {
+                    event_id: occurrence.event_id,
+                    cue_id: occurrence.cue_id,
+                    iteration: occurrence.iteration,
+                    child_parent: Some((
+                        self.child_transports[transport_index].parent_event_id,
+                        self.child_transports[transport_index].parent_iteration,
+                    )),
+                    range,
+                    rate: valid_effect_rate(parent_rate * event_rate),
+                    created_at: if dispatch.pre_wait_ms == 0 {
+                        now.checked_sub(Duration::from_millis(elapsed_parent_ms))
+                            .unwrap_or(now)
+                    } else {
+                        due_at
+                    },
+                });
+            has_immediate_trigger |= dispatch.pre_wait_ms == 0;
+            let fade_override_ms = self.child_transports[transport_index]
+                .events
+                .get(occurrence.event_index)
+                .filter(|_| occurrence.iteration == 0)
+                .map(|event| event.fade_in_ms);
+            self.enqueue_pending_cue(PendingCueTrigger {
+                cue_id: occurrence.cue_id,
+                due_at,
+                source: PendingCueTriggerSource::Timeline,
+                repeat_count: 1,
+                fade_override_ms,
+                timeline_effect_activation,
+                dispatch: Some(dispatch),
+            });
+        }
+        has_immediate_trigger
+    }
+
+    fn advance_child_transports(&mut self, now: Instant) {
+        let mut has_immediate_trigger = false;
+        for transport_index in 0..self.child_transports.len() {
+            if !self.child_transports[transport_index].active {
+                continue;
+            }
+            let parent_position = self.timeline_position_ms;
+            let (window_start_ms, window_end_ms) = {
+                let transport = &self.child_transports[transport_index];
+                (transport.window_start_ms, transport.window_end_ms)
+            };
+            if parent_position < window_start_ms || parent_position >= window_end_ms {
+                self.deactivate_child_transport(transport_index);
+                continue;
+            }
+            let current_position_ms = child_transport_position_ms(
+                &self.child_transports[transport_index],
+                parent_position,
+            );
+            let previous_position_ms = self.child_transports[transport_index].previous_position_ms;
+            let include_previous =
+                std::mem::take(&mut self.child_transports[transport_index].boundary_armed);
+            if current_position_ms < previous_position_ms {
+                let duration_ms = self.child_transports[transport_index].duration_ms;
+                if duration_ms > 0 {
+                    has_immediate_trigger |= self.collect_and_dispatch_child_transport_range(
+                        transport_index,
+                        previous_position_ms,
+                        duration_ms,
+                        include_previous,
+                        now,
+                    );
+                    has_immediate_trigger |= self.collect_and_dispatch_child_transport_range(
+                        transport_index,
+                        0,
+                        current_position_ms,
+                        true,
+                        now,
+                    );
+                }
+            } else {
+                has_immediate_trigger |= self.collect_and_dispatch_child_transport_range(
+                    transport_index,
+                    previous_position_ms,
+                    current_position_ms,
+                    include_previous,
+                    now,
+                );
+            }
+            let transport = &mut self.child_transports[transport_index];
+            transport.previous_position_ms = current_position_ms;
+            transport.position_ms = current_position_ms;
+            transport.parent_iteration = parent_position.saturating_sub(transport.window_start_ms)
+                / transport.iteration_period_ms.max(1);
+        }
+        if has_immediate_trigger {
+            self.advance_pending_cue(now);
+        }
+    }
+
+    fn apply_child_timeline_automations(&mut self) {
+        for transport_index in 0..self.child_transports.len() {
+            if !self.child_transports[transport_index].active {
+                continue;
+            }
+            let position_ms = self.child_transports[transport_index].position_ms;
+            for automation_index in 0..self.child_transports[transport_index].automations.len() {
+                let automation =
+                    &self.child_transports[transport_index].automations[automation_index];
+                if !automation.enabled || !matches!(automation.track, TimelineTrackKind::Lighting) {
+                    continue;
+                }
+                let Some(value) = evaluate_automation_keyframes(&automation.keyframes, position_ms)
+                else {
+                    continue;
+                };
+                let key = (automation.fixture_id, automation.attribute.as_str());
+                if let Some((_, current)) = self
+                    .values
+                    .iter_mut()
+                    .find(|((fixture_id, attribute), _)| *fixture_id == key.0 && attribute == key.1)
+                {
+                    *current = value;
+                }
+            }
+            for automation_index in 0..self.child_transports[transport_index]
+                .video_automations
+                .len()
+            {
+                let automation =
+                    &self.child_transports[transport_index].video_automations[automation_index];
+                if !automation.enabled {
+                    continue;
+                }
+                let Some(value) =
+                    evaluate_video_automation_keyframes(&automation.keyframes, position_ms)
+                else {
+                    continue;
+                };
+                if let Some(layer) = self
+                    .video_layers
+                    .iter_mut()
+                    .find(|layer| layer.id == automation.layer_id)
+                {
+                    apply_video_param(&mut layer.state, &automation.param, value);
+                }
+            }
+        }
+    }
+
     fn advance_timeline(&mut self, now: Instant) {
         if !self.timeline_playing || self.timeline_external_sync_source.is_some() {
             return;
@@ -14009,6 +14788,14 @@ impl EngineRuntime {
                     .unwrap_or_default();
                 self.finish_timeline_block_fade_out(event_id);
                 self.deactivate_effect_range(range);
+                if let Some(transport_index) = self
+                    .child_transport_by_parent_event
+                    .get(event_index)
+                    .copied()
+                    .flatten()
+                {
+                    self.deactivate_child_transport(transport_index);
+                }
                 self.pending_cues.retain(|pending| {
                     pending
                         .timeline_effect_activation
@@ -14020,6 +14807,7 @@ impl EngineRuntime {
             // Block genuinely spans the destination before starting the jump target.
             self.reconcile_timeline_effect_activations_at_position(target.time_ms, now);
             if !target.layer_muted_effective {
+                self.activate_child_transport(target_event_index, 0);
                 self.request_timeline_event_at_index(target_event_index, now);
             }
             self.timeline_evaluated_boundary_position_ms = Some(target.time_ms);
@@ -14034,6 +14822,8 @@ impl EngineRuntime {
                 now,
             );
         }
+
+        self.advance_child_transports(now);
 
         if self.timeline_position_ms >= duration {
             self.timeline_playing = false;
@@ -14119,6 +14909,14 @@ impl EngineRuntime {
                         .timeline_effect_activation
                         .is_none_or(|activation| activation.event_id != occurrence.event_id)
                 });
+                if let Some(transport_index) = self
+                    .child_transport_by_parent_event
+                    .get(occurrence.event_index)
+                    .copied()
+                    .flatten()
+                {
+                    self.deactivate_child_transport(transport_index);
+                }
                 continue;
             }
             if matches!(occurrence.kind, TimelineCueOccurrenceKind::FadeOutStart) {
@@ -14127,6 +14925,7 @@ impl EngineRuntime {
             }
 
             let cue_id = occurrence.cue_id;
+            self.activate_child_transport(occurrence.event_index, occurrence.iteration);
             let Some(dispatch) = cue_dispatch.get(&cue_id).copied() else {
                 self.last_error = Some(format!("Cue {cue_id} was not found"));
                 continue;
@@ -14149,6 +14948,7 @@ impl EngineRuntime {
                         event_id: occurrence.event_id,
                         cue_id,
                         iteration: occurrence.iteration,
+                        child_parent: None,
                         range,
                         rate: valid_effect_rate(event.rate.unwrap_or(1.0)),
                         created_at,
@@ -15217,6 +16017,7 @@ fn engine_command_rebuilds_effect_activations(command: &EngineCommand) -> bool {
             | EngineCommand::UpdateCue { .. }
             | EngineCommand::UpdateCuePublished { .. }
             | EngineCommand::SetCueEffectTargetsPublished { .. }
+            | EngineCommand::SetCueChildTimeline { .. }
             | EngineCommand::DuplicateCue { .. }
             | EngineCommand::RemoveCue(_)
             | EngineCommand::RemoveCuePublished { .. }
@@ -15329,6 +16130,7 @@ fn cue_summary(cue: &RuntimeCue) -> CueSummary {
         video_output_targets: cue.video_output_targets.clone(),
         node_graph_targets: cue.node_graph_targets.clone(),
         effect_targets: cue.effect_targets.clone(),
+        child_timeline: cue.child_timeline.clone(),
     }
 }
 
@@ -15467,6 +16269,7 @@ fn runtime_cue_from_summary(cue: &CueSummary) -> RuntimeCue {
         video_output_targets: cue.video_output_targets.clone(),
         node_graph_targets: cue.node_graph_targets.clone(),
         effect_targets: cue.effect_targets.clone(),
+        child_timeline: cue.child_timeline.clone(),
         effect_activation_range: RuntimeEffectActivationRange::default(),
     }
 }
@@ -16343,6 +17146,200 @@ fn timeline_event_iteration_period_ms(event: &RuntimeTimelineEvent) -> u64 {
     } else {
         event.duration_ms
     }
+}
+
+fn child_transport_position_ms(transport: &RuntimeChildTransport, parent_position_ms: u64) -> u64 {
+    let parent_delta_ms = parent_position_ms.saturating_sub(transport.window_start_ms);
+    let scaled = ((parent_delta_ms as f64) * f64::from(transport.rate))
+        .floor()
+        .clamp(0.0, u64::MAX as f64) as u64;
+    if transport.loop_fill && transport.duration_ms > 0 {
+        scaled % transport.duration_ms
+    } else {
+        scaled.min(transport.duration_ms)
+    }
+}
+
+fn child_timeline_audio_runtime_clips(
+    snapshot: &EngineSnapshot,
+) -> Vec<ChildTimelineAudioRuntimeClip> {
+    if !snapshot.timeline.playing {
+        return Vec::new();
+    }
+    let parent_position_ms = snapshot.timeline.position_ms;
+    let mut active = Vec::new();
+    let parent_any_solo = snapshot.timeline.layers.iter().any(|layer| layer.solo);
+    for event in &snapshot.timeline.events {
+        if event.duration_ms == 0 {
+            continue;
+        }
+        if timeline_summary_event_is_muted(event, &snapshot.timeline.layers, parent_any_solo) {
+            continue;
+        }
+        let end_ms = if event.conform_to_tempo {
+            event.time_ms.saturating_add(event.duration_ms)
+        } else {
+            event.time_ms.saturating_add(
+                event
+                    .duration_ms
+                    .saturating_mul(u64::from(event.loop_count.max(1))),
+            )
+        };
+        if parent_position_ms < event.time_ms || parent_position_ms >= end_ms {
+            continue;
+        }
+        let Some(cue) = snapshot.cues.iter().find(|cue| cue.id == event.cue_id) else {
+            continue;
+        };
+        let Some(child) = cue.child_timeline.as_ref() else {
+            continue;
+        };
+        if child_timeline_recall_is_inert(snapshot, cue.id, child) {
+            continue;
+        }
+        let duration_ms = child
+            .duration_ms
+            .max(
+                child
+                    .events
+                    .iter()
+                    .map(|event| {
+                        let span_ms = if event.conform_to_tempo {
+                            event.duration_ms
+                        } else {
+                            event
+                                .duration_ms
+                                .saturating_mul(u64::from(event.loop_count.max(1)))
+                        };
+                        event.time_ms.saturating_add(span_ms)
+                    })
+                    .max()
+                    .unwrap_or(0),
+            )
+            .max(
+                child
+                    .audio_clips
+                    .iter()
+                    .map(|clip| clip.start_ms.saturating_add(clip.duration_ms))
+                    .max()
+                    .unwrap_or(0),
+            )
+            .max(
+                child
+                    .audio
+                    .as_ref()
+                    .map(|audio| audio.duration_ms)
+                    .unwrap_or(0),
+            );
+        if duration_ms == 0 {
+            continue;
+        }
+        let parent_delta_ms = parent_position_ms.saturating_sub(event.time_ms);
+        let rate = valid_effect_rate(event.rate.unwrap_or(1.0));
+        let scaled_ms = ((parent_delta_ms as f64) * f64::from(rate))
+            .floor()
+            .clamp(0.0, u64::MAX as f64) as u64;
+        let child_position_ms = if event.loop_fill {
+            scaled_ms % duration_ms
+        } else {
+            scaled_ms.min(duration_ms)
+        };
+        let iteration_period_ms = if event.conform_to_tempo {
+            cue.authored_beats
+                .filter(|beats| beats.is_finite() && *beats > 0.0)
+                .map(|beats| {
+                    (f64::from(beats) * 60_000.0 / f64::from(clamp_bpm(snapshot.clock.bpm)))
+                        .round()
+                        .clamp(1.0, u64::MAX as f64) as u64
+                })
+                .unwrap_or(event.duration_ms.max(1))
+        } else {
+            event.duration_ms.max(1)
+        };
+        let parent_iteration = parent_delta_ms / iteration_period_ms;
+        if child.audio_clips.is_empty() {
+            if let Some(audio) = &child.audio {
+                let layer_id = child
+                    .layers
+                    .iter()
+                    .filter(|layer| matches!(layer.kind, TimelineLayerKind::Audio))
+                    .min_by_key(|layer| (layer.order, layer.id))
+                    .map(|layer| layer.id)
+                    .unwrap_or(0);
+                let clip = legacy_timeline_audio_clip(audio, layer_id, 0);
+                if child_position_ms >= clip.start_ms
+                    && child_position_ms < clip.start_ms.saturating_add(clip.duration_ms)
+                {
+                    active.push(ChildTimelineAudioRuntimeClip {
+                        parent_event_id: event.id,
+                        parent_iteration,
+                        position_ms: child_position_ms,
+                        clip,
+                    });
+                }
+            }
+            continue;
+        }
+        for clip in &child.audio_clips {
+            if timeline_audio_clip_layer_is_muted(child, clip.layer_id) {
+                continue;
+            }
+            if child_position_ms >= clip.start_ms
+                && child_position_ms < clip.start_ms.saturating_add(clip.duration_ms)
+            {
+                active.push(ChildTimelineAudioRuntimeClip {
+                    parent_event_id: event.id,
+                    parent_iteration,
+                    position_ms: child_position_ms,
+                    clip: clip.clone(),
+                });
+            }
+        }
+    }
+    active
+}
+
+fn timeline_summary_event_is_muted(
+    event: &TimelineCueEventSummary,
+    layers: &[TimelineLayerSummary],
+    any_solo: bool,
+) -> bool {
+    if layers.is_empty() {
+        return false;
+    }
+    let layer = event
+        .layer_id
+        .and_then(|layer_id| layers.iter().find(|layer| layer.id == layer_id))
+        .or_else(|| {
+            layers.iter().find(|layer| {
+                timeline_track_for_layer_kind(layer.kind).as_ref() == Some(&event.track)
+            })
+        });
+    layer.is_none_or(|layer| layer.muted || (any_solo && !layer.solo))
+}
+
+fn child_timeline_recall_is_inert(
+    snapshot: &EngineSnapshot,
+    owner_cue_id: CueId,
+    child: &ChildTimelineSummary,
+) -> bool {
+    child.events.iter().any(|event| {
+        event.cue_id == owner_cue_id
+            || snapshot
+                .cues
+                .iter()
+                .find(|cue| cue.id == event.cue_id)
+                .is_none_or(|cue| cue.child_timeline.is_some())
+    })
+}
+
+fn timeline_audio_clip_layer_is_muted(child: &ChildTimelineSummary, layer_id: u32) -> bool {
+    let any_solo = child.layers.iter().any(|layer| layer.solo);
+    child
+        .layers
+        .iter()
+        .find(|layer| layer.id == layer_id && matches!(layer.kind, TimelineLayerKind::Audio))
+        .is_none_or(|layer| layer.muted || (any_solo && !layer.solo))
 }
 
 fn timeline_block_iteration_range(
@@ -23802,7 +24799,7 @@ mod tests {
                     path: "C:/media/show.wav".to_string(),
                     sample_rate: 48_000,
                     channels: 2,
-                    duration_ms: 4_000,
+                    duration_ms: 10_000,
                     estimated_bpm: Some(120.0),
                     waveform: vec![AudioWaveformPoint {
                         time_ms: 0,
@@ -41592,6 +42589,7 @@ mod tests {
                 enabled: true,
                 params: None,
             }],
+            child_timeline: None,
             effect_activation_range: RuntimeEffectActivationRange::default(),
         });
 
@@ -47036,5 +48034,405 @@ mod tests {
         );
         assert_eq!(roundtrip.timeline.audio_offset_ms, -125);
         assert!(roundtrip.timeline.audio_muted);
+    }
+
+    fn super_scene_test_runtime(rate: f32) -> EngineRuntime {
+        let child = ChildTimelineSummary {
+            events: vec![
+                TimelineCueEventSummary {
+                    id: 201,
+                    cue_id: 2,
+                    time_ms: 0,
+                    track: TimelineTrackKind::Lighting,
+                    duration_ms: 4_000,
+                    ..TimelineCueEventSummary::default()
+                },
+                TimelineCueEventSummary {
+                    id: 202,
+                    cue_id: 3,
+                    time_ms: 2_000,
+                    track: TimelineTrackKind::Lighting,
+                    ..TimelineCueEventSummary::default()
+                },
+            ],
+            duration_ms: 4_000,
+            ..ChildTimelineSummary::default()
+        };
+        let cues = [
+            CueSummary {
+                id: 1,
+                label: "Super".to_string(),
+                child_timeline: Some(child),
+                ..CueSummary::default()
+            },
+            CueSummary {
+                id: 2,
+                label: "Child zero".to_string(),
+                ..CueSummary::default()
+            },
+            CueSummary {
+                id: 3,
+                label: "Child two".to_string(),
+                ..CueSummary::default()
+            },
+        ];
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        runtime.cues = cues.iter().map(runtime_cue_from_summary).collect();
+        let mut parent = timeline_test_event(100, 1, 10_000, 0, 5_000, 1);
+        parent.rate = Some(rate);
+        runtime.timeline_events = vec![parent];
+        runtime.rebuild_effect_activations(Instant::now());
+        runtime
+    }
+
+    #[test]
+    fn child_timeline_fires_at_absolute_parent_times_including_rate_two() {
+        for (rate, second_parent_time) in [(1.0, 12_000), (2.0, 11_000)] {
+            let mut runtime = super_scene_test_runtime(rate);
+            runtime.timeline_playing = true;
+            runtime.timeline_position_ms = 9_999;
+            runtime.last_tick_interval = Duration::from_millis(1);
+            runtime.advance_timeline(Instant::now());
+            assert_eq!(runtime.timeline_position_ms, 10_000);
+            assert_eq!(runtime.active_cue_id, Some(2));
+
+            runtime.last_tick_interval =
+                Duration::from_millis(second_parent_time - runtime.timeline_position_ms);
+            runtime.advance_timeline(Instant::now());
+            assert_eq!(runtime.timeline_position_ms, second_parent_time);
+            assert_eq!(runtime.active_cue_id, Some(3));
+        }
+    }
+
+    #[test]
+    fn child_timeline_audio_maps_rate_and_derives_legacy_clip_zero() {
+        let mut snapshot = super_scene_test_runtime(2.0).build_persistence_snapshot();
+        snapshot.timeline.playing = true;
+        snapshot.timeline.position_ms = 10_500;
+        let child = snapshot.cues[0].child_timeline.as_mut().unwrap();
+        child.layers = vec![timeline_test_layer(
+            50,
+            0,
+            false,
+            false,
+            false,
+            TimelineLayerKind::Audio,
+        )];
+        let mut clip = timeline_test_audio_clip(77, 50);
+        clip.start_ms = 750;
+        clip.duration_ms = 500;
+        child.audio_clips = vec![clip];
+
+        let mapped = child_timeline_audio_runtime_clips(&snapshot);
+        assert_eq!(mapped.len(), 1);
+        assert_eq!(mapped[0].parent_event_id, 100);
+        assert_eq!(mapped[0].position_ms, 1_000);
+        assert_eq!(mapped[0].clip.id, 77);
+
+        let child = snapshot.cues[0].child_timeline.as_mut().unwrap();
+        child.audio_clips.clear();
+        child.audio = Some(AudioAnalysisSummary {
+            path: "C:/media/legacy-child.wav".to_string(),
+            sample_rate: 48_000,
+            channels: 2,
+            duration_ms: 2_000,
+            estimated_bpm: None,
+            waveform: Vec::new(),
+            spectrum: Vec::new(),
+            beats: Vec::new(),
+        });
+        let legacy = child_timeline_audio_runtime_clips(&snapshot);
+        assert_eq!(legacy.len(), 1);
+        assert_eq!(legacy[0].clip.id, 0);
+        assert_eq!(legacy[0].clip.path, "C:/media/legacy-child.wav");
+
+        snapshot.timeline.layers = vec![timeline_test_layer(
+            0,
+            0,
+            true,
+            false,
+            false,
+            TimelineLayerKind::Lighting,
+        )];
+        assert!(child_timeline_audio_runtime_clips(&snapshot).is_empty());
+        snapshot.timeline.layers[0].muted = false;
+        snapshot.cues[1].child_timeline = Some(ChildTimelineSummary::default());
+        assert!(child_timeline_audio_runtime_clips(&snapshot).is_empty());
+    }
+
+    #[test]
+    fn child_timeline_source_edit_rebuilds_every_parent_placement() {
+        let mut runtime = super_scene_test_runtime(1.0);
+        let mut second_parent = timeline_test_event(101, 1, 20_000, 0, 5_000, 1);
+        second_parent.rate = Some(1.0);
+        runtime.timeline_events.push(second_parent);
+        let mut child = runtime.cues[0].child_timeline.clone().unwrap();
+        child.events[1].time_ms = 2_500;
+        runtime
+            .set_cue_child_timeline_state(1, Some(child))
+            .unwrap();
+        runtime.rebuild_effect_activations(Instant::now());
+
+        assert_eq!(runtime.child_transports.len(), 2);
+        assert!(runtime
+            .child_transports
+            .iter()
+            .all(|transport| transport.events[1].time_ms == 2_500));
+    }
+
+    #[test]
+    fn child_timeline_parent_seek_establishes_state_and_leaves_no_transport_residue() {
+        let mut runtime = super_scene_test_runtime(1.0);
+        runtime.apply_command(EngineCommand::PatchFixture {
+            fixture_id: 1,
+            request: sample_patch_request("Child Effect Fixture", 1),
+            profile: sample_profile(),
+        });
+        runtime.cues[1].effect_targets = vec![owned_lfo_target(
+            901,
+            test_lfo_request(
+                "Child owned",
+                LfoShape::Sine,
+                1_000,
+                0.0,
+                EffectBlendMode::Override,
+                0,
+                u16::MAX,
+            ),
+        )];
+        runtime.rebuild_effect_activations(Instant::now());
+        runtime.child_transports[0].automations = vec![RuntimeTimelineAutomation {
+            id: 301,
+            fixture_id: 1,
+            attribute: "Dimmer".to_string(),
+            track: TimelineTrackKind::Lighting,
+            keyframes: vec![
+                AutomationKeyframeSummary {
+                    time_ms: 0,
+                    value: 0,
+                    interpolation: AutomationInterpolation::Linear,
+                },
+                AutomationKeyframeSummary {
+                    time_ms: 4_000,
+                    value: u16::MAX,
+                    interpolation: AutomationInterpolation::Linear,
+                },
+            ],
+            enabled: true,
+        }];
+        runtime.values.insert((1, "Dimmer".to_string()), 0);
+
+        runtime.apply_command(EngineCommand::SeekTimeline(11_000));
+        assert!(runtime.child_transports[0].active);
+        assert_eq!(runtime.child_transports[0].position_ms, 1_000);
+        assert_eq!(runtime.active_cue_id, Some(2));
+        assert!((16_383..=16_384).contains(&runtime.values[&(1, "Dimmer".to_string())]));
+        assert!(runtime.effect_activations.iter().any(|activation| matches!(
+            activation.key,
+            Some(RuntimeEffectActivationKey::ChildTimeline { .. })
+        )));
+
+        runtime.apply_command(EngineCommand::SeekTimeline(12_000));
+        assert_eq!(runtime.child_transports[0].position_ms, 2_000);
+        assert_eq!(runtime.active_cue_id, Some(3));
+        assert!((32_767..=32_768).contains(&runtime.values[&(1, "Dimmer".to_string())]));
+
+        runtime.apply_command(EngineCommand::SeekTimeline(15_000));
+        assert!(!runtime.child_transports[0].active);
+        assert!(runtime
+            .effect_activations
+            .iter()
+            .all(|activation| !matches!(
+                activation.key,
+                Some(RuntimeEffectActivationKey::ChildTimeline { .. })
+            )));
+    }
+
+    #[test]
+    fn child_timeline_validation_rejects_descendants_self_and_cycles() {
+        let mut runtime = super_scene_test_runtime(1.0);
+        let self_reference = ChildTimelineSummary {
+            events: vec![TimelineCueEventSummary {
+                id: 1,
+                cue_id: 1,
+                track: TimelineTrackKind::Lighting,
+                ..TimelineCueEventSummary::default()
+            }],
+            ..ChildTimelineSummary::default()
+        };
+        let self_error = runtime
+            .set_cue_child_timeline_state(1, Some(self_reference))
+            .unwrap_err();
+        assert!(self_error.contains("self reference"));
+
+        let nested = ChildTimelineSummary {
+            events: vec![TimelineCueEventSummary {
+                id: 2,
+                cue_id: 1,
+                track: TimelineTrackKind::Lighting,
+                ..TimelineCueEventSummary::default()
+            }],
+            ..ChildTimelineSummary::default()
+        };
+        let cycle_error = runtime
+            .set_cue_child_timeline_state(2, Some(nested))
+            .unwrap_err();
+        assert!(cycle_error.contains("cyclic reference"));
+
+        runtime.cues[0].child_timeline = None;
+        runtime.cues[1].child_timeline = Some(ChildTimelineSummary::default());
+        let depth_two = ChildTimelineSummary {
+            events: vec![TimelineCueEventSummary {
+                id: 3,
+                cue_id: 2,
+                track: TimelineTrackKind::Lighting,
+                ..TimelineCueEventSummary::default()
+            }],
+            ..ChildTimelineSummary::default()
+        };
+        let depth_error = runtime
+            .set_cue_child_timeline_state(1, Some(depth_two))
+            .unwrap_err();
+        assert!(depth_error.contains("nesting depth greater than 1"));
+        eprintln!(
+            "super-scene validation: self={self_error:?} cycle={cycle_error:?} depth={depth_error:?}"
+        );
+    }
+
+    #[test]
+    fn invalid_child_timeline_loads_for_inspection_but_recall_is_inert() {
+        let mut snapshot = super_scene_test_runtime(1.0).build_persistence_snapshot();
+        snapshot.cues[1].child_timeline = Some(ChildTimelineSummary {
+            events: vec![TimelineCueEventSummary {
+                id: 299,
+                cue_id: 1,
+                track: TimelineTrackKind::Lighting,
+                ..TimelineCueEventSummary::default()
+            }],
+            ..ChildTimelineSummary::default()
+        });
+        let mut loaded = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        loaded.load_project_snapshot(snapshot);
+
+        assert!(loaded.cues[0].child_timeline.is_some());
+        assert!(loaded.cues[1].child_timeline.is_some());
+        assert!(loaded.child_transports.is_empty());
+        let mut retained = loaded.cues[0].child_timeline.clone().unwrap();
+        assert!(loaded
+            .normalize_and_validate_child_timeline(1, &mut retained)
+            .unwrap_err()
+            .contains("cyclic reference"));
+
+        loaded.timeline_playing = true;
+        loaded.timeline_position_ms = 9_999;
+        loaded.last_tick_interval = Duration::from_millis(1);
+        loaded.advance_timeline(Instant::now());
+        assert_eq!(loaded.active_cue_id, Some(1));
+    }
+
+    #[test]
+    fn flat_timeline_without_child_is_byte_identical_to_legacy_shape() {
+        let cue = CueSummary {
+            id: 42,
+            label: "Flat".to_string(),
+            ..CueSummary::default()
+        };
+        let encoded = serde_json::to_vec(&cue).unwrap();
+        let legacy_encoded = concat!(
+            r#"{"id":42,"cue_list_id":1,"cue_number":"","label":"Flat","group_id":null,"recall_mode":"Coexist","fade_ms":0,"authored_beats":null,"pre_wait_ms":0,"follow_ms":null,"ifcb_timing":{"intensity_fade_ms":null,"intensity_delay_ms":0,"focus_fade_ms":null,"focus_delay_ms":0,"color_fade_ms":null,"color_delay_ms":0,"beam_fade_ms":null,"beam_delay_ms":0},"parts":[],"mark":false,"mib_fixture_ids":[],"palette_targets":[],"tracking":true,"notes":"","targets":[],"video_targets":[],"video_output_targets":[],"node_graph_targets":[],"effect_targets":[]}"#,
+        );
+        assert_eq!(encoded, legacy_encoded.as_bytes());
+        let child_field_present = String::from_utf8(encoded.clone())
+            .unwrap()
+            .contains("child_timeline");
+        assert!(!child_field_present);
+        eprintln!(
+            "flat-timeline byte identity: current_bytes={} legacy_bytes={} identical=true child_field_present={child_field_present}",
+            encoded.len(),
+            legacy_encoded.len(),
+        );
+    }
+
+    #[test]
+    fn child_timeline_budget_16_by_200_uses_preallocated_tick_buffers() {
+        let child_events = (0..200_u64)
+            .map(|index| TimelineCueEventSummary {
+                id: 10_000 + index,
+                cue_id: 2,
+                time_ms: index + 1,
+                track: TimelineTrackKind::Lighting,
+                ..TimelineCueEventSummary::default()
+            })
+            .collect();
+        let cues = [
+            CueSummary {
+                id: 1,
+                label: "Budget Super".to_string(),
+                child_timeline: Some(ChildTimelineSummary {
+                    events: child_events,
+                    duration_ms: 1_000,
+                    ..ChildTimelineSummary::default()
+                }),
+                ..CueSummary::default()
+            },
+            CueSummary {
+                id: 2,
+                label: "Budget Child".to_string(),
+                ..CueSummary::default()
+            },
+        ];
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        runtime.cues = cues.iter().map(runtime_cue_from_summary).collect();
+        runtime.timeline_events = (0..16_u64)
+            .map(|index| timeline_test_event(1_000 + index, 1, 0, 0, 10_000, 1))
+            .collect();
+        runtime.rebuild_effect_activations(Instant::now());
+        assert_eq!(runtime.child_transports.len(), 16);
+        assert!(runtime
+            .child_transports
+            .iter()
+            .all(|transport| transport.events.len() == 200 && transport.due.capacity() >= 200));
+        runtime.timeline_position_ms = 0;
+        runtime.establish_child_transports_at_position(Instant::now());
+        let before = runtime
+            .child_transports
+            .iter()
+            .map(|transport| {
+                (
+                    transport.events.as_ptr(),
+                    transport.events.capacity(),
+                    transport.due.as_ptr(),
+                    transport.due.capacity(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let pending_capacity = runtime.pending_cues.capacity();
+        runtime.timeline_position_ms = 200;
+        runtime.advance_child_transports(Instant::now());
+        let reallocation_count = runtime
+            .child_transports
+            .iter()
+            .zip(before.iter())
+            .filter(|(transport, before)| {
+                transport.events.as_ptr() != before.0
+                    || transport.events.capacity() != before.1
+                    || transport.due.as_ptr() != before.2
+                    || transport.due.capacity() != before.3
+            })
+            .count()
+            + usize::from(runtime.pending_cues.capacity() != pending_capacity);
+        eprintln!(
+            "super-scene budget: transports=16 child_events_each=200 transport_tick_reallocations={reallocation_count}"
+        );
+        assert_eq!(reallocation_count, 0);
     }
 }

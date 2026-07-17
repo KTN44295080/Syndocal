@@ -2143,6 +2143,8 @@ async function measureLayeredTimelineDeskState(client) {
     const audioFadeRamps = [...document.querySelectorAll('.timelineAudioClip [data-timeline-audio-fade-ramp]')];
     const audioClipAddButtons = visibleElements('[data-timeline-section-kind="Audio"] [data-timeline-add-audio-clip]');
     const lightingClipAddButtons = visibleElements('[data-timeline-section-kind="Lighting"] [data-timeline-add-audio-clip]');
+    const superSceneBlocks = visibleElements('.timelineMarker.sceneBlock[data-super-scene="true"]');
+    const superSceneSourceLinks = visibleElements('[data-super-scene-source-link]');
     const frame = document.querySelector('.timelineOverviewFrame');
     const scrollports = visibleElements('[data-timeline-layer-scrollport]');
     const documentElement = document.documentElement;
@@ -2186,6 +2188,8 @@ async function measureLayeredTimelineDeskState(client) {
       audioFadeRampCount: audioFadeRamps.length,
       audioClipAddButtonCount: audioClipAddButtons.length,
       lightingClipAddButtonCount: lightingClipAddButtons.length,
+      superSceneBlockCount: superSceneBlocks.length,
+      superSceneSourceLinkCount: superSceneSourceLinks.length,
       overviewNodeCount: document.querySelectorAll('.timelineOverview *').length,
       scrollportCount: scrollports.length,
       scrollportOverflowSafe: scrollports.every((scrollport) => {
@@ -2449,6 +2453,55 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
   })()`);
   await sleep(180);
   const placementAfter = await client.evaluate(`document.querySelectorAll('.timelineMarker.sceneBlock').length`);
+  const superSceneOpened = await client.evaluate(`(() => {
+    const marker = document.querySelector('.timelineMarker.sceneBlock[data-super-scene="true"]');
+    if (!marker) return false;
+    const rect = marker.getBoundingClientRect();
+    marker.dispatchEvent(new MouseEvent('dblclick', {
+      bubbles: true,
+      cancelable: true,
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2,
+    }));
+    return true;
+  })()`);
+  await sleep(180);
+  const childTimeline = await client.evaluate(`(() => {
+    const visible = (selector) => [...document.querySelectorAll(selector)].filter((element) => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    });
+    const frame = document.querySelector('.timelineOverviewFrame');
+    const documentElement = document.documentElement;
+    const body = document.body;
+    const app = document.querySelector('.app');
+    return {
+      breadcrumbVisible: visible('[data-timeline-breadcrumb]').length === 1,
+      breadcrumbLabel: document.querySelector('[data-child-timeline-label]')?.textContent?.trim() ?? '',
+      layerIds: visible('[data-timeline-layer-id][data-timeline-layer-gutter]')
+        .map((element) => element.getAttribute('data-timeline-layer-id') || ''),
+      blockCount: visible('.timelineMarker.sceneBlock').length,
+      audioClipCount: visible('.timelineAudioClip[data-timeline-layer-kind="Audio"]').length,
+      overviewNodeCount: document.querySelectorAll('.timelineOverview *').length,
+      frameHeight: Math.round(frame?.getBoundingClientRect().height ?? 0),
+      documentAndAppScrollZero:
+        window.scrollX === 0 && window.scrollY === 0 &&
+        documentElement.scrollWidth === documentElement.clientWidth &&
+        documentElement.scrollHeight === documentElement.clientHeight &&
+        body.scrollWidth === documentElement.clientWidth &&
+        body.scrollHeight === documentElement.clientHeight &&
+        (!app || (app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight)),
+    };
+  })()`);
+  const superSceneExitClicked = await client.evaluate(`(() => {
+    const button = document.querySelector('[data-timeline-breadcrumb] button');
+    if (!(button instanceof HTMLButtonElement)) return false;
+    button.click();
+    return true;
+  })()`);
+  await sleep(180);
+  const superSceneRestored = await measureLayeredTimelineDeskState(client);
   const direct = {
     controls: directControls,
     rate: { before: rateBefore, drag: rateDrag, after: rateAfter },
@@ -2458,6 +2511,7 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
     escape: { before: escapeBefore, during: escapeDuring, after: escapeAfter },
     wheel: { before: wheelBefore, after: wheelAfter, cursorDriftPx: wheelCursorDriftPx },
     placement: { before: placementBefore, after: placementAfter, dispatched: placementDispatched },
+    superScene: { opened: superSceneOpened, child: childTimeline, exitClicked: superSceneExitClicked, restored: superSceneRestored },
   };
   const expectedFrameHeight = viewport.height <= 800 ? 148 : 190;
   const conditions = [
@@ -2486,6 +2540,26 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
     ['timelineAudioAddAffordancePresentOnlyOnAudioSection', () =>
       before.audioClipAddButtonCount === 1 && before.lightingClipAddButtonCount === 0],
     ['timelineAudioClipsKeepOverviewNodeBudget', () => before.overviewNodeCount < 3_500],
+    ['superSceneSourceBlockAndLinkVisible', () => before.superSceneBlockCount === 1 && before.superSceneSourceLinkCount === 1],
+    ['superSceneBreadcrumbOpensChildTimeline', () =>
+      direct.superScene.opened &&
+      direct.superScene.child?.breadcrumbVisible === true &&
+      direct.superScene.child?.breadcrumbLabel === 'Shin'],
+    ['superSceneChildTimelineShowsThreeSourceLinkedLanes', () =>
+      JSON.stringify(direct.superScene.child?.layerIds) === JSON.stringify(['50', '51', '52'])],
+    ['superSceneChildTimelineShowsTwoLightingBlocksAndOneAudioClip', () =>
+      direct.superScene.child?.blockCount === 2 && direct.superScene.child?.audioClipCount === 1],
+    ['superSceneChildTimelineKeepsOverviewNodeBudget', () => direct.superScene.child?.overviewNodeCount < 3_500],
+    ['superSceneBreadcrumbRoundTripRestoresSourceBlock', () =>
+      direct.superScene.exitClicked &&
+      direct.superScene.restored?.superSceneBlockCount === 1 &&
+      direct.superScene.restored?.superSceneSourceLinkCount === 1],
+    ['superSceneBreadcrumbRoundTripKeepsFixedFrameHeight', () =>
+      Math.abs((direct.superScene.child?.frameHeight ?? 0) - expectedFrameHeight) <= 1 &&
+      Math.abs((direct.superScene.restored?.frameHeight ?? 0) - expectedFrameHeight) <= 1],
+    ['superSceneBreadcrumbRoundTripKeepsDocumentAndAppScrollZero', () =>
+      direct.superScene.child?.documentAndAppScrollZero === true &&
+      direct.superScene.restored?.documentAndAppScrollZero === true],
     ['timelineAudioFixtureKeepsDocumentAndAppScrollZero', () => before.documentAndAppScrollZero],
     ['layeredDeskInternalScrollportPresent', () => before.scrollportCount === 1 && before.scrollportOverflowSafe],
     ['layeredDeskDocumentAndAppScrollZero', () => before.documentAndAppScrollZero && muted.documentAndAppScrollZero],

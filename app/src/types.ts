@@ -1498,6 +1498,7 @@ export interface CueSummary {
   video_output_targets: VideoOutputTarget[];
   node_graph_targets: CueNodeGraphTarget[];
   effect_targets: CueEffectTarget[];
+  child_timeline?: ChildTimelineSummary | null;
 }
 
 export interface CueNodeGraphTarget {
@@ -1642,6 +1643,16 @@ export interface TimelineVideoAutomationSummary {
   track: TimelineTrackKind;
   keyframes: VideoAutomationKeyframeSummary[];
   enabled: boolean;
+}
+
+export interface ChildTimelineSummary {
+  layers?: TimelineLayerSummary[];
+  events?: TimelineCueEventSummary[];
+  automations?: TimelineAutomationSummary[];
+  video_automations?: TimelineVideoAutomationSummary[];
+  audio?: AudioAnalysisSummary | null;
+  audio_clips?: TimelineAudioClipSummary[];
+  duration_ms?: number;
 }
 
 export interface TimelineSnapshot {

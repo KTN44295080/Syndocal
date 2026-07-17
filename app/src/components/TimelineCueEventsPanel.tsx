@@ -54,6 +54,7 @@ interface AudioBeatMarker {
 }
 
 interface TimelineCueEventsPanelProps {
+  childTimelineLabel: string | null;
   positionMs: number;
   bpm: number;
   durationMs: number;
@@ -87,6 +88,7 @@ interface TimelineCueEventsPanelProps {
   snapMode: TimelineSnapMode;
   gridMs: number;
   selectedCueId: number | null;
+  selectedCueIsSuperScene: boolean;
   eventTimeMs: number;
   blockDurationMs: number;
   blockLoopCount: number;
@@ -96,6 +98,8 @@ interface TimelineCueEventsPanelProps {
   eventRows: TimelineSceneBlockRow[];
   timelineEventDraft: (event: TimelineCueEventSummary) => TimelineEventDraft;
   onSeek: (timeMs: number) => void | Promise<void>;
+  onExitChildTimeline: () => void;
+  onOpenSuperScene: (cueId: number) => void;
   onPause: () => void | Promise<void>;
   onPlay: () => void | Promise<void>;
   onSeekOverviewTime: (timeMs: number) => void;
@@ -154,6 +158,7 @@ interface TimelineCueEventsPanelProps {
     snapEnabled: boolean,
   ) => void | Promise<void>;
   onSelectedCueId: (cueId: number) => void;
+  onOpenOrCreateSuperScene: (cueId: number) => void | Promise<void>;
   onEventTimeMs: (timeMs: number) => void;
   onBlockDurationMs: (durationMs: number) => void;
   onBlockLoopCount: (loopCount: number) => void;
@@ -244,7 +249,18 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
   return (
     <>
       <div class="panelHeader">
-        <h2>Timeline</h2>
+        <div class="timelineTitleGroup">
+          <h2>Timeline</h2>
+          <Show when={props.childTimelineLabel}>
+            {(label) => (
+              <nav class="timelineBreadcrumb" aria-label="Timeline breadcrumb" data-timeline-breadcrumb>
+                <button type="button" onClick={props.onExitChildTimeline}>Show</button>
+                <span aria-hidden="true" data-no-localize>›</span>
+                <strong data-child-timeline-label data-no-localize>{label()}</strong>
+              </nav>
+            )}
+          </Show>
+        </div>
         <div
           class={`timelineHeaderMeta ${props.executingLive ? "executingLive" : ""}`}
           aria-label="Timeline summary"
@@ -282,11 +298,11 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         />
       </div>
       <div class="timelineTransport">
-        <button onClick={() => void props.onSeek(0)}>|&lt;</button>
-        <button onClick={() => void props.onPause()} disabled={!props.playing}>
+        <button onClick={() => void props.onSeek(0)} disabled={props.childTimelineLabel !== null}>|&lt;</button>
+        <button onClick={() => void props.onPause()} disabled={props.childTimelineLabel !== null || !props.playing}>
           Pause
         </button>
-        <button class="primary" onClick={() => void props.onPlay()} disabled={props.durationMs === 0 || props.playing}>
+        <button class="primary" onClick={() => void props.onPlay()} disabled={props.childTimelineLabel !== null || props.durationMs === 0 || props.playing}>
           Play
         </button>
       </div>
@@ -295,6 +311,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         min="0"
         max={Math.max(props.durationMs, 1)}
         value={props.positionMs}
+        disabled={props.childTimelineLabel !== null}
         onInput={(event) => void props.onSeek(Number(event.currentTarget.value))}
       />
       <nav class="timelineViewportToolbar" aria-label="Timeline visible range controls">
@@ -385,6 +402,16 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         >
           {armedCueId() === props.selectedCueId ? "Disarm Cue" : "Arm Cue"}
         </button>
+        <button
+          type="button"
+          data-open-super-scene={props.selectedCueId ?? undefined}
+          disabled={props.selectedCueId === null || props.childTimelineLabel !== null}
+          onClick={() => {
+            if (props.selectedCueId !== null) void props.onOpenOrCreateSuperScene(props.selectedCueId);
+          }}
+        >
+          {props.selectedCueIsSuperScene ? "Edit Super Scene" : "Create Super Scene"}
+        </button>
         <Show when={armedCue()}>
           {(cue) => <output class="timelineArmedCue" data-timeline-armed-cue={cue().id}>Armed: {cue().label}</output>}
         </Show>
@@ -413,6 +440,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         onSeekTime={props.onSeekOverviewTime}
         onSelectAutomationRange={props.onSelectAutomationRange}
         onSelectEvent={(eventId) => props.onSelectEvent(eventId, false)}
+        onOpenSuperScene={props.onOpenSuperScene}
         onSelectAudioClip={setSelectedAudioClipId}
         onInspectOverlapCluster={inspectOverlapCluster}
         onUpdateLayer={(layer) => void props.onUpdateTimelineLayer(layer)}

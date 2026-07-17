@@ -1220,6 +1220,8 @@ pub struct CueSummary {
     pub node_graph_targets: Vec<CueNodeGraphTarget>,
     #[serde(default)]
     pub effect_targets: Vec<CueEffectTarget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_timeline: Option<ChildTimelineSummary>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -1365,6 +1367,7 @@ impl Default for CueSummary {
             video_output_targets: Vec::new(),
             node_graph_targets: Vec::new(),
             effect_targets: Vec::new(),
+            child_timeline: None,
         }
     }
 }
@@ -1522,6 +1525,28 @@ pub struct TimelineCueEventSummary {
     pub jump_to_event_id: Option<TimelineEventId>,
 }
 
+impl Default for TimelineCueEventSummary {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            cue_id: 0,
+            time_ms: 0,
+            time_beats: None,
+            track: TimelineTrackKind::Lighting,
+            layer_id: None,
+            duration_ms: 0,
+            duration_beats: None,
+            conform_to_tempo: false,
+            loop_fill: false,
+            rate: None,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+            loop_count: default_timeline_scene_block_loop_count(),
+            jump_to_event_id: None,
+        }
+    }
+}
+
 fn default_timeline_scene_block_loop_count() -> u16 {
     1
 }
@@ -1668,6 +1693,26 @@ pub struct TimelineSnapshot {
     pub audio_transport_revision: u64,
     pub playing: bool,
     pub position_ms: u64,
+    pub duration_ms: u64,
+}
+
+/// Authored timeline content owned by a Cue. Transport state deliberately remains on the
+/// parent [`TimelineSnapshot`], so every placement receives its own runtime transport.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ChildTimelineSummary {
+    #[serde(default)]
+    pub layers: Vec<TimelineLayerSummary>,
+    #[serde(default)]
+    pub events: Vec<TimelineCueEventSummary>,
+    #[serde(default)]
+    pub automations: Vec<TimelineAutomationSummary>,
+    #[serde(default)]
+    pub video_automations: Vec<TimelineVideoAutomationSummary>,
+    #[serde(default)]
+    pub audio: Option<AudioAnalysisSummary>,
+    #[serde(default)]
+    pub audio_clips: Vec<TimelineAudioClipSummary>,
+    #[serde(default)]
     pub duration_ms: u64,
 }
 
@@ -3707,5 +3752,56 @@ mod tests {
         let parsed: super::EffectPreset = serde_json::from_str(&json).unwrap();
 
         assert_eq!(parsed, preset);
+    }
+
+    #[test]
+    fn child_timeline_defaults_every_collection_and_legacy_cue_loads_none() {
+        let child: super::ChildTimelineSummary =
+            serde_json::from_str(r#"{"duration_ms":1200}"#).unwrap();
+        assert!(child.layers.is_empty());
+        assert!(child.events.is_empty());
+        assert!(child.automations.is_empty());
+        assert!(child.video_automations.is_empty());
+        assert!(child.audio.is_none());
+        assert!(child.audio_clips.is_empty());
+        assert_eq!(child.duration_ms, 1_200);
+
+        let legacy = serde_json::to_value(super::CueSummary::default()).unwrap();
+        assert!(legacy.get("child_timeline").is_none());
+        let parsed: super::CueSummary = serde_json::from_value(legacy).unwrap();
+        assert!(parsed.child_timeline.is_none());
+    }
+
+    #[test]
+    fn child_timeline_roundtrip_includes_f7_audio_clips() {
+        let mut cue = super::CueSummary::default();
+        cue.id = 9;
+        cue.child_timeline = Some(super::ChildTimelineSummary {
+            layers: vec![super::TimelineLayerSummary {
+                id: 4,
+                label: "Child Audio".to_string(),
+                order: 0,
+                muted: false,
+                locked: false,
+                solo: false,
+                kind: super::TimelineLayerKind::Audio,
+            }],
+            audio_clips: vec![super::TimelineAudioClipSummary {
+                id: 7,
+                layer_id: 4,
+                path: "child.wav".to_string(),
+                start_ms: 100,
+                offset_ms: 20,
+                duration_ms: 900,
+                gain: 0.75,
+                fade_in_ms: 50,
+                fade_out_ms: 80,
+            }],
+            duration_ms: 1_000,
+            ..super::ChildTimelineSummary::default()
+        });
+        let json = serde_json::to_vec(&cue).unwrap();
+        let parsed: super::CueSummary = serde_json::from_slice(&json).unwrap();
+        assert_eq!(parsed, cue);
     }
 }

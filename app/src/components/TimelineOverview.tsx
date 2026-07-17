@@ -50,6 +50,7 @@ export interface TimelineOverviewEvent {
   width: number;
   y: number;
   under_playhead: boolean;
+  is_super_scene: boolean;
 }
 
 export interface TimelineOverviewAutomationRange {
@@ -114,6 +115,7 @@ interface TimelineOverviewProps {
   onSeekTime: (timeMs: number) => void;
   onSelectAutomationRange: (range: TimelineOverviewAutomationRange) => void;
   onSelectEvent: (eventId: number) => void;
+  onOpenSuperScene: (cueId: number) => void;
   onSelectAudioClip: (clipId: number) => void;
   onInspectOverlapCluster: (cluster: TimelineOverviewOverlapCluster) => void;
   onUpdateLayer: (layer: TimelineLayerSummary) => void | Promise<void>;
@@ -2274,6 +2276,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               !props.legacyMode && layerById().get(event.layer_id)?.muted ? "layerMuted" : "",
             ].filter(Boolean).join(" ")}
             data-timeline-event-id={event.id}
+            data-super-scene={event.is_super_scene ? "true" : undefined}
             data-timeline-layer-id={eventPreviewLayerId(event)}
             data-timeline-layer-kind={layerById().get(eventPreviewLayerId(event))?.kind ?? event.track}
             data-timeline-layer-muted={layerById().get(event.layer_id)?.muted ? "true" : "false"}
@@ -2309,6 +2312,12 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               }
               props.onSelectEvent(event.id);
               props.onSeekTime(event.time_ms);
+            }}
+            onDblClick={(pointerEvent) => {
+              if (!event.is_super_scene) return;
+              pointerEvent.preventDefault();
+              pointerEvent.stopPropagation();
+              props.onOpenSuperScene(event.cue_id);
             }}
             onKeyDown={(keyboardEvent) => {
               if (keyboardEvent.key === "ArrowRight" || keyboardEvent.key === "ArrowDown") {
@@ -2430,6 +2439,18 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                 >
                   {sceneBlockName(event)}
                 </text>
+                <Show when={event.is_super_scene}>
+                  <text
+                    class="timelineSuperSceneLink"
+                    data-super-scene-source-link
+                    x={Math.max(nameInsetPx, sceneBlockPixelWidth(event) - 12)}
+                    y={-blockHeightPx() / 2 + identityBandHeightPx() / 2}
+                    dominant-baseline="central"
+                    data-no-localize
+                  >
+                    ↳
+                  </text>
+                </Show>
                 <Show when={sceneBlockShowsDuration(event)}>
                   <text
                     class="timelineSceneBlockDuration"
