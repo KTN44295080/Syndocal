@@ -51,6 +51,8 @@ export interface TimelineEventDraft {
   duration_beats: number | null;
   conform_to_tempo: boolean;
   loop_fill: boolean;
+  fade_in_ms: number;
+  fade_out_ms: number;
   loop_count: number;
   jump_to_event_id: number | null;
 }
@@ -125,6 +127,8 @@ export const timelineEventDraftFromSummary = (event: TimelineCueEventSummary): T
   duration_beats: event.duration_beats ?? null,
   conform_to_tempo: event.conform_to_tempo ?? false,
   loop_fill: event.loop_fill ?? false,
+  fade_in_ms: event.fade_in_ms ?? 0,
+  fade_out_ms: event.fade_out_ms ?? 0,
   loop_count: event.loop_count ?? 1,
   jump_to_event_id: event.jump_to_event_id ?? null,
 });

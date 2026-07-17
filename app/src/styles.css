@@ -11963,6 +11963,53 @@ input[type="color"] {
   cursor: ew-resize;
 }
 
+.timelineSceneBlockFadeHandle {
+  fill: rgba(133, 196, 235, 0.24);
+  cursor: ew-resize;
+  opacity: 0;
+  pointer-events: all;
+  touch-action: none;
+}
+
+.timelineMarker:hover .timelineSceneBlockFadeHandle,
+.timelineMarker.selected .timelineSceneBlockFadeHandle,
+.timelineMarker.fading .timelineSceneBlockFadeHandle {
+  opacity: 1;
+}
+
+.timelineSceneBlockGhost {
+  fill: none;
+  stroke: rgba(225, 238, 249, 0.72);
+  stroke-width: 1;
+  stroke-dasharray: 3 2;
+  pointer-events: none;
+}
+
+.timelineSceneBlockLiveStamp {
+  fill: #ecf5fd;
+  font-size: 9px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  paint-order: stroke;
+  stroke: #0d141c;
+  stroke-width: 3px;
+  pointer-events: none;
+}
+
+.timelinePlacementPreview rect {
+  fill: rgba(66, 142, 196, 0.34);
+  stroke: #8fc8ee;
+  stroke-width: 1;
+  stroke-dasharray: 3 2;
+}
+
+.timelinePlacementPreview text {
+  fill: #edf8ff;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
 .timelineCueDragGhost {
   z-index: 1200;
   max-width: min(240px, calc(100vw - 24px));
@@ -22936,7 +22983,7 @@ h3 {
 }
 
 .timelineShowSurface {
-  grid-template-rows: auto auto auto auto minmax(92px, 0.55fr) minmax(230px, 1.45fr);
+  grid-template-rows: auto auto auto auto auto minmax(92px, 0.55fr) minmax(230px, 1.45fr);
 }
 
 .timelineShowSurface > .sceneBlockWorkspace {
@@ -23538,11 +23585,24 @@ h3 {
 }
 
 .sceneBlockRowFields {
-  display: grid;
-  grid-template-columns: minmax(115px, 1.15fr) 64px 72px 48px minmax(132px, 1fr) 68px minmax(108px, 0.9fr);
+  display: flex;
+  flex-wrap: wrap;
   align-items: end;
   gap: 3px;
   min-width: 0;
+}
+
+.sceneBlockRowFields > label {
+  flex: 1 1 64px;
+}
+
+.sceneBlockRowFields > .sceneBlockSourceField {
+  flex: 2 1 150px;
+}
+
+.sceneBlockRowFields > .sceneBlockConformControls,
+.sceneBlockRowFields > .sceneBlockAfterField {
+  flex: 1 1 120px;
 }
 
 .sceneBlockConformControls {
@@ -23696,7 +23756,7 @@ h3 {
 
 @media (max-height: 760px) {
   .timelineShowSurface {
-    grid-template-rows: auto auto auto auto minmax(70px, 0.42fr) minmax(190px, 1.58fr);
+    grid-template-rows: auto auto auto auto auto minmax(70px, 0.42fr) minmax(190px, 1.58fr);
   }
 
   .sceneBlockWorkspace {
@@ -23723,7 +23783,7 @@ h3 {
   }
 
   .timelineShowSurface {
-    grid-template-rows: auto auto auto auto 78px minmax(190px, 1fr);
+    grid-template-rows: auto auto auto auto auto 78px minmax(190px, 1fr);
     align-content: start;
     overflow-x: hidden;
     overflow-y: auto;
@@ -24551,7 +24611,7 @@ h3 {
 }
 
 .layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelineShowSurface {
-  grid-template-rows: auto auto auto auto 78px minmax(190px, 1fr);
+  grid-template-rows: auto auto auto auto auto 78px minmax(190px, 1fr);
   align-content: start;
   overflow-x: hidden;
   overflow-y: auto;
@@ -24560,6 +24620,55 @@ h3 {
      contain: size layout, so scrollbar appearance cannot feed back into the
      SVG sizing loop, and the reservation cost the scene-block workspace the
      >=97%-of-panel width contract at compact viewports. */
+}
+
+.timelineDirectToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.timelineDirectToolbarLabel {
+  flex: 0 1 auto;
+  color: #9ba6b2;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.timelineStretchModeToggle {
+  display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.timelineDirectToolbar button,
+.timelineStretchModeToggle button {
+  flex: 0 1 auto;
+  min-height: 27px;
+  padding: 3px 7px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.timelineDirectToolbar button.active,
+.timelineStretchModeToggle button.active,
+.sceneBlockComposer button.active,
+.sceneBlockRowFields button.active {
+  border-color: #6f9bc0;
+  background: #243b4d;
+  color: #eef7ff;
+}
+
+.timelineArmedCue {
+  flex: 1 1 140px;
+  min-width: 0;
+  overflow: hidden;
+  color: #b9c9d8;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelinePanel > .panelHeader {

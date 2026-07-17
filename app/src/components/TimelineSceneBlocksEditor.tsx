@@ -60,6 +60,8 @@ interface TimelineSceneBlocksEditorProps {
   onSelectEvent: (eventId: number) => void;
   onClearEventFilter: () => void;
   onOpenSourceCue: (cueId: number) => void;
+  armedCueId: number | null;
+  onArmCue: (cueId: number | null) => void;
 }
 
 const totalDurationMs = (
@@ -493,6 +495,17 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
             </span>
             <small>Find…</small>
           </button>
+          <button
+            type="button"
+            classList={{ active: props.selectedCueId !== null && props.armedCueId === props.selectedCueId }}
+            aria-pressed={props.selectedCueId !== null && props.armedCueId === props.selectedCueId}
+            aria-label={props.armedCueId === props.selectedCueId ? "Disarm Cue" : "Arm Cue"}
+            data-timeline-arm-cue={props.selectedCueId ?? undefined}
+            disabled={props.selectedCueId === null}
+            onClick={() => props.onArmCue(props.selectedCueId)}
+          >
+            {props.armedCueId === props.selectedCueId ? "Disarm Cue" : "Arm Cue"}
+          </button>
         </div>
         <label>
           Start ms
@@ -586,6 +599,17 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
                 {(cue) => <option data-no-localize value={cue.id}>{sourceCueOptionLabel(cue)}</option>}
               </For>
             </select>
+            <button
+              type="button"
+              classList={{ active: sourcePickerCueId() !== null && props.armedCueId === sourcePickerCueId() }}
+              aria-pressed={sourcePickerCueId() !== null && props.armedCueId === sourcePickerCueId()}
+              aria-label={props.armedCueId === sourcePickerCueId() ? "Disarm Cue" : "Arm Cue"}
+              data-timeline-arm-cue={sourcePickerCueId() ?? undefined}
+              disabled={sourcePickerCueId() === null}
+              onClick={() => props.onArmCue(sourcePickerCueId())}
+            >
+              {props.armedCueId === sourcePickerCueId() ? "Disarm Cue" : "Arm Cue"}
+            </button>
             <small>{Math.min(sourcePickerResultLimit, matchingSourceOptions().length)} shown · {props.cueOptions.length} total</small>
             <button
               type="button"
@@ -859,6 +883,16 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
                         </span>
                         <small>Change…</small>
                       </button>
+                      <button
+                        type="button"
+                        classList={{ active: props.armedCueId === draft().cue_id }}
+                        aria-pressed={props.armedCueId === draft().cue_id}
+                        aria-label={props.armedCueId === draft().cue_id ? "Disarm Cue" : "Arm Cue"}
+                        data-timeline-arm-cue={draft().cue_id}
+                        onClick={() => props.onArmCue(draft().cue_id)}
+                      >
+                        {props.armedCueId === draft().cue_id ? "Disarm Cue" : "Arm Cue"}
+                      </button>
                     </div>
                     <label>
                       Start ms
@@ -903,6 +937,30 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
                         value={draft().loop_count}
                         disabled={!isBlock() || draft().loop_fill}
                         onInput={(inputEvent) => props.onUpdateEventDraft(event, { loop_count: Number(inputEvent.currentTarget.value) })}
+                      />
+                    </label>
+                    <label>
+                      Fade In ms
+                      <input
+                        type="number"
+                        min="0"
+                        max={Math.max(0, draft().duration_ms)}
+                        value={draft().fade_in_ms}
+                        onInput={(inputEvent) => props.onUpdateEventDraft(event, {
+                          fade_in_ms: Math.min(draft().duration_ms, Math.max(0, Number(inputEvent.currentTarget.value))),
+                        })}
+                      />
+                    </label>
+                    <label>
+                      Fade Out ms
+                      <input
+                        type="number"
+                        min="0"
+                        max={Math.max(0, draft().duration_ms)}
+                        value={draft().fade_out_ms}
+                        onInput={(inputEvent) => props.onUpdateEventDraft(event, {
+                          fade_out_ms: Math.min(draft().duration_ms, Math.max(0, Number(inputEvent.currentTarget.value))),
+                        })}
                       />
                     </label>
                     <fieldset class="sceneBlockConformControls">

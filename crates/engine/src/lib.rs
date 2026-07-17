@@ -627,6 +627,8 @@ pub enum EngineCommand {
         duration_beats: Option<f64>,
         conform_to_tempo: bool,
         loop_fill: bool,
+        fade_in_ms: u64,
+        fade_out_ms: u64,
         loop_count: u16,
         jump_to_event_id: Option<TimelineEventId>,
         expires_at: Instant,
@@ -643,6 +645,8 @@ pub enum EngineCommand {
         duration_beats: Option<f64>,
         conform_to_tempo: bool,
         loop_fill: bool,
+        fade_in_ms: u64,
+        fade_out_ms: u64,
         loop_count: u16,
         jump_to_event_id: Option<TimelineEventId>,
         expires_at: Instant,
@@ -1791,6 +1795,8 @@ impl EngineHandle {
         duration_beats: Option<f64>,
         conform_to_tempo: bool,
         loop_fill: bool,
+        fade_in_ms: u64,
+        fade_out_ms: u64,
         loop_count: u16,
         jump_to_event_id: Option<TimelineEventId>,
     ) -> Result<(), String> {
@@ -1806,6 +1812,8 @@ impl EngineHandle {
             duration_beats,
             conform_to_tempo,
             loop_fill,
+            fade_in_ms,
+            fade_out_ms,
             loop_count,
             jump_to_event_id,
             expires_at: Instant::now() + Duration::from_secs(2),
@@ -1830,6 +1838,8 @@ impl EngineHandle {
         duration_beats: Option<f64>,
         conform_to_tempo: bool,
         loop_fill: bool,
+        fade_in_ms: u64,
+        fade_out_ms: u64,
         loop_count: u16,
         jump_to_event_id: Option<TimelineEventId>,
     ) -> Result<(), String> {
@@ -1845,6 +1855,8 @@ impl EngineHandle {
             duration_beats,
             conform_to_tempo,
             loop_fill,
+            fade_in_ms,
+            fade_out_ms,
             loop_count,
             jump_to_event_id,
             expires_at: Instant::now() + Duration::from_secs(2),
@@ -2788,6 +2800,7 @@ struct CueBody {
 #[derive(Clone)]
 struct RuntimeFade {
     cue_id: CueId,
+    timeline_event_id: Option<TimelineEventId>,
     started_at: Instant,
     duration: Duration,
     video_duration: Duration,
@@ -2827,6 +2840,7 @@ struct PendingCueTrigger {
     due_at: Instant,
     source: PendingCueTriggerSource,
     repeat_count: u64,
+    fade_override_ms: Option<u64>,
     timeline_effect_activation: Option<PendingTimelineEffectActivation>,
     dispatch: Option<CueDispatchEntry>,
 }
@@ -2855,6 +2869,8 @@ struct RuntimeTimelineEvent {
     loop_fill: bool,
     iteration_period_ms: u64,
     rate: Option<f32>,
+    fade_in_ms: u64,
+    fade_out_ms: u64,
     loop_count: u16,
     jump_to_event_id: Option<TimelineEventId>,
 }
@@ -2870,6 +2886,7 @@ enum CueFreeRunPeriodResolution {
 enum TimelineCueOccurrenceKind {
     End,
     Trigger,
+    FadeOutStart,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -6476,6 +6493,8 @@ impl EngineRuntime {
                 duration_beats,
                 conform_to_tempo,
                 loop_fill,
+                fade_in_ms,
+                fade_out_ms,
                 loop_count,
                 jump_to_event_id,
                 expires_at,
@@ -6510,6 +6529,8 @@ impl EngineRuntime {
                         loop_fill,
                         iteration_period_ms: duration_ms,
                         rate: None,
+                        fade_in_ms: fade_in_ms.min(duration_ms),
+                        fade_out_ms: fade_out_ms.min(duration_ms),
                         loop_count,
                         jump_to_event_id,
                     })
@@ -6537,6 +6558,8 @@ impl EngineRuntime {
                 duration_beats,
                 conform_to_tempo,
                 loop_fill,
+                fade_in_ms,
+                fade_out_ms,
                 loop_count,
                 jump_to_event_id,
                 expires_at,
@@ -6571,6 +6594,8 @@ impl EngineRuntime {
                         loop_fill,
                         iteration_period_ms: duration_ms,
                         rate: None,
+                        fade_in_ms: fade_in_ms.min(duration_ms),
+                        fade_out_ms: fade_out_ms.min(duration_ms),
                         loop_count,
                         jump_to_event_id,
                     })
@@ -10393,6 +10418,95 @@ impl EngineRuntime {
             .retain(|index| *index < range.start || *index >= end);
     }
 
+    fn start_timeline_block_fade_out(&mut self, event_index: usize, now: Instant) {
+        let Some(event) = self.timeline_events.get(event_index).cloned() else {
+            return;
+        };
+        if event.duration_ms == 0 || event.fade_out_ms == 0 {
+            return;
+        }
+        let Some(cue) = self.cues.iter().find(|cue| cue.id == event.cue_id).cloned() else {
+            return;
+        };
+        let range = self
+            .timeline_effect_activation_ranges
+            .get(event_index)
+            .copied()
+            .unwrap_or_default();
+        let cue_values = self
+            .cue_palette_target_values(&cue.palette_targets)
+            .into_iter()
+            .chain(cue_target_values(&cue.targets))
+            .collect::<HashMap<_, _>>();
+        let mut start_values = HashMap::new();
+        for fixture in &self.fixtures {
+            let Some(mode) = fixture.profile.dmx_modes.get(fixture.mode_index) else {
+                continue;
+            };
+            for control in &mode.controls {
+                let key = (fixture.id, control.attribute.clone());
+                let base_value = self
+                    .values
+                    .get(&key)
+                    .copied()
+                    .unwrap_or(control.default_value);
+                let effective_value =
+                    self.apply_effects(fixture, &control.attribute, base_value, now);
+                if cue_values.contains_key(&key) || effective_value != base_value {
+                    start_values.insert(key, effective_value);
+                }
+            }
+        }
+        self.deactivate_effect_range(range);
+        if start_values.is_empty() {
+            return;
+        }
+        for (key, value) in &start_values {
+            self.values.insert(key.clone(), *value);
+        }
+        let duration = Duration::from_millis(event.fade_out_ms);
+        let target_values = start_values
+            .keys()
+            .map(|key| (key.clone(), 0))
+            .collect::<HashMap<_, _>>();
+        let attribute_timings = start_values
+            .keys()
+            .map(|key| (key.clone(), (Duration::ZERO, duration)))
+            .collect::<HashMap<_, _>>();
+        self.active_fade = Some(RuntimeFade {
+            cue_id: cue.id,
+            timeline_event_id: Some(event.id),
+            started_at: now,
+            duration,
+            video_duration: Duration::ZERO,
+            paused_at: None,
+            paused_duration: Duration::ZERO,
+            start_values,
+            target_values,
+            attribute_timings,
+            video_start_states: HashMap::new(),
+            video_target_states: HashMap::new(),
+            video_layer_timings: HashMap::new(),
+            video_output_start_opacities: HashMap::new(),
+            video_output_target_opacities: HashMap::new(),
+            video_output_targets: HashMap::new(),
+            video_output_timings: HashMap::new(),
+        });
+    }
+
+    fn finish_timeline_block_fade_out(&mut self, event_id: TimelineEventId) {
+        let Some(fade) = self
+            .active_fade
+            .take_if(|fade| fade.timeline_event_id == Some(event_id))
+        else {
+            return;
+        };
+        for (key, target) in fade.target_values {
+            self.values.insert(key.clone(), target);
+            self.cue_value_origins.remove(&key);
+        }
+    }
+
     fn deactivate_cue_list_effect_activations(&mut self, cue_list_id: CueListId) {
         for activation in &mut self.effect_activations {
             if matches!(
@@ -11334,6 +11448,8 @@ impl EngineRuntime {
         if !event.conform_to_tempo {
             event.iteration_period_ms = event.duration_ms;
             event.rate = None;
+            event.fade_in_ms = event.fade_in_ms.min(event.duration_ms);
+            event.fade_out_ms = event.fade_out_ms.min(event.duration_ms);
             return Ok(event);
         }
         if event.duration_ms == 0 {
@@ -11398,13 +11514,21 @@ impl EngineRuntime {
                 "Scene Block beat duration",
             )?;
         }
-        event.rate = match self.cue_free_run_period_ms(event.cue_id) {
-            CueFreeRunPeriodResolution::Unique(period_ms) => {
-                timeline_conform_rate(period_ms, conformed_iteration_ms)
+        event.rate = if event.loop_fill {
+            match self.cue_free_run_period_ms(event.cue_id) {
+                CueFreeRunPeriodResolution::Unique(period_ms) => {
+                    timeline_conform_rate(period_ms, conformed_iteration_ms)
+                }
+                CueFreeRunPeriodResolution::NoCandidate => Some(1.0),
+                CueFreeRunPeriodResolution::Ambiguous => None,
             }
-            CueFreeRunPeriodResolution::NoCandidate => Some(1.0),
-            CueFreeRunPeriodResolution::Ambiguous => None,
+        } else {
+            // RATE stretch keeps the Cue's authored beat period as content truth and maps the
+            // user-authored block window onto the existing activation playback-rate field.
+            timeline_conform_rate(conformed_iteration_ms, event.duration_ms as f64)
         };
+        event.fade_in_ms = event.fade_in_ms.min(event.duration_ms);
+        event.fade_out_ms = event.fade_out_ms.min(event.duration_ms);
         Ok(event)
     }
 
@@ -11495,6 +11619,8 @@ impl EngineRuntime {
             loop_fill: false,
             iteration_period_ms: 0,
             rate: None,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
             loop_count: 1,
             jump_to_event_id: None,
         };
@@ -11654,6 +11780,8 @@ impl EngineRuntime {
                 loop_fill: update.loop_fill,
                 iteration_period_ms: update.duration_ms,
                 rate: None,
+                fade_in_ms: update.fade_in_ms.min(update.duration_ms),
+                fade_out_ms: update.fade_out_ms.min(update.duration_ms),
                 loop_count: update.loop_count,
                 jump_to_event_id: update.jump_to_event_id,
             };
@@ -12118,6 +12246,7 @@ impl EngineRuntime {
             due_at,
             source: PendingCueTriggerSource::Timeline,
             repeat_count: 1,
+            fade_override_ms: Some(event.fade_in_ms),
             timeline_effect_activation,
             dispatch: Some(dispatch),
         });
@@ -12149,6 +12278,7 @@ impl EngineRuntime {
                 due_at: now + Duration::from_millis(pre_wait_ms),
                 source,
                 repeat_count: 1,
+                fade_override_ms: None,
                 timeline_effect_activation: None,
                 dispatch: None,
             });
@@ -12181,6 +12311,7 @@ impl EngineRuntime {
             if previous.cue_id == pending.cue_id
                 && previous.due_at == pending.due_at
                 && previous.source == pending.source
+                && previous.fade_override_ms == pending.fade_override_ms
                 && previous.timeline_effect_activation == pending.timeline_effect_activation
             {
                 if let Some(repeat_count) = previous.repeat_count.checked_add(pending.repeat_count)
@@ -12229,6 +12360,7 @@ impl EngineRuntime {
                 now,
                 pending.source,
                 pending.repeat_count,
+                pending.fade_override_ms,
                 pending.timeline_effect_activation,
             );
         }
@@ -12240,7 +12372,7 @@ impl EngineRuntime {
             return;
         };
         let next_cue_index = self.next_cue_index(cue_index);
-        self.start_cue_at_index(cue_index, next_cue_index, now, source, 1, None);
+        self.start_cue_at_index(cue_index, next_cue_index, now, source, 1, None, None);
     }
 
     fn start_cue_at_index(
@@ -12250,6 +12382,7 @@ impl EngineRuntime {
         now: Instant,
         source: PendingCueTriggerSource,
         repeat_count: u64,
+        fade_override_ms: Option<u64>,
         timeline_effect_activation: Option<PendingTimelineEffectActivation>,
     ) {
         if repeat_count == 0 {
@@ -12260,6 +12393,7 @@ impl EngineRuntime {
             return;
         };
         let cue_id = cue.id;
+        let default_fade_ms = fade_override_ms.unwrap_or(cue.fade_ms);
 
         self.deactivate_cue_list_effect_activations(cue.cue_list_id);
         self.cue_list_effect_activation_cues
@@ -12279,6 +12413,7 @@ impl EngineRuntime {
                 due_at: now + Duration::from_millis(follow_ms),
                 source,
                 repeat_count,
+                fade_override_ms: None,
                 timeline_effect_activation: None,
                 dispatch: None,
             })
@@ -12371,7 +12506,7 @@ impl EngineRuntime {
                         &cue.parts,
                         key.0,
                         &cue.ifcb_timing,
-                        cue.fade_ms,
+                        default_fade_ms,
                         &key.1,
                     ),
                 )
@@ -12395,7 +12530,7 @@ impl EngineRuntime {
             .map(|layer_id| {
                 (
                     *layer_id,
-                    cue_part_video_layer_timing(&cue.parts, *layer_id, cue.fade_ms),
+                    cue_part_video_layer_timing(&cue.parts, *layer_id, default_fade_ms),
                 )
             })
             .collect::<HashMap<_, _>>();
@@ -12404,7 +12539,7 @@ impl EngineRuntime {
             .map(|output_id| {
                 (
                     *output_id,
-                    cue_part_video_output_timing(&cue.parts, *output_id, cue.fade_ms),
+                    cue_part_video_output_timing(&cue.parts, *output_id, default_fade_ms),
                 )
             })
             .collect::<HashMap<_, _>>();
@@ -12456,6 +12591,7 @@ impl EngineRuntime {
             }
             self.active_fade = Some(RuntimeFade {
                 cue_id,
+                timeline_event_id: None,
                 started_at: now,
                 duration,
                 video_duration,
@@ -12954,6 +13090,11 @@ impl EngineRuntime {
         }
         if elapsed >= fade.duration {
             let cue_id = fade.cue_id;
+            if fade.timeline_event_id.is_some() {
+                for key in fade.target_values.keys() {
+                    self.cue_value_origins.remove(key);
+                }
+            }
             self.active_fade = None;
             self.apply_mib_for_next_cue(cue_id);
         }
@@ -13026,6 +13167,7 @@ impl EngineRuntime {
                     .get(event_index)
                     .copied()
                     .unwrap_or_default();
+                self.finish_timeline_block_fade_out(event_id);
                 self.deactivate_effect_range(range);
                 self.pending_cues.retain(|pending| {
                     pending
@@ -13130,12 +13272,17 @@ impl EngineRuntime {
                 .copied()
                 .unwrap_or_default();
             if matches!(occurrence.kind, TimelineCueOccurrenceKind::End) {
+                self.finish_timeline_block_fade_out(occurrence.event_id);
                 self.deactivate_effect_range(range);
                 self.pending_cues.retain(|pending| {
                     pending
                         .timeline_effect_activation
                         .is_none_or(|activation| activation.event_id != occurrence.event_id)
                 });
+                continue;
+            }
+            if matches!(occurrence.kind, TimelineCueOccurrenceKind::FadeOutStart) {
+                self.start_timeline_block_fade_out(occurrence.event_index, now);
                 continue;
             }
 
@@ -13172,6 +13319,11 @@ impl EngineRuntime {
                 due_at,
                 source: PendingCueTriggerSource::Timeline,
                 repeat_count: 1,
+                fade_override_ms: self
+                    .timeline_events
+                    .get(occurrence.event_index)
+                    .filter(|_| occurrence.iteration == 0)
+                    .map(|event| event.fade_in_ms),
                 timeline_effect_activation,
                 dispatch: Some(dispatch),
             });
@@ -15159,6 +15311,8 @@ fn timeline_event_summary(event: &RuntimeTimelineEvent) -> TimelineCueEventSumma
         conform_to_tempo: event.conform_to_tempo,
         loop_fill: event.loop_fill,
         rate: event.rate,
+        fade_in_ms: event.fade_in_ms,
+        fade_out_ms: event.fade_out_ms,
         loop_count: event.loop_count,
         jump_to_event_id: event.jump_to_event_id,
     }
@@ -15190,6 +15344,8 @@ fn runtime_timeline_event_from_summary(event: &TimelineCueEventSummary) -> Runti
         iteration_period_ms: event.duration_ms,
         // `rate` is derived runtime state. Never trust a persisted display value.
         rate: None,
+        fade_in_ms: event.fade_in_ms.min(event.duration_ms),
+        fade_out_ms: event.fade_out_ms.min(event.duration_ms),
         loop_count,
         jump_to_event_id,
     }
@@ -15263,6 +15419,13 @@ fn try_collect_aligned_timeline_block_occurrences(
     let mut relevant_event_count = 0_usize;
     let mut last_dispatch_key = None;
     for event in events {
+        if event.duration_ms > 0
+            && event.fade_out_ms > 0
+            && (lower_bound..=upper_bound)
+                .contains(&timeline_event_end_ms(event).saturating_sub(event.fade_out_ms))
+        {
+            return false;
+        }
         if event.duration_ms > 0
             && (lower_bound..=upper_bound).contains(&timeline_event_end_ms(event))
         {
@@ -15373,6 +15536,7 @@ fn collect_timeline_cue_occurrences_between(
     for (event_index, event) in events.iter().enumerate() {
         if event.duration_ms > 0 {
             let end_ms = timeline_event_end_ms(event);
+            let fade_out_start_ms = end_ms.saturating_sub(event.fade_out_ms);
             if (lower_bound..=upper_bound).contains(&end_ms) {
                 due.push(TimelineCueOccurrence {
                     time_ms: end_ms,
@@ -15382,6 +15546,20 @@ fn collect_timeline_cue_occurrences_between(
                     layer_order: event.layer_order,
                     iteration: u64::from(event.loop_count),
                     kind: TimelineCueOccurrenceKind::End,
+                });
+            }
+            if event.fade_out_ms > 0
+                && !event.layer_muted_effective
+                && (lower_bound..=upper_bound).contains(&fade_out_start_ms)
+            {
+                due.push(TimelineCueOccurrence {
+                    time_ms: fade_out_start_ms,
+                    event_index,
+                    event_id: event.id,
+                    cue_id: event.cue_id,
+                    layer_order: event.layer_order,
+                    iteration: u64::from(event.loop_count),
+                    kind: TimelineCueOccurrenceKind::FadeOutStart,
                 });
             }
         }
@@ -15423,6 +15601,10 @@ fn collect_timeline_cue_occurrences_between(
         for iteration in first_iteration..=last_iteration {
             let occurrence_ms =
                 event.time_ms + iteration * timeline_event_iteration_period_ms(event);
+            let fade_out_start_ms = timeline_event_end_ms(event).saturating_sub(event.fade_out_ms);
+            if iteration > 0 && event.fade_out_ms > 0 && occurrence_ms >= fade_out_start_ms {
+                continue;
+            }
             due.push(TimelineCueOccurrence {
                 time_ms: occurrence_ms,
                 event_index,
@@ -21596,6 +21778,8 @@ mod tests {
             duration_beats: None,
             conform_to_tempo: false,
             loop_fill: false,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
             iteration_period_ms: duration_ms,
             rate: Some(rate),
             id: event_id,
@@ -22424,6 +22608,8 @@ mod tests {
                     duration_beats: None,
                     conform_to_tempo: false,
                     loop_fill: false,
+                    fade_in_ms: 0,
+                    fade_out_ms: 0,
                     rate: None,
                     id: 42,
                     cue_id: 41,
@@ -23845,6 +24031,8 @@ mod tests {
                         duration_beats: None,
                         conform_to_tempo: false,
                         loop_fill: false,
+                        fade_in_ms: 0,
+                        fade_out_ms: 0,
                         rate: None,
                         id: 20,
                         cue_id: 10,
@@ -23860,6 +24048,8 @@ mod tests {
                         duration_beats: None,
                         conform_to_tempo: false,
                         loop_fill: false,
+                        fade_in_ms: 0,
+                        fade_out_ms: 0,
                         rate: None,
                         id: 21,
                         cue_id: 11,
@@ -24168,6 +24358,8 @@ mod tests {
                         duration_beats: None,
                         conform_to_tempo: false,
                         loop_fill: false,
+                        fade_in_ms: 0,
+                        fade_out_ms: 0,
                         rate: None,
                         id: 20,
                         cue_id: 10,
@@ -24183,6 +24375,8 @@ mod tests {
                         duration_beats: None,
                         conform_to_tempo: false,
                         loop_fill: false,
+                        fade_in_ms: 0,
+                        fade_out_ms: 0,
                         rate: None,
                         id: 21,
                         cue_id: 11,
@@ -41116,6 +41310,8 @@ mod tests {
             duration_beats: None,
             conform_to_tempo: false,
             loop_fill: false,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
             iteration_period_ms: 0,
             rate: None,
             id: 10,
@@ -41201,6 +41397,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 10,
@@ -41220,6 +41418,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 20,
@@ -41239,6 +41439,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 30,
@@ -41258,6 +41460,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 40,
@@ -41359,6 +41563,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 10,
@@ -41378,6 +41584,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 20,
@@ -41453,6 +41661,8 @@ mod tests {
             duration_beats: None,
             conform_to_tempo: false,
             loop_fill: false,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
             iteration_period_ms: 0,
             rate: None,
             id: 10,
@@ -41479,6 +41689,7 @@ mod tests {
             due_at: Instant::now() + Duration::from_secs(1),
             source: PendingCueTriggerSource::Timeline,
             repeat_count: 1,
+            fade_override_ms: None,
             timeline_effect_activation: None,
             dispatch: None,
         });
@@ -41528,6 +41739,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 20,
@@ -41547,6 +41760,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 10,
@@ -41566,6 +41781,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 30,
@@ -41667,6 +41884,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 20,
@@ -41686,6 +41905,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 10,
@@ -41705,6 +41926,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 30,
@@ -41807,6 +42030,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 10,
@@ -41826,6 +42051,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 20,
@@ -41845,6 +42072,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 30,
@@ -41905,6 +42134,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: index + 1,
@@ -41956,6 +42187,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 10,
@@ -41975,6 +42208,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 20,
@@ -41994,6 +42229,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 30,
@@ -42065,6 +42302,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 10,
@@ -42084,6 +42323,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 20,
@@ -42189,6 +42430,7 @@ mod tests {
                 due_at: now,
                 source: PendingCueTriggerSource::Timeline,
                 repeat_count,
+                fade_override_ms: None,
                 timeline_effect_activation: None,
                 dispatch: None,
             });
@@ -42269,6 +42511,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: true,
                 loop_fill: true,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: duration_ms,
                 rate: None,
                 loop_count: 1,
@@ -42362,6 +42606,8 @@ mod tests {
                 duration_beats: Some(8.0),
                 conform_to_tempo: true,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 1_000,
                 rate: None,
                 loop_count: 1,
@@ -42371,12 +42617,14 @@ mod tests {
         assert_eq!(runtime.timeline_events[0].time_ms, 500);
         assert_eq!(runtime.timeline_events[0].duration_ms, 4_000);
         assert_eq!(runtime.timeline_events[0].iteration_period_ms, 2_000);
+        assert_eq!(runtime.timeline_events[0].rate, Some(0.5));
         assert_eq!(timeline_event_end_ms(&runtime.timeline_events[0]), 4_500);
 
         runtime.apply_command(EngineCommand::SetBpm(60.0));
         assert_eq!(runtime.timeline_events[0].time_ms, 1_000);
         assert_eq!(runtime.timeline_events[0].duration_ms, 8_000);
         assert_eq!(runtime.timeline_events[0].iteration_period_ms, 4_000);
+        assert_eq!(runtime.timeline_events[0].rate, Some(0.5));
         assert_eq!(timeline_event_end_ms(&runtime.timeline_events[0]), 9_000);
     }
 
@@ -42829,6 +43077,103 @@ mod tests {
             (12_345_u16 >> 8) as u8,
             "block-end marker did not return DMX to base"
         );
+    }
+
+    #[test]
+    fn timeline_block_fade_in_overrides_cue_fade_at_block_start_with_dmx_preview() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.apply_command(EngineCommand::CreateCue {
+            authored_beats: None,
+            cue_id: 1,
+            label: "Timeline fade in".to_string(),
+            fade_ms: 1_000,
+            targets: vec![CueFixtureTarget {
+                fixture_id: 1,
+                values: vec![AttributeValueSummary {
+                    attribute: "Dimmer".to_string(),
+                    value: u16::MAX,
+                }],
+            }],
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: Vec::new(),
+        });
+        let mut block = test_scene_block(10, 1, 0, 1_000, 1, 1.0);
+        block.fade_in_ms = 400;
+        runtime.timeline_events = vec![block];
+        runtime.sort_timeline_events();
+        let started_at = Instant::now();
+        runtime.rebuild_effect_activations(started_at);
+
+        runtime.trigger_timeline_events_between(0, 0, true, true, started_at);
+
+        let fade = runtime.active_fade.as_ref().expect("timeline fade-in");
+        assert_eq!(fade.duration, Duration::from_millis(400));
+        assert_eq!(fade.timeline_event_id, None);
+        runtime.apply_active_fade(started_at + Duration::from_millis(200));
+        let preview =
+            runtime.render_dmx_frame_for_universe(0, started_at + Duration::from_millis(200))[0];
+        assert!((126..=129).contains(&preview), "mid-fade DMX was {preview}");
+    }
+
+    #[test]
+    fn timeline_block_fade_out_releases_activation_and_legacy_value_to_zero_at_end() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let owned = test_lfo_request(
+            "Timeline fade owned effect",
+            LfoShape::Square,
+            1_000,
+            0.25,
+            EffectBlendMode::Override,
+            u16::MAX,
+            u16::MAX,
+        );
+        runtime.apply_command(EngineCommand::CreateCue {
+            authored_beats: None,
+            cue_id: 1,
+            label: "Timeline fade out".to_string(),
+            fade_ms: 0,
+            targets: vec![CueFixtureTarget {
+                fixture_id: 1,
+                values: vec![AttributeValueSummary {
+                    attribute: "Dimmer".to_string(),
+                    value: u16::MAX,
+                }],
+            }],
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: vec![owned_lfo_target(90, owned)],
+        });
+        let mut block = test_scene_block(10, 1, 0, 1_000, 1, 1.0);
+        block.fade_out_ms = 400;
+        runtime.timeline_events = vec![block];
+        runtime.sort_timeline_events();
+        let started_at = Instant::now();
+        runtime.rebuild_effect_activations(started_at);
+        runtime.trigger_timeline_events_between(0, 0, true, true, started_at);
+        assert_eq!(runtime.active_effect_activation_indices.len(), 1);
+        assert_eq!(runtime.render_dmx_frame_for_universe(0, started_at)[0], 255);
+
+        let release_started_at = started_at + Duration::from_millis(600);
+        runtime.trigger_timeline_events_between(0, 600, false, true, release_started_at);
+        assert!(runtime.active_effect_activation_indices.is_empty());
+        let fade = runtime.active_fade.as_ref().expect("timeline fade-out");
+        assert_eq!(fade.duration, Duration::from_millis(400));
+        assert_eq!(fade.timeline_event_id, Some(10));
+        runtime.apply_active_fade(started_at + Duration::from_millis(800));
+        let midpoint =
+            runtime.render_dmx_frame_for_universe(0, started_at + Duration::from_millis(800))[0];
+        assert!(
+            (126..=129).contains(&midpoint),
+            "release midpoint DMX was {midpoint}"
+        );
+
+        let ended_at = started_at + Duration::from_millis(1_000);
+        runtime.trigger_timeline_events_between(600, 1_000, false, true, ended_at);
+        assert!(runtime.active_fade.is_none());
+        assert_eq!(runtime.render_dmx_frame_for_universe(0, ended_at)[0], 0);
     }
 
     #[test]
@@ -43452,6 +43797,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: index + 1,
@@ -43531,6 +43878,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: index + 1,
@@ -43582,6 +43931,8 @@ mod tests {
             duration_beats: None,
             conform_to_tempo: false,
             loop_fill: false,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
             iteration_period_ms: 0,
             rate: None,
             id: 7,
@@ -43661,6 +44012,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 10,
@@ -43740,6 +44093,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 20,
@@ -43759,6 +44114,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 10,
@@ -43778,6 +44135,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 30,
@@ -43841,6 +44200,8 @@ mod tests {
             duration_beats: None,
             conform_to_tempo: false,
             loop_fill: false,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
             event_id: 20,
             cue_id: 1,
             time_ms: 1_000,
@@ -43861,6 +44222,8 @@ mod tests {
             duration_beats: None,
             conform_to_tempo: false,
             loop_fill: false,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
             event_id: 10,
             cue_id: 1,
             time_ms: 100,
@@ -43885,6 +44248,8 @@ mod tests {
             duration_beats: None,
             conform_to_tempo: false,
             loop_fill: false,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
             event_id: 10,
             cue_id: 1,
             time_ms: 999,
@@ -43935,6 +44300,8 @@ mod tests {
                     duration_beats: None,
                     conform_to_tempo: false,
                     loop_fill: false,
+                    fade_in_ms: 0,
+                    fade_out_ms: 0,
                     iteration_period_ms: 0,
                     rate: None,
                     id: 99,
@@ -44107,6 +44474,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 10,
@@ -44126,6 +44495,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 20,
@@ -44151,6 +44522,7 @@ mod tests {
             due_at: now + Duration::from_secs(10),
             source: PendingCueTriggerSource::Timeline,
             repeat_count: 2,
+            fade_override_ms: None,
             timeline_effect_activation: None,
             dispatch: None,
         });
@@ -44266,6 +44638,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 10,
@@ -44285,6 +44659,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 20,
@@ -44346,6 +44722,8 @@ mod tests {
                     duration_beats: None,
                     conform_to_tempo: false,
                     loop_fill: false,
+                    fade_in_ms: 0,
+                    fade_out_ms: 0,
                     event_id: 10,
                     cue_id: 2,
                     time_ms: 400,
@@ -44360,6 +44738,8 @@ mod tests {
                     duration_beats: None,
                     conform_to_tempo: false,
                     loop_fill: false,
+                    fade_in_ms: 0,
+                    fade_out_ms: 0,
                     event_id: 20,
                     cue_id: 1,
                     time_ms: 50,
@@ -44436,6 +44816,8 @@ mod tests {
                     duration_beats: None,
                     conform_to_tempo: false,
                     loop_fill: false,
+                    fade_in_ms: 0,
+                    fade_out_ms: 0,
                     event_id: 10,
                     cue_id: 1,
                     time_ms: 999,
@@ -44478,6 +44860,8 @@ mod tests {
                         duration_beats: None,
                         conform_to_tempo: false,
                         loop_fill: false,
+                        fade_in_ms: 0,
+                        fade_out_ms: 0,
                         event_id: 10,
                         cue_id: 1,
                         time_ms: 10,
@@ -44492,6 +44876,8 @@ mod tests {
                         duration_beats: None,
                         conform_to_tempo: false,
                         loop_fill: false,
+                        fade_in_ms: 0,
+                        fade_out_ms: 0,
                         event_id: 20,
                         cue_id: 2,
                         time_ms: 30,
@@ -44556,6 +44942,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: index + 1,
@@ -44575,6 +44963,8 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 iteration_period_ms: 0,
                 rate: None,
                 id: 2_001 + index,
@@ -44636,6 +45026,8 @@ mod tests {
             duration_beats: None,
             conform_to_tempo: false,
             loop_fill: false,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
             iteration_period_ms: 0,
             rate: None,
             id,
@@ -44812,6 +45204,8 @@ mod tests {
             duration_beats: None,
             conform_to_tempo: false,
             loop_fill: false,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
             event_id: 100,
             cue_id: 1,
             time_ms: 200,
@@ -44839,6 +45233,8 @@ mod tests {
                     duration_beats: None,
                     conform_to_tempo: false,
                     loop_fill: false,
+                    fade_in_ms: 0,
+                    fade_out_ms: 0,
                     event_id: 100,
                     cue_id: 1,
                     time_ms: 300,

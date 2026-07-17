@@ -2222,6 +2222,229 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
   })()`);
   await sleep(160);
   const muted = await measureLayeredTimelineDeskState(client);
+  const dragTimelineElement = async (selector, deltaX, deltaY = 0, duringDrag = null) => {
+    const point = await client.evaluate(`(() => {
+      const element = document.querySelector(${JSON.stringify(selector)});
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    })()`);
+    if (!point) return { dragged: false, during: null };
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x: point.x,
+      y: point.y,
+      button: 'left',
+      buttons: 1,
+      clickCount: 1,
+    });
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: point.x + deltaX,
+      y: point.y + deltaY,
+      button: 'left',
+      buttons: 1,
+    });
+    await sleep(32);
+    const during = duringDrag ? await duringDrag() : null;
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: point.x + deltaX,
+      y: point.y + deltaY,
+      button: 'left',
+      buttons: 0,
+      clickCount: 1,
+    });
+    await sleep(160);
+    return { dragged: true, during };
+  };
+  const selectFirstSceneBlock = async () => client.evaluate(`(() => {
+    const marker = [...document.querySelectorAll('.timelineMarker.sceneBlock')]
+      .find((candidate) => candidate.getBoundingClientRect().width >= 48);
+    if (!marker) return null;
+    marker.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    const rect = marker.getBoundingClientRect();
+    return {
+      id: marker.getAttribute('data-timeline-event-id'),
+      startMs: Number(marker.getAttribute('data-timeline-start-ms')),
+      previewStartMs: Number(marker.getAttribute('data-timeline-preview-start-ms')),
+      previewEndMs: Number(marker.getAttribute('data-timeline-preview-end-ms')),
+      rate: marker.getAttribute('data-timeline-rate'),
+      width: rect.width,
+    };
+  })()`);
+  const readSelectedSceneBlock = async () => client.evaluate(`(() => {
+    const marker = document.querySelector('.timelineMarker.sceneBlock.selected');
+    if (!marker) return null;
+    return {
+      id: marker.getAttribute('data-timeline-event-id'),
+      startMs: Number(marker.getAttribute('data-timeline-start-ms')),
+      previewStartMs: Number(marker.getAttribute('data-timeline-preview-start-ms')),
+      previewEndMs: Number(marker.getAttribute('data-timeline-preview-end-ms')),
+      rate: marker.getAttribute('data-timeline-rate'),
+      previewRate: marker.getAttribute('data-timeline-preview-rate'),
+      fadeInMs: Number(marker.getAttribute('data-timeline-fade-in-ms')),
+      fadeOutMs: Number(marker.getAttribute('data-timeline-fade-out-ms')),
+      fadeInRamp: Boolean(marker.querySelector('[data-timeline-block-fade-ramp="in"]')),
+      fadeOutRamp: Boolean(marker.querySelector('[data-timeline-block-fade-ramp="out"]')),
+      liveStamp: marker.querySelector('[data-timeline-live-stamp]')?.textContent?.trim() ?? '',
+    };
+  })()`);
+
+  const directControls = await client.evaluate(`(() => ({
+    stretchToggle: Boolean(document.querySelector('[data-timeline-stretch-mode-toggle]')),
+    rateButton: Boolean(document.querySelector('[data-timeline-stretch-mode="RATE"]')),
+    windowButton: Boolean(document.querySelector('[data-timeline-stretch-mode="WINDOW"]')),
+    magnetToggle: Boolean(document.querySelector('[data-timeline-magnet-toggle]')),
+    armButton: Boolean(document.querySelector('.timelineDirectToolbar [data-timeline-arm-cue]')),
+  }))()`);
+  await client.evaluate(`document.querySelector('[data-timeline-stretch-mode="RATE"]')?.click()`);
+  const rateBefore = await selectFirstSceneBlock();
+  await sleep(32);
+  const rateDrag = await dragTimelineElement(
+    '.timelineMarker.sceneBlock.selected [data-timeline-scene-block-resize="end"]',
+    -48,
+    0,
+    readSelectedSceneBlock,
+  );
+  const rateAfter = await readSelectedSceneBlock();
+
+  await client.send('Page.navigate', { url: fixtureUrl('timeline-layered') });
+  await waitForApp(client);
+  await clickVisibleByText(client, '.workspaceTabs button', 'Control');
+  await clickVisibleByText(client, '.controlModeTabs button', 'Timeline');
+  await clickVisibleByText(client, '.timelineDeskTabs button', 'Show');
+  await sleep(120);
+  await client.evaluate(`document.querySelector('[data-timeline-stretch-mode="WINDOW"]')?.click()`);
+  const windowBefore = await selectFirstSceneBlock();
+  await sleep(32);
+  const windowDrag = await dragTimelineElement(
+    '.timelineMarker.sceneBlock.selected [data-timeline-scene-block-resize="end"]',
+    Math.max(42, (windowBefore?.width ?? 140) * 0.3),
+  );
+  const windowAfter = await readSelectedSceneBlock();
+
+  const fadeInDrag = await dragTimelineElement(
+    '.timelineMarker.sceneBlock.selected [data-timeline-scene-block-fade="in"]',
+    36,
+    0,
+    readSelectedSceneBlock,
+  );
+  const fadeInAfter = await readSelectedSceneBlock();
+  const fadeOutDrag = await dragTimelineElement(
+    '.timelineMarker.sceneBlock.selected [data-timeline-scene-block-fade="out"]',
+    -36,
+    0,
+    readSelectedSceneBlock,
+  );
+  const fadeOutAfter = await readSelectedSceneBlock();
+
+  const escapeBefore = await readSelectedSceneBlock();
+  const escapePoint = await client.evaluate(`(() => {
+    const marker = document.querySelector('.timelineMarker.sceneBlock.selected');
+    if (!marker) return null;
+    const rect = marker.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + 4 };
+  })()`);
+  let escapeDuring = null;
+  if (escapePoint) {
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mousePressed', x: escapePoint.x, y: escapePoint.y,
+      button: 'left', buttons: 1, clickCount: 1,
+    });
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved', x: escapePoint.x + 52, y: escapePoint.y,
+      button: 'left', buttons: 1,
+    });
+    await sleep(32);
+    escapeDuring = await readSelectedSceneBlock();
+    await client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
+    await client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape' });
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased', x: escapePoint.x + 52, y: escapePoint.y,
+      button: 'left', buttons: 0, clickCount: 1,
+    });
+    await sleep(64);
+  }
+  const escapeAfter = await readSelectedSceneBlock();
+
+  const wheelBefore = await client.evaluate(`(() => {
+    const canvas = document.querySelector('.timelineOverview');
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const ratio = 0.63;
+    const startMs = Number(canvas.getAttribute('data-visible-start-ms'));
+    const endMs = Number(canvas.getAttribute('data-visible-end-ms'));
+    return {
+      x: rect.left + rect.width * ratio,
+      y: rect.top + rect.height / 2,
+      width: rect.width,
+      ratio,
+      startMs,
+      endMs,
+      cursorTimeMs: startMs + (endMs - startMs) * ratio,
+    };
+  })()`);
+  if (wheelBefore) {
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mouseWheel',
+      x: wheelBefore.x,
+      y: wheelBefore.y,
+      deltaX: 0,
+      deltaY: -120,
+    });
+    await sleep(96);
+  }
+  const wheelAfter = await client.evaluate(`(() => {
+    const canvas = document.querySelector('.timelineOverview');
+    const documentElement = document.documentElement;
+    const app = document.querySelector('.app');
+    if (!canvas) return null;
+    const startMs = Number(canvas.getAttribute('data-visible-start-ms'));
+    const endMs = Number(canvas.getAttribute('data-visible-end-ms'));
+    return {
+      startMs,
+      endMs,
+      documentAndAppScrollZero:
+        window.scrollX === 0 && window.scrollY === 0 &&
+        documentElement.scrollWidth === documentElement.clientWidth &&
+        documentElement.scrollHeight === documentElement.clientHeight &&
+        (!app || (app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight)),
+    };
+  })()`);
+  const wheelCursorDriftPx = wheelBefore && wheelAfter
+    ? Math.abs(
+        (wheelAfter.startMs + (wheelAfter.endMs - wheelAfter.startMs) * wheelBefore.ratio) -
+        wheelBefore.cursorTimeMs
+      ) / Math.max(1, wheelAfter.endMs - wheelAfter.startMs) * wheelBefore.width
+    : Number.POSITIVE_INFINITY;
+
+  const placementBefore = await client.evaluate(`document.querySelectorAll('.timelineMarker.sceneBlock').length`);
+  await client.evaluate(`document.querySelector('.timelineDirectToolbar [data-timeline-arm-cue]')?.click()`);
+  const placementDispatched = await client.evaluate(`(() => {
+    const row = document.querySelector('[data-timeline-layer-id="13"].timelineLayerRowBackground');
+    if (!row) return false;
+    const rect = row.getBoundingClientRect();
+    row.dispatchEvent(new MouseEvent('dblclick', {
+      bubbles: true,
+      cancelable: true,
+      clientX: rect.left + rect.width * 0.82,
+      clientY: rect.top + rect.height / 2,
+    }));
+    return true;
+  })()`);
+  await sleep(180);
+  const placementAfter = await client.evaluate(`document.querySelectorAll('.timelineMarker.sceneBlock').length`);
+  const direct = {
+    controls: directControls,
+    rate: { before: rateBefore, drag: rateDrag, after: rateAfter },
+    window: { before: windowBefore, drag: windowDrag, after: windowAfter },
+    fadeIn: { drag: fadeInDrag, after: fadeInAfter },
+    fadeOut: { drag: fadeOutDrag, after: fadeOutAfter },
+    escape: { before: escapeBefore, during: escapeDuring, after: escapeAfter },
+    wheel: { before: wheelBefore, after: wheelAfter, cursorDriftPx: wheelCursorDriftPx },
+    placement: { before: placementBefore, after: placementAfter, dispatched: placementDispatched },
+  };
   const expectedFrameHeight = viewport.height <= 800 ? 148 : 190;
   const conditions = [
     ['layeredDeskFixtureHasSixGutters', () =>
@@ -2246,6 +2469,43 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
     ['layeredDeskFrameHeightFixed', () =>
       Math.abs(before.frameHeight - expectedFrameHeight) <= 1 &&
       Math.abs(muted.frameHeight - expectedFrameHeight) <= 1],
+    ['timelineStretchModeTogglePresent', () =>
+      direct.controls.stretchToggle && direct.controls.rateButton && direct.controls.windowButton],
+    ['timelineMagnetTogglePresent', () => direct.controls.magnetToggle],
+    ['timelineRateStretchChangesLiveRateBadge', () =>
+      direct.rate.drag.dragged &&
+      Number.isFinite(Number(direct.rate.drag.during?.previewRate)) &&
+      Number(direct.rate.drag.during?.previewRate) > 0 &&
+      /\[[0-9.]+x\]/.test(direct.rate.drag.during?.liveStamp ?? '') &&
+      direct.rate.after?.rate !== direct.rate.before?.rate],
+    ['timelineWindowStretchChangesDurationOnly', () =>
+      direct.window.drag.dragged &&
+      direct.window.after?.previewEndMs !== direct.window.before?.previewEndMs &&
+      direct.window.after?.startMs === direct.window.before?.startMs &&
+      direct.window.after?.rate === direct.window.before?.rate],
+    ['timelineFadeInHandleSetsValueAndDrawsRamp', () =>
+      direct.fadeIn.drag.dragged &&
+      (direct.fadeIn.drag.during?.fadeInMs ?? 0) > 0 &&
+      (direct.fadeIn.after?.fadeInMs ?? 0) > 0 &&
+      direct.fadeIn.after?.fadeInRamp],
+    ['timelineFadeOutHandleSetsValueAndDrawsRamp', () =>
+      direct.fadeOut.drag.dragged &&
+      (direct.fadeOut.drag.during?.fadeOutMs ?? 0) > 0 &&
+      (direct.fadeOut.after?.fadeOutMs ?? 0) > 0 &&
+      direct.fadeOut.after?.fadeOutRamp],
+    ['timelineEscapeCancelRestoresGeometry', () =>
+      direct.escape.before && direct.escape.during && direct.escape.after &&
+      direct.escape.during.previewStartMs !== direct.escape.before.previewStartMs &&
+      direct.escape.after.previewStartMs === direct.escape.before.previewStartMs &&
+      direct.escape.after.previewEndMs === direct.escape.before.previewEndMs],
+    ['timelineWheelZoomKeepsCursorTimeWithinTwoPixels', () =>
+      direct.wheel.before && direct.wheel.after &&
+      direct.wheel.after.endMs - direct.wheel.after.startMs < direct.wheel.before.endMs - direct.wheel.before.startMs &&
+      direct.wheel.cursorDriftPx <= 2],
+    ['timelineWheelZoomKeepsDocumentAndAppScrollZero', () =>
+      direct.wheel.after?.documentAndAppScrollZero === true],
+    ['timelineArmedCueDoubleClickPlacesNaturalBlock', () =>
+      direct.controls.armButton && direct.placement.dispatched && direct.placement.after === direct.placement.before + 1],
   ];
   const checks = Object.fromEntries(conditions.map(([name, check]) => {
     try {
@@ -2262,6 +2522,7 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
     failedChecks,
     before,
     muted,
+    direct,
     muteToggleClicked,
     expectedFrameHeight,
   };
@@ -3542,7 +3803,7 @@ function hasExpectedSceneBlocks(result) {
     result.sceneBlockLaneScopeHintCount === 4 &&
     result.sceneBlockPlaybackJumpHintCount === 4 &&
     result.sceneBlockLinkBadgeCount >= 3 &&
-    result.visibleSceneBlockComposerControlCount === 9 &&
+    result.visibleSceneBlockComposerControlCount === 10 &&
     result.visibleSceneBlockRowActionCount === 9 &&
     result.sceneBlockLastComposerControlReachable &&
     result.sceneBlockLastRowActionReachable &&
@@ -7450,7 +7711,10 @@ async function runSceneBlockLargeViewport(client, viewport) {
     const svgRect = svg.getBoundingClientRect();
     return {
       x: rect.left + rect.width / 2,
-      y: rect.top + rect.height / 2,
+      // T4 zone contract: upper band (0-11px of the 22px block) center = Move;
+      // the vertical center sits exactly on the move/select band boundary, so
+      // aim a quarter of the height down to land inside the move zone.
+      y: rect.top + 5,
       svgWidth: svgRect.width,
     };
   })()`);
@@ -7501,7 +7765,8 @@ async function runSceneBlockLargeViewport(client, viewport) {
       const body = document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="500"] .timelineSceneBlockBody');
       if (!body) return null;
       const rect = body.getBoundingClientRect();
-      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      // T4 zone contract: aim the upper move band, same as the mouse drag.
+      return { x: rect.left + rect.width / 2, y: rect.top + 5 };
     })()`);
     const markerTouchAction = await client.evaluate(`(() => {
       const marker = document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="500"]');

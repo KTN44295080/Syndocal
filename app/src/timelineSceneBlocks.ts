@@ -1,5 +1,6 @@
 import type { TimelineEventDraft } from "./editorDrafts";
 import type { ClockSource, CueSummary, TimelineCueEventSummary, TimelineTrackKind, VideoLayerSummary } from "./types";
+import { projectTimelineBlockStretch, type TimelineStretchMode } from "./timelineBlockGestures";
 
 export interface TimelineSceneBlockAddDraft {
   cue_id: number;
@@ -11,6 +12,8 @@ export interface TimelineSceneBlockAddDraft {
   duration_beats: number | null;
   conform_to_tempo: boolean;
   loop_fill: boolean;
+  fade_in_ms: number;
+  fade_out_ms: number;
   loop_count: number;
   jump_to_event_id: number | null;
 }
@@ -26,6 +29,8 @@ export interface TimelineSceneBlockPlacementUpdate {
   duration_beats: number | null;
   conform_to_tempo: boolean;
   loop_fill: boolean;
+  fade_in_ms: number;
+  fade_out_ms: number;
   loop_count: number;
   jump_to_event_id: number | null;
 }
@@ -45,6 +50,7 @@ interface TimelineSceneBlockControllerOptions {
   getAddLoopCount: () => number;
   getAddJumpToEventId: () => number | null;
   getBpm: () => number;
+  getCueAuthoredBeats: (cueId: number) => number | null;
   setNextStartMs: (timeMs: number) => void;
   setMessage: (message: string) => void;
   refreshSnapshot: () => Promise<unknown>;
@@ -69,6 +75,8 @@ const timelineEventDraftFromEvent = (event: TimelineCueEventSummary): TimelineEv
   duration_beats: event.duration_beats ?? null,
   conform_to_tempo: event.conform_to_tempo ?? false,
   loop_fill: event.loop_fill ?? false,
+  fade_in_ms: event.fade_in_ms ?? 0,
+  fade_out_ms: event.fade_out_ms ?? 0,
   loop_count: event.loop_count ?? 1,
   jump_to_event_id: event.jump_to_event_id ?? null,
 });
@@ -226,6 +234,8 @@ export const buildTimelineSceneBlockRows = (events: TimelineCueEventSummary[], c
     return {
       ...event,
       duration_ms: event.duration_ms ?? 0,
+      fade_in_ms: event.fade_in_ms ?? 0,
+      fade_out_ms: event.fade_out_ms ?? 0,
       loop_count: event.loop_count ?? 1,
       jump_to_event_id: event.jump_to_event_id ?? null,
       cue_number: cue?.cue_number || String(event.cue_id),
@@ -252,6 +262,8 @@ export const timelineSceneBlockRowsEqual = (
     (event.conform_to_tempo ?? false) === (candidate.conform_to_tempo ?? false) &&
     (event.loop_fill ?? false) === (candidate.loop_fill ?? false) &&
     (event.rate ?? null) === (candidate.rate ?? null) &&
+    (event.fade_in_ms ?? 0) === (candidate.fade_in_ms ?? 0) &&
+    (event.fade_out_ms ?? 0) === (candidate.fade_out_ms ?? 0) &&
     event.loop_count === candidate.loop_count &&
     event.jump_to_event_id === candidate.jump_to_event_id &&
     event.cue_number === candidate.cue_number &&
@@ -293,6 +305,8 @@ export const timelineEventDraftMatchesSummary = (
   draft.duration_beats === (event.duration_beats ?? null) &&
   draft.conform_to_tempo === (event.conform_to_tempo ?? false) &&
   draft.loop_fill === (event.loop_fill ?? false) &&
+  draft.fade_in_ms === (event.fade_in_ms ?? 0) &&
+  draft.fade_out_ms === (event.fade_out_ms ?? 0) &&
   draft.loop_count === (event.loop_count ?? 1) &&
   draft.jump_to_event_id === (event.jump_to_event_id ?? null);
 
@@ -512,6 +526,8 @@ export const normalizeTimelineEventDraft = (
     duration_beats: event.duration_beats ?? null,
     conform_to_tempo: event.conform_to_tempo ?? false,
     loop_fill: event.loop_fill ?? false,
+    fade_in_ms: event.fade_in_ms ?? 0,
+    fade_out_ms: event.fade_out_ms ?? 0,
     loop_count: event.loop_count ?? 1,
     jump_to_event_id: event.jump_to_event_id ?? null,
     ...patch,
@@ -551,6 +567,8 @@ export const normalizeTimelineEventDraft = (
       : null,
     conform_to_tempo: conformToTempo,
     loop_fill: conformToTempo && source.loop_fill,
+    fade_in_ms: durationMs > 0 ? Math.round(clamp(finiteOr(source.fade_in_ms, 0), 0, durationMs)) : 0,
+    fade_out_ms: durationMs > 0 ? Math.round(clamp(finiteOr(source.fade_out_ms, 0), 0, durationMs)) : 0,
     loop_count: loopCount,
     jump_to_event_id: jumpToEventId,
   };
@@ -578,6 +596,8 @@ export const normalizeTimelineSceneBlockAddDraft = (
       : null,
     conform_to_tempo: draft.conform_to_tempo,
     loop_fill: draft.conform_to_tempo && draft.loop_fill,
+    fade_in_ms: Math.round(clamp(finiteOr(draft.fade_in_ms, 0), 0, Math.max(1, draft.duration_ms))),
+    fade_out_ms: Math.round(clamp(finiteOr(draft.fade_out_ms, 0), 0, Math.max(1, draft.duration_ms))),
     loop_count: Math.round(clamp(finiteOr(draft.loop_count, 1), 1, 256)),
     jump_to_event_id: requestedJumpId !== null && hasEventId(requestedJumpId) ? requestedJumpId : null,
   };
@@ -615,6 +635,8 @@ export const buildTimelineSceneBlockSnapPlacements = (
     duration_beats: draft.duration_beats,
     conform_to_tempo: draft.conform_to_tempo,
     loop_fill: draft.loop_fill,
+    fade_in_ms: draft.fade_in_ms,
+    fade_out_ms: draft.fade_out_ms,
     loop_count: draft.loop_count,
     jump_to_event_id: draft.jump_to_event_id,
   };
@@ -622,12 +644,12 @@ export const buildTimelineSceneBlockSnapPlacements = (
 });
 
 export const createTimelineSceneBlockController = (options: TimelineSceneBlockControllerOptions) => {
-  const add = async (draft: TimelineSceneBlockAddDraft) => {
+  const add = async (draft: TimelineSceneBlockAddDraft, snapEnabled = true) => {
     const next = normalizeTimelineSceneBlockAddDraft(
       draft,
-      options.snapTimeMs,
+      snapEnabled ? options.snapTimeMs : (timeMs) => Math.max(0, Math.round(timeMs)),
       options.hasEventId,
-      options.snappedTimeBeats,
+      snapEnabled ? options.snappedTimeBeats : () => undefined,
     );
     const eventId = await options.invoke<number>("add_timeline_scene_block", {
       cueId: next.cue_id,
@@ -639,19 +661,25 @@ export const createTimelineSceneBlockController = (options: TimelineSceneBlockCo
       durationBeats: next.duration_beats,
       conformToTempo: next.conform_to_tempo,
       loopFill: next.loop_fill,
+      fadeInMs: next.fade_in_ms,
+      fadeOutMs: next.fade_out_ms,
       loopCount: next.loop_count,
       jumpToEventId: next.jump_to_event_id,
     });
     return { eventId, draft: next };
   };
 
-  const set = async (event: TimelineCueEventSummary, patch: Partial<TimelineEventDraft> = {}) => {
+  const set = async (
+    event: TimelineCueEventSummary,
+    patch: Partial<TimelineEventDraft> = {},
+    snapEnabled = true,
+  ) => {
     const next = normalizeTimelineEventDraft(
       event,
       patch,
-      options.snapTimeMs,
+      snapEnabled ? options.snapTimeMs : (timeMs) => Math.max(0, Math.round(timeMs)),
       options.hasEventId,
-      options.snappedTimeBeats,
+      snapEnabled ? options.snappedTimeBeats : () => undefined,
       options.timeBeatsAtCurrentBpm,
     );
     if (next.duration_ms > 0) {
@@ -666,6 +694,8 @@ export const createTimelineSceneBlockController = (options: TimelineSceneBlockCo
         durationBeats: next.duration_beats,
         conformToTempo: next.conform_to_tempo,
         loopFill: next.loop_fill,
+        fadeInMs: next.fade_in_ms,
+        fadeOutMs: next.fade_out_ms,
         loopCount: next.loop_count,
         jumpToEventId: next.jump_to_event_id,
       });
@@ -688,19 +718,25 @@ export const createTimelineSceneBlockController = (options: TimelineSceneBlockCo
     return isSceneBlock;
   };
 
-  const moveToPlacement = async (eventId: number, requestedTimeMs: number, layerId: number | null) => {
+  const moveToPlacement = async (
+    eventId: number,
+    requestedTimeMs: number,
+    layerId: number | null,
+    snapEnabled = true,
+  ) => {
     const event = options.getEventById(eventId);
     if (!event) {
       options.setMessage(`Timeline event ${eventId} was not found.`);
       return;
     }
-    const timeMs = options.snapTimeMs(Math.max(0, Math.round(finiteOr(requestedTimeMs, event.time_ms))));
+    const requested = Math.max(0, Math.round(finiteOr(requestedTimeMs, event.time_ms)));
+    const timeMs = snapEnabled ? options.snapTimeMs(requested) : requested;
     try {
       const next = await set(event, {
         ...options.getEventDraft(event),
         time_ms: timeMs,
         layer_id: layerId,
-      });
+      }, snapEnabled);
       options.setEventDraft(event.id, next);
       options.setMessage(`Moved Cue ${event.cue_id} to ${timeMs} ms on layer ${layerId ?? "legacy"}`);
       await options.refreshSnapshot();
@@ -718,26 +754,38 @@ export const createTimelineSceneBlockController = (options: TimelineSceneBlockCo
       timeMs: number,
       track: TimelineTrackKind,
       nextDraftTime = true,
-      placement: { layerId?: number | null; durationMs?: number } = {},
+      placement: {
+        layerId?: number | null;
+        durationMs?: number;
+        authoredBeats?: number | null;
+        stretchMode?: TimelineStretchMode;
+        snapEnabled?: boolean;
+        loopCount?: number;
+      } = {},
     ) {
       if (cueId === null) {
         options.setMessage("Create a Cue before adding linked Scene Blocks.");
         return;
       }
       try {
+        const durationMs = placement.durationMs ?? options.getAddDurationMs();
+        const authoredBeats = placement.authoredBeats ?? null;
+        const conformToTempo = authoredBeats !== null && authoredBeats > 0;
         const { eventId, draft } = await add({
           cue_id: cueId,
           time_ms: timeMs,
           time_beats: null,
           track,
           layer_id: placement.layerId ?? null,
-          duration_ms: placement.durationMs ?? options.getAddDurationMs(),
-          duration_beats: null,
-          conform_to_tempo: false,
-          loop_fill: false,
-          loop_count: options.getAddLoopCount(),
+          duration_ms: durationMs,
+          duration_beats: conformToTempo ? durationMs * options.getBpm() / 60_000 : null,
+          conform_to_tempo: conformToTempo,
+          loop_fill: conformToTempo && placement.stretchMode === "WINDOW",
+          fade_in_ms: 0,
+          fade_out_ms: 0,
+          loop_count: placement.loopCount ?? options.getAddLoopCount(),
           jump_to_event_id: options.getAddJumpToEventId(),
-        });
+        }, placement.snapEnabled ?? true);
         options.setNextStartMs(nextDraftTime
           ? options.snapTimeMs(draft.time_ms + timelineSceneBlockSpanMs(draft))
           : draft.time_ms);
@@ -785,38 +833,71 @@ export const createTimelineSceneBlockController = (options: TimelineSceneBlockCo
 
     moveToPlacement,
 
-    async resizeToTime(eventId: number, edge: "start" | "end", requestedTimeMs: number) {
+    async resizeToTime(
+      eventId: number,
+      edge: "start" | "end",
+      requestedTimeMs: number,
+      mode: TimelineStretchMode = "WINDOW",
+      snapEnabled = true,
+    ) {
       const event = options.getEventById(eventId);
       if (!event || event.duration_ms <= 0) {
         options.setMessage(`Scene Block ${eventId} was not found.`);
         return;
       }
       const currentDraft = options.getEventDraft(event);
-      const loopCount = timelineSceneBlockIterationCount(currentDraft);
-      const spanFactor = currentDraft.conform_to_tempo ? 1 : loopCount;
       const startMs = currentDraft.time_ms;
       const endMs = startMs + timelineSceneBlockSpanMs(currentDraft);
-      const snappedEdgeMs = options.snapTimeMs(Math.max(0, Math.round(finiteOr(requestedTimeMs, edge === "start" ? startMs : endMs))));
-      const nextStartMs = edge === "start"
-        ? Math.min(snappedEdgeMs, Math.max(0, endMs - spanFactor))
-        : startMs;
-      const nextEndMs = edge === "end"
-        ? Math.max(startMs + spanFactor, snappedEdgeMs)
-        : endMs;
-      const nextDurationMs = Math.max(1, Math.round((nextEndMs - nextStartMs) / spanFactor));
-      const bpm = options.getBpm();
-      const durationBeats = currentDraft.conform_to_tempo && !currentDraft.loop_fill && Number.isFinite(bpm) && bpm > 0
-        ? nextDurationMs * bpm / 60_000
-        : currentDraft.duration_beats;
+      const requested = Math.max(0, Math.round(finiteOr(requestedTimeMs, edge === "start" ? startMs : endMs)));
+      const edgeMs = snapEnabled ? options.snapTimeMs(requested) : requested;
+      const projection = projectTimelineBlockStretch({
+        mode,
+        edge,
+        originalStartMs: startMs,
+        originalEndMs: endMs,
+        requestedEdgeMs: edgeMs,
+        authoredBeats: options.getCueAuthoredBeats(currentDraft.cue_id),
+        bpm: options.getBpm(),
+      });
       try {
         const next = await set(event, {
           ...currentDraft,
-          time_ms: nextStartMs,
-          duration_ms: nextDurationMs,
-          duration_beats: durationBeats,
-        });
+          time_ms: projection.start_ms,
+          duration_ms: projection.duration_ms,
+          duration_beats: projection.duration_beats,
+          conform_to_tempo: projection.conform_to_tempo,
+          loop_fill: projection.loop_fill,
+          loop_count: projection.loop_count,
+        }, snapEnabled);
         options.setEventDraft(event.id, next);
-        options.setMessage(`Resized Scene Block ${event.id} to ${nextDurationMs} ms duration`);
+        options.setMessage(projection.fallback_to_window
+          ? `Scene Block ${event.id} has no Authored beats; RATE stretch used WINDOW behavior (${projection.duration_ms} ms).`
+          : `Stretched Scene Block ${event.id} in ${mode} mode to ${projection.duration_ms} ms${projection.rate ? ` [${projection.rate.toFixed(2)}x]` : ""}`);
+        await options.refreshSnapshot();
+      } catch (error) {
+        options.setMessage(String(error));
+      }
+    },
+
+    async setFade(eventId: number, edge: "in" | "out", requestedFadeMs: number, snapEnabled = true) {
+      const event = options.getEventById(eventId);
+      if (!event || event.duration_ms <= 0) {
+        options.setMessage(`Scene Block ${eventId} was not found.`);
+        return;
+      }
+      const currentDraft = options.getEventDraft(event);
+      const windowMs = Math.max(1, currentDraft.duration_ms);
+      const requested = Math.round(clamp(finiteOr(requestedFadeMs, 0), 0, windowMs));
+      const fadeMs = snapEnabled
+        ? Math.round(clamp(options.snapTimeMs(requested), 0, windowMs))
+        : requested;
+      try {
+        const next = await set(event, {
+          ...currentDraft,
+          [edge === "in" ? "fade_in_ms" : "fade_out_ms"]: fadeMs,
+        }, snapEnabled);
+        options.setEventDraft(event.id, next);
+        options.setMessage(`Set Scene Block ${event.id} Fade ${edge === "in" ? "In" : "Out"} to ${fadeMs} ms`);
         await options.refreshSnapshot();
       } catch (error) {
         options.setMessage(String(error));

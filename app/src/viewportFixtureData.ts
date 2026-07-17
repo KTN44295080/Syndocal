@@ -516,6 +516,7 @@ const cueRecallCue: CueSummary = {
   cue_number: "1",
   label: "Viewport Cue",
   fade_ms: 1_000,
+  authored_beats: 4,
   pre_wait_ms: 0,
   follow_ms: null,
   ifcb_timing: {

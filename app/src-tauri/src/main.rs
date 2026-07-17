@@ -6819,6 +6819,8 @@ fn add_timeline_scene_block(
     duration_beats: Option<f64>,
     conform_to_tempo: bool,
     loop_fill: bool,
+    fade_in_ms: u64,
+    fade_out_ms: u64,
     loop_count: u16,
     jump_to_event_id: Option<TimelineEventId>,
 ) -> Result<TimelineEventId, String> {
@@ -6848,6 +6850,8 @@ fn add_timeline_scene_block(
         duration_beats,
         conform_to_tempo,
         loop_fill,
+        fade_in_ms.min(duration_ms),
+        fade_out_ms.min(duration_ms),
         loop_count,
         jump_to_event_id,
     )?;
@@ -6868,6 +6872,8 @@ fn set_timeline_scene_block(
     duration_beats: Option<f64>,
     conform_to_tempo: bool,
     loop_fill: bool,
+    fade_in_ms: u64,
+    fade_out_ms: u64,
     loop_count: u16,
     jump_to_event_id: Option<TimelineEventId>,
 ) -> Result<(), String> {
@@ -6904,6 +6910,8 @@ fn set_timeline_scene_block(
         duration_beats,
         conform_to_tempo,
         loop_fill,
+        fade_in_ms.min(duration_ms),
+        fade_out_ms.min(duration_ms),
         loop_count,
         jump_to_event_id,
     )
@@ -13786,6 +13794,15 @@ fn node_graph_for_persistence(mut graph: NodeGraphSummary) -> NodeGraphSummary {
 }
 
 fn normalize_project_timeline_layers(snapshot: &mut EngineSnapshot) {
+    for event in &mut snapshot.timeline.events {
+        if event.duration_ms == 0 {
+            event.fade_in_ms = 0;
+            event.fade_out_ms = 0;
+        } else {
+            event.fade_in_ms = event.fade_in_ms.min(event.duration_ms);
+            event.fade_out_ms = event.fade_out_ms.min(event.duration_ms);
+        }
+    }
     if snapshot.timeline.layers.is_empty() {
         return;
     }
@@ -28934,6 +28951,8 @@ f 1 2 3
                 duration_beats: Some(4.0),
                 conform_to_tempo: true,
                 loop_fill: true,
+                fade_in_ms: 350,
+                fade_out_ms: 500,
                 rate: Some(1.5),
                 loop_count: 3,
                 jump_to_event_id: Some(21),
@@ -28949,6 +28968,8 @@ f 1 2 3
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
                 rate: None,
                 loop_count: 1,
                 jump_to_event_id: None,
@@ -29080,6 +29101,41 @@ f 1 2 3
     }
 
     #[test]
+    fn project_timeline_block_fade_fields_roundtrip_clamp_and_legacy_defaults() {
+        let project = project_with_timeline_scene_blocks();
+        let json = project_json_for_write(&project).unwrap();
+        let roundtrip: ProjectFile = serde_json::from_str(&json).unwrap();
+        let event = &roundtrip.snapshot.timeline.events[0];
+        assert_eq!(event.fade_in_ms, 350);
+        assert_eq!(event.fade_out_ms, 500);
+
+        let mut oversized = project.clone();
+        oversized.snapshot.timeline.events[0].fade_in_ms = 9_000;
+        oversized.snapshot.timeline.events[0].fade_out_ms = 8_000;
+        let normalized = project_snapshot_for_save(oversized.snapshot);
+        assert_eq!(normalized.timeline.events[0].fade_in_ms, 2_000);
+        assert_eq!(normalized.timeline.events[0].fade_out_ms, 2_000);
+
+        let mut legacy = serde_json::to_value(project).unwrap();
+        for event in legacy["snapshot"]["timeline"]["events"]
+            .as_array_mut()
+            .unwrap()
+        {
+            let event = event.as_object_mut().unwrap();
+            event.remove("fade_in_ms");
+            event.remove("fade_out_ms");
+        }
+        let legacy: ProjectFile = serde_json::from_value(legacy).unwrap();
+        assert!(legacy
+            .snapshot
+            .timeline
+            .events
+            .iter()
+            .all(|event| { event.fade_in_ms == 0 && event.fade_out_ms == 0 }));
+        validate_project_file(&legacy).unwrap();
+    }
+
+    #[test]
     fn project_file_validation_rejects_authored_beats_outside_supported_range() {
         let mut project = project_with_timeline_scene_blocks();
         project.snapshot.cues[0].authored_beats = Some(protocol::MIN_CUE_AUTHORED_BEATS);
@@ -29159,6 +29215,8 @@ f 1 2 3
             duration_beats: Some(8.0),
             conform_to_tempo: true,
             loop_fill: true,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
             rate: Some(99.0),
             loop_count: 1,
             jump_to_event_id: None,

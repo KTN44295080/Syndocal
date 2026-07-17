@@ -1456,6 +1456,10 @@ pub struct TimelineCueEventSummary {
     pub loop_fill: bool,
     #[serde(default)]
     pub rate: Option<f32>,
+    #[serde(default)]
+    pub fade_in_ms: u64,
+    #[serde(default)]
+    pub fade_out_ms: u64,
     #[serde(default = "default_timeline_scene_block_loop_count")]
     pub loop_count: u16,
     #[serde(default)]
@@ -1557,6 +1561,10 @@ pub struct TimelineEventPlacementUpdate {
     pub conform_to_tempo: bool,
     #[serde(default)]
     pub loop_fill: bool,
+    #[serde(default)]
+    pub fade_in_ms: u64,
+    #[serde(default)]
+    pub fade_out_ms: u64,
     #[serde(default = "default_timeline_scene_block_loop_count")]
     pub loop_count: u16,
     #[serde(default)]
@@ -3006,6 +3014,8 @@ mod tests {
         assert!(!event.conform_to_tempo);
         assert!(!event.loop_fill);
         assert_eq!(event.rate, None);
+        assert_eq!(event.fade_in_ms, 0);
+        assert_eq!(event.fade_out_ms, 0);
         assert_eq!(event.loop_count, 1);
         assert_eq!(event.jump_to_event_id, None);
     }
@@ -3073,6 +3083,8 @@ mod tests {
             conform_to_tempo: true,
             loop_fill: true,
             rate: Some(1.25),
+            fade_in_ms: 350,
+            fade_out_ms: 700,
             loop_count: 4,
             jump_to_event_id: Some(2),
         };
@@ -3100,6 +3112,8 @@ mod tests {
                 duration_beats: Some(4.0),
                 conform_to_tempo: true,
                 loop_fill: true,
+                fade_in_ms: 350,
+                fade_out_ms: 700,
                 loop_count: 4,
                 jump_to_event_id: Some(2),
             }],
@@ -3137,6 +3151,8 @@ mod tests {
         assert_eq!(legacy_placement.duration_beats, None);
         assert!(!legacy_placement.conform_to_tempo);
         assert!(!legacy_placement.loop_fill);
+        assert_eq!(legacy_placement.fade_in_ms, 0);
+        assert_eq!(legacy_placement.fade_out_ms, 0);
 
         let defaults: super::TimelineSnapRequest = serde_json::from_str("{}").unwrap();
         assert_eq!(defaults, super::TimelineSnapRequest::default());

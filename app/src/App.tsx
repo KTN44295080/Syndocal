@@ -86,6 +86,7 @@ import {
 import {
   createTimelineViewportState,
   fitTimelineVisibleWindow,
+  normalizeTimelineVisibleWindow,
   panTimelineVisibleWindow,
   reconcileTimelineViewportState,
   revealTimelineVisibleRange,
@@ -3573,7 +3574,7 @@ export default function App() {
     const visibleSpanMs = timelineVisibleWindowSpanMs(visibleWindow);
     const currentPositionMs = timelinePositionMs();
     const layers = timelineLayers();
-    const cueFadeById = new Map(snapshotCues().map((cue) => [cue.id, cue.fade_ms]));
+    const cueAuthoredBeatsById = new Map(snapshotCues().map((cue) => [cue.id, cue.authored_beats ?? null]));
     return timelineEventRows().filter((event) => timelineRangeIntersectsVisibleWindow(
       event.time_ms,
       event.duration_ms > 0 ? event.time_ms + timelineSceneBlockSpanMs(event) : event.time_ms,
@@ -3594,8 +3595,10 @@ export default function App() {
         conform_to_tempo: event.conform_to_tempo ?? false,
         loop_fill: event.loop_fill ?? false,
         rate: event.rate ?? null,
+        authored_beats: cueAuthoredBeatsById.get(event.cue_id) ?? null,
         total_duration_ms: timelineSceneBlockSpanMs(event),
-        fade_in_ms: Math.max(0, cueFadeById.get(event.cue_id) ?? 0),
+        fade_in_ms: Math.max(0, event.fade_in_ms ?? 0),
+        fade_out_ms: Math.max(0, event.fade_out_ms ?? 0),
         x: timelineTimeToVisibleRawRatio(event.time_ms, visibleWindow) * 100,
         width: event.duration_ms > 0
           ? (timelineSceneBlockSpanMs(event) / visibleSpanMs) * 100
@@ -5663,7 +5666,18 @@ export default function App() {
               : Number(args.durationBeats),
             conform_to_tempo: Boolean(args?.conformToTempo),
             loop_fill: Boolean(args?.loopFill),
-            rate: null,
+            rate: Boolean(args?.conformToTempo) && !Boolean(args?.loopFill)
+              ? (() => {
+                  const cue = current.cues.find((candidate) => candidate.id === Number(args?.cueId));
+                  const authoredBeats = cue?.authored_beats ?? null;
+                  const durationMs = Number(args?.durationMs ?? 1_000);
+                  return authoredBeats !== null && durationMs > 0
+                    ? (authoredBeats * 60_000 / current.clock.bpm) / durationMs
+                    : null;
+                })()
+              : null,
+            fade_in_ms: Math.min(Number(args?.fadeInMs ?? 0), Number(args?.durationMs ?? 1_000)),
+            fade_out_ms: Math.min(Number(args?.fadeOutMs ?? 0), Number(args?.durationMs ?? 1_000)),
             loop_count: Number(args?.loopCount ?? 1),
             jump_to_event_id: args?.jumpToEventId === null || args?.jumpToEventId === undefined
               ? null
@@ -5705,6 +5719,22 @@ export default function App() {
                 loop_fill: command === "set_timeline_scene_block"
                   ? Boolean(args?.loopFill)
                   : false,
+                rate: command === "set_timeline_scene_block" && Boolean(args?.conformToTempo) && !Boolean(args?.loopFill)
+                  ? (() => {
+                      const cue = current.cues.find((candidate) => candidate.id === Number(args?.cueId ?? event.cue_id));
+                      const authoredBeats = cue?.authored_beats ?? null;
+                      const durationMs = Number(args?.durationMs ?? event.duration_ms);
+                      return authoredBeats !== null && durationMs > 0
+                        ? (authoredBeats * 60_000 / current.clock.bpm) / durationMs
+                        : null;
+                    })()
+                  : null,
+                fade_in_ms: command === "set_timeline_scene_block"
+                  ? Math.min(Number(args?.fadeInMs ?? event.fade_in_ms ?? 0), Number(args?.durationMs ?? event.duration_ms))
+                  : 0,
+                fade_out_ms: command === "set_timeline_scene_block"
+                  ? Math.min(Number(args?.fadeOutMs ?? event.fade_out_ms ?? 0), Number(args?.durationMs ?? event.duration_ms))
+                  : 0,
                 loop_count: command === "set_timeline_scene_block"
                   ? Number(args?.loopCount ?? event.loop_count)
                   : 1,
@@ -5732,6 +5762,28 @@ export default function App() {
     }
     return invoke<T>(command, args);
   };
+  const zoomTimelineOverviewAt = (anchorMs: number, scale: number) => {
+    setTimelineViewportState((current) => ({
+      ...current,
+      mode: "manual",
+      visible_window: zoomTimelineVisibleWindow(
+        current.visible_window,
+        current.edit_extent_ms,
+        scale,
+        anchorMs,
+      ),
+    }));
+  };
+  const setTimelineVisibleWindowDirect = (visibleWindow: { start_ms: number; end_ms: number }) => {
+    setTimelineViewportState((current) => ({
+      ...current,
+      mode: "manual",
+      visible_window: normalizeTimelineVisibleWindow(
+        visibleWindow,
+        current.edit_extent_ms,
+      ),
+    }));
+  };
 
   const timelineSceneBlocks = createTimelineSceneBlockController({
     invoke: invokeTimelineSceneBlockCommand,
@@ -5749,6 +5801,7 @@ export default function App() {
     getAddLoopCount: timelineBlockLoopCount,
     getAddJumpToEventId: timelineBlockJumpToEventId,
     getBpm: () => snapshot().clock.bpm,
+    getCueAuthoredBeats: (cueId) => snapshot().cues.find((cue) => cue.id === cueId)?.authored_beats ?? null,
     setNextStartMs: setTimelineEventTimeMs,
     setMessage,
     refreshSnapshot: () => viewportFixture === "timeline-layered"
@@ -9212,6 +9265,22 @@ export default function App() {
   const moveTimelineCueEvent = timelineSceneBlocks.moveBy;
   const moveTimelineCueEventToPlacement = timelineSceneBlocks.moveToPlacement;
   const resizeTimelineCueEventToTime = timelineSceneBlocks.resizeToTime;
+  const setTimelineCueEventFade = timelineSceneBlocks.setFade;
+  const placeArmedTimelineCue = async (
+    cueId: number,
+    timeMs: number,
+    layerId: number,
+    durationMs: number,
+    stretchMode: "RATE" | "WINDOW",
+    snapEnabled: boolean,
+  ) => timelineSceneBlocks.addAt(cueId, timeMs, "Lighting", false, {
+    layerId,
+    durationMs,
+    authoredBeats: snapshot().cues.find((cue) => cue.id === cueId)?.authored_beats ?? null,
+    stretchMode,
+    snapEnabled,
+    loopCount: 1,
+  });
 
   const beginTimelineCueDrag = (cue: CueSummary, point: TimelineCueDragPoint) => {
     setTimelineCueDrag({
@@ -13799,6 +13868,7 @@ export default function App() {
               onSeekOverviewTime={seekTimelineFromOverviewTime}
               onMoveEventPlacement={moveTimelineCueEventToPlacement}
               onResizeEventTime={resizeTimelineCueEventToTime}
+              onSetEventFade={setTimelineCueEventFade}
               onSelectAutomationRange={selectTimelineAutomationRange}
               onMoveAutomationRangeTime={moveTimelineAutomationRangeToTime}
               onResizeAutomationRangeTime={resizeTimelineAutomationRangeToTime}
@@ -13807,6 +13877,8 @@ export default function App() {
               onFitOverview={fitTimelineOverview}
               onZoomOverview={zoomTimelineOverview}
               onPanOverview={panTimelineOverview}
+              onSetVisibleWindow={setTimelineVisibleWindowDirect}
+              onZoomOverviewAt={zoomTimelineOverviewAt}
               onRevealSelected={() => {
                 const eventId = selectedTimelineSceneBlockEventId();
                 if (eventId !== null) revealTimelineSceneBlock(eventId);
@@ -13819,6 +13891,8 @@ export default function App() {
               onGridMs={setTimelineGridMs}
               onSnapDrafts={snapTimelineDrafts}
               onSnapItems={snapTimelineItems}
+              snapTimeMs={snapTimeMs}
+              onPlaceArmedCue={placeArmedTimelineCue}
               onSelectedCueId={setTimelineCueId}
               onEventTimeMs={setTimelineEventTimeMs}
               onBlockDurationMs={setTimelineBlockDurationMs}

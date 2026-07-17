@@ -2,8 +2,19 @@ import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";
 import ts from "typescript";
 
+const gestureSource = await readFile(new URL("../src/timelineBlockGestures.ts", import.meta.url), "utf8");
+const gestureTranspiled = ts.transpileModule(gestureSource, {
+  compilerOptions: {
+    module: ts.ModuleKind.ESNext,
+    target: ts.ScriptTarget.ES2022,
+  },
+  fileName: "timelineBlockGestures.ts",
+});
+const gestureModuleUrl = `data:text/javascript;base64,${Buffer.from(gestureTranspiled.outputText).toString("base64")}`;
+const gestures = await import(gestureModuleUrl);
+
 const source = await readFile(new URL("../src/timelineSceneBlocks.ts", import.meta.url), "utf8");
-const transpiled = ts.transpileModule(source, {
+const transpiled = ts.transpileModule(source.replace("./timelineBlockGestures", gestureModuleUrl), {
   compilerOptions: {
     module: ts.ModuleKind.ESNext,
     target: ts.ScriptTarget.ES2022,
@@ -13,12 +24,68 @@ const transpiled = ts.transpileModule(source, {
 });
 const helpers = await import(`data:text/javascript;base64,${Buffer.from(transpiled.outputText).toString("base64")}`);
 
+assert.equal(gestures.timelineBlockGestureZone(50, 4, 100, true), "move");
+assert.equal(gestures.timelineBlockGestureZone(3, 4, 100, true), "stretch-start");
+assert.equal(gestures.timelineBlockGestureZone(97, 4, 100, true), "stretch-end");
+assert.equal(gestures.timelineBlockGestureZone(8, 17, 100, true), "fade-in");
+assert.equal(gestures.timelineBlockGestureZone(92, 17, 100, true), "fade-out");
+assert.equal(gestures.timelineBlockGestureZone(50, 17, 100, true), "select");
+
+const rateStretch = gestures.projectTimelineBlockStretch({
+  mode: "RATE",
+  edge: "end",
+  originalStartMs: 1_000,
+  originalEndMs: 3_000,
+  requestedEdgeMs: 2_000,
+  authoredBeats: 4,
+  bpm: 120,
+});
+assert.equal(rateStretch.duration_ms, 1_000);
+assert.equal(rateStretch.duration_beats, 2);
+assert.equal(rateStretch.rate, 2, "shortening a four-beat authored block to one second doubles RATE");
+assert.equal(rateStretch.loop_fill, false);
+
+const windowStretch = gestures.projectTimelineBlockStretch({
+  mode: "WINDOW",
+  edge: "end",
+  originalStartMs: 1_000,
+  originalEndMs: 3_000,
+  requestedEdgeMs: 4_000,
+  authoredBeats: 4,
+  bpm: 120,
+});
+assert.equal(windowStretch.duration_ms, 3_000);
+assert.equal(windowStretch.rate, null);
+assert.equal(windowStretch.loop_fill, true);
+assert.equal(windowStretch.conform_to_tempo, true);
+
+const rateFallback = gestures.projectTimelineBlockStretch({
+  mode: "RATE",
+  edge: "end",
+  originalStartMs: 0,
+  originalEndMs: 1_000,
+  requestedEdgeMs: 1_500,
+  authoredBeats: null,
+  bpm: 120,
+});
+assert.equal(rateFallback.fallback_to_window, true);
+assert.equal(rateFallback.conform_to_tempo, false);
+assert.equal(gestures.projectTimelineBlockFadeMs("in", 1_000, 3_000, 1_350), 350);
+assert.equal(gestures.projectTimelineBlockFadeMs("out", 1_000, 3_000, 2_400), 600);
+
 const block = {
   id: 7,
   cue_id: 3,
   time_ms: 1000,
+  time_beats: null,
   track: "Lighting",
+  layer_id: null,
   duration_ms: 800,
+  duration_beats: null,
+  conform_to_tempo: false,
+  loop_fill: false,
+  fade_in_ms: 0,
+  fade_out_ms: 0,
   loop_count: 2,
   jump_to_event_id: 7,
 };
@@ -223,8 +290,15 @@ const snapPlacements = helpers.buildTimelineSceneBlockSnapPlacements(
 assert.deepEqual(snapPlacements[0].draft, {
   cue_id: 8,
   time_ms: 1300,
+  time_beats: null,
   track: "Video",
+  layer_id: null,
   duration_ms: 900,
+  duration_beats: null,
+  conform_to_tempo: false,
+  loop_fill: false,
+  fade_in_ms: 0,
+  fade_out_ms: 0,
   loop_count: 3,
   jump_to_event_id: 8,
 });
@@ -232,8 +306,15 @@ assert.deepEqual(snapPlacements[0].request, {
   event_id: 7,
   cue_id: 8,
   time_ms: 1300,
+  time_beats: null,
   track: "Video",
+  layer_id: null,
   duration_ms: 900,
+  duration_beats: null,
+  conform_to_tempo: false,
+  loop_fill: false,
+  fade_in_ms: 0,
+  fade_out_ms: 0,
   loop_count: 3,
   jump_to_event_id: 8,
 }, "atomic Snap Items request preserves normalized unsaved placement fields");

@@ -1555,6 +1555,10 @@ export interface TimelineCueEventSummary {
   loop_fill?: boolean;
   /** Derived display/cadence multiplier; recomputed by the engine on load. */
   rate?: number | null;
+  /** Scene Block fade-in override, clamped to the block window. */
+  fade_in_ms?: number;
+  /** Scene Block release fade, clamped to the block window. */
+  fade_out_ms?: number;
   /** Number of Cue iterations; derived by the engine when loop_fill is enabled. */
   loop_count: number;
   /** Optional placement to seek to after the final iteration completes. */

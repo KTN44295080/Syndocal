@@ -26,6 +26,10 @@ import {
   type TimelineSceneBlockRow,
 } from "./TimelineSceneBlocksEditor";
 import { TimelineLayerToolbar } from "./TimelineLayerToolbar";
+import {
+  naturalTimelineBlockDurationMs,
+  type TimelineStretchMode,
+} from "../timelineBlockGestures";
 
 export type TimelineSnapMode = "Off" | "Beat" | "Bar" | "Grid";
 
@@ -91,8 +95,20 @@ interface TimelineCueEventsPanelProps {
   onPause: () => void | Promise<void>;
   onPlay: () => void | Promise<void>;
   onSeekOverviewTime: (timeMs: number) => void;
-  onMoveEventPlacement: (eventId: number, timeMs: number, layerId: number) => void | Promise<void>;
-  onResizeEventTime: (eventId: number, edge: "start" | "end", timeMs: number) => void | Promise<void>;
+  onMoveEventPlacement: (
+    eventId: number,
+    timeMs: number,
+    layerId: number,
+    snapEnabled: boolean,
+  ) => void | Promise<void>;
+  onResizeEventTime: (
+    eventId: number,
+    edge: "start" | "end",
+    timeMs: number,
+    mode: TimelineStretchMode,
+    snapEnabled: boolean,
+  ) => void | Promise<void>;
+  onSetEventFade: (eventId: number, edge: "in" | "out", fadeMs: number, snapEnabled: boolean) => void | Promise<void>;
   onSelectAutomationRange: (range: TimelineOverviewAutomationRange) => void;
   onMoveAutomationRangeTime: (range: TimelineOverviewAutomationRange, timeMs: number) => void | Promise<void>;
   onResizeAutomationRangeTime: (
@@ -109,6 +125,8 @@ interface TimelineCueEventsPanelProps {
   onFitOverview: () => void;
   onZoomOverview: (scale: number) => void;
   onPanOverview: (direction: -1 | 1) => void;
+  onSetVisibleWindow: (window: TimelineVisibleWindow) => void;
+  onZoomOverviewAt: (anchorMs: number, scale: number) => void;
   onRevealSelected: () => void;
   onRevealPlayhead: () => void;
   onAnalyzeAudio: () => void | Promise<void>;
@@ -118,6 +136,15 @@ interface TimelineCueEventsPanelProps {
   onGridMs: (value: number) => void;
   onSnapDrafts: () => void;
   onSnapItems: () => void | Promise<void>;
+  snapTimeMs: (timeMs: number) => number;
+  onPlaceArmedCue: (
+    cueId: number,
+    timeMs: number,
+    layerId: number,
+    durationMs: number,
+    mode: TimelineStretchMode,
+    snapEnabled: boolean,
+  ) => void | Promise<void>;
   onSelectedCueId: (cueId: number) => void;
   onEventTimeMs: (timeMs: number) => void;
   onBlockDurationMs: (durationMs: number) => void;
@@ -138,6 +165,26 @@ interface TimelineCueEventsPanelProps {
 }
 
 export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
+  const [stretchMode, setStretchMode] = createSignal<TimelineStretchMode>("RATE");
+  const [magnetEnabled, setMagnetEnabled] = createSignal(true);
+  const [armedCueId, setArmedCueId] = createSignal<number | null>(null);
+  const armedCue = () => {
+    const cue = props.cueOptions.find((candidate) => candidate.id === armedCueId());
+    return cue ? {
+      id: cue.id,
+      label: cue.label,
+      authored_beats: cue.authored_beats,
+      natural_duration_ms: naturalTimelineBlockDurationMs(cue.authored_beats, props.bpm, props.blockDurationMs),
+    } : null;
+  };
+  const toggleArmedCue = (cueId: number | null) => {
+    setArmedCueId((current) => current === cueId ? null : cueId);
+    if (cueId !== null) props.onTimelineStatus(
+      armedCueId() === cueId
+        ? `Cue ${cueId} armed: double-click or sweep a Lighting lane to place it.`
+        : `Cue ${cueId} disarmed.`,
+    );
+  };
   const [overlapFilter, setOverlapFilter] = createSignal<{
     eventIds: number[];
     label: string;
@@ -278,6 +325,53 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
           {formatTimelineHeaderTime(props.visibleWindow.start_ms)} – {formatTimelineHeaderTime(props.visibleWindow.end_ms)}
         </output>
       </nav>
+      <div class="timelineDirectToolbar" aria-label="Timeline block direct manipulation">
+        <span class="timelineDirectToolbarLabel">Stretch mode</span>
+        <div class="timelineStretchModeToggle" role="group" aria-label="Stretch mode" data-timeline-stretch-mode-toggle>
+          <button
+            type="button"
+            classList={{ active: stretchMode() === "RATE" }}
+            aria-pressed={stretchMode() === "RATE"}
+            data-timeline-stretch-mode="RATE"
+            onClick={() => setStretchMode("RATE")}
+          >
+            RATE
+          </button>
+          <button
+            type="button"
+            classList={{ active: stretchMode() === "WINDOW" }}
+            aria-pressed={stretchMode() === "WINDOW"}
+            data-timeline-stretch-mode="WINDOW"
+            onClick={() => setStretchMode("WINDOW")}
+          >
+            WINDOW
+          </button>
+        </div>
+        <button
+          type="button"
+          classList={{ active: magnetEnabled() }}
+          aria-pressed={magnetEnabled()}
+          aria-label={magnetEnabled() ? "Disable magnet snap" : "Enable magnet snap"}
+          data-timeline-magnet-toggle
+          onClick={() => setMagnetEnabled((enabled) => !enabled)}
+        >
+          Magnet
+        </button>
+        <button
+          type="button"
+          classList={{ active: armedCueId() === props.selectedCueId }}
+          aria-pressed={props.selectedCueId !== null && armedCueId() === props.selectedCueId}
+          aria-label={armedCueId() === props.selectedCueId ? "Disarm Cue" : "Arm Cue"}
+          data-timeline-arm-cue={props.selectedCueId ?? undefined}
+          disabled={props.selectedCueId === null}
+          onClick={() => toggleArmedCue(props.selectedCueId)}
+        >
+          {armedCueId() === props.selectedCueId ? "Disarm Cue" : "Arm Cue"}
+        </button>
+        <Show when={armedCue()}>
+          {(cue) => <output class="timelineArmedCue" data-timeline-armed-cue={cue().id}>Armed: {cue().label}</output>}
+        </Show>
+      </div>
       <TimelineOverview
         events={props.overviewEvents}
         layers={props.timelineLayers}
@@ -291,16 +385,31 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         selectedEventId={props.selectedEventId}
         playheadX={props.overviewPlayheadX}
         visibleWindow={props.visibleWindow}
+        bpm={props.bpm}
+        stretchMode={stretchMode()}
+        magnetEnabled={magnetEnabled()}
+        armedCue={armedCue()}
+        snapTimeMs={props.snapTimeMs}
         onSeekTime={props.onSeekOverviewTime}
         onSelectAutomationRange={props.onSelectAutomationRange}
         onSelectEvent={(eventId) => props.onSelectEvent(eventId, false)}
         onInspectOverlapCluster={inspectOverlapCluster}
         onUpdateLayer={(layer) => void props.onUpdateTimelineLayer(layer)}
         onStatus={props.onTimelineStatus}
-        onMoveEventPlacement={(eventId, timeMs, layerId) =>
-          void props.onMoveEventPlacement(eventId, timeMs, layerId)
+        onMoveEventPlacement={(eventId, timeMs, layerId, snapEnabled) =>
+          void props.onMoveEventPlacement(eventId, timeMs, layerId, snapEnabled)
         }
-        onResizeEventTime={(eventId, edge, timeMs) => void props.onResizeEventTime(eventId, edge, timeMs)}
+        onResizeEventTime={(eventId, edge, timeMs, mode, snapEnabled) =>
+          void props.onResizeEventTime(eventId, edge, timeMs, mode, snapEnabled)
+        }
+        onSetEventFade={(eventId, edge, fadeMs, snapEnabled) =>
+          void props.onSetEventFade(eventId, edge, fadeMs, snapEnabled)
+        }
+        onSetVisibleWindow={props.onSetVisibleWindow}
+        onZoomAt={props.onZoomOverviewAt}
+        onPlaceArmedCue={(cueId, timeMs, layerId, durationMs, mode, snapEnabled) =>
+          void props.onPlaceArmedCue(cueId, timeMs, layerId, durationMs, mode, snapEnabled)
+        }
         onMoveAutomationRangeTime={(range, timeMs) => void props.onMoveAutomationRangeTime(range, timeMs)}
         onResizeAutomationRangeTime={(range, edge, timeMs) => void props.onResizeAutomationRangeTime(range, edge, timeMs)}
         onMoveAutomationKeyframeTime={(range, keyframeIndex, timeMs) =>
@@ -418,6 +527,8 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         onSelectEvent={(eventId) => props.onSelectEvent(eventId, true)}
         onClearEventFilter={clearOverlapFilter}
         onOpenSourceCue={props.onOpenSourceCue}
+        armedCueId={armedCueId()}
+        onArmCue={toggleArmedCue}
       />
     </>
   );
