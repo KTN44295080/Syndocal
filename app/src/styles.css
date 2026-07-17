@@ -25476,3 +25476,188 @@ h3 {
   min-width: 28px;
   min-height: 26px;
 }
+
+/* ---- UI redesign T3: Scene Block Finder + fixed Block Properties inspector.
+   Dense graphite; the split scrolls internally per column and never adds an
+   app-level scroll surface. Wrapping flex only (no fixed column templates). */
+
+.sceneBlockViewToggle {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+
+.sceneBlockViewToggle button {
+  min-height: 22px;
+  padding: 1px 8px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.sceneBlockViewToggle button.active {
+  background: #34302b;
+  color: #eee8e2;
+}
+
+.sceneBlockFinderSplit {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 4px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.sceneBlockFinder {
+  display: flex;
+  flex: 1 1 52%;
+  flex-direction: column;
+  gap: 1px;
+  overflow-y: auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.sceneBlockFinderRow {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  min-height: 22px;
+  padding: 1px 4px;
+  border: 1px solid #2b2823;
+  background: #17191c;
+  text-align: left;
+}
+
+.sceneBlockFinderRow.selected {
+  border-color: #8a8378;
+  background: #24262a;
+}
+
+.sceneBlockFinderChip {
+  flex: 0 0 8px;
+  width: 8px;
+  height: 14px;
+  border-radius: 1px;
+}
+
+.sceneBlockFinderName {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.sceneBlockFinderName small {
+  color: #8f989f;
+}
+
+.sceneBlockFinderStamp {
+  flex: 0 0 auto;
+  color: #b8c0c6;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sceneBlockFinderLane {
+  flex: 0 0 auto;
+  min-width: 28px;
+  color: #8f989f;
+  font-size: 10px;
+  text-align: right;
+}
+
+.sceneBlockInspector {
+  display: flex;
+  flex: 1 1 48%;
+  flex-direction: column;
+  overflow-y: auto;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid #2b2823;
+  background: #141619;
+}
+
+.sceneBlockInspectorBody {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 5px;
+}
+
+.sceneBlockInspectorHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+}
+
+.sceneBlockInspectorHead strong {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sceneBlockInspectorFields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.sceneBlockInspectorFields label {
+  display: flex;
+  flex: 1 1 78px;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 10px;
+  color: #8f989f;
+}
+
+.sceneBlockInspectorFields input {
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.sceneBlockInspectorLane {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 10px;
+  color: #8f989f;
+}
+
+.sceneBlockInspectorSource {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 10px;
+  color: #8f989f;
+}
+
+.sceneBlockInspectorSource span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #cfd6db;
+  font-size: 11px;
+}
+
+.sceneBlockInspectorActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.sceneBlockInspectorActions button {
+  flex: 0 1 auto;
+  min-height: 22px;
+  padding: 1px 7px;
+  font-size: 10px;
+}
