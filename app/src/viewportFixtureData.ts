@@ -12,6 +12,7 @@ import type {
   TimelineAudioClipSummary,
   TimelineCueEventSummary,
   TimelineLayerSummary,
+  TouchSurfaceSummary,
   VideoIsfEffectSummary,
   VideoLayerSummary,
   VideoOutputMapping,
@@ -486,6 +487,26 @@ const stageObject: StageObjectSummary = {
   color: "#2f6f9f",
 };
 
+const touchSurface: TouchSurfaceSummary = {
+  pages: [
+    {
+      id: 91,
+      label: "Viewport Touch",
+      controls: [
+        { id: 9_101, kind: "Label", x: 0, y: 0, w: 2, h: 1, label: "VIEWPORT SHOW", binding: null },
+        { id: 9_102, kind: "Image", x: 0, y: 1, w: 2, h: 2, label: "Stage Image", binding: null },
+        { id: 9_103, kind: "Button", x: 2, y: 0, w: 3, h: 2, label: "GO", binding: { kind: "cue_next" } },
+        { id: 9_104, kind: "Fader", x: 5, y: 0, w: 1, h: 4, label: "LIGHT", binding: { kind: "lighting_master" } },
+        { id: 9_105, kind: "Dial", x: 6, y: 0, w: 2, h: 2, label: "DIMMER", binding: { kind: "group_attribute", group_id: "front", attribute: "Dimmer" } },
+        { id: 9_106, kind: "IncrementalWheel", x: 8, y: 0, w: 2, h: 3, label: "FINE", binding: { kind: "group_attribute", group_id: "front", attribute: "Dimmer" } },
+        { id: 9_107, kind: "ColorWheel", x: 2, y: 2, w: 3, h: 3, label: "COLOR", binding: { kind: "group_color", group_id: "front" } },
+        { id: 9_108, kind: "XyGrid", x: 6, y: 2, w: 3, h: 3, label: "POSITION", binding: { kind: "group_pan_tilt", group_id: "front", pan_attribute: "Pan", tilt_attribute: "Tilt" } },
+        { id: 9_109, kind: "Button", x: 10, y: 0, w: 2, h: 2, label: "ALL BO", binding: { kind: "all_blackout" } },
+      ],
+    },
+  ],
+};
+
 const cueRecallEffect: EffectSummary = {
   id: 101,
   label: "Viewport Video Pulse",
@@ -877,6 +898,7 @@ export const viewportFixtureData = {
   vjBankComposition,
   vjBankOutputs,
   stageObject,
+  touchSurface,
   cueRecallEffect,
   cueRecallNodeGraph,
   cueRecallCue,

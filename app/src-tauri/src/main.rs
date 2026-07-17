@@ -45,12 +45,12 @@ use protocol::{
     RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile,
     StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary, TimelineAudioClipId,
     TimelineAudioClipSummary, TimelineEventId, TimelineLayerKind, TimelineSnapRequest,
-    TimelineTrackKind, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBackendState,
-    VideoBlendMode, VideoEffectTarget, VideoIsfEffectStageSummary, VideoIsfEffectSummary,
-    VideoLayerId, VideoLayerState, VideoLayerTarget, VideoOutputId, VideoOutputKind,
-    VideoOutputMapping, VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary,
-    VideoOutputSummary, VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind,
-    VideoSourceSummary,
+    TimelineTrackKind, TouchControlBinding, TouchSurfaceSummary, ValueEffectRequest, Vec3,
+    VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode, VideoEffectTarget,
+    VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId, VideoLayerState,
+    VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
+    VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary, VideoOutputSummary,
+    VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -14955,12 +14955,223 @@ fn has_extension(path: &Path, expected: &str) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case(expected))
 }
 
+fn validate_touch_surface(
+    surface: &TouchSurfaceSummary,
+    snapshot: &EngineSnapshot,
+) -> Result<(), String> {
+    const TOUCH_GRID_COLUMNS: u16 = 12;
+    const TOUCH_GRID_ROWS: u16 = 8;
+    if surface.pages.len() > 64 {
+        return Err("Touch surface contains more than 64 pages".to_string());
+    }
+    let mut page_ids = HashSet::new();
+    let mut control_ids = HashSet::new();
+    for page in &surface.pages {
+        if page.id == 0 || !page_ids.insert(page.id) {
+            return Err(format!(
+                "Touch page {} has an invalid or duplicate ID",
+                page.id
+            ));
+        }
+        if page.label.trim().is_empty() || page.label.chars().count() > 64 {
+            return Err(format!("Touch page {} has an invalid label", page.id));
+        }
+        if page.controls.len() > 256 {
+            return Err(format!(
+                "Touch page {} contains more than 256 controls",
+                page.id
+            ));
+        }
+        for control in &page.controls {
+            if control.id == 0 || !control_ids.insert(control.id) {
+                return Err(format!(
+                    "Touch control {} has an invalid or duplicate ID",
+                    control.id
+                ));
+            }
+            if control.label.trim().is_empty() || control.label.chars().count() > 128 {
+                return Err(format!("Touch control {} has an invalid label", control.id));
+            }
+            if control.w == 0
+                || control.h == 0
+                || control.x.saturating_add(control.w) > TOUCH_GRID_COLUMNS
+                || control.y.saturating_add(control.h) > TOUCH_GRID_ROWS
+            {
+                return Err(format!(
+                    "Touch control {} is outside the 12x8 surface grid",
+                    control.id
+                ));
+            }
+            let Some(binding) = &control.binding else {
+                continue;
+            };
+            match binding {
+                TouchControlBinding::FixtureAttribute {
+                    fixture_id,
+                    attribute,
+                } => {
+                    let fixture = snapshot
+                        .fixtures
+                        .iter()
+                        .find(|fixture| fixture.id == *fixture_id)
+                        .ok_or_else(|| {
+                            format!(
+                                "Touch control {} references missing fixture {}",
+                                control.id, fixture_id
+                            )
+                        })?;
+                    if !fixture
+                        .controls
+                        .iter()
+                        .any(|candidate| candidate.attribute == *attribute)
+                    {
+                        return Err(format!(
+                            "Touch control {} references missing fixture attribute '{}'",
+                            control.id, attribute
+                        ));
+                    }
+                }
+                TouchControlBinding::GroupAttribute {
+                    group_id,
+                    attribute,
+                } => {
+                    if !snapshot.fixtures.iter().any(|fixture| {
+                        fixture.group_ids.contains(group_id)
+                            && fixture
+                                .controls
+                                .iter()
+                                .any(|candidate| candidate.attribute == *attribute)
+                    }) {
+                        return Err(format!(
+                            "Touch control {} references missing group attribute '{} / {}'",
+                            control.id, group_id, attribute
+                        ));
+                    }
+                }
+                TouchControlBinding::FixtureColor { fixture_id } => {
+                    if !snapshot.fixtures.iter().any(|fixture| {
+                        fixture.id == *fixture_id && fixture_supports_color_effect(fixture)
+                    }) {
+                        return Err(format!(
+                            "Touch control {} references fixture {} without color controls",
+                            control.id, fixture_id
+                        ));
+                    }
+                }
+                TouchControlBinding::GroupColor { group_id } => {
+                    if !snapshot.fixtures.iter().any(|fixture| {
+                        fixture.group_ids.contains(group_id)
+                            && fixture_supports_color_effect(fixture)
+                    }) {
+                        return Err(format!(
+                            "Touch control {} references group '{}' without color controls",
+                            control.id, group_id
+                        ));
+                    }
+                }
+                TouchControlBinding::FixturePanTilt {
+                    fixture_id,
+                    pan_attribute,
+                    tilt_attribute,
+                } => {
+                    let fixture = snapshot
+                        .fixtures
+                        .iter()
+                        .find(|fixture| fixture.id == *fixture_id)
+                        .ok_or_else(|| {
+                            format!(
+                                "Touch control {} references missing fixture {}",
+                                control.id, fixture_id
+                            )
+                        })?;
+                    if ![pan_attribute, tilt_attribute]
+                        .into_iter()
+                        .all(|attribute| {
+                            fixture
+                                .controls
+                                .iter()
+                                .any(|control| control.attribute == attribute.as_str())
+                        })
+                    {
+                        return Err(format!(
+                            "Touch control {} references missing Pan/Tilt attributes",
+                            control.id
+                        ));
+                    }
+                }
+                TouchControlBinding::GroupPanTilt {
+                    group_id,
+                    pan_attribute,
+                    tilt_attribute,
+                } => {
+                    if !snapshot.fixtures.iter().any(|fixture| {
+                        fixture.group_ids.contains(group_id)
+                            && [pan_attribute, tilt_attribute]
+                                .into_iter()
+                                .all(|attribute| {
+                                    fixture
+                                        .controls
+                                        .iter()
+                                        .any(|control| control.attribute == attribute.as_str())
+                                })
+                    }) {
+                        return Err(format!(
+                            "Touch control {} references missing group Pan/Tilt target",
+                            control.id
+                        ));
+                    }
+                }
+                TouchControlBinding::Cue { cue_id } => {
+                    if !snapshot.cues.iter().any(|cue| cue.id == *cue_id) {
+                        return Err(format!(
+                            "Touch control {} references missing cue {}",
+                            control.id, cue_id
+                        ));
+                    }
+                }
+                TouchControlBinding::GroupSubmaster { group_id } => {
+                    if !snapshot
+                        .fixtures
+                        .iter()
+                        .any(|fixture| fixture.group_ids.contains(group_id))
+                    {
+                        return Err(format!(
+                            "Touch control {} references missing submaster group '{}'",
+                            control.id, group_id
+                        ));
+                    }
+                }
+                TouchControlBinding::SelectedFixtureAttribute { attribute }
+                    if attribute.trim().is_empty() =>
+                {
+                    return Err(format!(
+                        "Touch control {} requires a selected-fixture attribute",
+                        control.id
+                    ));
+                }
+                TouchControlBinding::SelectedFixturePanTilt {
+                    pan_attribute,
+                    tilt_attribute,
+                } if pan_attribute.trim().is_empty() || tilt_attribute.trim().is_empty() => {
+                    return Err(format!(
+                        "Touch control {} requires Pan and Tilt attributes",
+                        control.id
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_project_file(project: &ProjectFile) -> Result<(), String> {
     if project.version != PROJECT_FILE_VERSION {
         return Err(format!("Unsupported project version {}", project.version));
     }
     validate_app_name("project", &project.app)?;
     validate_project_custom_profiles(&project.custom_profiles)?;
+    validate_touch_surface(&project.snapshot.touch_surface, &project.snapshot)?;
     validate_unique_ids(
         "fixture",
         project.snapshot.fixtures.iter().map(|fixture| fixture.id),
@@ -18130,6 +18341,15 @@ fn set_stage_map_config(state: State<'_, AppState>, config: StageMapConfig) -> R
         .engine
         .send(EngineCommand::SetStageMapConfig(config))
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_touch_surface(
+    state: State<'_, AppState>,
+    surface: TouchSurfaceSummary,
+) -> Result<(), String> {
+    validate_touch_surface(&surface, &state.engine.snapshot())?;
+    state.engine.set_touch_surface(surface)
 }
 
 #[tauri::command]
@@ -29688,6 +29908,79 @@ f 1 2 3
         project
     }
 
+    #[test]
+    fn project_touch_surface_sdc_roundtrip_and_legacy_default() {
+        let mut project = project_with_timeline_scene_blocks();
+        project.snapshot.touch_surface = TouchSurfaceSummary {
+            pages: vec![protocol::TouchPageSummary {
+                id: 1,
+                label: "Default preset".to_string(),
+                controls: vec![protocol::TouchControlSummary {
+                    id: 11,
+                    kind: protocol::TouchControlKind::Button,
+                    x: 0,
+                    y: 0,
+                    w: 2,
+                    h: 2,
+                    label: "Cue 7".to_string(),
+                    binding: Some(TouchControlBinding::Cue { cue_id: 7 }),
+                }],
+            }],
+        };
+
+        let json = project_json_for_write(&project).unwrap();
+        let roundtrip: ProjectFile = serde_json::from_str(&json).unwrap();
+        validate_project_file(&roundtrip).unwrap();
+        assert_eq!(
+            roundtrip.snapshot.touch_surface,
+            project.snapshot.touch_surface
+        );
+
+        let legacy_bytes = project_json_for_write(&project_with_timeline_scene_blocks())
+            .unwrap()
+            .into_bytes();
+        let legacy: ProjectFile = serde_json::from_slice(&legacy_bytes).unwrap();
+        validate_project_file(&legacy).unwrap();
+        assert!(legacy.snapshot.touch_surface.pages.is_empty());
+        let roundtrip_bytes = project_json_for_write(&legacy).unwrap().into_bytes();
+        assert_eq!(roundtrip_bytes, legacy_bytes);
+        assert!(
+            serde_json::from_slice::<serde_json::Value>(&legacy_bytes).unwrap()["snapshot"]
+                .get("touch_surface")
+                .is_none()
+        );
+        eprintln!(
+            "legacy .sdc touch bytes: {} == {}",
+            legacy_bytes.len(),
+            roundtrip_bytes.len()
+        );
+    }
+
+    #[test]
+    fn project_touch_surface_validation_rejects_out_of_grid_control() {
+        let mut project = project_with_timeline_scene_blocks();
+        project.snapshot.touch_surface = TouchSurfaceSummary {
+            pages: vec![protocol::TouchPageSummary {
+                id: 1,
+                label: "Bad page".to_string(),
+                controls: vec![protocol::TouchControlSummary {
+                    id: 1,
+                    kind: protocol::TouchControlKind::Fader,
+                    x: 11,
+                    y: 0,
+                    w: 2,
+                    h: 2,
+                    label: "Bad fader".to_string(),
+                    binding: Some(TouchControlBinding::LightingMaster),
+                }],
+            }],
+        };
+
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("outside the 12x8 surface grid"));
+    }
+
     fn project_timeline_layer(
         id: u32,
         label: &str,
@@ -37446,6 +37739,7 @@ fn main() {
             set_group_park,
             set_fixture_transform,
             set_stage_map_config,
+            set_touch_surface,
             set_fixture_highlight,
             set_fixture_solo,
             set_fixture_park,

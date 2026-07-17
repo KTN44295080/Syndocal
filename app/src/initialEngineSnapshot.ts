@@ -50,6 +50,7 @@ export const createInitialEngineSnapshot = (): EngineSnapshot => ({
   stage_map: { locked: false, min_x: -10, max_x: 10, min_z: -10, max_z: 10 },
   stage_map_presets: [],
   stage_objects: [],
+  touch_surface: { pages: [] },
   dmx_preview: Array.from({ length: 512 }, () => 0),
   dmx_previews: [{ universe: 0, values: Array.from({ length: 512 }, () => 0) }],
   telemetry: {

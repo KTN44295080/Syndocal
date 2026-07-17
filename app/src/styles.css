@@ -26263,3 +26263,400 @@ h3 {
 .groupColorControls button {
   min-height: 18px;
 }
+
+/* T11: one composed Touch surface switches in place between EDIT and LIVE. */
+.layoutTouch {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 92px minmax(0, 1fr);
+}
+
+.layoutTouch .touchSurfacePanel {
+  position: relative;
+  grid-column: 1;
+  grid-row: 2;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: 4px;
+  border-radius: 0;
+  background: #171a1d;
+  padding: 4px;
+  overflow: hidden;
+}
+
+.layoutTouch > .touchCuePanel,
+.layoutTouch > .touchStagePanel,
+.layoutTouch > .touchFixturePanel,
+.layoutTouch > .touchVideoPanel,
+.layoutTouch > .touchRemotePanel {
+  display: none;
+}
+
+.touchSurfaceToolbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  min-height: 48px;
+  border: 1px solid #343a3f;
+  background: #111416;
+  padding: 2px;
+}
+
+.touchSurfaceModeToggle,
+.touchPageTabs,
+.touchControlPalette {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 3px;
+}
+
+.touchSurfaceModeToggle button {
+  min-width: 70px;
+  border-radius: 1px;
+  font-weight: 800;
+}
+
+.touchSurfaceModeToggle button.active,
+.touchPageTabs button.active {
+  border-color: var(--ray-accent-strong);
+  background: #4b2d19;
+  color: #fff;
+}
+
+.touchPageTabs {
+  overflow: hidden auto;
+}
+
+.touchPageTabs button {
+  flex: 0 0 auto;
+  min-width: 76px;
+  max-width: 180px;
+  border-radius: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.touchPageTabs .touchPageAdd,
+.touchPageTabs .touchPageRemove {
+  min-width: 48px;
+  width: 48px;
+  padding: 0;
+  font-size: 20px;
+}
+
+.touchSurfaceStatus {
+  color: #aeb5ba;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.touchControlPalette {
+  min-height: 48px;
+  overflow: hidden auto;
+  border: 1px solid #343a3f;
+  background: #111416;
+  padding: 2px;
+}
+
+.touchControlPalette > strong {
+  flex: 0 0 auto;
+  padding: 0 8px;
+  color: #c7cdd1;
+  font-size: 11px;
+}
+
+.touchControlPalette button {
+  flex: 0 0 auto;
+  min-width: 78px;
+  border-radius: 1px;
+  font-size: 11px;
+}
+
+.touchSurfaceGrid {
+  display: grid;
+  min-width: 0;
+  min-height: 384px;
+  flex: 1 1 auto;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-template-rows: repeat(8, minmax(48px, 1fr));
+  gap: 3px;
+  border: 1px solid #3d4246;
+  background: #0f1214;
+  padding: 3px;
+  overflow: hidden;
+  touch-action: none;
+}
+
+.touchPlacedControl {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 48px;
+  place-items: stretch;
+  border: 1px solid #3b4044;
+  background: #1a1e21;
+  overflow: hidden;
+}
+
+.touchPlacedControl.selected {
+  outline: 2px solid var(--ray-accent-strong);
+  outline-offset: -2px;
+}
+
+.touchPlacedControl > button,
+.touchPlacedControl > label,
+.touchPlacedControl > div,
+.touchPlacedControl > strong {
+  min-width: 0;
+  min-height: 48px;
+}
+
+.touchPlacedLabel {
+  display: grid;
+  place-items: center;
+  padding: 4px;
+  color: #f2f3f4;
+  font-size: 13px;
+  text-align: center;
+}
+
+.touchPlacedImage {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 3px;
+  background: #12171a;
+  color: #aeb6bc;
+  text-align: center;
+}
+
+.touchPlacedImage > span {
+  font-size: 28px;
+}
+
+.touchPlacedImage > strong {
+  max-width: 100%;
+  padding: 0 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app .layoutTouch .touchPlacedButton {
+  width: 100%;
+  height: 100%;
+  border-radius: 1px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.app .layoutTouch .touchPlacedButton.primary {
+  border-color: var(--ray-accent-strong);
+  background: #b85b1b;
+  color: #fff;
+  font-size: 22px;
+}
+
+.touchPlacedFader,
+.touchPlacedDial,
+.touchPlacedColor {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  place-items: center;
+  gap: 3px;
+  padding: 4px;
+  color: #c7cdd1;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.touchPlacedFader {
+  grid-template-rows: auto minmax(48px, 1fr) auto;
+}
+
+.touchPlacedFader input[type="range"] {
+  width: 48px;
+  min-width: 48px;
+  height: 100%;
+  min-height: 48px;
+  padding: 0;
+  direction: rtl;
+  writing-mode: vertical-lr;
+}
+
+.touchPlacedDial {
+  grid-template-rows: auto 48px auto;
+}
+
+.touchPlacedDial input[type="range"] {
+  width: 100%;
+  min-height: 48px;
+  padding: 0;
+}
+
+.touchPlacedIncremental {
+  display: grid;
+  grid-template-rows: auto minmax(48px, 1fr);
+  gap: 3px;
+  padding: 4px;
+  color: #c7cdd1;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.touchPlacedIncremental > div {
+  display: grid;
+  grid-template-columns: minmax(48px, 1fr) auto minmax(48px, 1fr);
+  align-items: center;
+  gap: 3px;
+}
+
+.touchPlacedIncremental button {
+  min-width: 48px;
+  min-height: 48px;
+  padding: 0;
+  font-size: 22px;
+}
+
+.touchPlacedColor {
+  grid-template-rows: auto minmax(48px, 1fr);
+}
+
+.touchPlacedColor input[type="color"] {
+  width: 100%;
+  height: 100%;
+  min-width: 48px;
+  min-height: 48px;
+  padding: 3px;
+}
+
+.app .layoutTouch .touchPlacedXy {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 48px;
+  min-height: 48px;
+  border-radius: 1px;
+  background: #12171a;
+  padding: 4px;
+  overflow: hidden;
+  touch-action: none;
+}
+
+.touchPlacedXy > span {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  color: #c7cdd1;
+  font-size: 10px;
+  pointer-events: none;
+}
+
+.touchPlacedXy > i {
+  position: absolute;
+  display: block;
+  width: 18px;
+  height: 18px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #b85b1b;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.app .layoutTouch .touchEditMoveHandle,
+.app .layoutTouch .touchEditResizeHandle {
+  position: absolute;
+  z-index: 2;
+  width: 48px;
+  min-width: 48px;
+  height: 48px;
+  min-height: 48px;
+  border-color: #6d604f;
+  border-radius: 1px;
+  background: #2a251f;
+  padding: 0;
+  color: #fff;
+  font-size: 18px;
+  touch-action: none;
+}
+
+.touchEditMoveHandle {
+  top: 0;
+  left: 0;
+  cursor: move;
+}
+
+.touchEditResizeHandle {
+  right: 0;
+  bottom: 0;
+  cursor: nwse-resize;
+}
+
+.touchSurfaceEmpty {
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 5px;
+  color: #aeb5ba;
+  text-align: center;
+}
+
+.touchBindingEditor {
+  position: absolute;
+  z-index: 3;
+  top: 108px;
+  right: 7px;
+  bottom: 7px;
+  display: grid;
+  width: min(330px, 42%);
+  min-width: 260px;
+  align-content: start;
+  gap: 6px;
+  border: 1px solid #6d604f;
+  background: #171a1d;
+  padding: 7px;
+  overflow: hidden auto;
+}
+
+.touchBindingEditor > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+}
+
+.touchBindingEditor label {
+  display: grid;
+  gap: 3px;
+  color: #c7cdd1;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.touchBindingPair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+@media (max-height: 760px) {
+  .layoutTouch {
+    grid-template-rows: 88px minmax(0, 1fr);
+  }
+
+  .touchSurfaceToolbar,
+  .touchControlPalette {
+    min-height: 48px;
+  }
+}

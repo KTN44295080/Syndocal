@@ -16,6 +16,8 @@ pub type CompositionId = u64;
 pub type VideoOutputId = u64;
 pub type NodeGraphId = u64;
 pub type StageObjectId = u64;
+pub type TouchPageId = u64;
+pub type TouchControlId = u64;
 
 pub const MAX_TIMELINE_SCENE_BLOCK_LOOPS: u16 = 256;
 pub const MIN_CUE_AUTHORED_BEATS: f32 = 0.25;
@@ -2845,6 +2847,102 @@ pub struct StageMapPresetFile {
     pub preset: StageMapPresetSummary,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum TouchControlKind {
+    Label,
+    Image,
+    Button,
+    Fader,
+    Dial,
+    IncrementalWheel,
+    ColorWheel,
+    XyGrid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TouchControlBinding {
+    FixtureAttribute {
+        fixture_id: FixtureId,
+        attribute: String,
+    },
+    GroupAttribute {
+        group_id: String,
+        attribute: String,
+    },
+    FixtureColor {
+        fixture_id: FixtureId,
+    },
+    GroupColor {
+        group_id: String,
+    },
+    FixturePanTilt {
+        fixture_id: FixtureId,
+        pan_attribute: String,
+        tilt_attribute: String,
+    },
+    GroupPanTilt {
+        group_id: String,
+        pan_attribute: String,
+        tilt_attribute: String,
+    },
+    Cue {
+        cue_id: CueId,
+    },
+    GroupSubmaster {
+        group_id: String,
+    },
+    LightingMaster,
+    VideoMaster,
+    Blackout,
+    VideoBlackout,
+    AllBlackout,
+    CueNext,
+    CuePrevious,
+    CueFadePause,
+    SelectedFixtureAttribute {
+        attribute: String,
+    },
+    SelectedFixtureColor,
+    SelectedFixturePanTilt {
+        pan_attribute: String,
+        tilt_attribute: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TouchControlSummary {
+    pub id: TouchControlId,
+    pub kind: TouchControlKind,
+    pub x: u16,
+    pub y: u16,
+    pub w: u16,
+    pub h: u16,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding: Option<TouchControlBinding>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TouchPageSummary {
+    pub id: TouchPageId,
+    pub label: String,
+    #[serde(default)]
+    pub controls: Vec<TouchControlSummary>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TouchSurfaceSummary {
+    #[serde(default)]
+    pub pages: Vec<TouchPageSummary>,
+}
+
+impl TouchSurfaceSummary {
+    pub fn is_empty(&self) -> bool {
+        self.pages.is_empty()
+    }
+}
+
 impl Default for StageMapConfig {
     fn default() -> Self {
         Self {
@@ -2915,6 +3013,10 @@ pub struct EngineSnapshot {
     pub stage_map_presets: Vec<StageMapPresetSummary>,
     #[serde(default)]
     pub stage_objects: Vec<StageObjectSummary>,
+    /// T11 show-owned composed Touch layout. Empty layouts are skipped so a
+    /// legacy v1 snapshot serializes to exactly the same bytes as before T11.
+    #[serde(default, skip_serializing_if = "TouchSurfaceSummary::is_empty")]
+    pub touch_surface: TouchSurfaceSummary,
     pub dmx_preview: Vec<u8>,
     #[serde(default)]
     pub dmx_previews: Vec<DmxUniversePreview>,
@@ -2949,6 +3051,7 @@ impl Default for EngineSnapshot {
             stage_map: StageMapConfig::default(),
             stage_map_presets: Vec::new(),
             stage_objects: Vec::new(),
+            touch_surface: TouchSurfaceSummary::default(),
             dmx_preview: vec![0; 512],
             dmx_previews: vec![DmxUniversePreview {
                 universe: 0,
@@ -3871,6 +3974,149 @@ mod tests {
         assert_eq!(
             back.group_colors.get("Back").map(String::as_str),
             Some("#8844cc")
+        );
+    }
+
+    #[test]
+    fn touch_surface_roundtrips_all_control_kinds() {
+        use super::{
+            TouchControlBinding as Binding, TouchControlKind as Kind, TouchControlSummary,
+            TouchPageSummary, TouchSurfaceSummary,
+        };
+
+        let bindings = vec![
+            Some(Binding::FixtureAttribute {
+                fixture_id: 7,
+                attribute: "Dimmer".to_string(),
+            }),
+            Some(Binding::GroupAttribute {
+                group_id: "front".to_string(),
+                attribute: "Dimmer".to_string(),
+            }),
+            Some(Binding::Cue { cue_id: 12 }),
+            Some(Binding::GroupSubmaster {
+                group_id: "front".to_string(),
+            }),
+            Some(Binding::LightingMaster),
+            Some(Binding::SelectedFixtureColor),
+            Some(Binding::SelectedFixturePanTilt {
+                pan_attribute: "Pan".to_string(),
+                tilt_attribute: "Tilt".to_string(),
+            }),
+            None,
+        ];
+        let kinds = [
+            Kind::Label,
+            Kind::Image,
+            Kind::Button,
+            Kind::Fader,
+            Kind::Dial,
+            Kind::IncrementalWheel,
+            Kind::ColorWheel,
+            Kind::XyGrid,
+        ];
+        let controls = kinds
+            .into_iter()
+            .zip(bindings)
+            .enumerate()
+            .map(|(index, (kind, binding))| TouchControlSummary {
+                id: index as u64 + 1,
+                kind,
+                x: (index % 4) as u16 * 3,
+                y: (index / 4) as u16 * 4,
+                w: 3,
+                h: 4,
+                label: format!("Control {}", index + 1),
+                binding,
+            })
+            .collect();
+        let surface = TouchSurfaceSummary {
+            pages: vec![TouchPageSummary {
+                id: 1,
+                label: "Default".to_string(),
+                controls,
+            }],
+        };
+
+        let json = serde_json::to_string(&surface).unwrap();
+        let decoded: TouchSurfaceSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, surface);
+    }
+
+    #[test]
+    fn touch_surface_roundtrips_all_binding_variants() {
+        use super::TouchControlBinding as Binding;
+
+        let bindings = vec![
+            Binding::FixtureAttribute {
+                fixture_id: 7,
+                attribute: "Dimmer".to_string(),
+            },
+            Binding::GroupAttribute {
+                group_id: "front".to_string(),
+                attribute: "Dimmer".to_string(),
+            },
+            Binding::FixtureColor { fixture_id: 7 },
+            Binding::GroupColor {
+                group_id: "front".to_string(),
+            },
+            Binding::FixturePanTilt {
+                fixture_id: 7,
+                pan_attribute: "Pan".to_string(),
+                tilt_attribute: "Tilt".to_string(),
+            },
+            Binding::GroupPanTilt {
+                group_id: "front".to_string(),
+                pan_attribute: "Pan".to_string(),
+                tilt_attribute: "Tilt".to_string(),
+            },
+            Binding::Cue { cue_id: 12 },
+            Binding::GroupSubmaster {
+                group_id: "front".to_string(),
+            },
+            Binding::LightingMaster,
+            Binding::VideoMaster,
+            Binding::Blackout,
+            Binding::VideoBlackout,
+            Binding::AllBlackout,
+            Binding::CueNext,
+            Binding::CuePrevious,
+            Binding::CueFadePause,
+            Binding::SelectedFixtureAttribute {
+                attribute: "Dimmer".to_string(),
+            },
+            Binding::SelectedFixtureColor,
+            Binding::SelectedFixturePanTilt {
+                pan_attribute: "Pan".to_string(),
+                tilt_attribute: "Tilt".to_string(),
+            },
+        ];
+
+        let json = serde_json::to_string(&bindings).unwrap();
+        let decoded: Vec<Binding> = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, bindings);
+    }
+
+    #[test]
+    fn touch_surface_legacy_absence_defaults_empty_and_is_byte_identical() {
+        let legacy_bytes = serde_json::to_vec(&super::EngineSnapshot::default()).unwrap();
+        let legacy_value: serde_json::Value = serde_json::from_slice(&legacy_bytes).unwrap();
+        assert!(legacy_value.get("touch_surface").is_none());
+
+        let mut legacy_without_touch = legacy_value;
+        legacy_without_touch
+            .as_object_mut()
+            .unwrap()
+            .remove("touch_surface");
+        let decoded: super::EngineSnapshot = serde_json::from_value(legacy_without_touch).unwrap();
+        assert!(decoded.touch_surface.pages.is_empty());
+        let roundtrip_bytes = serde_json::to_vec(&decoded).unwrap();
+
+        assert_eq!(roundtrip_bytes, legacy_bytes);
+        eprintln!(
+            "legacy touch snapshot bytes: {} == {}",
+            legacy_bytes.len(),
+            roundtrip_bytes.len()
         );
     }
 

@@ -62,6 +62,7 @@ const REMOTE_PAGE_HTML: &str = r##"<!doctype html>
     .log{min-height:32px;color:#91a0b2;overflow-wrap:anywhere}.inline{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
     .cuePadHeader{display:grid;grid-template-columns:1fr auto auto auto auto;gap:8px;align-items:center}.compact{display:inline-flex;gap:6px;align-items:center}.compact input{min-height:0;width:auto}.cuePadGrid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}.cuePad{display:grid;grid-template-columns:24px minmax(0,1fr);grid-template-rows:auto auto;gap:2px 8px;min-height:58px;text-align:left}.cuePad span{grid-row:1 / span 2;display:grid;width:24px;height:24px;place-items:center;border-radius:4px;background:#151b22;color:#91a0b2;font-weight:700}.cuePad strong,.cuePad small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.cuePad.active{border-color:#74d99f;background:#173122}.cuePad.next{border-color:#5f9ddc}
     .sceneToolbar{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;align-items:end}.sceneSelectorGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:8px;max-height:260px;overflow:auto}.sceneButton{display:grid;grid-template-columns:28px minmax(0,1fr);grid-template-rows:auto auto auto auto;gap:2px 8px;min-height:72px;text-align:left}.sceneButton b{grid-row:1/span 4;display:grid;width:28px;height:28px;place-items:center;border-radius:5px;background:#151b22;color:#91a0b2;font-size:12px}.sceneButton strong,.sceneButton span,.sceneButton small,.sceneButton em{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sceneButton span,.sceneButton small{color:#91a0b2;font-size:11px}.sceneButton em{width:max-content;border:1px solid rgba(116,217,159,.58);border-radius:999px;background:rgba(116,217,159,.13);padding:1px 7px;color:#a8ff99;font-size:11px;font-style:normal;font-weight:700;text-transform:uppercase}.sceneButton.active{border-color:#74d99f;background:#173122}.sceneButton.next{border-color:#5f9ddc}.sceneButton.firstMatch{border-color:#74d99f;box-shadow:inset 0 0 0 1px rgba(116,217,159,.42)}
+    .remoteTouchHeader{display:flex;align-items:center;justify-content:space-between;gap:8px}.remoteTouchPages{display:flex;gap:6px;overflow:auto}.remoteTouchPages button{min-width:72px;min-height:48px}.remoteTouchPages button.active{border-color:#f2c14e;background:#342719}.remoteTouchSurface{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:repeat(8,minmax(48px,1fr));gap:4px;min-height:384px;border:1px solid #323b48;background:#0d1116;padding:4px;overflow:hidden}.remoteTouchControl{display:grid;min-width:0;min-height:48px;place-items:stretch;border:1px solid #323b48;border-radius:3px;background:#171d25;overflow:hidden}.remoteTouchControl>button,.remoteTouchControl>label,.remoteTouchControl>div,.remoteTouchControl>strong{min-width:0;min-height:48px}.remoteTouchLabel,.remoteTouchImage,.remoteTouchUnsupported{display:grid;place-items:center;padding:6px;text-align:center}.remoteTouchButton{width:100%;height:100%;min-height:48px;font-weight:800}.remoteTouchButton.primary{font-size:19px}.remoteTouchFader{display:grid;grid-template-rows:auto minmax(48px,1fr) auto;place-items:center;gap:3px;padding:5px;color:#aab6c6;font-size:11px;text-align:center}.remoteTouchFader input{width:100%;min-height:48px;padding:0}.remoteTouchColor{display:grid;grid-template-rows:auto minmax(48px,1fr);place-items:stretch;gap:4px;padding:5px;color:#aab6c6;font-size:11px;text-align:center}.remoteTouchColor input{width:100%;height:100%;min-width:48px;min-height:48px;padding:3px}
     @media (max-width:640px){main{padding:10px}.grid,.triple,.summary,.liveGrid,.videoDeckControls,.effectDeckControls,.loopGrid,.sceneToolbar{grid-template-columns:1fr}.deckSlider{grid-template-columns:58px minmax(0,1fr) 48px}.cuePadHeader{grid-template-columns:1fr auto}.cuePadGrid{grid-template-columns:repeat(2,1fr)}header{align-items:flex-start;gap:8px;flex-direction:column}}
   </style>
 </head>
@@ -101,6 +102,11 @@ const REMOTE_PAGE_HTML: &str = r##"<!doctype html>
       <button onclick='setAllBlackout(true)'>All BO</button>
       <button onclick='setAllBlackout(false)'>All Clear</button>
     </div>
+  </section>
+  <section id="remoteTouchPanel">
+    <div class="remoteTouchHeader"><h2>Touch Surface</h2><span id="remoteTouchPageLabel" class="small">Default Desk</span></div>
+    <div id="remoteTouchPages" class="remoteTouchPages"></div>
+    <div id="remoteTouchSurface" class="remoteTouchSurface" aria-label="Composed Touch surface"></div>
   </section>
   <section class="remoteStagePanel">
     <h2>Stage</h2>
@@ -295,6 +301,7 @@ let sceneFilterText="";
 let remoteStageSelectedOutputId=null;
 let remoteColorAutoWhite=false;
 let remoteDimmerBumpRestore=null;
+let remoteTouchPageId=null;
 const remotePositionFavoritesStorageKey="syndocal.remote.positionFavorites.v1";
 const remotePositionFavoriteTolerance=512;
 let remotePositionFavorites=loadRemotePositionFavorites();
@@ -525,6 +532,7 @@ function applySnapshot(snapshot){
   renderStatus(snapshot,video);
   renderRemoteDmxRoutes(snapshot,snapshot.telemetry||{});
   renderLiveDesk(snapshot,cues,video,snapshot.timeline||{events:[],position_ms:0,duration_ms:0,playing:false});
+  renderRemoteTouchSurface(snapshot);
   renderRemoteStage(snapshot);
 }
 function applyAttributeOptions(){
@@ -1667,6 +1675,108 @@ function remoteVideoOutputMappingPanel(output){
 function renderSubmasters(submasters){
   const el=document.getElementById("submasterList");
   el.innerHTML=submasters.length?submasters.map(s=>`<div class="row"><div><strong>${escapeHtml(s.label)}</strong><label><span class="small">Submaster</span><input type="range" min="0" max="1" step="0.01" value="${Number(s.level??1)}" data-group="${escapeHtml(s.group_id)}" oninput="setGroupSubmasterFromInput(this)"></label></div><div class="inline"><button data-group="${escapeHtml(s.group_id)}" onclick="setGroupHighlightFromButton(this,true)">Hi</button><button data-group="${escapeHtml(s.group_id)}" onclick="setGroupHighlightFromButton(this,false)">-Hi</button><button data-group="${escapeHtml(s.group_id)}" onclick="setGroupSoloFromButton(this,true)">Solo</button><button data-group="${escapeHtml(s.group_id)}" onclick="setGroupSoloFromButton(this,false)">-Solo</button><button data-group="${escapeHtml(s.group_id)}" onclick="setGroupParkFromButton(this,true)">Park</button><button data-group="${escapeHtml(s.group_id)}" onclick="setGroupParkFromButton(this,false)">-Park</button></div></div>`).join(""):`<span class="small">No fixture groups</span>`;
+}
+function remoteDefaultTouchSurface(snapshot){
+  const cueControls=((snapshot&&snapshot.cues)||[]).slice(0,4).map((cue,index)=>({id:15+index,kind:"Button",x:index*3,y:6,w:3,h:2,label:cue.label,binding:{kind:"cue",cue_id:cue.id}}));
+  return {pages:[{id:1,label:"Default Desk",controls:[
+    {id:1,kind:"Label",x:0,y:0,w:2,h:1,label:"SHOW CONTROL",binding:null},
+    {id:2,kind:"Image",x:0,y:1,w:2,h:2,label:"Touch Stage",binding:null},
+    {id:3,kind:"Button",x:2,y:0,w:2,h:2,label:"BACK",binding:{kind:"cue_previous"}},
+    {id:4,kind:"Button",x:4,y:0,w:3,h:2,label:"GO",binding:{kind:"cue_next"}},
+    {id:6,kind:"Fader",x:9,y:0,w:1,h:4,label:"LIGHT",binding:{kind:"lighting_master"}},
+    {id:11,kind:"ColorWheel",x:4,y:2,w:3,h:3,label:"COLOR",binding:{kind:"selected_fixture_color"}},
+    {id:12,kind:"XyGrid",x:7,y:2,w:2,h:3,label:"POSITION",binding:{kind:"selected_fixture_pan_tilt",pan_attribute:"Pan",tilt_attribute:"Tilt"}},
+    {id:14,kind:"Button",x:10,y:4,w:1,h:2,label:"VIDEO BO",binding:{kind:"video_blackout"}},
+    ...cueControls
+  ]}]};
+}
+function remoteEffectiveTouchSurface(snapshot){
+  const surface=snapshot&&snapshot.touch_surface;
+  return surface&&Array.isArray(surface.pages)&&surface.pages.length?surface:remoteDefaultTouchSurface(snapshot);
+}
+function remoteTouchActivePage(snapshot){
+  const surface=remoteEffectiveTouchSurface(snapshot||latestSnapshot||{});
+  const page=surface.pages.find(candidate=>candidate.id===remoteTouchPageId)||surface.pages[0];
+  remoteTouchPageId=page?page.id:null;
+  return page;
+}
+function remoteTouchControl(control_id){
+  return remoteTouchActivePage(latestSnapshot||{})?.controls.find(control=>control.id===Number(control_id))||null;
+}
+function remoteTouchBindingValue(binding){
+  if(!binding||!latestSnapshot)return 0;
+  if(binding.kind==="lighting_master")return Number(latestSnapshot.lighting_master??1);
+  if(binding.kind==="video_master")return Number((latestSnapshot.video&&latestSnapshot.video.master_opacity)??1);
+  if(binding.kind==="group_submaster")return Number((latestSnapshot.submasters||[]).find(entry=>entry.group_id===binding.group_id)?.level??1);
+  let fixture=null;
+  if(binding.kind==="fixture_attribute")fixture=(latestSnapshot.fixtures||[]).find(candidate=>candidate.id===binding.fixture_id);
+  if(binding.kind==="group_attribute")fixture=(latestSnapshot.fixtures||[]).find(candidate=>(candidate.group_ids||[]).includes(binding.group_id));
+  if(binding.kind==="selected_fixture_attribute")fixture=remoteControlFixture();
+  return fixture&&binding.attribute?normalizedAttributeValue(fixture,binding.attribute):0;
+}
+function remoteTouchSetPage(page_id){remoteTouchPageId=Number(page_id);renderRemoteTouchSurface(latestSnapshot||{})}
+function remoteTouchTrigger(control_id){
+  const binding=remoteTouchControl(control_id)?.binding;
+  if(!binding)return;
+  if(binding.kind==="cue")send({type:"triggerCue",cue_id:binding.cue_id});
+  else if(binding.kind==="cue_next")send({type:"triggerNextCue"});
+  else if(binding.kind==="cue_previous")send({type:"triggerPreviousCue"});
+  else if(binding.kind==="cue_fade_pause")send({type:"setCueFadePaused",paused:!(latestSnapshot.active_fade&&latestSnapshot.active_fade.paused)});
+  else if(binding.kind==="blackout")send({type:"blackout",enabled:!latestSnapshot.blackout});
+  else if(binding.kind==="video_blackout")send({type:"videoBlackout",enabled:!(latestSnapshot.video&&latestSnapshot.video.blackout)});
+  else if(binding.kind==="all_blackout")setAllBlackout(!(latestSnapshot.blackout&&latestSnapshot.video&&latestSnapshot.video.blackout));
+}
+function remoteTouchSetValue(control_id,rawValue){
+  const binding=remoteTouchControl(control_id)?.binding;
+  const value=Math.max(0,Math.min(1,Number(rawValue)||0));
+  if(!binding)return;
+  if(binding.kind==="fixture_attribute")send({type:"setAttribute",fixture_id:binding.fixture_id,attribute:binding.attribute,value});
+  else if(binding.kind==="group_attribute")send({type:"setGroupAttribute",group_id:binding.group_id,attribute:binding.attribute,value});
+  else if(binding.kind==="selected_fixture_attribute"){
+    const fixture=remoteControlFixture();const group_id=selectedGroupId();
+    if(group_id)send({type:"setGroupAttribute",group_id,attribute:binding.attribute,value});
+    else if(fixture)send({type:"setAttribute",fixture_id:fixture.id,attribute:binding.attribute,value});
+  }else if(binding.kind==="group_submaster")send({type:"setGroupSubmaster",group_id:binding.group_id,level:value});
+  else if(binding.kind==="lighting_master")send({type:"lightingMaster",master:value});
+  else if(binding.kind==="video_master")send({type:"videoMaster",opacity:value});
+}
+function remoteTouchSetColor(control_id,hex){
+  const binding=remoteTouchControl(control_id)?.binding;
+  if(!binding||!/^#[0-9a-fA-F]{6}$/.test(String(hex)))return;
+  let fixture=null;let group_id=null;
+  if(binding.kind==="fixture_color")fixture=(latestSnapshot.fixtures||[]).find(candidate=>candidate.id===binding.fixture_id);
+  else if(binding.kind==="group_color"){group_id=binding.group_id;fixture=(latestSnapshot.fixtures||[]).find(candidate=>(candidate.group_ids||[]).includes(group_id));}
+  else if(binding.kind==="selected_fixture_color"){fixture=remoteControlFixture();group_id=selectedGroupId();}
+  const controls=remoteColorControls(fixture);if(!fixture||!controls)return;
+  const values=[[controls.red,Number.parseInt(hex.slice(1,3),16)/255],[controls.green,Number.parseInt(hex.slice(3,5),16)/255],[controls.blue,Number.parseInt(hex.slice(5,7),16)/255]];
+  for(const [attribute,value] of values){
+    if(group_id)send({type:"setGroupAttribute",group_id,attribute,value},false);
+    else send({type:"setAttribute",fixture_id:fixture.id,attribute,value},false);
+  }
+  queueSnapshot(160);
+}
+function remoteTouchControlHtml(control){
+  const style=`grid-column:${Number(control.x)+1}/span ${Math.max(1,Number(control.w)||1)};grid-row:${Number(control.y)+1}/span ${Math.max(1,Number(control.h)||1)}`;
+  const label=escapeHtml(control.label||control.kind||"Control");
+  const disabled=control.binding?"":" disabled";
+  let body="";
+  if(control.kind==="Label")body=`<strong class="remoteTouchLabel">${label}</strong>`;
+  else if(control.kind==="Image")body=`<div class="remoteTouchImage" role="img" aria-label="${label}">▧<strong>${label}</strong></div>`;
+  else if(control.kind==="Button")body=`<button class="remoteTouchButton ${control.binding&&control.binding.kind==="cue_next"?"primary":""}"${disabled} onclick="remoteTouchTrigger(${Number(control.id)})">${label}</button>`;
+  else if(control.kind==="Fader")body=`<label class="remoteTouchFader"><span>${label}</span><input aria-label="${label}" type="range" min="0" max="1" step="0.01" value="${remoteTouchBindingValue(control.binding)}"${disabled} oninput="remoteTouchSetValue(${Number(control.id)},this.value)"><strong>${Math.round(remoteTouchBindingValue(control.binding)*100)}%</strong></label>`;
+  else if(control.kind==="ColorWheel")body=`<label class="remoteTouchColor"><span>${label}</span><input aria-label="${label}" type="color" value="#ff7a00"${disabled} oninput="remoteTouchSetColor(${Number(control.id)},this.value)"></label>`;
+  else body=`<div class="remoteTouchUnsupported"><strong>${label}</strong><span class="small">${escapeHtml(control.kind)}</span></div>`;
+  return `<div class="remoteTouchControl kind-${escapeHtml(control.kind)}" style="${style}" data-remote-touch-kind="${escapeHtml(control.kind)}">${body}</div>`;
+}
+function renderRemoteTouchSurface(snapshot){
+  const surface=remoteEffectiveTouchSurface(snapshot);
+  const page=remoteTouchActivePage(snapshot);
+  const pages=document.getElementById("remoteTouchPages");
+  const grid=document.getElementById("remoteTouchSurface");
+  if(!pages||!grid||!page)return;
+  text("remoteTouchPageLabel",page.label||"Touch page");
+  pages.innerHTML=surface.pages.map(candidate=>`<button class="${candidate.id===page.id?"active":""}" onclick="remoteTouchSetPage(${Number(candidate.id)})">${escapeHtml(candidate.label)}</button>`).join("");
+  grid.innerHTML=(page.controls||[]).map(remoteTouchControlHtml).join("")||`<span class="small">No controls on this Touch page</span>`;
 }
 function renderTimeline(timeline){
   const duration=timeline.duration_ms||0;
@@ -4372,6 +4482,12 @@ mod tests {
         assert!(page.contains("jit ${formatRemoteMicros(jitterP99)}"));
         assert!(page.contains("resetTelemetry"));
         assert!(page.contains("renderLiveDesk"));
+        assert!(page.contains("remoteTouchSurface"));
+        assert!(page.contains("renderRemoteTouchSurface"));
+        assert!(page.contains("snapshot.touch_surface"));
+        assert!(page.contains("cueControls"));
+        assert!(page.contains("remoteTouchSetValue"));
+        assert!(page.contains("remoteTouchSetColor"));
         assert!(page.contains("new WebSocket"));
         assert!(page.contains("getSnapshot"));
         assert!(page.contains("getVideoRuntimeStatus"));

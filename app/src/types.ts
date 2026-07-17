@@ -2119,6 +2119,58 @@ export interface StageMapPresetSummary {
   stage_objects?: StageObjectSummary[] | null;
 }
 
+export type TouchControlKind =
+  | "Label"
+  | "Image"
+  | "Button"
+  | "Fader"
+  | "Dial"
+  | "IncrementalWheel"
+  | "ColorWheel"
+  | "XyGrid";
+
+export type TouchControlBinding =
+  | { kind: "fixture_attribute"; fixture_id: number; attribute: string }
+  | { kind: "group_attribute"; group_id: string; attribute: string }
+  | { kind: "fixture_color"; fixture_id: number }
+  | { kind: "group_color"; group_id: string }
+  | { kind: "fixture_pan_tilt"; fixture_id: number; pan_attribute: string; tilt_attribute: string }
+  | { kind: "group_pan_tilt"; group_id: string; pan_attribute: string; tilt_attribute: string }
+  | { kind: "cue"; cue_id: number }
+  | { kind: "group_submaster"; group_id: string }
+  | { kind: "lighting_master" }
+  | { kind: "video_master" }
+  | { kind: "blackout" }
+  | { kind: "video_blackout" }
+  | { kind: "all_blackout" }
+  | { kind: "cue_next" }
+  | { kind: "cue_previous" }
+  | { kind: "cue_fade_pause" }
+  | { kind: "selected_fixture_attribute"; attribute: string }
+  | { kind: "selected_fixture_color" }
+  | { kind: "selected_fixture_pan_tilt"; pan_attribute: string; tilt_attribute: string };
+
+export interface TouchControlSummary {
+  id: number;
+  kind: TouchControlKind;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  label: string;
+  binding?: TouchControlBinding | null;
+}
+
+export interface TouchPageSummary {
+  id: number;
+  label: string;
+  controls: TouchControlSummary[];
+}
+
+export interface TouchSurfaceSummary {
+  pages: TouchPageSummary[];
+}
+
 export interface EngineSnapshot {
   fixtures: PatchedFixtureSummary[];
   cues: CueSummary[];
@@ -2154,6 +2206,7 @@ export interface EngineSnapshot {
   stage_map: StageMapConfig;
   stage_map_presets: StageMapPresetSummary[];
   stage_objects: StageObjectSummary[];
+  touch_surface?: TouchSurfaceSummary;
   dmx_preview: number[];
   dmx_previews: DmxUniversePreview[];
   telemetry: {

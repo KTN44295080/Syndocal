@@ -43,15 +43,16 @@ use protocol::{
     StageObjectId, StageObjectSummary, SubmasterSummary, TimelineAudioClipId,
     TimelineAudioClipSummary, TimelineAutomationSummary, TimelineCueEventSummary, TimelineEventId,
     TimelineLayerKind, TimelineLayerSummary, TimelineSnapRequest, TimelineSnapshot,
-    TimelineTrackKind, TimelineVideoAutomationSummary, Transform2D, ValueEffectDirection,
-    ValueEffectInterpolation, ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3,
-    VideoAutomationKeyframeSummary, VideoBlendMode, VideoColorAdjust, VideoCuePointSummary,
-    VideoEffectTarget, VideoFxAdjust, VideoIsfControlKind, VideoIsfEffectStageSummary,
-    VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerSummary, VideoLayerTarget,
-    VideoOutputId, VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetSummary,
-    VideoOutputSummary, VideoOutputTarget, VideoParam, VideoSnapshot, VideoSourceKind,
-    VideoSourceSummary, DEFAULT_CUE_LIST_ID, LIVE_AUDIO_FEATURE_BAND_CAPACITY,
-    MAX_CUE_AUTHORED_BEATS, MAX_TIMELINE_SCENE_BLOCK_LOOPS, MIN_CUE_AUTHORED_BEATS,
+    TimelineTrackKind, TimelineVideoAutomationSummary, TouchSurfaceSummary, Transform2D,
+    ValueEffectDirection, ValueEffectInterpolation, ValueEffectMode, ValueEffectPoint,
+    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBlendMode, VideoColorAdjust,
+    VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust, VideoIsfControlKind,
+    VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId, VideoLayerState,
+    VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
+    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
+    VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
+    LIVE_AUDIO_FEATURE_BAND_CAPACITY, MAX_CUE_AUTHORED_BEATS, MAX_TIMELINE_SCENE_BLOCK_LOOPS,
+    MIN_CUE_AUTHORED_BEATS,
 };
 use thiserror::Error;
 
@@ -281,6 +282,11 @@ pub enum EngineCommand {
     LoadProjectSnapshot(EngineSnapshot),
     RequestPersistenceSnapshot {
         response: mpsc::SyncSender<EngineSnapshot>,
+    },
+    SetTouchSurface {
+        surface: TouchSurfaceSummary,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
     },
     SetStageMapConfig(StageMapConfig),
     SaveStageMapPreset {
@@ -2346,6 +2352,19 @@ impl EngineHandle {
             .map_err(|error| format!("Persistence snapshot request failed: {error}"))
     }
 
+    pub fn set_touch_surface(&self, surface: TouchSurfaceSummary) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::SetTouchSurface {
+            surface,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Touch surface acknowledgement failed: {error}"))?
+    }
+
     pub fn video_audio_runtime_snapshot(&self) -> VideoAudioRuntimeSnapshot {
         self.snapshot
             .read()
@@ -3315,6 +3334,10 @@ struct PendingCommandAck {
 #[derive(Clone)]
 enum PendingCommandRollback {
     KeepApplied,
+    RestoreTouchSurface {
+        touch_surface: TouchSurfaceSummary,
+        last_error: Option<String>,
+    },
     ClearBootstrappedVjShow,
     RemoveAddedEffect {
         effect_id: EffectId,
@@ -3439,6 +3462,7 @@ impl PendingCommandRollback {
                 | Self::RestoreTimelineItems { .. }
                 | Self::RestoreTimelineLayers { .. }
                 | Self::RestoreTimelineAudioMaster { .. }
+                | Self::RestoreTouchSurface { .. }
         )
     }
 }
@@ -3573,6 +3597,8 @@ struct EngineRuntime {
     stage_map: StageMapConfig,
     stage_map_presets: Vec<StageMapPresetSummary>,
     stage_objects: Vec<StageObjectSummary>,
+    touch_surface: TouchSurfaceSummary,
+    touch_surface_dirty: bool,
     active_cue_id: Option<CueId>,
     active_fade: Option<RuntimeFade>,
     pending_cues: VecDeque<PendingCueTrigger>,
@@ -3765,6 +3791,8 @@ impl EngineRuntime {
             stage_map: StageMapConfig::default(),
             stage_map_presets: Vec::new(),
             stage_objects: Vec::new(),
+            touch_surface: TouchSurfaceSummary::default(),
+            touch_surface_dirty: false,
             active_cue_id: None,
             active_fade: None,
             pending_cues: VecDeque::with_capacity(64),
@@ -4061,6 +4089,8 @@ impl EngineRuntime {
             .filter_map(sanitize_stage_map_preset)
             .collect();
         self.stage_objects = sanitize_stage_objects(snapshot.stage_objects);
+        self.touch_surface = snapshot.touch_surface;
+        self.touch_surface_dirty = true;
         self.blackout = snapshot.blackout;
         self.clock = BpmClock::new(snapshot.clock.bpm, now);
         self.timeline_position_ms = snapshot
@@ -4530,6 +4560,7 @@ impl EngineRuntime {
             let publication_barrier = matches!(
                 queued_command.command,
                 EngineCommand::BootstrapVjShow { .. }
+                    | EngineCommand::SetTouchSurface { .. }
                     | EngineCommand::ExclusiveVideoTake { .. }
                     | EngineCommand::ClearLiveAudioInputPublished { .. }
                     | EngineCommand::SetAutoVjConfigPublished { .. }
@@ -4988,6 +5019,36 @@ impl EngineRuntime {
             }
             EngineCommand::RequestPersistenceSnapshot { response } => {
                 let _ = response.send(self.build_persistence_snapshot());
+            }
+            EngineCommand::SetTouchSurface {
+                surface,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreTouchSurface {
+                    touch_surface: self.touch_surface.clone(),
+                    last_error: previous_last_error.clone(),
+                };
+                let expired = Instant::now() > expires_at;
+                let result = if expired {
+                    Err("Touch surface update expired before engine execution".to_string())
+                } else {
+                    self.touch_surface = surface;
+                    Ok(())
+                };
+                self.last_error = if expired {
+                    previous_last_error
+                } else {
+                    result.as_ref().err().cloned()
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Touch surface update could not publish an acknowledged snapshot",
+                });
             }
             EngineCommand::SetStageMapConfig(config) => {
                 self.stage_map = sanitize_stage_map_config(config);
@@ -8914,6 +8975,13 @@ impl EngineRuntime {
     fn rollback_pending_command(&mut self, rollback: PendingCommandRollback) {
         match rollback {
             PendingCommandRollback::KeepApplied => {}
+            PendingCommandRollback::RestoreTouchSurface {
+                touch_surface,
+                last_error,
+            } => {
+                self.touch_surface = touch_surface;
+                self.last_error = last_error;
+            }
             PendingCommandRollback::ClearBootstrappedVjShow => {
                 self.video_layers.clear();
                 self.video_layer_fades.clear();
@@ -10061,7 +10129,15 @@ impl EngineRuntime {
         }
 
         if let Ok(mut guard) = snapshot.write() {
-            *guard = self.build_snapshot(queue_depth);
+            // Touch layout is authored state, not 44 Hz render state. Reuse the already-published
+            // allocation on ordinary ticks; only project loads copy a newly-authored surface once.
+            let touch_surface = if self.touch_surface_dirty {
+                self.touch_surface_dirty = false;
+                self.touch_surface.clone()
+            } else {
+                std::mem::take(&mut guard.touch_surface)
+            };
+            *guard = self.build_snapshot_with_touch_surface(queue_depth, touch_surface);
         }
     }
 
@@ -16395,6 +16471,14 @@ impl EngineRuntime {
     }
 
     fn build_snapshot(&self, queue_depth: usize) -> EngineSnapshot {
+        self.build_snapshot_with_touch_surface(queue_depth, self.touch_surface.clone())
+    }
+
+    fn build_snapshot_with_touch_surface(
+        &self,
+        queue_depth: usize,
+        touch_surface: TouchSurfaceSummary,
+    ) -> EngineSnapshot {
         let fixtures = self
             .fixtures
             .iter()
@@ -16466,6 +16550,7 @@ impl EngineRuntime {
             stage_map: self.stage_map,
             stage_map_presets: self.stage_map_presets.clone(),
             stage_objects: self.stage_objects.clone(),
+            touch_surface,
             dmx_preview: self.last_frame.to_vec(),
             dmx_previews: self.dmx_preview_snapshot(),
             telemetry: EngineTelemetry {
@@ -28092,6 +28177,38 @@ mod tests {
                 .find(|value| value.attribute == "Dimmer")
                 .map(|value| value.value),
             Some(0x4000)
+        );
+    }
+
+    #[test]
+    fn touch_surface_acknowledges_and_roundtrips_through_persistence_snapshot() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let surface = protocol::TouchSurfaceSummary {
+            pages: vec![protocol::TouchPageSummary {
+                id: 1,
+                label: "Default".to_string(),
+                controls: vec![protocol::TouchControlSummary {
+                    id: 1,
+                    kind: protocol::TouchControlKind::Button,
+                    x: 0,
+                    y: 0,
+                    w: 2,
+                    h: 2,
+                    label: "GO".to_string(),
+                    binding: Some(protocol::TouchControlBinding::CueNext),
+                }],
+            }],
+        };
+
+        engine.set_touch_surface(surface.clone()).unwrap();
+
+        assert_eq!(engine.snapshot().touch_surface, surface);
+        assert_eq!(
+            engine.persistence_snapshot().unwrap().touch_surface,
+            surface
         );
     }
 

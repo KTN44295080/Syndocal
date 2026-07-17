@@ -55,6 +55,7 @@ import { VideoEffectTargetPanel } from "./components/VideoEffectTargetPanel";
 import { readVideoOutputTestPattern, readVideoOutputWindowId, VideoOutputWindow } from "./components/VideoOutputWindow";
 import { TimelineCueEventsPanel } from "./components/TimelineCueEventsPanel";
 import { TimelineLightingAutomationPanel } from "./components/TimelineLightingAutomationPanel";
+import { EditableTouchSurface } from "./components/EditableTouchSurface";
 import { TouchColorPalettePanel } from "./components/TouchColorPalettePanel";
 import { TouchCuePanel } from "./components/TouchCuePanel";
 import { TouchDimmerControlPanel } from "./components/TouchDimmerControlPanel";
@@ -247,6 +248,8 @@ import type {
   TimelineTrackKind,
   TimelineSnapshot,
   TimelineVideoAutomationSummary,
+  TouchControlBinding,
+  TouchSurfaceSummary,
   UsbRdmRequest,
   VideoAutomationKeyframeSummary,
   VideoAudioMonitorStatus,
@@ -727,6 +730,7 @@ const projectMutationCommands = new Set([
   "add_stage_object",
   "set_stage_object",
   "remove_stage_object",
+  "set_touch_surface",
 ]);
 
 const projectMutationLabel = (command: string) =>
@@ -1476,6 +1480,7 @@ export default function App() {
     || viewportFixture === "cue-recall-large"
     || viewportFixture === "cue-node-graph"
     || viewportFixture === "scene-matrix"
+    || viewportFixture === "touch-composed"
   ) {
     const sceneBlockLargeFixture = viewportFixture === "scene-block-large";
     const sceneBlockHourFixture = viewportFixture === "scene-block-hour";
@@ -1486,6 +1491,7 @@ export default function App() {
     const cueFixture = cueRecallFixture || cueRecallLargeFixture;
     const cueNodeGraphFixture = viewportFixture === "cue-node-graph";
     const sceneMatrixFixture = viewportFixture === "scene-matrix";
+    const touchComposedFixture = viewportFixture === "touch-composed";
     const cueFixtureEffects = cueRecallLargeFixture
       ? Array.from({ length: 500 }, (_, index) => ({
           ...viewportFixtureData.cueRecallEffect,
@@ -1534,7 +1540,7 @@ export default function App() {
         ]
       : timelineSceneBlockViewport.events;
     const activeCueId = fixtureCues[0].id;
-    setWorkspaceTab("control");
+    setWorkspaceTab(touchComposedFixture ? "touch" : "control");
     if (sceneMatrixFixture) {
       setTimelineDeskSurface("cues");
       setSceneMatrixVisible(true);
@@ -1579,12 +1585,18 @@ export default function App() {
             remaining_ms: 580,
             paused: false,
           },
-      active_cue_id: cueFixture || timelineFixture || sceneMatrixFixture ? activeCueId : current.active_cue_id,
+      active_cue_id: cueFixture || timelineFixture || sceneMatrixFixture || touchComposedFixture
+        ? activeCueId
+        : current.active_cue_id,
       active_group_cue_ids: sceneMatrixFixture ? { front: activeCueId } : current.active_group_cue_ids,
       // T7: persisted identity colors under test in the scene-matrix fixture.
       group_colors: sceneMatrixFixture ? { back: "#22aa88" } : current.group_colors,
-      cues: cueFixture || sceneMatrixFixture ? fixtureCues : timelineFixture ? timelineFixtureCues : current.cues,
-      cue_lists: cueFixture || timelineFixture || sceneMatrixFixture
+      cues: cueFixture || sceneMatrixFixture || touchComposedFixture
+        ? fixtureCues
+        : timelineFixture
+          ? timelineFixtureCues
+          : current.cues,
+      cue_lists: cueFixture || timelineFixture || sceneMatrixFixture || touchComposedFixture
         ? [{ id: 1, label: "Main", active_cue_id: activeCueId }]
         : current.cue_lists,
       effects: cueFixture ? cueFixtureEffects : sceneMatrixFixture ? [] : current.effects,
@@ -1600,6 +1612,9 @@ export default function App() {
             mapping_presets: [{ label: "Viewport 16:9", mapping: viewportFixtureData.projectorMapping }],
           },
       stage_objects: [viewportFixtureData.stageObject],
+      touch_surface: touchComposedFixture
+        ? structuredClone(viewportFixtureData.touchSurface)
+        : current.touch_surface,
       timeline: {
         ...current.timeline,
         layers: timelineLayeredFixture
@@ -8522,6 +8537,136 @@ export default function App() {
     }
   };
 
+  const touchRgbAttributes = (fixture: PatchedFixtureSummary) => {
+    const normalized = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const find = (candidates: string[]) => fixture.controls.find((control) =>
+      candidates.includes(normalized(control.attribute)),
+    )?.attribute;
+    const red = find(["colorred", "coloraddr", "red"]);
+    const green = find(["colorgreen", "coloraddg", "green"]);
+    const blue = find(["colorblue", "coloraddb", "blue"]);
+    return red && green && blue ? { red, green, blue } : null;
+  };
+
+  const setTouchSurfaceLayout = async (surface: TouchSurfaceSummary) => {
+    const previous = snapshot().touch_surface ?? { pages: [] };
+    setSnapshot((current) => ({ ...current, touch_surface: surface }));
+    setProjectDirty(true);
+    if (!isTauriRuntime()) return;
+    try {
+      await invoke("set_touch_surface", { surface });
+      await refreshSnapshot();
+    } catch (error) {
+      setSnapshot((current) => ({ ...current, touch_surface: previous }));
+      setMessage(String(error));
+    }
+  };
+
+  const triggerTouchBinding = async (binding: TouchControlBinding) => {
+    switch (binding.kind) {
+      case "cue":
+        await triggerCue(binding.cue_id);
+        break;
+      case "cue_next":
+        await triggerNextCue();
+        break;
+      case "cue_previous":
+        await triggerPreviousCue();
+        break;
+      case "cue_fade_pause":
+        await setCueFadePaused(!snapshot().active_fade?.paused);
+        break;
+      case "blackout":
+        await setBlackout(!snapshot().blackout);
+        break;
+      case "video_blackout":
+        await setVideoBlackout(!snapshot().video.blackout);
+        break;
+      case "all_blackout":
+        await setAllBlackout(!(snapshot().blackout && snapshot().video.blackout));
+        break;
+      default:
+        break;
+    }
+  };
+
+  const setTouchBindingValue = async (binding: TouchControlBinding, normalizedValue: number) => {
+    const value = Math.round(clamp01(normalizedValue) * 65_535);
+    switch (binding.kind) {
+      case "fixture_attribute":
+        await setAttribute(binding.fixture_id, binding.attribute, value);
+        break;
+      case "group_attribute":
+        await setGroupAttribute(binding.group_id, binding.attribute, value);
+        break;
+      case "selected_fixture_attribute": {
+        const groupId = selectedFixtureGroupFilter();
+        const fixtureId = selectedFixtureId();
+        if (groupId) await setGroupAttribute(groupId, binding.attribute, value);
+        else if (fixtureId !== null) await setAttribute(fixtureId, binding.attribute, value);
+        break;
+      }
+      case "group_submaster":
+        await setGroupSubmaster(binding.group_id, clamp01(normalizedValue));
+        break;
+      case "lighting_master":
+        await setLightingMaster(clamp01(normalizedValue));
+        break;
+      case "video_master":
+        await setVideoMasterOpacity(clamp01(normalizedValue));
+        break;
+      default:
+        break;
+    }
+  };
+
+  const setTouchBindingColor = async (binding: TouchControlBinding, color: string) => {
+    if (binding.kind === "selected_fixture_color") {
+      await setFixtureColor(color);
+      return;
+    }
+    const fixture = binding.kind === "fixture_color"
+      ? snapshot().fixtures.find((candidate) => candidate.id === binding.fixture_id)
+      : binding.kind === "group_color"
+        ? snapshot().fixtures.find((candidate) => candidate.group_ids.includes(binding.group_id))
+        : undefined;
+    if (!fixture) return;
+    const attributes = touchRgbAttributes(fixture);
+    if (!attributes) return;
+    const values = {
+      [attributes.red]: Number.parseInt(color.slice(1, 3), 16) * 257,
+      [attributes.green]: Number.parseInt(color.slice(3, 5), 16) * 257,
+      [attributes.blue]: Number.parseInt(color.slice(5, 7), 16) * 257,
+    };
+    for (const [attribute, value] of Object.entries(values)) {
+      if (binding.kind === "fixture_color") {
+        await setAttribute(binding.fixture_id, attribute, value);
+      } else if (binding.kind === "group_color") {
+        await setGroupAttribute(binding.group_id, attribute, value);
+      }
+    }
+  };
+
+  const setTouchBindingXy = async (binding: TouchControlBinding, x: number, y: number) => {
+    const pan = Math.round(clamp01(x) * 65_535);
+    const tilt = Math.round(clamp01(y) * 65_535);
+    switch (binding.kind) {
+      case "fixture_pan_tilt":
+        await setAttribute(binding.fixture_id, binding.pan_attribute, pan);
+        await setAttribute(binding.fixture_id, binding.tilt_attribute, tilt);
+        break;
+      case "group_pan_tilt":
+        await setGroupAttribute(binding.group_id, binding.pan_attribute, pan);
+        await setGroupAttribute(binding.group_id, binding.tilt_attribute, tilt);
+        break;
+      case "selected_fixture_pan_tilt":
+        await setPanTiltValues(pan, tilt);
+        break;
+      default:
+        break;
+    }
+  };
+
   const setPanTiltPercent = (axis: "pan" | "tilt", percent: number) => {
     const controls = selectedPositionControls();
     if (!controls) {
@@ -13513,6 +13658,16 @@ export default function App() {
           onSetBlackout={setBlackout}
           onSetVideoBlackout={setVideoBlackout}
           onSetAllBlackout={setAllBlackout}
+        />
+        <EditableTouchSurface
+          snapshot={snapshot()}
+          surface={snapshot().touch_surface}
+          selectedFixtureId={selectedFixtureId()}
+          onSurfaceChange={setTouchSurfaceLayout}
+          onTrigger={triggerTouchBinding}
+          onValue={setTouchBindingValue}
+          onColor={setTouchBindingColor}
+          onXy={setTouchBindingXy}
         />
         <TouchCuePanel
           snapshot={snapshot()}
