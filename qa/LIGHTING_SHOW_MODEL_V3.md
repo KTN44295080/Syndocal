@@ -185,6 +185,17 @@ risk: low / est: M / depends: none
 - cargo test -p engine: no change to tick-path telemetry (audio is entirely on the Tauri side); existing timeline tests green.
 - Drift resync unit coverage on the new sink follows the existing video-layer audio resync test pattern.
 
+## User decisions (2026-07-17)
+
+- **F4b（要実装修正）削除ポリシー**: グローバルスタックからのエフェクト削除時、params保持シーンも
+  **一緒に消える**（現F4実装の「シーン生存」既定は誤り）。ただし静かに空にせず、削除操作時に
+  「このエフェクトは以下のシーンで使用中」の警告リストを出して確認を取り、確認後にcue側の
+  effect_targetsからも除去する。destructiveActions.tsの確認ポリシーに接続。
+- **F5列排他はシーン毎設定（Daslight Bank相当）**: プロジェクト全体フラグではなく、cue単位の
+  再生モード設定 — 「共存」or「前のシーンをクリア」。CueSummaryへ #[serde(default)] の
+  recall_mode（Coexist既定 / ReplaceGroup）を追加する設計へ変更。F5のper-group active-cue map
+  はこの per-cue モードを参照する。
+
 ## Open Questions（ユーザー回答待ち）
 - Layer conflict policy: when overlapping blocks on different layers drive the same fixture attributes, which wins — top layer by order (Daslight-like priority), latest trigger regardless of layer (LTP), or HTP for intensity only? F1 ships deterministic top-layer-wins on simultaneous triggers and last-trigger-wins otherwise as the interim; confirm or redirect before F2 UI bakes expectations.
 - Group-column exclusivity scope: should activating a scene in a group column always auto-release the previous scene of that group (Daslight behavior) everywhere (pads, MIDI/OSC, timeline blocks too), only from the matrix surface, or stay off by default? And should the release snap or fade using the released cue's fade_ms?
