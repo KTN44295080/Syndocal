@@ -5084,8 +5084,14 @@ async function prepareLiveAudioAcceptanceViewport(client, viewport, locale, full
   });
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
+  // Reset persisted UI state before applying the locale. A prior iteration's
+  // acceptance run persists controlMode "mixer"; booting straight into the
+  // full VJ-desk layout replaces the shared workspace band whose tab is
+  // labeled "Mixer"/"ミキサー" with tabs labeled "VJ Desk"/"VJデスク", so the
+  // scripted tab click below would not find its target.
   await client.evaluate(
-    "window.localStorage.setItem('syndocal.uiLocale.v1'," + JSON.stringify(locale) + ")",
+    "window.localStorage.clear();" +
+      "window.localStorage.setItem('syndocal.uiLocale.v1'," + JSON.stringify(locale) + ")",
   );
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
