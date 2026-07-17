@@ -26276,8 +26276,9 @@ h3 {
 /* Stretch the band to the full pane window; the T10 fixed band heights are a
    main-shell contract, not a pane-window one. */
 .app.paneWindow .mappingPersistentWorkspaceBand {
-  height: 100%;
-  grid-template-rows: auto minmax(0, 1fr);
+  height: 100% !important;
+  max-height: none !important;
+  grid-template-rows: auto minmax(0, 1fr) !important;
 }
 
 .app.paneWindow .mappingPersistentWorkspaceGrid,
@@ -26305,6 +26306,8 @@ h3 {
 
 .app.paneWindow .mappingPersistentWorkspaceGrid {
   grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) !important;
+  height: 100%;
 }
 
 .app.paneWindow-stage .mappingSelectionsColumn,
@@ -26328,6 +26331,14 @@ h3 {
 
 .mappingPersistentWorkspaceBand.stagePanePopped .mappingPersistentWorkspaceGrid {
   grid-template-columns: minmax(0, 0.42fr) minmax(0, 1fr);
+}
+
+/* Pane-window mode surfaces fill the window; the main-shell fixed panel
+   heights are a T10 contract that does not apply inside a pane window. */
+.app.paneWindow .controlContextPane > .panel {
+  height: 100% !important;
+  max-height: none !important;
+  min-height: 0;
 }
 
 .panePopoutToggle.expanded {
