@@ -6888,6 +6888,34 @@ fn set_cue_steps(
     state.engine.set_cue_steps_published(cue_id, steps)
 }
 
+#[tauri::command]
+fn set_cue_color(
+    state: State<'_, AppState>,
+    cue_id: CueId,
+    color: Option<String>,
+) -> Result<(), String> {
+    if let Some(color) = &color {
+        // Identity colors share the strict #rrggbb contract of cue-point colors.
+        validate_video_cue_point_color(color)?;
+    }
+    state.engine.set_cue_color_published(cue_id, color)
+}
+
+#[tauri::command]
+fn set_group_color(
+    state: State<'_, AppState>,
+    group_id: String,
+    color: Option<String>,
+) -> Result<(), String> {
+    if group_id.trim().is_empty() {
+        return Err("Group id is required".to_string());
+    }
+    if let Some(color) = &color {
+        validate_video_cue_point_color(color)?;
+    }
+    state.engine.set_group_color_published(group_id, color)
+}
+
 fn validate_cue_authored_beats(authored_beats: Option<f32>) -> Result<(), String> {
     let Some(authored_beats) = authored_beats else {
         return Ok(());
@@ -30162,6 +30190,55 @@ f 1 2 3
     }
 
     #[test]
+    fn project_identity_colors_sdc_roundtrip_and_legacy_defaults() {
+        let mut project = project_with_timeline_scene_blocks();
+        if let Some(cue) = project.snapshot.cues.first_mut() {
+            cue.color = Some("#ff3366".to_string());
+        }
+        project
+            .snapshot
+            .group_colors
+            .insert("Front".to_string(), "#22aa88".to_string());
+
+        let json = project_json_for_write(&project).unwrap();
+        let roundtrip: ProjectFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            roundtrip
+                .snapshot
+                .cues
+                .first()
+                .and_then(|cue| cue.color.clone()),
+            Some("#ff3366".to_string())
+        );
+        assert_eq!(
+            roundtrip
+                .snapshot
+                .group_colors
+                .get("Front")
+                .map(String::as_str),
+            Some("#22aa88")
+        );
+        validate_project_file(&roundtrip).unwrap();
+
+        // Legacy projects carry neither field and stay byte-free of them.
+        let mut legacy = project_with_timeline_scene_blocks();
+        if let Some(cue) = legacy.snapshot.cues.first_mut() {
+            cue.color = None;
+        }
+        legacy.snapshot.group_colors.clear();
+        let legacy_json = project_json_for_write(&legacy).unwrap();
+        assert!(!legacy_json.contains("\"group_colors\""));
+        let legacy_roundtrip: ProjectFile = serde_json::from_str(&legacy_json).unwrap();
+        assert!(legacy_roundtrip
+            .snapshot
+            .cues
+            .first()
+            .map(|cue| cue.color.is_none())
+            .unwrap_or(true));
+        assert!(legacy_roundtrip.snapshot.group_colors.is_empty());
+    }
+
+    #[test]
     fn project_timeline_audio_clips_sdc_roundtrip_preserves_clips_and_master_fields() {
         let mut project = project_with_timeline_scene_blocks();
         let missing_audio_path = env::temp_dir()
@@ -37449,6 +37526,8 @@ fn main() {
             set_cue_metadata,
             set_cue_child_timeline,
             set_cue_steps,
+            set_cue_color,
+            set_group_color,
             move_cue,
             duplicate_cue,
             trigger_cue,

@@ -1,7 +1,7 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import type { TimelineEventDraft } from "../editorDrafts";
 import { confirmTimelinePlacementRemoval } from "../destructiveActions";
-import { cueIdentityHue, identityCssColor } from "../identityColor";
+import { cueIdentityCss } from "../identityColor";
 import {
   reconcileTimelineSceneBlockJumpTarget,
   reconcileTimelineSceneBlockPickerTarget,
@@ -34,6 +34,7 @@ export interface TimelineSceneBlockRow extends TimelineCueEventSummary {
 interface TimelineSceneBlocksEditorProps {
   positionMs: number;
   bpm: number;
+  cueColors?: Record<number, string>;
   executionLive: boolean;
   selectedCueId: number | null;
   startMs: number;
@@ -834,7 +835,7 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
                     <span
                       class="sceneBlockFinderChip"
                       aria-hidden="true"
-                      style={{ background: identityCssColor(cueIdentityHue(event.cue_id), "band") }}
+                      style={{ background: cueIdentityCss(event.cue_id, props.cueColors?.[event.cue_id], "band") }}
                     />
                     <span class="sceneBlockFinderName" data-no-localize>
                       <small>#{event.id}</small> {event.cue_label}
@@ -865,7 +866,7 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
                       <span
                         class="sceneBlockFinderChip"
                         aria-hidden="true"
-                        style={{ background: identityCssColor(cueIdentityHue(row().cue_id), "band") }}
+                        style={{ background: cueIdentityCss(row().cue_id, props.cueColors?.[row().cue_id], "band") }}
                       />
                       <strong data-no-localize>#{row().id} {row().cue_label}</strong>
                       <Show when={inspectorDirty()}>
@@ -1062,7 +1063,7 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
                 <article
                   class={`sceneBlockRow ${isBlock() ? "linkedBlock" : "legacyPoint"} ${playbackStatus().under_playhead ? "underPlayhead" : ""} ${playbackStatus().live ? "live" : ""} ${isDirty() ? "dirty" : ""} ${props.selectedEventId === event.id ? "selected" : ""}`}
                   role="listitem"
-                  style={{ "--identity": identityCssColor(cueIdentityHue(event.cue_id), "fill") }}
+                  style={{ "--identity": cueIdentityCss(event.cue_id, props.cueColors?.[event.cue_id], "fill") }}
                   data-scene-block-id={event.id}
                   data-source-cue-id={draft().cue_id}
                   data-dirty={isDirty() ? "true" : "false"}

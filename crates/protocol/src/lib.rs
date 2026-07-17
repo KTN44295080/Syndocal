@@ -1231,6 +1231,10 @@ pub struct CueSummary {
     pub steps: Vec<CueStepSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub child_timeline: Option<ChildTimelineSummary>,
+    /// T7 persistent identity color (`#rrggbb`). `None` keeps the deterministic
+    /// hash-derived hue; skipped when absent so legacy cues stay byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -1378,6 +1382,7 @@ impl Default for CueSummary {
             effect_targets: Vec::new(),
             steps: Vec::new(),
             child_timeline: None,
+            color: None,
         }
     }
 }
@@ -2881,6 +2886,11 @@ pub struct EngineSnapshot {
     pub active_cue_id: Option<CueId>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub active_group_cue_ids: BTreeMap<String, CueId>,
+    /// T7 persistent identity colors per group path (`#rrggbb`). BTreeMap keeps
+    /// serialization order deterministic for project snapshot comparison;
+    /// skipped when empty so legacy snapshots stay byte-identical.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub group_colors: BTreeMap<String, String>,
     pub active_fade: Option<ActiveFadeSummary>,
     #[serde(default)]
     pub programmer: ProgrammerSnapshot,
@@ -2922,6 +2932,7 @@ impl Default for EngineSnapshot {
             playback_master: 1.0,
             active_cue_id: None,
             active_group_cue_ids: BTreeMap::new(),
+            group_colors: BTreeMap::new(),
             active_fade: None,
             programmer: ProgrammerSnapshot::default(),
             timeline: TimelineSnapshot::default(),
@@ -3821,6 +3832,46 @@ mod tests {
         assert!(legacy.get("child_timeline").is_none());
         let parsed: super::CueSummary = serde_json::from_value(legacy).unwrap();
         assert!(parsed.child_timeline.is_none());
+    }
+
+    #[test]
+    fn identity_color_defaults_are_skipped_and_roundtrip() {
+        // Legacy cues carry no color field and stay byte-identical on save.
+        let legacy = serde_json::to_value(super::CueSummary::default()).unwrap();
+        assert!(legacy.get("color").is_none());
+        let parsed: super::CueSummary = serde_json::from_value(legacy).unwrap();
+        assert!(parsed.color.is_none());
+
+        let mut cue = super::CueSummary::default();
+        cue.id = 12;
+        cue.color = Some("#ff3366".to_string());
+        let json = serde_json::to_string(&cue).unwrap();
+        let back: super::CueSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.color.as_deref(), Some("#ff3366"));
+
+        // Empty group_colors is skipped on the snapshot; populated maps
+        // roundtrip in deterministic BTreeMap order.
+        let snapshot = super::EngineSnapshot::default();
+        let value = serde_json::to_value(&snapshot).unwrap();
+        assert!(value.get("group_colors").is_none());
+        let mut colored = super::EngineSnapshot::default();
+        colored
+            .group_colors
+            .insert("Front".to_string(), "#22aa88".to_string());
+        colored
+            .group_colors
+            .insert("Back".to_string(), "#8844cc".to_string());
+        let json = serde_json::to_string(&colored).unwrap();
+        let back: super::EngineSnapshot = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.group_colors.len(), 2);
+        assert_eq!(
+            back.group_colors.get("Front").map(String::as_str),
+            Some("#22aa88")
+        );
+        assert_eq!(
+            back.group_colors.get("Back").map(String::as_str),
+            Some("#8844cc")
+        );
     }
 
     #[test]

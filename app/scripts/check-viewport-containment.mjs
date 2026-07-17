@@ -6669,6 +6669,9 @@ async function measureSceneMatrixPane(client) {
     const headers = [...document.querySelectorAll('[data-scene-matrix-group-hue]')].filter(isVisible);
     const cards = [...document.querySelectorAll('[data-scene-matrix-cue-id]')].filter(isVisible);
     const replaceCards = cards.filter((card) => isVisible(card.querySelector('.sceneMatrixReplaceBadge')));
+    const groupColorInputs = [...document.querySelectorAll('[data-group-color-input]')].filter(isVisible);
+    const backHeader = headers.find((header) =>
+      header.closest('[data-scene-matrix-column]')?.getAttribute('data-scene-matrix-column') === 'back');
     const documentElement = document.documentElement;
     const body = document.body;
     const app = document.querySelector('.app');
@@ -6679,6 +6682,10 @@ async function measureSceneMatrixPane(client) {
       headerHues: headers.map((header) => header.getAttribute('data-scene-matrix-group-hue')),
       cardHues: cards.map((card) => card.getAttribute('data-scene-matrix-cue-hue')),
       cardIds: cards.map((card) => card.getAttribute('data-scene-matrix-cue-id')),
+      groupColorInputCount: groupColorInputs.length,
+      cueColorInputCount: [...document.querySelectorAll('[data-cue-color-input]')].filter(isVisible).length,
+      coloredCardIdentity: document.querySelector('[data-scene-matrix-cue-id="301"]')?.style.getPropertyValue('--cue-identity') ?? '',
+      backHeaderIdentity: backHeader?.style.getPropertyValue('--group-identity') ?? '',
       replaceCardIds: replaceCards.map((card) => card.getAttribute('data-scene-matrix-cue-id')),
       activeCardIds: cards
         .filter((card) => card.getAttribute('data-scene-matrix-active') === 'true' && card.classList.contains('active'))
@@ -6789,6 +6796,14 @@ async function runSceneMatrixPaneCheck(client, viewport) {
     ["matrixActiveCueHighlightFollowedClick", () => JSON.stringify(after.activeCardIds) === JSON.stringify(["302"])],
     ["matrixColumnsUseInternalScrollport", () => before.internalScrollport && after.internalScrollport],
     ["matrixDocumentAndAppScrollZero", () => before.documentAndAppScrollZero && after.documentAndAppScrollZero],
+    // T7: the fixture persists #ff3366 on cue 301 (hue 345) and #22aa88 on the
+    // back group (hue 165); persisted colors must win over the hash palette
+    // while the header hue ATTRIBUTE keeps the deterministic hash value.
+    ["matrixPersistedCueColorWinsHashHue", () =>
+      (before.coloredCardIdentity || "").startsWith("hsl(345")],
+    ["matrixPersistedGroupColorWinsHashHue", () =>
+      (before.backHeaderIdentity || "").startsWith("hsl(165")],
+    ["matrixGroupColorPickerPerGroupColumn", () => before.groupColorInputCount === 2],
   ];
   const checks = Object.fromEntries(conditions.map(([name, check]) => {
     try {
@@ -6904,6 +6919,8 @@ async function runCueRecallViewport(client, viewport) {
       holdInputCount: stepEditor?.querySelectorAll('[data-cue-step-hold]').length ?? 0,
       saveStepsEnabled: !Boolean(stepEditor?.querySelector('[data-cue-step-save]')?.disabled),
       authoredBeatsValue: authoredBeats instanceof HTMLInputElement ? Number(authoredBeats.value) : null,
+      // T7: the cue edit row carries the identity color picker.
+      cueColorInputCount: document.querySelectorAll('.cueItem [data-cue-color-input]').length,
     };
   })()`);
   if (shouldCaptureViewport(viewport)) {
@@ -6948,6 +6965,8 @@ async function runCueRecallViewport(client, viewport) {
     ["cueStepFadeInputsRendered", () => stats.fadeInputCount === 5],
     ["cueStepHoldInputsRendered", () => stats.holdInputCount === 5],
     ["cueStepDirtySaveEnabled", () => stats.saveStepsEnabled],
+    // T7: the identity color picker lives in the cue edit row.
+    ["cueColorPickerPresentInCueEditRow", () => stats.cueColorInputCount >= 1],
   ];
   const checks = Object.fromEntries(conditions.map(([name, check]) => {
     try {

@@ -743,6 +743,7 @@ const japaneseText: Record<string, string> = {
   "Video BO": "映像BO",
   Apply: "適用",
   Aspect: "アスペクト",
+  "Clear Color": "色をクリア",
   "Clear Lens/Key": "レンズ／キーをクリア",
   "Clear Warp": "ワープをクリア",
   "Fade Out": "フェードアウト",

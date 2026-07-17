@@ -398,7 +398,7 @@ import {
   type WaveStageDragMode,
 } from "./mappingRuntime";
 import { stageObjectDefaultColor } from "./stageObjects";
-import { cueIdentityHue, identityCssColor } from "./identityColor";
+import { cueIdentityCss } from "./identityColor";
 import {
   defaultVideoOutputMapping,
   outputAspectRatio,
@@ -624,6 +624,8 @@ const projectMutationCommands = new Set([
   "set_cue_metadata",
   "set_cue_child_timeline",
   "set_cue_steps",
+  "set_cue_color",
+  "set_group_color",
   "move_cue",
   "duplicate_cue",
   "remove_cue",
@@ -1507,6 +1509,10 @@ export default function App() {
     const fixtureCues = sceneMatrixFixture
       ? structuredClone(viewportFixtureData.sceneMatrixCues)
       : cueFixtureCues;
+    if (sceneMatrixFixture && fixtureCues[0]) {
+      // T7: one persisted cue color so the harness can assert it wins the hash hue.
+      fixtureCues[0].color = "#ff3366";
+    }
     const timelineSceneBlockViewport = sceneBlockLargeFixture
       ? createTimelineSceneBlockLargeViewportFixture(viewportFixtureData.cueRecallCue)
       : sceneBlockHourFixture
@@ -1575,6 +1581,8 @@ export default function App() {
           },
       active_cue_id: cueFixture || timelineFixture || sceneMatrixFixture ? activeCueId : current.active_cue_id,
       active_group_cue_ids: sceneMatrixFixture ? { front: activeCueId } : current.active_group_cue_ids,
+      // T7: persisted identity colors under test in the scene-matrix fixture.
+      group_colors: sceneMatrixFixture ? { back: "#22aa88" } : current.group_colors,
       cues: cueFixture || sceneMatrixFixture ? fixtureCues : timelineFixture ? timelineFixtureCues : current.cues,
       cue_lists: cueFixture || timelineFixture || sceneMatrixFixture
         ? [{ id: 1, label: "Main", active_cue_id: activeCueId }]
@@ -4782,6 +4790,50 @@ export default function App() {
     const activeCueId = snapshot().active_cue_id;
     return snapshot().cues.find((cue) => cue.id === activeCueId) ?? null;
   });
+  // T7: persisted identity colors. Components that only carry cue ids receive
+  // this map; components with full CueSummary objects read cue.color directly.
+  const cueColors = createMemo<Record<number, string>>(() => {
+    const map: Record<number, string> = {};
+    for (const cue of snapshot().cues) {
+      if (cue.color) map[cue.id] = cue.color;
+    }
+    return map;
+  });
+  const groupColors = createMemo<Record<string, string>>(() => snapshot().group_colors ?? {});
+  const setCueColor = async (cueId: number, color: string | null) => {
+    if (viewportFixture) {
+      setSnapshot((current) => ({
+        ...current,
+        cues: current.cues.map((cue) => (cue.id === cueId ? { ...cue, color } : cue)),
+      }));
+      return;
+    }
+    try {
+      await invoke("set_cue_color", { cueId, color });
+      await refreshSnapshot();
+      setMessage(color ? `Cue color updated (${color})` : "Cue color cleared");
+    } catch (error) {
+      setMessage(`Cue color update failed: ${error}`);
+    }
+  };
+  const setGroupColor = async (groupId: string, color: string | null) => {
+    if (viewportFixture) {
+      setSnapshot((current) => {
+        const nextColors = { ...(current.group_colors ?? {}) };
+        if (color) nextColors[groupId] = color;
+        else delete nextColors[groupId];
+        return { ...current, group_colors: nextColors };
+      });
+      return;
+    }
+    try {
+      await invoke("set_group_color", { groupId, color });
+      await refreshSnapshot();
+      setMessage(color ? `Group color updated (${color})` : "Group color cleared");
+    } catch (error) {
+      setMessage(`Group color update failed: ${error}`);
+    }
+  };
   const nextCue = createMemo(() => {
     const cues = snapshot().cues;
     if (cues.length === 0) {
@@ -13241,7 +13293,7 @@ export default function App() {
                   <i
                     class="liveCueIdentityChip"
                     aria-hidden="true"
-                    style={{ background: identityCssColor(cueIdentityHue(activeCue()!.id), "band") }}
+                    style={{ background: cueIdentityCss(activeCue()!.id, activeCue()!.color, "band") }}
                   />
                 </Show>
                 {activeCue()?.label ?? "None"}
@@ -13254,7 +13306,7 @@ export default function App() {
                   <i
                     class="liveCueIdentityChip"
                     aria-hidden="true"
-                    style={{ background: identityCssColor(cueIdentityHue(nextCue()!.id), "band") }}
+                    style={{ background: cueIdentityCss(nextCue()!.id, nextCue()!.color, "band") }}
                   />
                 </Show>
                 {nextCue()?.label ?? "None"}
@@ -13385,7 +13437,7 @@ export default function App() {
                   class={`liveCuePad ${pad.cue?.id === snapshot().active_cue_id ? "active" : ""} ${
                     pad.cue?.id === nextCue()?.id ? "next" : ""
                   }`}
-                  style={pad.cue ? { "--identity": identityCssColor(cueIdentityHue(pad.cue.id), "text") } : undefined}
+                  style={pad.cue ? { "--identity": cueIdentityCss(pad.cue.id, pad.cue.color, "text") } : undefined}
                   disabled={!pad.cue}
                   onClick={() => {
                     if (pad.cue) {
@@ -13612,6 +13664,7 @@ export default function App() {
           selectedGroupId={selectedFixtureGroupFilter()}
           selectedFixture={selectedFixture() ?? null}
           groups={fixtureGroupRows()}
+          groupColors={groupColors()}
           fixtures={filteredFixtures()}
           totalFixtureCount={snapshot().fixtures.length}
           selectedFixtureId={selectedFixtureId()}
@@ -14613,6 +14666,7 @@ export default function App() {
           </FaderAttributeEditorPanel>
           <CueManagementPanel
             mode={controlMode() === "live" ? "live" : "edit"}
+            onSetCueColor={setCueColor}
             cues={selectedCueListCues()}
             allCues={snapshot().cues}
             cueLists={snapshot().cue_lists}
@@ -14683,6 +14737,8 @@ export default function App() {
           />
           <SceneMatrixPanel
             cues={snapshot().cues}
+            groupColors={groupColors()}
+            onSetGroupColor={setGroupColor}
             groupIds={fixtureGroupRows().map((row) => row.groupId)}
             activeCueId={snapshot().active_cue_id}
             activeGroupCueIds={snapshot().active_group_cue_ids ?? {}}
@@ -14696,6 +14752,7 @@ export default function App() {
             <div class="timelineShowSurface">
             <TimelineCueEventsPanel
               childTimelineLabel={timelineChildCue()?.label ?? null}
+              cueColors={cueColors()}
               positionMs={activeTimeline().position_ms}
               bpm={snapshot().clock.bpm}
               durationMs={activeTimeline().duration_ms}
@@ -14975,6 +15032,7 @@ export default function App() {
                 <EffectGroupTargetPanel
                   value={effectTargetGroups()}
                   groups={fixtureGroupRows()}
+                  groupColors={groupColors()}
                   activeGroupIds={parseGroupIds(effectTargetGroups())}
                   onValue={setEffectTargetGroups}
                   onToggleGroup={toggleEffectTargetGroup}

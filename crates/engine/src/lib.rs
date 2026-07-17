@@ -1,6 +1,6 @@
 use std::{
     cell::Cell,
-    collections::{BTreeSet, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     sync::{
         atomic::{AtomicU32, AtomicU64, Ordering},
         mpsc, Arc, Condvar, Mutex, RwLock, Weak,
@@ -514,6 +514,18 @@ pub enum EngineCommand {
     SetCueChildTimeline {
         cue_id: CueId,
         child_timeline: Option<ChildTimelineSummary>,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    SetCueColor {
+        cue_id: CueId,
+        color: Option<String>,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    SetGroupColor {
+        group_id: String,
+        color: Option<String>,
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
@@ -1814,6 +1826,42 @@ impl EngineHandle {
             .map_err(|error| format!("Cue child-timeline acknowledgement failed: {error}"))?
     }
 
+    pub fn set_cue_color_published(
+        &self,
+        cue_id: CueId,
+        color: Option<String>,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::SetCueColor {
+            cue_id,
+            color,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Cue color acknowledgement failed: {error}"))?
+    }
+
+    pub fn set_group_color_published(
+        &self,
+        group_id: String,
+        color: Option<String>,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::SetGroupColor {
+            group_id,
+            color,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Group color acknowledgement failed: {error}"))?
+    }
+
     pub fn remove_cue_published(&self, cue_id: CueId) -> Result<(), String> {
         let (ack, receiver) = mpsc::sync_channel(1);
         self.send(EngineCommand::RemoveCuePublished {
@@ -3052,6 +3100,7 @@ struct RuntimeCue {
     effect_targets: Vec<CueEffectTarget>,
     steps: Vec<CueStepSummary>,
     child_timeline: Option<ChildTimelineSummary>,
+    color: Option<String>,
     effect_activation_range: RuntimeEffectActivationRange,
     step_sequence: RuntimeCueStepSequence,
     step_activation_range: RuntimeCueStepActivationRange,
@@ -3313,6 +3362,10 @@ enum PendingCommandRollback {
         auto_vj: RuntimeAutoVj,
         last_error: Option<String>,
     },
+    RestoreGroupColors {
+        group_colors: BTreeMap<String, String>,
+        last_error: Option<String>,
+    },
     RestoreCueRemoval {
         cues: Vec<RuntimeCue>,
         cue_lists: Vec<CueListSummary>,
@@ -3463,6 +3516,7 @@ struct EngineRuntime {
     cue_lists: Vec<CueListSummary>,
     cue_list_effect_activation_cues: HashMap<CueListId, CueId>,
     active_group_cue_ids: HashMap<String, CueId>,
+    group_colors: BTreeMap<String, String>,
     cue_release_values: HashMap<CueId, HashMap<(FixtureId, String), u16>>,
     palettes: Vec<ReferencePaletteSummary>,
     playback_executors: Vec<PlaybackExecutorSummary>,
@@ -3654,6 +3708,7 @@ impl EngineRuntime {
             cue_lists: vec![CueListSummary::default()],
             cue_list_effect_activation_cues: HashMap::new(),
             active_group_cue_ids: HashMap::new(),
+            group_colors: BTreeMap::new(),
             cue_release_values: HashMap::new(),
             palettes: Vec::new(),
             playback_executors: vec![PlaybackExecutorSummary::default()],
@@ -4029,6 +4084,7 @@ impl EngineRuntime {
                 })
             })
             .collect();
+        self.group_colors = snapshot.group_colors;
         if let Some(active_cue) = self
             .active_cue_id
             .and_then(|cue_id| self.cues.iter().find(|cue| cue.id == cue_id))
@@ -4194,6 +4250,7 @@ impl EngineRuntime {
                     effect_targets,
                     steps,
                     child_timeline: cue.child_timeline,
+                    color: cue.color,
                     effect_activation_range: RuntimeEffectActivationRange::default(),
                     step_sequence,
                     step_activation_range: RuntimeCueStepActivationRange::default(),
@@ -6310,6 +6367,89 @@ impl EngineRuntime {
                     rollback,
                     publication_error:
                         "Engine snapshot was busy; Cue child-timeline update was rolled back",
+                });
+            }
+            EngineCommand::SetCueColor {
+                cue_id,
+                color,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreCueRemoval {
+                    cues: self.cues.clone(),
+                    cue_lists: self.cue_lists.clone(),
+                    cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
+                    active_group_cue_ids: self.active_group_cue_ids.clone(),
+                    cue_release_values: self.cue_release_values.clone(),
+                    timeline_events: self.timeline_events.clone(),
+                    active_cue_id: self.active_cue_id,
+                    active_fade: self.active_fade.clone(),
+                    pending_cues: self.pending_cues.clone(),
+                    timeline_position_ms: self.timeline_position_ms,
+                    timeline_playhead_boundary_armed: self.timeline_playhead_boundary_armed,
+                    timeline_evaluated_boundary_position_ms: self
+                        .timeline_evaluated_boundary_position_ms,
+                    timeline_jump_landed_event_id: self.timeline_jump_landed_event_id,
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Cue color update expired before engine execution".to_string())
+                } else if let Some(cue) = self.cues.iter_mut().find(|cue| cue.id == cue_id) {
+                    cue.color = color;
+                    Ok(())
+                } else {
+                    Err(format!("Cue {cue_id} was not found"))
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error: "Engine snapshot was busy; Cue color update was rolled back",
+                });
+            }
+            EngineCommand::SetGroupColor {
+                group_id,
+                color,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreGroupColors {
+                    group_colors: self.group_colors.clone(),
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Group color update expired before engine execution".to_string())
+                } else if group_id.trim().is_empty() {
+                    Err("Group id is required".to_string())
+                } else {
+                    match color {
+                        Some(color) => {
+                            self.group_colors.insert(group_id, color);
+                        }
+                        None => {
+                            self.group_colors.remove(&group_id);
+                        }
+                    }
+                    Ok(())
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Group color update was rolled back",
                 });
             }
             EngineCommand::SetCueParts { cue_id, parts } => {
@@ -8894,6 +9034,13 @@ impl EngineRuntime {
                 self.auto_vj = auto_vj;
                 self.last_error = last_error;
             }
+            PendingCommandRollback::RestoreGroupColors {
+                group_colors,
+                last_error,
+            } => {
+                self.group_colors = group_colors;
+                self.last_error = last_error;
+            }
             PendingCommandRollback::RestoreCueRemoval {
                 cues,
                 cue_lists,
@@ -10521,6 +10668,7 @@ impl EngineRuntime {
             effect_targets,
             steps: Vec::new(),
             child_timeline: None,
+            color: None,
             effect_activation_range: RuntimeEffectActivationRange::default(),
             step_sequence: RuntimeCueStepSequence::default(),
             step_activation_range: RuntimeCueStepActivationRange::default(),
@@ -16289,6 +16437,7 @@ impl EngineRuntime {
                 .iter()
                 .map(|(group_id, cue_id)| (group_id.clone(), *cue_id))
                 .collect(),
+            group_colors: self.group_colors.clone(),
             active_fade: self.active_fade_summary(self.last_tick),
             programmer: self.programmer_snapshot(),
             timeline: self.timeline_snapshot(),
@@ -16773,6 +16922,7 @@ fn cue_summary(cue: &RuntimeCue) -> CueSummary {
         effect_targets: cue.effect_targets.clone(),
         steps: cue.steps.clone(),
         child_timeline: cue.child_timeline.clone(),
+        color: cue.color.clone(),
     }
 }
 
@@ -16914,6 +17064,7 @@ fn runtime_cue_from_summary(cue: &CueSummary) -> RuntimeCue {
         effect_targets: cue.effect_targets.clone(),
         steps: cue.steps.clone(),
         child_timeline: cue.child_timeline.clone(),
+        color: cue.color.clone(),
         effect_activation_range: RuntimeEffectActivationRange::default(),
         step_sequence,
         step_activation_range: RuntimeCueStepActivationRange::default(),
@@ -41139,6 +41290,83 @@ mod tests {
     }
 
     #[test]
+    fn identity_colors_set_clear_and_survive_snapshot_roundtrip() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+
+        let mut cue = CueSummary::default();
+        cue.id = 5;
+        cue.cue_number = "1".to_string();
+        cue.label = "Colored".to_string();
+        cue.group_id = Some("Front".to_string());
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.cues = vec![cue];
+        snapshot.output.enabled = false;
+        snapshot.dmx_outputs = vec![snapshot.output.clone()];
+        engine
+            .send(EngineCommand::LoadProjectSnapshot(snapshot))
+            .unwrap();
+        for _ in 0..100 {
+            if engine.snapshot().cues.len() == 1 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        engine
+            .set_cue_color_published(5, Some("#ff3366".to_string()))
+            .unwrap();
+        engine
+            .set_group_color_published("Front".to_string(), Some("#22aa88".to_string()))
+            .unwrap();
+        let colored = engine.snapshot();
+        assert_eq!(colored.cues[0].color.as_deref(), Some("#ff3366"));
+        assert_eq!(
+            colored.group_colors.get("Front").map(String::as_str),
+            Some("#22aa88")
+        );
+
+        // The colors are project data: a save/load roundtrip preserves them.
+        engine
+            .send(EngineCommand::LoadProjectSnapshot(colored.clone()))
+            .unwrap();
+        let mut reloaded = engine.snapshot();
+        for _ in 0..100 {
+            if reloaded
+                .cues
+                .first()
+                .and_then(|cue| cue.color.clone())
+                .is_some()
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+            reloaded = engine.snapshot();
+        }
+        assert_eq!(reloaded.cues[0].color.as_deref(), Some("#ff3366"));
+        assert_eq!(
+            reloaded.group_colors.get("Front").map(String::as_str),
+            Some("#22aa88")
+        );
+
+        // Clearing removes the persisted values again.
+        engine.set_cue_color_published(5, None).unwrap();
+        engine
+            .set_group_color_published("Front".to_string(), None)
+            .unwrap();
+        let cleared = engine.snapshot();
+        assert!(cleared.cues[0].color.is_none());
+        assert!(cleared.group_colors.is_empty());
+
+        // Unknown cue ids fail the ack instead of silently succeeding.
+        assert!(engine
+            .set_cue_color_published(999, Some("#ffffff".to_string()))
+            .is_err());
+    }
+
+    #[test]
     fn large_show_loads_200_fixtures_across_8_universes_and_100_cues() {
         let engine = EngineHandle::start(DmxOutputConfig {
             enabled: false,
@@ -43308,6 +43536,7 @@ mod tests {
             }],
             steps: Vec::new(),
             child_timeline: None,
+            color: None,
             effect_activation_range: RuntimeEffectActivationRange::default(),
             step_sequence: RuntimeCueStepSequence::default(),
             step_activation_range: RuntimeCueStepActivationRange::default(),

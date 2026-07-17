@@ -10,7 +10,7 @@ import {
   type TimelineVisibleWindow,
 } from "../timelineViewport";
 import { packTimelineOverlapClusterBadges } from "../timelineOverlapClusters";
-import { cueIdentityHue, identityCssColor } from "../identityColor";
+import { cueIdentityCss, cueIdentityHue, identityCssColor } from "../identityColor";
 import { formatCompactClock } from "../clockDisplay";
 import type {
   AudioAnalysisSummary,
@@ -89,6 +89,7 @@ export interface TimelineOverviewOverlapCluster {
 interface TimelineOverviewProps {
   layers: TimelineLayerSummary[];
   legacyMode: boolean;
+  cueColors?: Record<number, string>;
   cueDrag: TimelineCueDragState | null;
   events: TimelineOverviewEvent[];
   audioClips: TimelineAudioClipSummary[];
@@ -2288,8 +2289,8 @@ export function TimelineOverview(props: TimelineOverviewProps) {
             data-timeline-fade-out-ms={eventPreviewFadeMs(event, "out")}
             data-timeline-preview-rate={eventPreviewRate(event) ?? undefined}
             style={{
-              "--identity": identityCssColor(cueIdentityHue(event.cue_id), "fill"),
-              "--identity-band": identityCssColor(cueIdentityHue(event.cue_id), "band"),
+              "--identity": cueIdentityCss(event.cue_id, props.cueColors?.[event.cue_id], "fill"),
+              "--identity-band": cueIdentityCss(event.cue_id, props.cueColors?.[event.cue_id], "band"),
             }}
             data-timeline-preview-start-ms={eventPreviewStartMs(event)}
             data-timeline-preview-end-ms={eventPreviewEndMs(event)}
