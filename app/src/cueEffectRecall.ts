@@ -18,7 +18,7 @@ export interface CueEffectScopeContext {
 
 type CueNonEffectTargets = Partial<Pick<
   CueSummary,
-  "targets" | "video_targets" | "video_output_targets" | "node_graph_targets" | "palette_targets"
+  "targets" | "video_targets" | "video_output_targets" | "node_graph_targets" | "palette_targets" | "steps"
 >>;
 
 export const cueHasNonEffectTargets = (cue: CueNonEffectTargets) =>
@@ -26,7 +26,8 @@ export const cueHasNonEffectTargets = (cue: CueNonEffectTargets) =>
   || (cue.video_targets?.length ?? 0) > 0
   || (cue.video_output_targets?.length ?? 0) > 0
   || (cue.node_graph_targets?.length ?? 0) > 0
-  || (cue.palette_targets?.length ?? 0) > 0;
+  || (cue.palette_targets?.length ?? 0) > 0
+  || (cue.steps?.length ?? 0) > 0;
 
 export const canSaveCueEffectTargets = (
   cue: CueNonEffectTargets,

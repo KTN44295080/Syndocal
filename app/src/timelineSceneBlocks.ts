@@ -179,6 +179,7 @@ export const buildTimelineSceneBlockCueOptions = (cues: CueSummary[]) => cues.ma
   cue_number: cue.cue_number || String(cue.id),
   label: cue.label,
   authored_beats: cue.authored_beats ?? null,
+  step_count: (cue.steps ?? []).length,
   source_summary: timelineSceneBlockSourceSummary(cue),
 }));
 
@@ -188,6 +189,7 @@ export const timelineSceneBlockSourcePickerOptions = <T extends {
   cue_number: string;
   label: string;
   authored_beats: number | null;
+  step_count: number;
   source_summary: string;
 }>(
   cueOptions: T[],
@@ -224,6 +226,7 @@ export const timelineSceneBlockCueOptionsEqual = (
     option.cue_number === candidate.cue_number &&
     option.label === candidate.label &&
     option.authored_beats === candidate.authored_beats &&
+    option.step_count === candidate.step_count &&
     option.source_summary === candidate.source_summary;
 });
 

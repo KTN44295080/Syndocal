@@ -1498,7 +1498,14 @@ export interface CueSummary {
   video_output_targets: VideoOutputTarget[];
   node_graph_targets: CueNodeGraphTarget[];
   effect_targets: CueEffectTarget[];
+  steps?: CueStepSummary[];
   child_timeline?: ChildTimelineSummary | null;
+}
+
+export interface CueStepSummary {
+  values: CueFixtureTarget[];
+  fade_ms: number;
+  hold_ms: number;
 }
 
 export interface CueNodeGraphTarget {

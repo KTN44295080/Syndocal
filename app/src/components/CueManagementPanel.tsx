@@ -4,6 +4,7 @@ import type {
   ActiveFadeSummary,
   CueEffectTarget,
   CueListSummary,
+  CueStepSummary,
   CueSummary,
   EffectSummary,
   ReferencePaletteSummary,
@@ -17,6 +18,7 @@ import { cueIdentityHue, identityCssColor } from "../identityColor";
 import type { TimelineCueDragPoint } from "../timelineCueDrag";
 import { CueCapturePreviewPanel, type CueCapturePreviewModel } from "./CueCapturePreviewPanel";
 import { CueEffectRecallEditor } from "./CueEffectRecallEditor";
+import { CueStepEditor } from "./CueStepEditor";
 
 export type CueCaptureScopeMode = "all" | "lighting" | "effects" | "selectedFixture" | "selectedGroup" | "video";
 
@@ -48,6 +50,7 @@ interface CueManagementPanelProps {
   revealCueRevision: number;
   activeFade: ActiveFadeSummary | null | undefined;
   timelinePositionMs: number;
+  bpm: number;
   timelineTrack: TimelineTrackKind;
   cueLabel: string;
   cueFadeMs: number;
@@ -87,6 +90,7 @@ interface CueManagementPanelProps {
   onMoveCue: (cueId: number, delta: -1 | 1) => void | Promise<void>;
   onSetCueMetadata: (cue: CueSummary) => void | Promise<void>;
   onSetCueEffectTargets: (cueId: number, effectTargets: CueEffectTarget[]) => void | Promise<void>;
+  onSetCueSteps: (cueId: number, steps: CueStepSummary[]) => void | Promise<void>;
   onDuplicateCue: (cue: CueSummary) => void | Promise<void>;
   onUpdateCue: (cueId: number, label: string, fadeMs: number) => void | Promise<void>;
   onTriggerCue: (cueId: number) => void | Promise<void>;
@@ -488,9 +492,7 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                     </button>
                   </div>
                   <span>
-                    {cue.targets.length} fixture(s) / {cue.video_targets.length} video /{" "}
-                    {cue.video_output_targets.length} video output(s) / {(cue.effect_targets ?? []).length} effect(s) /{" "}
-                    {cue.fade_ms}ms / {cue.tracking ? "Track" : "Block"}{cue.mark ? " / MIB" : ""}
+                    {`${cue.targets.length} fixture(s) / ${(cue.steps ?? []).length} step(s) / ${cue.video_targets.length} video / ${cue.video_output_targets.length} video output(s) / ${(cue.effect_targets ?? []).length} effect(s) / ${cue.fade_ms}ms / ${cue.tracking ? "Track" : "Block"}${cue.mark ? " / MIB" : ""}`}
                   </span>
                 </div>
                 <div class="cueEditRow">
@@ -554,6 +556,7 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                       max="1024"
                       step="0.25"
                       placeholder="Optional"
+                      data-cue-authored-beats
                       value={draft().authored_beats ?? ""}
                       aria-invalid={authoredBeatsInvalid()}
                       onInput={(event) => props.onUpdateCueMetadataDraft(cue, {
@@ -611,6 +614,13 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                     />
                   </label>
                 </div>
+                <CueStepEditor
+                  cue={cue}
+                  bpm={props.bpm}
+                  onSave={props.onSetCueSteps}
+                  onUseAuthoredBeats={(authored_beats) =>
+                    props.onUpdateCueMetadataDraft(cue, { authored_beats })}
+                />
                 <details class="cueMibEditor cueEditOnly">
                   <summary>MIB targets ({draft().mib_fixture_ids.length === 0 ? "Auto" : draft().mib_fixture_ids.length})</summary>
                   <p>Auto considers every fixture targeted by this Cue. Selecting fixtures limits MIB to that set; dark-only safety remains enforced.</p>

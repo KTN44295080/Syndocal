@@ -342,6 +342,13 @@ pub struct CueFixtureTarget {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CueStepSummary {
+    pub values: Vec<CueFixtureTarget>,
+    pub fade_ms: u64,
+    pub hold_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CueEffectTarget {
     pub effect_id: EffectId,
     pub enabled: bool,
@@ -1220,6 +1227,8 @@ pub struct CueSummary {
     pub node_graph_targets: Vec<CueNodeGraphTarget>,
     #[serde(default)]
     pub effect_targets: Vec<CueEffectTarget>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<CueStepSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub child_timeline: Option<ChildTimelineSummary>,
 }
@@ -1367,6 +1376,7 @@ impl Default for CueSummary {
             video_output_targets: Vec::new(),
             node_graph_targets: Vec::new(),
             effect_targets: Vec::new(),
+            steps: Vec::new(),
             child_timeline: None,
         }
     }
@@ -3096,8 +3106,49 @@ mod tests {
         assert!(parsed.mib_fixture_ids.is_empty());
         assert!(parsed.palette_targets.is_empty());
         assert!(parsed.effect_targets.is_empty());
+        assert!(parsed.steps.is_empty());
         assert_eq!(parsed.group_id, None);
         assert_eq!(parsed.recall_mode, super::RecallMode::Coexist);
+    }
+
+    #[test]
+    fn cue_steps_roundtrip_and_empty_steps_are_omitted() {
+        let legacy = super::CueSummary::default();
+        let legacy_json = serde_json::to_value(&legacy).unwrap();
+        assert!(legacy_json.get("steps").is_none());
+        let decoded_legacy: super::CueSummary = serde_json::from_value(legacy_json).unwrap();
+        assert!(decoded_legacy.steps.is_empty());
+
+        let mut cue = super::CueSummary::default();
+        cue.id = 21;
+        cue.steps = vec![
+            super::CueStepSummary {
+                values: vec![super::CueFixtureTarget {
+                    fixture_id: 7,
+                    values: vec![super::AttributeValueSummary {
+                        attribute: "Dimmer".to_string(),
+                        value: 12_345,
+                    }],
+                }],
+                fade_ms: 250,
+                hold_ms: 750,
+            },
+            super::CueStepSummary {
+                values: vec![super::CueFixtureTarget {
+                    fixture_id: 7,
+                    values: vec![super::AttributeValueSummary {
+                        attribute: "Dimmer".to_string(),
+                        value: 54_321,
+                    }],
+                }],
+                fade_ms: 500,
+                hold_ms: 500,
+            },
+        ];
+
+        let encoded = serde_json::to_vec(&cue).unwrap();
+        let decoded: super::CueSummary = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, cue);
     }
 
     #[test]

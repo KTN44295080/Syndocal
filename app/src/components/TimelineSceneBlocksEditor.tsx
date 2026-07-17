@@ -20,6 +20,7 @@ export interface TimelineSceneBlockCueOption {
   cue_number: string;
   label: string;
   authored_beats: number | null;
+  step_count: number;
   source_summary: string;
 }
 
@@ -945,6 +946,9 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
                     <div class="sceneBlockInspectorSource">
                       <small>Source Cue</small>
                       <span data-no-localize>{sourceCue() ? sourceCueOptionLabel(sourceCue()!) : `Missing Cue ${draft().cue_id}`}</span>
+                      <span class="tabularNums" data-scene-block-step-count>
+                        {`${sourceCue()?.step_count ?? 0} Static step(s)`}
+                      </span>
                     </div>
                     <div class="sceneBlockInspectorActions">
                       <button type="button" onClick={() => openSourcePicker(row(), draft())}>Change Source…</button>

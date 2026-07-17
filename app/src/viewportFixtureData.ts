@@ -539,6 +539,23 @@ const cueRecallCue: CueSummary = {
   tracking: true,
   notes: "",
   targets: [{ fixture_id: 1, values: [{ attribute: "Dimmer", value: 32_768 }] }],
+  steps: [
+    {
+      values: [{ fixture_id: 1, values: [{ attribute: "Dimmer", value: 12_000 }] }],
+      fade_ms: 250,
+      hold_ms: 750,
+    },
+    {
+      values: [{ fixture_id: 1, values: [{ attribute: "Dimmer", value: 42_000 }] }],
+      fade_ms: 500,
+      hold_ms: 500,
+    },
+    {
+      values: [{ fixture_id: 1, values: [{ attribute: "Dimmer", value: 65_535 }] }],
+      fade_ms: 1_000,
+      hold_ms: 250,
+    },
+  ],
   video_targets: [],
   video_output_targets: [],
   node_graph_targets: [{ graph_id: cueRecallNodeGraph.id, enabled: true }],

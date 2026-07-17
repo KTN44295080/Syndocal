@@ -6816,6 +6816,38 @@ async function runCueRecallViewport(client, viewport) {
   await sleep(80);
   await clickVisibleByText(client, ".cueItem .cueEffectRecallToolbar .buttonRow button", "Clear");
   await sleep(120);
+  const stepExercise = await client.evaluate(`(async () => {
+    const raf2 = () => new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const editor = document.querySelector('.cueItem [data-cue-step-editor]');
+    if (!(editor instanceof HTMLDetailsElement)) return null;
+    editor.open = true;
+    editor.scrollIntoView({ block: 'center', inline: 'nearest' });
+    await raf2();
+    const initialRows = [...editor.querySelectorAll('[data-cue-step-index]')];
+    const initialFadeValues = initialRows.map((row) => Number(row.querySelector('[data-cue-step-fade]')?.value));
+    const initialHoldValues = initialRows.map((row) => Number(row.querySelector('[data-cue-step-hold]')?.value));
+    const initialTotalLabel = (editor.querySelector('summary small')?.textContent || '').trim();
+    editor.querySelectorAll('[data-cue-step-duplicate]')[0]?.click();
+    await raf2();
+    const firstFade = editor.querySelectorAll('[data-cue-step-fade]')[0];
+    if (firstFade instanceof HTMLInputElement) {
+      firstFade.value = '375';
+      firstFade.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    await raf2();
+    editor.querySelectorAll('[data-cue-step-down]')[0]?.click();
+    await raf2();
+    editor.querySelector('[data-cue-step-add]')?.click();
+    await raf2();
+    editor.querySelector('[data-cue-step-use-beats]')?.click();
+    await raf2();
+    return {
+      initialCount: initialRows.length,
+      initialFadeValues,
+      initialHoldValues,
+      initialTotalLabel,
+    };
+  })()`);
   const actionReached = await client.evaluate(`(() => {
     const action = document.querySelector('.cueItem .cueSaveRecall');
     if (!action) return false;
@@ -6841,6 +6873,10 @@ async function runCueRecallViewport(client, viewport) {
     const saveRecall = document.querySelector('.cueItem .cueSaveRecall');
     const updateLook = document.querySelector('.cueItem .cueUpdateLook');
     const recallDetails = document.querySelector('.cueItem .cueEffectRecallEditor');
+    const stepEditor = document.querySelector('.cueItem [data-cue-step-editor]');
+    const stepList = stepEditor?.querySelector('.cueStepList');
+    const stepRows = [...(stepEditor?.querySelectorAll('[data-cue-step-index]') ?? [])];
+    const authoredBeats = document.querySelector('.cueItem [data-cue-authored-beats]');
     return {
       scope: document.querySelector('#cue-store-form select')?.value ?? '',
       recallDetailsOpen: Boolean(recallDetails?.open),
@@ -6853,6 +6889,21 @@ async function runCueRecallViewport(client, viewport) {
       updateLookDisabled: Boolean(updateLook?.disabled),
       actionCount: actions.length,
       fullyVisibleActionCount: actions.filter(fullyVisible).length,
+      stepEditorOpen: Boolean(stepEditor?.open),
+      stepCount: stepRows.length,
+      stepFadeValues: stepRows.map((row) => Number(row.querySelector('[data-cue-step-fade]')?.value)),
+      stepHoldValues: stepRows.map((row) => Number(row.querySelector('[data-cue-step-hold]')?.value)),
+      stepTotalLabel: (stepEditor?.querySelector('summary small')?.textContent || '').trim(),
+      stepDerivedLabel: (stepEditor?.querySelector('.cueStepToolbar span')?.textContent || '').trim(),
+      stepListOverflowY: stepList ? getComputedStyle(stepList).overflowY : '',
+      addButtonCount: stepEditor?.querySelectorAll('[data-cue-step-add]').length ?? 0,
+      duplicateButtonCount: stepEditor?.querySelectorAll('[data-cue-step-duplicate]').length ?? 0,
+      upButtonCount: stepEditor?.querySelectorAll('[data-cue-step-up]').length ?? 0,
+      downButtonCount: stepEditor?.querySelectorAll('[data-cue-step-down]').length ?? 0,
+      fadeInputCount: stepEditor?.querySelectorAll('[data-cue-step-fade]').length ?? 0,
+      holdInputCount: stepEditor?.querySelectorAll('[data-cue-step-hold]').length ?? 0,
+      saveStepsEnabled: !Boolean(stepEditor?.querySelector('[data-cue-step-save]')?.disabled),
+      authoredBeatsValue: authoredBeats instanceof HTMLInputElement ? Number(authoredBeats.value) : null,
     };
   })()`);
   if (shouldCaptureViewport(viewport)) {
@@ -6864,22 +6915,57 @@ async function runCueRecallViewport(client, viewport) {
       "base64",
     );
   }
-  const passed = Boolean(
-    actionReached &&
-    hasNoOuterOverflow(containment) &&
-    stats.scope === "effects" &&
-    stats.recallDetailsOpen &&
-    stats.recallCount === "0 / 1" &&
-    stats.saveDetailsLabel === "Save Details" &&
-    stats.saveRecallLabel === "Save Recall" &&
-    stats.updateLookLabel === "Update Look" &&
-    !stats.saveDetailsDisabled &&
-    !stats.saveRecallDisabled &&
-    !stats.updateLookDisabled &&
-    stats.actionCount === 3 &&
-    stats.fullyVisibleActionCount === 3
-  );
-  return { label: `cue-recall-${viewport.width}x${viewport.height}`, passed, containment, stats };
+  const conditions = [
+    ["cueActionReached", () => actionReached],
+    ["cueNoOuterOverflow", () => hasNoOuterOverflow(containment)],
+    ["cueEffectsScopeSelected", () => stats.scope === "effects"],
+    ["cueEffectRecallOpen", () => stats.recallDetailsOpen],
+    ["cueEffectRecallCleared", () => stats.recallCount === "0 / 1"],
+    ["cueSaveDetailsLabel", () => stats.saveDetailsLabel === "Save Details"],
+    ["cueSaveRecallLabel", () => stats.saveRecallLabel === "Save Recall"],
+    ["cueUpdateLookLabel", () => stats.updateLookLabel === "Update Look"],
+    ["cueSaveDetailsEnabled", () => !stats.saveDetailsDisabled],
+    ["cueSaveRecallEnabled", () => !stats.saveRecallDisabled],
+    ["cueUpdateLookEnabled", () => !stats.updateLookDisabled],
+    ["cueThreeActionsRendered", () => stats.actionCount === 3],
+    ["cueThreeActionsVisible", () => stats.fullyVisibleActionCount === 3],
+    ["cueThreeStepFixtureLoaded", () => stepExercise?.initialCount === 3],
+    ["cueStepFixtureFadeValues", () => JSON.stringify(stepExercise?.initialFadeValues) === JSON.stringify([250, 500, 1000])],
+    ["cueStepFixtureHoldValues", () => JSON.stringify(stepExercise?.initialHoldValues) === JSON.stringify([750, 500, 250])],
+    ["cueStepFixtureTotal", () => stepExercise?.initialTotalLabel === "3250 ms total"],
+    ["cueStepEditorOpen", () => stats.stepEditorOpen],
+    ["cueStepDuplicateAndAddApplied", () => stats.stepCount === 5],
+    ["cueStepFadeEditAndReorderApplied", () => JSON.stringify(stats.stepFadeValues) === JSON.stringify([250, 375, 500, 1000, 1000])],
+    ["cueStepHoldsPreserved", () => JSON.stringify(stats.stepHoldValues) === JSON.stringify([750, 750, 500, 250, 0])],
+    ["cueStepEditedTotal", () => stats.stepTotalLabel === "5375 ms total"],
+    ["cueStepDerivedBeatsVisible", () => stats.stepDerivedLabel === "10.750 beats at 120.0 BPM"],
+    ["cueStepAuthoredBeatsApplied", () => stats.authoredBeatsValue === 10.75],
+    ["cueStepUsesInternalScrollport", () => stats.stepListOverflowY === "auto" || stats.stepListOverflowY === "scroll"],
+    ["cueStepAddControlRendered", () => stats.addButtonCount === 1],
+    ["cueStepDuplicateControlsRendered", () => stats.duplicateButtonCount === 5],
+    ["cueStepUpControlsRendered", () => stats.upButtonCount === 5],
+    ["cueStepDownControlsRendered", () => stats.downButtonCount === 5],
+    ["cueStepFadeInputsRendered", () => stats.fadeInputCount === 5],
+    ["cueStepHoldInputsRendered", () => stats.holdInputCount === 5],
+    ["cueStepDirtySaveEnabled", () => stats.saveStepsEnabled],
+  ];
+  const checks = Object.fromEntries(conditions.map(([name, check]) => {
+    try {
+      return [name, Boolean(check())];
+    } catch {
+      return [name, false];
+    }
+  }));
+  const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  return {
+    label: `cue-recall-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    containment,
+    stepExercise,
+    stats,
+  };
 }
 
 async function runCueNodeGraphViewport(client, viewport) {
@@ -7968,6 +8054,7 @@ async function runSceneBlockLargeViewport(client, viewport) {
     const inspectorVisible = Boolean(inspector && inspector.getBoundingClientRect().width > 0);
     let rowSelected = false;
     let inspectorShowsRow = false;
+    let inspectorStepCountLabel = '';
     let startCommitApplied = false;
     let dirtyChipAfterCommit = true;
     if (firstRow) {
@@ -7976,6 +8063,7 @@ async function runSceneBlockLargeViewport(client, viewport) {
       rowSelected = firstRow.classList.contains('selected');
       const rowId = firstRow.getAttribute('data-scene-block-id') ?? '';
       inspectorShowsRow = Boolean(inspector?.textContent?.includes('#' + rowId));
+      inspectorStepCountLabel = (inspector?.querySelector('[data-scene-block-step-count]')?.textContent || '').trim();
       const startInput = inspector?.querySelector('[data-scene-block-inspector-start]');
       const marker = document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="' + rowId + '"]');
       const beforeStartMs = Number(marker?.getAttribute('data-timeline-start-ms'));
@@ -8007,6 +8095,7 @@ async function runSceneBlockLargeViewport(client, viewport) {
       finderRowCount: rows.length,
       rowSelected,
       inspectorShowsRow,
+      inspectorStepCountLabel,
       startCommitApplied,
       dirtyChipAfterCommit,
     };
@@ -8680,6 +8769,7 @@ async function runSceneBlockLargeViewport(client, viewport) {
     ['finderStats.finderRowCount > 0', () => Boolean((finderStats?.finderRowCount ?? 0) > 0)],
     ['finderStats.rowSelected', () => Boolean(finderStats?.rowSelected)],
     ['finderStats.inspectorShowsRow', () => Boolean(finderStats?.inspectorShowsRow)],
+    ['finderStats.inspectorStepCountLabel === "3 Static step(s)"', () => Boolean(finderStats?.inspectorStepCountLabel === '3 Static step(s)')],
     ['finderStats.startCommitApplied', () => Boolean(finderStats?.startCommitApplied)],
     ['finderStats.dirtyChipAfterCommit', () => Boolean(finderStats?.dirtyChipAfterCommit)],
     ['markerDragStats !== null', () => Boolean(markerDragStats !== null)],

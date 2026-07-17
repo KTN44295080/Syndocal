@@ -6879,6 +6879,15 @@ fn set_cue_child_timeline(
     state.engine.set_cue_child_timeline(cue_id, child_timeline)
 }
 
+#[tauri::command]
+fn set_cue_steps(
+    state: State<'_, AppState>,
+    cue_id: CueId,
+    steps: Vec<protocol::CueStepSummary>,
+) -> Result<(), String> {
+    state.engine.set_cue_steps_published(cue_id, steps)
+}
+
 fn validate_cue_authored_beats(authored_beats: Option<f32>) -> Result<(), String> {
     let Some(authored_beats) = authored_beats else {
         return Ok(());
@@ -15673,6 +15682,35 @@ fn validate_project_lighting_references(snapshot: &EngineSnapshot) -> Result<(),
                 &target.values,
                 &format!("cue {}", cue.id),
             )?;
+        }
+        let mut step_duration_ms = 0_u64;
+        for (step_index, step) in cue.steps.iter().enumerate() {
+            step_duration_ms = step_duration_ms
+                .checked_add(step.fade_ms)
+                .and_then(|value| value.checked_add(step.hold_ms))
+                .ok_or_else(|| {
+                    format!(
+                        "Project cue {} step {} duration exceeds the supported range",
+                        cue.id,
+                        step_index + 1
+                    )
+                })?;
+            validate_project_unique_refs(
+                &format!("cue {} step {} fixture target", cue.id, step_index + 1),
+                &step
+                    .values
+                    .iter()
+                    .map(|target| target.fixture_id)
+                    .collect::<Vec<_>>(),
+            )?;
+            for target in &step.values {
+                validate_project_fixture_attribute_values_for_target(
+                    &fixtures_by_id,
+                    target.fixture_id,
+                    &target.values,
+                    &format!("cue {} step {}", cue.id, step_index + 1),
+                )?;
+            }
         }
         validate_project_unique_refs(
             &format!("cue {} palette", cue.id),
@@ -29745,6 +29783,58 @@ f 1 2 3
     }
 
     #[test]
+    fn project_cue_steps_sdc_roundtrip_and_legacy_default() {
+        let mut project = empty_project_file();
+        project.snapshot.fixtures = vec![project_fixture(1, "Step Fixture", 0, 1)];
+        let steps = vec![
+            protocol::CueStepSummary {
+                values: vec![protocol::CueFixtureTarget {
+                    fixture_id: 1,
+                    values: vec![protocol::AttributeValueSummary {
+                        attribute: "Dimmer".to_string(),
+                        value: 12_000,
+                    }],
+                }],
+                fade_ms: 250,
+                hold_ms: 750,
+            },
+            protocol::CueStepSummary {
+                values: vec![protocol::CueFixtureTarget {
+                    fixture_id: 1,
+                    values: vec![protocol::AttributeValueSummary {
+                        attribute: "Dimmer".to_string(),
+                        value: 48_000,
+                    }],
+                }],
+                fade_ms: 500,
+                hold_ms: 500,
+            },
+        ];
+        project.snapshot.cues = vec![protocol::CueSummary {
+            id: 7,
+            label: "Multi-step look".to_string(),
+            targets: steps[0].values.clone(),
+            steps: steps.clone(),
+            ..protocol::CueSummary::default()
+        }];
+        validate_project_file(&project).unwrap();
+
+        let json = project_json_for_write(&project).unwrap();
+        let roundtrip: ProjectFile = serde_json::from_str(&json).unwrap();
+        validate_project_file(&roundtrip).unwrap();
+        assert_eq!(roundtrip.snapshot.cues[0].steps, steps);
+
+        let mut legacy = serde_json::to_value(project).unwrap();
+        legacy["snapshot"]["cues"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("steps");
+        let legacy: ProjectFile = serde_json::from_value(legacy).unwrap();
+        validate_project_file(&legacy).unwrap();
+        assert!(legacy.snapshot.cues[0].steps.is_empty());
+    }
+
+    #[test]
     fn project_scene_matrix_cue_fields_roundtrip() {
         let mut project: ProjectFile = serde_json::from_str(PHASE1_SAMPLE_PROJECT_JSON).unwrap();
         project.snapshot.cues[0].group_id = Some("Front".to_string());
@@ -37358,6 +37448,7 @@ fn main() {
             set_cue_effect_targets,
             set_cue_metadata,
             set_cue_child_timeline,
+            set_cue_steps,
             move_cue,
             duplicate_cue,
             trigger_cue,

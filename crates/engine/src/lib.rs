@@ -30,12 +30,12 @@ use protocol::{
     ChildTimelineSummary, ClockSnapshot, ClockSource, ColorEffectAlgorithm, ColorEffectColor,
     ColorEffectInterpolation, ColorEffectRequest, CompositionId, CompositionSummary,
     CueEffectTarget, CueFixtureTarget, CueId, CueIfcbTiming, CueListId, CueListSummary,
-    CueNodeGraphTarget, CuePaletteTarget, CuePartSummary, CueSummary, DmxMergeMode, DmxModeSummary,
-    DmxOutputConfig, DmxOutputProtocol, DmxOutputRouteTelemetry, DmxUniversePreview,
-    EffectBlendMode, EffectId, EffectKind, EffectParamsSnapshot, EffectSummary, EngineSnapshot,
-    EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId, FixtureId, FixtureLimits,
-    FixtureProfileSummary, LfoEffectRequest, LfoShape, LiveAudioFrame, LiveAudioReactiveFeatures,
-    MoveCoordinateMode, MoveDirection, MoveEffectRequest, MovePathPoint,
+    CueNodeGraphTarget, CuePaletteTarget, CuePartSummary, CueStepSummary, CueSummary, DmxMergeMode,
+    DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, DmxOutputRouteTelemetry,
+    DmxUniversePreview, EffectBlendMode, EffectId, EffectKind, EffectParamsSnapshot, EffectSummary,
+    EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId, FixtureId,
+    FixtureLimits, FixtureProfileSummary, LfoEffectRequest, LfoShape, LiveAudioFrame,
+    LiveAudioReactiveFeatures, MoveCoordinateMode, MoveDirection, MoveEffectRequest, MovePathPoint,
     NodeGraphAudioRuntimeStatus, NodeGraphId, NodeGraphNodeKind, NodeGraphNodeSummary,
     NodeGraphSummary, NodeGraphTransformOp, PaletteId, PatchFixtureRequest, PatchedFixtureSummary,
     PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot, ProgrammerValueSummary,
@@ -483,6 +483,12 @@ pub enum EngineCommand {
     SetCueEffectTargetsPublished {
         cue_id: CueId,
         effect_targets: Vec<CueEffectTarget>,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    SetCueStepsPublished {
+        cue_id: CueId,
+        steps: Vec<CueStepSummary>,
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
@@ -1035,6 +1041,7 @@ impl EngineCommand {
                 | EngineCommand::UpdateCue { .. }
                 | EngineCommand::UpdateCuePublished { .. }
                 | EngineCommand::SetCueEffectTargetsPublished { .. }
+                | EngineCommand::SetCueStepsPublished { .. }
                 | EngineCommand::SetCueDetailsPublished { .. }
                 | EngineCommand::SetCueMetadata { .. }
                 | EngineCommand::SetCueParts { .. }
@@ -1724,6 +1731,24 @@ impl EngineHandle {
         receiver
             .recv_timeout(Duration::from_secs(3))
             .map_err(|error| format!("Cue effect-target update acknowledgement failed: {error}"))?
+    }
+
+    pub fn set_cue_steps_published(
+        &self,
+        cue_id: CueId,
+        steps: Vec<CueStepSummary>,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::SetCueStepsPublished {
+            cue_id,
+            steps,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Cue step update acknowledgement failed: {error}"))?
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2590,6 +2615,64 @@ struct RuntimeEffectActivation {
 }
 
 #[derive(Clone)]
+struct RuntimeCueStepValue {
+    fixture_id: FixtureId,
+    attribute: String,
+    value: u16,
+}
+
+#[derive(Clone)]
+struct RuntimeCueStep {
+    starts_at_ms: u64,
+    fade_ms: u64,
+    ends_at_ms: u64,
+    values: Vec<RuntimeCueStepValue>,
+}
+
+#[derive(Clone, Default)]
+struct RuntimeCueStepSequence {
+    steps: Vec<RuntimeCueStep>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct RuntimeCueStepActivationRange {
+    start: usize,
+    len: usize,
+}
+
+impl RuntimeCueStepActivationRange {
+    fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
+    fn end(self) -> usize {
+        self.start.saturating_add(self.len)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeCueStepClock {
+    Realtime {
+        started_at: Instant,
+    },
+    Timeline {
+        starts_at_ms: u64,
+    },
+    ChildTimeline {
+        transport_index: usize,
+        starts_at_ms: u64,
+    },
+}
+
+#[derive(Clone)]
+struct RuntimeCueStepActivation {
+    cue_index: usize,
+    key: Option<RuntimeEffectActivationKey>,
+    rate: f32,
+    clock: RuntimeCueStepClock,
+}
+
+#[derive(Clone)]
 struct RuntimeNodeGraph {
     summary: NodeGraphSummary,
     created_at: Instant,
@@ -2967,8 +3050,11 @@ struct RuntimeCue {
     video_output_targets: Vec<VideoOutputTarget>,
     node_graph_targets: Vec<CueNodeGraphTarget>,
     effect_targets: Vec<CueEffectTarget>,
+    steps: Vec<CueStepSummary>,
     child_timeline: Option<ChildTimelineSummary>,
     effect_activation_range: RuntimeEffectActivationRange,
+    step_sequence: RuntimeCueStepSequence,
+    step_activation_range: RuntimeCueStepActivationRange,
 }
 
 struct CueBody {
@@ -3021,8 +3107,11 @@ struct PendingTimelineEffectActivation {
     iteration: u64,
     child_parent: Option<(TimelineEventId, u64)>,
     range: RuntimeEffectActivationRange,
+    step_range: RuntimeCueStepActivationRange,
     rate: f32,
+    step_rate: f32,
     created_at: Instant,
+    step_clock: RuntimeCueStepClock,
 }
 
 #[derive(Clone)]
@@ -3111,6 +3200,7 @@ struct RuntimeChildTransport {
     due: Vec<TimelineCueOccurrence>,
     dispatch: Vec<Option<CueDispatchEntry>>,
     effect_activation_ranges: Vec<RuntimeEffectActivationRange>,
+    step_activation_ranges: Vec<RuntimeCueStepActivationRange>,
 }
 
 #[derive(Clone)]
@@ -3362,7 +3452,10 @@ struct EngineRuntime {
     effects: Vec<RuntimeEffect>,
     effect_activations: Vec<RuntimeEffectActivation>,
     active_effect_activation_indices: Vec<usize>,
+    step_activations: Vec<RuntimeCueStepActivation>,
+    active_step_activation_indices: Vec<usize>,
     timeline_effect_activation_ranges: Vec<RuntimeEffectActivationRange>,
+    timeline_step_activation_ranges: Vec<RuntimeCueStepActivationRange>,
     child_transports: Vec<RuntimeChildTransport>,
     child_transport_by_parent_event: Vec<Option<usize>>,
     node_graphs: Vec<RuntimeNodeGraph>,
@@ -3550,7 +3643,10 @@ impl EngineRuntime {
             effects: Vec::new(),
             effect_activations: Vec::new(),
             active_effect_activation_indices: Vec::new(),
+            step_activations: Vec::new(),
+            active_step_activation_indices: Vec::new(),
             timeline_effect_activation_ranges: Vec::new(),
+            timeline_step_activation_ranges: Vec::new(),
             child_transports: Vec::new(),
             child_transport_by_parent_event: Vec::new(),
             node_graphs: Vec::new(),
@@ -4064,6 +4160,8 @@ impl EngineRuntime {
                     &self.fixtures,
                 );
                 let effect_targets = cue.effect_targets;
+                let steps = self.resolve_cue_steps(cue.steps).ok()?;
+                let step_sequence = runtime_cue_step_sequence(&steps);
                 let mib_fixture_ids =
                     reconcile_mib_fixture_ids(cue.mib_fixture_ids, &targets, &palette_targets);
                 Some(RuntimeCue {
@@ -4094,8 +4192,11 @@ impl EngineRuntime {
                     video_output_targets,
                     node_graph_targets,
                     effect_targets,
+                    steps,
                     child_timeline: cue.child_timeline,
                     effect_activation_range: RuntimeEffectActivationRange::default(),
+                    step_sequence,
+                    step_activation_range: RuntimeCueStepActivationRange::default(),
                 })
             })
             .collect();
@@ -4391,6 +4492,7 @@ impl EngineRuntime {
                     | EngineCommand::CreateCuePublished { .. }
                     | EngineCommand::UpdateCuePublished { .. }
                     | EngineCommand::SetCueEffectTargetsPublished { .. }
+                    | EngineCommand::SetCueStepsPublished { .. }
                     | EngineCommand::SetCueDetailsPublished { .. }
                     | EngineCommand::SetCueChildTimeline { .. }
                     | EngineCommand::ReconformTimelineToBpm { .. }
@@ -6054,6 +6156,47 @@ impl EngineRuntime {
                     rollback,
                     publication_error:
                         "Engine snapshot was busy; Cue effect-target update was rolled back",
+                });
+            }
+            EngineCommand::SetCueStepsPublished {
+                cue_id,
+                steps,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreCueRemoval {
+                    cues: self.cues.clone(),
+                    cue_lists: self.cue_lists.clone(),
+                    cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
+                    active_group_cue_ids: self.active_group_cue_ids.clone(),
+                    cue_release_values: self.cue_release_values.clone(),
+                    timeline_events: self.timeline_events.clone(),
+                    active_cue_id: self.active_cue_id,
+                    active_fade: self.active_fade.clone(),
+                    pending_cues: self.pending_cues.clone(),
+                    timeline_position_ms: self.timeline_position_ms,
+                    timeline_playhead_boundary_armed: self.timeline_playhead_boundary_armed,
+                    timeline_evaluated_boundary_position_ms: self
+                        .timeline_evaluated_boundary_position_ms,
+                    timeline_jump_landed_event_id: self.timeline_jump_landed_event_id,
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Cue step update expired before engine execution".to_string())
+                } else {
+                    self.set_cue_steps_state(cue_id, steps)
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error: "Engine snapshot was busy; Cue step update was rolled back",
                 });
             }
             EngineCommand::SetCueDetailsPublished {
@@ -10149,7 +10292,8 @@ impl EngineRuntime {
         let value = if programmer_value.is_some() {
             value
         } else {
-            self.apply_playback_level(fixture.id, &control.attribute, value)
+            let value = self.apply_playback_level(fixture.id, &control.attribute, value);
+            self.apply_cue_step_activations(fixture.id, &control.attribute, value, now)
         };
         let value = self.apply_effects(fixture, &control.attribute, value, now);
         let value = apply_highlight(
@@ -10375,8 +10519,11 @@ impl EngineRuntime {
             video_output_targets,
             node_graph_targets,
             effect_targets,
+            steps: Vec::new(),
             child_timeline: None,
             effect_activation_range: RuntimeEffectActivationRange::default(),
+            step_sequence: RuntimeCueStepSequence::default(),
+            step_activation_range: RuntimeCueStepActivationRange::default(),
         });
         if reconform_referenced_events {
             let bpm = self.clock.bpm;
@@ -10465,10 +10612,11 @@ impl EngineRuntime {
             || !cue.palette_targets.is_empty()
             || !cue.video_targets.is_empty()
             || !cue.video_output_targets.is_empty()
-            || !cue.node_graph_targets.is_empty();
+            || !cue.node_graph_targets.is_empty()
+            || !cue.steps.is_empty();
         if effect_targets.is_empty() && !has_non_effect_target {
             return Err(format!(
-                "Cue {cue_id} must keep at least one fixture, palette, video, output, node graph, or effect target"
+                "Cue {cue_id} must keep at least one fixture, palette, video, output, node graph, step, or effect target"
             ));
         }
         let reconform_referenced_events = self.timeline_has_conformed_events_for_cue(cue_id);
@@ -10490,6 +10638,42 @@ impl EngineRuntime {
                 return Err(error);
             }
         }
+        Ok(())
+    }
+
+    fn set_cue_steps_state(
+        &mut self,
+        cue_id: CueId,
+        steps: Vec<CueStepSummary>,
+    ) -> Result<(), String> {
+        let cue_index = self
+            .cues
+            .iter()
+            .position(|cue| cue.id == cue_id)
+            .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
+        let steps = self.resolve_cue_steps(steps)?;
+        let cue = self
+            .cues
+            .get(cue_index)
+            .expect("resolved Cue index must remain valid");
+        let has_non_step_target = !cue.targets.is_empty()
+            || !cue.palette_targets.is_empty()
+            || !cue.video_targets.is_empty()
+            || !cue.video_output_targets.is_empty()
+            || !cue.node_graph_targets.is_empty()
+            || !cue.effect_targets.is_empty();
+        if steps.is_empty() && !has_non_step_target {
+            return Err(format!(
+                "Cue {cue_id} must keep at least one fixture, palette, video, output, node graph, step, or effect target"
+            ));
+        }
+        let step_sequence = runtime_cue_step_sequence(&steps);
+        let cue = self
+            .cues
+            .get_mut(cue_index)
+            .expect("resolved Cue index must remain valid");
+        cue.steps = steps;
+        cue.step_sequence = step_sequence;
         Ok(())
     }
 
@@ -10804,6 +10988,52 @@ impl EngineRuntime {
         Ok(targets)
     }
 
+    fn resolve_cue_steps(&self, steps: Vec<CueStepSummary>) -> Result<Vec<CueStepSummary>, String> {
+        let mut elapsed_ms = 0_u64;
+        let mut resolved = Vec::with_capacity(steps.len());
+        for (index, step) in steps.into_iter().enumerate() {
+            elapsed_ms = elapsed_ms
+                .checked_add(step.fade_ms)
+                .and_then(|value| value.checked_add(step.hold_ms))
+                .ok_or_else(|| {
+                    format!(
+                        "Cue step {} duration exceeds the supported range",
+                        index + 1
+                    )
+                })?;
+            let mut fixture_ids = HashSet::new();
+            for target in &step.values {
+                if !fixture_ids.insert(target.fixture_id) {
+                    return Err(format!(
+                        "Fixture {} is targeted more than once by Cue step {}",
+                        target.fixture_id,
+                        index + 1
+                    ));
+                }
+                let mut attributes = HashSet::new();
+                for value in &target.values {
+                    let normalized = value.attribute.trim().to_ascii_lowercase();
+                    if !attributes.insert(normalized) {
+                        return Err(format!(
+                            "Attribute '{}' is targeted more than once for fixture {} by Cue step {}",
+                            value.attribute,
+                            target.fixture_id,
+                            index + 1
+                        ));
+                    }
+                }
+            }
+            let (values, _, _, _) =
+                self.resolve_cue_targets(step.values, Vec::new(), Vec::new(), Vec::new())?;
+            resolved.push(CueStepSummary {
+                values,
+                fade_ms: step.fade_ms,
+                hold_ms: step.hold_ms,
+            });
+        }
+        Ok(resolved)
+    }
+
     fn runtime_effect_from_params_snapshot(
         &self,
         effect_id: EffectId,
@@ -10967,6 +11197,7 @@ impl EngineRuntime {
                 due: Vec::with_capacity(required_due_capacity),
                 dispatch,
                 effect_activation_ranges: Vec::new(),
+                step_activation_ranges: Vec::new(),
             });
         }
         let required_pending_capacity = self
@@ -11258,6 +11489,7 @@ impl EngineRuntime {
             );
         }
 
+        self.rebuild_step_activations(now);
         let pending_event_ranges = self
             .timeline_events
             .iter()
@@ -11267,6 +11499,10 @@ impl EngineRuntime {
                     event.id,
                     event.cue_id,
                     self.timeline_effect_activation_ranges
+                        .get(event_index)
+                        .copied()
+                        .unwrap_or_default(),
+                    self.timeline_step_activation_ranges
                         .get(event_index)
                         .copied()
                         .unwrap_or_default(),
@@ -11285,17 +11521,19 @@ impl EngineRuntime {
             let Some(activation) = pending.timeline_effect_activation.as_mut() else {
                 return true;
             };
-            let Some((_, _, range, rate)) =
+            let Some((_, _, range, step_range, rate)) =
                 pending_event_ranges
                     .iter()
-                    .find(|(event_id, cue_id, _, _)| {
+                    .find(|(event_id, cue_id, _, _, _)| {
                         *event_id == activation.event_id && *cue_id == activation.cue_id
                     })
             else {
                 return false;
             };
             activation.range = *range;
+            activation.step_range = *step_range;
             activation.rate = *rate;
+            activation.step_rate = *rate;
             true
         });
 
@@ -11304,6 +11542,248 @@ impl EngineRuntime {
                 "Cue-owned effect activation could not be built: {error}"
             ));
         }
+    }
+
+    fn rebuild_step_activations(&mut self, now: Instant) {
+        let previously_active = self
+            .active_step_activation_indices
+            .iter()
+            .filter_map(|index| self.step_activations.get(*index))
+            .filter_map(|activation| {
+                activation
+                    .key
+                    .map(|key| (key, activation.clock, activation.rate))
+            })
+            .collect::<Vec<_>>();
+        self.step_activations.clear();
+        self.active_step_activation_indices.clear();
+        self.timeline_step_activation_ranges.clear();
+        self.timeline_step_activation_ranges.resize(
+            self.timeline_events.len(),
+            RuntimeCueStepActivationRange::default(),
+        );
+
+        for cue_index in 0..self.cues.len() {
+            let sequence = runtime_cue_step_sequence(&self.cues[cue_index].steps);
+            self.cues[cue_index].step_sequence = sequence;
+            let start = self.step_activations.len();
+            if !self.cues[cue_index].step_sequence.steps.is_empty() {
+                self.step_activations.push(RuntimeCueStepActivation {
+                    cue_index,
+                    key: None,
+                    rate: 1.0,
+                    clock: RuntimeCueStepClock::Realtime { started_at: now },
+                });
+            }
+            self.cues[cue_index].step_activation_range = RuntimeCueStepActivationRange {
+                start,
+                len: self.step_activations.len().saturating_sub(start),
+            };
+        }
+
+        for event_index in 0..self.timeline_events.len() {
+            let start = self.step_activations.len();
+            if let Some(cue_index) = self
+                .cues
+                .iter()
+                .position(|cue| cue.id == self.timeline_events[event_index].cue_id)
+                .filter(|index| !self.cues[*index].step_sequence.steps.is_empty())
+            {
+                self.step_activations.push(RuntimeCueStepActivation {
+                    cue_index,
+                    key: None,
+                    rate: 1.0,
+                    clock: RuntimeCueStepClock::Timeline { starts_at_ms: 0 },
+                });
+            }
+            self.timeline_step_activation_ranges[event_index] = RuntimeCueStepActivationRange {
+                start,
+                len: self.step_activations.len().saturating_sub(start),
+            };
+        }
+
+        for transport_index in 0..self.child_transports.len() {
+            let event_count = self.child_transports[transport_index].events.len();
+            self.child_transports[transport_index]
+                .step_activation_ranges
+                .clear();
+            self.child_transports[transport_index]
+                .step_activation_ranges
+                .resize(event_count, RuntimeCueStepActivationRange::default());
+            for event_index in 0..event_count {
+                let start = self.step_activations.len();
+                let cue_id = self.child_transports[transport_index].events[event_index].cue_id;
+                if let Some(cue_index) = self
+                    .cues
+                    .iter()
+                    .position(|cue| cue.id == cue_id)
+                    .filter(|index| !self.cues[*index].step_sequence.steps.is_empty())
+                {
+                    self.step_activations.push(RuntimeCueStepActivation {
+                        cue_index,
+                        key: None,
+                        rate: 1.0,
+                        clock: RuntimeCueStepClock::ChildTimeline {
+                            transport_index,
+                            starts_at_ms: 0,
+                        },
+                    });
+                }
+                self.child_transports[transport_index].step_activation_ranges[event_index] =
+                    RuntimeCueStepActivationRange {
+                        start,
+                        len: self.step_activations.len().saturating_sub(start),
+                    };
+            }
+        }
+        self.active_step_activation_indices
+            .reserve(self.step_activations.len());
+
+        let active_cue_lists = self
+            .cue_list_effect_activation_cues
+            .iter()
+            .map(|(cue_list_id, cue_id)| (*cue_list_id, *cue_id))
+            .collect::<Vec<_>>();
+        for (cue_list_id, cue_id) in active_cue_lists {
+            let Some(cue) = self.cues.iter().find(|cue| cue.id == cue_id) else {
+                continue;
+            };
+            let key = RuntimeEffectActivationKey::CueList {
+                cue_list_id,
+                cue_id,
+            };
+            let (clock, rate) = previously_active
+                .iter()
+                .find(|(candidate, _, _)| *candidate == key)
+                .map(|(_, clock, rate)| (*clock, *rate))
+                .unwrap_or((RuntimeCueStepClock::Realtime { started_at: now }, 1.0));
+            self.activate_step_range(cue.step_activation_range, key, clock, rate);
+        }
+
+        for event_index in 0..self.timeline_events.len() {
+            let event = &self.timeline_events[event_index];
+            if event.duration_ms == 0
+                || event.layer_muted_effective
+                || self.timeline_position_ms < event.time_ms
+                || self.timeline_position_ms >= timeline_event_end_ms(event)
+            {
+                continue;
+            }
+            let period_ms = timeline_event_iteration_period_ms(event).max(1);
+            let iteration = ((self.timeline_position_ms - event.time_ms) / period_ms)
+                .min(u64::from(event.loop_count.saturating_sub(1)));
+            let starts_at_ms = event
+                .time_ms
+                .saturating_add(iteration.saturating_mul(period_ms));
+            let range = self.timeline_step_activation_ranges[event_index];
+            let key = RuntimeEffectActivationKey::Timeline {
+                event_id: event.id,
+                cue_id: event.cue_id,
+                iteration,
+            };
+            let rate = valid_effect_rate(event.rate.unwrap_or(1.0));
+            self.activate_step_range(
+                range,
+                key,
+                RuntimeCueStepClock::Timeline { starts_at_ms },
+                rate,
+            );
+        }
+    }
+
+    fn activate_step_range(
+        &mut self,
+        range: RuntimeCueStepActivationRange,
+        key: RuntimeEffectActivationKey,
+        clock: RuntimeCueStepClock,
+        rate: f32,
+    ) {
+        let end = range.end().min(self.step_activations.len());
+        for index in range.start.min(end)..end {
+            let activation = &mut self.step_activations[index];
+            let was_inactive = activation.key.is_none();
+            activation.key = Some(key);
+            activation.clock = clock;
+            activation.rate = valid_effect_rate(rate);
+            if was_inactive {
+                self.active_step_activation_indices.push(index);
+            } else {
+                self.active_step_activation_indices
+                    .retain(|candidate| *candidate != index);
+                self.active_step_activation_indices.push(index);
+            }
+        }
+    }
+
+    fn deactivate_step_range(&mut self, range: RuntimeCueStepActivationRange) {
+        if range.is_empty() {
+            return;
+        }
+        let end = range.end().min(self.step_activations.len());
+        for activation in &mut self.step_activations[range.start.min(end)..end] {
+            activation.key = None;
+        }
+        self.active_step_activation_indices
+            .retain(|index| *index < range.start || *index >= end);
+    }
+
+    fn cue_step_activation_position_ms(
+        &self,
+        activation: &RuntimeCueStepActivation,
+        now: Instant,
+    ) -> Option<u64> {
+        let elapsed_ms = match activation.clock {
+            RuntimeCueStepClock::Realtime { started_at } => {
+                now.saturating_duration_since(started_at).as_millis() as u64
+            }
+            RuntimeCueStepClock::Timeline { starts_at_ms } => {
+                self.timeline_position_ms.saturating_sub(starts_at_ms)
+            }
+            RuntimeCueStepClock::ChildTimeline {
+                transport_index,
+                starts_at_ms,
+            } => {
+                let transport = self.child_transports.get(transport_index)?;
+                if !transport.active {
+                    return None;
+                }
+                transport.position_ms.saturating_sub(starts_at_ms)
+            }
+        };
+        Some(
+            ((elapsed_ms as f64) * f64::from(activation.rate))
+                .floor()
+                .clamp(0.0, u64::MAX as f64) as u64,
+        )
+    }
+
+    fn apply_cue_step_activations(
+        &self,
+        fixture_id: FixtureId,
+        attribute: &str,
+        base_value: u16,
+        now: Instant,
+    ) -> u16 {
+        let mut value = base_value;
+        for index in &self.active_step_activation_indices {
+            let Some(activation) = self.step_activations.get(*index) else {
+                continue;
+            };
+            let Some(position_ms) = self.cue_step_activation_position_ms(activation, now) else {
+                continue;
+            };
+            let Some(cue) = self.cues.get(activation.cue_index) else {
+                continue;
+            };
+            value = evaluate_cue_step_sequence(
+                &cue.step_sequence,
+                fixture_id,
+                attribute,
+                value,
+                position_ms,
+            );
+        }
+        value
     }
 
     fn activate_effect_range(
@@ -11371,8 +11851,14 @@ impl EngineRuntime {
                     .get(&key)
                     .copied()
                     .unwrap_or(control.default_value);
+                let step_value = self.apply_cue_step_activations(
+                    fixture.id,
+                    &control.attribute,
+                    base_value,
+                    now,
+                );
                 let effective_value =
-                    self.apply_effects(fixture, &control.attribute, base_value, now);
+                    self.apply_effects(fixture, &control.attribute, step_value, now);
                 if cue_values.contains_key(&key) || effective_value != base_value {
                     start_values.insert(key, effective_value);
                 }
@@ -11442,6 +11928,19 @@ impl EngineRuntime {
         }
         self.active_effect_activation_indices
             .retain(|index| self.effect_activations[*index].key.is_some());
+        for activation in &mut self.step_activations {
+            if matches!(
+                activation.key,
+                Some(RuntimeEffectActivationKey::CueList {
+                    cue_list_id: candidate,
+                    ..
+                }) if candidate == cue_list_id
+            ) {
+                activation.key = None;
+            }
+        }
+        self.active_step_activation_indices
+            .retain(|index| self.step_activations[*index].key.is_some());
     }
 
     fn deactivate_cue_effect_activations(&mut self, cue_id: CueId) {
@@ -11464,6 +11963,25 @@ impl EngineRuntime {
         }
         self.active_effect_activation_indices
             .retain(|index| self.effect_activations[*index].key.is_some());
+        for activation in &mut self.step_activations {
+            if matches!(
+                activation.key,
+                Some(RuntimeEffectActivationKey::Timeline {
+                    cue_id: candidate,
+                    ..
+                } | RuntimeEffectActivationKey::ChildTimeline {
+                    cue_id: candidate,
+                    ..
+                } | RuntimeEffectActivationKey::CueList {
+                    cue_id: candidate,
+                    ..
+                }) if candidate == cue_id
+            ) {
+                activation.key = None;
+            }
+        }
+        self.active_step_activation_indices
+            .retain(|index| self.step_activations[*index].key.is_some());
     }
 
     fn deactivate_all_timeline_effect_activations(&mut self) {
@@ -11480,6 +11998,19 @@ impl EngineRuntime {
         }
         self.active_effect_activation_indices
             .retain(|index| self.effect_activations[*index].key.is_some());
+        for activation in &mut self.step_activations {
+            if matches!(
+                activation.key,
+                Some(
+                    RuntimeEffectActivationKey::Timeline { .. }
+                        | RuntimeEffectActivationKey::ChildTimeline { .. }
+                )
+            ) {
+                activation.key = None;
+            }
+        }
+        self.active_step_activation_indices
+            .retain(|index| self.step_activations[*index].key.is_some());
         self.pending_cues
             .retain(|pending| pending.timeline_effect_activation.is_none());
     }
@@ -11530,6 +12061,41 @@ impl EngineRuntime {
         }
         self.active_effect_activation_indices
             .retain(|index| self.effect_activations[*index].key.is_some());
+
+        for activation in &mut self.step_activations {
+            let Some(RuntimeEffectActivationKey::Timeline {
+                event_id, cue_id, ..
+            }) = activation.key
+            else {
+                continue;
+            };
+            let Some(event) = timeline_events.iter().find(|event| {
+                event.id == event_id
+                    && event.cue_id == cue_id
+                    && !event.layer_muted_effective
+                    && event.duration_ms > 0
+                    && position_ms >= event.time_ms
+                    && position_ms < timeline_event_end_ms(event)
+            }) else {
+                activation.key = None;
+                continue;
+            };
+            let period_ms = timeline_event_iteration_period_ms(event).max(1);
+            let iteration = ((position_ms - event.time_ms) / period_ms)
+                .min(u64::from(event.loop_count.saturating_sub(1)));
+            let starts_at_ms = event
+                .time_ms
+                .saturating_add(iteration.saturating_mul(period_ms));
+            activation.key = Some(RuntimeEffectActivationKey::Timeline {
+                event_id,
+                cue_id,
+                iteration,
+            });
+            activation.clock = RuntimeCueStepClock::Timeline { starts_at_ms };
+            activation.rate = valid_effect_rate(event.rate.unwrap_or(1.0));
+        }
+        self.active_step_activation_indices
+            .retain(|index| self.step_activations[*index].key.is_some());
 
         let timeline_events = &self.timeline_events;
         self.pending_cues.retain(|pending| {
@@ -13440,20 +14006,31 @@ impl EngineRuntime {
             .get(event_index)
             .copied()
             .unwrap_or_default();
-        let timeline_effect_activation =
-            (duration_ms > 0 && !range.is_empty()).then_some(PendingTimelineEffectActivation {
-                event_id,
-                cue_id,
-                iteration: 0,
-                child_parent: None,
-                range,
-                rate,
-                created_at: if dispatch.pre_wait_ms == 0 {
-                    now
-                } else {
-                    due_at
-                },
-            });
+        let step_range = self
+            .timeline_step_activation_ranges
+            .get(event_index)
+            .copied()
+            .unwrap_or_default();
+        let timeline_effect_activation = (duration_ms > 0
+            && (!range.is_empty() || !step_range.is_empty()))
+        .then_some(PendingTimelineEffectActivation {
+            event_id,
+            cue_id,
+            iteration: 0,
+            child_parent: None,
+            range,
+            step_range,
+            rate,
+            step_rate: rate,
+            created_at: if dispatch.pre_wait_ms == 0 {
+                now
+            } else {
+                due_at
+            },
+            step_clock: RuntimeCueStepClock::Timeline {
+                starts_at_ms: event.time_ms,
+            },
+        });
         self.enqueue_pending_cue(PendingCueTrigger {
             cue_id,
             due_at,
@@ -13683,16 +14260,24 @@ impl EngineRuntime {
                 activation.created_at,
                 activation.rate,
             );
+            self.activate_step_range(
+                activation.step_range,
+                key,
+                activation.step_clock,
+                activation.step_rate,
+            );
         } else {
             self.cue_list_effect_activation_cues
                 .insert(cue.cue_list_id, cue_id);
-            self.activate_effect_range(
-                cue.effect_activation_range,
-                RuntimeEffectActivationKey::CueList {
-                    cue_list_id: cue.cue_list_id,
-                    cue_id,
-                },
-                now,
+            let key = RuntimeEffectActivationKey::CueList {
+                cue_list_id: cue.cue_list_id,
+                cue_id,
+            };
+            self.activate_effect_range(cue.effect_activation_range, key, now, 1.0);
+            self.activate_step_range(
+                cue.step_activation_range,
+                key,
+                RuntimeCueStepClock::Realtime { started_at: now },
                 1.0,
             );
         }
@@ -14459,6 +15044,15 @@ impl EngineRuntime {
                 self.child_transports[transport_index].effect_activation_ranges[range_index];
             self.deactivate_effect_range(range);
         }
+        let step_range_count = self
+            .child_transports
+            .get(transport_index)
+            .map(|transport| transport.step_activation_ranges.len())
+            .unwrap_or(0);
+        for range_index in 0..step_range_count {
+            let range = self.child_transports[transport_index].step_activation_ranges[range_index];
+            self.deactivate_step_range(range);
+        }
         let parent_event_id = self.child_transports[transport_index].parent_event_id;
         self.pending_cues.retain(|pending| {
             pending.timeline_effect_activation.is_none_or(|activation| {
@@ -14550,8 +15144,14 @@ impl EngineRuntime {
                 .get(occurrence.event_index)
                 .copied()
                 .unwrap_or_default();
+            let step_range = self.child_transports[transport_index]
+                .step_activation_ranges
+                .get(occurrence.event_index)
+                .copied()
+                .unwrap_or_default();
             if matches!(occurrence.kind, TimelineCueOccurrenceKind::End) {
                 self.deactivate_effect_range(range);
+                self.deactivate_step_range(step_range);
                 self.pending_cues.retain(|pending| {
                     pending.timeline_effect_activation.is_none_or(|activation| {
                         activation.child_parent
@@ -14566,6 +15166,7 @@ impl EngineRuntime {
             }
             if matches!(occurrence.kind, TimelineCueOccurrenceKind::FadeOutStart) {
                 self.deactivate_effect_range(range);
+                self.deactivate_step_range(step_range);
                 continue;
             }
             let Some(dispatch) = self.child_transports[transport_index]
@@ -14590,7 +15191,9 @@ impl EngineRuntime {
             let timeline_effect_activation = self.child_transports[transport_index]
                 .events
                 .get(occurrence.event_index)
-                .filter(|event| event.duration_ms > 0 && !range.is_empty())
+                .filter(|event| {
+                    event.duration_ms > 0 && (!range.is_empty() || !step_range.is_empty())
+                })
                 .map(|_| PendingTimelineEffectActivation {
                     event_id: occurrence.event_id,
                     cue_id: occurrence.cue_id,
@@ -14600,20 +15203,32 @@ impl EngineRuntime {
                         self.child_transports[transport_index].parent_iteration,
                     )),
                     range,
+                    step_range,
                     rate: valid_effect_rate(parent_rate * event_rate),
+                    step_rate: valid_effect_rate(event_rate),
                     created_at: if dispatch.pre_wait_ms == 0 {
                         now.checked_sub(Duration::from_millis(elapsed_parent_ms))
                             .unwrap_or(now)
                     } else {
                         due_at
                     },
+                    step_clock: RuntimeCueStepClock::ChildTimeline {
+                        transport_index,
+                        starts_at_ms: occurrence.time_ms,
+                    },
                 });
             has_immediate_trigger |= dispatch.pre_wait_ms == 0;
             let fade_override_ms = self.child_transports[transport_index]
                 .events
                 .get(occurrence.event_index)
-                .filter(|_| occurrence.iteration == 0)
-                .map(|event| event.fade_in_ms);
+                .and_then(|event| {
+                    (occurrence.iteration == 0
+                        || self
+                            .cues
+                            .get(dispatch.cue_index)
+                            .is_some_and(|cue| cue.fade_ms == event.fade_in_ms))
+                    .then_some(event.fade_in_ms)
+                });
             self.enqueue_pending_cue(PendingCueTrigger {
                 cue_id: occurrence.cue_id,
                 due_at,
@@ -14786,8 +15401,14 @@ impl EngineRuntime {
                     .get(event_index)
                     .copied()
                     .unwrap_or_default();
+                let step_range = self
+                    .timeline_step_activation_ranges
+                    .get(event_index)
+                    .copied()
+                    .unwrap_or_default();
                 self.finish_timeline_block_fade_out(event_id);
                 self.deactivate_effect_range(range);
+                self.deactivate_step_range(step_range);
                 if let Some(transport_index) = self
                     .child_transport_by_parent_event
                     .get(event_index)
@@ -14901,9 +15522,15 @@ impl EngineRuntime {
                 .get(occurrence.event_index)
                 .copied()
                 .unwrap_or_default();
+            let step_range = self
+                .timeline_step_activation_ranges
+                .get(occurrence.event_index)
+                .copied()
+                .unwrap_or_default();
             if matches!(occurrence.kind, TimelineCueOccurrenceKind::End) {
                 self.finish_timeline_block_fade_out(occurrence.event_id);
                 self.deactivate_effect_range(range);
+                self.deactivate_step_range(step_range);
                 self.pending_cues.retain(|pending| {
                     pending
                         .timeline_effect_activation
@@ -14921,6 +15548,7 @@ impl EngineRuntime {
             }
             if matches!(occurrence.kind, TimelineCueOccurrenceKind::FadeOutStart) {
                 self.start_timeline_block_fade_out(occurrence.event_index, now);
+                self.deactivate_step_range(step_range);
                 continue;
             }
 
@@ -14935,7 +15563,9 @@ impl EngineRuntime {
             let timeline_effect_activation = self
                 .timeline_events
                 .get(occurrence.event_index)
-                .filter(|event| event.duration_ms > 0 && !range.is_empty())
+                .filter(|event| {
+                    event.duration_ms > 0 && (!range.is_empty() || !step_range.is_empty())
+                })
                 .map(|event| {
                     let elapsed_ms = current_position.saturating_sub(occurrence.time_ms);
                     let created_at = if dispatch.pre_wait_ms == 0 {
@@ -14950,8 +15580,13 @@ impl EngineRuntime {
                         iteration: occurrence.iteration,
                         child_parent: None,
                         range,
+                        step_range,
                         rate: valid_effect_rate(event.rate.unwrap_or(1.0)),
+                        step_rate: valid_effect_rate(event.rate.unwrap_or(1.0)),
                         created_at,
+                        step_clock: RuntimeCueStepClock::Timeline {
+                            starts_at_ms: occurrence.time_ms,
+                        },
                     }
                 });
             self.enqueue_pending_cue(PendingCueTrigger {
@@ -14959,11 +15594,16 @@ impl EngineRuntime {
                 due_at,
                 source: PendingCueTriggerSource::Timeline,
                 repeat_count: 1,
-                fade_override_ms: self
-                    .timeline_events
-                    .get(occurrence.event_index)
-                    .filter(|_| occurrence.iteration == 0)
-                    .map(|event| event.fade_in_ms),
+                fade_override_ms: self.timeline_events.get(occurrence.event_index).and_then(
+                    |event| {
+                        (occurrence.iteration == 0
+                            || self
+                                .cues
+                                .get(dispatch.cue_index)
+                                .is_some_and(|cue| cue.fade_ms == event.fade_in_ms))
+                        .then_some(event.fade_in_ms)
+                    },
+                ),
                 timeline_effect_activation,
                 dispatch: Some(dispatch),
             });
@@ -16017,6 +16657,7 @@ fn engine_command_rebuilds_effect_activations(command: &EngineCommand) -> bool {
             | EngineCommand::UpdateCue { .. }
             | EngineCommand::UpdateCuePublished { .. }
             | EngineCommand::SetCueEffectTargetsPublished { .. }
+            | EngineCommand::SetCueStepsPublished { .. }
             | EngineCommand::SetCueChildTimeline { .. }
             | EngineCommand::DuplicateCue { .. }
             | EngineCommand::RemoveCue(_)
@@ -16130,6 +16771,7 @@ fn cue_summary(cue: &RuntimeCue) -> CueSummary {
         video_output_targets: cue.video_output_targets.clone(),
         node_graph_targets: cue.node_graph_targets.clone(),
         effect_targets: cue.effect_targets.clone(),
+        steps: cue.steps.clone(),
         child_timeline: cue.child_timeline.clone(),
     }
 }
@@ -16233,6 +16875,7 @@ fn runtime_fixtures_from_snapshot(
 }
 
 fn runtime_cue_from_summary(cue: &CueSummary) -> RuntimeCue {
+    let step_sequence = runtime_cue_step_sequence(&cue.steps);
     RuntimeCue {
         id: cue.id,
         cue_list_id: if cue.cue_list_id == 0 {
@@ -16269,8 +16912,11 @@ fn runtime_cue_from_summary(cue: &CueSummary) -> RuntimeCue {
         video_output_targets: cue.video_output_targets.clone(),
         node_graph_targets: cue.node_graph_targets.clone(),
         effect_targets: cue.effect_targets.clone(),
+        steps: cue.steps.clone(),
         child_timeline: cue.child_timeline.clone(),
         effect_activation_range: RuntimeEffectActivationRange::default(),
+        step_sequence,
+        step_activation_range: RuntimeCueStepActivationRange::default(),
     }
 }
 
@@ -17657,6 +18303,77 @@ fn cue_target_values(targets: &[CueFixtureTarget]) -> HashMap<(FixtureId, String
         }
     }
     values
+}
+
+fn runtime_cue_step_sequence(steps: &[CueStepSummary]) -> RuntimeCueStepSequence {
+    let mut starts_at_ms = 0_u64;
+    RuntimeCueStepSequence {
+        steps: steps
+            .iter()
+            .map(|step| {
+                let ends_at_ms = starts_at_ms
+                    .saturating_add(step.fade_ms)
+                    .saturating_add(step.hold_ms);
+                let runtime = RuntimeCueStep {
+                    starts_at_ms,
+                    fade_ms: step.fade_ms,
+                    ends_at_ms,
+                    values: step
+                        .values
+                        .iter()
+                        .flat_map(|target| {
+                            target.values.iter().map(|value| RuntimeCueStepValue {
+                                fixture_id: target.fixture_id,
+                                attribute: value.attribute.clone(),
+                                value: value.value,
+                            })
+                        })
+                        .collect(),
+                };
+                starts_at_ms = ends_at_ms;
+                runtime
+            })
+            .collect(),
+    }
+}
+
+fn evaluate_cue_step_sequence(
+    sequence: &RuntimeCueStepSequence,
+    fixture_id: FixtureId,
+    attribute: &str,
+    base_value: u16,
+    position_ms: u64,
+) -> u16 {
+    let mut current = base_value;
+    for step in &sequence.steps {
+        if position_ms < step.starts_at_ms {
+            break;
+        }
+        let target = step
+            .values
+            .iter()
+            .find(|value| value.fixture_id == fixture_id && value.attribute == attribute)
+            .map(|value| value.value);
+        let Some(target) = target else {
+            if position_ms < step.ends_at_ms {
+                break;
+            }
+            continue;
+        };
+        let fade_end_ms = step.starts_at_ms.saturating_add(step.fade_ms);
+        if step.fade_ms > 0 && position_ms < fade_end_ms {
+            let progress =
+                position_ms.saturating_sub(step.starts_at_ms) as f64 / step.fade_ms as f64;
+            return (f64::from(current) + (f64::from(target) - f64::from(current)) * progress)
+                .round()
+                .clamp(0.0, f64::from(u16::MAX)) as u16;
+        }
+        current = target;
+        if position_ms < step.ends_at_ms {
+            break;
+        }
+    }
+    current
 }
 
 fn cue_video_target_states(
@@ -42589,8 +43306,11 @@ mod tests {
                 enabled: true,
                 params: None,
             }],
+            steps: Vec::new(),
             child_timeline: None,
             effect_activation_range: RuntimeEffectActivationRange::default(),
+            step_sequence: RuntimeCueStepSequence::default(),
+            step_activation_range: RuntimeCueStepActivationRange::default(),
         });
 
         runtime.remove_fixture(1);
@@ -48036,6 +48756,222 @@ mod tests {
         assert!(roundtrip.timeline.audio_muted);
     }
 
+    fn cue_step_test_steps() -> Vec<CueStepSummary> {
+        [(10_000, 100, 100), (30_000, 100, 100), (50_000, 100, 100)]
+            .into_iter()
+            .map(|(value, fade_ms, hold_ms)| CueStepSummary {
+                values: vec![CueFixtureTarget {
+                    fixture_id: 1,
+                    values: vec![AttributeValueSummary {
+                        attribute: "Dimmer".to_string(),
+                        value,
+                    }],
+                }],
+                fade_ms,
+                hold_ms,
+            })
+            .collect()
+    }
+
+    fn cue_step_test_runtime() -> EngineRuntime {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.apply_command(EngineCommand::CreateCue {
+            cue_id: 1,
+            label: "Multi-step".to_string(),
+            fade_ms: 0,
+            authored_beats: None,
+            targets: vec![CueFixtureTarget {
+                fixture_id: 1,
+                values: vec![AttributeValueSummary {
+                    attribute: "Dimmer".to_string(),
+                    value: 0,
+                }],
+            }],
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: Vec::new(),
+        });
+        runtime
+            .set_cue_steps_state(1, cue_step_test_steps())
+            .unwrap();
+        runtime
+    }
+
+    fn cue_step_test_dimmer(runtime: &EngineRuntime, now: Instant) -> u16 {
+        let fixture = &runtime.fixtures[0];
+        let control = &fixture.profile.dmx_modes[fixture.mode_index].controls[0];
+        runtime.render_unlimited_control_value(fixture, control, now, false)
+    }
+
+    #[test]
+    fn cue_step_manual_activation_progresses_fade_hold_and_releases_cleanly() {
+        let mut runtime = cue_step_test_runtime();
+        let started_at = Instant::now();
+        runtime.rebuild_effect_activations(started_at);
+        runtime.start_cue(1, started_at, PendingCueTriggerSource::Manual);
+
+        assert_eq!(cue_step_test_dimmer(&runtime, started_at), 0);
+        assert_eq!(
+            cue_step_test_dimmer(&runtime, started_at + Duration::from_millis(50)),
+            5_000
+        );
+        assert_eq!(
+            cue_step_test_dimmer(&runtime, started_at + Duration::from_millis(150)),
+            10_000
+        );
+        assert_eq!(
+            cue_step_test_dimmer(&runtime, started_at + Duration::from_millis(250)),
+            20_000
+        );
+        assert_eq!(
+            cue_step_test_dimmer(&runtime, started_at + Duration::from_millis(550)),
+            50_000
+        );
+        assert_eq!(runtime.active_step_activation_indices.len(), 1);
+
+        runtime.release_cue_state(1).unwrap();
+        assert!(runtime.active_step_activation_indices.is_empty());
+        assert_eq!(
+            cue_step_test_dimmer(&runtime, started_at + Duration::from_millis(550)),
+            0
+        );
+    }
+
+    #[test]
+    fn cue_step_timeline_rate_two_uses_block_local_clock_at_double_speed() {
+        let mut runtime = cue_step_test_runtime();
+        let started_at = Instant::now();
+        let mut event = timeline_test_event(100, 1, 1_000, 0, 1_000, 1);
+        event.rate = Some(2.0);
+        runtime.timeline_events = vec![event];
+        runtime.timeline_position_ms = 1_000;
+        runtime.rebuild_effect_activations(started_at);
+        runtime.request_timeline_event_at_index(0, started_at);
+
+        runtime.timeline_position_ms = 1_125;
+        let value = cue_step_test_dimmer(&runtime, started_at + Duration::from_millis(125));
+        assert_eq!(value, 20_000);
+        assert!(runtime.step_activations.iter().any(|activation| matches!(
+            activation.key,
+            Some(RuntimeEffectActivationKey::Timeline {
+                event_id: 100,
+                cue_id: 1,
+                iteration: 0,
+            })
+        )));
+        eprintln!(
+            "cue-step rate measurement: block_elapsed_ms=125 rate=2.0 step_position_ms=250 dimmer={value}"
+        );
+    }
+
+    #[test]
+    fn cue_step_child_timeline_uses_child_transport_local_clock() {
+        let mut runtime = cue_step_test_runtime();
+        runtime.apply_command(EngineCommand::CreateCue {
+            cue_id: 2,
+            label: "Super scene".to_string(),
+            fade_ms: 0,
+            authored_beats: None,
+            targets: Vec::new(),
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: Vec::new(),
+        });
+        runtime
+            .set_cue_child_timeline_state(
+                2,
+                Some(ChildTimelineSummary {
+                    events: vec![TimelineCueEventSummary {
+                        id: 201,
+                        cue_id: 1,
+                        time_ms: 0,
+                        track: TimelineTrackKind::Lighting,
+                        duration_ms: 1_000,
+                        ..TimelineCueEventSummary::default()
+                    }],
+                    duration_ms: 1_000,
+                    ..ChildTimelineSummary::default()
+                }),
+            )
+            .unwrap();
+        let mut parent = timeline_test_event(200, 2, 1_000, 0, 1_000, 1);
+        parent.rate = Some(2.0);
+        runtime.timeline_events = vec![parent];
+        let started_at = Instant::now();
+        runtime.rebuild_effect_activations(started_at);
+        runtime.timeline_playing = true;
+        runtime.timeline_position_ms = 999;
+        runtime.last_tick_interval = Duration::from_millis(1);
+        runtime.advance_timeline(started_at);
+        assert_eq!(runtime.active_cue_id, Some(1));
+
+        runtime.last_tick_interval = Duration::from_millis(125);
+        runtime.advance_timeline(started_at + Duration::from_millis(125));
+        assert_eq!(runtime.timeline_position_ms, 1_125);
+        assert_eq!(runtime.child_transports[0].position_ms, 250);
+        let value = cue_step_test_dimmer(&runtime, started_at + Duration::from_millis(125));
+        assert_eq!(value, 20_000);
+        assert!(runtime.step_activations.iter().any(|activation| matches!(
+            activation.key,
+            Some(RuntimeEffectActivationKey::ChildTimeline {
+                parent_event_id: 200,
+                event_id: 201,
+                cue_id: 1,
+                ..
+            })
+        )));
+        eprintln!(
+            "child cue-step measurement: parent_elapsed_ms=125 parent_rate=2.0 child_position_ms={} dimmer={value}",
+            runtime.child_transports[0].position_ms
+        );
+    }
+
+    #[test]
+    fn cue_step_snapshot_roundtrip_preserves_steps_and_legacy_empty_behavior() {
+        let mut runtime = cue_step_test_runtime();
+        let persisted = runtime.build_persistence_snapshot();
+        assert_eq!(persisted.cues[0].steps, cue_step_test_steps());
+
+        let mut loaded = runtime_with_lfo_effects(&[]);
+        loaded.load_project_snapshot(persisted);
+        assert_eq!(
+            loaded.build_persistence_snapshot().cues[0].steps,
+            cue_step_test_steps()
+        );
+
+        runtime.cues[0].steps.clear();
+        runtime.rebuild_effect_activations(Instant::now());
+        runtime.start_cue(1, Instant::now(), PendingCueTriggerSource::Manual);
+        assert!(runtime.active_step_activation_indices.is_empty());
+        assert_eq!(cue_step_test_dimmer(&runtime, Instant::now()), 0);
+    }
+
+    #[test]
+    fn cue_step_values_count_as_a_target_and_the_last_target_cannot_be_cleared() {
+        let mut runtime = runtime_with_lfo_effects(&[(7, false)]);
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![CueEffectTarget {
+                effect_id: 7,
+                enabled: true,
+                params: None,
+            }],
+        );
+        runtime
+            .set_cue_steps_state(1, cue_step_test_steps())
+            .unwrap();
+        runtime.set_cue_effect_targets_state(1, Vec::new()).unwrap();
+        assert!(runtime.cues[0].effect_targets.is_empty());
+        assert_eq!(runtime.cues[0].steps, cue_step_test_steps());
+
+        let error = runtime.set_cue_steps_state(1, Vec::new()).unwrap_err();
+        assert!(error.contains("must keep at least one"));
+        assert_eq!(runtime.cues[0].steps, cue_step_test_steps());
+    }
+
     fn super_scene_test_runtime(rate: f32) -> EngineRuntime {
         let child = ChildTimelineSummary {
             events: vec![
@@ -48351,9 +49287,14 @@ mod tests {
         let child_field_present = String::from_utf8(encoded.clone())
             .unwrap()
             .contains("child_timeline");
+        let steps_field_present = String::from_utf8(encoded.clone())
+            .unwrap()
+            .contains("\"steps\"");
         assert!(!child_field_present);
+        assert!(!steps_field_present);
+        assert_eq!(encoded.len(), 540);
         eprintln!(
-            "flat-timeline byte identity: current_bytes={} legacy_bytes={} identical=true child_field_present={child_field_present}",
+            "legacy Cue byte identity: current_bytes={} legacy_bytes={} identical=true child_field_present={child_field_present} steps_field_present={steps_field_present}",
             encoded.len(),
             legacy_encoded.len(),
         );

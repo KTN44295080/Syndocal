@@ -169,6 +169,7 @@ import type {
   CustomFixtureProfileRequest,
   CueEffectTarget,
   CueListSummary,
+  CueStepSummary,
   CueSummary,
   PaletteKind,
   PlaybackExecutorSummary,
@@ -622,6 +623,7 @@ const projectMutationCommands = new Set([
   "set_cue_effect_targets",
   "set_cue_metadata",
   "set_cue_child_timeline",
+  "set_cue_steps",
   "move_cue",
   "duplicate_cue",
   "remove_cue",
@@ -9720,6 +9722,16 @@ export default function App() {
     }
   };
 
+  const setCueSteps = async (cueId: number, steps: CueStepSummary[]) => {
+    try {
+      await invoke("set_cue_steps", { cueId, steps });
+      setMessage(`Saved ${steps.length} Static step(s) for cue ${cueId}.`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
   const setCueMetadata = async (cue: CueSummary) => {
     const draft = cueMetadataDraft(cue);
     const fadeMs = Math.max(0, Math.round(Number.isFinite(draft.fade_ms) ? draft.fade_ms : cue.fade_ms));
@@ -14615,6 +14627,7 @@ export default function App() {
             revealCueRevision={revealedSourceCueRevision()}
             activeFade={snapshot().active_fade}
             timelinePositionMs={snapshot().timeline.position_ms}
+            bpm={snapshot().clock.bpm}
             timelineTrack={timelineTrack()}
             cueLabel={cueLabel()}
             cueFadeMs={cueFadeMs()}
@@ -14654,6 +14667,7 @@ export default function App() {
             onMoveCue={moveCue}
             onSetCueMetadata={setCueMetadata}
             onSetCueEffectTargets={setCueEffectTargets}
+            onSetCueSteps={setCueSteps}
             onDuplicateCue={duplicateCue}
             onUpdateCue={updateCue}
             onTriggerCue={triggerCue}

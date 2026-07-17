@@ -11134,6 +11134,124 @@ input[type="color"] {
   font-weight: 600;
 }
 
+.cueStepEditor {
+  display: grid;
+  min-width: 0;
+  border: 1px solid #303947;
+  border-radius: 4px;
+  background: #0d141c;
+  padding: 5px 7px;
+}
+
+.cueStepEditor > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 30px;
+  cursor: pointer;
+  color: #c7d0dc;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.cueStepEditor > summary small,
+.cueStepToolbar > span,
+.cueStepFooter > span {
+  color: #8d9aaa;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.cueStepEditor > p {
+  margin: 4px 0 8px;
+  color: #8d9aaa;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: normal;
+}
+
+.cueStepToolbar,
+.cueStepFooter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.cueStepToolbar > span {
+  flex: 1 1 150px;
+}
+
+.cueStepList {
+  display: grid;
+  gap: 6px;
+  max-height: min(240px, 34vh);
+  min-height: 0;
+  margin-block: 8px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 3px;
+  scrollbar-gutter: stable;
+}
+
+.cueStepRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 6px;
+  min-width: 0;
+  border: 1px solid #28313d;
+  border-radius: 4px;
+  background: #111820;
+  padding: 6px;
+}
+
+.cueStepRow > strong {
+  align-self: center;
+  flex: 0 0 52px;
+  color: #d7dee8;
+  font-size: 12px;
+}
+
+.cueStepRow > span {
+  align-self: center;
+  flex: 1 1 126px;
+  min-width: 0;
+  color: #8997a8;
+  font-size: 11px;
+}
+
+.cueStepRow > label {
+  display: grid;
+  flex: 0 1 86px;
+  gap: 3px;
+  min-width: 72px;
+  color: #9ba8b7;
+  font-size: 11px;
+}
+
+.cueStepRow > label input {
+  width: 100%;
+  min-height: 28px;
+}
+
+.cueStepRow > button,
+.cueStepToolbar > button,
+.cueStepFooter > button {
+  min-height: 28px;
+}
+
+.cueStepFooter {
+  justify-content: space-between;
+  border-top: 1px solid #28313d;
+  padding-top: 7px;
+}
+
+.cueStepFooter > span {
+  flex: 1 1 140px;
+}
+
 .cueEffectRecallToolbar {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) auto;
