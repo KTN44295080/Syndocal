@@ -3714,6 +3714,31 @@ async function measure(client, label) {
       visibleVideoMixerLayerFaderCount: visibleCount('.videoControlPanelMixer .videoMixerLayerDeck input[type="range"]'),
       visibleVideoMixerLayerButtonCount: visibleCount('.videoControlPanelMixer .videoMixerLayerDeck button'),
       visibleVideoDeckPagerCount: visibleCount('.videoControlPanelMixer .deckPager'),
+      mixerDrawerBarCount: visibleCount('[data-mixer-drawer-toggle]'),
+      mixerDrawerOpenCount: [...document.querySelectorAll('[data-mixer-drawer-toggle]')]
+        .filter((bar) => bar.getAttribute('aria-expanded') === 'true').length,
+      videoClipGridScrollDelta: (() => {
+        const grid = document.querySelector('.videoMixerClipPane .videoClipGrid');
+        return grid ? grid.scrollHeight - grid.clientHeight : -1;
+      })(),
+      videoMixerMonitorHeightRatio: (() => {
+        const pane = document.querySelector('.videoMixerProgramPane');
+        const monitors = document.querySelector('.liveVideoMonitorPanel');
+        if (!pane || !monitors) return -1;
+        const paneHeight = pane.getBoundingClientRect().height - 40;
+        if (paneHeight <= 0) return -1;
+        return Number((monitors.getBoundingClientRect().height / paneHeight).toFixed(3));
+      })(),
+      fullyVisibleVideoLayerItemCount: (() => {
+        const pane = document.querySelector('.videoMixerLayerPane');
+        if (!pane) return 0;
+        const paneRect = pane.getBoundingClientRect();
+        return [...document.querySelectorAll('.videoMixerLayerPane .videoLayerItem')].filter((item) => {
+          const rect = item.getBoundingClientRect();
+          return rect.height > 0 && rect.top >= paneRect.top - 1 && rect.bottom <= paneRect.bottom + 1;
+        }).length;
+      })(),
+      visibleMixerKillButtonCount: visibleCount('.videoControlPanelMixer .killButton'),
       visibleVideoMixerDiagnosticsCount: visibleCount('.videoMixerDiagnostics'),
       visibleVideoMixerSetupToolsCount: visibleCount('.videoMixerSetupTools'),
       visibleVideoMixerAutomationToolsCount: visibleCount('.videoMixerAutomationTools'),
@@ -4417,24 +4442,39 @@ function hasExpectedControlModeSurface(result) {
         result.visibleVideoAbDeckCount > 0 &&
         result.visibleVideoDeckLoadButtonCount >= 2 &&
         result.visibleVideoRecordingBarCount > 0,
-      liveAudioRail:
-        result.visibleLiveAudioInputBarCount === 1 &&
-        result.liveAudioInputBarDomCount === 1 &&
-        result.visibleLiveAudioRailCount === 1 &&
-        result.visibleEmbeddedLiveAudioCount === 0 &&
-        result.liveAudioRailHeight > 0 &&
-        result.liveAudioRailHeight <= 70 &&
-        result.liveAudioRailBelowMaster === true &&
-        result.liveAudioRailAboveClipGrid === true &&
-        result.liveAudioRailOverflowX <= 1 &&
-        result.liveAudioRailOverflowY <= 1 &&
-        result.liveAudioRailControlOverflowY <= 1 &&
-        result.liveAudioRailMeterCount === 3 &&
-        result.liveAudioRailPoliteRegionCount === 1,
+      liveAudioRail: liveTelemetryExpected
+        ? result.visibleLiveAudioInputBarCount === 1 &&
+          result.liveAudioInputBarDomCount === 1 &&
+          result.visibleLiveAudioRailCount === 1 &&
+          result.visibleEmbeddedLiveAudioCount === 0 &&
+          result.liveAudioRailHeight > 0 &&
+          result.liveAudioRailHeight <= 70 &&
+          result.liveAudioRailBelowMaster === true &&
+          result.liveAudioRailAboveClipGrid === true &&
+          result.liveAudioRailOverflowX <= 1 &&
+          result.liveAudioRailOverflowY <= 1 &&
+          result.liveAudioRailControlOverflowY <= 1 &&
+          result.liveAudioRailMeterCount === 3 &&
+          result.liveAudioRailPoliteRegionCount === 1 &&
+          result.mixerDrawerBarCount === 3 &&
+          result.mixerDrawerOpenCount >= 1
+        : // T6 default state: the three drawers are collapsed and the rail is
+          // hidden until its drawer opens (the live scenario opens it first).
+          result.mixerDrawerBarCount === 3 &&
+          result.mixerDrawerOpenCount === 0 &&
+          result.visibleLiveAudioInputBarCount === 0 &&
+          result.liveAudioInputBarDomCount === 1 &&
+          result.visibleEmbeddedLiveAudioCount === 0,
       liveTelemetry: liveTelemetryIsValid,
       clipGrid:
-        result.videoClipGridClientHeight >= 90 &&
-        result.fullyVisibleVideoClipPadCount >= 1,
+        // T6 renegotiation: the old >=90px floor assumed two stacked text rows
+        // per pad; thumbnail-first pads guarantee one usable >=56px row, and
+        // the full 12-pad bank contract is asserted by the vj-bank scenarios.
+        result.videoClipGridClientHeight >= 56 &&
+        result.fullyVisibleVideoClipPadCount >= 1 &&
+        (liveTelemetryExpected || result.videoClipGridScrollDelta <= 1),
+      monitorDominance: result.videoMixerMonitorHeightRatio >= 0.65,
+      killVocabulary: result.visibleMixerKillButtonCount >= 1,
       outputDecks:
         result.visibleVideoOutputControlListCount > 0 &&
         result.visibleVideoOutputItemCount > 0 &&
@@ -4714,6 +4754,9 @@ async function setLiveAudioSelect(client, kind, value) {
 async function runLiveAudioAcceptance(client, locale, label) {
   await installLiveAudioInvokeMock(client);
   await sleep(60);
+  // T6: the live audio rail sits behind the collapsed "Audio In" drawer by
+  // default; open it so every existing rail assertion measures the open state.
+  await openMixerDrawer(client, "audio-in", ".videoMixerClipPane > .liveAudioInputBar");
   const initial = await readLiveAudioRailState(client);
   const refreshClicked = await clickLiveAudioControl(client, "refresh");
   await sleep(45);
@@ -5065,6 +5108,13 @@ async function runLiveAudioAcceptance(client, locale, label) {
   if (!acceptance.passed) {
     throw new Error("Live audio UI acceptance failed: " + JSON.stringify(acceptance));
   }
+  // T6: close the audio-in drawer again so its localStorage-persisted open
+  // state cannot leak into later scenarios that assert the collapsed default.
+  await client.evaluate(
+    "(() => { const bar = document.querySelector('[data-mixer-drawer-toggle=\"audio-in\"]'); " +
+    "if (bar && bar.getAttribute('aria-expanded') === 'true') bar.click(); })()",
+  );
+  await sleep(60);
   return {
     ...acceptance,
     liveContainment: {
@@ -5099,6 +5149,22 @@ async function prepareLiveAudioAcceptanceViewport(client, viewport, locale, full
   }
 }
 
+// T6: open one of the mixer drawers (audio-in / auto-vj / reactive) and wait
+// until the strip that follows its bar is actually visible.
+async function openMixerDrawer(client, drawerId, stripSelector) {
+  await client.evaluate(
+    `(() => { const bar = document.querySelector('[data-mixer-drawer-toggle="${drawerId}"]'); ` +
+    `if (bar && bar.getAttribute('aria-expanded') !== 'true') bar.click(); })()`,
+  );
+  await waitForClientCondition(
+    client,
+    `(() => { const strip = document.querySelector('${stripSelector}'); ` +
+    `return Boolean(strip && strip.getBoundingClientRect().height > 0); })()`,
+    `Mixer drawer ${drawerId} open`,
+  );
+  await sleep(60);
+}
+
 async function runLiveAudioAcceptanceViewport(client, viewport, locale) {
   await prepareLiveAudioAcceptanceViewport(client, viewport, locale);
   return runLiveAudioAcceptance(
@@ -5110,6 +5176,7 @@ async function runLiveAudioAcceptanceViewport(client, viewport, locale) {
 
 async function runFullscreenVjAcceptanceViewport(client, viewport) {
   await prepareLiveAudioAcceptanceViewport(client, viewport, "en", true);
+  await openMixerDrawer(client, "audio-in", ".videoMixerClipPane > .liveAudioInputBar");
   const stopped = await measure(
     client,
     "fullscreen-vj-stopped-" + viewport.width + "x" + viewport.height,
@@ -5201,6 +5268,7 @@ async function runAudioReactiveAcceptanceViewport(client, viewport) {
     "Boolean(document.querySelector('.videoMixerClipPane > .audioReactiveVjStrip'))",
     "Audio Reactive VJ strip",
   );
+  await openMixerDrawer(client, "reactive", ".videoMixerClipPane > .audioReactiveVjStrip");
   const mixer = await measure(client, `audio-reactive-mixer-${viewport.width}x${viewport.height}`);
   const mixerContract = await client.evaluate(`(() => {
     const strip = document.querySelector('.audioReactiveVjStrip');
@@ -5822,6 +5890,7 @@ async function prepareAutoVjAcceptanceViewport(client, viewport, locale) {
     "Boolean(document.querySelector('.videoMixerClipPane > .autoVjStrip'))",
     "Auto VJ fixture strip",
   );
+  await openMixerDrawer(client, "auto-vj", ".videoMixerClipPane > .autoVjStrip");
   await installAutoVjInvokeMock(client);
 }
 
@@ -6554,6 +6623,52 @@ async function measureSceneMatrixPane(client) {
       },
     };
   })()`);
+}
+
+// T6: the vj-bank fixture carries 14 clips so bank 1 must show all 12 pads
+// without scrolling, monitors must own >=65% of the center column, at least
+// six layer decks stay visible, and the three settings drawers default closed.
+async function runVjBankViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: fixtureUrl("vj-bank") });
+  await waitForApp(client);
+  await waitForClientCondition(
+    client,
+    "document.querySelectorAll('.videoClipPad').length === 12",
+    "VJ bank clip pads",
+  );
+  await sleep(120);
+  const containment = await measure(client, `vj-bank-${viewport.width}x${viewport.height}`);
+  const conditions = [
+    ["vjBankTwelvePadsFullyVisibleWithoutScroll", () =>
+      containment.visibleVideoClipPadCount === 12 &&
+      containment.fullyVisibleVideoClipPadCount === 12 &&
+      containment.videoClipGridScrollDelta <= 1],
+    ["vjBankDrawersDefaultClosed", () =>
+      containment.mixerDrawerBarCount === 3 && containment.mixerDrawerOpenCount === 0],
+    ["vjBankMonitorsDominateCenterColumn", () => containment.videoMixerMonitorHeightRatio >= 0.65],
+    ["vjBankSixLayerRowsVisible", () => containment.fullyVisibleVideoLayerItemCount >= 6],
+    ["vjBankKillVocabularyPresent", () => containment.visibleMixerKillButtonCount >= 1],
+    ["vjBankPagerPresentForSecondBank", () => containment.visibleVideoDeckPagerCount >= 1],
+    ["vjBankContained", () => isContained(containment)],
+  ];
+  const failedChecks = conditions.filter(([, check]) => !check()).map(([name]) => name);
+  return {
+    viewport,
+    label: `vj-bank-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    failedChecks,
+    pads: [containment.visibleVideoClipPadCount, containment.fullyVisibleVideoClipPadCount, containment.videoClipGridScrollDelta],
+    drawers: [containment.mixerDrawerBarCount, containment.mixerDrawerOpenCount],
+    monitorRatio: containment.videoMixerMonitorHeightRatio,
+    layerRows: containment.fullyVisibleVideoLayerItemCount,
+    killButtons: containment.visibleMixerKillButtonCount,
+  };
 }
 
 async function runSceneMatrixPaneCheck(client, viewport) {
@@ -9049,6 +9164,7 @@ async function main() {
     const sceneBlockLargeResults = [];
     const cueNodeGraphResults = [];
     const sceneMatrixResults = [];
+    const vjBankResults = [];
     if (!workspaceShellOnlyMode) {
       for (const viewport of viewports) {
         await recycleBrowser();
@@ -9057,6 +9173,7 @@ async function main() {
         effectStackLargeResults.push(await runEffectStackLargeViewport(client, viewport));
         cueNodeGraphResults.push(await runCueNodeGraphViewport(client, viewport));
         sceneMatrixResults.push(await runSceneMatrixPaneCheck(client, viewport));
+        vjBankResults.push(await runVjBankViewport(client, viewport));
       }
     }
     const sceneBlockScaleViewports = viewports.filter((viewport) =>
@@ -9078,6 +9195,7 @@ async function main() {
     const sceneBlockLargeFailures = sceneBlockLargeResults.filter((result) => !result.passed);
     const cueNodeGraphFailures = cueNodeGraphResults.filter((result) => !result.passed);
     const sceneMatrixFailures = sceneMatrixResults.filter((result) => !result.passed);
+    const vjBankFailures = vjBankResults.filter((result) => !result.passed);
     const setupSurfaceFailures = results.filter((result) => !hasExpectedSetupSurface(result));
     const persistentBandFailures = results.filter((result) => !hasExpectedPersistentWorkspaceBand(result));
     const persistentBandInvarianceFailures = results.filter((result) => !hasExpectedPersistentBandInvariance(result));
@@ -9192,6 +9310,11 @@ async function main() {
         `${result.passed ? "pass" : "fail"} ${result.label} columns=${JSON.stringify(result.before.columns)} active=${JSON.stringify(result.before.activeCardIds)}->${JSON.stringify(result.after.activeCardIds)} failed=${JSON.stringify(result.failedChecks)}`,
       );
     }
+    for (const result of vjBankResults) {
+      console.log(
+        `${result.passed ? "pass" : "fail"} ${result.label} pads=${result.pads.join("/")} drawers=${result.drawers.join("/")} monitorRatio=${result.monitorRatio} layerRows=${result.layerRows} kill=${result.killButtons} failed=${JSON.stringify(result.failedChecks)}`,
+      );
+    }
     if (
       failures.length > 0 ||
       cueRecallFailures.length > 0 ||
@@ -9200,6 +9323,7 @@ async function main() {
       sceneBlockLargeFailures.length > 0 ||
       cueNodeGraphFailures.length > 0 ||
       sceneMatrixFailures.length > 0 ||
+      vjBankFailures.length > 0 ||
       keyboardNavigationFailures.length > 0 ||
       setupSurfaceFailures.length > 0 ||
       persistentBandFailures.length > 0 ||
@@ -9275,6 +9399,7 @@ async function main() {
             sceneBlockLarge: sceneBlockLargeFailures,
             cueNodeGraph: cueNodeGraphFailures,
             sceneMatrix: sceneMatrixFailures,
+            vjBank: vjBankFailures,
             keyboardNavigation: keyboardNavigationFailures,
             setupSurface: setupSurfaceFailures,
             persistentBand: persistentBandFailures,

@@ -1778,6 +1778,23 @@ export default function App() {
         outputs,
       },
     }));
+  } else if (viewportFixture === "vj-bank") {
+    const layers = structuredClone(viewportFixtureData.vjBankLayers);
+    const composition = structuredClone(viewportFixtureData.vjBankComposition);
+    const outputs = structuredClone(viewportFixtureData.vjBankOutputs);
+    setWorkspaceTab("control");
+    setControlMode("mixer");
+    setSelectedVideoOutputId(outputs[0]?.id ?? null);
+    setVideoProgramAudioEnabled(true);
+    setSnapshot((current) => ({
+      ...current,
+      video: {
+        ...current.video,
+        layers,
+        compositions: [composition],
+        outputs,
+      },
+    }));
   } else if (viewportFixture === "auto-vj") {
     const labels = ["Video", "Output", "Signal Echo"];
     const layers = labels.map((layerLabel, index) => {

@@ -71,11 +71,15 @@ export function VideoMasterControlsPanel(props: VideoMasterControlsPanelProps) {
         <button onClick={() => void props.onSetMasterOpacity(1)} disabled={props.masterOpacity >= 1}>
           Full
         </button>
-        <button onClick={() => void props.onSetBlackout(true)} disabled={props.blackout}>
-          V Blackout
+        <button
+          class={`killButton${props.blackout ? " engaged" : ""}`}
+          onClick={() => void props.onSetBlackout(true)}
+          disabled={props.blackout}
+        >
+          Video BO
         </button>
-        <button onClick={() => void props.onSetBlackout(false)} disabled={!props.blackout}>
-          V Clear
+        <button class="killClear" onClick={() => void props.onSetBlackout(false)} disabled={!props.blackout}>
+          Clear BO
         </button>
       </div>
     </div>
@@ -263,7 +267,7 @@ export function VideoOutputControlListPanel(props: VideoOutputControlListPanelPr
                       {output.enabled ? "On" : "Off"}
                     </button>
                     <button
-                      class={output.blackout ? "active" : ""}
+                      class={`killButton${output.blackout ? " engaged" : ""}`}
                       onClick={() => {
                         selectOutput();
                         void props.onSetOutputBlackout(output.id, !output.blackout);
@@ -333,12 +337,13 @@ export function VideoOutputControlListPanel(props: VideoOutputControlListPanelPr
                     {output.enabled ? "Disable" : "Enable"}
                   </button>
                   <button
+                    class={`killButton${output.blackout ? " engaged" : ""}`}
                     onClick={() => {
                       selectOutput();
                       void props.onSetOutputBlackout(output.id, !output.blackout);
                     }}
                   >
-                    {output.blackout ? "Clear" : "Blackout"}
+                    {output.blackout ? "Clear BO" : "BO"}
                   </button>
                   <button
                     onClick={() => {

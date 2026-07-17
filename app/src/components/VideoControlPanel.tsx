@@ -1,4 +1,4 @@
-import { Show, type ComponentProps } from "solid-js";
+import { Show, createSignal, type ComponentProps } from "solid-js";
 import { VideoLayerListPanel } from "./VideoLayerListPanel";
 import { VideoMasterControlsPanel, VideoOutputControlListPanel } from "./VideoControlOutputsPanel";
 import { VideoPreviewDiagnosticsPanel } from "./VideoPreviewDiagnosticsPanel";
@@ -14,6 +14,7 @@ import { LiveVideoMonitorPanel } from "./LiveVideoMonitorPanel";
 import { LiveAudioInputRail } from "./LiveAudioInputRail";
 import { AutoVjStrip } from "./AutoVjStrip";
 import { AudioReactiveVjStrip } from "./AudioReactiveVjStrip";
+import { MixerDrawerBar, loadMixerDrawerOpen, saveMixerDrawerOpen, type MixerDrawerId } from "./MixerDrawerBar";
 
 interface VideoControlPanelProps {
   mixer: boolean;
@@ -34,6 +35,30 @@ interface VideoControlPanelProps {
 }
 
 export function VideoControlPanel(props: VideoControlPanelProps) {
+  // T6: Audio/AutoVJ/Reactive settings live behind collapsed drawers so the clip
+  // bank dominates the pane. Open state persists per drawer in localStorage.
+  const [audioInOpen, setAudioInOpen] = createSignal(loadMixerDrawerOpen("audio-in"));
+  const [autoVjOpen, setAutoVjOpen] = createSignal(loadMixerDrawerOpen("auto-vj"));
+  const [reactiveOpen, setReactiveOpen] = createSignal(loadMixerDrawerOpen("reactive"));
+  const toggleDrawer = (id: MixerDrawerId) => {
+    const [open, setOpen] =
+      id === "audio-in" ? [audioInOpen, setAudioInOpen]
+      : id === "auto-vj" ? [autoVjOpen, setAutoVjOpen]
+      : [reactiveOpen, setReactiveOpen];
+    const next = !open();
+    setOpen(next);
+    saveMixerDrawerOpen(id, next);
+  };
+  const audioInStatus = () => (props.clipGrid.liveAudioInputStatus.running ? "LIVE" : "OFF");
+  const autoVjStatus = () => props.autoVj.snapshot.status.mode.toUpperCase();
+  const reactiveStatus = () => {
+    const audioGraphs = props.audioReactive.graphs.filter((graph) =>
+      graph.nodes.some((node) => node.kind === "Audio"));
+    const enabled = audioGraphs.filter((graph) => graph.enabled);
+    if (audioGraphs.length === 0) return "NONE";
+    if (enabled.length === 0) return `0/${audioGraphs.length} OFF`;
+    return `${enabled.length}/${audioGraphs.length} ON`;
+  };
   return (
     <section class={`panel videoControlPanel controlPanel ${props.mixer ? "videoControlPanelMixer" : ""}`}>
       <div class="panelHeader">
@@ -56,8 +81,11 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
         </header>
         <VideoMasterControlsPanel {...props.masterControls} />
         <Show when={props.mixer}>
+          <MixerDrawerBar id="audio-in" title="Audio In" status={audioInStatus()} open={audioInOpen()} onToggle={() => toggleDrawer("audio-in")} />
           <LiveAudioInputRail {...props.clipGrid} compact />
+          <MixerDrawerBar id="auto-vj" title="Auto VJ" status={autoVjStatus()} open={autoVjOpen()} onToggle={() => toggleDrawer("auto-vj")} />
           <AutoVjStrip {...props.autoVj} />
+          <MixerDrawerBar id="reactive" title="Reactive" status={reactiveStatus()} open={reactiveOpen()} onToggle={() => toggleDrawer("reactive")} />
           <AudioReactiveVjStrip {...props.audioReactive} />
         </Show>
         <VideoClipGridPanel {...props.clipGrid} compact={props.mixer} />
