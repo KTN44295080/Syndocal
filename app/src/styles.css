@@ -26101,3 +26101,47 @@ h3 {
   min-height: 78px;
   padding: 5px 7px;
 }
+
+/* ---- UI redesign T7: persistent identity colors. Compact pickers live in
+   the cue edit row and Scene Matrix column headers; persisted colors win
+   over the hash palette while keeping the role lightness clamps. */
+
+.cueColorControls,
+.groupColorControls {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.cueColorControls input[type="color"],
+.groupColorControls input[type="color"] {
+  width: 28px;
+  min-width: 28px;
+  height: 22px;
+  border: 1px solid #343a3f;
+  border-radius: 2px;
+  background: #181c1f;
+  padding: 1px;
+}
+
+.cueColorControls button,
+.groupColorControls button {
+  min-width: 20px;
+  min-height: 22px;
+  padding: 0 4px;
+  font-size: 11px;
+}
+
+.groupColorControls {
+  margin-left: auto;
+}
+
+.groupColorControls input[type="color"] {
+  width: 22px;
+  min-width: 22px;
+  height: 18px;
+}
+
+.groupColorControls button {
+  min-height: 18px;
+}

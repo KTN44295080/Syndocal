@@ -55,6 +55,7 @@ interface AudioBeatMarker {
 
 interface TimelineCueEventsPanelProps {
   childTimelineLabel: string | null;
+  cueColors?: Record<number, string>;
   positionMs: number;
   bpm: number;
   durationMs: number;
@@ -418,6 +419,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
       </div>
       <TimelineOverview
         events={props.overviewEvents}
+        cueColors={props.cueColors}
         audioClips={props.audioClips}
         audioAnalysis={props.audioAnalysis}
         layers={props.timelineLayers}
@@ -625,6 +627,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
       <TimelineSceneBlocksEditor
         positionMs={props.positionMs}
         bpm={props.bpm}
+        cueColors={props.cueColors}
         executionLive={props.executingLive}
         selectedCueId={props.selectedCueId}
         startMs={props.eventTimeMs}

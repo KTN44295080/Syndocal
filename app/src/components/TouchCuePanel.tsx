@@ -1,6 +1,6 @@
 import { For, Show } from "solid-js";
 import type { CueSummary, EngineSnapshot } from "../types";
-import { cueIdentityHue, identityCssColor } from "../identityColor";
+import { cueIdentityCss } from "../identityColor";
 
 type MaybePromise = void | Promise<void>;
 
@@ -59,7 +59,7 @@ export function TouchCuePanel(props: TouchCuePanelProps) {
               class={`liveCuePad ${pad.cue?.id === props.snapshot.active_cue_id ? "active" : ""} ${
                 pad.cue?.id === props.nextCue?.id ? "next" : ""
               }`}
-              style={pad.cue ? { "--identity": identityCssColor(cueIdentityHue(pad.cue.id), "text") } : undefined}
+              style={pad.cue ? { "--identity": cueIdentityCss(pad.cue.id, pad.cue.color, "text") } : undefined}
               disabled={!pad.cue}
               onClick={() => {
                 if (pad.cue) void props.onTriggerCue(pad.cue.id);

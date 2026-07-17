@@ -9,6 +9,7 @@ interface TouchFixturePanelProps {
   selectedGroupId?: string | null;
   selectedFixture?: PatchedFixtureSummary | null;
   groups: TouchFixtureGroupRow[];
+  groupColors?: Record<string, string>;
   fixtures: PatchedFixtureSummary[];
   totalFixtureCount: number;
   selectedFixtureId?: number | null;
@@ -40,6 +41,7 @@ export function TouchFixturePanel(props: TouchFixturePanelProps) {
       </div>
       <TouchFixturePickerPanel
         groups={props.groups}
+        groupColors={props.groupColors}
         fixtures={props.fixtures}
         totalFixtureCount={props.totalFixtureCount}
         selectedGroupId={props.selectedGroupId}

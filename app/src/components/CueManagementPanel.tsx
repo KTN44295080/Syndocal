@@ -13,7 +13,7 @@ import type {
 import { canSaveCueEffectTargets } from "../cueEffectRecall";
 import type { CueEffectRecallChange } from "../cueEffectRecall";
 import { timelineConformRateBadge } from "../timelineSceneBlocks";
-import { cueIdentityHue, identityCssColor } from "../identityColor";
+import { cueIdentityCss } from "../identityColor";
 import type { TimelineCueDragPoint } from "../timelineCueDrag";
 import { CueCapturePreviewPanel, type CueCapturePreviewModel } from "./CueCapturePreviewPanel";
 import { CueEffectRecallEditor } from "./CueEffectRecallEditor";
@@ -34,6 +34,7 @@ const cueCaptureScopeLabel = (scope: CueCaptureScopeMode) => {
 
 interface CueManagementPanelProps {
   mode: "edit" | "live";
+  onSetCueColor: (cueId: number, color: string | null) => void | Promise<void>;
   cues: CueSummary[];
   allCues: CueSummary[];
   cueLists: CueListSummary[];
@@ -463,7 +464,7 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
             return (
               <div
                 class={cue.id === props.activeCueId ? "cueItem active" : "cueItem"}
-                style={{ "--identity": identityCssColor(cueIdentityHue(cue.id), "fill") }}
+                style={{ "--identity": cueIdentityCss(cue.id, cue.color, "fill") }}
                 data-cue-id={cue.id}
                 role="listitem"
                 aria-posinset={cueIndex() + 1}
@@ -524,6 +525,28 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                         {(groupId) => <option data-no-localize value={groupId}>{groupId}</option>}
                       </For>
                     </select>
+                  </label>
+                  <label class="cueColorField">
+                    Color
+                    <span class="cueColorControls">
+                      <input
+                        type="color"
+                        value={cue.color ?? "#5f6b76"}
+                        data-cue-color-input={cue.id}
+                        aria-label={`Identity color for ${cue.label}`}
+                        onChange={(event) => void props.onSetCueColor(cue.id, event.currentTarget.value)}
+                      />
+                      <button
+                        type="button"
+                        disabled={!cue.color}
+                        data-cue-color-clear={cue.id}
+                        title="Clear Color"
+                        aria-label={`Clear identity color for ${cue.label}`}
+                        onClick={() => void props.onSetCueColor(cue.id, null)}
+                      >
+                        ×
+                      </button>
+                    </span>
                   </label>
                   <label>
                     Recall mode

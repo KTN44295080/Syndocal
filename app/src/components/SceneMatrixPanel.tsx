@@ -1,10 +1,12 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
-import { cueIdentityHue, groupIdentityHue, identityCssColor } from "../identityColor";
+import { cueIdentityCss, groupIdentityCss, groupIdentityHue } from "../identityColor";
 import type { CueSummary, TimelineTrackKind } from "../types";
 import type { TimelineCueDragPoint } from "../timelineCueDrag";
 
 interface SceneMatrixPanelProps {
   cues: CueSummary[];
+  groupColors?: Record<string, string>;
+  onSetGroupColor?: (groupId: string, color: string | null) => void | Promise<void>;
   groupIds: string[];
   activeCueId: number | null | undefined;
   activeGroupCueIds: Record<string, number>;
@@ -118,7 +120,11 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
         <div class="sceneMatrixColumns">
           <For each={columns()}>
             {(column) => {
+              // The data attribute keeps the deterministic hash hue for the
+              // harness; the rendered colors prefer the persisted group color.
               const hue = () => groupIdentityHue(column.id ?? "Show");
+              const groupCss = (role: "fill" | "text") =>
+                groupIdentityCss(column.id ?? "Show", props.groupColors, role);
               return (
                 <section
                   class="sceneMatrixColumn"
@@ -128,26 +134,46 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                   <header
                     class="sceneMatrixColumnHeader"
                     style={{
-                      "--group-identity": identityCssColor(hue(), "fill"),
-                      "--group-identity-text": identityCssColor(hue(), "text"),
+                      "--group-identity": groupCss("fill"),
+                      "--group-identity-text": groupCss("text"),
                     }}
                     data-scene-matrix-group-hue={hue()}
                   >
                     <strong data-no-localize={column.id !== null ? true : undefined}>{column.label}</strong>
                     <span>{column.cues.length}</span>
+                    <Show when={column.id !== null && props.onSetGroupColor}>
+                      <span class="groupColorControls">
+                        <input
+                          type="color"
+                          value={props.groupColors?.[column.id!] ?? "#5f6b76"}
+                          data-group-color-input={column.id!}
+                          aria-label={`Identity color for group ${column.label}`}
+                          onChange={(event) => void props.onSetGroupColor!(column.id!, event.currentTarget.value)}
+                        />
+                        <button
+                          type="button"
+                          disabled={!props.groupColors?.[column.id!]}
+                          data-group-color-clear={column.id!}
+                          title="Clear Color"
+                          aria-label={`Clear identity color for group ${column.label}`}
+                          onClick={() => void props.onSetGroupColor!(column.id!, null)}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    </Show>
                   </header>
                   <div class="sceneMatrixCards">
                     <Show when={column.cues.length > 0} fallback={<p class="empty">No scenes in this column.</p>}>
                       <For each={column.cues}>
                         {(cue) => {
-                          const hue = cueIdentityHue(cue.id);
                           return (
                             <article
                               class="sceneMatrixCard"
                               classList={{ active: isActive(cue) }}
                               style={{
-                                "--cue-identity": identityCssColor(hue, "fill"),
-                                "--cue-identity-text": identityCssColor(hue, "text"),
+                                "--cue-identity": cueIdentityCss(cue.id, cue.color, "fill"),
+                                "--cue-identity-text": cueIdentityCss(cue.id, cue.color, "text"),
                               }}
                               data-scene-matrix-cue-id={cue.id}
                               data-scene-matrix-cue-hue={hue}

@@ -1499,6 +1499,8 @@ export interface CueSummary {
   node_graph_targets: CueNodeGraphTarget[];
   effect_targets: CueEffectTarget[];
   child_timeline?: ChildTimelineSummary | null;
+  /** T7 persistent identity color (#rrggbb); absent keeps the hash-derived hue. */
+  color?: string | null;
 }
 
 export interface CueNodeGraphTarget {
@@ -2119,6 +2121,8 @@ export interface EngineSnapshot {
   playback_master: number;
   active_cue_id?: number | null;
   active_group_cue_ids?: Record<string, number>;
+  /** T7 persistent identity colors per group path (#rrggbb). */
+  group_colors?: Record<string, string>;
   active_fade?: ActiveFadeSummary | null;
   programmer: ProgrammerSnapshot;
   timeline: TimelineSnapshot;

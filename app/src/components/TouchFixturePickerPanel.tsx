@@ -1,6 +1,6 @@
 import { For, Show } from "solid-js";
 import type { PatchedFixtureSummary } from "../types";
-import { groupIdentityHue, identityCssColor } from "../identityColor";
+import { groupIdentityCss } from "../identityColor";
 
 export interface TouchFixtureGroupRow {
   groupId: string;
@@ -10,6 +10,7 @@ export interface TouchFixtureGroupRow {
 interface TouchFixturePickerPanelProps {
   groups: TouchFixtureGroupRow[];
   fixtures: PatchedFixtureSummary[];
+  groupColors?: Record<string, string>;
   totalFixtureCount: number;
   selectedGroupId?: string | null;
   selectedFixtureId?: number | null;
@@ -32,7 +33,7 @@ export function TouchFixturePickerPanel(props: TouchFixturePickerPanelProps) {
           {(group) => (
             <button
               class={props.selectedGroupId === group.groupId ? "groupChip active" : "groupChip"}
-              style={{ "--identity": identityCssColor(groupIdentityHue(group.groupId), "fill") }}
+              style={{ "--identity": groupIdentityCss(group.groupId, props.groupColors, "fill") }}
               onClick={() => props.onSelectGroup(group.groupId)}
             >
               <span data-no-localize>{group.groupId}</span>
