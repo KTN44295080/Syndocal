@@ -768,6 +768,85 @@ const layeredTimelineSuperSceneEvent: TimelineCueEventSummary = {
   jump_to_event_id: null,
 };
 
+const vjBankLayerLabels = [
+  "Opener Loop",
+  "Strobe Wash",
+  "Logo Sting",
+  "Liquid Ink",
+  "Crowd Cam",
+  "Geo Tunnel",
+  "Glitch Burst",
+  "Smoke Drift",
+  "Neon Grid",
+  "Kanji Flash",
+  "Particle Rain",
+  "Blackout Card",
+  "Encore Loop",
+  "Credits Roll",
+] as const;
+
+const vjBankLayers: VideoLayerSummary[] = vjBankLayerLabels.map((layerLabel, index) => ({
+  ...videoLayer,
+  id: index + 1,
+  label: layerLabel,
+  source: {
+    kind: "File",
+    path: `viewport://vj-bank/clip-${index + 1}.mp4`,
+    name: layerLabel,
+    codec: "H264",
+    metadata: {
+      duration_ms: 6_000 + index * 500,
+      width: 1_920,
+      height: 1_080,
+      frame_rate: 60,
+      has_audio: index % 3 === 0,
+    },
+  },
+  blend_mode: "Normal",
+  state: {
+    ...videoLayer.state,
+    opacity: index === 0 ? 1 : 0.85,
+    playing: index === 0,
+    enabled: index < 2,
+    bpm_sync: { ...videoLayer.state.bpm_sync },
+    cue_points: videoLayer.state.cue_points.map((cuePoint) => ({ ...cuePoint })),
+    cue_points_ms: [...videoLayer.state.cue_points_ms],
+    transform: { ...videoLayer.state.transform },
+    color: { ...videoLayer.state.color },
+    fx: { ...videoLayer.state.fx },
+  },
+}));
+
+const vjBankComposition: CompositionSummary = {
+  id: 1,
+  label: "Bank Program",
+  layer_ids: vjBankLayers.map((layer) => layer.id),
+  output_ids: [1, 2],
+};
+
+const vjBankOutputs: VideoOutputSummary[] = [
+  {
+    ...videoOutput,
+    id: 1,
+    label: "Main Screen",
+    enabled: true,
+    opacity: 1,
+    blackout: false,
+    monitor_id: 1,
+    mapping: { ...projectorMapping, stage_x: 0, stage_z: 3.2 },
+  },
+  {
+    ...videoOutput,
+    id: 2,
+    label: "Side Fill",
+    enabled: true,
+    opacity: 0.9,
+    blackout: false,
+    monitor_id: 2,
+    mapping: { ...projectorMapping, stage_x: -4.2, stage_z: 2.6 },
+  },
+];
+
 export const viewportFixtureData = {
   profile,
   projectorMapping,
@@ -777,6 +856,9 @@ export const viewportFixtureData = {
   operatorVjLayers,
   operatorVjComposition,
   operatorVjOutputs,
+  vjBankLayers,
+  vjBankComposition,
+  vjBankOutputs,
   stageObject,
   cueRecallEffect,
   cueRecallNodeGraph,

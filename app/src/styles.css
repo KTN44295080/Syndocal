@@ -25922,3 +25922,182 @@ h3 {
 .layoutControl.controlModeLive .liveControlPanel > .liveFadeMeter progress {
   accent-color: #cfd6db;
 }
+
+/* ---- UI redesign T6: VJ desk reshaped around the clip bank. Audio-in/AutoVJ/
+   Reactive move behind collapsed drawer bars (localStorage-persisted), the
+   Preview/Program monitors own >=70% of the center column, clip pads become
+   thumbnail-first, and layer rows compress so six stay visible. The pane keeps
+   the fixed one-screen contract: internal scrolling only, no app scrolling. */
+
+.videoMixerClipPane {
+  display: flex;
+  flex-direction: column;
+}
+
+.videoMixerClipPane > * {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.videoMixerClipPane > .videoClipGridPanel {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.mixerDrawerBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  border: 0;
+  border-bottom: 1px solid var(--ray-border);
+  border-radius: 0;
+  background: #191d20;
+  padding: 0 8px;
+  color: #aeb6bc;
+  font-size: 10px;
+  text-align: left;
+}
+
+.mixerDrawerBar strong {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.mixerDrawerBar .mixerDrawerChevron {
+  flex: 0 0 auto;
+  color: #6d777e;
+}
+
+.mixerDrawerBar .mixerDrawerStatus {
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: #8f999f;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mixerDrawerBar.open {
+  background: #202428;
+  color: #e8ecef;
+  box-shadow: inset 2px 0 0 var(--ray-accent);
+}
+
+/* Collapsed drawer hides the strip that immediately follows its bar. The
+   strips stay direct children of .videoMixerClipPane so every existing
+   ".videoMixerClipPane > ..." harness selector keeps working when open. */
+.mixerDrawerBar[aria-expanded="false"] + .liveAudioInputBar,
+.mixerDrawerBar[aria-expanded="false"] + .autoVjStrip,
+.mixerDrawerBar[aria-expanded="false"] + .audioReactiveVjStrip {
+  display: none;
+}
+
+/* Monitors dominate the center column (about 70/30 against the output list). */
+.videoMixerProgramPane {
+  grid-template-rows: 40px minmax(0, 7fr) minmax(0, 3fr);
+}
+
+/* Thumbnail-first clip pads: the thumbnail fills the pad, text overlays the
+   bottom edge, and rows keep a 56px usability floor (P button stays 44px). */
+.videoControlPanelMixer .videoMixerClipPane .videoClipGrid {
+  grid-auto-rows: minmax(56px, 1fr);
+  align-content: stretch;
+}
+
+.videoControlPanelMixer .videoMixerClipPane .videoClipPad,
+.videoControlPanelMixer .videoMixerClipPane .videoClipLaunch {
+  min-height: 56px;
+}
+
+.videoControlPanelMixer .videoMixerClipPane .videoClipLaunch {
+  position: relative;
+  overflow: hidden;
+  align-content: end;
+  padding: 4px 49px 4px 6px;
+}
+
+.videoControlPanelMixer .videoMixerClipPane .videoClipThumbnail {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  border-radius: 0;
+  opacity: 0.55;
+}
+
+.videoControlPanelMixer .videoMixerClipPane .videoClipLaunch small,
+.videoControlPanelMixer .videoMixerClipPane .videoClipLaunch strong,
+.videoControlPanelMixer .videoMixerClipPane .videoClipLaunch span,
+.videoControlPanelMixer .videoMixerClipPane .videoClipLaunch em {
+  position: relative;
+  z-index: 1;
+  text-shadow: 0 1px 2px rgba(4, 6, 8, 0.85);
+}
+
+.videoControlPanelMixer .videoMixerClipPane .videoClipLaunch span {
+  display: none;
+}
+
+/* Compressed layer rows: six decks stay visible in the layer column. */
+.videoMixerLayerPane .videoLayerListPanel {
+  min-height: 0;
+  overflow: hidden auto;
+}
+
+/* T6: the two-column clip-pane chrome (header+recording / preview+AB side by
+   side) was previously compact-height-only, which made 1366x768 stack chrome
+   into ~220px and push pads out of view. Promote it to every mixer height so
+   the clip grid keeps its 12-pad bank visible; the compact media block keeps
+   its extra font/padding trims. */
+.videoControlPanelMixer .videoMixerClipPane .videoClipGridPanel {
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  align-content: start;
+}
+
+.videoControlPanelMixer .videoMixerClipPane .videoClipGridHeader {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.videoControlPanelMixer .videoMixerClipPane .videoRecordingBar {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.videoControlPanelMixer .videoMixerClipPane .videoClipPreviewBar {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.videoControlPanelMixer .videoMixerClipPane .videoAbDeck {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.videoControlPanelMixer .videoMixerClipPane .videoAudioSyncStatus {
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
+
+.videoControlPanelMixer .videoMixerClipPane .videoClipGrid {
+  grid-column: 1 / -1;
+  grid-row: 4;
+}
+
+.videoControlPanelMixer .videoMixerClipPane .deckPager {
+  grid-column: 1 / -1;
+  grid-row: 5;
+}
+
+/* T6: six layer decks stay visible in the layer column. */
+.videoControlPanelMixer .videoMixerLayerPane .videoLayerItem {
+  min-height: 78px;
+  padding: 5px 7px;
+}
