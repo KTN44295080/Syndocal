@@ -1,6 +1,6 @@
 # Production-Quality Goal Completion Audit
 
-Updated: 2026-07-15
+Updated: 2026-07-17 (addendum below; base table rows dated 2026-07-15)
 Scope: Syndocal as a unified lighting and VJ application, preserving `.sdc v1` and the one-screen desk.
 
 ## Verdict
@@ -19,6 +19,39 @@ The implementable software-only scope is feature-complete and locally gated. Win
 | Active/Standby | Software safety complete | Atomic generations, integrity fallback, output disarm, monotonic heartbeat, split-brain refusal tests | Two-computer shared-storage failover, physical fencing, duplicate-frame and recovery timing capture |
 | Performance/reliability | Complete for established local gates; representative-media venue soak open | Three one-hour release soaks (base, live-FFT, mixed Color/Chaser/Move), zero drops/send failures, p99 timing budgets pass; release-build mixed Color/Chaser/Move per-tick benchmark (200 fixtures × 64 effects) at p95 ~3.0 ms / p99 ~3.4 ms / max ~4.1 ms, gated release-only at p95 ≤ 5 ms / p99 ≤ 8 ms; 4K HAP R GPU and engine large-show tests pass; deterministic 200 fixtures × 64 active effect regressions cover Color, Chaser and Move, with one Chaser level or paired Move value evaluation per fixture/effect/tick; maximum-control Chaser also evaluates 10 effects × 16 features × 64 fixtures × maximum width/Wings over 10 frames inside the focused budget | Representative multi-layer 4K media and mixed ISF/HAP one-hour venue-host soak |
 | Distribution/update | Implementation complete | Cross-platform package CI, install smoke, signed-updater validation boundary, backup-before-update | HTTPS release endpoint, minisign private key, Authenticode, Apple Developer ID/notarization, real N-to-N+1 install |
+
+## Addendum 2026-07-17: Unified desk and lighting show model (Daslight-parity series)
+
+Landed since the 2026-07-15 table, all with full viewport-matrix and focused-test evidence
+(no rows above are upgraded by this addendum until re-audited end-to-end):
+
+- T10 unified workspace shell (e0e2e3e): persistent lower half (GROUPS + 2D stage +
+  SELECTIONS + context pane) pixel-invariant across Setup/Control/Touch (0px rect delta,
+  5 viewports); layout-oscillation class fixed via fixed-height + `contain: size layout`.
+- T8 timeline pane expand toggle (41aaaaf): Daslight-style full-width pane with exact
+  (0.01px) restore, gated into persistent-band invariance checks.
+- F1 timeline layers v3 (63a9ce1): N user layers with engine-enforced mute/solo/lock,
+  typed kinds (Audio/Lighting/Video), deterministic top-layer-wins dispatch; .sdc v1
+  additive, legacy files byte-compatible.
+- F3 conform-to-tempo (09fc18c): authored_beats, beat-domain placement, loop_fill,
+  immediate BPM re-conform on the command drain (including during Play), [N.NNx] badge.
+- F2 layered timeline desk (f4a62b2): the core Daslight workflow - drag a scene onto a
+  layer; typed sections, functional lane gutters, kind-validated drops, edge-resize;
+  live CDP drag-drop evidence; overview node budget held (3057/3500).
+- F4 cue-owned FX parameters (b8de22d): EffectParamsSnapshot copy-on-capture,
+  activation-scoped effect instances per block with conform rate threaded into all six
+  evaluators, zero 44Hz-tick additions; 18 new tests. This closes part of the
+  "Per-Cue Effect parameter" remaining item in the Lighting Cue Engine row - parameter
+  MORPH/FADE between cues remains open.
+- Verification infrastructure (2532943): matrix stall watchdog, Codex job watcher,
+  CDP freeze autopsy (after a diagnosed silent-hang incident: stale-port half-attach +
+  long-lived headless renderer freeze, both now structurally mitigated in the harness);
+  executable operation-count contract (`qa/harnesses/check-operation-counts.mjs`).
+
+Honest operability standing vs Daslight 5 (executable Syndocal side + manually observed
+Daslight side; see qa/harnesses/README.md): place-scene-on-lane currently costs 2 ops vs
+Daslight's 1 (cue pool requires a surface switch); layer mute and pane expand are at
+parity. No operability-superiority claim is made for timeline workflows yet.
 
 ## Local gates
 

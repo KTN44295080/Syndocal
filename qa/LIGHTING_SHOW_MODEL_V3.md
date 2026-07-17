@@ -128,8 +128,16 @@ risk: medium / est: L / depends: F2, T10
 
 **Design**: Protocol: CueSummary.group_id: Option<String> #[serde(default)] — a fixture group path matching the existing group_ids vocabulary; capture UI defaults it from the selectedGroup capture scope, editable in cue metadata. UI (inside the T10 shell's Control surface): a Scene Matrix pane — one column per group in group order, header tinted with groupIdentityHue, scene cards per column tinted with cueIdentityHue, active-cue highlight from engine snapshot; ungrouped cues collect in a trailing 'Show' column; cards double as F2 drag sources for timeline placement. Exclusivity: engine grows a per-group active-cue map; when a cue with group_id G triggers with the exclusivity policy on, the previously active cue of G is released (its targets fade back to base/tracked values using the released cue's fade_ms) before/while the new cue applies — implemented on the existing cue-apply path, resolved at trigger time, no per-tick work. Whether exclusivity is matrix-only, global (pads/MIDI/OSC/timeline too), or off-by-default is an openQuestion; the tranche ships the mechanism behind a project-level policy flag defaulting to the user's answer. The flat pad bank remains for hotkey/MIDI muscle memory.
 
+**Amendment (2026-07-17 ユーザー回答反映)**: 列排他はプロジェクト全体フラグではなく
+**cue毎の再生モード**（Daslight Bank相当）。CueSummary.recall_mode: #[serde(default)] Coexist |
+ReplaceGroup。ReplaceGroupのcueが発火すると、同じgroup_idで現在アクティブなcueをそのcueの
+fade_msでリリースしてから適用（per-group active-cue mapはトリガー時解決、per-tickゼロ）。
+Coexist（既定）は現状どおり重ね掛け。発火経路（マトリクス/パッド/MIDI/OSC/タイムライン）に
+よらずcue自身の設定に従う。cueエディタにモードセレクタ、マトリクスカードにReplaceバッジ表示。
+
 **Protocol changes (.sdc-compat)**:
 - CueSummary.group_id: Option<String> — new, #[serde(default)] None; legacy cues load ungrouped; validation warns (not errors) when group_id names a group no fixture carries.
+- CueSummary.recall_mode: RecallMode (Coexist | ReplaceGroup) — new, #[serde(default)] Coexist; legacy cues keep coexist semantics byte-identically.
 - Project-level setting group_column_exclusivity: bool (location: project settings summary) — new, #[serde(default)] false until the user decides the default.
 - Cue trigger command surface gains an optional exclusivity override flag (runtime-only, not serialized).
 
