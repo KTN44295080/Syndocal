@@ -147,7 +147,15 @@ pwsh -NoProfile -File qa/harnesses/click-window-point.ps1 -TitlePattern "Dasligh
 - 帰属判断に迷ったら**git stashでプレ変更ツリーとのN連A/B**が最速の裁定者
   （クリーン環境の作り直しをrun間に挟むこと）。
 
-## 7. 分析・設計が必要なとき
+## 7. 2レーン並行実装とマージ合議（2026-07-17ユーザー指示）
+
+- 実装は2レーン: Codex（メイン作業ツリー）+ Fable直接実装（worktree `../KDMX-fable-lane`、
+  node_modulesはジャンクション共有、フロントエンド専用トランシェ向き）。ドメイン非重複で割当。
+- **マージ・コンフリクト解決はFable+Codexの合議必須**: Fableが解析と解決案を作る → コンフリクト
+  ハンクと解決案をCodexレビュージョブへ → 両者一致でマージコミット。不一致はユーザーへ。
+  単独判断でのコンフリクト解決は禁止（ユーザー明示指示）。
+
+## 8. 分析・設計が必要なとき
 
 大きな設計判断（新トランシェ系列、構造変更）は Workflow ツールで
 Inventory(並列) → Design(複数レンズ) → Judge → Adversarial Verify を回し、
