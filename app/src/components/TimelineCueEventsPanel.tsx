@@ -2,6 +2,7 @@ import { createEffect, createSignal, For, Show } from "solid-js";
 import type { TimelineEventDraft } from "../editorDrafts";
 import type {
   AudioAnalysisSummary,
+  TimelineAudioClipSummary,
   TimelineCueEventSummary,
   TimelineLayerKind,
   TimelineLayerSummary,
@@ -77,6 +78,9 @@ interface TimelineCueEventsPanelProps {
   selectedEventId: number | null;
   selectionRevision: number;
   audioAnalysis: AudioAnalysisSummary | null;
+  audioClips: TimelineAudioClipSummary[];
+  audioOffsetMs: number;
+  audioMuted: boolean;
   audioWaveformPoints: string;
   audioSpectrumPaths: { bass: string; mid: string; high: string };
   audioBeatMarkers: AudioBeatMarker[];
@@ -132,6 +136,10 @@ interface TimelineCueEventsPanelProps {
   onAnalyzeAudio: () => void | Promise<void>;
   onClearAudio: () => void | Promise<void>;
   onApplyAudioBpm: () => void | Promise<void>;
+  onAddAudioClip: (layerId: number) => void | Promise<void>;
+  onUpdateAudioClip: (clip: TimelineAudioClipSummary) => void | Promise<void>;
+  onRemoveAudioClip: (clipId: number) => void | Promise<void>;
+  onSetAudioMaster: (offsetMs: number, muted: boolean) => void | Promise<void>;
   onSnapMode: (mode: TimelineSnapMode) => void;
   onGridMs: (value: number) => void;
   onSnapDrafts: () => void;
@@ -165,9 +173,18 @@ interface TimelineCueEventsPanelProps {
 }
 
 export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
+  let audioClipRemoveDialog: HTMLDialogElement | undefined;
   const [stretchMode, setStretchMode] = createSignal<TimelineStretchMode>("RATE");
   const [magnetEnabled, setMagnetEnabled] = createSignal(true);
   const [armedCueId, setArmedCueId] = createSignal<number | null>(null);
+  const [selectedAudioClipId, setSelectedAudioClipId] = createSignal<number | null>(null);
+  const [pendingRemoveAudioClipId, setPendingRemoveAudioClipId] = createSignal<number | null>(null);
+  const selectedAudioClip = () => props.audioClips.find((clip) => clip.id === selectedAudioClipId()) ?? null;
+  const pendingRemoveAudioClip = () =>
+    props.audioClips.find((clip) => clip.id === pendingRemoveAudioClipId()) ?? null;
+  createEffect(() => {
+    if (selectedAudioClipId() !== null && !selectedAudioClip()) setSelectedAudioClipId(null);
+  });
   const armedCue = () => {
     const cue = props.cueOptions.find((candidate) => candidate.id === armedCueId());
     return cue ? {
@@ -374,6 +391,8 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
       </div>
       <TimelineOverview
         events={props.overviewEvents}
+        audioClips={props.audioClips}
+        audioAnalysis={props.audioAnalysis}
         layers={props.timelineLayers}
         legacyMode={props.legacyTimelineLayers}
         cueDrag={props.timelineCueDrag}
@@ -383,6 +402,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         overlapClusters={props.overviewOverlapClusters}
         selectedRangeId={props.selectedAutomationRangeId}
         selectedEventId={props.selectedEventId}
+        selectedAudioClipId={selectedAudioClipId()}
         playheadX={props.overviewPlayheadX}
         visibleWindow={props.visibleWindow}
         bpm={props.bpm}
@@ -393,8 +413,11 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         onSeekTime={props.onSeekOverviewTime}
         onSelectAutomationRange={props.onSelectAutomationRange}
         onSelectEvent={(eventId) => props.onSelectEvent(eventId, false)}
+        onSelectAudioClip={setSelectedAudioClipId}
         onInspectOverlapCluster={inspectOverlapCluster}
         onUpdateLayer={(layer) => void props.onUpdateTimelineLayer(layer)}
+        onAddAudioClip={(layerId) => void props.onAddAudioClip(layerId)}
+        onUpdateAudioClip={(clip) => void props.onUpdateAudioClip(clip)}
         onStatus={props.onTimelineStatus}
         onMoveEventPlacement={(eventId, timeMs, layerId, snapEnabled) =>
           void props.onMoveEventPlacement(eventId, timeMs, layerId, snapEnabled)
@@ -425,6 +448,30 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
               Clear
             </button>
           </div>
+        </div>
+        <div class="timelineAudioMasterControls">
+          <button
+            type="button"
+            data-timeline-audio-master-mute
+            aria-pressed={props.audioMuted}
+            onClick={() => void props.onSetAudioMaster(props.audioOffsetMs, !props.audioMuted)}
+          >
+            {props.audioMuted ? "Unmute Timeline Audio" : "Mute Timeline Audio"}
+          </button>
+          <label>
+            Master Offset (ms)
+            <input
+              class="tabularNums"
+              type="number"
+              step="1"
+              value={props.audioOffsetMs}
+              onChange={(event) => void props.onSetAudioMaster(
+                Math.round(Number(event.currentTarget.value) || 0),
+                props.audioMuted,
+              )}
+            />
+          </label>
+          <span class="tabularNums">{`${props.audioClips.length} audio clips`}</span>
         </div>
         <Show when={props.audioAnalysis}>
           {(analysis) => (
@@ -461,6 +508,57 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
               <small>{analysis().path}</small>
             </>
           )}
+        </Show>
+        <Show when={selectedAudioClip()}>
+          {(clip) => {
+            const update = (patch: Partial<TimelineAudioClipSummary>) =>
+              void props.onUpdateAudioClip({ ...clip(), ...patch });
+            return (
+              <div class="timelineAudioClipProperties" data-timeline-audio-clip-properties={clip().id}>
+                <strong data-no-localize>{clip().path.replaceAll("\\", "/").split("/").pop()}</strong>
+                <label>
+                  Start (ms)
+                  <input class="tabularNums" type="number" min="0" step="1" value={clip().start_ms}
+                    onChange={(event) => update({ start_ms: Math.max(0, Math.round(Number(event.currentTarget.value) || 0)) })} />
+                </label>
+                <label>
+                  Source Offset (ms)
+                  <input class="tabularNums" type="number" min="0" step="1" value={clip().offset_ms}
+                    onChange={(event) => update({ offset_ms: Math.max(0, Math.round(Number(event.currentTarget.value) || 0)) })} />
+                </label>
+                <label>
+                  Duration (ms)
+                  <input class="tabularNums" type="number" min="1" step="1" value={clip().duration_ms}
+                    onChange={(event) => update({ duration_ms: Math.max(1, Math.round(Number(event.currentTarget.value) || 1)) })} />
+                </label>
+                <label>
+                  Gain
+                  <input class="tabularNums" type="number" min="0" max="2" step="0.01" value={clip().gain}
+                    onChange={(event) => update({ gain: Math.min(2, Math.max(0, Number(event.currentTarget.value) || 0)) })} />
+                </label>
+                <label>
+                  Fade In (ms)
+                  <input class="tabularNums" type="number" min="0" step="1" value={clip().fade_in_ms}
+                    onChange={(event) => update({ fade_in_ms: Math.max(0, Math.round(Number(event.currentTarget.value) || 0)) })} />
+                </label>
+                <label>
+                  Fade Out (ms)
+                  <input class="tabularNums" type="number" min="0" step="1" value={clip().fade_out_ms}
+                    onChange={(event) => update({ fade_out_ms: Math.max(0, Math.round(Number(event.currentTarget.value) || 0)) })} />
+                </label>
+                <button
+                  type="button"
+                  class="danger"
+                  onClick={() => {
+                    setPendingRemoveAudioClipId(clip().id);
+                    if (!audioClipRemoveDialog?.open) audioClipRemoveDialog?.showModal();
+                  }}
+                >
+                  Remove Audio Clip
+                </button>
+              </div>
+            );
+          }}
         </Show>
       </div>
       <div class="timelineSnapControls">
@@ -530,6 +628,43 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         armedCueId={armedCueId()}
         onArmCue={toggleArmedCue}
       />
+      <dialog
+        ref={(element) => { audioClipRemoveDialog = element; }}
+        class="timelineLayerRemoveDialog timelineAudioClipRemoveDialog"
+        data-timeline-audio-clip-remove-dialog
+        role="alertdialog"
+        aria-labelledby="timeline-audio-clip-remove-title"
+        aria-describedby="timeline-audio-clip-remove-description"
+        onClose={() => setPendingRemoveAudioClipId(null)}
+      >
+        <form method="dialog">
+          <h2 id="timeline-audio-clip-remove-title" class="textBalance">Remove Audio Clip?</h2>
+          <div id="timeline-audio-clip-remove-description" class="textPretty">
+            <p>Remove this clip from the timeline?</p>
+            <strong data-no-localize>
+              {pendingRemoveAudioClip()?.path.replaceAll("\\", "/").split("/").pop() ?? ""}
+            </strong>
+          </div>
+          <div class="buttonRow">
+            <button value="cancel">Cancel</button>
+            <button
+              type="button"
+              class="danger"
+              data-timeline-audio-clip-remove-confirm
+              disabled={!pendingRemoveAudioClip()}
+              onClick={() => {
+                const clipId = pendingRemoveAudioClipId();
+                if (clipId === null) return;
+                audioClipRemoveDialog?.close();
+                void props.onRemoveAudioClip(clipId);
+                setSelectedAudioClipId(null);
+              }}
+            >
+              Remove Audio Clip
+            </button>
+          </div>
+        </form>
+      </dialog>
     </>
   );
 }

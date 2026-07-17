@@ -43,13 +43,14 @@ use protocol::{
     OscControlAction, OscControlMapping, OscInputConfig, PatchFixtureRequest,
     PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RecallMode, RemoteControlConfig,
     RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile,
-    StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary, TimelineEventId,
-    TimelineLayerKind, TimelineSnapRequest, TimelineTrackKind, ValueEffectRequest, Vec3,
-    VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode, VideoEffectTarget,
-    VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId, VideoLayerState,
-    VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
-    VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary, VideoOutputSummary,
-    VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
+    StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary, TimelineAudioClipId,
+    TimelineAudioClipSummary, TimelineEventId, TimelineLayerKind, TimelineSnapRequest,
+    TimelineTrackKind, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBackendState,
+    VideoBlendMode, VideoEffectTarget, VideoIsfEffectStageSummary, VideoIsfEffectSummary,
+    VideoLayerId, VideoLayerState, VideoLayerTarget, VideoOutputId, VideoOutputKind,
+    VideoOutputMapping, VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary,
+    VideoOutputSummary, VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind,
+    VideoSourceSummary,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -667,10 +668,16 @@ struct MediaAudioPlayback {
     sinks: HashMap<VideoLayerId, rodio::Sink>,
     sources: HashMap<VideoLayerId, MediaAudioSourceConfig>,
     last_resync_at: HashMap<VideoLayerId, Instant>,
+    timeline_sinks: HashMap<TimelineAudioClipId, rodio::Sink>,
+    timeline_sources: HashMap<TimelineAudioClipId, TimelineAudioSourceConfig>,
+    timeline_failures: HashMap<TimelineAudioClipId, TimelineAudioPlaybackFailure>,
+    timeline_last_resync_at: HashMap<TimelineAudioClipId, Instant>,
+    timeline_transport: TimelineAudioTransportState,
     resync_count: u64,
     last_drift_ms: i64,
     max_abs_drift_ms: u64,
     last_sync_error: Option<String>,
+    timeline_last_sync_error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -678,6 +685,34 @@ struct MediaAudioSourceConfig {
     path: PathBuf,
     volume: f32,
     requested_device_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct TimelineAudioSourceConfig {
+    path: PathBuf,
+    gain: f32,
+    offset_ms: u64,
+}
+
+#[derive(Debug, Clone)]
+struct TimelineAudioPlaybackFailure {
+    source: TimelineAudioSourceConfig,
+    error: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct TimelineAudioTransportState {
+    playing: bool,
+    position_ms: u64,
+    transport_revision: u64,
+    synced_at: Option<Instant>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TimelineAudioTransportAction {
+    Stop,
+    Recue,
+    Sync,
 }
 
 const MEDIA_AUDIO_RESYNC_THRESHOLD_MS: u64 = 75;
@@ -853,6 +888,53 @@ fn media_audio_resync_required(drift_ms: i64, cooldown_elapsed: Duration) -> boo
         && cooldown_elapsed >= MEDIA_AUDIO_RESYNC_COOLDOWN
 }
 
+fn timeline_audio_transport_action(
+    previous: TimelineAudioTransportState,
+    playing: bool,
+    position_ms: u64,
+    transport_revision: u64,
+    now: Instant,
+) -> TimelineAudioTransportAction {
+    if !playing {
+        return TimelineAudioTransportAction::Stop;
+    }
+    if !previous.playing {
+        return TimelineAudioTransportAction::Recue;
+    }
+    if previous.transport_revision != transport_revision {
+        return TimelineAudioTransportAction::Recue;
+    }
+    let elapsed_ms = previous
+        .synced_at
+        .map(|synced_at| now.saturating_duration_since(synced_at).as_millis())
+        .unwrap_or(0)
+        .min(u128::from(u64::MAX)) as u64;
+    let expected_ms = previous.position_ms.saturating_add(elapsed_ms);
+    if expected_ms.abs_diff(position_ms) > MEDIA_AUDIO_RESYNC_THRESHOLD_MS {
+        TimelineAudioTransportAction::Recue
+    } else {
+        TimelineAudioTransportAction::Sync
+    }
+}
+
+fn timeline_audio_clip_volume(clip: &TimelineAudioClipSummary, position_ms: u64) -> f32 {
+    let local_ms = position_ms
+        .saturating_sub(clip.start_ms)
+        .min(clip.duration_ms);
+    let fade_in = if clip.fade_in_ms == 0 {
+        1.0
+    } else {
+        local_ms as f32 / clip.fade_in_ms as f32
+    };
+    let remaining_ms = clip.duration_ms.saturating_sub(local_ms);
+    let fade_out = if clip.fade_out_ms == 0 {
+        1.0
+    } else {
+        remaining_ms as f32 / clip.fade_out_ms as f32
+    };
+    clip.gain.clamp(0.0, 2.0) * fade_in.clamp(0.0, 1.0).min(fade_out.clamp(0.0, 1.0))
+}
+
 fn reconfigured_program_audio_volume(
     current_volume: f32,
     previous_base_volume: f32,
@@ -913,7 +995,10 @@ impl MediaAudioSyncRuntime {
                             if !audio.sinks.is_empty() {
                                 audio.sync_to_video_layers(&snapshot.layers);
                             }
+                            audio.sync_to_timeline_audio(&snapshot.timeline_audio);
                             !audio.sinks.is_empty()
+                                || !audio.timeline_sinks.is_empty()
+                                || snapshot.timeline_audio.playing
                         })
                         .unwrap_or(false);
                     let low_latency_poll = worker_handoff
@@ -2063,6 +2148,49 @@ impl Drop for LiveAudioInput {
 }
 
 impl MediaAudioPlayback {
+    fn ensure_output_stream(&mut self, requested_device_name: Option<&str>) -> Result<(), String> {
+        use rodio::cpal::traits::{DeviceTrait, HostTrait};
+
+        let requested_device_name = requested_device_name
+            .map(str::trim)
+            .filter(|name| !name.is_empty());
+        if self.stream.is_some() && self.requested_device_name.as_deref() == requested_device_name {
+            return Ok(());
+        }
+        for (_, sink) in self.sinks.drain() {
+            sink.stop();
+        }
+        for (_, sink) in self.timeline_sinks.drain() {
+            sink.stop();
+        }
+        self.sources.clear();
+        self.last_resync_at.clear();
+        self.timeline_sources.clear();
+        self.timeline_failures.clear();
+        self.timeline_last_resync_at.clear();
+        self.stream = None;
+        let host = rodio::cpal::default_host();
+        let device = match requested_device_name {
+            Some(name) => host
+                .output_devices()
+                .map_err(|error| format!("Failed to list audio output devices: {error}"))?
+                .find(|device| device.name().ok().as_deref() == Some(name))
+                .ok_or_else(|| format!("Audio output device '{name}' was not found"))?,
+            None => host
+                .default_output_device()
+                .ok_or_else(|| "No default audio output device is available".to_string())?,
+        };
+        let resolved_name = device.name().ok();
+        self.stream = Some(
+            rodio::OutputStreamBuilder::from_device(device)
+                .and_then(|builder| builder.open_stream_or_fallback())
+                .map_err(|error| format!("Failed to open audio output: {error}"))?,
+        );
+        self.device_name = requested_device_name.map(str::to_string).or(resolved_name);
+        self.requested_device_name = requested_device_name.map(str::to_string);
+        Ok(())
+    }
+
     fn apply_program_handoff(
         &mut self,
         layers: &[protocol::VideoLayerSummary],
@@ -2137,41 +2265,13 @@ impl MediaAudioPlayback {
         volume: f32,
         requested_device_name: Option<&str>,
     ) -> Result<(), String> {
-        use rodio::cpal::traits::{DeviceTrait, HostTrait};
-
         if let Some(previous) = self.sinks.remove(&layer_id) {
             previous.stop();
         }
         let requested_device_name = requested_device_name
             .map(str::trim)
             .filter(|name| !name.is_empty());
-        if self.stream.is_none() || self.requested_device_name.as_deref() != requested_device_name {
-            for (_, sink) in self.sinks.drain() {
-                sink.stop();
-            }
-            self.sources.clear();
-            self.last_resync_at.clear();
-            self.stream = None;
-            let host = rodio::cpal::default_host();
-            let device = match requested_device_name {
-                Some(name) => host
-                    .output_devices()
-                    .map_err(|error| format!("Failed to list audio output devices: {error}"))?
-                    .find(|device| device.name().ok().as_deref() == Some(name))
-                    .ok_or_else(|| format!("Audio output device '{name}' was not found"))?,
-                None => host
-                    .default_output_device()
-                    .ok_or_else(|| "No default audio output device is available".to_string())?,
-            };
-            let resolved_name = device.name().ok();
-            self.stream = Some(
-                rodio::OutputStreamBuilder::from_device(device)
-                    .and_then(|builder| builder.open_stream_or_fallback())
-                    .map_err(|error| format!("Failed to open audio output: {error}"))?,
-            );
-            self.device_name = requested_device_name.map(str::to_string).or(resolved_name);
-            self.requested_device_name = requested_device_name.map(str::to_string);
-        }
+        self.ensure_output_stream(requested_device_name)?;
         let file = fs::File::open(path)
             .map_err(|error| format!("Failed to open media audio '{}': {error}", path.display()))?;
         let decoder = rodio::Decoder::try_from(file).map_err(|error| {
@@ -2221,6 +2321,209 @@ impl MediaAudioPlayback {
         }
     }
 
+    fn play_timeline_clip(
+        &mut self,
+        clip: &TimelineAudioClipSummary,
+        source_position_ms: u64,
+        volume: f32,
+    ) -> Result<(), String> {
+        if let Some(previous) = self.timeline_sinks.remove(&clip.id) {
+            previous.stop();
+        }
+        let requested_device_name = self.requested_device_name.clone();
+        self.ensure_output_stream(requested_device_name.as_deref())?;
+        let file = fs::File::open(&clip.path).map_err(|error| {
+            format!(
+                "Timeline audio clip {} could not open '{}': {error}",
+                clip.id, clip.path
+            )
+        })?;
+        let decoder = rodio::Decoder::try_from(file).map_err(|error| {
+            format!(
+                "Timeline audio clip {} could not decode '{}': {error}",
+                clip.id, clip.path
+            )
+        })?;
+        let stream = self
+            .stream
+            .as_ref()
+            .ok_or_else(|| "Audio output stream was not initialized".to_string())?;
+        let sink = rodio::Sink::connect_new(stream.mixer());
+        sink.append(decoder);
+        sink.set_volume(volume.clamp(0.0, 2.0));
+        if source_position_ms > 0 {
+            sink.try_seek(Duration::from_millis(source_position_ms))
+                .map_err(|error| format!("Timeline audio clip {} seek failed: {error}", clip.id))?;
+        }
+        sink.play();
+        self.timeline_sinks.insert(clip.id, sink);
+        self.timeline_sources.insert(
+            clip.id,
+            TimelineAudioSourceConfig {
+                path: PathBuf::from(&clip.path),
+                gain: clip.gain.clamp(0.0, 2.0),
+                offset_ms: clip.offset_ms,
+            },
+        );
+        self.timeline_last_resync_at.insert(clip.id, Instant::now());
+        Ok(())
+    }
+
+    fn stop_timeline_clip(&mut self, clip_id: TimelineAudioClipId) {
+        if let Some(sink) = self.timeline_sinks.remove(&clip_id) {
+            sink.stop();
+        }
+        self.timeline_sources.remove(&clip_id);
+        self.timeline_failures.remove(&clip_id);
+        self.timeline_last_resync_at.remove(&clip_id);
+    }
+
+    fn stop_all_timeline(&mut self) {
+        let clip_ids = self.timeline_sinks.keys().copied().collect::<Vec<_>>();
+        for clip_id in clip_ids {
+            self.stop_timeline_clip(clip_id);
+        }
+        self.timeline_failures.clear();
+    }
+
+    fn apply_timeline_transport_barrier(
+        &mut self,
+        action: TimelineAudioTransportAction,
+        muted: bool,
+    ) -> bool {
+        if muted || matches!(action, TimelineAudioTransportAction::Stop) {
+            self.stop_all_timeline();
+            return false;
+        }
+        if matches!(action, TimelineAudioTransportAction::Recue) {
+            self.stop_all_timeline();
+        }
+        true
+    }
+
+    fn sync_to_timeline_audio(&mut self, timeline: &engine::TimelineAudioRuntimeSnapshot) {
+        let now = Instant::now();
+        let action = timeline_audio_transport_action(
+            self.timeline_transport,
+            timeline.playing,
+            timeline.position_ms,
+            timeline.transport_revision,
+            now,
+        );
+        self.timeline_transport = TimelineAudioTransportState {
+            playing: timeline.playing,
+            position_ms: timeline.position_ms,
+            transport_revision: timeline.transport_revision,
+            synced_at: Some(now),
+        };
+        if !self.apply_timeline_transport_barrier(action, timeline.muted) {
+            self.timeline_last_sync_error = None;
+            return;
+        }
+
+        let active_clips = timeline
+            .clips
+            .iter()
+            .filter(|clip| {
+                clip.duration_ms > 0
+                    && timeline.position_ms >= clip.start_ms
+                    && timeline.position_ms < clip.start_ms.saturating_add(clip.duration_ms)
+            })
+            .collect::<Vec<_>>();
+        let active_ids = active_clips
+            .iter()
+            .map(|clip| clip.id)
+            .collect::<HashSet<_>>();
+        let stale_ids = self
+            .timeline_sinks
+            .keys()
+            .copied()
+            .filter(|clip_id| !active_ids.contains(clip_id))
+            .collect::<Vec<_>>();
+        for clip_id in stale_ids {
+            self.stop_timeline_clip(clip_id);
+        }
+        self.timeline_failures
+            .retain(|clip_id, _| active_ids.contains(clip_id));
+
+        let mut errors = Vec::new();
+        for clip in active_clips {
+            let source_position_ms = timeline
+                .position_ms
+                .saturating_sub(clip.start_ms)
+                .saturating_add(clip.offset_ms);
+            let volume = timeline_audio_clip_volume(clip, timeline.position_ms);
+            let source_config = TimelineAudioSourceConfig {
+                path: PathBuf::from(&clip.path),
+                gain: clip.gain.clamp(0.0, 2.0),
+                offset_ms: clip.offset_ms,
+            };
+            let source_changed = self.timeline_sources.get(&clip.id).is_some_and(|source| {
+                source.path.as_path() != Path::new(&clip.path) || source.offset_ms != clip.offset_ms
+            });
+            if source_changed {
+                self.stop_timeline_clip(clip.id);
+            }
+            if !self.timeline_sinks.contains_key(&clip.id) {
+                if let Some(failure) = self.timeline_failures.get(&clip.id) {
+                    if failure.source == source_config
+                        && matches!(action, TimelineAudioTransportAction::Sync)
+                    {
+                        errors.push(failure.error.clone());
+                        continue;
+                    }
+                }
+                self.timeline_failures.remove(&clip.id);
+                if let Err(error) = self.play_timeline_clip(clip, source_position_ms, volume) {
+                    self.stop_timeline_clip(clip.id);
+                    self.timeline_failures.insert(
+                        clip.id,
+                        TimelineAudioPlaybackFailure {
+                            source: source_config,
+                            error: error.clone(),
+                        },
+                    );
+                    errors.push(error);
+                    continue;
+                }
+            }
+            if let Some(source) = self.timeline_sources.get_mut(&clip.id) {
+                source.gain = clip.gain.clamp(0.0, 2.0);
+                source.offset_ms = clip.offset_ms;
+            }
+            let Some(sink) = self.timeline_sinks.get(&clip.id) else {
+                continue;
+            };
+            sink.set_volume(volume.clamp(0.0, 2.0));
+            if sink.empty() {
+                continue;
+            }
+            let actual_ms = sink.get_pos().as_millis().min(i64::MAX as u128) as i64;
+            let desired_ms = source_position_ms.min(i64::MAX as u64) as i64;
+            let drift_ms = actual_ms.saturating_sub(desired_ms);
+            self.last_drift_ms = drift_ms;
+            self.max_abs_drift_ms = self.max_abs_drift_ms.max(drift_ms.unsigned_abs());
+            let cooldown_elapsed = self
+                .timeline_last_resync_at
+                .get(&clip.id)
+                .map(|last| now.saturating_duration_since(*last))
+                .unwrap_or(Duration::MAX);
+            if media_audio_resync_required(drift_ms, cooldown_elapsed) {
+                match sink.try_seek(Duration::from_millis(source_position_ms)) {
+                    Ok(()) => {
+                        self.resync_count = self.resync_count.saturating_add(1);
+                        self.timeline_last_resync_at.insert(clip.id, now);
+                    }
+                    Err(error) => errors.push(format!(
+                        "Timeline audio clip {} drift resync failed: {error}",
+                        clip.id
+                    )),
+                }
+            }
+        }
+        self.timeline_last_sync_error = (!errors.is_empty()).then(|| errors.join("; "));
+    }
+
     fn reconfigure_active(
         &mut self,
         layers: &[protocol::VideoLayerSummary],
@@ -2265,6 +2568,7 @@ impl MediaAudioPlayback {
         }
 
         self.stop_all();
+        self.stop_all_timeline();
         self.stream = None;
         self.device_name = None;
         self.requested_device_name = None;
@@ -2391,7 +2695,10 @@ impl MediaAudioPlayback {
             resync_count: self.resync_count,
             last_drift_ms: self.last_drift_ms,
             max_abs_drift_ms: self.max_abs_drift_ms,
-            last_sync_error: self.last_sync_error.clone(),
+            last_sync_error: self
+                .timeline_last_sync_error
+                .clone()
+                .or_else(|| self.last_sync_error.clone()),
         }
     }
 }
@@ -3904,6 +4211,170 @@ fn analyze_audio_file(state: State<'_, AppState>) -> Result<Option<AudioAnalysis
         .send(EngineCommand::SetTimelineAudio(Some(analysis.clone())))
         .map_err(|error| error.to_string())?;
     Ok(Some(analysis))
+}
+
+fn analyze_timeline_audio_path(
+    state: &AppState,
+    path: &Path,
+) -> Result<AudioAnalysisSummary, String> {
+    if !AUDIO_FILE_EXTENSIONS
+        .iter()
+        .any(|extension| has_extension(path, extension))
+    {
+        return Err(format!(
+            "Timeline audio clips require one of these file types: {}",
+            AUDIO_FILE_EXTENSIONS.join(", ")
+        ));
+    }
+    let analysis = audio::analyze_audio_file(path).map_err(|error| error.to_string())?;
+    state
+        .engine
+        .send(EngineCommand::SetTimelineAudio(Some(analysis.clone())))
+        .map_err(|error| error.to_string())?;
+    Ok(analysis)
+}
+
+#[tauri::command]
+fn select_timeline_audio_clip_file(
+    state: State<'_, AppState>,
+) -> Result<Option<AudioAnalysisSummary>, String> {
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("Audio Files", AUDIO_FILE_EXTENSIONS)
+        .pick_file()
+    else {
+        return Ok(None);
+    };
+    analyze_timeline_audio_path(&state, &path).map(Some)
+}
+
+#[tauri::command]
+fn analyze_timeline_audio_clip_path(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<AudioAnalysisSummary, String> {
+    analyze_timeline_audio_path(&state, Path::new(path.trim()))
+}
+
+fn sanitize_timeline_audio_clip_request(
+    snapshot: &EngineSnapshot,
+    mut clip: TimelineAudioClipSummary,
+) -> Result<TimelineAudioClipSummary, String> {
+    clip.path = clip.path.trim().to_string();
+    if clip.path.is_empty() {
+        return Err("Audio Clip path is required".to_string());
+    }
+    if clip.duration_ms == 0 {
+        return Err("Audio Clip duration must be greater than zero".to_string());
+    }
+    let layer = snapshot
+        .timeline
+        .layers
+        .iter()
+        .find(|layer| layer.id == clip.layer_id)
+        .ok_or_else(|| format!("Timeline layer {} was not found", clip.layer_id))?;
+    if !matches!(layer.kind, TimelineLayerKind::Audio) {
+        return Err(format!(
+            "Audio Clips can only be placed on Audio lanes; '{}' is {:?}",
+            layer.label, layer.kind
+        ));
+    }
+    if layer.locked {
+        return Err(format!(
+            "Timeline layer '{}' is locked; unlock it before editing Audio Clips",
+            layer.label
+        ));
+    }
+    clip.start_ms = clip.start_ms.min(u64::MAX.saturating_sub(clip.duration_ms));
+    clip.gain = if clip.gain.is_finite() {
+        clip.gain.clamp(0.0, 2.0)
+    } else {
+        1.0
+    };
+    clip.fade_in_ms = clip.fade_in_ms.min(clip.duration_ms);
+    clip.fade_out_ms = clip
+        .fade_out_ms
+        .min(clip.duration_ms.saturating_sub(clip.fade_in_ms));
+    Ok(clip)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+fn add_timeline_audio_clip(
+    state: State<'_, AppState>,
+    layer_id: u32,
+    path: String,
+    start_ms: u64,
+    offset_ms: u64,
+    duration_ms: u64,
+    gain: f32,
+    fade_in_ms: u64,
+    fade_out_ms: u64,
+) -> Result<TimelineAudioClipId, String> {
+    let id = state.engine.allocate_timeline_audio_clip_id();
+    let clip = sanitize_timeline_audio_clip_request(
+        &state.engine.snapshot(),
+        TimelineAudioClipSummary {
+            id,
+            layer_id,
+            path,
+            start_ms,
+            offset_ms,
+            duration_ms,
+            gain,
+            fade_in_ms,
+            fade_out_ms,
+        },
+    )?;
+    state.engine.add_timeline_audio_clip(clip)?;
+    Ok(id)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+fn update_timeline_audio_clip(
+    state: State<'_, AppState>,
+    id: TimelineAudioClipId,
+    layer_id: u32,
+    path: String,
+    start_ms: u64,
+    offset_ms: u64,
+    duration_ms: u64,
+    gain: f32,
+    fade_in_ms: u64,
+    fade_out_ms: u64,
+) -> Result<(), String> {
+    let clip = sanitize_timeline_audio_clip_request(
+        &state.engine.snapshot(),
+        TimelineAudioClipSummary {
+            id,
+            layer_id,
+            path,
+            start_ms,
+            offset_ms,
+            duration_ms,
+            gain,
+            fade_in_ms,
+            fade_out_ms,
+        },
+    )?;
+    state.engine.update_timeline_audio_clip(clip)
+}
+
+#[tauri::command]
+fn remove_timeline_audio_clip(
+    state: State<'_, AppState>,
+    clip_id: TimelineAudioClipId,
+) -> Result<(), String> {
+    state.engine.remove_timeline_audio_clip(clip_id)
+}
+
+#[tauri::command]
+fn set_timeline_audio_master(
+    state: State<'_, AppState>,
+    offset_ms: i64,
+    muted: bool,
+) -> Result<(), String> {
+    state.engine.set_timeline_audio_master(offset_ms, muted)
 }
 
 #[tauri::command]
@@ -13819,6 +14290,23 @@ fn normalize_project_timeline_layers(snapshot: &mut EngineSnapshot) {
             event.fade_out_ms = event.fade_out_ms.min(event.duration_ms);
         }
     }
+    for clip in &mut snapshot.timeline.audio_clips {
+        clip.path = clip.path.trim().to_string();
+        clip.start_ms = clip.start_ms.min(u64::MAX.saturating_sub(clip.duration_ms));
+        clip.gain = if clip.gain.is_finite() {
+            clip.gain.clamp(0.0, 2.0)
+        } else {
+            1.0
+        };
+        clip.fade_in_ms = clip.fade_in_ms.min(clip.duration_ms);
+        clip.fade_out_ms = clip
+            .fade_out_ms
+            .min(clip.duration_ms.saturating_sub(clip.fade_in_ms));
+    }
+    snapshot
+        .timeline
+        .audio_clips
+        .sort_by_key(|clip| (clip.start_ms, clip.layer_id, clip.id));
     if snapshot.timeline.layers.is_empty() {
         return;
     }
@@ -14189,7 +14677,10 @@ fn load_project_snapshot_with_runtime_reset(
             .lock()
             .map_err(|_| "Media audio monitor lock was poisoned".to_string())?;
         audio.stop_all();
+        audio.stop_all_timeline();
+        audio.timeline_transport = TimelineAudioTransportState::default();
         audio.last_sync_error = None;
+        audio.timeline_last_sync_error = None;
     }
     let published = state.engine.snapshot();
     let mut program_handoff = state
@@ -14552,6 +15043,16 @@ fn validate_project_file(project: &ProjectFile) -> Result<(), String> {
             ));
         }
     }
+    validate_unique_ids(
+        "timeline audio clip",
+        project
+            .snapshot
+            .timeline
+            .audio_clips
+            .iter()
+            .map(|clip| clip.id),
+    )?;
+    validate_project_timeline_audio_clips(&project.snapshot)?;
     validate_project_timeline_scene_blocks(&project.snapshot)?;
     validate_unique_ids(
         "timeline automation",
@@ -14616,7 +15117,7 @@ fn validate_project_file(project: &ProjectFile) -> Result<(), String> {
 }
 
 fn project_validation_warnings(project: &ProjectFile) -> Vec<String> {
-    project
+    let mut warnings = project
         .snapshot
         .cues
         .iter()
@@ -14635,7 +15136,22 @@ fn project_validation_warnings(project: &ProjectFile) -> Vec<String> {
                 )
             })
         })
-        .collect()
+        .collect::<Vec<_>>();
+    warnings.extend(
+        project
+            .snapshot
+            .timeline
+            .audio_clips
+            .iter()
+            .filter(|clip| !clip.path.trim().is_empty() && !Path::new(&clip.path).exists())
+            .map(|clip| {
+                format!(
+                    "Timeline audio clip {} file '{}' is unavailable; the show remains loadable for travel",
+                    clip.id, clip.path
+                )
+            }),
+    );
+    warnings
 }
 
 fn validate_unique_ids(label: &str, ids: impl IntoIterator<Item = u64>) -> Result<(), String> {
@@ -14643,6 +15159,53 @@ fn validate_unique_ids(label: &str, ids: impl IntoIterator<Item = u64>) -> Resul
     for id in ids {
         if !seen.insert(id) {
             return Err(format!("Project contains duplicate {label} id {id}"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_project_timeline_audio_clips(snapshot: &EngineSnapshot) -> Result<(), String> {
+    for clip in &snapshot.timeline.audio_clips {
+        if clip.path.trim().is_empty() {
+            return Err(format!(
+                "Project timeline audio clip {} has an empty path",
+                clip.id
+            ));
+        }
+        if clip.duration_ms == 0 {
+            return Err(format!(
+                "Project timeline audio clip {} has zero duration",
+                clip.id
+            ));
+        }
+        if !clip.gain.is_finite() || !(0.0..=2.0).contains(&clip.gain) {
+            return Err(format!(
+                "Project timeline audio clip {} gain must be from 0 to 2",
+                clip.id
+            ));
+        }
+        if clip.fade_in_ms.saturating_add(clip.fade_out_ms) > clip.duration_ms {
+            return Err(format!(
+                "Project timeline audio clip {} fade windows exceed its duration",
+                clip.id
+            ));
+        }
+        let layer = snapshot
+            .timeline
+            .layers
+            .iter()
+            .find(|layer| layer.id == clip.layer_id)
+            .ok_or_else(|| {
+                format!(
+                    "Project timeline audio clip {} references missing layer {}",
+                    clip.id, clip.layer_id
+                )
+            })?;
+        if !matches!(layer.kind, TimelineLayerKind::Audio) {
+            return Err(format!(
+                "Project timeline audio clip {} references non-Audio layer {}",
+                clip.id, clip.layer_id
+            ));
         }
     }
     Ok(())
@@ -29469,6 +30032,95 @@ f 1 2 3
     }
 
     #[test]
+    fn project_timeline_audio_clips_sdc_roundtrip_preserves_clips_and_master_fields() {
+        let mut project = project_with_timeline_scene_blocks();
+        let missing_audio_path = env::temp_dir()
+            .join(format!(
+                "syndocal-f7-missing-{}-{}",
+                std::process::id(),
+                current_unix_ms()
+            ))
+            .join("show-bed.wav")
+            .to_string_lossy()
+            .to_string();
+        project.snapshot.timeline.layers = vec![
+            project_timeline_layer(10, "Audio Bed", 0, TimelineLayerKind::Audio),
+            project_timeline_layer(11, "Lighting Main", 1, TimelineLayerKind::Lighting),
+        ];
+        for event in &mut project.snapshot.timeline.events {
+            event.layer_id = Some(11);
+        }
+        project.snapshot.timeline.audio_clips = vec![TimelineAudioClipSummary {
+            id: 700,
+            layer_id: 10,
+            path: missing_audio_path.clone(),
+            start_ms: 1_250,
+            offset_ms: 200,
+            duration_ms: 8_000,
+            gain: 0.8,
+            fade_in_ms: 500,
+            fade_out_ms: 750,
+        }];
+        project.snapshot.timeline.audio_offset_ms = -125;
+        project.snapshot.timeline.audio_muted = true;
+
+        let json = project_json_for_write(&project).unwrap();
+        let roundtrip: ProjectFile = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            roundtrip.snapshot.timeline.audio_clips,
+            project.snapshot.timeline.audio_clips
+        );
+        assert_eq!(roundtrip.snapshot.timeline.audio_offset_ms, -125);
+        assert!(roundtrip.snapshot.timeline.audio_muted);
+        validate_project_file(&roundtrip).unwrap();
+        let warnings = project_validation_warnings(&roundtrip);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("show-bed.wav"));
+        assert!(warnings[0].contains("remains loadable for travel"));
+
+        let mut clamped = project.snapshot.clone();
+        let clip = &mut clamped.timeline.audio_clips[0];
+        clip.path = format!("  {missing_audio_path}  ");
+        clip.start_ms = u64::MAX;
+        clip.gain = 3.0;
+        clip.fade_in_ms = 5_000;
+        clip.fade_out_ms = 5_000;
+        let clamped = project_snapshot_for_save(clamped);
+        let clip = &clamped.timeline.audio_clips[0];
+        assert_eq!(clip.path, missing_audio_path);
+        assert_eq!(clip.start_ms, u64::MAX - clip.duration_ms);
+        assert_eq!(clip.gain, 2.0);
+        assert_eq!(clip.fade_in_ms, 5_000);
+        assert_eq!(clip.fade_out_ms, 3_000);
+    }
+
+    #[test]
+    fn project_timeline_audio_legacy_defaults_keep_empty_clips_and_master_path_compatible() {
+        let project = project_with_timeline_scene_blocks();
+        let mut legacy = serde_json::to_value(project).unwrap();
+        let timeline = legacy["snapshot"]["timeline"].as_object_mut().unwrap();
+        timeline.remove("audio_clips");
+        timeline.remove("audio_offset_ms");
+        timeline.remove("audio_muted");
+
+        let legacy: ProjectFile = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.snapshot.timeline.audio_clips.is_empty());
+        assert_eq!(legacy.snapshot.timeline.audio_offset_ms, 0);
+        assert!(!legacy.snapshot.timeline.audio_muted);
+        validate_project_file(&legacy).unwrap();
+
+        let mut legacy_master = serde_json::to_value(&legacy).unwrap();
+        legacy_master["snapshot"]["timeline"]["audio_offset_ms"] = serde_json::json!(375);
+        legacy_master["snapshot"]["timeline"]["audio_muted"] = serde_json::json!(true);
+        let legacy_master: ProjectFile = serde_json::from_value(legacy_master).unwrap();
+        assert!(legacy_master.snapshot.timeline.audio_clips.is_empty());
+        assert_eq!(legacy_master.snapshot.timeline.audio_offset_ms, 375);
+        assert!(legacy_master.snapshot.timeline.audio_muted);
+        validate_project_file(&legacy_master).unwrap();
+    }
+
+    #[test]
     fn project_file_validation_rejects_missing_timeline_layer_reference() {
         let mut project = project_with_timeline_scene_blocks();
         project.snapshot.timeline.layers = vec![project_timeline_layer(
@@ -33381,6 +34033,120 @@ mod media_audio_playback_tests {
     }
 
     #[test]
+    fn timeline_audio_playback_lifecycle_recues_on_play_and_seek_and_stops_on_pause() {
+        let started_at = Instant::now();
+        assert_eq!(
+            timeline_audio_transport_action(
+                TimelineAudioTransportState::default(),
+                true,
+                1_000,
+                4,
+                started_at,
+            ),
+            TimelineAudioTransportAction::Recue
+        );
+
+        let playing = TimelineAudioTransportState {
+            playing: true,
+            position_ms: 1_000,
+            transport_revision: 4,
+            synced_at: Some(started_at),
+        };
+        assert_eq!(
+            timeline_audio_transport_action(
+                playing,
+                true,
+                1_025,
+                4,
+                started_at + Duration::from_millis(25),
+            ),
+            TimelineAudioTransportAction::Sync
+        );
+        assert_eq!(
+            timeline_audio_transport_action(
+                playing,
+                true,
+                1_050,
+                5,
+                started_at + Duration::from_millis(25),
+            ),
+            TimelineAudioTransportAction::Recue
+        );
+        assert_eq!(
+            timeline_audio_transport_action(playing, false, 1_025, 4, started_at),
+            TimelineAudioTransportAction::Stop
+        );
+    }
+
+    #[test]
+    fn timeline_audio_sink_domain_recreates_clip_id_on_seek_and_stops_on_pause_or_mute() {
+        let (mixer, _mixer_source) = rodio::mixer::mixer(2, 48_000);
+        let mut playback = MediaAudioPlayback::default();
+        let install_clip_sink = |playback: &mut MediaAudioPlayback| {
+            playback
+                .timeline_sinks
+                .insert(70, rodio::Sink::connect_new(&mixer));
+            playback.timeline_sources.insert(
+                70,
+                TimelineAudioSourceConfig {
+                    path: PathBuf::from("fixture.wav"),
+                    gain: 1.0,
+                    offset_ms: 0,
+                },
+            );
+        };
+
+        assert!(
+            playback.apply_timeline_transport_barrier(TimelineAudioTransportAction::Recue, false,)
+        );
+        install_clip_sink(&mut playback);
+        assert!(playback.timeline_sinks.contains_key(&70));
+
+        assert!(
+            playback.apply_timeline_transport_barrier(TimelineAudioTransportAction::Sync, false,)
+        );
+        assert!(playback.timeline_sinks.contains_key(&70));
+
+        assert!(
+            playback.apply_timeline_transport_barrier(TimelineAudioTransportAction::Recue, false,)
+        );
+        assert!(!playback.timeline_sinks.contains_key(&70));
+        install_clip_sink(&mut playback);
+        assert!(playback.timeline_sinks.contains_key(&70));
+
+        assert!(
+            !playback.apply_timeline_transport_barrier(TimelineAudioTransportAction::Sync, true,)
+        );
+        assert!(playback.timeline_sinks.is_empty());
+        install_clip_sink(&mut playback);
+        assert!(
+            !playback.apply_timeline_transport_barrier(TimelineAudioTransportAction::Stop, false,)
+        );
+        assert!(playback.timeline_sinks.is_empty());
+    }
+
+    #[test]
+    fn timeline_audio_clip_gain_envelope_combines_fades_and_gain() {
+        let clip = TimelineAudioClipSummary {
+            id: 7,
+            layer_id: 10,
+            path: "fixture.wav".to_string(),
+            start_ms: 1_000,
+            offset_ms: 0,
+            duration_ms: 2_000,
+            gain: 1.5,
+            fade_in_ms: 500,
+            fade_out_ms: 500,
+        };
+
+        assert_eq!(timeline_audio_clip_volume(&clip, 1_000), 0.0);
+        assert!((timeline_audio_clip_volume(&clip, 1_250) - 0.75).abs() < 0.001);
+        assert!((timeline_audio_clip_volume(&clip, 2_000) - 1.5).abs() < 0.001);
+        assert!((timeline_audio_clip_volume(&clip, 2_750) - 0.75).abs() < 0.001);
+        assert_eq!(timeline_audio_clip_volume(&clip, 3_000), 0.0);
+    }
+
+    #[test]
     fn program_audio_handoff_plans_each_auto_action_exactly_once() {
         let config =
             ProgramAudioHandoffConfig::validated(true, 1.25, Some("  ASIO Main  ".to_string()))
@@ -36392,6 +37158,12 @@ fn main() {
             tap_bpm,
             sync_ableton_link_clock,
             analyze_audio_file,
+            select_timeline_audio_clip_file,
+            analyze_timeline_audio_clip_path,
+            add_timeline_audio_clip,
+            update_timeline_audio_clip,
+            remove_timeline_audio_clip,
+            set_timeline_audio_master,
             clear_timeline_audio,
             list_midi_inputs,
             list_midi_outputs,

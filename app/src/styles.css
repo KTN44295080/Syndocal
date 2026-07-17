@@ -25661,3 +25661,137 @@ h3 {
   padding: 1px 7px;
   font-size: 10px;
 }
+
+/* F7 timeline audio clips: additive lane-local styling. The fixed overview
+   frame/scrollport geometry remains the sole layout owner. */
+.timelineLayerSection.audio .timelineLayerSectionHeader {
+  grid-template-columns: 18px minmax(0, 1fr) auto auto;
+}
+
+.timelineAudioClipAdd {
+  min-width: 0;
+  height: 16px;
+  overflow: hidden;
+  border: 1px solid #5e533e;
+  border-radius: 2px;
+  background: #242119;
+  color: #d8bd82;
+  padding: 0 4px;
+  font-size: 8px;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timelineAudioClip {
+  cursor: grab;
+  outline: none;
+  touch-action: none;
+}
+
+.timelineAudioClip.dragging {
+  cursor: grabbing;
+}
+
+.timelineAudioClip.layerMuted {
+  opacity: 0.38;
+}
+
+.timelineAudioClipBody {
+  fill: var(--identity-band, #5b4930);
+  fill-opacity: 0.96;
+  stroke: rgba(7, 10, 12, 0.72);
+  stroke-width: 1;
+}
+
+.timelineAudioClipIdentityBand {
+  fill: var(--identity, #c69755);
+  fill-opacity: 0.96;
+  pointer-events: none;
+}
+
+.timelineAudioClip.selected .timelineAudioClipBody,
+.timelineAudioClip:focus-visible .timelineAudioClipBody {
+  stroke: #fff5dd;
+  stroke-width: 1.7;
+}
+
+.timelineAudioClipWaveform {
+  fill: none;
+  stroke: rgba(244, 225, 182, 0.94);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.timelineAudioClipFade {
+  fill: rgba(6, 9, 11, 0.6);
+  pointer-events: none;
+}
+
+.timelineAudioClipLabel {
+  fill: #17130d;
+  font-size: 10px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.timelineAudioClipDuration {
+  fill: rgba(255, 246, 224, 0.94);
+  font-size: 9px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.timelineAudioClipGhost {
+  fill: transparent;
+  stroke: rgba(255, 245, 221, 0.68);
+  stroke-dasharray: 3 2;
+  pointer-events: none;
+}
+
+.timelineAudioClipResizeHandle,
+.timelineAudioClipFadeHandle {
+  fill: transparent;
+}
+
+.timelineAudioClipResizeHandle {
+  cursor: ew-resize;
+}
+
+.timelineAudioClipFadeHandle {
+  cursor: col-resize;
+}
+
+.timelineAudioClipProperties {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 5px;
+  min-width: 0;
+  border-top: 1px solid #34302a;
+  padding-top: 5px;
+}
+
+.timelineAudioClipProperties label {
+  display: grid;
+  gap: 2px;
+  min-width: 74px;
+  color: #a9a196;
+  font-size: 9px;
+}
+
+.timelineAudioClipProperties input {
+  width: 86px;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.timelineAudioMasterControls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}

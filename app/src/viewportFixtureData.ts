@@ -1,6 +1,7 @@
 import { defaultFixtureLimits } from "./fixtureLimits";
 import type {
   AttributeControl,
+  AudioAnalysisSummary,
   CompositionSummary,
   CueSummary,
   EffectSummary,
@@ -8,6 +9,7 @@ import type {
   NodeGraphSummary,
   PatchedFixtureSummary,
   StageObjectSummary,
+  TimelineAudioClipSummary,
   TimelineLayerSummary,
   VideoIsfEffectSummary,
   VideoLayerSummary,
@@ -642,6 +644,46 @@ const layeredTimelineLayers: TimelineLayerSummary[] = [
   },
 ];
 
+const layeredTimelineAudioAnalysis: AudioAnalysisSummary = {
+  path: "C:/fixture/audio/main-bed.wav",
+  sample_rate: 48_000,
+  channels: 2,
+  duration_ms: 4_000,
+  estimated_bpm: 120,
+  waveform: Array.from({ length: 41 }, (_, index) => ({
+    time_ms: index * 100,
+    peak: 0.2 + (index % 7) * 0.11,
+    rms: 0.1 + (index % 5) * 0.08,
+  })),
+  spectrum: [],
+  beats: [0, 500, 1_000, 1_500, 2_000, 2_500, 3_000, 3_500],
+};
+
+const layeredTimelineAudioClips: TimelineAudioClipSummary[] = [
+  {
+    id: 700,
+    layer_id: 10,
+    path: layeredTimelineAudioAnalysis.path,
+    start_ms: 250,
+    offset_ms: 100,
+    duration_ms: 3_200,
+    gain: 1,
+    fade_in_ms: 400,
+    fade_out_ms: 600,
+  },
+  {
+    id: 701,
+    layer_id: 11,
+    path: "C:/fixture/audio/hit.wav",
+    start_ms: 1_800,
+    offset_ms: 0,
+    duration_ms: 1_400,
+    gain: 0.8,
+    fade_in_ms: 0,
+    fade_out_ms: 200,
+  },
+];
+
 export const viewportFixtureData = {
   profile,
   projectorMapping,
@@ -657,4 +699,6 @@ export const viewportFixtureData = {
   cueRecallCue,
   sceneMatrixCues,
   layeredTimelineLayers,
+  layeredTimelineAudioAnalysis,
+  layeredTimelineAudioClips,
 } as const;

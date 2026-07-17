@@ -9,6 +9,7 @@ pub type CueListId = u64;
 pub type PaletteId = u64;
 pub type ExecutorId = u64;
 pub type TimelineEventId = u64;
+pub type TimelineAudioClipId = u64;
 pub type AutomationId = u64;
 pub type VideoLayerId = u64;
 pub type CompositionId = u64;
@@ -1450,6 +1451,48 @@ pub struct TimelineLayerSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TimelineAudioClipSummary {
+    #[serde(default)]
+    pub id: TimelineAudioClipId,
+    #[serde(default)]
+    pub layer_id: u32,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub start_ms: u64,
+    #[serde(default)]
+    pub offset_ms: u64,
+    #[serde(default)]
+    pub duration_ms: u64,
+    #[serde(default = "default_timeline_audio_clip_gain")]
+    pub gain: f32,
+    #[serde(default)]
+    pub fade_in_ms: u64,
+    #[serde(default)]
+    pub fade_out_ms: u64,
+}
+
+impl Default for TimelineAudioClipSummary {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            layer_id: 0,
+            path: String::new(),
+            start_ms: 0,
+            offset_ms: 0,
+            duration_ms: 0,
+            gain: default_timeline_audio_clip_gain(),
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+        }
+    }
+}
+
+fn default_timeline_audio_clip_gain() -> f32 {
+    1.0
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TimelineCueEventSummary {
     pub id: TimelineEventId,
     pub cue_id: CueId,
@@ -1615,6 +1658,14 @@ pub struct TimelineSnapshot {
     pub video_automations: Vec<TimelineVideoAutomationSummary>,
     #[serde(default)]
     pub audio: Option<AudioAnalysisSummary>,
+    #[serde(default)]
+    pub audio_clips: Vec<TimelineAudioClipSummary>,
+    #[serde(default)]
+    pub audio_offset_ms: i64,
+    #[serde(default)]
+    pub audio_muted: bool,
+    #[serde(default, skip_serializing)]
+    pub audio_transport_revision: u64,
     pub playing: bool,
     pub position_ms: u64,
     pub duration_ms: u64,
@@ -3108,6 +3159,51 @@ mod tests {
         .unwrap();
 
         assert!(snapshot.layers.is_empty());
+        assert!(snapshot.audio_clips.is_empty());
+        assert_eq!(snapshot.audio_offset_ms, 0);
+        assert!(!snapshot.audio_muted);
+        assert_eq!(snapshot.audio_transport_revision, 0);
+    }
+
+    #[test]
+    fn timeline_audio_clip_serde_defaults_are_sensible() {
+        let clip: super::TimelineAudioClipSummary =
+            serde_json::from_value(serde_json::json!({})).unwrap();
+
+        assert_eq!(clip.id, 0);
+        assert_eq!(clip.layer_id, 0);
+        assert!(clip.path.is_empty());
+        assert_eq!(clip.start_ms, 0);
+        assert_eq!(clip.offset_ms, 0);
+        assert_eq!(clip.duration_ms, 0);
+        assert_eq!(clip.gain, 1.0);
+        assert_eq!(clip.fade_in_ms, 0);
+        assert_eq!(clip.fade_out_ms, 0);
+    }
+
+    #[test]
+    fn timeline_audio_clip_and_master_fields_roundtrip() {
+        let snapshot = super::TimelineSnapshot {
+            audio_clips: vec![super::TimelineAudioClipSummary {
+                id: 4,
+                layer_id: 12,
+                path: "music/show.wav".to_string(),
+                start_ms: 1_000,
+                offset_ms: 250,
+                duration_ms: 8_000,
+                gain: 1.25,
+                fade_in_ms: 500,
+                fade_out_ms: 750,
+            }],
+            audio_offset_ms: -250,
+            audio_muted: true,
+            ..super::TimelineSnapshot::default()
+        };
+
+        let encoded = serde_json::to_string(&snapshot).unwrap();
+        let decoded: super::TimelineSnapshot = serde_json::from_str(&encoded).unwrap();
+
+        assert_eq!(decoded, snapshot);
     }
 
     #[test]

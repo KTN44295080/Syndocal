@@ -40,15 +40,16 @@ use protocol::{
     PatchFixtureRequest, PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest,
     ProgrammerSnapshot, ProgrammerValueSummary, RecallMode, ReferencePaletteSummary, Rotation3,
     StageMapConfig, StageMapPresetSummary, StageObjectId, StageObjectSummary, SubmasterSummary,
-    TimelineAutomationSummary, TimelineCueEventSummary, TimelineEventId, TimelineLayerKind,
-    TimelineLayerSummary, TimelineSnapRequest, TimelineSnapshot, TimelineTrackKind,
-    TimelineVideoAutomationSummary, Transform2D, ValueEffectDirection, ValueEffectInterpolation,
-    ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
-    VideoBlendMode, VideoColorAdjust, VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust,
-    VideoIsfControlKind, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId,
-    VideoLayerState, VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind,
-    VideoOutputMapping, VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget,
-    VideoParam, VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
+    TimelineAudioClipId, TimelineAudioClipSummary, TimelineAutomationSummary,
+    TimelineCueEventSummary, TimelineEventId, TimelineLayerKind, TimelineLayerSummary,
+    TimelineSnapRequest, TimelineSnapshot, TimelineTrackKind, TimelineVideoAutomationSummary,
+    Transform2D, ValueEffectDirection, ValueEffectInterpolation, ValueEffectMode, ValueEffectPoint,
+    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBlendMode, VideoColorAdjust,
+    VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust, VideoIsfControlKind,
+    VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId, VideoLayerState,
+    VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
+    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
+    VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
     LIVE_AUDIO_FEATURE_BAND_CAPACITY, MAX_CUE_AUTHORED_BEATS, MAX_TIMELINE_SCENE_BLOCK_LOOPS,
     MIN_CUE_AUTHORED_BEATS,
 };
@@ -691,6 +692,27 @@ pub enum EngineCommand {
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
+    AddTimelineAudioClip {
+        clip: TimelineAudioClipSummary,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    UpdateTimelineAudioClip {
+        clip: TimelineAudioClipSummary,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    RemoveTimelineAudioClip {
+        clip_id: TimelineAudioClipId,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    SetTimelineAudioMaster {
+        offset_ms: i64,
+        muted: bool,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     AddTimelineAutomation {
         automation_id: AutomationId,
         fixture_id: FixtureId,
@@ -1064,6 +1086,7 @@ pub struct EngineHandle {
     next_executor_id: Arc<AtomicU64>,
     next_timeline_event_id: Arc<AtomicU64>,
     next_timeline_layer_id: Arc<AtomicU32>,
+    next_timeline_audio_clip_id: Arc<AtomicU64>,
     next_automation_id: Arc<AtomicU64>,
     next_video_layer_id: Arc<AtomicU64>,
     next_composition_id: Arc<AtomicU64>,
@@ -1076,6 +1099,16 @@ pub struct EngineHandle {
 pub struct VideoAudioRuntimeSnapshot {
     pub layers: Vec<VideoLayerSummary>,
     pub auto_vj_status: AutoVjStatus,
+    pub timeline_audio: TimelineAudioRuntimeSnapshot,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TimelineAudioRuntimeSnapshot {
+    pub clips: Vec<TimelineAudioClipSummary>,
+    pub playing: bool,
+    pub position_ms: u64,
+    pub muted: bool,
+    pub transport_revision: u64,
 }
 
 struct QueuedEngineCommand {
@@ -1226,6 +1259,7 @@ impl EngineHandle {
         let next_executor_id = Arc::new(AtomicU64::new(2));
         let next_timeline_event_id = Arc::new(AtomicU64::new(1));
         let next_timeline_layer_id = Arc::new(AtomicU32::new(2));
+        let next_timeline_audio_clip_id = Arc::new(AtomicU64::new(1));
         let next_automation_id = Arc::new(AtomicU64::new(1));
         let next_video_layer_id = Arc::new(AtomicU64::new(1));
         let next_composition_id = Arc::new(AtomicU64::new(2));
@@ -1269,6 +1303,7 @@ impl EngineHandle {
             next_executor_id,
             next_timeline_event_id,
             next_timeline_layer_id,
+            next_timeline_audio_clip_id,
             next_automation_id,
             next_video_layer_id,
             next_composition_id,
@@ -1308,6 +1343,11 @@ impl EngineHandle {
 
     pub fn allocate_timeline_layer_id(&self) -> u32 {
         self.next_timeline_layer_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    pub fn allocate_timeline_audio_clip_id(&self) -> TimelineAudioClipId {
+        self.next_timeline_audio_clip_id
+            .fetch_add(1, Ordering::Relaxed)
     }
 
     pub fn allocate_automation_id(&self) -> AutomationId {
@@ -1975,6 +2015,63 @@ impl EngineHandle {
             .map_err(|error| format!("Timeline layer reorder acknowledgement failed: {error}"))?
     }
 
+    pub fn add_timeline_audio_clip(&self, clip: TimelineAudioClipSummary) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::AddTimelineAudioClip {
+            clip,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Timeline audio clip add acknowledgement failed: {error}"))?
+    }
+
+    pub fn update_timeline_audio_clip(&self, clip: TimelineAudioClipSummary) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::UpdateTimelineAudioClip {
+            clip,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| {
+                format!("Timeline audio clip update acknowledgement failed: {error}")
+            })?
+    }
+
+    pub fn remove_timeline_audio_clip(&self, clip_id: TimelineAudioClipId) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::RemoveTimelineAudioClip {
+            clip_id,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| {
+                format!("Timeline audio clip removal acknowledgement failed: {error}")
+            })?
+    }
+
+    pub fn set_timeline_audio_master(&self, offset_ms: i64, muted: bool) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::SetTimelineAudioMaster {
+            offset_ms,
+            muted,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Timeline audio master acknowledgement failed: {error}"))?
+    }
+
     pub fn bootstrap_vj_show(
         &self,
         layers: Vec<(VideoLayerId, String, VideoSourceSummary)>,
@@ -2149,6 +2246,13 @@ impl EngineHandle {
             .map(|snapshot| VideoAudioRuntimeSnapshot {
                 layers: snapshot.video.layers.clone(),
                 auto_vj_status: snapshot.video.auto_vj.status.clone(),
+                timeline_audio: TimelineAudioRuntimeSnapshot {
+                    clips: snapshot.timeline.audio_clips.clone(),
+                    playing: snapshot.timeline.playing,
+                    position_ms: snapshot.timeline.position_ms,
+                    muted: snapshot.timeline.audio_muted,
+                    transport_revision: snapshot.timeline.audio_transport_revision,
+                },
             })
             .unwrap_or_default()
     }
@@ -2225,17 +2329,38 @@ impl EngineHandle {
                 .unwrap_or(0)
                 .saturating_add(1),
         );
+        let authored_next_timeline_layer_id = snapshot
+            .timeline
+            .layers
+            .iter()
+            .map(|layer| layer.id)
+            .max()
+            .unwrap_or(1)
+            .saturating_add(1)
+            .max(2);
+        let derived_audio_next_timeline_layer_id = (snapshot.timeline.audio.is_some()
+            && snapshot.timeline.audio_clips.is_empty()
+            && first_timeline_audio_layer_id(&snapshot.timeline.layers).is_none())
+        .then(|| {
+            next_timeline_audio_layer_id(&snapshot.timeline.layers)
+                .saturating_add(1)
+                .max(2)
+        })
+        .unwrap_or(2);
         self.next_timeline_layer_id.store(
+            authored_next_timeline_layer_id.max(derived_audio_next_timeline_layer_id),
+            Ordering::Relaxed,
+        );
+        store_next_id(
+            &self.next_timeline_audio_clip_id,
             snapshot
                 .timeline
-                .layers
+                .audio_clips
                 .iter()
-                .map(|layer| layer.id)
+                .map(|clip| clip.id)
                 .max()
-                .unwrap_or(1)
-                .saturating_add(1)
-                .max(2),
-            Ordering::Relaxed,
+                .unwrap_or(0)
+                .saturating_add(1),
         );
         let max_automation_id = snapshot
             .timeline
@@ -2325,6 +2450,9 @@ impl EngineHandle {
             EngineCommand::AddTimelineLayer { layer, .. } => {
                 self.next_timeline_layer_id
                     .fetch_max(layer.id.saturating_add(1).max(2), Ordering::Relaxed);
+            }
+            EngineCommand::AddTimelineAudioClip { clip, .. } => {
+                store_next_id(&self.next_timeline_audio_clip_id, clip.id.saturating_add(1));
             }
             EngineCommand::UpsertStageObject(object) => {
                 self.sync_stage_object_allocator(std::slice::from_ref(object));
@@ -3067,6 +3195,20 @@ enum PendingCommandRollback {
     RestoreTimelineLayers {
         timeline_layers: Vec<TimelineLayerSummary>,
         timeline_events: Vec<RuntimeTimelineEvent>,
+        timeline_audio: Option<AudioAnalysisSummary>,
+        timeline_audio_clips: Vec<TimelineAudioClipSummary>,
+        timeline_audio_clips_derived: bool,
+        timeline_audio_duration_ms: u64,
+        timeline_position_ms: u64,
+        last_error: Option<String>,
+    },
+    RestoreTimelineAudioMaster {
+        audio_offset_ms: i64,
+        audio_muted: bool,
+        timeline_audio_clips: Vec<TimelineAudioClipSummary>,
+        timeline_audio_clips_derived: bool,
+        timeline_audio_duration_ms: u64,
+        timeline_position_ms: u64,
         last_error: Option<String>,
     },
 }
@@ -3088,6 +3230,7 @@ impl PendingCommandRollback {
                 | Self::RestoreTimelineEvents { .. }
                 | Self::RestoreTimelineItems { .. }
                 | Self::RestoreTimelineLayers { .. }
+                | Self::RestoreTimelineAudioMaster { .. }
         )
     }
 }
@@ -3169,6 +3312,12 @@ struct EngineRuntime {
     timeline_automations: Vec<RuntimeTimelineAutomation>,
     timeline_video_automations: Vec<RuntimeTimelineVideoAutomation>,
     timeline_audio: Option<AudioAnalysisSummary>,
+    timeline_audio_clips: Vec<TimelineAudioClipSummary>,
+    timeline_audio_clips_derived: bool,
+    timeline_audio_duration_ms: u64,
+    timeline_audio_offset_ms: i64,
+    timeline_audio_muted: bool,
+    timeline_audio_transport_revision: u64,
     live_audio_spectrum: Option<AudioSpectrumPoint>,
     live_audio_features: Option<LiveAudioReactiveFeatures>,
     live_audio_onset_latched: bool,
@@ -3349,6 +3498,12 @@ impl EngineRuntime {
             timeline_automations: Vec::new(),
             timeline_video_automations: Vec::new(),
             timeline_audio: None,
+            timeline_audio_clips: Vec::new(),
+            timeline_audio_clips_derived: false,
+            timeline_audio_duration_ms: 0,
+            timeline_audio_offset_ms: 0,
+            timeline_audio_muted: false,
+            timeline_audio_transport_revision: 0,
             live_audio_spectrum: None,
             live_audio_features: None,
             live_audio_onset_latched: false,
@@ -3466,6 +3621,13 @@ impl EngineRuntime {
             self.last_error = Some(error);
             return;
         }
+        if let Err(error) = normalize_and_validate_timeline_audio_clips(
+            &snapshot.timeline.layers,
+            &mut snapshot.timeline.audio_clips,
+        ) {
+            self.last_error = Some(error);
+            return;
+        }
         if let Some(authored_video) = snapshot.authored_video.take() {
             snapshot.video = authored_video;
         }
@@ -3564,6 +3726,17 @@ impl EngineRuntime {
             .map(runtime_timeline_video_automation_from_summary)
             .collect();
         self.timeline_audio = snapshot.timeline.audio.clone();
+        self.timeline_audio_offset_ms = snapshot.timeline.audio_offset_ms;
+        self.timeline_audio_muted = snapshot.timeline.audio_muted;
+        self.timeline_audio_transport_revision =
+            self.timeline_audio_transport_revision.wrapping_add(1);
+        self.timeline_audio_clips = snapshot.timeline.audio_clips.clone();
+        self.timeline_audio_clips_derived = false;
+        if self.timeline_audio_clips.is_empty() && self.timeline_audio.is_some() {
+            self.rebuild_derived_timeline_audio_clip();
+        } else {
+            self.refresh_timeline_audio_duration();
+        }
         self.live_audio_spectrum = None;
         self.live_audio_features = None;
         self.live_audio_onset_latched = false;
@@ -6799,6 +6972,11 @@ impl EngineRuntime {
                 let rollback = PendingCommandRollback::RestoreTimelineLayers {
                     timeline_layers: self.timeline_layers.clone(),
                     timeline_events: self.timeline_events.clone(),
+                    timeline_audio: self.timeline_audio.clone(),
+                    timeline_audio_clips: self.timeline_audio_clips.clone(),
+                    timeline_audio_clips_derived: self.timeline_audio_clips_derived,
+                    timeline_audio_duration_ms: self.timeline_audio_duration_ms,
+                    timeline_position_ms: self.timeline_position_ms,
                     last_error: previous_last_error.clone(),
                 };
                 let result = if Instant::now() > expires_at {
@@ -6828,6 +7006,11 @@ impl EngineRuntime {
                 let rollback = PendingCommandRollback::RestoreTimelineLayers {
                     timeline_layers: self.timeline_layers.clone(),
                     timeline_events: self.timeline_events.clone(),
+                    timeline_audio: self.timeline_audio.clone(),
+                    timeline_audio_clips: self.timeline_audio_clips.clone(),
+                    timeline_audio_clips_derived: self.timeline_audio_clips_derived,
+                    timeline_audio_duration_ms: self.timeline_audio_duration_ms,
+                    timeline_position_ms: self.timeline_position_ms,
                     last_error: previous_last_error.clone(),
                 };
                 let result = if Instant::now() > expires_at {
@@ -6858,6 +7041,11 @@ impl EngineRuntime {
                 let rollback = PendingCommandRollback::RestoreTimelineLayers {
                     timeline_layers: self.timeline_layers.clone(),
                     timeline_events: self.timeline_events.clone(),
+                    timeline_audio: self.timeline_audio.clone(),
+                    timeline_audio_clips: self.timeline_audio_clips.clone(),
+                    timeline_audio_clips_derived: self.timeline_audio_clips_derived,
+                    timeline_audio_duration_ms: self.timeline_audio_duration_ms,
+                    timeline_position_ms: self.timeline_position_ms,
                     last_error: previous_last_error.clone(),
                 };
                 let result = if Instant::now() > expires_at {
@@ -6887,6 +7075,11 @@ impl EngineRuntime {
                 let rollback = PendingCommandRollback::RestoreTimelineLayers {
                     timeline_layers: self.timeline_layers.clone(),
                     timeline_events: self.timeline_events.clone(),
+                    timeline_audio: self.timeline_audio.clone(),
+                    timeline_audio_clips: self.timeline_audio_clips.clone(),
+                    timeline_audio_clips_derived: self.timeline_audio_clips_derived,
+                    timeline_audio_duration_ms: self.timeline_audio_duration_ms,
+                    timeline_position_ms: self.timeline_position_ms,
                     last_error: previous_last_error.clone(),
                 };
                 let result = if Instant::now() > expires_at {
@@ -6905,6 +7098,143 @@ impl EngineRuntime {
                     rollback,
                     publication_error:
                         "Engine snapshot was busy; Timeline layer reorder was rolled back",
+                });
+            }
+            EngineCommand::AddTimelineAudioClip {
+                clip,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreTimelineLayers {
+                    timeline_layers: self.timeline_layers.clone(),
+                    timeline_events: self.timeline_events.clone(),
+                    timeline_audio: self.timeline_audio.clone(),
+                    timeline_audio_clips: self.timeline_audio_clips.clone(),
+                    timeline_audio_clips_derived: self.timeline_audio_clips_derived,
+                    timeline_audio_duration_ms: self.timeline_audio_duration_ms,
+                    timeline_position_ms: self.timeline_position_ms,
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Timeline audio clip add expired before engine execution".to_string())
+                } else {
+                    self.add_timeline_audio_clip_state(clip)
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Timeline audio clip add was rolled back",
+                });
+            }
+            EngineCommand::UpdateTimelineAudioClip {
+                clip,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreTimelineLayers {
+                    timeline_layers: self.timeline_layers.clone(),
+                    timeline_events: self.timeline_events.clone(),
+                    timeline_audio: self.timeline_audio.clone(),
+                    timeline_audio_clips: self.timeline_audio_clips.clone(),
+                    timeline_audio_clips_derived: self.timeline_audio_clips_derived,
+                    timeline_audio_duration_ms: self.timeline_audio_duration_ms,
+                    timeline_position_ms: self.timeline_position_ms,
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Timeline audio clip update expired before engine execution".to_string())
+                } else {
+                    self.update_timeline_audio_clip_state(clip)
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Timeline audio clip update was rolled back",
+                });
+            }
+            EngineCommand::RemoveTimelineAudioClip {
+                clip_id,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreTimelineLayers {
+                    timeline_layers: self.timeline_layers.clone(),
+                    timeline_events: self.timeline_events.clone(),
+                    timeline_audio: self.timeline_audio.clone(),
+                    timeline_audio_clips: self.timeline_audio_clips.clone(),
+                    timeline_audio_clips_derived: self.timeline_audio_clips_derived,
+                    timeline_audio_duration_ms: self.timeline_audio_duration_ms,
+                    timeline_position_ms: self.timeline_position_ms,
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Timeline audio clip removal expired before engine execution".to_string())
+                } else {
+                    self.remove_timeline_audio_clip_state(clip_id)
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Timeline audio clip removal was rolled back",
+                });
+            }
+            EngineCommand::SetTimelineAudioMaster {
+                offset_ms,
+                muted,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreTimelineAudioMaster {
+                    audio_offset_ms: self.timeline_audio_offset_ms,
+                    audio_muted: self.timeline_audio_muted,
+                    timeline_audio_clips: self.timeline_audio_clips.clone(),
+                    timeline_audio_clips_derived: self.timeline_audio_clips_derived,
+                    timeline_audio_duration_ms: self.timeline_audio_duration_ms,
+                    timeline_position_ms: self.timeline_position_ms,
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Timeline audio master update expired before engine execution".to_string())
+                } else {
+                    self.set_timeline_audio_master_state(offset_ms, muted);
+                    Ok(())
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Timeline audio master update was rolled back",
                 });
             }
             EngineCommand::AddTimelineAutomation {
@@ -7054,7 +7384,13 @@ impl EngineRuntime {
                     .retain(|automation| automation.id != automation_id);
             }
             EngineCommand::SetTimelineAudio(audio) => {
+                let rebuild_legacy_clip = self.timeline_audio_clips_derived;
                 self.timeline_audio = audio;
+                if rebuild_legacy_clip {
+                    self.rebuild_derived_timeline_audio_clip();
+                } else {
+                    self.refresh_timeline_audio_duration();
+                }
                 self.timeline_position_ms =
                     self.timeline_position_ms.min(self.timeline_duration_ms());
                 self.last_error = None;
@@ -7145,6 +7481,8 @@ impl EngineRuntime {
                 self.timeline_jump_landed_event_id = None;
                 self.timeline_external_sync_source = None;
                 self.timeline_position_ms = position_ms.min(self.timeline_duration_ms());
+                self.timeline_audio_transport_revision =
+                    self.timeline_audio_transport_revision.wrapping_add(1);
                 self.timeline_evaluated_boundary_position_ms = None;
                 self.timeline_playhead_boundary_armed = self.timeline_playing;
                 self.apply_timeline_automations();
@@ -7153,6 +7491,8 @@ impl EngineRuntime {
             EngineCommand::SeekTimelineBeat { direction } => {
                 self.deactivate_all_timeline_effect_activations();
                 self.seek_timeline_adjacent_beat(direction);
+                self.timeline_audio_transport_revision =
+                    self.timeline_audio_transport_revision.wrapping_add(1);
             }
             EngineCommand::SyncTimelineTimecode {
                 position_ms,
@@ -8344,10 +8684,37 @@ impl EngineRuntime {
             PendingCommandRollback::RestoreTimelineLayers {
                 timeline_layers,
                 timeline_events,
+                timeline_audio,
+                timeline_audio_clips,
+                timeline_audio_clips_derived,
+                timeline_audio_duration_ms,
+                timeline_position_ms,
                 last_error,
             } => {
                 self.timeline_layers = timeline_layers;
                 self.timeline_events = timeline_events;
+                self.timeline_audio = timeline_audio;
+                self.timeline_audio_clips = timeline_audio_clips;
+                self.timeline_audio_clips_derived = timeline_audio_clips_derived;
+                self.timeline_audio_duration_ms = timeline_audio_duration_ms;
+                self.timeline_position_ms = timeline_position_ms;
+                self.last_error = last_error;
+            }
+            PendingCommandRollback::RestoreTimelineAudioMaster {
+                audio_offset_ms,
+                audio_muted,
+                timeline_audio_clips,
+                timeline_audio_clips_derived,
+                timeline_audio_duration_ms,
+                timeline_position_ms,
+                last_error,
+            } => {
+                self.timeline_audio_offset_ms = audio_offset_ms;
+                self.timeline_audio_muted = audio_muted;
+                self.timeline_audio_clips = timeline_audio_clips;
+                self.timeline_audio_clips_derived = timeline_audio_clips_derived;
+                self.timeline_audio_duration_ms = timeline_audio_duration_ms;
+                self.timeline_position_ms = timeline_position_ms;
                 self.last_error = last_error;
             }
         }
@@ -11304,12 +11671,24 @@ impl EngineRuntime {
     }
 
     fn materialize_legacy_timeline_layers(&mut self) {
-        if !self.timeline_layers.is_empty() {
-            return;
+        if self.timeline_layers.is_empty() {
+            self.timeline_layers = implicit_timeline_layers();
+            for event in &mut self.timeline_events {
+                event.layer_id = Some(event.resolved_layer_id);
+            }
         }
-        self.timeline_layers = implicit_timeline_layers();
-        for event in &mut self.timeline_events {
-            event.layer_id = Some(event.resolved_layer_id);
+        if self.timeline_audio_clips_derived {
+            if let Some(layer_id) = self.timeline_audio_clips.first().map(|clip| clip.layer_id) {
+                if !self
+                    .timeline_layers
+                    .iter()
+                    .any(|layer| layer.id == layer_id)
+                {
+                    self.timeline_layers
+                        .push(default_timeline_audio_layer(layer_id));
+                    let _ = normalize_timeline_layer_orders(&mut self.timeline_layers);
+                }
+            }
         }
     }
 
@@ -11365,17 +11744,27 @@ impl EngineRuntime {
     ) -> Result<(), String> {
         let previous_layers = self.timeline_layers.clone();
         let previous_events = self.timeline_events.clone();
+        let previous_audio_clips = self.timeline_audio_clips.clone();
+        let previous_audio_clips_derived = self.timeline_audio_clips_derived;
+        let previous_audio_duration_ms = self.timeline_audio_duration_ms;
+        let previous_position_ms = self.timeline_position_ms;
         let result = mutation(self);
         if result.is_err() {
             self.timeline_layers = previous_layers;
             self.timeline_events = previous_events;
+            self.timeline_audio_clips = previous_audio_clips;
+            self.timeline_audio_clips_derived = previous_audio_clips_derived;
+            self.timeline_audio_duration_ms = previous_audio_duration_ms;
+            self.timeline_position_ms = previous_position_ms;
         }
         result
     }
 
     fn add_timeline_layer_state(&mut self, mut layer: TimelineLayerSummary) -> Result<(), String> {
         sanitize_timeline_layer_label(&mut layer)?;
-        if effective_timeline_layer_by_id(&self.timeline_layers, layer.id).is_some() {
+        if effective_timeline_layer_by_id(&self.timeline_layers, layer.id).is_some()
+            || self.timeline_audio_layer(layer.id).is_some()
+        {
             return Err(format!("Timeline layer {} already exists", layer.id));
         }
         self.commit_timeline_layer_mutation(move |runtime| {
@@ -11391,8 +11780,12 @@ impl EngineRuntime {
         mut layer: TimelineLayerSummary,
     ) -> Result<(), String> {
         sanitize_timeline_layer_label(&mut layer)?;
-        let current = effective_timeline_layer_by_id(&self.timeline_layers, layer.id)
-            .ok_or_else(|| format!("Timeline layer {} was not found", layer.id))?;
+        let current_exists = effective_timeline_layer_by_id(&self.timeline_layers, layer.id)
+            .is_some()
+            || self.timeline_audio_layer(layer.id).is_some();
+        if !current_exists {
+            return Err(format!("Timeline layer {} was not found", layer.id));
+        }
         if matches!(layer.kind, TimelineLayerKind::Audio)
             && self
                 .timeline_events
@@ -11404,7 +11797,17 @@ impl EngineRuntime {
                 layer.id
             ));
         }
-        let _ = current;
+        if !matches!(layer.kind, TimelineLayerKind::Audio)
+            && self
+                .timeline_audio_clips
+                .iter()
+                .any(|clip| clip.layer_id == layer.id)
+        {
+            return Err(format!(
+                "Timeline layer {} contains audio clips and must remain Audio",
+                layer.id
+            ));
+        }
         self.commit_timeline_layer_mutation(move |runtime| {
             runtime.materialize_legacy_timeline_layers();
             let index = runtime
@@ -11423,18 +11826,17 @@ impl EngineRuntime {
         layer_id: u32,
         reassign_to_layer_id: Option<u32>,
     ) -> Result<(), String> {
-        let source = effective_timeline_layer_by_id(&self.timeline_layers, layer_id)
+        let source = self
+            .timeline_layers_with_audio()
+            .into_iter()
+            .find(|layer| layer.id == layer_id)
             .ok_or_else(|| format!("Timeline layer {layer_id} was not found"))?;
         if source.locked {
             return Err(format!(
                 "Timeline layer {layer_id} is locked; unlock it before removal"
             ));
         }
-        let effective_count = if self.timeline_layers.is_empty() {
-            2
-        } else {
-            self.timeline_layers.len()
-        };
+        let effective_count = self.timeline_layers_with_audio().len();
         if effective_count <= 1 {
             return Err("Timeline must contain at least one layer".to_string());
         }
@@ -11442,12 +11844,19 @@ impl EngineRuntime {
             .timeline_events
             .iter()
             .any(|event| event.resolved_layer_id == layer_id);
+        let has_audio_clips = self
+            .timeline_audio_clips
+            .iter()
+            .any(|clip| clip.layer_id == layer_id);
         let target = match reassign_to_layer_id {
             Some(target_id) if target_id == layer_id => {
                 return Err("Timeline layer cannot be reassigned to itself".to_string());
             }
             Some(target_id) => {
-                let target = effective_timeline_layer_by_id(&self.timeline_layers, target_id)
+                let target = self
+                    .timeline_layers_with_audio()
+                    .into_iter()
+                    .find(|layer| layer.id == target_id)
                     .ok_or_else(|| {
                         format!("Timeline layer reassignment target {target_id} was not found")
                     })?;
@@ -11461,9 +11870,14 @@ impl EngineRuntime {
                         "Cue events cannot be reassigned to Audio timeline layer {target_id}"
                     ));
                 }
+                if !matches!(target.kind, TimelineLayerKind::Audio) && has_audio_clips {
+                    return Err(format!(
+                        "Audio clips can only be reassigned to Audio timeline layer {target_id}"
+                    ));
+                }
                 Some(target)
             }
-            None if has_events => {
+            None if has_events || has_audio_clips => {
                 return Err(format!(
                     "Timeline layer {layer_id} is not empty; provide a reassign target"
                 ));
@@ -11473,12 +11887,19 @@ impl EngineRuntime {
         self.commit_timeline_layer_mutation(move |runtime| {
             runtime.materialize_legacy_timeline_layers();
             if let Some(target) = target {
-                let target_track = timeline_track_for_layer_kind(target.kind)
-                    .expect("audio reassignment with cue events was rejected");
-                for event in &mut runtime.timeline_events {
-                    if event.resolved_layer_id == layer_id {
-                        event.layer_id = Some(target.id);
-                        event.track = target_track.clone();
+                if let Some(target_track) = timeline_track_for_layer_kind(target.kind) {
+                    for event in &mut runtime.timeline_events {
+                        if event.resolved_layer_id == layer_id {
+                            event.layer_id = Some(target.id);
+                            event.track = target_track.clone();
+                        }
+                    }
+                }
+                if matches!(target.kind, TimelineLayerKind::Audio) {
+                    for clip in &mut runtime.timeline_audio_clips {
+                        if clip.layer_id == layer_id {
+                            clip.layer_id = target.id;
+                        }
                     }
                 }
             }
@@ -11489,11 +11910,7 @@ impl EngineRuntime {
     }
 
     fn reorder_timeline_layers_state(&mut self, layer_ids: Vec<u32>) -> Result<(), String> {
-        let effective_layers = if self.timeline_layers.is_empty() {
-            implicit_timeline_layers()
-        } else {
-            self.timeline_layers.clone()
-        };
+        let effective_layers = self.timeline_layers_with_audio();
         if layer_ids.len() != effective_layers.len() {
             return Err(format!(
                 "Timeline layer reorder must contain all {} layer ids exactly once",
@@ -11524,6 +11941,208 @@ impl EngineRuntime {
             normalize_timeline_layer_orders(&mut runtime.timeline_layers)?;
             runtime.recompute_timeline_event_layers()
         })
+    }
+
+    fn rebuild_derived_timeline_audio_clip(&mut self) {
+        let Some(audio) = self.timeline_audio.as_ref() else {
+            self.timeline_audio_clips.clear();
+            self.timeline_audio_clips_derived = false;
+            self.refresh_timeline_audio_duration();
+            return;
+        };
+        let layer_id = first_timeline_audio_layer_id(&self.timeline_layers)
+            .unwrap_or_else(|| next_timeline_audio_layer_id(&self.timeline_layers));
+        self.timeline_audio_clips = vec![legacy_timeline_audio_clip(
+            audio,
+            layer_id,
+            self.timeline_audio_offset_ms,
+        )];
+        self.timeline_audio_clips_derived = true;
+        self.refresh_timeline_audio_duration();
+    }
+
+    fn refresh_timeline_audio_duration(&mut self) {
+        self.timeline_audio_duration_ms = self
+            .timeline_audio_clips
+            .iter()
+            .map(|clip| clip.start_ms.saturating_add(clip.duration_ms))
+            .max()
+            .unwrap_or_else(|| {
+                self.timeline_audio
+                    .as_ref()
+                    .map(|audio| audio.duration_ms)
+                    .unwrap_or(0)
+            });
+    }
+
+    fn materialize_timeline_audio_clips_for_edit(&mut self) {
+        if self.timeline_audio_clips_derived {
+            self.materialize_legacy_timeline_layers();
+            self.timeline_audio_clips_derived = false;
+        }
+    }
+
+    fn timeline_audio_layer(&self, layer_id: u32) -> Option<TimelineLayerSummary> {
+        self.timeline_layers
+            .iter()
+            .find(|layer| layer.id == layer_id)
+            .cloned()
+            .or_else(|| {
+                (self.timeline_audio_clips_derived
+                    && self
+                        .timeline_audio_clips
+                        .iter()
+                        .any(|clip| clip.layer_id == layer_id))
+                .then(|| default_timeline_audio_layer(layer_id))
+            })
+    }
+
+    fn timeline_layers_with_audio(&self) -> Vec<TimelineLayerSummary> {
+        let mut layers = if self.timeline_layers.is_empty() {
+            implicit_timeline_layers()
+        } else {
+            self.timeline_layers.clone()
+        };
+        for clip in &self.timeline_audio_clips {
+            if !layers.iter().any(|layer| layer.id == clip.layer_id) {
+                layers.push(default_timeline_audio_layer(clip.layer_id));
+            }
+        }
+        layers
+    }
+
+    fn sanitize_timeline_audio_clip(
+        &self,
+        mut clip: TimelineAudioClipSummary,
+    ) -> Result<TimelineAudioClipSummary, String> {
+        clip.path = clip.path.trim().to_string();
+        if clip.path.is_empty() {
+            return Err(format!(
+                "Timeline audio clip {} path must not be empty",
+                clip.id
+            ));
+        }
+        if clip.duration_ms == 0 {
+            return Err(format!(
+                "Timeline audio clip {} duration must be greater than zero",
+                clip.id
+            ));
+        }
+        let layer = self
+            .timeline_audio_layer(clip.layer_id)
+            .ok_or_else(|| format!("Timeline audio layer {} was not found", clip.layer_id))?;
+        if !matches!(layer.kind, TimelineLayerKind::Audio) {
+            return Err(format!(
+                "Timeline audio clips can only be placed on Audio lanes; layer {} is {:?}",
+                clip.layer_id, layer.kind
+            ));
+        }
+        if layer.locked {
+            return Err(format!(
+                "Timeline layer {} is locked; unlock it before editing audio clips",
+                clip.layer_id
+            ));
+        }
+        clip.start_ms = clip.start_ms.min(u64::MAX.saturating_sub(clip.duration_ms));
+        clip.gain = if clip.gain.is_finite() {
+            clip.gain.clamp(0.0, 2.0)
+        } else {
+            1.0
+        };
+        clip.fade_in_ms = clip.fade_in_ms.min(clip.duration_ms);
+        clip.fade_out_ms = clip
+            .fade_out_ms
+            .min(clip.duration_ms.saturating_sub(clip.fade_in_ms));
+        Ok(clip)
+    }
+
+    fn add_timeline_audio_clip_state(
+        &mut self,
+        clip: TimelineAudioClipSummary,
+    ) -> Result<(), String> {
+        if self
+            .timeline_audio_clips
+            .iter()
+            .any(|current| current.id == clip.id)
+        {
+            return Err(format!("Timeline audio clip {} already exists", clip.id));
+        }
+        self.materialize_timeline_audio_clips_for_edit();
+        let clip = self.sanitize_timeline_audio_clip(clip)?;
+        self.timeline_audio_clips.push(clip);
+        self.timeline_audio_clips
+            .sort_by_key(|clip| (clip.start_ms, clip.layer_id, clip.id));
+        self.refresh_timeline_audio_duration();
+        self.clamp_timeline_position_after_edit();
+        Ok(())
+    }
+
+    fn update_timeline_audio_clip_state(
+        &mut self,
+        clip: TimelineAudioClipSummary,
+    ) -> Result<(), String> {
+        let index = self
+            .timeline_audio_clips
+            .iter()
+            .position(|current| current.id == clip.id)
+            .ok_or_else(|| format!("Timeline audio clip {} was not found", clip.id))?;
+        if self
+            .timeline_audio_layer(self.timeline_audio_clips[index].layer_id)
+            .is_some_and(|layer| layer.locked)
+        {
+            return Err(format!(
+                "Timeline layer {} is locked; unlock it before editing audio clip {}",
+                self.timeline_audio_clips[index].layer_id, clip.id
+            ));
+        }
+        self.materialize_timeline_audio_clips_for_edit();
+        let clip = self.sanitize_timeline_audio_clip(clip)?;
+        self.timeline_audio_clips[index] = clip;
+        self.timeline_audio_clips
+            .sort_by_key(|clip| (clip.start_ms, clip.layer_id, clip.id));
+        self.refresh_timeline_audio_duration();
+        self.clamp_timeline_position_after_edit();
+        Ok(())
+    }
+
+    fn remove_timeline_audio_clip_state(
+        &mut self,
+        clip_id: TimelineAudioClipId,
+    ) -> Result<(), String> {
+        let index = self
+            .timeline_audio_clips
+            .iter()
+            .position(|clip| clip.id == clip_id)
+            .ok_or_else(|| format!("Timeline audio clip {clip_id} was not found"))?;
+        if self
+            .timeline_audio_layer(self.timeline_audio_clips[index].layer_id)
+            .is_some_and(|layer| layer.locked)
+        {
+            return Err(format!(
+                "Timeline layer {} is locked; unlock it before removing audio clip {clip_id}",
+                self.timeline_audio_clips[index].layer_id
+            ));
+        }
+        self.materialize_timeline_audio_clips_for_edit();
+        self.timeline_audio_clips.remove(index);
+        if self.timeline_audio_clips.is_empty() {
+            // An empty authored clip list is indistinguishable from a pre-F7 legacy
+            // snapshot. Clearing the legacy analysis when the final clip is explicitly
+            // removed prevents clip 0 from being derived again on the next load.
+            self.timeline_audio = None;
+        }
+        self.refresh_timeline_audio_duration();
+        self.clamp_timeline_position_after_edit();
+        Ok(())
+    }
+
+    fn set_timeline_audio_master_state(&mut self, offset_ms: i64, muted: bool) {
+        self.timeline_audio_offset_ms = offset_ms;
+        self.timeline_audio_muted = muted;
+        if self.timeline_audio_clips_derived {
+            self.rebuild_derived_timeline_audio_clip();
+        }
+        self.clamp_timeline_position_after_edit();
     }
 
     fn timeline_has_conformed_events(&self) -> bool {
@@ -13693,11 +14312,6 @@ impl EngineRuntime {
             .flat_map(|automation| automation.keyframes.iter().map(|keyframe| keyframe.time_ms))
             .max()
             .unwrap_or(0);
-        let audio_duration = self
-            .timeline_audio
-            .as_ref()
-            .map(|audio| audio.duration_ms)
-            .unwrap_or(0);
         let video_source_duration = self
             .video_layers
             .iter()
@@ -13708,7 +14322,7 @@ impl EngineRuntime {
         event_duration
             .max(automation_duration)
             .max(video_automation_duration)
-            .max(audio_duration)
+            .max(self.timeline_audio_duration_ms)
             .max(video_source_duration)
     }
 
@@ -13741,12 +14355,19 @@ impl EngineRuntime {
     }
 
     fn timeline_snapshot(&self) -> TimelineSnapshot {
+        let mut layers = if self.timeline_layers.is_empty() {
+            implicit_timeline_layers()
+        } else {
+            self.timeline_layers.clone()
+        };
+        for clip in &self.timeline_audio_clips {
+            if !layers.iter().any(|layer| layer.id == clip.layer_id) {
+                layers.push(default_timeline_audio_layer(clip.layer_id));
+            }
+        }
+        layers.sort_by_key(|layer| (layer.kind.display_section_rank(), layer.order, layer.id));
         TimelineSnapshot {
-            layers: if self.timeline_layers.is_empty() {
-                implicit_timeline_layers()
-            } else {
-                self.timeline_layers.clone()
-            },
+            layers,
             events: self
                 .timeline_events
                 .iter()
@@ -13763,6 +14384,10 @@ impl EngineRuntime {
                 .map(timeline_video_automation_summary)
                 .collect(),
             audio: self.timeline_audio.clone(),
+            audio_clips: self.timeline_audio_clips.clone(),
+            audio_offset_ms: self.timeline_audio_offset_ms,
+            audio_muted: self.timeline_audio_muted,
+            audio_transport_revision: self.timeline_audio_transport_revision,
             playing: self.timeline_playing,
             position_ms: self.timeline_position_ms,
             duration_ms: self.timeline_duration_ms(),
@@ -14317,6 +14942,10 @@ impl EngineRuntime {
     fn build_persistence_snapshot(&self) -> EngineSnapshot {
         let mut snapshot = self.build_snapshot(0);
         snapshot.timeline.layers = self.timeline_layers.clone();
+        snapshot.timeline.audio_transport_revision = 0;
+        if self.timeline_audio_clips_derived {
+            snapshot.timeline.audio_clips.clear();
+        }
         for (summary, event) in snapshot
             .timeline
             .events
@@ -15285,6 +15914,7 @@ fn runtime_video_layer_from_summary(layer: &VideoLayerSummary) -> RuntimeVideoLa
 
 const LEGACY_LIGHTING_TIMELINE_LAYER_ID: u32 = 0;
 const LEGACY_VIDEO_TIMELINE_LAYER_ID: u32 = 1;
+const LEGACY_AUDIO_TIMELINE_LAYER_ID: u32 = 2;
 
 #[derive(Clone, Copy)]
 struct ResolvedTimelineLayer {
@@ -15316,6 +15946,59 @@ fn implicit_timeline_layers() -> Vec<TimelineLayerSummary> {
             kind: TimelineLayerKind::Video,
         },
     ]
+}
+
+fn default_timeline_audio_layer(id: u32) -> TimelineLayerSummary {
+    TimelineLayerSummary {
+        id,
+        label: "Audio".to_string(),
+        order: 0,
+        muted: false,
+        locked: false,
+        solo: false,
+        kind: TimelineLayerKind::Audio,
+    }
+}
+
+fn first_timeline_audio_layer_id(layers: &[TimelineLayerSummary]) -> Option<u32> {
+    layers
+        .iter()
+        .filter(|layer| matches!(layer.kind, TimelineLayerKind::Audio))
+        .min_by_key(|layer| (layer.order, layer.id))
+        .map(|layer| layer.id)
+}
+
+fn next_timeline_audio_layer_id(layers: &[TimelineLayerSummary]) -> u32 {
+    layers
+        .iter()
+        .map(|layer| layer.id)
+        .max()
+        .unwrap_or(LEGACY_VIDEO_TIMELINE_LAYER_ID)
+        .saturating_add(1)
+        .max(LEGACY_AUDIO_TIMELINE_LAYER_ID)
+}
+
+fn legacy_timeline_audio_clip(
+    audio: &AudioAnalysisSummary,
+    layer_id: u32,
+    audio_offset_ms: i64,
+) -> TimelineAudioClipSummary {
+    let (start_ms, offset_ms) = if audio_offset_ms >= 0 {
+        (audio_offset_ms as u64, 0)
+    } else {
+        (0, audio_offset_ms.unsigned_abs())
+    };
+    TimelineAudioClipSummary {
+        id: 0,
+        layer_id,
+        path: audio.path.clone(),
+        start_ms,
+        offset_ms,
+        duration_ms: audio.duration_ms.saturating_sub(offset_ms),
+        gain: 1.0,
+        fade_in_ms: 0,
+        fade_out_ms: 0,
+    }
 }
 
 fn timeline_track_for_layer_kind(kind: TimelineLayerKind) -> Option<TimelineTrackKind> {
@@ -15452,6 +16135,61 @@ fn normalize_and_validate_timeline_layers(
             |error| format!("Timeline event {} has an invalid layer: {error}", event.id),
         )?;
     }
+    Ok(())
+}
+
+fn normalize_and_validate_timeline_audio_clips(
+    layers: &[TimelineLayerSummary],
+    clips: &mut Vec<TimelineAudioClipSummary>,
+) -> Result<(), String> {
+    let mut ids = HashSet::with_capacity(clips.len());
+    for clip in clips.iter_mut() {
+        if !ids.insert(clip.id) {
+            return Err(format!(
+                "Timeline contains duplicate audio clip {}",
+                clip.id
+            ));
+        }
+        clip.path = clip.path.trim().to_string();
+        if clip.path.is_empty() {
+            return Err(format!(
+                "Timeline audio clip {} path must not be empty",
+                clip.id
+            ));
+        }
+        if clip.duration_ms == 0 {
+            return Err(format!(
+                "Timeline audio clip {} duration must be greater than zero",
+                clip.id
+            ));
+        }
+        let layer = layers
+            .iter()
+            .find(|layer| layer.id == clip.layer_id)
+            .ok_or_else(|| {
+                format!(
+                    "Timeline audio clip {} references missing layer {}",
+                    clip.id, clip.layer_id
+                )
+            })?;
+        if !matches!(layer.kind, TimelineLayerKind::Audio) {
+            return Err(format!(
+                "Timeline audio clip {} references non-Audio layer {}",
+                clip.id, clip.layer_id
+            ));
+        }
+        clip.start_ms = clip.start_ms.min(u64::MAX.saturating_sub(clip.duration_ms));
+        clip.gain = if clip.gain.is_finite() {
+            clip.gain.clamp(0.0, 2.0)
+        } else {
+            1.0
+        };
+        clip.fade_in_ms = clip.fade_in_ms.min(clip.duration_ms);
+        clip.fade_out_ms = clip
+            .fade_out_ms
+            .min(clip.duration_ms.saturating_sub(clip.fade_in_ms));
+    }
+    clips.sort_by_key(|clip| (clip.start_ms, clip.layer_id, clip.id));
     Ok(())
 }
 
@@ -23074,6 +23812,10 @@ mod tests {
                     spectrum: Vec::new(),
                     beats: vec![0, 500, 1_000],
                 }),
+                audio_clips: Vec::new(),
+                audio_offset_ms: 0,
+                audio_muted: false,
+                audio_transport_revision: 0,
                 playing: false,
                 position_ms: 250,
                 duration_ms: 500,
@@ -24560,6 +25302,10 @@ mod tests {
                     },
                 ],
                 audio: None,
+                audio_clips: Vec::new(),
+                audio_offset_ms: 0,
+                audio_muted: false,
+                audio_transport_revision: 0,
                 playing: false,
                 position_ms: 0,
                 duration_ms: 500,
@@ -30781,6 +31527,7 @@ mod tests {
             next_executor_id: Arc::new(AtomicU64::new(2)),
             next_timeline_event_id: Arc::new(AtomicU64::new(1)),
             next_timeline_layer_id: Arc::new(AtomicU32::new(2)),
+            next_timeline_audio_clip_id: Arc::new(AtomicU64::new(1)),
             next_automation_id: Arc::new(AtomicU64::new(1)),
             next_video_layer_id: Arc::new(AtomicU64::new(1)),
             next_composition_id: Arc::new(AtomicU64::new(1)),
@@ -45453,6 +46200,23 @@ mod tests {
         }
     }
 
+    fn timeline_test_audio_clip(
+        id: TimelineAudioClipId,
+        layer_id: u32,
+    ) -> TimelineAudioClipSummary {
+        TimelineAudioClipSummary {
+            id,
+            layer_id,
+            path: format!("C:/media/clip-{id}.wav"),
+            start_ms: 250,
+            offset_ms: 100,
+            duration_ms: 2_000,
+            gain: 1.0,
+            fade_in_ms: 200,
+            fade_out_ms: 300,
+        }
+    }
+
     fn timeline_test_event(
         id: TimelineEventId,
         cue_id: CueId,
@@ -46085,5 +46849,192 @@ mod tests {
                 (None, TimelineTrackKind::Video)
             ]
         );
+    }
+
+    #[test]
+    fn timeline_audio_clip_crud_ack_and_busy_publication_rollback_are_atomic() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_layers = vec![
+            timeline_test_layer(10, 0, false, false, false, TimelineLayerKind::Audio),
+            timeline_test_layer(11, 0, false, false, false, TimelineLayerKind::Lighting),
+        ];
+        let published = RwLock::new(runtime.build_snapshot(0));
+
+        let (add_ack, add_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::AddTimelineAudioClip {
+            clip: timeline_test_audio_clip(70, 10),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: add_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(add_receiver.recv().unwrap(), Ok(()));
+        assert_eq!(
+            runtime.timeline_audio_clips,
+            vec![timeline_test_audio_clip(70, 10)]
+        );
+
+        let mut updated = timeline_test_audio_clip(70, 10);
+        updated.gain = 3.5;
+        updated.fade_in_ms = 1_800;
+        updated.fade_out_ms = 1_800;
+        let (update_ack, update_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::UpdateTimelineAudioClip {
+            clip: updated,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: update_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(update_receiver.recv().unwrap(), Ok(()));
+        assert_eq!(runtime.timeline_audio_clips[0].gain, 2.0);
+        assert_eq!(runtime.timeline_audio_clips[0].fade_in_ms, 1_800);
+        assert_eq!(runtime.timeline_audio_clips[0].fade_out_ms, 200);
+
+        let before_busy_add = runtime.timeline_audio_clips.clone();
+        let published_guard = published.write().unwrap();
+        let (busy_ack, busy_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::AddTimelineAudioClip {
+            clip: timeline_test_audio_clip(71, 10),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: busy_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(busy_receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("rolled back"));
+        assert_eq!(runtime.timeline_audio_clips, before_busy_add);
+        drop(published_guard);
+
+        let before_invalid_update = runtime.timeline_audio_clips.clone();
+        let mut invalid = before_invalid_update[0].clone();
+        invalid.layer_id = 11;
+        let (invalid_ack, invalid_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::UpdateTimelineAudioClip {
+            clip: invalid,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: invalid_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(invalid_receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("Audio lanes"));
+        assert_eq!(runtime.timeline_audio_clips, before_invalid_update);
+
+        let (remove_ack, remove_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::RemoveTimelineAudioClip {
+            clip_id: 70,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: remove_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(remove_receiver.recv().unwrap(), Ok(()));
+        assert!(runtime.timeline_audio_clips.is_empty());
+    }
+
+    #[test]
+    fn timeline_audio_legacy_track_derives_clip_zero_until_first_clip_edit() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.timeline.layers = vec![
+            timeline_test_layer(12, 0, false, false, false, TimelineLayerKind::Lighting),
+            timeline_test_layer(10, 1, false, false, false, TimelineLayerKind::Audio),
+        ];
+        snapshot.timeline.audio_offset_ms = 250;
+        snapshot.timeline.audio = Some(AudioAnalysisSummary {
+            path: "C:/media/legacy-master.wav".to_string(),
+            sample_rate: 48_000,
+            channels: 2,
+            duration_ms: 4_000,
+            estimated_bpm: None,
+            waveform: Vec::new(),
+            spectrum: Vec::new(),
+            beats: Vec::new(),
+        });
+
+        let mut untyped_snapshot = snapshot.clone();
+        untyped_snapshot.timeline.layers.clear();
+        let handle = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        handle.load_project_snapshot(untyped_snapshot).unwrap();
+        assert_eq!(handle.allocate_timeline_layer_id(), 3);
+
+        runtime.load_project_snapshot(snapshot);
+        let display = runtime.build_snapshot(0);
+        assert_eq!(display.timeline.audio_clips.len(), 1);
+        assert_eq!(display.timeline.audio_clips[0].id, 0);
+        assert_eq!(display.timeline.audio_clips[0].layer_id, 10);
+        assert_eq!(display.timeline.audio_clips[0].start_ms, 250);
+        assert_eq!(display.timeline.audio_clips[0].offset_ms, 0);
+        assert!(runtime
+            .build_persistence_snapshot()
+            .timeline
+            .audio_clips
+            .is_empty());
+
+        let mut edited = display.timeline.audio_clips[0].clone();
+        edited.gain = 0.75;
+        let published = RwLock::new(display);
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::UpdateTimelineAudioClip {
+            clip: edited,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(receiver.recv().unwrap(), Ok(()));
+        let persisted = runtime.build_persistence_snapshot();
+        assert_eq!(persisted.timeline.audio_clips.len(), 1);
+        assert_eq!(persisted.timeline.audio_clips[0].id, 0);
+        assert_eq!(persisted.timeline.audio_clips[0].gain, 0.75);
+
+        let (remove_ack, remove_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::RemoveTimelineAudioClip {
+            clip_id: 0,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: remove_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(remove_receiver.recv().unwrap(), Ok(()));
+        let removed = runtime.build_persistence_snapshot();
+        assert!(removed.timeline.audio.is_none());
+        assert!(removed.timeline.audio_clips.is_empty());
+        let mut reloaded = runtime_with_lfo_effects(&[]);
+        reloaded.load_project_snapshot(removed);
+        assert!(reloaded.build_snapshot(0).timeline.audio_clips.is_empty());
+    }
+
+    #[test]
+    fn timeline_audio_explicit_clips_and_master_fields_snapshot_roundtrip() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.timeline.layers = vec![timeline_test_layer(
+            10,
+            0,
+            false,
+            false,
+            false,
+            TimelineLayerKind::Audio,
+        )];
+        snapshot.timeline.audio_clips = vec![timeline_test_audio_clip(80, 10)];
+        snapshot.timeline.audio_offset_ms = -125;
+        snapshot.timeline.audio_muted = true;
+        runtime.load_project_snapshot(snapshot);
+
+        let persisted = runtime.build_persistence_snapshot();
+        let mut reloaded = runtime_with_lfo_effects(&[]);
+        reloaded.load_project_snapshot(persisted);
+        let roundtrip = reloaded.build_persistence_snapshot();
+
+        assert_eq!(
+            roundtrip.timeline.audio_clips,
+            vec![timeline_test_audio_clip(80, 10)]
+        );
+        assert_eq!(roundtrip.timeline.audio_offset_ms, -125);
+        assert!(roundtrip.timeline.audio_muted);
     }
 }

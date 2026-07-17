@@ -2138,6 +2138,11 @@ async function measureLayeredTimelineDeskState(client) {
     const targetGutter = document.querySelector('[data-timeline-layer-id="12"][data-timeline-layer-gutter]');
     const targetToggle = targetGutter?.querySelector('[data-timeline-layer-mute-toggle]') ?? null;
     const targetMarkers = visibleElements('.timelineMarker[data-timeline-layer-id="12"][data-timeline-layer-muted]');
+    const audioClips = visibleElements('.timelineAudioClip[data-timeline-layer-kind="Audio"]');
+    const audioWaveforms = [...document.querySelectorAll('.timelineAudioClip [data-timeline-audio-waveform]')];
+    const audioFadeRamps = [...document.querySelectorAll('.timelineAudioClip [data-timeline-audio-fade-ramp]')];
+    const audioClipAddButtons = visibleElements('[data-timeline-section-kind="Audio"] [data-timeline-add-audio-clip]');
+    const lightingClipAddButtons = visibleElements('[data-timeline-section-kind="Lighting"] [data-timeline-add-audio-clip]');
     const frame = document.querySelector('.timelineOverviewFrame');
     const scrollports = visibleElements('[data-timeline-layer-scrollport]');
     const documentElement = document.documentElement;
@@ -2173,6 +2178,15 @@ async function measureLayeredTimelineDeskState(client) {
       targetLayerMuted: targetGutter?.getAttribute('data-timeline-layer-muted') === 'true' ||
         targetToggle?.getAttribute('aria-pressed') === 'false',
       targetMarkerMutedStates: targetMarkers.map((marker) => marker.getAttribute('data-timeline-layer-muted') === 'true'),
+      audioClipCount: audioClips.length,
+      audioClipLayerKinds: audioClips.map((clip) => clip.getAttribute('data-timeline-layer-kind') || ''),
+      audioWaveformCount: audioWaveforms.length,
+      audioWaveformDeclaredNodeCounts: audioWaveforms.map((waveform) =>
+        Number(waveform.getAttribute('data-timeline-audio-waveform-node-count') || 0)),
+      audioFadeRampCount: audioFadeRamps.length,
+      audioClipAddButtonCount: audioClipAddButtons.length,
+      lightingClipAddButtonCount: lightingClipAddButtons.length,
+      overviewNodeCount: document.querySelectorAll('.timelineOverview *').length,
       scrollportCount: scrollports.length,
       scrollportOverflowSafe: scrollports.every((scrollport) => {
         const style = getComputedStyle(scrollport);
@@ -2463,6 +2477,16 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
       before.targetMarkerMutedStates.every((state) => !state) &&
       muted.targetMarkerMutedStates.length === before.targetMarkerMutedStates.length &&
       muted.targetMarkerMutedStates.every(Boolean)],
+    ['timelineAudioFixtureHasTwoVisibleClipsOnAudioLanes', () =>
+      before.audioClipCount === 2 && before.audioClipLayerKinds.every((kind) => kind === 'Audio')],
+    ['timelineAudioClipWaveformUsesOneNodePerClip', () =>
+      before.audioWaveformCount === before.audioClipCount &&
+      before.audioWaveformDeclaredNodeCounts.every((count) => count === 1)],
+    ['timelineAudioClipConfiguredFadeDrawsRamp', () => before.audioFadeRampCount >= 1],
+    ['timelineAudioAddAffordancePresentOnlyOnAudioSection', () =>
+      before.audioClipAddButtonCount === 1 && before.lightingClipAddButtonCount === 0],
+    ['timelineAudioClipsKeepOverviewNodeBudget', () => before.overviewNodeCount < 3_500],
+    ['timelineAudioFixtureKeepsDocumentAndAppScrollZero', () => before.documentAndAppScrollZero],
     ['layeredDeskInternalScrollportPresent', () => before.scrollportCount === 1 && before.scrollportOverflowSafe],
     ['layeredDeskDocumentAndAppScrollZero', () => before.documentAndAppScrollZero && muted.documentAndAppScrollZero],
     ['layeredDeskUnsafeOverflowZero', () => before.unsafeOverflowCount === 0 && muted.unsafeOverflowCount === 0],

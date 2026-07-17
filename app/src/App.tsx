@@ -238,6 +238,7 @@ import type {
   StageObjectKind,
   StageObjectSummary,
   TimelineCueEventSummary,
+  TimelineAudioClipSummary,
   TimelineAutomationSummary,
   TimelineGroupAutomationAddResult,
   TimelineLayerSummary,
@@ -582,6 +583,10 @@ const projectHistoryChangedEvent = "syndocal:project-history-changed";
 const projectMutationCommands = new Set([
   "analyze_audio_file",
   "clear_timeline_audio",
+  "add_timeline_audio_clip",
+  "update_timeline_audio_clip",
+  "remove_timeline_audio_clip",
+  "set_timeline_audio_master",
   "create_custom_fixture_profile",
   "use_fixture_profile",
   "patch_fixture",
@@ -763,6 +768,11 @@ const listen = <T,>(event: string, handler: (event: { payload: T }) => void) => 
 };
 
 const isSyndocalProjectPath = (path: string) => path.trim().toLowerCase().endsWith(".sdc");
+const timelineAudioFileExtensions = ["wav", "mp3", "m4a", "aac", "flac", "aiff", "aif", "ogg", "opus"];
+const isTimelineAudioFilePath = (path: string) => {
+  const normalized = path.trim().toLowerCase();
+  return timelineAudioFileExtensions.some((extension) => normalized.endsWith(`.${extension}`));
+};
 const uiScaleStorageKey = "syndocal.uiScale.v1";
 type UiScale = 90 | 100 | 110;
 const loadUiScale = (): UiScale => {
@@ -1543,6 +1553,14 @@ export default function App() {
         layers: timelineLayeredFixture
           ? structuredClone(viewportFixtureData.layeredTimelineLayers)
           : current.timeline.layers,
+        audio: timelineLayeredFixture
+          ? structuredClone(viewportFixtureData.layeredTimelineAudioAnalysis)
+          : current.timeline.audio,
+        audio_clips: timelineLayeredFixture
+          ? structuredClone(viewportFixtureData.layeredTimelineAudioClips)
+          : current.timeline.audio_clips,
+        audio_offset_ms: timelineLayeredFixture ? 0 : current.timeline.audio_offset_ms,
+        audio_muted: timelineLayeredFixture ? false : current.timeline.audio_muted,
         playing: timelineFixture ? true : current.timeline.playing,
         duration_ms: sceneBlockHourFixture
           ? 3_600_000
@@ -3478,6 +3496,7 @@ export default function App() {
       1,
       current.timeline.duration_ms,
       ...current.timeline.events.map(timelinePlacementDisplayEndMs),
+      ...(current.timeline.audio_clips ?? []).map((clip) => clip.start_ms + clip.duration_ms),
       ...lightingAutomationEndMs,
       ...videoAutomationEndMs,
     );
@@ -6477,6 +6496,10 @@ export default function App() {
     void getCurrentWebview()
       .onDragDropEvent((event) => {
         if (event.payload.type === "enter") {
+          if (event.payload.paths.some(isTimelineAudioFilePath)) {
+            setProjectDropState(null);
+            return;
+          }
           setProjectDropState(event.payload.paths.some(isSyndocalProjectPath) ? "project" : "invalid");
           return;
         }
@@ -6488,6 +6511,23 @@ export default function App() {
           return;
         }
         setProjectDropState(null);
+        const audioPath = event.payload.paths.find(isTimelineAudioFilePath);
+        if (audioPath) {
+          const scale = Math.max(1, window.devicePixelRatio || 1);
+          const target = document
+            .elementFromPoint(event.payload.position.x / scale, event.payload.position.y / scale)
+            ?.closest<HTMLElement>("[data-timeline-audio-layer-id], [data-timeline-layer-kind='Audio'][data-timeline-layer-id]");
+          const layerId = Number(
+            target?.dataset.timelineAudioLayerId
+              ?? target?.dataset.timelineLayerId,
+          );
+          if (!Number.isFinite(layerId)) {
+            setMessage("Drop Audio Clips on the Audio section header or an Audio lane.");
+            return;
+          }
+          void addTimelineAudioClipPath(layerId, audioPath);
+          return;
+        }
         const projectPath = event.payload.paths.find(isSyndocalProjectPath);
         if (!projectPath) {
           if (event.payload.paths.length > 0) {
@@ -8562,6 +8602,169 @@ export default function App() {
       await invoke("clear_timeline_audio");
       await refreshSnapshot();
       setMessage("Cleared audio analysis.");
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const commitTimelineAudioClip = async (
+    layerId: number,
+    analysis: AudioAnalysisSummary,
+    startMs: number,
+  ) => {
+    const layer = timelineLayers().find((candidate) => candidate.id === layerId);
+    if (!layer || layer.kind !== "Audio") {
+      setMessage("Audio Clips can only be placed on Audio lanes.");
+      return;
+    }
+    if (layer.locked) {
+      setMessage(`Timeline layer ${layer.label} is locked. Unlock it before adding Audio Clips.`);
+      return;
+    }
+    if (viewportFixture === "timeline-layered") {
+      const id = Math.max(0, ...(snapshot().timeline.audio_clips ?? []).map((clip) => clip.id)) + 1;
+      setSnapshot((current) => ({
+        ...current,
+        timeline: {
+          ...current.timeline,
+          audio: analysis,
+          audio_clips: [...(current.timeline.audio_clips ?? []), {
+            id,
+            layer_id: layerId,
+            path: analysis.path,
+            start_ms: startMs,
+            offset_ms: 0,
+            duration_ms: Math.max(1, analysis.duration_ms),
+            gain: 1,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+          }],
+        },
+      }));
+      setMessage(`Added Audio Clip ${analysis.path}.`);
+      return;
+    }
+    await invoke<number>("add_timeline_audio_clip", {
+      layerId,
+      path: analysis.path,
+      startMs,
+      offsetMs: 0,
+      durationMs: Math.max(1, analysis.duration_ms),
+      gain: 1,
+      fadeInMs: 0,
+      fadeOutMs: 0,
+    });
+    await refreshSnapshot();
+    setMessage(`Added Audio Clip ${analysis.path}.`);
+  };
+
+  const addTimelineAudioClip = async (layerId: number) => {
+    try {
+      if (viewportFixture === "timeline-layered") {
+        const analysis = audioAnalysis() ?? {
+          path: "C:/fixture/audio/added-loop.wav",
+          sample_rate: 48_000,
+          channels: 2,
+          duration_ms: 4_000,
+          estimated_bpm: 120,
+          waveform: [],
+          spectrum: [],
+          beats: [],
+        };
+        await commitTimelineAudioClip(layerId, analysis, snapTimeMs(snapshot().timeline.position_ms));
+        return;
+      }
+      const analysis = await invoke<AudioAnalysisSummary | null>("select_timeline_audio_clip_file");
+      if (!analysis) {
+        setMessage("Add Audio Clip canceled.");
+        return;
+      }
+      await commitTimelineAudioClip(layerId, analysis, snapTimeMs(snapshot().timeline.position_ms));
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const addTimelineAudioClipPath = async (layerId: number, path: string) => {
+    try {
+      const analysis = await invoke<AudioAnalysisSummary>("analyze_timeline_audio_clip_path", { path });
+      await commitTimelineAudioClip(layerId, analysis, snapTimeMs(snapshot().timeline.position_ms));
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const updateTimelineAudioClip = async (clip: TimelineAudioClipSummary) => {
+    try {
+      if (viewportFixture === "timeline-layered") {
+        const durationMs = Math.max(1, Math.round(clip.duration_ms));
+        const fadeInMs = Math.min(durationMs, Math.max(0, Math.round(clip.fade_in_ms)));
+        const normalized = {
+          ...clip,
+          start_ms: Math.max(0, Math.round(clip.start_ms)),
+          offset_ms: Math.max(0, Math.round(clip.offset_ms)),
+          duration_ms: durationMs,
+          gain: Math.min(2, Math.max(0, Number.isFinite(clip.gain) ? clip.gain : 1)),
+          fade_in_ms: fadeInMs,
+          fade_out_ms: Math.min(durationMs - fadeInMs, Math.max(0, Math.round(clip.fade_out_ms))),
+        };
+        setSnapshot((current) => ({
+          ...current,
+          timeline: {
+            ...current.timeline,
+            audio_clips: (current.timeline.audio_clips ?? []).map((candidate) =>
+              candidate.id === clip.id ? normalized : candidate),
+          },
+        }));
+        return;
+      }
+      await invoke("update_timeline_audio_clip", {
+        id: clip.id,
+        layerId: clip.layer_id,
+        path: clip.path,
+        startMs: clip.start_ms,
+        offsetMs: clip.offset_ms,
+        durationMs: clip.duration_ms,
+        gain: clip.gain,
+        fadeInMs: clip.fade_in_ms,
+        fadeOutMs: clip.fade_out_ms,
+      });
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const removeTimelineAudioClip = async (clipId: number) => {
+    try {
+      if (viewportFixture === "timeline-layered") {
+        setSnapshot((current) => ({
+          ...current,
+          timeline: {
+            ...current.timeline,
+            audio_clips: (current.timeline.audio_clips ?? []).filter((clip) => clip.id !== clipId),
+          },
+        }));
+        return;
+      }
+      await invoke("remove_timeline_audio_clip", { clipId });
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const setTimelineAudioMaster = async (offsetMs: number, muted: boolean) => {
+    try {
+      if (viewportFixture === "timeline-layered") {
+        setSnapshot((current) => ({
+          ...current,
+          timeline: { ...current.timeline, audio_offset_ms: offsetMs, audio_muted: muted },
+        }));
+        return;
+      }
+      await invoke("set_timeline_audio_master", { offsetMs, muted });
+      await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
     }
@@ -13902,6 +14105,9 @@ export default function App() {
               selectedEventId={selectedTimelineSceneBlockEventId()}
               selectionRevision={timelineSceneBlockSelectionRevision()}
               audioAnalysis={audioAnalysis()}
+              audioClips={snapshot().timeline.audio_clips ?? []}
+              audioOffsetMs={snapshot().timeline.audio_offset_ms ?? 0}
+              audioMuted={snapshot().timeline.audio_muted ?? false}
               audioWaveformPoints={audioWaveformPoints()}
               audioSpectrumPaths={audioSpectrumPaths()}
               audioBeatMarkers={audioBeatMarkers()}
@@ -13941,6 +14147,10 @@ export default function App() {
               onAnalyzeAudio={analyzeAudioFile}
               onClearAudio={clearTimelineAudio}
               onApplyAudioBpm={applyAudioBpm}
+              onAddAudioClip={addTimelineAudioClip}
+              onUpdateAudioClip={updateTimelineAudioClip}
+              onRemoveAudioClip={removeTimelineAudioClip}
+              onSetAudioMaster={setTimelineAudioMaster}
               onSnapMode={setTimelineSnapMode}
               onGridMs={setTimelineGridMs}
               onSnapDrafts={snapTimelineDrafts}

@@ -12,7 +12,13 @@ import {
 import { packTimelineOverlapClusterBadges } from "../timelineOverlapClusters";
 import { cueIdentityHue, identityCssColor } from "../identityColor";
 import { formatCompactClock } from "../clockDisplay";
-import type { TimelineLayerKind, TimelineLayerSummary, TimelineTrackKind } from "../types";
+import type {
+  AudioAnalysisSummary,
+  TimelineAudioClipSummary,
+  TimelineLayerKind,
+  TimelineLayerSummary,
+  TimelineTrackKind,
+} from "../types";
 import type { TimelineCueDragState } from "../timelineCueDrag";
 import {
   TIMELINE_BLOCK_FADE_EDGE_PX,
@@ -84,12 +90,15 @@ interface TimelineOverviewProps {
   legacyMode: boolean;
   cueDrag: TimelineCueDragState | null;
   events: TimelineOverviewEvent[];
+  audioClips: TimelineAudioClipSummary[];
+  audioAnalysis: AudioAnalysisSummary | null;
   executionLive: boolean;
   markerAriaLabel: (event: TimelineOverviewEvent) => string;
   automationRanges: TimelineOverviewAutomationRange[];
   overlapClusters: TimelineOverviewOverlapCluster[];
   selectedRangeId: string | null;
   selectedEventId: number | null;
+  selectedAudioClipId: number | null;
   playheadX: number;
   visibleWindow: TimelineVisibleWindow;
   bpm: number;
@@ -105,8 +114,11 @@ interface TimelineOverviewProps {
   onSeekTime: (timeMs: number) => void;
   onSelectAutomationRange: (range: TimelineOverviewAutomationRange) => void;
   onSelectEvent: (eventId: number) => void;
+  onSelectAudioClip: (clipId: number) => void;
   onInspectOverlapCluster: (cluster: TimelineOverviewOverlapCluster) => void;
   onUpdateLayer: (layer: TimelineLayerSummary) => void | Promise<void>;
+  onAddAudioClip: (layerId: number) => void | Promise<void>;
+  onUpdateAudioClip: (clip: TimelineAudioClipSummary) => void | Promise<void>;
   onStatus: (message: string) => void;
   onMoveEventPlacement: (eventId: number, timeMs: number, layerId: number, snapEnabled: boolean) => void;
   onResizeEventTime: (
@@ -189,6 +201,19 @@ interface TimelinePlacementDrag {
   layerId: number;
   startMs: number;
   endMs: number;
+  moved: boolean;
+}
+
+interface TimelineAudioClipDrag {
+  clipId: number;
+  pointerId: number;
+  mode: "move" | "resize-start" | "resize-end" | "fade-in" | "fade-out";
+  startClientX: number;
+  startClientY: number;
+  original: TimelineAudioClipSummary;
+  preview: TimelineAudioClipSummary;
+  hoverLayerId: number | null;
+  rejection: "locked" | "kind" | null;
   moved: boolean;
 }
 
@@ -282,12 +307,27 @@ const sameOverviewAutomationRange = (
     return keyframe.keyframe_index === candidate.keyframe_index && keyframe.time_ms === candidate.time_ms;
   });
 
+const stableTimelineAudioPathHash = (path: string) => {
+  let hash = 2166136261;
+  for (let index = 0; index < path.length; index += 1) {
+    hash ^= path.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+};
+
+const timelineAudioClipName = (path: string) => {
+  const normalized = path.replaceAll("\\", "/");
+  return normalized.split("/").pop() || path || "Audio Clip";
+};
+
 export function TimelineOverview(props: TimelineOverviewProps) {
   const [markerDrag, setMarkerDrag] = createSignal<TimelineMarkerDrag | null>(null);
   const [eventResizeDrag, setEventResizeDrag] = createSignal<TimelineEventResizeDrag | null>(null);
   const [eventFadeDrag, setEventFadeDrag] = createSignal<TimelineEventFadeDrag | null>(null);
   const [canvasPanDrag, setCanvasPanDrag] = createSignal<TimelineCanvasPanDrag | null>(null);
   const [placementDrag, setPlacementDrag] = createSignal<TimelinePlacementDrag | null>(null);
+  const [audioClipDrag, setAudioClipDrag] = createSignal<TimelineAudioClipDrag | null>(null);
   const [rangeDrag, setRangeDrag] = createSignal<TimelineAutomationRangeDrag | null>(null);
   const [keyframeDrag, setKeyframeDrag] = createSignal<TimelineAutomationKeyframeDrag | null>(null);
   const [suppressClickEventId, setSuppressClickEventId] = createSignal<number | null>(null);
@@ -326,13 +366,14 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       const pan = canvasPanDrag();
-      if (!markerDrag() && !eventResizeDrag() && !eventFadeDrag() && !placementDrag() && !pan) return;
+      if (!markerDrag() && !eventResizeDrag() && !eventFadeDrag() && !placementDrag() && !audioClipDrag() && !pan) return;
       event.preventDefault();
       if (pan) props.onSetVisibleWindow(pan.originalWindow);
       setMarkerDrag(null);
       setEventResizeDrag(null);
       setEventFadeDrag(null);
       setPlacementDrag(null);
+      setAudioClipDrag(null);
       setCanvasPanDrag(null);
       setSuppressCanvasClick(true);
       props.onStatus("Timeline drag canceled; the original geometry was restored.");
@@ -345,6 +386,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       window.removeEventListener("keydown", handleEscape);
     });
   });
+
   const overviewW = () => Math.max(1, overviewPixelWidth());
   const overviewH = () => Math.max(1, overviewPixelHeight());
   const laneVisible = (track: TimelineTrackKind) =>
@@ -456,6 +498,15 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   const renderedEvents = createMemo(() => props.legacyMode
     ? orderedEvents()
     : orderedEvents().filter((event) => layerRowById().has(event.layer_id)));
+  const renderedAudioClips = createMemo(() => props.legacyMode
+    ? []
+    : props.audioClips.filter((clip) => layerRowById().get(clip.layer_id)?.layer.kind === "Audio"));
+  const audioClipTabStopId = createMemo(() => {
+    const clips = renderedAudioClips();
+    return clips.some((clip) => clip.id === props.selectedAudioClipId)
+      ? props.selectedAudioClipId
+      : clips[0]?.id ?? null;
+  });
   const markerTabStopId = createMemo(() => {
     const events = renderedEvents();
     if (events.some((event) => event.id === props.selectedEventId)) return props.selectedEventId;
@@ -823,9 +874,157 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     else finishMarkerDrag(event, canceled);
   };
 
+  const beginAudioClipGesture = (
+    event: PointerEvent & { currentTarget: SVGGElement },
+    clip: TimelineAudioClipSummary,
+  ) => {
+    const layer = layerById().get(clip.layer_id);
+    if (layer?.locked) {
+      props.onStatus(`Timeline layer ${layer.label} is locked. Unlock it before editing Audio Clips.`);
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    props.onSelectAudioClip(clip.id);
+    const rect = event.currentTarget.getBoundingClientRect();
+    const zone = timelineBlockGestureZone(
+      event.clientX - rect.left,
+      event.clientY - rect.top,
+      Math.max(1, rect.width),
+      props.selectedAudioClipId === clip.id,
+      blockHeightPx(),
+    );
+    const mode = zone === "stretch-start"
+      ? "resize-start"
+      : zone === "stretch-end"
+        ? "resize-end"
+        : zone === "fade-in"
+          ? "fade-in"
+          : zone === "fade-out"
+            ? "fade-out"
+            : "move";
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setAudioClipDrag({
+      clipId: clip.id,
+      pointerId: event.pointerId,
+      mode,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      original: { ...clip },
+      preview: { ...clip },
+      hoverLayerId: clip.layer_id,
+      rejection: null,
+      moved: false,
+    });
+  };
+
+  const moveAudioClipGesture = (event: PointerEvent & { currentTarget: SVGGElement }) => {
+    const drag = audioClipDrag();
+    const svg = event.currentTarget.ownerSVGElement;
+    if (!drag || drag.pointerId !== event.pointerId || !svg) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const deltaMs = (event.clientX - drag.startClientX)
+      / Math.max(1, svg.getBoundingClientRect().width)
+      * timelineVisibleWindowSpanMs(props.visibleWindow);
+    const originalEndMs = drag.original.start_ms + drag.original.duration_ms;
+    let preview = { ...drag.preview };
+    let hoverLayerId = drag.hoverLayerId;
+    let rejection = drag.rejection;
+    if (drag.mode === "move") {
+      const rawStartMs = Math.max(0, Math.round(drag.original.start_ms + deltaMs));
+      preview.start_ms = props.magnetEnabled ? props.snapTimeMs(rawStartMs) : rawStartMs;
+      hoverLayerId = layerIdFromPoint(event.clientX, event.clientY);
+      const target = hoverLayerId === null ? undefined : layerById().get(hoverLayerId);
+      rejection = !target
+        ? null
+        : target.kind !== "Audio"
+          ? "kind"
+          : target.locked
+            ? "locked"
+            : null;
+      preview.layer_id = target && rejection === null ? target.id : drag.original.layer_id;
+    } else if (drag.mode === "resize-start") {
+      const earliestStartMs = Math.max(0, drag.original.start_ms - drag.original.offset_ms);
+      const rawStartMs = Math.min(
+        originalEndMs - 1,
+        Math.max(earliestStartMs, Math.round(drag.original.start_ms + deltaMs)),
+      );
+      const startMs = props.magnetEnabled ? props.snapTimeMs(rawStartMs) : rawStartMs;
+      const boundedStartMs = Math.min(originalEndMs - 1, Math.max(earliestStartMs, startMs));
+      const trimDeltaMs = boundedStartMs - drag.original.start_ms;
+      preview.start_ms = boundedStartMs;
+      preview.offset_ms = Math.max(0, drag.original.offset_ms + trimDeltaMs);
+      preview.duration_ms = Math.max(1, originalEndMs - boundedStartMs);
+      preview.fade_in_ms = Math.min(preview.fade_in_ms, preview.duration_ms);
+      preview.fade_out_ms = Math.min(preview.fade_out_ms, preview.duration_ms - preview.fade_in_ms);
+    } else if (drag.mode === "resize-end") {
+      const rawEndMs = Math.max(drag.original.start_ms + 1, Math.round(originalEndMs + deltaMs));
+      const endMs = props.magnetEnabled ? props.snapTimeMs(rawEndMs) : rawEndMs;
+      preview.duration_ms = Math.max(1, endMs - drag.original.start_ms);
+      preview.fade_in_ms = Math.min(preview.fade_in_ms, preview.duration_ms);
+      preview.fade_out_ms = Math.min(preview.fade_out_ms, preview.duration_ms - preview.fade_in_ms);
+    } else {
+      const edge = drag.mode === "fade-in" ? "in" : "out";
+      const pointerTimeMs = edge === "in"
+        ? drag.original.start_ms + drag.original.fade_in_ms + deltaMs
+        : originalEndMs - drag.original.fade_out_ms + deltaMs;
+      const projected = projectTimelineBlockFadeMs(
+        edge,
+        drag.original.start_ms,
+        originalEndMs,
+        pointerTimeMs,
+      );
+      const fadeMs = props.magnetEnabled ? props.snapTimeMs(projected) : projected;
+      if (edge === "in") {
+        preview.fade_in_ms = Math.min(
+          drag.original.duration_ms - drag.original.fade_out_ms,
+          Math.max(0, fadeMs),
+        );
+      } else {
+        preview.fade_out_ms = Math.min(
+          drag.original.duration_ms - drag.original.fade_in_ms,
+          Math.max(0, fadeMs),
+        );
+      }
+    }
+    setAudioClipDrag({
+      ...drag,
+      preview,
+      hoverLayerId,
+      rejection,
+      moved: drag.moved
+        || Math.abs(event.clientX - drag.startClientX) >= 4
+        || Math.abs(event.clientY - drag.startClientY) >= 4,
+    });
+  };
+
+  const finishAudioClipGesture = (
+    event: PointerEvent & { currentTarget: SVGGElement },
+    canceled: boolean,
+  ) => {
+    const drag = audioClipDrag();
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setAudioClipDrag(null);
+    setSuppressCanvasClick(true);
+    if (canceled || !drag.moved) return;
+    if (drag.rejection) {
+      props.onStatus(drag.rejection === "locked"
+        ? "The target Audio lane is locked. No changes were made."
+        : "Audio Clips can only move within Audio lanes. No changes were made.");
+      return;
+    }
+    void props.onUpdateAudioClip(drag.preview);
+  };
+
   const isCanvasTarget = (target: EventTarget | null) => {
     const element = target instanceof Element ? target : null;
-    return !element?.closest(".timelineMarker, .timelineAutomationRange, .timelineOverlapCluster, .timelinePlayheadGroup");
+    return !element?.closest(".timelineMarker, .timelineAudioClip, .timelineAutomationRange, .timelineOverlapCluster, .timelinePlayheadGroup");
   };
 
   const validatePlacementLayer = (layerId: number | null) => {
@@ -1350,6 +1549,69 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       ? `0,${halfHeight} 0,0 ${fadePx},0`
       : `${widthPx},${halfHeight} ${widthPx},0 ${widthPx - fadePx},0`;
   };
+  const audioClipPreview = (clip: TimelineAudioClipSummary) =>
+    audioClipDrag()?.clipId === clip.id ? audioClipDrag()!.preview : clip;
+  const audioClipPixelWidth = (clip: TimelineAudioClipSummary) => Math.max(
+    0.8,
+    audioClipPreview(clip).duration_ms
+      / timelineVisibleWindowSpanMs(props.visibleWindow)
+      * overviewW(),
+  );
+  const audioClipCenterYPx = (clip: TimelineAudioClipSummary) => {
+    const row = layerRowById().get(audioClipPreview(clip).layer_id);
+    return (row?.top ?? 0) + 4 + blockHeightPx() / 2;
+  };
+  const audioClipVisibleName = (clip: TimelineAudioClipSummary) => {
+    const label = timelineAudioClipName(clip.path);
+    const maxCharacters = Math.floor(Math.max(0, audioClipPixelWidth(clip) - nameInsetPx * 2) / nameCharWidthPx);
+    if (maxCharacters < 1) return "";
+    return label.length <= maxCharacters ? label : `${label.slice(0, Math.max(1, maxCharacters - 1))}…`;
+  };
+  const audioClipShowsDuration = (clip: TimelineAudioClipSummary) => audioClipPixelWidth(clip) >= 80;
+  const audioClipWaveformPoints = (clip: TimelineAudioClipSummary) => {
+    const preview = audioClipPreview(clip);
+    const width = audioClipPixelWidth(clip);
+    const stripTop = -blockHeightPx() / 2 + identityBandHeightPx() + 1;
+    const stripHeight = Math.max(2, blockHeightPx() - identityBandHeightPx() - 2);
+    const analysis = props.audioAnalysis;
+    if (!analysis || analysis.path !== clip.path || analysis.waveform.length === 0) {
+      return `0,${stripTop + stripHeight / 2} ${width},${stripTop + stripHeight / 2}`;
+    }
+    const sourceStartMs = preview.offset_ms;
+    const sourceEndMs = sourceStartMs + preview.duration_ms;
+    const candidates = analysis.waveform.filter((point) =>
+      point.time_ms >= sourceStartMs && point.time_ms <= sourceEndMs);
+    if (candidates.length === 0) {
+      return `0,${stripTop + stripHeight / 2} ${width},${stripTop + stripHeight / 2}`;
+    }
+    const nodeBudget = 64;
+    const stride = Math.max(1, Math.ceil(candidates.length / nodeBudget));
+    const sampled = candidates.filter((_, index) => index % stride === 0).slice(0, nodeBudget);
+    return sampled.map((point) => {
+      const ratio = clampRatio((point.time_ms - sourceStartMs) / Math.max(1, preview.duration_ms));
+      const peak = Math.min(1, Math.max(0, Math.abs(point.peak)));
+      return `${(ratio * width).toFixed(2)},${(stripTop + (1 - peak) * stripHeight).toFixed(2)}`;
+    }).join(" ");
+  };
+  const audioClipFadeRampPoints = (clip: TimelineAudioClipSummary, edge: "in" | "out") => {
+    const preview = audioClipPreview(clip);
+    const fadeMs = edge === "in" ? preview.fade_in_ms : preview.fade_out_ms;
+    if (fadeMs <= 0 || preview.duration_ms <= 0) return null;
+    const width = audioClipPixelWidth(clip);
+    const fadePx = Math.min(width, fadeMs / preview.duration_ms * width);
+    if (fadePx < 1) return null;
+    const halfHeight = blockHeightPx() / 2;
+    return edge === "in"
+      ? `0,${halfHeight} 0,0 ${fadePx},0`
+      : `${width},${halfHeight} ${width},0 ${width - fadePx},0`;
+  };
+  const audioClipLiveStamp = (clip: TimelineAudioClipSummary) => {
+    const drag = audioClipDrag();
+    if (drag?.clipId !== clip.id) return null;
+    if (drag.mode === "fade-in") return `Fade In ${drag.preview.fade_in_ms} ms`;
+    if (drag.mode === "fade-out") return `Fade Out ${drag.preview.fade_out_ms} ms`;
+    return `${formatCompactClock(drag.preview.start_ms)} · ${formatCompactClock(drag.preview.duration_ms)}`;
+  };
   const activeDragStamp = (event: TimelineOverviewEvent) => {
     const fade = eventFadeDrag();
     if (fade?.eventId === event.id) return `Fade ${fade.edge === "in" ? "In" : "Out"} ${fade.fadeMs} ms`;
@@ -1410,6 +1672,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   const layerEventCounts = createMemo(() => {
     const counts = new Map<number, number>();
     for (const event of props.events) counts.set(event.layer_id, (counts.get(event.layer_id) ?? 0) + 1);
+    for (const clip of props.audioClips) counts.set(clip.layer_id, (counts.get(clip.layer_id) ?? 0) + 1);
     return counts;
   });
   const updateLayer = (layer: TimelineLayerSummary, patch: Partial<TimelineLayerSummary>) => {
@@ -1507,6 +1770,26 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               </button>
               <strong>{section.kind}</strong>
               <span class="timelineLayerSectionCount tabularNums" data-no-localize>{section.layers.length}</span>
+              <Show when={section.kind === "Audio" && section.layers.length > 0}>
+                <button
+                  type="button"
+                  class="timelineAudioClipAdd"
+                  data-timeline-add-audio-clip
+                  data-timeline-audio-layer-id={(section.layers.find((layer) => !layer.locked) ?? section.layers[0]).id}
+                  aria-label="Add Audio Clip"
+                  title="Add Audio Clip"
+                  onClick={() => {
+                    const target = section.layers.find((layer) => !layer.locked) ?? section.layers[0];
+                    if (target.locked) {
+                      props.onStatus("The Audio section has no unlocked lane for a new clip.");
+                      return;
+                    }
+                    void props.onAddAudioClip(target.id);
+                  }}
+                >
+                  + Audio Clip
+                </button>
+              </Show>
             </div>
             <Show when={!section.collapsed}>
               <For each={section.layers}>
@@ -1798,6 +2081,181 @@ export function TimelineOverview(props: TimelineOverviewProps) {
             </title>
           </g>
         )}
+      </For>
+      <For each={renderedAudioClips()}>
+        {(clip) => {
+          const preview = () => audioClipPreview(clip);
+          const selected = () => props.selectedAudioClipId === clip.id;
+          return (
+            <g
+              class="timelineAudioClip"
+              classList={{
+                selected: selected(),
+                dragging: audioClipDrag()?.clipId === clip.id,
+                layerMuted: layerById().get(clip.layer_id)?.muted ?? false,
+              }}
+              data-timeline-audio-clip-id={clip.id}
+              data-timeline-layer-id={preview().layer_id}
+              data-timeline-layer-kind="Audio"
+              data-timeline-audio-path={clip.path}
+              data-timeline-audio-start-ms={preview().start_ms}
+              data-timeline-audio-offset-ms={preview().offset_ms}
+              data-timeline-audio-duration-ms={preview().duration_ms}
+              data-timeline-audio-gain={preview().gain}
+              data-timeline-audio-fade-in-ms={preview().fade_in_ms}
+              data-timeline-audio-fade-out-ms={preview().fade_out_ms}
+              style={{
+                "--identity": identityCssColor(cueIdentityHue(stableTimelineAudioPathHash(clip.path)), "fill"),
+                "--identity-band": identityCssColor(cueIdentityHue(stableTimelineAudioPathHash(clip.path)), "band"),
+              }}
+              role="button"
+              tabIndex={audioClipTabStopId() === clip.id ? 0 : -1}
+              aria-label={`Audio Clip ${timelineAudioClipName(clip.path)}, starts ${preview().start_ms} milliseconds, duration ${preview().duration_ms} milliseconds`}
+              transform={`translate(${viewBoxX(timelineTimeToVisibleRawRatio(preview().start_ms, props.visibleWindow) * 100)} ${audioClipCenterYPx(clip)})`}
+              onPointerDown={(pointerEvent) => beginAudioClipGesture(pointerEvent, clip)}
+              onPointerMove={moveAudioClipGesture}
+              onPointerUp={(pointerEvent) => finishAudioClipGesture(pointerEvent, false)}
+              onPointerCancel={(pointerEvent) => finishAudioClipGesture(pointerEvent, true)}
+              onClick={(pointerEvent) => {
+                pointerEvent.preventDefault();
+                pointerEvent.stopPropagation();
+                props.onSelectAudioClip(clip.id);
+                props.onSeekTime(preview().start_ms);
+              }}
+              onKeyDown={(keyboardEvent) => {
+                if (keyboardEvent.key !== "Enter" && keyboardEvent.key !== " ") return;
+                keyboardEvent.preventDefault();
+                props.onSelectAudioClip(clip.id);
+                props.onSeekTime(preview().start_ms);
+              }}
+            >
+              <Show when={audioClipDrag()?.clipId === clip.id}>
+                <rect
+                  class="timelineAudioClipGhost"
+                  data-timeline-audio-drag-ghost
+                  x={(clip.start_ms - preview().start_ms) / timelineVisibleWindowSpanMs(props.visibleWindow) * overviewW()}
+                  y={-blockHeightPx() / 2}
+                  width={Math.max(0.8, clip.duration_ms / timelineVisibleWindowSpanMs(props.visibleWindow) * overviewW())}
+                  height={blockHeightPx()}
+                  rx="1.6"
+                />
+              </Show>
+              <rect
+                class="timelineAudioClipBody"
+                x="0"
+                y={-blockHeightPx() / 2}
+                width={audioClipPixelWidth(clip)}
+                height={blockHeightPx()}
+                rx="1.6"
+              />
+              <rect
+                class="timelineAudioClipIdentityBand"
+                x="0"
+                y={-blockHeightPx() / 2}
+                width={audioClipPixelWidth(clip)}
+                height={identityBandHeightPx()}
+              />
+              <Show when={audioClipFadeRampPoints(clip, "in")}>
+                {(points) => (
+                  <polygon
+                    class="timelineAudioClipFade in"
+                    data-timeline-audio-fade-ramp="in"
+                    points={points()}
+                  />
+                )}
+              </Show>
+              <Show when={audioClipFadeRampPoints(clip, "out")}>
+                {(points) => (
+                  <polygon
+                    class="timelineAudioClipFade out"
+                    data-timeline-audio-fade-ramp="out"
+                    points={points()}
+                  />
+                )}
+              </Show>
+              <polyline
+                class="timelineAudioClipWaveform"
+                data-timeline-audio-waveform
+                data-timeline-audio-waveform-node-count="1"
+                points={audioClipWaveformPoints(clip)}
+              />
+              <text
+                class="timelineAudioClipLabel"
+                x={nameInsetPx}
+                y={-blockHeightPx() / 2 + identityBandHeightPx() / 2}
+                dominant-baseline="central"
+                data-full-label={timelineAudioClipName(clip.path)}
+              >
+                {audioClipVisibleName(clip)}
+              </text>
+              <Show when={audioClipShowsDuration(clip)}>
+                <text
+                  class="timelineAudioClipDuration"
+                  x={nameInsetPx}
+                  y={-blockHeightPx() / 2 + identityBandHeightPx() + (blockHeightPx() - identityBandHeightPx()) / 2}
+                  dominant-baseline="central"
+                  data-no-localize
+                >
+                  {formatCompactClock(preview().duration_ms)}
+                </text>
+              </Show>
+              <Show when={audioClipLiveStamp(clip)}>
+                {(stamp) => (
+                  <text class="timelineSceneBlockLiveStamp" data-timeline-audio-live-stamp x="4" y={-blockHeightPx() / 2 - 4} data-no-localize>
+                    {stamp()}
+                  </text>
+                )}
+              </Show>
+              <Show when={selected() || audioClipDrag()?.clipId === clip.id}>
+                <rect
+                  class="timelineAudioClipResizeHandle start"
+                  data-timeline-audio-resize="start"
+                  data-timeline-zone-band-px={TIMELINE_BLOCK_UPPER_BAND_PX}
+                  data-timeline-zone-edge-px={TIMELINE_BLOCK_STRETCH_EDGE_PX}
+                  x="0"
+                  y={-blockHeightPx() / 2}
+                  width={TIMELINE_BLOCK_STRETCH_EDGE_PX}
+                  height={TIMELINE_BLOCK_UPPER_BAND_PX}
+                  aria-label="Resize Audio Clip start"
+                />
+                <rect
+                  class="timelineAudioClipResizeHandle end"
+                  data-timeline-audio-resize="end"
+                  data-timeline-zone-band-px={TIMELINE_BLOCK_UPPER_BAND_PX}
+                  data-timeline-zone-edge-px={TIMELINE_BLOCK_STRETCH_EDGE_PX}
+                  x={Math.max(0, audioClipPixelWidth(clip) - TIMELINE_BLOCK_STRETCH_EDGE_PX)}
+                  y={-blockHeightPx() / 2}
+                  width={TIMELINE_BLOCK_STRETCH_EDGE_PX}
+                  height={TIMELINE_BLOCK_UPPER_BAND_PX}
+                  aria-label="Resize Audio Clip end"
+                />
+                <rect
+                  class="timelineAudioClipFadeHandle in"
+                  data-timeline-audio-fade="in"
+                  data-timeline-zone-band-px={TIMELINE_BLOCK_UPPER_BAND_PX}
+                  data-timeline-zone-edge-px={TIMELINE_BLOCK_FADE_EDGE_PX}
+                  x="0"
+                  y="0"
+                  width={TIMELINE_BLOCK_FADE_EDGE_PX}
+                  height={TIMELINE_BLOCK_UPPER_BAND_PX}
+                  aria-label="Adjust Audio Clip Fade In"
+                />
+                <rect
+                  class="timelineAudioClipFadeHandle out"
+                  data-timeline-audio-fade="out"
+                  data-timeline-zone-band-px={TIMELINE_BLOCK_UPPER_BAND_PX}
+                  data-timeline-zone-edge-px={TIMELINE_BLOCK_FADE_EDGE_PX}
+                  x={Math.max(0, audioClipPixelWidth(clip) - TIMELINE_BLOCK_FADE_EDGE_PX)}
+                  y="0"
+                  width={TIMELINE_BLOCK_FADE_EDGE_PX}
+                  height={TIMELINE_BLOCK_UPPER_BAND_PX}
+                  aria-label="Adjust Audio Clip Fade Out"
+                />
+              </Show>
+              <title>{`${timelineAudioClipName(clip.path)} / Audio / ${preview().start_ms} ms / ${preview().duration_ms} ms / gain ${preview().gain.toFixed(2)}`}</title>
+            </g>
+          );
+        }}
       </For>
       <For each={renderedEvents()}>
         {(event) => (

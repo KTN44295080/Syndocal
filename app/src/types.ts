@@ -1542,6 +1542,18 @@ export interface TimelineLayerSummary {
   kind: TimelineLayerKind;
 }
 
+export interface TimelineAudioClipSummary {
+  id: number;
+  layer_id: number;
+  path: string;
+  start_ms: number;
+  offset_ms: number;
+  duration_ms: number;
+  gain: number;
+  fade_in_ms: number;
+  fade_out_ms: number;
+}
+
 export interface TimelineCueEventSummary {
   id: number;
   cue_id: number;
@@ -1638,6 +1650,9 @@ export interface TimelineSnapshot {
   automations: TimelineAutomationSummary[];
   video_automations: TimelineVideoAutomationSummary[];
   audio?: AudioAnalysisSummary | null;
+  audio_clips?: TimelineAudioClipSummary[];
+  audio_offset_ms?: number;
+  audio_muted?: boolean;
   playing: boolean;
   position_ms: number;
   duration_ms: number;

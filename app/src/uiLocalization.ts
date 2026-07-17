@@ -1807,9 +1807,133 @@ const japaneseText: Record<string, string> = {
   "Show (ungrouped)": "ショー（未グループ）",
   "No scenes in this column.": "この列にはシーンがありません。",
   scenes: "シーン",
+  "Add Audio Clip": "音声クリップを追加",
+  "+ Audio Clip": "+ 音声クリップ",
+  "Audio Clip": "音声クリップ",
+  "Mute Timeline Audio": "タイムライン音声をミュート",
+  "Unmute Timeline Audio": "タイムライン音声のミュートを解除",
+  "Master Offset (ms)": "マスターオフセット（ms）",
+  "Start (ms)": "開始（ms）",
+  "Source Offset (ms)": "ソースオフセット（ms）",
+  "Duration (ms)": "長さ（ms）",
+  "Fade In (ms)": "フェードイン（ms）",
+  "Fade Out (ms)": "フェードアウト（ms）",
+  "Remove Audio Clip": "音声クリップを削除",
+  "Remove Audio Clip?": "音声クリップを削除しますか？",
+  "Remove this clip from the timeline?": "このクリップをタイムラインから削除しますか？",
+  "Resize Audio Clip start": "音声クリップの開始端をリサイズ",
+  "Resize Audio Clip end": "音声クリップの終了端をリサイズ",
+  "Adjust Audio Clip Fade In": "音声クリップのフェードインを調整",
+  "Adjust Audio Clip Fade Out": "音声クリップのフェードアウトを調整",
+  "Audio Clips can only move within Audio lanes. No changes were made.":
+    "音声クリップは音声レーン内でのみ移動できます。変更は行われませんでした。",
+  "Audio Clips can only be placed on Audio lanes.": "音声クリップは音声レーンにのみ配置できます。",
+  "Drop Audio Clips on the Audio section header or an Audio lane.":
+    "音声クリップを音声セクションのヘッダーまたは音声レーンへドロップしてください。",
+  "Add Audio Clip canceled.": "音声クリップの追加をキャンセルしました。",
+  "The Audio section has no unlocked lane for a new clip.":
+    "音声セクションに新しいクリップを追加できるロック解除済みレーンがありません。",
+  "The target Audio lane is locked. No changes were made.":
+    "移動先の音声レーンはロック中です。変更は行われませんでした。",
+  "Audio Clip path is required": "音声クリップのパスが必要です",
+  "Audio Clip duration must be greater than zero": "音声クリップの長さは0より大きくしてください",
+  "No default audio output device is available": "既定の音声出力デバイスを利用できません",
+  "Audio output stream was not initialized": "音声出力ストリームが初期化されていません",
+  "Timeline audio clip add expired before engine execution": "エンジン実行前に音声クリップ追加が期限切れになりました",
+  "Timeline audio clip update expired before engine execution": "エンジン実行前に音声クリップ更新が期限切れになりました",
+  "Timeline audio clip removal expired before engine execution": "エンジン実行前に音声クリップ削除が期限切れになりました",
+  "Timeline audio master update expired before engine execution": "エンジン実行前にタイムライン音声マスター更新が期限切れになりました",
+  "Engine snapshot was busy; Timeline audio clip add was rolled back":
+    "エンジンスナップショットが使用中のため、音声クリップ追加をロールバックしました",
+  "Engine snapshot was busy; Timeline audio clip update was rolled back":
+    "エンジンスナップショットが使用中のため、音声クリップ更新をロールバックしました",
+  "Engine snapshot was busy; Timeline audio clip removal was rolled back":
+    "エンジンスナップショットが使用中のため、音声クリップ削除をロールバックしました",
+  "Engine snapshot was busy; Timeline audio master update was rolled back":
+    "エンジンスナップショットが使用中のため、タイムライン音声マスター更新をロールバックしました",
 };
 
 const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
+  [/^(\d+) audio clips?$/, (count) => `音声クリップ ${count}件`],
+  [/^Audio Clip (.+), starts (\d+) milliseconds, duration (\d+) milliseconds$/,
+    (name, startMs, durationMs) => `音声クリップ ${name}、開始 ${startMs}ミリ秒、長さ ${durationMs}ミリ秒`],
+  [/^Fade In (\d+) ms$/, (durationMs) => `フェードイン ${durationMs} ms`],
+  [/^Fade Out (\d+) ms$/, (durationMs) => `フェードアウト ${durationMs} ms`],
+  [/^Added Audio Clip (.+)\.$/, (path) => `音声クリップを追加しました: ${path}`],
+  [/^Timeline layer (.+) is locked\. Unlock it before adding Audio Clips\.$/,
+    (label) => `タイムラインレイヤー ${label} はロック中です。音声クリップを追加する前にロックを解除してください。`],
+  [/^Timeline layer (.+) is locked\. Unlock it before editing Audio Clips\.$/,
+    (label) => `タイムラインレイヤー ${label} はロック中です。音声クリップを編集する前にロックを解除してください。`],
+  [/^Timeline audio clip (\d+) could not (open|decode) '(.+)': (.+)$/,
+    (id, operation, path, detail) =>
+      `タイムライン音声クリップ ${id} の${operation === "open" ? "読込" : "デコード"}に失敗しました（${path}）: ${detail}`],
+  [/^Timeline audio clip (\d+) (seek|drift resync) failed: (.+)$/,
+    (id, operation, detail) =>
+      `タイムライン音声クリップ ${id} の${operation === "seek" ? "シーク" : "ドリフト再同期"}に失敗しました: ${detail}`],
+  [/^Timeline audio clips require one of these file types: (.+)$/,
+    (extensions) => `タイムライン音声クリップには次のファイル形式が必要です: ${extensions}`],
+  [/^Audio Clips can only be placed on Audio lanes; '(.+)' is (.+)$/,
+    (label, kind) => `音声クリップは音声レーンにのみ配置できます。'${label}' は ${kind} です`],
+  [/^Timeline layer '(.+)' is locked; unlock it before editing Audio Clips$/,
+    (label) => `タイムラインレイヤー '${label}' はロック中です。音声クリップを編集する前にロックを解除してください`],
+  [/^Timeline audio clip (\d+) file '(.+)' is unavailable; the show remains loadable for travel$/,
+    (id, path) => `タイムライン音声クリップ ${id} のファイル '${path}' は見つかりませんが、持ち運び用にショーは読み込めます`],
+  [/^Project timeline audio clip (\d+) has an empty path$/,
+    (id) => `プロジェクトのタイムライン音声クリップ ${id} のパスが空です`],
+  [/^Project timeline audio clip (\d+) has zero duration$/,
+    (id) => `プロジェクトのタイムライン音声クリップ ${id} の長さが0です`],
+  [/^Project timeline audio clip (\d+) gain must be from 0 to 2$/,
+    (id) => `プロジェクトのタイムライン音声クリップ ${id} のゲインは0から2の範囲にしてください`],
+  [/^Project timeline audio clip (\d+) fade windows exceed its duration$/,
+    (id) => `プロジェクトのタイムライン音声クリップ ${id} のフェード合計がクリップ長を超えています`],
+  [/^Project timeline audio clip (\d+) references missing layer (\d+)$/,
+    (id, layerId) => `プロジェクトのタイムライン音声クリップ ${id} が存在しないレイヤー ${layerId} を参照しています`],
+  [/^Project timeline audio clip (\d+) references non-Audio layer (\d+)$/,
+    (id, layerId) => `プロジェクトのタイムライン音声クリップ ${id} が音声ではないレイヤー ${layerId} を参照しています`],
+  [/^(.+) \/ Audio \/ (\d+) ms \/ (\d+) ms \/ gain ([0-9.]+)$/,
+    (name, startMs, durationMs, gain) => `${name} / 音声 / ${startMs} ms / ${durationMs} ms / ゲイン ${gain}`],
+  [/^Failed to list audio output devices: (.+)$/,
+    (detail) => `音声出力デバイスの一覧取得に失敗しました: ${detail}`],
+  [/^Audio output device '(.+)' was not found$/,
+    (name) => `音声出力デバイス '${name}' が見つかりません`],
+  [/^Failed to open audio output: (.+)$/,
+    (detail) => `音声出力を開けませんでした: ${detail}`],
+  [/^Timeline audio (clip add|clip update|clip removal|master) acknowledgement failed: (.+)$/,
+    (operation, detail) => {
+      const label = operation === "clip add"
+        ? "音声クリップ追加"
+        : operation === "clip update"
+          ? "音声クリップ更新"
+          : operation === "clip removal"
+            ? "音声クリップ削除"
+            : "タイムライン音声マスター更新";
+      return `${label}の確認に失敗しました: ${detail}`;
+    }],
+  [/^Timeline layer (\d+) contains audio clips and must remain Audio$/,
+    (layerId) => `タイムラインレイヤー ${layerId} には音声クリップがあるため、音声のままにしてください`],
+  [/^Audio clips can only be reassigned to Audio timeline layer (\d+)$/,
+    (layerId) => `音声クリップの移動先には音声タイムラインレイヤー ${layerId} のみ指定できます`],
+  [/^Timeline audio clip (\d+) (path must not be empty|duration must be greater than zero|already exists|was not found)$/,
+    (id, reason) => {
+      const detail = reason === "path must not be empty"
+        ? "パスを空にできません"
+        : reason === "duration must be greater than zero"
+          ? "長さは0より大きくしてください"
+          : reason === "already exists"
+            ? "は既に存在します"
+            : "が見つかりません";
+      return `タイムライン音声クリップ ${id}${reason.startsWith("path") || reason.startsWith("duration") ? " の" : ""}${detail}`;
+    }],
+  [/^Timeline audio layer (\d+) was not found$/,
+    (layerId) => `タイムライン音声レイヤー ${layerId} が見つかりません`],
+  [/^Timeline audio clips can only be placed on Audio lanes; layer (\d+) is (.+)$/,
+    (layerId, kind) => `タイムライン音声クリップは音声レーンにのみ配置できます。レイヤー ${layerId} は ${kind} です`],
+  [/^Timeline layer (\d+) is locked; unlock it before (editing audio clips|editing audio clip (\d+)|removing audio clip (\d+))$/,
+    (layerId, operation) => `タイムラインレイヤー ${layerId} はロック中です。音声クリップを${operation.startsWith("removing") ? "削除" : "編集"}する前にロックを解除してください`],
+  [/^Timeline contains duplicate audio clip (\d+)$/,
+    (id) => `タイムラインに重複した音声クリップ ${id} があります`],
+  [/^Project contains duplicate timeline audio clip id (\d+)$/,
+    (id) => `プロジェクトに重複したタイムライン音声クリップID ${id} があります`],
   [/^Built-in FX for (.+) \(layer (\d+)\)$/, (label, id) => `${label}（レイヤー${id}）の内蔵FX`],
   [/^FX stack for (.+) \(layer (\d+)\)$/, (label, id) => `${label}（レイヤー${id}）のFXスタック`],
   [/^(.+) FX enabled for (.+) \(layer (\d+)\)$/, (effect, label, id) => `${label}（レイヤー${id}）の${effect} FX有効状態`],
