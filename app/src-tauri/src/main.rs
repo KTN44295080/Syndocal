@@ -35,21 +35,21 @@ use protocol::{
     CompositionSummary, CueEffectTarget, CueFixtureTarget, CueId, CueNodeGraphTarget,
     CustomFixtureProfileFile, CustomFixtureProfileRequest, DmxInputConfig, DmxInputProtocol,
     DmxInputStatus, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, EffectId, EffectKind,
-    EffectPreset, EffectSummary, EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest,
-    FixtureId, FixtureLimits, FixturePreset, FixtureProfileSummary, GeometrySummary,
-    LearnedMidiControl, LearnedOscControl, LfoEffectRequest, MidiControlAction, MidiControlMapping,
-    MidiInputSummary, MidiOutputSummary, MoveEffectRequest, NodeGraphId, NodeGraphNodeKind,
-    NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp, OscControlAction,
-    OscControlMapping, OscInputConfig, PatchFixtureRequest, PatchedFixtureSummary,
-    PositionWaveEffectRequest, ProjectFile, RemoteControlConfig, RemoteControlStatus, Rotation3,
-    SerialPortSummary, StageMapConfig, StageMapPresetFile, StageMapPresetSummary, StageObjectId,
-    StageObjectKind, StageObjectSummary, TimelineEventId, TimelineLayerKind, TimelineSnapRequest,
-    TimelineTrackKind, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBackendState,
-    VideoBlendMode, VideoEffectTarget, VideoIsfEffectStageSummary, VideoIsfEffectSummary,
-    VideoLayerId, VideoLayerState, VideoLayerTarget, VideoOutputId, VideoOutputKind,
-    VideoOutputMapping, VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary,
-    VideoOutputSummary, VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind,
-    VideoSourceSummary,
+    EffectParamsSnapshot, EffectPreset, EffectSummary, EngineSnapshot, EngineTelemetry,
+    ExclusiveVideoTakeRequest, FixtureId, FixtureLimits, FixturePreset, FixtureProfileSummary,
+    GeometrySummary, LearnedMidiControl, LearnedOscControl, LfoEffectRequest, MidiControlAction,
+    MidiControlMapping, MidiInputSummary, MidiOutputSummary, MoveEffectRequest, NodeGraphId,
+    NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp,
+    OscControlAction, OscControlMapping, OscInputConfig, PatchFixtureRequest,
+    PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RemoteControlConfig,
+    RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile,
+    StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary, TimelineEventId,
+    TimelineLayerKind, TimelineSnapRequest, TimelineTrackKind, ValueEffectRequest, Vec3,
+    VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode, VideoEffectTarget,
+    VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId, VideoLayerState,
+    VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
+    VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary, VideoOutputSummary,
+    VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -5747,12 +5747,10 @@ fn create_cue_from_current(
     let (targets, video_targets, video_output_targets, node_graph_targets, captured_effect_targets) =
         cue_targets_from_snapshot_with_scope(&snapshot, &scope)?;
     let effect_targets = match effect_targets {
-        Some(effect_targets) => {
-            validate_cue_effect_targets(&snapshot, &effect_targets)?;
-            effect_targets
-        }
+        Some(effect_targets) => copy_cue_effect_params_on_capture(&snapshot, effect_targets)?,
         None => captured_effect_targets,
     };
+    validate_cue_effect_targets(&snapshot, &effect_targets)?;
     ensure_cue_targets_present(
         &targets,
         &video_targets,
@@ -6219,12 +6217,15 @@ fn update_cue_from_current(
     let scope = capture_scope.unwrap_or_default();
     let captured = cue_targets_from_snapshot_with_scope(&snapshot, &scope)?;
     let explicit_effect_targets = match effect_targets {
-        Some(effect_targets) => {
-            validate_cue_effect_targets(&snapshot, &effect_targets)?;
-            Some(effect_targets)
-        }
+        Some(effect_targets) => Some(copy_cue_effect_params_on_capture(
+            &snapshot,
+            effect_targets,
+        )?),
         None => None,
     };
+    if let Some(effect_targets) = explicit_effect_targets.as_deref() {
+        validate_cue_effect_targets(&snapshot, effect_targets)?;
+    }
     let merged =
         merge_cue_update_targets(&snapshot, cue_id, &scope, captured, explicit_effect_targets)?;
     ensure_cue_targets_present(
@@ -6535,6 +6536,14 @@ fn trigger_cue(state: State<'_, AppState>, cue_id: CueId) -> Result<(), String> 
     state
         .engine
         .send(EngineCommand::TriggerCue(cue_id))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn release_cue(state: State<'_, AppState>, cue_id: CueId) -> Result<(), String> {
+    state
+        .engine
+        .send(EngineCommand::ReleaseCue(cue_id))
         .map_err(|error| error.to_string())
 }
 
@@ -14878,6 +14887,94 @@ fn validate_project_dmx_outputs(snapshot: &EngineSnapshot) -> Result<(), String>
     }
 }
 
+fn validate_project_cue_effect_params(
+    snapshot: &EngineSnapshot,
+    fixtures_by_id: &HashMap<FixtureId, &PatchedFixtureSummary>,
+    cue_id: CueId,
+    effect_id: EffectId,
+    params: &EffectParamsSnapshot,
+) -> Result<(), String> {
+    let owner_label = format!("cue {cue_id} owned effect {effect_id}");
+    validate_effect_params_snapshot(params)
+        .map_err(|error| format!("Project {owner_label} is invalid: {error}"))?;
+
+    let validate_video_targets = |targets: &[VideoEffectTarget]| -> Result<(), String> {
+        let layer_ids = snapshot
+            .video
+            .layers
+            .iter()
+            .map(|layer| layer.id)
+            .collect::<HashSet<_>>();
+        for target in targets {
+            for layer_id in &target.layer_ids {
+                validate_project_video_layer_ref(
+                    &layer_ids,
+                    *layer_id,
+                    &format!("cue {cue_id} owned effect"),
+                    effect_id,
+                )?;
+            }
+        }
+        Ok(())
+    };
+
+    match params {
+        EffectParamsSnapshot::Lfo(request) => {
+            validate_project_effect_fixture_targets(
+                snapshot,
+                fixtures_by_id,
+                &request.fixture_ids,
+                &request.target_group_ids,
+                &request.attribute,
+                &owner_label,
+            )?;
+            validate_video_targets(&request.video_targets)
+        }
+        EffectParamsSnapshot::PositionWave(request) => {
+            validate_project_effect_fixture_targets(
+                snapshot,
+                fixtures_by_id,
+                &request.fixture_ids,
+                &request.target_group_ids,
+                &request.attribute,
+                &owner_label,
+            )?;
+            validate_video_targets(&request.video_targets)
+        }
+        EffectParamsSnapshot::Color(request) => validate_project_color_effect_targets(
+            snapshot,
+            fixtures_by_id,
+            &request.fixture_ids,
+            &request.target_group_ids,
+            &owner_label,
+        ),
+        EffectParamsSnapshot::Chaser(request) => {
+            validate_project_chaser_effect_targets(
+                snapshot,
+                fixtures_by_id,
+                request,
+                &owner_label,
+            )?;
+            Ok(())
+        }
+        EffectParamsSnapshot::Move(request) => validate_project_move_effect_targets(
+            snapshot,
+            fixtures_by_id,
+            &request.fixture_ids,
+            &request.target_group_ids,
+            &owner_label,
+        ),
+        EffectParamsSnapshot::Value(request) => validate_project_effect_fixture_targets(
+            snapshot,
+            fixtures_by_id,
+            &request.fixture_ids,
+            &request.target_group_ids,
+            &request.attribute,
+            &owner_label,
+        ),
+    }
+}
+
 fn validate_project_lighting_references(snapshot: &EngineSnapshot) -> Result<(), String> {
     let fixtures_by_id = snapshot
         .fixtures
@@ -14957,7 +15054,15 @@ fn validate_project_lighting_references(snapshot: &EngineSnapshot) -> Result<(),
                 .collect::<Vec<_>>(),
         )?;
         for target in &cue.effect_targets {
-            if !effect_ids.contains(&target.effect_id) {
+            if let Some(params) = &target.params {
+                validate_project_cue_effect_params(
+                    snapshot,
+                    &fixtures_by_id,
+                    cue.id,
+                    target.effect_id,
+                    params,
+                )?;
+            } else if !effect_ids.contains(&target.effect_id) {
                 return Err(format!(
                     "Project cue {} references missing effect {}",
                     cue.id, target.effect_id
@@ -16442,6 +16547,38 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 value: Some(request),
             })
         }
+    }
+}
+
+fn effect_params_snapshot_from_summary(
+    effect: &EffectSummary,
+) -> Result<EffectParamsSnapshot, String> {
+    let preset = effect_summary_to_preset(effect)?;
+    match effect.effect_type {
+        EffectKind::Lfo => preset
+            .lfo
+            .map(EffectParamsSnapshot::Lfo)
+            .ok_or_else(|| "LFO effect summary is missing its request body".to_string()),
+        EffectKind::PositionWave => preset
+            .position_wave
+            .map(EffectParamsSnapshot::PositionWave)
+            .ok_or_else(|| "Position wave effect summary is missing its request body".to_string()),
+        EffectKind::Color => preset
+            .color
+            .map(EffectParamsSnapshot::Color)
+            .ok_or_else(|| "Color effect summary is missing its request body".to_string()),
+        EffectKind::Chaser => preset
+            .chaser
+            .map(EffectParamsSnapshot::Chaser)
+            .ok_or_else(|| "Chaser effect summary is missing its request body".to_string()),
+        EffectKind::Move => preset
+            .move_effect
+            .map(EffectParamsSnapshot::Move)
+            .ok_or_else(|| "Move effect summary is missing its request body".to_string()),
+        EffectKind::Value => preset
+            .value
+            .map(EffectParamsSnapshot::Value)
+            .ok_or_else(|| "Value effect summary is missing its request body".to_string()),
     }
 }
 
@@ -20883,13 +21020,16 @@ fn normalize_fixture_limits(limits: FixtureLimits) -> FixtureLimits {
 
 fn cue_targets_from_snapshot(
     snapshot: &EngineSnapshot,
-) -> (
-    Vec<CueFixtureTarget>,
-    Vec<VideoLayerTarget>,
-    Vec<VideoOutputTarget>,
-    Vec<CueNodeGraphTarget>,
-    Vec<CueEffectTarget>,
-) {
+) -> Result<
+    (
+        Vec<CueFixtureTarget>,
+        Vec<VideoLayerTarget>,
+        Vec<VideoOutputTarget>,
+        Vec<CueNodeGraphTarget>,
+        Vec<CueEffectTarget>,
+    ),
+    String,
+> {
     let targets = snapshot
         .fixtures
         .iter()
@@ -20929,18 +21069,43 @@ fn cue_targets_from_snapshot(
     let effect_targets = snapshot
         .effects
         .iter()
-        .map(|effect| CueEffectTarget {
-            effect_id: effect.id,
-            enabled: effect.enabled,
+        .map(|effect| {
+            Ok(CueEffectTarget {
+                effect_id: effect.id,
+                enabled: effect.enabled,
+                params: effect
+                    .enabled
+                    .then(|| effect_params_snapshot_from_summary(effect))
+                    .transpose()?,
+            })
         })
-        .collect::<Vec<_>>();
-    (
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok((
         targets,
         video_targets,
         video_output_targets,
         node_graph_targets,
         effect_targets,
-    )
+    ))
+}
+
+fn copy_cue_effect_params_on_capture(
+    snapshot: &EngineSnapshot,
+    mut effect_targets: Vec<CueEffectTarget>,
+) -> Result<Vec<CueEffectTarget>, String> {
+    for target in &mut effect_targets {
+        target.params = if target.enabled {
+            let effect = snapshot
+                .effects
+                .iter()
+                .find(|effect| effect.id == target.effect_id)
+                .ok_or_else(|| format!("Effect {} was not found", target.effect_id))?;
+            Some(effect_params_snapshot_from_summary(effect)?)
+        } else {
+            None
+        };
+    }
+    Ok(effect_targets)
 }
 
 fn effect_lighting_targets(effect: &EffectSummary) -> (&[FixtureId], &[String]) {
@@ -21029,7 +21194,7 @@ fn validate_cue_effect_targets(
         .collect::<HashSet<_>>();
     let mut seen = HashSet::new();
     for target in effect_targets {
-        if !effect_ids.contains(&target.effect_id) {
+        if target.params.is_none() && !effect_ids.contains(&target.effect_id) {
             return Err(format!("Effect {} was not found", target.effect_id));
         }
         if !seen.insert(target.effect_id) {
@@ -21037,6 +21202,14 @@ fn validate_cue_effect_targets(
                 "Effect {} can only be referenced once per cue",
                 target.effect_id
             ));
+        }
+        if let Some(params) = &target.params {
+            validate_effect_params_snapshot(params).map_err(|error| {
+                format!(
+                    "Effect {} owned parameters are invalid: {error}",
+                    target.effect_id
+                )
+            })?;
         }
     }
     Ok(())
@@ -21077,7 +21250,7 @@ fn cue_targets_from_snapshot_with_scope(
     String,
 > {
     let (targets, video_targets, video_output_targets, node_graph_targets, effect_targets) =
-        cue_targets_from_snapshot(snapshot);
+        cue_targets_from_snapshot(snapshot)?;
     match scope {
         CueCaptureScope::All => Ok((
             targets,
@@ -21770,6 +21943,19 @@ fn dmx_range(start_address: u16, footprint: u16) -> Option<(u16, u16)> {
 
 fn ranges_overlap(first: (u16, u16), second: (u16, u16)) -> bool {
     first.0 <= second.1 && second.0 <= first.1
+}
+
+fn validate_effect_params_snapshot(params: &EffectParamsSnapshot) -> Result<(), String> {
+    match params {
+        EffectParamsSnapshot::Lfo(request) => validate_lfo_effect_request(request),
+        EffectParamsSnapshot::PositionWave(request) => {
+            validate_position_wave_effect_request(request)
+        }
+        EffectParamsSnapshot::Color(request) => validate_color_effect_request(request),
+        EffectParamsSnapshot::Chaser(request) => validate_chaser_effect_request(request),
+        EffectParamsSnapshot::Move(request) => validate_move_effect_request(request),
+        EffectParamsSnapshot::Value(request) => validate_value_effect_request(request),
+    }
 }
 
 fn validate_lfo_effect_request(request: &LfoEffectRequest) -> Result<(), String> {
@@ -24647,6 +24833,7 @@ f 1 2 3
             vec![CueEffectTarget {
                 effect_id: 9,
                 enabled: false,
+                params: None,
             }]
         );
 
@@ -24670,6 +24857,7 @@ f 1 2 3
             vec![CueEffectTarget {
                 effect_id: 9,
                 enabled: false,
+                params: None,
             }]
         );
 
@@ -26840,7 +27028,7 @@ f 1 2 3
         };
 
         use_authored_video_snapshot(&mut snapshot);
-        let (_, video_targets, _, _, _) = cue_targets_from_snapshot(&snapshot);
+        let (_, video_targets, _, _, _) = cue_targets_from_snapshot(&snapshot).unwrap();
 
         assert_eq!(video_targets.len(), 1);
         assert_eq!(video_targets[0].state.opacity, 0.25);
@@ -27128,6 +27316,7 @@ f 1 2 3
                     effect_targets: vec![CueEffectTarget {
                         effect_id: 9,
                         enabled: false,
+                        params: None,
                     }],
                     ..protocol::CueSummary::default()
                 }],
@@ -27139,9 +27328,8 @@ f 1 2 3
 
     #[test]
     fn strict_sdc_validation_rejects_duplicate_or_unknown_cue_effect_targets() {
-        // Saved .sdc files are an operator-authored contract, so dangling Cue references are
-        // rejected here. The engine also prunes them defensively when lower-level snapshots are
-        // loaded directly, but that recovery behavior must not hide a corrupt project file.
+        // Param-less targets retain the strict legacy reference contract. Cue-owned parameter
+        // snapshots are covered separately because they deliberately survive stack deletion.
         let mut project = project_with_effect_only_cue();
         validate_project_file(&project).unwrap();
 
@@ -27150,6 +27338,7 @@ f 1 2 3
             .push(CueEffectTarget {
                 effect_id: 9,
                 enabled: true,
+                params: None,
             });
         assert_eq!(
             validate_project_file(&project).unwrap_err(),
@@ -27159,10 +27348,55 @@ f 1 2 3
         project.snapshot.cues[0].effect_targets = vec![CueEffectTarget {
             effect_id: 99,
             enabled: true,
+            params: None,
         }];
         assert_eq!(
             validate_project_file(&project).unwrap_err(),
             "Project cue 7 references missing effect 99"
+        );
+    }
+
+    #[test]
+    fn project_cue_owned_effect_target_survives_missing_global_effect_and_validates() {
+        let mut project = project_with_effect_only_cue();
+        let params = effect_params_snapshot_from_summary(&project.snapshot.effects[0]).unwrap();
+        project.snapshot.cues[0].effect_targets[0] = CueEffectTarget {
+            effect_id: 9,
+            enabled: true,
+            params: Some(params),
+        };
+        project.snapshot.effects.clear();
+
+        validate_project_file(&project).unwrap();
+        let json = project_json_for_write(&project).unwrap();
+        let roundtrip: ProjectFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtrip, project);
+
+        let EffectParamsSnapshot::Lfo(request) = roundtrip.snapshot.cues[0].effect_targets[0]
+            .params
+            .as_ref()
+            .unwrap()
+        else {
+            panic!("expected an owned LFO request");
+        };
+        assert_eq!(request.period_ms, 500);
+
+        let mut invalid = roundtrip.clone();
+        let Some(EffectParamsSnapshot::Lfo(request)) =
+            invalid.snapshot.cues[0].effect_targets[0].params.as_mut()
+        else {
+            panic!("expected an owned LFO request");
+        };
+        request.period_ms = 1;
+        assert!(validate_project_file(&invalid)
+            .unwrap_err()
+            .contains("at least 10 ms"));
+
+        let mut legacy_missing = roundtrip;
+        legacy_missing.snapshot.cues[0].effect_targets[0].params = None;
+        assert_eq!(
+            validate_project_file(&legacy_missing).unwrap_err(),
+            "Project cue 7 references missing effect 9"
         );
     }
 
@@ -27181,6 +27415,10 @@ f 1 2 3
             ..project.clone()
         })
         .unwrap();
+        let saved_value: Value = serde_json::from_str(&json).unwrap();
+        assert!(saved_value["snapshot"]["cues"][0]["effect_targets"][0]
+            .get("params")
+            .is_none());
         let roundtrip: ProjectFile = serde_json::from_str(&json).unwrap();
         validate_project_file(&roundtrip).unwrap();
         assert_eq!(
@@ -27188,6 +27426,7 @@ f 1 2 3
             vec![CueEffectTarget {
                 effect_id: 9,
                 enabled: false,
+                params: None,
             }]
         );
 
@@ -29525,7 +29764,7 @@ f 1 2 3
             video_output_targets,
             node_graph_targets,
             effect_targets,
-        ) = cue_targets_from_snapshot(&snapshot);
+        ) = cue_targets_from_snapshot(&snapshot).unwrap();
 
         assert!(fixture_targets.is_empty());
         assert!(video_targets.is_empty());
@@ -29542,6 +29781,7 @@ f 1 2 3
             vec![CueEffectTarget {
                 effect_id: 13,
                 enabled: false,
+                params: None,
             }]
         );
     }
@@ -29625,6 +29865,7 @@ f 1 2 3
             vec![CueEffectTarget {
                 effect_id: 11,
                 enabled: false,
+                params: None,
             }]
         );
     }
@@ -29705,6 +29946,7 @@ f 1 2 3
             vec![CueEffectTarget {
                 effect_id: 11,
                 enabled: false,
+                params: None,
             }]
         );
         ensure_cue_targets_present(
@@ -29726,6 +29968,50 @@ f 1 2 3
         )
         .unwrap_err()
         .contains("add an effect"));
+    }
+
+    #[test]
+    fn project_cue_effect_capture_with_params_roundtrips_and_enriches_explicit_targets() {
+        let mut project = project_with_effect_only_cue();
+        let captured =
+            cue_targets_from_snapshot_with_scope(&project.snapshot, &CueCaptureScope::EffectsOnly)
+                .unwrap();
+        assert_eq!(captured.4.len(), 1);
+        assert!(matches!(
+            captured.4[0].params.as_ref(),
+            Some(EffectParamsSnapshot::Lfo(_))
+        ));
+
+        let explicit = copy_cue_effect_params_on_capture(
+            &project.snapshot,
+            vec![CueEffectTarget {
+                effect_id: 9,
+                enabled: true,
+                params: None,
+            }],
+        )
+        .unwrap();
+        assert_eq!(explicit, captured.4);
+
+        let disabled = copy_cue_effect_params_on_capture(
+            &project.snapshot,
+            vec![CueEffectTarget {
+                effect_id: 9,
+                enabled: false,
+                params: explicit[0].params.clone(),
+            }],
+        )
+        .unwrap();
+        assert!(disabled[0].params.is_none());
+
+        project.snapshot.cues[0].effect_targets = explicit;
+        validate_project_file(&project).unwrap();
+        let json = project_json_for_write(&project).unwrap();
+        let roundtrip: ProjectFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            roundtrip.snapshot.cues[0].effect_targets,
+            project.snapshot.cues[0].effect_targets
+        );
     }
 
     #[test]
@@ -29758,6 +30044,7 @@ f 1 2 3
             effect_targets: vec![CueEffectTarget {
                 effect_id: 11,
                 enabled: true,
+                params: None,
             }],
             ..protocol::CueSummary::default()
         };
@@ -29787,10 +30074,14 @@ f 1 2 3
                 CueEffectTarget {
                     effect_id: 11,
                     enabled: false,
+                    params: None,
                 },
                 CueEffectTarget {
                     effect_id: 12,
                     enabled: true,
+                    params: Some(
+                        effect_params_snapshot_from_summary(&snapshot.effects[1]).unwrap()
+                    ),
                 },
             ]
         );
@@ -29887,10 +30178,12 @@ f 1 2 3
                 CueEffectTarget {
                     effect_id: 11,
                     enabled: true,
+                    params: None,
                 },
                 CueEffectTarget {
                     effect_id: 12,
                     enabled: false,
+                    params: None,
                 },
             ],
             ..protocol::CueSummary::default()
@@ -29983,6 +30276,7 @@ f 1 2 3
             vec![CueEffectTarget {
                 effect_id: 11,
                 enabled: true,
+                params: Some(effect_params_snapshot_from_summary(&parent_group_effect).unwrap()),
             }]
         );
     }
@@ -29996,10 +30290,12 @@ f 1 2 3
                 CueEffectTarget {
                     effect_id: 11,
                     enabled: true,
+                    params: None,
                 },
                 CueEffectTarget {
                     effect_id: 12,
                     enabled: false,
+                    params: None,
                 },
             ],
             ..protocol::CueSummary::default()
@@ -30039,6 +30335,7 @@ f 1 2 3
                 captured(vec![CueEffectTarget {
                     effect_id: 11,
                     enabled: false,
+                    params: None,
                 }]),
                 None,
             )
@@ -30053,10 +30350,12 @@ f 1 2 3
                 captured(vec![CueEffectTarget {
                     effect_id: 11,
                     enabled: true,
+                    params: None,
                 }]),
                 Some(vec![CueEffectTarget {
                     effect_id: 11,
                     enabled: false,
+                    params: None,
                 }]),
             )
             .unwrap();
@@ -30070,6 +30369,7 @@ f 1 2 3
                 captured(vec![CueEffectTarget {
                     effect_id: 11,
                     enabled: true,
+                    params: None,
                 }]),
                 Some(Vec::new()),
             )
@@ -30084,10 +30384,12 @@ f 1 2 3
                 captured(vec![CueEffectTarget {
                     effect_id: 11,
                     enabled: true,
+                    params: None,
                 }]),
                 Some(vec![CueEffectTarget {
                     effect_id: 12,
                     enabled: true,
+                    params: None,
                 }]),
             )
             .unwrap_err();
@@ -30105,6 +30407,7 @@ f 1 2 3
                 captured(vec![CueEffectTarget {
                     effect_id: 11,
                     enabled: false,
+                    params: None,
                 }]),
                 None,
             )
@@ -30114,6 +30417,7 @@ f 1 2 3
                 vec![CueEffectTarget {
                     effect_id: 11,
                     enabled: false,
+                    params: None,
                 }]
             );
         }
@@ -30134,6 +30438,7 @@ f 1 2 3
             effect_targets: vec![CueEffectTarget {
                 effect_id: 11,
                 enabled: true,
+                params: None,
             }],
             ..protocol::CueSummary::default()
         };
@@ -30164,6 +30469,7 @@ f 1 2 3
                 effect_targets: vec![CueEffectTarget {
                     effect_id: 11,
                     enabled: true,
+                    params: None,
                 }],
                 ..protocol::CueSummary::default()
             }],
@@ -30196,6 +30502,7 @@ f 1 2 3
             effect_targets: vec![CueEffectTarget {
                 effect_id: 11,
                 enabled: true,
+                params: None,
             }],
             ..protocol::CueSummary::default()
         };
@@ -31665,6 +31972,25 @@ f 1 2 3
         assert!(validate_color_effect_request(&request)
             .unwrap_err()
             .contains("within 0..1"));
+    }
+
+    #[test]
+    fn sample_effect_params_snapshots_use_existing_request_shapes() {
+        let snapshots = vec![
+            EffectParamsSnapshot::Lfo(sample_lfo_request()),
+            EffectParamsSnapshot::PositionWave(sample_position_wave_request()),
+            EffectParamsSnapshot::Color(sample_color_effect_request()),
+            EffectParamsSnapshot::Chaser(sample_chaser_effect_request()),
+            EffectParamsSnapshot::Move(sample_move_effect_request()),
+            EffectParamsSnapshot::Value(sample_value_effect_request()),
+        ];
+
+        for snapshot in snapshots {
+            validate_effect_params_snapshot(&snapshot).unwrap();
+            let json = serde_json::to_string(&snapshot).unwrap();
+            let roundtrip: EffectParamsSnapshot = serde_json::from_str(&json).unwrap();
+            assert_eq!(roundtrip, snapshot);
+        }
     }
 
     #[test]
@@ -35970,6 +36296,7 @@ fn main() {
             move_cue,
             duplicate_cue,
             trigger_cue,
+            release_cue,
             trigger_next_cue,
             trigger_previous_cue,
             set_cue_fade_paused,

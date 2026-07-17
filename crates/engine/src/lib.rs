@@ -32,23 +32,23 @@ use protocol::{
     CueId, CueIfcbTiming, CueListId, CueListSummary, CueNodeGraphTarget, CuePaletteTarget,
     CuePartSummary, CueSummary, DmxMergeMode, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol,
     DmxOutputRouteTelemetry, DmxUniversePreview, EffectBlendMode, EffectId, EffectKind,
-    EffectSummary, EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId,
-    FixtureId, FixtureLimits, FixtureProfileSummary, LfoEffectRequest, LfoShape, LiveAudioFrame,
-    LiveAudioReactiveFeatures, MoveCoordinateMode, MoveDirection, MoveEffectRequest, MovePathPoint,
-    NodeGraphAudioRuntimeStatus, NodeGraphId, NodeGraphNodeKind, NodeGraphNodeSummary,
-    NodeGraphSummary, NodeGraphTransformOp, PaletteId, PatchFixtureRequest, PatchedFixtureSummary,
-    PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot, ProgrammerValueSummary,
-    ReferencePaletteSummary, Rotation3, StageMapConfig, StageMapPresetSummary, StageObjectId,
-    StageObjectSummary, SubmasterSummary, TimelineAutomationSummary, TimelineCueEventSummary,
-    TimelineEventId, TimelineLayerKind, TimelineLayerSummary, TimelineSnapRequest,
-    TimelineSnapshot, TimelineTrackKind, TimelineVideoAutomationSummary, Transform2D,
-    ValueEffectDirection, ValueEffectInterpolation, ValueEffectMode, ValueEffectPoint,
-    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBlendMode, VideoColorAdjust,
-    VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust, VideoIsfControlKind,
-    VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId, VideoLayerState,
-    VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
-    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
-    VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
+    EffectParamsSnapshot, EffectSummary, EngineSnapshot, EngineTelemetry,
+    ExclusiveVideoTakeRequest, ExecutorId, FixtureId, FixtureLimits, FixtureProfileSummary,
+    LfoEffectRequest, LfoShape, LiveAudioFrame, LiveAudioReactiveFeatures, MoveCoordinateMode,
+    MoveDirection, MoveEffectRequest, MovePathPoint, NodeGraphAudioRuntimeStatus, NodeGraphId,
+    NodeGraphNodeKind, NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId,
+    PatchFixtureRequest, PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest,
+    ProgrammerSnapshot, ProgrammerValueSummary, ReferencePaletteSummary, Rotation3, StageMapConfig,
+    StageMapPresetSummary, StageObjectId, StageObjectSummary, SubmasterSummary,
+    TimelineAutomationSummary, TimelineCueEventSummary, TimelineEventId, TimelineLayerKind,
+    TimelineLayerSummary, TimelineSnapRequest, TimelineSnapshot, TimelineTrackKind,
+    TimelineVideoAutomationSummary, Transform2D, ValueEffectDirection, ValueEffectInterpolation,
+    ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
+    VideoBlendMode, VideoColorAdjust, VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust,
+    VideoIsfControlKind, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId,
+    VideoLayerState, VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind,
+    VideoOutputMapping, VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget,
+    VideoParam, VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
     LIVE_AUDIO_FEATURE_BAND_CAPACITY, MAX_CUE_AUTHORED_BEATS, MAX_TIMELINE_SCENE_BLOCK_LOOPS,
     MIN_CUE_AUTHORED_BEATS,
 };
@@ -566,6 +566,7 @@ pub enum EngineCommand {
     TriggerPreviousCue,
     TriggerCueListNext(CueListId),
     TriggerCueListPrevious(CueListId),
+    ReleaseCue(CueId),
     SetCueFadePaused(bool),
     RemoveCue(CueId),
     RemoveCuePublished {
@@ -1023,6 +1024,7 @@ impl EngineCommand {
                 | EngineCommand::TriggerPreviousCue
                 | EngineCommand::TriggerCueListNext(_)
                 | EngineCommand::TriggerCueListPrevious(_)
+                | EngineCommand::ReleaseCue(_)
                 | EngineCommand::SetCueFadePaused(_)
                 | EngineCommand::RemoveCue(_)
                 | EngineCommand::RemoveCuePublished { .. }
@@ -2358,6 +2360,42 @@ struct RuntimeEffect {
     created_at: Instant,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct RuntimeEffectActivationRange {
+    start: usize,
+    len: usize,
+}
+
+impl RuntimeEffectActivationRange {
+    fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
+    fn end(self) -> usize {
+        self.start.saturating_add(self.len)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeEffectActivationKey {
+    Timeline {
+        event_id: TimelineEventId,
+        cue_id: CueId,
+        iteration: u64,
+    },
+    CueList {
+        cue_list_id: CueListId,
+        cue_id: CueId,
+    },
+}
+
+#[derive(Clone)]
+struct RuntimeEffectActivation {
+    effect: RuntimeEffect,
+    key: Option<RuntimeEffectActivationKey>,
+    rate: f32,
+}
+
 #[derive(Clone)]
 struct RuntimeNodeGraph {
     summary: NodeGraphSummary,
@@ -2431,6 +2469,32 @@ enum RuntimeEffectKind {
     Chaser(RuntimeChaserEffect),
     Move(RuntimeMoveEffect),
     Value(RuntimeValueEffect),
+}
+
+fn clear_runtime_effect_caches(kind: &RuntimeEffectKind) {
+    match kind {
+        RuntimeEffectKind::Color(runtime) => {
+            for target in &runtime.targets {
+                target.cached.set(None);
+            }
+        }
+        RuntimeEffectKind::Chaser(runtime) => {
+            for cache in runtime.target_level_cache.values() {
+                cache.set(None);
+            }
+        }
+        RuntimeEffectKind::Move(runtime) => {
+            for target in &runtime.targets {
+                target.cached.set(None);
+            }
+        }
+        RuntimeEffectKind::Value(runtime) => {
+            for target in &runtime.targets {
+                target.cached.set(None);
+            }
+        }
+        RuntimeEffectKind::Lfo(_) | RuntimeEffectKind::PositionWave(_) => {}
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2708,6 +2772,7 @@ struct RuntimeCue {
     video_output_targets: Vec<VideoOutputTarget>,
     node_graph_targets: Vec<CueNodeGraphTarget>,
     effect_targets: Vec<CueEffectTarget>,
+    effect_activation_range: RuntimeEffectActivationRange,
 }
 
 struct CueBody {
@@ -2746,15 +2811,27 @@ enum PendingCueTriggerSource {
     Timeline,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PendingTimelineEffectActivation {
+    event_id: TimelineEventId,
+    cue_id: CueId,
+    iteration: u64,
+    range: RuntimeEffectActivationRange,
+    rate: f32,
+    created_at: Instant,
+}
+
 #[derive(Clone)]
 struct PendingCueTrigger {
     cue_id: CueId,
     due_at: Instant,
     source: PendingCueTriggerSource,
     repeat_count: u64,
+    timeline_effect_activation: Option<PendingTimelineEffectActivation>,
+    dispatch: Option<CueDispatchEntry>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CueDispatchEntry {
     cue_index: usize,
     pre_wait_ms: u64,
@@ -2789,7 +2866,22 @@ enum CueFreeRunPeriodResolution {
     Ambiguous,
 }
 
-type TimelineCueOccurrence = (u64, TimelineEventId, CueId, u32);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum TimelineCueOccurrenceKind {
+    End,
+    Trigger,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TimelineCueOccurrence {
+    time_ms: u64,
+    event_index: usize,
+    event_id: TimelineEventId,
+    cue_id: CueId,
+    layer_order: u32,
+    iteration: u64,
+    kind: TimelineCueOccurrenceKind,
+}
 
 #[derive(Clone)]
 struct RuntimeTimelineAutomation {
@@ -2904,6 +2996,7 @@ enum PendingCommandRollback {
     RestoreCueRemoval {
         cues: Vec<RuntimeCue>,
         cue_lists: Vec<CueListSummary>,
+        cue_list_effect_activation_cues: HashMap<CueListId, CueId>,
         timeline_events: Vec<RuntimeTimelineEvent>,
         active_cue_id: Option<CueId>,
         active_fade: Option<RuntimeFade>,
@@ -3020,9 +3113,13 @@ struct EngineRuntime {
     next_video_isf_event_pulse_id: u64,
     fixtures: Vec<RuntimeFixture>,
     effects: Vec<RuntimeEffect>,
+    effect_activations: Vec<RuntimeEffectActivation>,
+    active_effect_activation_indices: Vec<usize>,
+    timeline_effect_activation_ranges: Vec<RuntimeEffectActivationRange>,
     node_graphs: Vec<RuntimeNodeGraph>,
     cues: Vec<RuntimeCue>,
     cue_lists: Vec<CueListSummary>,
+    cue_list_effect_activation_cues: HashMap<CueListId, CueId>,
     palettes: Vec<ReferencePaletteSummary>,
     playback_executors: Vec<PlaybackExecutorSummary>,
     playback_master: f32,
@@ -3194,9 +3291,13 @@ impl EngineRuntime {
             next_video_isf_event_pulse_id: 1,
             fixtures: Vec::new(),
             effects: Vec::new(),
+            effect_activations: Vec::new(),
+            active_effect_activation_indices: Vec::new(),
+            timeline_effect_activation_ranges: Vec::new(),
             node_graphs: Vec::new(),
             cues: Vec::new(),
             cue_lists: vec![CueListSummary::default()],
+            cue_list_effect_activation_cues: HashMap::new(),
             palettes: Vec::new(),
             playback_executors: vec![PlaybackExecutorSummary::default()],
             playback_master: 1.0,
@@ -3331,6 +3432,10 @@ impl EngineRuntime {
             self.last_error = Some(error);
             return;
         }
+        self.effect_activations.clear();
+        self.active_effect_activation_indices.clear();
+        self.timeline_effect_activation_ranges.clear();
+        self.cue_list_effect_activation_cues.clear();
         self.pending_video_isf_event_resets.clear();
         let now = Instant::now();
         let (loaded_fixtures, loaded_fixture_summaries, dropped_fixture_count) =
@@ -3550,6 +3655,23 @@ impl EngineRuntime {
                 }
             }
         }
+        self.cue_list_effect_activation_cues.clear();
+        for cue_list in &self.cue_lists {
+            let Some(cue_id) = cue_list.active_cue_id else {
+                continue;
+            };
+            let inside_scene_block = self.timeline_events.iter().any(|event| {
+                event.cue_id == cue_id
+                    && event.duration_ms > 0
+                    && !event.layer_muted_effective
+                    && self.timeline_position_ms >= event.time_ms
+                    && self.timeline_position_ms < timeline_event_end_ms(event)
+            });
+            if !inside_scene_block {
+                self.cue_list_effect_activation_cues
+                    .insert(cue_list.id, cue_id);
+            }
+        }
         self.rebuild_cue_value_origins();
         self.active_fade = None;
         self.pending_cues.clear();
@@ -3653,6 +3775,7 @@ impl EngineRuntime {
                     video_output_targets,
                     node_graph_targets,
                     effect_targets,
+                    effect_activation_range: RuntimeEffectActivationRange::default(),
                 })
             })
             .collect();
@@ -3864,7 +3987,7 @@ impl EngineRuntime {
             .collect::<HashSet<_>>();
         for cue in &mut self.cues {
             cue.effect_targets
-                .retain(|target| effect_ids.contains(&target.effect_id));
+                .retain(|target| target.params.is_some() || effect_ids.contains(&target.effect_id));
             cue.effect_targets.sort_by_key(|target| target.effect_id);
             cue.effect_targets.dedup_by_key(|target| target.effect_id);
         }
@@ -3979,6 +4102,15 @@ impl EngineRuntime {
     }
 
     fn apply_command(&mut self, command: EngineCommand) {
+        let rebuild_effect_activations = engine_command_rebuilds_effect_activations(&command);
+        let pending_ack_count = self.pending_command_acks.len();
+        self.apply_command_inner(command);
+        if rebuild_effect_activations && self.pending_command_acks.len() == pending_ack_count {
+            self.rebuild_effect_activations(Instant::now());
+        }
+    }
+
+    fn apply_command_inner(&mut self, command: EngineCommand) {
         if auto_vj_manual_override_command(&command) {
             self.auto_vj.manual_override_this_tick = true;
             if self.auto_vj.status.armed {
@@ -5234,9 +5366,11 @@ impl EngineRuntime {
                     .cues
                     .iter()
                     .filter(|cue| {
-                        cue.effect_targets
-                            .iter()
-                            .any(|target| target.enabled && target.effect_id == effect_id)
+                        cue.effect_targets.iter().any(|target| {
+                            target.enabled
+                                && target.params.is_none()
+                                && target.effect_id == effect_id
+                        })
                     })
                     .map(|cue| cue.id)
                     .collect::<Vec<_>>();
@@ -5250,7 +5384,7 @@ impl EngineRuntime {
                 self.effects.retain(|effect| effect.id != effect_id);
                 for cue in &mut self.cues {
                     cue.effect_targets
-                        .retain(|target| target.effect_id != effect_id);
+                        .retain(|target| target.params.is_some() || target.effect_id != effect_id);
                 }
                 if reconform_referenced_events {
                     for event in &mut self.timeline_events {
@@ -5415,6 +5549,7 @@ impl EngineRuntime {
                 let rollback = PendingCommandRollback::RestoreCueRemoval {
                     cues: self.cues.clone(),
                     cue_lists: self.cue_lists.clone(),
+                    cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
                     timeline_events: self.timeline_events.clone(),
                     active_cue_id: self.active_cue_id,
                     active_fade: self.active_fade.clone(),
@@ -5497,6 +5632,7 @@ impl EngineRuntime {
                 let rollback = PendingCommandRollback::RestoreCueRemoval {
                     cues: self.cues.clone(),
                     cue_lists: self.cue_lists.clone(),
+                    cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
                     timeline_events: self.timeline_events.clone(),
                     active_cue_id: self.active_cue_id,
                     active_fade: self.active_fade.clone(),
@@ -5546,6 +5682,7 @@ impl EngineRuntime {
                 let rollback = PendingCommandRollback::RestoreCueRemoval {
                     cues: self.cues.clone(),
                     cue_lists: self.cue_lists.clone(),
+                    cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
                     timeline_events: self.timeline_events.clone(),
                     active_cue_id: self.active_cue_id,
                     active_fade: self.active_fade.clone(),
@@ -5596,6 +5733,7 @@ impl EngineRuntime {
                 let rollback = PendingCommandRollback::RestoreCueRemoval {
                     cues: self.cues.clone(),
                     cue_lists: self.cue_lists.clone(),
+                    cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
                     timeline_events: self.timeline_events.clone(),
                     active_cue_id: self.active_cue_id,
                     active_fade: self.active_fade.clone(),
@@ -5930,6 +6068,8 @@ impl EngineRuntime {
                             .iter()
                             .any(|cue| cue.id == active_cue_id && cue.cue_list_id == cue_list_id)
                     });
+                    let moved_effect_activation =
+                        self.cue_list_effect_activation_cues.remove(&cue_list_id);
                     self.cue_lists.retain(|cue_list| cue_list.id != cue_list_id);
                     for cue in &mut self.cues {
                         if cue.cue_list_id == cue_list_id {
@@ -5954,6 +6094,10 @@ impl EngineRuntime {
                         {
                             main.active_cue_id = Some(active_cue_id);
                         }
+                        if moved_effect_activation == Some(active_cue_id) {
+                            self.cue_list_effect_activation_cues
+                                .insert(DEFAULT_CUE_LIST_ID, active_cue_id);
+                        }
                     }
                     self.last_error = None;
                 }
@@ -5969,6 +6113,12 @@ impl EngineRuntime {
                 {
                     self.last_error = Some(format!("Cue List {cue_list_id} was not found"));
                 } else if let Some(cue) = self.cues.iter_mut().find(|cue| cue.id == cue_id) {
+                    let previous_cue_list_id = cue.cue_list_id;
+                    let move_effect_activation = self
+                        .cue_list_effect_activation_cues
+                        .get(&previous_cue_list_id)
+                        .copied()
+                        == Some(cue_id);
                     for cue_list in &mut self.cue_lists {
                         if cue_list.active_cue_id == Some(cue_id) {
                             cue_list.active_cue_id = None;
@@ -5983,6 +6133,12 @@ impl EngineRuntime {
                         {
                             cue_list.active_cue_id = Some(cue_id);
                         }
+                    }
+                    if move_effect_activation {
+                        self.cue_list_effect_activation_cues
+                            .remove(&previous_cue_list_id);
+                        self.cue_list_effect_activation_cues
+                            .insert(cue_list_id, cue_id);
                     }
                     self.rebuild_cue_value_origins();
                     self.last_error = None;
@@ -6118,6 +6274,9 @@ impl EngineRuntime {
                     self.last_error = Some(format!("Cue List {cue_list_id} has no cues"));
                 }
             }
+            EngineCommand::ReleaseCue(cue_id) => {
+                self.last_error = self.release_cue_state(cue_id).err();
+            }
             EngineCommand::SetCueFadePaused(paused) => {
                 self.set_active_fade_paused(paused, Instant::now());
             }
@@ -6133,6 +6292,7 @@ impl EngineRuntime {
                 let rollback = PendingCommandRollback::RestoreCueRemoval {
                     cues: self.cues.clone(),
                     cue_lists: self.cue_lists.clone(),
+                    cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
                     timeline_events: self.timeline_events.clone(),
                     active_cue_id: self.active_cue_id,
                     active_fade: self.active_fade.clone(),
@@ -6876,6 +7036,7 @@ impl EngineRuntime {
                 }
             }
             EngineCommand::SeekTimeline(position_ms) => {
+                self.deactivate_all_timeline_effect_activations();
                 self.timeline_jump_landed_event_id = None;
                 self.timeline_external_sync_source = None;
                 self.timeline_position_ms = position_ms.min(self.timeline_duration_ms());
@@ -6885,6 +7046,7 @@ impl EngineRuntime {
                 self.apply_timeline_video_automations();
             }
             EngineCommand::SeekTimelineBeat { direction } => {
+                self.deactivate_all_timeline_effect_activations();
                 self.seek_timeline_adjacent_beat(direction);
             }
             EngineCommand::SyncTimelineTimecode {
@@ -6895,6 +7057,9 @@ impl EngineRuntime {
                 self.timeline_jump_landed_event_id = None;
                 self.timeline_playhead_boundary_armed = false;
                 let source_changed = self.timeline_external_sync_source.as_ref() != Some(&source);
+                if source_changed || position_ms < self.timeline_position_ms {
+                    self.deactivate_all_timeline_effect_activations();
+                }
                 self.timeline_external_sync_source = Some(source.clone());
                 self.sync_timeline_position(position_ms, source_changed, now);
                 self.clock.mark_timecode_sync(source, now);
@@ -7869,6 +8034,7 @@ impl EngineRuntime {
                     .map(|pending| pending.publication_error.to_string());
             }
         }
+        self.rebuild_effect_activations(Instant::now());
         for pending in pending {
             let result = if pending.result.is_ok() && !published {
                 Err(pending.publication_error.to_string())
@@ -8005,6 +8171,7 @@ impl EngineRuntime {
             PendingCommandRollback::RestoreCueRemoval {
                 cues,
                 cue_lists,
+                cue_list_effect_activation_cues,
                 timeline_events,
                 active_cue_id,
                 active_fade,
@@ -8017,6 +8184,7 @@ impl EngineRuntime {
             } => {
                 self.cues = cues;
                 self.cue_lists = cue_lists;
+                self.cue_list_effect_activation_cues = cue_list_effect_activation_cues;
                 self.timeline_events = timeline_events;
                 self.active_cue_id = active_cue_id;
                 self.active_fade = active_fade;
@@ -9588,6 +9756,7 @@ impl EngineRuntime {
             video_output_targets,
             node_graph_targets,
             effect_targets,
+            effect_activation_range: RuntimeEffectActivationRange::default(),
         });
         if reconform_referenced_events {
             let bpm = self.clock.bpm;
@@ -9887,15 +10056,461 @@ impl EngineRuntime {
                 duplicate[0].effect_id
             ));
         }
-        if let Some(missing) = targets.iter().find(|target| {
-            !self
+        for target in &targets {
+            if let Some(params) = &target.params {
+                self.runtime_effect_from_params_snapshot(target.effect_id, params, Instant::now())?;
+            } else if !self
                 .effects
                 .iter()
                 .any(|effect| effect.id == target.effect_id)
-        }) {
-            return Err(format!("Effect {} was not found", missing.effect_id));
+            {
+                return Err(format!("Effect {} was not found", target.effect_id));
+            }
         }
         Ok(targets)
+    }
+
+    fn runtime_effect_from_params_snapshot(
+        &self,
+        effect_id: EffectId,
+        params: &EffectParamsSnapshot,
+        created_at: Instant,
+    ) -> Result<RuntimeEffect, String> {
+        let kind = match params {
+            EffectParamsSnapshot::Lfo(request) => {
+                RuntimeEffectKind::Lfo(self.resolve_lfo_effect_request(request.clone())?)
+            }
+            EffectParamsSnapshot::PositionWave(request) => RuntimeEffectKind::PositionWave(
+                self.resolve_position_wave_effect_request(request.clone())?,
+            ),
+            EffectParamsSnapshot::Color(request) => {
+                RuntimeEffectKind::Color(self.resolve_color_effect_request(request.clone())?)
+            }
+            EffectParamsSnapshot::Chaser(request) => {
+                RuntimeEffectKind::Chaser(self.resolve_chaser_effect_request(request.clone())?)
+            }
+            EffectParamsSnapshot::Move(request) => {
+                RuntimeEffectKind::Move(self.resolve_move_effect_request(request.clone())?)
+            }
+            EffectParamsSnapshot::Value(request) => {
+                RuntimeEffectKind::Value(self.resolve_value_effect_request(request.clone())?)
+            }
+        };
+        Ok(RuntimeEffect {
+            id: effect_id,
+            kind,
+            enabled: true,
+            created_at,
+        })
+    }
+
+    fn rebuild_effect_activations(&mut self, now: Instant) {
+        self.cue_list_effect_activation_cues.reserve(
+            self.cue_lists
+                .len()
+                .saturating_sub(self.cue_list_effect_activation_cues.len()),
+        );
+        let mut previously_active = Vec::new();
+        for index in &self.active_effect_activation_indices {
+            let Some(activation) = self.effect_activations.get(*index) else {
+                continue;
+            };
+            let Some(key) = activation.key else {
+                continue;
+            };
+            if !previously_active
+                .iter()
+                .any(|(candidate, _, _)| *candidate == key)
+            {
+                previously_active.push((key, activation.effect.created_at, activation.rate));
+            }
+        }
+        let cue_owned_counts = self
+            .cues
+            .iter()
+            .map(|cue| {
+                cue.effect_targets
+                    .iter()
+                    .filter(|target| target.enabled && target.params.is_some())
+                    .count()
+            })
+            .collect::<Vec<_>>();
+        let timeline_owned_count = self
+            .timeline_events
+            .iter()
+            .filter_map(|event| {
+                self.cues
+                    .iter()
+                    .position(|cue| cue.id == event.cue_id)
+                    .map(|cue_index| cue_owned_counts[cue_index])
+            })
+            .fold(0_usize, usize::saturating_add);
+        let required_capacity = cue_owned_counts
+            .iter()
+            .copied()
+            .fold(timeline_owned_count, usize::saturating_add);
+
+        self.effect_activations.clear();
+        if self.effect_activations.capacity() < required_capacity {
+            self.effect_activations.reserve(required_capacity);
+        }
+        self.active_effect_activation_indices.clear();
+        if self.active_effect_activation_indices.capacity() < required_capacity {
+            self.active_effect_activation_indices
+                .reserve(required_capacity);
+        }
+        self.timeline_effect_activation_ranges.clear();
+        if self.timeline_effect_activation_ranges.capacity() < self.timeline_events.len() {
+            self.timeline_effect_activation_ranges
+                .reserve(self.timeline_events.len());
+        }
+
+        let mut first_error = None;
+        for cue_index in 0..self.cues.len() {
+            let start = self.effect_activations.len();
+            for target_index in 0..self.cues[cue_index].effect_targets.len() {
+                let (effect_id, params) = {
+                    let target = &self.cues[cue_index].effect_targets[target_index];
+                    if !target.enabled {
+                        continue;
+                    }
+                    let Some(params) = target.params.clone() else {
+                        continue;
+                    };
+                    (target.effect_id, params)
+                };
+                match self.runtime_effect_from_params_snapshot(effect_id, &params, now) {
+                    Ok(effect) => self.effect_activations.push(RuntimeEffectActivation {
+                        effect,
+                        key: None,
+                        rate: 1.0,
+                    }),
+                    Err(error) => {
+                        first_error.get_or_insert(error);
+                    }
+                };
+            }
+            self.cues[cue_index].effect_activation_range = RuntimeEffectActivationRange {
+                start,
+                len: self.effect_activations.len() - start,
+            };
+        }
+
+        for event_index in 0..self.timeline_events.len() {
+            let start = self.effect_activations.len();
+            let cue_index = self
+                .cues
+                .iter()
+                .position(|cue| cue.id == self.timeline_events[event_index].cue_id);
+            if let Some(cue_index) = cue_index {
+                for target_index in 0..self.cues[cue_index].effect_targets.len() {
+                    let (effect_id, params) = {
+                        let target = &self.cues[cue_index].effect_targets[target_index];
+                        if !target.enabled {
+                            continue;
+                        }
+                        let Some(params) = target.params.clone() else {
+                            continue;
+                        };
+                        (target.effect_id, params)
+                    };
+                    match self.runtime_effect_from_params_snapshot(effect_id, &params, now) {
+                        Ok(effect) => self.effect_activations.push(RuntimeEffectActivation {
+                            effect,
+                            key: None,
+                            rate: 1.0,
+                        }),
+                        Err(error) => {
+                            first_error.get_or_insert(error);
+                        }
+                    };
+                }
+            }
+            self.timeline_effect_activation_ranges
+                .push(RuntimeEffectActivationRange {
+                    start,
+                    len: self.effect_activations.len() - start,
+                });
+        }
+
+        let mut cue_list_activations = self
+            .cue_list_effect_activation_cues
+            .iter()
+            .map(|(cue_list_id, cue_id)| (*cue_list_id, *cue_id))
+            .collect::<Vec<_>>();
+        cue_list_activations.sort_unstable_by_key(|(cue_list_id, _)| *cue_list_id);
+        for (cue_list_id, cue_id) in cue_list_activations {
+            let Some(cue_index) = self.cues.iter().position(|cue| cue.id == cue_id) else {
+                continue;
+            };
+            if self.cues[cue_index].cue_list_id != cue_list_id {
+                continue;
+            }
+            let range = self.cues[cue_index].effect_activation_range;
+            let key = RuntimeEffectActivationKey::CueList {
+                cue_list_id,
+                cue_id,
+            };
+            let created_at = previously_active
+                .iter()
+                .find(|(candidate, _, _)| *candidate == key)
+                .map(|(_, created_at, _)| *created_at)
+                .unwrap_or(now);
+            self.activate_effect_range(range, key, created_at, 1.0);
+        }
+
+        for (key, saved_created_at, _) in previously_active {
+            let RuntimeEffectActivationKey::Timeline {
+                event_id,
+                cue_id,
+                iteration: previous_iteration,
+            } = key
+            else {
+                continue;
+            };
+            let Some(event_index) = self
+                .timeline_events
+                .iter()
+                .position(|event| event.id == event_id && event.cue_id == cue_id)
+            else {
+                continue;
+            };
+            let event = &self.timeline_events[event_index];
+            if event.duration_ms == 0
+                || event.layer_muted_effective
+                || self.timeline_position_ms < event.time_ms
+                || self.timeline_position_ms >= timeline_event_end_ms(event)
+            {
+                continue;
+            }
+            let period_ms = timeline_event_iteration_period_ms(event).max(1);
+            let iteration = ((self.timeline_position_ms - event.time_ms) / period_ms)
+                .min(u64::from(event.loop_count.saturating_sub(1)));
+            let iteration_start_ms = event.time_ms.saturating_add(iteration * period_ms);
+            let elapsed_ms = self.timeline_position_ms.saturating_sub(iteration_start_ms);
+            let created_at = if iteration == previous_iteration {
+                saved_created_at
+            } else {
+                now.checked_sub(Duration::from_millis(elapsed_ms))
+                    .unwrap_or(now)
+            };
+            let key = RuntimeEffectActivationKey::Timeline {
+                event_id,
+                cue_id,
+                iteration,
+            };
+            let range = self
+                .timeline_effect_activation_ranges
+                .get(event_index)
+                .copied()
+                .unwrap_or_default();
+            self.activate_effect_range(
+                range,
+                key,
+                created_at,
+                valid_effect_rate(event.rate.unwrap_or(1.0)),
+            );
+        }
+
+        let pending_event_ranges = self
+            .timeline_events
+            .iter()
+            .enumerate()
+            .map(|(event_index, event)| {
+                (
+                    event.id,
+                    event.cue_id,
+                    self.timeline_effect_activation_ranges
+                        .get(event_index)
+                        .copied()
+                        .unwrap_or_default(),
+                    valid_effect_rate(event.rate.unwrap_or(1.0)),
+                )
+            })
+            .collect::<Vec<_>>();
+        let cue_dispatch = self.build_cue_dispatch_index();
+        self.pending_cues.retain_mut(|pending| {
+            if pending.dispatch.is_some() {
+                pending.dispatch = cue_dispatch.get(&pending.cue_id).copied();
+                if pending.dispatch.is_none() {
+                    return false;
+                }
+            }
+            let Some(activation) = pending.timeline_effect_activation.as_mut() else {
+                return true;
+            };
+            let Some((_, _, range, rate)) =
+                pending_event_ranges
+                    .iter()
+                    .find(|(event_id, cue_id, _, _)| {
+                        *event_id == activation.event_id && *cue_id == activation.cue_id
+                    })
+            else {
+                return false;
+            };
+            activation.range = *range;
+            activation.rate = *rate;
+            true
+        });
+
+        if let Some(error) = first_error {
+            self.last_error = Some(format!(
+                "Cue-owned effect activation could not be built: {error}"
+            ));
+        }
+    }
+
+    fn activate_effect_range(
+        &mut self,
+        range: RuntimeEffectActivationRange,
+        key: RuntimeEffectActivationKey,
+        created_at: Instant,
+        rate: f32,
+    ) {
+        let end = range.end().min(self.effect_activations.len());
+        for index in range.start.min(end)..end {
+            let activation = &mut self.effect_activations[index];
+            let was_inactive = activation.key.is_none();
+            activation.key = Some(key);
+            activation.effect.created_at = created_at;
+            activation.rate = valid_effect_rate(rate);
+            clear_runtime_effect_caches(&activation.effect.kind);
+            if was_inactive {
+                self.active_effect_activation_indices.push(index);
+            }
+        }
+    }
+
+    fn deactivate_effect_range(&mut self, range: RuntimeEffectActivationRange) {
+        if range.is_empty() {
+            return;
+        }
+        let end = range.end().min(self.effect_activations.len());
+        for activation in &mut self.effect_activations[range.start.min(end)..end] {
+            activation.key = None;
+        }
+        self.active_effect_activation_indices
+            .retain(|index| *index < range.start || *index >= end);
+    }
+
+    fn deactivate_cue_list_effect_activations(&mut self, cue_list_id: CueListId) {
+        for activation in &mut self.effect_activations {
+            if matches!(
+                activation.key,
+                Some(RuntimeEffectActivationKey::CueList {
+                    cue_list_id: candidate,
+                    ..
+                }) if candidate == cue_list_id
+            ) {
+                activation.key = None;
+            }
+        }
+        self.active_effect_activation_indices
+            .retain(|index| self.effect_activations[*index].key.is_some());
+    }
+
+    fn deactivate_cue_effect_activations(&mut self, cue_id: CueId) {
+        for activation in &mut self.effect_activations {
+            if matches!(
+                activation.key,
+                Some(RuntimeEffectActivationKey::Timeline {
+                    cue_id: candidate,
+                    ..
+                } | RuntimeEffectActivationKey::CueList {
+                    cue_id: candidate,
+                    ..
+                }) if candidate == cue_id
+            ) {
+                activation.key = None;
+            }
+        }
+        self.active_effect_activation_indices
+            .retain(|index| self.effect_activations[*index].key.is_some());
+    }
+
+    fn deactivate_all_timeline_effect_activations(&mut self) {
+        for activation in &mut self.effect_activations {
+            if matches!(
+                activation.key,
+                Some(RuntimeEffectActivationKey::Timeline { .. })
+            ) {
+                activation.key = None;
+            }
+        }
+        self.active_effect_activation_indices
+            .retain(|index| self.effect_activations[*index].key.is_some());
+        self.pending_cues
+            .retain(|pending| pending.timeline_effect_activation.is_none());
+    }
+
+    fn reconcile_timeline_effect_activations_at_position(
+        &mut self,
+        position_ms: u64,
+        now: Instant,
+    ) {
+        let timeline_events = &self.timeline_events;
+        for activation in &mut self.effect_activations {
+            let Some(RuntimeEffectActivationKey::Timeline {
+                event_id,
+                cue_id,
+                iteration,
+            }) = activation.key
+            else {
+                continue;
+            };
+            let Some(event) = timeline_events.iter().find(|event| {
+                event.id == event_id
+                    && event.cue_id == cue_id
+                    && !event.layer_muted_effective
+                    && event.duration_ms > 0
+                    && position_ms >= event.time_ms
+                    && position_ms < timeline_event_end_ms(event)
+            }) else {
+                activation.key = None;
+                continue;
+            };
+            let period_ms = timeline_event_iteration_period_ms(event).max(1);
+            let destination_iteration = ((position_ms - event.time_ms) / period_ms)
+                .min(u64::from(event.loop_count.saturating_sub(1)));
+            if destination_iteration != iteration {
+                let iteration_start_ms = event
+                    .time_ms
+                    .saturating_add(destination_iteration * period_ms);
+                let elapsed_ms = position_ms.saturating_sub(iteration_start_ms);
+                activation.key = Some(RuntimeEffectActivationKey::Timeline {
+                    event_id,
+                    cue_id,
+                    iteration: destination_iteration,
+                });
+                activation.effect.created_at = now
+                    .checked_sub(Duration::from_millis(elapsed_ms))
+                    .unwrap_or(now);
+            }
+        }
+        self.active_effect_activation_indices
+            .retain(|index| self.effect_activations[*index].key.is_some());
+
+        let timeline_events = &self.timeline_events;
+        self.pending_cues.retain(|pending| {
+            pending
+                .timeline_effect_activation
+                .as_ref()
+                .is_none_or(|activation| {
+                    timeline_events.iter().any(|event| {
+                        let destination_iteration = position_ms.saturating_sub(event.time_ms)
+                            / timeline_event_iteration_period_ms(event).max(1);
+                        event.id == activation.event_id
+                            && event.cue_id == activation.cue_id
+                            && !event.layer_muted_effective
+                            && event.duration_ms > 0
+                            && position_ms >= event.time_ms
+                            && position_ms < timeline_event_end_ms(event)
+                            && activation.iteration
+                                == destination_iteration
+                                    .min(u64::from(event.loop_count.saturating_sub(1)))
+                    })
+                })
+        });
     }
 
     fn resolve_lfo_effect_request(
@@ -10358,6 +10973,9 @@ impl EngineRuntime {
             ));
         }
 
+        self.deactivate_cue_effect_activations(cue_id);
+        self.cue_list_effect_activation_cues
+            .retain(|_, active_cue_id| *active_cue_id != cue_id);
         self.cues.retain(|cue| cue.id != cue_id);
         self.timeline_events.retain(|event| event.cue_id != cue_id);
         for event in &mut self.timeline_events {
@@ -10386,6 +11004,33 @@ impl EngineRuntime {
             }
         }
         self.pending_cues.retain(|pending| pending.cue_id != cue_id);
+        Ok(())
+    }
+
+    fn release_cue_state(&mut self, cue_id: CueId) -> Result<(), String> {
+        let cue_list_id = self
+            .cues
+            .iter()
+            .find(|cue| cue.id == cue_id)
+            .map(|cue| cue.cue_list_id)
+            .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
+        self.deactivate_cue_effect_activations(cue_id);
+        self.cue_list_effect_activation_cues
+            .retain(|_, active_cue_id| *active_cue_id != cue_id);
+        self.pending_cues.retain(|pending| pending.cue_id != cue_id);
+        if self.active_cue_id == Some(cue_id) {
+            self.active_cue_id = None;
+            self.active_fade = None;
+        }
+        if let Some(cue_list) = self
+            .cue_lists
+            .iter_mut()
+            .find(|cue_list| cue_list.id == cue_list_id)
+        {
+            if cue_list.active_cue_id == Some(cue_id) {
+                cue_list.active_cue_id = None;
+            }
+        }
         Ok(())
     }
 
@@ -10644,10 +11289,9 @@ impl EngineRuntime {
 
     fn timeline_has_conformed_events_for_effect(&self, effect_id: EffectId) -> bool {
         self.cues.iter().any(|cue| {
-            cue.effect_targets
-                .iter()
-                .any(|target| target.enabled && target.effect_id == effect_id)
-                && self.timeline_has_conformed_events_for_cue(cue.id)
+            cue.effect_targets.iter().any(|target| {
+                target.enabled && target.params.is_none() && target.effect_id == effect_id
+            }) && self.timeline_has_conformed_events_for_cue(cue.id)
         })
     }
 
@@ -10657,14 +11301,15 @@ impl EngineRuntime {
         };
         let mut resolved = None;
         for target in cue.effect_targets.iter().filter(|target| target.enabled) {
-            let Some(effect) = self
-                .effects
-                .iter()
-                .find(|effect| effect.id == target.effect_id)
-            else {
-                continue;
+            let period_ms = if let Some(params) = &target.params {
+                effect_params_snapshot_free_run_period_ms(params)
+            } else {
+                self.effects
+                    .iter()
+                    .find(|effect| effect.id == target.effect_id)
+                    .and_then(|effect| runtime_effect_free_run_period_ms(&effect.kind))
             };
-            let Some(period_ms) = runtime_effect_free_run_period_ms(&effect.kind) else {
+            let Some(period_ms) = period_ms else {
                 continue;
             };
             if resolved.is_some_and(|current: f64| {
@@ -11196,10 +11841,21 @@ impl EngineRuntime {
         });
         self.timeline_due_cues.clear();
         let required_due_capacity = self.timeline_events.iter().fold(0_usize, |total, event| {
-            total.saturating_add(usize::from(event.loop_count.max(1)))
+            total.saturating_add(
+                usize::from(event.loop_count.max(1))
+                    .saturating_add(usize::from(event.duration_ms > 0)),
+            )
         });
         if self.timeline_due_cues.capacity() < required_due_capacity {
             self.timeline_due_cues.reserve(required_due_capacity);
+        }
+        if self
+            .pending_cues
+            .capacity()
+            .saturating_sub(self.pending_cues.len())
+            < required_due_capacity
+        {
+            self.pending_cues.reserve(required_due_capacity);
         }
     }
 
@@ -11258,16 +11914,24 @@ impl EngineRuntime {
     ) -> u16 {
         let mut value = base_value;
         let clock = self.clock.snapshot(now);
-        for effect in &self.effects {
-            if !effect.enabled {
-                continue;
-            }
+        let global_effects = self
+            .effects
+            .iter()
+            .filter(|effect| effect.enabled)
+            .map(|effect| (effect, 1.0));
+        let activation_effects = self
+            .active_effect_activation_indices
+            .iter()
+            .filter_map(|index| self.effect_activations.get(*index))
+            .filter(|activation| activation.key.is_some())
+            .map(|activation| (&activation.effect, activation.rate));
+        for (effect, rate) in global_effects.chain(activation_effects) {
             match &effect.kind {
                 RuntimeEffectKind::Color(runtime) => {
                     let Some(binding) = fixture.color_binding.as_ref() else {
                         continue;
                     };
-                    if let Some(next) = evaluate_runtime_color_attribute(
+                    if let Some(next) = evaluate_runtime_color_attribute_at_rate(
                         runtime,
                         binding,
                         fixture.id,
@@ -11277,6 +11941,7 @@ impl EngineRuntime {
                         effect.created_at,
                         now,
                         &clock,
+                        rate,
                     ) {
                         value = next;
                     }
@@ -11285,7 +11950,13 @@ impl EngineRuntime {
                     if effect_targets_fixture_attribute(effect, fixture, attribute) {
                         value = blend_effect_value(
                             value,
-                            evaluate_lfo_effect(request, effect.created_at, now, &clock),
+                            evaluate_lfo_effect_at_rate(
+                                request,
+                                effect.created_at,
+                                now,
+                                &clock,
+                                rate,
+                            ),
                             &request.blend_mode,
                         );
                     }
@@ -11294,12 +11965,13 @@ impl EngineRuntime {
                     if effect_targets_fixture_attribute(effect, fixture, attribute) {
                         value = blend_effect_value(
                             value,
-                            evaluate_position_wave_effect(
+                            evaluate_position_wave_effect_at_rate(
                                 request,
                                 fixture.request.position,
                                 effect.created_at,
                                 now,
                                 &clock,
+                                rate,
                             ),
                             &request.blend_mode,
                         );
@@ -11320,20 +11992,21 @@ impl EngineRuntime {
                         }
                         value = blend_effect_value(
                             value,
-                            evaluate_chaser_effect(
+                            evaluate_chaser_effect_at_rate(
                                 runtime,
                                 *feature_index,
                                 fixture.id,
                                 effect.created_at,
                                 now,
                                 &clock,
+                                rate,
                             ),
                             &runtime.request.blend_mode,
                         );
                     }
                 }
                 RuntimeEffectKind::Move(runtime) => {
-                    if let Some(next) = evaluate_runtime_move_attribute(
+                    if let Some(next) = evaluate_runtime_move_attribute_at_rate(
                         runtime,
                         fixture.id,
                         attribute,
@@ -11341,12 +12014,13 @@ impl EngineRuntime {
                         effect.created_at,
                         now,
                         &clock,
+                        rate,
                     ) {
                         value = next;
                     }
                 }
                 RuntimeEffectKind::Value(runtime) => {
-                    if let Some(evaluated) = evaluate_runtime_value_attribute(
+                    if let Some(evaluated) = evaluate_runtime_value_attribute_at_rate(
                         runtime,
                         fixture.id,
                         attribute,
@@ -11354,6 +12028,7 @@ impl EngineRuntime {
                         effect.created_at,
                         now,
                         &clock,
+                        rate,
                     ) {
                         value = blend_effect_value(value, evaluated, &runtime.request.blend_mode);
                     }
@@ -11402,8 +12077,53 @@ impl EngineRuntime {
         self.request_cue_from_source(cue_id, now, PendingCueTriggerSource::Manual);
     }
 
-    fn request_timeline_cue(&mut self, cue_id: CueId, now: Instant) {
-        self.request_cue_from_source(cue_id, now, PendingCueTriggerSource::Timeline);
+    fn request_timeline_event_at_index(&mut self, event_index: usize, now: Instant) {
+        let Some(event) = self.timeline_events.get(event_index) else {
+            return;
+        };
+        let cue_id = event.cue_id;
+        let event_id = event.id;
+        let duration_ms = event.duration_ms;
+        let rate = valid_effect_rate(event.rate.unwrap_or(1.0));
+        let Some(cue_index) = self.cues.iter().position(|cue| cue.id == cue_id) else {
+            self.last_error = Some(format!("Cue {cue_id} was not found"));
+            return;
+        };
+        let dispatch = CueDispatchEntry {
+            cue_index,
+            pre_wait_ms: self.cues[cue_index].pre_wait_ms,
+            next_cue_index: self.next_cue_index(cue_index),
+        };
+        let due_at = now + Duration::from_millis(dispatch.pre_wait_ms);
+        let range = self
+            .timeline_effect_activation_ranges
+            .get(event_index)
+            .copied()
+            .unwrap_or_default();
+        let timeline_effect_activation =
+            (duration_ms > 0 && !range.is_empty()).then_some(PendingTimelineEffectActivation {
+                event_id,
+                cue_id,
+                iteration: 0,
+                range,
+                rate,
+                created_at: if dispatch.pre_wait_ms == 0 {
+                    now
+                } else {
+                    due_at
+                },
+            });
+        self.enqueue_pending_cue(PendingCueTrigger {
+            cue_id,
+            due_at,
+            source: PendingCueTriggerSource::Timeline,
+            repeat_count: 1,
+            timeline_effect_activation,
+            dispatch: Some(dispatch),
+        });
+        if dispatch.pre_wait_ms == 0 {
+            self.advance_pending_cue(now);
+        }
     }
 
     fn request_cue_from_source(
@@ -11429,6 +12149,8 @@ impl EngineRuntime {
                 due_at: now + Duration::from_millis(pre_wait_ms),
                 source,
                 repeat_count: 1,
+                timeline_effect_activation: None,
+                dispatch: None,
             });
             self.last_error = None;
         }
@@ -11459,6 +12181,7 @@ impl EngineRuntime {
             if previous.cue_id == pending.cue_id
                 && previous.due_at == pending.due_at
                 && previous.source == pending.source
+                && previous.timeline_effect_activation == pending.timeline_effect_activation
             {
                 if let Some(repeat_count) = previous.repeat_count.checked_add(pending.repeat_count)
                 {
@@ -11481,12 +12204,22 @@ impl EngineRuntime {
         if due_count == 0 {
             return;
         }
-        let cue_dispatch = self.build_cue_dispatch_index();
+        let cue_dispatch = self
+            .pending_cues
+            .iter()
+            .take(due_count)
+            .any(|pending| pending.dispatch.is_none())
+            .then(|| self.build_cue_dispatch_index());
         for _ in 0..due_count {
             let Some(pending) = self.pending_cues.pop_front() else {
                 break;
             };
-            let Some(dispatch) = cue_dispatch.get(&pending.cue_id).copied() else {
+            let dispatch = pending.dispatch.or_else(|| {
+                cue_dispatch
+                    .as_ref()
+                    .and_then(|index| index.get(&pending.cue_id).copied())
+            });
+            let Some(dispatch) = dispatch else {
                 self.last_error = Some(format!("Cue {} was not found", pending.cue_id));
                 continue;
             };
@@ -11496,6 +12229,7 @@ impl EngineRuntime {
                 now,
                 pending.source,
                 pending.repeat_count,
+                pending.timeline_effect_activation,
             );
         }
     }
@@ -11506,7 +12240,7 @@ impl EngineRuntime {
             return;
         };
         let next_cue_index = self.next_cue_index(cue_index);
-        self.start_cue_at_index(cue_index, next_cue_index, now, source, 1);
+        self.start_cue_at_index(cue_index, next_cue_index, now, source, 1, None);
     }
 
     fn start_cue_at_index(
@@ -11516,6 +12250,7 @@ impl EngineRuntime {
         now: Instant,
         source: PendingCueTriggerSource,
         repeat_count: u64,
+        timeline_effect_activation: Option<PendingTimelineEffectActivation>,
     ) {
         if repeat_count == 0 {
             return;
@@ -11526,6 +12261,9 @@ impl EngineRuntime {
         };
         let cue_id = cue.id;
 
+        self.deactivate_cue_list_effect_activations(cue.cue_list_id);
+        self.cue_list_effect_activation_cues
+            .remove(&cue.cue_list_id);
         self.active_cue_id = Some(cue_id);
         if let Some(cue_list) = self
             .cue_lists
@@ -11541,12 +12279,38 @@ impl EngineRuntime {
                 due_at: now + Duration::from_millis(follow_ms),
                 source,
                 repeat_count,
+                timeline_effect_activation: None,
+                dispatch: None,
             })
         });
         if let Some(follow) = follow {
             self.enqueue_pending_cue(follow);
         }
         self.apply_cue_effect_targets(&cue.effect_targets);
+        if let Some(activation) = timeline_effect_activation {
+            self.activate_effect_range(
+                activation.range,
+                RuntimeEffectActivationKey::Timeline {
+                    event_id: activation.event_id,
+                    cue_id: activation.cue_id,
+                    iteration: activation.iteration,
+                },
+                activation.created_at,
+                activation.rate,
+            );
+        } else {
+            self.cue_list_effect_activation_cues
+                .insert(cue.cue_list_id, cue_id);
+            self.activate_effect_range(
+                cue.effect_activation_range,
+                RuntimeEffectActivationKey::CueList {
+                    cue_list_id: cue.cue_list_id,
+                    cue_id,
+                },
+                now,
+                1.0,
+            );
+        }
         let mut target_values = if cue.tracking {
             HashMap::new()
         } else {
@@ -11897,7 +12661,7 @@ impl EngineRuntime {
     }
 
     fn apply_cue_effect_targets(&mut self, targets: &[CueEffectTarget]) {
-        for target in targets {
+        for target in targets.iter().filter(|target| target.params.is_none()) {
             if let Some(effect) = self
                 .effects
                 .iter_mut()
@@ -12240,7 +13004,7 @@ impl EngineRuntime {
             .try_into()
             .unwrap_or(u64::MAX);
         let current_position = previous_position.saturating_add(delta_ms).min(duration);
-        if let Some((jump_at_ms, target)) =
+        if let Some((jump_at_ms, _source_event_index, target_event_index, target)) =
             self.first_timeline_jump_between(previous_position, current_position, include_previous)
         {
             self.timeline_position_ms = jump_at_ms;
@@ -12251,9 +13015,30 @@ impl EngineRuntime {
                 false,
                 now,
             );
+            for event_index in 0..self.timeline_events.len() {
+                let event = &self.timeline_events[event_index];
+                if event.duration_ms == 0 || timeline_event_end_ms(event) != jump_at_ms {
+                    continue;
+                }
+                let event_id = event.id;
+                let range = self
+                    .timeline_effect_activation_ranges
+                    .get(event_index)
+                    .copied()
+                    .unwrap_or_default();
+                self.deactivate_effect_range(range);
+                self.pending_cues.retain(|pending| {
+                    pending
+                        .timeline_effect_activation
+                        .is_none_or(|activation| activation.event_id != event_id)
+                });
+            }
             self.timeline_position_ms = target.time_ms;
+            // A jump may skip another block's end occurrence. Keep only instances whose Scene
+            // Block genuinely spans the destination before starting the jump target.
+            self.reconcile_timeline_effect_activations_at_position(target.time_ms, now);
             if !target.layer_muted_effective {
-                self.request_timeline_cue(target.cue_id, now);
+                self.request_timeline_event_at_index(target_event_index, now);
             }
             self.timeline_evaluated_boundary_position_ms = Some(target.time_ms);
             self.timeline_jump_landed_event_id = Some(target.id);
@@ -12336,38 +13121,66 @@ impl EngineRuntime {
         // Resolve Cue indices once for the whole due batch. Large shows can deliver thousands of
         // placements in one tick, so a per-occurrence linear Cue search would become O(N*C).
         let cue_dispatch = self.build_cue_dispatch_index();
-        let mut index = 0;
-        while index < self.timeline_due_cues.len() {
-            let cue_id = self.timeline_due_cues[index].2;
-            let mut run_end = index + 1;
-            while run_end < self.timeline_due_cues.len()
-                && self.timeline_due_cues[run_end].2 == cue_id
-            {
-                run_end += 1;
+        let mut has_immediate_trigger = false;
+        for index in 0..self.timeline_due_cues.len() {
+            let occurrence = self.timeline_due_cues[index];
+            let range = self
+                .timeline_effect_activation_ranges
+                .get(occurrence.event_index)
+                .copied()
+                .unwrap_or_default();
+            if matches!(occurrence.kind, TimelineCueOccurrenceKind::End) {
+                self.deactivate_effect_range(range);
+                self.pending_cues.retain(|pending| {
+                    pending
+                        .timeline_effect_activation
+                        .is_none_or(|activation| activation.event_id != occurrence.event_id)
+                });
+                continue;
             }
-            let repeat_count = (run_end - index) as u64;
+
+            let cue_id = occurrence.cue_id;
             let Some(dispatch) = cue_dispatch.get(&cue_id).copied() else {
                 self.last_error = Some(format!("Cue {cue_id} was not found"));
-                index = run_end;
                 continue;
             };
-            if dispatch.pre_wait_ms == 0 {
-                self.start_cue_at_index(
-                    dispatch.cue_index,
-                    dispatch.next_cue_index,
-                    now,
-                    PendingCueTriggerSource::Timeline,
-                    repeat_count,
-                );
-            } else {
-                self.enqueue_pending_cue(PendingCueTrigger {
-                    cue_id,
-                    due_at: now + Duration::from_millis(dispatch.pre_wait_ms),
-                    source: PendingCueTriggerSource::Timeline,
-                    repeat_count,
+            let due_at = now + Duration::from_millis(dispatch.pre_wait_ms);
+            has_immediate_trigger |= dispatch.pre_wait_ms == 0;
+            let timeline_effect_activation = self
+                .timeline_events
+                .get(occurrence.event_index)
+                .filter(|event| event.duration_ms > 0 && !range.is_empty())
+                .map(|event| {
+                    let elapsed_ms = current_position.saturating_sub(occurrence.time_ms);
+                    let created_at = if dispatch.pre_wait_ms == 0 {
+                        now.checked_sub(Duration::from_millis(elapsed_ms))
+                            .unwrap_or(now)
+                    } else {
+                        due_at
+                    };
+                    PendingTimelineEffectActivation {
+                        event_id: occurrence.event_id,
+                        cue_id,
+                        iteration: occurrence.iteration,
+                        range,
+                        rate: valid_effect_rate(event.rate.unwrap_or(1.0)),
+                        created_at,
+                    }
                 });
-            }
-            index = run_end;
+            self.enqueue_pending_cue(PendingCueTrigger {
+                cue_id,
+                due_at,
+                source: PendingCueTriggerSource::Timeline,
+                repeat_count: 1,
+                timeline_effect_activation,
+                dispatch: Some(dispatch),
+            });
+        }
+        // Preserve the legacy zero-pre-wait recall boundary, including command-path timecode
+        // sync: run immediate placements through the allocation-free pending hook before the
+        // caller applies timeline automation. Delayed placements remain queued for later ticks.
+        if has_immediate_trigger {
+            self.advance_pending_cue(now);
         }
         if include_current {
             self.timeline_evaluated_boundary_position_ms = Some(current_position);
@@ -12379,11 +13192,12 @@ impl EngineRuntime {
         previous_position: u64,
         current_position: u64,
         include_previous: bool,
-    ) -> Option<(u64, RuntimeTimelineEvent)> {
-        let (end_ms, _, _, target_id) = self
+    ) -> Option<(u64, usize, usize, RuntimeTimelineEvent)> {
+        let (end_ms, _, _, source_event_index, target_id) = self
             .timeline_events
             .iter()
-            .filter_map(|event| {
+            .enumerate()
+            .filter_map(|(event_index, event)| {
                 if event.layer_muted_effective {
                     return None;
                 }
@@ -12399,21 +13213,22 @@ impl EngineRuntime {
                     end_ms,
                     event.layer_order,
                     std::cmp::Reverse(event.id),
+                    event_index,
                     target_id,
                 ))
             })
             // Cue dispatch at one timestamp runs bottom-to-top, then low-to-high event id.
             // A jump is singular, so select that sequence's final writer: the topmost layer,
             // then the highest event id within that layer.
-            .min_by_key(|(end_ms, layer_order, reverse_event_id, _)| {
+            .min_by_key(|(end_ms, layer_order, reverse_event_id, _, _)| {
                 (*end_ms, *layer_order, *reverse_event_id)
             })?;
-        let target = self
+        let target_event_index = self
             .timeline_events
             .iter()
-            .find(|candidate| candidate.id == target_id)?
-            .clone();
-        Some((end_ms, target))
+            .position(|candidate| candidate.id == target_id)?;
+        let target = self.timeline_events[target_event_index].clone();
+        Some((end_ms, source_event_index, target_event_index, target))
     }
 
     fn apply_timeline_automations(&mut self) {
@@ -12895,21 +13710,30 @@ impl EngineRuntime {
         include_param: impl Fn(&VideoParam) -> bool,
     ) {
         let clock = self.clock.snapshot(now);
-        for effect in &self.effects {
-            if !effect.enabled {
-                continue;
-            }
+        let global_effects = self
+            .effects
+            .iter()
+            .filter(|effect| effect.enabled)
+            .map(|effect| (effect, 1.0));
+        let activation_effects = self
+            .active_effect_activation_indices
+            .iter()
+            .filter_map(|index| self.effect_activations.get(*index))
+            .filter(|activation| activation.key.is_some())
+            .map(|activation| (&activation.effect, activation.rate));
+        for (effect, rate) in global_effects.chain(activation_effects) {
             match &effect.kind {
                 RuntimeEffectKind::Lfo(request) => {
                     for target in request.video_targets.iter().filter(|target| {
                         target.layer_ids.contains(&layer.id) && include_param(&target.param)
                     }) {
-                        let value = evaluate_lfo_video_effect(
+                        let value = evaluate_lfo_video_effect_at_rate(
                             request,
                             target,
                             effect.created_at,
                             now,
                             &clock,
+                            rate,
                         );
                         apply_video_effect_param(state, &target.param, value, &request.blend_mode);
                     }
@@ -12919,13 +13743,14 @@ impl EngineRuntime {
                         target.layer_ids.contains(&layer.id) && include_param(&target.param)
                     }) {
                         let layer_position = target.position.unwrap_or_default();
-                        let value = evaluate_position_wave_video_effect(
+                        let value = evaluate_position_wave_video_effect_at_rate(
                             request,
                             target,
                             layer_position,
                             effect.created_at,
                             now,
                             &clock,
+                            rate,
                         );
                         apply_video_effect_param(state, &target.param, value, &request.blend_mode);
                     }
@@ -13371,6 +14196,48 @@ fn auto_vj_show_revision(config: &AutoVjConfig, layers: &[RuntimeVideoLayer]) ->
     hash
 }
 
+fn engine_command_rebuilds_effect_activations(command: &EngineCommand) -> bool {
+    matches!(
+        command,
+        EngineCommand::PatchFixture { .. }
+            | EngineCommand::RemoveFixture(_)
+            | EngineCommand::SetFixtureGroups { .. }
+            | EngineCommand::LoadProjectSnapshot(_)
+            | EngineCommand::SetBpm(_)
+            | EngineCommand::TapBpm
+            | EngineCommand::CreateCue { .. }
+            | EngineCommand::CreateCuePublished { .. }
+            | EngineCommand::UpdateCue { .. }
+            | EngineCommand::UpdateCuePublished { .. }
+            | EngineCommand::SetCueEffectTargetsPublished { .. }
+            | EngineCommand::DuplicateCue { .. }
+            | EngineCommand::RemoveCue(_)
+            | EngineCommand::RemoveCuePublished { .. }
+            | EngineCommand::RemoveCueList(_)
+            | EngineCommand::SetCueList { .. }
+            | EngineCommand::UpsertCueList { .. }
+            | EngineCommand::AddTimelineCueEvent { .. }
+            | EngineCommand::SetTimelineCueEvent { .. }
+            | EngineCommand::RemoveTimelineEvent(_)
+            | EngineCommand::AddTimelineCueEventPublished { .. }
+            | EngineCommand::SetTimelineCueEventPublished { .. }
+            | EngineCommand::RemoveTimelineEventPublished { .. }
+            | EngineCommand::AddTimelineSceneBlockPublished { .. }
+            | EngineCommand::SetTimelineSceneBlockPublished { .. }
+            | EngineCommand::RemoveTimelineSceneBlockPublished { .. }
+            | EngineCommand::SnapTimelineItemsPublished { .. }
+            | EngineCommand::ReconformTimelineToBpm { .. }
+            | EngineCommand::AddTimelineLayer { .. }
+            | EngineCommand::UpdateTimelineLayer { .. }
+            | EngineCommand::RemoveTimelineLayer { .. }
+            | EngineCommand::ReorderTimelineLayers { .. }
+            | EngineCommand::AddVideoLayer { .. }
+            | EngineCommand::DuplicateVideoLayer { .. }
+            | EngineCommand::DuplicateVideoLayerPublished { .. }
+            | EngineCommand::RemoveVideoLayer(_)
+    )
+}
+
 fn auto_vj_manual_override_command(command: &EngineCommand) -> bool {
     matches!(
         command,
@@ -13382,6 +14249,7 @@ fn auto_vj_manual_override_command(command: &EngineCommand) -> bool {
             | EngineCommand::TriggerPreviousCue
             | EngineCommand::TriggerCueListNext(_)
             | EngineCommand::TriggerCueListPrevious(_)
+            | EngineCommand::ReleaseCue(_)
             | EngineCommand::SetVideoLayerState { .. }
             | EngineCommand::ExclusiveVideoTake { .. }
             | EngineCommand::SetVideoLayerParam { .. }
@@ -13588,6 +14456,7 @@ fn runtime_cue_from_summary(cue: &CueSummary) -> RuntimeCue {
         video_output_targets: cue.video_output_targets.clone(),
         node_graph_targets: cue.node_graph_targets.clone(),
         effect_targets: cue.effect_targets.clone(),
+        effect_activation_range: RuntimeEffectActivationRange::default(),
     }
 }
 
@@ -14244,6 +15113,39 @@ fn runtime_effect_free_run_period_ms(kind: &RuntimeEffectKind) -> Option<f64> {
     (period_ms.is_finite() && period_ms > 0.0).then_some(period_ms)
 }
 
+fn effect_params_snapshot_free_run_period_ms(params: &EffectParamsSnapshot) -> Option<f64> {
+    let period_ms = match params {
+        EffectParamsSnapshot::Lfo(request) => request.period_ms as f64,
+        EffectParamsSnapshot::PositionWave(request) => {
+            let speed = f64::from(request.speed).abs();
+            let wavelength = f64::from(request.wavelength).abs();
+            if !speed.is_finite() || !wavelength.is_finite() || speed <= f64::EPSILON {
+                return None;
+            }
+            wavelength / speed * 1_000.0
+        }
+        EffectParamsSnapshot::Color(request) => request.period_ms as f64,
+        EffectParamsSnapshot::Chaser(request) => {
+            let path_len =
+                chaser_step_order(request.direction, request.steps.len(), request.random_seed)
+                    .len()
+                    .max(1);
+            request.step_duration_ms as f64 * path_len as f64
+        }
+        EffectParamsSnapshot::Move(request) => request.period_ms as f64,
+        EffectParamsSnapshot::Value(request) => request.period_ms as f64,
+    };
+    (period_ms.is_finite() && period_ms > 0.0).then_some(period_ms)
+}
+
+fn valid_effect_rate(rate: f32) -> f32 {
+    if rate.is_finite() && rate > 0.0 {
+        rate
+    } else {
+        1.0
+    }
+}
+
 fn timeline_event_summary(event: &RuntimeTimelineEvent) -> TimelineCueEventSummary {
     TimelineCueEventSummary {
         id: event.id,
@@ -14361,6 +15263,11 @@ fn try_collect_aligned_timeline_block_occurrences(
     let mut relevant_event_count = 0_usize;
     let mut last_dispatch_key = None;
     for event in events {
+        if event.duration_ms > 0
+            && (lower_bound..=upper_bound).contains(&timeline_event_end_ms(event))
+        {
+            return false;
+        }
         if event.layer_muted_effective {
             continue;
         }
@@ -14400,14 +15307,22 @@ fn try_collect_aligned_timeline_block_occurrences(
 
     for iteration in first_iteration..=last_iteration {
         let occurrence_ms = time_ms + iteration * iteration_period_ms;
-        for event in events {
+        for (event_index, event) in events.iter().enumerate() {
             if !event.layer_muted_effective
                 && event.time_ms == time_ms
                 && timeline_event_iteration_period_ms(event) == iteration_period_ms
                 && timeline_block_iteration_range(event, lower_bound, upper_bound)
                     == Some((first_iteration, last_iteration))
             {
-                due.push((occurrence_ms, event.id, event.cue_id, event.layer_order));
+                due.push(TimelineCueOccurrence {
+                    time_ms: occurrence_ms,
+                    event_index,
+                    event_id: event.id,
+                    cue_id: event.cue_id,
+                    layer_order: event.layer_order,
+                    iteration,
+                    kind: TimelineCueOccurrenceKind::Trigger,
+                });
             }
         }
     }
@@ -14455,7 +15370,21 @@ fn collect_timeline_cue_occurrences_between(
         return;
     }
 
-    for event in events {
+    for (event_index, event) in events.iter().enumerate() {
+        if event.duration_ms > 0 {
+            let end_ms = timeline_event_end_ms(event);
+            if (lower_bound..=upper_bound).contains(&end_ms) {
+                due.push(TimelineCueOccurrence {
+                    time_ms: end_ms,
+                    event_index,
+                    event_id: event.id,
+                    cue_id: event.cue_id,
+                    layer_order: event.layer_order,
+                    iteration: u64::from(event.loop_count),
+                    kind: TimelineCueOccurrenceKind::End,
+                });
+            }
+        }
         if event.layer_muted_effective {
             continue;
         }
@@ -14464,7 +15393,15 @@ fn collect_timeline_cue_occurrences_between(
             let skipped_landing =
                 skip_landed_event_id == Some(event.id) && occurrence_ms == previous_position;
             if occurrence_ms >= lower_bound && occurrence_ms <= upper_bound && !skipped_landing {
-                due.push((occurrence_ms, event.id, event.cue_id, event.layer_order));
+                due.push(TimelineCueOccurrence {
+                    time_ms: occurrence_ms,
+                    event_index,
+                    event_id: event.id,
+                    cue_id: event.cue_id,
+                    layer_order: event.layer_order,
+                    iteration: 0,
+                    kind: TimelineCueOccurrenceKind::Trigger,
+                });
             }
             continue;
         }
@@ -14486,14 +15423,23 @@ fn collect_timeline_cue_occurrences_between(
         for iteration in first_iteration..=last_iteration {
             let occurrence_ms =
                 event.time_ms + iteration * timeline_event_iteration_period_ms(event);
-            due.push((occurrence_ms, event.id, event.cue_id, event.layer_order));
+            due.push(TimelineCueOccurrence {
+                time_ms: occurrence_ms,
+                event_index,
+                event_id: event.id,
+                cue_id: event.cue_id,
+                layer_order: event.layer_order,
+                iteration,
+                kind: TimelineCueOccurrenceKind::Trigger,
+            });
         }
     }
     due.sort_unstable_by(|left, right| {
-        left.0
-            .cmp(&right.0)
-            .then_with(|| right.3.cmp(&left.3))
-            .then_with(|| left.1.cmp(&right.1))
+        left.time_ms
+            .cmp(&right.time_ms)
+            .then_with(|| left.kind.cmp(&right.kind))
+            .then_with(|| right.layer_order.cmp(&left.layer_order))
+            .then_with(|| left.event_id.cmp(&right.event_id))
     });
 }
 
@@ -16156,6 +17102,8 @@ fn runtime_move_effect_from_request(
     })
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn evaluate_runtime_move_attribute(
     runtime: &RuntimeMoveEffect,
     fixture_id: FixtureId,
@@ -16164,6 +17112,22 @@ fn evaluate_runtime_move_attribute(
     created_at: Instant,
     now: Instant,
     clock: &ClockSnapshot,
+) -> Option<u16> {
+    evaluate_runtime_move_attribute_at_rate(
+        runtime, fixture_id, attribute, base_value, created_at, now, clock, 1.0,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_runtime_move_attribute_at_rate(
+    runtime: &RuntimeMoveEffect,
+    fixture_id: FixtureId,
+    attribute: &str,
+    base_value: u16,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
 ) -> Option<u16> {
     let target = runtime
         .target_indices
@@ -16187,6 +17151,7 @@ fn evaluate_runtime_move_attribute(
                 created_at,
                 now,
                 clock,
+                rate,
             );
             let point = runtime.path.sample(progress);
             let evaluation = RuntimeMoveEvaluation {
@@ -16231,13 +17196,15 @@ fn move_effect_progress(
     created_at: Instant,
     now: Instant,
     clock: &ClockSnapshot,
+    rate: f32,
 ) -> f32 {
+    let rate = valid_effect_rate(rate);
     let cycle = if let Some(clock_sync) = request.clock_sync {
         let beat_position = clock.beat_counter as f32 + clock.beat_phase;
-        beat_position / clock_sync.beats.max(0.000_1)
+        beat_position / clock_sync.beats.max(0.000_1) * rate
     } else {
         let period = request.period_ms.max(10) as f32 / 1_000.0;
-        now.saturating_duration_since(created_at).as_secs_f32() / period
+        now.saturating_duration_since(created_at).as_secs_f32() * rate / period
     };
     let phase = (cycle + request.phase + fixture_phase_offset).rem_euclid(1.0);
     match request.direction {
@@ -16353,6 +17320,8 @@ fn runtime_value_effect_from_request(
     })
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn evaluate_runtime_value_attribute(
     runtime: &RuntimeValueEffect,
     fixture_id: FixtureId,
@@ -16361,6 +17330,22 @@ fn evaluate_runtime_value_attribute(
     created_at: Instant,
     now: Instant,
     clock: &ClockSnapshot,
+) -> Option<u16> {
+    evaluate_runtime_value_attribute_at_rate(
+        runtime, fixture_id, attribute, base_value, created_at, now, clock, 1.0,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_runtime_value_attribute_at_rate(
+    runtime: &RuntimeValueEffect,
+    fixture_id: FixtureId,
+    attribute: &str,
+    base_value: u16,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
 ) -> Option<u16> {
     if !runtime.request.attribute.eq_ignore_ascii_case(attribute) {
         return None;
@@ -16381,6 +17366,7 @@ fn evaluate_runtime_value_attribute(
                 created_at,
                 now,
                 clock,
+                rate,
             );
             let normalized = runtime.envelope.sample(progress);
             target.cached.set(Some(RuntimeValueEvaluation {
@@ -16409,13 +17395,15 @@ fn value_effect_progress(
     created_at: Instant,
     now: Instant,
     clock: &ClockSnapshot,
+    rate: f32,
 ) -> f32 {
+    let rate = valid_effect_rate(rate);
     let cycle = if let Some(clock_sync) = request.clock_sync {
         let beat_position = clock.beat_counter as f32 + clock.beat_phase;
-        beat_position / clock_sync.beats.max(0.000_1)
+        beat_position / clock_sync.beats.max(0.000_1) * rate
     } else {
         let period = request.period_ms.max(10) as f32 / 1_000.0;
-        now.saturating_duration_since(created_at).as_secs_f32() / period
+        now.saturating_duration_since(created_at).as_secs_f32() * rate / period
     };
     let phase = (cycle + request.phase + fixture_phase_offset).rem_euclid(1.0);
     match request.direction {
@@ -17119,6 +18107,8 @@ fn runtime_named_color(
     })
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn evaluate_runtime_color_attribute(
     runtime: &RuntimeColorEffect,
     binding: &RuntimeColorBinding,
@@ -17130,6 +18120,24 @@ fn evaluate_runtime_color_attribute(
     now: Instant,
     clock: &ClockSnapshot,
 ) -> Option<u16> {
+    evaluate_runtime_color_attribute_at_rate(
+        runtime, binding, fixture_id, attribute, base_value, effect_id, created_at, now, clock, 1.0,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_runtime_color_attribute_at_rate(
+    runtime: &RuntimeColorEffect,
+    binding: &RuntimeColorBinding,
+    fixture_id: FixtureId,
+    attribute: &str,
+    base_value: u16,
+    effect_id: EffectId,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> Option<u16> {
     let output = binding.outputs.get(attribute)?;
     let target = runtime
         .target_indices
@@ -17140,7 +18148,7 @@ fn evaluate_runtime_color_attribute(
         .get()
         .filter(|cached| cached.at == now)
         .unwrap_or_else(|| {
-            let rgb = evaluate_color_effect(
+            let rgb = evaluate_color_effect_at_rate(
                 &runtime.request,
                 target.phase_offset,
                 effect_id,
@@ -17148,6 +18156,7 @@ fn evaluate_runtime_color_attribute(
                 created_at,
                 now,
                 clock,
+                rate,
             );
             let rgbw = if binding.conversions.rgbw {
                 let white = rgb.red.min(rgb.green).min(rgb.blue);
@@ -17236,6 +18245,8 @@ fn evaluate_runtime_color_attribute(
     ))
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn evaluate_color_effect(
     request: &ColorEffectRequest,
     fixture_phase: f32,
@@ -17245,14 +18256,39 @@ fn evaluate_color_effect(
     now: Instant,
     clock: &ClockSnapshot,
 ) -> ColorEffectColor {
+    evaluate_color_effect_at_rate(
+        request,
+        fixture_phase,
+        effect_id,
+        fixture_id,
+        created_at,
+        now,
+        clock,
+        1.0,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_color_effect_at_rate(
+    request: &ColorEffectRequest,
+    fixture_phase: f32,
+    effect_id: EffectId,
+    fixture_id: FixtureId,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> ColorEffectColor {
+    let rate = f64::from(valid_effect_rate(rate));
     let time_phase = request
         .clock_sync
         .map(|clock_sync| {
             (clock.beat_counter as f64 + clock.beat_phase as f64)
                 / clock_sync.beats.max(0.000_1) as f64
+                * rate
         })
         .unwrap_or_else(|| {
-            now.saturating_duration_since(created_at).as_secs_f64()
+            now.saturating_duration_since(created_at).as_secs_f64() * rate
                 / (request.period_ms.max(10) as f64 / 1000.0)
         });
     let absolute_phase = time_phase + request.phase as f64 + fixture_phase as f64;
@@ -17536,19 +18572,33 @@ fn blend_effect_float(base: f32, effect: f32, blend_mode: &EffectBlendMode) -> f
     }
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn evaluate_lfo_effect(
     request: &LfoEffectRequest,
     created_at: Instant,
     now: Instant,
     clock: &ClockSnapshot,
 ) -> u16 {
+    evaluate_lfo_effect_at_rate(request, created_at, now, clock, 1.0)
+}
+
+fn evaluate_lfo_effect_at_rate(
+    request: &LfoEffectRequest,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> u16 {
     scale_effect_u16(
         request.low,
         request.high,
-        evaluate_lfo_effect_normalized(request, created_at, now, clock),
+        evaluate_lfo_effect_normalized(request, created_at, now, clock, rate),
     )
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn evaluate_lfo_video_effect(
     request: &LfoEffectRequest,
     target: &VideoEffectTarget,
@@ -17556,10 +18606,21 @@ fn evaluate_lfo_video_effect(
     now: Instant,
     clock: &ClockSnapshot,
 ) -> f32 {
+    evaluate_lfo_video_effect_at_rate(request, target, created_at, now, clock, 1.0)
+}
+
+fn evaluate_lfo_video_effect_at_rate(
+    request: &LfoEffectRequest,
+    target: &VideoEffectTarget,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> f32 {
     scale_effect_float(
         target.low,
         target.high,
-        evaluate_lfo_effect_normalized(request, created_at, now, clock),
+        evaluate_lfo_effect_normalized(request, created_at, now, clock, rate),
     )
 }
 
@@ -17568,19 +18629,23 @@ fn evaluate_lfo_effect_normalized(
     created_at: Instant,
     now: Instant,
     clock: &ClockSnapshot,
+    rate: f32,
 ) -> f32 {
+    let rate = valid_effect_rate(rate);
     if let Some(clock_sync) = request.clock_sync {
         let beats = clock_sync.beats.max(0.000_1);
         let beat_position = clock.beat_counter as f32 + clock.beat_phase;
-        let phase = (beat_position / beats + request.phase).rem_euclid(1.0);
+        let phase = (beat_position / beats * rate + request.phase).rem_euclid(1.0);
         return evaluate_lfo_shape(&request.shape, phase);
     }
     let period = request.period_ms.max(10) as f32 / 1000.0;
     let elapsed = now.saturating_duration_since(created_at).as_secs_f32();
-    let phase = (elapsed / period + request.phase).rem_euclid(1.0);
+    let phase = (elapsed * rate / period + request.phase).rem_euclid(1.0);
     evaluate_lfo_shape(&request.shape, phase)
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn evaluate_position_wave_effect(
     request: &PositionWaveEffectRequest,
     fixture_position: Vec3,
@@ -17588,13 +18653,33 @@ fn evaluate_position_wave_effect(
     now: Instant,
     clock: &ClockSnapshot,
 ) -> u16 {
+    evaluate_position_wave_effect_at_rate(request, fixture_position, created_at, now, clock, 1.0)
+}
+
+fn evaluate_position_wave_effect_at_rate(
+    request: &PositionWaveEffectRequest,
+    fixture_position: Vec3,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> u16 {
     scale_effect_u16(
         request.low,
         request.high,
-        evaluate_position_wave_effect_normalized(request, fixture_position, created_at, now, clock),
+        evaluate_position_wave_effect_normalized(
+            request,
+            fixture_position,
+            created_at,
+            now,
+            clock,
+            rate,
+        ),
     )
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn evaluate_position_wave_video_effect(
     request: &PositionWaveEffectRequest,
     target: &VideoEffectTarget,
@@ -17603,10 +18688,38 @@ fn evaluate_position_wave_video_effect(
     now: Instant,
     clock: &ClockSnapshot,
 ) -> f32 {
+    evaluate_position_wave_video_effect_at_rate(
+        request,
+        target,
+        layer_position,
+        created_at,
+        now,
+        clock,
+        1.0,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_position_wave_video_effect_at_rate(
+    request: &PositionWaveEffectRequest,
+    target: &VideoEffectTarget,
+    layer_position: Vec3,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> f32 {
     scale_effect_float(
         target.low,
         target.high,
-        evaluate_position_wave_effect_normalized(request, layer_position, created_at, now, clock),
+        evaluate_position_wave_effect_normalized(
+            request,
+            layer_position,
+            created_at,
+            now,
+            clock,
+            rate,
+        ),
     )
 }
 
@@ -17616,7 +18729,9 @@ fn evaluate_position_wave_effect_normalized(
     created_at: Instant,
     now: Instant,
     clock: &ClockSnapshot,
+    rate: f32,
 ) -> f32 {
+    let rate = valid_effect_rate(rate);
     let wavelength = request.wavelength.abs().max(0.001);
     let elapsed = now.saturating_duration_since(created_at).as_secs_f32();
     let distance_phase =
@@ -17626,9 +18741,9 @@ fn evaluate_position_wave_effect_normalized(
         .map(|clock_sync| {
             let beats = clock_sync.beats.max(0.000_1);
             let beat_position = clock.beat_counter as f32 + clock.beat_phase;
-            beat_position / beats
+            beat_position / beats * rate
         })
-        .unwrap_or_else(|| elapsed * request.speed / wavelength);
+        .unwrap_or_else(|| elapsed * rate * request.speed / wavelength);
     let phase = (request.phase + time_phase - distance_phase).rem_euclid(1.0);
     evaluate_lfo_shape(&request.shape, phase)
 }
@@ -17752,6 +18867,8 @@ fn chaser_block_level(
     level
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn evaluate_chaser_effect(
     runtime: &RuntimeChaserEffect,
     feature_index: usize,
@@ -17760,11 +18877,32 @@ fn evaluate_chaser_effect(
     now: Instant,
     clock: &ClockSnapshot,
 ) -> u16 {
+    evaluate_chaser_effect_at_rate(
+        runtime,
+        feature_index,
+        fixture_id,
+        created_at,
+        now,
+        clock,
+        1.0,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_chaser_effect_at_rate(
+    runtime: &RuntimeChaserEffect,
+    feature_index: usize,
+    fixture_id: FixtureId,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> u16 {
     let Some(feature) = runtime.request.features.get(feature_index) else {
         return 0;
     };
     let normalized_level =
-        evaluate_chaser_effect_normalized(runtime, fixture_id, created_at, now, clock);
+        evaluate_chaser_effect_normalized(runtime, fixture_id, created_at, now, clock, rate);
     scale_effect_u16(feature.low, feature.high, normalized_level)
 }
 
@@ -17774,6 +18912,7 @@ fn evaluate_chaser_effect_normalized(
     created_at: Instant,
     now: Instant,
     clock: &ClockSnapshot,
+    rate: f32,
 ) -> f32 {
     let Some(cache) = runtime.target_level_cache.get(&fixture_id) else {
         return 0.0;
@@ -17781,12 +18920,13 @@ fn evaluate_chaser_effect_normalized(
     if let Some(cached) = cache.get().filter(|cached| cached.at == now) {
         return cached.normalized_level;
     }
+    let rate = f64::from(valid_effect_rate(rate));
     let step_position = if let Some(clock_sync) = runtime.request.clock_sync {
         let beat_position = clock.beat_counter as f64 + clock.beat_phase as f64;
-        beat_position / clock_sync.beats.max(0.000_1) as f64
+        beat_position / clock_sync.beats.max(0.000_1) as f64 * rate
     } else {
         let elapsed_ms = now.saturating_duration_since(created_at).as_secs_f64() * 1000.0;
-        elapsed_ms / runtime.request.step_duration_ms.max(10) as f64
+        elapsed_ms * rate / runtime.request.step_duration_ms.max(10) as f64
     };
     let path_len = runtime.step_order.len().max(1);
     let fixture_offset = runtime
@@ -20408,6 +21548,85 @@ mod tests {
             effect_targets: targets,
         });
         assert_eq!(runtime.last_error, None);
+    }
+
+    fn test_lfo_request(
+        label: &str,
+        shape: LfoShape,
+        period_ms: u64,
+        phase: f32,
+        blend_mode: EffectBlendMode,
+        low: u16,
+        high: u16,
+    ) -> LfoEffectRequest {
+        LfoEffectRequest {
+            label: label.to_string(),
+            fixture_ids: vec![1],
+            target_group_ids: Vec::new(),
+            attribute: "Dimmer".to_string(),
+            video_targets: Vec::new(),
+            shape,
+            period_ms,
+            clock_sync: None,
+            low,
+            high,
+            phase,
+            blend_mode,
+        }
+    }
+
+    fn owned_lfo_target(effect_id: EffectId, request: LfoEffectRequest) -> CueEffectTarget {
+        CueEffectTarget {
+            effect_id,
+            enabled: true,
+            params: Some(EffectParamsSnapshot::Lfo(request)),
+        }
+    }
+
+    fn test_scene_block(
+        event_id: TimelineEventId,
+        cue_id: CueId,
+        time_ms: u64,
+        duration_ms: u64,
+        loop_count: u16,
+        rate: f32,
+    ) -> RuntimeTimelineEvent {
+        RuntimeTimelineEvent {
+            time_beats: None,
+            duration_beats: None,
+            conform_to_tempo: false,
+            loop_fill: false,
+            iteration_period_ms: duration_ms,
+            rate: Some(rate),
+            id: event_id,
+            cue_id,
+            time_ms,
+            track: TimelineTrackKind::Lighting,
+            layer_id: None,
+            resolved_layer_id: 0,
+            layer_order: 0,
+            layer_muted_effective: false,
+            duration_ms,
+            loop_count,
+            jump_to_event_id: None,
+        }
+    }
+
+    fn timeline_trigger_tuples(
+        occurrences: &[TimelineCueOccurrence],
+    ) -> Vec<(u64, TimelineEventId, CueId, u32)> {
+        occurrences
+            .iter()
+            .filter(|occurrence| occurrence.kind == TimelineCueOccurrenceKind::Trigger)
+            .map(|occurrence| {
+                (
+                    occurrence.time_ms,
+                    occurrence.event_id,
+                    occurrence.cue_id,
+                    occurrence.layer_order,
+                )
+            })
+            .collect()
     }
 
     fn sample_patched_fixture(id: FixtureId, label: &str, address: u16) -> PatchedFixtureSummary {
@@ -24274,10 +25493,12 @@ mod tests {
                 CueEffectTarget {
                     effect_id: 2,
                     enabled: false,
+                    params: None,
                 },
                 CueEffectTarget {
                     effect_id: 1,
                     enabled: true,
+                    params: None,
                 },
             ],
         );
@@ -24287,10 +25508,12 @@ mod tests {
                 CueEffectTarget {
                     effect_id: 1,
                     enabled: true,
+                    params: None,
                 },
                 CueEffectTarget {
                     effect_id: 2,
                     enabled: false,
+                    params: None,
                 },
             ]
         );
@@ -24307,10 +25530,12 @@ mod tests {
                 CueEffectTarget {
                     effect_id: 1,
                     enabled: false,
+                    params: None,
                 },
                 CueEffectTarget {
                     effect_id: 2,
                     enabled: true,
+                    params: None,
                 },
             ],
         });
@@ -24333,10 +25558,12 @@ mod tests {
                 CueEffectTarget {
                     effect_id: 1,
                     enabled: false,
+                    params: None,
                 },
                 CueEffectTarget {
                     effect_id: 2,
                     enabled: true,
+                    params: None,
                 },
             ]
         );
@@ -24352,10 +25579,12 @@ mod tests {
                 CueEffectTarget {
                     effect_id: 1,
                     enabled: true,
+                    params: None,
                 },
                 CueEffectTarget {
                     effect_id: 2,
                     enabled: false,
+                    params: None,
                 },
             ],
         );
@@ -24366,10 +25595,12 @@ mod tests {
                 CueEffectTarget {
                     effect_id: 1,
                     enabled: false,
+                    params: None,
                 },
                 CueEffectTarget {
                     effect_id: 2,
                     enabled: true,
+                    params: None,
                 },
             ],
         );
@@ -24403,6 +25634,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: true,
+                params: None,
             }],
         );
         create_effect_only_cue(
@@ -24411,6 +25643,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 2,
                 enabled: true,
+                params: None,
             }],
         );
         runtime.cues[0].pre_wait_ms = 100;
@@ -24448,6 +25681,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: true,
+                params: None,
             }],
         );
 
@@ -24462,6 +25696,7 @@ mod tests {
             effect_targets: vec![CueEffectTarget {
                 effect_id: 99,
                 enabled: true,
+                params: None,
             }],
         });
         assert_eq!(runtime.cues[0].label, "Cue 1");
@@ -24487,6 +25722,7 @@ mod tests {
             effect_targets: vec![CueEffectTarget {
                 effect_id: 99,
                 enabled: true,
+                params: None,
             }],
         });
         assert_eq!(runtime.cues.len(), 1);
@@ -24505,6 +25741,7 @@ mod tests {
             effect_targets: vec![CueEffectTarget {
                 effect_id: 404,
                 enabled: true,
+                params: None,
             }],
             ..CueSummary::default()
         });
@@ -24617,6 +25854,7 @@ mod tests {
                 vec![CueEffectTarget {
                     effect_id,
                     enabled: true,
+                    params: None,
                 }],
             )
             .unwrap();
@@ -24636,6 +25874,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id,
                 enabled: true,
+                params: None,
             }]
         );
 
@@ -24657,6 +25896,7 @@ mod tests {
                 vec![CueEffectTarget {
                     effect_id,
                     enabled: false,
+                    params: None,
                 }],
             )
             .unwrap();
@@ -24753,6 +25993,7 @@ mod tests {
             effect_targets: vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: true,
+                params: None,
             }],
             expires_at: Instant::now() + Duration::from_secs(1),
             ack: missing_list_ack,
@@ -24784,6 +26025,7 @@ mod tests {
             effect_targets: vec![CueEffectTarget {
                 effect_id: 999,
                 enabled: true,
+                params: None,
             }],
             expires_at: Instant::now() + Duration::from_secs(1),
             ack: missing_effect_ack,
@@ -24814,6 +26056,7 @@ mod tests {
             effect_targets: vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: true,
+                params: None,
             }],
             expires_at: Instant::now() - Duration::from_millis(1),
             ack: expired_ack,
@@ -24840,6 +26083,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: true,
+                params: None,
             }],
         );
         runtime.last_error = Some("preserve me".to_string());
@@ -24859,6 +26103,7 @@ mod tests {
             effect_targets: vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: false,
+                params: None,
             }],
             expires_at: Instant::now() + Duration::from_secs(1),
             ack,
@@ -25013,6 +26258,7 @@ mod tests {
             effect_targets: vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: true,
+                params: None,
             }],
         });
         create_effect_only_cue(
@@ -25021,6 +26267,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: false,
+                params: None,
             }],
         );
         runtime.apply_command(EngineCommand::UpsertPalette(ReferencePaletteSummary {
@@ -25038,6 +26285,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: true,
+                params: None,
             }],
         );
         runtime.apply_command(EngineCommand::SetCuePaletteTargets {
@@ -28660,6 +29908,7 @@ mod tests {
         }
         .requests_low_latency_dmx_tick());
         assert!(EngineCommand::TriggerCue(1).requests_low_latency_dmx_tick());
+        assert!(EngineCommand::ReleaseCue(1).requests_low_latency_dmx_tick());
         assert!(!EngineCommand::SetBpm(120.0).requests_low_latency_dmx_tick());
         assert!(!EngineCommand::SetVideoLayerParam {
             layer_id: 1,
@@ -34231,6 +35480,7 @@ mod tests {
                 effect_targets: vec![CueEffectTarget {
                     effect_id,
                     enabled: true,
+                    params: None,
                 }],
             })
             .unwrap();
@@ -36737,8 +37987,13 @@ mod tests {
             ..ClockSnapshot::default()
         };
 
-        let normalized =
-            evaluate_lfo_effect_normalized(&request, now, now + Duration::from_secs(30), &clock);
+        let normalized = evaluate_lfo_effect_normalized(
+            &request,
+            now,
+            now + Duration::from_secs(30),
+            &clock,
+            1.0,
+        );
 
         assert!((normalized - 0.375).abs() < 0.001, "{normalized}");
     }
@@ -36786,6 +38041,7 @@ mod tests {
             now,
             now + Duration::from_secs(30),
             &clock,
+            1.0,
         );
 
         assert!((normalized - 0.125).abs() < 0.001, "{normalized}");
@@ -38955,7 +40211,9 @@ mod tests {
             effect_targets: vec![CueEffectTarget {
                 effect_id: 77,
                 enabled: true,
+                params: None,
             }],
+            effect_activation_range: RuntimeEffectActivationRange::default(),
         });
 
         runtime.remove_fixture(1);
@@ -39850,6 +41108,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: true,
+                params: None,
             }],
         );
         runtime.timeline_events.push(RuntimeTimelineEvent {
@@ -39915,6 +41174,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: true,
+                params: None,
             }],
         );
         create_effect_only_cue(
@@ -39923,6 +41183,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: false,
+                params: None,
             }],
         );
         create_effect_only_cue(
@@ -39931,6 +41192,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: true,
+                params: None,
             }],
         );
         runtime.timeline_events = vec![
@@ -40079,6 +41341,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: true,
+                params: None,
             }],
         );
         create_effect_only_cue(
@@ -40087,6 +41350,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 2,
                 enabled: true,
+                params: None,
             }],
         );
         runtime.timeline_events = vec![
@@ -40181,6 +41445,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: true,
+                params: None,
             }],
         );
         runtime.timeline_events.push(RuntimeTimelineEvent {
@@ -40214,6 +41479,8 @@ mod tests {
             due_at: Instant::now() + Duration::from_secs(1),
             source: PendingCueTriggerSource::Timeline,
             repeat_count: 1,
+            timeline_effect_activation: None,
+            dispatch: None,
         });
         runtime.apply_command(EngineCommand::LoadProjectSnapshot(snapshot.clone()));
         assert_eq!(runtime.timeline_evaluated_boundary_position_ms, None);
@@ -40243,6 +41510,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: true,
+                params: None,
             }],
         );
         create_effect_only_cue(
@@ -40251,6 +41519,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: false,
+                params: None,
             }],
         );
         runtime.timeline_events = vec![
@@ -40520,6 +41789,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: false,
+                params: None,
             }],
         );
         create_effect_only_cue(
@@ -40528,6 +41798,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: true,
+                params: None,
             }],
         );
         runtime.timeline_events = vec![
@@ -40651,9 +41922,10 @@ mod tests {
             .collect::<Vec<_>>();
         let mut due = Vec::with_capacity(events.len());
         collect_timeline_cue_occurrences_between(&events, 0, 1, true, true, None, &mut due);
-        assert_eq!(due.len(), 2_000);
-        assert_eq!(due.first().copied(), Some((0, 1, 1, 0)));
-        assert_eq!(due.last().copied(), Some((0, 2_000, 1, 0)));
+        let triggers = timeline_trigger_tuples(&due);
+        assert_eq!(triggers.len(), 2_000);
+        assert_eq!(triggers.first().copied(), Some((0, 1, 1, 0)));
+        assert_eq!(triggers.last().copied(), Some((0, 2_000, 1, 0)));
         let warmed_capacity = due.capacity();
         let started = Instant::now();
         let mut occurrence_count = 0_usize;
@@ -40751,13 +42023,14 @@ mod tests {
         let mut due = Vec::new();
 
         collect_timeline_cue_occurrences_between(&events, 0, 2, true, true, None, &mut due);
-        assert_eq!(due, expected);
+        assert_eq!(timeline_trigger_tuples(&due), expected);
 
         let mut unsorted = events;
         unsorted.reverse();
         collect_timeline_cue_occurrences_between(&unsorted, 0, 2, true, true, None, &mut due);
         assert_eq!(
-            due, expected,
+            timeline_trigger_tuples(&due),
+            expected,
             "general fallback diverged from the aligned fast path"
         );
     }
@@ -40771,6 +42044,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: true,
+                params: None,
             }],
         );
         create_effect_only_cue(
@@ -40779,6 +42053,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 2,
                 enabled: true,
+                params: None,
             }],
         );
         runtime.cues[0].pre_wait_ms = 50;
@@ -40877,6 +42152,7 @@ mod tests {
                 vec![CueEffectTarget {
                     effect_id: 1,
                     enabled: true,
+                    params: None,
                 }],
             );
             create_effect_only_cue(
@@ -40885,6 +42161,7 @@ mod tests {
                 vec![CueEffectTarget {
                     effect_id: 1,
                     enabled: false,
+                    params: None,
                 }],
             );
             create_effect_only_cue(&mut runtime, 3, Vec::new());
@@ -40912,6 +42189,8 @@ mod tests {
                 due_at: now,
                 source: PendingCueTriggerSource::Timeline,
                 repeat_count,
+                timeline_effect_activation: None,
+                dispatch: None,
             });
         }
         assert_eq!(
@@ -41008,6 +42287,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: true,
+                params: None,
             }],
         );
         runtime.cues[0].authored_beats = Some(4.0);
@@ -41031,7 +42311,8 @@ mod tests {
         );
         assert_eq!(
             due.iter()
-                .map(|occurrence| occurrence.0)
+                .filter(|occurrence| occurrence.kind == TimelineCueOccurrenceKind::Trigger)
+                .map(|occurrence| occurrence.time_ms)
                 .collect::<Vec<_>>(),
             vec![1_000, 3_000, 5_000, 7_000, 9_000]
         );
@@ -41054,7 +42335,8 @@ mod tests {
         );
         assert_eq!(
             due.iter()
-                .map(|occurrence| occurrence.0)
+                .filter(|occurrence| occurrence.kind == TimelineCueOccurrenceKind::Trigger)
+                .map(|occurrence| occurrence.time_ms)
                 .collect::<Vec<_>>(),
             vec![2_000, 6_000, 10_000]
         );
@@ -41246,6 +42528,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: true,
+                params: None,
             }],
         );
         source.cues[0].authored_beats = Some(4.0);
@@ -41274,6 +42557,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: true,
+                params: None,
             }],
         );
         create_effect_only_cue(&mut source, 2, Vec::new());
@@ -41306,6 +42590,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: true,
+                params: None,
             }],
         );
         runtime.cues[0].authored_beats = Some(4.0);
@@ -41345,6 +42630,812 @@ mod tests {
         assert_eq!(runtime.last_error, None);
         assert_eq!(runtime.timeline_events[0].iteration_period_ms, 4_000);
         assert_eq!(runtime.timeline_events[0].rate, Some(0.5));
+    }
+
+    #[test]
+    fn activation_scoped_scene_effects_run_concurrently_at_1_and_2_78_rates_in_dmx_preview() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let request = test_lfo_request(
+            "Owned additive wave",
+            LfoShape::Sine,
+            1_000,
+            0.0,
+            EffectBlendMode::Add,
+            0,
+            16_000,
+        );
+        create_effect_only_cue(&mut runtime, 1, vec![owned_lfo_target(90, request)]);
+        runtime.timeline_events = vec![
+            test_scene_block(10, 1, 0, 1_000, 1, 1.0),
+            test_scene_block(20, 1, 0, 1_000, 1, 2.78),
+        ];
+        runtime.sort_timeline_events();
+        let started_at = Instant::now();
+        runtime.rebuild_effect_activations(started_at);
+        assert!(
+            runtime.active_effect_activation_indices.is_empty(),
+            "prebuilding a block at the playhead must not fire it"
+        );
+
+        runtime.trigger_timeline_events_between(0, 0, true, true, started_at);
+
+        assert_eq!(runtime.active_effect_activation_indices.len(), 2);
+        let mut active = runtime
+            .active_effect_activation_indices
+            .iter()
+            .filter_map(|index| runtime.effect_activations.get(*index))
+            .filter_map(|activation| {
+                let RuntimeEffectActivationKey::Timeline { event_id, .. } = activation.key? else {
+                    return None;
+                };
+                Some((event_id, activation))
+            })
+            .collect::<Vec<_>>();
+        active.sort_by_key(|(event_id, _)| *event_id);
+        assert_eq!(active.len(), 2);
+        assert_eq!(active[0].0, 10);
+        assert_eq!(active[0].1.rate, 1.0);
+        assert_eq!(active[1].0, 20);
+        assert!((active[1].1.rate - 2.78).abs() < f32::EPSILON);
+        assert_eq!(active[0].1.effect.created_at, started_at);
+        assert_eq!(active[1].1.effect.created_at, started_at);
+
+        let sampled_at = started_at + Duration::from_millis(100);
+        let clock = runtime.clock.snapshot(sampled_at);
+        let contributions = active
+            .iter()
+            .map(|(_, activation)| {
+                let RuntimeEffectKind::Lfo(request) = &activation.effect.kind else {
+                    panic!("owned test effect must be an LFO");
+                };
+                evaluate_lfo_effect_at_rate(
+                    request,
+                    activation.effect.created_at,
+                    sampled_at,
+                    &clock,
+                    activation.rate,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_ne!(
+            contributions[0], contributions[1],
+            "phases must be independent"
+        );
+        let combined = contributions[0].saturating_add(contributions[1]);
+        assert!(combined > contributions[0] && combined > contributions[1]);
+        let preview = runtime.render_dmx_frame_for_universe(0, sampled_at);
+        assert_eq!(preview[0], (combined >> 8) as u8);
+
+        let periods_ms = [1_000.0 / active[0].1.rate, 1_000.0 / active[1].1.rate];
+        assert!((periods_ms[0] - 1_000.0).abs() < f32::EPSILON);
+        assert!((periods_ms[1] - 359.712_25).abs() < 0.001);
+    }
+
+    #[test]
+    fn activation_scoped_snapshot_ignores_global_edit_while_legacy_target_follows_stack() {
+        let mut runtime = runtime_with_lfo_effects(&[(1, false)]);
+        let RuntimeEffectKind::Lfo(captured) = runtime.effects[0].kind.clone() else {
+            panic!("test stack effect must be an LFO");
+        };
+        create_effect_only_cue(&mut runtime, 1, vec![owned_lfo_target(1, captured.clone())]);
+        create_effect_only_cue(
+            &mut runtime,
+            2,
+            vec![CueEffectTarget {
+                effect_id: 1,
+                enabled: true,
+                params: None,
+            }],
+        );
+        let edited = test_lfo_request(
+            "Edited global square",
+            LfoShape::Square,
+            250,
+            0.75,
+            EffectBlendMode::Override,
+            0,
+            u16::MAX,
+        );
+        runtime.apply_command(EngineCommand::UpdateLfoEffect {
+            effect_id: 1,
+            request: edited,
+        });
+        assert_eq!(runtime.last_error, None);
+
+        let recalled_at = Instant::now();
+        runtime.request_cue(1, recalled_at);
+        let owned_preview = runtime.render_dmx_frame_for_universe(0, recalled_at);
+        assert_eq!(
+            owned_preview[0], 128,
+            "owned snapshot changed with the stack edit"
+        );
+        assert!(!runtime.effects[0].enabled);
+
+        runtime.release_cue_state(1).unwrap();
+        runtime.effects[0].created_at = recalled_at;
+        runtime.request_cue(2, recalled_at);
+        let legacy_preview = runtime.render_dmx_frame_for_universe(0, recalled_at);
+        assert!(runtime.effects[0].enabled);
+        assert_eq!(
+            legacy_preview[0], 0,
+            "legacy target did not follow the edited stack"
+        );
+        assert!(matches!(
+            &runtime.effects[0].kind,
+            RuntimeEffectKind::Lfo(request)
+                if request.shape == LfoShape::Square && request.phase == 0.75
+        ));
+    }
+
+    #[test]
+    fn activation_scoped_scene_effect_ends_at_block_boundary_and_restarts_each_loop() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let request = test_lfo_request(
+            "Restarting owned saw",
+            LfoShape::Saw,
+            1_000,
+            0.0,
+            EffectBlendMode::Override,
+            0,
+            u16::MAX,
+        );
+        create_effect_only_cue(&mut runtime, 1, vec![owned_lfo_target(91, request)]);
+        runtime.timeline_events = vec![test_scene_block(10, 1, 0, 100, 2, 1.0)];
+        runtime.sort_timeline_events();
+        runtime.values.insert((1, "Dimmer".to_string()), 12_345);
+        let started_at = Instant::now();
+        runtime.rebuild_effect_activations(started_at);
+
+        runtime.trigger_timeline_events_between(0, 0, true, true, started_at);
+        let first_mid =
+            runtime.render_dmx_frame_for_universe(0, started_at + Duration::from_millis(50))[0];
+        assert!(first_mid > 0);
+
+        let second_started_at = started_at + Duration::from_millis(100);
+        runtime.trigger_timeline_events_between(0, 100, false, true, second_started_at);
+        let activation = runtime
+            .active_effect_activation_indices
+            .iter()
+            .filter_map(|index| runtime.effect_activations.get(*index))
+            .find(|activation| {
+                matches!(
+                    activation.key,
+                    Some(RuntimeEffectActivationKey::Timeline {
+                        event_id: 10,
+                        iteration: 1,
+                        ..
+                    })
+                )
+            })
+            .expect("second loop iteration must reuse the event activation");
+        assert_eq!(activation.effect.created_at, second_started_at);
+        assert_eq!(
+            runtime.render_dmx_frame_for_universe(0, second_started_at)[0],
+            0,
+            "loop phase did not restart"
+        );
+        assert_eq!(
+            runtime.render_dmx_frame_for_universe(0, second_started_at + Duration::from_millis(50))
+                [0],
+            first_mid,
+            "second loop did not reproduce the first-loop phase"
+        );
+
+        let ended_at = started_at + Duration::from_millis(200);
+        runtime.trigger_timeline_events_between(100, 200, false, true, ended_at);
+        assert!(runtime.active_effect_activation_indices.is_empty());
+        assert_eq!(
+            runtime.render_dmx_frame_for_universe(0, ended_at)[0],
+            (12_345_u16 >> 8) as u8,
+            "block-end marker did not return DMX to base"
+        );
+    }
+
+    #[test]
+    fn activation_scoped_effect_walk_reuses_prebuilt_capacity() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let request = test_lfo_request(
+            "Capacity owned wave",
+            LfoShape::Triangle,
+            100,
+            0.0,
+            EffectBlendMode::Override,
+            0,
+            u16::MAX,
+        );
+        create_effect_only_cue(&mut runtime, 1, vec![owned_lfo_target(92, request)]);
+        runtime.timeline_events = vec![test_scene_block(10, 1, 0, 10, 3, 1.0)];
+        runtime.sort_timeline_events();
+        let started_at = Instant::now();
+        runtime.rebuild_effect_activations(started_at);
+        runtime.effect_activations.shrink_to_fit();
+        runtime.active_effect_activation_indices.shrink_to_fit();
+        runtime.cues[0].effect_targets.push(owned_lfo_target(
+            93,
+            test_lfo_request(
+                "Capacity growth wave",
+                LfoShape::Saw,
+                100,
+                0.25,
+                EffectBlendMode::Add,
+                0,
+                1_000,
+            ),
+        ));
+        runtime.rebuild_effect_activations(started_at);
+        let activation_capacity = runtime.effect_activations.capacity();
+        let active_capacity = runtime.active_effect_activation_indices.capacity();
+        assert_eq!(runtime.effect_activations.len(), 4);
+        assert!(activation_capacity >= 4);
+        assert!(active_capacity >= 4);
+
+        for iteration in 0..3_u64 {
+            let occurrence_ms = iteration * 10;
+            let at = started_at + Duration::from_millis(occurrence_ms);
+            runtime.trigger_timeline_events_between(
+                occurrence_ms.saturating_sub(1),
+                occurrence_ms,
+                occurrence_ms == 0,
+                true,
+                at,
+            );
+            for sample in 0..100_u64 {
+                let _ = runtime.apply_effects(
+                    &runtime.fixtures[0],
+                    "Dimmer",
+                    0,
+                    at + Duration::from_micros(sample),
+                );
+            }
+            assert_eq!(runtime.effect_activations.capacity(), activation_capacity);
+            assert_eq!(
+                runtime.active_effect_activation_indices.capacity(),
+                active_capacity
+            );
+        }
+        runtime.trigger_timeline_events_between(
+            20,
+            30,
+            false,
+            true,
+            started_at + Duration::from_millis(30),
+        );
+        assert!(runtime.active_effect_activation_indices.is_empty());
+        assert_eq!(runtime.effect_activations.capacity(), activation_capacity);
+        assert_eq!(
+            runtime.active_effect_activation_indices.capacity(),
+            active_capacity
+        );
+    }
+
+    #[test]
+    fn activation_scoped_params_survive_global_effect_deletion_while_legacy_targets_are_pruned() {
+        let mut runtime = runtime_with_lfo_effects(&[(7, false)]);
+        let RuntimeEffectKind::Lfo(captured) = runtime.effects[0].kind.clone() else {
+            panic!("test stack effect must be an LFO");
+        };
+        create_effect_only_cue(&mut runtime, 1, vec![owned_lfo_target(7, captured)]);
+        create_effect_only_cue(
+            &mut runtime,
+            2,
+            vec![CueEffectTarget {
+                effect_id: 7,
+                enabled: true,
+                params: None,
+            }],
+        );
+
+        runtime.apply_command(EngineCommand::RemoveEffect(7));
+
+        assert!(runtime.effects.is_empty());
+        assert_eq!(runtime.cues[0].effect_targets.len(), 1);
+        assert!(runtime.cues[0].effect_targets[0].params.is_some());
+        assert!(runtime.cues[1].effect_targets.is_empty());
+        let recalled_at = Instant::now();
+        runtime.request_cue(1, recalled_at);
+        assert_eq!(
+            runtime.render_dmx_frame_for_universe(0, recalled_at)[0],
+            128
+        );
+    }
+
+    #[test]
+    fn activation_scoped_manual_recall_replaces_prior_cue_list_instance_and_releases() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.values.insert((1, "Dimmer".to_string()), 20_000);
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![owned_lfo_target(
+                101,
+                test_lfo_request(
+                    "First manual",
+                    LfoShape::Square,
+                    1_000,
+                    0.25,
+                    EffectBlendMode::Override,
+                    0,
+                    u16::MAX,
+                ),
+            )],
+        );
+        create_effect_only_cue(
+            &mut runtime,
+            2,
+            vec![owned_lfo_target(
+                102,
+                test_lfo_request(
+                    "Second manual",
+                    LfoShape::Square,
+                    1_000,
+                    0.75,
+                    EffectBlendMode::Override,
+                    0,
+                    u16::MAX,
+                ),
+            )],
+        );
+        let recalled_at = Instant::now();
+
+        runtime.request_cue(1, recalled_at);
+        assert_eq!(runtime.active_effect_activation_indices.len(), 1);
+        assert_eq!(
+            runtime.render_dmx_frame_for_universe(0, recalled_at)[0],
+            255
+        );
+
+        runtime.request_cue(2, recalled_at);
+        assert_eq!(runtime.active_effect_activation_indices.len(), 1);
+        assert!(matches!(
+            runtime.effect_activations[runtime.active_effect_activation_indices[0]].key,
+            Some(RuntimeEffectActivationKey::CueList { cue_id: 2, .. })
+        ));
+        assert_eq!(runtime.render_dmx_frame_for_universe(0, recalled_at)[0], 0);
+
+        runtime.apply_command(EngineCommand::ReleaseCue(2));
+        assert!(runtime.active_effect_activation_indices.is_empty());
+        assert_eq!(
+            runtime.render_dmx_frame_for_universe(0, recalled_at)[0],
+            (20_000_u16 >> 8) as u8
+        );
+        assert_eq!(runtime.cue_lists[0].active_cue_id, None);
+        runtime.rebuild_effect_activations(recalled_at + Duration::from_millis(1));
+        assert!(
+            runtime.active_effect_activation_indices.is_empty(),
+            "a later pool rebuild resurrected the released Cue"
+        );
+    }
+
+    #[test]
+    fn activation_scoped_manual_recall_tracks_cue_list_moves() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![owned_lfo_target(
+                103,
+                test_lfo_request(
+                    "Moving manual",
+                    LfoShape::Sine,
+                    1_000,
+                    0.0,
+                    EffectBlendMode::Override,
+                    0,
+                    u16::MAX,
+                ),
+            )],
+        );
+        runtime.apply_command(EngineCommand::UpsertCueList {
+            cue_list_id: 2,
+            label: "Secondary".to_string(),
+        });
+        let recalled_at = Instant::now();
+        runtime.request_cue(1, recalled_at);
+
+        runtime.apply_command(EngineCommand::SetCueList {
+            cue_id: 1,
+            cue_list_id: 2,
+        });
+        assert!(matches!(
+            runtime.effect_activations[runtime.active_effect_activation_indices[0]].key,
+            Some(RuntimeEffectActivationKey::CueList {
+                cue_list_id: 2,
+                cue_id: 1
+            })
+        ));
+
+        runtime.apply_command(EngineCommand::RemoveCueList(2));
+        assert!(matches!(
+            runtime.effect_activations[runtime.active_effect_activation_indices[0]].key,
+            Some(RuntimeEffectActivationKey::CueList {
+                cue_list_id: DEFAULT_CUE_LIST_ID,
+                cue_id: 1
+            })
+        ));
+        assert_eq!(
+            runtime
+                .cue_list_effect_activation_cues
+                .get(&DEFAULT_CUE_LIST_ID),
+            Some(&1)
+        );
+    }
+
+    #[test]
+    fn activation_scoped_jump_ends_sources_and_lands_target_with_event_rate() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let request = test_lfo_request(
+            "Jump owned wave",
+            LfoShape::Saw,
+            1_000,
+            0.0,
+            EffectBlendMode::Override,
+            0,
+            u16::MAX,
+        );
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![owned_lfo_target(110, request.clone())],
+        );
+        create_effect_only_cue(&mut runtime, 2, vec![owned_lfo_target(110, request)]);
+        let mut source = test_scene_block(10, 1, 0, 100, 1, 1.0);
+        source.jump_to_event_id = Some(20);
+        runtime.timeline_events = vec![source, test_scene_block(20, 2, 500, 100, 1, 2.78)];
+        runtime.sort_timeline_events();
+        let started_at = Instant::now();
+        runtime.rebuild_effect_activations(started_at);
+        runtime.trigger_timeline_events_between(0, 0, true, true, started_at);
+        assert!(runtime
+            .active_effect_activation_indices
+            .iter()
+            .any(|index| {
+                matches!(
+                    runtime.effect_activations[*index].key,
+                    Some(RuntimeEffectActivationKey::Timeline { event_id: 10, .. })
+                )
+            }));
+
+        runtime.timeline_playing = true;
+        runtime.last_tick_interval = Duration::from_millis(100);
+        runtime.advance_timeline(started_at + Duration::from_millis(100));
+
+        assert_eq!(runtime.timeline_position_ms, 500);
+        assert_eq!(runtime.active_effect_activation_indices.len(), 1);
+        let target = &runtime.effect_activations[runtime.active_effect_activation_indices[0]];
+        assert!(matches!(
+            target.key,
+            Some(RuntimeEffectActivationKey::Timeline {
+                event_id: 20,
+                cue_id: 2,
+                iteration: 0
+            })
+        ));
+        assert!((target.rate - 2.78).abs() < f32::EPSILON);
+
+        runtime.last_tick_interval = Duration::from_millis(100);
+        runtime.advance_timeline(started_at + Duration::from_millis(200));
+        assert_eq!(runtime.timeline_position_ms, 600);
+        assert!(runtime.active_effect_activation_indices.is_empty());
+    }
+
+    #[test]
+    fn activation_scoped_jump_drops_instances_in_skipped_span() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let request = test_lfo_request(
+            "Jump span wave",
+            LfoShape::Saw,
+            1_000,
+            0.0,
+            EffectBlendMode::Override,
+            0,
+            u16::MAX,
+        );
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![owned_lfo_target(111, request.clone())],
+        );
+        create_effect_only_cue(
+            &mut runtime,
+            2,
+            vec![owned_lfo_target(112, request.clone())],
+        );
+        create_effect_only_cue(&mut runtime, 3, vec![owned_lfo_target(113, request)]);
+        let spanning_source = test_scene_block(5, 1, 0, 300, 1, 1.0);
+        let mut jump_source = test_scene_block(10, 2, 0, 100, 1, 1.0);
+        jump_source.jump_to_event_id = Some(20);
+        runtime.timeline_events = vec![
+            spanning_source,
+            jump_source,
+            test_scene_block(20, 3, 500, 100, 1, 1.0),
+        ];
+        runtime.sort_timeline_events();
+        let started_at = Instant::now();
+        runtime.rebuild_effect_activations(started_at);
+        runtime.trigger_timeline_events_between(0, 0, true, true, started_at);
+        assert_eq!(runtime.active_effect_activation_indices.len(), 2);
+
+        runtime.timeline_playing = true;
+        runtime.last_tick_interval = Duration::from_millis(100);
+        runtime.advance_timeline(started_at + Duration::from_millis(100));
+
+        assert_eq!(runtime.timeline_position_ms, 500);
+        assert_eq!(runtime.active_effect_activation_indices.len(), 1);
+        assert!(matches!(
+            runtime.effect_activations[runtime.active_effect_activation_indices[0]].key,
+            Some(RuntimeEffectActivationKey::Timeline {
+                event_id: 20,
+                cue_id: 3,
+                iteration: 0
+            })
+        ));
+    }
+
+    #[test]
+    fn activation_scoped_jump_rebases_looping_instance_at_destination_iteration() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let request = test_lfo_request(
+            "Jump loop wave",
+            LfoShape::Saw,
+            1_000,
+            0.0,
+            EffectBlendMode::Override,
+            0,
+            u16::MAX,
+        );
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![owned_lfo_target(115, request.clone())],
+        );
+        create_effect_only_cue(
+            &mut runtime,
+            2,
+            vec![owned_lfo_target(116, request.clone())],
+        );
+        create_effect_only_cue(
+            &mut runtime,
+            3,
+            vec![owned_lfo_target(117, request.clone())],
+        );
+        create_effect_only_cue(&mut runtime, 4, vec![owned_lfo_target(118, request)]);
+        runtime
+            .cues
+            .iter_mut()
+            .find(|cue| cue.id == 4)
+            .unwrap()
+            .pre_wait_ms = 1_000;
+        let looping_span = test_scene_block(5, 1, 0, 100, 6, 1.0);
+        let delayed_looping_span = test_scene_block(6, 4, 0, 100, 6, 1.0);
+        let mut jump_source = test_scene_block(10, 2, 0, 100, 1, 1.0);
+        jump_source.jump_to_event_id = Some(20);
+        runtime.timeline_events = vec![
+            looping_span,
+            delayed_looping_span,
+            jump_source,
+            test_scene_block(20, 3, 450, 100, 1, 1.0),
+        ];
+        runtime.sort_timeline_events();
+        let started_at = Instant::now();
+        runtime.rebuild_effect_activations(started_at);
+        runtime.trigger_timeline_events_between(0, 0, true, true, started_at);
+        assert!(runtime.pending_cues.iter().any(|pending| {
+            pending
+                .timeline_effect_activation
+                .as_ref()
+                .is_some_and(|activation| activation.event_id == 6 && activation.iteration == 0)
+        }));
+
+        runtime.timeline_playing = true;
+        runtime.last_tick_interval = Duration::from_millis(100);
+        let jumped_at = started_at + Duration::from_millis(100);
+        runtime.advance_timeline(jumped_at);
+
+        assert_eq!(runtime.timeline_position_ms, 450);
+        let looping_activation = runtime
+            .active_effect_activation_indices
+            .iter()
+            .map(|index| &runtime.effect_activations[*index])
+            .find(|activation| {
+                matches!(
+                    activation.key,
+                    Some(RuntimeEffectActivationKey::Timeline { event_id: 5, .. })
+                )
+            })
+            .expect("looping source remains active across the jump destination");
+        assert!(matches!(
+            looping_activation.key,
+            Some(RuntimeEffectActivationKey::Timeline {
+                event_id: 5,
+                cue_id: 1,
+                iteration: 4
+            })
+        ));
+        assert_eq!(
+            looping_activation.effect.created_at,
+            jumped_at - Duration::from_millis(50)
+        );
+        assert!(!runtime.pending_cues.iter().any(|pending| {
+            pending
+                .timeline_effect_activation
+                .as_ref()
+                .is_some_and(|activation| activation.event_id == 6)
+        }));
+    }
+
+    #[test]
+    fn activation_scoped_seek_and_backward_sync_cancel_timeline_instances() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![owned_lfo_target(
+                114,
+                test_lfo_request(
+                    "Seek cleanup wave",
+                    LfoShape::Sine,
+                    1_000,
+                    0.0,
+                    EffectBlendMode::Override,
+                    0,
+                    u16::MAX,
+                ),
+            )],
+        );
+        runtime.timeline_events = vec![test_scene_block(10, 1, 0, 1_000, 1, 1.0)];
+        runtime.sort_timeline_events();
+        let started_at = Instant::now();
+        runtime.rebuild_effect_activations(started_at);
+        runtime.trigger_timeline_events_between(0, 0, true, true, started_at);
+        assert_eq!(runtime.active_effect_activation_indices.len(), 1);
+
+        runtime.apply_command(EngineCommand::SeekTimeline(500));
+        assert!(runtime.active_effect_activation_indices.is_empty());
+        assert!(runtime.pending_cues.is_empty());
+
+        runtime.timeline_position_ms = 0;
+        runtime.trigger_timeline_events_between(0, 0, true, true, started_at);
+        assert_eq!(runtime.active_effect_activation_indices.len(), 1);
+        runtime.timeline_position_ms = 400;
+        runtime.timeline_external_sync_source = Some(ClockSource::MidiTimecode);
+        runtime.apply_command(EngineCommand::SyncTimelineTimecode {
+            position_ms: 100,
+            source: ClockSource::MidiTimecode,
+        });
+        assert!(runtime.active_effect_activation_indices.is_empty());
+        assert!(runtime.pending_cues.is_empty());
+    }
+
+    #[test]
+    fn activation_scoped_pre_wait_survives_rebuild_without_early_activation() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![owned_lfo_target(
+                120,
+                test_lfo_request(
+                    "Delayed owned wave",
+                    LfoShape::Saw,
+                    1_000,
+                    0.0,
+                    EffectBlendMode::Override,
+                    0,
+                    u16::MAX,
+                ),
+            )],
+        );
+        runtime.cues[0].pre_wait_ms = 100;
+        runtime.timeline_events = vec![test_scene_block(10, 1, 0, 500, 1, 1.0)];
+        runtime.sort_timeline_events();
+        let started_at = Instant::now();
+        runtime.rebuild_effect_activations(started_at);
+        runtime.trigger_timeline_events_between(0, 0, true, true, started_at);
+        assert_eq!(runtime.pending_cues.len(), 1);
+        assert!(runtime.active_effect_activation_indices.is_empty());
+
+        runtime.timeline_position_ms = 50;
+        runtime.apply_command(EngineCommand::SetBpm(121.0));
+        assert_eq!(runtime.pending_cues.len(), 1);
+        assert!(
+            runtime.active_effect_activation_indices.is_empty(),
+            "a command-drain rebuild fired a pre-wait activation early"
+        );
+
+        let due_at = started_at + Duration::from_millis(100);
+        runtime.advance_pending_cue(due_at);
+        assert_eq!(runtime.active_effect_activation_indices.len(), 1);
+        let activation = &runtime.effect_activations[runtime.active_effect_activation_indices[0]];
+        assert_eq!(activation.effect.created_at, due_at);
+    }
+
+    #[test]
+    fn activation_scoped_rebuild_drops_block_moved_outside_playhead() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![owned_lfo_target(
+                121,
+                test_lfo_request(
+                    "Moved owned wave",
+                    LfoShape::Sine,
+                    1_000,
+                    0.0,
+                    EffectBlendMode::Override,
+                    0,
+                    u16::MAX,
+                ),
+            )],
+        );
+        runtime.timeline_events = vec![test_scene_block(10, 1, 0, 100, 1, 1.0)];
+        runtime.sort_timeline_events();
+        let started_at = Instant::now();
+        runtime.rebuild_effect_activations(started_at);
+        runtime.trigger_timeline_events_between(0, 0, true, true, started_at);
+        runtime.timeline_position_ms = 50;
+        assert_eq!(runtime.active_effect_activation_indices.len(), 1);
+
+        let mut moved = runtime.timeline_events[0].clone();
+        moved.time_ms = 200;
+        runtime.set_timeline_scene_block_state(moved).unwrap();
+        runtime.rebuild_effect_activations(started_at + Duration::from_millis(50));
+
+        assert!(runtime.active_effect_activation_indices.is_empty());
+    }
+
+    #[test]
+    fn activation_scoped_failed_publication_restores_active_block_instance() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![owned_lfo_target(
+                122,
+                test_lfo_request(
+                    "Rollback owned wave",
+                    LfoShape::Sine,
+                    1_000,
+                    0.0,
+                    EffectBlendMode::Override,
+                    0,
+                    u16::MAX,
+                ),
+            )],
+        );
+        runtime.timeline_events = vec![test_scene_block(10, 1, 0, 500, 1, 1.0)];
+        runtime.sort_timeline_events();
+        let started_at = Instant::now();
+        runtime.rebuild_effect_activations(started_at);
+        runtime.trigger_timeline_events_between(0, 0, true, true, started_at);
+        let original_created_at = runtime.effect_activations
+            [runtime.active_effect_activation_indices[0]]
+            .effect
+            .created_at;
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::RemoveTimelineSceneBlockPublished {
+            event_id: 10,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        let guard = published.read().unwrap();
+        runtime.publish_pending_command_acks(0, &published);
+        drop(guard);
+
+        assert!(receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("rolled back"));
+        assert_eq!(runtime.timeline_events.len(), 1);
+        assert_eq!(runtime.active_effect_activation_indices.len(), 1);
+        let restored = &runtime.effect_activations[runtime.active_effect_activation_indices[0]];
+        assert!(matches!(
+            restored.key,
+            Some(RuntimeEffectActivationKey::Timeline { event_id: 10, .. })
+        ));
+        assert_eq!(restored.effect.created_at, original_created_at);
     }
 
     #[test]
@@ -41517,7 +43608,7 @@ mod tests {
             &mut due,
         );
         assert_eq!(
-            due,
+            timeline_trigger_tuples(&due),
             vec![
                 (100, 7, 3, 0),
                 (150, 7, 3, 0),
@@ -41534,7 +43625,7 @@ mod tests {
             None,
             &mut due,
         );
-        assert_eq!(due, vec![(150, 7, 3, 0)]);
+        assert_eq!(timeline_trigger_tuples(&due), vec![(150, 7, 3, 0)]);
 
         let mut runtime = EngineRuntime::new(DmxOutputConfig {
             enabled: false,
@@ -41622,6 +43713,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: false,
+                params: None,
             }],
         );
         create_effect_only_cue(
@@ -41630,6 +43722,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: true,
+                params: None,
             }],
         );
         create_effect_only_cue(
@@ -41638,6 +43731,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: true,
+                params: None,
             }],
         );
         runtime.timeline_events = vec![
@@ -41736,6 +43830,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: true,
+                params: None,
             }],
         );
         let published = RwLock::new(runtime.build_snapshot(0));
@@ -42056,6 +44151,8 @@ mod tests {
             due_at: now + Duration::from_secs(10),
             source: PendingCueTriggerSource::Timeline,
             repeat_count: 2,
+            timeline_effect_activation: None,
+            dispatch: None,
         });
         runtime.timeline_playing = true;
         runtime.timeline_position_ms = 900;
@@ -42572,6 +44669,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: true,
+                params: None,
             }],
         );
         runtime.timeline_layers = vec![timeline_test_layer(
@@ -42604,6 +44702,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: true,
+                params: None,
             }],
         );
         create_effect_only_cue(
@@ -42612,6 +44711,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 2,
                 enabled: true,
+                params: None,
             }],
         );
         runtime.timeline_layers = vec![
@@ -42644,6 +44744,7 @@ mod tests {
             vec![CueEffectTarget {
                 effect_id: 1,
                 enabled: true,
+                params: None,
             }],
         );
         runtime.timeline_layers = vec![timeline_test_layer(
@@ -42804,7 +44905,10 @@ mod tests {
             None,
             &mut due,
         );
-        assert_eq!(due, vec![(0, 30, 3, 1), (0, 10, 1, 0), (0, 20, 2, 0)]);
+        assert_eq!(
+            timeline_trigger_tuples(&due),
+            vec![(0, 30, 3, 1), (0, 10, 1, 0), (0, 20, 2, 0)]
+        );
 
         runtime.timeline_playing = true;
         runtime.timeline_playhead_boundary_armed = true;
@@ -42839,7 +44943,7 @@ mod tests {
         ];
         runtime.recompute_timeline_event_layers().unwrap();
 
-        let (jump_at_ms, target) = runtime
+        let (jump_at_ms, _, _, target) = runtime
             .first_timeline_jump_between(0, 100, true)
             .expect("simultaneous jump sources should select one target");
 

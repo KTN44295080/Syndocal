@@ -94,24 +94,31 @@ export const normalizedCueEffectTargets = (
   targets: CueEffectTarget[],
 ): CueEffectTarget[] => {
   const targetById = new Map<number, CueEffectTarget>();
+  const effectIds = new Set(effects.map((effect) => effect.id));
   for (const target of targets) {
     if (!targetById.has(target.effect_id)) targetById.set(target.effect_id, target);
   }
   return effects.flatMap((effect) => {
     const target = targetById.get(effect.id);
-    return target ? [{ effect_id: effect.id, enabled: target.enabled }] : [];
-  });
+    return target ? [{ ...target, effect_id: effect.id, enabled: target.enabled }] : [];
+  }).concat(
+    [...targetById.values()]
+      .filter((target) => target.params != null && !effectIds.has(target.effect_id))
+      .map((target) => ({ ...target })),
+  );
 };
 
 export const selectAllCueEffects = (
   effects: EffectSummary[],
   targets: CueEffectTarget[],
 ): CueEffectTarget[] => {
-  const existing = new Map(targets.map((target) => [target.effect_id, target.enabled]));
-  return effects.map((effect) => ({
-    effect_id: effect.id,
-    enabled: existing.get(effect.id) ?? effect.enabled,
-  }));
+  const existingIds = new Set(targets.map((target) => target.effect_id));
+  return normalizedCueEffectTargets(effects, [
+    ...targets,
+    ...effects
+      .filter((effect) => !existingIds.has(effect.id))
+      .map((effect) => ({ effect_id: effect.id, enabled: effect.enabled })),
+  ]);
 };
 
 export const syncCueEffectCaptureTargets = (
@@ -126,6 +133,7 @@ export const syncCueEffectCaptureTargets = (
     const current = currentById.get(effect.id);
     if (!current && !includeMissing) return [];
     return [{
+      ...current,
       effect_id: effect.id,
       enabled: current && overrides.has(effect.id) ? current.enabled : effect.enabled,
     }];
@@ -140,6 +148,7 @@ export const refreshListedCueEffectStates = (
   return normalizedCueEffectTargets(
     effects,
     targets.map((target) => ({
+      ...target,
       effect_id: target.effect_id,
       enabled: current.get(target.effect_id) ?? target.enabled,
     })),
@@ -154,6 +163,8 @@ export const setCueEffectIncluded = (
 ): CueEffectTarget[] => {
   const withoutTarget = targets.filter((target) => target.effect_id !== effectId);
   if (!included) return normalizedCueEffectTargets(effects, withoutTarget);
+  const existing = targets.find((target) => target.effect_id === effectId);
+  if (existing) return normalizedCueEffectTargets(effects, [...withoutTarget, existing]);
   const effect = effects.find((candidate) => candidate.id === effectId);
   return effect
     ? normalizedCueEffectTargets(effects, [...withoutTarget, { effect_id: effectId, enabled: effect.enabled }])

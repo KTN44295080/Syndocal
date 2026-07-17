@@ -11255,6 +11255,41 @@ input[type="color"] {
   font-size: 10px;
 }
 
+.cueEffectRecallRow > label .cueEffectRecallMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 4px;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.cueEffectRecallRow > label .cueEffectRecallMetaText {
+  display: block;
+  flex: 1 1 80px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cueEffectRecallRow > label .cueEffectParamsChip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-height: 16px;
+  border: 1px solid #597789;
+  border-radius: 2px;
+  background: #1d2a31;
+  color: #b9d5e4;
+  padding: 1px 4px;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
 .cueEffectRecallState {
   min-width: 0;
   min-height: 30px;

@@ -593,6 +593,7 @@ const japaneseText: Record<string, string> = {
   "Node Graph Enable": "ノードグラフを有効化",
   "Effect Enable": "エフェクトを有効化",
   "Effect Recall": "エフェクト呼び出し",
+  "Owns params": "パラメータ保持",
   "Effects Only": "エフェクトのみ",
   "All Sources": "すべてのソース",
   "Effect Recall selection tools": "エフェクト呼び出し対象の選択ツール",

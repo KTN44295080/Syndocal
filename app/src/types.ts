@@ -1502,9 +1502,18 @@ export interface CueNodeGraphTarget {
   enabled: boolean;
 }
 
+export type EffectParamsSnapshot =
+  | { Lfo: LfoEffectRequest }
+  | { PositionWave: PositionWaveEffectRequest }
+  | { Color: ColorEffectRequest }
+  | { Chaser: ChaserEffectRequest }
+  | { Move: MoveEffectRequest }
+  | { Value: ValueEffectRequest };
+
 export interface CueEffectTarget {
   effect_id: number;
   enabled: boolean;
+  params?: EffectParamsSnapshot | null;
 }
 
 export interface ActiveFadeSummary {

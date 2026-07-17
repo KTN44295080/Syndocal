@@ -340,10 +340,12 @@ pub struct CueFixtureTarget {
     pub values: Vec<AttributeValueSummary>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CueEffectTarget {
     pub effect_id: EffectId,
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<EffectParamsSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -2058,6 +2060,16 @@ pub struct ValueEffectRequest {
     pub blend_mode: EffectBlendMode,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum EffectParamsSnapshot {
+    Lfo(LfoEffectRequest),
+    PositionWave(PositionWaveEffectRequest),
+    Color(ColorEffectRequest),
+    Chaser(ChaserEffectRequest),
+    Move(MoveEffectRequest),
+    Value(ValueEffectRequest),
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum EffectKind {
     Lfo,
@@ -3138,10 +3150,12 @@ mod tests {
             super::CueEffectTarget {
                 effect_id: 3,
                 enabled: true,
+                params: None,
             },
             super::CueEffectTarget {
                 effect_id: 8,
                 enabled: false,
+                params: None,
             },
         ];
 
@@ -3149,6 +3163,43 @@ mod tests {
         let decoded: super::CueSummary = serde_json::from_str(&encoded).unwrap();
 
         assert_eq!(decoded, cue);
+    }
+
+    #[test]
+    fn cue_effect_target_params_roundtrip_and_legacy_default() {
+        let target = super::CueEffectTarget {
+            effect_id: 3,
+            enabled: true,
+            params: Some(super::EffectParamsSnapshot::Lfo(super::LfoEffectRequest {
+                label: "Owned pulse".to_string(),
+                fixture_ids: vec![7],
+                target_group_ids: vec!["Front".to_string()],
+                attribute: "Dimmer".to_string(),
+                video_targets: Vec::new(),
+                shape: super::LfoShape::Sine,
+                period_ms: 1_000,
+                clock_sync: Some(super::EffectClockSync { beats: 2.0 }),
+                low: 1_024,
+                high: 60_000,
+                phase: 0.25,
+                blend_mode: super::EffectBlendMode::Override,
+            })),
+        };
+
+        let encoded = serde_json::to_string(&target).unwrap();
+        let decoded: super::CueEffectTarget = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, target);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&encoded).unwrap()["params"]["Lfo"]
+                ["period_ms"],
+            1_000
+        );
+
+        let legacy: super::CueEffectTarget =
+            serde_json::from_str(r#"{"effect_id":3,"enabled":true}"#).unwrap();
+        assert!(legacy.params.is_none());
+        let legacy_value = serde_json::to_value(legacy).unwrap();
+        assert!(legacy_value.get("params").is_none());
     }
 
     #[test]

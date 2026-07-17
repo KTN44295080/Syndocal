@@ -7,7 +7,7 @@ import {
   setCueEffectTargetEnabled,
 } from "../cueEffectRecall";
 import type { CueEffectRecallChange } from "../cueEffectRecall";
-import type { CueEffectTarget, EffectSummary } from "../types";
+import type { CueEffectTarget, EffectKind, EffectParamsSnapshot, EffectSummary } from "../types";
 
 interface CueEffectRecallEditorProps {
   id?: string;
@@ -20,13 +20,26 @@ interface CueEffectRecallEditorProps {
   onChange: (targets: CueEffectTarget[], change: CueEffectRecallChange) => void;
 }
 
-const effectKindLabel = (effect: EffectSummary) => {
-  if (effect.effect_type === "Color") return "Color";
-  if (effect.effect_type === "Chaser") return "Chaser";
-  if (effect.effect_type === "Move") return "Move";
-  if (effect.effect_type === "PositionWave") return "Position Wave";
-  return "LFO";
+const effectKindLabel = (effectKind: EffectKind) => {
+  if (effectKind === "PositionWave") return "Position Wave";
+  if (effectKind === "Lfo") return "LFO";
+  return effectKind;
 };
+
+const effectParamsDescriptor = (params: EffectParamsSnapshot): { kind: EffectKind; label: string } => {
+  if ("Lfo" in params) return { kind: "Lfo", label: params.Lfo.label };
+  if ("PositionWave" in params) return { kind: "PositionWave", label: params.PositionWave.label };
+  if ("Color" in params) return { kind: "Color", label: params.Color.label };
+  if ("Chaser" in params) return { kind: "Chaser", label: params.Chaser.label };
+  if ("Move" in params) return { kind: "Move", label: params.Move.label };
+  return { kind: "Value", label: params.Value.label };
+};
+
+interface CueEffectRecallRowModel {
+  id: number;
+  label: string;
+  kind: EffectKind;
+}
 
 const effectRowsPerPage = 48;
 
@@ -35,20 +48,36 @@ export function CueEffectRecallEditor(props: CueEffectRecallEditorProps) {
   const [filter, setFilter] = createSignal("");
   const [page, setPage] = createSignal(0);
   const targetById = createMemo(() => new Map(props.targets.map((target) => [target.effect_id, target])));
-  const includedCount = createMemo(() => props.effects.filter((effect) => targetById().has(effect.id)).length);
-  const matchingEffects = createMemo(() => {
+  const effectById = createMemo(() => new Map(props.effects.map((effect) => [effect.id, effect])));
+  const rows = createMemo<CueEffectRecallRowModel[]>(() => [
+    ...props.effects.map((effect) => ({ id: effect.id, label: effect.label, kind: effect.effect_type })),
+    ...props.targets.flatMap((target) => {
+      const params = target.params;
+      if (params == null || effectById().has(target.effect_id)) return [];
+      const descriptor = effectParamsDescriptor(params);
+      return [{
+        id: target.effect_id,
+        label: descriptor.label || `Effect ${target.effect_id}`,
+        kind: descriptor.kind,
+      }];
+    }),
+  ]);
+  const includedCount = createMemo(() => rows().filter((row) => targetById().has(row.id)).length);
+  const listedCurrentEffectCount = createMemo(() => props.effects.filter((effect) => targetById().has(effect.id)).length);
+  const allCurrentEffectsIncluded = createMemo(() => props.effects.length > 0 && listedCurrentEffectCount() === props.effects.length);
+  const matchingRows = createMemo(() => {
     const query = filter().trim().toLocaleLowerCase();
-    if (!query) return props.effects;
-    return props.effects.filter((effect) =>
-      effect.label.toLocaleLowerCase().includes(query)
-      || String(effect.id).includes(query)
-      || effectKindLabel(effect).toLocaleLowerCase().includes(query)
+    if (!query) return rows();
+    return rows().filter((row) =>
+      row.label.toLocaleLowerCase().includes(query)
+      || String(row.id).includes(query)
+      || effectKindLabel(row.kind).toLocaleLowerCase().includes(query)
     );
   });
-  const pageCount = createMemo(() => Math.max(1, Math.ceil(matchingEffects().length / effectRowsPerPage)));
-  const visibleEffects = createMemo(() => {
+  const pageCount = createMemo(() => Math.max(1, Math.ceil(matchingRows().length / effectRowsPerPage)));
+  const visibleRows = createMemo(() => {
     const start = page() * effectRowsPerPage;
-    return matchingEffects().slice(start, start + effectRowsPerPage);
+    return matchingRows().slice(start, start + effectRowsPerPage);
   });
   createEffect(() => {
     const lastPage = pageCount() - 1;
@@ -73,7 +102,7 @@ export function CueEffectRecallEditor(props: CueEffectRecallEditorProps) {
     >
       <summary>
         <span>Effect Recall</span>
-        <small class="tabularNums">{includedCount()} / {props.effects.length}</small>
+        <small class="tabularNums">{includedCount()} / {rows().length}</small>
       </summary>
       <Show when={props.expanded || open()}>
         <div class="cueEffectRecallBody">
@@ -84,7 +113,7 @@ export function CueEffectRecallEditor(props: CueEffectRecallEditorProps) {
             <div class="buttonRow" role="group" aria-label="Effect Recall selection tools">
               <button
                 type="button"
-                disabled={props.effects.length === 0 || includedCount() === props.effects.length}
+                disabled={props.effects.length === 0 || allCurrentEffectsIncluded()}
                 onClick={() => props.onChange(selectAllCueEffects(props.effects, props.targets), { kind: "selectAll" })}
               >
                 Select All
@@ -92,7 +121,7 @@ export function CueEffectRecallEditor(props: CueEffectRecallEditorProps) {
               <button type="button" disabled={includedCount() === 0} onClick={() => props.onChange([], { kind: "clear" })}>
                 Clear
               </button>
-              <button type="button" disabled={props.effects.length === 0 || (props.currentMode === "refresh" && includedCount() === 0)} onClick={useCurrentState}>
+              <button type="button" disabled={props.effects.length === 0 || (props.currentMode === "refresh" && listedCurrentEffectCount() === 0)} onClick={useCurrentState}>
                 {props.currentMode === "capture" ? "Capture Current" : "Refresh States"}
               </button>
             </div>
@@ -100,7 +129,7 @@ export function CueEffectRecallEditor(props: CueEffectRecallEditorProps) {
           <Show when={props.applyHint}>
             {(hint) => <p class="cueEffectRecallApplyHint">{hint()}</p>}
           </Show>
-          <Show when={props.effects.length > effectRowsPerPage}>
+          <Show when={rows().length > effectRowsPerPage}>
             <div class="cueEffectRecallFilter">
               <label>
                 <span>Filter Effects</span>
@@ -124,58 +153,63 @@ export function CueEffectRecallEditor(props: CueEffectRecallEditorProps) {
             </div>
           </Show>
           <Show
-            when={props.effects.length > 0}
+            when={rows().length > 0}
             fallback={
               <p class="empty">
                 {props.hasAnyEffects ? "No Effects match this Cue scope." : "Create an Effect in the Effect rack first."}
               </p>
             }
           >
-            <Show when={matchingEffects().length > 0} fallback={<p class="empty">No Effects match this filter.</p>}>
+            <Show when={matchingRows().length > 0} fallback={<p class="empty">No Effects match this filter.</p>}>
               <div class="cueEffectRecallList" role="list" aria-label="Cue Effect Recall targets">
-                <For each={visibleEffects()}>
-                  {(effect, index) => {
-                    const target = () => targetById().get(effect.id);
+                <For each={visibleRows()}>
+                  {(row, index) => {
+                    const target = () => targetById().get(row.id);
                     const included = () => Boolean(target());
                     return (
                       <div
                         class={`cueEffectRecallRow ${included() ? "included" : ""}`}
                         role="listitem"
                         aria-posinset={page() * effectRowsPerPage + index() + 1}
-                        aria-setsize={matchingEffects().length}
+                        aria-setsize={matchingRows().length}
                       >
                         <label>
                           <input
                             type="checkbox"
                             checked={included()}
-                            aria-label={`Include Effect ${effect.id} ${effect.label}`}
+                            aria-label={`Include Effect ${row.id} ${row.label}`}
                             onChange={(event) => {
                               const included = event.currentTarget.checked;
                               props.onChange(
-                                setCueEffectIncluded(props.effects, props.targets, effect.id, included),
-                                { kind: "include", effectId: effect.id, included },
+                                setCueEffectIncluded(props.effects, props.targets, row.id, included),
+                                { kind: "include", effectId: row.id, included },
                               );
                             }}
                           />
                           <span>
-                            <b data-no-localize>{effect.label}</b>
-                            <small class="tabularNums">#{effect.id} · {effectKindLabel(effect)}</small>
+                            <b data-no-localize>{row.label}</b>
+                            <small class="cueEffectRecallMeta tabularNums">
+                              <span class="cueEffectRecallMetaText">#{row.id} · {effectKindLabel(row.kind)}</span>
+                              <Show when={target()?.params != null}>
+                                <span class="cueEffectParamsChip">Owns params</span>
+                              </Show>
+                            </small>
                           </span>
                         </label>
                         <button
                           type="button"
                           class={`cueEffectRecallState ${target()?.enabled ? "on" : "off"}`}
                           disabled={!included()}
-                          aria-label={`Recall Effect ${effect.id} ${target()?.enabled ? "ON" : "OFF"}`}
+                          aria-label={`Recall Effect ${row.id} ${target()?.enabled ? "ON" : "OFF"}`}
                           aria-pressed={target()?.enabled ?? false}
                           onClick={() => props.onChange(
                             setCueEffectTargetEnabled(
                               props.effects,
                               props.targets,
-                              effect.id,
+                              row.id,
                               !(target()?.enabled ?? false),
                             ),
-                            { kind: "state", effectId: effect.id },
+                            { kind: "state", effectId: row.id },
                           )}
                         >
                           {target()?.enabled ? "ON" : "OFF"}
