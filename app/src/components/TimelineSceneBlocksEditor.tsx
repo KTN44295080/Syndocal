@@ -12,6 +12,7 @@ import {
   timelineSceneBlockSourcePickerOptions,
 } from "../timelineSceneBlocks";
 import type { TimelineCueEventSummary, TimelineTrackKind } from "../types";
+import { formatTimelineTimeInput, parseTimelineTimeInput } from "../timelineTimeInput";
 
 export interface TimelineSceneBlockCueOption {
   id: number;
@@ -83,6 +84,9 @@ const searchTokensMatch = (searchable: string, query: string) =>
 export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps) {
   const [page, setPage] = createSignal(0);
   const [rowQuery, setRowQuery] = createSignal("");
+  // T3: the Finder + fixed inspector is the primary editing surface; the
+  // legacy paged row editor stays reachable behind the List toggle.
+  const [editorView, setEditorView] = createSignal<"finder" | "list">("finder");
   const [jumpPickerEventId, setJumpPickerEventId] = createSignal<number | null>(null);
   const [jumpPickerTargetId, setJumpPickerTargetId] = createSignal<number | null>(null);
   const [jumpPickerQuery, setJumpPickerQuery] = createSignal("");
@@ -452,6 +456,63 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
     setSourcePickerQuery("");
   };
 
+  // T3 inspector: one fixed properties pane for the selected block with
+  // Enter/blur commit (no Save button). Text inputs accept M:SS.ff or raw ms.
+  const selectedRow = createMemo(() =>
+    props.eventRows.find((event) => event.id === props.selectedEventId) ?? null,
+  );
+  const inspectorDraft = () => {
+    const row = selectedRow();
+    return row ? props.timelineEventDraft(row) : null;
+  };
+  const inspectorDirty = () => {
+    const row = selectedRow();
+    const draft = inspectorDraft();
+    return Boolean(row && draft && !timelineEventDraftMatchesSummary(row, draft));
+  };
+  const commitInspectorPatch = (patch: Partial<TimelineEventDraft>) => {
+    const row = selectedRow();
+    if (!row) return;
+    props.onUpdateEventDraft(row, patch);
+    void props.onSaveEvent(row);
+  };
+  const commitInspectorTime = (field: "time_ms" | "duration_ms", input: HTMLInputElement) => {
+    const row = selectedRow();
+    const draft = inspectorDraft();
+    if (!row || !draft) return;
+    const parsed = parseTimelineTimeInput(input.value);
+    const current = field === "time_ms" ? draft.time_ms : draft.duration_ms;
+    if (parsed === null) {
+      input.value = formatTimelineTimeInput(current);
+      return;
+    }
+    const nextMs = field === "duration_ms" && row.duration_ms > 0 ? Math.max(1, parsed) : Math.max(0, parsed);
+    if (nextMs === current) {
+      input.value = formatTimelineTimeInput(current);
+      return;
+    }
+    if (field === "time_ms") {
+      commitInspectorPatch({
+        time_ms: nextMs,
+        ...(draft.conform_to_tempo ? { time_beats: millisecondsToBeats(nextMs) } : {}),
+      });
+    } else {
+      commitInspectorPatch({
+        duration_ms: nextMs,
+        ...(draft.conform_to_tempo && !draft.loop_fill ? { duration_beats: millisecondsToBeats(nextMs) } : {}),
+      });
+    }
+  };
+  const blurOnEnter = (event: KeyboardEvent & { currentTarget: HTMLInputElement }) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      event.currentTarget.blur();
+    }
+  };
+  const finderStartStamp = (event: TimelineSceneBlockRow) => formatTimelineTimeInput(event.time_ms);
+  const finderLaneLabel = (event: TimelineSceneBlockRow) =>
+    event.layer_id !== null && event.layer_id !== undefined ? `L${event.layer_id}` : event.track;
+
   return (
     <section
       class="sceneBlockWorkspace"
@@ -471,6 +532,26 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
           <span><small>Blocks</small><strong>{blockCount()}</strong></span>
           <span><small>Points</small><strong>{pointCount()}</strong></span>
         </div>
+        <nav class="sceneBlockViewToggle" aria-label="Scene Block editor view">
+          <button
+            type="button"
+            classList={{ active: editorView() === "finder" }}
+            aria-pressed={editorView() === "finder"}
+            data-scene-block-view-toggle="finder"
+            onClick={() => setEditorView("finder")}
+          >
+            Finder
+          </button>
+          <button
+            type="button"
+            classList={{ active: editorView() === "list" }}
+            aria-pressed={editorView() === "list"}
+            data-scene-block-view-toggle="list"
+            onClick={() => setEditorView("list")}
+          >
+            List
+          </button>
+        </nav>
       </header>
 
       <form
@@ -681,11 +762,13 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
           </div>
       </Show>
 
-      <div class="sceneBlockColumnGuide" aria-hidden="true">
-        <span>Source / live status</span>
-        <span>Instance timing and flow</span>
-        <span>Actions</span>
-      </div>
+      <Show when={editorView() === "list"}>
+        <div class="sceneBlockColumnGuide" aria-hidden="true">
+          <span>Source / live status</span>
+          <span>Instance timing and flow</span>
+          <span>Actions</span>
+        </div>
+      </Show>
 
       <Show when={props.filterEventIds !== null}>
         <div class="sceneBlockOverlapFilter" role="status">
@@ -725,6 +808,181 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
         </nav>
       </Show>
 
+      <Show when={editorView() === "finder"}>
+        <div class="sceneBlockFinderSplit" data-scene-block-finder-split>
+          <div class="sceneBlockFinder" role="list" ref={(element) => { listElement = element; }}>
+            <Show
+              when={filteredRows().length > 0}
+              fallback={
+                <div class="sceneBlockEmpty">
+                  <strong>No Scene Blocks yet</strong>
+                  <span>Select a source Cue, set its instance timing, then place the first linked block.</span>
+                </div>
+              }
+            >
+              <For each={visibleRows()}>
+                {(event) => (
+                  <button
+                    type="button"
+                    role="listitem"
+                    class="sceneBlockRow sceneBlockFinderRow"
+                    classList={{ selected: props.selectedEventId === event.id }}
+                    data-scene-block-id={event.id}
+                    onClick={() => props.onSelectEvent(event.id)}
+                  >
+                    <span
+                      class="sceneBlockFinderChip"
+                      aria-hidden="true"
+                      style={{ background: identityCssColor(cueIdentityHue(event.cue_id), "band") }}
+                    />
+                    <span class="sceneBlockFinderName" data-no-localize>
+                      <small>#{event.id}</small> {event.cue_label}
+                    </span>
+                    <span class="sceneBlockFinderStamp" data-no-localize>{finderStartStamp(event)}</span>
+                    <span class="sceneBlockFinderLane" data-no-localize>{finderLaneLabel(event)}</span>
+                  </button>
+                )}
+              </For>
+            </Show>
+          </div>
+          <aside class="sceneBlockInspector" data-scene-block-inspector aria-label="Block Properties">
+            <Show
+              when={selectedRow()}
+              fallback={
+                <div class="sceneBlockEmpty">
+                  <strong>Block Properties</strong>
+                  <span>Select a block in the Finder or on the canvas to edit it here.</span>
+                </div>
+              }
+            >
+              {(row) => {
+                const draft = () => props.timelineEventDraft(row());
+                const sourceCue = () => cueOptionById().get(draft().cue_id) ?? null;
+                return (
+                  <div class="sceneBlockInspectorBody">
+                    <div class="sceneBlockInspectorHead">
+                      <span
+                        class="sceneBlockFinderChip"
+                        aria-hidden="true"
+                        style={{ background: identityCssColor(cueIdentityHue(row().cue_id), "band") }}
+                      />
+                      <strong data-no-localize>#{row().id} {row().cue_label}</strong>
+                      <Show when={inspectorDirty()}>
+                        <span class="sceneBlockUnsavedBadge" data-scene-block-inspector-dirty>UNSAVED</span>
+                      </Show>
+                    </div>
+                    <div class="sceneBlockInspectorFields">
+                      <label>
+                        Start
+                        <input
+                          type="text"
+                          data-scene-block-inspector-start
+                          title="M:SS.ff or raw ms"
+                          value={formatTimelineTimeInput(draft().time_ms)}
+                          onKeyDown={blurOnEnter}
+                          onBlur={(inputEvent) => commitInspectorTime("time_ms", inputEvent.currentTarget)}
+                        />
+                      </label>
+                      <label>
+                        Duration
+                        <input
+                          type="text"
+                          data-scene-block-inspector-duration
+                          title="M:SS.ff or raw ms"
+                          value={formatTimelineTimeInput(draft().duration_ms)}
+                          onKeyDown={blurOnEnter}
+                          onBlur={(inputEvent) => commitInspectorTime("duration_ms", inputEvent.currentTarget)}
+                        />
+                      </label>
+                      <label>
+                        Loops
+                        <input
+                          type="number"
+                          min="1"
+                          max="256"
+                          disabled={draft().loop_fill || row().duration_ms <= 0}
+                          value={draft().loop_count}
+                          onKeyDown={blurOnEnter}
+                          onBlur={(inputEvent) => {
+                            const loops = Math.min(256, Math.max(1, Number(inputEvent.currentTarget.value) || 1));
+                            if (loops !== draft().loop_count) commitInspectorPatch({ loop_count: loops });
+                          }}
+                        />
+                      </label>
+                      <label>
+                        Fade In ms
+                        <input
+                          type="number"
+                          min="0"
+                          max={Math.max(0, draft().duration_ms)}
+                          value={draft().fade_in_ms}
+                          onKeyDown={blurOnEnter}
+                          onBlur={(inputEvent) => {
+                            const fadeMs = Math.min(draft().duration_ms, Math.max(0, Number(inputEvent.currentTarget.value) || 0));
+                            if (fadeMs !== draft().fade_in_ms) commitInspectorPatch({ fade_in_ms: fadeMs });
+                          }}
+                        />
+                      </label>
+                      <label>
+                        Fade Out ms
+                        <input
+                          type="number"
+                          min="0"
+                          max={Math.max(0, draft().duration_ms)}
+                          value={draft().fade_out_ms}
+                          onKeyDown={blurOnEnter}
+                          onBlur={(inputEvent) => {
+                            const fadeMs = Math.min(draft().duration_ms, Math.max(0, Number(inputEvent.currentTarget.value) || 0));
+                            if (fadeMs !== draft().fade_out_ms) commitInspectorPatch({ fade_out_ms: fadeMs });
+                          }}
+                        />
+                      </label>
+                      <span class="sceneBlockInspectorLane">
+                        <small>Lane</small>
+                        <strong data-no-localize>{finderLaneLabel(row())}</strong>
+                      </span>
+                    </div>
+                    <div class="sceneBlockInspectorSource">
+                      <small>Source Cue</small>
+                      <span data-no-localize>{sourceCue() ? sourceCueOptionLabel(sourceCue()!) : `Missing Cue ${draft().cue_id}`}</span>
+                    </div>
+                    <div class="sceneBlockInspectorActions">
+                      <button type="button" onClick={() => openSourcePicker(row(), draft())}>Change Source…</button>
+                      <button type="button" onClick={() => openJumpPicker(row(), draft())}>After…</button>
+                      <button type="button" onClick={() => props.onOpenSourceCue(draft().cue_id)}>Edit Source</button>
+                      <button
+                        type="button"
+                        classList={{ active: props.armedCueId === draft().cue_id }}
+                        aria-pressed={props.armedCueId === draft().cue_id}
+                        data-timeline-arm-cue={draft().cue_id}
+                        onClick={() => props.onArmCue(draft().cue_id)}
+                      >
+                        {props.armedCueId === draft().cue_id ? "Disarm Cue" : "Arm Cue"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (confirmTimelinePlacementRemoval(
+                            row().id,
+                            `${row().cue_number} · ${row().cue_label}`,
+                            totalDurationMs(row()),
+                          )) {
+                            void props.onRemoveEvent(row());
+                          }
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                );
+              }}
+            </Show>
+          </aside>
+        </div>
+      </Show>
+
+      <Show when={editorView() === "list"}>
       <div class="sceneBlockList" role="list" ref={(element) => { listElement = element; }}>
         <Show
           when={props.eventRows.length > 0}
@@ -1064,6 +1322,7 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
           </For>
         </Show>
       </div>
+      </Show>
     </section>
   );
 }

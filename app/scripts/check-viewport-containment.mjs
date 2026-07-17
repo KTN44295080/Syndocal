@@ -6197,6 +6197,12 @@ async function runViewport(client, viewport) {
       const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
       writeFileSync(join(screenshotDir, `control-${controlTab.id}-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
     }
+    if (controlTab.id === "live") {
+      // T3: the Finder+inspector is the default editor view; these control-live
+      // expectations describe the legacy paged list, so switch to it first.
+      await client.evaluate(`document.querySelector('[data-scene-block-view-toggle="list"]')?.click()`);
+      await sleep(120);
+    }
     results.push(await measure(client, `control-${controlTab.id}-${viewport.width}x${viewport.height}`));
     traceViewport(`control ${controlTab.id} measured ${viewport.width}x${viewport.height}`);
     if (controlTab.id === "mixer") {
@@ -7590,6 +7596,64 @@ async function runSceneBlockLargeViewport(client, viewport) {
   await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(180);
+  // T3: the Finder + fixed inspector is the default editor view. Verify it,
+  // exercise a row-select and an Enter-commit edit, then switch to the legacy
+  // List view so every pre-T3 expectation below runs against the paged list.
+  const finderStats = await client.evaluate(`(async () => {
+    const raf2 = () => new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const split = document.querySelector('[data-scene-block-finder-split]');
+    const inspector = document.querySelector('[data-scene-block-inspector]');
+    const rows = [...document.querySelectorAll('.sceneBlockFinderRow')];
+    const firstRow = rows[0] ?? null;
+    const splitVisible = Boolean(split && split.getBoundingClientRect().width > 0);
+    const inspectorVisible = Boolean(inspector && inspector.getBoundingClientRect().width > 0);
+    let rowSelected = false;
+    let inspectorShowsRow = false;
+    let startCommitApplied = false;
+    let dirtyChipAfterCommit = true;
+    if (firstRow) {
+      firstRow.click();
+      await raf2(); await raf2();
+      rowSelected = firstRow.classList.contains('selected');
+      const rowId = firstRow.getAttribute('data-scene-block-id') ?? '';
+      inspectorShowsRow = Boolean(inspector?.textContent?.includes('#' + rowId));
+      const startInput = inspector?.querySelector('[data-scene-block-inspector-start]');
+      const marker = document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="' + rowId + '"]');
+      const beforeStartMs = Number(marker?.getAttribute('data-timeline-start-ms'));
+      if (startInput instanceof HTMLInputElement && Number.isFinite(beforeStartMs)) {
+        const targetMs = beforeStartMs + 250;
+        startInput.focus();
+        startInput.value = String(targetMs);
+        startInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        startInput.blur();
+        startInput.dispatchEvent(new Event('blur'));
+        await raf2(); await raf2();
+        const afterStartMs = Number(document
+          .querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="' + rowId + '"]')
+          ?.getAttribute('data-timeline-start-ms'));
+        startCommitApplied = afterStartMs === targetMs;
+        dirtyChipAfterCommit = !document.querySelector('[data-scene-block-inspector-dirty]');
+        // Restore the original start so the untouched-list expectations hold.
+        startInput.focus();
+        startInput.value = String(beforeStartMs);
+        startInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        startInput.blur();
+        startInput.dispatchEvent(new Event('blur'));
+        await raf2(); await raf2();
+      }
+    }
+    return {
+      splitVisible,
+      inspectorVisible,
+      finderRowCount: rows.length,
+      rowSelected,
+      inspectorShowsRow,
+      startCommitApplied,
+      dirtyChipAfterCommit,
+    };
+  })()`);
+  await client.evaluate(`document.querySelector('[data-scene-block-view-toggle="list"]')?.click()`);
+  await sleep(180);
   const idleMutationStats = await client.evaluate(`(() => new Promise((resolveIdle) => {
     const target = document.querySelector('.timelinePanel');
     if (!target) {
@@ -8252,6 +8316,13 @@ async function runSceneBlockLargeViewport(client, viewport) {
     ['activeTransitionStats.classAttributeMutations <= 4', () => Boolean(activeTransitionStats.classAttributeMutations <= 4)],
     ['activeTransitionStats.markerIdentityStable', () => Boolean(activeTransitionStats.markerIdentityStable)],
     ['activeTransitionStats.elapsedMs < activeTransitionBudgetMs', () => Boolean(activeTransitionStats.elapsedMs < activeTransitionBudgetMs)],
+    ['finderStats.splitVisible', () => Boolean(finderStats?.splitVisible)],
+    ['finderStats.inspectorVisible', () => Boolean(finderStats?.inspectorVisible)],
+    ['finderStats.finderRowCount > 0', () => Boolean((finderStats?.finderRowCount ?? 0) > 0)],
+    ['finderStats.rowSelected', () => Boolean(finderStats?.rowSelected)],
+    ['finderStats.inspectorShowsRow', () => Boolean(finderStats?.inspectorShowsRow)],
+    ['finderStats.startCommitApplied', () => Boolean(finderStats?.startCommitApplied)],
+    ['finderStats.dirtyChipAfterCommit', () => Boolean(finderStats?.dirtyChipAfterCommit)],
     ['markerDragStats !== null', () => Boolean(markerDragStats !== null)],
     ['Math.abs(markerDragStats.tinyMoveX - markerDragStats.initialX) < 1', () => Boolean(Math.abs(markerDragStats.tinyMoveX - markerDragStats.initialX) < 1)],
     ['Math.abs(markerDragStats.committedMoveX - markerDragStats.expectedCommittedX) < 2', () => Boolean(Math.abs(markerDragStats.committedMoveX - markerDragStats.expectedCommittedX) < 2)],
@@ -8361,6 +8432,7 @@ async function runSceneBlockLargeViewport(client, viewport) {
     idleMutationStats,
     activeTransitionStats,
     markerDragStats,
+    finderStats,
     sourcePickerStats,
     pickerStats,
     cueStats,
