@@ -282,6 +282,26 @@ syndocal5+playback3、tsc+viteビルド緑、フルマトリクス217 pass exit 
    Conform/Loop-fill toggles and rate badge from F3.
 
 ## F8: マルチステップStaticシーン（ユーザー承認 2026-07-16、F3/F4後）
+
+**✅完了 2026-07-18 コミット6a863a1** — 承認仕様どおり実装。CueSummary.steps:
+Vec<CueStepSummary>（values+fade_ms+hold_ms、#[serde(default)]、空=単一状態Cue
+バイト同一 — 540バイトfixtureでsteps欄不在を実証）。ステップ進行はブロックローカル
+時間×rate（F3）でactivation-scoped（F4）: fixture/attribute解決・累積step境界・
+activation rangeをcommand-drain/rebuild側で事前構築し、44Hz tickは事前構築済み
+sequenceとactivation indexのみ評価（新規アロケーション/ブロッキング/target再解決
+なし）。F6子タイムライン内のcueブロックも子transportのブロックローカル時刻で進行
+（rate合成実測: 親rate2.0でblock 125ms→step位置250ms、子経由でも同値）。
+authored_beatsはステップ合計から導出可能（F3 capture UI拡張、実測10.750 beats@120BPM）。
+UI: CueStepEditor（追加/複製/並替/fade/hold、内部スクロール）+ cueエディタ統合 +
+T3インスペクタ「N Static step(s)」表示。set_cue_steps Tauriコマンド+project検証+
+.sdcラウンドトリップ。JA 100%。
+ハーネス: cue-recallフェーズの合否を32 named条件へ形式化（旧13暗黙条件は期待値
+不変で命名、19が新規F8断言）+ T3ステップ数断言。
+実装経緯: Codex 3ジョブ（初回はprovider容量エラーで中断、スレッドresume失敗、
+3回目が作業ツリー差分から継続完了）。検証: engine cue_step 5/timeline 61/cue 59/
+child 9、protocol 30、syndocal project_ 75、ビルド緑、マトリクス222 exit 0、
+ライブ確認（ステップ3行/fade・hold入力6/Static steps(3)/Add Step等/スクロール0）。
+T7と3ラウンド合議マージ済み（7ee9214、マージ後222 exit 0）。
 Daslightパリティ: Cueが内部ステップ列（各ステップ = 属性値スナップショット + fade + hold）を持てる。
 - Protocol: CueSummary.steps: Vec<CueStepSummary> #[serde(default)] 空（CueStepSummary =
   { values: Vec<CueFixtureTarget相当>, fade_ms, hold_ms }）。空 = 現行の単一状態Cue（完全互換）。

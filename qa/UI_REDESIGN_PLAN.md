@@ -2,7 +2,7 @@
 
 作成: 2026-07-15 / 計画: Fable（実機比較・多段Workflow分析・敵対検証込み）/ 実装: Opus委任
 状態: **承認済み（2026-07-15）** — 実施順:
-T1✅ → T2✅ → T9✅ → T10✅ → T8✅ → F1✅ → F3✅ → F2✅ → F4✅ → T4✅（86ca79e）→ F5✅（243aaea）+ T3✅（f5cc523、Fable直接実装・合議マージf64ef96）→ F7✅（95b33b0、音声クリップブロック+可聴再生）+ T5✅（90dfa1a、Fable直接実装・合議マージ8c364a0）→ F6✅（59b6600、super scene）+ T6✅（4182ad6、Fable直接実装・合議マージf344713）→ **次: T7/F8以降** → T11 → T12
+T1✅ → T2✅ → T9✅ → T10✅ → T8✅ → F1✅ → F3✅ → F2✅ → F4✅ → T4✅（86ca79e）→ F5✅（243aaea）+ T3✅（f5cc523、Fable直接実装・合議マージf64ef96）→ F7✅（95b33b0、音声クリップブロック+可聴再生）+ T5✅（90dfa1a、Fable直接実装・合議マージ8c364a0）→ F6✅（59b6600、super scene）+ T6✅（4182ad6、Fable直接実装・合議マージf344713）→ F8✅（6a863a1、マルチステップStaticシーン）+ T7✅（60f1ad1、Fable直接実装 protocol込み・3ラウンド合議マージ7ee9214）→ **次: T11 → T12**
 実装体制（2026-07-16更新）: 実装=Codex gpt-5.6-sol（ローカルCLI、ユーザー指定）/ 計画・検証・コミット=Fable。
 T9はOpus（Mapping再設計）+Codex（StageGlyphs.tsx共有レンダラー統一）の合作で`1db7af5`として着地。
 承認内容: (1) 計画全体 (2) T8をT2直後へ前倒し（Control構造契約の変更を承認） (3) T7のprotocol変更
@@ -121,6 +121,27 @@ viewportFixtureData.ts 1ハンク、Fable解決→Codexレビュー ADJUDICATION
 （fa0b987/5742959）がマージ前に着地済み。
 
 ### T7:（オプション・要明示承認）永続identity色 — protocol変更
+
+**✅完了 2026-07-18 ブランチ60f1ad1 → 3ラウンド合議マージ7ee9214（Fable直接実装、
+frontend-only緩和はユーザー承認済み 2026-07-18）** —
+Protocol: CueSummary.color + EngineSnapshot.group_colors（BTreeMap、両方
+skip_serializing_ifでレガシーバイト同一）。Engine: SetCueColor/SetGroupColor
+（ack+expiry、RestoreGroupColorsロールバック新設）。Tauri: set_cue_color/
+set_group_color（cue-point hex検証器を再利用）+ .sdcラウンドトリップ/レガシー
+既定テスト。UI: cueIdentityCss/groupIdentityCssが永続色優先（role別明度クランプ
+fill 40-65/band 24-36/text 68-80・彩度20-85でgraphite可読性契約維持）・ハッシュ
+fallback。17呼び出しサイト全書換（音声クリップのパスハッシュ2箇所は対象外）。
+ピッカー: cue編集行 + Scene Matrixグループ列ヘッダ。scene-matrixフィクスチャに
+#ff3366(cue301)/#22aa88(backグループ)を永続化。
+ハーネス契約変更: scene-matrixへ3条件（永続cue色hsl(345)勝利/永続グループ色
+hsl(165)勝利+ハッシュ属性210温存/グループピッカー2個）、cue-recallへ
+cueColorPickerPresentInCueEditRow（F8の32条件構造へ33番目として統合）。
+既存期待値変更なし。
+検証: worktreeマトリクス222 exit 0 → F8込みmainへ合議マージ（コンフリクト3ファイル
+5ハンク全て同一アンカー隣接追加、両側保持で解決）→ マージ済みツリーで全ゲート+
+マトリクス222 exit 0。合議は3ラウンド: Codex初回レビューがマージ実質全項目を正当
+確認しつつFableパケットの条件数誤記を検出しDISAGREE → 訂正 → 訂正漏れ1箇所を
+再検出 → 最終AGREE（相互検証が機能した証跡としてコミット7ee9214に全記録）。
 `CueSummary.color: Option<String>` + `EngineSnapshot.group_colors`（serde default、`.sdc` v1互換維持、前例: StageObjectSummary.color / VideoCuePointSummary.color）。set-cue-color / set-group-colorコマンド、カラーピッカーUI。永続色優先・ハッシュfallback。
 **「frontend-only」制約の明示的緩和が必要。**
 
