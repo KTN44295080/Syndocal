@@ -4,6 +4,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { CueManagementPanel } from "./components/CueManagementPanel";
+import { SceneMatrixPanel } from "./components/SceneMatrixPanel";
 import { AppStatusLine } from "./components/AppStatusLine";
 import { ArtRdmPanel } from "./components/ArtRdmPanel";
 import { ChaserEffectEditorPanel } from "./components/ChaserEffectEditorPanel";
@@ -930,6 +931,7 @@ export default function App() {
   const [timelineDeskSurface, setTimelineDeskSurface] = createSignal<TimelineDeskSurface>(
     initialWorkspaceLayout.timeline_desk_surface,
   );
+  const [sceneMatrixVisible, setSceneMatrixVisible] = createSignal(false);
   const [editDeskSurface, setEditDeskSurface] = createSignal<EditDeskSurface>(initialWorkspaceLayout.edit_desk_surface);
   const [revealedSourceCueId, setRevealedSourceCueId] = createSignal<number | null>(null);
   const [revealedSourceCueRevision, setRevealedSourceCueRevision] = createSignal(0);
@@ -1422,6 +1424,7 @@ export default function App() {
     || viewportFixture === "cue-recall"
     || viewportFixture === "cue-recall-large"
     || viewportFixture === "cue-node-graph"
+    || viewportFixture === "scene-matrix"
   ) {
     const sceneBlockLargeFixture = viewportFixture === "scene-block-large";
     const sceneBlockHourFixture = viewportFixture === "scene-block-hour";
@@ -1431,6 +1434,7 @@ export default function App() {
     const cueRecallLargeFixture = viewportFixture === "cue-recall-large";
     const cueFixture = cueRecallFixture || cueRecallLargeFixture;
     const cueNodeGraphFixture = viewportFixture === "cue-node-graph";
+    const sceneMatrixFixture = viewportFixture === "scene-matrix";
     const cueFixtureEffects = cueRecallLargeFixture
       ? Array.from({ length: 500 }, (_, index) => ({
           ...viewportFixtureData.cueRecallEffect,
@@ -1451,6 +1455,9 @@ export default function App() {
           }],
         }))
       : [viewportFixtureData.cueRecallCue];
+    const fixtureCues = sceneMatrixFixture
+      ? structuredClone(viewportFixtureData.sceneMatrixCues)
+      : cueFixtureCues;
     const timelineSceneBlockViewport = sceneBlockLargeFixture
       ? createTimelineSceneBlockLargeViewportFixture(viewportFixtureData.cueRecallCue)
       : sceneBlockHourFixture
@@ -1466,8 +1473,12 @@ export default function App() {
           layer_id: event.track === "Lighting" ? (index === 2 ? 13 : 12) : 14,
         }))
       : timelineSceneBlockViewport.events;
-    const activeCueId = cueFixtureCues[0].id;
+    const activeCueId = fixtureCues[0].id;
     setWorkspaceTab("control");
+    if (sceneMatrixFixture) {
+      setTimelineDeskSurface("cues");
+      setSceneMatrixVisible(true);
+    }
     setSelectedFixtureGroupFilter("front");
     setProfile(viewportFixtureData.profile);
     setGdtfPath(viewportFixtureData.profile.source_path);
@@ -1489,25 +1500,32 @@ export default function App() {
       ...current,
       fixtures: cueNodeGraphFixture
         ? []
+        : sceneMatrixFixture
+          ? [
+              { ...viewportPatchedFixture(1, "Front L", 1, -4, -2), group_ids: ["front"] },
+              { ...viewportPatchedFixture(2, "Front R", 9, 0, -2), group_ids: ["front"] },
+              { ...viewportPatchedFixture(3, "Back", 17, 4, -2), group_ids: ["back"] },
+            ]
         : [
             viewportPatchedFixture(1, "Video", 1, -4, -2),
             viewportPatchedFixture(2, "Save", 9, 0, -2),
             viewportPatchedFixture(3, "Output", 17, 4, -2),
           ],
-      active_fade: cueNodeGraphFixture
+      active_fade: cueNodeGraphFixture || sceneMatrixFixture
         ? null
         : {
-            cue_id: cueFixture || timelineFixture ? activeCueId : 1,
+            cue_id: cueFixture || timelineFixture || sceneMatrixFixture ? activeCueId : 1,
             progress: 0.42,
             remaining_ms: 580,
             paused: false,
           },
-      active_cue_id: cueFixture || timelineFixture ? activeCueId : current.active_cue_id,
-      cues: cueFixture ? cueFixtureCues : timelineFixture ? timelineFixtureCues : current.cues,
-      cue_lists: cueFixture || timelineFixture
+      active_cue_id: cueFixture || timelineFixture || sceneMatrixFixture ? activeCueId : current.active_cue_id,
+      active_group_cue_ids: sceneMatrixFixture ? { front: activeCueId } : current.active_group_cue_ids,
+      cues: cueFixture || sceneMatrixFixture ? fixtureCues : timelineFixture ? timelineFixtureCues : current.cues,
+      cue_lists: cueFixture || timelineFixture || sceneMatrixFixture
         ? [{ id: 1, label: "Main", active_cue_id: activeCueId }]
         : current.cue_lists,
-      effects: cueFixture ? cueFixtureEffects : current.effects,
+      effects: cueFixture ? cueFixtureEffects : sceneMatrixFixture ? [] : current.effects,
       node_graphs: cueFixture || cueNodeGraphFixture ? [viewportFixtureData.cueRecallNodeGraph] : current.node_graphs,
       submasters: [{ group_id: "front", label: "front", level: 1 }],
       video: cueNodeGraphFixture
@@ -4718,7 +4736,7 @@ export default function App() {
     if (controlMode() === "edit") return editDeskSurface() === "effects" ? "Lighting FX" : "Faders";
     if (controlMode() !== "live") return "Faders";
     switch (timelineDeskSurface()) {
-      case "cues": return "Cue List";
+      case "cues": return sceneMatrixVisible() ? "Scene Matrix" : "Cue List";
       case "automation": return "Automation";
       case "playback": return "Playback";
       default: return "Show Timeline";
@@ -7640,7 +7658,11 @@ export default function App() {
 
   const loadedProjectMessage = (result: ProjectLoadResult) => {
     const profileLabel = result.profiles.length === 1 ? "1 embedded profile" : `${result.profiles.length} embedded profiles`;
-    return `Loaded project ${result.path} (${profileLabel})`;
+    const warnings = result.warnings ?? [];
+    const warningLabel = warnings.length === 1 ? "1 validation warning" : `${warnings.length} validation warnings`;
+    return warnings.length > 0
+      ? `Loaded project ${result.path} (${profileLabel}; ${warningLabel}): ${warnings.join(" | ")}`
+      : `Loaded project ${result.path} (${profileLabel})`;
   };
 
   const applyLoadedProjectResult = async (result: ProjectLoadResult, currentPath: string | null) => {
@@ -8943,6 +8965,21 @@ export default function App() {
   };
 
   const triggerCue = async (cueId: number) => {
+    if (viewportFixture === "scene-matrix") {
+      setSnapshot((current) => {
+        const cue = current.cues.find((candidate) => candidate.id === cueId);
+        if (!cue) return current;
+        const activeGroupCueIds = { ...(current.active_group_cue_ids ?? {}) };
+        if (cue.group_id) activeGroupCueIds[cue.group_id] = cue.id;
+        return {
+          ...current,
+          active_cue_id: cue.id,
+          active_group_cue_ids: activeGroupCueIds,
+        };
+      });
+      setMessage(`Triggered cue ${cueId}`);
+      return;
+    }
     try {
       await invoke("trigger_cue", { cueId });
       setMessage(`Triggered cue ${cueId}`);
@@ -9039,6 +9076,8 @@ export default function App() {
         cueId: cue.id,
         cueNumber: draft.cue_number,
         label: draft.label,
+        groupId: draft.group_id,
+        recallMode: draft.recall_mode,
         fadeMs,
         authoredBeats,
         preWaitMs,
@@ -9055,6 +9094,8 @@ export default function App() {
         [cue.id]: {
           cue_number: draft.cue_number,
           label: draft.label,
+          group_id: draft.group_id,
+          recall_mode: draft.recall_mode,
           fade_ms: fadeMs,
           authored_beats: authoredBeats,
           pre_wait_ms: preWaitMs,
@@ -13554,16 +13595,17 @@ export default function App() {
         >
         <Show when={workspaceTab() === "control"}>
         <section
-          class={`panel faders controlPanel timelineDesk-${timelineDeskSurface()} editDesk-${editDeskSurface()}`}
+          class={`panel faders controlPanel timelineDesk-${timelineDeskSurface()} editDesk-${editDeskSurface()} ${sceneMatrixVisible() ? "sceneMatrixVisible" : ""}`}
         >
           <div class="panelHeader">
             <h2>{faderDeskTitle()}</h2>
             <Show when={controlMode() === "live"}>
               <nav class="timelineDeskTabs" aria-label="Timeline desk surface">
-                <button class={timelineDeskSurface() === "show" ? "active" : ""} onClick={() => setTimelineDeskSurface("show")}>Show</button>
-                <button class={timelineDeskSurface() === "cues" ? "active" : ""} onClick={() => setTimelineDeskSurface("cues")}>Cues</button>
-                <button class={timelineDeskSurface() === "automation" ? "active" : ""} onClick={() => setTimelineDeskSurface("automation")}>Automation</button>
-                <button class={timelineDeskSurface() === "playback" ? "active" : ""} onClick={() => setTimelineDeskSurface("playback")}>Playback</button>
+                <button class={timelineDeskSurface() === "show" ? "active" : ""} onClick={() => { setSceneMatrixVisible(false); setTimelineDeskSurface("show"); }}>Show</button>
+                <button class={timelineDeskSurface() === "cues" && !sceneMatrixVisible() ? "active" : ""} onClick={() => { setSceneMatrixVisible(false); setTimelineDeskSurface("cues"); }}>Cues</button>
+                <button class={timelineDeskSurface() === "cues" && sceneMatrixVisible() ? "active" : ""} onClick={() => { setTimelineDeskSurface("cues"); setSceneMatrixVisible(true); }}>Matrix</button>
+                <button class={timelineDeskSurface() === "automation" ? "active" : ""} onClick={() => { setSceneMatrixVisible(false); setTimelineDeskSurface("automation"); }}>Automation</button>
+                <button class={timelineDeskSurface() === "playback" ? "active" : ""} onClick={() => { setSceneMatrixVisible(false); setTimelineDeskSurface("playback"); }}>Playback</button>
               </nav>
             </Show>
             <Show when={controlMode() === "edit"}>
@@ -13756,6 +13798,7 @@ export default function App() {
             cues={selectedCueListCues()}
             allCues={snapshot().cues}
             cueLists={snapshot().cue_lists}
+            groupIds={fixtureGroupRows().map((row) => row.groupId)}
             palettes={snapshot().palettes}
             effects={snapshot().effects}
             cueCaptureEffects={cueCaptureEligibleEffects()}
@@ -13814,6 +13857,17 @@ export default function App() {
             onOpenTimeline={() => setTimelineDeskSurface("show")}
             onMoveTimelineCueEvent={moveTimelineCueEvent}
             onRemoveTimelineEvent={removeTimelineEvent}
+            onBeginTimelineCueDrag={beginTimelineCueDrag}
+            onMoveTimelineCueDrag={moveTimelineCueDrag}
+            onEndTimelineCueDrag={(point, moved, canceled) => void endTimelineCueDrag(point, moved, canceled)}
+          />
+          <SceneMatrixPanel
+            cues={snapshot().cues}
+            groupIds={fixtureGroupRows().map((row) => row.groupId)}
+            activeCueId={snapshot().active_cue_id}
+            activeGroupCueIds={snapshot().active_group_cue_ids ?? {}}
+            timelineTrack={timelineTrack()}
+            onTriggerCue={triggerCue}
             onBeginTimelineCueDrag={beginTimelineCueDrag}
             onMoveTimelineCueDrag={moveTimelineCueDrag}
             onEndTimelineCueDrag={(point, moved, canceled) => void endTimelineCueDrag(point, moved, canceled)}

@@ -4224,7 +4224,7 @@ function hasExpectedControlModeSurface(result) {
     ) return false;
     if (result.label.startsWith("control-live-playback-")) {
       return (
-        result.visibleTimelineDeskTabCount === 4 &&
+        result.visibleTimelineDeskTabCount === 5 &&
         result.visiblePlaybackDeskSurfaceCount === 1 &&
         result.visibleProgrammerPanelCount === 1 &&
         result.visibleReferencePalettePanelCount === 1 &&
@@ -4242,7 +4242,7 @@ function hasExpectedControlModeSurface(result) {
         result.cueEditToggleControls === "cue-list-editor cue-store-form cue-effect-capture-editor cue-list-items";
       if (result.label.startsWith("control-live-cues-effects-only-")) {
         return (
-          result.visibleTimelineDeskTabCount === 4 &&
+          result.visibleTimelineDeskTabCount === 5 &&
           result.visibleCuePanelCount === 1 &&
           result.visibleCueLivePanelCount === 1 &&
           result.visibleCueFormCount === 1 &&
@@ -4264,7 +4264,7 @@ function hasExpectedControlModeSurface(result) {
       }
       if (result.label.startsWith("control-live-cues-edit-")) {
         return (
-          result.visibleTimelineDeskTabCount === 4 &&
+          result.visibleTimelineDeskTabCount === 5 &&
           result.visibleCuePanelCount === 1 &&
           result.visibleCueLivePanelCount === 1 &&
           result.visibleCueFormCount === 1 &&
@@ -4281,7 +4281,7 @@ function hasExpectedControlModeSurface(result) {
         );
       }
       return (
-        result.visibleTimelineDeskTabCount === 4 &&
+        result.visibleTimelineDeskTabCount === 5 &&
         result.visibleCuePanelCount === 1 &&
         result.visibleCueLivePanelCount === 1 &&
         result.visibleCueFormCount === 0 &&
@@ -4295,7 +4295,7 @@ function hasExpectedControlModeSurface(result) {
     }
     if (result.label.startsWith("control-live-automation-")) {
       return (
-        result.visibleTimelineDeskTabCount === 4 &&
+        result.visibleTimelineDeskTabCount === 5 &&
         result.visibleCuePanelCount === 0 &&
         result.visibleTimelinePanelCount === 1 &&
         result.visibleTimelineShowSurfaceCount === 0 &&
@@ -4309,7 +4309,7 @@ function hasExpectedControlModeSurface(result) {
       result.visibleCueFormCount === 0 &&
       result.visibleCueEditOnlyCount === 0 &&
       result.visibleTimelinePanelCount > 0 &&
-      result.visibleTimelineDeskTabCount === 4 &&
+      result.visibleTimelineDeskTabCount === 5 &&
       result.visibleTimelineShowSurfaceCount === 1 &&
       result.controlWorkSurfaceUnsafeOverflowCount === 0 &&
       result.visibleFixtureEditSurfaceCount === 0 &&
@@ -6441,6 +6441,114 @@ async function openCueFixture(client, viewport, fixture) {
   await sleep(120);
   await clickVisibleByText(client, ".cuePanelEditToggle", "Edit Cues");
   await sleep(120);
+}
+
+async function measureSceneMatrixPane(client) {
+  return await client.evaluate(`(async () => {
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const isVisible = (element) => {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const pane = document.querySelector('.sceneMatrixPanel');
+    const scroller = document.querySelector('.sceneMatrixScroller');
+    const columns = [...document.querySelectorAll('[data-scene-matrix-column]')].filter(isVisible);
+    const headers = [...document.querySelectorAll('[data-scene-matrix-group-hue]')].filter(isVisible);
+    const cards = [...document.querySelectorAll('[data-scene-matrix-cue-id]')].filter(isVisible);
+    const replaceCards = cards.filter((card) => isVisible(card.querySelector('.sceneMatrixReplaceBadge')));
+    const documentElement = document.documentElement;
+    const body = document.body;
+    const app = document.querySelector('.app');
+    const scrollerStyle = scroller ? getComputedStyle(scroller) : null;
+    return {
+      paneVisible: isVisible(pane),
+      columns: columns.map((column) => column.getAttribute('data-scene-matrix-column')),
+      headerHues: headers.map((header) => header.getAttribute('data-scene-matrix-group-hue')),
+      cardHues: cards.map((card) => card.getAttribute('data-scene-matrix-cue-hue')),
+      cardIds: cards.map((card) => card.getAttribute('data-scene-matrix-cue-id')),
+      replaceCardIds: replaceCards.map((card) => card.getAttribute('data-scene-matrix-cue-id')),
+      activeCardIds: cards
+        .filter((card) => card.getAttribute('data-scene-matrix-active') === 'true' && card.classList.contains('active'))
+        .map((card) => card.getAttribute('data-scene-matrix-cue-id')),
+      internalScrollport: Boolean(scroller && scrollerStyle && /(auto|scroll)/.test(scrollerStyle.overflowX)),
+      documentAndAppScrollZero:
+        window.scrollX === 0 && window.scrollY === 0 &&
+        documentElement.scrollWidth === documentElement.clientWidth &&
+        documentElement.scrollHeight === documentElement.clientHeight &&
+        body.scrollWidth === documentElement.clientWidth &&
+        body.scrollHeight === documentElement.clientHeight &&
+        (!app || (app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight)),
+      scrollMetrics: {
+        document: [
+          documentElement.scrollWidth,
+          documentElement.clientWidth,
+          documentElement.scrollHeight,
+          documentElement.clientHeight,
+        ],
+        app: app ? [app.scrollWidth, app.clientWidth, app.scrollHeight, app.clientHeight] : null,
+        matrix: scroller ? [scroller.scrollWidth, scroller.clientWidth, scroller.scrollHeight, scroller.clientHeight] : null,
+      },
+    };
+  })()`);
+}
+
+async function runSceneMatrixPaneCheck(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: fixtureUrl("scene-matrix") });
+  await waitForApp(client);
+  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await clickVisibleByText(client, ".timelineDeskTabs button", "Matrix");
+  await sleep(120);
+  const before = await measureSceneMatrixPane(client);
+  const triggerClicked = await client.evaluate(`(() => {
+    const trigger = document.querySelector('[data-scene-matrix-cue-id="302"] .sceneMatrixTrigger');
+    if (!(trigger instanceof HTMLButtonElement) || trigger.disabled) return false;
+    const rect = trigger.getBoundingClientRect();
+    const style = getComputedStyle(trigger);
+    if (rect.width <= 0 || rect.height <= 0 || style.display === 'none' || style.visibility === 'hidden') return false;
+    trigger.click();
+    return true;
+  })()`);
+  await sleep(120);
+  const after = await measureSceneMatrixPane(client);
+  const expectedColumns = ["back", "front", "Show"];
+  const expectedReplaceCards = ["302", "303"];
+  const conditions = [
+    ["matrixPaneVisible", () => before.paneVisible && after.paneVisible],
+    ["matrixExpectedGroupColumns", () => JSON.stringify(before.columns) === JSON.stringify(expectedColumns)],
+    ["matrixHeaderHueAttributesPresent", () => before.headerHues.length === expectedColumns.length && before.headerHues.every(Boolean)],
+    ["matrixCardHueAttributesPresent", () => before.cardHues.length === 4 && before.cardHues.every(Boolean)],
+    ["matrixReplaceGroupBadgesPresent", () => JSON.stringify(before.replaceCardIds.sort()) === JSON.stringify(expectedReplaceCards)],
+    ["matrixInitialActiveCueVisible", () => JSON.stringify(before.activeCardIds) === JSON.stringify(["301"])],
+    ["matrixTriggerClickApplied", () => triggerClicked],
+    ["matrixActiveCueHighlightFollowedClick", () => JSON.stringify(after.activeCardIds) === JSON.stringify(["302"])],
+    ["matrixColumnsUseInternalScrollport", () => before.internalScrollport && after.internalScrollport],
+    ["matrixDocumentAndAppScrollZero", () => before.documentAndAppScrollZero && after.documentAndAppScrollZero],
+  ];
+  const checks = Object.fromEntries(conditions.map(([name, check]) => {
+    try {
+      return [name, Boolean(check())];
+    } catch {
+      return [name, false];
+    }
+  }));
+  const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  return {
+    label: `scene-matrix-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    before,
+    after,
+  };
 }
 
 async function runCueRecallViewport(client, viewport) {
@@ -8812,6 +8920,7 @@ async function main() {
     const effectStackLargeResults = [];
     const sceneBlockLargeResults = [];
     const cueNodeGraphResults = [];
+    const sceneMatrixResults = [];
     if (!workspaceShellOnlyMode) {
       for (const viewport of viewports) {
         await recycleBrowser();
@@ -8819,6 +8928,7 @@ async function main() {
         cueRecallLargeResults.push(await runCueRecallLargeViewport(client, viewport));
         effectStackLargeResults.push(await runEffectStackLargeViewport(client, viewport));
         cueNodeGraphResults.push(await runCueNodeGraphViewport(client, viewport));
+        sceneMatrixResults.push(await runSceneMatrixPaneCheck(client, viewport));
       }
     }
     const sceneBlockScaleViewports = viewports.filter((viewport) =>
@@ -8839,6 +8949,7 @@ async function main() {
     const effectStackLargeFailures = effectStackLargeResults.filter((result) => !result.passed);
     const sceneBlockLargeFailures = sceneBlockLargeResults.filter((result) => !result.passed);
     const cueNodeGraphFailures = cueNodeGraphResults.filter((result) => !result.passed);
+    const sceneMatrixFailures = sceneMatrixResults.filter((result) => !result.passed);
     const setupSurfaceFailures = results.filter((result) => !hasExpectedSetupSurface(result));
     const persistentBandFailures = results.filter((result) => !hasExpectedPersistentWorkspaceBand(result));
     const persistentBandInvarianceFailures = results.filter((result) => !hasExpectedPersistentBandInvariance(result));
@@ -8945,6 +9056,11 @@ async function main() {
         `${result.passed ? "pass" : "fail"} ${result.label} all=${result.allScope.storeDisabled ? "disabled" : "enabled"}/${result.allScope.scopeErrorCount} video=${result.videoScope.storeDisabled ? "disabled" : "enabled"}/${result.videoScope.scopeErrorCount} graphs=${result.videoScope.graphCount}`,
       );
     }
+    for (const result of sceneMatrixResults) {
+      console.log(
+        `${result.passed ? "pass" : "fail"} ${result.label} columns=${JSON.stringify(result.before.columns)} active=${JSON.stringify(result.before.activeCardIds)}->${JSON.stringify(result.after.activeCardIds)} failed=${JSON.stringify(result.failedChecks)}`,
+      );
+    }
     if (
       failures.length > 0 ||
       cueRecallFailures.length > 0 ||
@@ -8952,6 +9068,7 @@ async function main() {
       effectStackLargeFailures.length > 0 ||
       sceneBlockLargeFailures.length > 0 ||
       cueNodeGraphFailures.length > 0 ||
+      sceneMatrixFailures.length > 0 ||
       keyboardNavigationFailures.length > 0 ||
       setupSurfaceFailures.length > 0 ||
       persistentBandFailures.length > 0 ||
@@ -9017,6 +9134,7 @@ async function main() {
             effectStackLarge: effectStackLargeFailures,
             sceneBlockLarge: sceneBlockLargeFailures,
             cueNodeGraph: cueNodeGraphFailures,
+            sceneMatrix: sceneMatrixFailures,
             keyboardNavigation: keyboardNavigationFailures,
             setupSurface: setupSurfaceFailures,
             persistentBand: persistentBandFailures,
@@ -9038,7 +9156,7 @@ async function main() {
         ),
       );
       throw new Error(
-        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${effectStackLargeFailures.length} large live-effect DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${statusLineFailures.length} status line check(s) failed.`,
+        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${effectStackLargeFailures.length} large live-effect DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${sceneMatrixFailures.length} Scene Matrix fixture check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${statusLineFailures.length} status line check(s) failed.`,
       );
     }
   } finally {

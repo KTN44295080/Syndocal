@@ -38,8 +38,8 @@ use protocol::{
     MoveDirection, MoveEffectRequest, MovePathPoint, NodeGraphAudioRuntimeStatus, NodeGraphId,
     NodeGraphNodeKind, NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId,
     PatchFixtureRequest, PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest,
-    ProgrammerSnapshot, ProgrammerValueSummary, ReferencePaletteSummary, Rotation3, StageMapConfig,
-    StageMapPresetSummary, StageObjectId, StageObjectSummary, SubmasterSummary,
+    ProgrammerSnapshot, ProgrammerValueSummary, RecallMode, ReferencePaletteSummary, Rotation3,
+    StageMapConfig, StageMapPresetSummary, StageObjectId, StageObjectSummary, SubmasterSummary,
     TimelineAutomationSummary, TimelineCueEventSummary, TimelineEventId, TimelineLayerKind,
     TimelineLayerSummary, TimelineSnapRequest, TimelineSnapshot, TimelineTrackKind,
     TimelineVideoAutomationSummary, Transform2D, ValueEffectDirection, ValueEffectInterpolation,
@@ -445,6 +445,8 @@ pub enum EngineCommand {
         cue_id: CueId,
         cue_list_id: CueListId,
         label: String,
+        group_id: Option<String>,
+        recall_mode: RecallMode,
         fade_ms: u64,
         authored_beats: Option<f32>,
         targets: Vec<CueFixtureTarget>,
@@ -487,6 +489,8 @@ pub enum EngineCommand {
         cue_id: CueId,
         cue_number: String,
         label: String,
+        group_id: Option<String>,
+        recall_mode: RecallMode,
         fade_ms: u64,
         authored_beats: Option<f32>,
         pre_wait_ms: u64,
@@ -1585,6 +1589,8 @@ impl EngineHandle {
         cue_id: CueId,
         cue_list_id: CueListId,
         label: String,
+        group_id: Option<String>,
+        recall_mode: RecallMode,
         fade_ms: u64,
         authored_beats: Option<f32>,
         targets: Vec<CueFixtureTarget>,
@@ -1598,6 +1604,8 @@ impl EngineHandle {
             cue_id,
             cue_list_id,
             label,
+            group_id,
+            recall_mode,
             fade_ms,
             authored_beats,
             targets,
@@ -1669,6 +1677,8 @@ impl EngineHandle {
         cue_id: CueId,
         cue_number: String,
         label: String,
+        group_id: Option<String>,
+        recall_mode: RecallMode,
         fade_ms: u64,
         authored_beats: Option<f32>,
         pre_wait_ms: u64,
@@ -1685,6 +1695,8 @@ impl EngineHandle {
             cue_id,
             cue_number,
             label,
+            group_id,
+            recall_mode,
             fade_ms,
             authored_beats,
             pre_wait_ms,
@@ -2768,6 +2780,8 @@ struct RuntimeCue {
     cue_list_id: CueListId,
     cue_number: String,
     label: String,
+    group_id: Option<String>,
+    recall_mode: RecallMode,
     fade_ms: u64,
     authored_beats: Option<f32>,
     pre_wait_ms: u64,
@@ -2816,6 +2830,12 @@ struct RuntimeFade {
     video_output_target_opacities: HashMap<VideoOutputId, f32>,
     video_output_targets: HashMap<VideoOutputId, VideoOutputTarget>,
     video_output_timings: HashMap<VideoOutputId, (Duration, Duration)>,
+}
+
+#[derive(Default)]
+struct CueValueReleasePlan {
+    target_values: HashMap<(FixtureId, String), u16>,
+    attribute_timings: HashMap<(FixtureId, String), (Duration, Duration)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3014,6 +3034,8 @@ enum PendingCommandRollback {
         cues: Vec<RuntimeCue>,
         cue_lists: Vec<CueListSummary>,
         cue_list_effect_activation_cues: HashMap<CueListId, CueId>,
+        active_group_cue_ids: HashMap<String, CueId>,
+        cue_release_values: HashMap<CueId, HashMap<(FixtureId, String), u16>>,
         timeline_events: Vec<RuntimeTimelineEvent>,
         active_cue_id: Option<CueId>,
         active_fade: Option<RuntimeFade>,
@@ -3137,6 +3159,8 @@ struct EngineRuntime {
     cues: Vec<RuntimeCue>,
     cue_lists: Vec<CueListSummary>,
     cue_list_effect_activation_cues: HashMap<CueListId, CueId>,
+    active_group_cue_ids: HashMap<String, CueId>,
+    cue_release_values: HashMap<CueId, HashMap<(FixtureId, String), u16>>,
     palettes: Vec<ReferencePaletteSummary>,
     playback_executors: Vec<PlaybackExecutorSummary>,
     playback_master: f32,
@@ -3315,6 +3339,8 @@ impl EngineRuntime {
             cues: Vec::new(),
             cue_lists: vec![CueListSummary::default()],
             cue_list_effect_activation_cues: HashMap::new(),
+            active_group_cue_ids: HashMap::new(),
+            cue_release_values: HashMap::new(),
             palettes: Vec::new(),
             playback_executors: vec![PlaybackExecutorSummary::default()],
             playback_master: 1.0,
@@ -3656,6 +3682,38 @@ impl EngineRuntime {
         self.active_cue_id = snapshot
             .active_cue_id
             .filter(|cue_id| self.cues.iter().any(|cue| cue.id == *cue_id));
+        self.active_group_cue_ids = snapshot
+            .active_group_cue_ids
+            .into_iter()
+            .filter(|(group_id, cue_id)| {
+                self.cues.iter().any(|cue| {
+                    cue.id == *cue_id && cue.group_id.as_deref() == Some(group_id.as_str())
+                })
+            })
+            .collect();
+        if let Some(active_cue) = self
+            .active_cue_id
+            .and_then(|cue_id| self.cues.iter().find(|cue| cue.id == cue_id))
+        {
+            if let Some(group_id) = &active_cue.group_id {
+                self.active_group_cue_ids
+                    .entry(group_id.clone())
+                    .or_insert(active_cue.id);
+            }
+        }
+        self.cue_release_values.clear();
+        for cue_id in self
+            .active_group_cue_ids
+            .values()
+            .copied()
+            .collect::<Vec<_>>()
+        {
+            let Some(cue) = self.cues.iter().find(|cue| cue.id == cue_id).cloned() else {
+                continue;
+            };
+            self.cue_release_values
+                .insert(cue_id, self.cue_default_release_values(&cue));
+        }
         if let Some(active_cue_id) = self.active_cue_id {
             if let Some(cue_list_id) = self
                 .cues
@@ -3771,6 +3829,8 @@ impl EngineRuntime {
                     cue_list_id: cue.cue_list_id,
                     cue_number: cue.cue_number,
                     label: cue.label,
+                    group_id: cue.group_id,
+                    recall_mode: cue.recall_mode,
                     fade_ms: cue.fade_ms,
                     authored_beats: cue.authored_beats,
                     pre_wait_ms: cue.pre_wait_ms,
@@ -5534,6 +5594,8 @@ impl EngineRuntime {
                 let result = self.create_cue_state(
                     cue_id,
                     DEFAULT_CUE_LIST_ID,
+                    None,
+                    RecallMode::Coexist,
                     authored_beats,
                     CueBody {
                         label,
@@ -5552,6 +5614,8 @@ impl EngineRuntime {
                 cue_id,
                 cue_list_id,
                 label,
+                group_id,
+                recall_mode,
                 fade_ms,
                 authored_beats,
                 targets,
@@ -5567,6 +5631,8 @@ impl EngineRuntime {
                     cues: self.cues.clone(),
                     cue_lists: self.cue_lists.clone(),
                     cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
+                    active_group_cue_ids: self.active_group_cue_ids.clone(),
+                    cue_release_values: self.cue_release_values.clone(),
                     timeline_events: self.timeline_events.clone(),
                     active_cue_id: self.active_cue_id,
                     active_fade: self.active_fade.clone(),
@@ -5584,6 +5650,8 @@ impl EngineRuntime {
                     self.create_cue_state(
                         cue_id,
                         cue_list_id,
+                        group_id,
+                        recall_mode,
                         authored_beats,
                         CueBody {
                             label,
@@ -5650,6 +5718,8 @@ impl EngineRuntime {
                     cues: self.cues.clone(),
                     cue_lists: self.cue_lists.clone(),
                     cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
+                    active_group_cue_ids: self.active_group_cue_ids.clone(),
+                    cue_release_values: self.cue_release_values.clone(),
                     timeline_events: self.timeline_events.clone(),
                     active_cue_id: self.active_cue_id,
                     active_fade: self.active_fade.clone(),
@@ -5700,6 +5770,8 @@ impl EngineRuntime {
                     cues: self.cues.clone(),
                     cue_lists: self.cue_lists.clone(),
                     cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
+                    active_group_cue_ids: self.active_group_cue_ids.clone(),
+                    cue_release_values: self.cue_release_values.clone(),
                     timeline_events: self.timeline_events.clone(),
                     active_cue_id: self.active_cue_id,
                     active_fade: self.active_fade.clone(),
@@ -5733,6 +5805,8 @@ impl EngineRuntime {
                 cue_id,
                 cue_number,
                 label,
+                group_id,
+                recall_mode,
                 fade_ms,
                 authored_beats,
                 pre_wait_ms,
@@ -5751,6 +5825,8 @@ impl EngineRuntime {
                     cues: self.cues.clone(),
                     cue_lists: self.cue_lists.clone(),
                     cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
+                    active_group_cue_ids: self.active_group_cue_ids.clone(),
+                    cue_release_values: self.cue_release_values.clone(),
                     timeline_events: self.timeline_events.clone(),
                     active_cue_id: self.active_cue_id,
                     active_fade: self.active_fade.clone(),
@@ -5769,6 +5845,8 @@ impl EngineRuntime {
                         cue_id,
                         cue_number,
                         label,
+                        group_id,
+                        recall_mode,
                         fade_ms,
                         authored_beats,
                         pre_wait_ms,
@@ -6310,6 +6388,8 @@ impl EngineRuntime {
                     cues: self.cues.clone(),
                     cue_lists: self.cue_lists.clone(),
                     cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
+                    active_group_cue_ids: self.active_group_cue_ids.clone(),
+                    cue_release_values: self.cue_release_values.clone(),
                     timeline_events: self.timeline_events.clone(),
                     active_cue_id: self.active_cue_id,
                     active_fade: self.active_fade.clone(),
@@ -8197,6 +8277,8 @@ impl EngineRuntime {
                 cues,
                 cue_lists,
                 cue_list_effect_activation_cues,
+                active_group_cue_ids,
+                cue_release_values,
                 timeline_events,
                 active_cue_id,
                 active_fade,
@@ -8210,6 +8292,8 @@ impl EngineRuntime {
                 self.cues = cues;
                 self.cue_lists = cue_lists;
                 self.cue_list_effect_activation_cues = cue_list_effect_activation_cues;
+                self.active_group_cue_ids = active_group_cue_ids;
+                self.cue_release_values = cue_release_values;
                 self.timeline_events = timeline_events;
                 self.active_cue_id = active_cue_id;
                 self.active_fade = active_fade;
@@ -9728,6 +9812,8 @@ impl EngineRuntime {
         &mut self,
         cue_id: CueId,
         cue_list_id: CueListId,
+        group_id: Option<String>,
+        recall_mode: RecallMode,
         authored_beats: Option<f32>,
         body: CueBody,
         replace_existing: bool,
@@ -9765,6 +9851,8 @@ impl EngineRuntime {
             cue_list_id,
             cue_number: cue_id.to_string(),
             label,
+            group_id: normalize_cue_group_id(group_id),
+            recall_mode,
             fade_ms,
             authored_beats,
             pre_wait_ms: 0,
@@ -9904,6 +9992,8 @@ impl EngineRuntime {
         cue_id: CueId,
         cue_number: String,
         label: String,
+        group_id: Option<String>,
+        recall_mode: RecallMode,
         fade_ms: u64,
         authored_beats: Option<f32>,
         pre_wait_ms: u64,
@@ -9920,6 +10010,10 @@ impl EngineRuntime {
             .iter()
             .position(|cue| cue.id == cue_id)
             .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
+        let was_active_group_cue = self
+            .active_group_cue_ids
+            .values()
+            .any(|active_cue_id| *active_cue_id == cue_id);
         let cue_number = cue_number.trim().to_string();
         if cue_number.is_empty() {
             return Err("Cue number is required".to_string());
@@ -9960,6 +10054,8 @@ impl EngineRuntime {
             .expect("resolved Cue index must remain valid");
         cue.cue_number = cue_number;
         cue.label = label;
+        cue.group_id = normalize_cue_group_id(group_id);
+        cue.recall_mode = recall_mode;
         cue.fade_ms = fade_ms;
         cue.authored_beats = authored_beats;
         cue.pre_wait_ms = pre_wait_ms;
@@ -9978,6 +10074,14 @@ impl EngineRuntime {
                 self.timeline_events = previous_timeline_events
                     .expect("referenced Cue rollback must preserve prior timeline events");
                 return Err(error);
+            }
+        }
+        if was_active_group_cue {
+            let group_id = self.cues[cue_index].group_id.clone();
+            self.active_group_cue_ids
+                .retain(|_, active_cue_id| *active_cue_id != cue_id);
+            if let Some(group_id) = group_id {
+                self.active_group_cue_ids.insert(group_id, cue_id);
             }
         }
         Ok(())
@@ -11090,6 +11194,9 @@ impl EngineRuntime {
         self.deactivate_cue_effect_activations(cue_id);
         self.cue_list_effect_activation_cues
             .retain(|_, active_cue_id| *active_cue_id != cue_id);
+        self.active_group_cue_ids
+            .retain(|_, active_cue_id| *active_cue_id != cue_id);
+        self.cue_release_values.remove(&cue_id);
         self.cues.retain(|cue| cue.id != cue_id);
         self.timeline_events.retain(|event| event.cue_id != cue_id);
         for event in &mut self.timeline_events {
@@ -11131,6 +11238,9 @@ impl EngineRuntime {
         self.deactivate_cue_effect_activations(cue_id);
         self.cue_list_effect_activation_cues
             .retain(|_, active_cue_id| *active_cue_id != cue_id);
+        self.active_group_cue_ids
+            .retain(|_, active_cue_id| *active_cue_id != cue_id);
+        self.cue_release_values.remove(&cue_id);
         self.pending_cues.retain(|pending| pending.cue_id != cue_id);
         if self.active_cue_id == Some(cue_id) {
             self.active_cue_id = None;
@@ -11146,6 +11256,33 @@ impl EngineRuntime {
             }
         }
         Ok(())
+    }
+
+    fn cue_value_release_plan(&self, cue_id: CueId) -> CueValueReleasePlan {
+        let Some(cue) = self.cues.iter().find(|cue| cue.id == cue_id) else {
+            return CueValueReleasePlan::default();
+        };
+        let Some(target_values) = self.cue_release_values.get(&cue_id).cloned() else {
+            return CueValueReleasePlan::default();
+        };
+        let timing = (Duration::ZERO, Duration::from_millis(cue.fade_ms));
+        let attribute_timings = target_values
+            .keys()
+            .map(|key| (key.clone(), timing))
+            .collect();
+        CueValueReleasePlan {
+            target_values,
+            attribute_timings,
+        }
+    }
+
+    fn fixture_attribute_default(&self, key: &(FixtureId, String)) -> Option<u16> {
+        let fixture = self.fixtures.iter().find(|fixture| fixture.id == key.0)?;
+        fixture.profile.dmx_modes[fixture.mode_index]
+            .controls
+            .iter()
+            .find(|control| control.attribute == key.1)
+            .map(|control| control.default_value)
     }
 
     fn recompute_timeline_event_layers(&mut self) -> Result<(), String> {
@@ -12394,11 +12531,37 @@ impl EngineRuntime {
         };
         let cue_id = cue.id;
         let default_fade_ms = fade_override_ms.unwrap_or(cue.fade_ms);
+        let active_group_cue_id = cue
+            .group_id
+            .as_ref()
+            .and_then(|group_id| self.active_group_cue_ids.get(group_id).copied());
+        let same_group_retrigger = active_group_cue_id == Some(cue_id);
+
+        let release_plan = if cue.recall_mode == RecallMode::ReplaceGroup {
+            active_group_cue_id
+                .filter(|active_cue_id| *active_cue_id != cue_id)
+                .and_then(|active_cue_id| {
+                    self.apply_active_fade(now);
+                    let plan = self.cue_value_release_plan(active_cue_id);
+                    if let Err(error) = self.release_cue_state(active_cue_id) {
+                        self.last_error = Some(error);
+                        None
+                    } else {
+                        Some(plan)
+                    }
+                })
+                .unwrap_or_default()
+        } else {
+            CueValueReleasePlan::default()
+        };
 
         self.deactivate_cue_list_effect_activations(cue.cue_list_id);
         self.cue_list_effect_activation_cues
             .remove(&cue.cue_list_id);
         self.active_cue_id = Some(cue_id);
+        if let Some(group_id) = &cue.group_id {
+            self.active_group_cue_ids.insert(group_id.clone(), cue_id);
+        }
         if let Some(cue_list) = self
             .cue_lists
             .iter_mut()
@@ -12466,6 +12629,25 @@ impl EngineRuntime {
         };
         target_values.extend(self.cue_palette_target_values(&cue.palette_targets));
         target_values.extend(cue_target_values(&cue.targets));
+        let cue_target_keys = target_values.keys().cloned().collect::<HashSet<_>>();
+        let cue_release_values = cue_target_keys
+            .iter()
+            .map(|key| {
+                let value = release_plan
+                    .target_values
+                    .get(key)
+                    .copied()
+                    .or_else(|| self.values.get(key).copied())
+                    .unwrap_or_else(|| self.fixture_attribute_default(key).unwrap_or(0));
+                (key.clone(), value)
+            })
+            .collect();
+        if cue.group_id.is_some() && !same_group_retrigger {
+            self.cue_release_values.insert(cue_id, cue_release_values);
+        }
+        for (key, value) in &release_plan.target_values {
+            target_values.entry(key.clone()).or_insert(*value);
+        }
         for key in target_values.keys() {
             self.cue_value_origins.insert(key.clone(), cue.cue_list_id);
         }
@@ -12497,7 +12679,7 @@ impl EngineRuntime {
             .keys()
             .map(|key| (key.clone(), self.values.get(key).copied().unwrap_or(0)))
             .collect::<HashMap<_, _>>();
-        let attribute_timings = target_values
+        let mut attribute_timings = target_values
             .keys()
             .map(|key| {
                 (
@@ -12512,6 +12694,11 @@ impl EngineRuntime {
                 )
             })
             .collect::<HashMap<_, _>>();
+        for (key, timing) in release_plan.attribute_timings {
+            if !cue_target_keys.contains(&key) {
+                attribute_timings.insert(key, timing);
+            }
+        }
         let video_output_start_opacities = video_output_targets
             .iter()
             .filter_map(|(output_id, _)| {
@@ -12744,6 +12931,40 @@ impl EngineRuntime {
             }
         }
         values
+    }
+
+    fn cue_default_release_values(&self, cue: &RuntimeCue) -> HashMap<(FixtureId, String), u16> {
+        let mut target_values = if cue.tracking {
+            HashMap::new()
+        } else {
+            self.fixtures
+                .iter()
+                .flat_map(|fixture| {
+                    fixture.profile.dmx_modes[fixture.mode_index]
+                        .controls
+                        .iter()
+                        .map(|control| {
+                            (
+                                (fixture.id, control.attribute.clone()),
+                                control.default_value,
+                            )
+                        })
+                })
+                .collect::<HashMap<_, _>>()
+        };
+        target_values.extend(
+            self.cue_palette_target_values(&cue.palette_targets)
+                .into_keys()
+                .map(|key| {
+                    let value = self.fixture_attribute_default(&key).unwrap_or(0);
+                    (key, value)
+                }),
+        );
+        target_values.extend(cue_target_values(&cue.targets).into_keys().map(|key| {
+            let value = self.fixture_attribute_default(&key).unwrap_or(0);
+            (key, value)
+        }));
+        target_values
     }
 
     fn rebuild_cue_value_origins(&mut self) {
@@ -13998,6 +14219,11 @@ impl EngineRuntime {
             playback_executors: self.playback_executors.clone(),
             playback_master: self.playback_master,
             active_cue_id: self.active_cue_id,
+            active_group_cue_ids: self
+                .active_group_cue_ids
+                .iter()
+                .map(|(group_id, cue_id)| (group_id.clone(), *cue_id))
+                .collect(),
             active_fade: self.active_fade_summary(self.last_tick),
             programmer: self.programmer_snapshot(),
             timeline: self.timeline_snapshot(),
@@ -14456,6 +14682,8 @@ fn cue_summary(cue: &RuntimeCue) -> CueSummary {
         cue_list_id: cue.cue_list_id,
         cue_number: cue.cue_number.clone(),
         label: cue.label.clone(),
+        group_id: cue.group_id.clone(),
+        recall_mode: cue.recall_mode,
         fade_ms: cue.fade_ms,
         authored_beats: cue.authored_beats,
         pre_wait_ms: cue.pre_wait_ms,
@@ -14587,6 +14815,8 @@ fn runtime_cue_from_summary(cue: &CueSummary) -> RuntimeCue {
             cue.cue_number.trim().to_string()
         },
         label: cue.label.clone(),
+        group_id: normalize_cue_group_id(cue.group_id.clone()),
+        recall_mode: cue.recall_mode,
         fade_ms: cue.fade_ms,
         authored_beats: cue.authored_beats,
         pre_wait_ms: cue.pre_wait_ms,
@@ -14610,6 +14840,13 @@ fn runtime_cue_from_summary(cue: &CueSummary) -> RuntimeCue {
         effect_targets: cue.effect_targets.clone(),
         effect_activation_range: RuntimeEffectActivationRange::default(),
     }
+}
+
+fn normalize_cue_group_id(group_id: Option<String>) -> Option<String> {
+    group_id.and_then(|group_id| {
+        let group_id = group_id.trim().to_string();
+        (!group_id.is_empty()).then_some(group_id)
+    })
 }
 
 fn validate_and_sanitize_palette(
@@ -21732,6 +21969,189 @@ mod tests {
         assert_eq!(runtime.last_error, None);
     }
 
+    fn create_group_recall_cue(
+        runtime: &mut EngineRuntime,
+        cue_id: CueId,
+        group_id: &str,
+        recall_mode: RecallMode,
+        fade_ms: u64,
+        attribute: &str,
+        value: u16,
+        effect_targets: Vec<CueEffectTarget>,
+    ) {
+        runtime.apply_command(EngineCommand::CreateCue {
+            authored_beats: None,
+            cue_id,
+            label: format!("Group Cue {cue_id}"),
+            fade_ms,
+            targets: vec![CueFixtureTarget {
+                fixture_id: 1,
+                values: vec![AttributeValueSummary {
+                    attribute: attribute.to_string(),
+                    value,
+                }],
+            }],
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets,
+        });
+        let cue = runtime
+            .cues
+            .iter_mut()
+            .find(|cue| cue.id == cue_id)
+            .expect("created group recall Cue");
+        cue.group_id = Some(group_id.to_string());
+        cue.recall_mode = recall_mode;
+        assert_eq!(runtime.last_error, None);
+    }
+
+    fn group_recall_test_runtime() -> EngineRuntime {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        create_group_recall_cue(
+            &mut runtime,
+            1,
+            "Front",
+            RecallMode::Coexist,
+            400,
+            "Dimmer",
+            u16::MAX,
+            Vec::new(),
+        );
+        create_group_recall_cue(
+            &mut runtime,
+            2,
+            "Front",
+            RecallMode::ReplaceGroup,
+            0,
+            "Pan",
+            50_000,
+            Vec::new(),
+        );
+        runtime
+    }
+
+    #[test]
+    fn group_recall_replace_releases_previous_values_with_released_fade_and_effect_instances() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let owned = test_lfo_request(
+            "ReplaceGroup owned effect",
+            LfoShape::Square,
+            1_000,
+            0.0,
+            EffectBlendMode::Override,
+            1_000,
+            1_000,
+        );
+        create_group_recall_cue(
+            &mut runtime,
+            1,
+            "Front",
+            RecallMode::Coexist,
+            400,
+            "Dimmer",
+            u16::MAX,
+            vec![owned_lfo_target(91, owned)],
+        );
+        create_group_recall_cue(
+            &mut runtime,
+            2,
+            "Front",
+            RecallMode::ReplaceGroup,
+            0,
+            "Pan",
+            50_000,
+            Vec::new(),
+        );
+        let started_at = Instant::now();
+        runtime.rebuild_effect_activations(started_at);
+        runtime.start_cue(1, started_at, PendingCueTriggerSource::Manual);
+        runtime.apply_active_fade(started_at + Duration::from_millis(400));
+        assert_eq!(runtime.values[&(1, "Dimmer".to_string())], u16::MAX);
+        assert_eq!(runtime.active_effect_activation_indices.len(), 1);
+        runtime.start_cue(
+            1,
+            started_at + Duration::from_millis(450),
+            PendingCueTriggerSource::Manual,
+        );
+
+        let replaced_at = started_at + Duration::from_millis(500);
+        runtime.start_cue(2, replaced_at, PendingCueTriggerSource::Manual);
+        assert_eq!(runtime.active_group_cue_ids.get("Front"), Some(&2));
+        assert!(runtime.active_effect_activation_indices.is_empty());
+        assert_eq!(
+            runtime.active_fade.as_ref().map(|fade| fade.duration),
+            Some(Duration::from_millis(400))
+        );
+
+        runtime.apply_active_fade(replaced_at + Duration::from_millis(200));
+        assert!((32_767..=32_768).contains(&runtime.values[&(1, "Dimmer".to_string())]));
+        assert_eq!(runtime.values[&(1, "Pan".to_string())], 50_000);
+        runtime.apply_active_fade(replaced_at + Duration::from_millis(400));
+        assert_eq!(runtime.values[&(1, "Dimmer".to_string())], 0);
+    }
+
+    #[test]
+    fn group_recall_coexist_preserves_stacked_values() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        create_group_recall_cue(
+            &mut runtime,
+            1,
+            "Front",
+            RecallMode::Coexist,
+            0,
+            "Dimmer",
+            40_000,
+            Vec::new(),
+        );
+        create_group_recall_cue(
+            &mut runtime,
+            2,
+            "Front",
+            RecallMode::Coexist,
+            0,
+            "Pan",
+            50_000,
+            Vec::new(),
+        );
+        let now = Instant::now();
+        runtime.start_cue(1, now, PendingCueTriggerSource::Manual);
+        runtime.start_cue(2, now, PendingCueTriggerSource::Manual);
+
+        assert_eq!(runtime.values[&(1, "Dimmer".to_string())], 40_000);
+        assert_eq!(runtime.values[&(1, "Pan".to_string())], 50_000);
+        assert_eq!(runtime.active_group_cue_ids.get("Front"), Some(&2));
+        assert!(runtime.active_fade.is_none());
+    }
+
+    #[test]
+    fn group_recall_timeline_replace_matches_manual_trigger() {
+        let base = Instant::now();
+        let mut manual = group_recall_test_runtime();
+        let mut timeline = group_recall_test_runtime();
+        for runtime in [&mut manual, &mut timeline] {
+            runtime.start_cue(1, base, PendingCueTriggerSource::Manual);
+            runtime.apply_active_fade(base + Duration::from_millis(400));
+        }
+
+        let replaced_at = base + Duration::from_millis(500);
+        manual.start_cue(2, replaced_at, PendingCueTriggerSource::Manual);
+        timeline.timeline_events = vec![test_scene_block(10, 2, 0, 1_000, 1, 1.0)];
+        timeline.sort_timeline_events();
+        timeline.rebuild_effect_activations(replaced_at);
+        timeline.trigger_timeline_events_between(0, 0, true, true, replaced_at);
+        for runtime in [&mut manual, &mut timeline] {
+            runtime.apply_active_fade(replaced_at + Duration::from_millis(200));
+        }
+
+        assert_eq!(timeline.active_group_cue_ids, manual.active_group_cue_ids);
+        assert_eq!(timeline.values, manual.values);
+        assert_eq!(
+            timeline.active_fade.as_ref().map(|fade| fade.duration),
+            manual.active_fade.as_ref().map(|fade| fade.duration)
+        );
+    }
+
     fn test_lfo_request(
         label: &str,
         shape: LfoShape,
@@ -26033,6 +26453,8 @@ mod tests {
                 cue_id,
                 cue_list_id,
                 "Atomic Create".to_string(),
+                None,
+                RecallMode::Coexist,
                 250,
                 None,
                 vec![CueFixtureTarget {
@@ -26120,6 +26542,8 @@ mod tests {
                 cue_id,
                 "2.5".to_string(),
                 "Published Details".to_string(),
+                Some("Front".to_string()),
+                RecallMode::ReplaceGroup,
                 750,
                 None,
                 125,
@@ -26143,6 +26567,8 @@ mod tests {
             .expect("Cue details must be visible when update returns");
         assert_eq!(detailed.cue_number, "2.5");
         assert_eq!(detailed.label, "Published Details");
+        assert_eq!(detailed.group_id.as_deref(), Some("Front"));
+        assert_eq!(detailed.recall_mode, RecallMode::ReplaceGroup);
         assert_eq!(detailed.fade_ms, 750);
         assert_eq!(detailed.pre_wait_ms, 125);
         assert_eq!(detailed.follow_ms, Some(2_000));
@@ -26179,6 +26605,8 @@ mod tests {
             cue_id: 10,
             cue_list_id: 404,
             label: "Missing list".to_string(),
+            group_id: None,
+            recall_mode: RecallMode::Coexist,
             fade_ms: 0,
             targets: Vec::new(),
             video_targets: Vec::new(),
@@ -26211,6 +26639,8 @@ mod tests {
             cue_id: 11,
             cue_list_id: DEFAULT_CUE_LIST_ID,
             label: "Missing effect".to_string(),
+            group_id: None,
+            recall_mode: RecallMode::Coexist,
             fade_ms: 0,
             targets: Vec::new(),
             video_targets: Vec::new(),
@@ -26242,6 +26672,8 @@ mod tests {
             cue_id: 12,
             cue_list_id: DEFAULT_CUE_LIST_ID,
             label: "Expired".to_string(),
+            group_id: None,
+            recall_mode: RecallMode::Coexist,
             fade_ms: 0,
             targets: Vec::new(),
             video_targets: Vec::new(),
@@ -26373,6 +26805,8 @@ mod tests {
             cue_id: 1,
             cue_number: "9".to_string(),
             label: "Must stay atomic".to_string(),
+            group_id: None,
+            recall_mode: RecallMode::Coexist,
             fade_ms: 999,
             pre_wait_ms: 25,
             follow_ms: Some(50),
@@ -26402,6 +26836,8 @@ mod tests {
             cue_id: 1,
             cue_number: "2".to_string(),
             label: "Must roll back".to_string(),
+            group_id: None,
+            recall_mode: RecallMode::Coexist,
             fade_ms: 999,
             pre_wait_ms: 25,
             follow_ms: Some(50),
@@ -40388,6 +40824,8 @@ mod tests {
             cue_list_id: DEFAULT_CUE_LIST_ID,
             cue_number: "1".to_string(),
             label: "Recall Chaser".to_string(),
+            group_id: None,
+            recall_mode: RecallMode::Coexist,
             fade_ms: 0,
             pre_wait_ms: 0,
             follow_ms: None,
@@ -42852,6 +43290,8 @@ mod tests {
                 cue.id,
                 cue.cue_number,
                 cue.label,
+                cue.group_id,
+                cue.recall_mode,
                 cue.fade_ms,
                 Some(8.0),
                 cue.pre_wait_ms,

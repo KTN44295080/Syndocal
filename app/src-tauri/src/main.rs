@@ -41,7 +41,7 @@ use protocol::{
     MidiControlMapping, MidiInputSummary, MidiOutputSummary, MoveEffectRequest, NodeGraphId,
     NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp,
     OscControlAction, OscControlMapping, OscInputConfig, PatchFixtureRequest,
-    PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RemoteControlConfig,
+    PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RecallMode, RemoteControlConfig,
     RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile,
     StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary, TimelineEventId,
     TimelineLayerKind, TimelineSnapRequest, TimelineTrackKind, ValueEffectRequest, Vec3,
@@ -2626,6 +2626,7 @@ struct PreparedFixturePatch {
 struct ProjectLoadResult {
     path: String,
     profiles: Vec<FixtureProfileSummary>,
+    warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2635,6 +2636,7 @@ struct UserTemplateLoadResult {
     profiles: Vec<FixtureProfileSummary>,
     midi_mappings: Vec<MidiControlMapping>,
     osc_mappings: Vec<OscControlMapping>,
+    warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -5750,6 +5752,10 @@ fn create_cue_from_current(
         Some(effect_targets) => copy_cue_effect_params_on_capture(&snapshot, effect_targets)?,
         None => captured_effect_targets,
     };
+    let group_id = match &scope {
+        CueCaptureScope::SelectedGroup { group_id } => Some(normalize_group_id(group_id)?),
+        _ => None,
+    };
     validate_cue_effect_targets(&snapshot, &effect_targets)?;
     ensure_cue_targets_present(
         &targets,
@@ -5765,6 +5771,8 @@ fn create_cue_from_current(
         cue_id,
         cue_list_id,
         label,
+        group_id,
+        RecallMode::Coexist,
         fade_ms,
         authored_beats,
         targets,
@@ -6293,6 +6301,8 @@ fn set_cue_metadata(
     cue_id: CueId,
     cue_number: String,
     label: String,
+    group_id: Option<String>,
+    recall_mode: RecallMode,
     fade_ms: u64,
     authored_beats: Option<f32>,
     pre_wait_ms: u64,
@@ -6312,6 +6322,9 @@ fn set_cue_metadata(
     if label.is_empty() {
         return Err("Cue label is required".to_string());
     }
+    let group_id = group_id
+        .map(|group_id| normalize_group_id(&group_id))
+        .transpose()?;
     validate_cue_authored_beats(authored_beats)?;
     let snapshot = state.engine.snapshot();
     if !snapshot.cues.iter().any(|cue| cue.id == cue_id) {
@@ -6340,6 +6353,8 @@ fn set_cue_metadata(
         cue_id,
         cue_number,
         label,
+        group_id,
+        recall_mode,
         fade_ms,
         authored_beats,
         pre_wait_ms,
@@ -12333,6 +12348,7 @@ fn load_user_template(
         profiles: loaded.profiles,
         midi_mappings,
         osc_mappings,
+        warnings: loaded.warnings,
     }))
 }
 
@@ -14099,6 +14115,7 @@ fn load_project_from_file(
     use_authored_video_snapshot(&mut project.snapshot);
     normalize_project_timeline_layers(&mut project.snapshot);
     validate_project_file(&project)?;
+    let warnings = project_validation_warnings(&project);
     let profiles = project.custom_profiles.clone();
     {
         let mut custom_profiles = state
@@ -14120,6 +14137,7 @@ fn load_project_from_file(
     Ok(ProjectLoadResult {
         path: path_label,
         profiles,
+        warnings,
     })
 }
 
@@ -14595,6 +14613,29 @@ fn validate_project_file(project: &ProjectFile) -> Result<(), String> {
     validate_project_video_graph(&project.snapshot)?;
     validate_project_node_graphs(&project.snapshot)?;
     Ok(())
+}
+
+fn project_validation_warnings(project: &ProjectFile) -> Vec<String> {
+    project
+        .snapshot
+        .cues
+        .iter()
+        .filter_map(|cue| {
+            let group_id = cue.group_id.as_deref()?;
+            let carried = project.snapshot.fixtures.iter().any(|fixture| {
+                fixture
+                    .group_ids
+                    .iter()
+                    .any(|fixture_group_id| group_matches(fixture_group_id, group_id))
+            });
+            (!carried).then(|| {
+                format!(
+                    "Cue {} '{}' references fixture group '{group_id}', but no fixture carries that group",
+                    cue.cue_number, cue.label
+                )
+            })
+        })
+        .collect()
 }
 
 fn validate_unique_ids(label: &str, ids: impl IntoIterator<Item = u64>) -> Result<(), String> {
@@ -29098,6 +29139,59 @@ f 1 2 3
                 && event.rate.is_none()
         }));
         validate_project_file(&legacy).unwrap();
+    }
+
+    #[test]
+    fn project_scene_matrix_cue_fields_roundtrip() {
+        let mut project: ProjectFile = serde_json::from_str(PHASE1_SAMPLE_PROJECT_JSON).unwrap();
+        project.snapshot.cues[0].group_id = Some("Front".to_string());
+        project.snapshot.cues[0].recall_mode = RecallMode::ReplaceGroup;
+
+        let json = project_json_for_write(&project).unwrap();
+        let roundtrip: ProjectFile = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            roundtrip.snapshot.cues[0].group_id.as_deref(),
+            Some("Front")
+        );
+        assert_eq!(
+            roundtrip.snapshot.cues[0].recall_mode,
+            RecallMode::ReplaceGroup
+        );
+        assert!(project_validation_warnings(&roundtrip).is_empty());
+    }
+
+    #[test]
+    fn project_scene_matrix_legacy_cues_default_to_ungrouped_coexist() {
+        let project: ProjectFile = serde_json::from_str(PHASE1_SAMPLE_PROJECT_JSON).unwrap();
+        let mut legacy = serde_json::to_value(project).unwrap();
+        for cue in legacy["snapshot"]["cues"].as_array_mut().unwrap() {
+            let cue = cue.as_object_mut().unwrap();
+            cue.remove("group_id");
+            cue.remove("recall_mode");
+        }
+
+        let legacy: ProjectFile = serde_json::from_value(legacy).unwrap();
+
+        assert!(legacy
+            .snapshot
+            .cues
+            .iter()
+            .all(|cue| { cue.group_id.is_none() && cue.recall_mode == RecallMode::Coexist }));
+        validate_project_file(&legacy).unwrap();
+    }
+
+    #[test]
+    fn project_scene_matrix_unknown_group_is_a_warning_not_an_error() {
+        let mut project: ProjectFile = serde_json::from_str(PHASE1_SAMPLE_PROJECT_JSON).unwrap();
+        project.snapshot.cues[0].group_id = Some("Missing/Group".to_string());
+
+        validate_project_file(&project).unwrap();
+        let warnings = project_validation_warnings(&project);
+
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("Missing/Group"));
+        assert!(warnings[0].contains("no fixture carries that group"));
     }
 
     #[test]

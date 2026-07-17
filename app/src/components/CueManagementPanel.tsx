@@ -37,6 +37,7 @@ interface CueManagementPanelProps {
   cues: CueSummary[];
   allCues: CueSummary[];
   cueLists: CueListSummary[];
+  groupIds: string[];
   palettes: ReferencePaletteSummary[];
   effects: EffectSummary[];
   cueCaptureEffects: EffectSummary[];
@@ -506,6 +507,35 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                   <label>
                     Label
                   <input value={draft().label} onInput={(event) => props.onUpdateCueMetadataDraft(cue, { label: event.currentTarget.value })} />
+                  </label>
+                  <label>
+                    Group
+                    <select
+                      value={draft().group_id ?? ""}
+                      onInput={(event) => props.onUpdateCueMetadataDraft(cue, {
+                        group_id: event.currentTarget.value || null,
+                      })}
+                    >
+                      <option value="">Show (ungrouped)</option>
+                      <Show when={draft().group_id && !props.groupIds.includes(draft().group_id!)}>
+                        <option data-no-localize value={draft().group_id!}>{draft().group_id}</option>
+                      </Show>
+                      <For each={props.groupIds}>
+                        {(groupId) => <option data-no-localize value={groupId}>{groupId}</option>}
+                      </For>
+                    </select>
+                  </label>
+                  <label>
+                    Recall mode
+                    <select
+                      value={draft().recall_mode}
+                      onInput={(event) => props.onUpdateCueMetadataDraft(cue, {
+                        recall_mode: event.currentTarget.value as CueMetadataDraft["recall_mode"],
+                      })}
+                    >
+                      <option value="Coexist">Coexist</option>
+                      <option value="ReplaceGroup">Replace group</option>
+                    </select>
                   </label>
                   <label>
                     Fade ms

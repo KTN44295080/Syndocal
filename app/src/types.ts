@@ -673,6 +673,7 @@ export interface ProjectFile {
 export interface ProjectLoadResult {
   path: string;
   profiles: FixtureProfileSummary[];
+  warnings: string[];
 }
 
 export interface UserTemplateLoadResult extends ProjectLoadResult {
@@ -1478,6 +1479,8 @@ export interface CueSummary {
   cue_list_id: number;
   cue_number: string;
   label: string;
+  group_id?: string | null;
+  recall_mode?: RecallMode;
   fade_ms: number;
   /** Intrinsic musical length used when a placed Scene Block conforms to tempo. */
   authored_beats?: number | null;
@@ -1501,6 +1504,8 @@ export interface CueNodeGraphTarget {
   graph_id: number;
   enabled: boolean;
 }
+
+export type RecallMode = "Coexist" | "ReplaceGroup";
 
 export type EffectParamsSnapshot =
   | { Lfo: LfoEffectRequest }
@@ -2087,6 +2092,7 @@ export interface EngineSnapshot {
   playback_executors: PlaybackExecutorSummary[];
   playback_master: number;
   active_cue_id?: number | null;
+  active_group_cue_ids?: Record<string, number>;
   active_fade?: ActiveFadeSummary | null;
   programmer: ProgrammerSnapshot;
   timeline: TimelineSnapshot;

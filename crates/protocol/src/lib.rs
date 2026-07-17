@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 
@@ -1171,6 +1171,13 @@ impl Default for VideoSnapshot {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RecallMode {
+    #[default]
+    Coexist,
+    ReplaceGroup,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CueSummary {
     pub id: CueId,
@@ -1179,6 +1186,10 @@ pub struct CueSummary {
     #[serde(default)]
     pub cue_number: String,
     pub label: String,
+    #[serde(default)]
+    pub group_id: Option<String>,
+    #[serde(default)]
+    pub recall_mode: RecallMode,
     pub fade_ms: u64,
     #[serde(default)]
     pub authored_beats: Option<f32>,
@@ -1335,6 +1346,8 @@ impl Default for CueSummary {
             cue_list_id: DEFAULT_CUE_LIST_ID,
             cue_number: String::new(),
             label: String::new(),
+            group_id: None,
+            recall_mode: RecallMode::default(),
             fade_ms: 0,
             authored_beats: None,
             pre_wait_ms: 0,
@@ -2760,6 +2773,8 @@ pub struct EngineSnapshot {
     #[serde(default = "default_level")]
     pub playback_master: f32,
     pub active_cue_id: Option<CueId>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub active_group_cue_ids: BTreeMap<String, CueId>,
     pub active_fade: Option<ActiveFadeSummary>,
     #[serde(default)]
     pub programmer: ProgrammerSnapshot,
@@ -2800,6 +2815,7 @@ impl Default for EngineSnapshot {
             playback_executors: default_playback_executors(),
             playback_master: 1.0,
             active_cue_id: None,
+            active_group_cue_ids: BTreeMap::new(),
             active_fade: None,
             programmer: ProgrammerSnapshot::default(),
             timeline: TimelineSnapshot::default(),
@@ -2969,6 +2985,8 @@ mod tests {
         value.as_object_mut().unwrap().remove("mib_fixture_ids");
         value.as_object_mut().unwrap().remove("palette_targets");
         value.as_object_mut().unwrap().remove("effect_targets");
+        value.as_object_mut().unwrap().remove("group_id");
+        value.as_object_mut().unwrap().remove("recall_mode");
 
         let parsed: super::CueSummary = serde_json::from_value(value).unwrap();
 
@@ -2982,6 +3000,29 @@ mod tests {
         assert!(parsed.mib_fixture_ids.is_empty());
         assert!(parsed.palette_targets.is_empty());
         assert!(parsed.effect_targets.is_empty());
+        assert_eq!(parsed.group_id, None);
+        assert_eq!(parsed.recall_mode, super::RecallMode::Coexist);
+    }
+
+    #[test]
+    fn cue_scene_matrix_fields_roundtrip_and_default_for_legacy_json() {
+        let mut cue = super::CueSummary::default();
+        cue.id = 18;
+        cue.group_id = Some("Front/Wash".to_string());
+        cue.recall_mode = super::RecallMode::ReplaceGroup;
+
+        let encoded = serde_json::to_value(&cue).unwrap();
+        assert_eq!(encoded["group_id"], "Front/Wash");
+        assert_eq!(encoded["recall_mode"], "ReplaceGroup");
+        let decoded: super::CueSummary = serde_json::from_value(encoded.clone()).unwrap();
+        assert_eq!(decoded, cue);
+
+        let mut legacy = encoded;
+        legacy.as_object_mut().unwrap().remove("group_id");
+        legacy.as_object_mut().unwrap().remove("recall_mode");
+        let legacy: super::CueSummary = serde_json::from_value(legacy).unwrap();
+        assert_eq!(legacy.group_id, None);
+        assert_eq!(legacy.recall_mode, super::RecallMode::Coexist);
     }
 
     #[test]

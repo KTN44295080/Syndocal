@@ -1791,6 +1791,15 @@ const japaneseText: Record<string, string> = {
   "Bass level": "低域レベル",
   "Mid level": "中域レベル",
   "High level": "高域レベル",
+  Matrix: "マトリクス",
+  "Scene Matrix": "シーンマトリクス",
+  "Scene matrix grouped by fixture group": "灯体グループ別シーンマトリクス",
+  "Recall mode": "呼び出しモード",
+  Coexist: "共存",
+  "Replace group": "グループを置換",
+  "Show (ungrouped)": "ショー（未グループ）",
+  "No scenes in this column.": "この列にはシーンがありません。",
+  scenes: "シーン",
 };
 
 const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
@@ -1875,6 +1884,8 @@ const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
   ],
   [/^Place at the current playhead \((\d+) ms\)$/, (timeMs) => `現在の再生位置（${timeMs} ms）へ配置`],
   [/^Drag Cue (.+) to Timeline$/, (label) => `キュー ${label} をタイムラインへドラッグ`],
+  [/^Trigger Cue (.+)$/, (label) => `キュー ${label} を実行`],
+  [/^Scene matrix column (.+)$/, (label) => `シーンマトリクス列 ${label}`],
   [
     /^Added (Audio|Lighting|Video) layer (.+) \((\d+)\)$/,
     (kind, label, id) => `${kind === "Audio" ? "音声" : kind === "Lighting" ? "照明" : "映像"}レイヤー ${label}（${id}）を追加しました`,
@@ -1966,6 +1977,16 @@ const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
   [/^Found (\d+) audio input device\(s\)\.$/, (count) => `音声入力デバイスが${count}件見つかりました。`],
   [/^(\d+) MB downloaded$/, (megabytes) => `${megabytes} MB ダウンロード済み`],
   [/^Saved project (.+)$/, (path) => `プロジェクトを保存しました: ${path}`],
+  [
+    /^Loaded project (.+) \((.+); (\d+) validation warnings?\): (.+)$/,
+    (path, profiles, count, detail) => {
+      const warnings = detail.split(" | ").map((warning) => warning.replace(
+        /^Cue (.+) '(.+)' references fixture group '(.+)', but no fixture carries that group$/,
+        "キュー $1 '$2' が参照する灯体グループ '$3' を持つ灯体がありません",
+      ));
+      return `プロジェクトを読み込みました: ${path}（${profiles}、検証警告 ${count}件）: ${warnings.join(" | ")}`;
+    },
+  ],
   [/^Loaded project (.+)$/, (detail) => `プロジェクトを読み込みました: ${detail}`],
   [/^Saved user template (.+)$/, (path) => `ユーザーテンプレートを保存しました: ${path}`],
   [/^Template save failed: (.+)$/, (detail) => `テンプレート保存に失敗しました: ${detail}`],

@@ -542,6 +542,49 @@ const cueRecallCue: CueSummary = {
   effect_targets: [{ effect_id: cueRecallEffect.id, enabled: true }],
 };
 
+const sceneMatrixCues: CueSummary[] = [
+  {
+    ...cueRecallCue,
+    id: 301,
+    cue_number: "1",
+    label: "Front Base",
+    group_id: "front",
+    recall_mode: "Coexist",
+    node_graph_targets: [],
+    effect_targets: [],
+  },
+  {
+    ...cueRecallCue,
+    id: 302,
+    cue_number: "2",
+    label: "Front Hit",
+    group_id: "front",
+    recall_mode: "ReplaceGroup",
+    node_graph_targets: [],
+    effect_targets: [],
+  },
+  {
+    ...cueRecallCue,
+    id: 303,
+    cue_number: "3",
+    label: "Back Sweep",
+    group_id: "back",
+    recall_mode: "ReplaceGroup",
+    node_graph_targets: [],
+    effect_targets: [],
+  },
+  {
+    ...cueRecallCue,
+    id: 304,
+    cue_number: "4",
+    label: "Show Blackout",
+    group_id: null,
+    recall_mode: "Coexist",
+    node_graph_targets: [],
+    effect_targets: [],
+  },
+];
+
 const layeredTimelineLayers: TimelineLayerSummary[] = [
   {
     id: 10,
@@ -612,5 +655,6 @@ export const viewportFixtureData = {
   cueRecallEffect,
   cueRecallNodeGraph,
   cueRecallCue,
+  sceneMatrixCues,
   layeredTimelineLayers,
 } as const;

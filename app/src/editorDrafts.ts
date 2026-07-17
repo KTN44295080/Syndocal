@@ -6,6 +6,7 @@ import type {
   CueEffectTarget,
   CueIfcbTiming,
   CuePartSummary,
+  RecallMode,
   TimelineAutomationSummary,
   TimelineCueEventSummary,
   TimelineTrackKind,
@@ -28,6 +29,8 @@ export interface VideoOutputConfigDraft {
 export interface CueMetadataDraft {
   cue_number: string;
   label: string;
+  group_id: string | null;
+  recall_mode: RecallMode;
   fade_ms: number;
   authored_beats: number | null;
   pre_wait_ms: number;
@@ -90,6 +93,8 @@ export const videoOutputConfigDraftFromSummary = (output: VideoOutputSummary): V
 export const cueMetadataDraftFromSummary = (cue: CueSummary): CueMetadataDraft => ({
   cue_number: cue.cue_number || String(cue.id),
   label: cue.label,
+  group_id: cue.group_id ?? null,
+  recall_mode: cue.recall_mode ?? "Coexist",
   fade_ms: cue.fade_ms,
   authored_beats: cue.authored_beats ?? null,
   pre_wait_ms: cue.pre_wait_ms ?? 0,
