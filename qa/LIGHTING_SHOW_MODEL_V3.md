@@ -176,6 +176,23 @@ risk: high / est: XL / depends: F1, F3, F4
 ## F7: Audible timeline audio — play the analyzed track during timeline Play, with offset and mute
 risk: low / est: M / depends: none
 
+**✅完了 2026-07-17 コミット95b33b0** — 昇格仕様（下記「F7昇格」= 音声クリップブロック）で実装。
+TimelineAudioClipSummary { id, layer_id, path, start_ms, offset_ms, duration_ms, gain,
+fade_in_ms, fade_out_ms } + master audio_offset_ms/audio_muted を #[serde(default)] 追加。
+レガシー timeline.audio はランタイム限定クリップ0へ導出され、未編集なら永続化スナップショット
+から除去されるため旧 .sdc はバイト互換で保存される。再生はクリップ独立sinkドメイン
+（playhead含有クリップのみsink生成、gain×fadeエンベロープ、seekはrevisionで強制re-cue、
+75ms超ドリフトのみ250msクールダウン後に再同期、欠損ファイルはstatusエラーでpanicなし）。
+UI: Audioレーンのクリップブロック（クリップ毎1 polylineノードの波形・最大64点、フェードランプ、
+move/resize/fadeジェスチャ+ゴースト/ライブスタンプ、マスターmute/offset、アクセシブル削除
+ダイアログ、JA全訳）。ハーネス: timeline-layeredへ6断言追加（2クリップ可視/波形1ノード毎/
+フェードランプ/Audioセクション限定add affordance/ノード予算<3500/スクロール0）。
+検証: protocol 27・engine timeline 51・syndocal project_ 72・audio焦点 protocol2+engine4+
+syndocal5+playback3、tsc+viteビルド緑、フルマトリクス217 pass exit 0。監督検出欠陥1件:
+「N audio clips」カウントがJSX補間で動的翻訳regexに届かずJAカバレッジ2433/2434 —
+テンプレートリテラル化で100%復帰。物理デバイスでの可聴確認はrodio裏付きplaybackテストを
+補完する次回ネイティブ検証項目として残す（過大評価しない）。
+
 **Problem**: The analyzed timeline audio track (waveform/beats/BPM) is never audibly played during timeline Play — the only rodio playback path is MediaAudioPlayback whose sinks are keyed by VideoLayerId (main.rs:662, video-layer media audio) — so a music-driven light show must route music as a video layer or play it externally. A lighting desk that shows a waveform it cannot play is incomplete (Daslight plays the track).
 
 **Design**: No engine hot-path change: the engine snapshot already carries timeline playing/position_ms every poll. Protocol: TimelineSnapshot.audio_offset_ms: i64 and audio_muted: bool, both #[serde(default)], edited via existing timeline-audio commands (set alongside analyze/clear). Tauri side: main.rs grows a dedicated timeline master sink inside MediaAudioPlayback (new key domain, not a VideoLayerId) that follows the engine snapshot — Play starts/decodes audio.path seeked to position_ms - offset, Pause stops, seek re-cues, and periodic drift resync reuses the tolerance/re-seek approach the video-layer audio path already implements. Mute toggles the sink without touching analysis. UI: mute + offset controls join the existing audio row in TimelineCueEventsPanel next to Apply BPM; the status line reports decode failures. Super-scene child audio (Shin's embedded audio layer) is explicitly F6 follow-up scope, not this tranche: one master track first, per the user's lighting-first directive. Sequenced independently of F1-F6; can land any time.
@@ -222,7 +239,7 @@ risk: low / est: M / depends: none
 - Video's place in the layered timeline: do video layers stay as layer kinds on the same single timeline alongside lighting layers, and should F6 child timelines be lighting-only for v3 given your lighting-completeness-first directive?
 - FX ownership after F4: if a global stack effect referenced by an FX scene is later deleted, should the scene keep working from its captured parameter snapshot (scene owns its look — proposed default), or go inert as today?
 - Super scene loop semantics: when a super-scene block loops (loop_fill or loop_count), should the child audio layer restart each iteration with the child timeline, and is depth-1 nesting (a super scene cannot contain another super scene) acceptable for v3?
-- Timeline audio scope: is one master audio track with offset/mute (F7) enough for this series — with per-super-scene audio arriving via F6 — or do you need multiple audio clips placeable as blocks on an audio lane now?
+- ~~Timeline audio scope~~ → 回答確定（F7昇格）: 複数音声クリップのブロック配置を採用し、95b33b0で実装済み。
 
 ## Verified claims
 14 claims adversarially verified: CONFIRMED

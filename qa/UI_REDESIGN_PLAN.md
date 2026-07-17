@@ -2,7 +2,7 @@
 
 作成: 2026-07-15 / 計画: Fable（実機比較・多段Workflow分析・敵対検証込み）/ 実装: Opus委任
 状態: **承認済み（2026-07-15）** — 実施順:
-T1✅ → T2✅ → T9✅ → T10✅ → T8✅ → F1✅ → F3✅ → F2✅ → F4✅ → T4✅（86ca79e）→ F5✅（243aaea）+ T3✅（f5cc523、Fable直接実装・合議マージf64ef96）→ **次: T5/F6以降** → T6 → T7 → F7/F8 → T11 → T12
+T1✅ → T2✅ → T9✅ → T10✅ → T8✅ → F1✅ → F3✅ → F2✅ → F4✅ → T4✅（86ca79e）→ F5✅（243aaea）+ T3✅（f5cc523、Fable直接実装・合議マージf64ef96）→ F7✅（95b33b0、音声クリップブロック+可聴再生）+ T5✅（90dfa1a、Fable直接実装・合議マージ8c364a0）→ **次: F6（タイムライン内タイムライン）/T6以降** → T7 → F8 → T11 → T12
 実装体制（2026-07-16更新）: 実装=Codex gpt-5.6-sol（ローカルCLI、ユーザー指定）/ 計画・検証・コミット=Fable。
 T9はOpus（Mapping再設計）+Codex（StageGlyphs.tsx共有レンダラー統一）の合作で`1db7af5`として着地。
 承認内容: (1) 計画全体 (2) T8をT2直後へ前倒し（Control構造契約の変更を承認） (3) T7のprotocol変更
@@ -80,6 +80,22 @@ TransportCluster共通化: GOが全モードで同一ジオメトリ（±4px）�
 FadeProgress単一化（1色1様式）。ステータス階層化: Active/Next Cueを大セル+identity色相チップ。Live Edit死領域解消（Cue Padグリッドが高さを充填）。
 **メタデータ最小フォント11px床 + CSS監査**。
 契約変更: モード別トランスポート配置のハーネス断言更新。
+
+**✅完了 2026-07-17 ブランチ90dfa1a → 合議マージ8c364a0（Fable直接実装 worktreeレーン）** —
+実装コア: BO3種（DMX/Video/All）を.killButton（#6b2424枠+斜線ハッチ、engaged=#6e2222塗り、
+橙不使用）へ、All Clearを.killClearへ。TouchSafetyDeckも同クラス継承。Active/Nextセルは
+.liveCueStatusCell + identity色相チップ（8x14、cueIdentityHue）。フェード進捗は
+.fadeMeter角形+中立#cfd6db、liveFadeMeter progressのaccent-colorも同色へ単一化。
+ハーネス契約変更（列挙）: killZone計測5項目（killButtonCount/killClearCount/
+killButtonBorderIsRed/liveStatusMinFontPx/liveCueIdentityChipCount）+
+hasExpectedKillZone断言を ^control-live-\d+x\d+$ ゲートで追加、killZoneFailuresを
+exit判定・counts行・両JSONダンプへ配線。既存断言の期待値変更なし。
+検証: worktreeフルマトリクス217 exit 0 → F7込みmainへの合議マージ（コンフリクト=styles.css
+1ハンク、Fable解決→Codexレビュー ADJUDICATION: AGREE、byte照合/ブレース収支/両側断言残存
+確認済）→ マージ済みツリーで tsc+viteビルド緑・フルマトリクス217 exit 0・ライブJS計測
+（ハッチKILL3個/チップ2色/デスクタブ単一行/スクロール0/0、F7 audioクリップ共存）。
+教訓（スキルへ反映済み）: ハーネスmeasureテンプレート内regexは\\dエスケープ必須、
+焦点実走の合否はexit codeで確認。
 
 ### T6: VJ Desk再構成（risk: medium / L）
 クリップバンク支配的（サムネイル第一のグリッド、12パッド無スクロール表示）。Preview/Programモニタが中央列高さ≥70%。Audio/AutoVJ/Reactive設定はアコーディオンドロワー（既定折りたたみ、localStorage永続）。レイヤー6行常設表示。Out系ボタンのスコープ語彙統一。
