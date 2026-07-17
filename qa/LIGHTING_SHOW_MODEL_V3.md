@@ -153,6 +153,27 @@ Coexist（既定）は現状どおり重ね掛け。発火経路（マトリク�
 ## F6: Super Scenes — nested child timeline inside a cue with per-block child transport
 risk: high / est: XL / depends: F1, F3, F4
 
+**✅完了 2026-07-18 コミット59b6600** — 確定仕様どおり実装（F7クリップモデル差分込み）。
+CueSummary.child_timeline: Option<ChildTimelineSummary>（layers/events/automations/
+video_automations/audio/audio_clips/duration_ms、全#[serde(default)]）。深度1バリデーション
+（自己/循環/入れ子はvalidationエラー、ロードは通し当該recallはinert — 実測メッセージ3種）。
+子transportはcommand-drain時に完全事前構築（子event配列/cue dispatch index/F4 activation
+range/occurrenceバッファ/pending容量）で、16並行super×200子イベント予算テストは3200子
+イベント処理でポインタ変更0・capacity増加0。child_pos=(parent-block_start)×rate、
+loop_fillはmodulo、親seekで窓内子位置再計算+状態確立occurrence再発火、ブロック終端で
+子transportとF4 activationをkill。フラット互換は540バイトfixtureで完全一致（None時
+フィールド省略）。子音声はRoot(clip_id)/Child{parent_event_id,parent_iteration,clip_id}の
+独立sinkドメインで複数配置・iteration跨ぎの衝突なし。UI: super sceneブロックはF2面の
+通常操作で配置・ソースリンク（子編集が全配置へ反映）、ダブルクリックで同一面が
+Show›<シーン名>breadcrumb付き子タイムラインへ遷移。ハーネス: layered-desk検査へ
+superScene系8条件+親状態計測を追加（既存期待値変更なし）。
+検証: protocol 29・engine child 8+timeline 59・syndocal project_ 74+child sink 3、
+tsc+viteビルド緑、JA 100%。監督検出欠陥1件: コンパクト2ビューポートでbreadcrumbが
+幅0へ圧搾され子タイムラインの唯一の脱出手段が不可視化（titleGroupのmin-width:0起因）—
+88px床+内部省略で修正しライブ実測88×24+exit往復動作確認。修正込みフルマトリクス
+217 pass exit 0（layeredDesk全5ビューポートpass）。T6と合議マージ済み（f344713、
+マージ後222 pass）。
+
 **Problem**: The engine owns exactly one flat TimelineSnapshot; a cue cannot contain a timeline and there is no per-block child transport, so the user's Super Scene 'Shin' (~10 layers: audio, full-length intensity lane, scene-block layers) is unrepresentable. jump_to_event_id and follow_ms chains express only linear sequences, not a parallel multi-layer bundle.
 
 **Design**: Protocol: CueSummary.child_timeline: Option<ChildTimelineSummary> #[serde(default)], where ChildTimelineSummary reuses the existing content structs { layers, events, automations, video_automations, audio: Option<AudioAnalysisSummary>, duration_ms } minus transport fields (playing/position live only in the parent). Depth-1 for v3: validation rejects a child event whose cue itself has a child_timeline, and rejects self/cyclic references. Engine: when a block whose cue carries a child timeline fires, advance_pending_cue spawns a pre-allocated ChildTransport { activation key, window start/end from the parent block, child position, rate from F3 conform }; advance_timeline advances active child transports immediately after the parent playhead each tick (child_pos = (parent_pos - block_start) * rate, modulo child duration under loop_fill), collects child occurrences with the same layer-gated occurrence collector (reused, parameterized over an event slice), and dispatches through the normal cue path — child FX scenes get F4 activation instances, so nesting composes. Seek/scrub: a parent seek recomputes each in-window child position and re-fires state-establishing occurrences the same way the flat timeline already handles seek-past events; MTC/LTC stay authoritative on the parent only. Block end kills the child transport and its activation instances. Editing: the child timeline is edited by opening the super scene in the same F2 timeline surface (breadcrumb: Show > Shin), reusing every lane/drag/resize interaction; placed super-scene blocks stay source-linked, so child edits update all placements. Bounded memory: child transports capped by simultaneously active super blocks; a focused budget test covers 16 concurrent super blocks each with 200 child events.

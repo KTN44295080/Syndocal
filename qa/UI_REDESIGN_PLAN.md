@@ -2,7 +2,7 @@
 
 作成: 2026-07-15 / 計画: Fable（実機比較・多段Workflow分析・敵対検証込み）/ 実装: Opus委任
 状態: **承認済み（2026-07-15）** — 実施順:
-T1✅ → T2✅ → T9✅ → T10✅ → T8✅ → F1✅ → F3✅ → F2✅ → F4✅ → T4✅（86ca79e）→ F5✅（243aaea）+ T3✅（f5cc523、Fable直接実装・合議マージf64ef96）→ F7✅（95b33b0、音声クリップブロック+可聴再生）+ T5✅（90dfa1a、Fable直接実装・合議マージ8c364a0）→ **次: F6（タイムライン内タイムライン）/T6以降** → T7 → F8 → T11 → T12
+T1✅ → T2✅ → T9✅ → T10✅ → T8✅ → F1✅ → F3✅ → F2✅ → F4✅ → T4✅（86ca79e）→ F5✅（243aaea）+ T3✅（f5cc523、Fable直接実装・合議マージf64ef96）→ F7✅（95b33b0、音声クリップブロック+可聴再生）+ T5✅（90dfa1a、Fable直接実装・合議マージ8c364a0）→ F6✅（59b6600、super scene）+ T6✅（4182ad6、Fable直接実装・合議マージf344713）→ **次: T7/F8以降** → T11 → T12
 実装体制（2026-07-16更新）: 実装=Codex gpt-5.6-sol（ローカルCLI、ユーザー指定）/ 計画・検証・コミット=Fable。
 T9はOpus（Mapping再設計）+Codex（StageGlyphs.tsx共有レンダラー統一）の合作で`1db7af5`として着地。
 承認内容: (1) 計画全体 (2) T8をT2直後へ前倒し（Control構造契約の変更を承認） (3) T7のprotocol変更
@@ -100,6 +100,25 @@ exit判定・counts行・両JSONダンプへ配線。既存断言の期待値変
 ### T6: VJ Desk再構成（risk: medium / L）
 クリップバンク支配的（サムネイル第一のグリッド、12パッド無スクロール表示）。Preview/Programモニタが中央列高さ≥70%。Audio/AutoVJ/Reactive設定はアコーディオンドロワー（既定折りたたみ、localStorage永続）。レイヤー6行常設表示。Out系ボタンのスコープ語彙統一。
 SynapseRack式フローティングパネルは一画面契約維持のため不採用（採用するなら別途契約再交渉）。
+
+**✅完了 2026-07-18 ブランチ4182ad6 → 合議マージf344713（Fable直接実装 worktreeレーン）** —
+実装: Audio In/Auto VJ/Reactiveを折りたたみドロワーバー化（MixerDrawerBar.tsx新規、
+localStorage毎ドロワー永続、閉状態でもstatus読み出し表示、ストリップはDOM直下維持+
+隣接兄弟セレクタ隠しで既存`>`セレクタ全温存）。パッドはサムネイル第一（絶対カバー+
+下端オーバーレイ、56px床）、2列チロームを全ミキサー高さへ昇格し**全5ビューポートで
+12/12パッド無スクロール実測**。モニタ7fr/3fr（実測0.70）。レイヤー行94→78pxで6行可視。
+ブラックアウト5様式をKILLファミリー（Video BO/BO/Clear BO + killButton/killClear）へ統一。
+vj-bankフィクスチャ（14クリップ）+常設5シナリオ×7断言。
+ハーネス契約変更（全列挙はコミットf344713/4182ad6参照）: 非live mixerのliveAudioRail検査を
+ドロワー既定閉検査へ再交渉、clipGrid床90→56px（理由明記）、monitorDominance≥0.65と
+killVocabulary新設、runLiveAudioAcceptanceが音声ドロワーを開閉（開状態のlocalStorage
+リークを閉で遮断）、auto-vj/reactive/fullscreen-vjフェーズへopenMixerDrawer追加。
+検証: worktreeマトリクス222 exit 0 → F6込みmainへ合議マージ（コンフリクト=
+viewportFixtureData.ts 1ハンク、Fable解決→Codexレビュー ADJUDICATION: AGREE、
+双方向numstat照合+シンボル単位残存確認）→ マージ済みツリーでビルド緑・マトリクス
+222 pass exit 0・vj-bank 12/12×5。既存欠陥2件（live-audio JAタブ探索/reactiveラック
+横overflow）はA/Bでベース起因と裁定→タスクチップ経由の別セッション修正
+（fa0b987/5742959）がマージ前に着地済み。
 
 ### T7:（オプション・要明示承認）永続identity色 — protocol変更
 `CueSummary.color: Option<String>` + `EngineSnapshot.group_colors`（serde default、`.sdc` v1互換維持、前例: StageObjectSummary.color / VideoCuePointSummary.color）。set-cue-color / set-group-colorコマンド、カラーピッカーUI。永続色優先・ハッシュfallback。
