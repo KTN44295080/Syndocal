@@ -12,13 +12,15 @@ import {
 import { packTimelineOverlapClusterBadges } from "../timelineOverlapClusters";
 import { cueIdentityHue, identityCssColor } from "../identityColor";
 import { formatCompactClock } from "../clockDisplay";
-import type { TimelineTrackKind } from "../types";
+import type { TimelineLayerKind, TimelineLayerSummary, TimelineTrackKind } from "../types";
+import type { TimelineCueDragState } from "../timelineCueDrag";
 
 export interface TimelineOverviewEvent {
   id: number;
   cue_id: number;
   cue_label: string;
   track: TimelineTrackKind;
+  layer_id: number;
   time_ms: number;
   duration_ms: number;
   loop_count: number;
@@ -40,6 +42,7 @@ export interface TimelineOverviewAutomationRange {
   target_id: number;
   label: string;
   track: TimelineTrackKind;
+  layer_id: number;
   start_ms: number;
   end_ms: number;
   keyframes: { keyframe_index: number; time_ms: number }[];
@@ -53,6 +56,7 @@ export interface TimelineOverviewOverlapCluster {
   id: string;
   label: string;
   track: TimelineTrackKind;
+  layer_id: number;
   start_ms: number;
   end_ms: number;
   count: number;
@@ -65,6 +69,9 @@ export interface TimelineOverviewOverlapCluster {
 }
 
 interface TimelineOverviewProps {
+  layers: TimelineLayerSummary[];
+  legacyMode: boolean;
+  cueDrag: TimelineCueDragState | null;
   events: TimelineOverviewEvent[];
   executionLive: boolean;
   markerAriaLabel: (event: TimelineOverviewEvent) => string;
@@ -78,7 +85,10 @@ interface TimelineOverviewProps {
   onSelectAutomationRange: (range: TimelineOverviewAutomationRange) => void;
   onSelectEvent: (eventId: number) => void;
   onInspectOverlapCluster: (cluster: TimelineOverviewOverlapCluster) => void;
-  onMoveEventTime: (eventId: number, timeMs: number) => void;
+  onUpdateLayer: (layer: TimelineLayerSummary) => void | Promise<void>;
+  onStatus: (message: string) => void;
+  onMoveEventPlacement: (eventId: number, timeMs: number, layerId: number) => void;
+  onResizeEventTime: (eventId: number, edge: "start" | "end", timeMs: number) => void;
   onMoveAutomationRangeTime: (range: TimelineOverviewAutomationRange, timeMs: number) => void;
   onResizeAutomationRangeTime: (
     range: TimelineOverviewAutomationRange,
@@ -98,8 +108,47 @@ interface TimelineMarkerDrag {
   originalTimeMs: number;
   timeMs: number;
   startClientX: number;
+  startClientY: number;
+  originalLayerId: number;
+  layerId: number;
+  hoverLayerId: number | null;
+  rejection: "locked" | "kind" | "audio" | null;
   moved: boolean;
 }
+
+interface TimelineEventResizeDrag {
+  eventId: number;
+  pointerId: number;
+  edge: "start" | "end";
+  startClientX: number;
+  moved: boolean;
+  originalStartMs: number;
+  originalEndMs: number;
+  startMs: number;
+  endMs: number;
+}
+
+interface TimelineLayerRowLayout {
+  layer: TimelineLayerSummary;
+  top: number;
+  height: number;
+}
+
+interface TimelineSectionRowLayout {
+  kind: TimelineLayerKind;
+  top: number;
+  height: number;
+  collapsed: boolean;
+  layers: TimelineLayerSummary[];
+}
+
+const timelineSectionKinds: TimelineLayerKind[] = ["Audio", "Lighting", "Video"];
+const timelineSectionHeaderHeightPx = 20;
+const timelineUserLaneHeightPx = 30;
+const legacyTimelineLayers: TimelineLayerSummary[] = [
+  { id: 0, label: "Lighting", order: 0, muted: false, locked: false, solo: false, kind: "Lighting" },
+  { id: 1, label: "Video", order: 1, muted: false, locked: false, solo: false, kind: "Video" },
+];
 
 interface TimelineAutomationRangeDrag {
   rangeId: string;
@@ -132,6 +181,7 @@ const sameOverviewEvent = (left: TimelineOverviewEvent, right: TimelineOverviewE
   left.cue_id === right.cue_id &&
   left.cue_label === right.cue_label &&
   left.track === right.track &&
+  left.layer_id === right.layer_id &&
   left.time_ms === right.time_ms &&
   left.duration_ms === right.duration_ms &&
   left.loop_count === right.loop_count &&
@@ -153,6 +203,7 @@ const sameOverviewAutomationRange = (
   left.target_id === right.target_id &&
   left.label === right.label &&
   left.track === right.track &&
+  left.layer_id === right.layer_id &&
   left.start_ms === right.start_ms &&
   left.end_ms === right.end_ms &&
   left.x === right.x &&
@@ -167,6 +218,7 @@ const sameOverviewAutomationRange = (
 
 export function TimelineOverview(props: TimelineOverviewProps) {
   const [markerDrag, setMarkerDrag] = createSignal<TimelineMarkerDrag | null>(null);
+  const [eventResizeDrag, setEventResizeDrag] = createSignal<TimelineEventResizeDrag | null>(null);
   const [rangeDrag, setRangeDrag] = createSignal<TimelineAutomationRangeDrag | null>(null);
   const [keyframeDrag, setKeyframeDrag] = createSignal<TimelineAutomationKeyframeDrag | null>(null);
   const [suppressClickEventId, setSuppressClickEventId] = createSignal<number | null>(null);
@@ -179,6 +231,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   const [overviewPixelHeight, setOverviewPixelHeight] = createSignal(78);
   const [lightingLaneVisible, setLightingLaneVisible] = createSignal(true);
   const [videoLaneVisible, setVideoLaneVisible] = createSignal(true);
+  const [collapsedSections, setCollapsedSections] = createSignal<Set<TimelineLayerKind>>(new Set());
   let overviewElement: SVGSVGElement | undefined;
   onMount(() => {
     const updateViewBox = () => {
@@ -199,6 +252,72 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   const overviewH = () => Math.max(1, overviewPixelHeight());
   const laneVisible = (track: TimelineTrackKind) =>
     track === "Lighting" ? lightingLaneVisible() : videoLaneVisible();
+  const orderedLayers = createMemo(() => [...props.layers].sort(
+    (left, right) => left.order - right.order || left.id - right.id,
+  ));
+  const effectiveLayers = createMemo(() => props.legacyMode ? legacyTimelineLayers : orderedLayers());
+  const layerById = createMemo(() => new Map(effectiveLayers().map((layer) => [layer.id, layer])));
+  const sectionLayout = createMemo(() => {
+    const collapsed = collapsedSections();
+    const sections: TimelineSectionRowLayout[] = [];
+    const laneRows: TimelineLayerRowLayout[] = [];
+    let top = 0;
+    for (const kind of timelineSectionKinds) {
+      const layers = orderedLayers().filter((layer) => layer.kind === kind);
+      const isCollapsed = collapsed.has(kind);
+      sections.push({
+        kind,
+        top,
+        height: timelineSectionHeaderHeightPx,
+        collapsed: isCollapsed,
+        layers,
+      });
+      top += timelineSectionHeaderHeightPx;
+      if (isCollapsed) continue;
+      for (const layer of layers) {
+        laneRows.push({ layer, top, height: timelineUserLaneHeightPx });
+        top += timelineUserLaneHeightPx;
+      }
+    }
+    return { sections, laneRows, contentHeight: Math.max(timelineSectionHeaderHeightPx * 3, top) };
+  });
+  const layerRowById = createMemo(() => new Map(
+    sectionLayout().laneRows.map((row) => [row.layer.id, row]),
+  ));
+  const canvasH = () => props.legacyMode ? overviewH() : sectionLayout().contentHeight;
+  const toggleSection = (kind: TimelineLayerKind) => {
+    setCollapsedSections((current) => {
+      const next = new Set(current);
+      if (next.has(kind)) next.delete(kind);
+      else next.add(kind);
+      return next;
+    });
+  };
+  const layerIdFromPoint = (clientX: number, clientY: number) => {
+    if (typeof document === "undefined") return null;
+    const target = document.elementFromPoint(clientX, clientY)?.closest<Element>("[data-timeline-layer-id]");
+    if (!target || !target.closest(".timelineOverviewFrame")) return null;
+    const layerId = Number(target.getAttribute("data-timeline-layer-id"));
+    return Number.isFinite(layerId) && layerById().has(layerId) ? layerId : null;
+  };
+  const cueDragTargetLayerId = createMemo(() => {
+    const drag = props.cueDrag;
+    return drag?.moved ? layerIdFromPoint(drag.client_x, drag.client_y) : null;
+  });
+  const cueDropStateForLayer = (layerId: number) => {
+    if (cueDragTargetLayerId() !== layerId) return "none" as const;
+    const layer = layerById().get(layerId);
+    return layer?.kind === "Lighting" && !layer.locked ? "valid" as const : "rejected" as const;
+  };
+  const markerDropStateForLayer = (layerId: number) => {
+    const drag = markerDrag();
+    if (!drag || drag.hoverLayerId !== layerId) return "none" as const;
+    return drag.rejection === null ? "valid" as const : "rejected" as const;
+  };
+  const safeCueDrag = createMemo(() => {
+    const drag = props.cueDrag;
+    return drag?.moved && Number.isFinite(drag.client_x) && Number.isFinite(drag.client_y) ? drag : null;
+  });
   let cachedEventsById = new Map<number, TimelineOverviewEvent>();
   const stableEvents = createMemo(() => {
     const nextCache = new Map<number, TimelineOverviewEvent>();
@@ -237,8 +356,11 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       ? [...events.filter((event) => event.id !== selectedEventId), selectedEvent]
       : events;
   });
+  const renderedEvents = createMemo(() => props.legacyMode
+    ? orderedEvents()
+    : orderedEvents().filter((event) => layerRowById().has(event.layer_id)));
   const markerTabStopId = createMemo(() => {
-    const events = orderedEvents();
+    const events = renderedEvents();
     if (events.some((event) => event.id === props.selectedEventId)) return props.selectedEventId;
     const keyboardId = keyboardMarkerEventId();
     return events.some((event) => event.id === keyboardId) ? keyboardId : (events[0]?.id ?? null);
@@ -252,7 +374,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     });
   };
   const moveMarkerKeyboardFocus = (eventId: number, direction: -1 | 1 | "first" | "last") => {
-    const events = stableEvents();
+    const events = renderedEvents();
     if (events.length === 0) return;
     const currentIndex = Math.max(0, events.findIndex((event) => event.id === eventId));
     const nextIndex = direction === "first"
@@ -285,6 +407,19 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     event.preventDefault();
     event.stopPropagation();
     props.onSelectEvent(overviewEvent.id);
+    const sourceLayer = layerById().get(overviewEvent.layer_id);
+    if (!sourceLayer) {
+      props.onStatus(`Timeline layer ${overviewEvent.layer_id} was not found.`);
+      return;
+    }
+    if (sourceLayer.locked) {
+      props.onStatus(`Timeline layer ${sourceLayer.label} is locked. Unlock it before moving blocks.`);
+      return;
+    }
+    if (sourceLayer.kind === "Audio") {
+      props.onStatus("Scene Blocks cannot be moved from Audio layers.");
+      return;
+    }
     event.currentTarget.setPointerCapture(event.pointerId);
     const projection = beginTimelineAbsoluteDragProjection(overviewEvent.time_ms, event.clientX);
     setMarkerDrag({
@@ -293,6 +428,11 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       originalTimeMs: projection.original_time_ms,
       timeMs: projection.time_ms,
       startClientX: projection.start_client_x,
+      startClientY: event.clientY,
+      originalLayerId: overviewEvent.layer_id,
+      layerId: overviewEvent.layer_id,
+      hoverLayerId: overviewEvent.layer_id,
+      rejection: null,
       moved: projection.moved,
     });
   };
@@ -316,10 +456,26 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       svg.getBoundingClientRect().width,
       timelineVisibleWindowSpanMs(props.visibleWindow),
     );
+    const hoverLayerId = layerIdFromPoint(event.clientX, event.clientY);
+    const sourceLayer = layerById().get(drag.originalLayerId);
+    const targetLayer = hoverLayerId === null ? undefined : layerById().get(hoverLayerId);
+    const rejection = !targetLayer || !sourceLayer
+      ? null
+      : targetLayer.kind === "Audio"
+        ? "audio" as const
+        : targetLayer.kind !== sourceLayer.kind
+          ? "kind" as const
+          : targetLayer.locked
+            ? "locked" as const
+            : null;
+    const nextLayerId = targetLayer && rejection === null ? targetLayer.id : drag.originalLayerId;
     setMarkerDrag({
       ...drag,
       timeMs: projection.time_ms,
-      moved: projection.moved,
+      layerId: nextLayerId,
+      hoverLayerId,
+      rejection,
+      moved: projection.moved || Math.abs(event.clientY - drag.startClientY) >= 4,
     });
   };
 
@@ -341,12 +497,103 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       return;
     }
     setSuppressClickEventId(drag.eventId);
-    props.onMoveEventTime(drag.eventId, drag.timeMs);
+    if (drag.rejection !== null) {
+      const targetLayer = drag.hoverLayerId === null ? undefined : layerById().get(drag.hoverLayerId);
+      if (drag.rejection === "locked") {
+        props.onStatus(`Timeline layer ${targetLayer?.label ?? drag.hoverLayerId ?? "target"} is locked. No changes were made.`);
+      } else if (drag.rejection === "audio") {
+        props.onStatus("Scene Blocks cannot be moved to Audio layers. No changes were made.");
+      } else {
+        props.onStatus("Scene Blocks can only move within the same timeline section. No changes were made.");
+      }
+      return;
+    }
+    props.onMoveEventPlacement(drag.eventId, drag.timeMs, drag.layerId);
   };
   const endMarkerDrag = (event: PointerEvent & { currentTarget: SVGGElement }) =>
     finishMarkerDrag(event, false);
   const cancelMarkerDrag = (event: PointerEvent & { currentTarget: SVGGElement }) =>
     finishMarkerDrag(event, true);
+
+  const beginEventResize = (
+    event: PointerEvent & { currentTarget: SVGRectElement },
+    overviewEvent: TimelineOverviewEvent,
+    edge: "start" | "end",
+  ) => {
+    const svg = event.currentTarget.ownerSVGElement;
+    if (!svg || overviewEvent.duration_ms <= 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const layer = layerById().get(overviewEvent.layer_id);
+    if (layer?.locked) {
+      props.onStatus(`Timeline layer ${layer.label} is locked. Unlock it before resizing blocks.`);
+      return;
+    }
+    props.onSelectEvent(overviewEvent.id);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setEventResizeDrag({
+      eventId: overviewEvent.id,
+      pointerId: event.pointerId,
+      edge,
+      startClientX: event.clientX,
+      moved: false,
+      originalStartMs: overviewEvent.time_ms,
+      originalEndMs: overviewEvent.time_ms + overviewEvent.total_duration_ms,
+      startMs: overviewEvent.time_ms,
+      endMs: overviewEvent.time_ms + overviewEvent.total_duration_ms,
+    });
+  };
+
+  const moveEventResize = (event: PointerEvent & { currentTarget: SVGRectElement }) => {
+    const drag = eventResizeDrag();
+    const svg = event.currentTarget.ownerSVGElement;
+    if (!drag || drag.pointerId !== event.pointerId || !svg) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const originalTimeMs = drag.edge === "end" ? drag.originalEndMs : drag.originalStartMs;
+    const projection = updateTimelineAbsoluteDragProjection(
+      {
+        original_time_ms: originalTimeMs,
+        time_ms: drag.edge === "end" ? drag.endMs : drag.startMs,
+        start_client_x: drag.startClientX,
+        moved: drag.moved,
+      },
+      event.clientX,
+      svg.getBoundingClientRect().width,
+      timelineVisibleWindowSpanMs(props.visibleWindow),
+      drag.edge === "end" ? drag.originalStartMs + 1 : 0,
+      drag.edge === "start" ? drag.originalEndMs - 1 : Number.POSITIVE_INFINITY,
+    );
+    if (!projection.moved) return;
+    setEventResizeDrag(drag.edge === "start"
+      ? { ...drag, moved: true, startMs: projection.time_ms }
+      : { ...drag, moved: true, endMs: projection.time_ms });
+  };
+
+  const finishEventResize = (
+    event: PointerEvent & { currentTarget: SVGRectElement },
+    canceled: boolean,
+  ) => {
+    const drag = eventResizeDrag();
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setEventResizeDrag(null);
+    if (!shouldCommitTimelineMarkerDrag(drag, canceled)) return;
+    setSuppressClickEventId(drag.eventId);
+    props.onResizeEventTime(
+      drag.eventId,
+      drag.edge,
+      drag.edge === "start" ? drag.startMs : drag.endMs,
+    );
+  };
+  const endEventResize = (event: PointerEvent & { currentTarget: SVGRectElement }) =>
+    finishEventResize(event, false);
+  const cancelEventResize = (event: PointerEvent & { currentTarget: SVGRectElement }) =>
+    finishEventResize(event, true);
 
   const beginRangeDrag = (event: PointerEvent & { currentTarget: SVGGElement }, range: TimelineOverviewAutomationRange) => {
     const svg = event.currentTarget.ownerSVGElement;
@@ -597,41 +844,94 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     return automationRangeX(range) + localRatio * automationRangeWidth(range);
   };
   // ---- Pixel-space layout ------------------------------------------------
-  // Every x is `percent (0..100 of the visible window) -> pixel`; every y and
-  // height is derived from the measured overview height so the two lanes and
-  // two-band blocks scale with the panel instead of a fixed 44-unit grid.
+  // Legacy keeps the measured two-lane geometry. Authored layers use an
+  // explicit 20px section header + 30px lane row model inside the scrollport;
+  // its content height never participates in the fixed frame's intrinsic size.
   const viewBoxX = (percent: number) => (percent / 100) * overviewW();
-  const laneHeightPx = () => overviewH() / 2;
-  const laneTopPx = (track: TimelineTrackKind) => track === "Lighting" ? 0 : laneHeightPx();
-  const laneBottomPx = (track: TimelineTrackKind) => laneTopPx(track) + laneHeightPx();
-  const blockHeightPx = () => Math.max(9, laneHeightPx() * 0.52);
+  const legacyLaneHeightPx = () => overviewH() / 2;
+  const legacyLaneTopPx = (track: TimelineTrackKind) => track === "Lighting" ? 0 : legacyLaneHeightPx();
+  const layerRow = (layerId: number, track: TimelineTrackKind) => props.legacyMode
+    ? { top: legacyLaneTopPx(track), height: legacyLaneHeightPx() }
+    : layerRowById().get(layerId) ?? { top: 0, height: timelineUserLaneHeightPx };
+  const blockHeightPx = () => props.legacyMode ? Math.max(9, legacyLaneHeightPx() * 0.52) : 22;
   // The Lighting lane clears the ruler labels at the very top of the canvas.
-  const blockTopPx = (track: TimelineTrackKind) =>
-    laneTopPx(track) + laneHeightPx() * (track === "Lighting" ? 0.30 : 0.18);
-  const blockCenterYPx = (track: TimelineTrackKind) => blockTopPx(track) + blockHeightPx() / 2;
+  const blockTopPx = (event: Pick<TimelineOverviewEvent, "layer_id" | "track">) => {
+    const row = layerRow(event.layer_id, event.track);
+    return props.legacyMode
+      ? row.top + row.height * (event.track === "Lighting" ? 0.30 : 0.18)
+      : row.top + 4;
+  };
+  const blockCenterYPx = (event: Pick<TimelineOverviewEvent, "layer_id" | "track">) =>
+    blockTopPx(event) + blockHeightPx() / 2;
   const identityBandHeightPx = () => blockHeightPx() * 0.54;
-  const automationBarHeightPx = (track: TimelineTrackKind) => Math.max(
-    3,
-    Math.min(9, (laneBottomPx(track) - (blockTopPx(track) + blockHeightPx())) * 0.72),
-  );
-  const automationBarTopPx = (track: TimelineTrackKind) =>
-    blockTopPx(track) + blockHeightPx() - automationBarHeightPx(track) * 0.3;
-  const rulerLabelBaselineY = () => Math.max(9, Math.min(14, overviewH() * 0.12));
+  const automationLayerRow = (
+    range: TimelineOverviewAutomationRange,
+  ): { top: number; height: number; layerId: number } | undefined => {
+    if (props.legacyMode) {
+      const layerId = range.track === "Lighting" ? 0 : 1;
+      return { ...layerRow(layerId, range.track), layerId };
+    }
+    const kind: TimelineLayerKind = range.kind === "lighting" ? "Lighting" : "Video";
+    const row = layerRowById().get(range.layer_id)
+      ?? sectionLayout().laneRows.find((candidate) => candidate.layer.kind === kind);
+    return row ? { top: row.top, height: row.height, layerId: row.layer.id } : undefined;
+  };
+  const automationBarHeightPx = (range: TimelineOverviewAutomationRange) => {
+    const row = automationLayerRow(range);
+    if (!row) return 3;
+    const pseudoEvent = {
+      layer_id: row.layerId,
+      track: range.track,
+    };
+    return Math.max(3, Math.min(9, (row.top + row.height - (blockTopPx(pseudoEvent) + blockHeightPx())) * 0.72));
+  };
+  const automationBarTopPx = (range: TimelineOverviewAutomationRange) => {
+    const row = automationLayerRow(range);
+    const pseudoEvent = {
+      layer_id: row?.layerId ?? (range.track === "Lighting" ? 0 : 1),
+      track: range.track,
+    };
+    return blockTopPx(pseudoEvent) + blockHeightPx() - automationBarHeightPx(range) * 0.3;
+  };
+  const rulerLabelBaselineY = () => props.legacyMode
+    ? Math.max(9, Math.min(14, overviewH() * 0.12))
+    : 14;
   const rulerLineTopPx = () => rulerLabelBaselineY() + 2;
-  const rulerLineBottomPx = () => overviewH() - 1;
+  const rulerLineBottomPx = () => canvasH() - 1;
   const clusterBadgeWidthPx = 24;
   // Keep the aggregate ×N badge in the upper strip of its lane, strictly above
   // the block centers, so it never intercepts pointer hit-testing on the
   // scene-block bodies (which would break block selection and dragging).
-  const clusterBadgeTopPx = (track: TimelineTrackKind) => laneTopPx(track) + 2;
-  const clusterBadgeHeightPx = (track: TimelineTrackKind) => {
-    const roomAboveBlockCenter = blockCenterYPx(track) - clusterBadgeTopPx(track) - 2;
+  const clusterBadgeTopPx = (cluster: TimelineOverviewOverlapCluster) =>
+    layerRow(cluster.layer_id, cluster.track).top + 2;
+  const clusterBadgeHeightPx = (cluster: TimelineOverviewOverlapCluster) => {
+    const roomAboveBlockCenter = blockCenterYPx(cluster) - clusterBadgeTopPx(cluster) - 2;
     return Math.max(10, Math.min(15, roomAboveBlockCenter));
   };
 
   const nameInsetPx = 4;
   const nameCharWidthPx = 6.6;
-  const sceneBlockPixelWidth = (event: TimelineOverviewEvent) => Math.max(viewBoxX(event.width), 0.8);
+  const eventPreviewStartMs = (event: TimelineOverviewEvent) => {
+    const resize = eventResizeDrag();
+    if (resize?.eventId === event.id) return resize.startMs;
+    const move = markerDrag();
+    return move?.eventId === event.id ? move.timeMs : event.time_ms;
+  };
+  const eventPreviewLayerId = (event: TimelineOverviewEvent) => {
+    const move = markerDrag();
+    return move?.eventId === event.id ? move.layerId : event.layer_id;
+  };
+  const eventPreviewEndMs = (event: TimelineOverviewEvent) => {
+    const resize = eventResizeDrag();
+    return resize?.eventId === event.id ? resize.endMs : eventPreviewStartMs(event) + event.total_duration_ms;
+  };
+  const eventPreviewSpanMs = (event: TimelineOverviewEvent) => Math.max(0, eventPreviewEndMs(event) - eventPreviewStartMs(event));
+  const sceneBlockPixelWidth = (event: TimelineOverviewEvent) => Math.max(
+    eventResizeDrag()?.eventId === event.id
+      ? (eventPreviewSpanMs(event) / timelineVisibleWindowSpanMs(props.visibleWindow)) * overviewW()
+      : viewBoxX(event.width),
+    0.8,
+  );
   const sceneBlockHasBands = (event: TimelineOverviewEvent) => sceneBlockPixelWidth(event) >= 16;
   const sceneBlockShowsDuration = (event: TimelineOverviewEvent) => sceneBlockPixelWidth(event) >= 80;
   const sceneBlockName = (event: TimelineOverviewEvent) => {
@@ -653,11 +953,12 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     return label.length <= maxCharacters ? label : `${label.slice(0, Math.max(1, maxCharacters - 1))}…`;
   };
   const sceneBlockDurationStamp = (event: TimelineOverviewEvent) =>
-    formatCompactClock(event.total_duration_ms);
+    formatCompactClock(eventPreviewSpanMs(event));
   const sceneBlockFadeWedgePoints = (event: TimelineOverviewEvent) => {
     const widthPx = sceneBlockPixelWidth(event);
-    if (event.total_duration_ms <= 0) return null;
-    const fadePx = Math.min(widthPx, (event.fade_in_ms / event.total_duration_ms) * widthPx);
+    const previewSpanMs = eventPreviewSpanMs(event);
+    if (previewSpanMs <= 0) return null;
+    const fadePx = Math.min(widthPx, (event.fade_in_ms / previewSpanMs) * widthPx);
     if (fadePx < 6) return null;
     const halfHeight = blockHeightPx() / 2;
     return `0,${-halfHeight} ${fadePx},${-halfHeight} 0,${halfHeight}`;
@@ -672,14 +973,19 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     return { lighting, video };
   });
 
-  const packedOverlapClusters = createMemo(() => packTimelineOverlapClusterBadges(
-    props.overlapClusters.map((cluster) => ({
-      ...cluster,
-      x: viewBoxX(cluster.x),
-      width: viewBoxX(cluster.width),
-    })),
-    overviewW(),
-  ));
+  const packedOverlapClusters = createMemo(() => {
+    const visible = props.overlapClusters.filter((cluster) =>
+      props.legacyMode || layerRowById().has(cluster.layer_id));
+    const layerIds = [...new Set(visible.map((cluster) => cluster.layer_id))];
+    return layerIds.flatMap((layerId) => packTimelineOverlapClusterBadges(
+      visible.filter((cluster) => cluster.layer_id === layerId).map((cluster) => ({
+        ...cluster,
+        x: viewBoxX(cluster.x),
+        width: viewBoxX(cluster.width),
+      })),
+      overviewW(),
+    ).map((cluster) => ({ ...cluster, layer_id: layerId })));
+  });
   const rulerTicks = createMemo(() => buildTimelineRulerTicks(props.visibleWindow, overviewPixelWidth()));
   const rulerLabelInsetPx = () => Math.max(2, overviewW() * 0.004);
   const rulerLabelX = (ratio: number) => Math.min(
@@ -690,11 +996,26 @@ export function TimelineOverview(props: TimelineOverviewProps) {
 
   const toggleLightingLane = () => setLightingLaneVisible((visible) => !visible);
   const toggleVideoLane = () => setVideoLaneVisible((visible) => !visible);
+  const layerEventCounts = createMemo(() => {
+    const counts = new Map<number, number>();
+    for (const event of props.events) counts.set(event.layer_id, (counts.get(event.layer_id) ?? 0) + 1);
+    return counts;
+  });
+  const updateLayer = (layer: TimelineLayerSummary, patch: Partial<TimelineLayerSummary>) => {
+    void props.onUpdateLayer({ ...layer, ...patch });
+  };
 
-  return (
-    <div class="timelineOverviewFrame">
-      <div class="timelineOverviewGutter" aria-hidden="false">
-        <div class="timelineLaneGutter" data-lane="lighting" classList={{ laneHidden: !lightingLaneVisible() }}>
+  const renderLegacyGutter = () => (
+      <div class="timelineOverviewGutter timelineOverviewGutterLegacy" aria-hidden="false">
+        <div
+          class="timelineLaneGutter"
+          data-lane="lighting"
+          data-timeline-layer-gutter
+          data-timeline-layer-id="0"
+          data-timeline-layer-kind="Lighting"
+          data-timeline-layer-muted={!lightingLaneVisible() ? "true" : "false"}
+          classList={{ laneHidden: !lightingLaneVisible() }}
+        >
           <span class="timelineLaneGutterName">Light</span>
           <span class="timelineLaneGutterCount" data-no-localize>{laneCounts().lighting}</span>
           <button
@@ -702,6 +1023,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
             class="timelineLaneEye"
             aria-pressed={lightingLaneVisible()}
             aria-label="Light lane visibility"
+            title="Light lane visibility"
             onClick={toggleLightingLane}
           >
             <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -713,7 +1035,15 @@ export function TimelineOverview(props: TimelineOverviewProps) {
             </svg>
           </button>
         </div>
-        <div class="timelineLaneGutter" data-lane="video" classList={{ laneHidden: !videoLaneVisible() }}>
+        <div
+          class="timelineLaneGutter"
+          data-lane="video"
+          data-timeline-layer-gutter
+          data-timeline-layer-id="1"
+          data-timeline-layer-kind="Video"
+          data-timeline-layer-muted={!videoLaneVisible() ? "true" : "false"}
+          classList={{ laneHidden: !videoLaneVisible() }}
+        >
           <span class="timelineLaneGutterName">Video</span>
           <span class="timelineLaneGutterCount" data-no-localize>{laneCounts().video}</span>
           <button
@@ -721,6 +1051,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
             class="timelineLaneEye"
             aria-pressed={videoLaneVisible()}
             aria-label="Video lane visibility"
+            title="Video lane visibility"
             onClick={toggleVideoLane}
           >
             <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -733,18 +1064,207 @@ export function TimelineOverview(props: TimelineOverviewProps) {
           </button>
         </div>
       </div>
+  );
+
+  const renderLayeredGutter = () => (
+    <div
+      class="timelineOverviewGutter timelineOverviewGutterLayered"
+      aria-label="Timeline layer gutters"
+      style={{ height: `${sectionLayout().contentHeight}px` }}
+    >
+      <For each={sectionLayout().sections}>
+        {(section) => (
+          <section
+            class={`timelineLayerSection ${section.kind.toLowerCase()} ${section.collapsed ? "collapsed" : ""}`}
+            data-timeline-section-kind={section.kind}
+            data-timeline-section-count={section.layers.length}
+            style={{
+              top: `${section.top}px`,
+              height: `${section.height + (section.collapsed ? 0 : section.layers.length * timelineUserLaneHeightPx)}px`,
+            }}
+          >
+            <div class="timelineLayerSectionHeader" style={{ height: `${timelineSectionHeaderHeightPx}px` }}>
+              <button
+                type="button"
+                class="timelineLayerSectionCollapse"
+                aria-expanded={!section.collapsed}
+                aria-label={section.collapsed ? "Expand timeline section" : "Collapse timeline section"}
+                title={section.collapsed ? "Expand timeline section" : "Collapse timeline section"}
+                onClick={() => toggleSection(section.kind)}
+              >
+                <span aria-hidden="true" data-no-localize>{section.collapsed ? "▸" : "▾"}</span>
+              </button>
+              <strong>{section.kind}</strong>
+              <span class="timelineLayerSectionCount tabularNums" data-no-localize>{section.layers.length}</span>
+            </div>
+            <Show when={!section.collapsed}>
+              <For each={section.layers}>
+                {(layer, index) => {
+                  const cueDropState = () => cueDropStateForLayer(layer.id);
+                  const markerDropState = () => markerDropStateForLayer(layer.id);
+                  return (
+                    <div
+                      class="timelineLaneGutter timelineUserLaneGutter"
+                      classList={{
+                        layerMuted: layer.muted,
+                        layerLocked: layer.locked,
+                        layerSolo: layer.solo,
+                        dropValid: cueDropState() === "valid" || markerDropState() === "valid",
+                        dropRejected: cueDropState() === "rejected" || markerDropState() === "rejected",
+                      }}
+                      data-timeline-layer-gutter
+                      data-timeline-layer-id={layer.id}
+                      data-timeline-layer-kind={layer.kind}
+                      data-timeline-layer-muted={layer.muted ? "true" : "false"}
+                      data-timeline-layer-locked={layer.locked ? "true" : "false"}
+                      data-timeline-layer-solo={layer.solo ? "true" : "false"}
+                      style={{
+                        top: `${timelineSectionHeaderHeightPx + index() * timelineUserLaneHeightPx}px`,
+                        height: `${timelineUserLaneHeightPx}px`,
+                      }}
+                    >
+                      <span class="timelineLaneGutterName" data-no-localize>{layer.label}</span>
+                      <span class="timelineLaneGutterCount tabularNums" data-no-localize>{layerEventCounts().get(layer.id) ?? 0}</span>
+                      <div class="timelineLaneGutterActions">
+                        <button
+                          type="button"
+                          class="timelineLaneEye"
+                          data-timeline-layer-mute-toggle
+                          aria-pressed={!layer.muted}
+                          aria-label={layer.muted ? "Unmute timeline layer" : "Mute timeline layer"}
+                          title={layer.muted ? "Unmute timeline layer" : "Mute timeline layer"}
+                          onClick={() => updateLayer(layer, { muted: !layer.muted })}
+                        >
+                          <svg viewBox="0 0 16 16" aria-hidden="true">
+                            <path class="timelineLaneEyeShape" d="M1 8 C 3.5 3.5, 12.5 3.5, 15 8 C 12.5 12.5, 3.5 12.5, 1 8 Z" />
+                            <circle cx="8" cy="8" r="2.4" />
+                            <Show when={layer.muted}>
+                              <line class="timelineLaneEyeSlash" x1="2.5" y1="13.5" x2="13.5" y2="2.5" />
+                            </Show>
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          class="timelineLaneLock"
+                          data-timeline-layer-lock-toggle
+                          aria-pressed={layer.locked}
+                          aria-label={layer.locked ? "Unlock timeline layer" : "Lock timeline layer"}
+                          title={layer.locked ? "Unlock timeline layer" : "Lock timeline layer"}
+                          onClick={() => updateLayer(layer, { locked: !layer.locked })}
+                        >
+                          <span aria-hidden="true" data-no-localize>{layer.locked ? "●" : "○"}</span>
+                        </button>
+                        <button
+                          type="button"
+                          class="timelineLaneSolo"
+                          data-timeline-layer-solo-toggle
+                          aria-pressed={layer.solo}
+                          aria-label={layer.solo ? "Clear timeline layer solo" : "Solo timeline layer"}
+                          title={layer.solo ? "Clear timeline layer solo" : "Solo timeline layer"}
+                          onClick={() => updateLayer(layer, { solo: !layer.solo })}
+                        >
+                          <span aria-hidden="true" data-no-localize>S</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                }}
+              </For>
+            </Show>
+          </section>
+        )}
+      </For>
+    </div>
+  );
+
+  const renderOverviewCanvas = () => (
       <svg
       class={`timelineOverview ${props.executionLive ? "executingLive" : ""}`}
       ref={(element) => { overviewElement = element; }}
-      viewBox={`0 0 ${overviewW()} ${overviewH()}`}
+      viewBox={`0 0 ${overviewW()} ${canvasH()}`}
       data-viewbox-width={overviewW()}
+      data-viewbox-height={canvasH()}
+      style={!props.legacyMode ? { height: `${sectionLayout().contentHeight}px` } : undefined}
       preserveAspectRatio="none"
       role="group"
       aria-label="Timeline overview"
       onClick={seekFromPointer}
     >
-      <rect class="timelineOverviewBg" x="0" y="0" width={overviewW()} height={overviewH()} />
-      <line class="timelineLaneDivider" x1="0" y1={laneHeightPx()} x2={overviewW()} y2={laneHeightPx()} />
+      <rect class="timelineOverviewBg" x="0" y="0" width={overviewW()} height={canvasH()} />
+      <Show
+        when={!props.legacyMode}
+        fallback={
+          <>
+            <rect
+              class="timelineLayerRowBackground lighting"
+              x="0"
+              y="0"
+              width={overviewW()}
+              height={legacyLaneHeightPx()}
+              data-timeline-layer-id="0"
+              data-timeline-layer-kind="Lighting"
+            />
+            <rect
+              class="timelineLayerRowBackground video"
+              x="0"
+              y={legacyLaneHeightPx()}
+              width={overviewW()}
+              height={legacyLaneHeightPx()}
+              data-timeline-layer-id="1"
+              data-timeline-layer-kind="Video"
+            />
+            <line class="timelineLaneDivider" x1="0" y1={legacyLaneHeightPx()} x2={overviewW()} y2={legacyLaneHeightPx()} />
+          </>
+        }
+      >
+        <For each={sectionLayout().sections}>
+          {(section) => (
+            <rect
+              class={`timelineLayerSectionBackground ${section.kind.toLowerCase()}`}
+              x="0"
+              y={section.top}
+              width={overviewW()}
+              height={section.height}
+            />
+          )}
+        </For>
+        <For each={sectionLayout().laneRows}>
+          {(row) => {
+            const cueDropState = () => cueDropStateForLayer(row.layer.id);
+            const markerDropState = () => markerDropStateForLayer(row.layer.id);
+            return (
+              <rect
+                class={`timelineLayerRowBackground ${row.layer.kind.toLowerCase()}`}
+                classList={{
+                  layerMuted: row.layer.muted,
+                  layerLocked: row.layer.locked,
+                  layerSolo: row.layer.solo,
+                  dropValid: cueDropState() === "valid" || markerDropState() === "valid",
+                  dropRejected: cueDropState() === "rejected" || markerDropState() === "rejected",
+                }}
+                x="0"
+                y={row.top}
+                width={overviewW()}
+                height={row.height}
+                data-timeline-layer-id={row.layer.id}
+                data-timeline-layer-kind={row.layer.kind}
+                data-timeline-layer-muted={row.layer.muted ? "true" : "false"}
+                data-timeline-layer-locked={row.layer.locked ? "true" : "false"}
+              />
+            );
+          }}
+        </For>
+        <For each={sectionLayout().sections.slice(1)}>
+          {(section) => (
+            <line class="timelineSectionDivider" x1="0" y1={section.top} x2={overviewW()} y2={section.top} />
+          )}
+        </For>
+        <For each={sectionLayout().laneRows}>
+          {(row) => (
+            <line class="timelineLaneDivider" x1="0" y1={row.top + row.height} x2={overviewW()} y2={row.top + row.height} />
+          )}
+        </For>
+      </Show>
       <g class="timelineRuler" aria-hidden="true">
         <For each={rulerTicks()}>
           {(tick) => (
@@ -767,7 +1287,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
           )}
         </For>
       </g>
-      <For each={stableAutomationRanges()}>
+      <For each={stableAutomationRanges().filter((range) => props.legacyMode || Boolean(automationLayerRow(range)))}>
         {(range) => (
           <g
             class={[
@@ -776,7 +1296,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               range.enabled ? "" : "disabled",
               props.selectedRangeId === range.id ? "selected" : "",
               rangeDrag()?.rangeId === range.id ? "dragging" : "",
-              laneVisible(range.track) ? "" : "laneDimmed",
+              props.legacyMode && !laneVisible(range.track) ? "laneDimmed" : "",
             ].filter(Boolean).join(" ")}
             onPointerDown={(pointerEvent) => beginRangeDrag(pointerEvent, range)}
             onPointerMove={moveRangeDrag}
@@ -794,9 +1314,9 @@ export function TimelineOverview(props: TimelineOverviewProps) {
           >
             <rect
               x={viewBoxX(automationRangeX(range))}
-              y={automationBarTopPx(range.track)}
+              y={automationBarTopPx(range)}
               width={viewBoxX(automationRangeWidth(range))}
-              height={automationBarHeightPx(range.track)}
+              height={automationBarHeightPx(range)}
               rx="1.6"
             />
             <For each={range.keyframes}>
@@ -825,13 +1345,13 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                   <circle
                     class="timelineAutomationKeyframeHit"
                     cx={viewBoxX(automationKeyframeX(range, keyframe.keyframe_index, keyframe.time_ms))}
-                    cy={automationBarTopPx(range.track) + automationBarHeightPx(range.track) / 2}
+                    cy={automationBarTopPx(range) + automationBarHeightPx(range) / 2}
                     r="3.2"
                   />
                   <circle
                     class="timelineAutomationKeyframe"
                     cx={viewBoxX(automationKeyframeX(range, keyframe.keyframe_index, keyframe.time_ms))}
-                    cy={automationBarTopPx(range.track) + automationBarHeightPx(range.track) / 2}
+                    cy={automationBarTopPx(range) + automationBarHeightPx(range) / 2}
                     r="1.1"
                   />
                 </g>
@@ -840,18 +1360,18 @@ export function TimelineOverview(props: TimelineOverviewProps) {
             <rect
               class="timelineAutomationHandle start"
               x={viewBoxX(automationRangeX(range))}
-              y={automationBarTopPx(range.track) - 0.8}
+              y={automationBarTopPx(range) - 0.8}
               width="2.1"
-              height={automationBarHeightPx(range.track) + 1.6}
+              height={automationBarHeightPx(range) + 1.6}
               rx="0.6"
               onPointerDown={(pointerEvent) => beginRangeResize(pointerEvent, range, "start")}
             />
             <rect
               class="timelineAutomationHandle end"
               x={Math.max(0, viewBoxX(automationRangeX(range) + automationRangeWidth(range)) - 2.1)}
-              y={automationBarTopPx(range.track) - 0.8}
+              y={automationBarTopPx(range) - 0.8}
               width="2.1"
-              height={automationBarHeightPx(range.track) + 1.6}
+              height={automationBarHeightPx(range) + 1.6}
               rx="0.6"
               onPointerDown={(pointerEvent) => beginRangeResize(pointerEvent, range, "end")}
             />
@@ -861,7 +1381,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
           </g>
         )}
       </For>
-      <For each={orderedEvents()}>
+      <For each={renderedEvents()}>
         {(event) => (
           <g
             class={[
@@ -872,9 +1392,14 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               underPlayheadEventIds().has(event.id) ? "underPlayhead" : "",
               props.selectedEventId === event.id ? "selected" : "",
               markerDrag()?.eventId === event.id ? "dragging" : "",
-              laneVisible(event.track) ? "" : "laneDimmed",
+              eventResizeDrag()?.eventId === event.id ? "resizing" : "",
+              props.legacyMode && !laneVisible(event.track) ? "laneDimmed" : "",
+              !props.legacyMode && layerById().get(event.layer_id)?.muted ? "layerMuted" : "",
             ].filter(Boolean).join(" ")}
             data-timeline-event-id={event.id}
+            data-timeline-layer-id={eventPreviewLayerId(event)}
+            data-timeline-layer-kind={layerById().get(eventPreviewLayerId(event))?.kind ?? event.track}
+            data-timeline-layer-muted={layerById().get(event.layer_id)?.muted ? "true" : "false"}
             data-timeline-start-ms={event.time_ms}
             data-timeline-loop-count={event.loop_count}
             data-timeline-conform={event.conform_to_tempo ? "true" : "false"}
@@ -883,15 +1408,15 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               "--identity": identityCssColor(cueIdentityHue(event.cue_id), "fill"),
               "--identity-band": identityCssColor(cueIdentityHue(event.cue_id), "band"),
             }}
-            data-timeline-preview-start-ms={markerDrag()?.eventId === event.id
-              ? markerDrag()!.timeMs
-              : event.time_ms}
+            data-timeline-preview-start-ms={eventPreviewStartMs(event)}
+            data-timeline-preview-end-ms={eventPreviewEndMs(event)}
             role="button"
             tabIndex={markerTabStopId() === event.id ? 0 : -1}
             aria-label={props.markerAriaLabel(event)}
-            transform={`translate(${viewBoxX(markerDrag()?.eventId === event.id
-              ? timelineTimeToVisibleRawRatio(markerDrag()!.timeMs, props.visibleWindow) * 100
-              : event.x)} ${blockCenterYPx(event.track)})`}
+            transform={`translate(${viewBoxX(timelineTimeToVisibleRawRatio(eventPreviewStartMs(event), props.visibleWindow) * 100)} ${blockCenterYPx({
+              layer_id: eventPreviewLayerId(event),
+              track: event.track,
+            })})`}
             onPointerDown={(pointerEvent) => beginMarkerDrag(pointerEvent, event)}
             onPointerMove={moveMarkerDrag}
             onPointerUp={endMarkerDrag}
@@ -1011,6 +1536,34 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                   </text>
                 </Show>
               </Show>
+              <Show when={props.selectedEventId === event.id || eventResizeDrag()?.eventId === event.id}>
+                <rect
+                  class="timelineSceneBlockResizeHandle start"
+                  data-timeline-scene-block-resize="start"
+                  x="-3"
+                  y={-blockHeightPx() / 2}
+                  width="6"
+                  height={blockHeightPx()}
+                  aria-label="Resize Scene Block start"
+                  onPointerDown={(pointerEvent) => beginEventResize(pointerEvent, event, "start")}
+                  onPointerMove={moveEventResize}
+                  onPointerUp={endEventResize}
+                  onPointerCancel={cancelEventResize}
+                />
+                <rect
+                  class="timelineSceneBlockResizeHandle end"
+                  data-timeline-scene-block-resize="end"
+                  x={Math.max(0, sceneBlockPixelWidth(event) - 3)}
+                  y={-blockHeightPx() / 2}
+                  width="6"
+                  height={blockHeightPx()}
+                  aria-label="Resize Scene Block end"
+                  onPointerDown={(pointerEvent) => beginEventResize(pointerEvent, event, "end")}
+                  onPointerMove={moveEventResize}
+                  onPointerUp={endEventResize}
+                  onPointerCancel={cancelEventResize}
+                />
+              </Show>
             </Show>
             <title>
               {event.duration_ms > 0
@@ -1059,7 +1612,8 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               data-overlap-cluster-ids={cluster.source_cluster_ids.join(",")}
               data-overlap-group-count={cluster.group_count}
               data-overlap-aggregated={cluster.aggregated ? "true" : "false"}
-              transform={`translate(${cluster.x} ${clusterBadgeTopPx(cluster.track)})`}
+              data-timeline-layer-id={cluster.layer_id}
+              transform={`translate(${cluster.x} ${clusterBadgeTopPx(cluster)})`}
               onClick={(event) => {
                 event.stopPropagation();
                 activate();
@@ -1071,8 +1625,8 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                 activate();
               }}
             >
-              <rect width={clusterBadgeWidthPx} height={clusterBadgeHeightPx(cluster.track)} rx="2" />
-              <text x={clusterBadgeWidthPx / 2} y={clusterBadgeHeightPx(cluster.track) / 2} text-anchor="middle" dominant-baseline="central">×{cluster.count}</text>
+              <rect width={clusterBadgeWidthPx} height={clusterBadgeHeightPx(cluster)} rx="2" />
+              <text x={clusterBadgeWidthPx / 2} y={clusterBadgeHeightPx(cluster) / 2} text-anchor="middle" dominant-baseline="central">×{cluster.count}</text>
               <title>{accessibleLabel}</title>
             </g>
           );
@@ -1085,7 +1639,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
             x1={viewBoxX(props.playheadX)}
             y1={rulerLineTopPx()}
             x2={viewBoxX(props.playheadX)}
-            y2={overviewH() - 1}
+            y2={canvasH() - 1}
           />
           <polygon
             class="timelinePlayheadHandle"
@@ -1094,6 +1648,57 @@ export function TimelineOverview(props: TimelineOverviewProps) {
         </g>
       </Show>
     </svg>
-    </div>
+  );
+
+  return (
+    <>
+      <div
+        class="timelineOverviewFrame"
+        classList={{ timelineOverviewLayered: !props.legacyMode }}
+      >
+        <Show
+          when={!props.legacyMode}
+          fallback={
+            <>
+              {renderLegacyGutter()}
+              {renderOverviewCanvas()}
+            </>
+          }
+        >
+          <div class="timelineLayerScrollport" data-timeline-layer-scrollport>
+            <div
+              class="timelineLayerScrollContent"
+              style={{ height: `${sectionLayout().contentHeight}px` }}
+            >
+              {renderLayeredGutter()}
+              {renderOverviewCanvas()}
+            </div>
+          </div>
+        </Show>
+      </div>
+      <Show when={safeCueDrag()}>
+        {(drag) => {
+          const targetLayerId = () => cueDragTargetLayerId();
+          const dropState = () => targetLayerId() === null
+            ? "outside"
+            : cueDropStateForLayer(targetLayerId()!);
+          return (
+            <div
+              class={`timelineCueDragGhost ${dropState()}`}
+              data-timeline-cue-drag-ghost
+              data-timeline-drop-state={dropState()}
+              style={{
+                position: "fixed",
+                left: `${drag().client_x + 12}px`,
+                top: `${drag().client_y + 12}px`,
+              }}
+              aria-hidden="true"
+            >
+              <span data-no-localize>{drag().cue_label}</span>
+            </div>
+          );
+        }}
+      </Show>
+    </>
   );
 }

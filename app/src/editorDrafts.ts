@@ -46,6 +46,7 @@ export interface TimelineEventDraft {
   time_ms: number;
   time_beats: number | null;
   track: TimelineTrackKind;
+  layer_id: number | null;
   duration_ms: number;
   duration_beats: number | null;
   conform_to_tempo: boolean;
@@ -119,6 +120,7 @@ export const timelineEventDraftFromSummary = (event: TimelineCueEventSummary): T
   time_ms: event.time_ms,
   time_beats: event.time_beats ?? null,
   track: event.track,
+  layer_id: event.layer_id ?? null,
   duration_ms: event.duration_ms ?? 0,
   duration_beats: event.duration_beats ?? null,
   conform_to_tempo: event.conform_to_tempo ?? false,

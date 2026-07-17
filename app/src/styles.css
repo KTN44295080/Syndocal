@@ -11592,6 +11592,368 @@ input[type="color"] {
   stroke-width: 1.4;
 }
 
+.cueTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cueTitleRow > strong {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.cueTimelineDragHandle {
+  display: inline-flex;
+  flex: 0 0 24px;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+  border-color: #3a4652;
+  background: #151c23;
+  color: #9eabb8;
+  padding: 0;
+  cursor: grab;
+  touch-action: none;
+}
+
+.cueTimelineDragHandle.dragging {
+  border-color: #6c8cac;
+  background: #1b2a38;
+  color: #e2ebf4;
+  cursor: grabbing;
+}
+
+.timelineOverviewFrame.timelineOverviewLayered {
+  display: block;
+}
+
+.timelineLayerScrollport {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.timelineLayerScrollContent {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  width: 100%;
+  min-width: 0;
+}
+
+.timelineOverviewLayered .timelineOverviewGutterLayered {
+  position: relative;
+  flex: 0 1 168px;
+  width: clamp(124px, 18vw, 168px);
+  min-width: 124px;
+  height: auto;
+  overflow: hidden;
+  background: #111416;
+}
+
+.timelineOverviewLayered .timelineOverview {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+  align-self: flex-start;
+}
+
+.timelineLayerSection {
+  position: absolute;
+  right: 0;
+  left: 0;
+  overflow: hidden;
+  border-top: 2px solid #353a40;
+}
+
+.timelineLayerSection:first-child {
+  border-top: 0;
+}
+
+.timelineLayerSectionHeader {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  border-bottom: 1px solid #282d32;
+  padding: 0 4px 0 2px;
+}
+
+.timelineLayerSectionHeader strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #aab2ba;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.timelineLayerSection.audio .timelineLayerSectionHeader {
+  border-left: 2px solid #a47e49;
+  background: #191a18;
+}
+
+.timelineLayerSection.lighting .timelineLayerSectionHeader {
+  border-left: 2px solid #777c82;
+  background: #171819;
+}
+
+.timelineLayerSection.video .timelineLayerSectionHeader {
+  border-left: 2px solid #4d6e8c;
+  background: #151b21;
+}
+
+.timelineLayerSectionCollapse,
+.timelineLaneLock,
+.timelineLaneSolo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: transparent;
+  color: #818b95;
+  padding: 0;
+}
+
+.timelineLayerSectionCollapse {
+  width: 18px;
+  height: 18px;
+}
+
+.timelineLayerSectionCollapse:hover,
+.timelineLaneLock:hover,
+.timelineLaneSolo:hover {
+  border-color: #3f4851;
+  background: #20262c;
+  color: #d7dee5;
+}
+
+.timelineLayerSectionCount {
+  color: #69737d;
+  font-size: 9px;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter {
+  position: absolute;
+  right: 0;
+  left: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  align-items: center;
+  gap: 0 2px;
+  min-width: 0;
+  border-bottom: 1px solid #24292e;
+  padding: 0 3px 0 6px;
+}
+
+.timelineOverviewLayered .timelineLayerSection.audio .timelineUserLaneGutter {
+  background: #151817;
+}
+
+.timelineOverviewLayered .timelineLayerSection.lighting .timelineUserLaneGutter {
+  background: #141617;
+}
+
+.timelineOverviewLayered .timelineLayerSection.video .timelineUserLaneGutter {
+  background: #13191f;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter.layerMuted {
+  background: #101214;
+  opacity: 0.62;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter.layerLocked {
+  border-left: 2px solid #8c6a42;
+  padding-left: 4px;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter.layerSolo {
+  border-left: 2px solid #b69d4d;
+  padding-left: 4px;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter.dropValid {
+  background: #1c3128;
+  outline: 1px solid #4f876c;
+  outline-offset: -1px;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter.dropRejected {
+  background: #321d21;
+  outline: 1px solid #8a4d57;
+  outline-offset: -1px;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter .timelineLaneGutterName {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter .timelineLaneGutterCount {
+  grid-column: 1;
+  grid-row: 2;
+  font-size: 9px;
+}
+
+.timelineLaneGutterActions {
+  display: flex;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-items: center;
+  gap: 0;
+}
+
+.timelineOverviewLayered .timelineLaneGutterActions .timelineLaneEye,
+.timelineOverviewLayered .timelineLaneLock,
+.timelineOverviewLayered .timelineLaneSolo {
+  width: 20px;
+  height: 20px;
+}
+
+.timelineOverviewLayered .timelineLaneGutterActions .timelineLaneEye {
+  flex: 0 0 20px;
+}
+
+.timelineOverviewLayered .timelineLaneLock[aria-pressed="true"],
+.timelineOverviewLayered .timelineLaneSolo[aria-pressed="true"] {
+  border-color: #77643f;
+  background: #30291d;
+  color: #e4ca76;
+}
+
+.timelineOverviewFrame:not(.timelineOverviewLayered) .timelineLayerRowBackground {
+  fill: transparent;
+}
+
+.timelineOverviewLayered .timelineLayerSectionBackground.audio {
+  fill: #181916;
+}
+
+.timelineOverviewLayered .timelineLayerSectionBackground.lighting {
+  fill: #161719;
+}
+
+.timelineOverviewLayered .timelineLayerSectionBackground.video {
+  fill: #141a20;
+}
+
+.timelineOverviewLayered .timelineLayerRowBackground.audio {
+  fill: #121614;
+}
+
+.timelineOverviewLayered .timelineLayerRowBackground.lighting {
+  fill: #101315;
+}
+
+.timelineOverviewLayered .timelineLayerRowBackground.video {
+  fill: #10171e;
+}
+
+.timelineOverviewLayered .timelineLayerRowBackground.layerMuted {
+  fill: #0d1012;
+  opacity: 0.72;
+}
+
+.timelineOverviewLayered .timelineLayerRowBackground.layerLocked {
+  stroke: #755938;
+  stroke-width: 0.8;
+}
+
+.timelineOverviewLayered .timelineLayerRowBackground.layerSolo {
+  stroke: #a48c43;
+  stroke-width: 0.9;
+}
+
+.timelineOverviewLayered .timelineLayerRowBackground.dropValid {
+  fill: #183025;
+  stroke: #5a9877;
+  stroke-width: 1;
+}
+
+.timelineOverviewLayered .timelineLayerRowBackground.dropRejected {
+  fill: #321a20;
+  stroke: #a15261;
+  stroke-width: 1;
+}
+
+.timelineOverviewLayered .timelineSectionDivider {
+  stroke: #41474e;
+  stroke-width: 2;
+}
+
+.timelineOverviewLayered .timelineMarker.layerMuted {
+  opacity: 0.32;
+}
+
+.timelineSceneBlockResizeHandle {
+  fill: rgba(232, 239, 246, 0.2);
+  cursor: ew-resize;
+  opacity: 0;
+  pointer-events: all;
+  touch-action: none;
+}
+
+.timelineMarker:hover .timelineSceneBlockResizeHandle,
+.timelineMarker.selected .timelineSceneBlockResizeHandle,
+.timelineMarker.resizing .timelineSceneBlockResizeHandle {
+  opacity: 1;
+}
+
+.timelineMarker.resizing {
+  cursor: ew-resize;
+}
+
+.timelineCueDragGhost {
+  z-index: 1200;
+  max-width: min(240px, calc(100vw - 24px));
+  overflow: hidden;
+  border: 1px solid #56616b;
+  border-radius: 3px;
+  background: #1a1e22;
+  color: #e3e8ed;
+  padding: 4px 7px;
+  font-size: 11px;
+  font-weight: 700;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timelineCueDragGhost.valid {
+  border-color: #5a9877;
+  background: #183025;
+}
+
+.timelineCueDragGhost.rejected {
+  border-color: #a15261;
+  background: #321a20;
+}
+
 .timelineOverview {
   display: block;
   flex: 1 1 auto;
@@ -19636,6 +19998,7 @@ h3 {
 
 .timelineShowSurface > input[type="range"] {
   min-height: 22px;
+  margin: 0;
 }
 
 .timelineViewportToolbar {
@@ -24162,6 +24525,160 @@ h3 {
      contain: size layout, so scrollbar appearance cannot feed back into the
      SVG sizing loop, and the reservation cost the scene-block workspace the
      >=97%-of-panel width contract at compact viewports. */
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelinePanel > .panelHeader {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelinePanel > .panelHeader > h2 {
+  flex: 0 0 auto;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelinePanel > .panelHeader > .timelineHeaderMeta {
+  flex: 1 1 420px;
+}
+
+.timelineLayerToolbar {
+  display: flex;
+  flex: 1 1 100%;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+}
+
+.timelineLayerAddControls,
+.timelineLayerSelectionControls {
+  display: flex;
+  flex: 1 1 320px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.timelineLayerSelectionControls {
+  justify-content: flex-end;
+}
+
+.timelineLayerToolbar label {
+  min-width: 0;
+  color: #948d86;
+  font-size: 9px;
+}
+
+.timelineLayerToolbar label > span {
+  display: block;
+  margin-bottom: 1px;
+  white-space: nowrap;
+}
+
+.timelineLayerKindField {
+  flex: 0 1 104px;
+}
+
+.timelineLayerNameField {
+  flex: 1 1 144px;
+}
+
+.timelineLayerSelectionField {
+  flex: 1 1 116px;
+  max-width: 190px;
+}
+
+.timelineLayerToolbar input,
+.timelineLayerToolbar select,
+.timelineLayerToolbar button {
+  max-width: 100%;
+  min-height: 25px;
+  padding: 2px 5px;
+  font-size: 10px;
+}
+
+.timelineLayerToolbarLock {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 25px;
+  padding: 0 4px;
+  white-space: nowrap;
+}
+
+.timelineLayerToolbarLock input {
+  min-height: 0;
+}
+
+.timelineLayerSelectionControls > button {
+  flex: 0 0 26px;
+  width: 26px;
+  padding: 0;
+}
+
+.timelineLayerRemoveDialog {
+  width: min(420px, calc(100vw - 24px));
+  max-width: 100%;
+  border: 1px solid #4b4540;
+  border-radius: 3px;
+  background: #191817;
+  color: #e8e2dc;
+  padding: 12px;
+}
+
+.timelineLayerRemoveDialog::backdrop {
+  background: rgba(7, 7, 7, 0.72);
+}
+
+.timelineLayerRemoveDialog form {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+}
+
+.timelineLayerRemoveDialog h2,
+.timelineLayerRemoveDialog p,
+.timelineLayerRemoveDialog dl {
+  margin: 0;
+}
+
+.timelineLayerRemoveDialog h2 {
+  font-size: 16px;
+}
+
+.timelineLayerRemoveSummary {
+  display: grid;
+  gap: 4px;
+}
+
+.timelineLayerRemoveSummary > div {
+  display: grid;
+  grid-template-columns: minmax(90px, auto) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.timelineLayerRemoveSummary dt {
+  color: #928a83;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.timelineLayerRemoveSummary dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.timelineLayerReassignField {
+  display: grid;
+  gap: 3px;
+  margin-top: 6px;
+}
+
+.timelineLayerRemoveDialog .buttonRow {
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 /* The overview frame hosts a ResizeObserver-driven pixel-space SVG (T2). Inside

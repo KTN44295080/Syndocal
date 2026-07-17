@@ -6568,6 +6568,59 @@ fn remove_cue(state: State<'_, AppState>, cue_id: CueId) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn add_timeline_layer(
+    state: State<'_, AppState>,
+    label: String,
+    kind: TimelineLayerKind,
+) -> Result<u32, String> {
+    let snapshot = state.engine.snapshot();
+    let order = snapshot
+        .timeline
+        .layers
+        .iter()
+        .map(|layer| layer.order)
+        .max()
+        .map_or(0, |order| order.saturating_add(1));
+    let layer_id = state.engine.allocate_timeline_layer_id();
+    state
+        .engine
+        .add_timeline_layer(protocol::TimelineLayerSummary {
+            id: layer_id,
+            label,
+            order,
+            muted: false,
+            locked: false,
+            solo: false,
+            kind,
+        })?;
+    Ok(layer_id)
+}
+
+#[tauri::command]
+fn update_timeline_layer(
+    state: State<'_, AppState>,
+    layer: protocol::TimelineLayerSummary,
+) -> Result<(), String> {
+    state.engine.update_timeline_layer(layer)
+}
+
+#[tauri::command]
+fn remove_timeline_layer(
+    state: State<'_, AppState>,
+    layer_id: u32,
+    reassign_to_layer_id: Option<u32>,
+) -> Result<(), String> {
+    state
+        .engine
+        .remove_timeline_layer(layer_id, reassign_to_layer_id)
+}
+
+#[tauri::command]
+fn reorder_timeline_layers(state: State<'_, AppState>, layer_ids: Vec<u32>) -> Result<(), String> {
+    state.engine.reorder_timeline_layers(layer_ids)
+}
+
+#[tauri::command]
 fn add_timeline_cue_event(
     state: State<'_, AppState>,
     cue_id: CueId,
@@ -35921,6 +35974,10 @@ fn main() {
             trigger_previous_cue,
             set_cue_fade_paused,
             remove_cue,
+            add_timeline_layer,
+            update_timeline_layer,
+            remove_timeline_layer,
+            reorder_timeline_layers,
             add_timeline_cue_event,
             set_timeline_cue_event,
             add_timeline_scene_block,

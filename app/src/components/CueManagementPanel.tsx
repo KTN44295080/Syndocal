@@ -14,6 +14,7 @@ import { canSaveCueEffectTargets } from "../cueEffectRecall";
 import type { CueEffectRecallChange } from "../cueEffectRecall";
 import { timelineConformRateBadge } from "../timelineSceneBlocks";
 import { cueIdentityHue, identityCssColor } from "../identityColor";
+import type { TimelineCueDragPoint } from "../timelineCueDrag";
 import { CueCapturePreviewPanel, type CueCapturePreviewModel } from "./CueCapturePreviewPanel";
 import { CueEffectRecallEditor } from "./CueEffectRecallEditor";
 
@@ -99,11 +100,22 @@ interface CueManagementPanelProps {
   onOpenTimeline: () => void;
   onMoveTimelineCueEvent: (event: TimelineCueEventSummary, deltaMs: number) => void | Promise<void>;
   onRemoveTimelineEvent: (eventId: number) => void | Promise<void>;
+  onBeginTimelineCueDrag: (cue: CueSummary, point: TimelineCueDragPoint) => void;
+  onMoveTimelineCueDrag: (point: TimelineCueDragPoint) => void;
+  onEndTimelineCueDrag: (point: TimelineCueDragPoint, moved: boolean, canceled: boolean) => void;
 }
 
 export function CueManagementPanel(props: CueManagementPanelProps) {
   const [cuePage, setCuePage] = createSignal(0);
   const [cueEditing, setCueEditing] = createSignal(false);
+  const [timelineDragCueId, setTimelineDragCueId] = createSignal<number | null>(null);
+  let timelineDragPointer: {
+    cueId: number;
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    moved: boolean;
+  } | null = null;
   let cuePanelElement: HTMLDivElement | undefined;
   const cuePageCount = createMemo(() => Math.max(1, Math.ceil(props.cues.length / cuesPerPage)));
   const visibleCues = createMemo(() => {
@@ -114,6 +126,63 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
   createEffect(() => {
     if (cuePage() >= cuePageCount()) setCuePage(cuePageCount() - 1);
   });
+
+  const beginTimelineCueDrag = (
+    event: PointerEvent & { currentTarget: HTMLButtonElement },
+    cue: CueSummary,
+  ) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    timelineDragPointer = {
+      cueId: cue.id,
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      moved: false,
+    };
+    setTimelineDragCueId(cue.id);
+    props.onBeginTimelineCueDrag(cue, {
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    });
+  };
+
+  const moveTimelineCueDrag = (event: PointerEvent & { currentTarget: HTMLButtonElement }) => {
+    const drag = timelineDragPointer;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    drag.moved = drag.moved
+      || Math.hypot(event.clientX - drag.startClientX, event.clientY - drag.startClientY) >= 4;
+    props.onMoveTimelineCueDrag({
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    });
+  };
+
+  const finishTimelineCueDrag = (
+    event: PointerEvent & { currentTarget: HTMLButtonElement },
+    canceled: boolean,
+  ) => {
+    const drag = timelineDragPointer;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    timelineDragPointer = null;
+    setTimelineDragCueId(null);
+    props.onEndTimelineCueDrag({
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    }, drag.moved, canceled);
+  };
 
   let lastRevealRevision = -1;
   let revealPriorityActive = false;
@@ -400,7 +469,23 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                 aria-setsize={props.cues.length}
               >
                 <div class="cueMetaLine">
-                  <strong data-no-localize><b>{cue.cue_number || cue.id}</b> {cue.label}</strong>
+                  <div class="cueTitleRow">
+                    <strong data-no-localize><b>{cue.cue_number || cue.id}</b> {cue.label}</strong>
+                    <button
+                      type="button"
+                      class="cueTimelineDragHandle"
+                      classList={{ dragging: timelineDragCueId() === cue.id }}
+                      title={`Drag Cue ${cue.label} to Timeline`}
+                      aria-label={`Drag Cue ${cue.label} to Timeline`}
+                      data-timeline-cue-drag-source={cue.id}
+                      onPointerDown={(event) => beginTimelineCueDrag(event, cue)}
+                      onPointerMove={moveTimelineCueDrag}
+                      onPointerUp={(event) => finishTimelineCueDrag(event, false)}
+                      onPointerCancel={(event) => finishTimelineCueDrag(event, true)}
+                    >
+                      <span aria-hidden="true" data-no-localize>⠿</span>
+                    </button>
+                  </div>
                   <span>
                     {cue.targets.length} fixture(s) / {cue.video_targets.length} video /{" "}
                     {cue.video_output_targets.length} video output(s) / {(cue.effect_targets ?? []).length} effect(s) /{" "}

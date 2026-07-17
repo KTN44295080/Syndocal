@@ -8,6 +8,7 @@ import type {
   NodeGraphSummary,
   PatchedFixtureSummary,
   StageObjectSummary,
+  TimelineLayerSummary,
   VideoIsfEffectSummary,
   VideoLayerSummary,
   VideoOutputMapping,
@@ -540,6 +541,63 @@ const cueRecallCue: CueSummary = {
   effect_targets: [{ effect_id: cueRecallEffect.id, enabled: true }],
 };
 
+const layeredTimelineLayers: TimelineLayerSummary[] = [
+  {
+    id: 10,
+    label: "Audio Bed",
+    order: 0,
+    muted: false,
+    locked: false,
+    solo: false,
+    kind: "Audio",
+  },
+  {
+    id: 11,
+    label: "Audio Hits",
+    order: 1,
+    muted: false,
+    locked: false,
+    solo: false,
+    kind: "Audio",
+  },
+  {
+    id: 12,
+    label: "Front Wash",
+    order: 2,
+    muted: false,
+    locked: false,
+    solo: false,
+    kind: "Lighting",
+  },
+  {
+    id: 13,
+    label: "Lighting FX",
+    order: 3,
+    muted: false,
+    locked: false,
+    solo: false,
+    kind: "Lighting",
+  },
+  {
+    id: 14,
+    label: "Video Main",
+    order: 4,
+    muted: false,
+    locked: false,
+    solo: false,
+    kind: "Video",
+  },
+  {
+    id: 15,
+    label: "Video Accent",
+    order: 5,
+    muted: false,
+    locked: false,
+    solo: false,
+    kind: "Video",
+  },
+];
+
 export const viewportFixtureData = {
   profile,
   projectorMapping,
@@ -553,4 +611,5 @@ export const viewportFixtureData = {
   cueRecallEffect,
   cueRecallNodeGraph,
   cueRecallCue,
+  layeredTimelineLayers,
 } as const;

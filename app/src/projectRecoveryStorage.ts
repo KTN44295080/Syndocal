@@ -22,6 +22,8 @@ const isTimelineEventDraft = (candidate: unknown): candidate is TimelineEventDra
   return Number.isFinite(draft.cue_id) &&
     Number.isFinite(draft.time_ms) &&
     (draft.track === "Lighting" || draft.track === "Video") &&
+    (draft.layer_id === undefined || draft.layer_id === null ||
+      (Number.isInteger(draft.layer_id) && draft.layer_id >= 0)) &&
     Number.isFinite(draft.duration_ms) &&
     Number.isFinite(draft.loop_count) &&
     (draft.jump_to_event_id === null || Number.isFinite(draft.jump_to_event_id));
@@ -40,6 +42,7 @@ const editorDraftsFromUnknown = (candidate: unknown): ProjectRecoveryCheckpoint[
     timelineEvents[numericEventId] = {
       ...draft,
       time_beats: draft.time_beats ?? null,
+      layer_id: draft.layer_id ?? null,
       duration_beats: draft.duration_beats ?? null,
       conform_to_tempo: draft.conform_to_tempo ?? false,
       loop_fill: draft.loop_fill ?? false,

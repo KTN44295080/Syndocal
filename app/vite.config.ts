@@ -15,6 +15,9 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           const normalizedId = id.replace(/\\/g, "/");
+          if (normalizedId.includes("/src/uiLocalization")) {
+            return "localization";
+          }
           if (
             normalizedId.includes("/src/components/CueManagementPanel") ||
             normalizedId.includes("/src/components/TimelineCueEventsPanel") ||
@@ -26,7 +29,11 @@ export default defineConfig({
             normalizedId.includes("/src/createTimelineKeyframeController") ||
             normalizedId.includes("/src/createTimelineOverviewAutomationController") ||
             normalizedId.includes("/src/timelineSceneBlocks") ||
-            normalizedId.includes("/src/timelineAutomationHelpers")
+            normalizedId.includes("/src/timelineAutomationHelpers") ||
+            normalizedId.includes("/src/components/TimelineLayerToolbar") ||
+            normalizedId.includes("/src/createTimelineLayerController") ||
+            normalizedId.includes("/src/timelineCueDrag") ||
+            normalizedId.includes("/src/timelineLayers")
           ) {
             return "timeline-panels";
           }

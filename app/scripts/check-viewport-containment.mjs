@@ -2102,6 +2102,174 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
   };
 }
 
+async function measureLayeredTimelineDeskState(client) {
+  return await client.evaluate(`(async () => {
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const isVisible = (element) => {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const visibleElements = (selector, root = document) => [...root.querySelectorAll(selector)].filter(isVisible);
+    const gutterSelector = '[data-timeline-layer-id][data-timeline-layer-gutter]';
+    const sectionHeaders = visibleElements('[data-timeline-section-kind]');
+    const gutters = visibleElements(gutterSelector);
+    const expectedLayerIdsByKind = {
+      Audio: new Set(['10', '11']),
+      Lighting: new Set(['12', '13']),
+      Video: new Set(['14', '15']),
+    };
+    const sectionLayerCounts = sectionHeaders.map((header) => {
+      const explicitCountAttribute = header.getAttribute('data-timeline-section-count');
+      const explicitCount = explicitCountAttribute === null ? Number.NaN : Number(explicitCountAttribute);
+      if (Number.isFinite(explicitCount) && explicitCount >= 0) return explicitCount;
+      const visibleCount = Number((header.textContent || '').match(/\\d+/)?.[0]);
+      if (Number.isFinite(visibleCount) && visibleCount >= 0) return visibleCount;
+      const sectionRoot = header.matches(gutterSelector) ? null : header;
+      const nestedGutters = sectionRoot ? visibleElements(gutterSelector, sectionRoot) : [];
+      if (nestedGutters.length > 0) return nestedGutters.length;
+      const parentGutters = header.parentElement ? visibleElements(gutterSelector, header.parentElement) : [];
+      if (parentGutters.length > 0) return parentGutters.length;
+      const kind = header.getAttribute('data-timeline-section-kind') || '';
+      const expectedIds = expectedLayerIdsByKind[kind];
+      return expectedIds ? gutters.filter((gutter) => expectedIds.has(gutter.getAttribute('data-timeline-layer-id') || '')).length : 0;
+    });
+    const targetGutter = document.querySelector('[data-timeline-layer-id="12"][data-timeline-layer-gutter]');
+    const targetToggle = targetGutter?.querySelector('[data-timeline-layer-mute-toggle]') ?? null;
+    const targetMarkers = visibleElements('.timelineMarker[data-timeline-layer-id="12"][data-timeline-layer-muted]');
+    const frame = document.querySelector('.timelineOverviewFrame');
+    const scrollports = visibleElements('[data-timeline-layer-scrollport]');
+    const documentElement = document.documentElement;
+    const body = document.body;
+    const app = document.querySelector('.app');
+    const overflowTargets = visibleElements(
+      '.timelinePanel, .timelineShowSurface, .timelineOverviewFrame, [data-timeline-layer-scrollport], .sceneBlockWorkspace',
+    );
+    const unsafeOverflow = overflowTargets.flatMap((element) => {
+      const style = getComputedStyle(element);
+      const horizontalTolerance = element.matches('.sceneBlockWorkspace') ? 4 : 1;
+      const unsafeX = element.scrollWidth > element.clientWidth + horizontalTolerance && !/(auto|scroll)/.test(style.overflowX);
+      const unsafeY = element.scrollHeight > element.clientHeight + 1 && !/(auto|scroll)/.test(style.overflowY);
+      return unsafeX || unsafeY
+        ? [{
+            selector: element.getAttribute('data-timeline-layer-scrollport') !== null
+              ? '[data-timeline-layer-scrollport]'
+              : String(element.className || element.tagName),
+            client: [element.clientWidth, element.clientHeight],
+            scroll: [element.scrollWidth, element.scrollHeight],
+            overflow: [style.overflowX, style.overflowY],
+            unsafeX,
+            unsafeY,
+          }]
+        : [];
+    });
+    return {
+      sectionKinds: sectionHeaders.map((header) => header.getAttribute('data-timeline-section-kind') || ''),
+      sectionLayerCounts,
+      gutterLayerIds: gutters.map((gutter) => gutter.getAttribute('data-timeline-layer-id') || ''),
+      targetToggleVisible: isVisible(targetToggle),
+      targetTogglePressed: targetToggle?.getAttribute('aria-pressed') ?? '',
+      targetLayerMuted: targetGutter?.getAttribute('data-timeline-layer-muted') === 'true' ||
+        targetToggle?.getAttribute('aria-pressed') === 'false',
+      targetMarkerMutedStates: targetMarkers.map((marker) => marker.getAttribute('data-timeline-layer-muted') === 'true'),
+      scrollportCount: scrollports.length,
+      scrollportOverflowSafe: scrollports.every((scrollport) => {
+        const style = getComputedStyle(scrollport);
+        return scrollport.scrollHeight <= scrollport.clientHeight + 1 || /(auto|scroll)/.test(style.overflowY);
+      }),
+      frameHeight: Math.round(frame?.getBoundingClientRect().height ?? 0),
+      documentAndAppScrollZero:
+        window.scrollX === 0 && window.scrollY === 0 &&
+        documentElement.scrollWidth === documentElement.clientWidth &&
+        documentElement.scrollHeight === documentElement.clientHeight &&
+        body.scrollWidth === documentElement.clientWidth &&
+        body.scrollHeight === documentElement.clientHeight &&
+        (!app || (app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight)),
+      scrollMetrics: {
+        window: [window.scrollX, window.scrollY],
+        document: [
+          documentElement.scrollWidth,
+          documentElement.clientWidth,
+          documentElement.scrollHeight,
+          documentElement.clientHeight,
+        ],
+        app: app ? [app.scrollWidth, app.clientWidth, app.scrollHeight, app.clientHeight] : null,
+      },
+      unsafeOverflowCount: unsafeOverflow.length,
+      unsafeOverflow,
+    };
+  })()`);
+}
+
+async function runLayeredTimelineDeskCheck(client, viewport) {
+  await client.send('Page.navigate', { url: fixtureUrl('timeline-layered') });
+  await waitForApp(client);
+  await clickVisibleByText(client, '.workspaceTabs button', 'Control');
+  await clickVisibleByText(client, '.controlModeTabs button', 'Timeline');
+  await clickVisibleByText(client, '.timelineDeskTabs button', 'Show');
+  await sleep(120);
+  const before = await measureLayeredTimelineDeskState(client);
+  const muteToggleClicked = await client.evaluate(`(() => {
+    const gutter = document.querySelector('[data-timeline-layer-id="12"][data-timeline-layer-gutter]');
+    const toggle = gutter?.querySelector('[data-timeline-layer-mute-toggle]');
+    if (!(toggle instanceof HTMLButtonElement) || toggle.disabled) return false;
+    const rect = toggle.getBoundingClientRect();
+    const style = getComputedStyle(toggle);
+    if (rect.width <= 0 || rect.height <= 0 || style.display === 'none' || style.visibility === 'hidden') return false;
+    toggle.click();
+    return true;
+  })()`);
+  await sleep(160);
+  const muted = await measureLayeredTimelineDeskState(client);
+  const expectedFrameHeight = viewport.height <= 800 ? 148 : 190;
+  const conditions = [
+    ['layeredDeskFixtureHasSixGutters', () =>
+      before.gutterLayerIds.length === 6 &&
+      new Set(before.gutterLayerIds).size === 6 &&
+      ['10', '11', '12', '13', '14', '15'].every((layerId) => before.gutterLayerIds.includes(layerId))],
+    ['layeredDeskSectionHeadersPresent', () => before.sectionKinds.length === 3],
+    ['layeredDeskSectionOrderAudioLightingVideo', () => JSON.stringify(before.sectionKinds) === JSON.stringify(['Audio', 'Lighting', 'Video'])],
+    ['layeredDeskSectionCountsTwoEach', () => JSON.stringify(before.sectionLayerCounts) === JSON.stringify([2, 2, 2])],
+    ['layeredDeskTargetMuteToggleVisible', () => Boolean(before.targetToggleVisible)],
+    ['layeredDeskTargetLaneHasMarkers', () => before.targetMarkerMutedStates.length > 0],
+    ['layeredDeskMuteToggleClicked', () => Boolean(muteToggleClicked)],
+    ['layeredDeskLayerMuteStateChanged', () => !before.targetLayerMuted && muted.targetLayerMuted],
+    ['layeredDeskMarkersReflectMutedState', () =>
+      before.targetMarkerMutedStates.length > 0 &&
+      before.targetMarkerMutedStates.every((state) => !state) &&
+      muted.targetMarkerMutedStates.length === before.targetMarkerMutedStates.length &&
+      muted.targetMarkerMutedStates.every(Boolean)],
+    ['layeredDeskInternalScrollportPresent', () => before.scrollportCount === 1 && before.scrollportOverflowSafe],
+    ['layeredDeskDocumentAndAppScrollZero', () => before.documentAndAppScrollZero && muted.documentAndAppScrollZero],
+    ['layeredDeskUnsafeOverflowZero', () => before.unsafeOverflowCount === 0 && muted.unsafeOverflowCount === 0],
+    ['layeredDeskFrameHeightFixed', () =>
+      Math.abs(before.frameHeight - expectedFrameHeight) <= 1 &&
+      Math.abs(muted.frameHeight - expectedFrameHeight) <= 1],
+  ];
+  const checks = Object.fromEntries(conditions.map(([name, check]) => {
+    try {
+      return [name, check()];
+    } catch {
+      return [name, false];
+    }
+  }));
+  const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  const result = {
+    label: `layered-timeline-desk-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    before,
+    muted,
+    muteToggleClicked,
+    expectedFrameHeight,
+  };
+  await client.send('Page.navigate', { url: appUrl });
+  await waitForApp(client);
+  return result;
+}
+
 async function measure(client, label) {
   return await client.evaluate(`(async () => {
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
@@ -3528,6 +3696,10 @@ function hasExpectedPersistentBandInvariance(result) {
 
 function hasExpectedTimelinePaneExpansion(result) {
   return !result.label.startsWith("persistent-band-invariance-") || result.timelinePaneExpansion?.passed === true;
+}
+
+function hasExpectedLayeredTimelineDesk(result) {
+  return !result.label.startsWith("persistent-band-invariance-") || result.layeredTimelineDesk?.passed === true;
 }
 
 function hasExpectedControlModeSurface(result) {
@@ -5733,6 +5905,7 @@ async function runViewport(client, viewport) {
     persistentSetupAfter,
   );
   const timelinePaneExpansion = await runTimelinePaneExpansionCheck(client, viewport);
+  const layeredTimelineDesk = await runLayeredTimelineDeskCheck(client, viewport);
   results.push({
     ...(setupMappingContainment ?? {}),
     ...persistentSetupAfter,
@@ -5741,6 +5914,7 @@ async function runViewport(client, viewport) {
     persistentBandRectsByWorkspace: persistentBandComparison.rectsByWorkspace,
     persistentBandRectDeltas: persistentBandComparison.deltas,
     timelinePaneExpansion,
+    layeredTimelineDesk,
   });
   traceViewport(`persistent band compared ${viewport.width}x${viewport.height}`);
   await clickByText(client, "Setup");
@@ -5966,6 +6140,7 @@ async function runPersistentBandInvarianceViewport(client, viewport) {
   const setupAfter = await measurePersistentBand(client, `persistent-band-setup-after-${viewport.width}x${viewport.height}`);
   const comparison = comparePersistentBandMeasurements(setupBefore, control, setupAfter);
   const timelinePaneExpansion = await runTimelinePaneExpansionCheck(client, viewport);
+  const layeredTimelineDesk = await runLayeredTimelineDeskCheck(client, viewport);
   const containment = {
     ...setupAfter,
     label: `persistent-band-invariance-${viewport.width}x${viewport.height}`,
@@ -5973,6 +6148,7 @@ async function runPersistentBandInvarianceViewport(client, viewport) {
     persistentBandRectsByWorkspace: comparison.rectsByWorkspace,
     persistentBandRectDeltas: comparison.deltas,
     timelinePaneExpansion,
+    layeredTimelineDesk,
   };
   return {
     passed:
@@ -5983,7 +6159,8 @@ async function runPersistentBandInvarianceViewport(client, viewport) {
       hasExpectedPersistentWorkspaceBand(control) &&
       hasExpectedPersistentWorkspaceBand(containment) &&
       hasExpectedPersistentBandInvariance(containment) &&
-      hasExpectedTimelinePaneExpansion(containment),
+      hasExpectedTimelinePaneExpansion(containment) &&
+      hasExpectedLayeredTimelineDesk(containment),
     containment,
   };
 }
@@ -8073,7 +8250,9 @@ async function main() {
             `rects=${JSON.stringify(result.containment.persistentBandRectsByWorkspace)} ` +
             `deltas=${JSON.stringify(result.containment.persistentBandRectDeltas)} ` +
             `timelineExpansion=${result.containment.timelinePaneExpansion?.passed ? "pass" : "fail"} ` +
-            `failedChecks=${JSON.stringify(result.containment.timelinePaneExpansion?.failedChecks ?? [])}`,
+            `failedChecks=${JSON.stringify(result.containment.timelinePaneExpansion?.failedChecks ?? [])} ` +
+            `layeredDesk=${result.containment.layeredTimelineDesk?.passed ? "pass" : "fail"} ` +
+            `layeredDeskFailed=${JSON.stringify(result.containment.layeredTimelineDesk?.failedChecks ?? [])}`,
         );
       }
       const failures = persistentBandResults.filter((result) => !result.passed);
@@ -8399,6 +8578,7 @@ async function main() {
     const persistentBandFailures = results.filter((result) => !hasExpectedPersistentWorkspaceBand(result));
     const persistentBandInvarianceFailures = results.filter((result) => !hasExpectedPersistentBandInvariance(result));
     const timelinePaneExpansionFailures = results.filter((result) => !hasExpectedTimelinePaneExpansion(result));
+    const layeredTimelineDeskFailures = results.filter((result) => !hasExpectedLayeredTimelineDesk(result));
     const projectMenuFailures = results.filter((result) => !hasExpectedProjectMenu(result));
     const localizationFailures = results.filter((result) => !hasExpectedLocalization(result));
     const keyboardNavigationFailures = results.filter((result) => !hasExpectedKeyboardNavigation(result));
@@ -8469,7 +8649,7 @@ async function main() {
         ? ` mixer=${result.visibleVideoOutputItemCount}/${result.visibleVideoOutputSelectedItemCount}/${result.visibleVideoMixerOutputDeckCount}/${result.visibleVideoMixerOutputFaderCount}/${result.visibleVideoMixerOutputSelectButtonCount}/${result.visibleVideoLayerItemCount}/${result.visibleBuiltinVideoFxSelectCount}/${result.visibleVideoMixerLayerDeckCount}/${result.visibleVideoMixerLayerFaderCount}/${result.visibleVideoMixerLayerButtonCount} clip=${result.videoClipGridClientHeight}/${result.fullyVisibleVideoClipPadCount} contract=${result.controlModeFailedChecks?.join(",") || "ok"}`
         : "";
       const persistentBandSuffix = result.label.startsWith("persistent-band-invariance-")
-        ? ` persistentBand=${result.persistentBandInvariant ? "stable" : "moved"} rects=${JSON.stringify(result.persistentBandRectsByWorkspace)} deltas=${JSON.stringify(result.persistentBandRectDeltas)} timelineExpansion=${result.timelinePaneExpansion?.passed ? "pass" : "fail"} timelineExpansionFailed=${JSON.stringify(result.timelinePaneExpansion?.failedChecks ?? [])}`
+        ? ` persistentBand=${result.persistentBandInvariant ? "stable" : "moved"} rects=${JSON.stringify(result.persistentBandRectsByWorkspace)} deltas=${JSON.stringify(result.persistentBandRectDeltas)} timelineExpansion=${result.timelinePaneExpansion?.passed ? "pass" : "fail"} timelineExpansionFailed=${JSON.stringify(result.timelinePaneExpansion?.failedChecks ?? [])} layeredDesk=${result.layeredTimelineDesk?.passed ? "pass" : "fail"} layeredDeskFailed=${JSON.stringify(result.layeredTimelineDesk?.failedChecks ?? [])}`
         : "";
       console.log(
         `${status} [${viewportRole({ width: result.innerWidth, height: result.innerHeight })}] ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${keyboardSuffix}${timelineSuffix}${sceneBlockSuffix}${touchSuffix}${controlStageGlyphSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${positionVisualSuffix}${colorEffectSuffix}${chaserEffectSuffix}${moveEffectSuffix}${mixerSuffix}${persistentBandSuffix}`,
@@ -8512,6 +8692,7 @@ async function main() {
       persistentBandFailures.length > 0 ||
       persistentBandInvarianceFailures.length > 0 ||
       timelinePaneExpansionFailures.length > 0 ||
+      layeredTimelineDeskFailures.length > 0 ||
       projectMenuFailures.length > 0 ||
       localizationFailures.length > 0 ||
       mappingHotkeyHelpFailures.length > 0 ||
@@ -8531,6 +8712,10 @@ async function main() {
           timelinePaneExpansion: timelinePaneExpansionFailures.map((result) => ({
             label: result.timelinePaneExpansion?.label ?? result.label,
             failedChecks: result.timelinePaneExpansion?.failedChecks ?? [],
+          })),
+          layeredTimelineDesk: layeredTimelineDeskFailures.map((result) => ({
+            label: result.layeredTimelineDesk?.label ?? result.label,
+            failedChecks: result.layeredTimelineDesk?.failedChecks ?? [],
           })),
           localization: localizationFailures.map((result) => ({
             label: result.label,
@@ -8572,6 +8757,7 @@ async function main() {
             persistentBand: persistentBandFailures,
             persistentBandInvariance: persistentBandInvarianceFailures,
             timelinePaneExpansion: timelinePaneExpansionFailures.map((result) => result.timelinePaneExpansion),
+            layeredTimelineDesk: layeredTimelineDeskFailures.map((result) => result.layeredTimelineDesk),
             projectMenu: projectMenuFailures,
             localization: localizationFailures,
             mappingHotkeyHelp: mappingHotkeyHelpFailures,
@@ -8587,7 +8773,7 @@ async function main() {
         ),
       );
       throw new Error(
-        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${effectStackLargeFailures.length} large live-effect DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${statusLineFailures.length} status line check(s) failed.`,
+        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${effectStackLargeFailures.length} large live-effect DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${statusLineFailures.length} status line check(s) failed.`,
       );
     }
   } finally {

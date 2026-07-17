@@ -1,6 +1,14 @@
 import { createEffect, createSignal, For, Show } from "solid-js";
 import type { TimelineEventDraft } from "../editorDrafts";
-import type { AudioAnalysisSummary, TimelineCueEventSummary, TimelineTrackKind } from "../types";
+import type {
+  AudioAnalysisSummary,
+  TimelineCueEventSummary,
+  TimelineLayerKind,
+  TimelineLayerSummary,
+  TimelineTrackKind,
+} from "../types";
+import type { TimelineCueDragState } from "../timelineCueDrag";
+import { timelineLayerIdForEvent } from "../timelineLayers";
 import {
   TIMELINE_MIN_VISIBLE_WINDOW_MS,
   timelineVisibleWindowSpanMs,
@@ -17,6 +25,7 @@ import {
   type TimelineSceneBlockCueOption,
   type TimelineSceneBlockRow,
 } from "./TimelineSceneBlocksEditor";
+import { TimelineLayerToolbar } from "./TimelineLayerToolbar";
 
 export type TimelineSnapMode = "Off" | "Beat" | "Bar" | "Grid";
 
@@ -49,6 +58,9 @@ interface TimelineCueEventsPanelProps {
   lightingAutomationCount: number;
   videoAutomationCount: number;
   overviewEvents: TimelineOverviewEvent[];
+  timelineLayers: TimelineLayerSummary[];
+  legacyTimelineLayers: boolean;
+  timelineCueDrag: TimelineCueDragState | null;
   overviewMarkerAriaLabel: (event: TimelineOverviewEvent) => string;
   overviewAutomationRanges: TimelineOverviewAutomationRange[];
   overviewOverlapClusters: TimelineOverviewOverlapCluster[];
@@ -79,7 +91,8 @@ interface TimelineCueEventsPanelProps {
   onPause: () => void | Promise<void>;
   onPlay: () => void | Promise<void>;
   onSeekOverviewTime: (timeMs: number) => void;
-  onMoveEventTime: (eventId: number, timeMs: number) => void | Promise<void>;
+  onMoveEventPlacement: (eventId: number, timeMs: number, layerId: number) => void | Promise<void>;
+  onResizeEventTime: (eventId: number, edge: "start" | "end", timeMs: number) => void | Promise<void>;
   onSelectAutomationRange: (range: TimelineOverviewAutomationRange) => void;
   onMoveAutomationRangeTime: (range: TimelineOverviewAutomationRange, timeMs: number) => void | Promise<void>;
   onResizeAutomationRangeTime: (
@@ -117,6 +130,11 @@ interface TimelineCueEventsPanelProps {
   onSaveEvent: (event: TimelineCueEventSummary) => void | Promise<void>;
   onRemoveEvent: (event: TimelineCueEventSummary) => void | Promise<void>;
   onOpenSourceCue: (cueId: number) => void;
+  onAddTimelineLayer: (label: string, kind: TimelineLayerKind) => void | Promise<void>;
+  onUpdateTimelineLayer: (layer: TimelineLayerSummary) => void | Promise<void>;
+  onRemoveTimelineLayer: (layerId: number, reassignToLayerId: number | null) => void | Promise<void>;
+  onReorderTimelineLayer: (layerId: number, direction: -1 | 1) => void | Promise<void>;
+  onTimelineStatus: (message: string) => void;
 }
 
 export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
@@ -188,6 +206,16 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
             <strong data-no-localize>{formatTimelineHeaderTime(props.positionMs)} / {formatTimelineHeaderTime(props.durationMs)}</strong>
           </span>
         </div>
+        <TimelineLayerToolbar
+          layers={props.timelineLayers}
+          legacyMode={props.legacyTimelineLayers}
+          eventCountForLayer={(layerId) => props.eventRows.filter((event) =>
+            timelineLayerIdForEvent(props.timelineLayers, event) === layerId).length}
+          onAddLayer={props.onAddTimelineLayer}
+          onUpdateLayer={props.onUpdateTimelineLayer}
+          onRemoveLayer={props.onRemoveTimelineLayer}
+          onReorderLayer={props.onReorderTimelineLayer}
+        />
       </div>
       <div class="timelineTransport">
         <button onClick={() => void props.onSeek(0)}>|&lt;</button>
@@ -252,6 +280,9 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
       </nav>
       <TimelineOverview
         events={props.overviewEvents}
+        layers={props.timelineLayers}
+        legacyMode={props.legacyTimelineLayers}
+        cueDrag={props.timelineCueDrag}
         executionLive={props.executingLive}
         markerAriaLabel={props.overviewMarkerAriaLabel}
         automationRanges={props.overviewAutomationRanges}
@@ -264,7 +295,12 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         onSelectAutomationRange={props.onSelectAutomationRange}
         onSelectEvent={(eventId) => props.onSelectEvent(eventId, false)}
         onInspectOverlapCluster={inspectOverlapCluster}
-        onMoveEventTime={(eventId, timeMs) => void props.onMoveEventTime(eventId, timeMs)}
+        onUpdateLayer={(layer) => void props.onUpdateTimelineLayer(layer)}
+        onStatus={props.onTimelineStatus}
+        onMoveEventPlacement={(eventId, timeMs, layerId) =>
+          void props.onMoveEventPlacement(eventId, timeMs, layerId)
+        }
+        onResizeEventTime={(eventId, edge, timeMs) => void props.onResizeEventTime(eventId, edge, timeMs)}
         onMoveAutomationRangeTime={(range, timeMs) => void props.onMoveAutomationRangeTime(range, timeMs)}
         onResizeAutomationRangeTime={(range, edge, timeMs) => void props.onResizeAutomationRangeTime(range, edge, timeMs)}
         onMoveAutomationKeyframeTime={(range, keyframeIndex, timeMs) =>
