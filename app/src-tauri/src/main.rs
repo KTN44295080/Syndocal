@@ -20966,6 +20966,62 @@ async fn sync_video_output_window(
     }
 }
 
+fn pane_window_label(pane: &str) -> String {
+    format!("pane-{pane}")
+}
+
+/// T12: open a pane as its own WebView window (multi-display workspaces). The
+/// window runs the full app pointed at ?syndocalPaneWindow=<pane>, so every
+/// command/snapshot path works unchanged; a root class collapses the shell to
+/// the one pane. Window placement is machine-specific, so persistence lives in
+/// frontend localStorage rather than the .sdc project.
+#[tauri::command]
+async fn open_pane_window(app: tauri::AppHandle, pane: String) -> Result<(), String> {
+    let pane = pane.trim().to_ascii_lowercase();
+    if pane != "stage" && pane != "timeline" {
+        return Err(format!("Unknown pane window '{pane}'"));
+    }
+    let label = pane_window_label(&pane);
+    if let Some(window) = app.webview_windows().get(&label).cloned() {
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+    let title = if pane == "stage" {
+        "Syndocal Stage - 2D Map"
+    } else {
+        "Syndocal Timeline"
+    };
+    let emit_pane = pane.clone();
+    let emit_app = app.clone();
+    let window = tauri::WebviewWindowBuilder::new(
+        &app,
+        &label,
+        tauri::WebviewUrl::App(format!("index.html?syndocalPaneWindow={pane}").into()),
+    )
+    .title(title)
+    .inner_size(1280.0, 720.0)
+    .resizable(true)
+    .build()
+    .map_err(|error| error.to_string())?;
+    window.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::Destroyed) {
+            let _ = emit_app.emit("syndocal://pane-window-closed", emit_pane.clone());
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+async fn close_pane_window(app: tauri::AppHandle, pane: String) -> Result<(), String> {
+    let pane = pane.trim().to_ascii_lowercase();
+    let label = pane_window_label(&pane);
+    if let Some(window) = app.webview_windows().get(&label).cloned() {
+        window.close().map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn open_video_output_window(
     app: tauri::AppHandle,
@@ -37528,6 +37584,8 @@ fn main() {
             set_cue_steps,
             set_cue_color,
             set_group_color,
+            open_pane_window,
+            close_pane_window,
             move_cue,
             duplicate_cue,
             trigger_cue,
