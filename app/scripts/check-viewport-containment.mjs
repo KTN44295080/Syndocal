@@ -3173,6 +3173,22 @@ async function measure(client, label) {
         );
       })(),
       timelineTimeStatTitle: document.querySelector('.timelineTimeStat')?.getAttribute('title') ?? '',
+      killButtonCount: visibleCount('.liveTransportGrid .killButton'),
+      killClearCount: visibleCount('.liveTransportGrid .killClear'),
+      killButtonBorderIsRed: (() => {
+        const button = [...document.querySelectorAll('.liveTransportGrid .killButton')]
+          .find((node) => node.getBoundingClientRect().width > 0);
+        if (!button) return false;
+        const parts = window.getComputedStyle(button).borderTopColor.match(/\\d+/g)?.map(Number) ?? [];
+        return parts.length >= 3 && parts[0] > parts[1] + 20 && parts[0] > parts[2] + 20;
+      })(),
+      liveStatusMinFontPx: (() => {
+        const nodes = [...document.querySelectorAll('.liveStatusItem span, .liveStatusItem strong')]
+          .filter((node) => node.getBoundingClientRect().width > 0);
+        if (nodes.length === 0) return 0;
+        return Math.min(...nodes.map((node) => parseFloat(window.getComputedStyle(node).fontSize) || 0));
+      })(),
+      liveCueIdentityChipCount: visibleCount('.liveCueIdentityChip'),
       visibleSceneBlockWorkspaceCount: visibleCount('.sceneBlockWorkspace'),
       sceneBlockRowCount: document.querySelectorAll('.sceneBlockRow').length,
       visibleSceneBlockRowCount: visibleCount('.sceneBlockRow'),
@@ -3809,6 +3825,22 @@ function hasTimelineAutomationVisuals(result) {
     result.timelineAutomationGroupButtonCount >= 1 &&
     result.timelineAutomationRangeWidths.length >= 2 &&
     result.timelineAutomationRangeWidths.every((width) => width > 0)
+  );
+}
+
+function hasExpectedKillZone(result) {
+  // T5: the three blackouts form a KILL visual family (red-family borders,
+  // never the GO accent), All Clear sits beside them, Active/Next cue carry
+  // identity chips, and Live Desk status text respects the 11px floor.
+  if (!/^control-live-\d+x\d+$/.test(result.label)) {
+    return true;
+  }
+  return (
+    result.killButtonCount === 3 &&
+    result.killClearCount === 1 &&
+    result.killButtonBorderIsRed === true &&
+    result.liveStatusMinFontPx >= 11 &&
+    result.liveCueIdentityChipCount >= 1
   );
 }
 
@@ -9064,6 +9096,9 @@ async function main() {
     const sceneBlockFailures = shouldCheckTimelineAutomation
       ? results.filter((result) => !hasExpectedSceneBlocks(result))
       : [];
+    const killZoneFailures = shouldCheckTimelineAutomation
+      ? results.filter((result) => !hasExpectedKillZone(result))
+      : [];
     const statusLineFailures = results.filter(
       (result) => result.visibleAppStatusLineCount !== 1 || !["info", "success", "warning", "error"].includes(result.appStatusTone),
     );
@@ -9179,6 +9214,7 @@ async function main() {
       touchSurfaceFailures.length > 0 ||
       timelineAutomationFailures.length > 0 ||
       sceneBlockFailures.length > 0 ||
+      killZoneFailures.length > 0 ||
       statusLineFailures.length > 0
     ) {
       if (workspaceShellOnlyMode) {
@@ -9220,6 +9256,14 @@ async function main() {
             overflow: [result.sceneBlockWorkspaceHorizontalOverflowPx, result.sceneBlockWorkspaceVerticalOverflowPx, result.sceneBlockListHorizontalOverflowPx, result.sceneBlockListVerticalOverflowPx, result.sceneBlockComposerHorizontalOverflowPx],
             reachability: [result.sceneBlockLastComposerControlReachable, result.sceneBlockLastRowActionReachable],
           })),
+          killZone: killZoneFailures.map((result) => ({
+            label: result.label,
+            killButtonCount: result.killButtonCount,
+            killClearCount: result.killClearCount,
+            killButtonBorderIsRed: result.killButtonBorderIsRed,
+            liveStatusMinFontPx: result.liveStatusMinFontPx,
+            liveCueIdentityChipCount: result.liveCueIdentityChipCount,
+          })),
         }, null, 2));
       } else console.error(
         JSON.stringify(
@@ -9245,6 +9289,14 @@ async function main() {
             touchSurface: touchSurfaceFailures,
             timelineAutomation: timelineAutomationFailures,
             sceneBlocks: sceneBlockFailures,
+            killZone: killZoneFailures.map((result) => ({
+              label: result.label,
+              killButtonCount: result.killButtonCount,
+              killClearCount: result.killClearCount,
+              killButtonBorderIsRed: result.killButtonBorderIsRed,
+              liveStatusMinFontPx: result.liveStatusMinFontPx,
+              liveCueIdentityChipCount: result.liveCueIdentityChipCount,
+            })),
             statusLine: statusLineFailures,
           },
           null,
@@ -9252,7 +9304,7 @@ async function main() {
         ),
       );
       throw new Error(
-        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${effectStackLargeFailures.length} large live-effect DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${sceneMatrixFailures.length} Scene Matrix fixture check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${statusLineFailures.length} status line check(s) failed.`,
+        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${effectStackLargeFailures.length} large live-effect DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${sceneMatrixFailures.length} Scene Matrix fixture check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${killZoneFailures.length} kill zone check(s), ${statusLineFailures.length} status line check(s) failed.`,
       );
     }
   } finally {

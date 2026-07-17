@@ -25795,3 +25795,69 @@ h3 {
   gap: 5px;
   min-width: 0;
 }
+
+/* ---- UI redesign T5: Control consistency. Blackouts move into a KILL visual
+   family (dark red + hatch, never the GO accent orange), Active/Next cue get
+   identity chips, and the two fade-progress styles unify to one neutral
+   square style. Touch inherits the same kill classes via TouchSafetyDeck. */
+
+.killButton {
+  border: 1px solid #6b2424;
+  background: repeating-linear-gradient(
+    -45deg,
+    #1d1416,
+    #1d1416 6px,
+    #241618 6px,
+    #241618 12px
+  );
+  color: #d9b8b8;
+}
+
+.killButton:hover:not(:disabled) {
+  border-color: #8c3030;
+  color: #f0d4d4;
+}
+
+.killButton.engaged {
+  border-color: #a83a3a;
+  background: #6e2222;
+  color: #f7e3e3;
+  font-weight: 800;
+}
+
+.killClear {
+  border: 1px solid #4a3a3a;
+  color: #c9bcbc;
+}
+
+.liveCueStatusCell strong {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.liveCueIdentityChip {
+  display: inline-block;
+  flex: 0 0 8px;
+  width: 8px;
+  height: 14px;
+  border-radius: 1px;
+}
+
+/* One fade style everywhere: square track, neutral fill, no accent orange. */
+.fadeMeter div {
+  border-radius: 0;
+}
+
+.fadeMeter i {
+  background: #cfd6db;
+}
+
+.layoutControl.controlModeLive .liveControlPanel > .liveFadeMeter progress {
+  accent-color: #cfd6db;
+}

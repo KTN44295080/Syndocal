@@ -12638,13 +12638,31 @@ export default function App() {
             <span>{snapshot().blackout || snapshot().video.blackout ? "Guarded" : "Ready"}</span>
           </div>
           <div class="liveStatusGrid">
-            <div class="liveStatusItem">
+            <div class="liveStatusItem liveCueStatusCell">
               <span>Active cue</span>
-              <strong>{activeCue()?.label ?? "None"}</strong>
+              <strong data-no-localize>
+                <Show when={activeCue()}>
+                  <i
+                    class="liveCueIdentityChip"
+                    aria-hidden="true"
+                    style={{ background: identityCssColor(cueIdentityHue(activeCue()!.id), "band") }}
+                  />
+                </Show>
+                {activeCue()?.label ?? "None"}
+              </strong>
             </div>
-            <div class="liveStatusItem">
+            <div class="liveStatusItem liveCueStatusCell">
               <span>Next cue</span>
-              <strong>{nextCue()?.label ?? "None"}</strong>
+              <strong data-no-localize>
+                <Show when={nextCue()}>
+                  <i
+                    class="liveCueIdentityChip"
+                    aria-hidden="true"
+                    style={{ background: identityCssColor(cueIdentityHue(nextCue()!.id), "band") }}
+                  />
+                </Show>
+                {nextCue()?.label ?? "None"}
+              </strong>
             </div>
             <div class="liveStatusItem">
               <span>Fixtures</span>
@@ -12705,25 +12723,26 @@ export default function App() {
               {snapshot().timeline.playing ? "Pause Timeline" : "Play Timeline"}
             </button>
             <button
-              class={snapshot().blackout ? "primary" : ""}
+              class={`killButton${snapshot().blackout ? " engaged" : ""}`}
               onClick={() => void setBlackout(!snapshot().blackout)}
             >
               {snapshot().blackout ? "Clear DMX BO" : "DMX BO"}
             </button>
             <button
-              class={snapshot().video.blackout ? "primary" : ""}
+              class={`killButton${snapshot().video.blackout ? " engaged" : ""}`}
               onClick={() => void setVideoBlackout(!snapshot().video.blackout)}
             >
               {snapshot().video.blackout ? "Clear Video BO" : "Video BO"}
             </button>
             <button
-              class={snapshot().blackout && snapshot().video.blackout ? "primary" : ""}
+              class={`killButton${snapshot().blackout && snapshot().video.blackout ? " engaged" : ""}`}
               onClick={() => void setAllBlackout(true)}
               disabled={snapshot().blackout && snapshot().video.blackout}
             >
               All BO
             </button>
             <button
+              class="killClear"
               onClick={() => void setAllBlackout(false)}
               disabled={!snapshot().blackout && !snapshot().video.blackout}
             >

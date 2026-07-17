@@ -59,25 +59,26 @@ export function TouchSafetyDeck(props: TouchSafetyDeckProps) {
       </div>
       <div class="touchGuardRow">
         <button
-          class={props.snapshot.blackout ? "primary" : ""}
+          class={`killButton${props.snapshot.blackout ? " engaged" : ""}`}
           onClick={() => void props.onSetBlackout(!props.snapshot.blackout)}
         >
           {props.snapshot.blackout ? "Clear DMX BO" : "DMX BO"}
         </button>
         <button
-          class={props.snapshot.video.blackout ? "primary" : ""}
+          class={`killButton${props.snapshot.video.blackout ? " engaged" : ""}`}
           onClick={() => void props.onSetVideoBlackout(!props.snapshot.video.blackout)}
         >
           {props.snapshot.video.blackout ? "Clear Video BO" : "Video BO"}
         </button>
         <button
-          class={props.snapshot.blackout && props.snapshot.video.blackout ? "primary" : ""}
+          class={`killButton${props.snapshot.blackout && props.snapshot.video.blackout ? " engaged" : ""}`}
           onClick={() => void props.onSetAllBlackout(true)}
           disabled={props.snapshot.blackout && props.snapshot.video.blackout}
         >
           All BO
         </button>
         <button
+          class="killClear"
           onClick={() => void props.onSetAllBlackout(false)}
           disabled={!props.snapshot.blackout && !props.snapshot.video.blackout}
         >
