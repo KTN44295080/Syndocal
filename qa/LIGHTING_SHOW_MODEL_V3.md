@@ -41,6 +41,12 @@ project_ 60 / tsc 全green（監督独立再実行済み）。TimelineEventPlace
 
 ## F2: Layered timeline desk UI — lane gutter, drag-drop scene placement, block edge-resize
 risk: medium / est: L / depends: F1, T10
+**✅完了 2026-07-17 コミットf4a62b2** — 型付きセクション（Audio→Lighting→Video、見出し+kindティント）、
+ガター（実効mute/lock/solo）、cueグリップ→Lightingレーンのドラッグ配置（F3 authored_beatsから既定尺、
+kind別ドロップ検証）、ブロック縦移動+端リサイズ（選択ブロックのみハンドル描画=ノード予算3057/3500）。
+Codex 3パス（本体+2px range marginあふれ修正+overlapClusterアイドルチャーン修正+ノード予算修正）。
+フルマトリクス212全緑、DnDはCDP実機操作で確認（配置成功+Video拒否メッセージ）。
+mainチャンクはlocalization分割で508→407kB。ハーネスにlayered-deskチェック13断言（マトリクス合否直結）。
 
 **Problem**: Placement today is form-based (TimelineSceneBlocksEditor composer + 'At Playhead'); existing blocks drag only horizontally; duration/loop edits require the numeric row editor; no drag from a scene pool onto a lane, no vertical lane-change drag, no block edge-resize (resize handles exist only for automation ranges). Daslight's core workflow is drag-scene-onto-layer.
 
