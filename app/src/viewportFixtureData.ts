@@ -627,7 +627,7 @@ const sceneMatrixCues: CueSummary[] = [
     group_id: "back",
     recall_mode: "ReplaceGroup",
     node_graph_targets: [],
-    effect_targets: [],
+    effect_targets: [{ effect_id: cueRecallEffect.id, enabled: true }],
   },
   {
     ...cueRecallCue,
@@ -639,6 +639,19 @@ const sceneMatrixCues: CueSummary[] = [
     node_graph_targets: [],
     effect_targets: [],
   },
+  ...Array.from({ length: 10 }, (_, index): CueSummary => {
+    const bankNumber = index + 3;
+    return {
+      ...cueRecallCue,
+      id: 305 + index,
+      cue_number: String(5 + index),
+      label: `Bank ${bankNumber} Scene`,
+      group_id: `bank-${String(bankNumber).padStart(2, "0")}`,
+      recall_mode: "Coexist",
+      node_graph_targets: [],
+      effect_targets: [],
+    };
+  }),
 ];
 
 const layeredTimelineLayers: TimelineLayerSummary[] = [

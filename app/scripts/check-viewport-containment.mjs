@@ -18,6 +18,7 @@ const audioReactiveOnlyMode = process.argv.includes("--audio-reactive-only");
 const sceneBlockOnlyMode = process.argv.includes("--scene-block-only");
 const sceneBlockHourOnlyMode = process.argv.includes("--scene-block-hour-only");
 const sceneBlockOverlapOnlyMode = process.argv.includes("--scene-block-overlap-only");
+const sceneMatrixOnlyMode = process.argv.includes("--scene-matrix-only");
 const persistentBandOnlyMode = process.argv.includes("--persistent-band-only");
 const workspaceShellOnlyMode = process.argv.includes("--workspace-shell-only");
 const viewportTraceEnabled = process.env.SYNDOCAL_VIEWPORT_TRACE === "1";
@@ -4410,7 +4411,7 @@ function hasExpectedControlModeSurface(result) {
     ) return false;
     if (result.label.startsWith("control-live-playback-")) {
       return (
-        result.visibleTimelineDeskTabCount === 5 &&
+        result.visibleTimelineDeskTabCount === 4 &&
         result.visiblePlaybackDeskSurfaceCount === 1 &&
         result.visibleProgrammerPanelCount === 1 &&
         result.visibleReferencePalettePanelCount === 1 &&
@@ -4428,7 +4429,7 @@ function hasExpectedControlModeSurface(result) {
         result.cueEditToggleControls === "cue-list-editor cue-store-form cue-effect-capture-editor cue-list-items";
       if (result.label.startsWith("control-live-cues-effects-only-")) {
         return (
-          result.visibleTimelineDeskTabCount === 5 &&
+          result.visibleTimelineDeskTabCount === 4 &&
           result.visibleCuePanelCount === 1 &&
           result.visibleCueLivePanelCount === 1 &&
           result.visibleCueFormCount === 1 &&
@@ -4450,7 +4451,7 @@ function hasExpectedControlModeSurface(result) {
       }
       if (result.label.startsWith("control-live-cues-edit-")) {
         return (
-          result.visibleTimelineDeskTabCount === 5 &&
+          result.visibleTimelineDeskTabCount === 4 &&
           result.visibleCuePanelCount === 1 &&
           result.visibleCueLivePanelCount === 1 &&
           result.visibleCueFormCount === 1 &&
@@ -4467,7 +4468,7 @@ function hasExpectedControlModeSurface(result) {
         );
       }
       return (
-        result.visibleTimelineDeskTabCount === 5 &&
+        result.visibleTimelineDeskTabCount === 4 &&
         result.visibleCuePanelCount === 1 &&
         result.visibleCueLivePanelCount === 1 &&
         result.visibleCueFormCount === 0 &&
@@ -4481,7 +4482,7 @@ function hasExpectedControlModeSurface(result) {
     }
     if (result.label.startsWith("control-live-automation-")) {
       return (
-        result.visibleTimelineDeskTabCount === 5 &&
+        result.visibleTimelineDeskTabCount === 4 &&
         result.visibleCuePanelCount === 0 &&
         result.visibleTimelinePanelCount === 1 &&
         result.visibleTimelineShowSurfaceCount === 0 &&
@@ -4495,7 +4496,7 @@ function hasExpectedControlModeSurface(result) {
       result.visibleCueFormCount === 0 &&
       result.visibleCueEditOnlyCount === 0 &&
       result.visibleTimelinePanelCount > 0 &&
-      result.visibleTimelineDeskTabCount === 5 &&
+      result.visibleTimelineDeskTabCount === 4 &&
       result.visibleTimelineShowSurfaceCount === 1 &&
       result.controlWorkSurfaceUnsafeOverflowCount === 0 &&
       result.visibleFixtureEditSurfaceCount === 0 &&
@@ -6810,11 +6811,25 @@ async function measureSceneMatrixPane(client) {
       const style = getComputedStyle(element);
       return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
     };
-    const pane = document.querySelector('.sceneMatrixPanel');
+    const pane = document.querySelector('.liveControlPanel > .sceneMatrixPanel');
     const scroller = document.querySelector('.sceneMatrixScroller');
     const columns = [...document.querySelectorAll('[data-scene-matrix-column]')].filter(isVisible);
     const headers = [...document.querySelectorAll('[data-scene-matrix-group-hue]')].filter(isVisible);
     const cards = [...document.querySelectorAll('[data-scene-matrix-cue-id]')].filter(isVisible);
+    const triggers = cards.map((card) => card.querySelector('.sceneMatrixTrigger')).filter(isVisible);
+    const kindBadges = cards.map((card) => card.querySelector('[data-scene-matrix-kind]')).filter(isVisible);
+    const progressBars = cards.map((card) => card.querySelector('[data-scene-matrix-progress] progress')).filter(isVisible);
+    const bankStrips = columns.map((column) => column.querySelector('.sceneMatrixBankStrip')).filter(isVisible);
+    const cardScrollers = columns.map((column) => column.querySelector('.sceneMatrixCards')).filter(isVisible);
+    const dragHandles = cards.map((card) => card.querySelector('.cueTimelineDragHandle')).filter(isVisible);
+    const dragSources = cards.filter((card) => card.hasAttribute('data-timeline-cue-drag-source'));
+    const timelineLanes = [...document.querySelectorAll('.timelineShowSurface [data-timeline-layer-id]')].filter(isVisible);
+    const liveViewButtons = [...document.querySelectorAll('.liveDeskViewToggle button')].filter(isVisible);
+    const matrixTextNodes = pane
+      ? [...pane.querySelectorAll('h2, p, span, strong, small, button')]
+          .filter(isVisible)
+          .filter((element) => (element.textContent || '').trim().length > 0)
+      : [];
     const replaceCards = cards.filter((card) => isVisible(card.querySelector('.sceneMatrixReplaceBadge')));
     const groupColorInputs = [...document.querySelectorAll('[data-group-color-input]')].filter(isVisible);
     const backHeader = headers.find((header) =>
@@ -6822,9 +6837,42 @@ async function measureSceneMatrixPane(client) {
     const documentElement = document.documentElement;
     const body = document.body;
     const app = document.querySelector('.app');
+    const livePanel = pane?.parentElement ?? null;
+    const status = document.querySelector('.liveControlPanel > .liveStatusGrid');
+    const paneRect = pane?.getBoundingClientRect() ?? null;
+    const liveRect = livePanel?.getBoundingClientRect() ?? null;
+    const statusRect = status?.getBoundingClientRect() ?? null;
+    const overlapArea = paneRect && statusRect
+      ? Math.max(0, Math.min(paneRect.right, statusRect.right) - Math.max(paneRect.left, statusRect.left)) *
+        Math.max(0, Math.min(paneRect.bottom, statusRect.bottom) - Math.max(paneRect.top, statusRect.top))
+      : Number.POSITIVE_INFINITY;
     const scrollerStyle = scroller ? getComputedStyle(scroller) : null;
     return {
       paneVisible: isVisible(pane),
+      paneInPrimaryLiveDesk: pane?.parentElement?.classList.contains('liveControlPanel') === true,
+      paneHeightCoverage: paneRect && liveRect && liveRect.height > 0 ? paneRect.height / liveRect.height : 0,
+      paneWidthCoverage: paneRect && liveRect && liveRect.width > 0 ? paneRect.width / liveRect.width : 0,
+      paneRect: paneRect ? {
+        left: paneRect.left,
+        top: paneRect.top,
+        right: paneRect.right,
+        bottom: paneRect.bottom,
+        width: paneRect.width,
+        height: paneRect.height,
+      } : null,
+      statusVisible: isVisible(status),
+      statusRect: statusRect ? {
+        left: statusRect.left,
+        top: statusRect.top,
+        right: statusRect.right,
+        bottom: statusRect.bottom,
+        width: statusRect.width,
+        height: statusRect.height,
+      } : null,
+      paneStatusOverlap: overlapArea > 1,
+      matrixMinFontPx: matrixTextNodes.length > 0
+        ? Math.min(...matrixTextNodes.map((element) => parseFloat(getComputedStyle(element).fontSize) || 0))
+        : 0,
       columns: columns.map((column) => column.getAttribute('data-scene-matrix-column')),
       headerHues: headers.map((header) => header.getAttribute('data-scene-matrix-group-hue')),
       cardHues: cards.map((card) => card.getAttribute('data-scene-matrix-cue-hue')),
@@ -6832,12 +6880,43 @@ async function measureSceneMatrixPane(client) {
       groupColorInputCount: groupColorInputs.length,
       cueColorInputCount: [...document.querySelectorAll('[data-cue-color-input]')].filter(isVisible).length,
       coloredCardIdentity: document.querySelector('[data-scene-matrix-cue-id="301"]')?.style.getPropertyValue('--cue-identity') ?? '',
-      backHeaderIdentity: backHeader?.style.getPropertyValue('--group-identity') ?? '',
+      backHeaderIdentity: backHeader?.closest('[data-scene-matrix-column]')?.style.getPropertyValue('--group-identity') ?? '',
       replaceCardIds: replaceCards.map((card) => card.getAttribute('data-scene-matrix-cue-id')),
+      kindBadgeCounts: Object.fromEntries(['STATIC', 'FX'].map((kind) => [
+        kind,
+        kindBadges.filter((badge) => badge.getAttribute('data-scene-matrix-kind') === kind).length,
+      ])),
+      bankStripCount: bankStrips.length,
+      bankStripColors: bankStrips.map((strip) => getComputedStyle(strip).backgroundColor),
+      progressBarCount: progressBars.length,
+      progressValues: progressBars.map((progress) => Number(progress.value)),
+      minCellHitSize: triggers.length > 0
+        ? Math.min(...triggers.map((trigger) => {
+            const rect = trigger.getBoundingClientRect();
+            return Math.min(rect.width, rect.height);
+          }))
+        : 0,
+      dragHandleCount: dragHandles.length,
+      minDragHandleHitSize: dragHandles.length > 0
+        ? Math.min(...dragHandles.map((handle) => {
+            const rect = handle.getBoundingClientRect();
+            return Math.min(rect.width, rect.height);
+          }))
+        : 0,
+      dragHandleTouchActions: dragHandles.map((handle) => getComputedStyle(handle).touchAction),
+      dragSourceCount: dragSources.length,
+      visibleTimelineLaneCount: timelineLanes.length,
+      timelineShowSurfaceVisible: isVisible(document.querySelector('.timelineShowSurface')),
+      liveViewButtonCount: liveViewButtons.length,
+      activeLiveView: (liveViewButtons.find((button) => button.getAttribute('aria-pressed') === 'true')?.textContent || '').trim(),
       activeCardIds: cards
         .filter((card) => card.getAttribute('data-scene-matrix-active') === 'true' && card.classList.contains('active'))
         .map((card) => card.getAttribute('data-scene-matrix-cue-id')),
-      internalScrollport: Boolean(scroller && scrollerStyle && /(auto|scroll)/.test(scrollerStyle.overflowX)),
+      internalScrollport: Boolean(
+        scroller && scrollerStyle && /(auto|scroll)/.test(scrollerStyle.overflowX) &&
+        cardScrollers.length === columns.length &&
+        cardScrollers.every((cardScroller) => /(auto|scroll)/.test(getComputedStyle(cardScroller).overflowY))
+      ),
       documentAndAppScrollZero:
         window.scrollX === 0 && window.scrollY === 0 &&
         documentElement.scrollWidth === documentElement.clientWidth &&
@@ -6855,6 +6934,88 @@ async function measureSceneMatrixPane(client) {
         app: app ? [app.scrollWidth, app.clientWidth, app.scrollHeight, app.clientHeight] : null,
         matrix: scroller ? [scroller.scrollWidth, scroller.clientWidth, scroller.scrollHeight, scroller.clientHeight] : null,
       },
+    };
+  })()`);
+}
+
+async function exerciseSceneMatrixHorizontalScroll(client) {
+  return await client.evaluate(`(async () => {
+    const settle = () => new Promise((resolveFrame) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const scroller = document.querySelector('.sceneMatrixScroller');
+    const showColumn = document.querySelector('[data-scene-matrix-column="Show"]');
+    const showHeader = showColumn?.querySelector('.sceneMatrixColumnHeader') ?? showColumn;
+    if (!(scroller instanceof HTMLElement) || !(showColumn instanceof HTMLElement) || !(showHeader instanceof HTMLElement)) {
+      return {
+        available: false,
+        initialScrollLeft: -1,
+        maxScrollLeft: 0,
+        reachedScrollLeft: -1,
+        reachedMax: false,
+        showVisibleAtMax: false,
+        showHitColumnAtMax: '',
+        resetScrollLeft: -1,
+        resetAtOrigin: false,
+      };
+    }
+
+    scroller.scrollLeft = 0;
+    await settle();
+    const initialScrollLeft = scroller.scrollLeft;
+    const maxScrollLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+    scroller.scrollLeft = maxScrollLeft;
+    await settle();
+    const reachedScrollLeft = scroller.scrollLeft;
+    const scrollerRect = scroller.getBoundingClientRect();
+    const showRect = showHeader.getBoundingClientRect();
+    const visibleLeft = Math.max(scrollerRect.left, showRect.left);
+    const visibleRight = Math.min(scrollerRect.right, showRect.right);
+    const visibleTop = Math.max(scrollerRect.top, showRect.top);
+    const visibleBottom = Math.min(scrollerRect.bottom, showRect.bottom);
+    const showVisibleAtMax = visibleRight - visibleLeft >= 2 && visibleBottom - visibleTop >= 2;
+    const showHitColumnAtMax = showVisibleAtMax
+      ? document.elementFromPoint(
+          visibleLeft + (visibleRight - visibleLeft) / 2,
+          visibleTop + (visibleBottom - visibleTop) / 2,
+        )?.closest('[data-scene-matrix-column]')?.getAttribute('data-scene-matrix-column') ?? ''
+      : '';
+
+    scroller.scrollLeft = 0;
+    await settle();
+    const resetScrollLeft = scroller.scrollLeft;
+    return {
+      available: true,
+      initialScrollLeft,
+      maxScrollLeft,
+      reachedScrollLeft,
+      reachedMax: maxScrollLeft > 1 && Math.abs(reachedScrollLeft - maxScrollLeft) <= 2,
+      showVisibleAtMax,
+      showHitColumnAtMax,
+      resetScrollLeft,
+      resetAtOrigin: Math.abs(resetScrollLeft) <= 1,
+    };
+  })()`);
+}
+
+async function measureSceneMatrixInteractionState(client, cueId) {
+  return await client.evaluate(`(() => {
+    const markers = [...document.querySelectorAll('.timelineOverview .timelineMarker.sceneBlock[data-timeline-event-id]')]
+      .map((marker) => ({
+        eventId: marker.getAttribute('data-timeline-event-id') ?? '',
+        layerId: Number(marker.getAttribute('data-timeline-layer-id')),
+        layerKind: marker.getAttribute('data-timeline-layer-kind') ?? '',
+        label: marker.getAttribute('aria-label') ?? '',
+      }));
+    const cueItem = document.querySelector('.cueItem[data-cue-id="${cueId}"]');
+    return {
+      cueId: ${cueId},
+      markerCount: markers.length,
+      markers,
+      cuePlacementCount: cueItem?.querySelectorAll('.cueTimelinePlacementChip').length ?? -1,
+      activeCardIds: [...document.querySelectorAll('[data-scene-matrix-cue-id]')]
+        .filter((card) => card.getAttribute('data-scene-matrix-active') === 'true' && card.classList.contains('active'))
+        .map((card) => card.getAttribute('data-scene-matrix-cue-id')),
+      ghostPresent: Boolean(document.querySelector('[data-timeline-cue-drag-ghost]')),
     };
   })()`);
 }
@@ -6990,32 +7151,287 @@ async function runSceneMatrixPaneCheck(client, viewport) {
   await waitForApp(client);
   await clickVisibleByText(client, ".workspaceTabs button", "Control");
   await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
-  await clickVisibleByText(client, ".timelineDeskTabs button", "Matrix");
+  await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(120);
   const before = await measureSceneMatrixPane(client);
-  const triggerClicked = await client.evaluate(`(() => {
-    const trigger = document.querySelector('[data-scene-matrix-cue-id="302"] .sceneMatrixTrigger');
-    if (!(trigger instanceof HTMLButtonElement) || trigger.disabled) return false;
-    const rect = trigger.getBoundingClientRect();
-    const style = getComputedStyle(trigger);
-    if (rect.width <= 0 || rect.height <= 0 || style.display === 'none' || style.visibility === 'hidden') return false;
-    trigger.click();
-    return true;
+  const horizontalScroll = await exerciseSceneMatrixHorizontalScroll(client);
+  await clickVisibleByText(client, ".liveDeskViewToggle button", "Cue Pads");
+  await sleep(80);
+  const alternateView = await client.evaluate(`(() => {
+    const visible = (selector) => [...document.querySelectorAll(selector)].filter((element) => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    }).length;
+    return {
+      matrixCount: visible('.liveControlPanel > .sceneMatrixPanel'),
+      cuePadSurfaceCount: visible('.liveControlPanel > .liveCuePadSurface'),
+      activeView: ([...document.querySelectorAll('.liveDeskViewToggle button')]
+        .find((button) => button.getAttribute('aria-pressed') === 'true')?.textContent || '').trim(),
+    };
   })()`);
-  await sleep(120);
+  await clickVisibleByText(client, ".liveDeskViewToggle button", "Matrix");
+  await sleep(80);
+  const interactionGeometry = await client.evaluate(`(() => {
+    const clickSource = document.querySelector('[data-scene-matrix-cue-id="302"] .sceneMatrixTrigger');
+    const dragSource = document.querySelector('[data-scene-matrix-cue-id="303"] .cueTimelineDragHandle');
+    clickSource?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    dragSource?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    const lane = [...document.querySelectorAll('.timelineOverview [data-timeline-layer-kind="Lighting"][data-timeline-layer-id]')]
+      .filter((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 80 && rect.height > 10;
+      })
+      .sort((left, right) => right.getBoundingClientRect().width - left.getBoundingClientRect().width)[0];
+    if (!clickSource || !dragSource || !lane) return null;
+    const visibleHitPoint = (source, cueId, requireHandle = false) => {
+      const rect = source.getBoundingClientRect();
+      for (const yRatio of [0.5, 0.25, 0.75]) {
+        for (const xRatio of [0.45, 0.25, 0.7]) {
+          const x = rect.left + rect.width * xRatio;
+          const y = rect.top + rect.height * yRatio;
+          const hitElement = document.elementFromPoint(x, y);
+          const hitCueId = hitElement
+            ?.closest('[data-scene-matrix-cue-id]')
+            ?.getAttribute('data-scene-matrix-cue-id');
+          const handleHit = hitElement?.closest('.cueTimelineDragHandle') === source;
+          if (hitCueId === cueId && (!requireHandle || handleHit)) return { x, y, hitCueId, handleHit };
+        }
+      }
+      return null;
+    };
+    const clickPoint = visibleHitPoint(clickSource, '302');
+    const dragPoint = visibleHitPoint(dragSource, '303', true);
+    if (!clickPoint || !dragPoint) return null;
+    const laneRect = lane.getBoundingClientRect();
+    return {
+      clickSourceX: clickPoint.x,
+      clickSourceY: clickPoint.y,
+      clickHitCueId: clickPoint.hitCueId,
+      dragSourceX: dragPoint.x,
+      dragSourceY: dragPoint.y,
+      dragHitCueId: dragPoint.hitCueId,
+      dragHandleHit: dragPoint.handleHit,
+      laneX: laneRect.left + laneRect.width * 0.6,
+      laneY: laneRect.top + laneRect.height / 2,
+      laneId: Number(lane.getAttribute('data-timeline-layer-id')),
+      laneKind: lane.getAttribute('data-timeline-layer-kind') ?? '',
+    };
+  })()`);
+  let subThresholdClick = null;
+  if (interactionGeometry) {
+    const stateBefore = await measureSceneMatrixInteractionState(client, 302);
+    await client.evaluate(`(() => {
+      const eventTypes = ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'click'];
+      window.__sceneMatrixTinyTrace = [];
+      window.__sceneMatrixTinyTraceHandlers = Object.fromEntries(eventTypes.map((type) => {
+        const handler = (event) => {
+          const target = event.target instanceof Element ? event.target.closest('[data-scene-matrix-cue-id]') : null;
+          if (target?.getAttribute('data-scene-matrix-cue-id') !== '302') return;
+          window.__sceneMatrixTinyTrace.push({
+            type,
+            target: event.target instanceof Element ? event.target.className : '',
+            defaultPrevented: event.defaultPrevented,
+          });
+        };
+        document.addEventListener(type, handler, true);
+        return [type, handler];
+      }));
+    })()`);
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: interactionGeometry.clickSourceX,
+      y: interactionGeometry.clickSourceY,
+      button: "left",
+      buttons: 1,
+      clickCount: 1,
+    });
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: interactionGeometry.clickSourceX + 3,
+      y: interactionGeometry.clickSourceY,
+      button: "left",
+      buttons: 1,
+    });
+    await sleep(30);
+    const ghostDuringMove = await client.evaluate(`Boolean(document.querySelector('[data-timeline-cue-drag-ghost]'))`);
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: interactionGeometry.clickSourceX + 3,
+      y: interactionGeometry.clickSourceY,
+      button: "left",
+      buttons: 0,
+      clickCount: 1,
+    });
+    await sleep(120);
+    const eventTrace = await client.evaluate(`(() => {
+      const trace = window.__sceneMatrixTinyTrace ?? [];
+      for (const [type, handler] of Object.entries(window.__sceneMatrixTinyTraceHandlers ?? {})) {
+        document.removeEventListener(type, handler, true);
+      }
+      delete window.__sceneMatrixTinyTrace;
+      delete window.__sceneMatrixTinyTraceHandlers;
+      return trace;
+    })()`);
+    subThresholdClick = {
+      movedPx: 3,
+      hitCueId: interactionGeometry.clickHitCueId,
+      ghostDuringMove,
+      eventTrace,
+      before: stateBefore,
+      after: await measureSceneMatrixInteractionState(client, 302),
+    };
+  }
+  let oneGestureDrag = null;
+  if (interactionGeometry) {
+    const stateBefore = await measureSceneMatrixInteractionState(client, 303);
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: interactionGeometry.dragSourceX,
+      y: interactionGeometry.dragSourceY,
+      button: "left",
+      buttons: 1,
+      clickCount: 1,
+    });
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: interactionGeometry.dragSourceX + 6,
+      y: interactionGeometry.dragSourceY,
+      button: "left",
+      buttons: 1,
+    });
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: interactionGeometry.laneX,
+      y: interactionGeometry.laneY,
+      button: "left",
+      buttons: 1,
+    });
+    await sleep(50);
+    const during = await client.evaluate(`(() => ({
+      dropState: document.querySelector('[data-timeline-cue-drag-ghost]')?.getAttribute('data-timeline-drop-state') ?? '',
+      sourceStillVisible: (() => {
+        const source = document.querySelector('[data-scene-matrix-cue-id="303"]');
+        const rect = source?.getBoundingClientRect();
+        return Boolean(rect && rect.width > 0 && rect.height > 0);
+      })(),
+      matrixStillVisible: Boolean(document.querySelector('.liveControlPanel > .sceneMatrixPanel')),
+    }))()`);
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: interactionGeometry.laneX,
+      y: interactionGeometry.laneY,
+      button: "left",
+      buttons: 0,
+      clickCount: 1,
+    });
+    await sleep(180);
+    const stateAfter = await measureSceneMatrixInteractionState(client, 303);
+    const beforeEventIds = new Set(stateBefore.markers.map((marker) => marker.eventId));
+    oneGestureDrag = {
+      ...during,
+      sourceCueId: 303,
+      sourceCueLabel: "Back Sweep",
+      hitCueId: interactionGeometry.dragHitCueId,
+      sourceHandleHit: interactionGeometry.dragHandleHit,
+      targetLayerId: interactionGeometry.laneId,
+      targetLayerKind: interactionGeometry.laneKind,
+      before: stateBefore,
+      after: stateAfter,
+      addedMarkers: stateAfter.markers.filter((marker) => !beforeEventIds.has(marker.eventId)),
+      ghostCleared: !stateAfter.ghostPresent,
+    };
+  }
   const after = await measureSceneMatrixPane(client);
-  const expectedColumns = ["back", "front", "Show"];
+  const expectedColumns = [
+    "front",
+    "back",
+    ...Array.from({ length: 10 }, (_, index) => `bank-${String(index + 3).padStart(2, "0")}`),
+    "Show",
+  ];
+  const expectedCardCount = 14;
   const expectedReplaceCards = ["302", "303"];
+  const validHueAttributes = (values, expectedCount) =>
+    values.length === expectedCount && values.every((value) => {
+      if (typeof value !== "string" || value.trim() === "") return false;
+      const hue = Number(value);
+      return Number.isFinite(hue) && hue >= 0 && hue <= 359;
+    });
   const conditions = [
-    ["matrixPaneVisible", () => before.paneVisible && after.paneVisible],
-    ["matrixExpectedGroupColumns", () => JSON.stringify(before.columns) === JSON.stringify(expectedColumns)],
-    ["matrixHeaderHueAttributesPresent", () => before.headerHues.length === expectedColumns.length && before.headerHues.every(Boolean)],
-    ["matrixCardHueAttributesPresent", () => before.cardHues.length === 4 && before.cardHues.every(Boolean)],
+    ["matrixPrimarySurfaceVisibleByDefault", () =>
+      before.paneVisible &&
+      after.paneVisible &&
+      before.paneInPrimaryLiveDesk &&
+      before.paneHeightCoverage >= 0.35 &&
+      before.activeLiveView === "Matrix"],
+    ["matrixTimelineLiveOwnsPrimaryWidth", () =>
+      before.paneWidthCoverage >= 0.6 &&
+      before.paneRect?.width > before.statusRect?.width],
+    ["matrixTimelineLiveDoesNotOverlapStatus", () => before.statusVisible && !before.paneStatusOverlap],
+    ["matrixCuePadsRemainAlternateView", () =>
+      before.liveViewButtonCount === 2 &&
+      alternateView.matrixCount === 0 &&
+      alternateView.cuePadSurfaceCount === 1 &&
+      alternateView.activeView === "Cue Pads"],
+    ["matrixExpectedGroupColumns", () =>
+      JSON.stringify(before.columns) === JSON.stringify(expectedColumns) && before.cardIds.length === expectedCardCount],
+    ["matrixHeaderHueAttributesPresent", () => validHueAttributes(before.headerHues, expectedColumns.length)],
+    ["matrixCardHueAttributesPresent", () => validHueAttributes(before.cardHues, expectedCardCount)],
+    ["matrixBankIdentityStripsVisible", () =>
+      before.bankStripCount === expectedColumns.length && before.bankStripColors.every((color) => color !== "rgba(0, 0, 0, 0)")],
+    ["matrixStaticAndFxBadgesPresent", () =>
+      before.kindBadgeCounts.STATIC === 13 && before.kindBadgeCounts.FX === 1],
     ["matrixReplaceGroupBadgesPresent", () => JSON.stringify(before.replaceCardIds.sort()) === JSON.stringify(expectedReplaceCards)],
     ["matrixInitialActiveCueVisible", () => JSON.stringify(before.activeCardIds) === JSON.stringify(["301"])],
-    ["matrixTriggerClickApplied", () => triggerClicked],
-    ["matrixActiveCueHighlightFollowedClick", () => JSON.stringify(after.activeCardIds) === JSON.stringify(["302"])],
-    ["matrixColumnsUseInternalScrollport", () => before.internalScrollport && after.internalScrollport],
+    ["matrixActiveCueProgressVisible", () =>
+      before.progressBarCount === 1 && before.progressValues.length === 1 && Math.abs(before.progressValues[0] - 0.42) <= 0.001],
+    ["matrixCellsMeetFortyPixelHitArea", () => before.minCellHitSize >= 40],
+    ["matrixDragHandlesMeetFortyPixelTouchContract", () =>
+      before.dragHandleCount === expectedCardCount &&
+      before.minDragHandleHitSize >= 40 &&
+      before.dragHandleTouchActions.every((touchAction) => touchAction === "none")],
+    ["matrixVisibleTextMeetsElevenPixelFloor", () => before.matrixMinFontPx >= 11],
+    ["matrixSubThresholdMoveRecallsWithoutTimelineMutation", () =>
+      subThresholdClick?.movedPx < 4 &&
+      subThresholdClick.hitCueId === "302" &&
+      !subThresholdClick.ghostDuringMove &&
+      JSON.stringify(subThresholdClick.before.activeCardIds) === JSON.stringify(["301"]) &&
+      JSON.stringify(subThresholdClick.after.activeCardIds) === JSON.stringify(["302"]) &&
+      subThresholdClick.before.cuePlacementCount >= 0 &&
+      subThresholdClick.after.markerCount === subThresholdClick.before.markerCount &&
+      subThresholdClick.after.cuePlacementCount === subThresholdClick.before.cuePlacementCount],
+    ["matrixAndTimelineLaneCoexistForOneGestureDrag", () =>
+      before.dragSourceCount === expectedCardCount && before.timelineShowSurfaceVisible && before.visibleTimelineLaneCount > 0],
+    ["matrixOneGestureDragUsesTimelineDropPath", () =>
+      oneGestureDrag?.dropState === "valid" &&
+      oneGestureDrag.sourceStillVisible &&
+      oneGestureDrag.matrixStillVisible &&
+      oneGestureDrag.ghostCleared &&
+      oneGestureDrag.sourceCueId === 303 &&
+      oneGestureDrag.hitCueId === "303" &&
+      oneGestureDrag.sourceHandleHit === true &&
+      oneGestureDrag.targetLayerKind === "Lighting" &&
+      oneGestureDrag.before.cuePlacementCount >= 0 &&
+      oneGestureDrag.after.markerCount === oneGestureDrag.before.markerCount + 1 &&
+      oneGestureDrag.after.cuePlacementCount === oneGestureDrag.before.cuePlacementCount + 1 &&
+      oneGestureDrag.addedMarkers.length === 1 &&
+      oneGestureDrag.addedMarkers[0].layerId === oneGestureDrag.targetLayerId &&
+      oneGestureDrag.addedMarkers[0].layerKind === "Lighting" &&
+      oneGestureDrag.addedMarkers[0].label.includes(oneGestureDrag.sourceCueLabel)],
+    ["matrixDragDoesNotRecallCue", () =>
+      JSON.stringify(oneGestureDrag?.before.activeCardIds) === JSON.stringify(["302"]) &&
+      JSON.stringify(oneGestureDrag?.after.activeCardIds) === JSON.stringify(["302"])],
+    ["matrixActiveCueHighlightFollowedSubThresholdClick", () => JSON.stringify(after.activeCardIds) === JSON.stringify(["302"])],
+    ["matrixColumnsUseInternalScrollport", () =>
+      before.internalScrollport &&
+      after.internalScrollport &&
+      horizontalScroll.available &&
+      Math.abs(horizontalScroll.initialScrollLeft) <= 1 &&
+      horizontalScroll.maxScrollLeft > 1 &&
+      horizontalScroll.reachedMax &&
+      horizontalScroll.showVisibleAtMax &&
+      horizontalScroll.showHitColumnAtMax === "Show" &&
+      horizontalScroll.resetAtOrigin],
     ["matrixDocumentAndAppScrollZero", () => before.documentAndAppScrollZero && after.documentAndAppScrollZero],
     // T7: the fixture persists #ff3366 on cue 301 (hue 345) and #22aa88 on the
     // back group (hue 165); persisted colors must win over the hash palette
@@ -7024,7 +7440,7 @@ async function runSceneMatrixPaneCheck(client, viewport) {
       (before.coloredCardIdentity || "").startsWith("hsl(345")],
     ["matrixPersistedGroupColorWinsHashHue", () =>
       (before.backHeaderIdentity || "").startsWith("hsl(165")],
-    ["matrixGroupColorPickerPerGroupColumn", () => before.groupColorInputCount === 2],
+    ["matrixGroupColorPickerPerGroupColumn", () => before.groupColorInputCount === expectedColumns.length - 1],
   ];
   const checks = Object.fromEntries(conditions.map(([name, check]) => {
     try {
@@ -7041,6 +7457,10 @@ async function runSceneMatrixPaneCheck(client, viewport) {
     failedChecks,
     before,
     after,
+    horizontalScroll,
+    alternateView,
+    subThresholdClick,
+    oneGestureDrag,
   };
 }
 
@@ -9287,6 +9707,32 @@ async function main() {
       }
       return;
     }
+    if (sceneMatrixOnlyMode) {
+      const sceneMatrixResults = [];
+      for (const viewport of viewports) {
+        const result = await runSceneMatrixPaneCheck(client, viewport);
+        sceneMatrixResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `columns=${JSON.stringify(result.before.columns)} ` +
+            `cell=${Math.round(result.before.minCellHitSize * 100) / 100}px ` +
+            `handle=${Math.round(result.before.minDragHandleHitSize * 100) / 100}px ` +
+            `width=${Math.round(result.before.paneWidthCoverage * 1000) / 1000} ` +
+            `scroll=${result.before.documentAndAppScrollZero ? "zero" : "overflow"} ` +
+            `click=302 active=${result.subThresholdClick?.before.activeCardIds.join("+") || "?"}->` +
+              `${result.subThresholdClick?.after.activeCardIds.join("+") || "?"} ` +
+            `drag=${result.oneGestureDrag?.sourceCueId ?? "?"}@${result.oneGestureDrag?.targetLayerId ?? "?"} ` +
+              `events=${result.oneGestureDrag?.before.markerCount ?? "?"}->${result.oneGestureDrag?.after.markerCount ?? "?"} ` +
+              `placements=${result.oneGestureDrag?.before.cuePlacementCount ?? "?"}->${result.oneGestureDrag?.after.cuePlacementCount ?? "?"} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = sceneMatrixResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Scene Matrix viewport failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
     if (largeShowMode) {
       const result = await runLargeShowViewport(client, viewports[0]);
       const passed = Boolean(
@@ -9721,7 +10167,7 @@ async function main() {
     }
     for (const result of sceneMatrixResults) {
       console.log(
-        `${result.passed ? "pass" : "fail"} ${result.label} columns=${JSON.stringify(result.before.columns)} active=${JSON.stringify(result.before.activeCardIds)}->${JSON.stringify(result.after.activeCardIds)} failed=${JSON.stringify(result.failedChecks)}`,
+        `${result.passed ? "pass" : "fail"} ${result.label} columns=${JSON.stringify(result.before.columns)} active=${JSON.stringify(result.before.activeCardIds)}->${JSON.stringify(result.after.activeCardIds)} width=${Math.round(result.before.paneWidthCoverage * 1000) / 1000} handle=${Math.round(result.before.minDragHandleHitSize * 100) / 100}px click=302:${result.subThresholdClick?.before.activeCardIds.join("+") || "?"}->${result.subThresholdClick?.after.activeCardIds.join("+") || "?"} drag=${result.oneGestureDrag?.sourceCueId ?? "?"}@${result.oneGestureDrag?.targetLayerId ?? "?"} events=${result.oneGestureDrag?.before.markerCount ?? "?"}->${result.oneGestureDrag?.after.markerCount ?? "?"} placements=${result.oneGestureDrag?.before.cuePlacementCount ?? "?"}->${result.oneGestureDrag?.after.cuePlacementCount ?? "?"} failed=${JSON.stringify(result.failedChecks)}`,
       );
     }
     for (const result of paneWindowResults) {

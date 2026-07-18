@@ -957,7 +957,7 @@ export default function App() {
     initialWorkspaceLayout.timeline_desk_surface,
   );
   const [timelineChildCueId, setTimelineChildCueId] = createSignal<number | null>(null);
-  const [sceneMatrixVisible, setSceneMatrixVisible] = createSignal(false);
+  const [controlLiveView, setControlLiveView] = createSignal<"matrix" | "pads">("matrix");
   const [editDeskSurface, setEditDeskSurface] = createSignal<EditDeskSurface>(initialWorkspaceLayout.edit_desk_surface);
   const [revealedSourceCueId, setRevealedSourceCueId] = createSignal<number | null>(null);
   const [revealedSourceCueRevision, setRevealedSourceCueRevision] = createSignal(0);
@@ -1629,8 +1629,8 @@ export default function App() {
     const activeCueId = fixtureCues[0].id;
     setWorkspaceTab(touchComposedFixture ? "touch" : "control");
     if (sceneMatrixFixture) {
-      setTimelineDeskSurface("cues");
-      setSceneMatrixVisible(true);
+      setTimelineDeskSurface("show");
+      setControlLiveView("matrix");
     }
     setSelectedFixtureGroupFilter("front");
     setProfile(viewportFixtureData.profile);
@@ -1664,7 +1664,7 @@ export default function App() {
             viewportPatchedFixture(2, "Save", 9, 0, -2),
             viewportPatchedFixture(3, "Output", 17, 4, -2),
           ],
-      active_fade: cueNodeGraphFixture || sceneMatrixFixture
+      active_fade: cueNodeGraphFixture
         ? null
         : {
             cue_id: cueFixture || timelineFixture || sceneMatrixFixture ? activeCueId : 1,
@@ -1686,7 +1686,7 @@ export default function App() {
       cue_lists: cueFixture || timelineFixture || sceneMatrixFixture || touchComposedFixture
         ? [{ id: 1, label: "Main", active_cue_id: activeCueId }]
         : current.cue_lists,
-      effects: cueFixture ? cueFixtureEffects : sceneMatrixFixture ? [] : current.effects,
+      effects: cueFixture ? cueFixtureEffects : sceneMatrixFixture ? [viewportFixtureData.cueRecallEffect] : current.effects,
       node_graphs: cueFixture || cueNodeGraphFixture ? [viewportFixtureData.cueRecallNodeGraph] : current.node_graphs,
       submasters: [{ group_id: "front", label: "front", level: 1 }],
       video: cueNodeGraphFixture
@@ -2294,6 +2294,18 @@ export default function App() {
     return [...counts.entries()]
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([groupId, count]) => ({ groupId, count }));
+  });
+  const sceneMatrixGroupIds = createMemo(() => {
+    // Cue group IDs are scene banks; fixture group IDs describe patch selections.
+    const groupIds: string[] = [];
+    const seen = new Set<string>();
+    for (const cue of snapshot().cues) {
+      const groupId = cue.group_id?.trim();
+      if (!groupId || seen.has(groupId)) continue;
+      seen.add(groupId);
+      groupIds.push(groupId);
+    }
+    return groupIds;
   });
   const filteredFixtures = createMemo(() => {
     const groupId = selectedFixtureGroupFilter();
@@ -4988,7 +5000,7 @@ export default function App() {
     if (controlMode() === "edit") return editDeskSurface() === "effects" ? "Lighting FX" : "Faders";
     if (controlMode() !== "live") return "Faders";
     switch (timelineDeskSurface()) {
-      case "cues": return sceneMatrixVisible() ? "Scene Matrix" : "Cue List";
+      case "cues": return "Cue List";
       case "automation": return "Automation";
       case "playback": return "Playback";
       default: return "Show Timeline";
@@ -6182,7 +6194,8 @@ export default function App() {
     }
     const localFixture = viewportFixture === "timeline-layered"
       || viewportFixture === "scene-block-large"
-      || viewportFixture === "scene-block-hour";
+      || viewportFixture === "scene-block-hour"
+      || viewportFixture === "scene-matrix";
     if (localFixture && command === "add_timeline_scene_block") {
       const eventId = Math.max(
         0,
@@ -6347,6 +6360,7 @@ export default function App() {
     refreshSnapshot: () => viewportFixture === "timeline-layered"
       || viewportFixture === "scene-block-large"
       || viewportFixture === "scene-block-hour"
+      || viewportFixture === "scene-matrix"
       ? Promise.resolve(snapshot())
       : refreshSnapshot(),
   });
@@ -13566,8 +13580,26 @@ export default function App() {
       >
         <Show when={workspaceTab() === "control" && controlMode() !== "mixer"}>
         <section class="panel liveControlPanel controlPanel">
-          <div class="panelHeader">
+          <div class="panelHeader liveDeskHeader">
             <h2>Live Desk</h2>
+            <nav class="liveDeskViewToggle" aria-label="Live desk view">
+              <button
+                type="button"
+                class={controlLiveView() === "matrix" ? "active" : ""}
+                aria-pressed={controlLiveView() === "matrix"}
+                onClick={() => setControlLiveView("matrix")}
+              >
+                Matrix
+              </button>
+              <button
+                type="button"
+                class={controlLiveView() === "pads" ? "active" : ""}
+                aria-pressed={controlLiveView() === "pads"}
+                onClick={() => setControlLiveView("pads")}
+              >
+                Cue Pads
+              </button>
+            </nav>
             <span>{snapshot().blackout || snapshot().video.blackout ? "Guarded" : "Ready"}</span>
           </div>
           <div class="liveStatusGrid">
@@ -13685,58 +13717,78 @@ export default function App() {
               Clear Flags
             </button>
           </div>
-          <div class="liveCuePadHeader">
-            <h3>Cue Pads</h3>
-            <span>{cuePadRangeLabel()}</span>
-            <label class="checkbox compactCheckbox">
-              <input
-                type="checkbox"
-                checked={cuePadFollowActive()}
-                onChange={(event) => setCuePadFollowActive(event.currentTarget.checked)}
-              />
-              Follow
-            </label>
-            <button
-              onClick={() => {
-                setCuePadFollowActive(false);
-                setCuePadBank(Math.max(0, cuePadBank() - 1));
-              }}
-              disabled={cuePadBank() === 0}
-            >
-              Prev
-            </button>
-            <button
-              onClick={() => {
-                setCuePadFollowActive(false);
-                setCuePadBank(Math.min(cuePadBankCount() - 1, cuePadBank() + 1));
-              }}
-              disabled={cuePadBank() >= cuePadBankCount() - 1}
-            >
-              Next
-            </button>
-          </div>
-          <div class="liveCuePadGrid">
-            <For each={liveCuePads()}>
-              {(pad) => (
+          <Show when={controlLiveView() === "matrix"}>
+            <SceneMatrixPanel
+              cues={snapshot().cues}
+              groupColors={groupColors()}
+              onSetGroupColor={setGroupColor}
+              groupIds={sceneMatrixGroupIds()}
+              activeCueId={snapshot().active_cue_id}
+              activeGroupCueIds={snapshot().active_group_cue_ids ?? {}}
+              activeFade={snapshot().active_fade}
+              timelineTrack={timelineTrack()}
+              onTriggerCue={triggerCue}
+              onBeginTimelineCueDrag={beginTimelineCueDrag}
+              onMoveTimelineCueDrag={moveTimelineCueDrag}
+              onEndTimelineCueDrag={(point, moved, canceled) => void endTimelineCueDrag(point, moved, canceled)}
+            />
+          </Show>
+          <Show when={controlLiveView() === "pads"}>
+            <div class="liveCuePadSurface">
+              <div class="liveCuePadHeader">
+                <h3>Cue Pads</h3>
+                <span>{cuePadRangeLabel()}</span>
+                <label class="checkbox compactCheckbox">
+                  <input
+                    type="checkbox"
+                    checked={cuePadFollowActive()}
+                    onChange={(event) => setCuePadFollowActive(event.currentTarget.checked)}
+                  />
+                  Follow
+                </label>
                 <button
-                  class={`liveCuePad ${pad.cue?.id === snapshot().active_cue_id ? "active" : ""} ${
-                    pad.cue?.id === nextCue()?.id ? "next" : ""
-                  }`}
-                  style={pad.cue ? { "--identity": cueIdentityCss(pad.cue.id, pad.cue.color, "text") } : undefined}
-                  disabled={!pad.cue}
                   onClick={() => {
-                    if (pad.cue) {
-                      void triggerCue(pad.cue.id);
-                    }
+                    setCuePadFollowActive(false);
+                    setCuePadBank(Math.max(0, cuePadBank() - 1));
                   }}
+                  disabled={cuePadBank() === 0}
                 >
-                  <span>{pad.slot}</span>
-                  <strong>{pad.cue?.label ?? "Empty"}</strong>
-                  <small>{pad.cue ? `#${pad.index + 1} / ${pad.cue.fade_ms} ms` : "-"}</small>
+                  Prev
                 </button>
-              )}
-            </For>
-          </div>
+                <button
+                  onClick={() => {
+                    setCuePadFollowActive(false);
+                    setCuePadBank(Math.min(cuePadBankCount() - 1, cuePadBank() + 1));
+                  }}
+                  disabled={cuePadBank() >= cuePadBankCount() - 1}
+                >
+                  Next
+                </button>
+              </div>
+              <div class="liveCuePadGrid">
+                <For each={liveCuePads()}>
+                  {(pad) => (
+                    <button
+                      class={`liveCuePad ${pad.cue?.id === snapshot().active_cue_id ? "active" : ""} ${
+                        pad.cue?.id === nextCue()?.id ? "next" : ""
+                      }`}
+                      style={pad.cue ? { "--identity": cueIdentityCss(pad.cue.id, pad.cue.color, "text") } : undefined}
+                      disabled={!pad.cue}
+                      onClick={() => {
+                        if (pad.cue) {
+                          void triggerCue(pad.cue.id);
+                        }
+                      }}
+                    >
+                      <span>{pad.slot}</span>
+                      <strong>{pad.cue?.label ?? "Empty"}</strong>
+                      <small>{pad.cue ? `#${pad.index + 1} / ${pad.cue.fade_ms} ms` : "-"}</small>
+                    </button>
+                  )}
+                </For>
+              </div>
+            </div>
+          </Show>
           <Show when={snapshot().active_fade}>
             {(fade) => (
               <div class="liveFadeMeter">
@@ -14763,17 +14815,16 @@ export default function App() {
         >
         <Show when={workspaceTab() === "control"}>
         <section
-          class={`panel faders controlPanel timelineDesk-${timelineDeskSurface()} editDesk-${editDeskSurface()} ${sceneMatrixVisible() ? "sceneMatrixVisible" : ""}`}
+          class={`panel faders controlPanel timelineDesk-${timelineDeskSurface()} editDesk-${editDeskSurface()}`}
         >
           <div class="panelHeader">
             <h2>{faderDeskTitle()}</h2>
             <Show when={controlMode() === "live"}>
               <nav class="timelineDeskTabs" aria-label="Timeline desk surface">
-                <button class={timelineDeskSurface() === "show" ? "active" : ""} onClick={() => { setSceneMatrixVisible(false); setTimelineDeskSurface("show"); }}>Show</button>
-                <button class={timelineDeskSurface() === "cues" && !sceneMatrixVisible() ? "active" : ""} onClick={() => { setSceneMatrixVisible(false); setTimelineDeskSurface("cues"); }}>Cues</button>
-                <button class={timelineDeskSurface() === "cues" && sceneMatrixVisible() ? "active" : ""} onClick={() => { setTimelineDeskSurface("cues"); setSceneMatrixVisible(true); }}>Matrix</button>
-                <button class={timelineDeskSurface() === "automation" ? "active" : ""} onClick={() => { setSceneMatrixVisible(false); setTimelineDeskSurface("automation"); }}>Automation</button>
-                <button class={timelineDeskSurface() === "playback" ? "active" : ""} onClick={() => { setSceneMatrixVisible(false); setTimelineDeskSurface("playback"); }}>Playback</button>
+                <button class={timelineDeskSurface() === "show" ? "active" : ""} onClick={() => setTimelineDeskSurface("show")}>Show</button>
+                <button class={timelineDeskSurface() === "cues" ? "active" : ""} onClick={() => setTimelineDeskSurface("cues")}>Cues</button>
+                <button class={timelineDeskSurface() === "automation" ? "active" : ""} onClick={() => setTimelineDeskSurface("automation")}>Automation</button>
+                <button class={timelineDeskSurface() === "playback" ? "active" : ""} onClick={() => setTimelineDeskSurface("playback")}>Playback</button>
               </nav>
             </Show>
             <Show when={controlMode() === "edit"}>
@@ -15029,19 +15080,6 @@ export default function App() {
             onOpenTimeline={() => setTimelineDeskSurface("show")}
             onMoveTimelineCueEvent={moveTimelineCueEvent}
             onRemoveTimelineEvent={removeTimelineEvent}
-            onBeginTimelineCueDrag={beginTimelineCueDrag}
-            onMoveTimelineCueDrag={moveTimelineCueDrag}
-            onEndTimelineCueDrag={(point, moved, canceled) => void endTimelineCueDrag(point, moved, canceled)}
-          />
-          <SceneMatrixPanel
-            cues={snapshot().cues}
-            groupColors={groupColors()}
-            onSetGroupColor={setGroupColor}
-            groupIds={fixtureGroupRows().map((row) => row.groupId)}
-            activeCueId={snapshot().active_cue_id}
-            activeGroupCueIds={snapshot().active_group_cue_ids ?? {}}
-            timelineTrack={timelineTrack()}
-            onTriggerCue={triggerCue}
             onBeginTimelineCueDrag={beginTimelineCueDrag}
             onMoveTimelineCueDrag={moveTimelineCueDrag}
             onEndTimelineCueDrag={(point, moved, canceled) => void endTimelineCueDrag(point, moved, canceled)}
