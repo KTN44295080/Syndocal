@@ -54,6 +54,7 @@ type WorkspaceChromeProps = {
   onSaveProject: () => void;
   onSaveProjectAs: () => void;
   onLoadProject: () => void;
+  onImportDaslightProject: () => void;
   onLoadRecentProject: (path: string) => void;
   onClearRecentProjects: () => void;
   onLoadRecovery: () => void;
@@ -163,6 +164,10 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               </button>
               <button role="menuitem" aria-keyshortcuts="Control+O Meta+O" onClick={() => runProjectMenuAction(props.onLoadProject)}>
                 <span>Load</span>
+              </button>
+              <button role="menuitem" onClick={() => runProjectMenuAction(props.onImportDaslightProject)}>
+                <span>Import .dvc</span>
+                <small>Daslight Project (.dvc)</small>
               </button>
               <div class="appProjectMenuLabel templateLabel" role="separator">
                 <span>User Templates</span>

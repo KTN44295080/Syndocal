@@ -59,6 +59,7 @@ use tauri::{Manager, State};
 use tauri_plugin_updater::UpdaterExt;
 
 mod capture_transport;
+mod dvc_import;
 mod ndi_transport;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 mod spout_transport;
@@ -14441,6 +14442,37 @@ fn load_project(state: State<'_, AppState>) -> Result<Option<ProjectLoadResult>,
         return Ok(None);
     };
     load_project_from_path(&state, &path).map(Some)
+}
+
+#[tauri::command]
+fn import_daslight_project(
+    state: State<'_, AppState>,
+    path: Option<String>,
+) -> Result<Option<dvc_import::DvcImportReport>, String> {
+    let path = match path {
+        Some(path) => PathBuf::from(path),
+        None => {
+            let Some(path) = rfd::FileDialog::new()
+                .add_filter("Daslight 5 Project", &["dvc"])
+                .pick_file()
+            else {
+                return Ok(None);
+            };
+            path
+        }
+    };
+    let dvc_import::DvcImportOutcome {
+        project,
+        mut report,
+    } = dvc_import::import_path(&path)?;
+    let loaded = load_project_from_file(
+        &state,
+        project,
+        format!("Imported Daslight project: {}", path.to_string_lossy()),
+        None,
+    )?;
+    report.warnings.extend(loaded.warnings);
+    Ok(Some(report))
 }
 
 #[tauri::command]
@@ -38014,6 +38046,7 @@ fn main() {
             save_project,
             save_project_as,
             load_project,
+            import_daslight_project,
             load_project_path,
             get_project_checkpoint,
             load_project_checkpoint,

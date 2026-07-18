@@ -19,6 +19,7 @@ import {
 import { DmxOutputConfigPanel } from "./components/DmxOutputConfigPanel";
 import { DmxInputPanel } from "./components/DmxInputPanel";
 import { DmxRawMonitor } from "./components/DmxRawMonitor";
+import { DvcImportReportPanel } from "./components/DvcImportReportPanel";
 import { EffectActionControlsPanel } from "./components/EffectActionControlsPanel";
 import { EffectGroupTargetPanel } from "./components/EffectGroupTargetPanel";
 import { EffectListPanel } from "./components/EffectListPanel";
@@ -175,6 +176,7 @@ import type {
   PaletteKind,
   PlaybackExecutorSummary,
   DmxOutputConfig,
+  DvcImportReport,
   DmxInputConfig,
   DmxInputStatus,
   EffectBlendMode,
@@ -924,6 +926,7 @@ export default function App() {
   const [currentProjectPath, setCurrentProjectPath] = createSignal<string | null>(null);
   const [projectDirty, setProjectDirty] = createSignal(false);
   const [projectDropState, setProjectDropState] = createSignal<"project" | "invalid" | null>(null);
+  const [dvcImportReport, setDvcImportReport] = createSignal<DvcImportReport | null>(null);
   const [recentProjectPaths, setRecentProjectPaths] = createSignal<string[]>(loadRecentProjectPaths());
   const [projectRecoveryCheckpoint, setProjectRecoveryCheckpoint] = createSignal<ProjectRecoveryCheckpoint | null>(
     loadProjectRecoveryCheckpoint(),
@@ -8290,6 +8293,36 @@ export default function App() {
     }
   };
 
+  const importDaslightProject = async () => {
+    if (!confirmDiscardProjectChanges("import a Daslight Project (.dvc)")) {
+      setMessage("Daslight Project import canceled.");
+      return;
+    }
+    try {
+      const report = await invoke<DvcImportReport | null>("import_daslight_project", { path: null });
+      if (!report) {
+        setMessage("Daslight Project import canceled.");
+        return;
+      }
+      await resetProjectHistory();
+      setCurrentProjectPath(null);
+      setWorkspaceTab("setup");
+      setSetupSubTab("patch");
+      const next = await refreshSnapshot(true, true);
+      if (next) {
+        setCleanProjectSignature("__syndocal_dvc_import_unsaved__");
+        setProjectDirty(true);
+      }
+      clearProjectRecovery();
+      setDvcImportReport(report);
+      setMessage(
+        `Imported Daslight Project (.dvc): ${report.summary.fixtures} fixtures, ${report.summary.cues} cues. Save As to create a Syndocal Project (.sdc).`,
+      );
+    } catch (error) {
+      setMessage(`Daslight Project import failed: ${String(error)}`);
+    }
+  };
+
   const loadProjectPath = async (path: string) => {
     if (!confirmDiscardProjectChanges(`open ${path}`)) {
       setMessage("Project open canceled.");
@@ -13483,6 +13516,7 @@ export default function App() {
         onSaveProject={saveProject}
         onSaveProjectAs={saveProjectAs}
         onLoadProject={loadProject}
+        onImportDaslightProject={() => void importDaslightProject()}
         onLoadRecentProject={loadRecentProject}
         onClearRecentProjects={clearRecentProjects}
         onLoadRecovery={loadProjectRecovery}
@@ -13500,6 +13534,9 @@ export default function App() {
         onLoadSample={loadPhase1SampleProject}
         onRunSmoke={runPhase1Smoke}
       />
+      <Show when={dvcImportReport()}>
+        {(report) => <DvcImportReportPanel report={report()} onClose={() => setDvcImportReport(null)} />}
+      </Show>
       <Show when={projectDropState()}>
         <div class={`projectDropOverlay ${projectDropState() === "invalid" ? "invalid" : ""}`}>
           <strong>{projectDropState() === "project" ? "Open Syndocal Project" : "Unsupported File"}</strong>

@@ -19,6 +19,7 @@ audio = { path = "../../crates/audio" }
 base64.workspace = true
 crossbeam-queue.workspace = true
 engine = { path = "../../crates/engine" }
+flate2.workspace = true
 gdtf = { path = "../../crates/gdtf" }
 image.workspace = true
 io = { path = "../../crates/io" }
@@ -26,6 +27,7 @@ minisign-verify.workspace = true
 protocol = { path = "../../crates/protocol" }
 rfd.workspace = true
 rodio.workspace = true
+roxmltree.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri.workspace = true

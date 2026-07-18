@@ -215,6 +215,316 @@ h3 {
   background: rgba(34, 18, 16, 0.82);
 }
 
+.dvcImportReportDialog {
+  position: fixed;
+  inset: 0;
+  display: none;
+  width: 100vw;
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  margin: 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  padding:
+    max(16px, env(safe-area-inset-top))
+    max(16px, env(safe-area-inset-right))
+    max(16px, env(safe-area-inset-bottom))
+    max(16px, env(safe-area-inset-left));
+  place-items: center;
+}
+
+.dvcImportReportDialog[open] {
+  display: grid;
+}
+
+.dvcImportReportDialog::backdrop {
+  background: rgb(5 7 9 / 76%);
+}
+
+.dvcImportReportPanel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(820px, 100%);
+  max-height: min(760px, 100%);
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid #4c5968;
+  border-radius: 7px;
+  background: #121820;
+  color: #e7edf5;
+  box-shadow: 0 18px 48px rgb(0 0 0 / 58%);
+}
+
+.dvcImportReportHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid #303b47;
+  padding: 12px 14px;
+}
+
+.dvcImportReportHeader p,
+.dvcImportReportHeader h2 {
+  margin: 0;
+}
+
+.dvcImportReportHeader p {
+  color: #82b9e8;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.dvcImportReportHeader h2 {
+  margin-top: 2px;
+  font-size: 18px;
+}
+
+.dvcImportReportHeader button {
+  flex: 0 0 auto;
+}
+
+.dvcImportReportBody {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px 14px 14px;
+}
+
+.dvcImportReportSource {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dvcImportReportSource span,
+.dvcImportReportSource small {
+  color: #909eae;
+  font-size: 10px;
+}
+
+.dvcImportReportSource strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #dfe8f3;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dvcImportSafetyNote {
+  margin: 0;
+  border: 1px solid #45634f;
+  border-radius: 4px;
+  background: #17251c;
+  color: #b9e4c5;
+  padding: 7px 9px;
+  font-size: 11px;
+}
+
+.dvcImportSummaryGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  margin: 0;
+}
+
+.dvcImportSummaryGrid > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid #2d3845;
+  border-radius: 4px;
+  background: #161e27;
+  padding: 6px 8px;
+}
+
+.dvcImportSummaryGrid dt {
+  min-width: 0;
+  overflow: hidden;
+  color: #98a6b6;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dvcImportSummaryGrid dd {
+  margin: 0;
+  color: #f3f7fc;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.dvcImportWarnings {
+  border: 1px solid #765f31;
+  border-radius: 4px;
+  background: #2a2418;
+  padding: 8px;
+}
+
+.dvcImportWarnings h3,
+.dvcImportWarnings ul {
+  margin: 0;
+}
+
+.dvcImportWarnings h3 {
+  color: #f5cf7d;
+  font-size: 12px;
+}
+
+.dvcImportWarnings ul {
+  margin-top: 5px;
+  padding-left: 18px;
+  color: #e2cda0;
+  font-size: 11px;
+}
+
+.dvcImportCategoryList {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.dvcImportCategory {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #34404d;
+  border-radius: 5px;
+  background: #141b23;
+}
+
+.dvcImportCategory > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid #2d3742;
+  padding: 7px 9px;
+}
+
+.dvcImportCategory h3 {
+  margin: 0;
+  color: #dce6f2;
+  font-size: 12px;
+}
+
+.dvcImportCategory header span {
+  border-radius: 999px;
+  background: #273441;
+  padding: 1px 7px;
+  color: #f3f7fc;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.dvcImportCategory.converted {
+  border-color: #365d45;
+}
+
+.dvcImportCategory.converted header span {
+  background: #21422d;
+  color: #b9e8c7;
+}
+
+.dvcImportCategory.approximate,
+.dvcImportCategory.skipped {
+  border-color: #655532;
+}
+
+.dvcImportCategory.approximate header span,
+.dvcImportCategory.skipped header span {
+  background: #44391f;
+  color: #f2d08a;
+}
+
+.dvcImportCategory.unsupported {
+  border-color: #63423f;
+}
+
+.dvcImportCategory.unsupported header span {
+  background: #492b28;
+  color: #efb0a9;
+}
+
+.dvcImportCategory ul {
+  display: grid;
+  gap: 0;
+  max-height: 190px;
+  margin: 0;
+  overflow-y: auto;
+  padding: 0;
+  list-style: none;
+  overscroll-behavior: contain;
+}
+
+.dvcImportCategory li {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  border-bottom: 1px solid #252f39;
+  padding: 6px 9px;
+}
+
+.dvcImportCategory li:last-child {
+  border-bottom: 0;
+}
+
+.dvcImportCategory li strong,
+.dvcImportCategory li span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dvcImportCategory li strong {
+  color: #dce5ef;
+  font-size: 11px;
+}
+
+.dvcImportCategory li span {
+  color: #98a6b5;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.dvcImportEmptyCategory {
+  margin: 0;
+  color: #758292;
+  padding: 8px 9px;
+  font-size: 10px;
+}
+
+@media (max-width: 680px) {
+  .dvcImportReportDialog {
+    padding:
+      max(8px, env(safe-area-inset-top))
+      max(8px, env(safe-area-inset-right))
+      max(8px, env(safe-area-inset-bottom))
+      max(8px, env(safe-area-inset-left));
+  }
+
+  .dvcImportReportPanel {
+    max-height: 100%;
+  }
+
+  .dvcImportSummaryGrid,
+  .dvcImportCategoryList {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .workspaceChrome {
   display: grid;
   gap: 5px;

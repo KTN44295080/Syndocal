@@ -676,6 +676,43 @@ export interface ProjectLoadResult {
   warnings: string[];
 }
 
+export interface DvcImportDetail {
+  item: string;
+  message: string;
+}
+
+export interface DvcImportCategory {
+  count: number;
+  details: DvcImportDetail[];
+}
+
+export interface DvcImportSummary {
+  fixtures: number;
+  profiles: number;
+  fixture_groups: number;
+  groups: number;
+  cues: number;
+  values_decoded: number;
+  values_skipped: number;
+  timeline_audio_clips: number;
+  timeline_scene_blocks: number;
+  effects_skipped: number;
+  unknown_channel_types: number;
+  missing_audio_files: number;
+}
+
+export interface DvcImportReport {
+  path: string;
+  das_build: string;
+  version_file: string;
+  summary: DvcImportSummary;
+  converted: DvcImportCategory;
+  approximate: DvcImportCategory;
+  skipped: DvcImportCategory;
+  unsupported: DvcImportCategory;
+  warnings: string[];
+}
+
 export interface UserTemplateLoadResult extends ProjectLoadResult {
   label: string;
   midi_mappings: MidiControlMapping[];

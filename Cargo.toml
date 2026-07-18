@@ -29,6 +29,7 @@ grafton-ndi = { version = "=0.11.0", default-features = false }
 image = { version = "=0.24.9", default-features = false, features = ["jpeg", "png"] }
 hap-parser = "=0.2.0"
 ffmpeg-next = { version = "=8.1.0", default-features = false }
+flate2 = "=1.1.9"
 io = { path = "crates/io" }
 libloading = "=0.8.9"
 midir = "0.11"
