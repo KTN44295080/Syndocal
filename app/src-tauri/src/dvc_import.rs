@@ -1719,6 +1719,66 @@ mod tests {
     }
 
     #[test]
+    fn dvc_local_golden_project_triggers_cue_and_renders_dmx() {
+        let path = Path::new(r"C:\Users\kouty\Documents\Daslight 5\Projects\Shinkan2026.dvc");
+        if !path.is_file() {
+            eprintln!(
+                "Skipping local Daslight golden: {} is unavailable",
+                path.display()
+            );
+            return;
+        }
+        let outcome = import_path(path).unwrap();
+        crate::validate_project_file(&outcome.project).unwrap();
+        let cue_id = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .find(|cue| {
+                cue.targets
+                    .iter()
+                    .any(|target| target.values.iter().any(|value| value.value > 0))
+            })
+            .expect("golden project should contain a cue with non-zero imported values")
+            .id;
+
+        let mut snapshot_to_load = outcome.project.snapshot.clone();
+        snapshot_to_load.output.enabled = false;
+        for output in &mut snapshot_to_load.dmx_outputs {
+            output.enabled = false;
+        }
+        let engine = engine::EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine.load_project_snapshot(snapshot_to_load).unwrap();
+        engine
+            .send(engine::EngineCommand::TriggerCue(cue_id))
+            .unwrap();
+
+        let mut nonzero = 0_usize;
+        for _ in 0..40 {
+            let snapshot = engine.snapshot();
+            if snapshot.active_cue_id == Some(cue_id) {
+                nonzero = snapshot
+                    .dmx_preview
+                    .iter()
+                    .filter(|value| **value != 0)
+                    .count();
+                if nonzero > 0 {
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(
+            nonzero > 0,
+            "imported cue {cue_id} should render non-zero DMX preview bytes"
+        );
+    }
+
+    #[test]
     fn dvc_local_golden_project_matches_verified_counts_when_present() {
         let path = Path::new(r"C:\Users\kouty\Documents\Daslight 5\Projects\Shinkan2026.dvc");
         if !path.is_file() {
