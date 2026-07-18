@@ -89,7 +89,14 @@ VALUE FX と COLOR MAPPINGS はユーザーの全ショーに検体なし（実�
    エフェクト変調中の実DMXに追従しない。
 2. **DVC-3b（新規パターンレシピ）**: COLOR FX Knight Rider / Burst / Random fill / Sparkle をビーム空間パターンとして
    Colorエンジンに新設（同一挙動目標）。パレットXML格納位置の特定を含む。
-3. **DVC-3c（残り）**: MOVE FX / TYPE=8 / ID 322・129・130 / CURVE波形3・10 の照合と変換。要・別プロジェクトロード。
+   **→ 2026-07-19 完了**（Codex実装 × Fable検証、コミット b4b6a7d）: 6ジェネレータ全て実装・変換。
+   パレット実在位置 = `EFFECT/PARAMS/PARAM[@TYPE=4][@ID=1]/COLORS/COLOR@VAL`。COLOR系はprofile順ビームストリップ、
+   MAPPINGSは正規化ステージX/Z空間+シード付きフラクタルノイズ。protocol追加はserde(default)のみでv1互換29/29維持。
+   金標準変換数: 127:5 / 121:4 / 131:1 / 133:1 / 521:1 / 530:1。dvc 22/22（Knight Rider実発光・時間掃引の
+   金標準テスト含む）、engine 370/370、マトリクス232全緑。同条件A/Bベンチ +3.8%（誤差内）で既存スタック非劣化。
+   絶対値2ms予算は環境負荷40%のため未計測 — クリーン環境での再計測が残件。
+3. **DVC-3c（残り）**: ~~MOVE FX / TYPE=8~~（3a2/3bで完了）→ 残りは ID 322・129・130・CURVE波形10 の照合のみ
+   （検体のUI再確認が必要になった時点で実施）。VALUE FX / COLOR MAPPINGS は検体なしのため対象外のまま。
 
 ## 実機操作の記録（正直な状態申告）
 
