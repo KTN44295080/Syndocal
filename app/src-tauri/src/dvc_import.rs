@@ -12,7 +12,8 @@ use protocol::{
     ChaserDirection, ChaserEffectRequest, ChaserFeature, ChaserStep, ChildTimelineSummary,
     CueEffectTarget, CueFixtureTarget, CueSummary, DmxModeSummary, DmxOutputConfig,
     DmxUniversePreview, EffectBlendMode, EffectClockSync, EffectParamsSnapshot, EngineSnapshot,
-    FixtureProfileSummary, GeometrySummary, LfoEffectRequest, LfoShape, PatchedFixtureSummary,
+    FixtureProfileSummary, GeometrySummary, LfoEffectRequest, LfoShape, MoveCoordinateMode,
+    MoveDirection, MoveEffectRequest, MoveInterpolation, MovePathPoint, PatchedFixtureSummary,
     ProjectFile, Rotation3, TimelineAudioClipSummary, TimelineCueEventSummary, TimelineLayerKind,
     TimelineLayerSummary, TimelineTrackKind, Vec3,
 };
@@ -1002,6 +1003,9 @@ fn parse_scene_effects(
             let generator = match (rack_type, effect_type, generator_id) {
                 (Some(3), Some(6), Some(321)) => Some("Chaser #1"),
                 (Some(3), Some(6), Some(325)) => Some("Chaser random"),
+                (Some(4), Some(4), Some(223)) => Some("Line"),
+                (Some(4), Some(4), Some(224)) => Some("Polygon"),
+                (Some(8), Some(5), Some(3)) => Some("Inverse Ramp"),
                 (Some(8), Some(5), Some(7)) => Some("Sinus"),
                 _ => None,
             };
@@ -1025,7 +1029,7 @@ fn parse_scene_effects(
                     )
                 }
                 _ => Err(format!(
-                    "RACK TYPE={} EFFECT TYPE={} ID={} is not confirmed for DVC-3a",
+                    "RACK TYPE={} EFFECT TYPE={} ID={} is not confirmed for DVC-3a2",
                     rack_type
                         .map(|value| value.to_string())
                         .unwrap_or_else(|| "missing".to_string()),
@@ -1103,6 +1107,23 @@ fn convert_dvc_effect(
             effect_id,
             fixture_refs,
         ),
+        (4, 4, 223 | 224) => convert_dvc_move_effect(
+            scene,
+            scene_name,
+            rack,
+            effect,
+            generator_id,
+            effect_id,
+            fixture_refs,
+        ),
+        (8, 5, 3) => convert_dvc_inverse_ramp_effect(
+            scene,
+            scene_name,
+            rack,
+            effect,
+            effect_id,
+            fixture_refs,
+        ),
         (8, 5, 7) => convert_dvc_sinus_effect(
             scene,
             scene_name,
@@ -1112,7 +1133,7 @@ fn convert_dvc_effect(
             fixture_refs,
         ),
         _ => Err(format!(
-            "RACK TYPE={rack_type} EFFECT TYPE={effect_type} ID={generator_id} is not confirmed for DVC-3a"
+            "RACK TYPE={rack_type} EFFECT TYPE={effect_type} ID={generator_id} is not confirmed for DVC-3a2"
         )),
     }
 }
@@ -1275,6 +1296,195 @@ fn convert_dvc_chaser_effect(
     })
 }
 
+fn convert_dvc_move_effect(
+    scene: Node<'_, '_>,
+    scene_name: &str,
+    rack: Node<'_, '_>,
+    effect: Node<'_, '_>,
+    generator_id: u16,
+    effect_id: u64,
+    fixture_refs: &HashMap<String, FixtureImportRef>,
+) -> Result<ConvertedDvcEffect, String> {
+    let generator = if generator_id == 223 {
+        "Line"
+    } else {
+        "Polygon"
+    };
+    let (points, phasing, symmetry) = dvc_move_effect_params(effect, generator)?;
+    let targets = dvc_rack_targets(rack, fixture_refs)?;
+    if targets.fixture_ids.is_empty() {
+        return Err(format!("BEAMS resolved to no {generator} fixture targets"));
+    }
+
+    let mut approximations = Vec::new();
+    if targets.has_multi_beam_selection {
+        approximations.push("segment selection approximated to fixture".to_string());
+    }
+    if symmetry {
+        approximations.push("Symmetry=ON is not reproduced by the Move engine".to_string());
+    }
+    let (period_ms, free_run_note) =
+        dvc_move_period(effect, scene, generator, &mut approximations)?;
+    let (clock_sync, clock_note, clock_warning) = dvc_scene_clock_sync(scene);
+    if let Some(clock_warning) = clock_warning {
+        approximations.push(clock_warning);
+    }
+
+    let (closed, direction) = if generator_id == 223 {
+        (false, MoveDirection::Bounce)
+    } else {
+        (true, MoveDirection::Forward)
+    };
+    let point_count = points.len();
+    let request = MoveEffectRequest {
+        label: format!("{scene_name} ({generator})"),
+        fixture_ids: targets.fixture_ids,
+        target_group_ids: Vec::new(),
+        points,
+        closed,
+        interpolation: MoveInterpolation::Line,
+        coordinate_mode: MoveCoordinateMode::Absolute,
+        center_x: 0.5,
+        center_y: 0.5,
+        size_x: 1.0,
+        size_y: 1.0,
+        rotation_degrees: 0.0,
+        period_ms,
+        clock_sync,
+        direction,
+        phase: 0.0,
+        fixture_spread: phasing,
+        blend_mode: EffectBlendMode::Override,
+    };
+    engine::validate_move_effect_request(&request).map_err(|error| {
+        format!("confirmed {generator} parameters are not representable: {error}")
+    })?;
+
+    let direction_note = if generator_id == 223 {
+        "direction=Bounce; closed=false"
+    } else {
+        "direction=Forward; closed=true"
+    };
+    let note = format!(
+        "points={point_count} normalized Pan/Tilt vertices (DMX16=round(point*65535)); interpolation=Line; {direction_note}; fixture_spread=id2=Phasing/100={phasing}; symmetry={}; {free_run_note}; {clock_note}",
+        u8::from(symmetry)
+    );
+    Ok(ConvertedDvcEffect {
+        target: CueEffectTarget {
+            effect_id,
+            enabled: true,
+            params: Some(EffectParamsSnapshot::Move(request)),
+        },
+        generator,
+        note,
+        approximations,
+        warnings: Vec::new(),
+    })
+}
+
+fn convert_dvc_inverse_ramp_effect(
+    scene: Node<'_, '_>,
+    scene_name: &str,
+    rack: Node<'_, '_>,
+    effect: Node<'_, '_>,
+    effect_id: u64,
+    fixture_refs: &HashMap<String, FixtureImportRef>,
+) -> Result<ConvertedDvcEffect, String> {
+    let params = dvc_effect_params(effect)?;
+    require_exact_dvc_params(&params, &[1, 2, 3, 4, 5])?;
+    let rate = dvc_param(&params, 1, "Rate")?;
+    let size = dvc_param(&params, 2, "Size")?;
+    let phase = dvc_param(&params, 3, "Phase")?;
+    let offset = dvc_param(&params, 4, "Offset")?;
+    let phasing = dvc_param(&params, 5, "Phasing")?;
+    if !rate.is_finite() || rate <= 0.0 {
+        return Err(format!(
+            "Rate must be finite and greater than 0, found {rate}"
+        ));
+    }
+    if !size.is_finite() || size < 0.0 {
+        return Err(format!(
+            "Size must be finite and greater than or equal to 0, found {size}"
+        ));
+    }
+    if !phase.is_finite() || !(0.0..=1.0).contains(&phase) {
+        return Err(format!("Phase must be within 0..1, found {phase}"));
+    }
+    if !offset.is_finite() || !phasing.is_finite() {
+        return Err("Offset and Phasing must be finite".to_string());
+    }
+    let duration_ms = effect
+        .attribute("DURATION")
+        .ok_or_else(|| "Inverse Ramp EFFECT is missing DURATION".to_string())?
+        .parse::<f64>()
+        .map_err(|error| format!("Inverse Ramp DURATION is invalid: {error}"))?;
+    let period = duration_ms / rate;
+    if !period.is_finite() || period < 10.0 || period > u64::MAX as f64 {
+        return Err(format!(
+            "DURATION / Rate must produce an LFO period of at least 10 ms, found {period}"
+        ));
+    }
+    let period_ms = period.round() as u64;
+    let center = 0.5 + offset;
+    let half_span = size * 0.5;
+    let raw_low = center - half_span;
+    let raw_high = center + half_span;
+    let low = normalized_dmx(raw_high);
+    let high = normalized_dmx(raw_low);
+    let targets = dvc_rack_targets(rack, fixture_refs)?;
+    if targets.fixture_ids.is_empty() {
+        return Err("BEAMS resolved to no Inverse Ramp fixture targets".to_string());
+    }
+
+    let mut approximations = Vec::new();
+    if targets.has_multi_beam_selection {
+        approximations.push("segment selection approximated to fixture".to_string());
+    }
+    if raw_low < 0.0 || raw_high > 1.0 {
+        approximations.push(format!(
+            "Size={size} and Offset={offset} produced raw range {raw_low:.3}..{raw_high:.3}; endpoints were clamped to DMX16"
+        ));
+    }
+    if phasing.abs() > f64::EPSILON {
+        approximations.push(format!(
+            "Phasing={phasing} is not reproduced by the LFO engine"
+        ));
+    }
+    let (clock_sync, clock_note, clock_warning) = dvc_scene_clock_sync(scene);
+    if let Some(clock_warning) = clock_warning {
+        approximations.push(clock_warning);
+    }
+
+    let request = LfoEffectRequest {
+        label: format!("{scene_name} (Inverse Ramp)"),
+        fixture_ids: targets.fixture_ids,
+        target_group_ids: Vec::new(),
+        attribute: "Dimmer".to_string(),
+        video_targets: Vec::new(),
+        shape: LfoShape::Saw,
+        period_ms,
+        clock_sync,
+        low,
+        high,
+        phase: phase as f32,
+        blend_mode: EffectBlendMode::Override,
+    };
+    let note = format!(
+        "feature=Dimmer; period_ms=round(DURATION/Rate)={period_ms}; descending_ramp=Saw directed from low-field {low} to high-field {high}: output(t)={low}+({high}-{low})*fract(t/period+Phase); phase={phase}; size={size}; offset={offset}; {clock_note}"
+    );
+    Ok(ConvertedDvcEffect {
+        target: CueEffectTarget {
+            effect_id,
+            enabled: true,
+            params: Some(EffectParamsSnapshot::Lfo(request)),
+        },
+        generator: "Inverse Ramp",
+        note,
+        approximations,
+        warnings: Vec::new(),
+    })
+}
+
 fn convert_dvc_sinus_effect(
     scene: Node<'_, '_>,
     scene_name: &str,
@@ -1397,6 +1607,156 @@ fn dvc_effect_params(effect: Node<'_, '_>) -> Result<HashMap<u16, f64>, String> 
         }
     }
     Ok(params)
+}
+
+fn dvc_move_effect_params(
+    effect: Node<'_, '_>,
+    generator: &str,
+) -> Result<(Vec<MovePathPoint>, f32, bool), String> {
+    let params_node = direct_child(effect, "PARAMS")
+        .ok_or_else(|| format!("{generator} generator is missing PARAMS"))?;
+    let param_nodes = element_children(params_node)
+        .filter(|node| node.has_tag_name("PARAM"))
+        .collect::<Vec<_>>();
+    let declared = params_node
+        .attribute("NB")
+        .and_then(|value| value.parse::<usize>().ok());
+    if declared.is_some_and(|count| count != param_nodes.len()) {
+        return Err(format!(
+            "PARAMS declares {} entries but contains {}",
+            declared.unwrap_or_default(),
+            param_nodes.len()
+        ));
+    }
+
+    let mut points = None;
+    let mut phasing = None;
+    let mut symmetry = None;
+    let mut seen = HashSet::new();
+    for param in param_nodes {
+        let id = required_attribute(param, "ID", "PARAM")?
+            .parse::<u16>()
+            .map_err(|error| format!("PARAM ID is invalid: {error}"))?;
+        if !seen.insert(id) {
+            return Err(format!("PARAM {id} is duplicated"));
+        }
+        let param_type = required_attribute(param, "TYPE", "PARAM")?
+            .parse::<u16>()
+            .map_err(|error| format!("PARAM {id} TYPE is invalid: {error}"))?;
+        match id {
+            1 => {
+                if param_type != 5 {
+                    return Err(format!(
+                        "Path PARAM 1 must use TYPE=5, found TYPE={param_type}"
+                    ));
+                }
+                let points_node = direct_child(param, "POINTS")
+                    .ok_or_else(|| format!("{generator} Path PARAM 1 is missing POINTS"))?;
+                let point_nodes = element_children(points_node)
+                    .filter(|node| node.has_tag_name("POINT"))
+                    .collect::<Vec<_>>();
+                let declared_points = required_attribute(points_node, "NB", "POINTS")?
+                    .parse::<usize>()
+                    .map_err(|error| format!("POINTS NB is invalid: {error}"))?;
+                if declared_points != point_nodes.len() {
+                    return Err(format!(
+                        "POINTS declares {declared_points} vertices but contains {}",
+                        point_nodes.len()
+                    ));
+                }
+                let mut parsed_points = Vec::with_capacity(point_nodes.len());
+                for (point_index, point) in point_nodes.into_iter().enumerate() {
+                    let x = required_attribute(point, "X", "POINT")?
+                        .parse::<f32>()
+                        .map_err(|error| {
+                            format!("POINT {} X is invalid: {error}", point_index + 1)
+                        })?;
+                    let y = required_attribute(point, "Y", "POINT")?
+                        .parse::<f32>()
+                        .map_err(|error| {
+                            format!("POINT {} Y is invalid: {error}", point_index + 1)
+                        })?;
+                    if !x.is_finite()
+                        || !y.is_finite()
+                        || !(0.0..=1.0).contains(&x)
+                        || !(0.0..=1.0).contains(&y)
+                    {
+                        return Err(format!(
+                            "POINT {} must be finite normalized Pan/Tilt coordinates within 0..1, found ({x},{y})",
+                            point_index + 1
+                        ));
+                    }
+                    parsed_points.push(MovePathPoint { x, y });
+                }
+                points = Some(parsed_points);
+            }
+            2 => {
+                if param_type != 1 {
+                    return Err(format!(
+                        "Phasing PARAM 2 must use TYPE=1, found TYPE={param_type}"
+                    ));
+                }
+                let value = required_attribute(param, "VAL", "PARAM 2")?
+                    .parse::<f32>()
+                    .map_err(|error| format!("Phasing PARAM 2 is invalid: {error}"))?;
+                if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                    return Err(format!(
+                        "Phasing PARAM 2 must be within 0..1, found {value}"
+                    ));
+                }
+                phasing = Some(value);
+            }
+            3 => {
+                if param_type != 2 {
+                    return Err(format!(
+                        "Symmetry PARAM 3 must use TYPE=2, found TYPE={param_type}"
+                    ));
+                }
+                symmetry = Some(match required_attribute(param, "VAL", "PARAM 3")? {
+                    "0" => false,
+                    "1" => true,
+                    value => {
+                        return Err(format!("Symmetry PARAM 3 must be 0 or 1, found {value}"));
+                    }
+                });
+            }
+            _ => {
+                return Err(format!(
+                    "confirmed {generator} generator expected PARAM IDs [1, 2, 3], found unexpected ID {id}"
+                ));
+            }
+        }
+    }
+    if seen != HashSet::from([1, 2, 3]) {
+        let mut actual = seen.into_iter().collect::<Vec<_>>();
+        actual.sort_unstable();
+        return Err(format!(
+            "confirmed {generator} generator expected PARAM IDs [1, 2, 3], found {actual:?}"
+        ));
+    }
+
+    let points = points.unwrap_or_default();
+    let valid_point_count = if generator == "Line" {
+        points.len() == 2
+    } else {
+        (3..=256).contains(&points.len())
+    };
+    if !valid_point_count {
+        let expected = if generator == "Line" {
+            "exactly 2"
+        } else {
+            "between 3 and 256"
+        };
+        return Err(format!(
+            "{generator} POINTS must contain {expected} vertices, found {}",
+            points.len()
+        ));
+    }
+    Ok((
+        points,
+        phasing.unwrap_or_default(),
+        symmetry.unwrap_or(false),
+    ))
 }
 
 fn require_exact_dvc_params(params: &HashMap<u16, f64>, expected: &[u16]) -> Result<(), String> {
@@ -1540,6 +1900,51 @@ fn dvc_chaser_step_duration(
         format!(
             "step_duration_ms=round(EFFECT DURATION / SCENE SPEED / selection_steps)={step_duration_ms}"
         ),
+    ))
+}
+
+fn dvc_move_period(
+    effect: Node<'_, '_>,
+    scene: Node<'_, '_>,
+    generator: &str,
+    approximations: &mut Vec<String>,
+) -> Result<(u64, String), String> {
+    let duration_ms = effect
+        .attribute("DURATION")
+        .ok_or_else(|| format!("{generator} EFFECT is missing DURATION"))?
+        .parse::<f64>()
+        .map_err(|error| format!("{generator} DURATION is invalid: {error}"))?;
+    let speed = scene
+        .attribute("SPEED")
+        .unwrap_or("1")
+        .parse::<f64>()
+        .map_err(|error| format!("SCENE SPEED is invalid: {error}"))?;
+    if !duration_ms.is_finite() || duration_ms <= 0.0 {
+        return Err(format!(
+            "{generator} DURATION must be finite and greater than 0, found {duration_ms}"
+        ));
+    }
+    if !speed.is_finite() || speed <= 0.0 {
+        return Err(format!(
+            "SCENE SPEED must be finite and greater than 0, found {speed}"
+        ));
+    }
+    let period = duration_ms / speed;
+    if !period.is_finite() || period > u64::MAX as f64 {
+        return Err(format!(
+            "derived {generator} period exceeds the supported range"
+        ));
+    }
+    let mut period_ms = period.round().max(1.0) as u64;
+    if period_ms < 10 {
+        approximations.push(format!(
+            "derived {period_ms} ms period was clamped to the Move engine minimum 10 ms"
+        ));
+        period_ms = 10;
+    }
+    Ok((
+        period_ms,
+        format!("period_ms=round(EFFECT DURATION / SCENE SPEED)={period_ms}"),
     ))
 }
 
@@ -2457,6 +2862,14 @@ mod tests {
         )
     }
 
+    fn synthetic_dvc3a2() -> String {
+        let patch = r#"<PATCH NBFIXTURE="2"><FIXTURES><SSLLIBRARY SSLFIXUID="profile-move" SSLNAME="Test/Move.ssl2"><SSLPROPERTIES SSLBEAMOPENING="20"/><SSLMODES SSLNBMODE="1"><SSLMODE SSLMODEINDEX="0" SSLNBCHANNEL="3"><SSLCHANNEL SSLCHANNELTYPE="1" SSLCHANNELNAME="Pan" SSLCHANNELMSB="0" SSLCHANNELLSB="0"><SSLPRESETS><SSLPRESET SSLPRESETNAME="Pan" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL><SSLCHANNEL SSLCHANNELTYPE="2" SSLCHANNELNAME="Tilt" SSLCHANNELMSB="0" SSLCHANNELLSB="0"><SSLPRESETS><SSLPRESET SSLPRESETNAME="Tilt" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL><SSLCHANNEL SSLCHANNELTYPE="7" SSLCHANNELNAME="Dimmer" SSLCHANNELMSB="0" SSLCHANNELLSB="0"><SSLPRESETS><SSLPRESET SSLPRESETNAME="Dimmer" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL></SSLMODE></SSLMODES></SSLLIBRARY><FIXTURE DASUID="fixture-1" NAME="Mover 1" ADDRESS="1" UNIVERS="1" POSX="0" POSY="0" ANGLE="0"/><FIXTURE DASUID="fixture-2" NAME="Mover 2" ADDRESS="4" UNIVERS="1" POSX="1" POSY="0" ANGLE="0"/></FIXTURES></PATCH>"#;
+        format!(
+            r##"<DLMFILE TYPE="Daslight" VERSION="5" DASBUILD="test-dvc3a2" VERSIONFILE="2"><PATCHS DATA="{}"/><FIXTUREGROUPS/><SCENES><BANK DASUID="bank-1" NAME="DVC-3a2" COLOR="#ff112233"><SCENE DASUID="scene-ramp" NAME="Inverse Ramp" COLOR="#ff112233" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><FIXTUREDATAS NB="0"/><RACKS><RACK TYPE="8"><EFFECT TYPE="5" ID="3" DURATION="5000"><PARAMS NB="5"><PARAM TYPE="0" ID="1" VAL="2"/><PARAM TYPE="1" ID="2" VAL="1.562"/><PARAM TYPE="1" ID="3" VAL="0.495"/><PARAM TYPE="1" ID="4" VAL="-0.848"/><PARAM TYPE="1" ID="5" VAL="0"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE><SCENE DASUID="scene-polygon" NAME="Move Polygon" COLOR="#ff445566" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="0.5" PLAY_TRIGGER="0" PLAY_DIVISION="1"><FIXTUREDATAS NB="0"/><RACKS><RACK TYPE="4"><EFFECT TYPE="4" ID="224" DURATION="2000"><PARAMS NB="3"><PARAM TYPE="5" ID="1"><POINTS NB="4"><POINT X="0.25" Y="0.5"/><POINT X="0.5" Y="0.75"/><POINT X="0.75" Y="0.5"/><POINT X="0.5" Y="0.25"/></POINTS></PARAM><PARAM TYPE="1" ID="2" VAL="0.02"/><PARAM TYPE="2" ID="3" VAL="1"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE></BANK></SCENES><SHORTCUTS/><TOUCH/><DEVICES/></DLMFILE>"##,
+            qcompress(patch.as_bytes())
+        )
+    }
+
     fn effect_test_fixture_refs() -> HashMap<String, FixtureImportRef> {
         HashMap::from([
             (
@@ -2638,6 +3051,130 @@ mod tests {
             .details
             .iter()
             .any(|detail| detail.message.contains("ID=10")));
+    }
+
+    #[test]
+    fn dvc3a2_inverse_ramp_and_polygon_convert_and_recall() {
+        let outcome = import_bytes(synthetic_dvc3a2().as_bytes(), "synthetic-dvc3a2.dvc").unwrap();
+        crate::validate_project_file(&outcome.project).unwrap();
+        assert_eq!(outcome.report.summary.effects_converted, 2);
+        assert_eq!(outcome.report.summary.effects_skipped, 0);
+
+        let ramp = &outcome.project.snapshot.cues[0].effect_targets[0];
+        let Some(EffectParamsSnapshot::Lfo(ramp)) = &ramp.params else {
+            panic!("CURVE 3 must be stored as cue-owned LFO params");
+        };
+        assert_eq!(ramp.shape, LfoShape::Saw);
+        assert_eq!(ramp.period_ms, 2_500);
+        assert_eq!(ramp.low, 28_377);
+        assert_eq!(ramp.high, 0);
+        assert_eq!(ramp.phase, 0.495);
+        assert!(outcome.report.converted.details.iter().any(|detail| {
+            detail.item.contains("Inverse Ramp")
+                && detail.message.contains("descending_ramp=Saw directed")
+        }));
+        assert!(outcome.report.approximate.details.iter().any(|detail| {
+            detail.item.contains("Inverse Ramp")
+                && detail.message.contains("endpoints were clamped")
+        }));
+
+        let polygon = &outcome.project.snapshot.cues[1].effect_targets[0];
+        let Some(EffectParamsSnapshot::Move(polygon)) = &polygon.params else {
+            panic!("MOVE 224 must be stored as cue-owned Move params");
+        };
+        assert_eq!(
+            polygon.points,
+            vec![
+                MovePathPoint { x: 0.25, y: 0.5 },
+                MovePathPoint { x: 0.5, y: 0.75 },
+                MovePathPoint { x: 0.75, y: 0.5 },
+                MovePathPoint { x: 0.5, y: 0.25 },
+            ]
+        );
+        assert!(polygon.closed);
+        assert_eq!(polygon.interpolation, MoveInterpolation::Line);
+        assert_eq!(polygon.direction, MoveDirection::Forward);
+        assert_eq!(polygon.coordinate_mode, MoveCoordinateMode::Absolute);
+        assert_eq!(polygon.period_ms, 4_000);
+        assert!((polygon.fixture_spread - 0.02).abs() < f32::EPSILON);
+        assert!(outcome.report.approximate.details.iter().any(|detail| {
+            detail.item.contains("Polygon")
+                && detail.message.contains("Symmetry=ON is not reproduced")
+        }));
+
+        let cue_id = outcome.project.snapshot.cues[1].id;
+        let mut snapshot_to_load = outcome.project.snapshot;
+        snapshot_to_load.output.enabled = false;
+        for output in &mut snapshot_to_load.dmx_outputs {
+            output.enabled = false;
+        }
+        let engine = engine::EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine.load_project_snapshot(snapshot_to_load).unwrap();
+        engine
+            .send(engine::EngineCommand::TriggerCue(cue_id))
+            .unwrap();
+        let mut active_nonzero = false;
+        for _ in 0..40 {
+            let snapshot = engine.snapshot();
+            active_nonzero = snapshot.active_cue_id == Some(cue_id)
+                && snapshot.dmx_preview.iter().any(|value| *value != 0);
+            if active_nonzero {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(
+            active_nonzero,
+            "cue recall must activate its owned Move effect"
+        );
+    }
+
+    #[test]
+    fn dvc_move_unexpected_params_and_empty_points_stay_skipped() {
+        let empty_document = Document::parse(
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="4"><EFFECT TYPE="4" ID="224" DURATION="1000"><PARAMS NB="3"><PARAM TYPE="5" ID="1"><POINTS NB="0"/></PARAM><PARAM TYPE="1" ID="2" VAL="0"/><PARAM TYPE="2" ID="3" VAL="0"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
+        )
+        .unwrap();
+        let scene = empty_document.root_element();
+        let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+        let effect = direct_child(rack, "EFFECT").unwrap();
+        let empty_error = convert_dvc_effect(
+            scene,
+            "Empty Polygon",
+            rack,
+            effect,
+            4,
+            4,
+            224,
+            1,
+            &effect_test_fixture_refs(),
+        )
+        .unwrap_err();
+        assert!(empty_error.contains("POINTS must contain between 3 and 256 vertices"));
+
+        let unexpected_document = Document::parse(
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="4"><EFFECT TYPE="4" ID="223" DURATION="1000"><PARAMS NB="4"><PARAM TYPE="5" ID="1"><POINTS NB="2"><POINT X="0" Y="0"/><POINT X="1" Y="1"/></POINTS></PARAM><PARAM TYPE="1" ID="2" VAL="0"/><PARAM TYPE="2" ID="3" VAL="0"/><PARAM TYPE="1" ID="4" VAL="0"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
+        )
+        .unwrap();
+        let scene = unexpected_document.root_element();
+        let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+        let effect = direct_child(rack, "EFFECT").unwrap();
+        let unexpected_error = convert_dvc_effect(
+            scene,
+            "Unexpected Line",
+            rack,
+            effect,
+            4,
+            4,
+            223,
+            1,
+            &effect_test_fixture_refs(),
+        )
+        .unwrap_err();
+        assert!(unexpected_error.contains("unexpected ID 4"));
     }
 
     #[test]
@@ -2902,8 +3439,8 @@ mod tests {
         assert_eq!(outcome.report.summary.beam_records, 221);
         assert_eq!(outcome.report.summary.beam_feature_checks, 109);
         assert_eq!(outcome.report.summary.beam_feature_mismatches, 0);
-        assert_eq!(outcome.report.summary.effects_converted, 5);
-        assert_eq!(outcome.report.summary.effects_skipped, 2);
+        assert_eq!(outcome.report.summary.effects_converted, 6);
+        assert_eq!(outcome.report.summary.effects_skipped, 1);
         let chaser_count = outcome
             .project
             .snapshot
@@ -2920,13 +3457,166 @@ mod tests {
             .flat_map(|cue| &cue.effect_targets)
             .filter(|target| matches!(target.params, Some(EffectParamsSnapshot::Lfo(_))))
             .count();
+        let move_count = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .flat_map(|cue| &cue.effect_targets)
+            .filter(|target| matches!(target.params, Some(EffectParamsSnapshot::Move(_))))
+            .count();
         assert_eq!(chaser_count, 5);
         assert_eq!(curve_count, 0);
+        assert_eq!(move_count, 1);
         assert!(outcome
             .report
             .approximate
             .details
             .iter()
             .any(|detail| { detail.message == "segment selection approximated to fixture" }));
+    }
+
+    #[test]
+    fn dvc_local_full_shinkan_move_fx_match_verified_generators_when_present() {
+        let path = Path::new(r"C:\Users\kouty\Desktop\Shinkan-Left\Shinkan2026.dvc");
+        if !path.is_file() {
+            eprintln!(
+                "Skipping local full Daslight golden: {} is unavailable",
+                path.display()
+            );
+            return;
+        }
+        let outcome = import_path(path).unwrap();
+        crate::validate_project_file(&outcome.project).unwrap();
+        assert_eq!(outcome.report.summary.effects_converted, 14);
+        assert_eq!(outcome.report.summary.effects_skipped, 16);
+
+        let moves = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .filter_map(|cue| {
+                cue.effect_targets.iter().find_map(|target| {
+                    let Some(EffectParamsSnapshot::Move(request)) = &target.params else {
+                        return None;
+                    };
+                    Some((cue.label.as_str(), request))
+                })
+            })
+            .collect::<HashMap<_, _>>();
+        assert_eq!(moves.len(), 3);
+
+        let left_to_right = moves
+            .get("Left2Right")
+            .expect("full Shinkan golden must contain Left2Right");
+        assert_eq!(left_to_right.points.len(), 2);
+        assert!(!left_to_right.closed);
+        assert_eq!(left_to_right.interpolation, MoveInterpolation::Line);
+        assert_eq!(left_to_right.direction, MoveDirection::Bounce);
+        assert!((left_to_right.fixture_spread - 0.01).abs() < f32::EPSILON);
+
+        let polygon = moves
+            .get("M-PolyLoop")
+            .expect("full Shinkan golden must contain M-PolyLoop");
+        assert_eq!(
+            polygon.points,
+            vec![
+                MovePathPoint { x: 0.25, y: 0.5 },
+                MovePathPoint { x: 0.5, y: 0.75 },
+                MovePathPoint { x: 0.75, y: 0.5 },
+                MovePathPoint { x: 0.5, y: 0.25 },
+            ]
+        );
+        assert!(polygon.closed);
+        assert_eq!(polygon.interpolation, MoveInterpolation::Line);
+        assert_eq!(polygon.direction, MoveDirection::Forward);
+        assert!((polygon.fixture_spread - 0.02).abs() < f32::EPSILON);
+
+        let center_div = moves
+            .get("M-CenterDivLoop")
+            .expect("full Shinkan golden must contain M-CenterDivLoop");
+        assert_eq!(center_div.points.len(), 2);
+        assert!(!center_div.closed);
+        assert_eq!(center_div.direction, MoveDirection::Bounce);
+        assert!((center_div.fixture_spread - 0.176).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn dvc_local_homecoming_inverse_ramp_matches_verified_generator_when_present() {
+        let path = Path::new(r"C:\Users\kouty\Desktop\homecoming2026\homecoming2606.dvc");
+        if !path.is_file() {
+            eprintln!(
+                "Skipping local homecoming Daslight golden: {} is unavailable",
+                path.display()
+            );
+            return;
+        }
+        let source = fs::read_to_string(path).unwrap();
+        let document = Document::parse(&source).unwrap();
+        let scene = document
+            .descendants()
+            .filter(|node| node.has_tag_name("SCENE"))
+            .find(|node| node.attribute("NAME") == Some("all_rampFlash"))
+            .expect("homecoming golden must contain all_rampFlash");
+        let rack = direct_child(scene, "RACKS")
+            .and_then(|racks| {
+                element_children(racks)
+                    .find(|rack| rack.has_tag_name("RACK") && rack.attribute("TYPE") == Some("8"))
+            })
+            .expect("all_rampFlash must contain its CURVE rack");
+        let effect = element_children(rack)
+            .find(|effect| {
+                effect.has_tag_name("EFFECT")
+                    && effect.attribute("TYPE") == Some("5")
+                    && effect.attribute("ID") == Some("3")
+            })
+            .expect("all_rampFlash must contain CURVE ID=3");
+        let mut fixture_refs = HashMap::new();
+        for beam in direct_child(rack, "BEAMS")
+            .into_iter()
+            .flat_map(element_children)
+            .filter(|node| node.has_tag_name("BEAM"))
+        {
+            let uid = required_attribute(beam, "FIXTURE", "BEAM").unwrap();
+            if fixture_refs.contains_key(uid) {
+                continue;
+            }
+            let fixture_id = fixture_refs.len() as u64 + 1;
+            fixture_refs.insert(
+                uid.to_string(),
+                FixtureImportRef {
+                    fixture_id,
+                    fixture_index: fixture_id as usize - 1,
+                    profile_index: 0,
+                },
+            );
+        }
+        let converted = convert_dvc_effect(
+            scene,
+            "all_rampFlash",
+            rack,
+            effect,
+            8,
+            5,
+            3,
+            1,
+            &fixture_refs,
+        )
+        .unwrap();
+        let Some(EffectParamsSnapshot::Lfo(ramp)) = converted.target.params else {
+            panic!("homecoming golden must convert all_rampFlash to an LFO");
+        };
+        assert_eq!(converted.generator, "Inverse Ramp");
+        assert!(converted.note.contains("descending_ramp=Saw directed"));
+        assert!(converted
+            .approximations
+            .iter()
+            .any(|note| note.contains("endpoints were clamped")));
+        assert_eq!(ramp.shape, LfoShape::Saw);
+        assert_eq!(ramp.period_ms, 2_500);
+        assert_eq!(ramp.low, 28_377);
+        assert_eq!(ramp.high, 0);
+        assert_eq!(ramp.phase, 0.495);
     }
 }

@@ -21697,7 +21697,7 @@ fn evaluate_lfo_effect_at_rate(
     clock: &ClockSnapshot,
     rate: f32,
 ) -> u16 {
-    scale_effect_u16(
+    scale_effect_u16_directed(
         request.low,
         request.high,
         evaluate_lfo_effect_normalized(request, created_at, now, clock, rate),
@@ -22166,6 +22166,14 @@ fn scale_effect_u16(low: u16, high: u16, normalized: f32) -> u16 {
     let low_value = low.min(high) as f32;
     let high_value = low.max(high) as f32;
     (low_value + (high_value - low_value) * normalized)
+        .round()
+        .clamp(0.0, 65535.0) as u16
+}
+
+fn scale_effect_u16_directed(from: u16, to: u16, normalized: f32) -> u16 {
+    let from = from as f32;
+    let to = to as f32;
+    (from + (to - from) * normalized.clamp(0.0, 1.0))
         .round()
         .clamp(0.0, 65535.0) as u16
 }
@@ -41203,6 +41211,13 @@ mod tests {
             .abs()
                 < 0.001
         );
+    }
+
+    #[test]
+    fn lfo_directed_range_preserves_descending_saw_output() {
+        assert_eq!(scale_effect_u16_directed(65_535, 0, 0.0), 65_535);
+        assert_eq!(scale_effect_u16_directed(65_535, 0, 0.25), 49_151);
+        assert_eq!(scale_effect_u16_directed(65_535, 0, 1.0), 0);
     }
 
     #[test]
