@@ -21,6 +21,7 @@ export function FaderAttributeEditorPanel(props: FaderAttributeEditorPanelProps)
         activeCategory={props.activeCategory}
         className="attributeCategoryRail"
         ariaLabel="Attribute category"
+        showWrittenState
         onCategory={props.onCategory}
       />
       <div class="attributeEditorBody">
@@ -38,7 +39,9 @@ export function FaderAttributeEditorPanel(props: FaderAttributeEditorPanelProps)
             <strong>{props.referenceLabel}</strong>
           </span>
         </div>
-        {props.children}
+        <div class={`attributeDeskSurface category-${props.activeCategory}`} aria-label="Attribute fader desk">
+          {props.children}
+        </div>
       </div>
     </div>
   );

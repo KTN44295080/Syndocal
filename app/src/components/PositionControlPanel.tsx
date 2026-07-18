@@ -183,7 +183,7 @@ export function PositionControlPanel(props: PositionControlPanelProps) {
   };
 
   return (
-    <div class="visualControlPanel">
+    <div class="visualControlPanel positionControlPanel">
       <div class="visualControlHeader">
         <div>
           <strong>Position</strong>

@@ -2710,6 +2710,14 @@ export default function App() {
     const groupId = selectedFixtureGroupFilter();
     return groupId ? commonAttributeControls(selectedControlTargetFixtures()) : (selectedFixture()?.controls ?? []);
   });
+  const controlIsWritten = (control: AttributeControl) =>
+    selectedControlTargetFixtures().some((fixture) => {
+      const fixtureControl = fixture.controls.find((candidate) => candidate.attribute === control.attribute);
+      if (!fixtureControl) {
+        return false;
+      }
+      return faderValue(fixture.id, fixtureControl.attribute, fixtureControl.default_value) !== fixtureControl.default_value;
+    });
   const timelineAutomationControls = createMemo<AttributeControl[]>(() => {
     const groupId = selectedFixtureGroupFilter();
     const fixtures = groupId
@@ -2948,6 +2956,9 @@ export default function App() {
       ...category,
       count: counts.get(category.id) ?? 0,
       hasVisual: categoryHasVisualControl(category.id),
+      hasWritten: activeControls()
+        .filter((control) => category.id === "fader" || controlCategoryForAttribute(control.attribute) === category.id)
+        .some((control) => controlIsWritten(control)),
     }));
   });
   const visibleControls = createMemo(() => {
@@ -3013,7 +3024,7 @@ export default function App() {
     `linear-gradient(to right, ${colorPreviewForSaturation(0)}, ${colorPreviewForSaturation(0.35)}, ${colorPreviewForSaturation(1)})`,
   );
   const currentControlValue = (control: AttributeControl) => {
-    const fixture = selectedFixture();
+    const fixture = selectedControlReferenceFixture();
     return fixture ? faderValue(fixture.id, control.attribute, control.default_value) : control.default_value;
   };
   const channelFunctionContainsValue = (
@@ -14935,12 +14946,13 @@ export default function App() {
           />
           <FaderGridPanel
             controls={visibleControls()}
-            selectedFixtureId={selectedFixture()?.id ?? null}
+            selectedFixtureId={selectedControlReferenceFixture()?.id ?? null}
             selectedGroupId={selectedFixtureGroupFilter()}
             valueForControl={(control) => {
               const fixture = selectedControlReferenceFixture();
               return fixture ? faderValue(fixture.id, control.attribute, control.default_value) : control.default_value;
             }}
+            isControlWritten={controlIsWritten}
             onSetFixtureAttribute={setAttribute}
             onSetGroupAttribute={setGroupAttribute}
           />

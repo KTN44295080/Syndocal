@@ -62,14 +62,14 @@ export function ChannelFunctionPanel(props: ChannelFunctionPanelProps) {
   };
 
   return (
-    <div class="visualControlPanel channelFunctionPanel">
-      <div class="visualControlHeader">
+    <details class="visualControlPanel channelFunctionPanel">
+      <summary class="visualControlHeader">
         <div>
           <strong>GDTF Functions</strong>
           <span>{props.entries.length} attribute(s) with function ranges</span>
         </div>
         <span>{props.categoryLabel}</span>
-      </div>
+      </summary>
       <div class="channelFunctionList">
         <For each={props.entries}>
           {(entry) => {
@@ -133,6 +133,6 @@ export function ChannelFunctionPanel(props: ChannelFunctionPanelProps) {
           }}
         </For>
       </div>
-    </div>
+    </details>
   );
 }

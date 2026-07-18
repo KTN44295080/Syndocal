@@ -27054,3 +27054,433 @@ h3 {
   color: #e8ecef;
   box-shadow: inset 0 -2px 0 var(--ray-accent);
 }
+
+/* ---- T13: Control / Live Edit follows a vertical Daslight-style fader desk.
+   Authored state remains in App; this block only composes the fixed context
+   pane as a horizontal dock and keeps overflow away from the app shell. */
+.layoutSharedWorkspace.layoutControl.controlModeEdit .attributeEditorBody {
+  grid-template-rows: 26px minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeEdit .attributeTargetSummary {
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #393530;
+  background: #1a1816;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeEdit .attributeTargetSummary > span {
+  grid-template-columns: auto minmax(0, 1fr);
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 24px;
+  overflow: hidden;
+  border: 0;
+  border-right: 1px solid #393530;
+  background: transparent;
+  padding: 2px 5px;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeEdit .attributeTargetSummary > span:first-child {
+  flex-grow: 1.15;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeEdit .attributeTargetSummary > span:last-child {
+  border-right: 0;
+}
+
+.attributeCategoryRail button > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.attributeCategoryWriteDot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border: 1px solid #625f5a;
+  border-radius: 50%;
+  background: #242321;
+}
+
+.attributeCategoryRail button.written .attributeCategoryWriteDot {
+  border-color: #69c36d;
+  background: #69c36d;
+}
+
+.attributeDeskSurface {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  scrollbar-color: #57524d #211f1c;
+}
+
+.attributeDeskSurface > .visualControlPanel {
+  order: 3;
+  flex: 0 0 260px;
+  width: 260px;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+  border-color: #403c37;
+  border-radius: 1px;
+  background: #1b1917;
+  padding: 4px;
+}
+
+.attributeDeskSurface > .dimmerControlPanel,
+.attributeDeskSurface > .colorControlPanel,
+.attributeDeskSurface > .positionControlPanel {
+  order: 1;
+}
+
+.attributeDeskSurface > .dimmerControlPanel {
+  flex-basis: 210px;
+  width: 210px;
+  grid-template-rows: auto auto;
+  align-content: start;
+}
+
+.attributeDeskSurface .dimmerControlPanel > .dimmerVisualRow,
+.attributeDeskSurface .dimmerControlPanel > .dimmerVisualSlider,
+.attributeDeskSurface .dimmerControlPanel > .controlLimitPanel {
+  display: none;
+}
+
+.attributeDeskSurface .dimmerQuickRow {
+  grid-template-columns: repeat(4, minmax(40px, 1fr));
+  gap: 3px;
+}
+
+.attributeDeskSurface .dimmerQuickRow button {
+  min-height: 40px;
+}
+
+.attributeDeskSurface > .colorControlPanel {
+  flex-basis: 306px;
+  width: 306px;
+  grid-template-rows: auto auto minmax(88px, 1fr) auto;
+}
+
+.attributeDeskSurface .colorControlPanel > .colorQuickLookRow,
+.attributeDeskSurface .colorControlPanel > .colorSaturationStrip,
+.attributeDeskSurface .colorControlPanel > .hsvDirectGrid,
+.attributeDeskSurface .colorControlPanel .rgbChannelRack,
+.attributeDeskSurface .colorControlPanel .extraColorChannelRack {
+  display: none;
+}
+
+.attributeDeskSurface .colorControlPanel > .colorSwatchPanel {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.attributeDeskSurface .colorPickerRow {
+  grid-template-columns: minmax(132px, 1fr) 72px;
+  gap: 4px;
+  min-height: 0;
+}
+
+.attributeDeskSurface .colorPickerSide {
+  align-content: start;
+}
+
+.attributeDeskSurface .colorPlane {
+  min-height: 88px;
+}
+
+.attributeDeskSurface .colorSwatchGrid {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 3px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.attributeDeskSurface .colorSwatchGrid button,
+.attributeDeskSurface .swatchHeader button {
+  flex: 0 0 40px;
+  min-width: 40px;
+  min-height: 40px;
+}
+
+.attributeDeskSurface > .positionControlPanel {
+  flex-basis: 520px;
+  width: 520px;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+/* Inside the fader desk the category rail already names the panel, and the
+   short 720-class desk row needs the header's ~45px so the pad keeps its
+   72px operational floor (Daslight likewise repeats no title in its editor). */
+.attributeDeskSurface > .positionControlPanel > .visualControlHeader {
+  display: none;
+}
+
+.attributeDeskSurface .positionControlPanel .positionConsoleSurface {
+  height: 100%;
+  min-height: 0;
+}
+
+.attributeDeskSurface .positionControlPanel .positionConsolePrimary {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+/* The pan/tilt pad must stay near-square (viewport contract 0.75..1.35) so
+   pan and tilt keep comparable pointer resolution whatever the desk row
+   shape is: the pad squares to min(column width, row height) via container
+   query units. The first selector outranks the width-driven shared-workspace
+   context-pane rule, which is correct only when vertical space is plentiful. */
+.attributeDeskSurface .positionControlPanel .positionPadRow {
+  container-type: size;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeEdit .controlContextPane .attributeDeskSurface .positionConsolePrimary .panTiltPad,
+.attributeDeskSurface .positionControlPanel .panTiltPad {
+  width: min(100%, 100cqh);
+  height: auto;
+  max-height: 100%;
+  aspect-ratio: 1;
+  min-height: 0;
+  align-self: center;
+  justify-self: center;
+}
+
+/* 1280-class viewports: keep the pad and tool pane above their operational
+   floors (pad >= 72px square, tool pane >= 60px) instead of letting the desk
+   split starve them - the tool pane already scrolls internally. */
+.attributeDeskSurface .positionControlPanel .positionConsoleSurface {
+  min-height: 96px;
+}
+
+.attributeDeskSurface .positionControlPanel .positionToolPane {
+  min-height: 60px;
+}
+
+.attributeDeskSurface > .colorWheelSlotPanel,
+.attributeDeskSurface > .goboWheelSlotPanel {
+  flex-basis: 248px;
+  width: 248px;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.attributeDeskSurface .wheelSlotActiveRow,
+.attributeDeskSurface .wheelSlotInactiveRow,
+.attributeDeskSurface .wheelSlotDirectRow {
+  display: none;
+}
+
+.attributeDeskSurface .colorWheelSlotGrid,
+.attributeDeskSurface .goboWheelSlotGrid {
+  min-height: 0;
+  overflow: hidden auto;
+}
+
+.attributeDeskSurface .colorWheelSlotGrid button,
+.attributeDeskSurface .goboWheelSlotGrid button {
+  min-height: 40px;
+}
+
+.attributeDeskSurface > .faderGrid {
+  display: flex;
+  order: 2;
+  flex: 0 0 auto;
+  align-items: stretch;
+  gap: 3px;
+  height: 100%;
+  min-height: 0;
+  overflow: visible;
+}
+
+.attributeDeskSurface .fader.attributeFaderColumn {
+  display: grid;
+  grid-template-rows: 18px 28px 17px 21px minmax(72px, 1fr) 40px;
+  width: 94px;
+  min-width: 94px;
+  min-height: 0;
+  gap: 2px;
+  overflow: hidden;
+  border: 1px solid #403c37;
+  border-radius: 1px;
+  background: #1c1a18;
+  padding: 3px;
+}
+
+.attributeFaderWriteRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  width: 100%;
+}
+
+.attributeFaderWriteIndicator {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border: 1px solid #65615c;
+  border-radius: 50%;
+  background: #252321;
+}
+
+.attributeFaderColumn.written .attributeFaderWriteIndicator {
+  border-color: #69c36d;
+  background: #69c36d;
+}
+
+.attributeFaderChannel,
+.attributeFaderValue {
+  font-variant-numeric: tabular-nums;
+}
+
+.attributeFaderChannel {
+  min-width: 0;
+  overflow: hidden;
+  color: #918b85;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.attributeFaderIcon {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #373430;
+  background: #24211f;
+  color: #c6c1bb;
+  font-size: 11px;
+}
+
+.attributeFaderIcon b {
+  max-width: 100%;
+  overflow: hidden;
+  padding-inline: 3px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.attributeFaderIcon i {
+  width: 18px;
+  height: 18px;
+  border: 1px solid #77716b;
+  border-radius: 50%;
+}
+
+.attributeFaderLabel {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  color: #d5d0ca;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.attributeFaderValue {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid #47423d;
+  background: #24211f;
+  color: #e2ded8;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.attributeFaderColumn.off .attributeFaderValue {
+  border-color: #34312e;
+  background: #1b1a18;
+  color: #7d7872;
+}
+
+.attributeDeskSurface .fader input.verticalFaderInput {
+  width: 40px;
+  min-width: 40px;
+  height: 100%;
+  min-height: 72px;
+  margin: 0;
+  justify-self: center;
+  padding: 0;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  touch-action: none;
+  accent-color: #a29b94;
+}
+
+.attributeDeskSurface .attributeFaderColumn.off input.verticalFaderInput {
+  opacity: 0.48;
+}
+
+.attributeDeskSurface .fader input.verticalFaderInput:focus-visible {
+  outline: 2px solid #f3974f;
+  outline-offset: 1px;
+}
+
+.attributeFaderFine {
+  display: grid;
+  grid-template-columns: repeat(2, 40px);
+  justify-content: center;
+  gap: 3px;
+}
+
+.attributeFaderFine button {
+  width: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  border-radius: 1px;
+  padding: 0;
+  font-size: 16px;
+}
+
+.attributeDeskSurface > .channelFunctionPanel {
+  order: 4;
+  flex-basis: 230px;
+  width: 230px;
+  overflow: hidden auto;
+}
+
+.attributeDeskSurface > .channelFunctionPanel:not([open]) {
+  align-self: start;
+  height: 40px;
+}
+
+.attributeDeskSurface > .channelFunctionPanel > summary {
+  min-height: 40px;
+  cursor: pointer;
+}
+
+.attributeDeskSurface > .channelFunctionPanel[open] > summary {
+  margin-bottom: 4px;
+}
+
+@media (max-height: 760px) {
+  .attributeDeskSurface > .colorControlPanel {
+    flex-basis: 250px;
+    width: 250px;
+  }
+}

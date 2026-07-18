@@ -1,4 +1,4 @@
-import { For } from "solid-js";
+import { For, Show } from "solid-js";
 import type { ControlCategory } from "../uiModes";
 
 export interface AttributeCategoryRow {
@@ -6,6 +6,7 @@ export interface AttributeCategoryRow {
   label: string;
   count: number;
   hasVisual: boolean;
+  hasWritten?: boolean;
 }
 
 interface AttributeCategoryRailProps {
@@ -13,6 +14,7 @@ interface AttributeCategoryRailProps {
   activeCategory: ControlCategory;
   className: string;
   ariaLabel: string;
+  showWrittenState?: boolean;
   onCategory: (category: ControlCategory) => void;
 }
 
@@ -22,12 +24,21 @@ export function AttributeCategoryRail(props: AttributeCategoryRailProps) {
       <For each={props.categories}>
         {(category) => (
           <button
-            class={props.activeCategory === category.id ? "active" : ""}
+            classList={{
+              active: props.activeCategory === category.id,
+              written: Boolean(props.showWrittenState && category.hasWritten),
+            }}
             disabled={!category.hasVisual && category.count === 0}
             onClick={() => props.onCategory(category.id)}
             aria-pressed={props.activeCategory === category.id}
+            title={props.showWrittenState ? (category.hasWritten ? "Written values" : "No written values") : undefined}
           >
-            <span>{category.label}</span>
+            <span>
+              <Show when={props.showWrittenState}>
+                <i class="attributeCategoryWriteDot" aria-hidden="true" />
+              </Show>
+              {category.label}
+            </span>
             <small>{category.count}</small>
           </button>
         )}
