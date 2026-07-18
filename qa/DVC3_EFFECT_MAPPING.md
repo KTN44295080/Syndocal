@@ -59,10 +59,16 @@ RACK内の PRESETS/BEAMS 以外の要素にあるとみられ、実装時に特�
 
 Syndocal受け皿: PositionWave（空間走査）+ Perlin LFO形状 + Transform（対称/回転）は新規要素。
 
-### MOVE FX（RACK=4, EFFECT TYPE=4）→ Syndocal Move エンジン — 未照合（最後の1ファミリー）
+### MOVE FX（RACK=4, EFFECT TYPE=4）→ Syndocal Move エンジン — 照合済み（2026-07-19、全ファミリー完了）
 
-検体は **Desktop版 Shinkan2026 の Moving-Pos バンク**: Left2Right / M-CenterDivLoop（ID=223, id2=0.01/0.176=速度）,
-M-PolyLoop（ID=224, id2=0.02, id3=1）。照合には同ファイルの再ロードが必要（マトリクス右端のバンク）。
+| ID | ジェネレータ | パラメータ対応（実測） |
+|---|---|---|
+| 223 | **Line** | Left2Right: Phasing=1.0⇔id2=0.01（**表示=id2×100**）✓、M-CenterDivLoop: Phasing=17.6⇔id2=0.176✓、Symmetry=off⇔id3=0✓ |
+| 224 | **Polygon** | M-PolyLoop: Phasing=2.0⇔id2=0.02✓、Symmetry=ON⇔id3=1✓ |
+
+**軌道頂点**は `PARAM TYPE=5 ID=1` 内の `<POINTS NB=n><POINT X=.. Y=..>` — 正規化0..1のPan/Tilt座標列
+（M-PolyLoopのダイヤ (0.25,0.5)(0.5,0.75)(0.75,0.5)(0.5,0.25) がUI表示と完全一致）。Attribute value=Absolute。
+Syndocal Move エンジン（複数点 smooth/line closed path）が直接の受け皿。
 
 ### FXファミリー全カタログ（2026-07-19 実機のFX追加チューザーで観測）
 
@@ -85,3 +91,7 @@ VALUE FX と COLOR MAPPINGS はユーザーの全ショーに検体なし（実�
 
 2026-07-19（homecoming2606、ユーザーがロード）: ロード直後はLIVEモードだったため**先にEDITへ切替**（クリック1回）、
 その後シーン選択5回とキャプチャのみ。保存・LIVEトグルなし。編集対象は「all_outIn」に残置。
+
+2026-07-19（Shinkan2026 Desktop版、ユーザーが再ロードしMoving-Posバンクまで表示済み）: LIVE→EDIT切替1回、
+シーン選択3回（Left2Right/M-PolyLoop/M-CenterDivLoop）とキャプチャのみ。保存なし。編集対象は「M-CenterDivLoop」に残置。
+これでユーザーの全ショーに存在する全FXファミリーの照合が完了。
