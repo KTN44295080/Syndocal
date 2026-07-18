@@ -23058,6 +23058,7 @@ fn validate_position_wave_effect_request(
 }
 
 fn validate_color_effect_request(request: &ColorEffectRequest) -> Result<(), String> {
+    engine::validate_color_effect_request(request)?;
     if request.label.trim().is_empty() {
         return Err("Color effect label is required".to_string());
     }
@@ -32508,6 +32509,7 @@ f 1 2 3
             phase: 0.125,
             fixture_spread: 0.75,
             blend_mode: protocol::EffectBlendMode::Override,
+            spatial_pattern: None,
         }
     }
 

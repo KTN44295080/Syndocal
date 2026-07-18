@@ -1985,6 +1985,63 @@ pub enum ColorEffectInterpolation {
     HsvLongest,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ColorEffectBeamTarget {
+    pub fixture_id: FixtureId,
+    /// Zero-based Daslight beam/segment index within the fixture profile.
+    pub beam_index: u16,
+    /// Stable spatial order. Equal values intentionally evaluate in phase.
+    pub selection_index: u32,
+    /// Virtual Daslight feature for value mappings (for example, Dimmer).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_attribute: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ColorEffectSpatialRecipe {
+    KnightRider {
+        size: u16,
+        one_way: bool,
+        fading: bool,
+        go_outside: bool,
+        gradient: f32,
+    },
+    Burst {
+        color_width: f32,
+        gradient: f32,
+    },
+    RandomFill {
+        point_width: u16,
+    },
+    Sparkle {
+        number: u16,
+        lifespan: f32,
+        width: u16,
+    },
+    Rainbow {
+        vertical_symmetry: bool,
+        rotation_degrees: f32,
+        color_width: f32,
+        angle_degrees: f32,
+        gradient: f32,
+    },
+    Perlin {
+        octaves: u8,
+        zoom: f32,
+        direction_degrees: f32,
+        speed: f32,
+        amplitude: f32,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ColorEffectSpatialPattern {
+    pub recipe: ColorEffectSpatialRecipe,
+    /// Empty for native effects; the engine derives one beam from each target fixture.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub beam_targets: Vec<ColorEffectBeamTarget>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ColorEffectRequest {
     pub label: String,
@@ -1999,6 +2056,9 @@ pub struct ColorEffectRequest {
     pub phase: f32,
     pub fixture_spread: f32,
     pub blend_mode: EffectBlendMode,
+    /// Optional beam-space recipe. Its absence preserves the original Color engine byte shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spatial_pattern: Option<Box<ColorEffectSpatialPattern>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -3797,6 +3857,7 @@ mod tests {
             phase: 0.125,
             fixture_spread: 1.0,
             blend_mode: super::EffectBlendMode::Multiply,
+            spatial_pattern: None,
         };
         let preset = super::EffectPreset {
             version: 1,
@@ -3811,9 +3872,51 @@ mod tests {
         };
 
         let json = serde_json::to_string(&preset).unwrap();
+        assert!(!json.contains("spatial_pattern"));
         let parsed: super::EffectPreset = serde_json::from_str(&json).unwrap();
 
         assert_eq!(parsed, preset);
+    }
+
+    #[test]
+    fn color_effect_spatial_pattern_roundtrips_and_legacy_defaults_to_none() {
+        let legacy = serde_json::json!({
+            "label": "Legacy color",
+            "fixture_ids": [1],
+            "target_group_ids": [],
+            "stops": [
+                {"position": 0.0, "color": {"red": 0, "green": 0, "blue": 0}},
+                {"position": 1.0, "color": {"red": 65535, "green": 65535, "blue": 65535}}
+            ],
+            "algorithm": "Sequence",
+            "interpolation": "Rgb",
+            "period_ms": 1000,
+            "phase": 0.0,
+            "fixture_spread": 0.0,
+            "blend_mode": "Override"
+        });
+        let parsed: super::ColorEffectRequest = serde_json::from_value(legacy).unwrap();
+        assert!(parsed.spatial_pattern.is_none());
+
+        let mut spatial = parsed;
+        spatial.spatial_pattern = Some(Box::new(super::ColorEffectSpatialPattern {
+            recipe: super::ColorEffectSpatialRecipe::Perlin {
+                octaves: 5,
+                zoom: 20.0,
+                direction_degrees: 1.0,
+                speed: 1.0,
+                amplitude: 100.0,
+            },
+            beam_targets: vec![super::ColorEffectBeamTarget {
+                fixture_id: 1,
+                beam_index: 7,
+                selection_index: 12,
+                feature_attribute: Some("Dimmer".to_string()),
+            }],
+        }));
+        let json = serde_json::to_string(&spatial).unwrap();
+        let roundtrip: super::ColorEffectRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtrip, spatial);
     }
 
     #[test]

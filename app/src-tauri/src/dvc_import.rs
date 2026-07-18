@@ -10,6 +10,8 @@ use flate2::{read::ZlibDecoder, Decompress, FlushDecompress, Status};
 use protocol::{
     AttributeControl, AttributeResolution, AttributeValueSummary, ChannelFunctionSummary,
     ChaserDirection, ChaserEffectRequest, ChaserFeature, ChaserStep, ChildTimelineSummary,
+    ColorEffectAlgorithm, ColorEffectBeamTarget, ColorEffectColor, ColorEffectInterpolation,
+    ColorEffectRequest, ColorEffectSpatialPattern, ColorEffectSpatialRecipe, ColorEffectStop,
     CueEffectTarget, CueFixtureTarget, CueSummary, DmxModeSummary, DmxOutputConfig,
     DmxUniversePreview, EffectBlendMode, EffectClockSync, EffectParamsSnapshot, EngineSnapshot,
     FixtureProfileSummary, GeometrySummary, LfoEffectRequest, LfoShape, MoveCoordinateMode,
@@ -143,6 +145,8 @@ struct FixtureImportRef {
     fixture_id: u64,
     fixture_index: usize,
     profile_index: usize,
+    supports_dimmer: bool,
+    color_beam_count: u16,
 }
 
 #[derive(Debug, Default)]
@@ -165,6 +169,7 @@ struct DvcRackTargets {
     ordered_steps: Vec<Vec<u64>>,
     fixture_ids: Vec<u64>,
     has_multi_beam_selection: bool,
+    beam_targets: Vec<ColorEffectBeamTarget>,
 }
 
 #[derive(Debug)]
@@ -413,6 +418,22 @@ fn parse_patch(
                 .first()
                 .map(|mode| mode.controls.clone())
                 .unwrap_or_default();
+            let supports_dimmer = controls
+                .iter()
+                .any(|control| normalize_dvc_attribute(&control.attribute) == "dimmer");
+            let color_beam_count = u16::try_from(
+                controls
+                    .iter()
+                    .filter(|control| {
+                        normalize_dvc_attribute(&control.attribute)
+                            .strip_prefix("colorred")
+                            .is_some_and(|suffix| {
+                                suffix.chars().all(|character| character.is_ascii_digit())
+                            })
+                    })
+                    .count(),
+            )
+            .unwrap_or(u16::MAX);
             fixtures.push(PatchedFixtureSummary {
                 id: fixture_id,
                 label,
@@ -453,6 +474,8 @@ fn parse_patch(
                         fixture_id,
                         fixture_index,
                         profile_index,
+                        supports_dimmer,
+                        color_beam_count,
                     },
                 )
                 .is_some()
@@ -720,6 +743,14 @@ fn unique_attribute(base: String, counts: &mut HashMap<String, usize>) -> String
     }
 }
 
+fn normalize_dvc_attribute(attribute: &str) -> String {
+    attribute
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
 fn profile_identity(library_name: &str) -> (String, String) {
     let normalized = library_name.replace('\\', "/");
     let mut segments = normalized
@@ -829,20 +860,27 @@ fn parse_scenes(
             };
             let cue_index = cues.len();
             cues.push(cue);
-            if scene_indices.insert(scene_uid.clone(), cue_index).is_some() {
-                return Err(format!("Duplicate Daslight scene DASUID {scene_uid}"));
+            if scene_indices.contains_key(&scene_uid) {
+                report.approximate.add(
+                    1,
+                    format!("Scene: {}", cues[cue_index].label),
+                    format!(
+                        "duplicate DASUID {scene_uid} imported as a separate Cue; timeline UUID references resolve to its first occurrence"
+                    ),
+                );
+            } else {
+                scene_indices.insert(scene_uid, cue_index);
             }
         }
     }
 
     let mut expected_record_bytes = HashMap::<usize, usize>::new();
+    let mut cue_cursor = 0_usize;
     for bank in banks.iter().copied() {
         let bank_name = non_empty_label(bank.attribute("NAME"), "Bank");
         for scene in element_children(bank).filter(|node| node.has_tag_name("SCENE")) {
-            let scene_uid = required_attribute(scene, "DASUID", "SCENE")?;
-            let cue_index = *scene_indices
-                .get(scene_uid)
-                .ok_or_else(|| format!("Scene index missing for {scene_uid}"))?;
+            let cue_index = cue_cursor;
+            cue_cursor = cue_cursor.saturating_add(1);
             let Some(fixture_datas) = direct_child(scene, "FIXTUREDATAS") else {
                 continue;
             };
@@ -1007,6 +1045,12 @@ fn parse_scene_effects(
                 (Some(4), Some(4), Some(224)) => Some("Polygon"),
                 (Some(8), Some(5), Some(3)) => Some("Inverse Ramp"),
                 (Some(8), Some(5), Some(7)) => Some("Sinus"),
+                (Some(2), Some(2), Some(121)) => Some("Burst"),
+                (Some(2), Some(2), Some(127)) => Some("Knight Rider"),
+                (Some(2), Some(2), Some(131)) => Some("Random fill"),
+                (Some(2), Some(2), Some(133)) => Some("Sparkle"),
+                (Some(6), Some(8), Some(521)) => Some("Rainbow"),
+                (Some(6), Some(8), Some(530)) => Some("Perlin"),
                 _ => None,
             };
             let item = format!(
@@ -1027,9 +1071,14 @@ fn parse_scene_effects(
                         *next_effect_id,
                         fixture_refs,
                     )
+                    .map_err(|error| {
+                        format!(
+                            "RACK TYPE={rack_type} EFFECT TYPE={effect_type} ID={generator_id}: {error}"
+                        )
+                    })
                 }
                 _ => Err(format!(
-                    "RACK TYPE={} EFFECT TYPE={} ID={} is not confirmed for DVC-3a2",
+                    "RACK TYPE={} EFFECT TYPE={} ID={} is not confirmed for DVC-3b",
                     rack_type
                         .map(|value| value.to_string())
                         .unwrap_or_else(|| "missing".to_string()),
@@ -1132,10 +1181,243 @@ fn convert_dvc_effect(
             effect_id,
             fixture_refs,
         ),
+        (2, 2, 121 | 127 | 131 | 133) | (6, 8, 521 | 530) => {
+            convert_dvc_color_spatial_effect(
+                scene,
+                scene_name,
+                rack,
+                effect,
+                generator_id,
+                effect_id,
+                fixture_refs,
+            )
+        }
         _ => Err(format!(
-            "RACK TYPE={rack_type} EFFECT TYPE={effect_type} ID={generator_id} is not confirmed for DVC-3a2"
+            "RACK TYPE={rack_type} EFFECT TYPE={effect_type} ID={generator_id} is not confirmed for DVC-3b"
         )),
     }
+}
+
+fn convert_dvc_color_spatial_effect(
+    scene: Node<'_, '_>,
+    scene_name: &str,
+    rack: Node<'_, '_>,
+    effect: Node<'_, '_>,
+    generator_id: u16,
+    effect_id: u64,
+    fixture_refs: &HashMap<String, FixtureImportRef>,
+) -> Result<ConvertedDvcEffect, String> {
+    let (params, stops) = dvc_color_palette_and_params(effect)?;
+    let generator = match generator_id {
+        121 => "Burst",
+        127 => "Knight Rider",
+        131 => "Random fill",
+        133 => "Sparkle",
+        521 => "Rainbow",
+        530 => "Perlin",
+        _ => {
+            return Err(format!(
+                "COLOR/MAPPINGS generator {generator_id} is not confirmed"
+            ))
+        }
+    };
+    let recipe = match generator_id {
+        127 => {
+            require_exact_dvc_params(&params, &[2, 3, 10, 11, 12, 13, 14])?;
+            require_zero_dvc_param(&params, 2, "Knight Rider header")?;
+            require_zero_dvc_param(&params, 3, "Knight Rider transform")?;
+            ColorEffectSpatialRecipe::KnightRider {
+                size: dvc_u16_param(&params, 10, "Size")?,
+                one_way: dvc_binary_param(&params, 11, "One Way Only")?,
+                fading: dvc_binary_param(&params, 12, "Fading")?,
+                go_outside: dvc_binary_param(&params, 13, "Go Outside")?,
+                gradient: dvc_percent_param(&params, 14, "Gradient")?,
+            }
+        }
+        121 => {
+            require_exact_dvc_params(&params, &[2, 3, 10, 11])?;
+            require_zero_dvc_param(&params, 2, "Burst header")?;
+            require_zero_dvc_param(&params, 3, "Burst transform")?;
+            ColorEffectSpatialRecipe::Burst {
+                color_width: dvc_percent_param(&params, 10, "Color Width")?,
+                gradient: dvc_unit_param(&params, 11, "Gradient")? * 100.0,
+            }
+        }
+        131 => {
+            require_exact_dvc_params(&params, &[2, 3, 10])?;
+            require_zero_dvc_param(&params, 2, "Random fill header")?;
+            require_zero_dvc_param(&params, 3, "Random fill transform")?;
+            ColorEffectSpatialRecipe::RandomFill {
+                point_width: dvc_u16_param(&params, 10, "Point Width")?,
+            }
+        }
+        133 => {
+            require_exact_dvc_params(&params, &[2, 3, 10, 11, 12])?;
+            require_zero_dvc_param(&params, 2, "Sparkle header")?;
+            require_zero_dvc_param(&params, 3, "Sparkle transform")?;
+            ColorEffectSpatialRecipe::Sparkle {
+                number: dvc_u16_param(&params, 10, "Sparkle Number")?,
+                lifespan: dvc_percent_param(&params, 11, "Sparkle LifeSpan")?,
+                width: dvc_u16_param(&params, 12, "Sparkle Width")?,
+            }
+        }
+        521 => {
+            require_exact_dvc_params(&params, &[3, 4, 10, 11, 12])?;
+            let transform = dvc_param(&params, 3, "Transform")?;
+            if !matches!(transform, 0.0 | 1.0) {
+                return Err(format!(
+                    "Rainbow Transform PARAM 3 must be None(0) or Vertical symmetry(1), found {transform}"
+                ));
+            }
+            ColorEffectSpatialRecipe::Rainbow {
+                vertical_symmetry: transform == 1.0,
+                rotation_degrees: dvc_finite_param(&params, 4, "Rotation")?,
+                color_width: dvc_percent_param(&params, 10, "Color Width")?,
+                angle_degrees: dvc_finite_param(&params, 11, "Angle")?,
+                gradient: dvc_unit_param(&params, 12, "Gradient")? * 100.0,
+            }
+        }
+        530 => {
+            require_exact_dvc_params(&params, &[3, 4, 10, 11, 12, 13, 14])?;
+            require_zero_dvc_param(&params, 3, "Perlin transform")?;
+            require_zero_dvc_param(&params, 4, "Perlin rotation")?;
+            let octaves = dvc_u16_param(&params, 10, "Octaves")?;
+            if octaves > 16 {
+                return Err(format!(
+                    "Perlin Octaves must be within 1..16, found {octaves}"
+                ));
+            }
+            let zoom = dvc_finite_param(&params, 11, "Zoom")?;
+            if zoom <= 0.0 {
+                return Err(format!("Perlin Zoom must be greater than 0, found {zoom}"));
+            }
+            ColorEffectSpatialRecipe::Perlin {
+                octaves: octaves as u8,
+                zoom,
+                direction_degrees: dvc_finite_param(&params, 12, "Direction")?,
+                speed: dvc_finite_param(&params, 13, "Speed")?,
+                amplitude: dvc_percent_param(&params, 14, "Amplitude")?,
+            }
+        }
+        _ => unreachable!(),
+    };
+    let mut targets = dvc_rack_targets(rack, fixture_refs)?;
+    if targets.beam_targets.is_empty() {
+        return Err(format!("BEAMS resolved to no {generator} beam targets"));
+    }
+    if matches!(generator_id, 521 | 530) {
+        for target in &mut targets.beam_targets {
+            target.feature_attribute = Some("Dimmer".to_string());
+        }
+    }
+    let omitted_spatial_targets = retain_dvc_color_spatial_targets(
+        &mut targets,
+        fixture_refs,
+        matches!(generator_id, 521 | 530),
+    );
+    if targets.beam_targets.is_empty() {
+        return Err(format!(
+            "BEAMS resolved to no {generator} targets with a verified color segment or Dimmer feature"
+        ));
+    }
+    let selection_count = targets.ordered_steps.len();
+    let beam_count = targets.beam_targets.len();
+    let mut approximations = Vec::new();
+    if omitted_spatial_targets > 0 {
+        approximations.push(format!(
+            "{omitted_spatial_targets} beam target(s) without a verified color segment or Dimmer attribute were omitted"
+        ));
+    }
+    let (period_ms, period_note) = dvc_move_period(effect, scene, generator, &mut approximations)?;
+    let (clock_sync, clock_note, clock_warning) = dvc_scene_clock_sync(scene);
+    if let Some(clock_warning) = clock_warning {
+        approximations.push(clock_warning);
+    }
+    let recipe_note = match &recipe {
+        ColorEffectSpatialRecipe::KnightRider {
+            size,
+            one_way,
+            fading,
+            go_outside,
+            gradient,
+        } => format!(
+            "Size={size}; OneWay={}; Fading={}; GoOutside={}; Gradient={gradient}",
+            u8::from(*one_way),
+            u8::from(*fading),
+            u8::from(*go_outside)
+        ),
+        ColorEffectSpatialRecipe::Burst {
+            color_width,
+            gradient,
+        } => format!("ColorWidth={color_width}; Gradient={gradient}"),
+        ColorEffectSpatialRecipe::RandomFill { point_width } => {
+            format!("PointWidth={point_width}")
+        }
+        ColorEffectSpatialRecipe::Sparkle {
+            number,
+            lifespan,
+            width,
+        } => format!("Number={number}; LifeSpan={lifespan}; Width={width}"),
+        ColorEffectSpatialRecipe::Rainbow {
+            vertical_symmetry,
+            rotation_degrees,
+            color_width,
+            angle_degrees,
+            gradient,
+        } => format!(
+            "VerticalSymmetry={}; Rotation={rotation_degrees}; ColorWidth={color_width}; Angle={angle_degrees}; Gradient={gradient}",
+            u8::from(*vertical_symmetry)
+        ),
+        ColorEffectSpatialRecipe::Perlin {
+            octaves,
+            zoom,
+            direction_degrees,
+            speed,
+            amplitude,
+        } => format!(
+            "Octaves={octaves}; Zoom={zoom}; Direction={direction_degrees}; Speed={speed}; Amplitude={amplitude}"
+        ),
+    };
+    let mapping_recipe = matches!(generator_id, 521 | 530);
+    let request = ColorEffectRequest {
+        label: format!("{scene_name} ({generator})"),
+        fixture_ids: targets.fixture_ids,
+        target_group_ids: Vec::new(),
+        stops,
+        algorithm: ColorEffectAlgorithm::Sequence,
+        interpolation: ColorEffectInterpolation::Rgb,
+        period_ms,
+        clock_sync,
+        phase: 0.0,
+        fixture_spread: 0.0,
+        blend_mode: if mapping_recipe {
+            EffectBlendMode::Multiply
+        } else {
+            EffectBlendMode::Override
+        },
+        spatial_pattern: Some(Box::new(ColorEffectSpatialPattern {
+            recipe,
+            beam_targets: targets.beam_targets,
+        })),
+    };
+    let note = format!(
+        "palette_source=PARAM TYPE=4 ID=1/COLORS/COLOR@VAL; palette_colors={}; beams={beam_count}; selections={selection_count}; {period_note}; {clock_note}; {recipe_note}",
+        request.stops.len()
+    );
+    engine::validate_color_effect_request(&request).map_err(|error| {
+        format!("confirmed {generator} parameters are not representable: {error}")
+    })?;
+    Ok(ConvertedDvcEffect {
+        target: CueEffectTarget {
+            effect_id,
+            enabled: true,
+            params: Some(EffectParamsSnapshot::Color(request)),
+        },
+        generator,
+        note,
+        approximations,
+        warnings: Vec::new(),
+    })
 }
 
 fn convert_dvc_chaser_effect(
@@ -1160,13 +1442,19 @@ fn convert_dvc_chaser_effect(
     };
     require_exact_dvc_params(&params, expected_params)?;
 
-    let targets = dvc_rack_targets(rack, fixture_refs)?;
+    let mut targets = dvc_rack_targets(rack, fixture_refs)?;
+    let incompatible_dimmer_targets = retain_dvc_dimmer_targets(&mut targets, fixture_refs);
     let original_step_count = targets.ordered_steps.len();
     if original_step_count == 0 {
         return Err("BEAMS resolved to no Chaser steps".to_string());
     }
 
     let mut approximations = Vec::new();
+    if incompatible_dimmer_targets > 0 {
+        approximations.push(format!(
+            "{incompatible_dimmer_targets} fixture target(s) without a Dimmer attribute were omitted"
+        ));
+    }
     let mut warnings = Vec::new();
     let mut ordered_steps = targets.ordered_steps;
     if ordered_steps.len() == 1 {
@@ -1431,12 +1719,18 @@ fn convert_dvc_inverse_ramp_effect(
     let raw_high = center + half_span;
     let low = normalized_dmx(raw_high);
     let high = normalized_dmx(raw_low);
-    let targets = dvc_rack_targets(rack, fixture_refs)?;
+    let mut targets = dvc_rack_targets(rack, fixture_refs)?;
+    let incompatible_dimmer_targets = retain_dvc_dimmer_targets(&mut targets, fixture_refs);
     if targets.fixture_ids.is_empty() {
         return Err("BEAMS resolved to no Inverse Ramp fixture targets".to_string());
     }
 
     let mut approximations = Vec::new();
+    if incompatible_dimmer_targets > 0 {
+        approximations.push(format!(
+            "{incompatible_dimmer_targets} fixture target(s) without a Dimmer attribute were omitted"
+        ));
+    }
     if targets.has_multi_beam_selection {
         approximations.push("segment selection approximated to fixture".to_string());
     }
@@ -1530,12 +1824,18 @@ fn convert_dvc_sinus_effect(
     let half_span = size * 0.5;
     let low = normalized_dmx(center - half_span);
     let high = normalized_dmx(center + half_span);
-    let targets = dvc_rack_targets(rack, fixture_refs)?;
+    let mut targets = dvc_rack_targets(rack, fixture_refs)?;
+    let incompatible_dimmer_targets = retain_dvc_dimmer_targets(&mut targets, fixture_refs);
     if targets.fixture_ids.is_empty() {
         return Err("BEAMS resolved to no Sinus fixture targets".to_string());
     }
 
     let mut approximations = Vec::new();
+    if incompatible_dimmer_targets > 0 {
+        approximations.push(format!(
+            "{incompatible_dimmer_targets} fixture target(s) without a Dimmer attribute were omitted"
+        ));
+    }
     if targets.has_multi_beam_selection {
         approximations.push("segment selection approximated to fixture".to_string());
     }
@@ -1607,6 +1907,109 @@ fn dvc_effect_params(effect: Node<'_, '_>) -> Result<HashMap<u16, f64>, String> 
         }
     }
     Ok(params)
+}
+
+fn dvc_color_palette_and_params(
+    effect: Node<'_, '_>,
+) -> Result<(HashMap<u16, f64>, Vec<ColorEffectStop>), String> {
+    let params_node = direct_child(effect, "PARAMS")
+        .ok_or_else(|| "confirmed COLOR/MAPPINGS generator is missing PARAMS".to_string())?;
+    let param_nodes = element_children(params_node)
+        .filter(|node| node.has_tag_name("PARAM"))
+        .collect::<Vec<_>>();
+    let declared = params_node
+        .attribute("NB")
+        .and_then(|value| value.parse::<usize>().ok());
+    if declared.is_some_and(|count| count != param_nodes.len()) {
+        return Err(format!(
+            "PARAMS declares {} entries but contains {}",
+            declared.unwrap_or_default(),
+            param_nodes.len()
+        ));
+    }
+    let mut seen = HashSet::new();
+    let mut params = HashMap::new();
+    let mut palette = None;
+    for param in param_nodes {
+        let id = required_attribute(param, "ID", "PARAM")?
+            .parse::<u16>()
+            .map_err(|error| format!("PARAM ID is invalid: {error}"))?;
+        if !seen.insert(id) {
+            return Err(format!("PARAM {id} is duplicated"));
+        }
+        if id == 1 {
+            if param.attribute("TYPE") != Some("4") {
+                return Err(format!(
+                    "palette PARAM 1 must have TYPE=4, found {}",
+                    param.attribute("TYPE").unwrap_or("missing")
+                ));
+            }
+            let colors = direct_child(param, "COLORS")
+                .ok_or_else(|| "palette PARAM TYPE=4 ID=1 is missing COLORS".to_string())?;
+            let color_nodes = element_children(colors)
+                .filter(|node| node.has_tag_name("COLOR"))
+                .collect::<Vec<_>>();
+            let declared_colors = colors
+                .attribute("NB")
+                .and_then(|value| value.parse::<usize>().ok());
+            if declared_colors.is_some_and(|count| count != color_nodes.len()) {
+                return Err(format!(
+                    "COLORS declares {} entries but contains {}",
+                    declared_colors.unwrap_or_default(),
+                    color_nodes.len()
+                ));
+            }
+            if !(2..=8).contains(&color_nodes.len()) {
+                return Err(format!(
+                    "palette requires 2..8 COLOR entries, found {}",
+                    color_nodes.len()
+                ));
+            }
+            let color_count = color_nodes.len();
+            let mut stops = Vec::with_capacity(color_count);
+            for (index, color) in color_nodes.into_iter().enumerate() {
+                let raw = required_attribute(color, "VAL", "COLOR")?;
+                let components = raw.split('/').collect::<Vec<_>>();
+                if components.len() != 18 {
+                    return Err(format!(
+                        "palette COLOR {index} requires the verified 18-component VAL, found {}",
+                        components.len()
+                    ));
+                }
+                let mut rgb = [0_u16; 3];
+                for (component_index, output) in rgb.iter_mut().enumerate() {
+                    let value = components[component_index].parse::<f64>().map_err(|error| {
+                        format!("palette COLOR {index} component {component_index} is invalid: {error}")
+                    })?;
+                    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                        return Err(format!(
+                            "palette COLOR {index} component {component_index} must be within 0..1, found {value}"
+                        ));
+                    }
+                    *output = (value * u16::MAX as f64).round() as u16;
+                }
+                stops.push(ColorEffectStop {
+                    position: index as f32 / (color_count - 1) as f32,
+                    color: ColorEffectColor {
+                        red: rgb[0],
+                        green: rgb[1],
+                        blue: rgb[2],
+                    },
+                });
+            }
+            palette = Some(stops);
+        } else {
+            let value = required_attribute(param, "VAL", "PARAM")?
+                .parse::<f64>()
+                .map_err(|error| format!("PARAM {id} value is invalid: {error}"))?;
+            params.insert(id, value);
+        }
+    }
+    let palette = palette.ok_or_else(|| {
+        "palette source PARAM TYPE=4 ID=1/COLORS/COLOR@VAL was not found; generator remains Skipped"
+            .to_string()
+    })?;
+    Ok((params, palette))
 }
 
 fn dvc_move_effect_params(
@@ -1779,6 +2182,48 @@ fn dvc_param(params: &HashMap<u16, f64>, id: u16, label: &str) -> Result<f64, St
         .ok_or_else(|| format!("{label} PARAM {id} is missing"))
 }
 
+fn dvc_finite_param(params: &HashMap<u16, f64>, id: u16, label: &str) -> Result<f32, String> {
+    let value = dvc_param(params, id, label)?;
+    if !value.is_finite() || value < f32::MIN as f64 || value > f32::MAX as f64 {
+        return Err(format!("{label} PARAM {id} must be finite, found {value}"));
+    }
+    Ok(value as f32)
+}
+
+fn dvc_percent_param(params: &HashMap<u16, f64>, id: u16, label: &str) -> Result<f32, String> {
+    let value = dvc_finite_param(params, id, label)?;
+    if !(0.0..=100.0).contains(&value) {
+        return Err(format!(
+            "{label} PARAM {id} must be within 0..100, found {value}"
+        ));
+    }
+    Ok(value)
+}
+
+fn dvc_unit_param(params: &HashMap<u16, f64>, id: u16, label: &str) -> Result<f32, String> {
+    let value = dvc_finite_param(params, id, label)?;
+    if !(0.0..=1.0).contains(&value) {
+        return Err(format!(
+            "{label} PARAM {id} must be within 0..1, found {value}"
+        ));
+    }
+    Ok(value)
+}
+
+fn dvc_u16_param(params: &HashMap<u16, f64>, id: u16, label: &str) -> Result<u16, String> {
+    let value = dvc_positive_integer_param(params, id, label)?;
+    u16::try_from(value).map_err(|_| format!("{label} PARAM {id} exceeds u16: {value}"))
+}
+
+fn require_zero_dvc_param(params: &HashMap<u16, f64>, id: u16, label: &str) -> Result<(), String> {
+    let value = dvc_param(params, id, label)?;
+    if value == 0.0 {
+        Ok(())
+    } else {
+        Err(format!("{label} PARAM {id} must be 0, found {value}"))
+    }
+}
+
 fn dvc_binary_param(params: &HashMap<u16, f64>, id: u16, label: &str) -> Result<bool, String> {
     match dvc_param(params, id, label)? {
         value if value == 0.0 => Ok(false),
@@ -1820,6 +2265,7 @@ fn dvc_rack_targets(
     let mut fixture_ids = Vec::new();
     let mut seen_fixture_ids = HashSet::new();
     let mut has_multi_beam_selection = false;
+    let mut beam_targets = Vec::with_capacity(beam_nodes.len());
     for (beam_index, beam) in beam_nodes.into_iter().enumerate() {
         let fixture_uid = required_attribute(beam, "FIXTURE", "BEAM")?;
         let fixture_ref = fixture_refs.get(fixture_uid).ok_or_else(|| {
@@ -1849,13 +2295,71 @@ fn dvc_rack_targets(
         if !step.contains(&fixture_ref.fixture_id) {
             step.push(fixture_ref.fixture_id);
         }
+        beam_targets.push(ColorEffectBeamTarget {
+            fixture_id: fixture_ref.fixture_id,
+            beam_index: beam_id,
+            selection_index: u32::try_from(selection_index).unwrap_or(u32::MAX),
+            feature_attribute: None,
+        });
     }
 
     Ok(DvcRackTargets {
         ordered_steps,
         fixture_ids,
         has_multi_beam_selection,
+        beam_targets,
     })
+}
+
+fn retain_dvc_dimmer_targets(
+    targets: &mut DvcRackTargets,
+    fixture_refs: &HashMap<String, FixtureImportRef>,
+) -> usize {
+    let supported = fixture_refs
+        .values()
+        .filter(|fixture_ref| fixture_ref.supports_dimmer)
+        .map(|fixture_ref| fixture_ref.fixture_id)
+        .collect::<HashSet<_>>();
+    let before = targets.fixture_ids.len();
+    targets
+        .fixture_ids
+        .retain(|fixture_id| supported.contains(fixture_id));
+    for step in &mut targets.ordered_steps {
+        step.retain(|fixture_id| supported.contains(fixture_id));
+    }
+    targets
+        .beam_targets
+        .retain(|target| supported.contains(&target.fixture_id));
+    before.saturating_sub(targets.fixture_ids.len())
+}
+
+fn retain_dvc_color_spatial_targets(
+    targets: &mut DvcRackTargets,
+    fixture_refs: &HashMap<String, FixtureImportRef>,
+    allow_dimmer_feature: bool,
+) -> usize {
+    let capabilities = fixture_refs
+        .values()
+        .map(|fixture_ref| (fixture_ref.fixture_id, *fixture_ref))
+        .collect::<HashMap<_, _>>();
+    let before = targets.beam_targets.len();
+    targets.beam_targets.retain(|target| {
+        capabilities
+            .get(&target.fixture_id)
+            .is_some_and(|fixture_ref| {
+                target.beam_index < fixture_ref.color_beam_count
+                    || (allow_dimmer_feature && fixture_ref.supports_dimmer)
+            })
+    });
+    let retained_fixture_ids = targets
+        .beam_targets
+        .iter()
+        .map(|target| target.fixture_id)
+        .collect::<HashSet<_>>();
+    targets
+        .fixture_ids
+        .retain(|fixture_id| retained_fixture_ids.contains(fixture_id));
+    before.saturating_sub(targets.beam_targets.len())
 }
 
 fn dvc_chaser_step_duration(
@@ -2870,6 +3374,84 @@ mod tests {
         )
     }
 
+    fn synthetic_dvc3b() -> String {
+        let patch = r#"<PATCH NBFIXTURE="2"><FIXTURES><SSLLIBRARY SSLFIXUID="profile-color" SSLNAME="Test/Two Segment RGBA.ssl2"><SSLPROPERTIES SSLBEAMOPENING="20"/><SSLMODES SSLNBMODE="1"><SSLMODE SSLMODEINDEX="0" SSLNBCHANNEL="8"><SSLCHANNEL SSLCHANNELTYPE="25" SSLCHANNELNAME="Red 1"><SSLPRESETS><SSLPRESET SSLPRESETNAME="Red" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL><SSLCHANNEL SSLCHANNELTYPE="26" SSLCHANNELNAME="Green 1"><SSLPRESETS><SSLPRESET SSLPRESETNAME="Green" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL><SSLCHANNEL SSLCHANNELTYPE="27" SSLCHANNELNAME="Blue 1"><SSLPRESETS><SSLPRESET SSLPRESETNAME="Blue" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL><SSLCHANNEL SSLCHANNELTYPE="45" SSLCHANNELNAME="Amber 1"><SSLPRESETS><SSLPRESET SSLPRESETNAME="Amber" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL><SSLCHANNEL SSLCHANNELTYPE="25" SSLCHANNELNAME="Red 2"><SSLPRESETS><SSLPRESET SSLPRESETNAME="Red" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL><SSLCHANNEL SSLCHANNELTYPE="26" SSLCHANNELNAME="Green 2"><SSLPRESETS><SSLPRESET SSLPRESETNAME="Green" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL><SSLCHANNEL SSLCHANNELTYPE="27" SSLCHANNELNAME="Blue 2"><SSLPRESETS><SSLPRESET SSLPRESETNAME="Blue" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL><SSLCHANNEL SSLCHANNELTYPE="45" SSLCHANNELNAME="Amber 2"><SSLPRESETS><SSLPRESET SSLPRESETNAME="Amber" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL></SSLMODE></SSLMODES></SSLLIBRARY><FIXTURE DASUID="fixture-1" NAME="Bar 1" ADDRESS="1" UNIVERS="1" POSX="0" POSY="0" ANGLE="0"/><FIXTURE DASUID="fixture-2" NAME="Bar 2" ADDRESS="9" UNIVERS="1" POSX="100" POSY="50" ANGLE="0"/></FIXTURES></PATCH>"#;
+        let palette = r#"<PARAM TYPE="4" ID="1"><COLORS NB="3"><COLOR VAL="0/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="1/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0/0/1/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/></COLORS></PARAM>"#;
+        let beams = r#"<BEAMS NB="4"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-1" BEAMID="1" IDSELECTION="2"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="3"/><BEAM FIXTURE="fixture-2" BEAMID="1" IDSELECTION="4"/></BEAMS>"#;
+        let scene = |uid: &str,
+                     name: &str,
+                     rack_type: u16,
+                     effect_type: u16,
+                     generator_id: u16,
+                     numeric_params: &str,
+                     param_count: usize| {
+            format!(
+                r##"<SCENE DASUID="{uid}" NAME="{name}" COLOR="#ff112233" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="8"><FIXTUREDATAS NB="0"/><RACKS><RACK TYPE="{rack_type}"><EFFECT TYPE="{effect_type}" ID="{generator_id}" DURATION="1000"><PARAMS NB="{param_count}">{palette}{numeric_params}</PARAMS></EFFECT>{beams}</RACK></RACKS></SCENE>"##
+            )
+        };
+        let scenes = [
+            scene(
+                "scene-127",
+                "Knight",
+                2,
+                2,
+                127,
+                r#"<PARAM TYPE="2" ID="2" VAL="0"/><PARAM TYPE="6" ID="3" VAL="0"/><PARAM TYPE="0" ID="10" VAL="2"/><PARAM TYPE="2" ID="11" VAL="1"/><PARAM TYPE="2" ID="12" VAL="1"/><PARAM TYPE="2" ID="13" VAL="0"/><PARAM TYPE="0" ID="14" VAL="50"/>"#,
+                8,
+            ),
+            scene(
+                "scene-121",
+                "Burst",
+                2,
+                2,
+                121,
+                r#"<PARAM TYPE="2" ID="2" VAL="0"/><PARAM TYPE="6" ID="3" VAL="0"/><PARAM TYPE="0" ID="10" VAL="50"/><PARAM TYPE="1" ID="11" VAL="1"/>"#,
+                5,
+            ),
+            scene(
+                "scene-131",
+                "Random fill",
+                2,
+                2,
+                131,
+                r#"<PARAM TYPE="2" ID="2" VAL="0"/><PARAM TYPE="6" ID="3" VAL="0"/><PARAM TYPE="0" ID="10" VAL="1"/>"#,
+                4,
+            ),
+            scene(
+                "scene-133",
+                "Sparkle",
+                2,
+                2,
+                133,
+                r#"<PARAM TYPE="2" ID="2" VAL="0"/><PARAM TYPE="6" ID="3" VAL="0"/><PARAM TYPE="0" ID="10" VAL="2"/><PARAM TYPE="1" ID="11" VAL="25"/><PARAM TYPE="0" ID="12" VAL="1"/>"#,
+                6,
+            ),
+            scene(
+                "scene-521",
+                "Rainbow",
+                6,
+                8,
+                521,
+                r#"<PARAM TYPE="6" ID="3" VAL="1"/><PARAM TYPE="0" ID="4" VAL="171"/><PARAM TYPE="1" ID="10" VAL="0"/><PARAM TYPE="1" ID="11" VAL="0"/><PARAM TYPE="1" ID="12" VAL="1"/>"#,
+                6,
+            ),
+            scene(
+                "scene-530",
+                "Perlin",
+                6,
+                8,
+                530,
+                r#"<PARAM TYPE="6" ID="3" VAL="0"/><PARAM TYPE="0" ID="4" VAL="0"/><PARAM TYPE="0" ID="10" VAL="5"/><PARAM TYPE="1" ID="11" VAL="20"/><PARAM TYPE="1" ID="12" VAL="1"/><PARAM TYPE="1" ID="13" VAL="1"/><PARAM TYPE="1" ID="14" VAL="100"/>"#,
+                8,
+            ),
+        ]
+        .join("");
+        format!(
+            r##"<DLMFILE TYPE="Daslight" VERSION="5" DASBUILD="test-dvc3b" VERSIONFILE="2"><PATCHS DATA="{}"/><FIXTUREGROUPS/><SCENES><BANK DASUID="bank-1" NAME="DVC-3b" COLOR="#ff112233">{scenes}</BANK></SCENES><SHORTCUTS/><TOUCH/><DEVICES/></DLMFILE>"##,
+            qcompress(patch.as_bytes())
+        )
+    }
+
     fn effect_test_fixture_refs() -> HashMap<String, FixtureImportRef> {
         HashMap::from([
             (
@@ -2878,6 +3460,8 @@ mod tests {
                     fixture_id: 1,
                     fixture_index: 0,
                     profile_index: 0,
+                    supports_dimmer: true,
+                    color_beam_count: 1,
                 },
             ),
             (
@@ -2886,6 +3470,8 @@ mod tests {
                     fixture_id: 2,
                     fixture_index: 1,
                     profile_index: 0,
+                    supports_dimmer: true,
+                    color_beam_count: 1,
                 },
             ),
         ])
@@ -3133,6 +3719,115 @@ mod tests {
     }
 
     #[test]
+    fn dvc3b_six_spatial_generators_convert_with_palette_and_beam_order() {
+        let xml = synthetic_dvc3b();
+        let outcome = import_bytes(xml.as_bytes(), "synthetic-dvc3b.dvc").unwrap();
+        assert_eq!(outcome.report.summary.effects_converted, 6);
+        assert_eq!(outcome.report.summary.effects_skipped, 0);
+        assert!(outcome
+            .report
+            .converted
+            .details
+            .iter()
+            .filter(|detail| detail.item.starts_with("Effect:"))
+            .all(|detail| detail
+                .message
+                .contains("palette_source=PARAM TYPE=4 ID=1/COLORS/COLOR@VAL")));
+
+        let requests = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .flat_map(|cue| &cue.effect_targets)
+            .filter_map(|target| match target.params.as_ref() {
+                Some(EffectParamsSnapshot::Color(request)) => Some(request),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(requests.len(), 6);
+        assert!(requests.iter().all(|request| request.stops.len() == 3));
+        assert!(requests.iter().all(|request| {
+            request.spatial_pattern.as_ref().is_some_and(|pattern| {
+                pattern.beam_targets.len() == 4
+                    && pattern
+                        .beam_targets
+                        .iter()
+                        .map(|target| target.selection_index)
+                        .eq(0..4)
+            })
+        }));
+        assert!(requests.iter().any(|request| matches!(
+            request
+                .spatial_pattern
+                .as_ref()
+                .map(|pattern| &pattern.recipe),
+            Some(ColorEffectSpatialRecipe::KnightRider { size: 2, .. })
+        )));
+        assert!(requests.iter().any(|request| matches!(
+            request
+                .spatial_pattern
+                .as_ref()
+                .map(|pattern| &pattern.recipe),
+            Some(ColorEffectSpatialRecipe::Burst {
+                color_width: 50.0,
+                gradient: 100.0
+            })
+        )));
+        assert!(requests.iter().any(|request| matches!(
+            request
+                .spatial_pattern
+                .as_ref()
+                .map(|pattern| &pattern.recipe),
+            Some(ColorEffectSpatialRecipe::RandomFill { point_width: 1 })
+        )));
+        assert!(requests.iter().any(|request| matches!(
+            request
+                .spatial_pattern
+                .as_ref()
+                .map(|pattern| &pattern.recipe),
+            Some(ColorEffectSpatialRecipe::Sparkle { number: 2, .. })
+        )));
+        assert!(requests.iter().any(|request| matches!(
+            request
+                .spatial_pattern
+                .as_ref()
+                .map(|pattern| &pattern.recipe),
+            Some(ColorEffectSpatialRecipe::Rainbow {
+                vertical_symmetry: true,
+                rotation_degrees: 171.0,
+                ..
+            })
+        )));
+        assert!(requests.iter().any(|request| matches!(
+            request
+                .spatial_pattern
+                .as_ref()
+                .map(|pattern| &pattern.recipe),
+            Some(ColorEffectSpatialRecipe::Perlin {
+                octaves: 5,
+                zoom: 20.0,
+                ..
+            })
+        )));
+    }
+
+    #[test]
+    fn dvc3b_generator_without_verified_palette_source_stays_skipped() {
+        let xml = synthetic_dvc3b().replacen(
+            r#"<PARAM TYPE="4" ID="1"><COLORS NB="3"><COLOR VAL="0/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="1/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0/0/1/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/></COLORS></PARAM>"#,
+            r#"<PARAM TYPE="4" ID="1"><NOT_COLORS/></PARAM>"#,
+            1,
+        );
+        let outcome = import_bytes(xml.as_bytes(), "synthetic-dvc3b-missing-palette.dvc").unwrap();
+        assert_eq!(outcome.report.summary.effects_converted, 5);
+        assert_eq!(outcome.report.summary.effects_skipped, 1);
+        assert!(outcome.report.skipped.details.iter().any(|detail| detail
+            .message
+            .contains("palette PARAM TYPE=4 ID=1 is missing COLORS")));
+    }
+
+    #[test]
     fn dvc_move_unexpected_params_and_empty_points_stay_skipped() {
         let empty_document = Document::parse(
             r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="4"><EFFECT TYPE="4" ID="224" DURATION="1000"><PARAMS NB="3"><PARAM TYPE="5" ID="1"><POINTS NB="0"/></PARAM><PARAM TYPE="1" ID="2" VAL="0"/><PARAM TYPE="2" ID="3" VAL="0"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
@@ -3343,6 +4038,68 @@ mod tests {
     }
 
     #[test]
+    fn dvc_local_golden_spatial_color_cue_renders_and_moves() {
+        let path = Path::new(r"C:\Users\kouty\Desktop\Shinkan-Left\Shinkan2026.dvc");
+        if !path.is_file() {
+            eprintln!(
+                "Skipping local Daslight golden: {} is unavailable",
+                path.display()
+            );
+            return;
+        }
+        let outcome = import_path(path).unwrap();
+        let cue_id = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .find(|cue| cue.label == "B-WineRed")
+            .expect("full Shinkan project should contain the B-WineRed Knight Rider cue")
+            .id;
+
+        let mut snapshot_to_load = outcome.project.snapshot.clone();
+        snapshot_to_load.output.enabled = false;
+        for output in &mut snapshot_to_load.dmx_outputs {
+            output.enabled = false;
+        }
+        let engine = engine::EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine.load_project_snapshot(snapshot_to_load).unwrap();
+        engine
+            .send(engine::EngineCommand::TriggerCue(cue_id))
+            .unwrap();
+
+        let mut first: Option<Vec<u8>> = None;
+        for _ in 0..40 {
+            let snapshot = engine.snapshot();
+            if snapshot.active_cue_id == Some(cue_id) {
+                let preview = snapshot.dmx_preview;
+                if preview.iter().filter(|value| **value != 0).count() >= 3 {
+                    first = Some(preview);
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        let first =
+            first.expect("imported Knight Rider cue must light multiple bar segment channels");
+
+        // The Knight Rider window sweeps the 64-beam strip; the rendered frame
+        // must change over a fraction of the scene duration.
+        let mut moved = false;
+        for _ in 0..12 {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            if engine.snapshot().dmx_preview != first {
+                moved = true;
+                break;
+            }
+        }
+        assert!(moved, "spatial color pattern output must sweep over time");
+    }
+
+    #[test]
     fn dvc_local_golden_fx_cue_renders_chaser_via_go_path() {
         let path = Path::new(r"C:\Users\kouty\Documents\Daslight 5\Projects\Shinkan2026.dvc");
         if !path.is_file() {
@@ -3488,8 +4245,49 @@ mod tests {
         }
         let outcome = import_path(path).unwrap();
         crate::validate_project_file(&outcome.project).unwrap();
-        assert_eq!(outcome.report.summary.effects_converted, 14);
-        assert_eq!(outcome.report.summary.effects_skipped, 16);
+        assert_eq!(outcome.report.summary.effects_converted, 22);
+        assert_eq!(outcome.report.summary.effects_skipped, 8);
+        let spatial_counts =
+            outcome
+                .project
+                .snapshot
+                .cues
+                .iter()
+                .flat_map(|cue| &cue.effect_targets)
+                .filter_map(|target| match target.params.as_ref() {
+                    Some(EffectParamsSnapshot::Color(request)) => request
+                        .spatial_pattern
+                        .as_ref()
+                        .map(|pattern| match &pattern.recipe {
+                            ColorEffectSpatialRecipe::KnightRider { .. } => 127,
+                            ColorEffectSpatialRecipe::Burst { .. } => 121,
+                            ColorEffectSpatialRecipe::RandomFill { .. } => 131,
+                            ColorEffectSpatialRecipe::Sparkle { .. } => 133,
+                            ColorEffectSpatialRecipe::Rainbow { .. } => 521,
+                            ColorEffectSpatialRecipe::Perlin { .. } => 530,
+                        }),
+                    _ => None,
+                })
+                .fold(HashMap::<u16, usize>::new(), |mut counts, generator| {
+                    *counts.entry(generator).or_default() += 1;
+                    counts
+                });
+        assert_eq!(spatial_counts.get(&127), Some(&5));
+        assert_eq!(spatial_counts.get(&121), Some(&1));
+        assert_eq!(spatial_counts.get(&131), Some(&1));
+        assert_eq!(spatial_counts.get(&133), Some(&1));
+        assert!(outcome
+            .report
+            .skipped
+            .details
+            .iter()
+            .any(|detail| { detail.message.contains("ID=129") || detail.item.contains("ID=129") }));
+        assert!(outcome
+            .report
+            .skipped
+            .details
+            .iter()
+            .any(|detail| { detail.message.contains("ID=130") || detail.item.contains("ID=130") }));
 
         let moves = outcome
             .project
@@ -3543,6 +4341,55 @@ mod tests {
     }
 
     #[test]
+    fn dvc_local_homecoming_mapping_and_burst_goldens_match_when_present() {
+        let path = Path::new(r"C:\Users\kouty\Desktop\homecoming2026\homecoming2606.dvc");
+        if !path.is_file() {
+            eprintln!(
+                "Skipping local homecoming Daslight golden: {} is unavailable",
+                path.display()
+            );
+            return;
+        }
+        let outcome = import_path(path).unwrap();
+        crate::validate_project_file(&outcome.project).unwrap();
+        let recipes = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .flat_map(|cue| &cue.effect_targets)
+            .filter_map(|target| match target.params.as_ref() {
+                Some(EffectParamsSnapshot::Color(request)) => request
+                    .spatial_pattern
+                    .as_ref()
+                    .map(|pattern| &pattern.recipe),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            recipes
+                .iter()
+                .filter(|recipe| matches!(recipe, ColorEffectSpatialRecipe::Burst { .. }))
+                .count(),
+            3
+        );
+        assert_eq!(
+            recipes
+                .iter()
+                .filter(|recipe| matches!(recipe, ColorEffectSpatialRecipe::Rainbow { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            recipes
+                .iter()
+                .filter(|recipe| matches!(recipe, ColorEffectSpatialRecipe::Perlin { .. }))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn dvc_local_homecoming_inverse_ramp_matches_verified_generator_when_present() {
         let path = Path::new(r"C:\Users\kouty\Desktop\homecoming2026\homecoming2606.dvc");
         if !path.is_file() {
@@ -3589,6 +4436,8 @@ mod tests {
                     fixture_id,
                     fixture_index: fixture_id as usize - 1,
                     profile_index: 0,
+                    supports_dimmer: true,
+                    color_beam_count: 1,
                 },
             );
         }

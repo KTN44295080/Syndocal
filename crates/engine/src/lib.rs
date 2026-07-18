@@ -28,29 +28,29 @@ use protocol::{
     AutoVjMode, AutoVjRhythmSource, AutoVjSnapshot, AutoVjStatus, AutoVjTrigger, AutomationId,
     AutomationInterpolation, AutomationKeyframeSummary, ChaserDirection, ChaserEffectRequest,
     ChildTimelineSummary, ClockSnapshot, ClockSource, ColorEffectAlgorithm, ColorEffectColor,
-    ColorEffectInterpolation, ColorEffectRequest, CompositionId, CompositionSummary,
-    CueEffectTarget, CueFixtureTarget, CueId, CueIfcbTiming, CueListId, CueListSummary,
-    CueNodeGraphTarget, CuePaletteTarget, CuePartSummary, CueStepSummary, CueSummary, DmxMergeMode,
-    DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, DmxOutputRouteTelemetry,
-    DmxUniversePreview, EffectBlendMode, EffectId, EffectKind, EffectParamsSnapshot, EffectSummary,
-    EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId, FixtureId,
-    FixtureLimits, FixtureProfileSummary, LfoEffectRequest, LfoShape, LiveAudioFrame,
-    LiveAudioReactiveFeatures, MoveCoordinateMode, MoveDirection, MoveEffectRequest, MovePathPoint,
-    NodeGraphAudioRuntimeStatus, NodeGraphId, NodeGraphNodeKind, NodeGraphNodeSummary,
-    NodeGraphSummary, NodeGraphTransformOp, PaletteId, PatchFixtureRequest, PatchedFixtureSummary,
-    PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot, ProgrammerValueSummary,
-    RecallMode, ReferencePaletteSummary, Rotation3, StageMapConfig, StageMapPresetSummary,
-    StageObjectId, StageObjectSummary, SubmasterSummary, TimelineAudioClipId,
-    TimelineAudioClipSummary, TimelineAutomationSummary, TimelineCueEventSummary, TimelineEventId,
-    TimelineLayerKind, TimelineLayerSummary, TimelineSnapRequest, TimelineSnapshot,
-    TimelineTrackKind, TimelineVideoAutomationSummary, TouchSurfaceSummary, Transform2D,
-    ValueEffectDirection, ValueEffectInterpolation, ValueEffectMode, ValueEffectPoint,
-    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBlendMode, VideoColorAdjust,
-    VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust, VideoIsfControlKind,
-    VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId, VideoLayerState,
-    VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
-    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
-    VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
+    ColorEffectInterpolation, ColorEffectRequest, ColorEffectSpatialRecipe, CompositionId,
+    CompositionSummary, CueEffectTarget, CueFixtureTarget, CueId, CueIfcbTiming, CueListId,
+    CueListSummary, CueNodeGraphTarget, CuePaletteTarget, CuePartSummary, CueStepSummary,
+    CueSummary, DmxMergeMode, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol,
+    DmxOutputRouteTelemetry, DmxUniversePreview, EffectBlendMode, EffectId, EffectKind,
+    EffectParamsSnapshot, EffectSummary, EngineSnapshot, EngineTelemetry,
+    ExclusiveVideoTakeRequest, ExecutorId, FixtureId, FixtureLimits, FixtureProfileSummary,
+    LfoEffectRequest, LfoShape, LiveAudioFrame, LiveAudioReactiveFeatures, MoveCoordinateMode,
+    MoveDirection, MoveEffectRequest, MovePathPoint, NodeGraphAudioRuntimeStatus, NodeGraphId,
+    NodeGraphNodeKind, NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId,
+    PatchFixtureRequest, PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest,
+    ProgrammerSnapshot, ProgrammerValueSummary, RecallMode, ReferencePaletteSummary, Rotation3,
+    StageMapConfig, StageMapPresetSummary, StageObjectId, StageObjectSummary, SubmasterSummary,
+    TimelineAudioClipId, TimelineAudioClipSummary, TimelineAutomationSummary,
+    TimelineCueEventSummary, TimelineEventId, TimelineLayerKind, TimelineLayerSummary,
+    TimelineSnapRequest, TimelineSnapshot, TimelineTrackKind, TimelineVideoAutomationSummary,
+    TouchSurfaceSummary, Transform2D, ValueEffectDirection, ValueEffectInterpolation,
+    ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
+    VideoBlendMode, VideoColorAdjust, VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust,
+    VideoIsfControlKind, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId,
+    VideoLayerState, VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind,
+    VideoOutputMapping, VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget,
+    VideoParam, VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
     LIVE_AUDIO_FEATURE_BAND_CAPACITY, MAX_CUE_AUTHORED_BEATS, MAX_TIMELINE_SCENE_BLOCK_LOOPS,
     MIN_CUE_AUTHORED_BEATS,
 };
@@ -2944,6 +2944,13 @@ struct RuntimeColorEffect {
     request: ColorEffectRequest,
     targets: Vec<RuntimeColorTarget>,
     target_indices: HashMap<FixtureId, usize>,
+    spatial: Option<Box<RuntimeColorSpatialState>>,
+}
+
+#[derive(Clone)]
+struct RuntimeColorSpatialState {
+    targets: Vec<RuntimeColorSpatialTarget>,
+    attribute_indices: HashMap<FixtureId, HashMap<String, usize>>,
 }
 
 #[derive(Debug, Clone)]
@@ -3001,11 +3008,24 @@ struct RuntimeColorTarget {
     cached: Cell<Option<RuntimeColorEvaluation>>,
 }
 
+#[derive(Clone)]
+struct RuntimeColorSpatialTarget {
+    fixture_id: FixtureId,
+    beam_index: u16,
+    strip_index: usize,
+    strip_count: usize,
+    x: f32,
+    z: f32,
+    binding: RuntimeColorBinding,
+    cached: Cell<Option<RuntimeColorEvaluation>>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct RuntimeColorEvaluation {
     at: Instant,
     rgb: ColorEffectColor,
     rgbw: [u16; 4],
+    amber: u16,
     cmy: [u16; 3],
     hsv: [u16; 3],
 }
@@ -3019,6 +3039,7 @@ struct RuntimeColorBinding {
 #[derive(Clone, Copy, Default)]
 struct RuntimeColorConversionFlags {
     rgbw: bool,
+    amber: bool,
     cmy: bool,
     hsv: bool,
 }
@@ -3029,6 +3050,8 @@ enum RuntimeColorOutput {
     Green { extract_white: bool },
     Blue { extract_white: bool },
     White,
+    Amber,
+    Intensity,
     Cyan,
     Magenta,
     Yellow,
@@ -3055,6 +3078,8 @@ impl RuntimeColorBinding {
                     extract_white: true,
                 }
                 | RuntimeColorOutput::White => conversions.rgbw = true,
+                RuntimeColorOutput::Amber => conversions.amber = true,
+                RuntimeColorOutput::Intensity => {}
                 RuntimeColorOutput::Cyan
                 | RuntimeColorOutput::Magenta
                 | RuntimeColorOutput::Yellow => conversions.cmy = true,
@@ -12627,10 +12652,25 @@ impl EngineRuntime {
             let RuntimeEffectKind::Color(runtime) = &mut effect.kind else {
                 return true;
             };
-            let (targets, target_indices) = runtime_color_targets(&runtime.request, fixtures);
-            runtime.targets = targets;
-            runtime.target_indices = target_indices;
-            !runtime.targets.is_empty() || !runtime.request.target_group_ids.is_empty()
+            let has_group_reference = !runtime.request.target_group_ids.is_empty();
+            match runtime_color_effect_from_request(runtime.request.clone(), fixtures) {
+                Ok(rebuilt) => {
+                    *runtime = rebuilt;
+                    !runtime.targets.is_empty()
+                        || runtime
+                            .spatial
+                            .as_ref()
+                            .is_some_and(|spatial| !spatial.targets.is_empty())
+                        || has_group_reference
+                }
+                Err(_) if has_group_reference => {
+                    runtime.targets.clear();
+                    runtime.target_indices.clear();
+                    runtime.spatial = None;
+                    true
+                }
+                Err(_) => false,
+            }
         });
         self.sanitize_cue_effect_targets();
     }
@@ -14058,21 +14098,35 @@ impl EngineRuntime {
         for (effect, rate) in global_effects.chain(activation_effects) {
             match &effect.kind {
                 RuntimeEffectKind::Color(runtime) => {
-                    let Some(binding) = fixture.color_binding.as_ref() else {
-                        continue;
+                    let next = if runtime.spatial.is_some() {
+                        evaluate_runtime_color_spatial_attribute_at_rate(
+                            runtime,
+                            fixture.id,
+                            attribute,
+                            value,
+                            effect.id,
+                            effect.created_at,
+                            now,
+                            &clock,
+                            rate,
+                        )
+                    } else {
+                        fixture.color_binding.as_ref().and_then(|binding| {
+                            evaluate_runtime_color_attribute_at_rate(
+                                runtime,
+                                binding,
+                                fixture.id,
+                                attribute,
+                                value,
+                                effect.id,
+                                effect.created_at,
+                                now,
+                                &clock,
+                                rate,
+                            )
+                        })
                     };
-                    if let Some(next) = evaluate_runtime_color_attribute_at_rate(
-                        runtime,
-                        binding,
-                        fixture.id,
-                        attribute,
-                        value,
-                        effect.id,
-                        effect.created_at,
-                        now,
-                        &clock,
-                        rate,
-                    ) {
+                    if let Some(next) = next {
                         value = next;
                     }
                 }
@@ -19980,6 +20034,7 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
             request: effect.color.clone()?,
             targets: Vec::new(),
             target_indices: HashMap::new(),
+            spatial: None,
         }),
         EffectKind::Chaser => RuntimeEffectKind::Chaser(RuntimeChaserEffect {
             request: effect.chaser.clone()?,
@@ -20058,7 +20113,104 @@ fn validate_runtime_color_effect_request(request: &ColorEffectRequest) -> Result
     if !(0.0..=1.0).contains(&request.fixture_spread) {
         return Err("Color effect fixture spread must be within 0..1".to_string());
     }
+    if let Some(pattern) = &request.spatial_pattern {
+        validate_color_spatial_recipe(&pattern.recipe)?;
+        let mut beam_targets = HashSet::new();
+        for target in &pattern.beam_targets {
+            if !request.fixture_ids.contains(&target.fixture_id) {
+                return Err(format!(
+                    "Color beam target fixture {} is not present in fixture_ids",
+                    target.fixture_id
+                ));
+            }
+            if !beam_targets.insert((target.fixture_id, target.beam_index)) {
+                return Err(format!(
+                    "Color beam target fixture {} beam {} is duplicated",
+                    target.fixture_id, target.beam_index
+                ));
+            }
+        }
+    }
     Ok(())
+}
+
+pub fn validate_color_effect_request(request: &ColorEffectRequest) -> Result<(), String> {
+    validate_runtime_color_effect_request(request)
+}
+
+fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<(), String> {
+    let percent = |label: &str, value: f32| {
+        if value.is_finite() && (0.0..=100.0).contains(&value) {
+            Ok(())
+        } else {
+            Err(format!(
+                "Color spatial {label} must be finite and within 0..100"
+            ))
+        }
+    };
+    match recipe {
+        ColorEffectSpatialRecipe::KnightRider { size, gradient, .. } => {
+            if *size == 0 {
+                return Err("Knight Rider size must be at least 1".to_string());
+            }
+            percent("gradient", *gradient)
+        }
+        ColorEffectSpatialRecipe::Burst {
+            color_width,
+            gradient,
+        } => {
+            percent("color width", *color_width)?;
+            percent("gradient", *gradient)
+        }
+        ColorEffectSpatialRecipe::RandomFill { point_width } => {
+            if *point_width == 0 {
+                Err("Random fill point width must be at least 1".to_string())
+            } else {
+                Ok(())
+            }
+        }
+        ColorEffectSpatialRecipe::Sparkle {
+            number,
+            lifespan,
+            width,
+        } => {
+            if *number == 0 || *width == 0 {
+                return Err("Sparkle number and width must be at least 1".to_string());
+            }
+            percent("lifespan", *lifespan)
+        }
+        ColorEffectSpatialRecipe::Rainbow {
+            rotation_degrees,
+            color_width,
+            angle_degrees,
+            gradient,
+            ..
+        } => {
+            if !rotation_degrees.is_finite() || !angle_degrees.is_finite() {
+                return Err("Rainbow rotation and angle must be finite".to_string());
+            }
+            percent("color width", *color_width)?;
+            percent("gradient", *gradient)
+        }
+        ColorEffectSpatialRecipe::Perlin {
+            octaves,
+            zoom,
+            direction_degrees,
+            speed,
+            amplitude,
+        } => {
+            if !(1..=16).contains(octaves) {
+                return Err("Perlin octaves must be within 1..16".to_string());
+            }
+            if !zoom.is_finite() || *zoom <= 0.0 {
+                return Err("Perlin zoom must be finite and greater than 0".to_string());
+            }
+            if !direction_degrees.is_finite() || !speed.is_finite() {
+                return Err("Perlin direction and speed must be finite".to_string());
+            }
+            percent("amplitude", *amplitude)
+        }
+    }
 }
 
 pub fn validate_move_effect_request(request: &MoveEffectRequest) -> Result<(), String> {
@@ -20752,14 +20904,316 @@ fn runtime_color_effect_from_request(
     fixtures: &[RuntimeFixture],
 ) -> Result<RuntimeColorEffect, String> {
     let (targets, target_indices) = runtime_color_targets(&request, fixtures);
-    if targets.is_empty() {
+    let spatial = if request.spatial_pattern.is_some() {
+        let (targets, attribute_indices) =
+            runtime_color_spatial_targets(&request, fixtures, &targets)?;
+        Some(Box::new(RuntimeColorSpatialState {
+            targets,
+            attribute_indices,
+        }))
+    } else {
+        None
+    };
+    if targets.is_empty()
+        && spatial
+            .as_ref()
+            .is_none_or(|spatial| spatial.targets.is_empty())
+    {
         return Err("Color effect targets expose no supported color controls".to_string());
     }
     Ok(RuntimeColorEffect {
         request,
         targets,
         target_indices,
+        spatial,
     })
+}
+
+fn runtime_color_spatial_targets(
+    request: &ColorEffectRequest,
+    fixtures: &[RuntimeFixture],
+    base_targets: &[RuntimeColorTarget],
+) -> Result<
+    (
+        Vec<RuntimeColorSpatialTarget>,
+        HashMap<FixtureId, HashMap<String, usize>>,
+    ),
+    String,
+> {
+    let pattern = request
+        .spatial_pattern
+        .as_ref()
+        .ok_or_else(|| "Color spatial pattern is missing".to_string())?;
+    let mut allowed_fixture_ids = request.fixture_ids.iter().copied().collect::<HashSet<_>>();
+    for group_id in &request.target_group_ids {
+        allowed_fixture_ids.extend(fixtures.iter().filter_map(|fixture| {
+            fixture
+                .request
+                .group_ids
+                .iter()
+                .any(|fixture_group| group_matches(fixture_group, group_id))
+                .then_some(fixture.id)
+        }));
+    }
+    let mut pending = Vec::<(FixtureId, u16, u32, RuntimeColorBinding, f32, f32)>::new();
+
+    if pattern.beam_targets.is_empty() {
+        let mut selection_index = 0_u32;
+        for target in base_targets {
+            let fixture = fixtures
+                .iter()
+                .find(|fixture| fixture.id == target.fixture_id)
+                .ok_or_else(|| {
+                    format!("Color target fixture {} was not found", target.fixture_id)
+                })?;
+            let controls = &fixture.profile.dmx_modes[fixture.mode_index].controls;
+            let bindings = compile_runtime_color_segment_bindings(controls);
+            if bindings.is_empty() {
+                if let Some(binding) = fixture.color_binding.clone() {
+                    pending.push((
+                        fixture.id,
+                        0,
+                        selection_index,
+                        binding,
+                        fixture.request.position.x,
+                        fixture.request.position.z,
+                    ));
+                    selection_index = selection_index.saturating_add(1);
+                }
+                continue;
+            }
+            for (beam_index, binding) in bindings.into_iter().enumerate() {
+                pending.push((
+                    fixture.id,
+                    u16::try_from(beam_index).unwrap_or(u16::MAX),
+                    selection_index,
+                    binding,
+                    fixture.request.position.x,
+                    fixture.request.position.z,
+                ));
+                selection_index = selection_index.saturating_add(1);
+            }
+        }
+    } else {
+        for target in &pattern.beam_targets {
+            if !allowed_fixture_ids.contains(&target.fixture_id) {
+                return Err(format!(
+                    "Color beam target fixture {} is not present in the resolved targets",
+                    target.fixture_id
+                ));
+            }
+            let fixture = fixtures
+                .iter()
+                .find(|fixture| fixture.id == target.fixture_id)
+                .ok_or_else(|| {
+                    format!(
+                        "Color beam target fixture {} was not found",
+                        target.fixture_id
+                    )
+                })?;
+            let controls = &fixture.profile.dmx_modes[fixture.mode_index].controls;
+            let bindings = compile_runtime_color_segment_bindings(controls);
+            let feature_binding = target.feature_attribute.as_deref().and_then(|feature| {
+                controls
+                    .iter()
+                    .find(|control| {
+                        normalize_chaser_attribute(&control.attribute)
+                            == normalize_chaser_attribute(feature)
+                    })
+                    .map(|control| {
+                        RuntimeColorBinding::new(HashMap::from([(
+                            control.attribute.clone(),
+                            RuntimeColorOutput::Intensity,
+                        )]))
+                    })
+            });
+            let binding = if target.feature_attribute.is_some() && bindings.len() <= 1 {
+                feature_binding.or_else(|| bindings.into_iter().nth(target.beam_index as usize))
+            } else {
+                bindings
+                    .into_iter()
+                    .nth(target.beam_index as usize)
+                    .or(feature_binding)
+            }
+                .or_else(|| (target.beam_index == 0).then(|| fixture.color_binding.clone()).flatten())
+                .ok_or_else(|| {
+                    format!(
+                        "Color beam target fixture {} has no RGB/RGBW segment {} or feature attribute {:?}",
+                        target.fixture_id, target.beam_index, target.feature_attribute
+                    )
+                })?;
+            pending.push((
+                fixture.id,
+                target.beam_index,
+                target.selection_index,
+                binding,
+                fixture.request.position.x,
+                fixture.request.position.z,
+            ));
+        }
+    }
+
+    if pending.is_empty() {
+        return Err("Color spatial pattern resolved to no beam targets".to_string());
+    }
+    let mut selections = pending
+        .iter()
+        .map(|(_, _, selection, _, _, _)| *selection)
+        .collect::<Vec<_>>();
+    selections.sort_unstable();
+    selections.dedup();
+    let min_x = pending
+        .iter()
+        .map(|(_, _, _, _, x, _)| *x)
+        .fold(f32::INFINITY, f32::min);
+    let max_x = pending
+        .iter()
+        .map(|(_, _, _, _, x, _)| *x)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let min_z = pending
+        .iter()
+        .map(|(_, _, _, _, _, z)| *z)
+        .fold(f32::INFINITY, f32::min);
+    let max_z = pending
+        .iter()
+        .map(|(_, _, _, _, _, z)| *z)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let normalize = |value: f32, minimum: f32, maximum: f32| {
+        let span = maximum - minimum;
+        if span.abs() <= f32::EPSILON {
+            0.5
+        } else {
+            ((value - minimum) / span).clamp(0.0, 1.0)
+        }
+    };
+    let strip_count = selections.len().max(1);
+    let mut targets = Vec::with_capacity(pending.len());
+    let mut attribute_indices = HashMap::<FixtureId, HashMap<String, usize>>::new();
+    for (fixture_id, beam_index, selection, binding, x, z) in pending {
+        let strip_index = selections.binary_search(&selection).unwrap_or_default();
+        let target_index = targets.len();
+        for attribute in binding.outputs.keys() {
+            if attribute_indices
+                .entry(fixture_id)
+                .or_default()
+                .insert(attribute.clone(), target_index)
+                .is_some()
+            {
+                return Err(format!(
+                    "Color spatial target fixture {fixture_id} maps attribute '{attribute}' more than once"
+                ));
+            }
+        }
+        targets.push(RuntimeColorSpatialTarget {
+            fixture_id,
+            beam_index,
+            strip_index,
+            strip_count,
+            x: normalize(x, min_x, max_x),
+            z: normalize(z, min_z, max_z),
+            binding,
+            cached: Cell::new(None),
+        });
+    }
+    Ok((targets, attribute_indices))
+}
+
+fn compile_runtime_color_segment_bindings(
+    controls: &[AttributeControl],
+) -> Vec<RuntimeColorBinding> {
+    let starts = controls
+        .iter()
+        .enumerate()
+        .filter_map(|(index, control)| {
+            matches!(
+                runtime_segment_color_component(&control.attribute),
+                Some("red")
+            )
+            .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let mut bindings = Vec::with_capacity(starts.len());
+    for (start_index, start) in starts.iter().copied().enumerate() {
+        let end = starts
+            .get(start_index + 1)
+            .copied()
+            .unwrap_or(controls.len());
+        let segment = &controls[start..end];
+        let red = segment
+            .iter()
+            .find(|control| runtime_segment_color_component(&control.attribute) == Some("red"));
+        let green = segment
+            .iter()
+            .find(|control| runtime_segment_color_component(&control.attribute) == Some("green"));
+        let blue = segment
+            .iter()
+            .find(|control| runtime_segment_color_component(&control.attribute) == Some("blue"));
+        let (Some(red), Some(green), Some(blue)) = (red, green, blue) else {
+            continue;
+        };
+        let white = segment
+            .iter()
+            .find(|control| runtime_segment_color_component(&control.attribute) == Some("white"));
+        let extract_white = white.is_some();
+        let mut outputs = HashMap::new();
+        outputs.insert(
+            red.attribute.clone(),
+            RuntimeColorOutput::Red { extract_white },
+        );
+        outputs.insert(
+            green.attribute.clone(),
+            RuntimeColorOutput::Green { extract_white },
+        );
+        outputs.insert(
+            blue.attribute.clone(),
+            RuntimeColorOutput::Blue { extract_white },
+        );
+        if let Some(white) = white {
+            outputs.insert(white.attribute.clone(), RuntimeColorOutput::White);
+        }
+        for control in segment {
+            match runtime_segment_color_component(&control.attribute) {
+                Some("amber") => {
+                    outputs.insert(control.attribute.clone(), RuntimeColorOutput::Amber);
+                }
+                Some("uv" | "lime") => {
+                    outputs.insert(control.attribute.clone(), RuntimeColorOutput::Zero);
+                }
+                _ => {}
+            }
+        }
+        bindings.push(RuntimeColorBinding::new(outputs));
+    }
+    bindings
+}
+
+fn runtime_segment_color_component(attribute: &str) -> Option<&'static str> {
+    let normalized = normalize_chaser_attribute(attribute);
+    let matches_alias = |alias: &str| {
+        normalized
+            .strip_prefix(alias)
+            .is_some_and(|suffix| suffix.chars().all(|character| character.is_ascii_digit()))
+    };
+    [
+        ("red", ["colorred", "colourred", "colorrgbred", "red"]),
+        (
+            "green",
+            ["colorgreen", "colourgreen", "colorrgbgreen", "green"],
+        ),
+        ("blue", ["colorblue", "colourblue", "colorrgbblue", "blue"]),
+        (
+            "white",
+            ["colorwhite", "colourwhite", "colorrgbwhite", "white"],
+        ),
+        (
+            "amber",
+            ["coloramber", "colouramber", "colorrgbamber", "amber"],
+        ),
+        ("uv", ["coloruv", "colouruv", "colorrgbuv", "uv"]),
+        ("lime", ["colorlime", "colourlime", "colorrgblime", "lime"]),
+    ]
+    .into_iter()
+    .find_map(|(component, aliases)| aliases.into_iter().any(matches_alias).then_some(component))
 }
 
 fn runtime_color_targets(
@@ -21276,6 +21730,11 @@ fn evaluate_runtime_color_attribute_at_rate(
             } else {
                 [0; 4]
             };
+            let amber = if binding.conversions.amber {
+                rgb.red.min(rgb.green).saturating_sub(rgb.blue)
+            } else {
+                0
+            };
             let cmy = if binding.conversions.cmy {
                 [
                     u16::MAX - rgb.red,
@@ -21294,6 +21753,7 @@ fn evaluate_runtime_color_attribute_at_rate(
                 at: now,
                 rgb,
                 rgbw,
+                amber,
                 cmy,
                 hsv,
             };
@@ -21323,6 +21783,147 @@ fn evaluate_runtime_color_attribute_at_rate(
             }
         }
         RuntimeColorOutput::White => evaluated.rgbw[3],
+        RuntimeColorOutput::Amber => evaluated.amber,
+        RuntimeColorOutput::Intensity => {
+            ((u32::from(evaluated.rgb.red)
+                + u32::from(evaluated.rgb.green)
+                + u32::from(evaluated.rgb.blue))
+                / 3) as u16
+        }
+        RuntimeColorOutput::Cyan => evaluated.cmy[0],
+        RuntimeColorOutput::Magenta => evaluated.cmy[1],
+        RuntimeColorOutput::Yellow => evaluated.cmy[2],
+        RuntimeColorOutput::Hue => evaluated.hsv[0],
+        RuntimeColorOutput::Saturation => evaluated.hsv[1],
+        RuntimeColorOutput::Value => evaluated.hsv[2],
+        RuntimeColorOutput::Zero => 0,
+        RuntimeColorOutput::OpenWheel(value) => return Some(*value),
+        RuntimeColorOutput::Wheel(slots) => {
+            let target_color = match runtime.request.blend_mode {
+                EffectBlendMode::Override => evaluated.rgb,
+                EffectBlendMode::Add | EffectBlendMode::Multiply => {
+                    let base_color = slots
+                        .iter()
+                        .find(|slot| (slot.dmx_from..=slot.dmx_to).contains(&base_value))
+                        .map(|slot| slot.color)?;
+                    blend_runtime_color(base_color, evaluated.rgb, &runtime.request.blend_mode)
+                }
+            };
+            return nearest_runtime_color_wheel_value(slots, target_color).or(Some(base_value));
+        }
+    };
+    Some(blend_effect_value(
+        base_value,
+        component,
+        &runtime.request.blend_mode,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_runtime_color_spatial_attribute_at_rate(
+    runtime: &RuntimeColorEffect,
+    fixture_id: FixtureId,
+    attribute: &str,
+    base_value: u16,
+    effect_id: EffectId,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> Option<u16> {
+    let spatial = runtime.spatial.as_ref()?;
+    let target = spatial
+        .attribute_indices
+        .get(&fixture_id)
+        .and_then(|attributes| attributes.get(attribute))
+        .and_then(|index| spatial.targets.get(*index))?;
+    let binding = &target.binding;
+    let output = binding.outputs.get(attribute)?;
+    let evaluated = target
+        .cached
+        .get()
+        .filter(|cached| cached.at == now)
+        .unwrap_or_else(|| {
+            let rgb = evaluate_color_spatial_effect_at_rate(
+                &runtime.request,
+                target,
+                effect_id,
+                created_at,
+                now,
+                clock,
+                rate,
+            );
+            let rgbw = if binding.conversions.rgbw {
+                let white = rgb.red.min(rgb.green).min(rgb.blue);
+                [
+                    rgb.red.saturating_sub(white),
+                    rgb.green.saturating_sub(white),
+                    rgb.blue.saturating_sub(white),
+                    white,
+                ]
+            } else {
+                [0; 4]
+            };
+            let amber = if binding.conversions.amber {
+                rgb.red.min(rgb.green).saturating_sub(rgb.blue)
+            } else {
+                0
+            };
+            let cmy = if binding.conversions.cmy {
+                [
+                    u16::MAX - rgb.red,
+                    u16::MAX - rgb.green,
+                    u16::MAX - rgb.blue,
+                ]
+            } else {
+                [0; 3]
+            };
+            let hsv = if binding.conversions.hsv {
+                color_to_hsv_u16(rgb)
+            } else {
+                [0; 3]
+            };
+            let evaluated = RuntimeColorEvaluation {
+                at: now,
+                rgb,
+                rgbw,
+                amber,
+                cmy,
+                hsv,
+            };
+            target.cached.set(Some(evaluated));
+            evaluated
+        });
+    let component = match output {
+        RuntimeColorOutput::Red { extract_white } => {
+            if *extract_white {
+                evaluated.rgbw[0]
+            } else {
+                evaluated.rgb.red
+            }
+        }
+        RuntimeColorOutput::Green { extract_white } => {
+            if *extract_white {
+                evaluated.rgbw[1]
+            } else {
+                evaluated.rgb.green
+            }
+        }
+        RuntimeColorOutput::Blue { extract_white } => {
+            if *extract_white {
+                evaluated.rgbw[2]
+            } else {
+                evaluated.rgb.blue
+            }
+        }
+        RuntimeColorOutput::White => evaluated.rgbw[3],
+        RuntimeColorOutput::Amber => evaluated.amber,
+        RuntimeColorOutput::Intensity => {
+            ((u32::from(evaluated.rgb.red)
+                + u32::from(evaluated.rgb.green)
+                + u32::from(evaluated.rgb.blue))
+                / 3) as u16
+        }
         RuntimeColorOutput::Cyan => evaluated.cmy[0],
         RuntimeColorOutput::Magenta => evaluated.cmy[1],
         RuntimeColorOutput::Yellow => evaluated.cmy[2],
@@ -21429,6 +22030,273 @@ fn evaluate_color_effect_at_rate(
             request.stops[random as usize % request.stops.len()].color
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_color_spatial_effect_at_rate(
+    request: &ColorEffectRequest,
+    target: &RuntimeColorSpatialTarget,
+    effect_id: EffectId,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> ColorEffectColor {
+    let Some(pattern) = request.spatial_pattern.as_ref() else {
+        return evaluate_color_effect_at_rate(
+            request,
+            0.0,
+            effect_id,
+            target.fixture_id,
+            created_at,
+            now,
+            clock,
+            rate,
+        );
+    };
+    let rate = f64::from(valid_effect_rate(rate));
+    let time_phase = request
+        .clock_sync
+        .map(|clock_sync| {
+            (clock.beat_counter as f64 + clock.beat_phase as f64)
+                / clock_sync.beats.max(0.000_1) as f64
+                * rate
+        })
+        .unwrap_or_else(|| {
+            now.saturating_duration_since(created_at).as_secs_f64() * rate
+                / (request.period_ms.max(10) as f64 / 1000.0)
+        })
+        + request.phase as f64;
+    let strip_count = target.strip_count.max(1);
+    let strip_position = if strip_count <= 1 {
+        0.5
+    } else {
+        target.strip_index as f32 / (strip_count - 1) as f32
+    };
+    let seed = effect_id
+        ^ target.fixture_id.rotate_left(17)
+        ^ u64::from(target.beam_index).rotate_left(41);
+
+    match &pattern.recipe {
+        ColorEffectSpatialRecipe::KnightRider {
+            size,
+            one_way,
+            fading,
+            go_outside,
+            gradient,
+        } => {
+            let width =
+                (f32::from(*size) / strip_count as f32).clamp(1.0 / strip_count as f32, 1.0);
+            let half_width = width * 0.5;
+            let phase = time_phase.rem_euclid(1.0) as f32;
+            let travel = if *one_way {
+                phase
+            } else if phase <= 0.5 {
+                phase * 2.0
+            } else {
+                (1.0 - phase) * 2.0
+            };
+            let center = if *go_outside {
+                -half_width + travel * (1.0 + width)
+            } else {
+                travel
+            };
+            let mut distance = (strip_position - center).abs();
+            if *one_way && !*go_outside {
+                distance = distance.min(1.0 - distance);
+            }
+            if distance > half_width {
+                return black_color();
+            }
+            let level = 1.0 - distance / half_width.max(f32::EPSILON);
+            let color = spatial_palette_color(request, level, *gradient);
+            if *fading {
+                scale_color(color, level)
+            } else {
+                color
+            }
+        }
+        ColorEffectSpatialRecipe::Burst {
+            color_width,
+            gradient,
+        } => {
+            let radius = (strip_position - 0.5).abs() * 2.0;
+            let front = time_phase.rem_euclid(1.0) as f32;
+            let width = (*color_width / 100.0).max(1.0 / strip_count as f32);
+            let distance = (radius - front).abs();
+            if distance > width {
+                black_color()
+            } else {
+                spatial_palette_color(request, 1.0 - distance / width, *gradient)
+            }
+        }
+        ColorEffectSpatialRecipe::RandomFill { point_width } => {
+            let point_width = usize::from(*point_width).max(1);
+            let cell_count = strip_count.div_ceil(point_width).max(1);
+            let cell = target.strip_index / point_width;
+            let phase = time_phase.rem_euclid(1.0) as f32;
+            let filled = ((phase * cell_count as f32).floor() as usize + 1).min(cell_count);
+            let rank = spatial_random_rank(cell, cell_count, effect_id);
+            if rank >= filled {
+                black_color()
+            } else {
+                let palette_index =
+                    splitmix64(effect_id ^ cell as u64) as usize % request.stops.len();
+                request.stops[palette_index].color
+            }
+        }
+        ColorEffectSpatialRecipe::Sparkle {
+            number,
+            lifespan,
+            width,
+        } => {
+            let epoch = time_phase.floor() as i64;
+            let age = time_phase.rem_euclid(1.0) as f32;
+            let life = (*lifespan / 100.0).max(0.04);
+            if age > life {
+                return black_color();
+            }
+            let radius = usize::from(*width).saturating_sub(1);
+            for sparkle in 0..usize::from(*number) {
+                let sparkle_seed =
+                    seed ^ (epoch as u64).rotate_left(29) ^ (sparkle as u64).rotate_left(47);
+                let center = splitmix64(sparkle_seed) as usize % strip_count;
+                if target.strip_index.abs_diff(center) <= radius {
+                    let palette_index =
+                        splitmix64(sparkle_seed ^ 0xA53C_9E17) as usize % request.stops.len();
+                    return scale_color(request.stops[palette_index].color, 1.0 - age / life);
+                }
+            }
+            black_color()
+        }
+        ColorEffectSpatialRecipe::Rainbow {
+            vertical_symmetry,
+            rotation_degrees,
+            color_width,
+            angle_degrees,
+            gradient,
+        } => {
+            let x = if *vertical_symmetry {
+                (target.x * 2.0 - 1.0).abs()
+            } else {
+                target.x
+            } - 0.5;
+            let z = target.z - 0.5;
+            let angle = (*rotation_degrees + *angle_degrees).to_radians();
+            let projected = x * angle.cos() + z * angle.sin();
+            let width_scale = 1.0 + *color_width / 100.0 * 7.0;
+            let position = (projected * width_scale + time_phase as f32).rem_euclid(1.0);
+            spatial_palette_color(request, position, *gradient)
+        }
+        ColorEffectSpatialRecipe::Perlin {
+            octaves,
+            zoom,
+            direction_degrees,
+            speed,
+            amplitude,
+        } => {
+            let direction = direction_degrees.to_radians();
+            let travel = time_phase as f32 * *speed;
+            let scale = (*zoom / 10.0).max(0.001);
+            let x = target.x * scale + travel * direction.cos();
+            let z = target.z * scale + travel * direction.sin();
+            let noise = spatial_fractal_noise(x, z, *octaves, effect_id as u32);
+            let value = (0.5 + (noise - 0.5) * (*amplitude / 100.0)).clamp(0.0, 1.0);
+            spatial_palette_color(request, value, 100.0)
+        }
+    }
+}
+
+fn black_color() -> ColorEffectColor {
+    ColorEffectColor {
+        red: 0,
+        green: 0,
+        blue: 0,
+    }
+}
+
+fn scale_color(color: ColorEffectColor, amount: f32) -> ColorEffectColor {
+    let amount = amount.clamp(0.0, 1.0);
+    ColorEffectColor {
+        red: (color.red as f32 * amount).round() as u16,
+        green: (color.green as f32 * amount).round() as u16,
+        blue: (color.blue as f32 * amount).round() as u16,
+    }
+}
+
+fn spatial_palette_color(
+    request: &ColorEffectRequest,
+    position: f32,
+    gradient_percent: f32,
+) -> ColorEffectColor {
+    let position = position.clamp(0.0, 1.0);
+    let discrete = request
+        .stops
+        .iter()
+        .rev()
+        .find(|stop| stop.position <= position)
+        .unwrap_or(&request.stops[0])
+        .color;
+    let gradient = (gradient_percent / 100.0).clamp(0.0, 1.0);
+    if gradient <= f32::EPSILON {
+        discrete
+    } else {
+        let continuous = evaluate_linear_stop_color(request, position);
+        interpolate_color_effect_color(
+            discrete,
+            continuous,
+            gradient,
+            ColorEffectInterpolation::Rgb,
+        )
+    }
+}
+
+fn spatial_random_rank(cell: usize, cell_count: usize, seed: u64) -> usize {
+    let key = splitmix64(seed ^ cell as u64);
+    (0..cell_count)
+        .filter(|candidate| {
+            let candidate_key = splitmix64(seed ^ *candidate as u64);
+            candidate_key < key || (candidate_key == key && *candidate < cell)
+        })
+        .count()
+}
+
+fn spatial_fractal_noise(x: f32, z: f32, octaves: u8, seed: u32) -> f32 {
+    let mut value = 0.0;
+    let mut weight = 0.5;
+    let mut weight_sum = 0.0;
+    let mut frequency = 1.0;
+    for octave in 0..octaves {
+        value +=
+            spatial_value_noise(x * frequency, z * frequency, seed ^ u32::from(octave)) * weight;
+        weight_sum += weight;
+        frequency *= 2.0;
+        weight *= 0.5;
+    }
+    if weight_sum <= f32::EPSILON {
+        0.5
+    } else {
+        (value / weight_sum).clamp(0.0, 1.0)
+    }
+}
+
+fn spatial_value_noise(x: f32, z: f32, seed: u32) -> f32 {
+    let x0 = x.floor() as i32;
+    let z0 = z.floor() as i32;
+    let tx = x - x.floor();
+    let tz = z - z.floor();
+    let smooth = |value: f32| value * value * (3.0 - 2.0 * value);
+    let sample = |sample_x: i32, sample_z: i32| {
+        let mixed = (sample_x as u32).wrapping_mul(0x8DA6_B343)
+            ^ (sample_z as u32).wrapping_mul(0xD816_3841)
+            ^ seed;
+        hash_unit_float(mixed)
+    };
+    let top = sample(x0, z0) + (sample(x0.saturating_add(1), z0) - sample(x0, z0)) * smooth(tx);
+    let bottom = sample(x0, z0.saturating_add(1))
+        + (sample(x0.saturating_add(1), z0.saturating_add(1)) - sample(x0, z0.saturating_add(1)))
+            * smooth(tx);
+    top + (bottom - top) * smooth(tz)
 }
 
 fn evaluate_cycle_color(request: &ColorEffectRequest, position: f32) -> ColorEffectColor {
@@ -25917,7 +26785,7 @@ mod tests {
                 .map(|audio| audio.path.as_str()),
             Some("C:/media/show.wav")
         );
-        assert_eq!(loaded.timeline.duration_ms, 4_000);
+        assert_eq!(loaded.timeline.duration_ms, 10_000);
         assert_eq!(loaded.video.layers[0].id, 44);
         assert_eq!(loaded.video.compositions[1].id, 45);
         assert_eq!(loaded.video.outputs[0].id, 46);
@@ -41614,7 +42482,62 @@ mod tests {
             phase: 0.0,
             fixture_spread: 0.0,
             blend_mode: EffectBlendMode::Override,
+            spatial_pattern: None,
         }
+    }
+
+    fn test_spatial_color_request(recipe: ColorEffectSpatialRecipe) -> ColorEffectRequest {
+        let mut request = test_color_request(vec![1], test_color(0, 0, 0));
+        request.stops = vec![
+            protocol::ColorEffectStop {
+                position: 0.0,
+                color: test_color(0, 0, 0),
+            },
+            protocol::ColorEffectStop {
+                position: 1.0,
+                color: test_color(u16::MAX, u16::MAX, u16::MAX),
+            },
+        ];
+        request.spatial_pattern = Some(Box::new(protocol::ColorEffectSpatialPattern {
+            recipe,
+            beam_targets: Vec::new(),
+        }));
+        request
+    }
+
+    fn test_spatial_color_target(
+        strip_index: usize,
+        strip_count: usize,
+        x: f32,
+        z: f32,
+    ) -> RuntimeColorSpatialTarget {
+        RuntimeColorSpatialTarget {
+            fixture_id: strip_index as u64 + 1,
+            beam_index: 0,
+            strip_index,
+            strip_count,
+            x,
+            z,
+            binding: RuntimeColorBinding::new(HashMap::new()),
+            cached: Cell::new(None),
+        }
+    }
+
+    fn evaluate_test_spatial_color(
+        request: &ColorEffectRequest,
+        target: &RuntimeColorSpatialTarget,
+        elapsed_ms: u64,
+    ) -> ColorEffectColor {
+        let created_at = Instant::now();
+        evaluate_color_spatial_effect_at_rate(
+            request,
+            target,
+            97,
+            created_at,
+            created_at + Duration::from_millis(elapsed_ms),
+            &ClockSnapshot::default(),
+            1.0,
+        )
     }
 
     fn test_color_control(attribute: &str, offset: u16) -> AttributeControl {
@@ -41684,6 +42607,7 @@ mod tests {
                 cached: Cell::new(None),
             }],
             target_indices: HashMap::from([(1, 0)]),
+            spatial: None,
         };
         let now = Instant::now();
         evaluate_runtime_color_attribute(
@@ -41728,6 +42652,165 @@ mod tests {
                 .unwrap_err()
                 .contains("within 0..1"));
         }
+    }
+
+    #[test]
+    fn color_spatial_knight_rider_sweeps_a_gradient_window() {
+        let request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
+            size: 3,
+            one_way: true,
+            fading: false,
+            go_outside: false,
+            gradient: 50.0,
+        });
+        let center =
+            evaluate_test_spatial_color(&request, &test_spatial_color_target(2, 5, 0.5, 0.5), 500);
+        let shoulder =
+            evaluate_test_spatial_color(&request, &test_spatial_color_target(1, 5, 0.25, 0.5), 500);
+        let outside =
+            evaluate_test_spatial_color(&request, &test_spatial_color_target(0, 5, 0.0, 0.5), 500);
+        assert_eq!(center, test_color(u16::MAX, u16::MAX, u16::MAX));
+        assert!(shoulder.red > 0 && shoulder.red < center.red);
+        assert_eq!(outside, test_color(0, 0, 0));
+    }
+
+    #[test]
+    fn color_spatial_burst_expands_from_strip_center() {
+        let request = test_spatial_color_request(ColorEffectSpatialRecipe::Burst {
+            color_width: 20.0,
+            gradient: 100.0,
+        });
+        let on_front =
+            evaluate_test_spatial_color(&request, &test_spatial_color_target(3, 5, 0.75, 0.5), 500);
+        let away =
+            evaluate_test_spatial_color(&request, &test_spatial_color_target(2, 5, 0.5, 0.5), 500);
+        assert_eq!(on_front, test_color(u16::MAX, u16::MAX, u16::MAX));
+        assert_eq!(away, test_color(0, 0, 0));
+    }
+
+    #[test]
+    fn color_spatial_random_fill_is_seeded_and_fills_by_point_width() {
+        let mut request =
+            test_spatial_color_request(ColorEffectSpatialRecipe::RandomFill { point_width: 1 });
+        request.stops[0].color = test_color(u16::MAX, 0, 0);
+        request.stops[1].color = test_color(0, 0, u16::MAX);
+        let colors = (0..5)
+            .map(|index| {
+                evaluate_test_spatial_color(
+                    &request,
+                    &test_spatial_color_target(index, 5, index as f32 / 4.0, 0.5),
+                    100,
+                )
+            })
+            .collect::<Vec<_>>();
+        let repeated = (0..5)
+            .map(|index| {
+                evaluate_test_spatial_color(
+                    &request,
+                    &test_spatial_color_target(index, 5, index as f32 / 4.0, 0.5),
+                    100,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(colors, repeated);
+        assert_eq!(
+            colors
+                .iter()
+                .filter(|color| **color != test_color(0, 0, 0))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn color_spatial_sparkle_has_deterministic_bounded_population() {
+        let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::Sparkle {
+            number: 2,
+            lifespan: 50.0,
+            width: 2,
+        });
+        request.stops[0].color = test_color(u16::MAX, 0, 0);
+        request.stops[1].color = test_color(0, 0, u16::MAX);
+        let lit = (0..16)
+            .filter(|index| {
+                evaluate_test_spatial_color(
+                    &request,
+                    &test_spatial_color_target(*index, 16, *index as f32 / 15.0, 0.5),
+                    10,
+                ) != test_color(0, 0, 0)
+            })
+            .count();
+        assert!((1..=6).contains(&lit), "lit={lit}");
+    }
+
+    #[test]
+    fn color_spatial_rainbow_vertical_symmetry_mirrors_mapping_coordinates() {
+        let request = test_spatial_color_request(ColorEffectSpatialRecipe::Rainbow {
+            vertical_symmetry: true,
+            rotation_degrees: 171.0,
+            color_width: 0.0,
+            angle_degrees: 0.0,
+            gradient: 100.0,
+        });
+        let left =
+            evaluate_test_spatial_color(&request, &test_spatial_color_target(0, 2, 0.25, 0.4), 250);
+        let right =
+            evaluate_test_spatial_color(&request, &test_spatial_color_target(1, 2, 0.75, 0.4), 250);
+        assert_eq!(left, right);
+    }
+
+    #[test]
+    fn color_spatial_perlin_reuses_seeded_smooth_noise_and_amplitude() {
+        let request = test_spatial_color_request(ColorEffectSpatialRecipe::Perlin {
+            octaves: 5,
+            zoom: 20.0,
+            direction_degrees: 1.0,
+            speed: 1.0,
+            amplitude: 0.0,
+        });
+        let target = test_spatial_color_target(0, 1, 0.37, 0.63);
+        let first = evaluate_test_spatial_color(&request, &target, 375);
+        let second = evaluate_test_spatial_color(&request, &target, 375);
+        assert_eq!(first, second);
+        assert!((32_767..=32_768).contains(&first.red), "{}", first.red);
+    }
+
+    #[test]
+    fn color_spatial_beam_bindings_follow_profile_rgba_channel_order() {
+        let controls = vec![
+            test_color_control("ColorRed", 1),
+            test_color_control("ColorGreen", 2),
+            test_color_control("ColorBlue", 3),
+            test_color_control("ColorAmber", 4),
+            test_color_control("ColorRed 2", 5),
+            test_color_control("ColorGreen 2", 6),
+            test_color_control("ColorBlue 2", 7),
+            test_color_control("ColorAmber 2", 8),
+        ];
+        let bindings = compile_runtime_color_segment_bindings(&controls);
+        assert_eq!(bindings.len(), 2);
+        assert_eq!(
+            bindings[0].outputs.keys().cloned().collect::<HashSet<_>>(),
+            HashSet::from([
+                "ColorRed".to_string(),
+                "ColorGreen".to_string(),
+                "ColorBlue".to_string(),
+                "ColorAmber".to_string(),
+            ])
+        );
+        assert_eq!(
+            bindings[1].outputs.keys().cloned().collect::<HashSet<_>>(),
+            HashSet::from([
+                "ColorRed 2".to_string(),
+                "ColorGreen 2".to_string(),
+                "ColorBlue 2".to_string(),
+                "ColorAmber 2".to_string(),
+            ])
+        );
+        assert!(matches!(
+            bindings[1].outputs.get("ColorAmber 2"),
+            Some(RuntimeColorOutput::Amber)
+        ));
     }
 
     #[test]

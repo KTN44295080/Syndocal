@@ -261,6 +261,7 @@ fn add_mixed_lighting_effects(engine: &EngineHandle) -> Result<(), String> {
         phase: 0.0,
         fixture_spread: 0.0,
         blend_mode: EffectBlendMode::Override,
+        spatial_pattern: None,
     };
     engine.add_color_effect(engine.allocate_effect_id(), color_request, true)?;
 

@@ -1749,6 +1749,26 @@ export interface ColorEffectStop {
   color: ColorEffectColor;
 }
 
+export interface ColorEffectBeamTarget {
+  fixture_id: number;
+  beam_index: number;
+  selection_index: number;
+  feature_attribute?: string | null;
+}
+
+export type ColorEffectSpatialRecipe =
+  | { KnightRider: { size: number; one_way: boolean; fading: boolean; go_outside: boolean; gradient: number } }
+  | { Burst: { color_width: number; gradient: number } }
+  | { RandomFill: { point_width: number } }
+  | { Sparkle: { number: number; lifespan: number; width: number } }
+  | { Rainbow: { vertical_symmetry: boolean; rotation_degrees: number; color_width: number; angle_degrees: number; gradient: number } }
+  | { Perlin: { octaves: number; zoom: number; direction_degrees: number; speed: number; amplitude: number } };
+
+export interface ColorEffectSpatialPattern {
+  recipe: ColorEffectSpatialRecipe;
+  beam_targets?: ColorEffectBeamTarget[];
+}
+
 export interface ColorEffectRequest {
   label: string;
   fixture_ids: number[];
@@ -1761,6 +1781,7 @@ export interface ColorEffectRequest {
   phase: number;
   fixture_spread: number;
   blend_mode: EffectBlendMode;
+  spatial_pattern?: ColorEffectSpatialPattern | null;
 }
 
 export interface PositionWaveEffectRequest {

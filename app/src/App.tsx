@@ -167,6 +167,7 @@ import type {
   ColorEffectAlgorithm,
   ColorEffectInterpolation,
   ColorEffectRequest,
+  ColorEffectSpatialPattern,
   ColorEffectStop,
   CustomFixtureProfileRequest,
   CueEffectTarget,
@@ -1350,6 +1351,8 @@ export default function App() {
   const [colorEffectInterpolation, setColorEffectInterpolation] =
     createSignal<ColorEffectInterpolation>("HsvShortest");
   const [colorEffectFixtureSpread, setColorEffectFixtureSpread] = createSignal(0);
+  const [colorEffectSpatialPattern, setColorEffectSpatialPattern] =
+    createSignal<ColorEffectSpatialPattern | null>(null);
   const [chaserSteps, setChaserSteps] = createSignal<ChaserStep[]>([]);
   const [chaserFeatures, setChaserFeatures] = createSignal<ChaserFeature[]>([
     { attribute: "Dimmer", low: 0, high: 65_535 },
@@ -12486,6 +12489,7 @@ export default function App() {
           phase: effectPhase(),
           fixture_spread: colorEffectFixtureSpread(),
           blend_mode: effectBlendMode(),
+          spatial_pattern: colorEffectSpatialPattern(),
         },
       };
     }
@@ -12640,6 +12644,7 @@ export default function App() {
       setColorEffectAlgorithm(color.algorithm);
       setColorEffectInterpolation(color.interpolation);
       setColorEffectFixtureSpread(color.fixture_spread);
+      setColorEffectSpatialPattern(color.spatial_pattern ?? null);
       setEffectPeriod(color.period_ms);
       setEffectClockSyncBeats(color.clock_sync?.beats ?? null);
       setEffectPhase(color.phase);
@@ -15425,12 +15430,14 @@ export default function App() {
                   bpm={snapshot().clock.bpm}
                   clockSyncBeats={effectClockSyncBeats()}
                   fixtureSpread={colorEffectFixtureSpread()}
+                  spatialPattern={colorEffectSpatialPattern()}
                   onStops={setColorEffectStops}
                   onAlgorithm={setColorEffectAlgorithm}
                   onInterpolation={setColorEffectInterpolation}
                   onPeriodMs={setEffectPeriod}
                   onClockSyncBeats={setEffectClockSyncPreset}
                   onFixtureSpread={setColorEffectFixtureSpread}
+                  onSpatialPattern={setColorEffectSpatialPattern}
                 />
               </Show>
               <Show when={effectType() === "Chaser"}>

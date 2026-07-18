@@ -3,6 +3,8 @@ import type {
   ColorEffectAlgorithm,
   ColorEffectColor,
   ColorEffectInterpolation,
+  ColorEffectSpatialPattern,
+  ColorEffectSpatialRecipe,
   ColorEffectStop,
 } from "../types";
 
@@ -14,13 +16,34 @@ export interface ColorEffectEditorPanelProps {
   bpm: number;
   clockSyncBeats: number | null;
   fixtureSpread: number;
+  spatialPattern: ColorEffectSpatialPattern | null;
   onStops: (stops: ColorEffectStop[]) => void;
   onAlgorithm: (algorithm: ColorEffectAlgorithm) => void;
   onInterpolation: (interpolation: ColorEffectInterpolation) => void;
   onPeriodMs: (periodMs: number) => void;
   onClockSyncBeats: (beats: number | null) => void;
   onFixtureSpread: (spread: number) => void;
+  onSpatialPattern: (pattern: ColorEffectSpatialPattern | null) => void;
 }
+
+type ColorSpatialKind = "PaletteFlow" | "KnightRider" | "Burst" | "RandomFill" | "Sparkle" | "Rainbow" | "Perlin";
+
+const defaultSpatialRecipe = (kind: Exclude<ColorSpatialKind, "PaletteFlow">): ColorEffectSpatialRecipe => {
+  switch (kind) {
+    case "KnightRider":
+      return { KnightRider: { size: 8, one_way: false, fading: true, go_outside: false, gradient: 50 } };
+    case "Burst":
+      return { Burst: { color_width: 50, gradient: 100 } };
+    case "RandomFill":
+      return { RandomFill: { point_width: 1 } };
+    case "Sparkle":
+      return { Sparkle: { number: 5, lifespan: 25, width: 1 } };
+    case "Rainbow":
+      return { Rainbow: { vertical_symmetry: false, rotation_degrees: 0, color_width: 0, angle_degrees: 0, gradient: 100 } };
+    case "Perlin":
+      return { Perlin: { octaves: 5, zoom: 20, direction_degrees: 0, speed: 1, amplitude: 100 } };
+  }
+};
 
 export const defaultColorEffectStops: ColorEffectStop[] = [
   { position: 0, color: { red: 65_535, green: 0, blue: 0 } },
@@ -87,6 +110,40 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
       .map(normalizedStop)
       .sort((first, second) => first.position - second.position),
   );
+  const spatialKind = createMemo<ColorSpatialKind>(() => {
+    const recipe = props.spatialPattern?.recipe;
+    if (!recipe) return "PaletteFlow";
+    return Object.keys(recipe)[0] as Exclude<ColorSpatialKind, "PaletteFlow">;
+  });
+  const spatialValues = createMemo<Record<string, number | boolean>>(() => {
+    const recipe = props.spatialPattern?.recipe;
+    if (!recipe) return {};
+    return Object.values(recipe)[0] as Record<string, number | boolean>;
+  });
+  const spatialNumber = (key: string, fallback = 0) => {
+    const value = spatialValues()[key];
+    return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  };
+  const spatialBoolean = (key: string) => spatialValues()[key] === true;
+  const selectSpatialKind = (kind: ColorSpatialKind) => {
+    if (kind === "PaletteFlow") {
+      props.onSpatialPattern(null);
+      return;
+    }
+    props.onSpatialPattern({
+      recipe: defaultSpatialRecipe(kind),
+      beam_targets: props.spatialPattern?.beam_targets ?? [],
+    });
+  };
+  const patchSpatialValues = (patch: Record<string, number | boolean>) => {
+    const pattern = props.spatialPattern;
+    const kind = spatialKind();
+    if (!pattern || kind === "PaletteFlow") return;
+    props.onSpatialPattern({
+      ...pattern,
+      recipe: { [kind]: { ...spatialValues(), ...patch } } as ColorEffectSpatialRecipe,
+    });
+  };
 
   const stopError = createMemo(() => {
     if (props.stops.length < 2 || props.stops.length > 8) {
@@ -341,6 +398,76 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
 
       <fieldset class="colorEffectMotionPanel">
         <legend>Color flow</legend>
+        <div class="colorEffectModeGrid">
+          <label>
+            Beam-space pattern
+            <select
+              value={spatialKind()}
+              aria-label="Color beam-space pattern"
+              onInput={(event) => selectSpatialKind(event.currentTarget.value as ColorSpatialKind)}
+            >
+              <option value="PaletteFlow">Palette flow</option>
+              <option value="KnightRider">Knight Rider</option>
+              <option value="Burst">Burst</option>
+              <option value="RandomFill">Random fill</option>
+              <option value="Sparkle">Sparkle</option>
+              <option value="Rainbow">Rainbow mapping</option>
+              <option value="Perlin">Perlin mapping</option>
+            </select>
+          </label>
+          <Show when={props.spatialPattern}>
+            <div class="effectFormHint textPretty">
+              {props.spatialPattern?.beam_targets?.length
+                ? `${props.spatialPattern.beam_targets.length} imported beam targets`
+                : "Beam targets follow fixture profile channel order."}
+            </div>
+          </Show>
+        </div>
+        <Show when={spatialKind() === "KnightRider"}>
+          <div class="colorEffectModeGrid">
+            <label>Size<input type="number" min="1" step="1" value={spatialNumber("size", 8)} onInput={(event) => patchSpatialValues({ size: Math.max(1, Math.round(Number(event.currentTarget.value) || 1)) })} /></label>
+            <label>Gradient %<input type="number" min="0" max="100" step="1" value={spatialNumber("gradient", 50)} onInput={(event) => patchSpatialValues({ gradient: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
+            <label><input type="checkbox" checked={spatialBoolean("one_way")} onInput={(event) => patchSpatialValues({ one_way: event.currentTarget.checked })} /> One way only</label>
+            <label><input type="checkbox" checked={spatialBoolean("fading")} onInput={(event) => patchSpatialValues({ fading: event.currentTarget.checked })} /> Fading</label>
+            <label><input type="checkbox" checked={spatialBoolean("go_outside")} onInput={(event) => patchSpatialValues({ go_outside: event.currentTarget.checked })} /> Go outside</label>
+          </div>
+        </Show>
+        <Show when={spatialKind() === "Burst"}>
+          <div class="colorEffectModeGrid">
+            <label>Color width %<input type="number" min="0" max="100" step="1" value={spatialNumber("color_width", 50)} onInput={(event) => patchSpatialValues({ color_width: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
+            <label>Gradient %<input type="number" min="0" max="100" step="1" value={spatialNumber("gradient", 100)} onInput={(event) => patchSpatialValues({ gradient: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
+          </div>
+        </Show>
+        <Show when={spatialKind() === "RandomFill"}>
+          <div class="colorEffectModeGrid">
+            <label>Point width<input type="number" min="1" step="1" value={spatialNumber("point_width", 1)} onInput={(event) => patchSpatialValues({ point_width: Math.max(1, Math.round(Number(event.currentTarget.value) || 1)) })} /></label>
+          </div>
+        </Show>
+        <Show when={spatialKind() === "Sparkle"}>
+          <div class="colorEffectModeGrid">
+            <label>Sparkle number<input type="number" min="1" step="1" value={spatialNumber("number", 5)} onInput={(event) => patchSpatialValues({ number: Math.max(1, Math.round(Number(event.currentTarget.value) || 1)) })} /></label>
+            <label>Life span %<input type="number" min="0" max="100" step="1" value={spatialNumber("lifespan", 25)} onInput={(event) => patchSpatialValues({ lifespan: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
+            <label>Sparkle width<input type="number" min="1" step="1" value={spatialNumber("width", 1)} onInput={(event) => patchSpatialValues({ width: Math.max(1, Math.round(Number(event.currentTarget.value) || 1)) })} /></label>
+          </div>
+        </Show>
+        <Show when={spatialKind() === "Rainbow"}>
+          <div class="colorEffectModeGrid">
+            <label>Rotation °<input type="number" step="1" value={spatialNumber("rotation_degrees")} onInput={(event) => patchSpatialValues({ rotation_degrees: Number(event.currentTarget.value) || 0 })} /></label>
+            <label>Angle °<input type="number" step="1" value={spatialNumber("angle_degrees")} onInput={(event) => patchSpatialValues({ angle_degrees: Number(event.currentTarget.value) || 0 })} /></label>
+            <label>Color width %<input type="number" min="0" max="100" step="1" value={spatialNumber("color_width")} onInput={(event) => patchSpatialValues({ color_width: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
+            <label>Gradient %<input type="number" min="0" max="100" step="1" value={spatialNumber("gradient", 100)} onInput={(event) => patchSpatialValues({ gradient: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
+            <label><input type="checkbox" checked={spatialBoolean("vertical_symmetry")} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.checked })} /> Vertical symmetry</label>
+          </div>
+        </Show>
+        <Show when={spatialKind() === "Perlin"}>
+          <div class="colorEffectModeGrid">
+            <label>Octaves<input type="number" min="1" max="16" step="1" value={spatialNumber("octaves", 5)} onInput={(event) => patchSpatialValues({ octaves: clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 16) })} /></label>
+            <label>Zoom<input type="number" min="0.01" step="0.1" value={spatialNumber("zoom", 20)} onInput={(event) => patchSpatialValues({ zoom: Math.max(0.01, Number(event.currentTarget.value) || 0.01) })} /></label>
+            <label>Direction °<input type="number" step="1" value={spatialNumber("direction_degrees")} onInput={(event) => patchSpatialValues({ direction_degrees: Number(event.currentTarget.value) || 0 })} /></label>
+            <label>Speed<input type="number" step="0.1" value={spatialNumber("speed", 1)} onInput={(event) => patchSpatialValues({ speed: Number(event.currentTarget.value) || 0 })} /></label>
+            <label>Amplitude %<input type="number" min="0" max="100" step="1" value={spatialNumber("amplitude", 100)} onInput={(event) => patchSpatialValues({ amplitude: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
+          </div>
+        </Show>
         <div class="colorEffectModeGrid">
           <label>
             Algorithm
