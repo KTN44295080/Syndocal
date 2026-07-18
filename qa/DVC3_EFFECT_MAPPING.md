@@ -25,8 +25,8 @@
 
 | ID | ジェネレータ | パラメータ対応（実測） |
 |---|---|---|
-| 7 | **Sinus** | **1=Rate**(10✓×2検体), **2=Size**(1⇔1.0✓), **3=Phase**(0.25⇔25.0✓ / 0⇔0.0✓ — 0..1正規化), **4=Offset**(0✓), **5=Phasing**(0✓) — **全一致** |
-| 3 | 波形未照合（all_rampFlash、homecoming） | Ramp系と推定。id2=1.562,id3=0.495,id4=-0.848 |
+| 7 | **Sinus** | **1=Rate**(10✓×2 / 2✓), **2=Size**(1⇔1.0✓), **3=Phase**(0.25⇔25.0✓ / 0.748⇔74.8✓ — 0..1正規化), **4=Offset**(0✓), **5=Phasing**(0✓) — **全一致・3検体** |
+| 3 | **Inverse Ramp**（2026-07-19 homecomingで照合） | all_rampFlash: Rate=2⇔1=2✓, Size=1.56⇔2=1.562✓, Phase=49.5⇔3=0.495✓, Offset=-84.8⇔4=-0.848✓ — **全一致** |
 | 10 | 波形未照合（Documents版Fl-Strobe） | 保留 |
 
 時間換算: `EFFECT DURATION=5000` × Rate=N → 周期 = 5000/N ms（Sinus Rate=10 → 500ms周期）。
@@ -48,14 +48,26 @@ Phasing = 選択ビーム間の位相分散（Syndocal側はLFO位相 + 分散�
 RACK内の PRESETS/BEAMS 以外の要素にあるとみられ、実装時に特定する。Beams は 4（ムービング群）〜64（8バー×8セグメント）
 — **DVC-2で確定したビーム構造の上でセグメント単位に色パターンが走る**。
 
-### MOVE FX（RACK=4, EFFECT TYPE=4）→ Syndocal Move エンジン — 未照合
+### MAPPINGS FX（RACK=6, EFFECT TYPE=8）→ Syndocal PositionWave/空間パターン — 照合済み（2026-07-19）
 
-ID 223（Left2Right, id2=0.01=速度?）/ 224（M-PolyLoop, id2=0.02）。Documents版のみのため実UI未照合。
-照合にはDaslightへの別プロジェクトロードが必要（ユーザー同席時に実施）。
+2D空間マッピング系ファミリー。ビーム位置の上をパターンが走る（Beams=38 = 全灯体規模）。
 
-### RACK=6 / EFFECT TYPE=8 — 未照合
+| ID | ジェネレータ | パラメータ対応（実測） |
+|---|---|---|
+| 521 | **Rainbow** | 3=Transform(1⇔Vertical symmetry✓), **4=Rotation**(171⇔171✓), 10=Color Width(0⇔0.0✓), 11=Angle(0✓), 12=Gradient/100?(1⇔100.0) |
+| 530 | **Perlin** | **10=Octaves**(5✓), **11=Zoom**(20✓), **12=Direction**(1✓), **13=Speed**(1✓), **14=Amplitude**(100✓) — **全一致** |
 
-ID 521（all_outIn）/ 530（all_random）。homecoming2606のみ。同上の理由で保留。
+Syndocal受け皿: PositionWave（空間走査）+ Perlin LFO形状 + Transform（対称/回転）は新規要素。
+
+### MOVE FX（RACK=4, EFFECT TYPE=4）→ Syndocal Move エンジン — 未照合（最後の1ファミリー）
+
+検体は **Desktop版 Shinkan2026 の Moving-Pos バンク**: Left2Right / M-CenterDivLoop（ID=223, id2=0.01/0.176=速度）,
+M-PolyLoop（ID=224, id2=0.02, id3=1）。照合には同ファイルの再ロードが必要（マトリクス右端のバンク）。
+
+### FXファミリー全カタログ（2026-07-19 実機のFX追加チューザーで観測）
+
+STEPS / COLOR FX / CHASER FX / MOVE FX / VALUE FX / CURVE FX / MAPPINGS / COLOR MAPPINGS / SUPER SCENE の9種。
+VALUE FX と COLOR MAPPINGS はユーザーの全ショーに検体なし（実装優先度低・将来検体待ち）。
 
 ## Syndocal実装方針（DVC-3分割）
 
@@ -67,7 +79,9 @@ ID 521（all_outIn）/ 530（all_random）。homecoming2606のみ。同上の理
 
 ## 実機操作の記録（正直な状態申告）
 
-Daslightに対して行ったのはEDITモードでのシーン選択クリック13回とキャプチャのみ。保存・GO・シーンセルのLIVEトグル・
-スーパーシーン起動は行っていない。編集対象選択は最後に「Chaser」シーンに残っている（元は「Shin」スーパーシーンだったが、
-スーパーシーンのセルクリックはタイムライン再生を誘発しうるため意図的に復元していない）。タイトルの未保存マーク（*）は
-作業前から存在した。
+2026-07-18（Shinkan2026 Desktop版）: EDITモードでのシーン選択クリック13回とキャプチャのみ。保存・GO・LIVEトグル・
+スーパーシーン起動なし。編集対象選択は「Chaser」シーンに残置（元は「Shin」スーパーシーン。スーパーシーンのセルは
+再生誘発リスクがあるため復元せず）。タイトルの未保存マーク（*）は作業前から存在。
+
+2026-07-19（homecoming2606、ユーザーがロード）: ロード直後はLIVEモードだったため**先にEDITへ切替**（クリック1回）、
+その後シーン選択5回とキャプチャのみ。保存・LIVEトグルなし。編集対象は「all_outIn」に残置。
