@@ -284,7 +284,7 @@ import {
   type MovePathRecipe,
   type MovePathPreset,
 } from "./moveEffect";
-import { browserViewportFixture, viewportFixtureData, viewportPatchedFixture } from "./viewportFixtureData";
+import { browserPoppedPanes, browserViewportFixture, paneWindowMode, viewportFixtureData, viewportPatchedFixture } from "./viewportFixtureData";
 import { defaultColorAdjust, defaultFxAdjust, defaultTransform } from "./videoLayerDefaults";
 import {
   colorQuickLooks,
@@ -1471,6 +1471,87 @@ export default function App() {
   const visibleProjectDirty = createMemo(() => projectDirty() || timelineEventEditorDirty());
   const snapshotRequestGuard = createSnapshotRequestGuard();
   const viewportFixture = browserViewportFixture(isTauriRuntime());
+  // T12: pane windows collapse the shell to one pane; popped panes are the
+  // main window's record of which panes live in separate windows. Window
+  // placement is machine-specific, so persistence is localStorage, not .sdc.
+  const paneWindow = paneWindowMode();
+  const initialPoppedPanes = (): string[] => {
+    const fromParam = browserPoppedPanes();
+    if (fromParam.length > 0) return fromParam;
+    if (!isTauriRuntime() || paneWindow) return [];
+    try {
+      const raw = window.localStorage.getItem("syndocal.paneWindows.v1");
+      const parsed: unknown = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed)
+        ? parsed.filter((pane): pane is string => pane === "stage" || pane === "timeline")
+        : [];
+    } catch {
+      return [];
+    }
+  };
+  const [poppedPanes, setPoppedPanes] = createSignal<string[]>(initialPoppedPanes());
+  const persistPoppedPanes = (panes: string[]) => {
+    try {
+      window.localStorage.setItem("syndocal.paneWindows.v1", JSON.stringify(panes));
+    } catch {
+      // Persistence loss only affects window restore on next launch.
+    }
+  };
+  const openPaneWindow = async (pane: "stage" | "timeline") => {
+    if (isTauriRuntime()) {
+      try {
+        await invoke("open_pane_window", { pane });
+      } catch (error) {
+        setMessage(`Pane window failed: ${error}`);
+        return;
+      }
+    } else {
+      const params = new URLSearchParams(window.location.search);
+      params.set("syndocalPaneWindow", pane);
+      params.delete("syndocalPoppedPanes");
+      window.open(`${window.location.pathname}?${params}`, `syndocal-pane-${pane}`);
+    }
+    setPoppedPanes((current) => {
+      const next = current.includes(pane) ? current : [...current, pane];
+      persistPoppedPanes(next);
+      return next;
+    });
+  };
+  const closePaneWindow = async (pane: "stage" | "timeline") => {
+    if (isTauriRuntime()) {
+      try {
+        await invoke("close_pane_window", { pane });
+      } catch (error) {
+        setMessage(`Pane window close failed: ${error}`);
+      }
+    }
+    setPoppedPanes((current) => {
+      const next = current.filter((candidate) => candidate !== pane);
+      persistPoppedPanes(next);
+      return next;
+    });
+  };
+  const togglePaneWindow = (pane: "stage" | "timeline") => {
+    void (poppedPanes().includes(pane) ? closePaneWindow(pane) : openPaneWindow(pane));
+  };
+  if (isTauriRuntime() && !paneWindow) {
+    listen<string>("syndocal://pane-window-closed", ({ payload }) => {
+      setPoppedPanes((current) => {
+        const next = current.filter((candidate) => candidate !== payload);
+        persistPoppedPanes(next);
+        return next;
+      });
+    });
+    for (const pane of initialPoppedPanes()) {
+      void invoke("open_pane_window", { pane }).catch(() => {});
+    }
+  }
+  if (paneWindow) {
+    setWorkspaceTab("control");
+    // Force a mode whose surface contains the pane: a persisted "mixer" mode
+    // would hide the stage column (exclusive surface) inside a stage window.
+    setControlMode("live");
+  }
   if (
     viewportFixture === "timeline"
     || viewportFixture === "timeline-layered"
@@ -13356,7 +13437,10 @@ export default function App() {
   });
 
   return (
-    <main class="app">
+    <main
+      class={`app${paneWindow ? ` paneWindow paneWindow-${paneWindow}` : ""}`}
+      style={paneWindow ? "grid-template-rows: minmax(0, 1fr) auto !important" : undefined}
+    >
       <WorkspaceChrome
         workspaceTab={workspaceTab()}
         setupSubTab={setupSubTab()}
@@ -13423,7 +13507,10 @@ export default function App() {
         </div>
       </Show>
 
-      <section class={`layout ${touchLayoutClass()}`}>
+      <section
+        class={`layout ${touchLayoutClass()}`}
+        style={paneWindow ? "grid-template-rows: minmax(0, 1fr) !important" : undefined}
+      >
         <Show when={workspaceTab() === "control" && controlMode() !== "mixer"}>
         <section class="panel liveControlPanel controlPanel">
           <div class="panelHeader">
@@ -14411,6 +14498,8 @@ export default function App() {
 
         <Show when={workspaceTab() === "setup" || (workspaceTab() === "control" && controlMode() !== "mixer")}>
         <MappingPersistentWorkspaceBand
+          poppedPanes={poppedPanes()}
+          onTogglePaneWindow={togglePaneWindow}
           workspace={workspaceTab() === "control" ? "control" : "setup"}
           controlMode={controlMode()}
           onControlMode={selectControlMode}

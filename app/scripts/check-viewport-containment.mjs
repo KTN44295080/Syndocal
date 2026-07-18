@@ -6905,6 +6905,80 @@ async function runVjBankViewport(client, viewport) {
   };
 }
 
+// T12: pane windows and popped-main compaction. Each scenario is a separate
+// navigation; the pane-window route collapses the shell to one pane and the
+// popped param simulates a pane living in another window.
+async function runPaneWindowViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  const measureState = async (query, setup) => {
+    await client.send("Page.navigate", { url: `${fixtureUrl("timeline")}&${query}` });
+    await waitForApp(client);
+    if (setup) await setup();
+    await sleep(320);
+    return await client.evaluate(`(() => {
+      const rect = (sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return { w: 0, h: 0 };
+        const b = el.getBoundingClientRect();
+        return { w: Math.round(b.width), h: Math.round(b.height) };
+      };
+      const doc = document.documentElement;
+      return {
+        stage: rect('.mappingPersistentStage'),
+        context: rect('.workspaceContextPane'),
+        selections: rect('.mappingSelectionsColumn'),
+        topbar: rect('.topbar'),
+        band: rect('.mappingPersistentWorkspaceBand'),
+        stageToggle: document.querySelector('[data-pane-popout-toggle="stage"]')?.getAttribute('aria-pressed') ?? '',
+        popoutToggleCount: document.querySelectorAll('[data-pane-popout-toggle]').length,
+        scrollZero:
+          doc.scrollWidth - doc.clientWidth === 0 &&
+          doc.scrollHeight - doc.clientHeight === 0,
+        vw: window.innerWidth,
+        vh: window.innerHeight,
+      };
+    })()`);
+  };
+  const stageWin = await measureState("syndocalPaneWindow=stage");
+  const timelineWin = await measureState("syndocalPaneWindow=timeline");
+  const poppedMain = await measureState("syndocalPoppedPanes=stage", async () => {
+    await clickByText(client, "Control");
+  });
+  const conditions = [
+    ["paneWindowStageFillsWidthWithoutChrome", () =>
+      stageWin.stage.w >= stageWin.vw - 20 && stageWin.stage.h >= stageWin.vh * 0.6 && stageWin.topbar.w === 0],
+    ["paneWindowStageHidesOtherPanes", () => stageWin.context.w === 0 && stageWin.selections.w === 0],
+    ["paneWindowStageScrollZero", () => stageWin.scrollZero === true],
+    ["paneWindowTimelineFillsViewportWithoutChrome", () =>
+      timelineWin.context.w >= timelineWin.vw - 20 && timelineWin.context.h >= timelineWin.vh * 0.75 && timelineWin.topbar.w === 0],
+    ["paneWindowTimelineScrollZero", () => timelineWin.scrollZero === true],
+    ["poppedMainHidesStageAndRefills", () =>
+      poppedMain.stage.w === 0 &&
+      poppedMain.selections.w > 0 &&
+      poppedMain.context.w > 0 &&
+      poppedMain.selections.w + poppedMain.context.w >= poppedMain.band.w - 40],
+    ["poppedMainToggleStatePressed", () => poppedMain.stageToggle === "true" && poppedMain.popoutToggleCount === 2],
+    ["poppedMainScrollZero", () => poppedMain.scrollZero === true],
+  ];
+  const failedChecks = conditions.filter(([, check]) => {
+    try { return !check(); } catch { return true; }
+  }).map(([name]) => name);
+  return {
+    viewport,
+    label: `pane-window-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    failedChecks,
+    stageWin: [stageWin.stage.w, stageWin.stage.h, stageWin.topbar.w],
+    timelineWin: [timelineWin.context.w, timelineWin.context.h],
+    poppedMain: [poppedMain.stage.w, poppedMain.selections.w, poppedMain.context.w],
+  };
+}
+
 async function runSceneMatrixPaneCheck(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -9502,6 +9576,7 @@ async function main() {
     const cueNodeGraphResults = [];
     const sceneMatrixResults = [];
     const vjBankResults = [];
+    const paneWindowResults = [];
     if (!workspaceShellOnlyMode) {
       for (const viewport of viewports) {
         await recycleBrowser();
@@ -9511,6 +9586,7 @@ async function main() {
         cueNodeGraphResults.push(await runCueNodeGraphViewport(client, viewport));
         sceneMatrixResults.push(await runSceneMatrixPaneCheck(client, viewport));
         vjBankResults.push(await runVjBankViewport(client, viewport));
+        paneWindowResults.push(await runPaneWindowViewport(client, viewport));
       }
     }
     const sceneBlockScaleViewports = viewports.filter((viewport) =>
@@ -9533,6 +9609,7 @@ async function main() {
     const cueNodeGraphFailures = cueNodeGraphResults.filter((result) => !result.passed);
     const sceneMatrixFailures = sceneMatrixResults.filter((result) => !result.passed);
     const vjBankFailures = vjBankResults.filter((result) => !result.passed);
+    const paneWindowFailures = paneWindowResults.filter((result) => !result.passed);
     const setupSurfaceFailures = results.filter((result) => !hasExpectedSetupSurface(result));
     const persistentBandFailures = results.filter((result) => !hasExpectedPersistentWorkspaceBand(result));
     const persistentBandInvarianceFailures = results.filter((result) => !hasExpectedPersistentBandInvariance(result));
@@ -9647,6 +9724,11 @@ async function main() {
         `${result.passed ? "pass" : "fail"} ${result.label} columns=${JSON.stringify(result.before.columns)} active=${JSON.stringify(result.before.activeCardIds)}->${JSON.stringify(result.after.activeCardIds)} failed=${JSON.stringify(result.failedChecks)}`,
       );
     }
+    for (const result of paneWindowResults) {
+      console.log(
+        `${result.passed ? "pass" : "fail"} ${result.label} stageWin=${result.stageWin.join("/")} timelineWin=${result.timelineWin.join("/")} poppedMain=${result.poppedMain.join("/")} failed=${JSON.stringify(result.failedChecks)}`,
+      );
+    }
     for (const result of vjBankResults) {
       console.log(
         `${result.passed ? "pass" : "fail"} ${result.label} pads=${result.pads.join("/")} drawers=${result.drawers.join("/")} monitorRatio=${result.monitorRatio} layerRows=${result.layerRows} kill=${result.killButtons} failed=${JSON.stringify(result.failedChecks)}`,
@@ -9661,6 +9743,7 @@ async function main() {
       cueNodeGraphFailures.length > 0 ||
       sceneMatrixFailures.length > 0 ||
       vjBankFailures.length > 0 ||
+      paneWindowFailures.length > 0 ||
       keyboardNavigationFailures.length > 0 ||
       setupSurfaceFailures.length > 0 ||
       persistentBandFailures.length > 0 ||
@@ -9737,6 +9820,7 @@ async function main() {
             cueNodeGraph: cueNodeGraphFailures,
             sceneMatrix: sceneMatrixFailures,
             vjBank: vjBankFailures,
+            paneWindow: paneWindowFailures,
             keyboardNavigation: keyboardNavigationFailures,
             setupSurface: setupSurfaceFailures,
             persistentBand: persistentBandFailures,

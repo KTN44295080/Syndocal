@@ -28,6 +28,21 @@ export const browserViewportFixture = (tauriRuntime: boolean) => {
   return new URLSearchParams(window.location.search).get("syndocalViewportFixture") ?? "";
 };
 
+// T12: pane-window mode works in BOTH browser and Tauri runtimes - a pane
+// window is the full app collapsed to one pane by a root class.
+export const paneWindowMode = (): "" | "stage" | "timeline" => {
+  if (typeof window === "undefined") return "";
+  const value = new URLSearchParams(window.location.search).get("syndocalPaneWindow") ?? "";
+  return value === "stage" || value === "timeline" ? value : "";
+};
+
+// T12: harness-only simulation of popped panes in the main window.
+export const browserPoppedPanes = (): string[] => {
+  if (typeof window === "undefined") return [];
+  const value = new URLSearchParams(window.location.search).get("syndocalPoppedPanes") ?? "";
+  return value.split(",").map((pane) => pane.trim()).filter((pane) => pane === "stage" || pane === "timeline");
+};
+
 const viewportFixtureControls: AttributeControl[] = [
   {
     attribute: "Dimmer",

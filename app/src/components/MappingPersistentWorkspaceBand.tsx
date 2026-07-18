@@ -25,6 +25,8 @@ type MappingPersistentWorkspaceBandProps = {
   stageLayers: ComponentProps<typeof MappingStageLayersPanel>;
   selection: MappingSelectionPanelProps;
   hotkeyHelpOpen: boolean;
+  poppedPanes: string[];
+  onTogglePaneWindow: (pane: "stage" | "timeline") => void;
   onControlMode: (mode: ControlMode) => void;
   onCloseHotkeyHelp: () => void;
   children?: JSX.Element;
@@ -68,7 +70,7 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
 
   return (
     <section
-      class={`mappingPersistentWorkspaceBand${timelinePaneExpanded() ? " timelinePaneExpanded" : ""}`}
+      class={`mappingPersistentWorkspaceBand${timelinePaneExpanded() ? " timelinePaneExpanded" : ""}${props.poppedPanes.includes("stage") ? " stagePanePopped" : ""}`}
       data-timeline-pane-expanded={timelinePaneExpanded() ? "true" : "false"}
       aria-label="Persistent workspace band"
     >
@@ -140,6 +142,32 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
                       </svg>
                     </button>
                   </Show>
+                  <button
+                    type="button"
+                    class={`timelinePaneExpandToggle panePopoutToggle${props.poppedPanes.includes("stage") ? " expanded" : ""}`}
+                    data-pane-popout-toggle="stage"
+                    title={props.poppedPanes.includes("stage") ? "Close Stage window" : "Open Stage in a window"}
+                    aria-label={props.poppedPanes.includes("stage") ? "Close Stage window" : "Open Stage in a window"}
+                    aria-pressed={props.poppedPanes.includes("stage")}
+                    onClick={() => props.onTogglePaneWindow("stage")}
+                  >
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="M3 5h7v8H3zM6 5V3h7v8h-2" />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    class={`timelinePaneExpandToggle panePopoutToggle${props.poppedPanes.includes("timeline") ? " expanded" : ""}`}
+                    data-pane-popout-toggle="timeline"
+                    title={props.poppedPanes.includes("timeline") ? "Close Timeline window" : "Open Timeline in a window"}
+                    aria-label={props.poppedPanes.includes("timeline") ? "Close Timeline window" : "Open Timeline in a window"}
+                    aria-pressed={props.poppedPanes.includes("timeline")}
+                    onClick={() => props.onTogglePaneWindow("timeline")}
+                  >
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="M2 6h12M2 6v6h12V6M6 3h7v3" />
+                    </svg>
+                  </button>
                 </nav>
                 {props.children}
               </>

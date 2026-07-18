@@ -26660,3 +26660,87 @@ h3 {
     min-height: 48px;
   }
 }
+
+/* ---- UI redesign T12: multi-window workspaces. A pane window is the full
+   app collapsed to one pane by a root class (all commands and snapshot
+   polling work unchanged); the main window compacts the freed slot. Window
+   placement persists in localStorage (machine-specific), not the .sdc. */
+
+.app.paneWindow .topbar {
+  display: none;
+}
+
+/* Stretch the band to the full pane window; the T10 fixed band heights are a
+   main-shell contract, not a pane-window one. */
+.app.paneWindow .mappingPersistentWorkspaceBand {
+  grid-row: 1 / -1 !important;
+  height: 100% !important;
+  max-height: none !important;
+  grid-template-rows: auto minmax(0, 1fr) !important;
+}
+
+.app.paneWindow .mappingPersistentWorkspaceGrid,
+.app.paneWindow .mappingPersistentStage,
+.app.paneWindow .workspaceContextPane {
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+}
+
+.app.paneWindow .layout > *:not(.mappingPersistentWorkspaceBand) {
+  display: none;
+}
+
+.app.paneWindow .workspaceTabs,
+.app.paneWindow .appMenuButton,
+.app.paneWindow > :first-child {
+  display: none;
+}
+
+/* The shared-workspace shell pins two rows with !important; the pane window
+   must match that weight to collapse to one row. */
+.app.paneWindow .layout.layoutSharedWorkspace {
+  grid-template-rows: minmax(0, 1fr) !important;
+}
+
+.app.paneWindow .mappingPersistentWorkspaceGrid {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) !important;
+  height: 100%;
+}
+
+.app.paneWindow-stage .mappingSelectionsColumn,
+.app.paneWindow-stage .workspaceContextPane {
+  display: none;
+}
+
+.app.paneWindow-timeline .mappingPersistentStage,
+.app.paneWindow-timeline .mappingSelectionsColumn {
+  display: none;
+}
+
+.app.paneWindow-timeline .controlContextPane {
+  grid-column: 1 / -1;
+}
+
+/* Main-window compaction while the stage lives in its own window. */
+.mappingPersistentWorkspaceBand.stagePanePopped .mappingPersistentStage {
+  display: none;
+}
+
+.mappingPersistentWorkspaceBand.stagePanePopped .mappingPersistentWorkspaceGrid {
+  grid-template-columns: minmax(0, 0.42fr) minmax(0, 1fr);
+}
+
+/* Pane-window mode surfaces fill the window; the main-shell fixed panel
+   heights are a T10 contract that does not apply inside a pane window. */
+.app.paneWindow .controlContextPane > .panel {
+  height: 100% !important;
+  max-height: none !important;
+  min-height: 0;
+}
+
+.panePopoutToggle.expanded {
+  color: #e8ecef;
+  box-shadow: inset 0 -2px 0 var(--ray-accent);
+}
