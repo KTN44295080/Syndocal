@@ -9,10 +9,12 @@ use base64::Engine as _;
 use flate2::{read::ZlibDecoder, Decompress, FlushDecompress, Status};
 use protocol::{
     AttributeControl, AttributeResolution, AttributeValueSummary, ChannelFunctionSummary,
-    ChildTimelineSummary, CueFixtureTarget, CueSummary, DmxModeSummary, DmxOutputConfig,
-    DmxUniversePreview, EngineSnapshot, FixtureProfileSummary, GeometrySummary,
-    PatchedFixtureSummary, ProjectFile, Rotation3, TimelineAudioClipSummary,
-    TimelineCueEventSummary, TimelineLayerKind, TimelineLayerSummary, TimelineTrackKind, Vec3,
+    ChaserDirection, ChaserEffectRequest, ChaserFeature, ChaserStep, ChildTimelineSummary,
+    CueEffectTarget, CueFixtureTarget, CueSummary, DmxModeSummary, DmxOutputConfig,
+    DmxUniversePreview, EffectBlendMode, EffectClockSync, EffectParamsSnapshot, EngineSnapshot,
+    FixtureProfileSummary, GeometrySummary, LfoEffectRequest, LfoShape, PatchedFixtureSummary,
+    ProjectFile, Rotation3, TimelineAudioClipSummary, TimelineCueEventSummary, TimelineLayerKind,
+    TimelineLayerSummary, TimelineTrackKind, Vec3,
 };
 use roxmltree::{Document, Node};
 use serde::Serialize;
@@ -83,6 +85,7 @@ pub(crate) struct DvcImportSummary {
     pub(crate) beam_feature_mismatches: usize,
     pub(crate) timeline_audio_clips: usize,
     pub(crate) timeline_scene_blocks: usize,
+    pub(crate) effects_converted: usize,
     pub(crate) effects_skipped: usize,
     pub(crate) unknown_channel_types: usize,
     pub(crate) missing_audio_files: usize,
@@ -139,6 +142,28 @@ struct FixtureImportRef {
     fixture_id: u64,
     fixture_index: usize,
     profile_index: usize,
+}
+
+#[derive(Debug, Default)]
+struct ParsedSceneEffects {
+    targets: Vec<CueEffectTarget>,
+    notes: Vec<String>,
+}
+
+#[derive(Debug)]
+struct ConvertedDvcEffect {
+    target: CueEffectTarget,
+    generator: &'static str,
+    note: String,
+    approximations: Vec<String>,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug)]
+struct DvcRackTargets {
+    ordered_steps: Vec<Vec<u64>>,
+    fixture_ids: Vec<u64>,
+    has_multi_beam_selection: bool,
 }
 
 #[derive(Debug)]
@@ -754,6 +779,7 @@ fn parse_scenes(
         .collect::<Vec<_>>();
     let mut cues = Vec::new();
     let mut scene_indices = HashMap::new();
+    let mut next_effect_id = 1_u64;
 
     for (bank_index, bank) in banks.iter().copied().enumerate() {
         let bank_name =
@@ -773,10 +799,6 @@ fn parse_scenes(
             );
             let fade_in = parse_u64_attribute(scene, "FADE_IN").unwrap_or(0);
             let fade_out = parse_u64_attribute(scene, "FADE_OUT").unwrap_or(0);
-            let effect_count = scene
-                .descendants()
-                .filter(|node| node.has_tag_name("EFFECT"))
-                .count();
             let mut notes = vec![format!(
                 "Daslight bank={bank_name}; loop={}; speed={}; play_trigger={}; play_division={}; fade_out_ms={fade_out}",
                 scene.attribute("LOOP").unwrap_or("0"),
@@ -784,18 +806,14 @@ fn parse_scenes(
                 scene.attribute("PLAY_TRIGGER").unwrap_or("0"),
                 scene.attribute("PLAY_DIVISION").unwrap_or("0"),
             )];
-            if effect_count > 0 {
-                notes.push(format!(
-                    "Daslight effects={effect_count}; not converted by DVC-1"
-                ));
-                report.summary.effects_skipped =
-                    report.summary.effects_skipped.saturating_add(effect_count);
-                report.skipped.add(
-                    effect_count,
-                    format!("Cue: {scene_name}"),
-                    "RACK/EFFECT numeric codes were not converted",
-                );
-            }
+            let parsed_effects = parse_scene_effects(
+                scene,
+                &scene_name,
+                fixture_refs,
+                &mut next_effect_id,
+                report,
+            );
+            notes.extend(parsed_effects.notes);
             let cue = CueSummary {
                 id: cue_id,
                 cue_list_id: protocol::DEFAULT_CUE_LIST_ID,
@@ -805,6 +823,7 @@ fn parse_scenes(
                 fade_ms: fade_in,
                 notes: notes.join(" | "),
                 color: scene.attribute("COLOR").and_then(dvc_argb_to_rgb),
+                effect_targets: parsed_effects.targets,
                 ..CueSummary::default()
             };
             let cue_index = cues.len();
@@ -955,6 +974,608 @@ fn parse_scenes(
         }
     }
     Ok((cues, scene_indices, banks.len()))
+}
+
+fn parse_scene_effects(
+    scene: Node<'_, '_>,
+    scene_name: &str,
+    fixture_refs: &HashMap<String, FixtureImportRef>,
+    next_effect_id: &mut u64,
+    report: &mut DvcImportReport,
+) -> ParsedSceneEffects {
+    let mut parsed = ParsedSceneEffects::default();
+    let Some(racks) = direct_child(scene, "RACKS") else {
+        return parsed;
+    };
+
+    for rack in element_children(racks).filter(|node| node.has_tag_name("RACK")) {
+        let rack_type = rack
+            .attribute("TYPE")
+            .and_then(|value| value.parse::<u16>().ok());
+        for effect in element_children(rack).filter(|node| node.has_tag_name("EFFECT")) {
+            let effect_type = effect
+                .attribute("TYPE")
+                .and_then(|value| value.parse::<u16>().ok());
+            let generator_id = effect
+                .attribute("ID")
+                .and_then(|value| value.parse::<u16>().ok());
+            let generator = match (rack_type, effect_type, generator_id) {
+                (Some(3), Some(6), Some(321)) => Some("Chaser #1"),
+                (Some(3), Some(6), Some(325)) => Some("Chaser random"),
+                (Some(8), Some(5), Some(7)) => Some("Sinus"),
+                _ => None,
+            };
+            let item = format!(
+                "Effect: {scene_name} ({})",
+                generator.unwrap_or("unconfirmed generator")
+            );
+
+            let conversion = match (rack_type, effect_type, generator_id, generator) {
+                (Some(rack_type), Some(effect_type), Some(generator_id), Some(_)) => {
+                    convert_dvc_effect(
+                        scene,
+                        scene_name,
+                        rack,
+                        effect,
+                        rack_type,
+                        effect_type,
+                        generator_id,
+                        *next_effect_id,
+                        fixture_refs,
+                    )
+                }
+                _ => Err(format!(
+                    "RACK TYPE={} EFFECT TYPE={} ID={} is not confirmed for DVC-3a",
+                    rack_type
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "missing".to_string()),
+                    effect_type
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "missing".to_string()),
+                    generator_id
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "missing".to_string())
+                )),
+            };
+
+            match conversion {
+                Ok(converted) => {
+                    let item = format!("Effect: {scene_name} ({})", converted.generator);
+                    report.summary.effects_converted =
+                        report.summary.effects_converted.saturating_add(1);
+                    report
+                        .converted
+                        .add(1, item.clone(), converted.note.clone());
+                    for approximation in &converted.approximations {
+                        report
+                            .approximate
+                            .add(1, item.clone(), approximation.clone());
+                    }
+                    for warning in &converted.warnings {
+                        if report.warnings.len() < DVC_REPORT_DETAIL_LIMIT {
+                            report.warnings.push(format!(
+                                "Effect '{scene_name}' ({}): {warning}",
+                                converted.generator
+                            ));
+                        }
+                    }
+                    parsed.notes.push(format!(
+                        "Daslight effect {} converted: {}",
+                        converted.generator, converted.note
+                    ));
+                    parsed.targets.push(converted.target);
+                    *next_effect_id = (*next_effect_id).saturating_add(1);
+                }
+                Err(error) => {
+                    report.summary.effects_skipped =
+                        report.summary.effects_skipped.saturating_add(1);
+                    report.skipped.add(1, item, error.clone());
+                    parsed
+                        .notes
+                        .push(format!("Daslight effect skipped: {error}"));
+                }
+            }
+        }
+    }
+
+    parsed
+}
+
+#[allow(clippy::too_many_arguments)]
+fn convert_dvc_effect(
+    scene: Node<'_, '_>,
+    scene_name: &str,
+    rack: Node<'_, '_>,
+    effect: Node<'_, '_>,
+    rack_type: u16,
+    effect_type: u16,
+    generator_id: u16,
+    effect_id: u64,
+    fixture_refs: &HashMap<String, FixtureImportRef>,
+) -> Result<ConvertedDvcEffect, String> {
+    match (rack_type, effect_type, generator_id) {
+        (3, 6, 321 | 325) => convert_dvc_chaser_effect(
+            scene,
+            scene_name,
+            rack,
+            effect,
+            generator_id,
+            effect_id,
+            fixture_refs,
+        ),
+        (8, 5, 7) => convert_dvc_sinus_effect(
+            scene,
+            scene_name,
+            rack,
+            effect,
+            effect_id,
+            fixture_refs,
+        ),
+        _ => Err(format!(
+            "RACK TYPE={rack_type} EFFECT TYPE={effect_type} ID={generator_id} is not confirmed for DVC-3a"
+        )),
+    }
+}
+
+fn convert_dvc_chaser_effect(
+    scene: Node<'_, '_>,
+    scene_name: &str,
+    rack: Node<'_, '_>,
+    effect: Node<'_, '_>,
+    generator_id: u16,
+    effect_id: u64,
+    fixture_refs: &HashMap<String, FixtureImportRef>,
+) -> Result<ConvertedDvcEffect, String> {
+    let generator = if generator_id == 321 {
+        "Chaser #1"
+    } else {
+        "Chaser random"
+    };
+    let params = dvc_effect_params(effect)?;
+    let expected_params: &[u16] = if generator_id == 321 {
+        &[10, 11, 12]
+    } else {
+        &[11, 12, 13, 14, 15]
+    };
+    require_exact_dvc_params(&params, expected_params)?;
+
+    let targets = dvc_rack_targets(rack, fixture_refs)?;
+    let original_step_count = targets.ordered_steps.len();
+    if original_step_count == 0 {
+        return Err("BEAMS resolved to no Chaser steps".to_string());
+    }
+
+    let mut approximations = Vec::new();
+    let mut warnings = Vec::new();
+    let mut ordered_steps = targets.ordered_steps;
+    if ordered_steps.len() == 1 {
+        ordered_steps.push(Vec::new());
+        approximations.push(
+            "single target selection requires an added blackout gap in the Chaser engine"
+                .to_string(),
+        );
+    }
+    if targets.has_multi_beam_selection {
+        approximations.push("segment selection approximated to fixture".to_string());
+    }
+
+    let pixels_on = dvc_positive_integer_param(&params, 12, "Nb pixels on")?;
+    let maximum_pixels = ordered_steps.len().min(64) as u64;
+    let active_step_count = pixels_on.min(maximum_pixels) as u16;
+    if pixels_on > maximum_pixels {
+        approximations.push(format!(
+            "Nb pixels on {pixels_on} was clamped to the Chaser engine limit {maximum_pixels}"
+        ));
+    }
+
+    let fading = dvc_binary_param(&params, 11, "Fading")?;
+    let (direction, duty_cycle, generator_note) = if generator_id == 321 {
+        let one_way = dvc_binary_param(&params, 10, "One Way Only")?;
+        (
+            if one_way {
+                ChaserDirection::Forward
+            } else {
+                ChaserDirection::Bounce
+            },
+            1.0,
+            format!(
+                "param10=One Way Only({}); param11=Fading({}) per Daslight UI-order interpretation",
+                u8::from(one_way),
+                u8::from(fading)
+            ),
+        )
+    } else {
+        let flash_percent = dvc_param(&params, 13, "Flash")?;
+        if !flash_percent.is_finite() || !(0.0..=100.0).contains(&flash_percent) {
+            return Err(format!(
+                "Flash must be within 0..100, found {flash_percent}"
+            ));
+        }
+        let random_sequence = dvc_binary_param(&params, 14, "Random sequence")?;
+        let cycles = dvc_positive_integer_param(&params, 15, "Nb cycles")?;
+        let mut duty_cycle = (flash_percent / 100.0) as f32;
+        if duty_cycle <= 0.0 {
+            duty_cycle = 0.001;
+            approximations
+                .push("Flash 0% was raised to the minimum non-zero Chaser duty cycle".to_string());
+        }
+        if !random_sequence {
+            approximations.push(
+                "RandomSeq=0 submode is represented by the Chaser engine's seeded Random order"
+                    .to_string(),
+            );
+        }
+        approximations.push(format!(
+            "NbCycles={cycles} is not reproduced by the continuously looping Chaser engine"
+        ));
+        (
+            ChaserDirection::Random,
+            duty_cycle,
+            format!(
+                "random_sequence={}; flash_percent={flash_percent}; cycles={cycles}",
+                u8::from(random_sequence)
+            ),
+        )
+    };
+
+    let (step_duration_ms, free_run_note) =
+        dvc_chaser_step_duration(effect, scene, ordered_steps.len(), &mut approximations)?;
+    let (clock_sync, clock_note, clock_warning) = dvc_scene_clock_sync(scene);
+    if let Some(clock_warning) = clock_warning {
+        approximations.push(clock_warning);
+    }
+
+    let steps = ordered_steps
+        .into_iter()
+        .map(|fixture_ids| ChaserStep {
+            fixture_ids,
+            target_group_ids: Vec::new(),
+            level: u16::MAX,
+        })
+        .collect::<Vec<_>>();
+    let request = ChaserEffectRequest {
+        label: format!("{scene_name} ({generator})"),
+        steps,
+        features: vec![ChaserFeature {
+            attribute: "Dimmer".to_string(),
+            low: 0,
+            high: u16::MAX,
+        }],
+        step_duration_ms,
+        clock_sync,
+        direction,
+        wings: 1,
+        active_step_count,
+        duty_cycle,
+        overlap: if fading { 1.0 } else { 0.0 },
+        phase: 0.0,
+        fixture_spread: 0.0,
+        random_seed: (effect_id % u32::MAX as u64).max(1),
+        blend_mode: EffectBlendMode::Override,
+    };
+    engine::validate_chaser_effect_request(&request)
+        .map_err(|error| format!("confirmed Chaser parameters are not representable: {error}"))?;
+
+    if targets.fixture_ids.is_empty() {
+        warnings.push("resolved fixture target list was unexpectedly empty".to_string());
+    }
+    let note = format!(
+        "feature=Dimmer; selections={original_step_count}; pixels_on={pixels_on}; {free_run_note}; {clock_note}; {generator_note}"
+    );
+    Ok(ConvertedDvcEffect {
+        target: CueEffectTarget {
+            effect_id,
+            enabled: true,
+            params: Some(EffectParamsSnapshot::Chaser(request)),
+        },
+        generator,
+        note,
+        approximations,
+        warnings,
+    })
+}
+
+fn convert_dvc_sinus_effect(
+    scene: Node<'_, '_>,
+    scene_name: &str,
+    rack: Node<'_, '_>,
+    effect: Node<'_, '_>,
+    effect_id: u64,
+    fixture_refs: &HashMap<String, FixtureImportRef>,
+) -> Result<ConvertedDvcEffect, String> {
+    let params = dvc_effect_params(effect)?;
+    require_exact_dvc_params(&params, &[1, 2, 3, 4, 5])?;
+    let rate = dvc_param(&params, 1, "Rate")?;
+    let size = dvc_param(&params, 2, "Size")?;
+    let phase = dvc_param(&params, 3, "Phase")?;
+    let offset = dvc_param(&params, 4, "Offset")?;
+    let phasing = dvc_param(&params, 5, "Phasing")?;
+    if !rate.is_finite() || rate <= 0.0 {
+        return Err(format!(
+            "Rate must be finite and greater than 0, found {rate}"
+        ));
+    }
+    if !size.is_finite() || !(0.0..=1.0).contains(&size) {
+        return Err(format!("Size must be within 0..1, found {size}"));
+    }
+    if !phase.is_finite() || !(0.0..=1.0).contains(&phase) {
+        return Err(format!("Phase must be within 0..1, found {phase}"));
+    }
+    if !offset.is_finite() || !phasing.is_finite() {
+        return Err("Offset and Phasing must be finite".to_string());
+    }
+    let duration_ms = effect
+        .attribute("DURATION")
+        .ok_or_else(|| "Sinus EFFECT is missing DURATION".to_string())?
+        .parse::<f64>()
+        .map_err(|error| format!("Sinus DURATION is invalid: {error}"))?;
+    let period = duration_ms / rate;
+    if !period.is_finite() || period < 10.0 || period > u64::MAX as f64 {
+        return Err(format!(
+            "DURATION / Rate must produce an LFO period of at least 10 ms, found {period}"
+        ));
+    }
+    let period_ms = period.round() as u64;
+    let center = 0.5 + offset;
+    let half_span = size * 0.5;
+    let low = normalized_dmx(center - half_span);
+    let high = normalized_dmx(center + half_span);
+    let targets = dvc_rack_targets(rack, fixture_refs)?;
+    if targets.fixture_ids.is_empty() {
+        return Err("BEAMS resolved to no Sinus fixture targets".to_string());
+    }
+
+    let mut approximations = Vec::new();
+    if targets.has_multi_beam_selection {
+        approximations.push("segment selection approximated to fixture".to_string());
+    }
+    let (clock_sync, clock_note, clock_warning) = dvc_scene_clock_sync(scene);
+    if let Some(clock_warning) = clock_warning {
+        approximations.push(clock_warning);
+    }
+    let mut warnings = Vec::new();
+    if phasing.abs() > f64::EPSILON {
+        warnings.push(format!("phasing not reproduced (Phasing={phasing})"));
+    }
+
+    let request = LfoEffectRequest {
+        label: format!("{scene_name} (Sinus)"),
+        fixture_ids: targets.fixture_ids,
+        target_group_ids: Vec::new(),
+        attribute: "Dimmer".to_string(),
+        video_targets: Vec::new(),
+        shape: LfoShape::Sine,
+        period_ms,
+        clock_sync,
+        low,
+        high,
+        phase: phase as f32,
+        blend_mode: EffectBlendMode::Override,
+    };
+    let note = format!(
+        "feature=Dimmer; period_ms=round(DURATION/Rate)={period_ms}; low={low}; high={high}; phase={phase}; offset={offset}; {clock_note}"
+    );
+    Ok(ConvertedDvcEffect {
+        target: CueEffectTarget {
+            effect_id,
+            enabled: true,
+            params: Some(EffectParamsSnapshot::Lfo(request)),
+        },
+        generator: "Sinus",
+        note,
+        approximations,
+        warnings,
+    })
+}
+
+fn dvc_effect_params(effect: Node<'_, '_>) -> Result<HashMap<u16, f64>, String> {
+    let params_node = direct_child(effect, "PARAMS")
+        .ok_or_else(|| "confirmed generator is missing PARAMS".to_string())?;
+    let param_nodes = element_children(params_node)
+        .filter(|node| node.has_tag_name("PARAM"))
+        .collect::<Vec<_>>();
+    let declared = params_node
+        .attribute("NB")
+        .and_then(|value| value.parse::<usize>().ok());
+    if declared.is_some_and(|count| count != param_nodes.len()) {
+        return Err(format!(
+            "PARAMS declares {} entries but contains {}",
+            declared.unwrap_or_default(),
+            param_nodes.len()
+        ));
+    }
+    let mut params = HashMap::new();
+    for param in param_nodes {
+        let id = required_attribute(param, "ID", "PARAM")?
+            .parse::<u16>()
+            .map_err(|error| format!("PARAM ID is invalid: {error}"))?;
+        let value = required_attribute(param, "VAL", "PARAM")?
+            .parse::<f64>()
+            .map_err(|error| format!("PARAM {id} value is invalid: {error}"))?;
+        if params.insert(id, value).is_some() {
+            return Err(format!("PARAM {id} is duplicated"));
+        }
+    }
+    Ok(params)
+}
+
+fn require_exact_dvc_params(params: &HashMap<u16, f64>, expected: &[u16]) -> Result<(), String> {
+    let mut actual = params.keys().copied().collect::<Vec<_>>();
+    actual.sort_unstable();
+    let mut expected = expected.to_vec();
+    expected.sort_unstable();
+    if actual != expected {
+        return Err(format!(
+            "confirmed generator expected PARAM IDs {expected:?}, found {actual:?}"
+        ));
+    }
+    Ok(())
+}
+
+fn dvc_param(params: &HashMap<u16, f64>, id: u16, label: &str) -> Result<f64, String> {
+    params
+        .get(&id)
+        .copied()
+        .ok_or_else(|| format!("{label} PARAM {id} is missing"))
+}
+
+fn dvc_binary_param(params: &HashMap<u16, f64>, id: u16, label: &str) -> Result<bool, String> {
+    match dvc_param(params, id, label)? {
+        value if value == 0.0 => Ok(false),
+        value if value == 1.0 => Ok(true),
+        value => Err(format!("{label} PARAM {id} must be 0 or 1, found {value}")),
+    }
+}
+
+fn dvc_positive_integer_param(
+    params: &HashMap<u16, f64>,
+    id: u16,
+    label: &str,
+) -> Result<u64, String> {
+    let value = dvc_param(params, id, label)?;
+    if !value.is_finite()
+        || value < 1.0
+        || value > u64::MAX as f64
+        || value.fract().abs() > f64::EPSILON
+    {
+        return Err(format!(
+            "{label} PARAM {id} must be a positive integer, found {value}"
+        ));
+    }
+    Ok(value as u64)
+}
+
+fn dvc_rack_targets(
+    rack: Node<'_, '_>,
+    fixture_refs: &HashMap<String, FixtureImportRef>,
+) -> Result<DvcRackTargets, String> {
+    let beams = direct_child(rack, "BEAMS")
+        .ok_or_else(|| "confirmed generator rack is missing BEAMS".to_string())?;
+    let beam_nodes = element_children(beams)
+        .filter(|node| node.has_tag_name("BEAM"))
+        .collect::<Vec<_>>();
+
+    let mut selection_indices = HashMap::<String, usize>::new();
+    let mut ordered_steps = Vec::<Vec<u64>>::new();
+    let mut fixture_ids = Vec::new();
+    let mut seen_fixture_ids = HashSet::new();
+    let mut has_multi_beam_selection = false;
+    for (beam_index, beam) in beam_nodes.into_iter().enumerate() {
+        let fixture_uid = required_attribute(beam, "FIXTURE", "BEAM")?;
+        let fixture_ref = fixture_refs.get(fixture_uid).ok_or_else(|| {
+            format!("BEAM fixture {fixture_uid} is not present in the imported patch")
+        })?;
+        let beam_id = required_attribute(beam, "BEAMID", "BEAM")?
+            .parse::<u16>()
+            .map_err(|error| format!("BEAMID is invalid: {error}"))?;
+        has_multi_beam_selection |= beam_id != 0;
+        if seen_fixture_ids.insert(fixture_ref.fixture_id) {
+            fixture_ids.push(fixture_ref.fixture_id);
+        }
+
+        let selection_key = beam
+            .attribute("IDSELECTION")
+            .map(|value| format!("selection:{value}"))
+            .unwrap_or_else(|| format!("beam:{beam_index}"));
+        let selection_index = if let Some(index) = selection_indices.get(&selection_key) {
+            *index
+        } else {
+            let index = ordered_steps.len();
+            ordered_steps.push(Vec::new());
+            selection_indices.insert(selection_key, index);
+            index
+        };
+        let step = &mut ordered_steps[selection_index];
+        if !step.contains(&fixture_ref.fixture_id) {
+            step.push(fixture_ref.fixture_id);
+        }
+    }
+
+    Ok(DvcRackTargets {
+        ordered_steps,
+        fixture_ids,
+        has_multi_beam_selection,
+    })
+}
+
+fn dvc_chaser_step_duration(
+    effect: Node<'_, '_>,
+    scene: Node<'_, '_>,
+    step_count: usize,
+    approximations: &mut Vec<String>,
+) -> Result<(u64, String), String> {
+    let duration_ms = effect
+        .attribute("DURATION")
+        .ok_or_else(|| "Chaser EFFECT is missing DURATION".to_string())?
+        .parse::<f64>()
+        .map_err(|error| format!("Chaser DURATION is invalid: {error}"))?;
+    let speed = scene
+        .attribute("SPEED")
+        .unwrap_or("1")
+        .parse::<f64>()
+        .map_err(|error| format!("SCENE SPEED is invalid: {error}"))?;
+    if !duration_ms.is_finite() || duration_ms <= 0.0 {
+        return Err(format!(
+            "Chaser DURATION must be finite and greater than 0, found {duration_ms}"
+        ));
+    }
+    if !speed.is_finite() || speed <= 0.0 {
+        return Err(format!(
+            "SCENE SPEED must be finite and greater than 0, found {speed}"
+        ));
+    }
+    let step_duration = duration_ms / speed / step_count.max(1) as f64;
+    if !step_duration.is_finite() || step_duration > u64::MAX as f64 {
+        return Err("derived Chaser step duration exceeds the supported range".to_string());
+    }
+    let mut step_duration_ms = step_duration.round().max(1.0) as u64;
+    if step_duration_ms < 10 {
+        approximations.push(format!(
+            "derived {step_duration_ms} ms step was clamped to the Chaser engine minimum 10 ms"
+        ));
+        step_duration_ms = 10;
+    }
+    Ok((
+        step_duration_ms,
+        format!(
+            "step_duration_ms=round(EFFECT DURATION / SCENE SPEED / selection_steps)={step_duration_ms}"
+        ),
+    ))
+}
+
+fn dvc_scene_clock_sync(scene: Node<'_, '_>) -> (Option<EffectClockSync>, String, Option<String>) {
+    let trigger = scene.attribute("PLAY_TRIGGER").unwrap_or("0").trim();
+    if trigger != "2" {
+        let warning = (!matches!(trigger, "" | "0")).then(|| {
+            format!(
+                "PLAY_TRIGGER={trigger} is not a confirmed BPM-sync mode; free-run timing retained"
+            )
+        });
+        return (None, "clock_sync=none".to_string(), warning);
+    }
+    let division = scene
+        .attribute("PLAY_DIVISION")
+        .and_then(|value| value.parse::<f32>().ok());
+    let Some(division) = division.filter(|value| value.is_finite() && *value > 0.0) else {
+        return (
+            None,
+            "clock_sync=none".to_string(),
+            Some(
+                "PLAY_TRIGGER=2 had no positive PLAY_DIVISION; free-run timing retained"
+                    .to_string(),
+            ),
+        );
+    };
+    let beats = 1.0 / division;
+    (
+        Some(EffectClockSync { beats }),
+        format!("clock_sync beats=1/PLAY_DIVISION={beats}"),
+        None,
+    )
+}
+
+fn normalized_dmx(value: f64) -> u16 {
+    (value.clamp(0.0, 1.0) * u16::MAX as f64).round() as u16
 }
 
 fn fixture_attribute_values(
@@ -1828,6 +2449,35 @@ mod tests {
         )
     }
 
+    fn synthetic_fx_dvc() -> String {
+        let patch = r#"<PATCH NBFIXTURE="3"><FIXTURES><SSLLIBRARY SSLFIXUID="profile-1" SSLNAME="Test/Dimmer.ssl2"><SSLPROPERTIES SSLBEAMOPENING="20"/><SSLMODES SSLNBMODE="1"><SSLMODE SSLMODEINDEX="0" SSLNBCHANNEL="1"><SSLCHANNEL SSLCHANNELTYPE="7" SSLCHANNELNAME="Dimmer" SSLCHANNELMSB="0" SSLCHANNELLSB="0"><SSLPRESETS><SSLPRESET SSLPRESETNAME="Dimmer" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL></SSLMODE></SSLMODES></SSLLIBRARY><FIXTURE DASUID="fixture-1" NAME="Dimmer 1" ADDRESS="1" UNIVERS="1" POSX="0" POSY="0" ANGLE="0"/><FIXTURE DASUID="fixture-2" NAME="Dimmer 2" ADDRESS="2" UNIVERS="1" POSX="1" POSY="0" ANGLE="0"/><FIXTURE DASUID="fixture-3" NAME="Dimmer 3" ADDRESS="3" UNIVERS="1" POSX="2" POSY="0" ANGLE="0"/></FIXTURES></PATCH>"#;
+        format!(
+            r##"<DLMFILE TYPE="Daslight" VERSION="5" DASBUILD="test-fx" VERSIONFILE="2"><PATCHS DATA="{}"/><FIXTUREGROUPS/><SCENES><BANK DASUID="bank-1" NAME="FX" COLOR="#ff112233"><SCENE DASUID="scene-chaser" NAME="Chaser 321" COLOR="#ff112233" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="0.5" PLAY_TRIGGER="0" PLAY_DIVISION="8"><FIXTUREDATAS NB="0"/><RACKS><RACK TYPE="3"><EFFECT TYPE="6" ID="321" DURATION="5000"><PARAMS NB="3"><PARAM TYPE="2" ID="10" VAL="1"/><PARAM TYPE="2" ID="11" VAL="1"/><PARAM TYPE="0" ID="12" VAL="2"/></PARAMS></EFFECT><BEAMS NB="3"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/><BEAM FIXTURE="fixture-3" BEAMID="0" IDSELECTION="3"/></BEAMS></RACK></RACKS></SCENE><SCENE DASUID="scene-curve" NAME="Curve 7" COLOR="#ff112233" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="8"><FIXTUREDATAS NB="0"/><RACKS><RACK TYPE="8"><EFFECT TYPE="5" ID="7" DURATION="5000"><PARAMS NB="5"><PARAM TYPE="0" ID="1" VAL="10"/><PARAM TYPE="1" ID="2" VAL="0.5"/><PARAM TYPE="1" ID="3" VAL="0.25"/><PARAM TYPE="1" ID="4" VAL="0.1"/><PARAM TYPE="1" ID="5" VAL="0"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE><SCENE DASUID="scene-random" NAME="Chaser 325" COLOR="#ff112233" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="8"><FIXTUREDATAS NB="0"/><RACKS><RACK TYPE="3"><EFFECT TYPE="6" ID="325" DURATION="1200"><PARAMS NB="5"><PARAM TYPE="2" ID="11" VAL="0"/><PARAM TYPE="0" ID="12" VAL="1"/><PARAM TYPE="1" ID="13" VAL="50"/><PARAM TYPE="2" ID="14" VAL="1"/><PARAM TYPE="0" ID="15" VAL="2"/></PARAMS></EFFECT><BEAMS NB="3"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/><BEAM FIXTURE="fixture-3" BEAMID="0" IDSELECTION="3"/></BEAMS></RACK></RACKS></SCENE><SCENE DASUID="scene-skipped" NAME="Unconfirmed" COLOR="#ff112233" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="8"><FIXTUREDATAS NB="0"/><RACKS><RACK TYPE="2"><EFFECT TYPE="2" ID="133" DURATION="5000"><PARAMS NB="0"/></EFFECT></RACK><RACK TYPE="8"><EFFECT TYPE="5" ID="10" DURATION="5000"><PARAMS NB="0"/></EFFECT></RACK></RACKS></SCENE></BANK></SCENES><SHORTCUTS/><TOUCH/><DEVICES/></DLMFILE>"##,
+            qcompress(patch.as_bytes())
+        )
+    }
+
+    fn effect_test_fixture_refs() -> HashMap<String, FixtureImportRef> {
+        HashMap::from([
+            (
+                "fixture-1".to_string(),
+                FixtureImportRef {
+                    fixture_id: 1,
+                    fixture_index: 0,
+                    profile_index: 0,
+                },
+            ),
+            (
+                "fixture-2".to_string(),
+                FixtureImportRef {
+                    fixture_id: 2,
+                    fixture_index: 1,
+                    profile_index: 0,
+                },
+            ),
+        ])
+    }
+
     #[test]
     fn dvc_qcompress_decoder_roundtrips_and_checks_length() {
         let source = b"<PATCH NBFIXTURE=\"0\"/>";
@@ -1934,6 +2584,168 @@ mod tests {
     }
 
     #[test]
+    fn dvc_confirmed_fx_convert_to_cue_owned_chaser_and_sinus_params() {
+        let outcome = import_bytes(synthetic_fx_dvc().as_bytes(), "synthetic-fx.dvc").unwrap();
+        crate::validate_project_file(&outcome.project).unwrap();
+        assert!(outcome.project.snapshot.effects.is_empty());
+        assert_eq!(outcome.report.summary.effects_converted, 3);
+        assert_eq!(outcome.report.summary.effects_skipped, 2);
+
+        let chaser = &outcome.project.snapshot.cues[0].effect_targets[0];
+        let Some(EffectParamsSnapshot::Chaser(chaser)) = &chaser.params else {
+            panic!("CHASER 321 must be stored as cue-owned Chaser params");
+        };
+        assert_eq!(chaser.step_duration_ms, 3_333);
+        assert_eq!(chaser.active_step_count, 2);
+        assert_eq!(chaser.direction, ChaserDirection::Forward);
+        assert_eq!(chaser.overlap, 1.0);
+        assert_eq!(chaser.features[0].attribute, "Dimmer");
+        assert_eq!(chaser.steps.len(), 3);
+
+        let sinus = &outcome.project.snapshot.cues[1].effect_targets[0];
+        let Some(EffectParamsSnapshot::Lfo(sinus)) = &sinus.params else {
+            panic!("CURVE 7 must be stored as cue-owned LFO params");
+        };
+        assert_eq!(sinus.shape, LfoShape::Sine);
+        assert_eq!(sinus.period_ms, 500);
+        assert_eq!(sinus.low, 22_937);
+        assert_eq!(sinus.high, 55_705);
+        assert_eq!(sinus.phase, 0.25);
+        assert_eq!(sinus.attribute, "Dimmer");
+
+        let random = &outcome.project.snapshot.cues[2].effect_targets[0];
+        let Some(EffectParamsSnapshot::Chaser(random)) = &random.params else {
+            panic!("CHASER 325 must be stored as cue-owned Chaser params");
+        };
+        assert_eq!(random.direction, ChaserDirection::Random);
+        assert_eq!(random.step_duration_ms, 400);
+        assert_eq!(random.duty_cycle, 0.5);
+        assert_eq!(random.overlap, 0.0);
+        assert!(outcome.report.approximate.details.iter().any(|detail| {
+            detail.item.contains("Chaser 325") && detail.message.contains("NbCycles=2")
+        }));
+
+        assert!(outcome.project.snapshot.cues[3].effect_targets.is_empty());
+        assert!(outcome
+            .report
+            .skipped
+            .details
+            .iter()
+            .any(|detail| detail.message.contains("ID=133")));
+        assert!(outcome
+            .report
+            .skipped
+            .details
+            .iter()
+            .any(|detail| detail.message.contains("ID=10")));
+    }
+
+    #[test]
+    fn dvc_chaser_321_with_unexpected_binary_param_stays_skipped() {
+        let document = Document::parse(
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="8"><RACKS><RACK TYPE="3"><EFFECT TYPE="6" ID="321" DURATION="1000"><PARAMS NB="3"><PARAM ID="10" VAL="2"/><PARAM ID="11" VAL="1"/><PARAM ID="12" VAL="1"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
+        )
+        .unwrap();
+        let scene = document.root_element();
+        let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+        let effect = direct_child(rack, "EFFECT").unwrap();
+        let error = convert_dvc_effect(
+            scene,
+            "Invalid 321",
+            rack,
+            effect,
+            3,
+            6,
+            321,
+            1,
+            &effect_test_fixture_refs(),
+        )
+        .unwrap_err();
+        assert!(error.contains("must be 0 or 1"));
+    }
+
+    #[test]
+    fn dvc_sinus_prefers_bpm_sync_and_reports_phasing_and_segment_approximation() {
+        let document = Document::parse(
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="2" PLAY_DIVISION="4"><RACKS><RACK TYPE="8"><EFFECT TYPE="5" ID="7" DURATION="5000"><PARAMS NB="5"><PARAM ID="1" VAL="10"/><PARAM ID="2" VAL="1"/><PARAM ID="3" VAL="0.25"/><PARAM ID="4" VAL="0"/><PARAM ID="5" VAL="0.2"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="1" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
+        )
+        .unwrap();
+        let scene = document.root_element();
+        let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+        let effect = direct_child(rack, "EFFECT").unwrap();
+        let converted = convert_dvc_effect(
+            scene,
+            "Synced Sinus",
+            rack,
+            effect,
+            8,
+            5,
+            7,
+            1,
+            &effect_test_fixture_refs(),
+        )
+        .unwrap();
+        let Some(EffectParamsSnapshot::Lfo(request)) = converted.target.params else {
+            panic!("CURVE 7 must convert to LFO params");
+        };
+        assert_eq!(request.clock_sync.unwrap().beats, 0.25);
+        assert!(converted
+            .approximations
+            .iter()
+            .any(|note| note == "segment selection approximated to fixture"));
+        assert!(converted
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("phasing not reproduced")));
+    }
+
+    #[test]
+    fn dvc_cue_owned_fx_recall_activates_and_release_stops_output() {
+        let outcome = import_bytes(synthetic_fx_dvc().as_bytes(), "synthetic-fx.dvc").unwrap();
+        let cue_id = outcome.project.snapshot.cues[0].id;
+        let mut snapshot_to_load = outcome.project.snapshot;
+        snapshot_to_load.output.enabled = false;
+        for output in &mut snapshot_to_load.dmx_outputs {
+            output.enabled = false;
+        }
+        let engine = engine::EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine.load_project_snapshot(snapshot_to_load).unwrap();
+        engine
+            .send(engine::EngineCommand::TriggerCue(cue_id))
+            .unwrap();
+
+        let mut active_nonzero = false;
+        for _ in 0..40 {
+            let snapshot = engine.snapshot();
+            active_nonzero = snapshot.active_cue_id == Some(cue_id)
+                && snapshot.dmx_preview.iter().any(|value| *value != 0);
+            if active_nonzero {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(active_nonzero, "cue recall must activate its owned Chaser");
+
+        engine
+            .send(engine::EngineCommand::ReleaseCue(cue_id))
+            .unwrap();
+        let mut released = false;
+        for _ in 0..40 {
+            let snapshot = engine.snapshot();
+            released = snapshot.active_cue_id.is_none()
+                && snapshot.dmx_preview.iter().all(|value| *value == 0);
+            if released {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(released, "cue release must stop its owned Chaser output");
+    }
+
+    #[test]
     fn dvc_local_golden_project_triggers_cue_and_renders_dmx() {
         let path = Path::new(r"C:\Users\kouty\Documents\Daslight 5\Projects\Shinkan2026.dvc");
         if !path.is_file() {
@@ -1994,6 +2806,82 @@ mod tests {
     }
 
     #[test]
+    fn dvc_local_golden_fx_cue_renders_chaser_via_go_path() {
+        let path = Path::new(r"C:\Users\kouty\Documents\Daslight 5\Projects\Shinkan2026.dvc");
+        if !path.is_file() {
+            eprintln!(
+                "Skipping local Daslight golden: {} is unavailable",
+                path.display()
+            );
+            return;
+        }
+        let outcome = import_path(path).unwrap();
+        let fx_cue = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .find(|cue| cue.label == "Fl-StrobeChase")
+            .expect("golden project should contain the Fl-StrobeChase FX cue")
+            .clone();
+
+        let mut snapshot_to_load = outcome.project.snapshot.clone();
+        snapshot_to_load.output.enabled = false;
+        for output in &mut snapshot_to_load.dmx_outputs {
+            output.enabled = false;
+        }
+        let engine = engine::EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine.load_project_snapshot(snapshot_to_load).unwrap();
+        // Reach the FX cue through the same transport command the app GO button
+        // sends, not through direct TriggerCue.
+        let list_id = fx_cue.cue_list_id;
+        for _ in 0..64 {
+            engine
+                .send(engine::EngineCommand::TriggerCueListNext(list_id))
+                .unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(40));
+            if engine.snapshot().active_cue_id == Some(fx_cue.id) {
+                break;
+            }
+        }
+        let snapshot = engine.snapshot();
+        assert_eq!(
+            snapshot.active_cue_id,
+            Some(fx_cue.id),
+            "GO transport should reach the Fl-StrobeChase cue"
+        );
+
+        let mut first_nonzero: Option<Vec<u8>> = None;
+        for _ in 0..40 {
+            let preview = engine.snapshot().dmx_preview.clone();
+            if preview.iter().any(|value| *value != 0) {
+                first_nonzero = Some(preview);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        let first = first_nonzero.expect("owned Chaser must render non-zero DMX after GO recall");
+
+        // step_duration_ms for this cue is 3333; sample past one step boundary
+        // and require the rendered frame to differ (the chase must move).
+        let mut moved = false;
+        for _ in 0..5 {
+            std::thread::sleep(std::time::Duration::from_millis(900));
+            if engine.snapshot().dmx_preview != first {
+                moved = true;
+                break;
+            }
+        }
+        assert!(
+            moved,
+            "owned Chaser output must change across step boundaries"
+        );
+    }
+
+    #[test]
     fn dvc_local_golden_project_matches_verified_counts_when_present() {
         let path = Path::new(r"C:\Users\kouty\Documents\Daslight 5\Projects\Shinkan2026.dvc");
         if !path.is_file() {
@@ -2014,5 +2902,31 @@ mod tests {
         assert_eq!(outcome.report.summary.beam_records, 221);
         assert_eq!(outcome.report.summary.beam_feature_checks, 109);
         assert_eq!(outcome.report.summary.beam_feature_mismatches, 0);
+        assert_eq!(outcome.report.summary.effects_converted, 5);
+        assert_eq!(outcome.report.summary.effects_skipped, 2);
+        let chaser_count = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .flat_map(|cue| &cue.effect_targets)
+            .filter(|target| matches!(target.params, Some(EffectParamsSnapshot::Chaser(_))))
+            .count();
+        let curve_count = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .flat_map(|cue| &cue.effect_targets)
+            .filter(|target| matches!(target.params, Some(EffectParamsSnapshot::Lfo(_))))
+            .count();
+        assert_eq!(chaser_count, 5);
+        assert_eq!(curve_count, 0);
+        assert!(outcome
+            .report
+            .approximate
+            .details
+            .iter()
+            .any(|detail| { detail.message == "segment selection approximated to fixture" }));
     }
 }

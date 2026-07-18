@@ -79,6 +79,14 @@ VALUE FX と COLOR MAPPINGS はユーザーの全ショーに検体なし（実�
 
 1. **DVC-3a（確定分の変換）**: CHASER FX 321/325 → Chaserエフェクト、CURVE FX（ID=波形）→ LFO/Valueエフェクト。
    インポート時にcue所有FX（F4）として生成し、cueリコールで発動。レポートの「Skipped」から「Converted(effect)」へ。
+   **→ 2026-07-19 完了**（Codex実装 × Fable検証）: 厳密パラメータ検証つき変換、近似は明示計上（セグメント選択→fixture化、
+   pixelsクランプ、Flash 0%床上げ等）。ステップ周期式 = round(EFFECT DURATION / SCENE SPEED / selection_steps)。
+   protocol/engine差分なし。検証: `cargo test -p syndocal dvc` 14/14 — 金標準で effects_converted=5 / skipped=2
+   （Fl-Strobe ID=10 は未照合波形として正直にSkipped）、合成のリコール発動/リリース停止テスト、
+   **GO実経路（TriggerCueListNext）での金標準チェイサー実動テスト**（ステップ境界でDMX変化を断言）。
+   ネイティブ実機でもインポートレポートに Effects converted 5 と変換式の明示を確認。
+   既知の表示限界（DVC-3aの回帰ではない・別タスク化済み）: 2DマップのLevels/ビームはfixture属性状態由来のため、
+   エフェクト変調中の実DMXに追従しない。
 2. **DVC-3b（新規パターンレシピ）**: COLOR FX Knight Rider / Burst / Random fill / Sparkle をビーム空間パターンとして
    Colorエンジンに新設（同一挙動目標）。パレットXML格納位置の特定を含む。
 3. **DVC-3c（残り）**: MOVE FX / TYPE=8 / ID 322・129・130 / CURVE波形3・10 の照合と変換。要・別プロジェクトロード。

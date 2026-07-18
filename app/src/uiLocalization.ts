@@ -26,6 +26,7 @@ const japaneseText: Record<string, string> = {
   "Beam feature records": "ビーム特徴量レコード",
   "Beam feature mismatches": "ビーム特徴量不一致",
   "Audio clips": "音声クリップ",
+  "Effects converted": "エフェクト変換済み",
   "Effects skipped": "エフェクトスキップ",
   "Unknown channel types": "未知のチャンネル種別",
   "Missing audio files": "不足している音声ファイル",
@@ -40,6 +41,13 @@ const japaneseText: Record<string, string> = {
   "Invalid MSB/LSB pair imported as one 8-bit channel":
     "無効なMSB/LSBペアを単一の8-bitチャンネルとして取り込みました",
   "RACK/EFFECT numeric codes were not converted": "RACK/EFFECTの数値コードは変換していません",
+  "segment selection approximated to fixture": "セグメント選択を灯体単位に近似しました",
+  "single target selection requires an added blackout gap in the Chaser engine":
+    "単一ターゲット選択のためChaserエンジンにブラックアウト区間を追加しました",
+  "Flash 0% was raised to the minimum non-zero Chaser duty cycle":
+    "Flash 0%をChaserの最小非ゼロデューティ比へ補正しました",
+  "RandomSeq=0 submode is represented by the Chaser engine's seeded Random order":
+    "RandomSeq=0サブモードをChaserエンジンのシード付きランダム順で近似しました",
   "A mixed Daslight lane was imported as Lighting; audio blocks on it are skipped":
     "音声と照明が混在するDaslightレーンを照明として取り込み、その音声ブロックはスキップしました",
   "Daslight folded lane state has no persisted Syndocal equivalent":
@@ -1969,6 +1977,21 @@ const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
   [/^(\d+) Daslight scenes?$/, (count) => `Daslightシーン ${count}件`],
   [/^(\d+) fixture value payloads?$/, (count) => `灯体値ペイロード ${count}件`],
   [/^Cue: (.+)$/, (label) => `キュー: ${label}`],
+  [/^Effect: (.+) \((.+)\)$/, (label, generator) => `エフェクト: ${label}（${generator}）`],
+  [
+    /^RACK TYPE=(.+) EFFECT TYPE=(.+) ID=(.+) is not confirmed for DVC-3a$/,
+    (rackType, effectType, id) =>
+      `RACK TYPE=${rackType} EFFECT TYPE=${effectType} ID=${id} はDVC-3aの確定対象ではありません`,
+  ],
+  [
+    /^NbCycles=(\d+) is not reproduced by the continuously looping Chaser engine$/,
+    (cycles) => `連続ループするChaserエンジンではNbCycles=${cycles}を再現していません`,
+  ],
+  [
+    /^Effect '(.+)' \((.+)\): phasing not reproduced \(Phasing=(.+)\)$/,
+    (label, generator, phasing) =>
+      `エフェクト「${label}」（${generator}）: Phasing=${phasing}の位相分散は再現していません`,
+  ],
   [/^Channel type (\d+)$/, (channelType) => `チャンネル種別 ${channelType}`],
   [/^Super Scene: (.+)$/, (label) => `Super Scene: ${label}`],
   [/^Audio block: (.+)$/, (label) => `音声ブロック: ${label}`],

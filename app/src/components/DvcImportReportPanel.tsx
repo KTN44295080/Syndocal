@@ -33,6 +33,7 @@ export function DvcImportReportPanel(props: DvcImportReportPanelProps) {
     ["Beam feature mismatches", props.report.summary.beam_feature_mismatches],
     ["Audio clips", props.report.summary.timeline_audio_clips],
     ["Scene Blocks", props.report.summary.timeline_scene_blocks],
+    ["Effects converted", props.report.summary.effects_converted],
     ["Effects skipped", props.report.summary.effects_skipped],
     ["Unknown channel types", props.report.summary.unknown_channel_types],
     ["Missing audio files", props.report.summary.missing_audio_files],

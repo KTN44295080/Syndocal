@@ -699,6 +699,7 @@ export interface DvcImportSummary {
   beam_feature_mismatches: number;
   timeline_audio_clips: number;
   timeline_scene_blocks: number;
+  effects_converted: number;
   effects_skipped: number;
   unknown_channel_types: number;
   missing_audio_files: number;
