@@ -1544,7 +1544,9 @@ export default function App() {
   }
   if (paneWindow) {
     setWorkspaceTab("control");
-    if (paneWindow === "timeline") setControlMode("live");
+    // Force a mode whose surface contains the pane: a persisted "mixer" mode
+    // would hide the stage column (exclusive surface) inside a stage window.
+    setControlMode("live");
   }
   if (
     viewportFixture === "timeline"
