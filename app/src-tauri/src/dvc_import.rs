@@ -21,7 +21,20 @@ const DVC_FILE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const DVC_PATCH_MAX_BYTES: usize = 128 * 1024 * 1024;
 const DVC_FIXTURE_DATA_MAX_BYTES: usize = 16 * 1024 * 1024;
 const DVC_FIXTURE_RECORD_BYTES: usize = 27;
+const DVC_BEAM_FEATURE_SLOTS: usize = 13;
+const DVC_BEAM_MISMATCH_WARNING_LIMIT: usize = 16;
 const DVC_REPORT_DETAIL_LIMIT: usize = 256;
+
+// Feature slots identified empirically across the five local Daslight projects
+// (525 payloads, 61 distinct row patterns): slots 0..2 mirror the unique
+// ColorRed/Green/Blue channels and slot 11 mirrors the unique Dimmer channel.
+// The remaining slots are not yet identified and are never used for import.
+const DVC_BEAM_FEATURE_BINDINGS: [(usize, &str); 4] = [
+    (0, "ColorRed"),
+    (1, "ColorGreen"),
+    (2, "ColorBlue"),
+    (11, "Dimmer"),
+];
 
 #[derive(Debug)]
 pub(crate) struct DvcImportOutcome {
@@ -65,6 +78,9 @@ pub(crate) struct DvcImportSummary {
     pub(crate) cues: usize,
     pub(crate) values_decoded: usize,
     pub(crate) values_skipped: usize,
+    pub(crate) beam_records: usize,
+    pub(crate) beam_feature_checks: usize,
+    pub(crate) beam_feature_mismatches: usize,
     pub(crate) timeline_audio_clips: usize,
     pub(crate) timeline_scene_blocks: usize,
     pub(crate) effects_skipped: usize,
@@ -129,6 +145,8 @@ struct FixtureImportRef {
 struct FixtureDataValues {
     values: Vec<Option<u8>>,
     record_bytes: usize,
+    beam_features: Option<Vec<[f32; DVC_BEAM_FEATURE_SLOTS]>>,
+    beam_feature_error: Option<String>,
 }
 
 pub(crate) fn import_path(path: &Path) -> Result<DvcImportOutcome, String> {
@@ -819,6 +837,10 @@ fn parse_scenes(
                 .and_then(|value| value.parse::<usize>().ok());
             let mut scene_targets = Vec::new();
             let mut touched_fixture_indices = Vec::new();
+            let mut beam_records = 0_usize;
+            let mut beam_checks = 0_usize;
+            let mut beam_mismatches: Vec<String> = Vec::new();
+            let mut beam_uninterpreted: Vec<String> = Vec::new();
             let decode_result = (|| -> Result<(), String> {
                 if declared.is_some_and(|count| count != data_nodes.len()) {
                     return Err(format!(
@@ -848,6 +870,23 @@ fn parse_scenes(
                         expected_record_bytes
                             .insert(fixture_ref.profile_index, decoded.record_bytes);
                     }
+                    match (&decoded.beam_features, &decoded.beam_feature_error) {
+                        (Some(features), _) => {
+                            beam_records = beam_records.saturating_add(features.len());
+                            let (checked, mismatches) =
+                                beam_feature_mismatch_details(profile, &decoded.values, features);
+                            beam_checks = beam_checks.saturating_add(checked);
+                            for mismatch in mismatches {
+                                beam_mismatches.push(format!("Fixture {fixture_uid}: {mismatch}"));
+                            }
+                        }
+                        (None, error) => {
+                            beam_uninterpreted.push(format!(
+                                "Fixture {fixture_uid}: {}",
+                                error.as_deref().unwrap_or("unrecognized row variant")
+                            ));
+                        }
+                    }
                     let values = fixture_attribute_values(profile, &decoded.values)?;
                     if !values.is_empty() {
                         scene_targets.push(CueFixtureTarget {
@@ -871,6 +910,32 @@ fn parse_scenes(
                         }
                     }
                     report.summary.values_decoded = report.summary.values_decoded.saturating_add(1);
+                    report.summary.beam_records =
+                        report.summary.beam_records.saturating_add(beam_records);
+                    report.summary.beam_feature_checks = report
+                        .summary
+                        .beam_feature_checks
+                        .saturating_add(beam_checks);
+                    report.summary.beam_feature_mismatches = report
+                        .summary
+                        .beam_feature_mismatches
+                        .saturating_add(beam_mismatches.len());
+                    for mismatch in beam_mismatches {
+                        if report.warnings.len() < DVC_BEAM_MISMATCH_WARNING_LIMIT {
+                            report.warnings.push(format!(
+                                "Cue '{}' beam feature disagrees with its channel value ({mismatch})",
+                                cues[cue_index].label
+                            ));
+                        }
+                    }
+                    for uninterpreted in beam_uninterpreted {
+                        if report.warnings.len() < DVC_BEAM_MISMATCH_WARNING_LIMIT {
+                            report.warnings.push(format!(
+                                "Cue '{}' beam rows were not interpreted ({uninterpreted}); channel values were kept",
+                                cues[cue_index].label
+                            ));
+                        }
+                    }
                     report.converted.add(
                         1,
                         format!("Cue: {}", cues[cue_index].label),
@@ -1412,10 +1477,17 @@ fn decode_fixture_data(
     if inflated.len() < 6 {
         return Err("FIXTUREDATA is shorter than its header".to_string());
     }
-    // Verified across all four read-only DVC-1 specimens: a BE channel count,
-    // one BE u16 per physical channel (0xFFFF = unwritten), a BE record count,
-    // then record_count opaque 27-byte metadata rows. The metadata rows are
-    // deliberately validated but not interpreted as steps without evidence.
+    // Verified across the five read-only local Daslight projects (525 payloads,
+    // DVC-2 census): a BE channel count, one BE u16 per physical channel
+    // (0xFFFF = unwritten), a BE record count, then one fixed 27-byte row per
+    // fixture BEAM (the record count matches the patch beam count: 8 for the
+    // eight-segment mega bar rgba, 1 everywhere else - these are NOT steps; no
+    // step container exists in any specimen). Each row is 13 big-endian IEEE
+    // half-precision floats plus one trailing mode byte (0x00 and 0x02 are the
+    // observed values): -1.0 marks an unset slot
+    // and set slots hold normalized 0..1 feature values that mirror the
+    // channel section (slot 0..2 = RGB, slot 11 = dimmer). The channel section
+    // remains the authoritative DMX state; rows are decoded for validation.
     let channel_count = u16::from_be_bytes([inflated[0], inflated[1]]) as usize;
     if channel_count != expected_channels {
         return Err(format!(
@@ -1467,10 +1539,109 @@ fn decode_fixture_data(
             }
         }
     }
+    // Beam-row interpretation is deliberately NON-fatal: the channel section
+    // above is the authoritative DMX state, so an unrecognized row variant must
+    // never discard the payload - it only downgrades to "rows not interpreted".
+    let (beam_features, beam_feature_error) =
+        match interpret_beam_features(&inflated[record_count_end..]) {
+            Ok(features) => (Some(features), None),
+            Err(error) => (None, Some(error)),
+        };
     Ok(FixtureDataValues {
         values,
         record_bytes,
+        beam_features,
+        beam_feature_error,
     })
+}
+
+fn interpret_beam_features(rows: &[u8]) -> Result<Vec<[f32; DVC_BEAM_FEATURE_SLOTS]>, String> {
+    let mut beam_features = Vec::with_capacity(rows.len() / DVC_FIXTURE_RECORD_BYTES);
+    for record in rows.chunks_exact(DVC_FIXTURE_RECORD_BYTES) {
+        let mode = record[DVC_FIXTURE_RECORD_BYTES - 1];
+        if !matches!(mode, 0x00 | 0x02) {
+            return Err(format!(
+                "beam record mode byte 0x{mode:02X} is outside the verified 0x00/0x02 set"
+            ));
+        }
+        let mut features = [0.0_f32; DVC_BEAM_FEATURE_SLOTS];
+        for (slot, bytes) in record[..DVC_BEAM_FEATURE_SLOTS * 2]
+            .chunks_exact(2)
+            .enumerate()
+        {
+            let value = half_bits_to_f32(u16::from_be_bytes([bytes[0], bytes[1]]));
+            if !beam_feature_is_unset(value) && !(0.0..=1.001).contains(&value) {
+                return Err(format!(
+                    "beam feature slot {slot} value {value} is outside the verified -1 / 0..1 range"
+                ));
+            }
+            features[slot] = value;
+        }
+        beam_features.push(features);
+    }
+    Ok(beam_features)
+}
+
+fn half_bits_to_f32(bits: u16) -> f32 {
+    let sign = if bits & 0x8000 != 0 { -1.0_f32 } else { 1.0 };
+    let exponent = (bits >> 10) & 0x1F;
+    let fraction = bits & 0x3FF;
+    let magnitude = match exponent {
+        0 => f32::from(fraction) / 1024.0 * 2.0_f32.powi(-14),
+        31 => f32::NAN,
+        _ => (1.0 + f32::from(fraction) / 1024.0) * 2.0_f32.powi(i32::from(exponent) - 15),
+    };
+    sign * magnitude
+}
+
+fn beam_feature_is_unset(value: f32) -> bool {
+    (value + 1.0).abs() <= 1.0e-3
+}
+
+// Cross-check decoded beam feature slots against the authoritative channel
+// section. Only unambiguous cases are compared: a single-beam payload, a slot
+// whose attribute exists exactly once in the profile, an 8-bit single-offset
+// binding, and a written header byte. Multi-beam rows target per-segment
+// channels whose beam-to-channel mapping is not verified, so they are skipped.
+fn beam_feature_mismatch_details(
+    profile: &ParsedProfile,
+    raw_values: &[Option<u8>],
+    beam_features: &[[f32; DVC_BEAM_FEATURE_SLOTS]],
+) -> (usize, Vec<String>) {
+    let mut checked = 0;
+    let mut mismatches = Vec::new();
+    let [features] = beam_features else {
+        return (0, mismatches);
+    };
+    for (slot, attribute) in DVC_BEAM_FEATURE_BINDINGS {
+        let feature = features[slot];
+        if beam_feature_is_unset(feature) {
+            continue;
+        }
+        let mut bindings = profile
+            .bindings
+            .iter()
+            .filter(|binding| binding.attribute == attribute);
+        let (Some(binding), None) = (bindings.next(), bindings.next()) else {
+            continue;
+        };
+        let (AttributeResolution::EightBit, [offset]) =
+            (&binding.resolution, binding.raw_offsets.as_slice())
+        else {
+            continue;
+        };
+        let Some(raw) = raw_values.get(*offset).copied().flatten() else {
+            continue;
+        };
+        checked += 1;
+        let expected = (feature * 255.0).round() as i32;
+        if (expected - i32::from(raw)).abs() > 2 {
+            mismatches.push(format!(
+                "{attribute}: channel byte {raw} vs beam feature {expected}"
+            ));
+        }
+    }
+    (checked, mismatches)
 }
 
 fn inflate_sync_flush_tolerant(input: &[u8], max_output: usize) -> Result<Vec<u8>, String> {
@@ -1629,12 +1800,25 @@ mod tests {
     }
 
     fn synthetic_dvc() -> String {
+        synthetic_dvc_with(255, 0x3C00)
+    }
+
+    fn synthetic_dvc_with(dimmer_byte: u16, dimmer_feature_bits: u16) -> String {
         let patch = r#"<PATCH NBFIXTURE="1"><FIXTURES><SSLLIBRARY SSLFIXUID="profile-1" SSLNAME="Test/Dimmer.ssl2"><SSLPROPERTIES SSLBEAMOPENING="20"/><SSLMODES SSLNBMODE="1"><SSLMODE SSLMODEINDEX="0" SSLNBCHANNEL="1"><SSLCHANNEL SSLCHANNELTYPE="7" SSLCHANNELNAME="Dimmer" SSLCHANNELMSB="0" SSLCHANNELLSB="0"><SSLPRESETS><SSLPRESET SSLPRESETNAME="Dimmer" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL></SSLMODE></SSLMODES></SSLLIBRARY><FIXTURE DASUID="fixture-1" NAME="Dimmer 1" ADDRESS="1" UNIVERS="1" POSX="0" POSY="0" ANGLE="0"/></FIXTURES></PATCH>"#;
         let mut fixture_data = Vec::new();
         fixture_data.extend_from_slice(&1_u16.to_be_bytes());
-        fixture_data.extend_from_slice(&255_u16.to_be_bytes());
+        fixture_data.extend_from_slice(&dimmer_byte.to_be_bytes());
         fixture_data.extend_from_slice(&1_u32.to_be_bytes());
-        fixture_data.extend_from_slice(&[0_u8; DVC_FIXTURE_RECORD_BYTES]);
+        let mut record = [0_u8; DVC_FIXTURE_RECORD_BYTES];
+        for slot in 0..DVC_BEAM_FEATURE_SLOTS {
+            let bits: u16 = if slot == 11 {
+                dimmer_feature_bits
+            } else {
+                0xBC00
+            };
+            record[slot * 2..slot * 2 + 2].copy_from_slice(&bits.to_be_bytes());
+        }
+        fixture_data.extend_from_slice(&record);
         let fixture_data =
             base64::engine::general_purpose::STANDARD.encode(sync_flush(&fixture_data));
         format!(
@@ -1716,6 +1900,37 @@ mod tests {
         assert!(child.events[0].loop_fill);
         assert_eq!(outcome.report.summary.values_decoded, 1);
         assert_eq!(outcome.report.summary.values_skipped, 0);
+        assert_eq!(outcome.report.summary.beam_records, 1);
+        assert_eq!(outcome.report.summary.beam_feature_checks, 1);
+        assert_eq!(outcome.report.summary.beam_feature_mismatches, 0);
+    }
+
+    #[test]
+    fn dvc_half_float_decoder_maps_sentinels_and_fractions() {
+        assert_eq!(half_bits_to_f32(0xBC00), -1.0);
+        assert_eq!(half_bits_to_f32(0x3C00), 1.0);
+        assert_eq!(half_bits_to_f32(0x0000), 0.0);
+        assert!((half_bits_to_f32(0x3999) - 0.7).abs() < 2.0e-3);
+        assert!((half_bits_to_f32(0x3866) - 0.55).abs() < 2.0e-3);
+        assert!((half_bits_to_f32(0x38CC) - 0.6).abs() < 2.0e-3);
+    }
+
+    #[test]
+    fn dvc_beam_feature_mismatch_is_reported_not_fatal() {
+        let source = synthetic_dvc_with(128, 0x3C00);
+        let outcome = import_bytes(source.as_bytes(), "synthetic.dvc").unwrap();
+        assert_eq!(outcome.report.summary.values_decoded, 1);
+        assert_eq!(outcome.report.summary.beam_feature_checks, 1);
+        assert_eq!(outcome.report.summary.beam_feature_mismatches, 1);
+        assert!(outcome
+            .report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("beam feature disagrees")));
+        assert_eq!(
+            outcome.project.snapshot.cues[0].targets[0].values[0].value,
+            128 * 257
+        );
     }
 
     #[test]
@@ -1796,5 +2011,8 @@ mod tests {
         assert_eq!(outcome.report.summary.cues, 30);
         assert_eq!(outcome.report.summary.values_decoded, 22);
         assert_eq!(outcome.report.summary.values_skipped, 0);
+        assert_eq!(outcome.report.summary.beam_records, 221);
+        assert_eq!(outcome.report.summary.beam_feature_checks, 109);
+        assert_eq!(outcome.report.summary.beam_feature_mismatches, 0);
     }
 }

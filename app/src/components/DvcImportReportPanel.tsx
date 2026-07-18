@@ -29,6 +29,8 @@ export function DvcImportReportPanel(props: DvcImportReportPanelProps) {
     ["Cues", props.report.summary.cues],
     ["Value payloads converted", props.report.summary.values_decoded],
     ["Value payloads skipped", props.report.summary.values_skipped],
+    ["Beam feature records", props.report.summary.beam_records],
+    ["Beam feature mismatches", props.report.summary.beam_feature_mismatches],
     ["Audio clips", props.report.summary.timeline_audio_clips],
     ["Scene Blocks", props.report.summary.timeline_scene_blocks],
     ["Effects skipped", props.report.summary.effects_skipped],

@@ -694,6 +694,9 @@ export interface DvcImportSummary {
   cues: number;
   values_decoded: number;
   values_skipped: number;
+  beam_records: number;
+  beam_feature_checks: number;
+  beam_feature_mismatches: number;
   timeline_audio_clips: number;
   timeline_scene_blocks: number;
   effects_skipped: number;
