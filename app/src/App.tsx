@@ -13290,7 +13290,10 @@ export default function App() {
   });
 
   return (
-    <main class={`app${paneWindow ? ` paneWindow paneWindow-${paneWindow}` : ""}`}>
+    <main
+      class={`app${paneWindow ? ` paneWindow paneWindow-${paneWindow}` : ""}`}
+      style={paneWindow ? "grid-template-rows: minmax(0, 1fr) auto !important" : undefined}
+    >
       <WorkspaceChrome
         workspaceTab={workspaceTab()}
         setupSubTab={setupSubTab()}
@@ -13357,7 +13360,10 @@ export default function App() {
         </div>
       </Show>
 
-      <section class={`layout ${touchLayoutClass()}`}>
+      <section
+        class={`layout ${touchLayoutClass()}`}
+        style={paneWindow ? "grid-template-rows: minmax(0, 1fr) !important" : undefined}
+      >
         <Show when={workspaceTab() === "control" && controlMode() !== "mixer"}>
         <section class="panel liveControlPanel controlPanel">
           <div class="panelHeader">

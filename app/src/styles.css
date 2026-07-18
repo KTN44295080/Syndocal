@@ -26276,6 +26276,7 @@ h3 {
 /* Stretch the band to the full pane window; the T10 fixed band heights are a
    main-shell contract, not a pane-window one. */
 .app.paneWindow .mappingPersistentWorkspaceBand {
+  grid-row: 1 / -1 !important;
   height: 100% !important;
   max-height: none !important;
   grid-template-rows: auto minmax(0, 1fr) !important;
@@ -26294,7 +26295,8 @@ h3 {
 }
 
 .app.paneWindow .workspaceTabs,
-.app.paneWindow .appMenuButton {
+.app.paneWindow .appMenuButton,
+.app.paneWindow > :first-child {
   display: none;
 }
 
