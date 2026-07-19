@@ -223,7 +223,7 @@ assert.equal(growingManualViewport.mode, "manual");
 assert.equal(growingManualViewport.edit_extent_ms, 25_000);
 assert.match(
   appSource,
-  /reconcileTimelineViewportState\(\s*current,\s*timelineOverviewContentEndMsForSnapshot\(next\),\s*\{ project_replaced: true \}/s,
+  /reconcileTimelineViewportState\(\s*current,\s*timelineOverviewContentEndMsForTimeline\(next\.timeline\),\s*\{ project_replaced: true \}/s,
   "same-App project replacement must be wired to the tested viewport reset path",
 );
 assert.doesNotMatch(

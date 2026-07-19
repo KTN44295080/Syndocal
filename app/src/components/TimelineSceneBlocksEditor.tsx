@@ -32,6 +32,7 @@ export interface TimelineSceneBlockRow extends TimelineCueEventSummary {
 }
 
 interface TimelineSceneBlocksEditorProps {
+  inspectorOnly?: boolean;
   positionMs: number;
   bpm: number;
   cueColors?: Record<number, string>;
@@ -283,9 +284,9 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
     lastSyncedFilterEventIds = filterEventIds;
     const filteredIndex = filteredIndexByEventId().get(selectedEventId) ?? -1;
     if (filteredIndex >= 0) {
-      ++selectedPageSyncRevision;
+      const revision = ++selectedPageSyncRevision;
       setPage(Math.floor(filteredIndex / sceneBlockRowsPerPage));
-      scheduleSelectedRowScroll(selectedEventId, selectionRevision);
+      scheduleSelectedRowScroll(selectedEventId, revision);
       return;
     }
     if (filterChanged && filterEventIdSet() !== null) {
@@ -300,7 +301,7 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
     queueMicrotask(() => {
       if (revision === selectedPageSyncRevision) {
         setPage(Math.floor(sourceIndex / sceneBlockRowsPerPage));
-        scheduleSelectedRowScroll(selectedEventId, selectionRevision);
+        scheduleSelectedRowScroll(selectedEventId, revision);
       }
     });
   });
@@ -518,9 +519,13 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
   return (
     <section
       class="sceneBlockWorkspace"
+      classList={{ sceneBlockWorkspaceInspectorOnly: Boolean(props.inspectorOnly) }}
       aria-label="Linked Scene Blocks"
+      data-scene-block-inspector-only={props.inspectorOnly ? "true" : undefined}
       ref={(element) => { workspaceElement = element; }}
     >
+      <Show when={!props.inspectorOnly}>
+      <>
       <header class="sceneBlockWorkspaceHeader">
         <div class="sceneBlockHeading">
           <small>SHOW SEQUENCE</small>
@@ -658,6 +663,8 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
           </button>
         </div>
       </form>
+      </>
+      </Show>
 
       <Show when={sourcePickerOpen()}>
         <div class="sceneBlockSourcePicker" role="group" aria-label="Shared source Cue picker">
@@ -764,7 +771,7 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
           </div>
       </Show>
 
-      <Show when={editorView() === "list"}>
+      <Show when={!props.inspectorOnly && editorView() === "list"}>
         <div class="sceneBlockColumnGuide" aria-hidden="true">
           <span>Source / live status</span>
           <span>Instance timing and flow</span>
@@ -772,14 +779,14 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
         </div>
       </Show>
 
-      <Show when={props.filterEventIds !== null}>
+      <Show when={!props.inspectorOnly && props.filterEventIds !== null}>
         <div class="sceneBlockOverlapFilter" role="status">
           <span>{props.filterLabel ?? "Overlap"} · {props.filterEventIds?.length ?? 0} blocks</span>
           <button type="button" onClick={props.onClearEventFilter}>Clear overlap filter</button>
         </div>
       </Show>
 
-      <Show when={props.eventRows.length > sceneBlockRowsPerPage || rowQuery().length > 0 || props.filterEventIds !== null}>
+      <Show when={!props.inspectorOnly && (props.eventRows.length > sceneBlockRowsPerPage || rowQuery().length > 0 || props.filterEventIds !== null)}>
         <nav class="sceneBlockPager" aria-label="Scene Block pages">
           <input
             class="sceneBlockRowSearch"
@@ -810,8 +817,14 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
         </nav>
       </Show>
 
-      <Show when={editorView() === "finder"}>
-        <div class="sceneBlockFinderSplit" data-scene-block-finder-split>
+      <Show when={props.inspectorOnly || editorView() === "finder"}>
+        <div
+          class="sceneBlockFinderSplit"
+          classList={{ sceneBlockFinderSplitInspectorOnly: Boolean(props.inspectorOnly) }}
+          data-scene-block-finder-split
+          data-scene-block-inspector-only={props.inspectorOnly ? "true" : undefined}
+        >
+          <Show when={!props.inspectorOnly}>
           <div class="sceneBlockFinder" role="list" ref={(element) => { listElement = element; }}>
             <Show
               when={filteredRows().length > 0}
@@ -847,7 +860,14 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
               </For>
             </Show>
           </div>
-          <aside class="sceneBlockInspector" data-scene-block-inspector aria-label="Block Properties">
+          </Show>
+          <aside
+            class="sceneBlockInspector"
+            classList={{ sceneBlockInspectorOnly: Boolean(props.inspectorOnly) }}
+            data-scene-block-inspector
+            data-scene-block-inspector-only={props.inspectorOnly ? "true" : undefined}
+            aria-label="Block Properties"
+          >
             <Show
               when={selectedRow()}
               fallback={
@@ -987,7 +1007,7 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
         </div>
       </Show>
 
-      <Show when={editorView() === "list"}>
+      <Show when={!props.inspectorOnly && editorView() === "list"}>
       <div class="sceneBlockList" role="list" ref={(element) => { listElement = element; }}>
         <Show
           when={props.eventRows.length > 0}

@@ -4,6 +4,9 @@ import { performance } from "node:perf_hooks";
 import ts from "typescript";
 
 const source = await readFile(new URL("../src/timelineOverlapClusters.ts", import.meta.url), "utf8");
+const overviewSource = await readFile(new URL("../src/components/TimelineOverview.tsx", import.meta.url), "utf8");
+const panelSource = await readFile(new URL("../src/components/TimelineCueEventsPanel.tsx", import.meta.url), "utf8");
+const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
 const transpiled = ts.transpileModule(source, {
   compilerOptions: {
     module: ts.ModuleKind.ESNext,
@@ -13,6 +16,42 @@ const transpiled = ts.transpileModule(source, {
   fileName: "timelineOverlapClusters.ts",
 });
 const overlap = await import(`data:text/javascript;base64,${Buffer.from(transpiled.outputText).toString("base64")}`);
+
+assert.equal(
+  overlap.TIMELINE_OVERLAP_BADGE_WIDTH_PX,
+  24,
+  "the overlap packer and rendered badge share the 24px visual width contract",
+);
+assert.match(
+  overviewSource,
+  /const clusterBadgeWidthPx = TIMELINE_OVERLAP_BADGE_WIDTH_PX;/,
+  "the overview renders badges with the helper's packing width",
+);
+assert.match(
+  overviewSource,
+  /left\.is_super_scene === right\.is_super_scene/,
+  "super-scene state participates in marker identity stabilization",
+);
+assert.match(
+  overviewSource,
+  /new Set\(props\.overlapLayerIds\)/,
+  "overlap rail reservation uses the full-timeline layer set",
+);
+assert.doesNotMatch(
+  overviewSource,
+  /new Set\(props\.overlapClusters\.map/,
+  "visible overlap badges must not control lane height",
+);
+assert.match(
+  panelSource,
+  /overlapLayerIds=\{props\.overviewOverlapLayerIds\}/,
+  "the panel forwards full-timeline overlap layer identity separately from visible badges",
+);
+assert.match(
+  appSource,
+  /overviewOverlapLayerIds=\{\[\s*\.\.\.new Set\(timelineOverlapClusters\(\)\.map\(\(cluster\) => cluster\.layer_id\)\),\s*\]\}/s,
+  "the App derives reserved overlap rails from all timeline clusters before viewport filtering",
+);
 
 const mixedDurationEvents = [
   { id: 1, track: "lighting", time_ms: 0, total_duration_ms: 1_000, duration_ms: 1, loop_count: 1 },
@@ -85,9 +124,14 @@ const crowdedBadgeCandidates = Array.from({ length: 5 }, (_, index) => ({
   width: 4,
 }));
 const packedBadges = overlap.packTimelineOverlapClusterBadges(crowdedBadgeCandidates, 100);
-assert.equal(packedBadges.length, 3, "badge overflow is combined into one reachable inspector");
-assert.ok(packedBadges.every((badge) => badge.x >= 27 && badge.x <= 80));
-assert.ok(packedBadges.every((badge, index) => index === 0 || badge.x - packedBadges[index - 1].x >= 20));
+assert.equal(packedBadges.length, 2, "badge overflow is combined into one reachable inspector");
+assert.ok(packedBadges.every((badge) => (
+  badge.x >= 27 && badge.x <= 100 - overlap.TIMELINE_OVERLAP_BADGE_WIDTH_PX - 2
+)));
+assert.ok(packedBadges.every((badge, index) => (
+  index === 0 ||
+  badge.x - packedBadges[index - 1].x >= overlap.TIMELINE_OVERLAP_BADGE_WIDTH_PX + 2
+)));
 assert.equal(packedBadges[0].x, 27, "near-start collisions remain anchored near their real time");
 assert.deepEqual(packedBadges[0].source_cluster_ids, ["cluster-0", "cluster-1", "cluster-2"]);
 assert.deepEqual(packedBadges[0].member_ids, [1, 2, 3, 4, 5, 6]);

@@ -105,7 +105,23 @@ assert.equal(
 );
 assert.match(source, /"aria-valuetext"/, "dynamic meter aria-valuetext must be localized");
 assert.equal(localization.translateUiText("Blocks 13-24 / 500", "ja"), "ブロック 13-24 / 500");
+assert.equal(
+  localization.translateUiText("Edit Source for Cue Opening Wash", "ja"),
+  "キュー Opening Wash のソースを編集",
+);
 assert.equal(localization.translateUiText("Lighting overlap ×250", "ja"), "照明の重複 ×250");
+assert.equal(
+  localization.translateUiText("Lane 3: Front Wash, 42 items", "ja"),
+  "レーン 3: Front Wash、42件",
+);
+assert.equal(
+  localization.translateUiText("Expand Lighting timeline section", "ja"),
+  "照明タイムラインセクションを展開",
+);
+assert.equal(
+  localization.translateUiText("Collapse Video timeline section", "ja"),
+  "映像タイムラインセクションを折りたたむ",
+);
 assert.equal(
   localization.translateUiText("Video overlap (250); 0 to 256000 ms; inspect 250 overlapping blocks", "ja"),
   "映像の重複。0〜256000 ms、250ブロックを確認",

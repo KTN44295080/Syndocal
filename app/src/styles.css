@@ -3193,6 +3193,653 @@ h3 {
   }
 }
 
+.timelineOverviewLayered .timelineLayerSectionHeader {
+  grid-template-columns: 14px 14px minmax(0, 1fr);
+  align-items: center;
+}
+
+.timelineOverviewLayered .timelineLayerSectionCollapse,
+.timelineOverviewLayered .timelineLayerSectionKindIcon,
+.timelineOverviewLayered .timelineLayerSectionHeader .timelineAudioClipAdd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  min-width: 14px;
+  height: 14px;
+  min-height: 14px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.timelineOverviewLayered .timelineLayerSectionKindIcon {
+  border: 0;
+}
+
+.timelineOverviewLayered .timelineLayerSectionKindIcon svg,
+.timelineOverviewLayered .timelineLayerSectionCollapse svg,
+.timelineOverviewLayered .timelineLayerSectionHeader .timelineAudioClipAdd svg,
+.timelineOverviewLayered .timelineLaneDetailsToggle svg,
+.timelineOverviewLayered .timelineLaneLock svg {
+  width: 13px;
+  height: 13px;
+  fill: currentColor;
+  stroke: currentColor;
+  stroke-width: 1.4;
+}
+
+.timelineOverviewLayered .timelineLayerSectionKindIcon.audio {
+  color: #d69a47;
+}
+
+.timelineOverviewLayered .timelineLayerSectionKindIcon.lighting {
+  color: #d0d4d7;
+}
+
+.timelineOverviewLayered .timelineLayerSectionKindIcon.video {
+  color: #4e9bd1;
+}
+
+.timelineOverviewLayered .timelineLayerSectionHeader .timelineAudioClipAdd {
+  justify-self: end;
+  color: #c8cdd1;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter {
+  position: absolute;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter[data-timeline-layer-kind="Audio"] {
+  box-shadow: inset 2px 0 #d69a47;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter[data-timeline-layer-kind="Lighting"] {
+  box-shadow: inset 2px 0 #aeb4b9;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter[data-timeline-layer-kind="Video"] {
+  box-shadow: inset 2px 0 #4e9bd1;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter[data-timeline-layer-expanded="true"] {
+  align-items: start;
+  padding-top: 2px;
+  padding-bottom: 17px;
+}
+
+.timelineOverviewLayered .timelineLaneNumber {
+  color: #d7dade;
+  font-size: 10px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.timelineOverviewLayered .timelineLaneDetailsToggle,
+.timelineOverviewLayered .timelineLaneLock {
+  color: #959da4;
+}
+
+.timelineOverviewLayered .timelineLaneLock[aria-pressed="true"] {
+  color: #e5bb62;
+}
+
+.timelineLaneExpandedDetails {
+  position: absolute;
+  right: 3px;
+  bottom: 1px;
+  left: 4px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+  height: 15px;
+  min-width: 0;
+  border-top: 1px solid #303438;
+  color: #aeb4b9;
+  font-size: 9px;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.timelineLaneExpandedName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timelineLaneExpandedCount {
+  color: #727a81;
+}
+
+.timelineSceneBlockLabel {
+  font-size: 11px;
+}
+
+.timelineSceneBlockDuration {
+  font-size: 10px;
+}
+
+/* ---- UI redesign T15: Daslight-density timeline + contextual inspectors. ---- */
+.layoutControl.controlModeLive .faders {
+  position: relative;
+}
+
+.timelineDeskTabs {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  min-width: 0;
+}
+
+.timelineDeskTabs button,
+.timelineToolStrip button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  border-radius: 2px;
+  padding: 0;
+}
+
+.timelineToolIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: currentColor;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.layoutControl.controlModeLive .faders > .timelineContextDrawer,
+.timelineShowSurface > .timelineContextDrawer {
+  position: absolute;
+  right: 0;
+  z-index: 90;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: clamp(320px, 36vw, 500px);
+  max-width: min(62%, 500px);
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #050607;
+  border-right: 0;
+  background: #16191b;
+  box-shadow: -10px 0 24px rgba(0, 0, 0, 0.42);
+}
+
+.layoutControl.controlModeLive .faders > .timelineContextDrawer {
+  top: 31px;
+  bottom: 0;
+}
+
+.timelineShowSurface > .timelineContextDrawer {
+  top: 0;
+  bottom: 0;
+}
+
+.timelineContextDrawerHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  border-bottom: 1px solid #050607;
+  background: #242526;
+  padding: 3px 5px 3px 9px;
+}
+
+.timelineContextDrawerHeader > div {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.timelineContextDrawerHeader strong {
+  color: #f2f2f2;
+  font-size: 11px;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.timelineContextDrawerHeader span {
+  min-width: 0;
+  overflow: hidden;
+  color: #a7aaac;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timelineContextDrawerClose {
+  flex: 0 0 28px;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+}
+
+.timelineContextDrawerBody {
+  min-height: 0;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  padding: 6px;
+  scrollbar-width: thin;
+}
+
+.timelineContextDrawerBody > .cuePanel,
+.timelineContextDrawerBody > .sceneBlockWorkspace {
+  min-width: 0;
+  min-height: 0;
+  border-top: 0;
+  padding-top: 0;
+}
+
+.timelineContextDrawerBody > .cuePanel .cueListManager {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.timelineContextDrawerBody > .cuePanel .cueListManager > label {
+  grid-column: span 3;
+}
+
+.timelineContextDrawerBody > .cuePanel .cueListManager > button {
+  grid-column: span 2;
+  min-width: 0;
+}
+
+.timelineContextDrawerBody > .cuePanel .cueForm {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.timelineContextDrawerBody > .cuePanel .cueForm > label:first-child,
+.timelineContextDrawerBody > .cuePanel .cueForm > label:nth-child(4),
+.timelineContextDrawerBody > .cuePanel .cueForm > button {
+  grid-column: span 2;
+}
+
+.layoutControl.controlModeLive .faders > .timelinePanel,
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelinePanel {
+  position: relative;
+  overflow: hidden;
+}
+
+.timelineShowSurface,
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelineShowSurface {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto auto minmax(148px, 1fr);
+  align-content: stretch;
+  gap: 3px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.timelineShowSurface > .panelHeader {
+  min-height: 28px;
+  flex-wrap: nowrap;
+  border-bottom-color: #202326;
+  padding: 2px 4px;
+}
+
+.timelineShowSurface .timelineTitleGroup h2 {
+  font-size: 11px;
+}
+
+.timelineShowSurface .timelineHeaderMeta {
+  flex: 1 1 auto;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.timelineShowSurface .timelineHeaderMeta > span:not(.timelineTimeStat) {
+  display: none;
+}
+
+.timelineShowSurface .timelineTimeStat {
+  min-height: 22px;
+  border: 0;
+  background: transparent;
+  padding: 1px 4px;
+}
+
+.timelineShowSurface .timelineTimeStat small {
+  display: none;
+}
+
+.timelineShowSurface .timelineTimeStat strong {
+  font-size: 10px;
+}
+
+.timelineToolStrip {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  min-height: 32px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid #24282b;
+  background: #1a1c1e;
+  padding: 1px 3px;
+  scrollbar-width: thin;
+  white-space: nowrap;
+}
+
+.timelineToolStrip .timelineTransport,
+.timelineToolStrip .timelineViewportToolbar,
+.timelineToolStrip .timelineDirectToolbar,
+.timelineToolStrip .timelineStretchModeToggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.timelineToolStrip .timelineTransport,
+.timelineToolStrip .timelineViewportToolbar {
+  padding-right: 3px;
+  border-right: 1px solid #34383b;
+}
+
+.timelineToolStrip .timelineScrubber {
+  flex: 1 1 120px;
+  width: auto;
+  min-width: 64px;
+  max-width: 190px;
+  min-height: 22px;
+  margin: 0 2px;
+}
+
+.timelineToolStrip .timelineViewportToolbar {
+  overflow: visible;
+  scrollbar-gutter: auto;
+}
+
+.timelineToolStrip .timelineVisibleRange {
+  flex: 0 0 auto;
+  min-width: 132px;
+  padding: 0 3px;
+  font-size: 9px;
+  text-align: center;
+}
+
+.timelineToolStrip .timelineArmedCue {
+  flex: 0 1 120px;
+  max-width: 120px;
+  font-size: 9px;
+}
+
+.timelineShowSurface > .timelineOverviewFrame,
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelineShowSurface > .timelineOverviewFrame {
+  align-self: stretch;
+  width: 100%;
+  height: 100%;
+  min-height: 148px;
+  contain: size layout;
+}
+
+.timelineLayerContextMenu {
+  position: fixed;
+  z-index: 1800;
+  display: grid;
+  width: 268px;
+  gap: 4px;
+  border: 1px solid #050607;
+  background: #202224;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.58);
+  padding: 6px;
+}
+
+.timelineLayerContextMenu header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  border-bottom: 1px solid #393c3f;
+}
+
+.timelineLayerContextMenu label {
+  display: grid;
+  gap: 2px;
+  color: #aaadaf;
+  font-size: 9px;
+}
+
+.timelineLayerContextMenu input,
+.timelineLayerContextMenu button {
+  min-height: 28px;
+  font-size: 10px;
+}
+
+.timelineLayerContextMove {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.timelineLayerKindIcon,
+.timelineLayerSectionKindIcon {
+  display: inline-block;
+  width: 8px;
+  height: 14px;
+  border: 1px solid #050607;
+  background: #7a7f84;
+}
+
+.timelineLayerKindIcon.audio,
+.timelineLayerSectionKindIcon.audio {
+  background: #d69a47;
+}
+
+.timelineLayerKindIcon.lighting,
+.timelineLayerSectionKindIcon.lighting {
+  background: #b8bdc2;
+}
+
+.timelineLayerKindIcon.video,
+.timelineLayerSectionKindIcon.video {
+  background: #4e9bd1;
+}
+
+.timelineOverviewLayered .timelineOverviewGutterLayered {
+  flex-basis: 94px;
+  width: 94px;
+  min-width: 94px;
+  background: #151719;
+}
+
+.timelineOverviewLayered .timelineLayerSection {
+  border-top: 1px solid #050607;
+}
+
+.timelineOverviewLayered .timelineLayerSectionHeader {
+  grid-template-columns: 8px minmax(0, 1fr);
+  gap: 0;
+  overflow: hidden;
+  border-bottom: 1px solid #050607;
+  padding: 0;
+}
+
+.timelineOverviewLayered .timelineLayerSectionHeader strong,
+.timelineOverviewLayered .timelineLayerSectionHeader .timelineLayerSectionCount,
+.timelineOverviewLayered .timelineLayerSectionHeader .timelineAudioClipAdd {
+  display: none;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter {
+  grid-template-columns: 24px 22px 22px 22px;
+  grid-template-rows: minmax(0, 1fr);
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  overflow: hidden;
+  border-bottom: 1px solid #050607;
+  padding: 0 1px;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter > button,
+.timelineOverviewLayered .timelineUserLaneGutter .timelineLaneEye,
+.timelineOverviewLayered .timelineUserLaneGutter .timelineLaneLock {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  min-width: 22px;
+  height: 24px;
+  min-height: 24px;
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 0;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter > button:hover,
+.timelineOverviewLayered .timelineUserLaneGutter > button:focus-visible {
+  border-color: #596067;
+  background: #292d30;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter .timelineLaneGutterNumber,
+.timelineOverviewLayered .timelineUserLaneGutter [data-timeline-layer-number] {
+  color: #d7dade;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter .timelineLaneGutterActions {
+  display: contents;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter .timelineLaneGutterName,
+.timelineOverviewLayered .timelineUserLaneGutter .timelineLaneGutterCount,
+.timelineOverviewLayered .timelineUserLaneGutter .timelineLaneSolo {
+  display: none;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter.layerLocked,
+.timelineOverviewLayered .timelineUserLaneGutter.layerSolo {
+  border-left: 0;
+  padding-left: 1px;
+}
+
+.timelineRuler line {
+  stroke: rgba(126, 136, 146, 0.1);
+  stroke-width: 0.5;
+}
+
+.timelineRuler line.major {
+  stroke: rgba(151, 160, 169, 0.24);
+  stroke-width: 0.7;
+}
+
+.timelineLaneDivider {
+  stroke: rgba(95, 101, 107, 0.2);
+}
+
+.timelineOverviewLayered .timelineSectionDivider {
+  stroke: rgba(118, 124, 130, 0.32);
+  stroke-width: 1;
+}
+
+.timelineSceneBlockBody,
+.timelineMarker.sceneBlock.hasBands .timelineSceneBlockBody,
+.timelineMarker.sceneBlock.lighting .timelineSceneBlockBody,
+.timelineMarker.sceneBlock.lighting.hasBands .timelineSceneBlockBody,
+.timelineMarker.sceneBlock.video .timelineSceneBlockBody,
+.timelineMarker.sceneBlock.video.hasBands .timelineSceneBlockBody {
+  fill: var(--identity, #4d91cd);
+  fill-opacity: 0.98;
+  stroke: #050505;
+  stroke-opacity: 1;
+  stroke-width: 2;
+}
+
+.timelineSceneBlockIdentityBand {
+  display: none;
+}
+
+.timelineSceneBlockLabel,
+.timelineSceneBlockDuration {
+  fill: var(--identity-text, #ffffff);
+  font-size: 10px;
+  font-weight: 800;
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.66);
+  stroke-width: 1.4px;
+  stroke-linejoin: round;
+}
+
+.timelineSceneBlockDuration {
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.timelineSceneBlockFade {
+  fill: rgba(0, 0, 0, 0.5);
+}
+
+.timelineOverview.executingLive .timelineMarker.sceneBlock.underPlayhead .timelineSceneBlockBody,
+.timelineOverview:not(.executingLive) .timelineMarker.sceneBlock.underPlayhead .timelineSceneBlockBody,
+.timelineMarker.sceneBlock.selected .timelineSceneBlockBody,
+.timelineMarker.sceneBlock.dragging .timelineSceneBlockBody {
+  stroke-opacity: 1;
+}
+
+.sceneMatrixCard {
+  position: relative;
+  grid-template-columns: minmax(0, 1fr) 124px;
+}
+
+.sceneMatrixCardFooter {
+  grid-template-columns: minmax(0, 1fr) 26px 40px;
+}
+
+.sceneMatrixEditCue {
+  display: inline-flex;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  min-width: 26px;
+  height: 40px;
+  min-height: 40px;
+  border-color: #3c4247;
+  background: #191d20;
+  color: #c8cdd1;
+  padding: 0;
+}
+
+.sceneMatrixCardFooter .cueTimelineDragHandle {
+  grid-column: 3;
+}
+
+@media (max-width: 1320px) {
+  .timelineToolStrip .timelineVisibleRange {
+    min-width: 112px;
+  }
+
+  .timelineToolStrip .timelineScrubber {
+    max-width: 100px;
+  }
+
+  .layoutControl.controlModeLive .faders > .timelineContextDrawer,
+  .timelineShowSurface > .timelineContextDrawer {
+    width: min(420px, 62%);
+  }
+}
+
 /* Native form accents follow the desktop system instead of browser blue. */
 input[type="range"],
 input[type="checkbox"],
@@ -28340,5 +28987,431 @@ h3 {
 
   .liveDeskSceneMeta {
     display: none;
+  }
+}
+
+/* T15 final cascade: keep the slim timeline authoritative over legacy desks. */
+.layoutControl.controlModeLive .timelineDeskTabs {
+  display: inline-flex;
+  grid-template-columns: none;
+  flex: 0 0 auto;
+  gap: 2px;
+  min-width: 0;
+}
+
+.layoutControl.controlModeLive .timelineDeskTabs button {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  font-size: 13px;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelinePanel {
+  overflow: hidden;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelineShowSurface {
+  --timeline-block-inspector-width: clamp(260px, 32%, 340px);
+  grid-template-rows: auto auto minmax(148px, 1fr);
+  align-content: start;
+  gap: 3px;
+  overflow: hidden;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelineShowSurfaceBlockDrawerOpen {
+  padding-right: 0;
+}
+
+.timelineShowSurface > .timelineBlockPropertiesDrawer:not(.timelineBlockBrowserDrawer) {
+  width: var(--timeline-block-inspector-width, clamp(260px, 32%, 340px));
+  max-width: none;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelineShowSurfaceBlockDrawerOpen:has(> .timelineBlockPropertiesDrawer:not(.timelineBlockBrowserDrawer)) {
+  grid-template-columns: minmax(0, 1fr) var(--timeline-block-inspector-width);
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelineShowSurfaceBlockDrawerOpen:has(> .timelineBlockPropertiesDrawer:not(.timelineBlockBrowserDrawer)) > .panelHeader,
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelineShowSurfaceBlockDrawerOpen:has(> .timelineBlockPropertiesDrawer:not(.timelineBlockBrowserDrawer)) > .timelineToolStrip {
+  grid-column: 1 / -1;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelineShowSurfaceBlockDrawerOpen:has(> .timelineBlockPropertiesDrawer:not(.timelineBlockBrowserDrawer)) > .timelineOverviewFrame {
+  grid-column: 1;
+  grid-row: 3;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelineShowSurfaceBlockDrawerOpen > .timelineBlockPropertiesDrawer:not(.timelineBlockBrowserDrawer) {
+  position: relative;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  grid-column: 2;
+  grid-row: 3;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelineShowSurface > .timelineOverviewFrame {
+  height: 100%;
+  min-height: 148px;
+  contain: size layout;
+}
+
+.timelineShowSurface .timelineHeaderMeta > .timelineTimeStat {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: max-content;
+  min-width: max-content;
+  max-width: none;
+}
+
+.timelineToolStrip .timelineDirectToolbar {
+  flex-wrap: nowrap;
+}
+
+@media (max-width: 1366px) {
+  .timelineToolStrip .timelineArmedCue {
+    display: none;
+  }
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .timelinePaneExpanded .controlContextPane .timelineShowSurface > .timelineOverviewFrame {
+  height: 100%;
+  min-height: 148px;
+}
+
+.timelineOverviewLayered .timelineOverviewGutterLayered {
+  flex: 0 0 94px;
+  width: 94px;
+  min-width: 94px;
+  background: #151719;
+}
+
+.timelineOverviewLayered .timelineLayerSection {
+  border-top: 1px solid #050607;
+}
+
+.timelineOverviewLayered .timelineLayerSectionHeader {
+  grid-template-columns: 14px 14px minmax(0, 1fr);
+  align-items: center;
+  gap: 0;
+  overflow: hidden;
+  border-bottom: 1px solid #050607;
+  padding: 0;
+}
+
+.timelineOverviewLayered .timelineLayerSectionHeader strong,
+.timelineOverviewLayered .timelineLayerSectionHeader .timelineLayerSectionCount {
+  display: none;
+}
+
+.timelineOverviewLayered .timelineLayerSectionCollapse,
+.timelineOverviewLayered .timelineLayerSectionKindIcon,
+.timelineOverviewLayered .timelineLayerSectionHeader .timelineAudioClipAdd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  min-width: 14px;
+  height: 14px;
+  min-height: 14px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.timelineOverviewLayered .timelineLayerSectionHeader .timelineAudioClipAdd {
+  justify-self: end;
+  color: #c8cdd1;
+}
+
+.timelineOverviewLayered .timelineLayerSectionKindIcon {
+  border: 0;
+  color: #aeb4b9;
+}
+
+.timelineOverviewLayered .timelineLayerSectionKindIcon.audio {
+  color: #d69a47;
+}
+
+.timelineOverviewLayered .timelineLayerSectionKindIcon.lighting {
+  color: #d0d4d7;
+}
+
+.timelineOverviewLayered .timelineLayerSectionKindIcon.video {
+  color: #4e9bd1;
+}
+
+.timelineOverviewLayered .timelineLayerSectionKindIcon svg,
+.timelineOverviewLayered .timelineLayerSectionCollapse svg,
+.timelineOverviewLayered .timelineLayerSectionHeader .timelineAudioClipAdd svg,
+.timelineOverviewLayered .timelineLaneDetailsToggle svg,
+.timelineOverviewLayered .timelineLaneLock svg {
+  width: 13px;
+  height: 13px;
+  fill: currentColor;
+  stroke: currentColor;
+  stroke-width: 1.4;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter {
+  position: absolute;
+  display: grid;
+  grid-template-columns: 24px 22px 22px 22px;
+  grid-template-rows: minmax(0, 1fr);
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  overflow: hidden;
+  border-bottom: 1px solid #050607;
+  padding: 0 1px;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter[data-timeline-layer-kind="Audio"] {
+  box-shadow: inset 2px 0 #d69a47;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter[data-timeline-layer-kind="Lighting"] {
+  box-shadow: inset 2px 0 #aeb4b9;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter[data-timeline-layer-kind="Video"] {
+  box-shadow: inset 2px 0 #4e9bd1;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter[data-timeline-layer-expanded="true"] {
+  align-items: start;
+  padding-top: 2px;
+  padding-bottom: 17px;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter > button,
+.timelineOverviewLayered .timelineUserLaneGutter .timelineLaneEye,
+.timelineOverviewLayered .timelineUserLaneGutter .timelineLaneLock {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  min-width: 22px;
+  height: 24px;
+  min-height: 24px;
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 0;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter > button:hover,
+.timelineOverviewLayered .timelineUserLaneGutter > button:focus-visible {
+  border-color: #596067;
+  background: #292d30;
+}
+
+.timelineOverviewLayered .timelineLaneNumber {
+  color: #d7dade;
+  font-size: 10px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.timelineOverviewLayered .timelineLaneDetailsToggle,
+.timelineOverviewLayered .timelineLaneLock {
+  color: #959da4;
+}
+
+.timelineOverviewLayered .timelineLaneLock[aria-pressed="true"] {
+  color: #e5bb62;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter .timelineLaneGutterName,
+.timelineOverviewLayered .timelineUserLaneGutter .timelineLaneGutterCount,
+.timelineOverviewLayered .timelineUserLaneGutter .timelineLaneSolo,
+.timelineOverviewLayered .timelineUserLaneGutter .timelineLaneGutterActions {
+  display: none;
+}
+
+.timelineOverviewLayered .timelineUserLaneGutter.layerLocked,
+.timelineOverviewLayered .timelineUserLaneGutter.layerSolo {
+  border-left: 0;
+  padding-left: 1px;
+}
+
+.timelineLaneExpandedDetails {
+  position: absolute;
+  right: 3px;
+  bottom: 1px;
+  left: 4px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+  height: 15px;
+  min-width: 0;
+  border-top: 1px solid #303438;
+  color: #aeb4b9;
+  font-size: 9px;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.timelineLaneExpandedName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timelineLaneExpandedCount {
+  color: #727a81;
+}
+
+.timelineRuler line {
+  stroke: rgba(126, 136, 146, 0.1);
+  stroke-width: 0.5;
+}
+
+.timelineRuler line.major {
+  stroke: rgba(151, 160, 169, 0.24);
+  stroke-width: 0.7;
+}
+
+.timelineLaneDivider {
+  stroke: rgba(95, 101, 107, 0.2);
+}
+
+.timelineOverviewLayered .timelineSectionDivider {
+  stroke: rgba(118, 124, 130, 0.32);
+  stroke-width: 1;
+}
+
+.timelineSceneBlockBody,
+.timelineMarker.sceneBlock.hasBands .timelineSceneBlockBody,
+.timelineMarker.sceneBlock.lighting .timelineSceneBlockBody,
+.timelineMarker.sceneBlock.lighting.hasBands .timelineSceneBlockBody,
+.timelineMarker.sceneBlock.video .timelineSceneBlockBody,
+.timelineMarker.sceneBlock.video.hasBands .timelineSceneBlockBody {
+  fill: var(--identity, #4d91cd);
+  fill-opacity: 0.98;
+  stroke: #050505;
+  stroke-opacity: 1;
+  stroke-width: 2;
+}
+
+.timelineSceneBlockIdentityBand {
+  display: none;
+}
+
+.timelineSceneBlockLabel,
+.timelineSceneBlockDuration {
+  fill: var(--identity-text, #ffffff);
+  font-size: 11px;
+  font-weight: 800;
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.66);
+  stroke-width: 1.4px;
+  stroke-linejoin: round;
+}
+
+.timelineSceneBlockDuration {
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.timelineSceneBlockFade {
+  fill: rgba(0, 0, 0, 0.5);
+}
+
+.sceneMatrixCard {
+  position: relative;
+  grid-template-columns: minmax(0, 1fr) 124px;
+}
+
+.sceneMatrixCardFooter {
+  grid-template-columns: minmax(0, 1fr) 26px 40px;
+}
+
+.sceneMatrixEditCue {
+  display: inline-flex;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  min-width: 26px;
+  height: 40px;
+  min-height: 40px;
+  border-color: #3c4247;
+  background: #191d20;
+  color: #c8cdd1;
+  padding: 0;
+}
+
+.sceneMatrixCardFooter .cueTimelineDragHandle {
+  grid-column: 3;
+}
+
+.sceneMatrixEmptyAction {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  min-width: 180px;
+  min-height: 96px;
+  padding: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.timelineShowSurface > .timelineBlockBrowserDrawer {
+  width: min(820px, 82%);
+  max-width: 82%;
+}
+
+.timelineContextDrawerMode {
+  flex: 0 0 28px;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  margin-left: auto;
+  padding: 0;
+}
+
+.timelineOverviewFrame.timelineOverviewLayered .timelineOverview .timelineMarker.sceneBlock.selected .timelineSceneBlockBody,
+.timelineOverviewFrame.timelineOverviewLayered .timelineOverview .timelineMarker.sceneBlock.dragging .timelineSceneBlockBody,
+.timelineOverviewFrame.timelineOverviewLayered .timelineOverview .timelineMarker.sceneBlock:focus-visible .timelineSceneBlockBody {
+  stroke: #ffffff;
+  stroke-opacity: 1;
+}
+
+.timelineOverviewFrame.timelineOverviewLayered .timelineOverview .timelineMarker.sceneBlock.selected .timelineSceneBlockBody {
+  stroke-width: 2.6;
+}
+
+.timelineOverviewFrame.timelineOverviewLayered .timelineOverview .timelineMarker.sceneBlock.dragging .timelineSceneBlockBody {
+  stroke-width: 2.4;
+}
+
+.timelineOverviewFrame.timelineOverviewLayered .timelineOverview .timelineMarker.sceneBlock:focus-visible .timelineSceneBlockBody {
+  stroke-width: 3;
+}
+
+@media (max-height: 800px) {
+  .layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelineShowSurface {
+    grid-template-rows: auto auto minmax(120px, 1fr);
+  }
+
+  .layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelineShowSurface > .timelineOverviewFrame {
+    height: 100%;
+    min-height: 120px;
+  }
+
+  .layoutSharedWorkspace.layoutControl.controlModeLive .timelinePaneExpanded .controlContextPane .timelineShowSurface > .timelineOverviewFrame {
+    height: 100%;
+    min-height: 120px;
   }
 }

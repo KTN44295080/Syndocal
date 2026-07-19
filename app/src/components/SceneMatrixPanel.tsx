@@ -12,6 +12,8 @@ interface SceneMatrixPanelProps {
   activeGroupCueIds: Record<string, number>;
   activeFade?: ActiveFadeSummary | null;
   onTriggerCue: (cueId: number) => void | Promise<void>;
+  onEditCue: (cueId: number) => void;
+  onOpenCueEditor: () => void;
   onBeginTimelineCueDrag: (cue: CueSummary, point: TimelineCueDragPoint) => void;
   onMoveTimelineCueDrag: (point: TimelineCueDragPoint) => void;
   onEndTimelineCueDrag: (point: TimelineCueDragPoint, moved: boolean, canceled: boolean) => void;
@@ -123,6 +125,18 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
       data-timeline-track={props.timelineTrack}
     >
       <div class="sceneMatrixScroller">
+        <Show when={props.cues.length > 0} fallback={
+          <div class="sceneMatrixEmptyAction">
+            <strong>No scenes yet.</strong>
+            <button
+              type="button"
+              data-scene-matrix-open-cue-editor
+              onClick={props.onOpenCueEditor}
+            >
+              Open Cue editor
+            </button>
+          </div>
+        }>
         <div class="sceneMatrixColumns">
           <For each={columns()}>
             {(column) => {
@@ -220,6 +234,24 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                 </Show>
                                 <button
                                   type="button"
+                                  class="sceneMatrixEditCue"
+                                  data-scene-matrix-edit-cue={cue.id}
+                                  title={`Edit Source for Cue ${cue.label}`}
+                                  aria-label={`Edit Source for Cue ${cue.label}`}
+                                  onPointerDown={(event) => event.stopPropagation()}
+                                  onPointerMove={(event) => event.stopPropagation()}
+                                  onPointerUp={(event) => event.stopPropagation()}
+                                  onPointerCancel={(event) => event.stopPropagation()}
+                                  onClick={(event) => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    props.onEditCue(cue.id);
+                                  }}
+                                >
+                                  <span aria-hidden="true" data-no-localize>✎</span>
+                                </button>
+                                <button
+                                  type="button"
                                   class="cueTimelineDragHandle"
                                   classList={{ dragging: dragCueId() === cue.id }}
                                   title={`Drag Cue ${cue.label} to Timeline`}
@@ -250,6 +282,7 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
             }}
           </For>
         </div>
+        </Show>
       </div>
     </section>
   );

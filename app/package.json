@@ -35,6 +35,7 @@
     "check:terminology": "node scripts/check-ui-terminology.mjs",
     "check:timeline-automation": "node scripts/check-timeline-automation-helpers.mjs",
     "check:timeline-overlap-clusters": "node scripts/check-timeline-overlap-clusters.mjs",
+    "check:timeline-slim": "node scripts/check-viewport-containment.mjs --timeline-slim-only",
     "check:timeline-viewport": "node scripts/check-timeline-viewport.mjs && node scripts/check-timeline-overlap-clusters.mjs && node scripts/check-viewport-containment.mjs --scene-block-hour-only && node scripts/check-viewport-containment.mjs --scene-block-overlap-only",
     "check:vj-first-run": "node scripts/check-vj-first-run.mjs",
     "check:virtualization": "node scripts/check-virtualization.mjs",

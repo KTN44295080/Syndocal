@@ -105,7 +105,7 @@ import { createTimelineLayerController } from "./createTimelineLayerController";
 import {
   cueDropDurationMs,
   effectiveTimelineLayers,
-  isLegacyTimelineLayerSet,
+  sameTimelineLayerSummaries,
   timelineLayerIdForEvent,
 } from "./timelineLayers";
 import {
@@ -333,6 +333,7 @@ import {
   type SetupSubTab,
   type WorkspaceTab,
   type EditDeskSurface,
+  type TimelineContextDrawer,
   type TimelineDeskSurface,
 } from "./uiModes";
 import { projectSnapshotSignature } from "./projectSnapshot";
@@ -964,6 +965,9 @@ export default function App() {
   const [controlMode, setControlMode] = createSignal<ControlMode>(initialWorkspaceLayout.control_mode);
   const [timelineDeskSurface, setTimelineDeskSurface] = createSignal<TimelineDeskSurface>(
     initialWorkspaceLayout.timeline_desk_surface,
+  );
+  const [timelineContextDrawer, setTimelineContextDrawer] = createSignal<TimelineContextDrawer>(
+    initialWorkspaceLayout.timeline_context_drawer,
   );
   const [timelineChildCueId, setTimelineChildCueId] = createSignal<number | null>(null);
   const [controlLiveView, setControlLiveView] = createSignal<"matrix" | "pads">("matrix");
@@ -1699,6 +1703,7 @@ export default function App() {
     setWorkspaceTab(touchComposedFixture ? "touch" : "control");
     if (sceneMatrixFixture) {
       setTimelineDeskSurface("show");
+      setTimelineContextDrawer("none");
       setControlLiveView("matrix");
     }
     setSelectedFixtureGroupFilter("front");
@@ -2173,6 +2178,7 @@ export default function App() {
       setup_sub_tab: setupSubTab(),
       control_mode: controlMode(),
       timeline_desk_surface: timelineDeskSurface(),
+      timeline_context_drawer: timelineContextDrawer() === "block" ? "none" : timelineContextDrawer(),
       edit_desk_surface: editDeskSurface(),
       control_category: controlCategory(),
       top_split_ratio: topSplitRatio(),
@@ -2191,6 +2197,7 @@ export default function App() {
     setSetupSubTab(defaultWorkspaceLayout.setup_sub_tab);
     setControlMode(defaultWorkspaceLayout.control_mode);
     setTimelineDeskSurface(defaultWorkspaceLayout.timeline_desk_surface);
+    setTimelineContextDrawer(defaultWorkspaceLayout.timeline_context_drawer);
     setEditDeskSurface(defaultWorkspaceLayout.edit_desk_surface);
     setControlCategory(defaultWorkspaceLayout.control_category);
     setTopSplitRatio(defaultWorkspaceLayout.top_split_ratio);
@@ -3718,8 +3725,11 @@ export default function App() {
     const beatMs = 60_000 / Math.max(1, snapshot().clock.bpm);
     return Number((Math.max(0, timeMs) / beatMs).toFixed(6));
   };
-  const timelineLayers = createMemo(() => effectiveTimelineLayers(activeTimeline().layers));
-  const legacyTimelineLayers = createMemo(() => isLegacyTimelineLayerSet(timelineLayers()));
+  const timelineLayers = createMemo(
+    () => effectiveTimelineLayers(activeTimeline().layers),
+    [] as TimelineLayerSummary[],
+    { equals: sameTimelineLayerSummaries },
+  );
   const timelineCueOptions = createMemo(
     () => buildTimelineSceneBlockCueOptions(
       timelineChildCueId() === null
@@ -5076,7 +5086,6 @@ export default function App() {
     if (controlMode() === "edit") return editDeskSurface() === "effects" ? "Lighting FX" : "Faders";
     if (controlMode() !== "live") return "Faders";
     switch (timelineDeskSurface()) {
-      case "cues": return "Cue List";
       case "automation": return "Automation";
       case "playback": return "Playback";
       default: return "Show Timeline";
@@ -6450,25 +6459,29 @@ export default function App() {
       if (command === "add_timeline_layer") {
         const layerId = Math.max(1, ...timelineLayers().map((layer) => layer.id)) + 1;
         const kind = String(args?.kind ?? "Lighting") as TimelineLayerSummary["kind"];
-        await persistChildTimeline(childCueId, (child) => ({
-          ...child,
-          layers: [...(child.layers ?? []), {
-            id: layerId,
-            label: String(args?.label ?? `${kind} Layer`),
-            order: child.layers?.length ?? 0,
-            muted: false,
-            locked: false,
-            solo: false,
-            kind,
-          }],
-        }));
+        await persistChildTimeline(childCueId, (child) => {
+          const baseLayers = effectiveTimelineLayers(child.layers);
+          return {
+            ...child,
+            layers: [...baseLayers, {
+              id: layerId,
+              label: String(args?.label ?? `${kind} Layer`),
+              order: baseLayers.length,
+              muted: false,
+              locked: false,
+              solo: false,
+              kind,
+            }],
+          };
+        });
         return layerId as T;
       }
       if (command === "update_timeline_layer") {
         const layer = args?.layer as TimelineLayerSummary;
         await persistChildTimeline(childCueId, (child) => ({
           ...child,
-          layers: (child.layers ?? []).map((candidate) => candidate.id === layer.id ? layer : candidate),
+          layers: effectiveTimelineLayers(child.layers)
+            .map((candidate) => candidate.id === layer.id ? layer : candidate),
         }));
         return undefined as T;
       }
@@ -6477,17 +6490,53 @@ export default function App() {
         const reassignToLayerId = args?.reassignToLayerId === null || args?.reassignToLayerId === undefined
           ? null
           : Number(args.reassignToLayerId);
-        const target = reassignToLayerId === null
-          ? null
-          : timelineLayers().find((layer) => layer.id === reassignToLayerId) ?? null;
-        await persistChildTimeline(childCueId, (child) => ({
-          ...child,
-          layers: (child.layers ?? []).filter((layer) => layer.id !== layerId),
-          events: (child.events ?? []).map((event) => event.layer_id === layerId && target
-            ? { ...event, layer_id: target.id, track: target.kind as TimelineTrackKind }
-            : event),
-          audio_clips: (child.audio_clips ?? []).filter((clip) => clip.layer_id !== layerId),
-        }));
+        await persistChildTimeline(childCueId, (child) => {
+          const baseLayers = effectiveTimelineLayers(child.layers);
+          const source = baseLayers.find((layer) => layer.id === layerId);
+          if (!source) throw new Error(`Timeline layer ${layerId} was not found`);
+          if (source.locked) {
+            throw new Error(`Timeline layer ${layerId} is locked; unlock it before removal`);
+          }
+          if (baseLayers.length <= 1) throw new Error("Timeline must contain at least one layer");
+          const events = child.events ?? [];
+          const audioClips = child.audio_clips ?? [];
+          const hasEvents = events.some((event) => timelineLayerIdForEvent(baseLayers, event) === layerId);
+          const hasAudioClips = audioClips.some((clip) => clip.layer_id === layerId);
+          if (reassignToLayerId === layerId) {
+            throw new Error("Timeline layer cannot be reassigned to itself");
+          }
+          const target = reassignToLayerId === null
+            ? null
+            : baseLayers.find((layer) => layer.id === reassignToLayerId) ?? null;
+          if (reassignToLayerId !== null && !target) {
+            throw new Error(`Timeline layer reassignment target ${reassignToLayerId} was not found`);
+          }
+          if (target?.locked) {
+            throw new Error(`Timeline layer ${target.id} is locked; unlock it before reassignment`);
+          }
+          if (target?.kind === "Audio" && hasEvents) {
+            throw new Error(`Cue events cannot be reassigned to Audio timeline layer ${target.id}`);
+          }
+          if (target && target.kind !== "Audio" && hasAudioClips) {
+            throw new Error(`Audio clips can only be reassigned to Audio timeline layer ${target.id}`);
+          }
+          if (!target && (hasEvents || hasAudioClips)) {
+            throw new Error(`Timeline layer ${layerId} is not empty; provide a reassign target`);
+          }
+          const remainingLayers = baseLayers.filter((layer) => layer.id !== layerId);
+          return {
+            ...child,
+            layers: remainingLayers.map((layer, order) => ({ ...layer, order })),
+            events: events.map((event) =>
+              timelineLayerIdForEvent(baseLayers, event) === layerId && target
+                ? { ...event, layer_id: target.id, track: target.kind as TimelineTrackKind }
+                : event),
+            audio_clips: audioClips.map((clip) =>
+              clip.layer_id === layerId && target?.kind === "Audio"
+                ? { ...clip, layer_id: target.id }
+                : clip),
+          };
+        });
         return undefined as T;
       }
       if (command === "reorder_timeline_layers") {
@@ -6495,7 +6544,7 @@ export default function App() {
         const orderById = new Map(layerIds.map((layerId, order) => [layerId, order]));
         await persistChildTimeline(childCueId, (child) => ({
           ...child,
-          layers: (child.layers ?? []).map((layer) => ({
+          layers: effectiveTimelineLayers(child.layers).map((layer) => ({
             ...layer,
             order: orderById.get(layer.id) ?? layer.order,
           })),
@@ -10322,7 +10371,8 @@ export default function App() {
     }
     setWorkspaceTab("control");
     setControlMode("live");
-    setTimelineDeskSurface("cues");
+    setTimelineDeskSurface("show");
+    setTimelineContextDrawer("cue");
     setSelectedCueListId(cue.cue_list_id);
     setRevealedSourceCueId(cue.id);
     setRevealedSourceCueRevision((revision) => revision + 1);
@@ -10556,6 +10606,7 @@ export default function App() {
       moved: false,
     });
     setTimelineDeskSurface("show");
+    setTimelineContextDrawer("none");
   };
 
   const moveTimelineCueDrag = (point: TimelineCueDragPoint) => {
@@ -13493,7 +13544,15 @@ export default function App() {
     if (paneWindow === "timeline" && mode !== "live") return;
     setControlMode(mode);
     if (mode === "edit") setEditDeskSurface("attributes");
-    if (mode === "live") setTimelineDeskSurface("show");
+    if (mode === "live") {
+      setTimelineDeskSurface("show");
+      setTimelineContextDrawer((current) => current === "cue" ? "cue" : "none");
+    }
+  };
+
+  const selectTimelineDeskSurface = (surface: TimelineDeskSurface) => {
+    setTimelineDeskSurface(surface);
+    setTimelineContextDrawer("none");
   };
 
   const { handleControlKeyDown } = createAppKeyboardController({
@@ -13539,6 +13598,25 @@ export default function App() {
   });
 
   const handleAppKeyDown = (event: KeyboardEvent) => {
+    if (
+      event.key === "Escape" &&
+      !event.defaultPrevented &&
+      document.querySelector("dialog[open]")
+    ) {
+      event.stopImmediatePropagation();
+      return;
+    }
+    if (
+      event.key === "Escape" &&
+      !event.defaultPrevented &&
+      workspaceTab() === "control" &&
+      controlMode() === "live" &&
+      timelineContextDrawer() !== "none"
+    ) {
+      event.preventDefault();
+      setTimelineContextDrawer("none");
+      return;
+    }
     if (
       paneWindow &&
       (
@@ -13873,6 +13951,11 @@ export default function App() {
               activeFade={snapshot().active_fade}
               timelineTrack={timelineTrack()}
               onTriggerCue={triggerCue}
+              onEditCue={openTimelineSourceCue}
+              onOpenCueEditor={() => {
+                setTimelineDeskSurface("show");
+                setTimelineContextDrawer("cue");
+              }}
               onBeginTimelineCueDrag={beginTimelineCueDrag}
               onMoveTimelineCueDrag={moveTimelineCueDrag}
               onEndTimelineCueDrag={(point, moved, canceled) => void endTimelineCueDrag(point, moved, canceled)}
@@ -14977,16 +15060,46 @@ export default function App() {
         >
         <Show when={workspaceTab() === "control"}>
         <section
-          class={`panel faders controlPanel timelineDesk-${timelineDeskSurface()} editDesk-${editDeskSurface()}`}
+          class={`panel faders controlPanel timelineDesk-${timelineDeskSurface()} timelineDrawer-${timelineContextDrawer()} editDesk-${editDeskSurface()}`}
+          data-timeline-context-drawer={timelineContextDrawer()}
         >
           <div class="panelHeader">
             <h2>{faderDeskTitle()}</h2>
             <Show when={controlMode() === "live"}>
               <nav class="timelineDeskTabs" aria-label="Timeline desk surface">
-                <button class={timelineDeskSurface() === "show" ? "active" : ""} onClick={() => setTimelineDeskSurface("show")}>Show</button>
-                <button class={timelineDeskSurface() === "cues" ? "active" : ""} onClick={() => setTimelineDeskSurface("cues")}>Cues</button>
-                <button class={timelineDeskSurface() === "automation" ? "active" : ""} onClick={() => setTimelineDeskSurface("automation")}>Automation</button>
-                <button class={timelineDeskSurface() === "playback" ? "active" : ""} onClick={() => setTimelineDeskSurface("playback")}>Playback</button>
+                <button
+                  type="button"
+                  class={timelineDeskSurface() === "show" ? "active" : ""}
+                  title="Show Timeline"
+                  aria-label="Show Timeline"
+                  aria-pressed={timelineDeskSurface() === "show"}
+                  data-timeline-desk-surface="show"
+                  onClick={() => selectTimelineDeskSurface("show")}
+                >
+                  <span class="timelineToolIcon" aria-hidden="true" data-no-localize>▤</span>
+                </button>
+                <button
+                  type="button"
+                  class={timelineDeskSurface() === "automation" ? "active" : ""}
+                  title="Automation"
+                  aria-label="Automation"
+                  aria-pressed={timelineDeskSurface() === "automation"}
+                  data-timeline-desk-surface="automation"
+                  onClick={() => selectTimelineDeskSurface("automation")}
+                >
+                  <span class="timelineToolIcon" aria-hidden="true" data-no-localize>∿</span>
+                </button>
+                <button
+                  type="button"
+                  class={timelineDeskSurface() === "playback" ? "active" : ""}
+                  title="Playback"
+                  aria-label="Playback"
+                  aria-pressed={timelineDeskSurface() === "playback"}
+                  data-timeline-desk-surface="playback"
+                  onClick={() => selectTimelineDeskSurface("playback")}
+                >
+                  <span class="timelineToolIcon" aria-hidden="true" data-no-localize>▦</span>
+                </button>
               </nav>
             </Show>
             <Show when={controlMode() === "edit"}>
@@ -15175,6 +15288,28 @@ export default function App() {
             onSetGroupAttribute={setGroupAttribute}
           />
           </FaderAttributeEditorPanel>
+          <Show when={controlMode() === "live" && timelineContextDrawer() === "cue"}>
+          <aside
+            class="timelineContextDrawer"
+            data-timeline-context-drawer-panel="cue"
+            aria-label="Cue editor drawer"
+          >
+            <header class="timelineContextDrawerHeader">
+              <div>
+                <strong>Cue editor</strong>
+                <span data-no-localize>{selectedCueList().label}</span>
+              </div>
+              <button
+                type="button"
+                class="timelineContextDrawerClose"
+                aria-label="Close Cue editor"
+                title="Close Cue editor"
+                onClick={() => setTimelineContextDrawer("none")}
+              >
+                <span aria-hidden="true" data-no-localize>×</span>
+              </button>
+            </header>
+            <div class="timelineContextDrawerBody">
           <CueManagementPanel
             mode={controlMode() === "live" ? "live" : "edit"}
             onSetCueColor={setCueColor}
@@ -15239,16 +15374,23 @@ export default function App() {
             onAddTimelineCueEventAt={addTimelineCueEventAt}
             onRemoveCue={removeCue}
             onSeekTimeline={seekTimeline}
-            onOpenTimeline={() => setTimelineDeskSurface("show")}
+            onOpenTimeline={() => selectTimelineDeskSurface("show")}
             onMoveTimelineCueEvent={moveTimelineCueEvent}
             onRemoveTimelineEvent={removeTimelineEvent}
             onBeginTimelineCueDrag={beginTimelineCueDrag}
             onMoveTimelineCueDrag={moveTimelineCueDrag}
             onEndTimelineCueDrag={(point, moved, canceled) => void endTimelineCueDrag(point, moved, canceled)}
           />
+            </div>
+          </aside>
+          </Show>
           <div class="timelinePanel">
-            <div class="timelineShowSurface">
+            <div
+              class="timelineShowSurface"
+              classList={{ timelineShowSurfaceBlockDrawerOpen: timelineContextDrawer() === "block" }}
+            >
             <TimelineCueEventsPanel
+              contextDrawer={timelineContextDrawer()}
               childTimelineLabel={timelineChildCue()?.label ?? null}
               cueColors={cueColors()}
               positionMs={activeTimeline().position_ms}
@@ -15261,11 +15403,13 @@ export default function App() {
               videoAutomationCount={activeTimeline().video_automations.length}
               overviewEvents={timelineOverviewEvents()}
               timelineLayers={timelineLayers()}
-              legacyTimelineLayers={legacyTimelineLayers()}
               timelineCueDrag={timelineCueDrag()}
               overviewMarkerAriaLabel={(event) => timelineOverviewMarkerAriaLabel(event, uiLocale())}
               overviewAutomationRanges={timelineOverviewAutomationRanges()}
               overviewOverlapClusters={timelineOverviewOverlapClusters()}
+              overviewOverlapLayerIds={[
+                ...new Set(timelineOverlapClusters().map((cluster) => cluster.layer_id)),
+              ]}
               overlapClusterMemberships={timelineOverlapClusters().map((cluster) => ({
                 id: cluster.id,
                 member_ids: cluster.member_ids.map(Number),
@@ -15353,6 +15497,7 @@ export default function App() {
               onRemoveTimelineLayer={removeTimelineLayer}
               onReorderTimelineLayer={timelineLayerController.reorder}
               onTimelineStatus={setMessage}
+              onContextDrawer={setTimelineContextDrawer}
             />
             </div>
             <div class="timelineAutomationSurface">

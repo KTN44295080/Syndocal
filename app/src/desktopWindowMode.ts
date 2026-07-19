@@ -53,7 +53,7 @@ export const desktopWindowShortcutAction = (
     return null;
   }
 
-  // Let an editor keep Escape when it explicitly consumes the key. Unhandled
-  // Escape still exits fullscreen without blurring or mutating the field.
-  return event.editableTarget && event.defaultPrevented ? null : "exitFullscreen";
+  // Any surface that consumes Escape keeps the key. A subsequent unhandled
+  // Escape may then exit fullscreen without blurring or mutating the field.
+  return event.defaultPrevented ? null : "exitFullscreen";
 };

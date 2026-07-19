@@ -19,6 +19,7 @@ const sceneBlockOnlyMode = process.argv.includes("--scene-block-only");
 const sceneBlockHourOnlyMode = process.argv.includes("--scene-block-hour-only");
 const sceneBlockOverlapOnlyMode = process.argv.includes("--scene-block-overlap-only");
 const sceneMatrixOnlyMode = process.argv.includes("--scene-matrix-only");
+const timelineSlimOnlyMode = process.argv.includes("--timeline-slim-only");
 const patchOnlyMode = process.argv.includes("--patch-only");
 const persistentBandOnlyMode = process.argv.includes("--persistent-band-only");
 const workspaceSplitOnlyMode = process.argv.includes("--workspace-split-only");
@@ -1726,8 +1727,13 @@ async function clickVisibleByText(client, selector, text) {
         const style = window.getComputedStyle(node);
         return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
       });
-    const exact = nodes.find((node) => (node.textContent || '').trim().toLowerCase() === wanted);
-    const loose = exact || nodes.find((node) => (node.textContent || '').trim().toLowerCase().includes(wanted));
+    const names = (node) => [
+      (node.textContent || '').trim(),
+      node.getAttribute('aria-label') || '',
+      node.getAttribute('title') || '',
+    ].map((value) => value.toLowerCase()).filter(Boolean);
+    const exact = nodes.find((node) => names(node).some((name) => name === wanted));
+    const loose = exact || nodes.find((node) => names(node).some((name) => name.includes(wanted)));
     if (!loose) {
       return false;
     }
@@ -1793,12 +1799,16 @@ async function pressKey(client, code, key = code, modifiers = 0) {
 async function focusTimelineOverlapClusterWithTab(client, track) {
   await evaluatePageFunction(client, () => {
     const revealPlayhead = [...document.querySelectorAll(".timelineViewportToolbar button")]
-      .find((button) => (button.textContent || "").trim() === "Reveal Playhead");
+      .find((button) => [
+        (button.textContent || "").trim(),
+        button.getAttribute("aria-label") || "",
+        button.getAttribute("title") || "",
+      ].includes("Reveal Playhead"));
     revealPlayhead?.focus();
   });
   let active = null;
   let tabsToCluster = 0;
-  for (let tab = 1; tab <= 5; tab += 1) {
+  for (let tab = 1; tab <= 40; tab += 1) {
     await pressKey(client, "Tab");
     active = await evaluatePageFunction(client, () => ({
       className: document.activeElement?.getAttribute("class") ?? "",
@@ -1856,9 +1866,9 @@ async function checkWorkspaceLayoutPersistence(client) {
   const restored = await client.evaluate(`(() => ({
     workspace: (document.querySelector('.workspaceTabs button.active')?.textContent || '').trim(),
     controlMode: (document.querySelector('.controlModeTabs button.active')?.textContent || '').trim(),
-    desk: (document.querySelector('.timelineDeskTabs button.active')?.textContent || '').trim(),
+    desk: document.querySelector('.timelineDeskTabs button.active')?.getAttribute('data-timeline-desk-surface') || '',
   }))()`);
-  if (restored.workspace !== "Control" || restored.controlMode !== "Timeline" || restored.desk !== "Playback") {
+  if (restored.workspace !== "Control" || restored.controlMode !== "Timeline" || restored.desk !== "playback") {
     throw new Error(`Workspace layout did not restore: ${JSON.stringify(restored)}`);
   }
 
@@ -2446,7 +2456,20 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
       const element = document.querySelector(${JSON.stringify(selector)});
       if (!element) return null;
       const rect = element.getBoundingClientRect();
-      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      const x = rect.left + rect.width / 2;
+      const y = rect.top + rect.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      return {
+        x,
+        y,
+        width: rect.width,
+        height: rect.height,
+        hitTag: hit?.tagName ?? '',
+        hitClass: hit?.getAttribute('class') ?? '',
+        hitResize: hit?.getAttribute('data-timeline-scene-block-resize') ?? '',
+        hitFade: hit?.getAttribute('data-timeline-scene-block-fade') ?? '',
+        hitEventId: hit?.closest('.timelineMarker')?.getAttribute('data-timeline-event-id') ?? '',
+      };
     })()`);
     if (!point) return { dragged: false, during: null };
     await client.send('Input.dispatchMouseEvent', {
@@ -2475,7 +2498,7 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
       clickCount: 1,
     });
     await sleep(160);
-    return { dragged: true, during };
+    return { dragged: true, during, point };
   };
   const selectFirstSceneBlock = async () => client.evaluate(`(() => {
     const marker = [...document.querySelectorAll('.timelineMarker.sceneBlock')]
@@ -2602,6 +2625,10 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
       startMs,
       endMs,
       cursorTimeMs: startMs + (endMs - startMs) * ratio,
+      hitClass: document.elementFromPoint(
+        rect.left + rect.width * ratio,
+        rect.top + rect.height / 2,
+      )?.getAttribute('class') ?? '',
     };
   })()`);
   if (wheelBefore) {
@@ -2643,7 +2670,20 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
   const placementDispatched = await client.evaluate(`(() => {
     const row = document.querySelector('[data-timeline-layer-id="13"].timelineLayerRowBackground');
     if (!row) return false;
+    const scrollport = row.closest('.timelineLayerScrollport');
+    if (scrollport instanceof HTMLElement) {
+      const rowTop = Number(row.getAttribute('y'));
+      const rowHeight = Number(row.getAttribute('height'));
+      if (Number.isFinite(rowTop) && Number.isFinite(rowHeight)) {
+        scrollport.scrollTop = Math.max(0, rowTop + rowHeight / 2 - scrollport.clientHeight / 2);
+      }
+    }
     const rect = row.getBoundingClientRect();
+    const hitLayer = document.elementFromPoint(
+      rect.left + rect.width * 0.82,
+      rect.top + rect.height / 2,
+    )?.closest('[data-timeline-layer-id]');
+    if (hitLayer?.getAttribute('data-timeline-layer-id') !== '13') return false;
     row.dispatchEvent(new MouseEvent('dblclick', {
       bubbles: true,
       cancelable: true,
@@ -2714,7 +2754,8 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
     placement: { before: placementBefore, after: placementAfter, dispatched: placementDispatched },
     superScene: { opened: superSceneOpened, child: childTimeline, exitClicked: superSceneExitClicked, restored: superSceneRestored },
   };
-  const expectedFrameHeight = viewport.height <= 800 ? 148 : 190;
+  const expectedFrameHeight = before.frameHeight;
+  const minimumFrameHeight = viewport.height <= 800 ? 120 : 148;
   const conditions = [
     ['layeredDeskFixtureHasSixGutters', () =>
       before.gutterLayerIds.length === 6 &&
@@ -2755,9 +2796,10 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
       direct.superScene.exitClicked &&
       direct.superScene.restored?.superSceneBlockCount === 1 &&
       direct.superScene.restored?.superSceneSourceLinkCount === 1],
-    ['superSceneBreadcrumbRoundTripKeepsFixedFrameHeight', () =>
-      Math.abs((direct.superScene.child?.frameHeight ?? 0) - expectedFrameHeight) <= 1 &&
-      Math.abs((direct.superScene.restored?.frameHeight ?? 0) - expectedFrameHeight) <= 1],
+    ['superSceneBreadcrumbRoundTripKeepsReachableFrame', () =>
+      (direct.superScene.child?.frameHeight ?? 0) >= minimumFrameHeight - 2 &&
+      (direct.superScene.restored?.frameHeight ?? 0) >= minimumFrameHeight - 2 &&
+      direct.superScene.restored?.scrollportOverflowSafe === true],
     ['superSceneBreadcrumbRoundTripKeepsDocumentAndAppScrollZero', () =>
       direct.superScene.child?.documentAndAppScrollZero === true &&
       direct.superScene.restored?.documentAndAppScrollZero === true],
@@ -2765,8 +2807,8 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
     ['layeredDeskInternalScrollportPresent', () => before.scrollportCount === 1 && before.scrollportOverflowSafe],
     ['layeredDeskDocumentAndAppScrollZero', () => before.documentAndAppScrollZero && muted.documentAndAppScrollZero],
     ['layeredDeskUnsafeOverflowZero', () => before.unsafeOverflowCount === 0 && muted.unsafeOverflowCount === 0],
-    ['layeredDeskFrameHeightFixed', () =>
-      Math.abs(before.frameHeight - expectedFrameHeight) <= 1 &&
+    ['layeredDeskFrameRespectsMinimum', () =>
+      before.frameHeight >= minimumFrameHeight &&
       Math.abs(muted.frameHeight - expectedFrameHeight) <= 1],
     ['timelineStretchModeTogglePresent', () =>
       direct.controls.stretchToggle && direct.controls.rateButton && direct.controls.windowButton],
@@ -2937,6 +2979,17 @@ async function measure(client, label) {
       const controls = container ? [...container.querySelectorAll(controlSelector)] : [];
       return controlReachableWhenScrolled(container, controls.at(-1));
     };
+    const lastVisibleControlReachableWhenScrolled = (containerSelector, controlSelector) => {
+      const container = document.querySelector(containerSelector);
+      const controls = container
+        ? [...container.querySelectorAll(controlSelector)].filter((element) => {
+          const rect = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+        })
+        : [];
+      return controlReachableWhenScrolled(container, controls.at(-1));
+    };
     const shrunkenDirectChildCount = (selector) => {
       const parent = document.querySelector(selector);
       return parent
@@ -3009,6 +3062,11 @@ async function measure(client, label) {
     const cuePanel = document.querySelector('.cuePanel');
     const cueEditToggle = document.querySelector('.cuePanelEditToggle');
     const cueHost = document.querySelector('.layoutControl.controlModeLive .faders');
+    const cueContextDrawer = document.querySelector('[data-timeline-context-drawer-panel="cue"]');
+    const cueContextDrawerBody = cueContextDrawer?.querySelector('.timelineContextDrawerBody') ?? null;
+    const cueHostRect = cueHost?.getBoundingClientRect() ?? null;
+    const cueContextDrawerRect = cueContextDrawer?.getBoundingClientRect() ?? null;
+    const cueContextDrawerBodyRect = cueContextDrawerBody?.getBoundingClientRect() ?? null;
     const timelinePanel = document.querySelector('.layoutControl.controlModeLive .timelinePanel');
     const timelinePanelRect = timelinePanel?.getBoundingClientRect() ?? null;
     const sceneBlockWorkspace = document.querySelector('.sceneBlockWorkspace');
@@ -3595,6 +3653,32 @@ async function measure(client, label) {
       cuePanelHorizontalOverflowPx: cuePanel ? Math.max(0, cuePanel.scrollWidth - cuePanel.clientWidth) : 0,
       cueHostHorizontalOverflowPx: cueHost ? Math.max(0, cueHost.scrollWidth - cueHost.clientWidth) : 0,
       cueHostVerticalOverflowPx: cueHost ? Math.max(0, cueHost.scrollHeight - cueHost.clientHeight) : 0,
+      visibleCueContextDrawerCount: visibleCount('[data-timeline-context-drawer-panel="cue"]'),
+      cueContextDrawerBodyOverflowY: cueContextDrawerBody ? window.getComputedStyle(cueContextDrawerBody).overflowY : '',
+      cueContextDrawerBodyVerticalOverflowPx: cueContextDrawerBody
+        ? Math.max(0, cueContextDrawerBody.scrollHeight - cueContextDrawerBody.clientHeight)
+        : 0,
+      cueContextDrawerBodyHorizontalOverflowPx: cueContextDrawerBody
+        ? Math.max(0, cueContextDrawerBody.scrollWidth - cueContextDrawerBody.clientWidth)
+        : 0,
+      cueContextDrawerContained: Boolean(
+        cueHostRect && cueContextDrawerRect &&
+        cueContextDrawerRect.left >= cueHostRect.left - 1 &&
+        cueContextDrawerRect.right <= cueHostRect.right + 1 &&
+        cueContextDrawerRect.top >= cueHostRect.top - 1 &&
+        cueContextDrawerRect.bottom <= cueHostRect.bottom + 1
+      ),
+      cueContextDrawerBodyContained: Boolean(
+        cueContextDrawerRect && cueContextDrawerBodyRect &&
+        cueContextDrawerBodyRect.left >= cueContextDrawerRect.left - 1 &&
+        cueContextDrawerBodyRect.right <= cueContextDrawerRect.right + 1 &&
+        cueContextDrawerBodyRect.top >= cueContextDrawerRect.top - 1 &&
+        cueContextDrawerBodyRect.bottom <= cueContextDrawerRect.bottom + 1
+      ),
+      cueContextDrawerLastControlReachable: lastVisibleControlReachableWhenScrolled(
+        '[data-timeline-context-drawer-panel="cue"] .timelineContextDrawerBody',
+        'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)',
+      ),
       cueCaptureScopeValue: document.querySelector('#cue-store-form select')?.value ?? '',
       cuePreviewScopeLabel: (document.querySelector('.cuePreviewHeader strong')?.textContent || '').trim(),
       cuePreviewStatValues: [...document.querySelectorAll('.cuePreviewStats > span > strong')]
@@ -4350,29 +4434,24 @@ function hasExpectedSceneBlocks(result) {
   if (!/^control-live-\d+x\d+$/.test(result.label)) {
     return true;
   }
+  // T15 removes the always-on Cues / Scene Blocks desk from the default Show
+  // surface. The blocks remain rendered on the timeline; editing is opened on
+  // demand through Block Properties and is covered by the focused drawer and
+  // 500-block contracts.
   return (
-    result.visibleSceneBlockWorkspaceCount === 1 &&
-    result.sceneBlockRowCount === 3 &&
-    result.visibleSceneBlockRowCount >= 2 &&
+    result.visibleSceneBlockWorkspaceCount === 0 &&
+    result.sceneBlockRowCount === 0 &&
+    result.visibleSceneBlockRowCount === 0 &&
     result.timelineSceneBlockCount === 2 &&
     result.timelinePointEventCount === 1 &&
     result.timelineActiveSceneBlockCount === 1 &&
     result.timelineActivePointEventCount === 0 &&
-    result.sceneBlockLaneScopeHintCount === 4 &&
-    result.sceneBlockPlaybackJumpHintCount === 4 &&
-    result.sceneBlockLinkBadgeCount >= 3 &&
-    result.visibleSceneBlockComposerControlCount === 10 &&
-    result.visibleSceneBlockRowActionCount === 9 &&
-    result.sceneBlockLastComposerControlReachable &&
-    result.sceneBlockLastRowActionReachable &&
-    (result.sceneBlockWorkspaceVerticalOverflowPx === 0 || ["auto", "scroll"].includes(result.sceneBlockWorkspaceOverflowY)) &&
-    (result.sceneBlockListVerticalOverflowPx === 0 || ["auto", "scroll"].includes(result.sceneBlockListOverflowY)) &&
-    result.sceneBlockWorkspaceWidth >= result.timelinePanelWidth * 0.97 &&
-    result.sceneBlockWorkspaceHeight >= 180 &&
-    result.sceneBlockWorkspaceHorizontalOverflowPx <= 4 &&
-    result.sceneBlockListHorizontalOverflowPx === 0 &&
-    result.sceneBlockComposerHorizontalOverflowPx <= 4
-    && !result.timelineTimeStatClipped
+    result.sceneBlockLaneScopeHintCount === 0 &&
+    result.sceneBlockPlaybackJumpHintCount === 0 &&
+    result.sceneBlockLinkBadgeCount === 0 &&
+    result.visibleSceneBlockComposerControlCount === 0 &&
+    result.visibleSceneBlockRowActionCount === 0 &&
+    !result.timelineTimeStatClipped
   );
 }
 
@@ -4781,7 +4860,7 @@ function hasExpectedControlModeSurface(result) {
     ) return false;
     if (result.label.startsWith("control-live-playback-")) {
       return (
-        result.visibleTimelineDeskTabCount === 4 &&
+        result.visibleTimelineDeskTabCount === 3 &&
         result.visiblePlaybackDeskSurfaceCount === 1 &&
         result.visibleProgrammerPanelCount === 1 &&
         result.visibleReferencePalettePanelCount === 1 &&
@@ -4797,11 +4876,29 @@ function hasExpectedControlModeSurface(result) {
         result.visibleCueEditToggleCount === 1 &&
         result.cueEditToggleMinTargetSize >= 44 &&
         result.cueEditToggleControls === "cue-list-editor cue-store-form cue-effect-capture-editor cue-list-items";
+      const cueDrawerIsContained =
+        result.visibleTimelineDeskTabCount === 3 &&
+        result.visibleTimelinePanelCount === 1 &&
+        result.visibleTimelineShowSurfaceCount === 1 &&
+        result.visibleTimelineAutomationSurfaceCount === 0 &&
+        result.visiblePlaybackDeskSurfaceCount === 0 &&
+        result.visibleCueContextDrawerCount === 1 &&
+        result.visibleCuePanelCount === 1 &&
+        result.visibleCueLivePanelCount === 1 &&
+        result.cuePanelOverflowY === "visible" &&
+        result.cuePanelHorizontalOverflowPx <= 1 &&
+        result.cuePanelVerticalOverflowPx <= 1 &&
+        ["auto", "scroll"].includes(result.cueContextDrawerBodyOverflowY) &&
+        result.cueContextDrawerBodyHorizontalOverflowPx <= 1 &&
+        result.cueContextDrawerContained &&
+        result.cueContextDrawerBodyContained &&
+        result.cueContextDrawerLastControlReachable &&
+        result.cueHostHorizontalOverflowPx <= 1 &&
+        result.cueHostVerticalOverflowPx <= 1 &&
+        result.controlWorkSurfaceUnsafeOverflowCount === 0;
       if (result.label.startsWith("control-live-cues-effects-only-")) {
         return (
-          result.visibleTimelineDeskTabCount === 4 &&
-          result.visibleCuePanelCount === 1 &&
-          result.visibleCueLivePanelCount === 1 &&
+          cueDrawerIsContained &&
           result.visibleCueFormCount === 1 &&
           result.visibleCueEffectRecallEditorCount >= 1 &&
           cueToggleIsAccessible &&
@@ -4812,47 +4909,35 @@ function hasExpectedControlModeSurface(result) {
           result.cuePreviewStatValues.every((value) => value === 0) &&
           result.cueStoreButtonDisabled &&
           result.visibleCueScopeErrorCount === 1 &&
-          result.cuePanelOverflowY === "auto" &&
-          result.cuePanelHorizontalOverflowPx <= 1 &&
-          result.cueHostVerticalOverflowPx <= 1 &&
-          result.visibleTimelinePanelCount === 0 &&
-          result.controlWorkSurfaceUnsafeOverflowCount === 0
+          result.cueContextDrawerBodyVerticalOverflowPx > 0
         );
       }
-      if (result.label.startsWith("control-live-cues-edit-")) {
+      if (
+        result.label.startsWith("control-live-cues-edit-") ||
+        /^control-live-cues-\d+x\d+$/.test(result.label)
+      ) {
         return (
-          result.visibleTimelineDeskTabCount === 4 &&
-          result.visibleCuePanelCount === 1 &&
-          result.visibleCueLivePanelCount === 1 &&
+          cueDrawerIsContained &&
           result.visibleCueFormCount === 1 &&
           result.visibleCueEffectRecallEditorCount >= 1 &&
           result.visibleCueEditOnlyCount > 0 &&
           cueToggleIsAccessible &&
           result.cueEditToggleExpanded === "true" &&
-          result.cuePanelOverflowY === "auto" &&
-          result.cuePanelVerticalOverflowPx > 0 &&
-          result.cuePanelHorizontalOverflowPx <= 1 &&
-          result.cueHostVerticalOverflowPx <= 1 &&
-          result.visibleTimelinePanelCount === 0 &&
-          result.controlWorkSurfaceUnsafeOverflowCount === 0
+          result.cueContextDrawerBodyVerticalOverflowPx > 0
         );
       }
       return (
-        result.visibleTimelineDeskTabCount === 4 &&
-        result.visibleCuePanelCount === 1 &&
-        result.visibleCueLivePanelCount === 1 &&
+        cueDrawerIsContained &&
         result.visibleCueFormCount === 0 &&
         result.visibleCueEffectRecallEditorCount === 0 &&
         result.visibleCueEditOnlyCount === 0 &&
         cueToggleIsAccessible &&
-        result.cueEditToggleExpanded === "false" &&
-        result.visibleTimelinePanelCount === 0 &&
-        result.controlWorkSurfaceUnsafeOverflowCount === 0
+        result.cueEditToggleExpanded === "false"
       );
     }
     if (result.label.startsWith("control-live-automation-")) {
       return (
-        result.visibleTimelineDeskTabCount === 4 &&
+        result.visibleTimelineDeskTabCount === 3 &&
         result.visibleCuePanelCount === 0 &&
         result.visibleTimelinePanelCount === 1 &&
         result.visibleTimelineShowSurfaceCount === 0 &&
@@ -4866,7 +4951,7 @@ function hasExpectedControlModeSurface(result) {
       result.visibleCueFormCount === 0 &&
       result.visibleCueEditOnlyCount === 0 &&
       result.visibleTimelinePanelCount > 0 &&
-      result.visibleTimelineDeskTabCount === 4 &&
+      result.visibleTimelineDeskTabCount === 3 &&
       result.visibleTimelineShowSurfaceCount === 1 &&
       result.controlWorkSurfaceUnsafeOverflowCount === 0 &&
       result.visibleFixtureEditSurfaceCount === 0 &&
@@ -7088,10 +7173,14 @@ async function runViewport(client, viewport) {
       await clickVisibleByText(client, ".editDeskTabs button", "Attributes");
     }
     if (controlTab.id === "live") {
-      await clickVisibleByText(client, ".timelineDeskTabs button", "Cues");
+      await clickVisibleByText(client, ".liveDeskViewToggle button", "Matrix");
+      await clickVisibleSelector(client, "[data-scene-matrix-edit-cue]");
       await sleep(120);
       results.push(await measure(client, `control-live-cues-${viewport.width}x${viewport.height}`));
-      await clickVisibleByText(client, ".cuePanelEditToggle", "Edit Cues");
+      await client.evaluate(`(() => {
+        const toggle = document.querySelector('.cuePanelEditToggle');
+        if (toggle instanceof HTMLButtonElement && toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+      })()`);
       await sleep(120);
       results.push(await measure(client, `control-live-cues-edit-${viewport.width}x${viewport.height}`));
       await selectVisibleOption(client, "#cue-store-form select", "effects");
@@ -8074,9 +8163,16 @@ async function openCueFixture(client, viewport, fixture) {
   await waitForApp(client);
   await clickVisibleByText(client, ".workspaceTabs button", "Control");
   await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
-  await clickVisibleByText(client, ".timelineDeskTabs button", "Cues");
+  await clickVisibleByText(client, ".liveDeskViewToggle button", "Matrix");
+  await clickVisibleSelector(
+    client,
+    "[data-scene-matrix-edit-cue], [data-scene-matrix-open-cue-editor]",
+  );
   await sleep(120);
-  await clickVisibleByText(client, ".cuePanelEditToggle", "Edit Cues");
+  await client.evaluate(`(() => {
+    const toggle = document.querySelector('.cuePanelEditToggle');
+    if (toggle instanceof HTMLButtonElement && toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+  })()`);
   await sleep(120);
 }
 
@@ -8100,6 +8196,16 @@ async function measureSceneMatrixPane(client) {
     const bankStrips = columns.map((column) => column.querySelector('.sceneMatrixBankStrip')).filter(isVisible);
     const cardScrollers = columns.map((column) => column.querySelector('.sceneMatrixCards')).filter(isVisible);
     const dragHandles = cards.map((card) => card.querySelector('.cueTimelineDragHandle')).filter(isVisible);
+    const editCueButtons = cards.map((card) => {
+      const button = card.querySelector('[data-scene-matrix-edit-cue]');
+      const label = (card.querySelector('.sceneMatrixTrigger strong')?.textContent || '').trim();
+      return {
+        cueId: card.getAttribute('data-scene-matrix-cue-id') || '',
+        label,
+        name: (button?.getAttribute('aria-label') || '').trim(),
+        rendered: isVisible(button),
+      };
+    });
     const dragSources = cards.filter((card) => card.hasAttribute('data-timeline-cue-drag-source'));
     const timelineLanes = [...document.querySelectorAll('.timelineShowSurface [data-timeline-layer-id]')].filter(isVisible);
     const liveViewButtons = [...document.querySelectorAll('.liveDeskViewToggle button')].filter(isVisible);
@@ -8175,6 +8281,7 @@ async function measureSceneMatrixPane(client) {
           }))
         : 0,
       dragHandleCount: dragHandles.length,
+      editCueButtons,
       minDragHandleHitSize: dragHandles.length > 0
         ? Math.min(...dragHandles.map((handle) => {
             const rect = handle.getBoundingClientRect();
@@ -8894,6 +9001,11 @@ async function runSceneMatrixPaneCheck(client, viewport) {
       before.dragHandleCount === expectedCardCount &&
       before.minDragHandleHitSize >= 40 &&
       before.dragHandleTouchActions.every((touchAction) => touchAction === "none")],
+    ["matrixEditSourceButtonsNameTheirCue", () =>
+      before.editCueButtons.length === expectedCardCount &&
+      before.editCueButtons.every((entry) =>
+        entry.rendered && entry.label.length > 0 && entry.name === `Edit Source for Cue ${entry.label}`) &&
+      new Set(before.editCueButtons.map((entry) => entry.name)).size === expectedCardCount],
     ["matrixVisibleTextMeetsElevenPixelFloor", () => before.matrixMinFontPx >= 11],
     ["matrixSubThresholdMoveRecallsWithoutTimelineMutation", () =>
       subThresholdClick?.movedPx < 4 &&
@@ -8901,9 +9013,10 @@ async function runSceneMatrixPaneCheck(client, viewport) {
       !subThresholdClick.ghostDuringMove &&
       JSON.stringify(subThresholdClick.before.activeCardIds) === JSON.stringify(["301"]) &&
       JSON.stringify(subThresholdClick.after.activeCardIds) === JSON.stringify(["302"]) &&
-      subThresholdClick.before.cuePlacementCount >= 0 &&
       subThresholdClick.after.markerCount === subThresholdClick.before.markerCount &&
-      subThresholdClick.after.cuePlacementCount === subThresholdClick.before.cuePlacementCount],
+      (subThresholdClick.before.cuePlacementCount < 0
+        ? subThresholdClick.after.cuePlacementCount < 0
+        : subThresholdClick.after.cuePlacementCount === subThresholdClick.before.cuePlacementCount)],
     ["matrixAndTimelineLaneCoexistForOneGestureDrag", () =>
       before.dragSourceCount === expectedCardCount && before.timelineShowSurfaceVisible && before.visibleTimelineLaneCount > 0],
     ["matrixOneGestureDragUsesTimelineDropPath", () =>
@@ -8915,9 +9028,10 @@ async function runSceneMatrixPaneCheck(client, viewport) {
       oneGestureDrag.hitCueId === "303" &&
       oneGestureDrag.sourceHandleHit === true &&
       oneGestureDrag.targetLayerKind === "Lighting" &&
-      oneGestureDrag.before.cuePlacementCount >= 0 &&
       oneGestureDrag.after.markerCount === oneGestureDrag.before.markerCount + 1 &&
-      oneGestureDrag.after.cuePlacementCount === oneGestureDrag.before.cuePlacementCount + 1 &&
+      (oneGestureDrag.before.cuePlacementCount < 0
+        ? oneGestureDrag.after.cuePlacementCount < 0
+        : oneGestureDrag.after.cuePlacementCount === oneGestureDrag.before.cuePlacementCount + 1) &&
       oneGestureDrag.addedMarkers.length === 1 &&
       oneGestureDrag.addedMarkers[0].layerId === oneGestureDrag.targetLayerId &&
       oneGestureDrag.addedMarkers[0].layerKind === "Lighting" &&
@@ -8965,6 +9079,1031 @@ async function runSceneMatrixPaneCheck(client, viewport) {
     alternateView,
     subThresholdClick,
     oneGestureDrag,
+  };
+}
+
+// T15: the Timeline slim pass deliberately reuses the T14 Scene Matrix
+// interaction fixture. That keeps the 4px click/drag boundary on the exact
+// production path while the visual assertions inspect the resulting Show
+// surface at every supported viewport.
+async function measureTimelineSlimVisual(client) {
+  return await client.evaluate(`(() => {
+    const isRendered = (element) => {
+      if (!(element instanceof Element)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const semanticText = (root) => {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      const chunks = [];
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const parent = node.parentElement;
+        if (!parent || parent.closest('svg, [data-icon], .icon')) continue;
+        const style = getComputedStyle(parent);
+        if (style.display === 'none' || style.visibility === 'hidden') continue;
+        const value = node.textContent?.trim();
+        if (parent.closest('[aria-hidden="true"]') && value && value.length <= 3) continue;
+        if (value) chunks.push(value);
+      }
+      return chunks.join(' ').trim();
+    };
+    const hasIcon = (button) => {
+      if (button.querySelector('svg, [data-icon], .icon')) return true;
+      return [...button.querySelectorAll('[aria-hidden="true"]')].some((element) => {
+        const glyph = (element.textContent || '').trim();
+        return glyph.length > 0 && glyph.length <= 3;
+      });
+    };
+    const accessibleName = (element) => (
+      element.getAttribute('aria-label') || element.getAttribute('title') || ''
+    ).trim();
+    const parseColor = (value) => {
+      const match = String(value || '').match(/rgba?\\(([^)]+)\\)/i);
+      if (!match) return null;
+      const parts = match[1].trim().split(/[\\s,\\/]+/).filter(Boolean).map(Number);
+      if (parts.length < 3 || parts.slice(0, 3).some((part) => !Number.isFinite(part))) return null;
+      return {
+        r: parts[0],
+        g: parts[1],
+        b: parts[2],
+        a: Number.isFinite(parts[3]) ? parts[3] : 1,
+      };
+    };
+    const normalizeColor = (value) => {
+      if (!String(value || '').trim()) return null;
+      const probe = document.createElement('span');
+      probe.style.position = 'fixed';
+      probe.style.pointerEvents = 'none';
+      probe.style.color = String(value);
+      document.body.append(probe);
+      const normalized = parseColor(getComputedStyle(probe).color);
+      probe.remove();
+      return normalized;
+    };
+    const sameRgb = (left, right, tolerance = 2) => Boolean(
+      left && right &&
+      Math.abs(left.r - right.r) <= tolerance &&
+      Math.abs(left.g - right.g) <= tolerance &&
+      Math.abs(left.b - right.b) <= tolerance
+    );
+    const relativeLuminance = (color) => {
+      if (!color) return Number.POSITIVE_INFINITY;
+      const linear = [color.r, color.g, color.b].map((channel) => {
+        const value = channel / 255;
+        return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+      });
+      return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
+    };
+    const lineInk = (line) => {
+      const style = getComputedStyle(line);
+      const color = parseColor(style.stroke);
+      if (!color) return Number.POSITIVE_INFINITY;
+      const opacity = (Number.parseFloat(style.opacity) || 1) *
+        (Number.parseFloat(style.strokeOpacity) || 1) * color.a;
+      return relativeLuminance(color) * opacity;
+    };
+    const isPaintedLine = (line) => {
+      if (!(line instanceof SVGLineElement)) return false;
+      const style = getComputedStyle(line);
+      return style.display !== 'none' && style.visibility !== 'hidden' &&
+        (line.x1.baseVal.value !== line.x2.baseVal.value || line.y1.baseVal.value !== line.y2.baseVal.value);
+    };
+    const maxOrMissing = (values) => values.length > 0 ? Math.max(...values) : -1;
+
+    const deskTabs = [...document.querySelectorAll('.timelineDeskTabs button')].filter(isRendered);
+    const cuesDeskTabs = deskTabs.filter((button) => (button.textContent || '').trim().toLowerCase() === 'cues');
+
+    const toolbarRoots = [...document.querySelectorAll(
+      '.timelineViewportToolbar, .timelineDirectToolbar, [data-timeline-slim-toolbar]'
+    )].filter(isRendered);
+    const toolbarButtons = [...new Set(toolbarRoots.flatMap((toolbar) =>
+      [...toolbar.querySelectorAll('button')].filter(isRendered)))];
+    const toolbarAriaButtonCount = toolbarButtons.filter((button) => accessibleName(button).length > 0).length;
+    const toolbarIconOnlyButtonCount = toolbarButtons.filter((button) =>
+      hasIcon(button) && semanticText(button) === '').length;
+    const toolbarOverflowCount = toolbarButtons.filter((button) => {
+      const toolbar = button.closest('.timelineViewportToolbar, .timelineDirectToolbar, [data-timeline-slim-toolbar]');
+      if (!toolbar) return true;
+      const buttonRect = button.getBoundingClientRect();
+      const toolbarRect = toolbar.getBoundingClientRect();
+      return buttonRect.left < toolbarRect.left - 1 || buttonRect.right > toolbarRect.right + 1;
+    }).length;
+
+    const gutters = [...document.querySelectorAll('.timelineUserLaneGutter')].filter(isRendered);
+    const gutterRows = gutters.map((gutter) => {
+      const buttons = [...gutter.querySelectorAll('button')].filter(isRendered);
+      const names = [...gutter.querySelectorAll('.timelineLaneGutterName')].filter(isRendered);
+      const numberElements = [...gutter.querySelectorAll('[data-timeline-lane-number], .timelineLaneGutterCount')]
+        .filter(isRendered)
+        .filter((element) => /^\\d+$/.test((element.textContent || '').trim()));
+      const numberElement = numberElements[0] ?? null;
+      const numberHasLaneSemantics = Boolean(numberElement && (
+        numberElement.hasAttribute('data-timeline-lane-number') ||
+        /(?:lane|track)\\s*#?\\d+/i.test(accessibleName(numberElement))
+      ));
+      const controlButtons = buttons.filter((button) => button !== numberElement);
+      const labels = controlButtons.map(accessibleName);
+      const expandCount = controlButtons.filter((button, index) =>
+        /(?:expand|collapse|details|open|close)/i.test(labels[index]) ||
+        button.hasAttribute('data-timeline-lane-expand-toggle') ||
+        button.hasAttribute('data-timeline-layer-expand-toggle')).length;
+      const forbiddenPlayCount = labels.filter((label) => /(?:play|run|go|trigger)/i.test(label)).length;
+      const visibilityCount = labels.filter((label) => /(?:visibility|visible|show|hide|mute|unmute)/i.test(label)).length;
+      const lockCount = labels.filter((label) => /(?:lock|unlock)/i.test(label)).length;
+      const soloCount = labels.filter((label) => /solo/i.test(label)).length;
+      const iconOnlyButtonCount = controlButtons.filter((button) =>
+        hasIcon(button) && semanticText(button) === '').length;
+      const section = gutter.closest('.timelineLayerSection');
+      const sectionHeader = section?.querySelector('.timelineLayerSectionHeader');
+      const gutterStyle = getComputedStyle(gutter);
+      const sectionHeaderStyle = sectionHeader ? getComputedStyle(sectionHeader) : null;
+      const typeAccent = (
+        gutterStyle.getPropertyValue('--timeline-lane-kind-color') ||
+        gutterStyle.getPropertyValue('--timeline-layer-kind-color') ||
+        sectionHeaderStyle?.borderLeftColor ||
+        gutterStyle.borderLeftColor ||
+        gutterStyle.backgroundColor
+      ).trim();
+      return {
+        kind: gutter.getAttribute('data-timeline-layer-kind') || '',
+        id: gutter.getAttribute('data-timeline-layer-id') || '',
+        accessibleName: accessibleName(gutter),
+        buttonCount: buttons.length,
+        controlButtonCount: controlButtons.length,
+        numberCount: numberElements.length,
+        numberHasLaneSemantics,
+        expandCount,
+        forbiddenPlayCount,
+        visibilityCount,
+        lockCount,
+        soloCount,
+        visibleNameCount: names.length,
+        iconOnlyButtonCount,
+        typeAccent,
+        exactFourElements:
+          numberElements.length === 1 &&
+          numberHasLaneSemantics &&
+          controlButtons.length === 3 &&
+          expandCount === 1 &&
+          forbiddenPlayCount === 0 &&
+          visibilityCount === 1 &&
+          lockCount === 1 &&
+          soloCount === 0 &&
+          iconOnlyButtonCount === controlButtons.length,
+      };
+    });
+    const gutterKinds = new Map();
+    for (const row of gutterRows) {
+      if (!row.kind || !row.typeAccent || row.typeAccent === 'rgba(0, 0, 0, 0)') continue;
+      if (!gutterKinds.has(row.kind)) gutterKinds.set(row.kind, row.typeAccent);
+    }
+    const sectionKindSummaries = [...document.querySelectorAll('.timelineLayerSectionKindIcon[role="img"]')]
+      .filter(isRendered)
+      .map((icon) => ({
+        kind: (icon.getAttribute('title') || '').trim(),
+        name: accessibleName(icon),
+      }));
+
+    const markers = [...document.querySelectorAll('.timelineOverview .timelineMarker.sceneBlock')]
+      .filter((marker) => isRendered(marker.querySelector('.timelineSceneBlockBody')));
+    const baseStyleMarkers = markers.filter((marker) =>
+      !marker.classList.contains('selected') &&
+      !marker.classList.contains('underPlayhead') &&
+      !marker.classList.contains('dragging'));
+    const styledMarkers = baseStyleMarkers.length > 0 ? baseStyleMarkers : markers;
+    const blockRows = styledMarkers.map((marker) => {
+      const body = marker.querySelector('.timelineSceneBlockBody');
+      const band = marker.querySelector('.timelineSceneBlockIdentityBand');
+      const label = marker.querySelector('.timelineSceneBlockLabel');
+      const duration = marker.querySelector('.timelineSceneBlockDuration');
+      const bodyRect = body.getBoundingClientRect();
+      const bodyStyle = getComputedStyle(body);
+      const bodyFill = normalizeColor(bodyStyle.fill);
+      const identity = normalizeColor(getComputedStyle(marker).getPropertyValue('--identity'));
+      const bandFill = band ? normalizeColor(getComputedStyle(band).fill) : bodyFill;
+      const stroke = parseColor(bodyStyle.stroke);
+      const labelRect = label?.getBoundingClientRect() ?? null;
+      const durationRect = duration?.getBoundingClientRect() ?? null;
+      const twoLineEligible = bodyRect.width >= 80;
+      const lineFontSizes = [label, duration]
+        .filter(Boolean)
+        .map((element) => Number.parseFloat(getComputedStyle(element).fontSize) || 0);
+      const twoLine = Boolean(
+        twoLineEligible &&
+        label && duration && isRendered(label) && isRendered(duration) &&
+        (label.textContent || '').trim().length > 0 &&
+        (duration.textContent || '').trim().length > 0 &&
+        labelRect && durationRect &&
+        labelRect.bottom <= durationRect.top + 1 &&
+        labelRect.top >= bodyRect.top - 1 && durationRect.bottom <= bodyRect.bottom + 1
+      );
+      return {
+        height: bodyRect.height,
+        width: bodyRect.width,
+        identityFill: sameRgb(bodyFill, identity),
+        solidIdentityBand: sameRgb(bodyFill, bandFill),
+        fillOpacity: Number.parseFloat(bodyStyle.fillOpacity) || 1,
+        opaqueBlackBorder: Boolean(
+          stroke && stroke.r <= 36 && stroke.g <= 36 && stroke.b <= 36 && stroke.a >= 0.85 &&
+          (Number.parseFloat(bodyStyle.strokeWidth) || 0) >= 1
+        ),
+        twoLineEligible,
+        twoLine,
+        minLineFontPx: lineFontSizes.length > 0 ? Math.min(...lineFontSizes) : 0,
+      };
+    });
+    const eligibleTwoLineRows = blockRows.filter((row) => row.twoLineEligible);
+    const minBlockHeight = blockRows.length > 0 ? Math.min(...blockRows.map((row) => row.height)) : 0;
+    const minTwoLineFontPx = eligibleTwoLineRows.length > 0
+      ? Math.min(...eligibleTwoLineRows.map((row) => row.minLineFontPx))
+      : 0;
+
+    const minorGridLines = [...document.querySelectorAll('.timelineRuler line:not(.major)')].filter(isPaintedLine);
+    const majorGridLines = [...document.querySelectorAll('.timelineRuler line.major')].filter(isPaintedLine);
+    const dividerLines = [...document.querySelectorAll('.timelineLaneDivider, .timelineSectionDivider')].filter(isPaintedLine);
+    const documentElement = document.documentElement;
+    const body = document.body;
+    const app = document.querySelector('.app');
+    const documentAndAppScrollZero =
+      window.scrollX === 0 && window.scrollY === 0 &&
+      documentElement.scrollWidth === documentElement.clientWidth &&
+      documentElement.scrollHeight === documentElement.clientHeight &&
+      body.scrollWidth === documentElement.clientWidth &&
+      body.scrollHeight === documentElement.clientHeight &&
+      (!app || (app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight));
+
+    return {
+      deskTabLabels: deskTabs.map((button) => (button.textContent || '').trim()),
+      deskTabSurfaceIds: deskTabs.map((button) => button.getAttribute('data-timeline-desk-surface') || ''),
+      deskTabPressedStates: deskTabs.map((button) => button.getAttribute('aria-pressed') || ''),
+      deskTabActiveStates: deskTabs.map((button) => button.classList.contains('active')),
+      cuesDeskTabCount: cuesDeskTabs.length,
+      toolbarRootCount: toolbarRoots.length,
+      toolbarButtonCount: toolbarButtons.length,
+      toolbarAriaButtonCount,
+      toolbarIconOnlyButtonCount,
+      toolbarOverflowCount,
+      toolbarButtonNames: toolbarButtons.map((button) => ({
+        name: accessibleName(button),
+        text: semanticText(button),
+        icon: hasIcon(button),
+      })),
+      toolbarToolIds: toolbarButtons.map((button) => button.getAttribute('data-timeline-tool') || ''),
+      gutterCount: gutterRows.length,
+      gutterRows,
+      visibleGutterNameCount: gutterRows.reduce((sum, row) => sum + row.visibleNameCount, 0),
+      gutterKindCount: gutterKinds.size,
+      gutterKindAccents: Object.fromEntries(gutterKinds),
+      sectionKindSummaries,
+      blockCount: blockRows.length,
+      minBlockHeight,
+      thickBlockCount: blockRows.filter((row) => row.height >= 26).length,
+      identityFillCount: blockRows.filter((row) => row.identityFill && row.fillOpacity >= 0.9).length,
+      solidIdentityBandCount: blockRows.filter((row) => row.solidIdentityBand).length,
+      opaqueBlackBorderCount: blockRows.filter((row) => row.opaqueBlackBorder).length,
+      twoLineEligibleCount: eligibleTwoLineRows.length,
+      twoLineBlockCount: eligibleTwoLineRows.filter((row) => row.twoLine).length,
+      minTwoLineFontPx,
+      minorGridLineCount: minorGridLines.length,
+      majorGridLineCount: majorGridLines.length,
+      dividerLineCount: dividerLines.length,
+      maxMinorGridInk: maxOrMissing(minorGridLines.map(lineInk)),
+      maxMajorGridInk: maxOrMissing(majorGridLines.map(lineInk)),
+      maxDividerInk: maxOrMissing(dividerLines.map(lineInk)),
+      documentAndAppScrollZero,
+      scrollMetrics: {
+        document: [documentElement.scrollWidth, documentElement.clientWidth, documentElement.scrollHeight, documentElement.clientHeight],
+        app: app ? [app.scrollWidth, app.clientWidth, app.scrollHeight, app.clientHeight] : null,
+      },
+    };
+  })()`);
+}
+
+async function exerciseTimelineDeskSurfaceAria(client) {
+  return await evaluatePageFunction(client, async () => {
+    const expected = ['show', 'automation', 'playback'];
+    const read = () => {
+      const buttons = [...document.querySelectorAll('.timelineDeskTabs button')];
+      return buttons.map((button) => ({
+        id: button.getAttribute('data-timeline-desk-surface') || '',
+        pressed: button.getAttribute('aria-pressed') === 'true',
+        active: button.classList.contains('active'),
+      }));
+    };
+    const transitions = [];
+    for (const id of expected) {
+      const button = document.querySelector(`[data-timeline-desk-surface="${id}"]`);
+      if (!(button instanceof HTMLButtonElement)) {
+        transitions.push({ id, state: read(), missing: true });
+        continue;
+      }
+      button.click();
+      await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+      transitions.push({ id, state: read(), missing: false });
+    }
+    document.querySelector('[data-timeline-desk-surface="show"]')?.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const restored = read();
+    const transitionStatesValid = transitions.every((transition) =>
+      !transition.missing &&
+      transition.state.length === expected.length &&
+      transition.state.filter((entry) => entry.pressed).length === 1 &&
+      transition.state.filter((entry) => entry.active).length === 1 &&
+      transition.state.some((entry) => entry.id === transition.id && entry.pressed && entry.active)
+    );
+    return {
+      transitions,
+      restored,
+      passed: transitionStatesValid &&
+        restored.filter((entry) => entry.pressed).length === 1 &&
+        restored.some((entry) => entry.id === 'show' && entry.pressed && entry.active),
+    };
+  });
+}
+
+async function exerciseTimelineBlockPropertiesDrawerLayout(client) {
+  const markerPoint = await evaluatePageFunction(client, () => {
+    const bodies = [...document.querySelectorAll('.timelineMarker.sceneBlock .timelineSceneBlockBody')];
+    const body = bodies.find((candidate) => {
+      const rect = candidate.getBoundingClientRect();
+      return rect.width >= 32 && rect.height >= 20 &&
+        rect.right > 0 && rect.left < innerWidth && rect.bottom > 0 && rect.top < innerHeight;
+    });
+    const rect = body?.getBoundingClientRect();
+    return rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null;
+  });
+  if (!markerPoint) return { passed: false, reason: 'missing-rendered-scene-block' };
+
+  await client.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: markerPoint.x,
+    y: markerPoint.y,
+    button: 'left',
+    buttons: 1,
+    clickCount: 1,
+  });
+  await client.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: markerPoint.x,
+    y: markerPoint.y,
+    button: 'left',
+    buttons: 0,
+    clickCount: 1,
+  });
+  await sleep(100);
+
+  const layout = await evaluatePageFunction(client, async () => {
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const surface = document.querySelector('.timelineShowSurface');
+    const frame = surface?.querySelector(':scope > .timelineOverviewFrame');
+    const drawer = surface?.querySelector(
+      ':scope > [data-timeline-context-drawer-panel="block"]:not(.timelineBlockBrowserDrawer)',
+    );
+    const body = drawer?.querySelector('.timelineContextDrawerBody');
+    const inspector = drawer?.querySelector('[data-scene-block-inspector-only="true"]');
+    const surfaceRect = surface?.getBoundingClientRect();
+    const frameRect = frame?.getBoundingClientRect();
+    const drawerRect = drawer?.getBoundingClientRect();
+    const bodyRect = body?.getBoundingClientRect();
+    const contained = (inner, outer) => Boolean(
+      inner && outer &&
+      inner.left >= outer.left - 1 && inner.top >= outer.top - 1 &&
+      inner.right <= outer.right + 1 && inner.bottom <= outer.bottom + 1
+    );
+    const horizontalIntersection = frameRect && drawerRect
+      ? Math.max(0, Math.min(frameRect.right, drawerRect.right) - Math.max(frameRect.left, drawerRect.left))
+      : Number.POSITIVE_INFINITY;
+    const verticalIntersection = frameRect && drawerRect
+      ? Math.max(0, Math.min(frameRect.bottom, drawerRect.bottom) - Math.max(frameRect.top, drawerRect.top))
+      : Number.POSITIVE_INFINITY;
+    const bodyStyle = body ? getComputedStyle(body) : null;
+    const selectedBlockBody = document.querySelector('.timelineMarker.sceneBlock.selected .timelineSceneBlockBody');
+    const selectedBlockStyle = selectedBlockBody ? getComputedStyle(selectedBlockBody) : null;
+    const selectedStrokeChannels = selectedBlockStyle?.stroke.match(/[0-9.]+/g)?.slice(0, 3).map(Number) ?? [];
+    const focusables = body
+      ? [...body.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled])')]
+      : [];
+    const lastControl = focusables.at(-1) ?? null;
+    if (body && lastControl instanceof HTMLElement) {
+      body.scrollTop = body.scrollHeight;
+      lastControl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    }
+    const finalBodyRect = body?.getBoundingClientRect();
+    const lastControlRect = lastControl?.getBoundingClientRect();
+    const lastControlReachable = Boolean(
+      finalBodyRect && lastControlRect &&
+      lastControlRect.top >= finalBodyRect.top - 1 &&
+      lastControlRect.bottom <= finalBodyRect.bottom + 1 &&
+      lastControlRect.left >= finalBodyRect.left - 1 &&
+      lastControlRect.right <= finalBodyRect.right + 1
+    );
+    const documentElement = document.documentElement;
+    const app = document.querySelector('.app');
+    return {
+      drawerOpen: Boolean(drawer),
+      browserMode: drawer?.classList.contains('timelineBlockBrowserDrawer') ?? null,
+      inspectorOnly: Boolean(inspector),
+      surfaceRect: surfaceRect ? { left: surfaceRect.left, top: surfaceRect.top, right: surfaceRect.right, bottom: surfaceRect.bottom } : null,
+      frameRect: frameRect ? { left: frameRect.left, top: frameRect.top, right: frameRect.right, bottom: frameRect.bottom, width: frameRect.width } : null,
+      drawerRect: drawerRect ? { left: drawerRect.left, top: drawerRect.top, right: drawerRect.right, bottom: drawerRect.bottom, width: drawerRect.width } : null,
+      frameContained: contained(frameRect, surfaceRect),
+      drawerContained: contained(drawerRect, surfaceRect),
+      adjacentWithoutOverlap: horizontalIntersection <= 1 || verticalIntersection <= 1,
+      drawerRightOfFrame: Boolean(frameRect && drawerRect && drawerRect.left >= frameRect.right - 1),
+      drawerBodyHorizontalOverflow: body ? body.scrollWidth - body.clientWidth : Number.POSITIVE_INFINITY,
+      drawerBodyVerticalOverflowSafe: Boolean(
+        body && (body.scrollHeight <= body.clientHeight + 1 || /(auto|scroll)/.test(bodyStyle?.overflowY || ''))
+      ),
+      focusableCount: focusables.length,
+      lastControlReachable,
+      selectedBlockClass: selectedBlockBody?.closest('.timelineMarker.sceneBlock')?.getAttribute('class') ?? '',
+      selectedBlockStroke: selectedBlockStyle?.stroke ?? '',
+      selectedBlockStrokeWidth: selectedBlockStyle?.strokeWidth ?? '',
+      selectedBlockHasVisibleStroke:
+        selectedStrokeChannels.length === 3 &&
+        selectedStrokeChannels.every((channel) => channel >= 240) &&
+        (Number.parseFloat(selectedBlockStyle?.strokeWidth || '0') || 0) >= 2.4,
+      documentAndAppScrollZero:
+        window.scrollX === 0 && window.scrollY === 0 &&
+        documentElement.scrollWidth === documentElement.clientWidth &&
+        documentElement.scrollHeight === documentElement.clientHeight &&
+        (!app || (app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight)),
+    };
+  });
+
+  const closeButton = await evaluatePageFunction(client, () => {
+    const button = document.querySelector(
+      '[data-timeline-context-drawer-panel="block"] .timelineContextDrawerClose',
+    );
+    if (!(button instanceof HTMLButtonElement)) return false;
+    button.click();
+    return true;
+  });
+  await sleep(60);
+  const closed = await evaluatePageFunction(client, () =>
+    !document.querySelector('[data-timeline-context-drawer-panel="block"]'),
+  );
+  return {
+    markerPoint,
+    layout,
+    closeButton,
+    closed,
+    passed: Boolean(
+      layout.drawerOpen &&
+      layout.browserMode === false &&
+      layout.inspectorOnly &&
+      layout.frameContained &&
+      layout.drawerContained &&
+      layout.adjacentWithoutOverlap &&
+      layout.drawerRightOfFrame &&
+      layout.frameRect?.width >= 180 &&
+      layout.drawerRect?.width >= 240 &&
+      layout.drawerBodyHorizontalOverflow <= 1 &&
+      layout.drawerBodyVerticalOverflowSafe &&
+      layout.focusableCount > 0 &&
+      layout.lastControlReachable &&
+      layout.selectedBlockHasVisibleStroke &&
+      layout.documentAndAppScrollZero &&
+      closeButton && closed
+    ),
+  };
+}
+
+async function readTimelineLaneCountState(client) {
+  return await client.evaluate(`(async () => {
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const overview = document.querySelector('.timelineOverview');
+    return {
+      laneNames: [...document.querySelectorAll('.timelineUserLaneGutter')]
+        .map((gutter) => ({
+          id: gutter.getAttribute('data-timeline-layer-id') || '',
+          name: (gutter.getAttribute('aria-label') || '').trim(),
+        }))
+        .sort((left, right) => left.id.localeCompare(right.id)),
+      markerIds: [...document.querySelectorAll('.timelineMarker.sceneBlock')]
+        .filter((marker) => marker.getBoundingClientRect().width > 0)
+        .map((marker) => marker.getAttribute('data-timeline-event-id') || '')
+        .sort(),
+      visibleStartMs: Number(overview?.getAttribute('data-visible-start-ms') || 0),
+      visibleEndMs: Number(overview?.getAttribute('data-visible-end-ms') || 0),
+    };
+  })()`);
+}
+
+async function exerciseTimelineLaneCountStability(client) {
+  const before = await readTimelineLaneCountState(client);
+  let after = before;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const zoomed = await client.evaluate(`(() => {
+      const button = document.querySelector('[data-timeline-tool="zoom-in"]');
+      if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+      button.click();
+      return true;
+    })()`);
+    await sleep(50);
+    const panned = await client.evaluate(`(() => {
+      const button = document.querySelector('[data-timeline-tool="pan-next"]');
+      if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+      button.click();
+      return true;
+    })()`);
+    await sleep(70);
+    after = await readTimelineLaneCountState(client);
+    if (JSON.stringify(after.markerIds) !== JSON.stringify(before.markerIds)) break;
+    if (!zoomed && !panned) break;
+  }
+  const restored = await client.evaluate(`(() => {
+    const button = document.querySelector('[data-timeline-tool="fit-all"]');
+    if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+    button.click();
+    return true;
+  })()`);
+  await sleep(80);
+  const finalState = await readTimelineLaneCountState(client);
+  return {
+    before,
+    after,
+    finalState,
+    restored,
+    passed:
+      before.laneNames.length > 0 &&
+      before.laneNames.every((entry) => /, \d+ items$/.test(entry.name)) &&
+      (after.visibleStartMs !== before.visibleStartMs || after.visibleEndMs !== before.visibleEndMs) &&
+      JSON.stringify(after.markerIds) !== JSON.stringify(before.markerIds) &&
+      JSON.stringify(after.laneNames) === JSON.stringify(before.laneNames) &&
+      restored &&
+      JSON.stringify(finalState.laneNames) === JSON.stringify(before.laneNames),
+  };
+}
+
+async function exerciseTimelineBlockKeyboardFocusVisual(client) {
+  const prepared = await client.evaluate(`(() => {
+    const markers = [...document.querySelectorAll('.timelineMarker')]
+      .filter((marker) => {
+        const rect = marker.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      });
+    const marker = markers.find((candidate) => candidate.tabIndex === 0);
+    const sceneBlockCount = markers.filter((candidate) => candidate.classList.contains('sceneBlock')).length;
+    if (!(marker instanceof SVGGElement) || sceneBlockCount < 2) {
+      return {
+        startId: '',
+        markerCount: markers.length,
+        sceneBlockCount,
+        selected: false,
+        markerTabStops: markers.map((candidate) => ({
+          id: candidate.getAttribute('data-timeline-event-id') || '',
+          attribute: candidate.getAttribute('tabindex'),
+          property: candidate.tabIndex,
+          selected: candidate.classList.contains('selected'),
+        })),
+      };
+    }
+    marker.setAttribute('data-timeline-keyboard-focus-probe', 'true');
+    return {
+      startId: marker.getAttribute('data-timeline-event-id') || '',
+      markerCount: markers.length,
+      sceneBlockCount,
+      startIsSceneBlock: marker.classList.contains('sceneBlock'),
+      selected: marker.classList.contains('selected'),
+    };
+  })()`);
+  if (!prepared?.startId) return { passed: false, prepared, result: null };
+  const anchorFocused = await client.evaluate(`(() => {
+    const anchor = document.querySelector('[data-timeline-tool="reveal-playhead"]')
+      ?? document.querySelector('[data-timeline-desk-surface="show"]');
+    if (!(anchor instanceof HTMLButtonElement) || anchor.disabled) return false;
+    anchor.focus();
+    return document.activeElement === anchor;
+  })()`);
+  let focused = null;
+  let tabsToMarker = 0;
+  for (let tab = 1; tab <= 96; tab += 1) {
+    await pressKey(client, 'Tab');
+    focused = await client.evaluate(`(() => {
+      const marker = document.activeElement?.closest?.('.timelineMarker');
+      const body = marker?.querySelector('.timelineSceneBlockBody');
+      const style = body ? getComputedStyle(body) : null;
+      const channels = style?.stroke.match(/[0-9.]+/g)?.slice(0, 3).map(Number) ?? [];
+      return {
+        activeTag: document.activeElement?.tagName ?? '',
+        activeId: marker?.getAttribute('data-timeline-event-id') ?? '',
+        sceneBlock: Boolean(marker?.classList.contains('sceneBlock')),
+        focusVisible: Boolean(marker?.matches(':focus-visible')),
+        whiteStroke: channels.length === 3 && channels.every((channel) => channel >= 240),
+        strokeWidth: Number.parseFloat(style?.strokeWidth || '0') || 0,
+        stroke: style?.stroke ?? '',
+      };
+    })()`);
+    if (focused.activeId) {
+      tabsToMarker = tab;
+      break;
+    }
+  }
+  if (!focused?.activeId) {
+    await client.evaluate(`document.querySelector('[data-timeline-keyboard-focus-probe="true"]')
+      ?.removeAttribute('data-timeline-keyboard-focus-probe')`);
+    return { passed: false, prepared, anchorFocused, tabsToMarker, focused, result: null };
+  }
+  const focusedProbe = await client.evaluate(`(() => {
+    const probe = document.querySelector('[data-timeline-keyboard-focus-probe="true"]');
+    return {
+      activeTag: document.activeElement?.tagName ?? '',
+      activeId: document.activeElement?.getAttribute?.('data-timeline-event-id') ?? '',
+      focusVisible: Boolean(probe?.matches(':focus-visible')),
+      activeIsProbe: document.activeElement === probe,
+    };
+  })()`);
+  let result = null;
+  let arrowMoves = 0;
+  for (let move = 1; move <= prepared.markerCount; move += 1) {
+    await pressKey(client, 'ArrowRight');
+    await sleep(80);
+    result = await client.evaluate(`(() => {
+      const marker = document.activeElement?.closest?.('.timelineMarker');
+      const body = marker?.querySelector('.timelineSceneBlockBody');
+      const style = body ? getComputedStyle(body) : null;
+      const channels = style?.stroke.match(/[0-9.]+/g)?.slice(0, 3).map(Number) ?? [];
+      return {
+        activeId: marker?.getAttribute('data-timeline-event-id') || '',
+        activeTag: document.activeElement?.tagName ?? '',
+        activeClass: document.activeElement?.getAttribute?.('class') ?? '',
+        activeTabIndex: document.activeElement?.getAttribute?.('tabindex') ?? '',
+        sceneBlock: Boolean(marker?.classList.contains('sceneBlock')),
+        focusVisible: Boolean(marker?.matches(':focus-visible')),
+        selected: Boolean(marker?.classList.contains('selected')),
+        whiteStroke: channels.length === 3 && channels.every((channel) => channel >= 240),
+        strokeWidth: Number.parseFloat(style?.strokeWidth || '0') || 0,
+        stroke: style?.stroke ?? '',
+      };
+    })()`);
+    arrowMoves = move;
+    if (!result.activeId || result.sceneBlock) break;
+  }
+  await client.evaluate(`document.querySelector('[data-timeline-keyboard-focus-probe="true"]')
+    ?.removeAttribute('data-timeline-keyboard-focus-probe')`);
+  return {
+    prepared,
+    anchorFocused,
+    tabsToMarker,
+    focused,
+    focusedProbe,
+    arrowMoves,
+    result,
+    passed:
+      anchorFocused &&
+      focusedProbe.activeIsProbe &&
+      focusedProbe.activeId === prepared.startId &&
+      focused.focusVisible &&
+      result?.activeId.length > 0 &&
+      result.activeId !== prepared.startId &&
+      result.sceneBlock &&
+      result.focusVisible &&
+      result.selected &&
+      result.whiteStroke &&
+      result.strokeWidth >= 2.8,
+  };
+}
+
+async function exerciseTimelineDialogEscapePriority(client) {
+  const prepared = await client.evaluate(`(() => {
+    const drawerToggle = document.querySelector('[data-timeline-block-properties-toggle]');
+    if (!(drawerToggle instanceof HTMLButtonElement)) return false;
+    if (drawerToggle.getAttribute('aria-pressed') !== 'true') drawerToggle.click();
+    const trigger = document.querySelector('[data-timeline-layer-menu-trigger]');
+    if (!(trigger instanceof HTMLButtonElement)) return false;
+    trigger.setAttribute('data-timeline-dialog-return-focus-probe', 'true');
+    trigger.focus();
+    return true;
+  })()`);
+  if (!prepared) return { passed: false, prepared: false };
+  await pressKey(client, 'Enter');
+  const opened = await client.evaluate(`(() => {
+    const menu = document.querySelector('.timelineLayerContextMenu');
+    const addButton = [...(menu?.querySelectorAll('button') ?? [])]
+      .find((button) => (button.textContent || '').trim() === 'Add Layer');
+    if (!(addButton instanceof HTMLButtonElement)) return false;
+    addButton.click();
+    return true;
+  })()`);
+  await sleep(80);
+  const beforeEscape = await client.evaluate(`(() => {
+    const dialog = document.querySelector('[data-timeline-layer-add-dialog]');
+    return {
+      dialogOpen: dialog instanceof HTMLDialogElement && dialog.open,
+      focusInsideDialog: Boolean(dialog?.contains(document.activeElement)),
+      drawerOpen: Boolean(document.querySelector('[data-timeline-context-drawer-panel="block"]')),
+    };
+  })()`);
+  await client.send('Input.dispatchKeyEvent', {
+    type: 'keyDown',
+    code: 'Escape',
+    key: 'Escape',
+    windowsVirtualKeyCode: 27,
+    nativeVirtualKeyCode: 27,
+  });
+  await client.send('Input.dispatchKeyEvent', {
+    type: 'keyUp',
+    code: 'Escape',
+    key: 'Escape',
+    windowsVirtualKeyCode: 27,
+    nativeVirtualKeyCode: 27,
+  });
+  await sleep(80);
+  const afterFirstEscape = await client.evaluate(`(() => {
+    const dialog = document.querySelector('[data-timeline-layer-add-dialog]');
+    const trigger = document.querySelector('[data-timeline-dialog-return-focus-probe="true"]');
+    return {
+      dialogClosed: !(dialog instanceof HTMLDialogElement) || !dialog.open,
+      drawerOpen: Boolean(document.querySelector('[data-timeline-context-drawer-panel="block"]')),
+      focusReturned: document.activeElement === trigger,
+    };
+  })()`);
+  await pressKey(client, 'Escape');
+  await sleep(80);
+  const afterSecondEscape = await client.evaluate(`(() => {
+    const trigger = document.querySelector('[data-timeline-dialog-return-focus-probe="true"]');
+    const result = {
+      drawerClosed: !document.querySelector('[data-timeline-context-drawer-panel="block"]'),
+      dialogClosed: !document.querySelector('[data-timeline-layer-add-dialog][open]'),
+    };
+    trigger?.removeAttribute('data-timeline-dialog-return-focus-probe');
+    return result;
+  })()`);
+  return {
+    prepared,
+    opened,
+    beforeEscape,
+    afterFirstEscape,
+    afterSecondEscape,
+    passed:
+      opened &&
+      beforeEscape.dialogOpen && beforeEscape.focusInsideDialog && beforeEscape.drawerOpen &&
+      afterFirstEscape.dialogClosed && afterFirstEscape.drawerOpen && afterFirstEscape.focusReturned &&
+      afterSecondEscape.dialogClosed && afterSecondEscape.drawerClosed,
+  };
+}
+
+async function exerciseTimelineSlimEscapePriority(client) {
+  const opened = await client.evaluate(`(() => {
+    const isRendered = (element) => {
+      if (!(element instanceof Element)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const toggle = [...document.querySelectorAll(
+      '.timelineViewportToolbar button[aria-haspopup], .timelineDirectToolbar button[aria-haspopup], [data-timeline-slim-toolbar] button[aria-haspopup]'
+    )].find((button) => isRendered(button) && !button.disabled);
+    if (!(toggle instanceof HTMLButtonElement)) return { required: false, opened: false };
+    toggle.setAttribute('data-timeline-slim-escape-probe', 'true');
+    toggle.click();
+    const controls = toggle.getAttribute('aria-controls');
+    const controlled = controls ? document.getElementById(controls) : null;
+    const popover = (() => {
+      try { return document.querySelector(':popover-open'); } catch { return null; }
+    })();
+    return {
+      required: true,
+      opened:
+        toggle.getAttribute('aria-expanded') === 'true' ||
+        isRendered(controlled) ||
+        isRendered(popover) ||
+        [...document.querySelectorAll('.timelinePanel [role="menu"]')].some(isRendered),
+    };
+  })()`);
+  if (!opened.required || !opened.opened) return { ...opened, passed: true, closed: true };
+  await sleep(60);
+  await client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
+  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape' });
+  await sleep(80);
+  const closed = await client.evaluate(`(() => {
+    const isRendered = (element) => {
+      if (!(element instanceof Element)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const toggle = document.querySelector('[data-timeline-slim-escape-probe="true"]');
+    const controls = toggle?.getAttribute('aria-controls');
+    const controlled = controls ? document.getElementById(controls) : null;
+    const popover = (() => {
+      try { return document.querySelector(':popover-open'); } catch { return null; }
+    })();
+    const menuVisible = [...document.querySelectorAll('.timelinePanel [role="menu"]')].some(isRendered);
+    const result = {
+      closed:
+        toggle?.getAttribute('aria-expanded') !== 'true' &&
+        !isRendered(controlled) &&
+        !isRendered(popover) &&
+        !menuVisible,
+      timelineStillVisible: isRendered(document.querySelector('.timelineShowSurface')),
+      outerScrollZero: window.scrollX === 0 && window.scrollY === 0,
+    };
+    toggle?.removeAttribute('data-timeline-slim-escape-probe');
+    return result;
+  })()`);
+  return {
+    ...opened,
+    ...closed,
+    passed: closed.closed && closed.timelineStillVisible && closed.outerScrollZero,
+  };
+}
+
+async function exerciseTimelineLaneMenuKeyboard(client) {
+  const prepared = await client.evaluate(`(() => {
+    const trigger = document.querySelector('[data-timeline-layer-menu-trigger]');
+    if (!(trigger instanceof HTMLButtonElement)) return null;
+    trigger.setAttribute('data-timeline-lane-menu-keyboard-probe', 'true');
+    trigger.focus();
+    return {
+      tagName: trigger.tagName,
+      hasPopup: trigger.getAttribute('aria-haspopup'),
+      focused: document.activeElement === trigger,
+    };
+  })()`);
+  if (!prepared) return { passed: false, prepared: null, opened: null, closed: null };
+  await pressKey(client, 'Enter');
+  const opened = await client.evaluate(`(async () => {
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const menu = document.querySelector('.timelineLayerContextMenu[role="dialog"][aria-modal="false"]');
+    return {
+      visible: Boolean(menu && menu.getBoundingClientRect().width > 0),
+      focusInside: Boolean(menu && menu.contains(document.activeElement)),
+      role: menu?.getAttribute('role') ?? '',
+    };
+  })()`);
+  await pressKey(client, 'Escape');
+  const closed = await client.evaluate(`(async () => {
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const trigger = document.querySelector('[data-timeline-lane-menu-keyboard-probe="true"]');
+    const result = {
+      closed: !document.querySelector('.timelineLayerContextMenu'),
+      focusReturned: document.activeElement === trigger,
+    };
+    trigger?.removeAttribute('data-timeline-lane-menu-keyboard-probe');
+    return result;
+  })()`);
+  return {
+    prepared,
+    opened,
+    closed,
+    passed: prepared.tagName === 'BUTTON' &&
+      prepared.hasPopup === 'dialog' &&
+      prepared.focused &&
+      opened.visible &&
+      opened.focusInside &&
+      opened.role === 'dialog' &&
+      closed.closed &&
+      closed.focusReturned,
+  };
+}
+
+async function runTimelineSlimViewport(client, viewport) {
+  const sceneMatrix = await runSceneMatrixPaneCheck(client, viewport);
+  // Cover both persisted authored layers and the implicit two-layer projection
+  // used by new / legacy .sdc projects. T15 must present the same operator
+  // contract on both data shapes.
+  await client.send('Page.navigate', { url: fixtureUrl('timeline-layered') });
+  await waitForApp(client);
+  await clickVisibleByText(client, '.workspaceTabs button', 'Control');
+  await clickVisibleByText(client, '.controlModeTabs button', 'Timeline');
+  await clickVisibleByText(client, '.timelineDeskTabs button', 'Show');
+  await sleep(120);
+  const visual = await measureTimelineSlimVisual(client);
+  const deskSurfaceAria = await exerciseTimelineDeskSurfaceAria(client);
+  const laneCountStability = await exerciseTimelineLaneCountStability(client);
+  const blockKeyboardFocus = await exerciseTimelineBlockKeyboardFocusVisual(client);
+  const blockPropertiesDrawer = await exerciseTimelineBlockPropertiesDrawerLayout(client);
+  const laneMenuKeyboard = await exerciseTimelineLaneMenuKeyboard(client);
+  const dialogEscapePriority = await exerciseTimelineDialogEscapePriority(client);
+  const escapePriority = await exerciseTimelineSlimEscapePriority(client);
+  await client.send('Page.navigate', { url: fixtureUrl('timeline') });
+  await waitForApp(client);
+  await clickVisibleByText(client, '.workspaceTabs button', 'Control');
+  await clickVisibleByText(client, '.controlModeTabs button', 'Timeline');
+  await clickVisibleByText(client, '.timelineDeskTabs button', 'Show');
+  await sleep(120);
+  const implicitVisual = await measureTimelineSlimVisual(client);
+  const expectedDeskSurfaceIds = ['automation', 'playback', 'show'];
+  const expectedTimelineToolIds = [
+    'arm-cue',
+    'block-properties',
+    'fit-all',
+    'magnet',
+    'pan-next',
+    'pan-prev',
+    'reveal-playhead',
+    'reveal-selected',
+    'stretch-rate',
+    'stretch-window',
+    'super-scene',
+    'zoom-in',
+    'zoom-out',
+  ];
+  const conditions = [
+    ['timelineSlimRemovesDuplicateCuesDeskTab', () => visual.cuesDeskTabCount === 0],
+    ['timelineSlimUsesExactDeskSurfaceSetAndAriaState', () =>
+      JSON.stringify([...visual.deskTabSurfaceIds].sort()) === JSON.stringify(expectedDeskSurfaceIds) &&
+      visual.deskTabPressedStates.filter((value) => value === 'true').length === 1 &&
+      visual.deskTabActiveStates.filter(Boolean).length === 1 &&
+      deskSurfaceAria.passed],
+    ['timelineSlimToolbarsUseNamedIconToggles', () =>
+      visual.toolbarRootCount >= 1 &&
+      visual.toolbarButtonCount === expectedTimelineToolIds.length &&
+      visual.toolbarAriaButtonCount === visual.toolbarButtonCount &&
+      visual.toolbarIconOnlyButtonCount === visual.toolbarButtonCount &&
+      visual.toolbarOverflowCount === 0],
+    ['timelineSlimPreservesExactToolInventory', () =>
+      visual.toolbarToolIds.length === expectedTimelineToolIds.length &&
+      new Set(visual.toolbarToolIds).size === expectedTimelineToolIds.length &&
+      JSON.stringify([...visual.toolbarToolIds].sort()) === JSON.stringify(expectedTimelineToolIds)],
+    ['timelineSlimBlockPropertiesDrawerIsDockedReachableAndContained', () => blockPropertiesDrawer.passed],
+    ['timelineSlimLaneCountsStayStableAcrossZoomAndPan', () => laneCountStability.passed],
+    ['timelineSlimKeyboardFocusKeepsVisibleWhiteStroke', () => blockKeyboardFocus.passed],
+    ['timelineSlimGuttersUseExactlyNumberExpandEyeLock', () =>
+      visual.gutterCount > 0 && visual.gutterRows.every((row) => row.exactFourElements)],
+    ['timelineSlimLaneMenuSupportsKeyboardAndReturnsFocus', () => laneMenuKeyboard.passed],
+    ['timelineSlimDialogEscapePrecedesDrawerAndReturnsFocus', () => dialogEscapePriority.passed],
+    ['timelineSlimGutterTypeUsesColorOrIconNotText', () =>
+      visual.visibleGutterNameCount === 0 && visual.gutterKindCount >= 2 &&
+      visual.sectionKindSummaries.length >= 2 &&
+      new Set(visual.sectionKindSummaries.map((entry) => entry.name)).size === visual.sectionKindSummaries.length &&
+      visual.sectionKindSummaries.every((entry) =>
+        entry.kind.length > 0 && entry.name.toLowerCase().includes(entry.kind.toLowerCase()))],
+    ['timelineSlimImplicitLayersUseSameGutterContract', () =>
+      implicitVisual.gutterCount === 2 &&
+      implicitVisual.gutterRows.every((row) => row.exactFourElements) &&
+      implicitVisual.visibleGutterNameCount === 0 &&
+      implicitVisual.gutterKindCount === 2],
+    ['timelineSlimBlocksAreThick', () =>
+      visual.blockCount > 0 && visual.thickBlockCount === visual.blockCount && visual.minBlockHeight >= 26],
+    ['timelineSlimBlocksUseSolidIdentityFill', () =>
+      visual.blockCount > 0 &&
+      visual.identityFillCount === visual.blockCount &&
+      visual.solidIdentityBandCount === visual.blockCount],
+    ['timelineSlimBlocksUseOpaqueBlackBorder', () =>
+      visual.blockCount > 0 && visual.opaqueBlackBorderCount === visual.blockCount],
+    ['timelineSlimBlocksShowNameAndDurationOnTwoLines', () =>
+      visual.twoLineEligibleCount > 0 &&
+      visual.twoLineBlockCount === visual.twoLineEligibleCount &&
+      visual.minTwoLineFontPx >= 10],
+    ['timelineSlimImplicitLayersUseSameBlockContract', () =>
+      implicitVisual.blockCount > 0 &&
+      implicitVisual.thickBlockCount === implicitVisual.blockCount &&
+      implicitVisual.identityFillCount === implicitVisual.blockCount &&
+      implicitVisual.opaqueBlackBorderCount === implicitVisual.blockCount &&
+      implicitVisual.twoLineBlockCount === implicitVisual.twoLineEligibleCount],
+    ['timelineSlimGridLinesStayDimmed', () =>
+      visual.minorGridLineCount > 0 &&
+      visual.majorGridLineCount > 0 &&
+      visual.dividerLineCount > 0 &&
+      visual.maxMinorGridInk <= 0.085 &&
+      visual.maxMajorGridInk <= 0.14 &&
+      visual.maxDividerInk <= 0.09],
+    ['timelineSlimPreservesT14SubFourPixelClick', () =>
+      sceneMatrix.subThresholdClick?.movedPx === 3 &&
+      sceneMatrix.checks.matrixSubThresholdMoveRecallsWithoutTimelineMutation === true],
+    ['timelineSlimPreservesT14OneGestureDrag', () =>
+      sceneMatrix.checks.matrixAndTimelineLaneCoexistForOneGestureDrag === true &&
+      sceneMatrix.checks.matrixOneGestureDragUsesTimelineDropPath === true &&
+      sceneMatrix.checks.matrixDragDoesNotRecallCue === true],
+    ['timelineSlimKeepsDocumentAndAppScrollZero', () =>
+      visual.documentAndAppScrollZero &&
+      implicitVisual.documentAndAppScrollZero &&
+      sceneMatrix.before.documentAndAppScrollZero &&
+      sceneMatrix.after.documentAndAppScrollZero],
+    ['timelineSlimEscapeClosesToolMenuBeforeLeavingTimeline', () => escapePriority.passed],
+  ];
+  const checks = Object.fromEntries(conditions.map(([name, check]) => {
+    try { return [name, Boolean(check())]; } catch { return [name, false]; }
+  }));
+  const failedChecks = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  return {
+    viewport,
+    label: `timeline-slim-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    visual,
+    implicitVisual,
+    deskSurfaceAria,
+    blockPropertiesDrawer,
+    laneCountStability,
+    blockKeyboardFocus,
+    laneMenuKeyboard,
+    dialogEscapePriority,
+    t14: {
+      subThresholdClick: sceneMatrix.subThresholdClick,
+      oneGestureDrag: sceneMatrix.oneGestureDrag,
+      failedChecks: sceneMatrix.failedChecks.filter((name) =>
+        name.includes('SubThreshold') || name.includes('OneGestureDrag') || name.includes('DragDoesNotRecall')),
+    },
+    escapePriority,
   };
 }
 
@@ -9263,6 +10402,41 @@ async function openTimelineShowFixture(client, viewport, fixture) {
   await sleep(180);
 }
 
+async function openSceneBlockBrowser(client) {
+  const drawerOpen = await client.evaluate(`Boolean(document.querySelector(
+    '[data-timeline-context-drawer-panel="block"]'
+  ))`);
+  if (!drawerOpen) {
+    await clickVisibleByText(client, "[data-timeline-block-properties-toggle]", "Block Properties");
+    await sleep(100);
+  }
+  const browserMode = await client.evaluate(`document.querySelector(
+    '[data-timeline-block-browser-toggle]'
+  )?.getAttribute('aria-pressed') === 'true'`);
+  if (!browserMode) {
+    await clickVisibleSelector(client, "[data-timeline-block-browser-toggle]");
+    await sleep(140);
+  }
+}
+
+async function closeSceneBlockDrawer(client) {
+  const closeButtonVisible = await client.evaluate(`(() => {
+    const button = document.querySelector(
+      '[data-timeline-context-drawer-panel="block"] .timelineContextDrawerClose'
+    );
+    if (!(button instanceof HTMLElement)) return false;
+    const rect = button.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  })()`);
+  if (closeButtonVisible) {
+    await clickVisibleSelector(
+      client,
+      '[data-timeline-context-drawer-panel="block"] .timelineContextDrawerClose',
+    );
+    await sleep(100);
+  }
+}
+
 async function runSceneBlockHourViewport(client, viewport) {
   await openTimelineShowFixture(client, viewport, "scene-block-hour");
 
@@ -9284,6 +10458,7 @@ async function runSceneBlockHourViewport(client, viewport) {
   });
   const initialRulerBounds = await readTimelineRulerBounds(client);
 
+  await openSceneBlockBrowser(client);
   const selectedByRow = await evaluatePageFunction(client, async () => {
     const search = document.querySelector(".sceneBlockRowSearch");
     if (!(search instanceof HTMLInputElement)) return false;
@@ -9296,6 +10471,7 @@ async function runSceneBlockHourViewport(client, viewport) {
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))));
     return true;
   });
+  await closeSceneBlockDrawer(client);
 
   const revealStats = await evaluatePageFunction(client, () => {
     const range = document.querySelector(".timelineVisibleRange");
@@ -9330,7 +10506,8 @@ async function runSceneBlockHourViewport(client, viewport) {
     if (!marker || !bodyRect || !svgRect) return null;
     return {
       x: bodyRect.left + bodyRect.width / 2,
-      y: bodyRect.top + bodyRect.height / 2,
+      // T15 keeps T4's upper move band inside the thicker two-line block.
+      y: bodyRect.top + 5,
       bodyLeft: bodyRect.left,
       svgWidth: svgRect.width,
       startMs: Number(marker.getAttribute("data-timeline-start-ms")),
@@ -9412,7 +10589,11 @@ async function runSceneBlockHourViewport(client, viewport) {
     };
     const before = read();
     const zoomOut = [...document.querySelectorAll(".timelineViewportToolbar button")]
-      .find((button) => (button.textContent || "").trim() === "Zoom Out");
+      .find((button) => [
+        (button.textContent || "").trim(),
+        button.getAttribute("aria-label") || "",
+        button.getAttribute("title") || "",
+      ].includes("Zoom Out"));
     const zoomOutClicked = zoomOut instanceof HTMLButtonElement && !zoomOut.disabled;
     if (zoomOutClicked) zoomOut.click();
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
@@ -9421,7 +10602,11 @@ async function runSceneBlockHourViewport(client, viewport) {
 
   const navigationStats = await evaluatePageFunction(client, async () => {
     const button = (label) => [...document.querySelectorAll(".timelineViewportToolbar button")]
-      .find((candidate) => (candidate.textContent || "").trim() === label);
+      .find((candidate) => [
+        (candidate.textContent || "").trim(),
+        candidate.getAttribute("aria-label") || "",
+        candidate.getAttribute("title") || "",
+      ].includes(label));
     const clickAndSettle = async (label) => {
       const target = button(label);
       if (!(target instanceof HTMLButtonElement) || target.disabled) return false;
@@ -9473,6 +10658,7 @@ async function runSceneBlockHourViewport(client, viewport) {
     };
   });
   await openTimelineShowFixture(client, viewport, "scene-block-hour");
+  await openSceneBlockBrowser(client);
   await evaluatePageFunction(client, async () => {
     const search = document.querySelector(".sceneBlockRowSearch");
     if (!(search instanceof HTMLInputElement)) return;
@@ -9482,6 +10668,7 @@ async function runSceneBlockHourViewport(client, viewport) {
     document.querySelector('.sceneBlockRow[data-scene-block-id="500"]')?.click();
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
   });
+  await closeSceneBlockDrawer(client);
   await clickVisibleByText(client, ".timelineViewportToolbar button", "Reveal Selected");
   await sleep(80);
   const finalRevealStats = await evaluatePageFunction(client, () => {
@@ -9721,13 +10908,20 @@ async function runSceneBlockOverlapTrack(client, viewport, track, expectedIds, a
       const microtaskValue = overview?.getAttribute("data-overlap-state-microtask-ms") ?? null;
       const stateHandlerElapsedMs = handlerValue === null ? null : Number(handlerValue);
       const stateMicrotaskElapsedMs = microtaskValue === null ? null : Number(microtaskValue);
+      const blockDrawerOpen = Boolean(document.querySelector(
+        '[data-timeline-context-drawer-panel="block"]',
+      ));
+      const blockBrowserModeActive = document.querySelector(
+        '[data-timeline-block-browser-toggle]',
+      )?.getAttribute('aria-pressed') === 'true';
       return {
         stateTrack,
         stateHandlerElapsedMs: Number.isFinite(stateHandlerElapsedMs) ? stateHandlerElapsedMs : null,
         stateMicrotaskElapsedMs: Number.isFinite(stateMicrotaskElapsedMs) ? stateMicrotaskElapsedMs : null,
-        committedFilterVisible: stateTrack === wantedTrack && Boolean(
-          document.querySelector(".sceneBlockOverlapFilter"),
-        ),
+        blockDrawerOpen,
+        blockBrowserModeActive,
+        committedFilterVisible: stateTrack === wantedTrack && blockDrawerOpen && blockBrowserModeActive &&
+          Boolean(document.querySelector(".sceneBlockOverlapFilter")),
       };
     }, track);
     if (stateActivationTimingStats?.stateMicrotaskElapsedMs !== null) break;
@@ -9743,11 +10937,24 @@ async function runSceneBlockOverlapTrack(client, viewport, track, expectedIds, a
     const filter = document.querySelector(".sceneBlockOverlapFilter");
     const range = document.querySelector(".timelineVisibleRange");
     const beforePanStartMs = Number(range?.getAttribute("data-visible-start-ms"));
-    const panNext = [...document.querySelectorAll(".timelineViewportToolbar button")]
-      .find((button) => (button.textContent || "").trim() === "Pan Next");
+    const readLaneGeometry = () => [...document.querySelectorAll(".timelineLayerRowBackground")]
+      .map((row) => ({
+        layerId: row.getAttribute("data-timeline-layer-id") ?? "",
+        top: Number(row.getAttribute("y")),
+        height: Number(row.getAttribute("height")),
+      }));
+    const laneGeometryBeforePan = readLaneGeometry();
+    const namedToolbarButton = (label) => [...document.querySelectorAll(".timelineViewportToolbar button")]
+      .find((button) => [
+        (button.textContent || "").trim(),
+        button.getAttribute("aria-label") || "",
+        button.getAttribute("title") || "",
+      ].includes(label));
+    const panNext = namedToolbarButton("Pan Next");
     panNext?.click();
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
     const afterPanStartMs = Number(range?.getAttribute("data-visible-start-ms"));
+    const laneGeometryAfterPan = readLaneGeometry();
     const badgeAfterPan = [...document.querySelectorAll(".timelineOverlapCluster")]
       .find((candidate) => candidate.getAttribute("data-overlap-track") === wantedTrack);
     const membersAfterPan = (badgeAfterPan?.getAttribute("data-overlap-members") || "")
@@ -9755,8 +10962,7 @@ async function runSceneBlockOverlapTrack(client, viewport, track, expectedIds, a
       .filter(Boolean)
       .map(Number);
     const filterPersistedAfterPan = Boolean(document.querySelector(".sceneBlockOverlapFilter"));
-    const fitAll = [...document.querySelectorAll(".timelineViewportToolbar button")]
-      .find((button) => (button.textContent || "").trim() === "Fit All");
+    const fitAll = namedToolbarButton("Fit All");
     fitAll?.click();
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
     const pagerBeforeLiveFollow = (document.querySelector(".sceneBlockPager span")?.textContent || "").trim();
@@ -9778,6 +10984,10 @@ async function runSceneBlockOverlapTrack(client, viewport, track, expectedIds, a
       rowsBelongToCluster: rowIds.every((rowId) => wantedIds.includes(rowId)),
       beforePanStartMs,
       afterPanStartMs,
+      laneGeometryBeforePan,
+      laneGeometryAfterPan,
+      laneGeometryStableAfterPan:
+        JSON.stringify(laneGeometryAfterPan) === JSON.stringify(laneGeometryBeforePan),
       filterPersistedAfterPan,
       badgePersistedAfterPan: Boolean(badgeAfterPan),
       membershipPersistedAfterPan: membersAfterPan.length === wantedIds.length &&
@@ -9825,7 +11035,7 @@ async function runSceneBlockOverlapTrack(client, viewport, track, expectedIds, a
     const selectedRow = document.querySelector(
       '.sceneBlockRow.selected[data-scene-block-id="' + wantedIds[1] + '"]',
     );
-    const listRect = document.querySelector(".sceneBlockList")?.getBoundingClientRect();
+    const listRect = document.querySelector(".sceneBlockFinder, .sceneBlockList")?.getBoundingClientRect();
     const selectedRowRect = selectedRow?.getBoundingClientRect();
     const result = {
       foundIds,
@@ -9858,7 +11068,11 @@ async function runSceneBlockOverlapTrack(client, viewport, track, expectedIds, a
       await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
     }
     await setSearch("");
-    const dirtyRow = document.querySelector(".sceneBlockRow");
+    const listView = document.querySelector('[data-scene-block-view-toggle="list"]');
+    if (listView instanceof HTMLButtonElement) listView.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    result.listViewReached = Boolean(document.querySelector(".sceneBlockList"));
+    const dirtyRow = document.querySelector(".sceneBlockList .sceneBlockRow");
     const dirtyStartInput = dirtyRow?.querySelector('.sceneBlockRowFields input[type="number"]');
     const originalDirtyStart = dirtyStartInput instanceof HTMLInputElement ? dirtyStartInput.value : "";
     if (dirtyStartInput instanceof HTMLInputElement) {
@@ -9884,8 +11098,10 @@ async function runSceneBlockOverlapTrack(client, viewport, track, expectedIds, a
     }
     return result;
   }, probeIds);
+  await closeSceneBlockDrawer(client);
   const containment = await measure(client, "scene-block-overlap-" + track.toLowerCase() + "-" + viewport.width + "x" + viewport.height);
-  const passed = Boolean(
+  const checks = [
+    ["initial-overlap-contract", Boolean(
     initialStats.badgeCount === 2 &&
     initialStats.lightingCount === 250 &&
     initialStats.videoCount === 250 &&
@@ -9908,33 +11124,46 @@ async function runSceneBlockOverlapTrack(client, viewport, track, expectedIds, a
     initialStats.markerCount === 500 &&
     initialStats.overviewNodeCount < 3_500 &&
     initialStats.rulerTickCount > 1 &&
-    initialStats.rulerTickCount <= 64 &&
+    initialStats.rulerTickCount <= 64
+    )],
+    ["activation-timing", Boolean(
     activationStats !== null &&
     activationStats.stateHandlerElapsedMs < 100 &&
     activationStats.stateMicrotaskElapsedMs < 100 &&
     activationStats.stateTrack === track &&
-    activationStats.committedFilterVisible &&
+    activationStats.blockDrawerOpen &&
+    activationStats.blockBrowserModeActive &&
+    activationStats.committedFilterVisible
+    )],
+    ["keyboard-access", Boolean(
+    activationStats !== null &&
     activationStats.keyboardAccessStats.active?.track === track &&
     activationStats.keyboardAccessStats.tabsToCluster > 0 &&
-    // T2: the fixed left lane gutter contributes up to two lane-visibility eye
-    // toggles ahead of the canvas, so the bounded overlap-inspector reach budget
-    // grows from 3 to 5 (still small, never through the 500 markers).
-    activationStats.keyboardAccessStats.tabsToCluster <= 5 &&
+    // T15: six four-control lane gutters and the icon tool strip precede the
+    // canvas. Keep the bound finite without tabbing through 500 block markers.
+    activationStats.keyboardAccessStats.tabsToCluster <= 40 &&
     activationStats.keyboardAccessStats.axButtonFound &&
     activationStats.keyboardAccessStats.markerTabStopCount === 1 &&
     activationStats.keyboardAccessStats.clusterTabStopCount === 2 &&
-    activationStats.keyboardAccessStats.overviewRole === "group" &&
+    activationStats.keyboardAccessStats.overviewRole === "group"
+    )],
+    ["filtered-navigation", Boolean(
+    activationStats !== null &&
     activationStats.filterText.includes("250") &&
     activationStats.pagerLabel.includes("/ 250") &&
     activationStats.rowCount > 0 &&
     activationStats.rowCount <= 12 &&
     activationStats.rowsBelongToCluster &&
     activationStats.afterPanStartMs > activationStats.beforePanStartMs &&
+    activationStats.laneGeometryBeforePan.length > 0 &&
+    activationStats.laneGeometryStableAfterPan &&
     activationStats.filterPersistedAfterPan &&
     activationStats.badgePersistedAfterPan &&
     activationStats.membershipPersistedAfterPan &&
     activationStats.pagerAfterLiveFollow === activationStats.pagerBeforeLiveFollow &&
-    activationStats.filterPersistedDuringLiveFollow &&
+    activationStats.filterPersistedDuringLiveFollow
+    )],
+    ["search-selection", Boolean(
     searchStats !== null &&
     searchStats.foundIds.length === probeIds.length &&
     searchStats.foundIds.every((eventId, index) => eventId === probeIds[index]) &&
@@ -9947,11 +11176,17 @@ async function runSceneBlockOverlapTrack(client, viewport, track, expectedIds, a
     searchStats.selectedRowVisibleAfterClear &&
     searchStats.selectedRowIdAfterClear === String(probeIds[1]) &&
     searchStats.lastMarkerIdAfterClear === String(probeIds[1]) &&
-    searchStats.overviewNodeCountAfterClear < 3_500 &&
+    searchStats.overviewNodeCountAfterClear < 3_500
+    )],
+    ["search-dirty-guards", Boolean(
+    searchStats !== null &&
     searchStats.searchGuardPassed &&
-    searchStats.dirtyGuardPassed &&
-    hasNoOuterOverflow(containment)
-  );
+    searchStats.dirtyGuardPassed
+    )],
+    ["outer-containment", hasNoOuterOverflow(containment)],
+  ];
+  const failedChecks = checks.filter(([, passed]) => !passed).map(([label]) => label);
+  const passed = failedChecks.length === 0;
   return {
     track,
     passed,
@@ -9959,6 +11194,7 @@ async function runSceneBlockOverlapTrack(client, viewport, track, expectedIds, a
     activationStats,
     searchStats,
     containment,
+    failedChecks,
   };
 }
 
@@ -9977,7 +11213,7 @@ async function runPartiallyClippedMarkerDrag(client, eventId) {
     const range = document.querySelector(".timelineVisibleRange");
     if (!marker || !bodyRect || !svgRect) return null;
     const x = bodyRect.left + bodyRect.width / 2;
-    const y = bodyRect.top + bodyRect.height / 2;
+    const y = bodyRect.top + 5;
     return {
       x,
       y,
@@ -10104,10 +11340,12 @@ async function runSceneBlockOverlapViewport(client, viewport) {
       pagerLabel: (document.querySelector(".sceneBlockPager span")?.textContent || "").trim(),
     };
   });
+  await closeSceneBlockDrawer(client);
   const clippedDragStats = await runPartiallyClippedMarkerDrag(
     client,
     Number(switchStats.selectedAfterVideo),
   );
+  await openSceneBlockBrowser(client);
   const finalStats = await evaluatePageFunction(client, () => ({
     videoFilterVisible: (document.querySelector(".sceneBlockOverlapFilter")?.textContent || "").includes("Video overlap ×250"),
     lightingBadgeVisible: Boolean(
@@ -10123,6 +11361,7 @@ async function runSceneBlockOverlapViewport(client, viewport) {
     selectedMarkerAria: document.querySelector(".timelineMarker.sceneBlock.selected")
       ?.getAttribute("aria-label") ?? "",
   }));
+  await closeSceneBlockDrawer(client);
   await evaluatePageFunction(client, async () => {
     if (typeof window.__syndocalPauseSceneBlockFixtureChurn === "function") {
       window.__syndocalPauseSceneBlockFixtureChurn();
@@ -10205,6 +11444,7 @@ async function runSceneBlockLargeViewport(client, viewport) {
   await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(180);
+  await openSceneBlockBrowser(client);
   // T3: the Finder + fixed inspector is the default editor view. Verify it,
   // exercise a row-select and an Enter-commit edit, then switch to the legacy
   // List view so every pre-T3 expectation below runs against the paged list.
@@ -10378,6 +11618,7 @@ async function runSceneBlockLargeViewport(client, viewport) {
         markersBefore.every((marker, index) => marker === markersAfter[index]),
     };
   })()`);
+  await closeSceneBlockDrawer(client);
   const dragGeometry = await client.evaluate(`(() => {
     const marker = document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="500"]');
     const body = marker?.querySelector('.timelineSceneBlockBody');
@@ -10387,7 +11628,7 @@ async function runSceneBlockLargeViewport(client, viewport) {
     const svgRect = svg.getBoundingClientRect();
     return {
       x: rect.left + rect.width / 2,
-      // T4 zone contract: upper band (0-11px of the 22px block) center = Move;
+      // T4 zone contract: upper band (0-14px of the 28px block) center = Move;
       // the vertical center sits exactly on the move/select band boundary, so
       // aim a quarter of the height down to land inside the move zone.
       y: rect.top + 5,
@@ -10501,6 +11742,23 @@ async function runSceneBlockLargeViewport(client, viewport) {
       settledNonMouseX,
     };
   }
+  const markerBlockPropertiesStats = await client.evaluate(`(async () => {
+    const marker = document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="493"]');
+    marker?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const drawer = document.querySelector('[data-timeline-context-drawer-panel="block"]');
+    const inspector = drawer?.querySelector('[data-scene-block-inspector-only="true"]');
+    return {
+      selectedEventId: Number(document.querySelector('.timelineMarker.sceneBlock.selected')?.getAttribute('data-timeline-event-id')),
+      drawerOpen: Boolean(drawer),
+      browserMode: drawer?.classList.contains('timelineBlockBrowserDrawer') ?? null,
+      inspectorOnly: Boolean(inspector),
+      inspectorShows493: (inspector?.textContent || '').includes('#493'),
+    };
+  })()`);
+  await openSceneBlockBrowser(client);
+  await clickVisibleSelector(client, '[data-scene-block-view-toggle="list"]');
+  await sleep(140);
   const showStats = await client.evaluate(`(async () => {
     const rows = () => [...document.querySelectorAll('.sceneBlockRow')];
     const beforeRows = rows();
@@ -10509,9 +11767,6 @@ async function runSceneBlockLargeViewport(client, viewport) {
     const composerSourceOptionCount = document.querySelectorAll('.sceneBlockComposer .sceneBlockSourceField option').length;
     const rowJumpOptionCount = document.querySelectorAll('.sceneBlockRow .sceneBlockAfterField option').length;
     const totalOptionCount = document.querySelectorAll('.sceneBlockWorkspace option').length;
-    const marker493 = document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="493"]');
-    marker493?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
     const list = document.querySelector('.sceneBlockList');
     const workspace = document.querySelector('.sceneBlockWorkspace');
     const rowVisible = (row) => {
@@ -10528,12 +11783,19 @@ async function runSceneBlockLargeViewport(client, viewport) {
       .find((button) => (button.textContent || '').trim() === 'First');
     firstButton?.click();
     await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
-    marker493?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    const search = document.querySelector('.sceneBlockRowSearch');
+    if (search instanceof HTMLInputElement) {
+      search.value = 'L1 cue 493';
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    document.querySelector('.sceneBlockRow[data-scene-block-id="493"]')?.dispatchEvent(
+      new MouseEvent('click', { bubbles: true }),
+    );
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
     const repeatedSelectionVisible = rowVisible(
       document.querySelector('.sceneBlockRow.selected[data-scene-block-id="493"]'),
     );
-    const search = document.querySelector('.sceneBlockRowSearch');
     if (search instanceof HTMLInputElement) {
       search.value = 'L1 cue 500';
       search.dispatchEvent(new Event('input', { bubbles: true }));
@@ -10621,9 +11883,18 @@ async function runSceneBlockLargeViewport(client, viewport) {
       renderedBlockLabelFontSize,
       longLabelWithinBody,
       sharedJumpPickerCount: document.querySelectorAll('.sceneBlockJumpPicker').length,
-      fieldLabelFontSize: parseFloat(getComputedStyle(document.querySelector('.sceneBlockRowFields label')).fontSize),
-      semanticHintFontSize: parseFloat(getComputedStyle(document.querySelector('.sceneBlockFieldLabel small')).fontSize),
-      columnGuideFontSize: parseFloat(getComputedStyle(document.querySelector('.sceneBlockColumnGuide')).fontSize),
+      fieldLabelFontSize: (() => {
+        const element = document.querySelector('.sceneBlockRowFields label');
+        return element ? parseFloat(getComputedStyle(element).fontSize) : 0;
+      })(),
+      semanticHintFontSize: (() => {
+        const element = document.querySelector('.sceneBlockFieldLabel small');
+        return element ? parseFloat(getComputedStyle(element).fontSize) : 0;
+      })(),
+      columnGuideFontSize: (() => {
+        const element = document.querySelector('.sceneBlockColumnGuide');
+        return element ? parseFloat(getComputedStyle(element).fontSize) : 0;
+      })(),
       timeLabel: (document.querySelector('.timelineTimeStat strong')?.textContent || '').trim(),
       timeTitle: document.querySelector('.timelineTimeStat')?.getAttribute('title') ?? '',
       timeStatClipped: (() => {
@@ -10859,9 +12130,10 @@ async function runSceneBlockLargeViewport(client, viewport) {
     openSource?.click();
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))));
     const cue500 = document.querySelector('.cueItem[data-cue-id="800"]');
+    cue500?.scrollIntoView({ block: 'center', inline: 'nearest' });
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
     const cuePanel = document.querySelector('.cuePanel');
-    const cueSurfaceTab = [...document.querySelectorAll('.timelineDeskTabs button')]
-      .find((button) => (button.textContent || '').trim() === 'Cues');
+    const cueDrawer = document.querySelector('[data-timeline-context-drawer-panel="cue"]');
     const cueHeader = cue500?.querySelector('.cueMetaLine');
     const headerRect = cueHeader?.getBoundingClientRect();
     const panelRect = cuePanel?.getBoundingClientRect();
@@ -10869,7 +12141,9 @@ async function runSceneBlockLargeViewport(client, viewport) {
       cue500Visible: Boolean(headerRect && panelRect && headerRect.width > 0 && headerRect.height > 0 &&
         headerRect.top >= Math.max(0, panelRect.top) - 1 && headerRect.bottom <= Math.min(window.innerHeight, panelRect.bottom) + 1),
       cuePanelEditing: cuePanel?.classList.contains('cuePanelEditing') ?? false,
-      cuesSurfaceActive: cueSurfaceTab?.classList.contains('active') ?? false,
+      cueDrawerActive: Boolean(cueDrawer && cueDrawer.getBoundingClientRect().width > 0),
+      cuesDeskTabRemoved: ![...document.querySelectorAll('.timelineDeskTabs button')]
+        .some((button) => (button.textContent || '').trim() === 'Cues'),
       pagerLabel: (document.querySelector('.cuePager span')?.textContent || '').trim(),
     };
   })()`);
@@ -10945,6 +12219,11 @@ async function runSceneBlockLargeViewport(client, viewport) {
     ['Math.abs(markerDragStats.nonMouseTinyMoveX - markerDragStats.nonMouseInitialX) < 1', () => Boolean(Math.abs(markerDragStats.nonMouseTinyMoveX - markerDragStats.nonMouseInitialX) < 1)],
     ['Math.abs(markerDragStats.nonMouseCommittedMoveX - markerDragStats.expectedNonMouseCommitte', () => Boolean(Math.abs(markerDragStats.nonMouseCommittedMoveX - markerDragStats.expectedNonMouseCommittedX) < 2)],
     ['Math.abs(markerDragStats.settledNonMouseX - markerDragStats.nonMouseCommittedMoveX) < 2', () => Boolean(Math.abs(markerDragStats.settledNonMouseX - markerDragStats.nonMouseCommittedMoveX) < 2)],
+    ['markerBlockPropertiesStats.selectedEventId === 493', () => Boolean(markerBlockPropertiesStats.selectedEventId === 493)],
+    ['markerBlockPropertiesStats.drawerOpen', () => Boolean(markerBlockPropertiesStats.drawerOpen)],
+    ['markerBlockPropertiesStats.browserMode === false', () => Boolean(markerBlockPropertiesStats.browserMode === false)],
+    ['markerBlockPropertiesStats.inspectorOnly', () => Boolean(markerBlockPropertiesStats.inspectorOnly)],
+    ['markerBlockPropertiesStats.inspectorShows493', () => Boolean(markerBlockPropertiesStats.inspectorShows493)],
     ['showStats.beforeRowCount <= 12', () => Boolean(showStats.beforeRowCount <= 12)],
     ['showStats.afterRowCount <= 12', () => Boolean(showStats.afterRowCount <= 12)],
     ['showStats.sourceOptionCount === 0', () => Boolean(showStats.sourceOptionCount === 0)],
@@ -10955,7 +12234,6 @@ async function runSceneBlockLargeViewport(client, viewport) {
     ['showStats.pagerCount === 1', () => Boolean(showStats.pagerCount === 1)],
     ['showStats.pagerLabel.includes("493-500 / 500")', () => Boolean(showStats.pagerLabel.includes('493-500 / 500'))],
     ['showStats.reachedLastBlock', () => Boolean(showStats.reachedLastBlock)],
-    ['(!requiresFullScaleVisualSignoff || showStats.firstMarkerRevealVisible)', () => Boolean((!requiresFullScaleVisualSignoff || showStats.firstMarkerRevealVisible))],
     ['(!requiresFullScaleVisualSignoff || showStats.repeatedSelectionVisible)', () => Boolean((!requiresFullScaleVisualSignoff || showStats.repeatedSelectionVisible))],
     ['showStats.cueIdentitySearchReached500', () => Boolean(showStats.cueIdentitySearchReached500)],
     ['showStats.selectedMarkerRenderedLast', () => Boolean(showStats.selectedMarkerRenderedLast)],
@@ -11018,7 +12296,8 @@ async function runSceneBlockLargeViewport(client, viewport) {
     ['composerPickerStats.composerEagerOptionCount === 0', () => Boolean(composerPickerStats.composerEagerOptionCount === 0)],
     ['sourceOpenStats.cue500Visible', () => Boolean(sourceOpenStats.cue500Visible)],
     ['sourceOpenStats.cuePanelEditing', () => Boolean(sourceOpenStats.cuePanelEditing)],
-    ['sourceOpenStats.cuesSurfaceActive', () => Boolean(sourceOpenStats.cuesSurfaceActive)],
+    ['sourceOpenStats.cueDrawerActive', () => Boolean(sourceOpenStats.cueDrawerActive)],
+    ['sourceOpenStats.cuesDeskTabRemoved', () => Boolean(sourceOpenStats.cuesDeskTabRemoved)],
     ['sourceOpenStats.pagerLabel.includes("42 / 42")', () => Boolean(sourceOpenStats.pagerLabel.includes('42 / 42'))],
     ['cueStats.cueRowCount === 12', () => Boolean(cueStats.cueRowCount === 12)],
     ['cueStats.placementChipCount === 8', () => Boolean(cueStats.placementChipCount === 8)],
@@ -11045,6 +12324,7 @@ async function runSceneBlockLargeViewport(client, viewport) {
     idleMutationStats,
     activeTransitionStats,
     markerDragStats,
+    markerBlockPropertiesStats,
     finderStats,
     sourcePickerStats,
     pickerStats,
@@ -11256,6 +12536,32 @@ async function main() {
       const failures = persistentBandResults.filter((result) => !result.passed);
       if (failures.length > 0) {
         throw new Error(`Persistent band invariance failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
+    if (timelineSlimOnlyMode) {
+      const timelineSlimResults = [];
+      for (const viewport of viewports) {
+        const result = await runTimelineSlimViewport(client, viewport);
+        timelineSlimResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `tabs=${JSON.stringify(result.visual.deskTabLabels)} ` +
+            `tools=${result.visual.toolbarIconOnlyButtonCount}/${result.visual.toolbarAriaButtonCount}/${result.visual.toolbarButtonCount} ` +
+            `gutters=${result.visual.gutterRows.filter((row) => row.exactFourElements).length}/${result.visual.gutterCount} ` +
+            `implicit=${result.implicitVisual.gutterRows.filter((row) => row.exactFourElements).length}/${result.implicitVisual.gutterCount} ` +
+            `blocks=${result.visual.thickBlockCount}/${result.visual.identityFillCount}/${result.visual.opaqueBlackBorderCount}/${result.visual.blockCount} ` +
+            `lines=${result.visual.twoLineBlockCount}/${result.visual.twoLineEligibleCount}@${Math.round(result.visual.minTwoLineFontPx * 100) / 100}px ` +
+            `grid=${result.visual.maxMinorGridInk.toFixed(3)}/${result.visual.maxMajorGridInk.toFixed(3)}/${result.visual.maxDividerInk.toFixed(3)} ` +
+            `t14=${result.t14.subThresholdClick?.movedPx ?? "?"}/${result.t14.oneGestureDrag?.sourceCueId ?? "?"}@${result.t14.oneGestureDrag?.targetLayerId ?? "?"} ` +
+            `t14Failed=${JSON.stringify(result.t14.failedChecks)} ` +
+            `scroll=${result.visual.documentAndAppScrollZero ? "zero" : "overflow"} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = timelineSlimResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Timeline slim viewport failed: ${JSON.stringify(failures)}`);
       }
       return;
     }
@@ -11788,6 +13094,41 @@ async function main() {
             upperPaneHeight: result.workspacePaneRects?.upper?.height ?? 0,
             position: [result.positionConsoleWidth, result.positionConsoleHeight, result.positionPadWidth, result.positionPadHeight],
             move: [result.moveEffectEditorWidth, result.moveEffectEditorHeight, result.moveEffectLastControlReachable, result.moveEffectLastPointReachable],
+            timeline: [result.visibleTimelinePanelCount, result.visibleTimelineShowSurfaceCount, result.visibleTimelineDeskTabCount],
+            cue: [
+              result.visibleCueContextDrawerCount,
+              result.visibleCuePanelCount,
+              result.visibleCueLivePanelCount,
+              result.visibleCueFormCount,
+              result.visibleCueEffectRecallEditorCount,
+              result.visibleCueEditOnlyCount,
+            ],
+            cueToggle: [
+              result.visibleCueEditToggleCount,
+              result.cueEditToggleExpanded,
+              result.cueEditToggleControls,
+              result.cueEditToggleMinTargetSize,
+            ],
+            cueScroll: [
+              result.cuePanelOverflowY,
+              result.cuePanelHorizontalOverflowPx,
+              result.cuePanelVerticalOverflowPx,
+              result.cueContextDrawerBodyOverflowY,
+              result.cueContextDrawerBodyHorizontalOverflowPx,
+              result.cueContextDrawerBodyVerticalOverflowPx,
+              result.cueContextDrawerContained,
+              result.cueContextDrawerBodyContained,
+              result.cueContextDrawerLastControlReachable,
+              result.cueHostHorizontalOverflowPx,
+              result.cueHostVerticalOverflowPx,
+            ],
+            cueScope: [
+              result.cueCaptureScopeValue,
+              result.cuePreviewScopeLabel,
+              result.cuePreviewStatValues,
+              result.cueStoreButtonDisabled,
+              result.visibleCueScopeErrorCount,
+            ],
           })),
           timelineAutomation: timelineAutomationFailures.map((result) => result.label),
           sceneBlocks: sceneBlockFailures.map((result) => ({

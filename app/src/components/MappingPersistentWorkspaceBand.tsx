@@ -53,7 +53,9 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
       : `workspaceContextPane controlContextPane controlMode${props.controlMode[0].toUpperCase()}${props.controlMode.slice(1)}`;
 
   const handleWindowKeyDown = (event: KeyboardEvent) => {
+    if (event.defaultPrevented) return;
     if (event.key === "Escape" && timelinePaneExpanded()) {
+      event.preventDefault();
       setTimelinePaneExpanded(false);
     }
   };

@@ -23,6 +23,20 @@ export const sortedTimelineLayers = (layers: readonly TimelineLayerSummary[]) =>
 export const effectiveTimelineLayers = (layers: readonly TimelineLayerSummary[] | undefined) =>
   sortedTimelineLayers(layers && layers.length > 0 ? layers : implicitTimelineLayers());
 
+export const sameTimelineLayerSummaries = (
+  previous: readonly TimelineLayerSummary[],
+  next: readonly TimelineLayerSummary[],
+) => previous.length === next.length && previous.every((layer, index) => {
+  const candidate = next[index];
+  return layer.id === candidate.id
+    && layer.label === candidate.label
+    && layer.order === candidate.order
+    && layer.muted === candidate.muted
+    && layer.locked === candidate.locked
+    && layer.solo === candidate.solo
+    && layer.kind === candidate.kind;
+});
+
 export const isLegacyTimelineLayerSet = (layers: readonly TimelineLayerSummary[]) => {
   const ordered = sortedTimelineLayers(layers);
   return ordered.length === 2

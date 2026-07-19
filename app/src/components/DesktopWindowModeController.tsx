@@ -164,7 +164,17 @@ export const DesktopWindowModeController: ParentComponent = (props) => {
       resizeTimer = window.setTimeout(() => void syncMode(true), RESIZE_SETTLE_MS);
     };
 
+    const closeOpenDialogForNativeEscape = () => {
+      const openDialogs = document.querySelectorAll<HTMLDialogElement>("dialog[open]");
+      const dialog = openDialogs.item(openDialogs.length - 1);
+      if (!dialog) return false;
+      const cancelEvent = new Event("cancel", { cancelable: true });
+      if (dialog.dispatchEvent(cancelEvent)) dialog.close();
+      return true;
+    };
+
     const forwardNativeEscape = () => {
+      if (closeOpenDialogForNativeEscape()) return;
       const target = document.activeElement ?? window;
       target.dispatchEvent(
         new KeyboardEvent("keydown", {

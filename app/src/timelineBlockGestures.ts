@@ -7,8 +7,8 @@ export type TimelineBlockGestureZone =
   | "fade-out"
   | "select";
 
-export const TIMELINE_BLOCK_HEIGHT_PX = 22;
-export const TIMELINE_BLOCK_UPPER_BAND_PX = 11;
+export const TIMELINE_BLOCK_HEIGHT_PX = 28;
+export const TIMELINE_BLOCK_UPPER_BAND_PX = 14;
 export const TIMELINE_BLOCK_STRETCH_EDGE_PX = 6;
 export const TIMELINE_BLOCK_FADE_EDGE_PX = 10;
 

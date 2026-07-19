@@ -243,6 +243,7 @@ assert.deepEqual(
     setup_sub_tab: "video",
     control_mode: "live",
     timeline_desk_surface: "playback",
+    timeline_context_drawer: "cue",
     edit_desk_surface: "effects",
     control_category: "color",
     future_field: true,
@@ -252,12 +253,58 @@ assert.deepEqual(
     setup_sub_tab: "video",
     control_mode: "live",
     timeline_desk_surface: "playback",
+    timeline_context_drawer: "cue",
     edit_desk_surface: "effects",
     control_category: "color",
     top_split_ratio: workspaceLayout.defaultWorkspaceLayout.top_split_ratio,
     lower_split_ratio: workspaceLayout.defaultWorkspaceLayout.lower_split_ratio,
     selections_drawer_open: workspaceLayout.defaultWorkspaceLayout.selections_drawer_open,
   },
+);
+assert.deepEqual(
+  workspaceLayout.workspaceLayoutFromUnknown({
+    workspace_tab: "control",
+    control_mode: "live",
+    timeline_desk_surface: "cues",
+    timeline_context_drawer: "none",
+  }),
+  {
+    ...workspaceLayout.defaultWorkspaceLayout,
+    workspace_tab: "control",
+    control_mode: "live",
+    timeline_desk_surface: "show",
+    timeline_context_drawer: "cue",
+  },
+  "legacy Cues surfaces migrate to the timeline Cue drawer",
+);
+assert.deepEqual(
+  workspaceLayout.workspaceLayoutFromUnknown({
+    workspace_tab: "control",
+    control_mode: "edit",
+    timeline_desk_surface: "cues",
+    timeline_context_drawer: "none",
+  }),
+  {
+    ...workspaceLayout.defaultWorkspaceLayout,
+    workspace_tab: "control",
+    control_mode: "edit",
+    timeline_desk_surface: "show",
+    timeline_context_drawer: "cue",
+  },
+  "legacy Cues migration survives an initially hidden Edit workspace",
+);
+assert.deepEqual(
+  workspaceLayout.workspaceLayoutFromUnknown({
+    workspace_tab: "control",
+    timeline_desk_surface: "show",
+    timeline_context_drawer: "block",
+  }),
+  {
+    ...workspaceLayout.defaultWorkspaceLayout,
+    workspace_tab: "control",
+    timeline_context_drawer: "none",
+  },
+  "selection-bound Block Properties drawers do not survive a workspace reload",
 );
 assert.deepEqual(
   workspaceLayout.workspaceLayoutFromUnknown({
@@ -296,6 +343,21 @@ const savedWorkspaceLayout = {
 };
 assert.equal(workspaceLayout.saveWorkspaceLayout(savedWorkspaceLayout), true);
 assert.deepEqual(workspaceLayout.loadWorkspaceLayout(), savedWorkspaceLayout);
+
+const transientBlockDrawerLayout = {
+  ...savedWorkspaceLayout,
+  timeline_context_drawer: "block",
+};
+assert.equal(workspaceLayout.saveWorkspaceLayout(transientBlockDrawerLayout), true);
+assert.equal(
+  JSON.parse(storageValues.get(workspaceLayout.workspaceLayoutStorageKey)).timeline_context_drawer,
+  "none",
+  "Block Properties drawer state is normalized at the persistence boundary",
+);
+assert.deepEqual(
+  workspaceLayout.loadWorkspaceLayout(),
+  { ...transientBlockDrawerLayout, timeline_context_drawer: "none" },
+);
 
 storageValues.set(workspaceLayout.workspaceLayoutStorageKey, "{broken-json");
 assert.deepEqual(workspaceLayout.loadWorkspaceLayout(), workspaceLayout.defaultWorkspaceLayout);

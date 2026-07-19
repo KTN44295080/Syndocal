@@ -1,5 +1,7 @@
 export type TimelineOverlapEventId = number | string;
 
+export const TIMELINE_OVERLAP_BADGE_WIDTH_PX = 24;
+
 export interface TimelineOverlapEvent<
   TId extends TimelineOverlapEventId = TimelineOverlapEventId,
   TTrack extends string = string,
@@ -208,13 +210,16 @@ export const packTimelineOverlapClusterBadges = <
   clusters: readonly TimelineOverlapBadgeCandidate<TId, TTrack>[],
   viewBoxWidth: number,
   minimumX = 27,
-  badgeWidth = 18,
+  badgeWidth = TIMELINE_OVERLAP_BADGE_WIDTH_PX,
   badgeGap = 2,
   rightPadding = 2,
   maximumBadgesPerTrack = Number.POSITIVE_INFINITY,
 ): TimelinePackedOverlapBadge<TId, TTrack>[] => {
   const safeMinimumX = Math.max(0, Number.isFinite(minimumX) ? minimumX : 27);
-  const safeBadgeWidth = Math.max(1, Number.isFinite(badgeWidth) ? badgeWidth : 18);
+  const safeBadgeWidth = Math.max(
+    1,
+    Number.isFinite(badgeWidth) ? badgeWidth : TIMELINE_OVERLAP_BADGE_WIDTH_PX,
+  );
   const safeGap = Math.max(0, Number.isFinite(badgeGap) ? badgeGap : 2);
   const slotWidth = safeBadgeWidth + safeGap;
   const maximumX = Math.max(

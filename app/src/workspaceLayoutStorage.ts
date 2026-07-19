@@ -3,6 +3,7 @@ import type {
   ControlMode,
   EditDeskSurface,
   SetupSubTab,
+  TimelineContextDrawer,
   TimelineDeskSurface,
   WorkspaceTab,
 } from "./uiModes";
@@ -12,6 +13,7 @@ export type WorkspaceLayout = {
   setup_sub_tab: SetupSubTab;
   control_mode: ControlMode;
   timeline_desk_surface: TimelineDeskSurface;
+  timeline_context_drawer: TimelineContextDrawer;
   edit_desk_surface: EditDeskSurface;
   control_category: ControlCategory;
   top_split_ratio: number;
@@ -24,6 +26,7 @@ export const defaultWorkspaceLayout: WorkspaceLayout = {
   setup_sub_tab: "patch",
   control_mode: "edit",
   timeline_desk_surface: "show",
+  timeline_context_drawer: "none",
   edit_desk_surface: "attributes",
   control_category: "position",
   top_split_ratio: 0.58,
@@ -46,7 +49,11 @@ const allowedSetupSubTabs: SetupSubTab[] = [
   "remote",
 ];
 const allowedControlModes: ControlMode[] = ["edit", "live", "mixer"];
-const allowedTimelineDeskSurfaces: TimelineDeskSurface[] = ["show", "cues", "automation", "playback"];
+const allowedTimelineDeskSurfaces: TimelineDeskSurface[] = ["show", "automation", "playback"];
+// Block properties are tied to the current selection, so reopening that drawer
+// from a previous process would restore stale editing context. Only stable
+// drawers participate in workspace persistence.
+const allowedPersistedTimelineContextDrawers: TimelineContextDrawer[] = ["none", "cue"];
 const allowedEditDeskSurfaces: EditDeskSurface[] = ["attributes", "effects", "dmx"];
 const allowedControlCategories: ControlCategory[] = [
   "dimmer",
@@ -72,14 +79,20 @@ export const workspaceLayoutFromUnknown = (candidate: unknown): WorkspaceLayout 
     return { ...defaultWorkspaceLayout };
   }
   const value = candidate as Record<string, unknown>;
+  const legacyCueSurface = value.timeline_desk_surface === "cues";
   return {
     workspace_tab: enumValue(value.workspace_tab, allowedWorkspaceTabs, defaultWorkspaceLayout.workspace_tab),
     setup_sub_tab: enumValue(value.setup_sub_tab, allowedSetupSubTabs, defaultWorkspaceLayout.setup_sub_tab),
     control_mode: enumValue(value.control_mode, allowedControlModes, defaultWorkspaceLayout.control_mode),
     timeline_desk_surface: enumValue(
-      value.timeline_desk_surface,
+      legacyCueSurface ? "show" : value.timeline_desk_surface,
       allowedTimelineDeskSurfaces,
       defaultWorkspaceLayout.timeline_desk_surface,
+    ),
+    timeline_context_drawer: enumValue(
+      legacyCueSurface ? "cue" : value.timeline_context_drawer,
+      allowedPersistedTimelineContextDrawers,
+      defaultWorkspaceLayout.timeline_context_drawer,
     ),
     edit_desk_surface: enumValue(
       value.edit_desk_surface,

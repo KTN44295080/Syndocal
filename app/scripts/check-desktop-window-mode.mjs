@@ -97,6 +97,10 @@ assert.ok(controller.includes("appWindow.setFullscreen(next)"), "fullscreen chan
 assert.ok(
   controller.includes(".listen(DESKTOP_FULLSCREEN_SHORTCUT_EVENT") &&
     controller.includes(".listen(DESKTOP_ESCAPE_SHORTCUT_EVENT, forwardNativeEscape)") &&
+    controller.includes('querySelectorAll<HTMLDialogElement>("dialog[open]")') &&
+    controller.includes('new Event("cancel", { cancelable: true })') &&
+    controller.includes("if (dialog.dispatchEvent(cancelEvent)) dialog.close()") &&
+    controller.includes("if (closeOpenDialogForNativeEscape()) return") &&
     controller.includes('new KeyboardEvent("keydown"') &&
     controller.includes("document.activeElement ?? window") &&
     controller.includes("unlistenNativeFullscreen?.()") &&
@@ -158,6 +162,14 @@ assert.equal(shortcuts.desktopWindowShortcutAction(event({ code: "F11" }), false
 assert.equal(shortcuts.desktopWindowShortcutAction(event({ code: "F11", editableTarget: true }), false), "toggleFullscreen");
 assert.equal(shortcuts.desktopWindowShortcutAction(event({ code: "Escape" }), true), "exitFullscreen");
 assert.equal(shortcuts.desktopWindowShortcutAction(event({ code: "Escape" }), false), null);
+assert.equal(
+  shortcuts.desktopWindowShortcutAction(
+    event({ code: "Escape", editableTarget: false, defaultPrevented: true }),
+    true,
+  ),
+  null,
+  "a drawer or other non-editable surface that consumes Escape must keep fullscreen",
+);
 assert.equal(
   shortcuts.desktopWindowShortcutAction(
     event({ code: "Escape", editableTarget: true, defaultPrevented: true }),
