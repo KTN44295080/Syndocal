@@ -5577,23 +5577,49 @@ progress {
 
 .dmxAddressGrid {
   display: grid;
-  grid-template-columns: repeat(32, minmax(14px, 1fr));
-  gap: 2px;
+  grid-template-rows: repeat(16, 18px);
+  align-content: start;
+  justify-content: start;
+  gap: 1px;
+  min-width: 0;
   max-height: 360px;
   overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   border: 1px solid #292621;
   border-radius: 4px;
   background:
     linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
     linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
     #181411;
-  background-size: 16px 16px;
-  padding: 6px;
+  background-size: 19px 19px;
+  padding: 4px;
+}
+
+.dmxAddressRow {
+  position: relative;
+  display: grid;
+  grid-template-columns: 50px repeat(32, 18px);
+  gap: 1px;
+  width: 658px;
+  height: 18px;
+  min-width: 658px;
+  min-height: 18px;
+}
+
+.dmxAddressGridCell {
+  width: 18px;
+  height: 18px;
+  min-width: 0;
+  min-height: 0;
 }
 
 .dmxAddressCell {
+  width: 18px;
+  height: 18px;
   min-width: 0;
-  min-height: 20px;
+  min-height: 18px;
+  overflow: hidden;
   border-color: #302c27;
   border-radius: 2px;
   background: #221e1a;
@@ -5601,6 +5627,19 @@ progress {
   padding: 0;
   font-size: 11px;
   line-height: 1;
+}
+
+.dmxAddressRowLabel {
+  align-self: center;
+  overflow: hidden;
+  color: #a79d94;
+  padding-inline: 3px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dmxAddressCell:hover {
@@ -5694,6 +5733,19 @@ progress {
   gap: 8px;
   color: #a79d94;
   font-size: 12px;
+}
+
+.dmxPatchAddressReadout {
+  flex: 0 0 auto;
+  min-width: 60px;
+  border: 1px solid #48413b;
+  border-radius: 2px;
+  background: #171513;
+  color: #d8d0c8;
+  padding: 4px 6px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
 }
 
 .dmxUniverseMap {
@@ -19563,22 +19615,26 @@ h3 {
 }
 
 .layoutSetup.setupMode-patch .dmxAddressGrid {
-  width: min(100%, 632px);
+  width: min(100%, 690px);
+  max-width: 690px;
+  box-sizing: border-box;
   gap: 1px;
-  max-height: none;
-  padding: 4px;
+  max-height: 236px;
+  padding: 4px 14px 4px 4px;
   justify-self: start;
 }
 
 .layoutSetup.setupMode-patch .dmxAddressCell {
-  width: 100%;
+  width: 18px;
   min-height: 0;
-  aspect-ratio: 1;
   font-size: 11px;
 }
 
 .dmxPatchFixtureBlock {
+  position: absolute;
+  top: 0;
   z-index: 2;
+  pointer-events: none;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -19618,9 +19674,7 @@ h3 {
 }
 
 .dmxPatchFixtureBlock small {
-  color: #ddd2c2;
-  font-size: 7px;
-  font-variant-numeric: tabular-nums;
+  display: none;
 }
 
 .dmxPatchFixtureBlock.narrow {
@@ -19640,11 +19694,12 @@ h3 {
 }
 
 .dmxPatchFixtureBlock.tiny strong {
+  display: block;
   font-size: 0;
 }
 
 .dmxPatchFixtureBlock.tiny strong::first-letter {
-  font-size: 7px;
+  font-size: 11px;
 }
 
 .layoutSetup .setupIoPanel {
@@ -24313,8 +24368,8 @@ h3 {
   }
 
   .layoutSetup.setupMode-patch .dmxAddressGrid {
-    width: 100%;
-    max-width: none;
+    width: min(100%, 690px);
+    max-width: 690px;
   }
 
   .layoutControl.controlModeMixer .videoControlPanelMixer {

@@ -1290,6 +1290,8 @@ const japaneseText: Record<string, string> = {
   "Distribute X": "X方向へ等間隔配置",
   "Distribute Z": "Z方向へ等間隔配置",
   "DMX address page": "DMXアドレスページ",
+  "DMX universe": "DMXユニバース",
+  "Current DMX address": "現在のDMXアドレス",
   "DMX BO": "DMX BO",
   "DMX Clear": "DMXクリア",
   "DMX Footprint": "DMX占有数",
@@ -2000,6 +2002,22 @@ const japaneseText: Record<string, string> = {
 };
 
 const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
+  [/^Universe (\d+) DMX addresses 1 to 512$/, (universe) => `ユニバース ${universe} DMXアドレス 1～512`],
+  [
+    /^Address (\d+), empty, pending fixture (\d+)(, conflict)?$/,
+    (address, fixture, conflict) => `アドレス ${address}、空き、予定灯体 ${fixture}${conflict ? "、競合" : ""}`,
+  ],
+  [
+    /^Address (\d+), (.+), pending fixture (\d+)(, conflict)?$/,
+    (address, label, fixture, conflict) =>
+      `アドレス ${address}、${label}、予定灯体 ${fixture}${conflict ? "、競合" : ""}`,
+  ],
+  [/^Address (\d+), empty$/, (address) => `アドレス ${address}、空き`],
+  [/^Address (\d+), (.+)$/, (address, fixture) => `アドレス ${address}、${fixture}`],
+  [
+    /^Select (.+), Universe (\d+), addresses (\d+) to (\d+)$/,
+    (fixture, universe, start, end) => `${fixture}を選択、ユニバース ${universe}、アドレス ${start}～${end}`,
+  ],
   [/^Daslight build (.+) · VERSIONFILE (.+)$/, (build, version) => `Daslightビルド ${build} · VERSIONFILE ${version}`],
   [
     /^Imported Daslight Project \(\.dvc\): (\d+) fixtures, (\d+) cues\. Save As to create a Syndocal Project \(\.sdc\)\.$/,

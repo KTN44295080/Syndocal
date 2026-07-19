@@ -25923,6 +25923,33 @@ mod tests {
     }
 
     #[test]
+    fn one_channel_fixture_at_address_512_writes_the_last_dmx_slot() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut profile = sample_profile();
+        profile.dmx_modes[0].controls.truncate(1);
+
+        runtime.apply_command(EngineCommand::PatchFixture {
+            fixture_id: 1,
+            request: sample_patch_request("Address 512 Fixture", 512),
+            profile,
+        });
+        runtime.apply_command(EngineCommand::SetAttribute {
+            fixture_id: 1,
+            attribute: "Dimmer".to_string(),
+            value: u16::MAX,
+        });
+
+        assert_eq!(runtime.last_error, None);
+        assert_eq!(runtime.fixtures[0].request.address, 512);
+        let frame = runtime.render_dmx_frame_for_universe(0, Instant::now());
+        assert!(frame[..511].iter().all(|value| *value == 0));
+        assert_eq!(frame[511], u8::MAX);
+    }
+
+    #[test]
     fn writes_16bit_attribute_as_coarse_and_fine() {
         let mut frame = [0u8; 512];
         let control = AttributeControl {

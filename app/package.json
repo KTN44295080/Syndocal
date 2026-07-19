@@ -39,6 +39,7 @@
     "check:vj-first-run": "node scripts/check-vj-first-run.mjs",
     "check:virtualization": "node scripts/check-virtualization.mjs",
     "check:large-show-ui": "node scripts/check-viewport-containment.mjs --large-show",
+    "check:patch-viewport": "node scripts/check-viewport-containment.mjs --patch-only",
     "check:viewport": "node scripts/check-viewport-containment.mjs",
     "check:vj-first-run-viewport": "node scripts/check-viewport-containment.mjs --vj-empty",
     "prepare:runtime-libs": "node scripts/prepare-release-runtime.mjs",

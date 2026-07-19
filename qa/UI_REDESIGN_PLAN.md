@@ -4,6 +4,8 @@
 状態: **承認済み（2026-07-15）** — 実施順:
 T1✅ → T2✅ → T9✅ → T10✅ → T8✅ → F1✅ → F3✅ → F2✅ → F4✅ → T4✅（86ca79e）→ F5✅（243aaea）+ T3✅（f5cc523、Fable直接実装・合議マージf64ef96）→ F7✅（95b33b0、音声クリップブロック+可聴再生）+ T5✅（90dfa1a、Fable直接実装・合議マージ8c364a0）→ F6✅（59b6600、super scene）+ T6✅（4182ad6、Fable直接実装・合議マージf344713）→ F8✅（6a863a1、マルチステップStaticシーン）+ T7✅（60f1ad1、Fable直接実装 protocol込み・3ラウンド合議マージ7ee9214）→ T11✅（5c3de86、編集可能Touchサーフェス）+ T12✅（0010443、Fable直接実装・合議マージd95de64）— **シリーズ全完了 2026-07-18**
 実装体制（2026-07-16更新）: 実装=Codex gpt-5.6-sol（ローカルCLI、ユーザー指定）/ 計画・検証・コミット=Fable。
+
+**2026-07-19承認済み継続計画:** T15=タイムライン減量、T16=FXエディタ可視化、T17=Scene Liveモディファイア、および先行するPATCH 512連続表示・Control可変ペイン基盤は [`qa/UI_REDESIGN_T15_T17_PLAN.md`](UI_REDESIGN_T15_T17_PLAN.md) を権威パケットとする。
 T9はOpus（Mapping再設計）+Codex（StageGlyphs.tsx共有レンダラー統一）の合作で`1db7af5`として着地。
 承認内容: (1) 計画全体 (2) T8をT2直後へ前倒し（Control構造契約の変更を承認） (3) T7のprotocol変更
 （frontend-only制約の当該範囲での緩和を承認） (4) T3のページ式フォーム行編集置換 (5) Opus委任即時開始

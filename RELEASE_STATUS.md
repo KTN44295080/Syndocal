@@ -113,7 +113,7 @@ Webリモートのアプリ内P0境界は完了した。インターネット公
 - [x] 110%を含む実画面containmentゲートを追加し、1366x768で一画面デスクを維持。
 - [x] 8-10px指定の可視テキストを11pxへ引き上げ、見出しのbalance、本文のpretty、数値のtabular表示、safe-area paddingを追加。
 - [x] 既存のfocus-visibleを全標準入力と操作要素へ維持し、入力欄内のネイティブUndoを保護。
-- [x] DMX Patch Gridを512 button同時生成から128アドレス×4ページへ変更し、全アドレス到達性を保ったままDOM／アクセシビリティツリーを削減。
+- [x] 2026-07-19の承認済みUI継続計画で、DMX Patch Gridを128アドレス×4ページから32列×16行の512アドレス連続面へ戻した。セルは固定上限512件、roving tabindex、矢印／Home／End移動、節目番号＋focus readout、PATCH内スクロールを使い、外側スクロールを増やさない。
 - [x] 灯体一覧は80件、Stage Mapの実表示Fixture一覧は60件を超えるとfixed-row windowingへ切替え、Cue編集は12件単位、Clip Gridは12件単位、映像Layer／Outputはページ単位でDOM上限を固定。
 - [x] 実ブラウザへ2,000灯体を投入し、1366x768でMapping Fixture DOMが先頭／末尾とも9行、`aria-rowcount=2000`、末尾灯体到達、画面containmentを確認。
 - [x] 1280x720、1366x768、2048x1129の全Setup/Control/Touch containmentを再確認。

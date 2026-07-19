@@ -19,6 +19,7 @@ const sceneBlockOnlyMode = process.argv.includes("--scene-block-only");
 const sceneBlockHourOnlyMode = process.argv.includes("--scene-block-hour-only");
 const sceneBlockOverlapOnlyMode = process.argv.includes("--scene-block-overlap-only");
 const sceneMatrixOnlyMode = process.argv.includes("--scene-matrix-only");
+const patchOnlyMode = process.argv.includes("--patch-only");
 const persistentBandOnlyMode = process.argv.includes("--persistent-band-only");
 const workspaceShellOnlyMode = process.argv.includes("--workspace-shell-only");
 const viewportTraceEnabled = process.env.SYNDOCAL_VIEWPORT_TRACE === "1";
@@ -2871,6 +2872,166 @@ async function measure(client, label) {
     const moveEffectPathDeskRect = moveEffectPathDesk?.getBoundingClientRect() ?? null;
     const moveEffectInspectorRect = moveEffectInspector?.getBoundingClientRect() ?? null;
     const moveEffectPathCanvasRect = moveEffectPathCanvas?.getBoundingClientRect() ?? null;
+    const patchGrid = document.querySelector('.dmxAddressGrid');
+    const patchCells = patchGrid ? [...patchGrid.querySelectorAll('.dmxAddressCell')] : [];
+    let patchGridMetrics = null;
+    if (patchGrid instanceof HTMLElement) {
+      const addressValues = patchCells
+        .map((cell) => Number(cell.getAttribute('data-dmx-address')))
+        .filter(Number.isFinite)
+        .sort((left, right) => left - right);
+      const cellRects = patchCells.map((cell) => cell.getBoundingClientRect());
+      const roundedUnique = (values) => new Set(values.map((value) => Math.round(value * 10) / 10)).size;
+      const gridStyle = getComputedStyle(patchGrid);
+      const directGridRows = [...patchGrid.children].filter((child) => child.getAttribute('role') === 'row');
+      const gridCells = [...patchGrid.querySelectorAll('[role="gridcell"]')];
+      const lastCell = patchGrid.querySelector('[data-dmx-address="512"]');
+      const setupPatchAddressDesk = patchGrid.closest('.setupPatchAddressDesk');
+      const initialScroll = {
+        gridLeft: patchGrid.scrollLeft,
+        gridTop: patchGrid.scrollTop,
+        windowX: window.scrollX,
+        windowY: window.scrollY,
+        documentLeft: documentElement.scrollLeft,
+        documentTop: documentElement.scrollTop,
+        bodyLeft: body.scrollLeft,
+        bodyTop: body.scrollTop,
+        appLeft: app?.scrollLeft ?? 0,
+        appTop: app?.scrollTop ?? 0,
+        layoutLeft: layout?.scrollLeft ?? 0,
+        layoutTop: layout?.scrollTop ?? 0,
+        deskLeft: setupPatchAddressDesk?.scrollLeft ?? 0,
+        deskTop: setupPatchAddressDesk?.scrollTop ?? 0,
+      };
+      patchGrid.scrollLeft = patchGrid.scrollWidth;
+      patchGrid.scrollTop = patchGrid.scrollHeight;
+      await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
+      const gridRectAtEnd = patchGrid.getBoundingClientRect();
+      const lastCellRectAtEnd = lastCell?.getBoundingClientRect() ?? null;
+      const endReachable = Boolean(
+        lastCellRectAtEnd &&
+        lastCellRectAtEnd.left >= gridRectAtEnd.left - 1 &&
+        lastCellRectAtEnd.right <= gridRectAtEnd.right + 1 &&
+        lastCellRectAtEnd.top >= gridRectAtEnd.top - 1 &&
+        lastCellRectAtEnd.bottom <= gridRectAtEnd.bottom + 1
+      );
+      const outerScrollUnchangedAtEnd =
+        window.scrollX === initialScroll.windowX &&
+        window.scrollY === initialScroll.windowY &&
+        documentElement.scrollLeft === initialScroll.documentLeft &&
+        documentElement.scrollTop === initialScroll.documentTop &&
+        body.scrollLeft === initialScroll.bodyLeft &&
+        body.scrollTop === initialScroll.bodyTop &&
+        (app?.scrollLeft ?? 0) === initialScroll.appLeft &&
+        (app?.scrollTop ?? 0) === initialScroll.appTop &&
+        (layout?.scrollLeft ?? 0) === initialScroll.layoutLeft &&
+        (layout?.scrollTop ?? 0) === initialScroll.layoutTop &&
+        (setupPatchAddressDesk?.scrollLeft ?? 0) === initialScroll.deskLeft &&
+        (setupPatchAddressDesk?.scrollTop ?? 0) === initialScroll.deskTop;
+
+      const dispatchGridKey = async (key, modifiers = {}) => {
+        const target = document.activeElement;
+        if (!(target instanceof HTMLElement)) return '';
+        target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...modifiers }));
+        await Promise.resolve();
+        await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+        return document.activeElement?.getAttribute('data-dmx-address') ?? '';
+      };
+      const firstCell = patchGrid.querySelector('[data-dmx-address="1"]');
+      firstCell?.focus({ preventScroll: true });
+      const arrowRightAddress = await dispatchGridKey('ArrowRight');
+      const arrowDownAddress = await dispatchGridKey('ArrowDown');
+      const controlEndAddress = await dispatchGridKey('End', { ctrlKey: true });
+      const focusedEndCell = document.activeElement;
+      const focusedEndRect = focusedEndCell?.getBoundingClientRect() ?? null;
+      const gridRectAfterKeyboard = patchGrid.getBoundingClientRect();
+      const keyboardVisibleLeft = gridRectAfterKeyboard.left + patchGrid.clientLeft;
+      const keyboardVisibleTop = gridRectAfterKeyboard.top + patchGrid.clientTop;
+      const keyboardVisibleRight = keyboardVisibleLeft + patchGrid.clientWidth;
+      const keyboardVisibleBottom = keyboardVisibleTop + patchGrid.clientHeight;
+      const controlEndFullyVisible = Boolean(
+        focusedEndRect &&
+        focusedEndRect.left >= keyboardVisibleLeft - 1 &&
+        focusedEndRect.right <= keyboardVisibleRight + 1 &&
+        focusedEndRect.top >= keyboardVisibleTop - 1 &&
+        focusedEndRect.bottom <= keyboardVisibleBottom + 1
+      );
+      const controlEndVisibility = focusedEndRect ? {
+        cell: [focusedEndRect.left, focusedEndRect.top, focusedEndRect.right, focusedEndRect.bottom],
+        viewport: [keyboardVisibleLeft, keyboardVisibleTop, keyboardVisibleRight, keyboardVisibleBottom],
+        scroll: [patchGrid.scrollLeft, patchGrid.scrollTop],
+      } : null;
+      const outerScrollUnchangedAfterKeyboard =
+        window.scrollX === initialScroll.windowX &&
+        window.scrollY === initialScroll.windowY &&
+        documentElement.scrollLeft === initialScroll.documentLeft &&
+        documentElement.scrollTop === initialScroll.documentTop &&
+        body.scrollLeft === initialScroll.bodyLeft &&
+        body.scrollTop === initialScroll.bodyTop &&
+        (app?.scrollLeft ?? 0) === initialScroll.appLeft &&
+        (app?.scrollTop ?? 0) === initialScroll.appTop &&
+        (layout?.scrollLeft ?? 0) === initialScroll.layoutLeft &&
+        (layout?.scrollTop ?? 0) === initialScroll.layoutTop &&
+        (setupPatchAddressDesk?.scrollLeft ?? 0) === initialScroll.deskLeft &&
+        (setupPatchAddressDesk?.scrollTop ?? 0) === initialScroll.deskTop;
+      await dispatchGridKey('Home', { ctrlKey: true });
+
+      patchGrid.scrollLeft = initialScroll.gridLeft;
+      patchGrid.scrollTop = initialScroll.gridTop;
+      if (setupPatchAddressDesk) {
+        setupPatchAddressDesk.scrollLeft = initialScroll.deskLeft;
+        setupPatchAddressDesk.scrollTop = initialScroll.deskTop;
+      }
+      await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
+      patchGridMetrics = {
+        pageSelectorCount: document.querySelectorAll('select[aria-label="DMX address page"]').length,
+        addressCount: addressValues.length,
+        uniqueAddressCount: new Set(addressValues).size,
+        firstAddress: addressValues.at(0) ?? null,
+        lastAddress: addressValues.at(-1) ?? null,
+        rowCount: roundedUnique(cellRects.map((rect) => rect.top)),
+        columnCount: roundedUnique(cellRects.map((rect) => rect.left)),
+        minCellWidth: cellRects.length > 0 ? Math.min(...cellRects.map((rect) => rect.width)) : 0,
+        maxCellWidth: cellRects.length > 0 ? Math.max(...cellRects.map((rect) => rect.width)) : 0,
+        minCellHeight: cellRects.length > 0 ? Math.min(...cellRects.map((rect) => rect.height)) : 0,
+        maxCellHeight: cellRects.length > 0 ? Math.max(...cellRects.map((rect) => rect.height)) : 0,
+        clientWidth: patchGrid.clientWidth,
+        clientHeight: patchGrid.clientHeight,
+        scrollWidth: patchGrid.scrollWidth,
+        scrollHeight: patchGrid.scrollHeight,
+        overflowX: gridStyle.overflowX,
+        overflowY: gridStyle.overflowY,
+        endReachable,
+        outerScrollUnchangedAtEnd,
+        accessibleName: patchGrid.getAttribute('aria-label') ?? '',
+        rowCountAria: Number(patchGrid.getAttribute('aria-rowcount') ?? 0),
+        columnCountAria: Number(patchGrid.getAttribute('aria-colcount') ?? 0),
+        directRowRoleCount: directGridRows.length,
+        gridCellRoleCount: gridCells.length,
+        invalidDirectGridChildCount: [...patchGrid.children]
+          .filter((child) => child.getAttribute('role') !== 'row').length,
+        addressButtonsOutsideGridCells: patchCells
+          .filter((cell) => cell.parentElement?.getAttribute('role') !== 'gridcell').length,
+        missingCellNameCount: patchCells.filter((cell) => !(cell.getAttribute('aria-label') || '').trim()).length,
+        plannedCellMissingStateNameCount: patchCells
+          .filter((cell) => cell.classList.contains('planned') && !(cell.getAttribute('aria-label') ?? '').includes('pending fixture '))
+          .length,
+        conflictCellMissingStateNameCount: patchCells
+          .filter((cell) => cell.classList.contains('plannedConflict') && !(cell.getAttribute('aria-label') ?? '').includes('conflict'))
+          .length,
+        tabStopCount: patchCells.filter((cell) => cell.tabIndex === 0).length,
+        arrowRightAddress,
+        arrowDownAddress,
+        controlEndAddress,
+        controlEndFullyVisible,
+        controlEndVisibility,
+        outerScrollUnchangedAfterKeyboard,
+        universeSelectorNamed: Boolean(document.querySelector('select[aria-label="DMX universe"]')),
+        viewToggleGrouped: Boolean(document.querySelector('.viewToggle[role="group"][aria-label="DMX map view"]')),
+        readoutNamed: Boolean(document.querySelector('.dmxPatchAddressReadout[aria-label="Current DMX address"]')),
+        unnamedOverviewSegmentCount: document.querySelectorAll('.dmxPatchSegment:not([aria-label])').length,
+      };
+    }
     window.scrollTo(9999, 9999);
     await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
     const movedX = window.scrollX;
@@ -3009,6 +3170,7 @@ async function measure(client, label) {
       dmxAddressOccupiedCellCount: document.querySelectorAll('.dmxAddressCell.occupied').length,
       dmxAddressPlannedCellCount: document.querySelectorAll('.dmxAddressCell.planned').length,
       visibleDmxFixtureBlockCount: visibleCount('.dmxPatchFixtureBlock'),
+      patchGridMetrics,
       compactMappingStageWidth: compactMappingStageRect ? Math.round(compactMappingStageRect.width) : 0,
       compactMappingStageHeight: compactMappingStageRect ? Math.round(compactMappingStageRect.height) : 0,
       videoSetupSidebarWidth: videoSetupSidebarRect ? Math.round(videoSetupSidebarRect.width) : 0,
@@ -4611,6 +4773,53 @@ function hasExpectedControlModeSurface(result) {
   return true;
 }
 
+function hasExpectedContinuousPatchGrid(result) {
+  const metrics = result.patchGridMetrics;
+  if (!metrics) return false;
+  const hasBoundedInternalScroll =
+    (metrics.scrollHeight > metrics.clientHeight + 1 && ["auto", "scroll"].includes(metrics.overflowY)) ||
+    (metrics.scrollWidth > metrics.clientWidth + 1 && ["auto", "scroll"].includes(metrics.overflowX));
+  const avoidsUnneededHorizontalScroll =
+    result.innerWidth < 1600 || metrics.scrollWidth <= metrics.clientWidth + 1;
+  return (
+    metrics.pageSelectorCount === 0 &&
+    metrics.addressCount === 512 &&
+    metrics.uniqueAddressCount === 512 &&
+    metrics.firstAddress === 1 &&
+    metrics.lastAddress === 512 &&
+    metrics.rowCount === 16 &&
+    metrics.columnCount === 32 &&
+    metrics.minCellWidth >= 16 &&
+    metrics.maxCellWidth <= 24 &&
+    metrics.minCellHeight >= 16 &&
+    metrics.maxCellHeight <= 24 &&
+    hasBoundedInternalScroll &&
+    avoidsUnneededHorizontalScroll &&
+    metrics.endReachable &&
+    metrics.outerScrollUnchangedAtEnd &&
+    /^Universe \d+ DMX addresses 1 to 512$/.test(metrics.accessibleName) &&
+    metrics.rowCountAria === 16 &&
+    metrics.columnCountAria === 32 &&
+    metrics.directRowRoleCount === 16 &&
+    metrics.gridCellRoleCount === 512 &&
+    metrics.invalidDirectGridChildCount === 0 &&
+    metrics.addressButtonsOutsideGridCells === 0 &&
+    metrics.missingCellNameCount === 0 &&
+    metrics.plannedCellMissingStateNameCount === 0 &&
+    metrics.conflictCellMissingStateNameCount === 0 &&
+    metrics.tabStopCount === 1 &&
+    metrics.arrowRightAddress === "2" &&
+    metrics.arrowDownAddress === "34" &&
+    metrics.controlEndAddress === "512" &&
+    metrics.controlEndFullyVisible &&
+    metrics.outerScrollUnchangedAfterKeyboard &&
+    metrics.universeSelectorNamed &&
+    metrics.viewToggleGrouped &&
+    metrics.readoutNamed &&
+    metrics.unnamedOverviewSegmentCount === 0
+  );
+}
+
 function hasExpectedSetupSurface(result) {
   if (result.label.startsWith("setup-library-")) {
     return (
@@ -4668,14 +4877,15 @@ function hasExpectedSetupSurface(result) {
       result.visiblePatchNextFreeButtonCount >= 1 &&
       result.visiblePatchFootprintCount >= 1 &&
       result.visibleDmxAddressGridCount >= 1 &&
-      result.dmxAddressCellCount === 128 &&
+      result.dmxAddressCellCount === 512 &&
       result.dmxAddressOccupiedCellCount > 0 &&
       result.dmxAddressPlannedCellCount > 0 &&
       result.visibleDmxFixtureBlockCount > 0 &&
       result.visibleDmxGridSummaryCount >= 1 &&
       result.visibleFixtureSetupEditorCount >= 1 &&
       result.visibleUseProfileForPatchButtonCount >= 1 &&
-      result.visibleDuplicateFixtureButtonCount >= 1
+      result.visibleDuplicateFixtureButtonCount >= 1 &&
+      hasExpectedContinuousPatchGrid(result)
     );
   }
   if (result.label.startsWith("setup-mapping-")) {
@@ -6729,6 +6939,103 @@ async function runComposedTouchViewport(client, viewport) {
   await sleep(180);
   await checkEditableTouchSurface(client, "Viewport Touch", false);
   return measure(client, `touch-composed-${viewport.width}x${viewport.height}`);
+}
+
+async function checkPatchHighAddressAction(client) {
+  return await client.evaluate(`(async () => {
+    const grid = document.querySelector('.dmxAddressGrid');
+    const cell497 = grid?.querySelector('[data-dmx-address="497"]');
+    const cell25 = grid?.querySelector('[data-dmx-address="25"]');
+    const addressInput = [...document.querySelectorAll('label')]
+      .find((label) => (label.childNodes[0]?.textContent || '').trim() === 'Address')
+      ?.querySelector('input');
+    if (!(grid instanceof HTMLElement) || !(cell497 instanceof HTMLButtonElement) || !(addressInput instanceof HTMLInputElement)) {
+      return { passed: false, reason: 'missing grid, A497, or Address input' };
+    }
+    grid.scrollTop = grid.scrollHeight;
+    await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
+    const gridRect = grid.getBoundingClientRect();
+    const cellRect = cell497.getBoundingClientRect();
+    const highCellReachable =
+      cellRect.left >= gridRect.left - 1 && cellRect.right <= gridRect.right + 1 &&
+      cellRect.top >= gridRect.top - 1 && cellRect.bottom <= gridRect.bottom + 1;
+    cell497.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const plannedHighAddresses = [...grid.querySelectorAll('.dmxAddressCell.planned')]
+      .map((cell) => Number(cell.getAttribute('data-dmx-address')))
+      .filter((address) => Number.isFinite(address) && address >= 497)
+      .sort((left, right) => left - right);
+    const app = document.querySelector('.app');
+    const layout = document.querySelector('.layout');
+    const desk = grid.closest('.setupPatchAddressDesk');
+    const outerScrollZero =
+      window.scrollX === 0 && window.scrollY === 0 &&
+      document.documentElement.scrollLeft === 0 && document.documentElement.scrollTop === 0 &&
+      document.body.scrollLeft === 0 && document.body.scrollTop === 0 &&
+      (!app || (app.scrollLeft === 0 && app.scrollTop === 0)) &&
+      (!layout || (layout.scrollLeft === 0 && layout.scrollTop === 0)) &&
+      (!desk || (desk.scrollLeft === 0 && desk.scrollTop === 0));
+    const addressValue = addressInput.value;
+    const readout = (document.querySelector('.dmxPatchAddressReadout')?.textContent || '').replace(/\s+/g, ' ').trim();
+    cell25?.click();
+    grid.scrollTop = 0;
+    await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
+    const passed =
+      highCellReachable &&
+      addressValue === '497' &&
+      plannedHighAddresses.length === 16 &&
+      plannedHighAddresses.every((address, index) => address === 497 + index) &&
+      readout.endsWith('A497') &&
+      outerScrollZero;
+    return {
+      passed,
+      highCellReachable,
+      addressValue,
+      plannedHighAddresses,
+      readout,
+      outerScrollZero,
+    };
+  })()`);
+}
+
+async function runPatchViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await seedViewportLocalStorage(client);
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await clickByText(client, "Setup");
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
+  await sleep(180);
+  if (shouldCaptureViewport(viewport)) {
+    mkdirSync(screenshotDir, { recursive: true });
+    const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+    writeFileSync(join(screenshotDir, `patch-continuous-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
+  }
+  const containment = await measure(client, `setup-patch-${viewport.width}x${viewport.height}`);
+  const highAddressAction = await checkPatchHighAddressAction(client);
+  const checks = {
+    contained: isContained(containment),
+    setupSurface: hasExpectedSetupSurface(containment),
+    continuousGrid: hasExpectedContinuousPatchGrid(containment),
+    highAddressAction: highAddressAction.passed === true,
+  };
+  const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  return {
+    passed: failedChecks.length === 0,
+    label: `patch-continuous-${viewport.width}x${viewport.height}`,
+    checks,
+    failedChecks,
+    containment,
+    highAddressAction,
+  };
 }
 
 async function runPersistentBandInvarianceViewport(client, viewport) {
@@ -9686,6 +9993,31 @@ async function main() {
     console.log(
       `viewport contract primary-browser=${primaryOperationalViewport.width}x${primaryOperationalViewport.height} measured-client-size-browser=${measuredClientSizeViewport.width}x${measuredClientSizeViewport.height} extended-browser=${extendedCeilingViewport.width}x${extendedCeilingViewport.height} fallback-browsers=${compactFallbackViewports.map((viewport) => `${viewport.width}x${viewport.height}`).join(",")} screenshots=${captureAllViewportScreenshots ? "all" : "large-browser-fixtures"}`,
     );
+    if (patchOnlyMode) {
+      const patchResults = [];
+      for (const viewport of viewports) {
+        const result = await runPatchViewport(client, viewport);
+        patchResults.push(result);
+        const metrics = result.containment.patchGridMetrics;
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `cells=${metrics?.addressCount ?? 0} range=${metrics?.firstAddress ?? "?"}..${metrics?.lastAddress ?? "?"} ` +
+            `pages=${metrics?.pageSelectorCount ?? "?"} geometry=${metrics?.columnCount ?? "?"}x${metrics?.rowCount ?? "?"} ` +
+            `cell=${metrics?.minCellWidth ?? "?"}x${metrics?.minCellHeight ?? "?"} ` +
+            `scroll=${metrics?.clientWidth ?? "?"}x${metrics?.clientHeight ?? "?"}->${metrics?.scrollWidth ?? "?"}x${metrics?.scrollHeight ?? "?"} ` +
+            `end=${metrics?.endReachable ? 1 : 0} outer=${metrics?.outerScrollUnchangedAtEnd ? 0 : 1} ` +
+            `keys=${metrics?.arrowRightAddress ?? "?"}/${metrics?.arrowDownAddress ?? "?"}/${metrics?.controlEndAddress ?? "?"} ` +
+            `keyVisible=${metrics?.controlEndFullyVisible ? 1 : 0} ` +
+            `high=${result.highAddressAction.addressValue ?? "?"}:${result.highAddressAction.plannedHighAddresses?.join(",") ?? "?"} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = patchResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Continuous PATCH viewport failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
     if (persistentBandOnlyMode) {
       const persistentBandResults = [];
       for (const viewport of viewports) {
@@ -10107,7 +10439,7 @@ async function main() {
         ? ` mappingHelp=${result.visibleMappingHotkeyHelpCount}/${result.mappingHotkeyHelpKeyCount}`
         : "";
       const patchSuffix = result.label.startsWith("setup-patch-")
-        ? ` patch=${result.visiblePatchActionRowCount}/${result.visiblePatchAutoButtonCount}/${result.visiblePatchPrimaryButtonCount}/${result.visiblePatchNextFreeButtonCount}/${result.visiblePatchFootprintCount}/${result.visibleDmxAddressGridCount}/${result.dmxAddressCellCount}/${result.dmxAddressOccupiedCellCount}/${result.dmxAddressPlannedCellCount}/${result.visibleDmxFixtureBlockCount}/${result.compactMappingStageWidth}x${result.compactMappingStageHeight}/${result.visibleDmxGridSummaryCount}/${result.visibleFixtureSetupEditorCount}/${result.visibleUseProfileForPatchButtonCount}/${result.visibleDuplicateFixtureButtonCount}`
+        ? ` patch=${result.visiblePatchActionRowCount}/${result.visiblePatchAutoButtonCount}/${result.visiblePatchPrimaryButtonCount}/${result.visiblePatchNextFreeButtonCount}/${result.visiblePatchFootprintCount}/${result.visibleDmxAddressGridCount}/${result.dmxAddressCellCount}/${result.dmxAddressOccupiedCellCount}/${result.dmxAddressPlannedCellCount}/${result.visibleDmxFixtureBlockCount}/${result.compactMappingStageWidth}x${result.compactMappingStageHeight}/${result.visibleDmxGridSummaryCount}/${result.visibleFixtureSetupEditorCount}/${result.visibleUseProfileForPatchButtonCount}/${result.visibleDuplicateFixtureButtonCount} continuous=${result.patchGridMetrics?.addressCount ?? 0}:${result.patchGridMetrics?.firstAddress ?? "?"}..${result.patchGridMetrics?.lastAddress ?? "?"} pages=${result.patchGridMetrics?.pageSelectorCount ?? "?"} geometry=${result.patchGridMetrics?.columnCount ?? "?"}x${result.patchGridMetrics?.rowCount ?? "?"} cell=${result.patchGridMetrics?.minCellWidth ?? "?"}x${result.patchGridMetrics?.minCellHeight ?? "?"} scroll=${result.patchGridMetrics?.clientWidth ?? "?"}x${result.patchGridMetrics?.clientHeight ?? "?"}->${result.patchGridMetrics?.scrollWidth ?? "?"}x${result.patchGridMetrics?.scrollHeight ?? "?"} end=${result.patchGridMetrics?.endReachable ? 1 : 0} outer=${result.patchGridMetrics?.outerScrollUnchangedAtEnd ? 0 : 1} keys=${result.patchGridMetrics?.arrowRightAddress ?? "?"}/${result.patchGridMetrics?.arrowDownAddress ?? "?"}/${result.patchGridMetrics?.controlEndAddress ?? "?"}`
         : "";
       const outputSetupSuffix = result.label.startsWith("setup-video-")
         ? ` outputSetup=${result.visibleSetupVideoPanelCount}/${result.visibleSetupVideoOutputDeckCount}/${result.visibleSetupVideoOutputActiveDeckCount}/${result.visibleSetupVideoOutputDetailPaneCount}/${result.visibleVideoOutputMappingPanelCount}/${result.visibleVideoOutputBlendControlsCount}/${result.visibleProjectorMapEditorCount}/${result.visibleProjectorMapHandleCount}/${result.visibleProjectorKeystoneHandleCount}/${result.visibleProjectorScaleHandleCount}/${result.visibleProjectorRotateHandleCount}/${result.visibleProjectorAspectModeButtonCount}/${result.visibleProjectorAspectPresetButtonCount}/${result.visibleProjectorResetPoseButtonCount}/${result.videoSetupSidebarWidth}w/${result.videoSetupOutputDeskWidth}w panes=${result.videoSetupRoutingPaneWidth}/${result.videoSetupMapPaneWidth}/${result.videoSetupInspectorPaneWidth} actions=${result.videoSetupCriticalActionInViewportCount}`
