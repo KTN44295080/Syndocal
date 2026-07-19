@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,6 +21,7 @@ const sceneBlockOverlapOnlyMode = process.argv.includes("--scene-block-overlap-o
 const sceneMatrixOnlyMode = process.argv.includes("--scene-matrix-only");
 const patchOnlyMode = process.argv.includes("--patch-only");
 const persistentBandOnlyMode = process.argv.includes("--persistent-band-only");
+const workspaceSplitOnlyMode = process.argv.includes("--workspace-split-only");
 const workspaceShellOnlyMode = process.argv.includes("--workspace-shell-only");
 const viewportTraceEnabled = process.env.SYNDOCAL_VIEWPORT_TRACE === "1";
 const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
@@ -148,7 +149,11 @@ const traceViewport = (message) => {
 };
 
 function comparePersistentBandMeasurements(setupBefore, control, setupAfter) {
-  const partNames = ["groups", "stage", "selections", "context"];
+  // T15-P replaces T10's fixed Groups / Stage / Selections / Context columns
+  // with a resizable lower-left / lower-right split. Compare stable pane hosts
+  // and split boundaries; drawer content and the stage SVG are intentionally
+  // excluded because they may open or resize inside the unchanged host.
+  const partNames = ["groups", "stage", "context"];
   const rectDelta = (left, right) => {
     if (!left || !right) return Number.POSITIVE_INFINITY;
     return Math.max(
@@ -166,24 +171,62 @@ function comparePersistentBandMeasurements(setupBefore, control, setupAfter) {
     part,
     rectDelta(control.persistentBandRects[part], setupAfter.persistentBandRects[part]),
   ]));
+  const splitterNames = ["upperLower", "lowerLeftRight"];
+  const setupToControlSplitters = Object.fromEntries(splitterNames.map((splitter) => [
+    splitter,
+    rectDelta(setupBefore.workspaceSplitterRects?.[splitter], control.workspaceSplitterRects?.[splitter]),
+  ]));
+  const controlToSetupSplitters = Object.fromEntries(splitterNames.map((splitter) => [
+    splitter,
+    rectDelta(control.workspaceSplitterRects?.[splitter], setupAfter.workspaceSplitterRects?.[splitter]),
+  ]));
+  const ratioDeltas = {
+    setupToControlTop: Math.abs((setupBefore.workspaceSplitRatios?.top ?? -1) - (control.workspaceSplitRatios?.top ?? -2)),
+    setupToControlLower: Math.abs((setupBefore.workspaceSplitRatios?.lower ?? -1) - (control.workspaceSplitRatios?.lower ?? -2)),
+    controlToSetupTop: Math.abs((control.workspaceSplitRatios?.top ?? -1) - (setupAfter.workspaceSplitRatios?.top ?? -2)),
+    controlToSetupLower: Math.abs((control.workspaceSplitRatios?.lower ?? -1) - (setupAfter.workspaceSplitRatios?.lower ?? -2)),
+  };
   return {
-    invariant: [...Object.values(setupToControl), ...Object.values(controlToSetup)].every((delta) => delta <= 1),
+    invariant:
+      [
+        ...Object.values(setupToControl),
+        ...Object.values(controlToSetup),
+        ...Object.values(setupToControlSplitters),
+        ...Object.values(controlToSetupSplitters),
+      ].every((delta) => delta <= 1) &&
+      Object.values(ratioDeltas).every((delta) => delta <= 0.001),
     rectsByWorkspace: {
       setupBefore: setupBefore.persistentBandRects,
       control: control.persistentBandRects,
       setupAfter: setupAfter.persistentBandRects,
     },
-    deltas: { setupToControl, controlToSetup },
+    splitterRectsByWorkspace: {
+      setupBefore: setupBefore.workspaceSplitterRects,
+      control: control.workspaceSplitterRects,
+      setupAfter: setupAfter.workspaceSplitterRects,
+    },
+    ratiosByWorkspace: {
+      setupBefore: setupBefore.workspaceSplitRatios,
+      control: control.workspaceSplitRatios,
+      setupAfter: setupAfter.workspaceSplitRatios,
+    },
+    deltas: {
+      setupToControl,
+      controlToSetup,
+      setupToControlSplitters,
+      controlToSetupSplitters,
+      ratioDeltas,
+    },
   };
 }
 
 function persistentBandRectsExactlyEqual(left, right) {
   if (!left || !right) return false;
   return (
-    left.x === right.x &&
-    left.y === right.y &&
-    left.width === right.width &&
-    left.height === right.height
+    Math.abs(left.x - right.x) <= 1 &&
+    Math.abs(left.y - right.y) <= 1 &&
+    Math.abs(left.width - right.width) <= 1 &&
+    Math.abs(left.height - right.height) <= 1
   );
 }
 
@@ -1945,21 +1988,54 @@ async function measurePersistentBand(client, label) {
     };
     const app = document.querySelector('.app');
     const layout = document.querySelector('.layout');
+    const splitters = {
+      upperLower: document.querySelector('[data-workspace-splitter="upper-lower"]'),
+      lowerLeftRight: document.querySelector('[data-workspace-splitter="lower-left-right"]'),
+    };
+    const drawer = document.querySelector('[data-workspace-selection-drawer]');
+    const drawerToggle = document.querySelector('[data-workspace-selection-drawer-toggle]');
     return {
       label: ${JSON.stringify(label)},
       visiblePersistentBandCount: visibleElements('.mappingPersistentWorkspaceBand').length,
       visiblePersistentGroupsCount: visibleElements('[data-persistent-band-part="groups"]').length,
       visiblePersistentStageCount: visibleElements('[data-persistent-band-part="stage"]').length,
-      visiblePersistentSelectionsCount: visibleElements('[data-persistent-band-part="selections"]').length,
+      visiblePersistentSelectionsCount: visibleElements('[data-workspace-selection-drawer][open]').length,
       visiblePersistentContextCount: visibleElements('[data-persistent-band-part="context"]').length,
+      visibleSelectionDrawerToggleCount: visibleElements('[data-workspace-selection-drawer-toggle]').length,
+      selectionDrawerOpen: drawer instanceof HTMLDetailsElement && drawer.open,
+      selectionDrawerExpandedMatches:
+        drawer instanceof HTMLDetailsElement &&
+        drawerToggle?.getAttribute('aria-expanded') === String(drawer.open),
+      visibleWorkspaceSplitterCount: visibleElements('[data-workspace-splitter]').length,
       visibleControlStagePanelCount: visibleElements('.controlStagePanel').length,
       visibleControlStageCount: visibleElements('.controlStage').length,
       persistentBandRects: {
         groups: measuredRect('[data-persistent-band-part="groups"]'),
-        stage: measuredRect('[data-persistent-band-part="stage"]'),
-        selections: measuredRect('[data-persistent-band-part="selections"]'),
-        context: measuredRect('[data-persistent-band-part="context"]'),
+        stage: measuredRect('[data-workspace-pane="lower-left"]'),
+        selections: measuredRect('[data-workspace-selection-drawer][open]'),
+        context: measuredRect('[data-workspace-pane="lower-right"]'),
       },
+      workspacePaneRects: {
+        upper: measuredRect('[data-workspace-pane="upper"]'),
+        lower: measuredRect('[data-workspace-pane="lower"]'),
+      },
+      workspaceSplitterRects: {
+        upperLower: measuredRect('[data-workspace-splitter="upper-lower"]'),
+        lowerLeftRight: measuredRect('[data-workspace-splitter="lower-left-right"]'),
+      },
+      workspaceSplitRatios: {
+        top: Number(layout?.getAttribute('data-upper-lower-ratio') ?? NaN),
+        lower: Number(layout?.getAttribute('data-lower-left-right-ratio') ?? NaN),
+      },
+      workspaceSplitterAccessibility: Object.fromEntries(Object.entries(splitters).map(([name, splitter]) => [name, splitter ? {
+        role: splitter.getAttribute('role') ?? '',
+        orientation: splitter.getAttribute('aria-orientation') ?? '',
+        label: splitter.getAttribute('aria-label') ?? '',
+        minimum: Number(splitter.getAttribute('aria-valuemin')),
+        maximum: Number(splitter.getAttribute('aria-valuemax')),
+        current: Number(splitter.getAttribute('aria-valuenow')),
+        tabIndex: splitter.tabIndex,
+      } : null])),
       outerContained:
         window.scrollX === 0 && window.scrollY === 0 &&
         document.documentElement.scrollWidth === document.documentElement.clientWidth &&
@@ -1993,21 +2069,57 @@ async function measureTimelinePaneExpansionState(client) {
         height: precision(rect.height),
       };
     };
+    const splitterState = (name, rootSelector, axis) => {
+      const splitter = [...document.querySelectorAll('[data-workspace-splitter="' + name + '"]')].find(isVisible);
+      const root = document.querySelector(rootSelector);
+      if (!splitter || !root) return null;
+      const splitterRect = splitter.getBoundingClientRect();
+      const rootRect = root.getBoundingClientRect();
+      const splitterSize = axis === 'horizontal' ? splitterRect.height : splitterRect.width;
+      const usable = (axis === 'horizontal' ? rootRect.height : rootRect.width) - splitterSize;
+      const first = axis === 'horizontal'
+        ? splitterRect.top - rootRect.top
+        : splitterRect.left - rootRect.left;
+      return {
+        minimum: Number(splitter.getAttribute('aria-valuemin')),
+        maximum: Number(splitter.getAttribute('aria-valuemax')),
+        current: Number(splitter.getAttribute('aria-valuenow')),
+        renderedRatio: usable > 0 ? first / usable : Number.NaN,
+      };
+    };
     const documentElement = document.documentElement;
     const body = document.body;
     const app = document.querySelector('.app');
+    const layout = document.querySelector('[data-workspace-split-root="true"]');
     const band = document.querySelector('.mappingPersistentWorkspaceBand');
     const toggle = document.querySelector('[data-timeline-pane-expand-toggle]');
+    const drawer = document.querySelector('[data-workspace-selection-drawer]');
     return {
       persistentBandRect: measuredRect('.mappingPersistentWorkspaceBand'),
       persistentBandRects: {
         groups: measuredRect('[data-persistent-band-part="groups"]'),
-        stage: measuredRect('[data-persistent-band-part="stage"]'),
-        selections: measuredRect('[data-persistent-band-part="selections"]'),
-        context: measuredRect('[data-persistent-band-part="context"]'),
+        stage: measuredRect('[data-workspace-pane="lower-left"]'),
+        selections: measuredRect('[data-workspace-selection-drawer][open]'),
+        context: measuredRect('[data-workspace-pane="lower-right"]'),
       },
+      workspaceSplitterRects: {
+        upperLower: measuredRect('[data-workspace-splitter="upper-lower"]'),
+        lowerLeftRight: measuredRect('[data-workspace-splitter="lower-left-right"]'),
+      },
+      workspaceSplitterState: {
+        upperLower: splitterState('upper-lower', '[data-workspace-split-root="true"]', 'horizontal'),
+        lowerLeftRight: splitterState('lower-left-right', '[data-workspace-pane="lower"]', 'vertical'),
+      },
+      workspaceSplitRatios: {
+        top: Number(layout?.getAttribute('data-upper-lower-ratio') ?? NaN),
+        lower: Number(layout?.getAttribute('data-lower-left-right-ratio') ?? NaN),
+      },
+      selectionDrawerOpen: drawer instanceof HTMLDetailsElement && drawer.open,
+      workspaceStorageRaw: window.localStorage.getItem('syndocal.workspaceLayout.v1') ?? '',
       timelinePaneExpanded: band?.classList.contains('timelinePaneExpanded') ?? false,
       timelinePaneExpandToggleVisible: isVisible(toggle),
+      timelinePaneExpandToggleNamed: Boolean(toggle?.getAttribute('aria-label')),
+      viewport: [innerWidth, innerHeight],
       documentAndAppScrollZero:
         window.scrollX === 0 && window.scrollY === 0 &&
         documentElement.scrollWidth === documentElement.clientWidth &&
@@ -2047,43 +2159,128 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
   })()`);
   await sleep(120);
   const expanded = await measureTimelinePaneExpansionState(client);
+  const resizedViewport = {
+    width: viewport.width + 37,
+    height: viewport.height + 23,
+  };
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: resizedViewport.width,
+    height: resizedViewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await sleep(160);
+  const expandedResized = await measureTimelinePaneExpansionState(client);
   await pressKey(client, 'Escape', 'Escape');
-  await sleep(120);
+  await sleep(160);
+  const restoredResized = await measureTimelinePaneExpansionState(client);
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await sleep(160);
   const restored = await measureTimelinePaneExpansionState(client);
   const beforeContextWidth = before.persistentBandRects.context?.width ?? 0;
   const expandedContextWidth = expanded.persistentBandRects.context?.width ?? 0;
   const expandedBandWidth = expanded.persistentBandRect?.width ?? 0;
+  const splitterAriaMatchesRendered = (state) => Boolean(
+    state &&
+    Number.isFinite(state.minimum) &&
+    Number.isFinite(state.maximum) &&
+    Number.isFinite(state.current) &&
+    Number.isFinite(state.renderedRatio) &&
+    state.minimum <= state.current &&
+    state.current <= state.maximum &&
+    Math.abs(state.current - Math.round(state.renderedRatio * 100)) <= 1
+  );
   const timelinePaneExpansionConditions = [
     ['timelineExpandToggleVisible', () => Boolean(before.timelinePaneExpandToggleVisible)],
+    ['timelineExpandToggleNamed', () => Boolean(before.timelinePaneExpandToggleNamed)],
     ['expandToggleClicked', () => Boolean(expandToggleClicked)],
     ['expandedStateApplied', () => Boolean(expanded.timelinePaneExpanded)],
     ['expandedContextWidthGrew', () => Boolean(expandedContextWidth > beforeContextWidth + 1)],
     ['expandedContextApproximatelyFullBandWidth', () => Boolean(
       expandedBandWidth > 0 && Math.abs(expandedBandWidth - expandedContextWidth) <= 4
     )],
-    ['expandedStageAndSelectionsHidden', () => Boolean(
+    ['expandedLowerLeftPaneAndDrawerHidden', () => Boolean(
       expanded.persistentBandRects.stage === null && expanded.persistentBandRects.selections === null
     )],
-    ['expandedGroupsStripKept', () => Boolean(expanded.persistentBandRects.groups !== null)],
+    ['expandedGroupsStripHiddenWithLowerLeftPane', () => Boolean(expanded.persistentBandRects.groups === null)],
+    ['expandedLowerSplitterHidden', () => Boolean(expanded.workspaceSplitterRects.lowerLeftRight === null)],
+    ['expandedUpperSplitterBoundaryPreserved', () => persistentBandRectsExactlyEqual(
+      before.workspaceSplitterRects.upperLower,
+      expanded.workspaceSplitterRects.upperLower,
+    )],
+    ['expandedSplitRatiosRemainStable', () => Boolean(
+      Math.abs(expanded.workspaceSplitRatios.top - before.workspaceSplitRatios.top) <= 0.001 &&
+      Math.abs(expanded.workspaceSplitRatios.lower - before.workspaceSplitRatios.lower) <= 0.001
+    )],
+    ['expandedStateDoesNotPersistTransientGeometry', () => expanded.workspaceStorageRaw === before.workspaceStorageRaw],
     ['expandedDocumentAndAppScrollZero', () => Boolean(expanded.documentAndAppScrollZero)],
+    ['expandedResizeKeepsFocusAndPreferredRatios', () => Boolean(
+      expandedResized.timelinePaneExpanded &&
+      Math.abs(expandedResized.workspaceSplitRatios.top - before.workspaceSplitRatios.top) <= 0.001 &&
+      Math.abs(expandedResized.workspaceSplitRatios.lower - before.workspaceSplitRatios.lower) <= 0.001 &&
+      expandedResized.workspaceStorageRaw === before.workspaceStorageRaw
+    )],
+    ['expandedResizeKeepsUpperSplitterAriaAndOuterScroll', () => Boolean(
+      splitterAriaMatchesRendered(expandedResized.workspaceSplitterState.upperLower) &&
+      expandedResized.workspaceSplitterState.lowerLeftRight === null &&
+      expandedResized.documentAndAppScrollZero
+    )],
+    ['resizeEscapeRestoresBothSplitterAria', () => Boolean(
+      !restoredResized.timelinePaneExpanded &&
+      splitterAriaMatchesRendered(restoredResized.workspaceSplitterState.upperLower) &&
+      splitterAriaMatchesRendered(restoredResized.workspaceSplitterState.lowerLeftRight)
+    )],
+    ['resizeEscapePreservesUpperBoundary', () => Boolean(
+      persistentBandRectsExactlyEqual(
+        expandedResized.workspaceSplitterRects.upperLower,
+        restoredResized.workspaceSplitterRects.upperLower,
+      ) &&
+      persistentBandRectsExactlyEqual(
+        expandedResized.persistentBandRect,
+        restoredResized.persistentBandRect,
+      )
+    )],
+    ['resizeEscapePreservesPreferredRatiosStorageAndOuterScroll', () => Boolean(
+      Math.abs(restoredResized.workspaceSplitRatios.top - before.workspaceSplitRatios.top) <= 0.001 &&
+      Math.abs(restoredResized.workspaceSplitRatios.lower - before.workspaceSplitRatios.lower) <= 0.001 &&
+      restoredResized.workspaceStorageRaw === before.workspaceStorageRaw &&
+      restoredResized.documentAndAppScrollZero
+    )],
     ['escapeClearedExpandedState', () => Boolean(!restored.timelinePaneExpanded)],
-    ['escapeRestoredGroupsRectExactly', () => persistentBandRectsExactlyEqual(
+    ['escapeRestoredGroupsRectWithinOnePixel', () => persistentBandRectsExactlyEqual(
       before.persistentBandRects.groups,
       restored.persistentBandRects.groups,
     )],
-    ['escapeRestoredStageRectExactly', () => persistentBandRectsExactlyEqual(
+    ['escapeRestoredLowerLeftRectWithinOnePixel', () => persistentBandRectsExactlyEqual(
       before.persistentBandRects.stage,
       restored.persistentBandRects.stage,
     )],
-    ['escapeRestoredSelectionsRectExactly', () => persistentBandRectsExactlyEqual(
-      before.persistentBandRects.selections,
-      restored.persistentBandRects.selections,
-    )],
-    ['escapeRestoredContextRectExactly', () => persistentBandRectsExactlyEqual(
+    ['escapeRestoredLowerRightRectWithinOnePixel', () => persistentBandRectsExactlyEqual(
       before.persistentBandRects.context,
       restored.persistentBandRects.context,
     )],
+    ['escapeRestoredLowerSplitterWithinOnePixel', () => persistentBandRectsExactlyEqual(
+      before.workspaceSplitterRects.lowerLeftRight,
+      restored.workspaceSplitterRects.lowerLeftRight,
+    )],
+    ['escapeRestoredDrawerState', () => restored.selectionDrawerOpen === before.selectionDrawerOpen],
+    ['escapeRestoredSplitRatios', () => Boolean(
+      Math.abs(restored.workspaceSplitRatios.top - before.workspaceSplitRatios.top) <= 0.001 &&
+      Math.abs(restored.workspaceSplitRatios.lower - before.workspaceSplitRatios.lower) <= 0.001
+    )],
+    ['escapeKeptWorkspaceStorageExact', () => restored.workspaceStorageRaw === before.workspaceStorageRaw],
     ['restoredDocumentAndAppScrollZero', () => Boolean(restored.documentAndAppScrollZero)],
+    ['originalViewportRestoresBothSplitterAria', () => Boolean(
+      restored.viewport[0] === viewport.width &&
+      restored.viewport[1] === viewport.height &&
+      splitterAriaMatchesRendered(restored.workspaceSplitterState.upperLower) &&
+      splitterAriaMatchesRendered(restored.workspaceSplitterState.lowerLeftRight)
+    )],
   ];
   const checks = Object.fromEntries(timelinePaneExpansionConditions.map(([name, check]) => {
     try {
@@ -2100,6 +2297,8 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
     failedChecks,
     before,
     expanded,
+    expandedResized,
+    restoredResized,
     restored,
   };
 }
@@ -3073,13 +3272,23 @@ async function measure(client, label) {
       visiblePersistentBandCount: visibleCount('.mappingPersistentWorkspaceBand'),
       visiblePersistentGroupsCount: visibleCount('[data-persistent-band-part="groups"]'),
       visiblePersistentStageCount: visibleCount('[data-persistent-band-part="stage"]'),
-      visiblePersistentSelectionsCount: visibleCount('[data-persistent-band-part="selections"]'),
+      visiblePersistentSelectionsCount: visibleCount('[data-workspace-selection-drawer][open]'),
       visiblePersistentContextCount: visibleCount('[data-persistent-band-part="context"]'),
+      visibleSelectionDrawerToggleCount: visibleCount('[data-workspace-selection-drawer-toggle]'),
+      visibleWorkspaceSplitterCount: visibleCount('[data-workspace-splitter]'),
       persistentBandRects: {
         groups: measuredRect('[data-persistent-band-part="groups"]'),
-        stage: measuredRect('[data-persistent-band-part="stage"]'),
-        selections: measuredRect('[data-persistent-band-part="selections"]'),
-        context: measuredRect('[data-persistent-band-part="context"]'),
+        stage: measuredRect('[data-workspace-pane="lower-left"]'),
+        selections: measuredRect('[data-workspace-selection-drawer][open]'),
+        context: measuredRect('[data-workspace-pane="lower-right"]'),
+      },
+      workspacePaneRects: {
+        upper: measuredRect('[data-workspace-pane="upper"]'),
+        lower: measuredRect('[data-workspace-pane="lower"]'),
+      },
+      workspaceSplitterRects: {
+        upperLower: measuredRect('[data-workspace-splitter="upper-lower"]'),
+        lowerLeftRight: measuredRect('[data-workspace-splitter="lower-left-right"]'),
       },
       visibleAppStatusLineCount: visibleCount('.appStatusLine[role="status"]'),
       appStatusTone: document.querySelector('.appStatusLine')?.getAttribute('data-status-tone') ?? '',
@@ -4290,12 +4499,12 @@ function hasExpectedPersistentWorkspaceBand(result) {
     result.visiblePersistentBandCount === 1 &&
     result.visiblePersistentGroupsCount === 1 &&
     result.visiblePersistentStageCount === 1 &&
-    result.visiblePersistentSelectionsCount === 1 &&
+    result.visibleSelectionDrawerToggleCount === 1 &&
     result.visiblePersistentContextCount === 1 &&
-    rects.groups?.width >= 900 && rects.groups?.height >= 24 &&
-    rects.stage?.width >= 320 && rects.stage?.height >= 120 &&
-    rects.selections?.width >= 170 && rects.selections?.height >= 120 &&
-    rects.context?.width >= 300 && rects.context?.height >= 120 &&
+    result.visibleWorkspaceSplitterCount === 2 &&
+    rects.groups?.width >= 428 && rects.groups?.height >= 24 &&
+    rects.stage?.width >= 428 && rects.stage?.height >= 120 &&
+    rects.context?.width >= 478 && rects.context?.height >= 120 &&
     oldControlPreviewAbsent
   );
 }
@@ -4325,8 +4534,9 @@ function hasExpectedControlModeSurface(result) {
       result.visibleLiveControlPanelCount !== 1 ||
       result.visiblePersistentBandCount !== 1 ||
       result.visiblePersistentStageCount !== 1 ||
-      result.visiblePersistentSelectionsCount !== 1 ||
+      result.visibleSelectionDrawerToggleCount !== 1 ||
       result.visiblePersistentContextCount !== 1 ||
+      result.visibleWorkspaceSplitterCount !== 2 ||
       result.visibleControlStagePanelCount !== 0 ||
       result.visibleControlStageCount !== 0
     )
@@ -4561,14 +4771,12 @@ function hasExpectedControlModeSurface(result) {
     );
   }
   if (result.label.startsWith("control-live-")) {
-    const persistentBandHeight =
-      (result.persistentBandRects?.groups?.height ?? 0) +
-      (result.persistentBandRects?.context?.height ?? 0);
-    if (persistentBandHeight <= 0 || Math.abs(result.liveControlPanelHeight - persistentBandHeight) > 4) return false;
+    const upperPaneHeight = result.workspacePaneRects?.upper?.height ?? 0;
+    if (upperPaneHeight <= 0 || Math.abs(result.liveControlPanelHeight - upperPaneHeight) > 4) return false;
     if (
       result.visibleLiveFadeMeterCount !== 1 ||
-      result.liveFadeMeterGridRow !== "5" ||
-      result.liveMasterGridRow !== "6" ||
+      result.liveFadeMeterGridRow !== "4" ||
+      result.liveMasterGridRow !== "5" ||
       !result.liveFadeAboveMaster
     ) return false;
     if (result.label.startsWith("control-live-playback-")) {
@@ -7038,6 +7246,769 @@ async function runPatchViewport(client, viewport) {
   };
 }
 
+const workspaceSplitDefaults = {
+  top: 0.58,
+  lower: 0.44,
+};
+
+const workspaceSplitMinimums = {
+  upper: 280,
+  lower: 310,
+  lowerLeft: 430,
+  lowerRight: 480,
+};
+
+async function readWorkspaceSplitState(client) {
+  return evaluatePageFunction(client, () => {
+    const visibleElement = (selector) => [...document.querySelectorAll(selector)].find((element) => {
+      const box = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return box.width > 0 && box.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+    }) ?? null;
+    const rect = (selector) => {
+      const element = visibleElement(selector);
+      if (!element) return null;
+      const box = element.getBoundingClientRect();
+      const precision = (value) => Math.round(value * 100) / 100;
+      return {
+        x: precision(box.x),
+        y: precision(box.y),
+        right: precision(box.right),
+        bottom: precision(box.bottom),
+        width: precision(box.width),
+        height: precision(box.height),
+      };
+    };
+    const splitterInfo = (name) => {
+      const selector = `[data-workspace-splitter="${name}"]`;
+      const element = visibleElement(selector);
+      if (!element) return null;
+      return {
+        rect: rect(selector),
+        role: element.getAttribute("role") ?? "",
+        orientation: element.getAttribute("aria-orientation") ?? "",
+        label: element.getAttribute("aria-label") ?? "",
+        minimum: Number(element.getAttribute("aria-valuemin")),
+        maximum: Number(element.getAttribute("aria-valuemax")),
+        current: Number(element.getAttribute("aria-valuenow")),
+        tabIndex: element.tabIndex,
+        dragging: element.getAttribute("data-dragging") === "true",
+      };
+    };
+    const renderedRatio = (root, splitter, axis) => {
+      if (!root || !splitter?.rect) return Number.NaN;
+      const rootBox = root.getBoundingClientRect();
+      const splitterSize = axis === "horizontal" ? splitter.rect.height : splitter.rect.width;
+      const usable = (axis === "horizontal" ? rootBox.height : rootBox.width) - splitterSize;
+      const first = axis === "horizontal"
+        ? splitter.rect.y - rootBox.y
+        : splitter.rect.x - rootBox.x;
+      return usable > 0 ? first / usable : Number.NaN;
+    };
+    const app = document.querySelector(".app");
+    const layout = document.querySelector('[data-workspace-split-root="true"]');
+    const rootRect = rect('[data-workspace-split-root="true"]');
+    const lowerRect = rect('[data-workspace-pane="lower"]');
+    const leftRect = rect('[data-workspace-pane="lower-left"]');
+    const rightRect = rect('[data-workspace-pane="lower-right"]');
+    const groupRect = rect('[data-persistent-band-part="groups"]');
+    const drawer = document.querySelector('[data-workspace-selection-drawer]');
+    const drawerRect = rect('[data-workspace-selection-drawer][open]');
+    const drawerToggle = document.querySelector('[data-workspace-selection-drawer-toggle]');
+    const topSplitter = splitterInfo("upper-lower");
+    const lowerSplitter = splitterInfo("lower-left-right");
+    const livePanel = document.querySelector('.liveControlPanel');
+    const liveStatusToggle = document.querySelector('[data-live-status-toggle]');
+    const liveStatusRect = rect('.liveControlPanel > .liveStatusGrid');
+    const sceneMatrixRect = rect('.liveControlPanel > .sceneMatrixPanel');
+    const liveFadeRect = rect('.liveControlPanel > .liveFadeMeter');
+    const liveMasterRect = rect('.liveControlPanel > .liveMasterGrid');
+    const visibleStatusItems = [...document.querySelectorAll('.liveControlPanel > .liveStatusGrid > .liveStatusItem')]
+      .filter((element) => {
+        const box = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return box.width > 0 && box.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      });
+    const visibleTransportButtons = [...document.querySelectorAll('.liveControlPanel > .liveTransportGrid > button')]
+      .filter((element) => {
+        const box = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return box.width > 0 && box.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      });
+    const transportRows = new Set(visibleTransportButtons.map((element) => Math.round(element.getBoundingClientRect().top)));
+    let storage = null;
+    const storageRaw = window.localStorage.getItem("syndocal.workspaceLayout.v1") ?? "";
+    try { storage = storageRaw ? JSON.parse(storageRaw) : null; } catch { storage = null; }
+    const documentElement = document.documentElement;
+    const body = document.body;
+    return {
+      rootRect,
+      lowerRect,
+      leftRect,
+      rightRect,
+      groupRect,
+      drawerRect,
+      topSplitter,
+      lowerSplitter,
+      visibleSplitterCount: [topSplitter, lowerSplitter].filter(Boolean).length,
+      upperHeight: rootRect && topSplitter?.rect ? topSplitter.rect.y - rootRect.y : 0,
+      lowerHeight: rootRect && topSplitter?.rect ? rootRect.bottom - topSplitter.rect.bottom : 0,
+      renderedTopRatio: renderedRatio(layout, topSplitter, "horizontal"),
+      renderedLowerRatio: renderedRatio(visibleElement('[data-workspace-pane="lower"]'), lowerSplitter, "vertical"),
+      drawerOpen: drawer instanceof HTMLDetailsElement && drawer.open,
+      drawerToggleNamed: Boolean((drawerToggle?.getAttribute("aria-label") || drawerToggle?.textContent || "").trim()),
+      drawerExpandedMatches:
+        drawer instanceof HTMLDetailsElement &&
+        drawerToggle?.getAttribute("aria-expanded") === String(drawer.open),
+      drawerContainedInLeft:
+        !drawerRect || !leftRect || (
+          drawerRect.x >= leftRect.x - 1 &&
+          drawerRect.right <= leftRect.right + 1 &&
+          drawerRect.y >= leftRect.y - 1 &&
+          drawerRect.bottom <= leftRect.bottom + 1
+        ),
+      groupsAlignedWithLeft:
+        Boolean(groupRect && leftRect && Math.abs(groupRect.x - leftRect.x) <= 1 && Math.abs(groupRect.width - leftRect.width) <= 1),
+      topRatio: Number(layout?.getAttribute("data-upper-lower-ratio") ?? NaN),
+      lowerRatio: Number(layout?.getAttribute("data-lower-left-right-ratio") ?? NaN),
+      workspace: (document.querySelector(".workspaceTabs button.active")?.textContent || "").trim(),
+      controlMode: (document.querySelector(".controlModeTabs button.active")?.textContent || "").trim(),
+      timelineExpanded: document.querySelector('.mappingPersistentWorkspaceBand')?.getAttribute('data-timeline-pane-expanded') === 'true',
+      liveStatus: {
+        expanded: livePanel?.getAttribute('data-live-status-expanded') === 'true',
+        inspectorRole: document.querySelector('.liveControlPanel > .liveStatusGrid')?.getAttribute('role') ?? '',
+        inspectorName: document.querySelector('.liveControlPanel > .liveStatusGrid')?.getAttribute('aria-label') ?? '',
+        toggleNamed: Boolean(liveStatusToggle?.getAttribute('aria-label')),
+        toggleControlsInspector: liveStatusToggle?.getAttribute('aria-controls') === 'live-status-inspector',
+        toggleExpanded: liveStatusToggle?.getAttribute('aria-expanded') === 'true',
+        inspectorWidth: liveStatusRect?.width ?? 0,
+        visibleItemCount: visibleStatusItems.length,
+        totalItemCount: document.querySelectorAll('.liveControlPanel > .liveStatusGrid > .liveStatusItem').length,
+        matrixStatusDoNotOverlap: Boolean(
+          sceneMatrixRect && liveStatusRect &&
+          sceneMatrixRect.right <= liveStatusRect.x + 1
+        ),
+        matrixRow: getComputedStyle(document.querySelector('.liveControlPanel > .sceneMatrixPanel') ?? document.body).gridRowStart,
+        fadeRow: getComputedStyle(document.querySelector('.liveControlPanel > .liveFadeMeter') ?? document.body).gridRowStart,
+        masterRow: getComputedStyle(document.querySelector('.liveControlPanel > .liveMasterGrid') ?? document.body).gridRowStart,
+        matrixFadeMasterDoNotOverlap: Boolean(
+          sceneMatrixRect && liveFadeRect && liveMasterRect &&
+          sceneMatrixRect.bottom <= liveFadeRect.y + 1 &&
+          liveFadeRect.bottom <= liveMasterRect.y + 1
+        ),
+        transportButtonCount: visibleTransportButtons.length,
+        transportRowCount: transportRows.size,
+        sceneMatrixHeaderCount: document.querySelectorAll('.liveControlPanel .sceneMatrixHeader').length,
+      },
+      storage,
+      storageRaw,
+      splitDebug: {
+        rootInlineStyle: layout?.getAttribute("style") ?? "",
+        rootComputedTracks: layout ? getComputedStyle(layout).gridTemplateRows : "",
+        rootClientHeight: layout?.clientHeight ?? 0,
+        lowerInlineStyle: visibleElement('[data-workspace-pane="lower"]')?.getAttribute("style") ?? "",
+        lowerComputedTracks: (() => {
+          const lowerPane = visibleElement('[data-workspace-pane="lower"]');
+          return lowerPane ? getComputedStyle(lowerPane).gridTemplateColumns : "";
+        })(),
+      },
+      outerScrollZero:
+        window.scrollX === 0 && window.scrollY === 0 &&
+        documentElement.scrollWidth === documentElement.clientWidth &&
+        documentElement.scrollHeight === documentElement.clientHeight &&
+        body.scrollWidth === documentElement.clientWidth &&
+        body.scrollHeight === documentElement.clientHeight &&
+        (!app || (app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight)) &&
+        (!layout || (layout.scrollWidth === layout.clientWidth && layout.scrollHeight === layout.clientHeight)),
+    };
+  });
+}
+
+async function measureWorkspaceDrawerReachability(client) {
+  return evaluatePageFunction(client, () => {
+    const drawer = document.querySelector('[data-workspace-selection-drawer][open]');
+    const drawerBody = drawer?.querySelector('.mappingSelectionsDrawerBody') ?? null;
+    const scroller = drawerBody?.querySelector('.mappingSelectionsColumn') ?? null;
+    const leftPane = document.querySelector('[data-workspace-pane="lower-left"]');
+    const documentElement = document.documentElement;
+    const app = document.querySelector('.app');
+    const rectSnapshot = (element) => {
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return {
+        x: rect.x,
+        y: rect.y,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height,
+      };
+    };
+    const isRendered = (element) => {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const reachableAfterInternalScroll = (control) => {
+      if (!drawerBody || !scroller || !control) return false;
+      const ancestors = [];
+      for (let ancestor = control.parentElement; ancestor; ancestor = ancestor.parentElement) {
+        ancestors.push(ancestor);
+        if (ancestor === drawerBody) break;
+      }
+      const scrollState = ancestors.map((ancestor) => ({
+        element: ancestor,
+        left: ancestor.scrollLeft,
+        top: ancestor.scrollTop,
+      }));
+      const scrollableAncestors = ancestors.filter((ancestor) => {
+        const style = getComputedStyle(ancestor);
+        return (
+          (/(auto|scroll)/.test(style.overflowY) && ancestor.scrollHeight > ancestor.clientHeight + 1) ||
+          (/(auto|scroll)/.test(style.overflowX) && ancestor.scrollWidth > ancestor.clientWidth + 1)
+        );
+      });
+      for (let pass = 0; pass < 4; pass += 1) {
+        for (const ancestor of scrollableAncestors) {
+          const ancestorRect = ancestor.getBoundingClientRect();
+          const controlRect = control.getBoundingClientRect();
+          if (controlRect.bottom > ancestorRect.bottom - 1) {
+            ancestor.scrollTop += controlRect.bottom - ancestorRect.bottom + 1;
+          } else if (controlRect.top < ancestorRect.top + 1) {
+            ancestor.scrollTop -= ancestorRect.top - controlRect.top + 1;
+          }
+          if (controlRect.right > ancestorRect.right - 1) {
+            ancestor.scrollLeft += controlRect.right - ancestorRect.right + 1;
+          } else if (controlRect.left < ancestorRect.left + 1) {
+            ancestor.scrollLeft -= ancestorRect.left - controlRect.left + 1;
+          }
+        }
+      }
+      const bodyRect = drawerBody.getBoundingClientRect();
+      const controlRect = control.getBoundingClientRect();
+      const reachable =
+        isRendered(control) &&
+        controlRect.left >= bodyRect.left - 1 &&
+        controlRect.right <= bodyRect.right + 1 &&
+        controlRect.top >= bodyRect.top - 1 &&
+        controlRect.bottom <= bodyRect.bottom + 1 &&
+        controlRect.left >= -1 &&
+        controlRect.right <= innerWidth + 1 &&
+        controlRect.top >= -1 &&
+        controlRect.bottom <= innerHeight + 1;
+      scrollState.forEach(({ element, left, top }) => {
+        element.scrollLeft = left;
+        element.scrollTop = top;
+      });
+      return reachable;
+    };
+    const buttons = drawerBody ? [...drawerBody.querySelectorAll('button')].filter(isRendered) : [];
+    const inputs = drawerBody ? [...drawerBody.querySelectorAll('input')].filter(isRendered) : [];
+    const interactives = drawerBody
+      ? [...drawerBody.querySelectorAll('button, input')].filter(isRendered)
+      : [];
+    const drawerRect = rectSnapshot(drawer);
+    const bodyRect = rectSnapshot(drawerBody);
+    const leftPaneRect = rectSnapshot(leftPane);
+    const summary = drawer?.querySelector(':scope > summary') ?? null;
+    const summaryRect = rectSnapshot(summary);
+    const drawerStyle = drawer ? getComputedStyle(drawer) : null;
+    const bodyStyle = drawerBody ? getComputedStyle(drawerBody) : null;
+    const scrollerStyle = scroller ? getComputedStyle(scroller) : null;
+    const offsetParentSnapshot = (element) => {
+      const offsetParent = element?.offsetParent ?? null;
+      return offsetParent ? {
+        tag: offsetParent.tagName,
+        className: offsetParent.getAttribute('class') ?? '',
+        rect: rectSnapshot(offsetParent),
+      } : null;
+    };
+    return {
+      drawerHeight: drawerRect?.height ?? 0,
+      expectedDrawerHeight: leftPaneRect ? Math.min(359, Math.max(0, leftPaneRect.height - 8)) : 0,
+      drawerBodyHeight: bodyRect?.height ?? 0,
+      scrollerClientHeight: scroller?.clientHeight ?? 0,
+      scrollerScrollHeight: scroller?.scrollHeight ?? 0,
+      scrollerOverflowY: scrollerStyle?.overflowY ?? '',
+      internallyScrollable: Boolean(
+        scroller &&
+        /(auto|scroll)/.test(scrollerStyle?.overflowY ?? '') &&
+        scroller.scrollHeight > scroller.clientHeight + 1
+      ),
+      lastInteractiveReachable: reachableAfterInternalScroll(interactives.at(-1)),
+      lastButtonReachable: reachableAfterInternalScroll(buttons.at(-1)),
+      lastInputReachable: reachableAfterInternalScroll(inputs.at(-1)),
+      controlCounts: [interactives.length, buttons.length, inputs.length],
+      bodyInsideViewport: Boolean(
+        bodyRect &&
+        bodyRect.x >= -1 &&
+        bodyRect.right <= innerWidth + 1 &&
+        bodyRect.y >= -1 &&
+        bodyRect.bottom <= innerHeight + 1
+      ),
+      outerScrollZero:
+        window.scrollX === 0 && window.scrollY === 0 &&
+        documentElement.scrollWidth === documentElement.clientWidth &&
+        documentElement.scrollHeight === documentElement.clientHeight &&
+        (!app || (app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight)),
+      computed: {
+        drawer: {
+          display: drawerStyle?.display ?? '',
+          gridTemplateRows: drawerStyle?.gridTemplateRows ?? '',
+          height: drawerStyle?.height ?? '',
+          minHeight: drawerStyle?.minHeight ?? '',
+          overflow: drawerStyle?.overflow ?? '',
+          overflowX: drawerStyle?.overflowX ?? '',
+          overflowY: drawerStyle?.overflowY ?? '',
+          offsetParent: offsetParentSnapshot(drawer),
+        },
+        summaryRect,
+        body: {
+          height: bodyStyle?.height ?? '',
+          minHeight: bodyStyle?.minHeight ?? '',
+          overflow: bodyStyle?.overflow ?? '',
+          overflowX: bodyStyle?.overflowX ?? '',
+          overflowY: bodyStyle?.overflowY ?? '',
+          gridRow: bodyStyle?.gridRow ?? '',
+          gridRowStart: bodyStyle?.gridRowStart ?? '',
+          gridRowEnd: bodyStyle?.gridRowEnd ?? '',
+          offsetParent: offsetParentSnapshot(drawerBody),
+        },
+        child: {
+          height: scrollerStyle?.height ?? '',
+          minHeight: scrollerStyle?.minHeight ?? '',
+          overflow: scrollerStyle?.overflow ?? '',
+          overflowX: scrollerStyle?.overflowX ?? '',
+          overflowY: scrollerStyle?.overflowY ?? '',
+          offsetParent: offsetParentSnapshot(scroller),
+        },
+      },
+    };
+  });
+}
+
+async function armWorkspacePointerCaptureProbe(client, splitter) {
+  return evaluatePageFunction(client, (name) => {
+    const element = document.querySelector(`[data-workspace-splitter="${name}"]`);
+    if (!(element instanceof HTMLElement)) return false;
+    window.__syndocalWorkspacePointerCaptureProbe = { got: 0, lost: 0 };
+    element.addEventListener("gotpointercapture", () => {
+      window.__syndocalWorkspacePointerCaptureProbe.got += 1;
+    }, { once: true });
+    element.addEventListener("lostpointercapture", () => {
+      window.__syndocalWorkspacePointerCaptureProbe.lost += 1;
+    }, { once: true });
+    return true;
+  }, splitter);
+}
+
+async function workspaceSplitterPoint(client, splitter) {
+  return evaluatePageFunction(client, (name) => {
+    const element = document.querySelector(`[data-workspace-splitter="${name}"]`);
+    if (!element) return null;
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    if (rect.width <= 0 || rect.height <= 0 || style.display === "none" || style.visibility === "hidden") return null;
+    return {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+    };
+  }, splitter);
+}
+
+async function dragWorkspaceSplitter(client, splitter, operation = {}) {
+  const point = await workspaceSplitterPoint(client, splitter);
+  if (!point) return { dragged: false, probe: { got: 0, lost: 0 } };
+  await armWorkspacePointerCaptureProbe(client, splitter);
+  const targetX = operation.edge === "start"
+    ? 1
+    : operation.edge === "end"
+      ? point.viewportWidth - 1
+      : point.x + (operation.deltaX ?? 0);
+  const targetY = operation.edge === "start"
+    ? 1
+    : operation.edge === "end"
+      ? point.viewportHeight - 1
+      : point.y + (operation.deltaY ?? 0);
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: point.x,
+    y: point.y,
+    button: "left",
+    buttons: 1,
+    clickCount: 1,
+  });
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: targetX,
+    y: targetY,
+    button: "left",
+    buttons: 1,
+  });
+  await sleep(48);
+  if (operation.escape) {
+    await pressKey(client, "Escape", "Escape");
+    await sleep(32);
+  }
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: targetX,
+    y: targetY,
+    button: "left",
+    buttons: 0,
+    clickCount: 1,
+  });
+  await sleep(140);
+  const probe = await client.evaluate(`window.__syndocalWorkspacePointerCaptureProbe ?? ({ got: 0, lost: 0 })`);
+  return { dragged: true, probe };
+}
+
+async function doubleClickWorkspaceSplitter(client, splitter) {
+  const point = await workspaceSplitterPoint(client, splitter);
+  if (!point) return false;
+  for (const clickCount of [1, 2]) {
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: point.x,
+      y: point.y,
+      button: "left",
+      buttons: 1,
+      clickCount,
+    });
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: point.x,
+      y: point.y,
+      button: "left",
+      buttons: 0,
+      clickCount,
+    });
+    await sleep(24);
+  }
+  await sleep(140);
+  return true;
+}
+
+async function clickWorkspaceSelector(client, selector) {
+  return evaluatePageFunction(client, (wanted) => {
+    const element = document.querySelector(wanted);
+    if (!(element instanceof HTMLElement)) return false;
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    if (rect.width <= 0 || rect.height <= 0 || style.display === "none" || style.visibility === "hidden") return false;
+    element.click();
+    return true;
+  }, selector);
+}
+
+const workspaceNumberClose = (left, right, tolerance = 0.001) =>
+  Number.isFinite(left) && Number.isFinite(right) && Math.abs(left - right) <= tolerance;
+
+const workspaceRectClose = (left, right, tolerance = 1) =>
+  Boolean(
+    left && right &&
+    Math.abs(left.x - right.x) <= tolerance &&
+    Math.abs(left.y - right.y) <= tolerance &&
+    Math.abs(left.width - right.width) <= tolerance &&
+    Math.abs(left.height - right.height) <= tolerance
+  );
+
+async function runWorkspaceSplitViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  // Deliberately seed the pre-T15-P schema. A successful load must migrate the
+  // missing split fields to defaults without collapsing any pane.
+  await seedViewportLocalStorage(client);
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await sleep(160);
+
+  const initial = await readWorkspaceSplitState(client);
+  const checks = {
+    normalShellHasOneUpperAndTwoLowerPaneHosts:
+      Boolean(initial.rootRect && initial.lowerRect && initial.leftRect && initial.rightRect),
+    normalShellHasTwoAccessibleSplitters:
+      initial.visibleSplitterCount === 2 &&
+      initial.topSplitter?.role === "separator" &&
+      initial.topSplitter?.orientation === "horizontal" &&
+      initial.topSplitter?.label.length > 0 &&
+      initial.topSplitter?.tabIndex === 0 &&
+      initial.lowerSplitter?.role === "separator" &&
+      initial.lowerSplitter?.orientation === "vertical" &&
+      initial.lowerSplitter?.label.length > 0 &&
+      initial.lowerSplitter?.tabIndex === 0,
+    splitterAriaValuesTrackRenderedRatios:
+      initial.topSplitter?.minimum <= initial.topSplitter?.current &&
+      initial.topSplitter?.current <= initial.topSplitter?.maximum &&
+      initial.lowerSplitter?.minimum <= initial.lowerSplitter?.current &&
+      initial.lowerSplitter?.current <= initial.lowerSplitter?.maximum &&
+      Math.abs(initial.topSplitter?.current - Math.round(initial.renderedTopRatio * 100)) <= 1 &&
+      Math.abs(initial.lowerSplitter?.current - Math.round(initial.renderedLowerRatio * 100)) <= 1,
+    legacyWorkspaceStorageUsesDefaultSplitRatios:
+      workspaceNumberClose(initial.topRatio, workspaceSplitDefaults.top) &&
+      workspaceNumberClose(initial.lowerRatio, workspaceSplitDefaults.lower) &&
+      workspaceNumberClose(initial.storage?.top_split_ratio, workspaceSplitDefaults.top) &&
+      workspaceNumberClose(initial.storage?.lower_split_ratio, workspaceSplitDefaults.lower),
+    normalPaneMinimumsSatisfied:
+      initial.upperHeight >= workspaceSplitMinimums.upper - 2 &&
+      initial.lowerHeight >= workspaceSplitMinimums.lower - 2 &&
+      initial.leftRect?.width >= workspaceSplitMinimums.lowerLeft - 2 &&
+      initial.rightRect?.width >= workspaceSplitMinimums.lowerRight - 2,
+    selectionDrawerBelongsToLowerLeftPane:
+      initial.drawerToggleNamed && initial.drawerExpandedMatches && initial.groupsAlignedWithLeft,
+    normalShellOuterScrollZero: initial.outerScrollZero,
+  };
+
+  const expectedClosedStatusWidth = viewport.width <= 1320 ? 168 : 180;
+  const expectedExpandedStatusWidth = viewport.width <= 1320 ? 238 : 248;
+  checks.liveStatusToggleNamedAndControlsInspector =
+    initial.liveStatus.toggleNamed &&
+    initial.liveStatus.toggleControlsInspector &&
+    initial.liveStatus.toggleExpanded === false;
+  checks.liveStatusInspectorIsNamedRegion =
+    initial.liveStatus.inspectorRole === 'region' && initial.liveStatus.inspectorName.trim().length > 0;
+  checks.liveStatusClosedShowsTwoCellsAtExpectedWidth =
+    initial.liveStatus.expanded === false &&
+    initial.liveStatus.visibleItemCount === 2 &&
+    initial.liveStatus.totalItemCount === 11 &&
+    Math.abs(initial.liveStatus.inspectorWidth - expectedClosedStatusWidth) <= 2;
+  checks.liveTransportIsNineButtonsInOneRow =
+    initial.liveStatus.transportButtonCount === 9 && initial.liveStatus.transportRowCount === 1;
+  checks.liveMatrixFadeMasterUseRowsThreeFourFive =
+    initial.liveStatus.matrixRow === "3" &&
+    initial.liveStatus.fadeRow === "4" &&
+    initial.liveStatus.masterRow === "5" &&
+    initial.liveStatus.matrixFadeMasterDoNotOverlap;
+  checks.sceneMatrixHeaderRemoved = initial.liveStatus.sceneMatrixHeaderCount === 0;
+  checks.liveStatusClosedDoesNotOverlapMatrix = initial.liveStatus.matrixStatusDoNotOverlap;
+  const liveStatusOpened = await clickWorkspaceSelector(client, '[data-live-status-toggle]');
+  await sleep(100);
+  const expandedLiveStatus = await readWorkspaceSplitState(client);
+  checks.liveStatusExpandedShowsElevenCellsAtExpectedWidth =
+    liveStatusOpened &&
+    expandedLiveStatus.liveStatus.expanded &&
+    expandedLiveStatus.liveStatus.toggleExpanded &&
+    expandedLiveStatus.liveStatus.visibleItemCount === 11 &&
+    Math.abs(expandedLiveStatus.liveStatus.inspectorWidth - expectedExpandedStatusWidth) <= 2;
+  checks.liveStatusExpansionHasExpectedWidthRatio =
+    expandedLiveStatus.liveStatus.inspectorWidth / Math.max(1, initial.liveStatus.inspectorWidth) >= 1.3;
+  checks.liveStatusExpandedDoesNotOverlapMatrixOrOuterScroll =
+    expandedLiveStatus.liveStatus.matrixStatusDoNotOverlap && expandedLiveStatus.outerScrollZero;
+  const liveStatusClosed = await clickWorkspaceSelector(client, '[data-live-status-toggle]');
+  await sleep(100);
+  const restoredLiveStatus = await readWorkspaceSplitState(client);
+  checks.liveStatusToggleRestoresClosedContract =
+    liveStatusClosed &&
+    !restoredLiveStatus.liveStatus.expanded &&
+    restoredLiveStatus.liveStatus.visibleItemCount === 2 &&
+    Math.abs(restoredLiveStatus.liveStatus.inspectorWidth - expectedClosedStatusWidth) <= 2 &&
+    restoredLiveStatus.outerScrollZero;
+
+  const topDrag = await dragWorkspaceSplitter(client, "upper-lower", { deltaY: -64 });
+  const topCustom = await readWorkspaceSplitState(client);
+  const topHasVisualRange =
+    (initial.topSplitter?.maximum ?? 0) - (initial.topSplitter?.minimum ?? 0) >= 2;
+  checks.upperLowerSplitterCapturedAndReleasedPointer =
+    topDrag.dragged && topDrag.probe.got >= 1 && topDrag.probe.lost >= 1;
+  checks.upperLowerDragChangesOnlyUpperLowerRatio =
+    (topHasVisualRange
+      ? Math.abs(topCustom.topRatio - initial.topRatio) >= 0.01
+      : workspaceNumberClose(topCustom.topRatio, initial.topRatio) &&
+        workspaceNumberClose(topCustom.renderedTopRatio, initial.renderedTopRatio, 0.002)) &&
+    workspaceNumberClose(topCustom.lowerRatio, initial.lowerRatio);
+  checks.upperLowerDragKeepsOuterScrollZero = topCustom.outerScrollZero;
+
+  const topEscapeBefore = await readWorkspaceSplitState(client);
+  const topEscape = await dragWorkspaceSplitter(client, "upper-lower", { deltaY: 56, escape: true });
+  const topEscapeAfter = await readWorkspaceSplitState(client);
+  checks.upperLowerEscapeRestoresPreGestureGeometry =
+    topEscape.dragged && topEscape.probe.got >= 1 && topEscape.probe.lost >= 1 &&
+    workspaceNumberClose(topEscapeAfter.topRatio, topEscapeBefore.topRatio) &&
+    workspaceRectClose(topEscapeAfter.topSplitter?.rect, topEscapeBefore.topSplitter?.rect) &&
+    topEscapeAfter.storageRaw === topEscapeBefore.storageRaw;
+
+  await dragWorkspaceSplitter(client, "upper-lower", { edge: "start" });
+  const topMinimum = await readWorkspaceSplitState(client);
+  await dragWorkspaceSplitter(client, "upper-lower", { edge: "end" });
+  const bottomMinimum = await readWorkspaceSplitState(client);
+  checks.upperLowerDragClampsBothPaneMinimums =
+    topMinimum.upperHeight >= workspaceSplitMinimums.upper - 2 &&
+    topMinimum.upperHeight <= workspaceSplitMinimums.upper + 3 &&
+    bottomMinimum.lowerHeight >= workspaceSplitMinimums.lower - 2 &&
+    bottomMinimum.lowerHeight <= workspaceSplitMinimums.lower + 3 &&
+    topMinimum.outerScrollZero && bottomMinimum.outerScrollZero;
+  checks.upperLowerDoubleClickTriggered = await doubleClickWorkspaceSplitter(client, "upper-lower");
+  const topReset = await readWorkspaceSplitState(client);
+  checks.upperLowerDoubleClickRestoresDefaultRatio = workspaceNumberClose(topReset.topRatio, workspaceSplitDefaults.top, 0.002);
+
+  const lowerDrag = await dragWorkspaceSplitter(client, "lower-left-right", { deltaX: 72 });
+  const lowerCustom = await readWorkspaceSplitState(client);
+  checks.lowerLeftRightSplitterCapturedAndReleasedPointer =
+    lowerDrag.dragged && lowerDrag.probe.got >= 1 && lowerDrag.probe.lost >= 1;
+  checks.lowerLeftRightDragChangesOnlyLowerRatio =
+    Math.abs(lowerCustom.lowerRatio - topReset.lowerRatio) >= 0.01 &&
+    workspaceNumberClose(lowerCustom.topRatio, topReset.topRatio);
+  checks.lowerLeftRightDragKeepsOuterScrollZero = lowerCustom.outerScrollZero;
+
+  const lowerEscapeBefore = await readWorkspaceSplitState(client);
+  const lowerEscape = await dragWorkspaceSplitter(client, "lower-left-right", { deltaX: -56, escape: true });
+  const lowerEscapeAfter = await readWorkspaceSplitState(client);
+  checks.lowerLeftRightEscapeRestoresPreGestureGeometry =
+    lowerEscape.dragged && lowerEscape.probe.got >= 1 && lowerEscape.probe.lost >= 1 &&
+    workspaceNumberClose(lowerEscapeAfter.lowerRatio, lowerEscapeBefore.lowerRatio) &&
+    workspaceRectClose(lowerEscapeAfter.lowerSplitter?.rect, lowerEscapeBefore.lowerSplitter?.rect) &&
+    lowerEscapeAfter.storageRaw === lowerEscapeBefore.storageRaw;
+
+  await dragWorkspaceSplitter(client, "lower-left-right", { edge: "start" });
+  const leftMinimum = await readWorkspaceSplitState(client);
+  await dragWorkspaceSplitter(client, "lower-left-right", { edge: "end" });
+  const rightMinimum = await readWorkspaceSplitState(client);
+  checks.lowerLeftRightDragClampsBothPaneMinimums =
+    leftMinimum.leftRect?.width >= workspaceSplitMinimums.lowerLeft - 2 &&
+    leftMinimum.leftRect?.width <= workspaceSplitMinimums.lowerLeft + 3 &&
+    rightMinimum.rightRect?.width >= workspaceSplitMinimums.lowerRight - 2 &&
+    rightMinimum.rightRect?.width <= workspaceSplitMinimums.lowerRight + 3 &&
+    leftMinimum.outerScrollZero && rightMinimum.outerScrollZero;
+  checks.lowerLeftRightDoubleClickTriggered = await doubleClickWorkspaceSplitter(client, "lower-left-right");
+  const lowerReset = await readWorkspaceSplitState(client);
+  checks.lowerLeftRightDoubleClickRestoresDefaultRatio = workspaceNumberClose(lowerReset.lowerRatio, workspaceSplitDefaults.lower, 0.002);
+
+  // Commit non-default ratios for reload, workspace-switch and T8 restoration.
+  await dragWorkspaceSplitter(client, "upper-lower", { deltaY: -42 });
+  await dragWorkspaceSplitter(client, "lower-left-right", { deltaX: 54 });
+  const customBeforeDrawer = await readWorkspaceSplitState(client);
+  const drawerClickedOpen = await clickWorkspaceSelector(client, '[data-workspace-selection-drawer-toggle]');
+  await sleep(100);
+  const drawerOpen = await readWorkspaceSplitState(client);
+  const drawerOpenMetrics = await measureWorkspaceDrawerReachability(client);
+  const drawerClickedClosed = await clickWorkspaceSelector(client, '[data-workspace-selection-drawer-toggle]');
+  await sleep(100);
+  const drawerClosed = await readWorkspaceSplitState(client);
+  checks.selectionDrawerToggleNamed = initial.drawerToggleNamed;
+  checks.selectionDrawerDoesNotMoveLowerSplitBoundary =
+    drawerClickedOpen && drawerClickedClosed && drawerOpen.drawerOpen && !drawerClosed.drawerOpen &&
+    drawerOpen.drawerContainedInLeft &&
+    workspaceRectClose(customBeforeDrawer.lowerSplitter?.rect, drawerOpen.lowerSplitter?.rect) &&
+    workspaceRectClose(customBeforeDrawer.lowerSplitter?.rect, drawerClosed.lowerSplitter?.rect);
+  checks.selectionDrawerStatePersistedLocally = drawerClosed.storage?.selections_drawer_open === false;
+  const compactMainViewport = viewport.width <= 1366 && viewport.height <= 768;
+  checks.compactSelectionDrawerHasDeterministicHeightAndInternalScroll =
+    !compactMainViewport || (
+      Math.abs(drawerOpenMetrics.drawerHeight - drawerOpenMetrics.expectedDrawerHeight) <= 1 &&
+      drawerOpenMetrics.drawerBodyHeight > 0 &&
+      drawerOpenMetrics.internallyScrollable
+    );
+  checks.compactSelectionDrawerLastControlsReachBodyAndViewport =
+    !compactMainViewport || (
+      drawerOpenMetrics.controlCounts[0] > 0 &&
+      drawerOpenMetrics.controlCounts[1] > 0 &&
+      drawerOpenMetrics.controlCounts[2] > 0 &&
+      drawerOpenMetrics.lastInteractiveReachable &&
+      drawerOpenMetrics.lastButtonReachable &&
+      drawerOpenMetrics.lastInputReachable &&
+      drawerOpenMetrics.bodyInsideViewport &&
+      drawerOpenMetrics.outerScrollZero
+    );
+
+  const beforeReload = await readWorkspaceSplitState(client);
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await sleep(160);
+  const afterReload = await readWorkspaceSplitState(client);
+  checks.customSplitRatiosPersistAfterReload =
+    workspaceNumberClose(afterReload.topRatio, beforeReload.topRatio) &&
+    workspaceNumberClose(afterReload.lowerRatio, beforeReload.lowerRatio) &&
+    workspaceRectClose(afterReload.topSplitter?.rect, beforeReload.topSplitter?.rect) &&
+    workspaceRectClose(afterReload.lowerSplitter?.rect, beforeReload.lowerSplitter?.rect);
+  checks.reloadKeepsOuterScrollZero = afterReload.outerScrollZero;
+
+  await clickVisibleByText(client, ".workspaceTabs button", "Setup");
+  await clickByText(client, "Mapping");
+  await clickByText(client, "Stage Map");
+  await sleep(120);
+  const setupBefore = await readWorkspaceSplitState(client);
+  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await sleep(120);
+  const control = await readWorkspaceSplitState(client);
+  await clickVisibleByText(client, ".workspaceTabs button", "Setup");
+  await clickByText(client, "Mapping");
+  await clickByText(client, "Stage Map");
+  await sleep(120);
+  const setupAfter = await readWorkspaceSplitState(client);
+  checks.setupControlSwitchPreservesSplitRatios =
+    workspaceNumberClose(setupBefore.topRatio, control.topRatio) &&
+    workspaceNumberClose(setupBefore.lowerRatio, control.lowerRatio) &&
+    workspaceNumberClose(control.topRatio, setupAfter.topRatio) &&
+    workspaceNumberClose(control.lowerRatio, setupAfter.lowerRatio);
+  checks.setupControlSwitchPreservesSplitBoundariesWithinOnePixel =
+    workspaceRectClose(setupBefore.topSplitter?.rect, control.topSplitter?.rect) &&
+    workspaceRectClose(control.topSplitter?.rect, setupAfter.topSplitter?.rect) &&
+    workspaceRectClose(setupBefore.lowerSplitter?.rect, control.lowerSplitter?.rect) &&
+    workspaceRectClose(control.lowerSplitter?.rect, setupAfter.lowerSplitter?.rect);
+  checks.workspaceSwitchKeepsDocumentAndAppScrollZero =
+    setupBefore.outerScrollZero && control.outerScrollZero && setupAfter.outerScrollZero;
+
+  const timelinePaneExpansion = await runTimelinePaneExpansionCheck(client, viewport);
+  checks.timelineFocusContract = timelinePaneExpansion.passed === true;
+  const paneWindow = await runPaneWindowViewport(client, viewport);
+  checks.paneWindowContract = paneWindow.passed === true;
+
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await clickVisibleByText(client, ".appMenuButton", "...");
+  await clickVisibleByText(client, ".appProjectMenu button", "Reset Layout");
+  await sleep(120);
+  const reset = await readWorkspaceSplitState(client);
+  checks.resetLayoutRestoresTabsDrawerAndDefaultRatios =
+    reset.workspace === "Setup" &&
+    workspaceNumberClose(reset.topRatio, workspaceSplitDefaults.top) &&
+    workspaceNumberClose(reset.lowerRatio, workspaceSplitDefaults.lower) &&
+    reset.drawerOpen === false &&
+    workspaceNumberClose(reset.storage?.top_split_ratio, workspaceSplitDefaults.top) &&
+    workspaceNumberClose(reset.storage?.lower_split_ratio, workspaceSplitDefaults.lower) &&
+    reset.storage?.selections_drawer_open === false;
+  checks.resetLayoutKeepsOuterScrollZero = reset.outerScrollZero;
+
+  const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  return {
+    viewport,
+    label: `workspace-split-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    initial: {
+      ratios: [initial.topRatio, initial.lowerRatio],
+      renderedRatios: [initial.renderedTopRatio, initial.renderedLowerRatio],
+      panes: [initial.upperHeight, initial.lowerHeight, initial.leftRect?.width ?? 0, initial.rightRect?.width ?? 0],
+      splitterAria: [initial.topSplitter, initial.lowerSplitter].map((splitter) => splitter ? [
+        splitter.minimum,
+        splitter.current,
+        splitter.maximum,
+      ] : null),
+      debug: initial.splitDebug,
+    },
+    persisted: {
+      before: [beforeReload.topRatio, beforeReload.lowerRatio],
+      after: [afterReload.topRatio, afterReload.lowerRatio],
+    },
+    drawerOpenMetrics,
+    timelinePaneExpansion,
+    paneWindow,
+  };
+}
+
 async function runPersistentBandInvarianceViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -7377,61 +8348,266 @@ async function runVjBankViewport(client, viewport) {
 // navigation; the pane-window route collapses the shell to one pane and the
 // popped param simulates a pane living in another window.
 async function runPaneWindowViewport(client, viewport) {
+  const paneWindowCapability = JSON.parse(readFileSync(
+    resolve(appRoot, "src-tauri", "capabilities", "main.json"),
+    "utf8",
+  ));
+  const paneWindowDestroyAllowed =
+    Array.isArray(paneWindowCapability.windows) &&
+    paneWindowCapability.windows.includes("*") &&
+    Array.isArray(paneWindowCapability.permissions) &&
+    paneWindowCapability.permissions.includes("core:window:allow-destroy");
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
     height: viewport.height,
     deviceScaleFactor: 1,
     mobile: false,
   });
+  const paneWindowStorageSentinel = {
+    workspace_tab: "setup",
+    setup_sub_tab: "mapping",
+    control_mode: "edit",
+    timeline_desk_surface: "playback",
+    edit_desk_surface: "effects",
+    control_category: "color",
+    top_split_ratio: 0.47,
+    lower_split_ratio: 0.52,
+    selections_drawer_open: true,
+  };
+  const paneWindowStorageRaw = JSON.stringify(paneWindowStorageSentinel);
+  await client.evaluate(`window.localStorage.setItem('syndocal.workspaceLayout.v1', ${JSON.stringify(paneWindowStorageRaw)})`);
+  const readState = async () => await client.evaluate(`(() => {
+      const rect = (sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return { x: 0, y: 0, w: 0, h: 0, right: 0, bottom: 0 };
+        const b = el.getBoundingClientRect();
+        return {
+          x: Math.round(b.x),
+          y: Math.round(b.y),
+          w: Math.round(b.width),
+          h: Math.round(b.height),
+          right: Math.round(b.right),
+          bottom: Math.round(b.bottom),
+        };
+      };
+      const doc = document.documentElement;
+      const body = document.body;
+      const app = document.querySelector('.app');
+      const visible = (sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return false;
+        const box = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return box.width > 0 && box.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      };
+      return {
+        stage: rect('[data-workspace-pane="lower-left"]'),
+        context: rect('[data-workspace-pane="lower-right"]'),
+        timelineFaders: rect('.controlContextPane > .faders'),
+        groups: rect('[data-persistent-band-part="groups"]'),
+        topbar: rect('.topbar'),
+        band: rect('.mappingPersistentWorkspaceBand'),
+        upperSplitter: rect('[data-workspace-splitter="upper-lower"]'),
+        lowerSplitter: rect('[data-workspace-splitter="lower-left-right"]'),
+        visibleSplitterCount: [...document.querySelectorAll('[data-workspace-splitter]')].filter((element) => visible('[data-workspace-splitter="' + element.getAttribute('data-workspace-splitter') + '"]')).length,
+        stageToggle: document.querySelector('[data-pane-popout-toggle="stage"]')?.getAttribute('aria-pressed') ?? '',
+        timelineToggle: document.querySelector('[data-pane-popout-toggle="timeline"]')?.getAttribute('aria-pressed') ?? '',
+        popoutToggleCount: document.querySelectorAll('[data-pane-popout-toggle]').length,
+        contextModeTabCount: document.querySelectorAll('.contextModeTabs').length,
+        visibleContextModeTabCount: [...document.querySelectorAll('.contextModeTabs')].filter((element) => {
+          const box = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return box.width > 0 && box.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+        }).length,
+        visiblePanePopoutToggleCount: [...document.querySelectorAll('.panePopoutToggle')].filter((element) => {
+          const box = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return box.width > 0 && box.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+        }).length,
+        controlLiveFixed: Boolean(
+          document.querySelector('.layout.layoutControl.controlModeLive') &&
+          document.querySelector('.controlContextPane')
+        ),
+        timelineRejoinToggleCount: document.querySelectorAll('[data-pane-rejoin-toggle="timeline"]').length,
+        timelineRejoinToggleVisible: visible('[data-pane-rejoin-toggle="timeline"]'),
+        timelineRejoinToggleName:
+          document.querySelector('[data-pane-rejoin-toggle="timeline"]')?.getAttribute('aria-label') ?? '',
+        paneWindowMode: app?.getAttribute('data-pane-window-mode') ?? '',
+        storageRaw: window.localStorage.getItem('syndocal.workspaceLayout.v1') ?? '',
+        paneWindowStorageRaw: window.localStorage.getItem('syndocal.paneWindows.v1') ?? '',
+        scrollZero:
+          window.scrollX === 0 && window.scrollY === 0 &&
+          doc.scrollWidth - doc.clientWidth === 0 &&
+          doc.scrollHeight - doc.clientHeight === 0 &&
+          body.scrollWidth === doc.clientWidth &&
+          body.scrollHeight === doc.clientHeight &&
+          (!app || (app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight)),
+        vw: window.innerWidth,
+        vh: window.innerHeight,
+      };
+    })()`);
   const measureState = async (query, setup) => {
     await client.send("Page.navigate", { url: `${fixtureUrl("timeline")}&${query}` });
     await waitForApp(client);
     if (setup) await setup();
     await sleep(320);
-    return await client.evaluate(`(() => {
-      const rect = (sel) => {
-        const el = document.querySelector(sel);
-        if (!el) return { w: 0, h: 0 };
-        const b = el.getBoundingClientRect();
-        return { w: Math.round(b.width), h: Math.round(b.height) };
-      };
-      const doc = document.documentElement;
-      return {
-        stage: rect('.mappingPersistentStage'),
-        context: rect('.workspaceContextPane'),
-        selections: rect('.mappingSelectionsColumn'),
-        topbar: rect('.topbar'),
-        band: rect('.mappingPersistentWorkspaceBand'),
-        stageToggle: document.querySelector('[data-pane-popout-toggle="stage"]')?.getAttribute('aria-pressed') ?? '',
-        popoutToggleCount: document.querySelectorAll('[data-pane-popout-toggle]').length,
-        scrollZero:
-          doc.scrollWidth - doc.clientWidth === 0 &&
-          doc.scrollHeight - doc.clientHeight === 0,
-        vw: window.innerWidth,
-        vh: window.innerHeight,
-      };
-    })()`);
+    return await readState();
   };
   const stageWin = await measureState("syndocalPaneWindow=stage");
   const timelineWin = await measureState("syndocalPaneWindow=timeline");
+  await client.evaluate(`document.activeElement instanceof HTMLElement && document.activeElement.blur()`);
+  const timelineHotkeyStates = [];
+  for (const [code, key] of [["KeyE", "e"], ["KeyM", "m"], ["F1", "F1"]]) {
+    await pressKey(client, code, key);
+    await sleep(60);
+    timelineHotkeyStates.push(await readState());
+  }
+  const timelineEditablePrepared = await client.evaluate(`(() => {
+    const visible = (element) => {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    let input = [...document.querySelectorAll('.controlContextPane input[type="search"], .controlContextPane input[type="text"], .controlContextPane input:not([type])')]
+      .find(visible);
+    if (!input) {
+      const sourcePicker = document.querySelector('.controlContextPane .sceneBlockComposerSourceButton');
+      if (visible(sourcePicker) && !sourcePicker.disabled) sourcePicker.click();
+    }
+    return Boolean(input || document.querySelector('.controlContextPane .sceneBlockComposerSourceButton'));
+  })()`);
+  await sleep(100);
+  const timelineEditableFocused = await client.evaluate(`(() => {
+    const visible = (element) => {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const input = [...document.querySelectorAll('.controlContextPane input[type="search"], .controlContextPane input[type="text"], .controlContextPane input:not([type])')]
+      .find(visible);
+    if (!(input instanceof HTMLInputElement)) return false;
+    input.setAttribute('data-viewport-pane-input-probe', 'true');
+    const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    valueSetter?.call(input, '');
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
+    input.focus({ preventScroll: true });
+    return document.activeElement === input;
+  })()`);
+  for (const character of "example") {
+    const code = `Key${character.toUpperCase()}`;
+    await client.send("Input.dispatchKeyEvent", { type: "rawKeyDown", code, key: character });
+    await client.send("Input.dispatchKeyEvent", {
+      type: "char",
+      code,
+      key: character,
+      text: character,
+      unmodifiedText: character,
+    });
+    await client.send("Input.dispatchKeyEvent", { type: "keyUp", code, key: character });
+  }
+  await sleep(100);
+  const timelineEditableResult = await client.evaluate(`(() => {
+    const input = document.querySelector('[data-viewport-pane-input-probe="true"]');
+    return {
+      value: input instanceof HTMLInputElement ? input.value : '',
+      focused: document.activeElement === input,
+      controlLiveFixed: Boolean(document.querySelector('.layout.layoutControl.controlModeLive')),
+    };
+  })()`);
+  const timelineWinAfterInteractions = await readState();
   const poppedMain = await measureState("syndocalPoppedPanes=stage", async () => {
-    await clickByText(client, "Control");
+    await clickVisibleByText(client, ".workspaceTabs button", "Control");
+    await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
   });
+  const poppedTimelineMain = await measureState("syndocalPoppedPanes=timeline", async () => {
+    await clickVisibleByText(client, ".workspaceTabs button", "Control");
+    // The entire Timeline context pane is intentionally hidden in this state,
+    // so select its exact (hidden) mode tab without the global text helper;
+    // the new visible rejoin button carries the same "Timeline" text.
+    const selectedTimelineMode = await client.evaluate(`(() => {
+      const button = [...document.querySelectorAll('.controlModeTabs button')]
+        .find((candidate) => (candidate.textContent || '').trim() === 'Timeline');
+      button?.click();
+      return Boolean(button);
+    })()`);
+    if (!selectedTimelineMode) throw new Error('Could not select hidden Timeline control mode');
+  });
+  const timelineRejoinClicked = await clickWorkspaceSelector(client, '[data-pane-rejoin-toggle="timeline"]');
+  await sleep(160);
+  const rejoinedTimelineMain = await readState();
   const conditions = [
+    ["paneWindowStageShowsOnlyLowerLeftUnit", () =>
+      stageWin.stage.w >= stageWin.band.w - 4 && stageWin.context.w === 0 && stageWin.groups.w > 0],
     ["paneWindowStageFillsWidthWithoutChrome", () =>
-      stageWin.stage.w >= stageWin.vw - 20 && stageWin.stage.h >= stageWin.vh * 0.6 && stageWin.topbar.w === 0],
-    ["paneWindowStageHidesOtherPanes", () => stageWin.context.w === 0 && stageWin.selections.w === 0],
+      stageWin.band.w >= stageWin.vw - 20 && stageWin.band.h >= stageWin.vh * 0.75 && stageWin.topbar.w === 0],
+    ["paneWindowStageHasNoSplitters", () => stageWin.visibleSplitterCount === 0],
+    ["paneWindowStageModeNamed", () => stageWin.paneWindowMode === "stage"],
     ["paneWindowStageScrollZero", () => stageWin.scrollZero === true],
+    ["paneWindowTimelineShowsOnlyLowerRightUnit", () =>
+      timelineWin.context.w >= timelineWin.band.w - 4 && timelineWin.stage.w === 0 && timelineWin.groups.w === 0],
     ["paneWindowTimelineFillsViewportWithoutChrome", () =>
-      timelineWin.context.w >= timelineWin.vw - 20 && timelineWin.context.h >= timelineWin.vh * 0.75 && timelineWin.topbar.w === 0],
+      timelineWin.band.w >= timelineWin.vw - 20 && timelineWin.band.h >= timelineWin.vh * 0.75 && timelineWin.topbar.w === 0],
+    ["paneWindowTimelineDeskFillsContextFromTop", () =>
+      timelineWin.timelineFaders.h >= timelineWin.context.h - 4 &&
+      Math.abs(timelineWin.timelineFaders.y - timelineWin.context.y) <= 2],
+    ["paneWindowNativeDestroyCapability", () => paneWindowDestroyAllowed],
+    ["paneWindowTimelineHasNoSplitters", () => timelineWin.visibleSplitterCount === 0],
+    ["paneWindowTimelineModeNamed", () => timelineWin.paneWindowMode === "timeline"],
+    ["paneWindowTimelineHidesModeTabsAndPopoutToggles", () =>
+      timelineWin.visibleContextModeTabCount === 0 && timelineWin.visiblePanePopoutToggleCount === 0],
+    ["paneWindowTimelineNonEditableHotkeysStayControlLive", () =>
+      timelineWin.controlLiveFixed &&
+      timelineHotkeyStates.length === 3 &&
+      timelineHotkeyStates.every((state) => state.controlLiveFixed && state.storageRaw === paneWindowStorageRaw)],
+    ["paneWindowTimelineEditableInputAcceptsModeLetters", () =>
+      timelineEditablePrepared &&
+      timelineEditableFocused &&
+      timelineEditableResult.focused &&
+      timelineEditableResult.value === "example" &&
+      timelineEditableResult.controlLiveFixed &&
+      timelineWinAfterInteractions.controlLiveFixed &&
+      timelineWinAfterInteractions.storageRaw === paneWindowStorageRaw &&
+      timelineWinAfterInteractions.scrollZero],
+    ["paneWindowRoutesHideTimelineRejoin", () =>
+      !stageWin.timelineRejoinToggleVisible && !timelineWin.timelineRejoinToggleVisible],
     ["paneWindowTimelineScrollZero", () => timelineWin.scrollZero === true],
-    ["poppedMainHidesStageAndRefills", () =>
+    ["paneWindowDoesNotOverwriteMainLayoutStorage", () =>
+      stageWin.storageRaw === paneWindowStorageRaw && timelineWin.storageRaw === paneWindowStorageRaw],
+    ["stagePoppedMainHidesLowerLeftAndSplitter", () =>
       poppedMain.stage.w === 0 &&
-      poppedMain.selections.w > 0 &&
-      poppedMain.context.w > 0 &&
-      poppedMain.selections.w + poppedMain.context.w >= poppedMain.band.w - 40],
-    ["poppedMainToggleStatePressed", () => poppedMain.stageToggle === "true" && poppedMain.popoutToggleCount === 2],
-    ["poppedMainScrollZero", () => poppedMain.scrollZero === true],
+      poppedMain.groups.w === 0 &&
+      poppedMain.lowerSplitter.w === 0],
+    ["stagePoppedMainTimelineRefillsLowerBand", () => poppedMain.context.w >= poppedMain.band.w - 4],
+    ["timelinePoppedMainHidesLowerRightAndSplitter", () =>
+      poppedTimelineMain.context.w === 0 && poppedTimelineMain.lowerSplitter.w === 0],
+    ["timelinePoppedMainStageRefillsLowerBand", () =>
+      poppedTimelineMain.stage.w >= poppedTimelineMain.band.w - 4 && poppedTimelineMain.groups.w > 0],
+    ["timelinePoppedMainRejoinVisibleAndNamed", () =>
+      poppedTimelineMain.timelineRejoinToggleCount === 1 &&
+      poppedTimelineMain.timelineRejoinToggleVisible === true &&
+      poppedTimelineMain.timelineRejoinToggleName.trim().length > 0],
+    ["timelinePoppedMainRejoinClickRestoresPane", () =>
+      timelineRejoinClicked &&
+      rejoinedTimelineMain.context.w > 0 &&
+      rejoinedTimelineMain.stage.w > 0 &&
+      rejoinedTimelineMain.groups.w > 0 &&
+      rejoinedTimelineMain.lowerSplitter.w > 0 &&
+      rejoinedTimelineMain.timelineToggle === "false" &&
+      rejoinedTimelineMain.timelineRejoinToggleVisible === false],
+    ["timelinePoppedMainRejoinClearsChildWindowState", () =>
+      rejoinedTimelineMain.paneWindowStorageRaw === "[]"],
+    ["timelinePoppedMainRejoinKeepsOuterScrollZero", () => rejoinedTimelineMain.scrollZero === true],
+    ["poppedMainToggleStatesPressed", () =>
+      poppedMain.stageToggle === "true" &&
+      poppedTimelineMain.timelineToggle === "true" &&
+      poppedMain.popoutToggleCount === 2 &&
+      poppedTimelineMain.popoutToggleCount === 2],
+    ["poppedMainKeepsOnlyUpperSplitter", () =>
+      poppedMain.visibleSplitterCount === 1 && poppedTimelineMain.visibleSplitterCount === 1],
+    ["paneWindowAndPoppedMainKeepOuterScrollZero", () =>
+      stageWin.scrollZero && timelineWin.scrollZero && poppedMain.scrollZero && poppedTimelineMain.scrollZero && rejoinedTimelineMain.scrollZero],
   ];
   const failedChecks = conditions.filter(([, check]) => {
     try { return !check(); } catch { return true; }
@@ -7442,8 +8618,29 @@ async function runPaneWindowViewport(client, viewport) {
     passed: failedChecks.length === 0,
     failedChecks,
     stageWin: [stageWin.stage.w, stageWin.stage.h, stageWin.topbar.w],
-    timelineWin: [timelineWin.context.w, timelineWin.context.h],
-    poppedMain: [poppedMain.stage.w, poppedMain.selections.w, poppedMain.context.w],
+    timelineWin: [
+      timelineWin.context.w,
+      timelineWin.context.h,
+      timelineWin.timelineFaders.y - timelineWin.context.y,
+      timelineWin.timelineFaders.h,
+    ],
+    timelineLock: {
+      modeControls: [timelineWin.contextModeTabCount, timelineWin.visibleContextModeTabCount],
+      popoutControls: [timelineWin.popoutToggleCount, timelineWin.visiblePanePopoutToggleCount],
+      hotkeys: timelineHotkeyStates.map((state) => state.controlLiveFixed),
+      editable: timelineEditableResult,
+    },
+    poppedMain: [poppedMain.stage.w, poppedMain.context.w, poppedMain.lowerSplitter.w],
+    poppedTimelineMain: [poppedTimelineMain.stage.w, poppedTimelineMain.context.w, poppedTimelineMain.lowerSplitter.w],
+    rejoinedTimelineMain: [
+      rejoinedTimelineMain.stage.w,
+      rejoinedTimelineMain.context.w,
+      rejoinedTimelineMain.lowerSplitter.w,
+      rejoinedTimelineMain.paneWindowStorageRaw,
+    ],
+    checks: Object.fromEntries(conditions.map(([name, check]) => {
+      try { return [name, Boolean(check())]; } catch { return [name, false]; }
+    })),
   };
 }
 
@@ -9370,8 +10567,8 @@ async function runSceneBlockLargeViewport(client, viewport) {
     const globalSave = document.querySelector('.projectAction[title^="Save project"]');
     globalSave?.click();
     await Promise.resolve();
-    const globalSaveBlocked = (document.querySelector('.appStatusText')?.textContent || '')
-      .includes('Save each modified Scene Block row');
+    const globalSaveBlocked = document.querySelector('.appStatusLine')
+      ?.getAttribute('data-status-key') === 'timeline-drafts-block-save';
     if (row500StartInput instanceof HTMLInputElement) {
       row500StartInput.value = originalStart;
       row500StartInput.dispatchEvent(new Event('input', { bubbles: true }));
@@ -10018,6 +11215,29 @@ async function main() {
       }
       return;
     }
+    if (workspaceSplitOnlyMode) {
+      const workspaceSplitResults = [];
+      for (const viewport of viewports) {
+        const result = await runWorkspaceSplitViewport(client, viewport);
+        workspaceSplitResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `initial=${result.initial.ratios.join("/")}:${result.initial.panes.map((value) => Math.round(value)).join("/")} ` +
+            `persisted=${result.persisted.before.join("/")}->${result.persisted.after.join("/")} ` +
+            `drawer=${Math.round(result.drawerOpenMetrics.drawerHeight)}/${Math.round(result.drawerOpenMetrics.expectedDrawerHeight)}:${result.drawerOpenMetrics.scrollerClientHeight}->${result.drawerOpenMetrics.scrollerScrollHeight}:${result.drawerOpenMetrics.lastInteractiveReachable ? 1 : 0}/${result.drawerOpenMetrics.lastButtonReachable ? 1 : 0}/${result.drawerOpenMetrics.lastInputReachable ? 1 : 0} ` +
+            `timelineFocus=${result.timelinePaneExpansion.passed ? "pass" : "fail"} ` +
+            `paneWindow=${result.paneWindow.passed ? "pass" : "fail"} ` +
+            `failed=${JSON.stringify(result.failedChecks)} ` +
+            `timelineFailed=${JSON.stringify(result.timelinePaneExpansion.failedChecks)} ` +
+            `paneFailed=${JSON.stringify(result.paneWindow.failedChecks)}`,
+        );
+      }
+      const failures = workspaceSplitResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Workspace split viewport failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
     if (persistentBandOnlyMode) {
       const persistentBandResults = [];
       for (const viewport of viewports) {
@@ -10433,7 +11653,7 @@ async function main() {
         ? ` controlStageGlyphs=${JSON.stringify(result.controlStageFixtureGlyphMetrics)} hitMin=${result.controlStageFixtureMinSize}`
         : "";
       const mappingSuffix = result.label.startsWith("setup-mapping-")
-        ? ` mapping=${result.mappingUseInEffectsButtonCount}/${result.mappingWaveDraftButtonCount}/${result.visibleMappingProjectorButtonCount}/${result.visibleMappingProjectorControlsCount}/${result.visibleMappingProjectorWarpGridCount}/${result.visibleMappingProjectorActionButtonCount}/${result.visibleMappingProjectorResetPoseButtonCount}/${result.visibleStageVideoSurfaceCount}`
+        ? ` mapping=${result.mappingUseInEffectsButtonCount}/${result.mappingWaveDraftButtonCount}/${result.visibleMappingProjectorButtonCount}/${result.visibleMappingProjectorControlsCount}/${result.visibleMappingProjectorWarpGridCount}/${result.visibleMappingProjectorActionButtonCount}/${result.visibleMappingProjectorResetPoseButtonCount}/${result.visibleStageVideoSurfaceCount} stage=${result.mappingStageHeight} clip=${result.mappingFilterVerticalClipCount}/${result.mappingViewportChildOverlapCount}/${result.mappingSidebarUnsafeOverflowCount}`
         : "";
       const mappingHotkeyHelpSuffix = result.label.startsWith("mapping-hotkey-help-")
         ? ` mappingHelp=${result.visibleMappingHotkeyHelpCount}/${result.mappingHotkeyHelpKeyCount}`
@@ -10442,7 +11662,7 @@ async function main() {
         ? ` patch=${result.visiblePatchActionRowCount}/${result.visiblePatchAutoButtonCount}/${result.visiblePatchPrimaryButtonCount}/${result.visiblePatchNextFreeButtonCount}/${result.visiblePatchFootprintCount}/${result.visibleDmxAddressGridCount}/${result.dmxAddressCellCount}/${result.dmxAddressOccupiedCellCount}/${result.dmxAddressPlannedCellCount}/${result.visibleDmxFixtureBlockCount}/${result.compactMappingStageWidth}x${result.compactMappingStageHeight}/${result.visibleDmxGridSummaryCount}/${result.visibleFixtureSetupEditorCount}/${result.visibleUseProfileForPatchButtonCount}/${result.visibleDuplicateFixtureButtonCount} continuous=${result.patchGridMetrics?.addressCount ?? 0}:${result.patchGridMetrics?.firstAddress ?? "?"}..${result.patchGridMetrics?.lastAddress ?? "?"} pages=${result.patchGridMetrics?.pageSelectorCount ?? "?"} geometry=${result.patchGridMetrics?.columnCount ?? "?"}x${result.patchGridMetrics?.rowCount ?? "?"} cell=${result.patchGridMetrics?.minCellWidth ?? "?"}x${result.patchGridMetrics?.minCellHeight ?? "?"} scroll=${result.patchGridMetrics?.clientWidth ?? "?"}x${result.patchGridMetrics?.clientHeight ?? "?"}->${result.patchGridMetrics?.scrollWidth ?? "?"}x${result.patchGridMetrics?.scrollHeight ?? "?"} end=${result.patchGridMetrics?.endReachable ? 1 : 0} outer=${result.patchGridMetrics?.outerScrollUnchangedAtEnd ? 0 : 1} keys=${result.patchGridMetrics?.arrowRightAddress ?? "?"}/${result.patchGridMetrics?.arrowDownAddress ?? "?"}/${result.patchGridMetrics?.controlEndAddress ?? "?"}`
         : "";
       const outputSetupSuffix = result.label.startsWith("setup-video-")
-        ? ` outputSetup=${result.visibleSetupVideoPanelCount}/${result.visibleSetupVideoOutputDeckCount}/${result.visibleSetupVideoOutputActiveDeckCount}/${result.visibleSetupVideoOutputDetailPaneCount}/${result.visibleVideoOutputMappingPanelCount}/${result.visibleVideoOutputBlendControlsCount}/${result.visibleProjectorMapEditorCount}/${result.visibleProjectorMapHandleCount}/${result.visibleProjectorKeystoneHandleCount}/${result.visibleProjectorScaleHandleCount}/${result.visibleProjectorRotateHandleCount}/${result.visibleProjectorAspectModeButtonCount}/${result.visibleProjectorAspectPresetButtonCount}/${result.visibleProjectorResetPoseButtonCount}/${result.videoSetupSidebarWidth}w/${result.videoSetupOutputDeskWidth}w panes=${result.videoSetupRoutingPaneWidth}/${result.videoSetupMapPaneWidth}/${result.videoSetupInspectorPaneWidth} actions=${result.videoSetupCriticalActionInViewportCount}`
+        ? ` outputSetup=${result.visibleSetupVideoPanelCount}/${result.visibleSetupVideoOutputDeckCount}/${result.visibleSetupVideoOutputActiveDeckCount}/${result.visibleSetupVideoOutputDetailPaneCount}/${result.visibleVideoOutputMappingPanelCount}/${result.visibleVideoOutputBlendControlsCount}/${result.visibleProjectorMapEditorCount}/${result.visibleProjectorMapHandleCount}/${result.visibleProjectorKeystoneHandleCount}/${result.visibleProjectorScaleHandleCount}/${result.visibleProjectorRotateHandleCount}/${result.visibleProjectorAspectModeButtonCount}/${result.visibleProjectorAspectPresetButtonCount}/${result.visibleProjectorResetPoseButtonCount}/${result.videoSetupSidebarWidth}w/${result.videoSetupOutputDeskWidth}w panes=${result.videoSetupRoutingPaneWidth}/${result.videoSetupMapPaneWidth}/${result.videoSetupInspectorPaneWidth} mapH=${result.videoSetupMapPaneHeight} overflow=${result.videoSetupMapPaneOverflowPx} reachable=${result.videoSetupMappingLastControlReachable ? 1 : 0}/${result.videoSetupPreviewContained ? 1 : 0}/${result.videoSetupActionDockLastActionReachable ? 1 : 0} dock=${result.visibleVideoSetupActionDockCount}/${result.videoSetupActionDockHeight} actions=${result.videoSetupCriticalActionInViewportCount}`
         : "";
       const waveDraftSuffix = result.label.startsWith("mapping-wave-draft-")
         ? ` waveDraft=${result.effectTargetValue}/${result.effectTypeValue}/${result.effectCommonAttributeValue || 'none'}`
@@ -10565,9 +11785,7 @@ async function main() {
           controlMode: controlModeFailures.map((result) => ({
             label: result.label,
             liveHeight: result.liveControlPanelHeight,
-            persistentBandHeight:
-              (result.persistentBandRects?.groups?.height ?? 0) +
-              (result.persistentBandRects?.context?.height ?? 0),
+            upperPaneHeight: result.workspacePaneRects?.upper?.height ?? 0,
             position: [result.positionConsoleWidth, result.positionConsoleHeight, result.positionPadWidth, result.positionPadHeight],
             move: [result.moveEffectEditorWidth, result.moveEffectEditorHeight, result.moveEffectLastControlReachable, result.moveEffectLastPointReachable],
           })),

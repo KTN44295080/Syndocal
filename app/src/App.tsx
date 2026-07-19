@@ -114,6 +114,7 @@ import {
   type TimelineCueDragState,
 } from "./timelineCueDrag";
 import { WorkspaceChrome } from "./components/WorkspaceChrome";
+import { WorkspaceSplitHandle } from "./components/WorkspaceSplitHandle";
 import {
   defaultWorkspaceLayout,
   loadWorkspaceLayout,
@@ -488,8 +489,10 @@ import {
 import {
   cueMetadataDraftFromSummary,
   timelineAutomationDraftFromSummary,
+  timelineAutomationDraftMatchesSummary,
   timelineEventDraftFromSummary,
   timelineVideoAutomationDraftFromSummary,
+  timelineVideoAutomationDraftMatchesSummary,
   videoOutputConfigDraftFromSummary,
   type CueMetadataDraft,
   type TimelineAutomationDraft,
@@ -545,6 +548,7 @@ import {
   loadUiLocale,
   saveUiLocale,
   timelineOverviewMarkerAriaLabel,
+  translateUiText,
   type UiLocale,
 } from "./uiLocalization";
 import {
@@ -949,6 +953,11 @@ export default function App() {
   });
   const [cleanProjectSignature, setCleanProjectSignature] = createSignal<string | null>(null);
   const [workspaceTab, setWorkspaceTab] = createSignal<WorkspaceTab>(initialWorkspaceLayout.workspace_tab);
+  const [topSplitRatio, setTopSplitRatio] = createSignal(initialWorkspaceLayout.top_split_ratio);
+  const [lowerSplitRatio, setLowerSplitRatio] = createSignal(initialWorkspaceLayout.lower_split_ratio);
+  const [selectionsDrawerOpen, setSelectionsDrawerOpen] = createSignal(
+    initialWorkspaceLayout.selections_drawer_open,
+  );
   const [uiScale, setUiScale] = createSignal<UiScale>(loadUiScale());
   const [uiLocale, setUiLocale] = createSignal<UiLocale>(loadUiLocale());
   const [setupSubTab, setSetupSubTab] = createSignal<SetupSubTab>(initialWorkspaceLayout.setup_sub_tab);
@@ -958,6 +967,7 @@ export default function App() {
   );
   const [timelineChildCueId, setTimelineChildCueId] = createSignal<number | null>(null);
   const [controlLiveView, setControlLiveView] = createSignal<"matrix" | "pads">("matrix");
+  const [liveStatusExpanded, setLiveStatusExpanded] = createSignal(false);
   const [editDeskSurface, setEditDeskSurface] = createSignal<EditDeskSurface>(initialWorkspaceLayout.edit_desk_surface);
   const [revealedSourceCueId, setRevealedSourceCueId] = createSignal<number | null>(null);
   const [revealedSourceCueRevision, setRevealedSourceCueRevision] = createSignal(0);
@@ -1474,7 +1484,23 @@ export default function App() {
     return dirtyDrafts;
   });
   const timelineEventEditorDirty = createMemo(() => Object.keys(dirtyTimelineEventDrafts()).length > 0);
-  const visibleProjectDirty = createMemo(() => projectDirty() || timelineEventEditorDirty());
+  const timelineAutomationEditorDirty = createMemo(() => {
+    const timeline = activeTimeline();
+    const lightingDrafts = timelineAutomationDrafts();
+    const videoDrafts = timelineVideoAutomationDrafts();
+    return (
+      timeline.automations.some((automation) => {
+        const draft = lightingDrafts[automation.id];
+        return Boolean(draft && !timelineAutomationDraftMatchesSummary(automation, draft));
+      }) ||
+      timeline.video_automations.some((automation) => {
+        const draft = videoDrafts[automation.id];
+        return Boolean(draft && !timelineVideoAutomationDraftMatchesSummary(automation, draft));
+      })
+    );
+  });
+  const timelineEditorDirty = createMemo(() => timelineEventEditorDirty() || timelineAutomationEditorDirty());
+  const visibleProjectDirty = createMemo(() => projectDirty() || timelineEditorDirty());
   const snapshotRequestGuard = createSnapshotRequestGuard();
   const viewportFixture = browserViewportFixture(isTauriRuntime());
   // T12: pane windows collapse the shell to one pane; popped panes are the
@@ -1503,54 +1529,97 @@ export default function App() {
       // Persistence loss only affects window restore on next launch.
     }
   };
-  const openPaneWindow = async (pane: "stage" | "timeline") => {
-    if (isTauriRuntime()) {
-      try {
-        await invoke("open_pane_window", { pane });
-      } catch (error) {
-        setMessage(`Pane window failed: ${error}`);
-        return;
-      }
-    } else {
-      const params = new URLSearchParams(window.location.search);
-      params.set("syndocalPaneWindow", pane);
-      params.delete("syndocalPoppedPanes");
-      window.open(`${window.location.pathname}?${params}`, `syndocal-pane-${pane}`);
-    }
-    setPoppedPanes((current) => {
-      const next = current.includes(pane) ? current : [...current, pane];
-      persistPoppedPanes(next);
-      return next;
-    });
-  };
-  const closePaneWindow = async (pane: "stage" | "timeline") => {
-    if (isTauriRuntime()) {
-      try {
-        await invoke("close_pane_window", { pane });
-      } catch (error) {
-        setMessage(`Pane window close failed: ${error}`);
-      }
-    }
+  const acknowledgePaneWindowClosed = (pane: string) => {
     setPoppedPanes((current) => {
       const next = current.filter((candidate) => candidate !== pane);
       persistPoppedPanes(next);
       return next;
     });
   };
+  const markPaneWindowOpen = (pane: "stage" | "timeline") => {
+    setPoppedPanes((current) => {
+      const next = current.includes(pane) ? current : [...current, pane];
+      persistPoppedPanes(next);
+      return next;
+    });
+  };
+  let paneWindowEventsReady: Promise<boolean> = Promise.resolve(true);
+  const openPaneWindow = async (pane: "stage" | "timeline") => {
+    if (isTauriRuntime()) {
+      if (!await paneWindowEventsReady) {
+        setMessage("Pane window events are unavailable.");
+        return;
+      }
+      markPaneWindowOpen(pane);
+      try {
+        await invoke("open_pane_window", { pane });
+      } catch (error) {
+        acknowledgePaneWindowClosed(pane);
+        setMessage(`Pane window failed: ${error}`);
+        return;
+      }
+      return;
+    } else {
+      const params = new URLSearchParams(window.location.search);
+      params.set("syndocalPaneWindow", pane);
+      params.delete("syndocalPoppedPanes");
+      window.open(`${window.location.pathname}?${params}`, `syndocal-pane-${pane}`);
+    }
+    markPaneWindowOpen(pane);
+  };
+  const closePaneWindow = async (pane: "stage" | "timeline") => {
+    if (isTauriRuntime()) {
+      if (!await paneWindowEventsReady) {
+        setMessage("Pane window events are unavailable.");
+        return;
+      }
+      try {
+        await invoke("close_pane_window", { pane });
+      } catch (error) {
+        setMessage(`Pane window close failed: ${error}`);
+        return;
+      }
+      // The child may prevent CloseRequested while it owns unsaved editor
+      // drafts. Keep the main-window placeholder until Rust confirms the
+      // actual Destroyed event through syndocal://pane-window-closed.
+      return;
+    }
+    acknowledgePaneWindowClosed(pane);
+  };
   const togglePaneWindow = (pane: "stage" | "timeline") => {
     void (poppedPanes().includes(pane) ? closePaneWindow(pane) : openPaneWindow(pane));
   };
   if (isTauriRuntime() && !paneWindow) {
-    listen<string>("syndocal://pane-window-closed", ({ payload }) => {
-      setPoppedPanes((current) => {
-        const next = current.filter((candidate) => candidate !== payload);
-        persistPoppedPanes(next);
-        return next;
+    let listenerDisposed = false;
+    let unlistenPaneWindowClosed: (() => void) | undefined;
+    paneWindowEventsReady = listen<string>("syndocal://pane-window-closed", ({ payload }) => {
+      acknowledgePaneWindowClosed(payload);
+    })
+      .then(async (unlisten) => {
+        if (listenerDisposed) {
+          unlisten();
+          return false;
+        }
+        unlistenPaneWindowClosed = unlisten;
+        await Promise.all(poppedPanes().map(async (pane) => {
+          try {
+            await invoke("open_pane_window", { pane });
+          } catch (error) {
+            acknowledgePaneWindowClosed(pane);
+            setMessage(`Pane window restore failed: ${error}`);
+          }
+        }));
+        return true;
+      })
+      .catch((error) => {
+        for (const pane of poppedPanes()) acknowledgePaneWindowClosed(pane);
+        setMessage(`Pane window listener failed: ${error}`);
+        return false;
       });
+    onCleanup(() => {
+      listenerDisposed = true;
+      unlistenPaneWindowClosed?.();
     });
-    for (const pane of initialPoppedPanes()) {
-      void invoke("open_pane_window", { pane }).catch(() => {});
-    }
   }
   if (paneWindow) {
     setWorkspaceTab("control");
@@ -2098,6 +2167,7 @@ export default function App() {
     uiLocalization.refresh();
   });
   createEffect(() => {
+    if (paneWindow) return;
     saveWorkspaceLayout({
       workspace_tab: workspaceTab(),
       setup_sub_tab: setupSubTab(),
@@ -2105,12 +2175,15 @@ export default function App() {
       timeline_desk_surface: timelineDeskSurface(),
       edit_desk_surface: editDeskSurface(),
       control_category: controlCategory(),
+      top_split_ratio: topSplitRatio(),
+      lower_split_ratio: lowerSplitRatio(),
+      selections_drawer_open: selectionsDrawerOpen(),
     });
   });
   const [appStatus, setAppStatus] = createSignal(appStatusFromMessage("Ready"));
   const message = () => appStatus().text;
-  const setMessage = (text: string) => {
-    setAppStatus(appStatusFromMessage(text));
+  const setMessage = (text: string, key?: string) => {
+    setAppStatus(appStatusFromMessage(text, key));
     return text;
   };
   const resetWorkspaceLayout = () => {
@@ -2120,6 +2193,9 @@ export default function App() {
     setTimelineDeskSurface(defaultWorkspaceLayout.timeline_desk_surface);
     setEditDeskSurface(defaultWorkspaceLayout.edit_desk_surface);
     setControlCategory(defaultWorkspaceLayout.control_category);
+    setTopSplitRatio(defaultWorkspaceLayout.top_split_ratio);
+    setLowerSplitRatio(defaultWorkspaceLayout.lower_split_ratio);
+    setSelectionsDrawerOpen(defaultWorkspaceLayout.selections_drawer_open);
     setMessage("Workspace layout reset to the default desk.");
   };
   const {
@@ -5015,6 +5091,9 @@ export default function App() {
             controlMode() === "edit" ? ` editDesk-${editDeskSurface()}` : ""
           }`,
   );
+  const sharedWorkspaceVisible = createMemo(
+    () => workspaceTab() === "setup" || (workspaceTab() === "control" && controlMode() !== "mixer"),
+  );
   const remoteConfig = createMemo<RemoteControlConfig>(() => ({
     bind_ip: remoteBindIp(),
     port: remotePort(),
@@ -5922,8 +6001,8 @@ export default function App() {
       },
     }));
   };
-  const confirmDiscardTimelineEventDrafts = (actionLabel: string) =>
-    !timelineEventEditorDirty() || window.confirm(`Discard unsaved Scene Block edits and ${actionLabel}?`);
+  const confirmDiscardTimelineEditorDrafts = () =>
+    !timelineEditorDirty() || window.confirm(translateUiText("Discard unsaved Timeline edits?", uiLocale()));
 
   const persistChildTimeline = async (
     cueId: number,
@@ -6745,8 +6824,8 @@ export default function App() {
       setMessage("Nothing to undo.");
       return;
     }
-    if (!confirmDiscardTimelineEventDrafts("undo the last project edit")) {
-      setMessage("Undo canceled; unsaved Scene Block edits were kept.");
+    if (!confirmDiscardTimelineEditorDrafts()) {
+      setMessage("Undo canceled; unsaved Timeline edits were kept.");
       return;
     }
     try {
@@ -6769,8 +6848,8 @@ export default function App() {
       setMessage("Nothing to redo.");
       return;
     }
-    if (!confirmDiscardTimelineEventDrafts("redo the next project edit")) {
-      setMessage("Redo canceled; unsaved Scene Block edits were kept.");
+    if (!confirmDiscardTimelineEditorDrafts()) {
+      setMessage("Redo canceled; unsaved Timeline edits were kept.");
       return;
     }
     try {
@@ -6840,13 +6919,13 @@ export default function App() {
   };
 
   const confirmDiscardProjectChanges = (actionLabel: string) => {
-    if (!projectDirty() && !timelineEventEditorDirty()) {
+    if (!projectDirty() && !timelineEditorDirty()) {
       return true;
     }
-    const changeKind = projectDirty() && timelineEventEditorDirty()
-      ? "project changes and Scene Block edits"
-      : timelineEventEditorDirty()
-        ? "Scene Block edits"
+    const changeKind = projectDirty() && timelineEditorDirty()
+      ? "project changes and Timeline edits"
+      : timelineEditorDirty()
+        ? "Timeline edits"
         : "project changes";
     return window.confirm(`Discard unsaved ${changeKind} and ${actionLabel}?`);
   };
@@ -8240,8 +8319,8 @@ export default function App() {
   };
 
   const saveProject = async () => {
-    if (timelineEventEditorDirty()) {
-      setMessage("Save each modified Scene Block row before saving the project.");
+    if (timelineEditorDirty()) {
+      setMessage("Save each modified Timeline row before saving the project.", "timeline-drafts-block-save");
       return;
     }
     try {
@@ -8262,8 +8341,8 @@ export default function App() {
   };
 
   const saveProjectAs = async () => {
-    if (timelineEventEditorDirty()) {
-      setMessage("Save each modified Scene Block row before using Save As.");
+    if (timelineEditorDirty()) {
+      setMessage("Save each modified Timeline row before using Save As.", "timeline-drafts-block-save-as");
       return;
     }
     try {
@@ -10256,6 +10335,10 @@ export default function App() {
       setMessage(`Source Cue ${cueId} is no longer available.`);
       return;
     }
+    if (!confirmDiscardTimelineEditorDrafts()) {
+      setMessage("Super Scene open canceled; unsaved Timeline edits were kept.");
+      return;
+    }
     if (!cue.child_timeline) {
       const childTimeline: ChildTimelineSummary = {
         layers: [
@@ -10297,6 +10380,10 @@ export default function App() {
   };
 
   const exitSuperScene = () => {
+    if (!confirmDiscardTimelineEditorDrafts()) {
+      setMessage("Show timeline open canceled; unsaved Timeline edits were kept.");
+      return;
+    }
     setTimelineChildCueId(null);
     setSelectedTimelineSceneBlockEventId(null);
     setTimelineEventDrafts({});
@@ -13403,6 +13490,7 @@ export default function App() {
   };
 
   const selectControlMode = (mode: ControlMode) => {
+    if (paneWindow === "timeline" && mode !== "live") return;
     setControlMode(mode);
     if (mode === "edit") setEditDeskSurface("attributes");
     if (mode === "live") setTimelineDeskSurface("show");
@@ -13450,6 +13538,20 @@ export default function App() {
     tapBpm,
   });
 
+  const handleAppKeyDown = (event: KeyboardEvent) => {
+    if (
+      paneWindow &&
+      (
+        workspaceTabForShortcut(event.code) !== null ||
+        (!isEditableShortcutTarget(event.target) && controlModeForShortcut(event.code) !== null)
+      )
+    ) {
+      event.preventDefault();
+      return;
+    }
+    handleControlKeyDown(event);
+  };
+
   let nativeCloseApproved = false;
   let closeRequestListenerDisposed = false;
   let unlistenCloseRequested: (() => void) | undefined;
@@ -13460,23 +13562,35 @@ export default function App() {
     }, 1000);
   };
 
+  const closeProtectedEditsDirty = () => paneWindow === "timeline"
+    ? timelineEditorDirty()
+    : !paneWindow && (projectDirty() || timelineEditorDirty());
+  const confirmProtectedClose = () => paneWindow === "timeline"
+    ? window.confirm(translateUiText(
+        "Discard unsaved Timeline edits and close Timeline window?",
+        uiLocale(),
+      ))
+    : confirmDiscardProjectChanges("close Syndocal");
+
   const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-    if (nativeCloseApproved || (!projectDirty() && !timelineEventEditorDirty())) {
+    if (nativeCloseApproved || !closeProtectedEditsDirty()) {
       return;
     }
     event.preventDefault();
     event.returnValue = "";
   };
 
-  window.addEventListener("keydown", handleControlKeyDown);
-  window.addEventListener("beforeunload", handleBeforeUnload);
-  if (isTauriRuntime()) {
+  window.addEventListener("keydown", handleAppKeyDown);
+  if (!paneWindow || paneWindow === "timeline") {
+    window.addEventListener("beforeunload", handleBeforeUnload);
+  }
+  if (isTauriRuntime() && (!paneWindow || paneWindow === "timeline")) {
     void getCurrentWindow()
       .onCloseRequested((event) => {
-        if (!projectDirty() && !timelineEventEditorDirty()) {
+        if (!closeProtectedEditsDirty()) {
           return;
         }
-        if (confirmDiscardProjectChanges("close Syndocal")) {
+        if (confirmProtectedClose()) {
           approveNativeCloseOnce();
           return;
         }
@@ -13495,7 +13609,7 @@ export default function App() {
   onCleanup(() => {
     closeRequestListenerDisposed = true;
     unlistenCloseRequested?.();
-    window.removeEventListener("keydown", handleControlKeyDown);
+    window.removeEventListener("keydown", handleAppKeyDown);
     window.removeEventListener("beforeunload", handleBeforeUnload);
   });
 
@@ -13503,6 +13617,7 @@ export default function App() {
     <main
       class={`app${paneWindow ? ` paneWindow paneWindow-${paneWindow}` : ""}`}
       style={paneWindow ? "grid-template-rows: minmax(0, 1fr) auto !important" : undefined}
+      data-pane-window-mode={paneWindow || "main"}
     >
       <WorkspaceChrome
         workspaceTab={workspaceTab()}
@@ -13576,10 +13691,21 @@ export default function App() {
 
       <section
         class={`layout ${touchLayoutClass()}`}
-        style={paneWindow ? "grid-template-rows: minmax(0, 1fr) !important" : undefined}
+        style={
+          paneWindow
+            ? "grid-template-rows: minmax(0, 1fr) !important"
+            : undefined
+        }
+        data-workspace-split-root={sharedWorkspaceVisible() ? "true" : undefined}
+        data-upper-lower-ratio={sharedWorkspaceVisible() ? topSplitRatio() : undefined}
+        data-lower-left-right-ratio={sharedWorkspaceVisible() ? lowerSplitRatio() : undefined}
       >
         <Show when={workspaceTab() === "control" && controlMode() !== "mixer"}>
-        <section class="panel liveControlPanel controlPanel">
+        <section
+          class={`panel liveControlPanel controlPanel${liveStatusExpanded() ? " liveStatusExpanded" : ""}`}
+          data-workspace-pane="upper"
+          data-live-status-expanded={liveStatusExpanded() ? "true" : "false"}
+        >
           <div class="panelHeader liveDeskHeader">
             <h2>Live Desk</h2>
             <nav class="liveDeskViewToggle" aria-label="Live desk view">
@@ -13600,9 +13726,28 @@ export default function App() {
                 Cue Pads
               </button>
             </nav>
-            <span>{snapshot().blackout || snapshot().video.blackout ? "Guarded" : "Ready"}</span>
+            <div class="liveDeskHeaderMeta">
+              <span class="liveDeskSceneMeta">
+                {timelineTrack()} · {snapshot().cues.length} scenes
+              </span>
+              <button
+                type="button"
+                class="liveStatusToggle"
+                data-live-status-toggle
+                aria-controls="live-status-inspector"
+                aria-expanded={liveStatusExpanded()}
+                aria-label={liveStatusExpanded() ? "Hide live status details" : "Show live status details"}
+                onClick={() => setLiveStatusExpanded((expanded) => !expanded)}
+              >
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M3 3h10v10H3zM6 5v6M8 5h3M8 8h3M8 11h3" />
+                </svg>
+                <span>Status</span>
+              </button>
+              <span class="liveDeskState">{snapshot().blackout || snapshot().video.blackout ? "Guarded" : "Ready"}</span>
+            </div>
           </div>
-          <div class="liveStatusGrid">
+          <div id="live-status-inspector" class="liveStatusGrid" role="region" aria-label="Live status details">
             <div class="liveStatusItem liveCueStatusCell">
               <span>Active cue</span>
               <strong data-no-localize>
@@ -14601,10 +14746,27 @@ export default function App() {
         />
         </Show>
 
-        <Show when={workspaceTab() === "setup" || (workspaceTab() === "control" && controlMode() !== "mixer")}>
+        <Show when={sharedWorkspaceVisible() && !paneWindow}>
+        <WorkspaceSplitHandle
+          axis="horizontal"
+          ratio={topSplitRatio()}
+          defaultRatio={defaultWorkspaceLayout.top_split_ratio}
+          minFirstPx={280}
+          minSecondPx={310}
+          label="Resize upper and lower workspace panes"
+          splitter="upper-lower"
+          onCommit={setTopSplitRatio}
+        />
+        </Show>
+
+        <Show when={sharedWorkspaceVisible()}>
         <MappingPersistentWorkspaceBand
           poppedPanes={poppedPanes()}
+          lowerSplitRatio={lowerSplitRatio()}
+          selectionsDrawerOpen={selectionsDrawerOpen()}
           onTogglePaneWindow={togglePaneWindow}
+          onLowerSplitRatio={setLowerSplitRatio}
+          onSelectionsDrawerOpen={setSelectionsDrawerOpen}
           workspace={workspaceTab() === "control" ? "control" : "setup"}
           controlMode={controlMode()}
           onControlMode={selectControlMode}

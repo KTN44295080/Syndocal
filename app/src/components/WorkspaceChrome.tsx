@@ -306,9 +306,13 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               <div class="appProjectMenuLabel" role="separator">
                 <span>Workspace Layout</span>
               </div>
-              <button role="menuitem" onClick={() => runProjectMenuAction(props.onResetWorkspaceLayout)}>
+              <button
+                role="menuitem"
+                data-reset-workspace-layout
+                onClick={() => runProjectMenuAction(props.onResetWorkspaceLayout)}
+              >
                 <span>Reset Layout</span>
-                <small>Tabs and desk surfaces auto-save on this device</small>
+                <small>Tabs, panes, and desk surfaces auto-save on this device</small>
               </button>
               <button role="menuitem" onClick={() => runProjectMenuAction(props.onLoadSample)}>
                 <span>Sample</span>

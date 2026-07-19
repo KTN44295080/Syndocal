@@ -14,5 +14,9 @@ assert.equal(model.appStatusTone("No MIDI input selected."), "warning");
 assert.equal(model.appStatusTone("DMX address conflict: U0 A1"), "error");
 assert.equal(model.appStatusTone("Timeline playing."), "info");
 assert.deepEqual(model.appStatusFromMessage(""), { text: "Ready", tone: "info" });
+assert.deepEqual(
+  model.appStatusFromMessage("Save blocked.", "timeline-drafts-block-save"),
+  { text: "Save blocked.", tone: "warning", key: "timeline-drafts-block-save" },
+);
 
 console.log("status model helpers ok");

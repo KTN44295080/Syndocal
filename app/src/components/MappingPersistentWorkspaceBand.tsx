@@ -1,6 +1,7 @@
 import { createEffect, createSignal, For, onCleanup, Show, type ComponentProps, type JSX } from "solid-js";
 import type { ControlMode } from "../uiModes";
 import { controlModes } from "../uiModes";
+import { defaultWorkspaceLayout } from "../workspaceLayoutStorage";
 import { MappingEditableStageShell } from "./MappingEditableStageShell";
 import { MappingGroupRibbon, type MappingFilterStripsProps } from "./MappingFilterStrips";
 import { MappingHotkeyHelp } from "./MappingHotkeyHelp";
@@ -12,6 +13,7 @@ import {
 import { MappingStageLayersPanel } from "./MappingStageLayersPanel";
 import { MappingToolRail } from "./MappingToolRail";
 import { MappingViewportControls } from "./MappingViewportControls";
+import { WorkspaceSplitHandle } from "./WorkspaceSplitHandle";
 
 type WithoutChildren<T> = Omit<T, "children">;
 
@@ -26,7 +28,11 @@ type MappingPersistentWorkspaceBandProps = {
   selection: MappingSelectionPanelProps;
   hotkeyHelpOpen: boolean;
   poppedPanes: string[];
+  lowerSplitRatio: number;
+  selectionsDrawerOpen: boolean;
   onTogglePaneWindow: (pane: "stage" | "timeline") => void;
+  onLowerSplitRatio: (ratio: number) => void;
+  onSelectionsDrawerOpen: (open: boolean) => void;
   onControlMode: (mode: ControlMode) => void;
   onCloseHotkeyHelp: () => void;
   children?: JSX.Element;
@@ -70,43 +76,92 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
 
   return (
     <section
-      class={`mappingPersistentWorkspaceBand${timelinePaneExpanded() ? " timelinePaneExpanded" : ""}${props.poppedPanes.includes("stage") ? " stagePanePopped" : ""}`}
+      class={`mappingPersistentWorkspaceBand${timelinePaneExpanded() ? " timelinePaneExpanded" : ""}${props.poppedPanes.includes("stage") ? " stagePanePopped" : ""}${props.poppedPanes.includes("timeline") ? " timelinePanePopped" : ""}`}
       data-timeline-pane-expanded={timelinePaneExpanded() ? "true" : "false"}
+      data-workspace-pane="lower"
       aria-label="Persistent workspace band"
     >
-      <MappingGroupRibbon
-        fixtureCount={props.filters.fixtureCount}
-        selectedGroupId={props.filters.selectedGroupId}
-        groupRows={props.filters.groupRows}
-        onSelectGroup={props.filters.onSelectGroup}
-      />
-      <div class="mappingPersistentWorkspaceGrid">
-        <section class="mappingPersistentStage" aria-label="Editable 2D stage map">
-          <MappingToolRail {...props.toolRail} />
-          <div class="mappingStageViewport">
-            <div class="mappingViewportToolbar">
-              <MappingViewportControls {...props.viewportControls} />
+      <div
+        class="mappingPersistentWorkspaceGrid"
+        data-lower-split-ratio={props.lowerSplitRatio}
+      >
+        <MappingGroupRibbon
+          fixtureCount={props.filters.fixtureCount}
+          selectedGroupId={props.filters.selectedGroupId}
+          groupRows={props.filters.groupRows}
+          onSelectGroup={props.filters.onSelectGroup}
+        />
+        <Show when={props.poppedPanes.includes("timeline")}>
+          <button
+            type="button"
+            class="paneRejoinToggle"
+            data-pane-rejoin-toggle="timeline"
+            title="Close Timeline window"
+            aria-label="Close Timeline window"
+            onClick={() => props.onTogglePaneWindow("timeline")}
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M2 4h8v8H2zM6 2h8v8M6 10h4" />
+            </svg>
+            <span>Timeline</span>
+          </button>
+        </Show>
+        <section class="mappingWorkspaceLeftPane" data-workspace-pane="lower-left" aria-label="Groups and Stage pane">
+          <section class="mappingPersistentStage" aria-label="Editable 2D stage map">
+            <MappingToolRail {...props.toolRail} />
+            <div class="mappingStageViewport">
+              <div class="mappingViewportToolbar">
+                <MappingViewportControls {...props.viewportControls} />
+              </div>
+              <MappingEditableStageShell {...props.editableStage}>
+                <MappingStageLayersPanel {...props.stageLayers} />
+              </MappingEditableStageShell>
             </div>
-            <MappingEditableStageShell {...props.editableStage}>
-              <MappingStageLayersPanel {...props.stageLayers} />
-            </MappingEditableStageShell>
-          </div>
-          <Show when={props.hotkeyHelpOpen}>
-            <MappingHotkeyHelp onClose={props.onCloseHotkeyHelp} />
-          </Show>
+            <Show when={props.hotkeyHelpOpen}>
+              <MappingHotkeyHelp onClose={props.onCloseHotkeyHelp} />
+            </Show>
+          </section>
+          <details
+            class="mappingSelectionsDrawer"
+            data-workspace-selection-drawer
+            open={props.selectionsDrawerOpen}
+            onToggle={(event) => props.onSelectionsDrawerOpen(event.currentTarget.open)}
+          >
+            <summary
+              data-persistent-band-part="selections-drawer"
+              data-workspace-selection-drawer-toggle
+              aria-expanded={props.selectionsDrawerOpen}
+            >
+              <span>Selections</span>
+              <strong>{props.selection.selectedFixtureCount} / {props.filters.filteredFixtureCount}</strong>
+            </summary>
+            <div class="mappingSelectionsDrawerBody">
+              <MappingSelectionsColumn
+                {...props.selection}
+                typeFilters={{
+                  filteredFixtureCount: props.filters.filteredFixtureCount,
+                  selectedTypeKey: props.filters.selectedTypeKey,
+                  fixtureTypeRows: props.filters.fixtureTypeRows,
+                  onSelectType: props.filters.onSelectType,
+                }}
+              />
+            </div>
+          </details>
         </section>
-        <MappingSelectionsColumn
-          {...props.selection}
-          typeFilters={{
-            filteredFixtureCount: props.filters.filteredFixtureCount,
-            selectedTypeKey: props.filters.selectedTypeKey,
-            fixtureTypeRows: props.filters.fixtureTypeRows,
-            onSelectType: props.filters.onSelectType,
-          }}
+        <WorkspaceSplitHandle
+          axis="vertical"
+          ratio={props.lowerSplitRatio}
+          defaultRatio={defaultWorkspaceLayout.lower_split_ratio}
+          minFirstPx={430}
+          minSecondPx={480}
+          label="Resize Stage and Timeline panes"
+          splitter="lower-left-right"
+          onCommit={props.onLowerSplitRatio}
         />
         <aside
           class={contextClass()}
           data-persistent-band-part="context"
+          data-workspace-pane="lower-right"
           aria-label="Workspace context pane"
         >
           <Show

@@ -24752,13 +24752,19 @@ h3 {
 }
 
 .layoutSharedWorkspace {
-  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows:
+    var(--workspace-first-grow, minmax(280px, 0.58fr))
+    7px
+    var(--workspace-second-grow, minmax(310px, 0.42fr));
   align-items: stretch;
 }
 
 .layout.layoutSharedWorkspace {
-  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) !important;
-  gap: 4px !important;
+  grid-template-rows:
+    var(--workspace-first-grow, minmax(280px, 0.58fr))
+    7px
+    var(--workspace-second-grow, minmax(310px, 0.42fr)) !important;
+  gap: 0 !important;
 }
 
 .layoutSharedWorkspace.layoutSetup.setupMode-library,
@@ -24781,6 +24787,11 @@ h3 {
 
 .layoutSharedWorkspace > .mappingPersistentWorkspaceBand {
   grid-column: 1 / -1;
+  grid-row: 3;
+}
+
+.layoutSharedWorkspace > .workspaceSplitHandle-horizontal {
+  grid-column: 1 / -1;
   grid-row: 2;
 }
 
@@ -24800,8 +24811,7 @@ h3 {
 }
 
 .mappingPersistentWorkspaceBand {
-  display: grid;
-  grid-template-rows: 31px minmax(0, 1fr);
+  display: block;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -24809,7 +24819,9 @@ h3 {
   background: #171513;
 }
 
-.mappingPersistentWorkspaceBand > .mappingGroupStrip {
+.mappingPersistentWorkspaceGrid > .mappingGroupStrip {
+  grid-column: 1;
+  grid-row: 1;
   min-height: 31px;
   overflow: auto hidden;
   border: 0;
@@ -24817,15 +24829,52 @@ h3 {
   padding: 2px 5px;
 }
 
-.mappingPersistentWorkspaceBand > .mappingGroupStrip button {
+.mappingPersistentWorkspaceGrid > .mappingGroupStrip button {
   min-height: 25px;
   padding-inline: 8px;
   font-size: 11px;
 }
 
+.paneRejoinToggle {
+  z-index: 9;
+  display: inline-flex;
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  min-height: 25px;
+  align-self: center;
+  align-items: center;
+  justify-self: end;
+  gap: 5px;
+  margin-right: 4px;
+  border-color: #62584d;
+  background: #201c18;
+  padding: 2px 7px;
+  color: #e0d8cf;
+  font-size: 11px;
+}
+
+.paneRejoinToggle svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+
+.mappingPersistentWorkspaceBand.timelinePanePopped .mappingGroupStrip {
+  padding-right: 112px;
+}
+
 .mappingPersistentWorkspaceGrid {
   display: grid;
-  grid-template-columns: minmax(420px, 1.05fr) minmax(190px, 0.42fr) minmax(410px, 0.88fr);
+  grid-template-columns:
+    var(--workspace-first-grow, minmax(430px, 0.44fr))
+    7px
+    var(--workspace-second-grow, minmax(480px, 0.56fr));
+  grid-template-rows: 31px minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -24834,6 +24883,153 @@ h3 {
 .mappingPersistentWorkspaceGrid > * {
   min-width: 0;
   min-height: 0;
+}
+
+.mappingWorkspaceLeftPane {
+  position: relative;
+  display: block;
+  grid-column: 1;
+  grid-row: 2;
+  overflow: hidden;
+}
+
+.mappingWorkspaceLeftPane > .mappingPersistentStage {
+  width: 100%;
+  height: 100%;
+}
+
+.mappingPersistentWorkspaceGrid > .workspaceSplitHandle-vertical {
+  grid-column: 2;
+  grid-row: 1 / -1;
+}
+
+.mappingPersistentWorkspaceGrid > .workspaceContextPane {
+  grid-column: 3;
+  grid-row: 1 / -1;
+}
+
+.workspaceSplitHandle {
+  position: relative;
+  z-index: 8;
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: #171513;
+  padding: 0;
+  touch-action: none;
+  user-select: none;
+}
+
+.workspaceSplitHandle::before {
+  position: absolute;
+  inset: 2px;
+  background: #403a34;
+  content: "";
+}
+
+.workspaceSplitHandle-horizontal {
+  width: 100%;
+  height: 7px;
+  cursor: row-resize;
+}
+
+.workspaceSplitHandle-vertical {
+  width: 7px;
+  height: 100%;
+  cursor: col-resize;
+}
+
+.workspaceSplitHandle:hover::before,
+.workspaceSplitHandle[data-dragging="true"]::before {
+  background: #8c7d6c;
+}
+
+.workspaceSplitHandle:focus-visible {
+  outline: 2px solid var(--ray-accent);
+  outline-offset: -2px;
+}
+
+.mappingSelectionsDrawer {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 7;
+  width: min(300px, calc(100% - 46px));
+  max-height: calc(100% - 8px);
+  overflow: hidden;
+  border: 1px solid #514a43;
+  background: #1b1917;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.42);
+}
+
+.mappingSelectionsDrawer:not([open]) {
+  width: 156px;
+  box-shadow: none;
+}
+
+.mappingSelectionsDrawer[open] {
+  height: min(359px, calc(100% - 8px));
+}
+
+.mappingSelectionsDrawer > summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 29px;
+  gap: 8px;
+  padding: 4px 7px;
+  color: #d7d0ca;
+  cursor: pointer;
+  font-size: 11px;
+  list-style: none;
+}
+
+.mappingSelectionsDrawer > summary::-webkit-details-marker {
+  display: none;
+}
+
+.mappingSelectionsDrawer > summary::before {
+  color: #9f948b;
+  content: "▸";
+}
+
+.mappingSelectionsDrawer[open] > summary::before {
+  content: "▾";
+}
+
+.mappingSelectionsDrawer > summary {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.mappingSelectionsDrawer > summary span,
+.mappingSelectionsDrawer > summary strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mappingSelectionsDrawer > summary strong {
+  color: #aaa098;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mappingSelectionsDrawerBody {
+  position: absolute;
+  inset: 29px 0 0;
+  height: auto;
+  min-height: 0;
+  overflow: hidden;
+  border-top: 1px solid #3b3732;
+}
+
+.mappingSelectionsDrawerBody > .mappingSelectionsColumn {
+  height: 100%;
+  border-right: 0;
 }
 
 .mappingPersistentStage {
@@ -25108,15 +25304,18 @@ h3 {
 
 .mappingPersistentWorkspaceBand.timelinePaneExpanded .mappingPersistentWorkspaceGrid {
   grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
 }
 
-.mappingPersistentWorkspaceBand.timelinePaneExpanded .mappingPersistentStage,
-.mappingPersistentWorkspaceBand.timelinePaneExpanded .mappingSelectionsColumn {
+.mappingPersistentWorkspaceBand.timelinePaneExpanded .mappingGroupStrip,
+.mappingPersistentWorkspaceBand.timelinePaneExpanded .mappingWorkspaceLeftPane,
+.mappingPersistentWorkspaceBand.timelinePaneExpanded .workspaceSplitHandle-vertical {
   display: none;
 }
 
 .mappingPersistentWorkspaceBand.timelinePaneExpanded .controlContextPane {
   grid-column: 1 / -1;
+  grid-row: 1 / -1;
 }
 
 .layoutSharedWorkspace.layoutControl .controlContextPane > .faders {
@@ -25449,6 +25648,7 @@ h3 {
 }
 
 .layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .sceneBlockRowFields {
+  display: grid;
   grid-column: 2;
   grid-row: 1;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -25602,7 +25802,7 @@ h3 {
   overflow: auto;
 }
 
-.layoutSharedWorkspace.layoutSetup.setupMode-patch .mappingPersistentWorkspaceBand > .mappingGroupStrip,
+.layoutSharedWorkspace.layoutSetup.setupMode-patch .mappingPersistentWorkspaceBand .mappingGroupStrip,
 .layoutSharedWorkspace.layoutSetup.setupMode-patch .mappingPersistentWorkspaceBand .mappingTypeStrip {
   display: flex;
 }
@@ -25623,10 +25823,6 @@ h3 {
 }
 
 @media (max-width: 1450px) {
-  .mappingPersistentWorkspaceGrid {
-    grid-template-columns: minmax(400px, 1fr) minmax(180px, 0.42fr) minmax(390px, 0.94fr);
-  }
-
   .mappingViewportToolbar {
     grid-template-columns: minmax(190px, 0.8fr) minmax(175px, 1fr);
   }
@@ -25650,6 +25846,13 @@ h3 {
 
 .layoutSharedWorkspace.layoutSetup.setupMode-video .videoSetupInspectorPane > .videoOutputPreviewCard .emptyState {
   min-height: 42px;
+}
+
+@media (max-height: 720px) {
+  .layoutSharedWorkspace.layoutSetup.setupMode-video .videoSetupInspectorPane {
+    gap: 0;
+    grid-template-rows: 34px minmax(58px, 0.7fr) minmax(78px, 1fr) minmax(68px, 0.85fr);
+  }
 }
 
 .layoutSharedWorkspace.layoutControl.controlModeEdit .controlContextPane .positionConsoleSurface {
@@ -27026,7 +27229,6 @@ h3 {
   grid-row: 1 / -1 !important;
   height: 100% !important;
   max-height: none !important;
-  grid-template-rows: auto minmax(0, 1fr) !important;
 }
 
 .app.paneWindow .mappingPersistentWorkspaceGrid,
@@ -27055,31 +27257,79 @@ h3 {
 
 .app.paneWindow .mappingPersistentWorkspaceGrid {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) !important;
   height: 100%;
 }
 
-.app.paneWindow-stage .mappingSelectionsColumn,
+.app.paneWindow-stage .workspaceSplitHandle-vertical,
 .app.paneWindow-stage .workspaceContextPane {
   display: none;
 }
 
-.app.paneWindow-timeline .mappingPersistentStage,
-.app.paneWindow-timeline .mappingSelectionsColumn {
+.app.paneWindow-stage .mappingGroupStrip {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.app.paneWindow-stage .mappingWorkspaceLeftPane {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.app.paneWindow-timeline .mappingGroupStrip,
+.app.paneWindow-timeline .mappingWorkspaceLeftPane,
+.app.paneWindow-timeline .workspaceSplitHandle-vertical,
+.app.paneWindow .paneRejoinToggle {
+  display: none;
+}
+
+.app.paneWindow .panePopoutToggle,
+.app.paneWindow-timeline .contextModeTabs,
+.app.paneWindow-stage .mappingSelectionsDrawer {
   display: none;
 }
 
 .app.paneWindow-timeline .controlContextPane {
   grid-column: 1 / -1;
+  grid-row: 1 / -1;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.app.paneWindow-timeline .controlContextPane > .faders {
+  /* The main-shell live selector has five class components and otherwise
+     leaves this desk on implicit row 2, producing a large blank row above the
+     Timeline in a real maximized child window. */
+  grid-row: 1 !important;
 }
 
 /* Main-window compaction while the stage lives in its own window. */
-.mappingPersistentWorkspaceBand.stagePanePopped .mappingPersistentStage {
+.mappingPersistentWorkspaceBand.stagePanePopped .mappingGroupStrip,
+.mappingPersistentWorkspaceBand.stagePanePopped .mappingWorkspaceLeftPane,
+.mappingPersistentWorkspaceBand.stagePanePopped .workspaceSplitHandle-vertical {
   display: none;
 }
 
 .mappingPersistentWorkspaceBand.stagePanePopped .mappingPersistentWorkspaceGrid {
-  grid-template-columns: minmax(0, 0.42fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.mappingPersistentWorkspaceBand.stagePanePopped .workspaceContextPane {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.mappingPersistentWorkspaceBand.timelinePanePopped .workspaceContextPane,
+.mappingPersistentWorkspaceBand.timelinePanePopped .workspaceSplitHandle-vertical {
+  display: none;
+}
+
+.mappingPersistentWorkspaceBand.timelinePanePopped .mappingPersistentWorkspaceGrid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.mappingPersistentWorkspaceBand.timelinePanePopped .mappingGroupStrip,
+.mappingPersistentWorkspaceBand.timelinePanePopped .mappingWorkspaceLeftPane {
+  grid-column: 1;
 }
 
 /* Pane-window mode surfaces fill the window; the main-shell fixed panel
@@ -27936,5 +28186,159 @@ h3 {
   .layoutSharedWorkspace.layoutControl .liveControlPanel > .liveTransportGrid {
     grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
     gap: 5px;
+  }
+}
+
+/* ---- T15-P: the Live Deck keeps the operator surface primary. Status is a
+   collapsible right inspector; transport, matrix cards, and timeline drag
+   handlers retain their existing DOM and command paths. */
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel {
+  grid-template-columns: minmax(0, 1fr) 180px;
+  grid-template-rows: 30px 32px minmax(0, 1fr) auto 40px;
+  gap: 3px;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel.liveStatusExpanded {
+  grid-template-columns: minmax(0, 1fr) 248px;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveDeskHeader {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  grid-template-columns: auto minmax(176px, 1fr) auto;
+  min-height: 30px;
+}
+
+.liveDeskHeaderMeta {
+  display: flex;
+  align-items: center;
+  justify-content: end;
+  gap: 7px;
+  min-width: 0;
+}
+
+.liveDeskSceneMeta,
+.liveDeskState {
+  min-width: 0;
+  overflow: hidden;
+  color: #8f8881;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.liveDeskSceneMeta {
+  font-variant-numeric: tabular-nums;
+  text-transform: uppercase;
+}
+
+.liveStatusToggle {
+  display: inline-grid;
+  grid-template-columns: 15px auto;
+  align-items: center;
+  gap: 5px;
+  min-width: 76px;
+  min-height: 25px;
+  border-color: #4a443e;
+  padding: 2px 7px;
+  font-size: 11px;
+}
+
+.liveStatusToggle svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+}
+
+.liveStatusToggle[aria-expanded="true"] {
+  background: #38332e;
+  color: #fff;
+  box-shadow: inset 0 -2px 0 var(--ray-accent);
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveTransportGrid {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  grid-template-columns: repeat(9, minmax(0, 1fr));
+  gap: 2px;
+  overflow: hidden;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .sceneMatrixPanel,
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveCuePadSurface {
+  grid-column: 1;
+  grid-row: 3;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .sceneMatrixPanel {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveStatusGrid {
+  grid-column: 2;
+  grid-row: 3 / -1;
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: minmax(48px, auto);
+  align-content: start;
+  gap: 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden auto;
+  border: 1px solid var(--ray-border);
+  background: #111416;
+  scrollbar-width: thin;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel:not(.liveStatusExpanded) > .liveStatusGrid > .liveStatusItem:nth-child(n + 3) {
+  display: none;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel.liveStatusExpanded > .liveStatusGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(42px, auto);
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveStatusGrid .liveStatusItem {
+  min-height: 0;
+  gap: 1px;
+  border: 0;
+  border-right: 1px solid #2d3338;
+  border-bottom: 1px solid #2d3338;
+  border-radius: 0;
+  background: transparent;
+  padding: 5px 7px;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel:not(.liveStatusExpanded) > .liveStatusGrid .liveStatusItem {
+  border-right: 0;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel.liveStatusExpanded > .liveStatusGrid .liveStatusItem:nth-child(2n) {
+  border-right: 0;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveFadeMeter {
+  grid-column: 1;
+  grid-row: 4;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveMasterGrid {
+  grid-column: 1;
+  grid-row: 5;
+}
+
+@media (max-width: 1320px) {
+  .layout.layoutSharedWorkspace.layoutControl .liveControlPanel {
+    grid-template-columns: minmax(0, 1fr) 168px;
+  }
+
+  .layout.layoutSharedWorkspace.layoutControl .liveControlPanel.liveStatusExpanded {
+    grid-template-columns: minmax(0, 1fr) 238px;
+  }
+
+  .liveDeskSceneMeta {
+    display: none;
   }
 }

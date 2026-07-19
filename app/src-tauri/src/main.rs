@@ -21267,9 +21267,18 @@ async fn open_pane_window(app: tauri::AppHandle, pane: String) -> Result<(), Str
 #[tauri::command]
 async fn close_pane_window(app: tauri::AppHandle, pane: String) -> Result<(), String> {
     let pane = pane.trim().to_ascii_lowercase();
+    if pane != "stage" && pane != "timeline" {
+        return Err(format!("Unknown pane window '{pane}'"));
+    }
     let label = pane_window_label(&pane);
     if let Some(window) = app.webview_windows().get(&label).cloned() {
         window.close().map_err(|error| error.to_string())?;
+    } else {
+        // Keep the frontend's Destroyed event as the only close acknowledgement.
+        // A missing window is already closed, so emit the same acknowledgement
+        // instead of leaving a stale popped-pane placeholder in localStorage.
+        app.emit("syndocal://pane-window-closed", pane)
+            .map_err(|error| error.to_string())?;
     }
     Ok(())
 }

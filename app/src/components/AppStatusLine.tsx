@@ -9,6 +9,7 @@ export function AppStatusLine(props: AppStatusLineProps) {
     <footer
       class={`appStatusLine ${props.status.tone}`}
       data-status-tone={props.status.tone}
+      data-status-key={props.status.key}
       role="status"
       aria-live="polite"
       aria-atomic="true"

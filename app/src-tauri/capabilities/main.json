@@ -5,6 +5,7 @@
   "windows": ["*"],
   "permissions": [
     "core:default",
+    "core:window:allow-destroy",
     "core:window:allow-maximize",
     "core:window:allow-set-fullscreen"
   ]

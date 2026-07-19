@@ -152,6 +152,22 @@ export const timelineAutomationDraftFromSummary = (automation: TimelineAutomatio
   };
 };
 
+export const timelineAutomationDraftMatchesSummary = (
+  automation: TimelineAutomationSummary,
+  draft: TimelineAutomationDraft,
+): boolean => {
+  const summary = timelineAutomationDraftFromSummary(automation);
+  return (
+    draft.fixture_id === summary.fixture_id &&
+    draft.attribute === summary.attribute &&
+    draft.start_ms === summary.start_ms &&
+    draft.end_ms === summary.end_ms &&
+    draft.start_value === summary.start_value &&
+    draft.end_value === summary.end_value &&
+    draft.interpolation === summary.interpolation
+  );
+};
+
 export const timelineVideoAutomationDraftFromSummary = (
   automation: TimelineVideoAutomationSummary,
 ): TimelineVideoAutomationDraft => {
@@ -166,4 +182,20 @@ export const timelineVideoAutomationDraftFromSummary = (
     end_value: last?.value ?? first?.value ?? 0,
     interpolation: first?.interpolation ?? "Linear",
   };
+};
+
+export const timelineVideoAutomationDraftMatchesSummary = (
+  automation: TimelineVideoAutomationSummary,
+  draft: TimelineVideoAutomationDraft,
+): boolean => {
+  const summary = timelineVideoAutomationDraftFromSummary(automation);
+  return (
+    draft.layer_id === summary.layer_id &&
+    draft.param === summary.param &&
+    draft.start_ms === summary.start_ms &&
+    draft.end_ms === summary.end_ms &&
+    draft.start_value === summary.start_value &&
+    draft.end_value === summary.end_value &&
+    draft.interpolation === summary.interpolation
+  );
 };

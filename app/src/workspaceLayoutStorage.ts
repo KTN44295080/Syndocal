@@ -14,6 +14,9 @@ export type WorkspaceLayout = {
   timeline_desk_surface: TimelineDeskSurface;
   edit_desk_surface: EditDeskSurface;
   control_category: ControlCategory;
+  top_split_ratio: number;
+  lower_split_ratio: number;
+  selections_drawer_open: boolean;
 };
 
 export const defaultWorkspaceLayout: WorkspaceLayout = {
@@ -23,6 +26,9 @@ export const defaultWorkspaceLayout: WorkspaceLayout = {
   timeline_desk_surface: "show",
   edit_desk_surface: "attributes",
   control_category: "position",
+  top_split_ratio: 0.58,
+  lower_split_ratio: 0.44,
+  selections_drawer_open: false,
 };
 
 export const workspaceLayoutStorageKey = "syndocal.workspaceLayout.v1";
@@ -56,6 +62,11 @@ const allowedControlCategories: ControlCategory[] = [
 const enumValue = <T extends string>(candidate: unknown, allowed: readonly T[], fallback: T): T =>
   typeof candidate === "string" && allowed.includes(candidate as T) ? (candidate as T) : fallback;
 
+const ratioValue = (candidate: unknown, fallback: number): number =>
+  typeof candidate === "number" && Number.isFinite(candidate)
+    ? Math.min(0.85, Math.max(0.15, candidate))
+    : fallback;
+
 export const workspaceLayoutFromUnknown = (candidate: unknown): WorkspaceLayout => {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
     return { ...defaultWorkspaceLayout };
@@ -80,6 +91,12 @@ export const workspaceLayoutFromUnknown = (candidate: unknown): WorkspaceLayout 
       allowedControlCategories,
       defaultWorkspaceLayout.control_category,
     ),
+    top_split_ratio: ratioValue(value.top_split_ratio, defaultWorkspaceLayout.top_split_ratio),
+    lower_split_ratio: ratioValue(value.lower_split_ratio, defaultWorkspaceLayout.lower_split_ratio),
+    selections_drawer_open:
+      typeof value.selections_drawer_open === "boolean"
+        ? value.selections_drawer_open
+        : defaultWorkspaceLayout.selections_drawer_open,
   };
 };
 

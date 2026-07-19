@@ -117,14 +117,11 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
     : 1;
 
   return (
-    <section class="sceneMatrixPanel" aria-label="Scene matrix grouped by scene bank">
-      <div class="panelHeader sceneMatrixHeader">
-        <div>
-          <p class="eyebrow">{props.timelineTrack}</p>
-          <h2>Scene Matrix</h2>
-        </div>
-        <span>{props.cues.length} scenes</span>
-      </div>
+    <section
+      class="sceneMatrixPanel"
+      aria-label="Scene matrix grouped by scene bank"
+      data-timeline-track={props.timelineTrack}
+    >
       <div class="sceneMatrixScroller">
         <div class="sceneMatrixColumns">
           <For each={columns()}>

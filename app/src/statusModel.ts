@@ -3,6 +3,7 @@ export type AppStatusTone = "info" | "success" | "warning" | "error";
 export interface AppStatus {
   text: string;
   tone: AppStatusTone;
+  key?: string;
 }
 
 const errorPattern = /\b(error|failed|failure|cannot|could not|invalid|unavailable|not found|exceeds|conflict|timed out|must be)\b/i;
@@ -17,7 +18,8 @@ export const appStatusTone = (text: string): AppStatusTone => {
   return "info";
 };
 
-export const appStatusFromMessage = (text: string): AppStatus => ({
+export const appStatusFromMessage = (text: string, key?: string): AppStatus => ({
   text: text.trim() || "Ready",
   tone: appStatusTone(text),
+  ...(key ? { key } : {}),
 });
