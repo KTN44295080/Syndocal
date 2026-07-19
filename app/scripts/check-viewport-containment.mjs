@@ -24,19 +24,22 @@ const patchOnlyMode = process.argv.includes("--patch-only");
 const persistentBandOnlyMode = process.argv.includes("--persistent-band-only");
 const workspaceSplitOnlyMode = process.argv.includes("--workspace-split-only");
 const workspaceShellOnlyMode = process.argv.includes("--workspace-shell-only");
+const fxVisualOnlyMode = process.argv.includes("--fx-visual-only");
 const viewportTraceEnabled = process.env.SYNDOCAL_VIEWPORT_TRACE === "1";
 const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
   largeShowMode
     ? "large-show"
-    : operatorVjOnlyMode
-      ? "operator-vj"
-      : autoVjOnlyMode
-        ? "auto-vj"
-        : audioReactiveOnlyMode
-          ? "audio-reactive"
-          : vjEmptyMode || liveAudioOnlyMode || fullscreenVjOnlyMode
-            ? "vj-empty"
-            : "timeline"
+    : fxVisualOnlyMode
+      ? "fx-visual"
+      : operatorVjOnlyMode
+        ? "operator-vj"
+        : autoVjOnlyMode
+          ? "auto-vj"
+          : audioReactiveOnlyMode
+            ? "audio-reactive"
+            : vjEmptyMode || liveAudioOnlyMode || fullscreenVjOnlyMode
+              ? "vj-empty"
+              : "timeline"
 );
 const defaultUrl =
   viewportFixture === "none"
@@ -568,6 +571,7 @@ class CdpClient {
     this.nextId = 1;
     this.pending = new Map();
     this.socket = null;
+    this.closedReason = null;
   }
 
   async connect() {
@@ -575,6 +579,31 @@ class CdpClient {
     await new Promise((resolveConnect, rejectConnect) => {
       this.socket.addEventListener("open", resolveConnect, { once: true });
       this.socket.addEventListener("error", rejectConnect, { once: true });
+    });
+    // Pending CDP calls must reject when the socket dies. Without this, a
+    // browser killed mid-run leaves send() promises unresolved forever: the
+    // run either hangs on the Vite child handle or, if every child is gone,
+    // the event loop drains and Node exits 0 with zero assertions executed
+    // (reproduced on this machine by killing Chrome between fx-visual
+    // resolutions). Rejecting routes the failure through main()'s
+    // catch/finally so children are cleaned up and the exit code is honest.
+    const failAllPending = (reason) => {
+      this.closedReason = reason;
+      if (this.pending.size === 0) {
+        return;
+      }
+      const waiters = [...this.pending.values()];
+      this.pending.clear();
+      const error = new Error(reason);
+      for (const { reject } of waiters) {
+        reject(error);
+      }
+    };
+    this.socket.addEventListener("close", (event) => {
+      failAllPending(`CDP socket closed mid-run (code ${event.code}); the browser died or was killed.`);
+    });
+    this.socket.addEventListener("error", () => {
+      failAllPending("CDP socket errored mid-run; the browser died or the connection was reset.");
     });
     this.socket.addEventListener("message", (event) => {
       const data = JSON.parse(event.data);
@@ -594,6 +623,9 @@ class CdpClient {
   send(method, params = {}) {
     if (!this.socket) {
       throw new Error("CDP socket is not connected.");
+    }
+    if (this.closedReason) {
+      return Promise.reject(new Error(this.closedReason));
     }
     const id = this.nextId;
     this.nextId += 1;
@@ -3785,8 +3817,10 @@ async function measure(client, label) {
       visibleEffectRecipeDockCount: visibleCount('.effectRecipeDock'),
       visibleEffectActionDockCount: visibleCount('.effectActionDock'),
       visibleEffectRackTabCount: visibleCount('.effectRackTabs button'),
-      visibleEffectFamilyButtonCount: visibleCount('.effectFamilyRail button'),
-      visibleActiveEffectFamilyButtonCount: visibleCount('.effectFamilyRail button.active[aria-pressed="true"]'),
+      visibleEffectFamilyButtonCount: visibleCount('.effectFamilyChooser button'),
+      visibleActiveEffectFamilyButtonCount: visibleCount('.effectFamilyChooser button.active[aria-pressed="true"]'),
+      activeEffectFamily: document.querySelector('.effectFamilyChooser button.active[aria-pressed="true"]')
+        ?.getAttribute('data-effect-family') ?? '',
       visibleEffectLibraryCardCount: visibleCount('.sampleEffectPresetCard'),
       visibleTargetRequiredEffectCardCount: visibleCount('.sampleEffectPresetCard[data-requires-target="true"]'),
       visibleColorEffectEditorCount: visibleCount('.colorEffectEditor'),
@@ -4801,26 +4835,44 @@ function hasExpectedControlModeSurface(result) {
           result.controlWorkSurfaceUnsafeOverflowCount === 0
         );
       }
-      if (result.label.startsWith("control-edit-effects-colour-")) {
+      if (result.label.startsWith("control-edit-effects-color-family-")) {
         return (
           hasFxDesk &&
           result.visibleEffectEditorCount === 1 &&
-          result.visibleEffectFamilyButtonCount === 8 &&
+          result.visibleEffectFamilyButtonCount === 9 &&
           result.visibleActiveEffectFamilyButtonCount === 1 &&
           result.visibleEffectLibraryCardCount === 1 &&
           result.visibleTargetRequiredEffectCardCount === 1 &&
           result.controlWorkSurfaceUnsafeOverflowCount === 0
         );
       }
+      const expectedRecipeCountByFamily = {
+        "COLOR FX": 1,
+        "CHASER FX": 1,
+        "MOVE FX": 1,
+        "VALUE FX": 4,
+        "CURVE FX": 2,
+        "MAPPINGS": 3,
+        "COLOR MAPPINGS": 1,
+      };
+      const expectedTargetRequiredCountByFamily = {
+        "COLOR FX": 1,
+        "CHASER FX": 1,
+        "MOVE FX": 1,
+        "VALUE FX": 0,
+        "CURVE FX": 0,
+        "MAPPINGS": 0,
+        "COLOR MAPPINGS": 1,
+      };
       return (
         hasFxDesk &&
         result.visibleEditDeskTabCount === 3 &&
         result.visibleFixtureEditSurfaceCount === 0 &&
         result.visibleEffectEditorCount === 1 &&
-        result.visibleEffectFamilyButtonCount === 8 &&
+        result.visibleEffectFamilyButtonCount === 9 &&
         result.visibleActiveEffectFamilyButtonCount === 1 &&
-        result.visibleEffectLibraryCardCount === 13 &&
-        result.visibleTargetRequiredEffectCardCount === 4 &&
+        result.visibleEffectLibraryCardCount === expectedRecipeCountByFamily[result.activeEffectFamily] &&
+        result.visibleTargetRequiredEffectCardCount === expectedTargetRequiredCountByFamily[result.activeEffectFamily] &&
         result.visibleNodeGraphPanelCount === 0 &&
         result.effectTargetHintCount >= 1 &&
         result.visibleRawMonitorCount === 0 &&
@@ -7094,10 +7146,10 @@ async function runViewport(client, viewport) {
       await sleep(80);
       results.push(await measure(client, `control-edit-effects-graphs-${viewport.width}x${viewport.height}`));
       await clickVisibleByText(client, ".effectRackTabs button", "Stack");
-      await clickVisibleByText(client, ".effectFamilyRail button", "Colour");
+      await clickVisibleByText(client, ".effectFamilyChooser button", "COLOR FX");
       await sleep(80);
-      results.push(await measure(client, `control-edit-effects-colour-${viewport.width}x${viewport.height}`));
-      await clickVisibleByText(client, ".effectFamilyRail button", "All");
+      results.push(await measure(client, `control-edit-effects-color-family-${viewport.width}x${viewport.height}`));
+      await clickVisibleByText(client, ".effectFamilyChooser button", "VALUE FX");
       await selectVisibleOption(client, ".effectEditor select", "Color");
       await sleep(120);
       const initialColorStopCount = await client.evaluate("document.querySelectorAll('.colorEffectStopRow').length");
@@ -12397,6 +12449,473 @@ async function runEmptyVjViewport(client, viewport) {
   return measure(client, `vj-empty-${viewport.width}x${viewport.height}`);
 }
 
+const fxVisualFamilyOrder = [
+  "STEPS",
+  "COLOR FX",
+  "CHASER FX",
+  "MOVE FX",
+  "VALUE FX",
+  "CURVE FX",
+  "MAPPINGS",
+  "COLOR MAPPINGS",
+  "SUPER SCENE",
+];
+
+const fxVisualRecipeFamilies = [
+  ["COLOR FX", "Color", 1],
+  ["CHASER FX", "Chaser", 1],
+  ["MOVE FX", "Move", 1],
+  ["VALUE FX", "Value", 4],
+  ["CURVE FX", "Lfo", 2],
+  ["MAPPINGS", "PositionWave", 3],
+  ["COLOR MAPPINGS", "Color", 1],
+];
+
+async function readFxVisualSurface(client) {
+  return evaluatePageFunction(client, async (expectedFamilies) => {
+    const visible = (element) => {
+      if (!element) return false;
+      const rectangle = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rectangle.width > 0 && rectangle.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+    };
+    const within = (inner, outer) => Boolean(
+      inner && outer &&
+      inner.left >= outer.left - 1 && inner.right <= outer.right + 1 &&
+      inner.top >= outer.top - 1 && inner.bottom <= outer.bottom + 1
+    );
+    const chooser = document.querySelector(".effectFamilyChooser");
+    const chooserRect = chooser?.getBoundingClientRect() ?? null;
+    const familyButtons = [...document.querySelectorAll(".effectFamilyChooser button")].map((button) => {
+      const rectangle = button.getBoundingClientRect();
+      const family = button.getAttribute("data-effect-family") || "";
+      return {
+        family,
+        label: (button.querySelector("strong")?.textContent || "").trim(),
+        order: Number(button.getAttribute("data-family-order")),
+        active: button.classList.contains("active") && button.getAttribute("aria-pressed") === "true",
+        visible: visible(button),
+        contained: within(rectangle, chooserRect) && rectangle.left >= -1 && rectangle.right <= innerWidth + 1,
+        width: Math.round(rectangle.width * 100) / 100,
+        height: Math.round(rectangle.height * 100) / 100,
+      };
+    });
+    const rack = document.querySelector(".effectRackPane");
+    const effectList = document.querySelector(".effectList");
+    const layoutRect = (selector) => {
+      const rectangle = document.querySelector(selector)?.getBoundingClientRect();
+      return rectangle ? {
+        width: Math.round(rectangle.width * 100) / 100,
+        height: Math.round(rectangle.height * 100) / 100,
+      } : { width: 0, height: 0 };
+    };
+    const previews = [...document.querySelectorAll(".effectListRows .effectGraphicalPreview")].map((preview) => {
+      const rectangle = preview.getBoundingClientRect();
+      const summaryRect = preview.closest(".effectItemSummary")?.getBoundingClientRect() ?? null;
+      const curve = preview.querySelector(".effectGraphicalCurve");
+      const gradient = preview.querySelector(".effectGraphicalGradient");
+      const move = preview.querySelector(".effectGraphicalMove");
+      const chaser = preview.querySelector(".effectGraphicalChaser");
+      return {
+        kind: preview.getAttribute("data-preview-kind") || "",
+        label: preview.getAttribute("data-effect-label") || "",
+        width: Math.round(rectangle.width * 100) / 100,
+        height: Math.round(rectangle.height * 100) / 100,
+        containedInItem: within(rectangle, summaryRect),
+        horizontalOverflowPx: Math.max(0, preview.scrollWidth - preview.clientWidth),
+        shape: curve?.getAttribute("data-lfo-shape") ?? "",
+        low: curve?.getAttribute("data-lfo-low") ?? "",
+        high: curve?.getAttribute("data-lfo-high") ?? "",
+        phase: curve?.getAttribute("data-lfo-phase") ?? "",
+        curvePath: curve?.querySelector("path")?.getAttribute("d") ?? "",
+        stopCount: gradient?.getAttribute("data-stop-count") ?? "",
+        stopPositions: gradient?.getAttribute("data-stop-positions") ?? "",
+        stopColors: gradient?.getAttribute("data-stop-colors") ?? "",
+        colorInterpolation: gradient?.getAttribute("data-color-interpolation") ?? "",
+        gradientBackground: gradient ? getComputedStyle(gradient).backgroundImage : "",
+        movePointCount: move?.getAttribute("data-point-count") ?? "",
+        movePoints: move?.getAttribute("data-move-points") ?? "",
+        moveCenter: move?.getAttribute("data-move-center") ?? "",
+        moveSize: move?.getAttribute("data-move-size") ?? "",
+        moveRotation: move?.getAttribute("data-move-rotation") ?? "",
+        moveCoordinateMode: move?.getAttribute("data-move-coordinate-mode") ?? "",
+        movePreviewBase: move?.getAttribute("data-move-preview-base") ?? "",
+        moveControlPath: move?.querySelector("path.control")?.getAttribute("d") ?? "",
+        moveOutputPath: move?.querySelector("path.output")?.getAttribute("d") ?? "",
+        moveOutputInViewBox: (() => {
+          const values = (move?.querySelector("path.output")?.getAttribute("d") ?? "")
+            .match(/-?\d+(?:\.\d+)?/g)
+            ?.map(Number) ?? [];
+          return values.length > 0 && values.every((value) => value >= 0 && value <= 100);
+        })(),
+        valuePoints: curve?.getAttribute("data-value-points") ?? "",
+        valueInterpolation: curve?.getAttribute("data-value-interpolation") ?? "",
+        chaserStepCount: chaser?.getAttribute("data-step-count") ?? "",
+        chaserActiveStepCount: chaser?.getAttribute("data-active-step-count") ?? "",
+      };
+    });
+    const effectListInitialScrollTop = effectList?.scrollTop ?? 0;
+    const lastPreview = [...document.querySelectorAll(".effectListRows .effectGraphicalPreview")].at(-1) ?? null;
+    if (effectList && lastPreview) {
+      const listRectangle = effectList.getBoundingClientRect();
+      const previewRectangle = lastPreview.getBoundingClientRect();
+      if (previewRectangle.bottom > listRectangle.bottom - 1) {
+        effectList.scrollTop += previewRectangle.bottom - listRectangle.bottom + 1;
+      } else if (previewRectangle.top < listRectangle.top + 1) {
+        effectList.scrollTop -= listRectangle.top - previewRectangle.top + 1;
+      }
+    }
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const lastPreviewRectAtEnd = lastPreview?.getBoundingClientRect() ?? null;
+    const effectListRectAtEnd = effectList?.getBoundingClientRect() ?? null;
+    const lastPreviewReachable = Boolean(
+      lastPreviewRectAtEnd && effectListRectAtEnd &&
+      lastPreviewRectAtEnd.left >= effectListRectAtEnd.left - 1 &&
+      lastPreviewRectAtEnd.right <= effectListRectAtEnd.right + 1 &&
+      lastPreviewRectAtEnd.top >= effectListRectAtEnd.top - 1 &&
+      lastPreviewRectAtEnd.bottom <= effectListRectAtEnd.bottom + 1
+    );
+    const effectListScrollMetrics = {
+      client: [effectList?.clientWidth ?? 0, effectList?.clientHeight ?? 0],
+      scroll: [effectList?.scrollWidth ?? 0, effectList?.scrollHeight ?? 0],
+      scrollTopAtEnd: effectList?.scrollTop ?? 0,
+      listRect: effectListRectAtEnd ? [
+        effectListRectAtEnd.left,
+        effectListRectAtEnd.top,
+        effectListRectAtEnd.right,
+        effectListRectAtEnd.bottom,
+      ] : null,
+      lastPreviewRect: lastPreviewRectAtEnd ? [
+        lastPreviewRectAtEnd.left,
+        lastPreviewRectAtEnd.top,
+        lastPreviewRectAtEnd.right,
+        lastPreviewRectAtEnd.bottom,
+      ] : null,
+    };
+    if (effectList) effectList.scrollTop = effectListInitialScrollTop;
+    await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
+    const documentAndAppScrollZero =
+      window.scrollX === 0 && window.scrollY === 0 &&
+      document.documentElement.scrollLeft === 0 && document.documentElement.scrollTop === 0 &&
+      document.body.scrollLeft === 0 && document.body.scrollTop === 0 &&
+      (document.querySelector(".app")?.scrollLeft ?? 0) === 0 &&
+      (document.querySelector(".app")?.scrollTop ?? 0) === 0;
+    return {
+      expectedFamilies,
+      familyButtons,
+      familyNames: familyButtons.map((button) => button.family),
+      familyLabels: familyButtons.map((button) => button.label),
+      activeFamilies: familyButtons.filter((button) => button.active).map((button) => button.family),
+      chooserHorizontalOverflowPx: chooser ? Math.max(0, chooser.scrollWidth - chooser.clientWidth) : -1,
+      chooserVerticalOverflowPx: chooser ? Math.max(0, chooser.scrollHeight - chooser.clientHeight) : -1,
+      rackHorizontalOverflowPx: rack ? Math.max(0, rack.scrollWidth - rack.clientWidth) : -1,
+      rackVerticalOverflowPx: rack ? Math.max(0, rack.scrollHeight - rack.clientHeight) : -1,
+      rackOverflowY: rack ? getComputedStyle(rack).overflowY : "",
+      effectListHorizontalOverflowPx: effectList ? Math.max(0, effectList.scrollWidth - effectList.clientWidth) : -1,
+      effectListVerticalOverflowPx: effectList ? Math.max(0, effectList.scrollHeight - effectList.clientHeight) : -1,
+      effectListOverflowY: effectList ? getComputedStyle(effectList).overflowY : "",
+      lastPreviewReachable,
+      effectListScrollMetrics,
+      workbenchRect: layoutRect(".effectWorkbench"),
+      libraryPaneRect: layoutRect(".effectLibraryPane"),
+      inspectorPaneRect: layoutRect(".effectInspectorPane"),
+      rackPaneRect: layoutRect(".effectRackPane"),
+      previewKinds: previews.map((preview) => preview.kind),
+      previews,
+      documentAndAppScrollZero,
+      appSize: (() => {
+        const rectangle = document.querySelector(".app")?.getBoundingClientRect();
+        return rectangle ? [Math.round(rectangle.width), Math.round(rectangle.height)] : [0, 0];
+      })(),
+    };
+  }, fxVisualFamilyOrder);
+}
+
+async function readMoveFxPointState(client, requestedPointIndex = null) {
+  return evaluatePageFunction(client, (pointIndex) => {
+    const handles = [...document.querySelectorAll(".moveEffectPathCanvas .moveEffectPointHandle")];
+    const handleCandidates = handles.map((candidate, index) => {
+      const rectangle = candidate.getBoundingClientRect();
+      const center = { x: rectangle.left + rectangle.width / 2, y: rectangle.top + rectangle.height / 2 };
+      const hit = center.x >= 0 && center.x < innerWidth && center.y >= 0 && center.y < innerHeight
+        ? document.elementFromPoint(center.x, center.y)
+        : null;
+      return {
+        candidate,
+        index,
+        rectangle,
+        center,
+        hit,
+        hitTestable: Boolean(hit && (hit === candidate || hit.closest(".moveEffectPointHandle") === candidate)),
+      };
+    });
+    const selectedHandle = (
+      Number.isInteger(pointIndex) ? handleCandidates.find((entry) => entry.index === pointIndex) : null
+    ) ?? handleCandidates.find((entry) => entry.hitTestable) ?? handleCandidates[0] ?? null;
+    const handle = selectedHandle?.candidate ?? null;
+    const canvas = document.querySelector(".moveEffectPathCanvas");
+    const rectangle = selectedHandle?.rectangle ?? null;
+    const canvasRect = canvas?.getBoundingClientRect() ?? null;
+    const canvasMatrix = canvas instanceof SVGGraphicsElement ? canvas.getScreenCTM() : null;
+    const label = handle?.getAttribute("aria-label") ?? "";
+    const match = label.match(/X\s+(-?[0-9.]+),\s+Y\s+(-?[0-9.]+)/);
+    const outputValues = (document.querySelector(".moveEffectPathOutput")?.getAttribute("d") ?? "")
+      .match(/-?\d+(?:\.\d+)?/g)
+      ?.map(Number) ?? [];
+    return {
+      exists: Boolean(handle && rectangle && rectangle.width > 0 && rectangle.height > 0),
+      pointIndex: selectedHandle?.index ?? -1,
+      hitTestable: selectedHandle?.hitTestable ?? false,
+      hitClass: selectedHandle?.hit?.getAttribute("class") ?? "",
+      label,
+      x: match ? Number(match[1]) : null,
+      y: match ? Number(match[2]) : null,
+      transform: handle?.getAttribute("transform") ?? "",
+      center: rectangle ? { x: rectangle.left + rectangle.width / 2, y: rectangle.top + rectangle.height / 2 } : null,
+      canvas: canvasRect ? {
+        left: canvasRect.left,
+        top: canvasRect.top,
+        right: canvasRect.right,
+        bottom: canvasRect.bottom,
+        width: canvasRect.width,
+        height: canvasRect.height,
+      } : null,
+      canvasScale: canvasMatrix ? {
+        x: Math.hypot(canvasMatrix.a, canvasMatrix.b),
+        y: Math.hypot(canvasMatrix.c, canvasMatrix.d),
+      } : null,
+      ghostCount: document.querySelectorAll("[data-move-point-ghost]").length,
+      readoutCount: document.querySelectorAll("[data-move-point-drag-readout]").length,
+      readout: (document.querySelector("[data-move-point-drag-readout]")?.textContent ?? "").replace(/\s+/g, " ").trim(),
+      outputPathInViewBox: outputValues.length > 0 && outputValues.every((value) => value >= 0 && value <= 100),
+      documentAndAppScrollZero:
+        window.scrollX === 0 && window.scrollY === 0 &&
+        document.documentElement.scrollLeft === 0 && document.documentElement.scrollTop === 0 &&
+        document.body.scrollLeft === 0 && document.body.scrollTop === 0 &&
+        (document.querySelector(".app")?.scrollLeft ?? 0) === 0 &&
+        (document.querySelector(".app")?.scrollTop ?? 0) === 0,
+    };
+  }, requestedPointIndex);
+}
+
+async function exerciseMoveFxDrag(client, deltaX, deltaY, escape = false) {
+  const before = await readMoveFxPointState(client);
+  if (!before.center) return { before, during: null, after: null };
+  const target = { x: before.center.x + deltaX, y: before.center.y + deltaY };
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: before.center.x,
+    y: before.center.y,
+    button: "left",
+    buttons: 1,
+    clickCount: 1,
+  });
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: target.x,
+    y: target.y,
+    button: "left",
+    buttons: 1,
+  });
+  await sleep(64);
+  const during = await readMoveFxPointState(client, before.pointIndex);
+  if (escape) {
+    await pressKey(client, "Escape", "Escape");
+    await sleep(48);
+  }
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: target.x,
+    y: target.y,
+    button: "left",
+    buttons: 0,
+    clickCount: 1,
+  });
+  await sleep(96);
+  const after = await readMoveFxPointState(client, before.pointIndex);
+  return { before, during, after, deltaX, deltaY, escape };
+}
+
+async function runFxVisualViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: fixtureUrl("fx-visual") });
+  await waitForApp(client);
+  await waitForClientCondition(
+    client,
+    "document.querySelectorAll('.effectFamilyChooser button').length === 9 && document.querySelectorAll('.effectListRows .effectGraphicalPreview').length === 5",
+    "T16 FX visualization fixture",
+  );
+  await sleep(120);
+  const initial = await readFxVisualSurface(client);
+
+  const recipeFamilies = [];
+  for (const [family, expectedType, expectedCards] of fxVisualRecipeFamilies) {
+    await clickVisibleByText(client, ".effectFamilyChooser button", family);
+    await sleep(64);
+    recipeFamilies.push(await evaluatePageFunction(client, (name, type, cards) => {
+      const typeSelect = [...document.querySelectorAll(".effectEditor select")]
+        .find((candidate) => [...candidate.options].some((option) => option.value === "PositionWave"));
+      const active = document.querySelector('.effectFamilyChooser button.active[aria-pressed="true"]');
+      return {
+        family: name,
+        expectedType: type,
+        expectedCards: cards,
+        activeFamily: active?.getAttribute("data-effect-family") ?? "",
+        effectType: typeSelect?.value ?? "",
+        cardCount: [...document.querySelectorAll(".sampleEffectPresetCard")].filter((card) => {
+          const rectangle = card.getBoundingClientRect();
+          const style = getComputedStyle(card);
+          return rectangle.width > 0 && rectangle.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+        }).length,
+      };
+    }, family, expectedType, expectedCards));
+  }
+
+  await clickVisibleByText(client, ".effectFamilyChooser button", "STEPS");
+  await sleep(160);
+  const cueEditOpened = await evaluatePageFunction(client, () => {
+    const toggle = document.querySelector(".cuePanelEditToggle");
+    if (toggle instanceof HTMLButtonElement && toggle.getAttribute("aria-expanded") !== "true") toggle.click();
+    return Boolean(toggle);
+  });
+  await sleep(96);
+  const cueRecallOpened = await evaluatePageFunction(client, () => {
+    const details = document.querySelector(".cueItem .cueEffectRecallEditor");
+    if (!(details instanceof HTMLDetailsElement)) return false;
+    details.open = true;
+    details.dispatchEvent(new Event("toggle"));
+    return true;
+  });
+  await sleep(96);
+  const stepsNavigation = await evaluatePageFunction(client, () => ({
+    cueDrawerVisible: (() => {
+      const drawer = document.querySelector('[data-timeline-context-drawer-panel="cue"]');
+      const rectangle = drawer?.getBoundingClientRect();
+      return Boolean(rectangle && rectangle.width > 0 && rectangle.height > 0);
+    })(),
+    cueLabelVisible: [...document.querySelectorAll(".cueItem")].some((item) =>
+      (item.textContent || "").includes("T16 Owned FX Cue")),
+    stepEditorCount: document.querySelectorAll('[data-cue-step-editor][data-cue-step-count="3"]').length,
+    ownedParamsChipCount: document.querySelectorAll(".cueItem .cueEffectParamsChip").length,
+    ownedPreviewKinds: [...document.querySelectorAll(".cueItem .cueEffectRecallRow .effectGraphicalPreview")]
+      .map((preview) => preview.getAttribute("data-preview-kind")),
+    ownedLfo: (() => {
+      const preview = [...document.querySelectorAll(".cueItem .cueEffectRecallRow .effectGraphicalPreview")]
+        .find((candidate) => candidate.getAttribute("data-preview-kind") === "Lfo");
+      const curve = preview?.querySelector(".effectGraphicalCurve");
+      return {
+        label: preview?.getAttribute("data-effect-label") ?? "",
+        low: curve?.getAttribute("data-lfo-low") ?? "",
+        high: curve?.getAttribute("data-lfo-high") ?? "",
+        phase: curve?.getAttribute("data-lfo-phase") ?? "",
+      };
+    })(),
+  }));
+  stepsNavigation.cueEditOpened = cueEditOpened;
+  stepsNavigation.cueRecallOpened = cueRecallOpened;
+
+  await client.send("Page.navigate", { url: fixtureUrl("fx-visual") });
+  await waitForApp(client);
+  await waitForClientCondition(client, "document.querySelectorAll('.effectFamilyChooser button').length === 9", "T16 family chooser reload");
+  await clickVisibleByText(client, ".effectFamilyChooser button", "SUPER SCENE");
+  await sleep(180);
+  const superSceneNavigation = await evaluatePageFunction(client, () => ({
+    breadcrumbVisible: (() => {
+      const breadcrumb = document.querySelector("[data-timeline-breadcrumb]");
+      const rectangle = breadcrumb?.getBoundingClientRect();
+      return Boolean(rectangle && rectangle.width > 0 && rectangle.height > 0);
+    })(),
+    childLabel: (document.querySelector("[data-child-timeline-label]")?.textContent || "").trim(),
+    childLayerCount: document.querySelectorAll(".timelineUserLaneGutter").length,
+    showExitButton: (document.querySelector("[data-timeline-breadcrumb] button")?.textContent || "").trim(),
+  }));
+
+  await client.send("Page.navigate", { url: fixtureUrl("fx-visual") });
+  await waitForApp(client);
+  await waitForClientCondition(client, "document.querySelectorAll('.effectListRows .effectGraphicalPreview').length === 5", "T16 rack reload");
+  await clickVisibleByText(client, ".effectItemSummary", "T16 Diamond Move");
+  await waitForClientCondition(client, "Boolean(document.querySelector('.moveEffectPathCanvas .moveEffectPointHandle'))", "T16 Move editor");
+  await evaluatePageFunction(client, async () => {
+    const canvas = document.querySelector(".moveEffectPathCanvas");
+    canvas?.scrollIntoView({ block: "center", inline: "nearest" });
+    window.scrollTo(0, 0);
+    document.documentElement.scrollTo(0, 0);
+    document.body.scrollTo(0, 0);
+    document.querySelector(".app")?.scrollTo(0, 0);
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    return true;
+  });
+  await sleep(96);
+  const subThreshold = await exerciseMoveFxDrag(client, 3, 0);
+  const escapeRollback = await exerciseMoveFxDrag(client, 6, 0, true);
+  const committed = await exerciseMoveFxDrag(client, 6, 0);
+  const clampStart = await readMoveFxPointState(client);
+  const clamped = clampStart.canvas
+    ? await exerciseMoveFxDrag(client, clampStart.canvas.width, -clampStart.canvas.height)
+    : { before: clampStart, during: null, after: null };
+
+  const close = (left, right, tolerance = 0.000_1) =>
+    typeof left === "number" && typeof right === "number" && Math.abs(left - right) <= tolerance;
+  const previewByKind = Object.fromEntries(initial.previews.map((preview) => [preview.kind, preview]));
+  const conditions = [
+    ["familyExactOrder", () => JSON.stringify(initial.familyNames) === JSON.stringify(fxVisualFamilyOrder)],
+    ["familyExactLabels", () => JSON.stringify(initial.familyLabels) === JSON.stringify(fxVisualFamilyOrder)],
+    ["familyAllVisibleAndContained", () => initial.familyButtons.length === 9 && initial.familyButtons.every((button) => button.visible && button.contained && button.width >= 40 && button.height >= 40)],
+    ["familyOneActive", () => JSON.stringify(initial.activeFamilies) === JSON.stringify(["VALUE FX"])],
+    ["familyNoOverflow", () => initial.chooserHorizontalOverflowPx <= 1 && initial.chooserVerticalOverflowPx <= 1],
+    ["sevenRecipeFamiliesReachable", () => recipeFamilies.length === 7 && recipeFamilies.every((entry) => entry.activeFamily === entry.family && entry.effectType === entry.expectedType && entry.cardCount === entry.expectedCards)],
+    ["rackFiveActualPreviews", () => JSON.stringify(initial.previewKinds) === JSON.stringify(["Lfo", "Color", "Move", "Value", "Chaser"])],
+    ["rackPreviewDimensions", () => initial.previews.every((preview) => preview.width >= 72 && preview.height >= 34 && preview.containedInItem && preview.horizontalOverflowPx <= 1)],
+    ["rackNoHorizontalOverflow", () => initial.rackHorizontalOverflowPx <= 1 && initial.effectListHorizontalOverflowPx <= 1],
+    ["rackVerticalScrollReachesLastPreview", () => initial.effectListVerticalOverflowPx <= 1 || (["auto", "scroll"].includes(initial.effectListOverflowY) && initial.lastPreviewReachable)],
+    ["lfoPreviewUsesAuthoredValues", () => previewByKind.Lfo?.shape === "Sine" && previewByKind.Lfo?.low === "4096" && previewByKind.Lfo?.high === "57344" && previewByKind.Lfo?.phase === "0.125" && previewByKind.Lfo?.curvePath.length > 20],
+    ["colorPreviewUsesAuthoredPalette", () => previewByKind.Color?.stopCount === "4" && previewByKind.Color?.stopPositions === "0,0.18,0.54,1" && previewByKind.Color?.stopColors === "65535:2048:0,65535:41000:0,0:50000:65535,25000:0:65535" && previewByKind.Color?.colorInterpolation === "HsvShortest" && previewByKind.Color?.gradientBackground.includes("gradient")],
+    ["movePreviewUsesAuthoredPath", () => previewByKind.Move?.movePointCount === "4" && previewByKind.Move?.movePoints === "0.5:0.08,0.92:0.5,0.5:0.92,0.08:0.5" && previewByKind.Move?.moveCenter === "0.46:0.56" && previewByKind.Move?.moveSize === "0.78:0.62" && previewByKind.Move?.moveRotation === "18" && previewByKind.Move?.moveCoordinateMode === "Absolute" && previewByKind.Move?.movePreviewBase === "absolute" && previewByKind.Move?.moveControlPath.length > 20 && previewByKind.Move?.moveOutputPath.length > 20 && previewByKind.Move?.moveControlPath !== previewByKind.Move?.moveOutputPath && previewByKind.Move?.moveOutputInViewBox],
+    ["valuePreviewUsesAuthoredEnvelope", () => previewByKind.Value?.valuePoints === "0:0.12,0.22:0.88,0.58:0.42,1:0.76" && previewByKind.Value?.valueInterpolation === "Smooth" && previewByKind.Value?.curvePath.length > 20],
+    ["chaserPreviewUsesAuthoredSteps", () => previewByKind.Chaser?.chaserStepCount === "4" && previewByKind.Chaser?.chaserActiveStepCount === "2"],
+    ["stepsNavigation", () => stepsNavigation.cueEditOpened && stepsNavigation.cueRecallOpened && stepsNavigation.cueDrawerVisible && stepsNavigation.cueLabelVisible && stepsNavigation.stepEditorCount === 1],
+    ["cueOwnedParamsRendered", () => stepsNavigation.ownedParamsChipCount === 5 && JSON.stringify(stepsNavigation.ownedPreviewKinds) === JSON.stringify(["Lfo", "Color", "Move", "Value", "Chaser"]) && stepsNavigation.ownedLfo.label === "Cue-owned Sine Curve" && stepsNavigation.ownedLfo.low === "8192" && stepsNavigation.ownedLfo.high === "61440" && stepsNavigation.ownedLfo.phase === "0.25"],
+    ["superSceneNavigation", () => superSceneNavigation.breadcrumbVisible && superSceneNavigation.childLabel === "T16 Owned FX Cue" && superSceneNavigation.childLayerCount === 3 && superSceneNavigation.showExitButton === "Show"],
+    ["moveThreePxIsClick", () => close(subThreshold.before?.x, subThreshold.during?.x) && close(subThreshold.before?.y, subThreshold.during?.y) && subThreshold.during?.ghostCount === 0 && subThreshold.during?.readoutCount === 0 && close(subThreshold.before?.x, subThreshold.after?.x) && close(subThreshold.before?.y, subThreshold.after?.y)],
+    ["moveSixPxShowsGhostAndReadout", () => escapeRollback.during?.ghostCount === 1 && escapeRollback.during?.readoutCount === 1 && /X\s+[0-9.]+\s+·\s+Y\s+[0-9.]+/.test(escapeRollback.during?.readout ?? "") && !close(escapeRollback.before?.x, escapeRollback.during?.x)],
+    ["moveEscapeRollsBack", () => close(escapeRollback.before?.x, escapeRollback.after?.x) && close(escapeRollback.before?.y, escapeRollback.after?.y) && escapeRollback.after?.ghostCount === 0 && escapeRollback.after?.readoutCount === 0],
+    ["moveSixPxCommits", () => committed.during?.ghostCount === 1 && committed.during?.readoutCount === 1 && !close(committed.before?.x, committed.after?.x) && close(committed.during?.x, committed.after?.x) && committed.after?.ghostCount === 0 && committed.after?.readoutCount === 0],
+    ["moveDragUsesRenderedSvgCoordinates", () => {
+      const scale = committed.before?.canvasScale?.x;
+      const actualDelta = (committed.after?.x ?? Number.NaN) - (committed.before?.x ?? Number.NaN);
+      const expectedDelta = typeof scale === "number" && scale > 0 ? committed.deltaX / (scale * 100) : Number.NaN;
+      return Number.isFinite(expectedDelta) && close(actualDelta, expectedDelta, 0.000_15);
+    }],
+    ["moveEditorOutputUsesRuntimeBounds", () => [subThreshold, escapeRollback, committed, clamped].every((result) => result.before?.outputPathInViewBox && result.during?.outputPathInViewBox && result.after?.outputPathInViewBox)],
+    ["moveClampCommitsUnitBounds", () => clamped.during?.ghostCount === 1 && close(clamped.after?.x, 1) && close(clamped.after?.y, 1) && clamped.after?.documentAndAppScrollZero === true],
+    ["documentAndAppScrollZero", () => initial.documentAndAppScrollZero && subThreshold.after?.documentAndAppScrollZero && escapeRollback.after?.documentAndAppScrollZero && committed.after?.documentAndAppScrollZero && clamped.after?.documentAndAppScrollZero],
+  ];
+  const checks = Object.fromEntries(conditions.map(([name, check]) => {
+    try {
+      return [name, Boolean(check())];
+    } catch {
+      return [name, false];
+    }
+  }));
+  const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  return {
+    label: `fx-visual-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    initial,
+    recipeFamilies,
+    stepsNavigation,
+    superSceneNavigation,
+    move: { subThreshold, escapeRollback, committed, clamped },
+  };
+}
+
 async function main() {
   const browser = findBrowser();
   if (!browser) {
@@ -12470,6 +12989,49 @@ async function main() {
     console.log(
       `viewport contract primary-browser=${primaryOperationalViewport.width}x${primaryOperationalViewport.height} measured-client-size-browser=${measuredClientSizeViewport.width}x${measuredClientSizeViewport.height} extended-browser=${extendedCeilingViewport.width}x${extendedCeilingViewport.height} fallback-browsers=${compactFallbackViewports.map((viewport) => `${viewport.width}x${viewport.height}`).join(",")} screenshots=${captureAllViewportScreenshots ? "all" : "large-browser-fixtures"}`,
     );
+    if (fxVisualOnlyMode) {
+      const fxVisualResults = [];
+      for (const viewport of viewports) {
+        const result = await runFxVisualViewport(client, viewport);
+        fxVisualResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `families=${result.initial.familyNames.join("/")} active=${result.initial.activeFamilies.join("+") || "none"} ` +
+            `recipes=${result.recipeFamilies.map((entry) => `${entry.family}:${entry.cardCount}:${entry.effectType}`).join(",")} ` +
+            `panes=${Math.round(result.initial.workbenchRect.width)}:` +
+              `${Math.round(result.initial.libraryPaneRect.width)}/${Math.round(result.initial.inspectorPaneRect.width)}/${Math.round(result.initial.rackPaneRect.width)} ` +
+            `previews=${result.initial.previews.map((entry) => `${entry.kind}:${Math.round(entry.width)}x${Math.round(entry.height)}`).join(",")} ` +
+            `owned=${result.stepsNavigation.ownedParamsChipCount}/${result.stepsNavigation.ownedPreviewKinds.join("+")} ` +
+            `nav=${result.stepsNavigation.stepEditorCount}/${result.superSceneNavigation.childLabel || "none"} ` +
+            `move=3:${result.move.subThreshold.before?.x}->${result.move.subThreshold.after?.x} ` +
+              `esc:${result.move.escapeRollback.before?.x}->${result.move.escapeRollback.during?.x}->${result.move.escapeRollback.after?.x} ` +
+              `commit:${result.move.committed.before?.x}->${result.move.committed.after?.x} ` +
+              `clamp:${result.move.clamped.after?.x},${result.move.clamped.after?.y} ` +
+            `scroll=${result.initial.documentAndAppScrollZero ? "zero" : "overflow"} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = fxVisualResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`FX visual viewport failed: ${JSON.stringify(failures.map((result) => ({
+          label: result.label,
+          failedChecks: result.failedChecks,
+          panes: result.initial ? {
+            workbench: result.initial.workbenchRect,
+            library: result.initial.libraryPaneRect,
+            inspector: result.initial.inspectorPaneRect,
+            rack: result.initial.rackPaneRect,
+          } : null,
+          previews: result.initial?.previews.map((preview) => ({
+            kind: preview.kind,
+            size: [preview.width, preview.height],
+            overflow: preview.horizontalOverflowPx,
+          })) ?? [],
+          rackScroll: result.initial?.effectListScrollMetrics ?? null,
+        })))}`);
+      }
+      return;
+    }
     if (patchOnlyMode) {
       const patchResults = [];
       for (const viewport of viewports) {
@@ -13204,7 +13766,21 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error.message);
-  process.exitCode = 1;
+// Second net behind the CDP close rejection: if every child process dies the
+// event loop can drain with main() still unsettled, and Node would exit 0
+// without having run a single assertion. Fail closed instead.
+let mainSettled = false;
+process.on("beforeExit", () => {
+  if (!mainSettled) {
+    console.error("viewport harness: event loop drained before checks completed - failing closed.");
+    process.exitCode = 1;
+  }
 });
+main()
+  .catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    mainSettled = true;
+  });

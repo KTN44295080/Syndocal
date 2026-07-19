@@ -1,4 +1,5 @@
-import { For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
+import { buildLfoPreviewPath } from "../effectVisualization";
 import type { EffectKind, LfoShape } from "../types";
 
 type WaveStageDragMode = "origin" | "direction" | "videoTarget";
@@ -48,6 +49,9 @@ interface WaveStageObject {
 interface EffectSourceControlsPanelProps {
   effectType: EffectKind;
   shape: LfoShape;
+  low: number;
+  high: number;
+  phase: number;
   periodMs: number;
   bpm: number;
   clockSyncBeats: number | null;
@@ -170,6 +174,16 @@ const nearlyEqual = (a: number | null, b: number | null) =>
   a === null || b === null ? a === b : Math.abs(a - b) < 0.001;
 
 export function EffectSourceControlsPanel(props: EffectSourceControlsPanelProps) {
+  const actualWavePath = createMemo(() => buildLfoPreviewPath(
+    props.shape,
+    props.phase,
+    100,
+    36,
+    96,
+    props.low,
+    props.high,
+    props.effectType === "Lfo",
+  ));
   const beatPeriodMs = (beats: number) => {
     const bpm = Number.isFinite(props.bpm) && props.bpm > 0 ? props.bpm : 120;
     return Math.max(10, Math.round((60_000 / bpm) * beats));
@@ -195,6 +209,25 @@ export function EffectSourceControlsPanel(props: EffectSourceControlsPanelProps)
         <div class="effectBpmPeriodHeader">
           <strong>Waveform</strong>
           <span>{props.shape}</span>
+        </div>
+        <div
+          class="effectActualWavePreview"
+          role="img"
+          aria-label="Current effect waveform preview"
+          data-lfo-shape={props.shape}
+          data-lfo-low={props.low}
+          data-lfo-high={props.high}
+          data-lfo-phase={props.phase}
+        >
+          <svg viewBox="0 0 100 36" preserveAspectRatio="none" aria-hidden="true">
+            <line x1="0" y1="18" x2="100" y2="18" />
+            <path d={actualWavePath()} />
+          </svg>
+          <span class="tabularNums">
+            <b>{props.shape}</b>
+            <span>{Math.round(props.low)}–{Math.round(props.high)}</span>
+            <span>φ {Math.round(props.phase * 100)}%</span>
+          </span>
         </div>
         <div class="effectShapePresetGrid" aria-label="Effect waveform presets">
           <For each={lfoShapePresets}>

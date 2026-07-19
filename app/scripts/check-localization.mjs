@@ -177,6 +177,19 @@ assert.equal(
   "Festival Baseから未保存プロジェクトを作成しました（埋め込みプロファイル 2、MIDI 4、OSC 1）。DMXと映像出力はすべて無効・ブラックアウトです。",
 );
 assert.equal(localization.translateUiText("Custom fixture", "ja"), "Custom fixture");
+assert.equal(localization.translateUiText("Effect family chooser", "ja"), "エフェクトファミリーチューザー");
+assert.equal(localization.translateUiText("COLOR FX", "ja"), "カラーFX");
+assert.equal(localization.translateUiText("SUPER SCENE", "ja"), "SUPER SCENE");
+assert.equal(localization.translateUiText("Current effect waveform preview", "ja"), "現在のエフェクト波形プレビュー");
+assert.equal(localization.translateUiText("Move graphical preview", "ja"), "ムーブのグラフィカルプレビュー");
+assert.equal(localization.translateUiText("REL @ 50%", "ja"), "相対 @ 50%");
+assert.equal(
+  localization.translateUiText("Output preview · neutral 50% base", "ja"),
+  "出力プレビュー · 基準値50%",
+);
+assert.equal(localization.translateUiText("Path point 3, X 0.125, Y 0.875", "ja"), "パスポイント3、X 0.125、Y 0.875");
+assert.equal(localization.translateUiText("4 points", "ja"), "4ポイント");
+assert.equal(localization.translateUiText("Perlin", "ja"), "パーリン");
 assert.equal(localization.translateUiText("Save", "en"), "Save");
 
 const accessibleSceneBlock = {

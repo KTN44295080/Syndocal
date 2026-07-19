@@ -1,5 +1,6 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import type { EffectSummary } from "../types";
+import { EffectGraphicalPreview } from "./EffectGraphicalPreview";
 
 const effectsPerPage = 10;
 
@@ -24,12 +25,14 @@ export function EffectListPanel(props: EffectListPanelProps) {
     if (effect.effect_type === "Color") return "Color";
     if (effect.effect_type === "Chaser") return "Chaser";
     if (effect.effect_type === "Move") return "Move";
+    if (effect.effect_type === "Value") return "Value";
     return effect.effect_type === "PositionWave" ? "Wave" : "LFO";
   };
   const effectKindClass = (effect: EffectSummary) => {
     if (effect.effect_type === "Color") return "color";
     if (effect.effect_type === "Chaser") return "chaser";
     if (effect.effect_type === "Move") return "move";
+    if (effect.effect_type === "Value") return "value";
     return effect.effect_type === "PositionWave" ? "wave" : "lfo";
   };
   const timingLabel = (effect: EffectSummary) => {
@@ -57,10 +60,6 @@ export function EffectListPanel(props: EffectListPanelProps) {
       return `speed ${effect.speed.toFixed(1)}`;
     }
     return "free";
-  };
-  const colorToHex = (red: number, green: number, blue: number) => {
-    const byte = (value: number) => Math.round(Math.min(65_535, Math.max(0, value)) / 257).toString(16).padStart(2, "0");
-    return `#${byte(red)}${byte(green)}${byte(blue)}`;
   };
   const colorInterpolationLabel = (interpolation: NonNullable<EffectSummary["color"]>["interpolation"]) => {
     if (interpolation === "HsvShortest") return "HSV shortest";
@@ -114,6 +113,7 @@ export function EffectListPanel(props: EffectListPanelProps) {
                     {effect.enabled ? "on" : "off"}
                   </span>
                 </div>
+                <EffectGraphicalPreview effect={effect} compact />
                 <div class="effectMetaGrid" aria-label={`Effect summary for ${effect.label}`}>
                   <span class={`effectMetaChip ${effectKindClass(effect)}`}>{effectKindLabel(effect)}</span>
                   <Show when={effect.effect_type === "Lfo" || effect.effect_type === "PositionWave"}>
@@ -133,21 +133,6 @@ export function EffectListPanel(props: EffectListPanelProps) {
                   <Show when={effect.effect_type === "Color" ? effect.color : null}>
                     {(color) => (
                       <>
-                        <span
-                          class="effectColorSwatches"
-                          role="img"
-                          aria-label={`${color().stops.length} color stops`}
-                          title={`${color().stops.length} color stops`}
-                        >
-                          <For each={color().stops}>
-                            {(stop) => (
-                              <i
-                                style={{ "background-color": colorToHex(stop.color.red, stop.color.green, stop.color.blue) }}
-                                aria-hidden="true"
-                              />
-                            )}
-                          </For>
-                        </span>
                         <span class="effectMetaChip">{color().algorithm}</span>
                         <span class="effectMetaChip">{colorInterpolationLabel(color().interpolation)}</span>
                         <span class="effectMetaChip tabularNums">spread {Math.round(color().fixture_spread * 100)}%</span>

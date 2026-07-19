@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 
 export type SampleEffectPreset =
   | "pulse"
@@ -15,19 +15,23 @@ export type SampleEffectPreset =
   | "spectrum"
   | "colour-chase";
 
-export type EffectLibraryFamily =
-  | "Colour"
-  | "Chaser"
-  | "Move"
-  | "Value"
-  | "Curve"
-  | "Mappings"
-  | "Colour Mappings";
+export type EffectChooserFamily =
+  | "STEPS"
+  | "COLOR FX"
+  | "CHASER FX"
+  | "MOVE FX"
+  | "VALUE FX"
+  | "CURVE FX"
+  | "MAPPINGS"
+  | "COLOR MAPPINGS"
+  | "SUPER SCENE";
+
+export type EffectRecipeFamily = Exclude<EffectChooserFamily, "STEPS" | "SUPER SCENE">;
 
 interface SampleEffectPresetOption {
   value: SampleEffectPreset;
   label: string;
-  family: EffectLibraryFamily;
+  family: EffectRecipeFamily;
   engine: "LFO" | "Wave" | "Color" | "Chaser" | "Move";
   target: string;
   description: string;
@@ -35,21 +39,23 @@ interface SampleEffectPresetOption {
   requiresTarget?: boolean;
 }
 
-const effectLibraryFamilies: EffectLibraryFamily[] = [
-  "Colour",
-  "Chaser",
-  "Move",
-  "Value",
-  "Curve",
-  "Mappings",
-  "Colour Mappings",
+export const effectChooserFamilies: EffectChooserFamily[] = [
+  "STEPS",
+  "COLOR FX",
+  "CHASER FX",
+  "MOVE FX",
+  "VALUE FX",
+  "CURVE FX",
+  "MAPPINGS",
+  "COLOR MAPPINGS",
+  "SUPER SCENE",
 ];
 
 export const sampleEffectPresetOptions: SampleEffectPresetOption[] = [
   {
     value: "pulse",
     label: "Pulse",
-    family: "Value",
+    family: "VALUE FX",
     engine: "LFO",
     target: "Dimmer",
     description: "Four-beat dimmer rise for a steady front wash pulse.",
@@ -58,7 +64,7 @@ export const sampleEffectPresetOptions: SampleEffectPresetOption[] = [
   {
     value: "shared",
     label: "Shared",
-    family: "Value",
+    family: "VALUE FX",
     engine: "LFO",
     target: "Dimmer+Video",
     description: "Two-beat pulse intended for linked lighting and VJ targets.",
@@ -67,7 +73,7 @@ export const sampleEffectPresetOptions: SampleEffectPresetOption[] = [
   {
     value: "wave",
     label: "Wave",
-    family: "Mappings",
+    family: "MAPPINGS",
     engine: "Wave",
     target: "Dimmer",
     description: "Position wave across the Front group with beat-synced travel.",
@@ -76,7 +82,7 @@ export const sampleEffectPresetOptions: SampleEffectPresetOption[] = [
   {
     value: "flash",
     label: "Flash",
-    family: "Value",
+    family: "VALUE FX",
     engine: "LFO",
     target: "Dimmer",
     description: "Short square flash for cue accents and blackout hits.",
@@ -85,7 +91,7 @@ export const sampleEffectPresetOptions: SampleEffectPresetOption[] = [
   {
     value: "random",
     label: "Random",
-    family: "Value",
+    family: "VALUE FX",
     engine: "LFO",
     target: "Dimmer",
     description: "Random dimmer modulation for loose live texture.",
@@ -94,7 +100,7 @@ export const sampleEffectPresetOptions: SampleEffectPresetOption[] = [
   {
     value: "perlin",
     label: "Perlin",
-    family: "Curve",
+    family: "CURVE FX",
     engine: "LFO",
     target: "Dimmer",
     description: "Smooth noise modulation for organic brightness movement.",
@@ -103,7 +109,7 @@ export const sampleEffectPresetOptions: SampleEffectPresetOption[] = [
   {
     value: "chase",
     label: "Chase",
-    family: "Chaser",
+    family: "CHASER FX",
     engine: "Chaser",
     target: "Dimmer",
     description: "Fixture-index beam chase with explicit order, active width and fading.",
@@ -113,7 +119,7 @@ export const sampleEffectPresetOptions: SampleEffectPresetOption[] = [
   {
     value: "ball",
     label: "Ball",
-    family: "Mappings",
+    family: "MAPPINGS",
     engine: "Wave",
     target: "Dimmer",
     description: "Radial dimmer ball expanding from the stage origin.",
@@ -122,7 +128,7 @@ export const sampleEffectPresetOptions: SampleEffectPresetOption[] = [
   {
     value: "fan",
     label: "Fan",
-    family: "Move",
+    family: "MAPPINGS",
     engine: "Wave",
     target: "Pan",
     description: "Position-based pan fan for moving-head spread looks.",
@@ -131,7 +137,7 @@ export const sampleEffectPresetOptions: SampleEffectPresetOption[] = [
   {
     value: "circle",
     label: "Circle",
-    family: "Move",
+    family: "MOVE FX",
     engine: "Move",
     target: "Pan/Tilt",
     description: "Independent paired-axis path with smooth, beat-synced circular movement.",
@@ -141,7 +147,7 @@ export const sampleEffectPresetOptions: SampleEffectPresetOption[] = [
   {
     value: "curve",
     label: "Curve Saw",
-    family: "Curve",
+    family: "CURVE FX",
     engine: "LFO",
     target: "Any value",
     description: "Beat-synced saw curve for ramps, wheels and continuous channels.",
@@ -150,7 +156,7 @@ export const sampleEffectPresetOptions: SampleEffectPresetOption[] = [
   {
     value: "spectrum",
     label: "Colour Spectrum",
-    family: "Colour",
+    family: "COLOR FX",
     engine: "Color",
     target: "RGB / RGBW / Wheel",
     description: "Seven-stop HSV spectrum rendered across the fixture's complete colour system.",
@@ -160,7 +166,7 @@ export const sampleEffectPresetOptions: SampleEffectPresetOption[] = [
   {
     value: "colour-chase",
     label: "Colour Chase",
-    family: "Colour Mappings",
+    family: "COLOR MAPPINGS",
     engine: "Color",
     target: "Fixture order",
     description: "Ordered multi-colour steps spread deterministically across the current fixtures.",
@@ -172,7 +178,50 @@ export const sampleEffectPresetOptions: SampleEffectPresetOption[] = [
 export const sampleEffectPresetSupportsTarget = (preset: SampleEffectPreset) =>
   sampleEffectPresetOptions.find((option) => option.value === preset)?.supportsTarget ?? false;
 
+const chooserFamilyCode = (family: EffectChooserFamily) => {
+  switch (family) {
+    case "STEPS": return "ST";
+    case "COLOR FX": return "CO";
+    case "CHASER FX": return "CH";
+    case "MOVE FX": return "MV";
+    case "VALUE FX": return "VL";
+    case "CURVE FX": return "CV";
+    case "MAPPINGS": return "MP";
+    case "COLOR MAPPINGS": return "CM";
+    case "SUPER SCENE": return "SS";
+  }
+};
+
+interface EffectFamilyChooserProps {
+  activeFamily: EffectChooserFamily;
+  onSelectFamily: (family: EffectChooserFamily) => void | Promise<void>;
+}
+
+export function EffectFamilyChooser(props: EffectFamilyChooserProps) {
+  return (
+    <nav class="effectFamilyChooser" aria-label="Effect family chooser">
+      <For each={effectChooserFamilies}>
+        {(family, index) => (
+          <button
+            type="button"
+            class={props.activeFamily === family ? "active" : ""}
+            aria-pressed={props.activeFamily === family}
+            data-effect-family={family}
+            data-effect-family-id={family.toLowerCase().replace(/\s+/g, "-")}
+            data-family-order={index() + 1}
+            onClick={() => void props.onSelectFamily(family)}
+          >
+            <span class="effectFamilyGlyph" aria-hidden="true">{chooserFamilyCode(family)}</span>
+            <strong>{family}</strong>
+          </button>
+        )}
+      </For>
+    </nav>
+  );
+}
+
 interface SampleEffectPresetPanelProps {
+  activeFamily: EffectRecipeFamily;
   selectedPreset: SampleEffectPreset;
   targetErrorForPreset: (preset: SampleEffectPreset) => string;
   onSelectPreset: (preset: SampleEffectPreset) => void;
@@ -181,11 +230,8 @@ interface SampleEffectPresetPanelProps {
 }
 
 export function SampleEffectPresetPanel(props: SampleEffectPresetPanelProps) {
-  const [family, setFamily] = createSignal<EffectLibraryFamily | "All">("All");
   const visibleOptions = createMemo(() =>
-    family() === "All"
-      ? sampleEffectPresetOptions
-      : sampleEffectPresetOptions.filter((option) => option.family === family()),
+    sampleEffectPresetOptions.filter((option) => option.family === props.activeFamily),
   );
   const selectedOption = () =>
     sampleEffectPresetOptions.find((option) => option.value === props.selectedPreset) ?? sampleEffectPresetOptions[0];
@@ -198,22 +244,15 @@ export function SampleEffectPresetPanel(props: SampleEffectPresetPanelProps) {
     }
     return targetError(option) || "Load this sample onto the current effect target";
   };
-  const selectFamily = (nextFamily: EffectLibraryFamily | "All") => {
-    setFamily(nextFamily);
-    const first = nextFamily === "All"
-      ? sampleEffectPresetOptions[0]
-      : sampleEffectPresetOptions.find((option) => option.family === nextFamily);
-    if (first) props.onSelectPreset(first.value);
-  };
-  const familyCode = (optionFamily: EffectLibraryFamily) => {
+  const familyCode = (optionFamily: EffectRecipeFamily) => {
     switch (optionFamily) {
-      case "Colour": return "CO";
-      case "Chaser": return "CH";
-      case "Move": return "MV";
-      case "Value": return "VL";
-      case "Curve": return "CV";
-      case "Mappings": return "MP";
-      case "Colour Mappings": return "CM";
+      case "COLOR FX": return "CO";
+      case "CHASER FX": return "CH";
+      case "MOVE FX": return "MV";
+      case "VALUE FX": return "VL";
+      case "CURVE FX": return "CV";
+      case "MAPPINGS": return "MP";
+      case "COLOR MAPPINGS": return "CM";
     }
   };
 
@@ -226,22 +265,6 @@ export function SampleEffectPresetPanel(props: SampleEffectPresetPanelProps) {
         </div>
         <span>{selectedOption().family}</span>
       </header>
-      <nav class="effectFamilyRail" aria-label="Effect families">
-        <button class={family() === "All" ? "active" : ""} aria-pressed={family() === "All"} onClick={() => selectFamily("All")}>
-          All
-        </button>
-        <For each={effectLibraryFamilies}>
-          {(optionFamily) => (
-            <button
-              class={family() === optionFamily ? "active" : ""}
-              aria-pressed={family() === optionFamily}
-              onClick={() => selectFamily(optionFamily)}
-            >
-              {optionFamily}
-            </button>
-          )}
-        </For>
-      </nav>
       <div class="sampleEffectPresetGrid" role="list" aria-label="Effect recipes">
         <For each={visibleOptions()}>
           {(option) => (

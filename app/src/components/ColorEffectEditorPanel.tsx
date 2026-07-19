@@ -1,4 +1,5 @@
 import { createMemo, For, Show } from "solid-js";
+import { buildColorGradient } from "../effectVisualization";
 import type {
   ColorEffectAlgorithm,
   ColorEffectColor,
@@ -175,18 +176,7 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
     return "";
   });
 
-  const gradientCss = createMemo(() => {
-    const stops = orderedStops();
-    if (stops.length === 0) {
-      return "#111416";
-    }
-    if (stops.length === 1) {
-      return colorToHex(stops[0].color);
-    }
-    return `linear-gradient(90deg, ${stops
-      .map((stop) => `${colorToHex(stop.color)} ${(stop.position * 100).toFixed(2)}%`)
-      .join(", ")})`;
-  });
+  const gradientCss = createMemo(() => buildColorGradient(orderedStops(), props.interpolation));
 
   const spreadPercent = createMemo(() => Math.round(clampSpread(props.fixtureSpread) * 100));
   const clockSummary = createMemo(() =>
@@ -289,6 +279,8 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
           style={{ background: gradientCss() }}
           role="img"
           aria-label={`Color effect gradient with ${orderedStops().length} stops`}
+          data-stop-positions={orderedStops().map((stop) => stop.position).join(",")}
+          data-color-interpolation={props.interpolation}
         >
           <For each={orderedStops()}>
             {(stop, index) => (

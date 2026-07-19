@@ -8,6 +8,7 @@ import {
 } from "../cueEffectRecall";
 import type { CueEffectRecallChange } from "../cueEffectRecall";
 import type { CueEffectTarget, EffectKind, EffectParamsSnapshot, EffectSummary } from "../types";
+import { EffectGraphicalPreview } from "./EffectGraphicalPreview";
 
 interface CueEffectRecallEditorProps {
   id?: string;
@@ -165,6 +166,7 @@ export function CueEffectRecallEditor(props: CueEffectRecallEditorProps) {
                 <For each={visibleRows()}>
                   {(row, index) => {
                     const target = () => targetById().get(row.id);
+                    const currentEffect = () => effectById().get(row.id);
                     const included = () => Boolean(target());
                     return (
                       <div
@@ -196,6 +198,16 @@ export function CueEffectRecallEditor(props: CueEffectRecallEditorProps) {
                             </small>
                           </span>
                         </label>
+                        <Show
+                          when={target()?.params}
+                          fallback={
+                            <Show when={currentEffect()}>
+                              {(effect) => <EffectGraphicalPreview effect={effect()} compact />}
+                            </Show>
+                          }
+                        >
+                          {(params) => <EffectGraphicalPreview params={params()} compact />}
+                        </Show>
                         <button
                           type="button"
                           class={`cueEffectRecallState ${target()?.enabled ? "on" : "off"}`}

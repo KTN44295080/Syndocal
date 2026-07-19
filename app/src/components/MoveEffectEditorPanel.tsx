@@ -1,13 +1,22 @@
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { normalizeMovePathPoints, transformMovePreview } from "../effectVisualization";
+import {
+  beginMoveEffectPointDrag,
+  commitMoveEffectPointDrag,
+  moveEffectMaximumPoints,
+  moveEffectMinimumPoints,
+  moveEffectDragSurfaceSizeFromCtm,
+  normalizeMoveEffectDragPoint,
+  updateMoveEffectPointDrag,
+  type MoveEffectDragPoint,
+  type MoveEffectPointDragState,
+} from "../moveEffectDrag";
 
 export type MoveEffectInterpolation = "Line" | "Smooth";
 export type MoveEffectCoordinateMode = "Absolute" | "Relative";
 export type MoveEffectDirection = "Forward" | "Reverse" | "Bounce";
 
-export interface MoveEffectPoint {
-  x: number;
-  y: number;
-}
+export interface MoveEffectPoint extends MoveEffectDragPoint {}
 
 export interface MoveEffectEditorPanelProps {
   /** Points always use 0..1. Relative mode interprets point - 0.5 as a runtime delta. */
@@ -48,7 +57,8 @@ interface CanvasPoint {
   y: number;
 }
 
-export const moveEffectMaximumPoints = 32;
+export { moveEffectMaximumPoints };
+
 const coordinateModes: MoveEffectCoordinateMode[] = ["Absolute", "Relative"];
 const interpolationModes: MoveEffectInterpolation[] = ["Line", "Smooth"];
 const directionModes: MoveEffectDirection[] = ["Forward", "Reverse", "Bounce"];
@@ -126,7 +136,39 @@ const buildPath = (points: CanvasPoint[], closed: boolean) => {
 
 export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
   const [selectedPoint, setSelectedPoint] = createSignal(0);
-  const [draggingPoint, setDraggingPoint] = createSignal<{ index: number; pointerId: number } | null>(null);
+  const [draggingPoint, setDraggingPoint] = createSignal<MoveEffectPointDragState | null>(null);
+  const activePointDrag = createMemo(() => {
+    const drag = draggingPoint();
+    return drag?.moved ? drag : null;
+  });
+  let pathCanvas: SVGSVGElement | undefined;
+
+  const releasePointCapture = (pointerId: number) => {
+    if (pathCanvas?.hasPointerCapture(pointerId)) {
+      pathCanvas.releasePointerCapture(pointerId);
+    }
+  };
+
+  const cancelPointDrag = (releaseCapture = true) => {
+    const drag = draggingPoint();
+    if (!drag) return;
+    setDraggingPoint(null);
+    if (releaseCapture) releasePointCapture(drag.pointerId);
+  };
+
+  onMount(() => {
+    const cancelFromEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || !draggingPoint()) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      cancelPointDrag();
+    };
+    window.addEventListener("keydown", cancelFromEscape, { capture: true });
+    onCleanup(() => {
+      window.removeEventListener("keydown", cancelFromEscape, { capture: true });
+      cancelPointDrag();
+    });
+  });
 
   const coordinateDomain = () => ({ minimum: 0, maximum: 1, origin: 0.5, step: 0.01 });
   const activePointIndex = createMemo<number | null>(() => {
@@ -145,11 +187,8 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
   );
 
   const normalizePoint = (point: MoveEffectPoint): MoveEffectPoint => {
-    const domain = coordinateDomain();
-    return {
-      x: roundCoordinate(clamp(point.x, domain.minimum, domain.maximum)),
-      y: roundCoordinate(clamp(point.y, domain.minimum, domain.maximum)),
-    };
+    const normalized = normalizeMoveEffectDragPoint(point);
+    return { x: normalized.x, y: normalized.y };
   };
 
   const pointToCanvas = (point: MoveEffectPoint): CanvasPoint => {
@@ -163,27 +202,34 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
     return normalizePoint({ x: canvasX / 100, y: 1 - canvasY / 100 });
   };
 
-  const editableCanvasPoints = createMemo(() => props.points.map(pointToCanvas));
-  const editablePathSamples = createMemo(() => samplePath(editableCanvasPoints(), props.interpolation, props.closed));
-  const transformedPathSamples = createMemo(() => {
-    const center = pointToCanvas(props.center);
-    const scaleX = clamp(props.size.x, 0.01, 2);
-    const scaleY = clamp(props.size.y, 0.01, 2);
-    const radians = (Number.isFinite(props.rotation) ? props.rotation : 0) * Math.PI / 180;
-    const cosine = Math.cos(radians);
-    const sine = Math.sin(radians);
-    return editablePathSamples().map((point) => {
-      const scaledX = (point.x - 50) * scaleX;
-      const scaledY = (point.y - 50) * scaleY;
-      return {
-        x: center.x + scaledX * cosine - scaledY * sine,
-        y: center.y + scaledX * sine + scaledY * cosine,
-      };
-    });
+  const editablePoints = createMemo<MoveEffectPoint[]>(() => {
+    const drag = draggingPoint();
+    if (!drag || !props.points[drag.index]) return props.points;
+    return props.points.map((point, index) => index === drag.index
+      ? { x: drag.draftPoint.x, y: drag.draftPoint.y }
+      : point);
   });
+  const editableCanvasPoints = createMemo(() => editablePoints().map(pointToCanvas));
+  const runtimeEditableCanvasPoints = createMemo(() =>
+    normalizeMovePathPoints(editablePoints(), props.closed).map(pointToCanvas),
+  );
+  const editablePathSamples = createMemo(() => samplePath(runtimeEditableCanvasPoints(), props.interpolation, props.closed));
+  const previewTransform = createMemo(() => ({
+    coordinate_mode: props.coordinateMode,
+    center_x: props.center.x,
+    center_y: props.center.y,
+    size_x: props.size.x,
+    size_y: props.size.y,
+    rotation_degrees: props.rotation,
+  }));
+  const transformedPathSamples = createMemo(() =>
+    transformMovePreview(editablePathSamples(), previewTransform()),
+  );
   const editablePath = createMemo(() => buildPath(editablePathSamples(), props.closed));
   const transformedPath = createMemo(() => buildPath(transformedPathSamples(), props.closed));
-  const transformedCenter = createMemo(() => pointToCanvas(props.center));
+  const transformedCenter = createMemo(() =>
+    transformMovePreview([{ x: 50, y: 50 }], previewTransform())[0] ?? { x: 50, y: 50 },
+  );
 
   const updatePoint = (index: number, point: MoveEffectPoint) => {
     if (!props.points[index]) return;
@@ -210,7 +256,7 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
   };
 
   const removePoint = (index: number) => {
-    if (!props.points[index]) return;
+    if (!props.points[index] || props.points.length <= moveEffectMinimumPoints) return;
     const next = props.points.filter((_, candidate) => candidate !== index).map((point) => ({ ...point }));
     props.onPoints(next);
     setSelectedPoint(Math.max(0, Math.min(index, next.length - 1)));
@@ -226,6 +272,11 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
   };
 
   const pointFromClient = (svg: SVGSVGElement, clientX: number, clientY: number) => {
+    const matrix = svg.getScreenCTM();
+    if (matrix) {
+      const point = new DOMPoint(clientX, clientY).matrixTransform(matrix.inverse());
+      return canvasToPoint(point.x, point.y);
+    }
     const rectangle = svg.getBoundingClientRect();
     if (rectangle.width <= 0 || rectangle.height <= 0) {
       const origin = coordinateDomain().origin;
@@ -238,31 +289,62 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
   };
 
   const beginPointDrag = (event: PointerEvent & { currentTarget: SVGGElement }, index: number) => {
+    if (event.button !== 0 || !event.isPrimary || draggingPoint() || !props.points[index]) return;
     event.preventDefault();
     event.stopPropagation();
     const svg = event.currentTarget.ownerSVGElement;
     if (!svg) return;
+    const rectangle = svg.getBoundingClientRect();
+    const surfaceSize = moveEffectDragSurfaceSizeFromCtm(
+      svg.getScreenCTM(),
+      rectangle.width,
+      rectangle.height,
+    );
+    event.currentTarget.focus({ preventScroll: true });
     svg.setPointerCapture(event.pointerId);
     setSelectedPoint(index);
-    setDraggingPoint({ index, pointerId: event.pointerId });
+    setDraggingPoint(beginMoveEffectPointDrag({
+      index,
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      surfaceWidth: surfaceSize.width,
+      surfaceHeight: surfaceSize.height,
+      point: props.points[index],
+    }));
   };
 
   const continuePointDrag = (event: PointerEvent & { currentTarget: SVGSVGElement }) => {
     const dragging = draggingPoint();
     if (!dragging || dragging.pointerId !== event.pointerId) return;
-    updatePoint(dragging.index, pointFromClient(event.currentTarget, event.clientX, event.clientY));
+    event.preventDefault();
+    setDraggingPoint(updateMoveEffectPointDrag(dragging, {
+      clientX: event.clientX,
+      clientY: event.clientY,
+    }));
   };
 
-  const endPointDrag = (event: PointerEvent & { currentTarget: SVGSVGElement }) => {
+  const commitPointDrag = (event: PointerEvent & { currentTarget: SVGSVGElement }) => {
     const dragging = draggingPoint();
     if (!dragging || dragging.pointerId !== event.pointerId) return;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
+    const completed = updateMoveEffectPointDrag(dragging, {
+      clientX: event.clientX,
+      clientY: event.clientY,
+    });
+    const next = commitMoveEffectPointDrag(props.points, completed);
     setDraggingPoint(null);
+    releasePointCapture(event.pointerId);
+    if (next) props.onPoints(next);
+  };
+
+  const cancelPointDragForPointer = (event: PointerEvent & { currentTarget: SVGSVGElement }, releaseCapture = true) => {
+    const dragging = draggingPoint();
+    if (!dragging || dragging.pointerId !== event.pointerId) return;
+    cancelPointDrag(releaseCapture);
   };
 
   const handlePointKeyDown = (event: KeyboardEvent, index: number) => {
+    if (draggingPoint()) return;
     const point = props.points[index];
     if (!point) return;
     const domain = coordinateDomain();
@@ -330,7 +412,7 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
                 const index = activePointIndex();
                 if (index !== null) removePoint(index);
               }}
-              disabled={activePointIndex() === null}
+              disabled={activePointIndex() === null || props.points.length <= moveEffectMinimumPoints}
             >
               Remove point
             </button>
@@ -342,14 +424,16 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
 
           <div class="moveEffectPathViewport">
             <svg
+              ref={pathCanvas}
               class="moveEffectPathCanvas"
               viewBox="0 0 100 100"
               role="group"
               aria-label={`${props.coordinateMode} ${props.interpolation} Move path with ${props.points.length} points. Double-click to add. Focus a point and use Arrow keys to nudge, Shift for coarse, Alt for fine, Home to center, Delete to remove.`}
               onDblClick={(event) => addPoint(pointFromClient(event.currentTarget, event.clientX, event.clientY))}
               onPointerMove={continuePointDrag}
-              onPointerUp={endPointDrag}
-              onPointerCancel={endPointDrag}
+              onPointerUp={commitPointDrag}
+              onPointerCancel={(event) => cancelPointDragForPointer(event)}
+              onLostPointerCapture={(event) => cancelPointDragForPointer(event, false)}
             >
               <rect class="moveEffectCanvasBackground" x="0" y="0" width="100" height="100" />
               <g class="moveEffectCanvasGrid" aria-hidden="true">
@@ -362,6 +446,29 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
               </g>
               <path class="moveEffectPathGuide" d={editablePath()} />
               <path class={props.closed ? "moveEffectPathOutput closed" : "moveEffectPathOutput"} d={transformedPath()} />
+              <Show when={activePointDrag()}>
+                {(drag) => {
+                  const original = () => pointToCanvas(drag().originalPoint);
+                  return (
+                    <g
+                      class="moveEffectPointGhost"
+                      data-move-point-ghost
+                      transform={`translate(${pathNumber(original().x)} ${pathNumber(original().y)})`}
+                      aria-hidden="true"
+                      pointer-events="none"
+                    >
+                      <circle
+                        r="4.2"
+                        fill="none"
+                        stroke="#cbd1d5"
+                        stroke-width="1"
+                        stroke-dasharray="2 2"
+                        vector-effect="non-scaling-stroke"
+                      />
+                    </g>
+                  );
+                }}
+              </Show>
               <g
                 class="moveEffectOutputCenter"
                 transform={`translate(${pathNumber(transformedCenter().x)} ${pathNumber(transformedCenter().y)})`}
@@ -374,18 +481,22 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
               <For each={editableCanvasPoints()}>
                 {(point, index) => (
                   <g
-                    class={activePointIndex() === index() ? "moveEffectPointHandle active" : "moveEffectPointHandle"}
+                    classList={{
+                      moveEffectPointHandle: true,
+                      active: activePointIndex() === index(),
+                      dragging: activePointDrag()?.index === index(),
+                    }}
                     transform={`translate(${pathNumber(point.x)} ${pathNumber(point.y)})`}
                     role="button"
-                    tabIndex={0}
-                    aria-label={`Path point ${index() + 1}, X ${props.points[index()]?.x ?? 0}, Y ${props.points[index()]?.y ?? 0}`}
+                    tabindex={0}
+                    aria-label={`Path point ${index() + 1}, X ${editablePoints()[index()]?.x ?? 0}, Y ${editablePoints()[index()]?.y ?? 0}`}
                     aria-pressed={activePointIndex() === index()}
                     onFocus={() => setSelectedPoint(index())}
                     onPointerDown={(event) => beginPointDrag(event, index())}
                     onDblClick={(event) => event.stopPropagation()}
                     onKeyDown={(event) => handlePointKeyDown(event, index())}
                   >
-                    <title>{`Point ${index() + 1}: ${props.points[index()]?.x ?? 0}, ${props.points[index()]?.y ?? 0}`}</title>
+                    <title>{`Point ${index() + 1}: ${editablePoints()[index()]?.x ?? 0}, ${editablePoints()[index()]?.y ?? 0}`}</title>
                     <circle r="3.3" />
                     <text x="0" y="1.15">{index() + 1}</text>
                   </g>
@@ -399,7 +510,19 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
 
           <div class="moveEffectPathFooter">
             <span><i class="control" />Control path</span>
-            <span><i class="output" />Output preview</span>
+            <span>
+              <i class="output" />
+              <Show when={props.coordinateMode === "Relative"} fallback="Output preview">
+                Output preview · neutral 50% base
+              </Show>
+            </span>
+            <Show when={activePointDrag()}>
+              {(drag) => (
+                <output class="moveEffectDragReadout tabularNums" data-move-point-drag-readout aria-live="polite">
+                  <span>Point</span> {drag().index + 1} · X {drag().draftPoint.x.toFixed(4)} · Y {drag().draftPoint.y.toFixed(4)}
+                </output>
+              )}
+            </Show>
             <small>Double-click grid to add · Arrow keys nudge · Shift coarse · Alt fine · Home center · Delete remove</small>
           </div>
         </section>
@@ -682,6 +805,7 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
                       class="moveEffectPointAction remove"
                       aria-label={`Remove path point ${index() + 1}`}
                       title="Remove point"
+                      disabled={props.points.length <= moveEffectMinimumPoints}
                       onClick={() => removePoint(index())}
                     >
                       ×

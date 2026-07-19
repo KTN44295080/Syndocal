@@ -4,6 +4,8 @@
 状態: **承認済み** — ユーザーは下記の設計判断をすべて推奨案で承認。  
 実施順: **T15-P 基盤改修 → T15 タイムライン減量 → T16 FXエディタ可視化 → T17 Scene Liveモディファイア**
 
+進捗: T15-P・T15・T16 完了。次は **T17 Scene Liveモディファイア**。
+
 ## 目的
 
 Daslight 5実機とSyndocal現行UIを比較し、演奏面の可読性と直接操作性を優先して次を完成させる。
@@ -104,12 +106,16 @@ Daslight 5実機とSyndocal現行UIを比較し、演奏面の可読性と直接
 - Cues保存値を新しいdrawer経路へmigrationし、旧localStorage値でも面が消えない。
 - 500ブロック／1時間／6レーン／overlap fixtureのnode budgetと直接操作契約を維持する。
 
-### T16: FXエディタ可視化
+### T16: FXエディタ可視化 ✅完了（2026-07-20 監督検証・Codex実装）
 
 - 9ファミリーが常時識別可能で、既存7 FX＋STEPS＋SUPER SCENEへ到達できる。
 - LFO curve、palette gradient、Move pathが実値と一致する。
 - Move頂点dragはghost、live readout、Escape cancel、範囲clampを持つ。
 - 全新規文字とaria labelをJAへlocalizeする。
+
+**受入証跡（監督自走再実行）:** `check:fx-visual`（family/LFO/palette/Move/Value契約）、`check:move-effect-helpers`（4px閾値・delta・Y反転・clamp・commit）、focused `check:fx-visual-viewport` 5解像度（1280x720〜2048x1152、`move` esc rollback・commit・clamp・`scroll=zero`・`failed=[]`）、full viewport matrix 232 pass/0 fail、`tsc --noEmit`、`check:localization` 2593/2593(100%)、`check:identity-color`、`check:large-show-ui`（2000灯windowing）、`vite build`（main index 482.86 kB）、`check:timeline-viewport`（T15回帰・6 pass）すべてgreen。ネイティブSyndocal debugビルドへShinkan2026.dvc実データ（灯体41・キュー30・エフェクト変換6/近似44/シーンブロック42）をインポートし、コントロール→ライブ編集→エフェクトでT16 FXエディタを開いて9ファミリー（ST/CO/CH/MV/VL/CV/MP/CM/SS・DasLight順・JA）と、スタックへ適用した実Perlin効果のグラフィカルカーブプレビュー（実波形・0–65535・φ0%）をWebView2上で目視確認。
+
+**監督修正（Codex報告になし・2件）:** ①`check-viewport-containment.mjs` の CDPクライアントがソケットclose/error時に保留Promiseをreject せず、ブラウザが実行中に死ぬと全T16断言を1つも実行しないまま exit 0 で偽PASSし、かつVite子プロセスをリークして固定ポートを汚染していた（実機で再現）。close/error時の全pending reject＋`beforeExit`のフェイルクローズを追加し、Chrome強制killで exit 1・0.9秒終了・ポートリークゼロを実証。②LfoShape `Perlin` のみJA辞書欠落で、既定選択のパーリンレシピを開くと新設プレビューに英語表示。`uiLocalization.ts` へ `Perlin: パーリン` を追加し `check-localization.mjs` にアサーションを固定（既存の `check-localization` は方針上許容していたが、新設2サーフェスで露出拡大のため翻訳を選択）。
 
 ### T17: Scene Liveモディファイア
 

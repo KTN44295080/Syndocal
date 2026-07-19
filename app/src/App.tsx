@@ -45,7 +45,15 @@ import { ProgrammerPanel } from "./components/ProgrammerPanel";
 import { PlaybackExecutorPanel } from "./components/PlaybackExecutorPanel";
 import { ReferencePalettePanel } from "./components/ReferencePalettePanel";
 import { RemoteControlPanel } from "./components/RemoteControlPanel";
-import { SampleEffectPresetPanel, sampleEffectPresetSupportsTarget, type SampleEffectPreset } from "./components/SampleEffectPresetPanel";
+import {
+  EffectFamilyChooser,
+  SampleEffectPresetPanel,
+  sampleEffectPresetOptions,
+  sampleEffectPresetSupportsTarget,
+  type EffectChooserFamily,
+  type EffectRecipeFamily,
+  type SampleEffectPreset,
+} from "./components/SampleEffectPresetPanel";
 import { SetupMappingWorkspace } from "./components/SetupMappingWorkspace";
 import { MappingPersistentWorkspaceBand } from "./components/MappingPersistentWorkspaceBand";
 import { SetupVideoPanel } from "./components/SetupVideoPanel";
@@ -1353,7 +1361,8 @@ export default function App() {
   const [effectVideoPositionY, setEffectVideoPositionY] = createSignal(0);
   const [effectVideoPositionZ, setEffectVideoPositionZ] = createSignal(0);
   const [effectVideoTargetLinked, setEffectVideoTargetLinked] = createSignal(false);
-  const [sampleEffectPreset, setSampleEffectPreset] = createSignal<SampleEffectPreset>("pulse");
+  const [sampleEffectPreset, setSampleEffectPreset] = createSignal<SampleEffectPreset>("perlin");
+  const [effectChooserFamily, setEffectChooserFamily] = createSignal<EffectRecipeFamily>("CURVE FX");
   const [effectRackSurface, setEffectRackSurface] = createSignal<"stack" | "graphs">("stack");
   const [editingEffectId, setEditingEffectId] = createSignal<number | null>(null);
   const [effectPeriod, setEffectPeriod] = createSignal(1000);
@@ -1641,6 +1650,7 @@ export default function App() {
     || viewportFixture === "cue-node-graph"
     || viewportFixture === "scene-matrix"
     || viewportFixture === "touch-composed"
+    || viewportFixture === "fx-visual"
   ) {
     const sceneBlockLargeFixture = viewportFixture === "scene-block-large";
     const sceneBlockHourFixture = viewportFixture === "scene-block-hour";
@@ -1648,11 +1658,14 @@ export default function App() {
     const timelineFixture = viewportFixture === "timeline" || timelineLayeredFixture || sceneBlockLargeFixture || sceneBlockHourFixture;
     const cueRecallFixture = viewportFixture === "cue-recall";
     const cueRecallLargeFixture = viewportFixture === "cue-recall-large";
-    const cueFixture = cueRecallFixture || cueRecallLargeFixture;
+    const fxVisualFixture = viewportFixture === "fx-visual";
+    const cueFixture = cueRecallFixture || cueRecallLargeFixture || fxVisualFixture;
     const cueNodeGraphFixture = viewportFixture === "cue-node-graph";
     const sceneMatrixFixture = viewportFixture === "scene-matrix";
     const touchComposedFixture = viewportFixture === "touch-composed";
-    const cueFixtureEffects = cueRecallLargeFixture
+    const cueFixtureEffects = fxVisualFixture
+      ? structuredClone(viewportFixtureData.fxVisualizationEffects)
+      : cueRecallLargeFixture
       ? Array.from({ length: 500 }, (_, index) => ({
           ...viewportFixtureData.cueRecallEffect,
           id: viewportFixtureData.cueRecallEffect.id + index,
@@ -1660,7 +1673,9 @@ export default function App() {
           enabled: index % 3 !== 0,
         }))
       : [viewportFixtureData.cueRecallEffect];
-    const cueFixtureCues = cueRecallLargeFixture
+    const cueFixtureCues = fxVisualFixture
+      ? [structuredClone(viewportFixtureData.fxVisualizationCue)]
+      : cueRecallLargeFixture
       ? Array.from({ length: 12 }, (_, index) => ({
           ...viewportFixtureData.cueRecallCue,
           id: viewportFixtureData.cueRecallCue.id + index,
@@ -1701,6 +1716,14 @@ export default function App() {
       : timelineSceneBlockViewport.events;
     const activeCueId = fixtureCues[0].id;
     setWorkspaceTab(touchComposedFixture ? "touch" : "control");
+    if (fxVisualFixture) {
+      setControlMode("edit");
+      setEditDeskSurface("effects");
+      setEffectRackSurface("stack");
+      setEffectChooserFamily("VALUE FX");
+      setEffectType("Value");
+      setSampleEffectPreset("pulse");
+    }
     if (sceneMatrixFixture) {
       setTimelineDeskSurface("show");
       setTimelineContextDrawer("none");
@@ -3515,6 +3538,47 @@ export default function App() {
       setMoveRotationDegrees(0);
       setMoveDirection("Forward");
       setMoveFixtureSpread(0);
+    }
+  };
+  const chooserFamilyForEffectType = (nextType: EffectKind): EffectRecipeFamily => {
+    if (nextType === "Color") return "COLOR FX";
+    if (nextType === "Chaser") return "CHASER FX";
+    if (nextType === "Move") return "MOVE FX";
+    if (nextType === "Value") return "VALUE FX";
+    if (nextType === "PositionWave") return "MAPPINGS";
+    return "CURVE FX";
+  };
+  const selectEffectType = (nextType: EffectKind, preserveChooserFamily = false) => {
+    const previousType = effectType();
+    const sourceEffectId = editingEffectId();
+    const startsNewEffect = sourceEffectId !== null && nextType !== previousType;
+    if (startsNewEffect) {
+      setEditingEffectId(null);
+      setMessage(`Effect ${sourceEffectId} remains unchanged; Type change starts a new ${nextType} effect.`);
+    }
+    setEffectType(nextType);
+    if (!preserveChooserFamily) {
+      const family = chooserFamilyForEffectType(nextType);
+      setEffectChooserFamily(family);
+      const firstPreset = sampleEffectPresetOptions.find((option) => option.family === family);
+      if (firstPreset) setSampleEffectPreset(firstPreset.value);
+    }
+    if (nextType === "Color") {
+      setEffectVideoTargetLinked(false);
+      if (effectTargetMode() === "video") setEffectTargetMode("fixture");
+      if (!startsNewEffect) setMessage("Prepared a multi-color draft for whole-fixture colour output.");
+    } else if (nextType === "Chaser") {
+      setEffectVideoTargetLinked(false);
+      if (effectTargetMode() === "video") setEffectTargetMode("fixture");
+      prepareChaserDraftFromCurrentTarget(nextType !== previousType);
+      if (!startsNewEffect) setMessage("Prepared an ordered fixture-index Chaser draft from the current target.");
+    } else if (nextType === "Move") {
+      prepareMoveDraft(nextType !== previousType);
+      if (!startsNewEffect) setMessage("Prepared an independent paired Pan/Tilt Move path from the current target.");
+    } else if (nextType === "Value") {
+      setEffectVideoTargetLinked(false);
+      if (effectTargetMode() === "video") setEffectTargetMode("fixture");
+      if (!startsNewEffect) setMessage("Prepared an envelope Value draft for the current scalar attribute.");
     }
   };
   const effectTargetSummary = createMemo(() => {
@@ -5870,7 +5934,7 @@ export default function App() {
     if (preferredAttribute) {
       setEffectAttribute(preferredAttribute.attribute);
     }
-    setEffectType("PositionWave");
+    selectEffectType("PositionWave");
     setEffectShape("Sine");
     setEffectBlendMode("Override");
     setEffectLow(0);
@@ -10383,11 +10447,11 @@ export default function App() {
     const cue = snapshot().cues.find((candidate) => candidate.id === cueId);
     if (!cue) {
       setMessage(`Source Cue ${cueId} is no longer available.`);
-      return;
+      return false;
     }
     if (!confirmDiscardTimelineEditorDrafts()) {
       setMessage("Super Scene open canceled; unsaved Timeline edits were kept.");
-      return;
+      return false;
     }
     if (!cue.child_timeline) {
       const childTimeline: ChildTimelineSummary = {
@@ -10405,7 +10469,8 @@ export default function App() {
       };
       const localFixture = viewportFixture === "timeline-layered"
         || viewportFixture === "scene-block-large"
-        || viewportFixture === "scene-block-hour";
+        || viewportFixture === "scene-block-hour"
+        || viewportFixture === "fx-visual";
       if (localFixture) {
         setSnapshot((current) => ({
           ...current,
@@ -10427,6 +10492,61 @@ export default function App() {
       Math.max(1, snapshot().cues.find((candidate) => candidate.id === cueId)?.child_timeline?.duration_ms ?? 1),
     ));
     setMessage(`Opened Super Scene ${cue.label}.`);
+    return true;
+  };
+
+  const effectChooserCueId = () => {
+    const cues = snapshot().cues;
+    const activeCueId = snapshot().active_cue_id;
+    if (activeCueId !== null && activeCueId !== undefined && cues.some((cue) => cue.id === activeCueId)) {
+      return activeCueId;
+    }
+    const explicitTimelineCueId = timelineCueId();
+    if (explicitTimelineCueId !== null && cues.some((cue) => cue.id === explicitTimelineCueId)) {
+      return explicitTimelineCueId;
+    }
+    return cues[0]?.id ?? null;
+  };
+
+  const selectEffectFamily = async (family: EffectChooserFamily) => {
+    const cueId = effectChooserCueId();
+    if (family === "STEPS") {
+      if (cueId === null) {
+        setMessage("Add or select a Cue before opening STEPS.");
+        return;
+      }
+      openTimelineSourceCue(cueId);
+      return;
+    }
+    if (family === "SUPER SCENE") {
+      if (cueId === null) {
+        setMessage("Add or select a Cue before opening SUPER SCENE.");
+        return;
+      }
+      const opened = await openOrCreateSuperScene(cueId);
+      if (!opened) return;
+      setWorkspaceTab("control");
+      setControlMode("live");
+      setTimelineDeskSurface("show");
+      setTimelineContextDrawer("none");
+      return;
+    }
+    const recipeFamily = family as EffectRecipeFamily;
+    setEffectChooserFamily(recipeFamily);
+    const firstPreset = sampleEffectPresetOptions.find((option) => option.family === recipeFamily);
+    if (firstPreset) setSampleEffectPreset(firstPreset.value);
+    const nextType: EffectKind = family === "COLOR FX" || family === "COLOR MAPPINGS"
+      ? "Color"
+      : family === "CHASER FX"
+        ? "Chaser"
+        : family === "MOVE FX"
+          ? "Move"
+          : family === "VALUE FX"
+            ? "Value"
+          : family === "MAPPINGS"
+            ? "PositionWave"
+            : "Lfo";
+    selectEffectType(nextType, true);
   };
 
   const exitSuperScene = () => {
@@ -12759,6 +12879,10 @@ export default function App() {
     const targetPlan = effectDraftTargetPlan(effect, snapshot().fixtures);
     setEditingEffectId(effect.id);
     setEffectType(effect.effect_type);
+    const effectFamily = chooserFamilyForEffectType(effect.effect_type);
+    setEffectChooserFamily(effectFamily);
+    const firstFamilyPreset = sampleEffectPresetOptions.find((option) => option.family === effectFamily);
+    if (firstFamilyPreset) setSampleEffectPreset(firstFamilyPreset.value);
     if (effect.effect_type === "Chaser") {
       const chaser = effect.chaser;
       if (!chaser) {
@@ -15480,7 +15604,7 @@ export default function App() {
               snapTimeMs={snapTimeMs}
               onPlaceArmedCue={placeArmedTimelineCue}
               onSelectedCueId={setTimelineCueId}
-              onOpenOrCreateSuperScene={openOrCreateSuperScene}
+              onOpenOrCreateSuperScene={async (cueId) => { await openOrCreateSuperScene(cueId); }}
               onEventTimeMs={setTimelineEventTimeMs}
               onBlockDurationMs={setTimelineBlockDurationMs}
               onBlockLoopCount={setTimelineBlockLoopCount}
@@ -15560,9 +15684,14 @@ export default function App() {
                 </button>
               </div>
             </div>
+            <EffectFamilyChooser
+              activeFamily={effectChooserFamily()}
+              onSelectFamily={selectEffectFamily}
+            />
             <div class={`effectWorkbench ${effectType() === "Move" ? "moveEffectWorkbench" : ""}`}>
             <section class="effectLibraryPane" aria-label="Effect Library">
             <SampleEffectPresetPanel
+              activeFamily={effectChooserFamily()}
               selectedPreset={sampleEffectPreset()}
               targetErrorForPreset={sampleEffectTargetOverrideError}
               onSelectPreset={setSampleEffectPreset}
@@ -15622,34 +15751,7 @@ export default function App() {
                   Type
                   <select
                     value={effectType()}
-                    onInput={(event) => {
-                      const nextType = event.currentTarget.value as EffectKind;
-                      const previousType = effectType();
-                      const sourceEffectId = editingEffectId();
-                      const startsNewEffect = sourceEffectId !== null && nextType !== previousType;
-                      if (startsNewEffect) {
-                        setEditingEffectId(null);
-                        setMessage(`Effect ${sourceEffectId} remains unchanged; Type change starts a new ${nextType} effect.`);
-                      }
-                      setEffectType(nextType);
-                      if (nextType === "Color") {
-                        setEffectVideoTargetLinked(false);
-                        if (effectTargetMode() === "video") setEffectTargetMode("fixture");
-                        if (!startsNewEffect) setMessage("Prepared a multi-color draft for whole-fixture colour output.");
-                      } else if (nextType === "Chaser") {
-                        setEffectVideoTargetLinked(false);
-                        if (effectTargetMode() === "video") setEffectTargetMode("fixture");
-                        prepareChaserDraftFromCurrentTarget(nextType !== previousType);
-                        if (!startsNewEffect) setMessage("Prepared an ordered fixture-index Chaser draft from the current target.");
-                      } else if (nextType === "Move") {
-                        prepareMoveDraft(nextType !== previousType);
-                        if (!startsNewEffect) setMessage("Prepared an independent paired Pan/Tilt Move path from the current target.");
-                      } else if (nextType === "Value") {
-                        setEffectVideoTargetLinked(false);
-                        if (effectTargetMode() === "video") setEffectTargetMode("fixture");
-                        if (!startsNewEffect) setMessage("Prepared an envelope Value draft for the current scalar attribute.");
-                      }
-                    }}
+                    onInput={(event) => selectEffectType(event.currentTarget.value as EffectKind)}
                   >
                     <option value="Lfo">LFO</option>
                     <option value="PositionWave">Position Wave</option>
@@ -15711,6 +15813,9 @@ export default function App() {
               <EffectSourceControlsPanel
                 effectType={effectType()}
                 shape={effectShape()}
+                low={effectLow()}
+                high={effectHigh()}
+                phase={effectPhase()}
                 periodMs={effectPeriod()}
                 bpm={snapshot().clock.bpm}
                 clockSyncBeats={effectClockSyncBeats()}
