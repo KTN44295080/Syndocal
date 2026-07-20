@@ -1188,6 +1188,52 @@ pub enum RecallMode {
     ReplaceGroup,
 }
 
+/// T17 authored starting position for the per-scene live modifier
+/// (speed/size/phase dials plus flash-mode pads). Stored on the Cue; the
+/// latched live override itself is runtime-only and never serialized.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct CueLiveModifierSettings {
+    #[serde(default = "default_live_modifier_scale")]
+    pub speed: f32,
+    #[serde(default = "default_live_modifier_scale")]
+    pub size: f32,
+    #[serde(default)]
+    pub phase: f32,
+    #[serde(default)]
+    pub flash: bool,
+}
+
+fn default_live_modifier_scale() -> f32 {
+    1.0
+}
+
+impl Default for CueLiveModifierSettings {
+    fn default() -> Self {
+        Self {
+            speed: 1.0,
+            size: 1.0,
+            phase: 0.0,
+            flash: false,
+        }
+    }
+}
+
+impl CueLiveModifierSettings {
+    pub fn is_neutral(&self) -> bool {
+        self.speed == 1.0 && self.size == 1.0 && self.phase == 0.0 && !self.flash
+    }
+}
+
+/// Runtime-only latched live override state for one active scene. Exposed in
+/// the snapshot for UI display but stripped before any `.sdc` write.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct CueLiveModifierState {
+    pub cue_id: CueId,
+    pub speed: f32,
+    pub size: f32,
+    pub phase: f32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CueSummary {
     pub id: CueId,
@@ -1237,6 +1283,10 @@ pub struct CueSummary {
     /// hash-derived hue; skipped when absent so legacy cues stay byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    /// T17 authored live-modifier defaults. `None` keeps legacy cues
+    /// byte-identical and means the neutral position (1.0/1.0/0.0, no flash).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_modifiers: Option<CueLiveModifierSettings>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -1385,6 +1435,7 @@ impl Default for CueSummary {
             steps: Vec::new(),
             child_timeline: None,
             color: None,
+            live_modifiers: None,
         }
     }
 }
@@ -3044,6 +3095,11 @@ pub struct EngineSnapshot {
     pub active_cue_id: Option<CueId>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub active_group_cue_ids: BTreeMap<String, CueId>,
+    /// T17 runtime-only latched scene live-modifier overrides. UI display
+    /// only: the persistence snapshot clears this before any `.sdc` write and
+    /// project load never reads it, so live overrides are never saved.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cue_live_modifiers: Vec<CueLiveModifierState>,
     /// T7 persistent identity colors per group path (`#rrggbb`). BTreeMap keeps
     /// serialization order deterministic for project snapshot comparison;
     /// skipped when empty so legacy snapshots stay byte-identical.
@@ -3093,6 +3149,7 @@ impl Default for EngineSnapshot {
             playback_executors: default_playback_executors(),
             playback_master: 1.0,
             active_cue_id: None,
+            cue_live_modifiers: Vec::new(),
             active_group_cue_ids: BTreeMap::new(),
             group_colors: BTreeMap::new(),
             active_fade: None,

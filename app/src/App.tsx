@@ -181,6 +181,7 @@ import type {
   CustomFixtureProfileRequest,
   CueEffectTarget,
   CueListSummary,
+  CueLiveModifierSettings,
   CueStepSummary,
   CueSummary,
   PaletteKind,
@@ -644,6 +645,7 @@ const projectMutationCommands = new Set([
   "set_cue_child_timeline",
   "set_cue_steps",
   "set_cue_color",
+  "set_cue_live_modifier_defaults",
   "set_group_color",
   "move_cue",
   "duplicate_cue",
@@ -5089,6 +5091,27 @@ export default function App() {
       setMessage(color ? `Cue color updated (${color})` : "Cue color cleared");
     } catch (error) {
       setMessage(`Cue color update failed: ${error}`);
+    }
+  };
+  const setCueLiveModifierDefaults = async (
+    cueId: number,
+    settings: CueLiveModifierSettings | null,
+  ) => {
+    if (viewportFixture) {
+      setSnapshot((current) => ({
+        ...current,
+        cues: current.cues.map((cue) =>
+          cue.id === cueId ? { ...cue, live_modifiers: settings } : cue,
+        ),
+      }));
+      return;
+    }
+    try {
+      await invoke("set_cue_live_modifier_defaults", { cueId, settings });
+      await refreshSnapshot();
+      setMessage(settings ? "Live modifier defaults updated" : "Live modifier defaults cleared");
+    } catch (error) {
+      setMessage(`Live modifier defaults update failed: ${error}`);
     }
   };
   const setGroupColor = async (groupId: string, color: string | null) => {
@@ -10198,6 +10221,10 @@ export default function App() {
           ...current,
           active_cue_id: cue.id,
           active_group_cue_ids: activeGroupCueIds,
+          // T17 reset rule: a fresh trigger drops the latched live modifier.
+          cue_live_modifiers: (current.cue_live_modifiers ?? []).filter(
+            (state) => state.cue_id !== cueId,
+          ),
         };
       });
       setMessage(`Triggered cue ${cueId}`);
@@ -10206,6 +10233,79 @@ export default function App() {
     try {
       await invoke("trigger_cue", { cueId });
       setMessage(`Triggered cue ${cueId}`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const releaseCueById = async (cueId: number) => {
+    if (viewportFixture === "scene-matrix") {
+      setSnapshot((current) => {
+        const cue = current.cues.find((candidate) => candidate.id === cueId);
+        if (!cue) return current;
+        const activeGroupCueIds = { ...(current.active_group_cue_ids ?? {}) };
+        if (cue.group_id && activeGroupCueIds[cue.group_id] === cueId) {
+          delete activeGroupCueIds[cue.group_id];
+        }
+        return {
+          ...current,
+          active_cue_id: current.active_cue_id === cueId ? null : current.active_cue_id,
+          active_group_cue_ids: activeGroupCueIds,
+          // T17 reset rule: release drops the latched live modifier.
+          cue_live_modifiers: (current.cue_live_modifiers ?? []).filter(
+            (state) => state.cue_id !== cueId,
+          ),
+        };
+      });
+      setMessage(`Released cue ${cueId}`);
+      return;
+    }
+    try {
+      await invoke("release_cue", { cueId });
+      setMessage(`Released cue ${cueId}`);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const setCueLiveModifierLive = async (
+    cueId: number,
+    speed: number,
+    size: number,
+    phase: number,
+  ) => {
+    if (viewportFixture === "scene-matrix") {
+      setSnapshot((current) => ({
+        ...current,
+        cue_live_modifiers: [
+          ...(current.cue_live_modifiers ?? []).filter((state) => state.cue_id !== cueId),
+          { cue_id: cueId, speed, size, phase },
+        ],
+      }));
+      return;
+    }
+    try {
+      await invoke("set_cue_live_modifier", { cueId, speed, size, phase });
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const clearCueLiveModifierLive = async (cueId: number) => {
+    if (viewportFixture === "scene-matrix") {
+      setSnapshot((current) => ({
+        ...current,
+        cue_live_modifiers: (current.cue_live_modifiers ?? []).filter(
+          (state) => state.cue_id !== cueId,
+        ),
+      }));
+      return;
+    }
+    try {
+      await invoke("clear_cue_live_modifier", { cueId });
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
@@ -14073,6 +14173,10 @@ export default function App() {
               activeCueId={snapshot().active_cue_id}
               activeGroupCueIds={snapshot().active_group_cue_ids ?? {}}
               activeFade={snapshot().active_fade}
+              cueLiveModifiers={snapshot().cue_live_modifiers}
+              onSetCueLiveModifier={setCueLiveModifierLive}
+              onClearCueLiveModifier={clearCueLiveModifierLive}
+              onReleaseCue={releaseCueById}
               timelineTrack={timelineTrack()}
               onTriggerCue={triggerCue}
               onEditCue={openTimelineSourceCue}
@@ -14212,6 +14316,9 @@ export default function App() {
           onValue={setTouchBindingValue}
           onColor={setTouchBindingColor}
           onXy={setTouchBindingXy}
+          onReleaseCue={releaseCueById}
+          onSetCueLiveModifier={setCueLiveModifierLive}
+          onClearCueLiveModifier={clearCueLiveModifierLive}
         />
         <TouchCuePanel
           snapshot={snapshot()}
@@ -15437,6 +15544,7 @@ export default function App() {
           <CueManagementPanel
             mode={controlMode() === "live" ? "live" : "edit"}
             onSetCueColor={setCueColor}
+            onSetCueLiveModifierDefaults={setCueLiveModifierDefaults}
             cues={selectedCueListCues()}
             allCues={snapshot().cues}
             cueLists={snapshot().cue_lists}

@@ -829,6 +829,20 @@ const sceneMatrixCues: CueSummary[] = [
     recall_mode: "ReplaceGroup",
     node_graph_targets: [],
     effect_targets: [{ effect_id: cueRecallEffect.id, enabled: true }],
+    // T17: authored dial defaults so the live strip starts off-neutral.
+    live_modifiers: { speed: 2, size: 0.5, phase: 0.25, flash: false },
+  },
+  {
+    ...cueRecallCue,
+    id: 320,
+    cue_number: "F1",
+    label: "Strobe Flash",
+    group_id: "back",
+    recall_mode: "Coexist",
+    node_graph_targets: [],
+    effect_targets: [],
+    // T17: momentary flash-mode pad exercised by the harness.
+    live_modifiers: { speed: 1, size: 1, phase: 0, flash: true },
   },
   {
     ...cueRecallCue,

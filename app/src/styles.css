@@ -29117,6 +29117,110 @@ h3 {
   accent-color: var(--cue-identity);
 }
 
+/* T17 momentary flash pads and the per-scene live modifier strip. */
+.sceneMatrixFlashBadge,
+.touchFlashBadge {
+  border: 1px solid var(--cue-identity, #8a939c);
+  color: var(--cue-identity-text, #d5d9de);
+  font-size: 11px;
+  line-height: 1;
+  padding: 1px 3px;
+  letter-spacing: 0.04em;
+}
+
+.sceneMatrixTrigger.flash:active,
+.liveCuePad.flash:active {
+  filter: brightness(1.35);
+}
+
+.cueLiveModifierStrip {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 3px;
+  padding: 3px 4px 4px;
+  border-top: 1px solid #2c3239;
+  background: #16191d;
+}
+
+.cueLiveModifierStrip.overridden {
+  border-top-color: var(--cue-identity, #b8742c);
+}
+
+.cueLiveModifierRow {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: #9aa2ab;
+}
+
+.cueLiveModifierRow input[type="range"] {
+  width: 100%;
+  min-width: 0;
+  height: 14px;
+  accent-color: var(--cue-identity, #b8742c);
+}
+
+.cueLiveModifierRow b {
+  font-size: 11px;
+  text-align: right;
+  color: #d5d9de;
+}
+
+.cueLiveModifierFooter {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.cueLiveModifierLiveBadge {
+  border: 1px solid var(--cue-identity, #b8742c);
+  color: var(--cue-identity-text, #e8c07a);
+  font-size: 11px;
+  line-height: 1;
+  padding: 1px 4px;
+  letter-spacing: 0.04em;
+}
+
+.cueLiveModifierReset {
+  min-height: 20px;
+  padding: 1px 8px;
+  font-size: 11px;
+}
+
+.cueLiveModifierStrip.touch {
+  gap: 8px;
+  padding: 8px;
+}
+
+.cueLiveModifierStrip.touch .cueLiveModifierRow {
+  grid-template-columns: 56px minmax(0, 1fr) 56px;
+  font-size: 13px;
+}
+
+.cueLiveModifierStrip.touch .cueLiveModifierRow input[type="range"] {
+  height: 48px;
+}
+
+.cueLiveModifierStrip.touch .cueLiveModifierReset {
+  min-height: 48px;
+  min-width: 96px;
+  font-size: 13px;
+}
+
+.cueLiveDefaultsField .cueLiveDefaultsControls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.cueLiveDefaultsControls input[type="number"] {
+  width: 58px;
+}
+
 @media (max-width: 1100px) {
   .liveDeskViewToggle button {
     min-width: 72px;

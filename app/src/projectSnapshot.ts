@@ -43,7 +43,12 @@ export const normalizeProjectAutoVjForPersistence = (snapshot: EngineSnapshot): 
  * Audio meters and rendered modulation are operational state, not save data.
  */
 export const normalizeProjectSnapshotForStorage = (snapshot: EngineSnapshot): EngineSnapshot => {
-  const { authored_video: authoredVideo, ...snapshotWithoutTransport } = snapshot;
+  // T17: drop the latched live-override list from any persisted shape.
+  const {
+    authored_video: authoredVideo,
+    cue_live_modifiers: _cueLiveModifiers,
+    ...snapshotWithoutTransport
+  } = snapshot;
   const authoredSnapshot: EngineSnapshot = {
     ...snapshotWithoutTransport,
     video: authoredVideo ?? snapshot.video,
@@ -83,6 +88,9 @@ export const projectComparableSnapshot = (snapshot: EngineSnapshot) => {
   comparable.dmx_preview = [];
   comparable.dmx_previews = [];
   comparable.telemetry = {} as EngineSnapshot["telemetry"];
+  // T17: latched scene live overrides are runtime-only and must never make
+  // the project look dirty or reach a save.
+  comparable.cue_live_modifiers = [];
   return comparable;
 };
 

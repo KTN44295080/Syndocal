@@ -25,12 +25,15 @@ const persistentBandOnlyMode = process.argv.includes("--persistent-band-only");
 const workspaceSplitOnlyMode = process.argv.includes("--workspace-split-only");
 const workspaceShellOnlyMode = process.argv.includes("--workspace-shell-only");
 const fxVisualOnlyMode = process.argv.includes("--fx-visual-only");
+const sceneLiveModifierOnlyMode = process.argv.includes("--scene-live-modifier-only");
 const viewportTraceEnabled = process.env.SYNDOCAL_VIEWPORT_TRACE === "1";
 const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
   largeShowMode
     ? "large-show"
-    : fxVisualOnlyMode
-      ? "fx-visual"
+    : sceneLiveModifierOnlyMode
+      ? "scene-matrix"
+      : fxVisualOnlyMode
+        ? "fx-visual"
       : operatorVjOnlyMode
         ? "operator-vj"
         : autoVjOnlyMode
@@ -9012,7 +9015,8 @@ async function runSceneMatrixPaneCheck(client, viewport) {
     ...Array.from({ length: 10 }, (_, index) => `bank-${String(index + 3).padStart(2, "0")}`),
     "Show",
   ];
-  const expectedCardCount = 14;
+  // T17 added the flash-mode cue 320 to the "back" column of the fixture.
+  const expectedCardCount = 15;
   const expectedReplaceCards = ["302", "303"];
   const validHueAttributes = (values, expectedCount) =>
     values.length === expectedCount && values.every((value) => {
@@ -9043,7 +9047,7 @@ async function runSceneMatrixPaneCheck(client, viewport) {
     ["matrixBankIdentityStripsVisible", () =>
       before.bankStripCount === expectedColumns.length && before.bankStripColors.every((color) => color !== "rgba(0, 0, 0, 0)")],
     ["matrixStaticAndFxBadgesPresent", () =>
-      before.kindBadgeCounts.STATIC === 13 && before.kindBadgeCounts.FX === 1],
+      before.kindBadgeCounts.STATIC === 14 && before.kindBadgeCounts.FX === 1],
     ["matrixReplaceGroupBadgesPresent", () => JSON.stringify(before.replaceCardIds.sort()) === JSON.stringify(expectedReplaceCards)],
     ["matrixInitialActiveCueVisible", () => JSON.stringify(before.activeCardIds) === JSON.stringify(["301"])],
     ["matrixActiveCueProgressVisible", () =>
@@ -12736,6 +12740,197 @@ async function exerciseMoveFxDrag(client, deltaX, deltaY, escape = false) {
   return { before, during, after, deltaX, deltaY, escape };
 }
 
+async function readSceneLiveModifierState(client, cueId) {
+  return evaluatePageFunction(client, (cueId) => {
+    const strip = document.querySelector(`[data-cue-live-modifier="${cueId}"]`);
+    const app = document.querySelector(".app");
+    return {
+      stripCueId: strip?.getAttribute("data-cue-live-modifier") ?? null,
+      override: strip?.getAttribute("data-live-override") ?? null,
+      readouts: strip
+        ? [...strip.querySelectorAll(".cueLiveModifierRow b")].map((element) =>
+            (element.textContent ?? "").trim(),
+          )
+        : [],
+      resetDisabled: strip?.querySelector(".cueLiveModifierReset")?.disabled ?? null,
+      activeCardIds: [...document.querySelectorAll('[data-scene-matrix-active="true"]')].map(
+        (element) => element.getAttribute("data-scene-matrix-cue-id"),
+      ),
+      matrixFlashCells: document.querySelectorAll("[data-scene-flash-cue]").length,
+      touchFlashPads: document.querySelectorAll(".touchPlacedButton[data-touch-flash-cue]").length,
+      // The Touch surface proves activation through the same runtime truth
+      // the operator sees: the active scene's live strip.
+      touchActivePadIds: [
+        ...document.querySelectorAll(".cueLiveModifierStrip.touch[data-cue-live-modifier]"),
+      ].map((element) => element.getAttribute("data-cue-live-modifier")),
+      containmentZero:
+        window.scrollX === 0 &&
+        window.scrollY === 0 &&
+        document.documentElement.scrollLeft === 0 &&
+        document.documentElement.scrollTop === 0 &&
+        document.body.scrollLeft === 0 &&
+        document.body.scrollTop === 0 &&
+        (app?.scrollLeft ?? 0) === 0 &&
+        (app?.scrollTop ?? 0) === 0,
+    };
+  }, cueId);
+}
+
+async function setSceneLiveModifierSlider(client, cueId, control, value) {
+  return evaluatePageFunction(
+    client,
+    (cueId, control, value) => {
+      const input = document.querySelector(`[data-cue-live-modifier-${control}="${cueId}"]`);
+      if (!input) return false;
+      input.value = String(value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      return true;
+    },
+    cueId,
+    control,
+    value,
+  );
+}
+
+async function dispatchFlashPointer(client, selector, press) {
+  const center = await evaluatePageFunction(
+    client,
+    (selector) => {
+      const cell = document.querySelector(selector);
+      if (!cell) return null;
+      // Cells can sit below the internal panel fold on compact viewports;
+      // panel-internal scrolling is allowed, off-viewport clicks are not.
+      cell.scrollIntoView({ block: "nearest", inline: "nearest" });
+      const rectangle = cell.getBoundingClientRect();
+      const x = rectangle.left + rectangle.width / 2;
+      const y = rectangle.top + rectangle.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      return {
+        x,
+        y,
+        hitSelf: Boolean(hit && (hit === cell || cell.contains(hit))),
+        hitClass: hit?.getAttribute("class") ?? "",
+        rect: [rectangle.left, rectangle.top, rectangle.width, rectangle.height].map(Math.round),
+      };
+    },
+    selector,
+  );
+  if (!center) return false;
+  if (viewportTraceEnabled && !center.hitSelf) {
+    console.log(
+      `flash pointer target occluded: ${selector} hit=${center.hitClass} rect=${center.rect.join(",")}`,
+    );
+  }
+  await client.send("Input.dispatchMouseEvent", {
+    type: press ? "mousePressed" : "mouseReleased",
+    x: center.x,
+    y: center.y,
+    button: "left",
+    buttons: press ? 1 : 0,
+    clickCount: 1,
+  });
+  return true;
+}
+
+// T17 acceptance: the Scene Matrix cell and the Touch pad drive the same
+// latched live-modifier path, flash pads are strictly momentary, and the
+// latch resets on reset/retrigger while document/.app scroll stays zero.
+async function runSceneLiveModifierViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: fixtureUrl("scene-matrix") });
+  await waitForApp(client);
+  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await sleep(64);
+  const failed = [];
+
+  await evaluatePageFunction(client, () => {
+    document.querySelector('[data-scene-matrix-cue-id="303"] .sceneMatrixTrigger')?.click();
+  });
+  await sleep(48);
+  const authored = await readSceneLiveModifierState(client, 303);
+  if (authored.stripCueId !== "303") failed.push(`strip=${authored.stripCueId}`);
+  if (authored.override !== "false") failed.push(`authored-override=${authored.override}`);
+  if (authored.readouts.join("|") !== "x2|50%|25%") {
+    failed.push(`authored-readouts=${authored.readouts.join("|")}`);
+  }
+  if (authored.resetDisabled !== true) failed.push("reset-enabled-at-authored");
+  if (authored.matrixFlashCells < 1) failed.push("no-matrix-flash-cell");
+
+  await setSceneLiveModifierSlider(client, 303, "speed", 3);
+  await sleep(48);
+  const latched = await readSceneLiveModifierState(client, 303);
+  if (latched.override !== "true") failed.push(`latch-override=${latched.override}`);
+  if (latched.readouts[0] !== "x3") failed.push(`latch-speed=${latched.readouts[0]}`);
+  if (latched.resetDisabled !== false) failed.push("reset-disabled-while-live");
+
+  await evaluatePageFunction(client, () => {
+    document.querySelector('[data-cue-live-modifier-reset="303"]')?.click();
+  });
+  await sleep(48);
+  const reset = await readSceneLiveModifierState(client, 303);
+  if (reset.override !== "false" || reset.readouts[0] !== "x2") {
+    failed.push(`reset=${reset.override}/${reset.readouts[0]}`);
+  }
+
+  await setSceneLiveModifierSlider(client, 303, "speed", 3);
+  await sleep(32);
+  await evaluatePageFunction(client, () => {
+    document.querySelector('[data-scene-matrix-cue-id="303"] .sceneMatrixTrigger')?.click();
+  });
+  await sleep(48);
+  const retriggered = await readSceneLiveModifierState(client, 303);
+  if (retriggered.override !== "false") failed.push(`retrigger-override=${retriggered.override}`);
+
+  await dispatchFlashPointer(client, '[data-scene-flash-cue="320"]', true);
+  await sleep(48);
+  const flashDown = await readSceneLiveModifierState(client, 303);
+  if (!flashDown.activeCardIds.includes("320")) failed.push("flash-not-active-on-down");
+  await dispatchFlashPointer(client, '[data-scene-flash-cue="320"]', false);
+  await sleep(48);
+  const flashUp = await readSceneLiveModifierState(client, 303);
+  if (flashUp.activeCardIds.includes("320")) failed.push("flash-still-active-on-up");
+  if (!flashUp.containmentZero) failed.push("matrix-containment");
+
+  await clickVisibleByText(client, ".workspaceTabs button", "Touch");
+  await sleep(96);
+  // The matrix flash release cleared the active cue; bring the latched-strip
+  // scene back through the Touch pad so both surfaces prove the same path.
+  await evaluatePageFunction(client, () => {
+    const pad = document.querySelector('[data-touch-cue-pad="303"]');
+    pad?.scrollIntoView({ block: "nearest" });
+    pad?.click();
+  });
+  await sleep(64);
+  const touch = await readSceneLiveModifierState(client, 303);
+  if (touch.stripCueId !== "303") failed.push(`touch-strip=${touch.stripCueId}`);
+  if (touch.touchFlashPads < 1) failed.push("no-touch-flash-pad");
+  await dispatchFlashPointer(client, '[data-touch-flash-cue="320"]', true);
+  await sleep(48);
+  const touchDown = await readSceneLiveModifierState(client, 303);
+  if (!touchDown.touchActivePadIds.includes("320")) failed.push("touch-flash-not-active-on-down");
+  await dispatchFlashPointer(client, '[data-touch-flash-cue="320"]', false);
+  await sleep(48);
+  const touchUp = await readSceneLiveModifierState(client, 303);
+  if (touchUp.touchActivePadIds.includes("320")) failed.push("touch-flash-still-active-on-up");
+  if (!touchUp.containmentZero) failed.push("touch-containment");
+
+  return {
+    label: `scene-live-modifier-${viewport.width}x${viewport.height}`,
+    passed: failed.length === 0,
+    failedChecks: failed,
+    authored,
+    latched,
+    retriggered,
+    flash: { down: flashDown.activeCardIds, up: flashUp.activeCardIds },
+    touchFlash: { down: touchDown.touchActivePadIds, up: touchUp.touchActivePadIds },
+  };
+}
+
 async function runFxVisualViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -12989,6 +13184,26 @@ async function main() {
     console.log(
       `viewport contract primary-browser=${primaryOperationalViewport.width}x${primaryOperationalViewport.height} measured-client-size-browser=${measuredClientSizeViewport.width}x${measuredClientSizeViewport.height} extended-browser=${extendedCeilingViewport.width}x${extendedCeilingViewport.height} fallback-browsers=${compactFallbackViewports.map((viewport) => `${viewport.width}x${viewport.height}`).join(",")} screenshots=${captureAllViewportScreenshots ? "all" : "large-browser-fixtures"}`,
     );
+    if (sceneLiveModifierOnlyMode) {
+      const liveModifierResults = [];
+      for (const viewport of viewports) {
+        const result = await runSceneLiveModifierViewport(client, viewport);
+        liveModifierResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `authored=${result.authored.readouts.join("/")} latch=${result.latched.readouts[0]} ` +
+            `retrigger=${result.retriggered.override} ` +
+            `flash=${result.flash.down.join("+") || "none"}->${result.flash.up.join("+") || "none"} ` +
+            `touchFlash=${result.touchFlash.down.join("+") || "none"}->${result.touchFlash.up.join("+") || "none"} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = liveModifierResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Scene live modifier viewport failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
     if (fxVisualOnlyMode) {
       const fxVisualResults = [];
       for (const viewport of viewports) {

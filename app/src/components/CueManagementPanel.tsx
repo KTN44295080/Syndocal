@@ -4,6 +4,7 @@ import type {
   ActiveFadeSummary,
   CueEffectTarget,
   CueListSummary,
+  CueLiveModifierSettings,
   CueStepSummary,
   CueSummary,
   EffectSummary,
@@ -11,6 +12,7 @@ import type {
   TimelineCueEventSummary,
   TimelineTrackKind,
 } from "../types";
+import { authoredCueLiveModifier } from "../cueLiveModifier";
 import { canSaveCueEffectTargets } from "../cueEffectRecall";
 import type { CueEffectRecallChange } from "../cueEffectRecall";
 import { timelineConformRateBadge } from "../timelineSceneBlocks";
@@ -37,6 +39,10 @@ const cueCaptureScopeLabel = (scope: CueCaptureScopeMode) => {
 interface CueManagementPanelProps {
   mode: "edit" | "live";
   onSetCueColor: (cueId: number, color: string | null) => void | Promise<void>;
+  onSetCueLiveModifierDefaults: (
+    cueId: number,
+    settings: CueLiveModifierSettings | null,
+  ) => void | Promise<void>;
   cues: CueSummary[];
   allCues: CueSummary[];
   cueLists: CueListSummary[];
@@ -545,6 +551,77 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                         title="Clear Color"
                         aria-label={`Clear identity color for ${cue.label}`}
                         onClick={() => void props.onSetCueColor(cue.id, null)}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  </label>
+                  <label class="cueLiveDefaultsField">
+                    Live modifier defaults
+                    <span class="cueLiveDefaultsControls" data-cue-live-defaults={cue.id}>
+                      <input
+                        type="number"
+                        min="0.05"
+                        max="20"
+                        step="0.05"
+                        value={authoredCueLiveModifier(cue).speed}
+                        data-cue-live-defaults-speed={cue.id}
+                        aria-label={`Default live speed for ${cue.label}`}
+                        onChange={(event) =>
+                          void props.onSetCueLiveModifierDefaults(cue.id, {
+                            ...authoredCueLiveModifier(cue),
+                            speed: Number(event.currentTarget.value),
+                          })}
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        max="2"
+                        step="0.05"
+                        value={authoredCueLiveModifier(cue).size}
+                        data-cue-live-defaults-size={cue.id}
+                        aria-label={`Default live size for ${cue.label}`}
+                        onChange={(event) =>
+                          void props.onSetCueLiveModifierDefaults(cue.id, {
+                            ...authoredCueLiveModifier(cue),
+                            size: Number(event.currentTarget.value),
+                          })}
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                        value={authoredCueLiveModifier(cue).phase}
+                        data-cue-live-defaults-phase={cue.id}
+                        aria-label={`Default live phase for ${cue.label}`}
+                        onChange={(event) =>
+                          void props.onSetCueLiveModifierDefaults(cue.id, {
+                            ...authoredCueLiveModifier(cue),
+                            phase: Number(event.currentTarget.value),
+                          })}
+                      />
+                      <label class="checkbox compactCheckbox">
+                        <input
+                          type="checkbox"
+                          checked={authoredCueLiveModifier(cue).flash}
+                          data-cue-live-defaults-flash={cue.id}
+                          aria-label={`Flash mode for ${cue.label}`}
+                          onChange={(event) =>
+                            void props.onSetCueLiveModifierDefaults(cue.id, {
+                              ...authoredCueLiveModifier(cue),
+                              flash: event.currentTarget.checked,
+                            })}
+                        />
+                        <span>FLASH</span>
+                      </label>
+                      <button
+                        type="button"
+                        disabled={!cue.live_modifiers}
+                        data-cue-live-defaults-clear={cue.id}
+                        title="Clear live modifier defaults"
+                        aria-label={`Clear live modifier defaults for ${cue.label}`}
+                        onClick={() => void props.onSetCueLiveModifierDefaults(cue.id, null)}
                       >
                         ×
                       </button>

@@ -4,7 +4,7 @@
 状態: **承認済み** — ユーザーは下記の設計判断をすべて推奨案で承認。  
 実施順: **T15-P 基盤改修 → T15 タイムライン減量 → T16 FXエディタ可視化 → T17 Scene Liveモディファイア**
 
-進捗: T15-P・T15・T16 完了。次は **T17 Scene Liveモディファイア**。
+進捗: T15-P・T15・T16・T17 完了。本パケットの全トランシェが完了。
 
 ## 目的
 
@@ -117,13 +117,17 @@ Daslight 5実機とSyndocal現行UIを比較し、演奏面の可読性と直接
 
 **監督修正（Codex報告になし・2件）:** ①`check-viewport-containment.mjs` の CDPクライアントがソケットclose/error時に保留Promiseをreject せず、ブラウザが実行中に死ぬと全T16断言を1つも実行しないまま exit 0 で偽PASSし、かつVite子プロセスをリークして固定ポートを汚染していた（実機で再現）。close/error時の全pending reject＋`beforeExit`のフェイルクローズを追加し、Chrome強制killで exit 1・0.9秒終了・ポートリークゼロを実証。②LfoShape `Perlin` のみJA辞書欠落で、既定選択のパーリンレシピを開くと新設プレビューに英語表示。`uiLocalization.ts` へ `Perlin: パーリン` を追加し `check-localization.mjs` にアサーションを固定（既存の `check-localization` は方針上許容していたが、新設2サーフェスで露出拡大のため翻訳を選択）。
 
-### T17: Scene Liveモディファイア
+### T17: Scene Liveモディファイア ✅完了（2026-07-20 Fable直接実装・Codex usage limitのためユーザー承認の役割変更）
 
 - MatrixセルとTouch padの両方から同じruntime override経路を操作できる。
 - speed／size／phaseはactive sceneへ即時反映し、flashはpress／releaseで確実に解除される。
 - authored値とLive overrideをUIで区別できる。
 - legacy `.sdc`は同じ初期挙動で読み込める。
 - project round-trip、DVC import、runtime lifecycle、44 Hz非増加をテストする。
+
+**実装形:** authored初期値は `CueSummary.live_modifiers`（`serde(default)`+`skip_serializing_if`、`color`前例踏襲でlegacyバイト同一）。ラッチは engine の `cue_live_modifier_overrides` マップ（コマンド適用時のみ参照）で、`SetCueLiveModifier`/`ClearCueLiveModifier`/`SetCueLiveModifierDefaults` がキューのactivation rangeパラメータを authored×係数（speed→period/step/wave速度とbeats、size→low-high振幅/Chaser feature範囲/Moveサイズ、Colorはamplitude無しのため意図的no-op、phase→巻き位相加算）で再構築する。**44Hz hot pathは構造的に不変**（per-tickの検索・確保・分岐追加ゼロ、evaluator署名変更ゼロ）。リセット規則=release/再trigger/project loadでauthoredへ。flashはauthored保存属性で、押下=TriggerCue/解放=ReleaseCueの同一経路。`.sdc`保護は engine `build_persistence_snapshot` クリア＋Tauri `project_snapshot_for_save` クリア＋frontend `projectSnapshot.ts` 除外の三重。UIは共有 `CueLiveModifierStrip`（Matrixアクティブセル＋Touch LIVEサーフェス）、flashパッドはMatrixセル/Touch配置Buttonのモーメンタリ化、authored編集はCue drawerの`Live modifier defaults`行。
+
+**受入証跡（監督実行）:** engine 374/374（新規: override適用・3種リセット・latch非永続・sanitize/legacyバイト形状）、syndocal 320 pass（+既存負債1件はHEADでもstash A/Bで再現・T17無関係としてチップ化）、44Hz releaseベンチ p95=3.06ms/p99=3.66ms/max=4.28ms（T17前レンジと同水準・非増加）、`check:cue-live-modifier`、focused `check:scene-live-viewport` 5解像度（authored x2/50%/25%→latch x3→reset→retrigger reset、Matrix flash 320 active-on-down/inactive-on-up、Touch flash同、containment 0）、full viewport matrix 232 pass/0 fail、`tsc`、`check:localization` 2603/2603(100%・新規aria JAパターン11種)、`vite build` main index 490.04kB、T16回帰（fx-visual 5解像度）green。再交渉断言2件: scene-matrix fixtureへflashキュー320追加に伴い `expectedCardCount` 14→15・STATICバッジ 13→14。新設UI文字は11pxデスク床へ、Touchストリップ操作対象は48pxへ準拠。DVCインポートは既存のSCENE SPEED焼き込み変換を維持し authored speed=1.0（二重適用回避・変換断言無変更）。
 
 ## 共通検証順
 

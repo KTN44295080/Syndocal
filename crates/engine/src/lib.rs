@@ -30,27 +30,28 @@ use protocol::{
     ChildTimelineSummary, ClockSnapshot, ClockSource, ColorEffectAlgorithm, ColorEffectColor,
     ColorEffectInterpolation, ColorEffectRequest, ColorEffectSpatialRecipe, CompositionId,
     CompositionSummary, CueEffectTarget, CueFixtureTarget, CueId, CueIfcbTiming, CueListId,
-    CueListSummary, CueNodeGraphTarget, CuePaletteTarget, CuePartSummary, CueStepSummary,
-    CueSummary, DmxMergeMode, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol,
-    DmxOutputRouteTelemetry, DmxUniversePreview, EffectBlendMode, EffectId, EffectKind,
-    EffectParamsSnapshot, EffectSummary, EngineSnapshot, EngineTelemetry,
-    ExclusiveVideoTakeRequest, ExecutorId, FixtureId, FixtureLimits, FixtureProfileSummary,
-    LfoEffectRequest, LfoShape, LiveAudioFrame, LiveAudioReactiveFeatures, MoveCoordinateMode,
-    MoveDirection, MoveEffectRequest, MovePathPoint, NodeGraphAudioRuntimeStatus, NodeGraphId,
-    NodeGraphNodeKind, NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId,
-    PatchFixtureRequest, PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest,
-    ProgrammerSnapshot, ProgrammerValueSummary, RecallMode, ReferencePaletteSummary, Rotation3,
-    StageMapConfig, StageMapPresetSummary, StageObjectId, StageObjectSummary, SubmasterSummary,
-    TimelineAudioClipId, TimelineAudioClipSummary, TimelineAutomationSummary,
-    TimelineCueEventSummary, TimelineEventId, TimelineLayerKind, TimelineLayerSummary,
-    TimelineSnapRequest, TimelineSnapshot, TimelineTrackKind, TimelineVideoAutomationSummary,
-    TouchSurfaceSummary, Transform2D, ValueEffectDirection, ValueEffectInterpolation,
-    ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
-    VideoBlendMode, VideoColorAdjust, VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust,
-    VideoIsfControlKind, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId,
-    VideoLayerState, VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind,
-    VideoOutputMapping, VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget,
-    VideoParam, VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
+    CueListSummary, CueLiveModifierSettings, CueLiveModifierState, CueNodeGraphTarget,
+    CuePaletteTarget, CuePartSummary, CueStepSummary, CueSummary, DmxMergeMode, DmxModeSummary,
+    DmxOutputConfig, DmxOutputProtocol, DmxOutputRouteTelemetry, DmxUniversePreview,
+    EffectBlendMode, EffectClockSync, EffectId, EffectKind, EffectParamsSnapshot, EffectSummary,
+    EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId, FixtureId,
+    FixtureLimits, FixtureProfileSummary, LfoEffectRequest, LfoShape, LiveAudioFrame,
+    LiveAudioReactiveFeatures, MoveCoordinateMode, MoveDirection, MoveEffectRequest, MovePathPoint,
+    NodeGraphAudioRuntimeStatus, NodeGraphId, NodeGraphNodeKind, NodeGraphNodeSummary,
+    NodeGraphSummary, NodeGraphTransformOp, PaletteId, PatchFixtureRequest, PatchedFixtureSummary,
+    PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot, ProgrammerValueSummary,
+    RecallMode, ReferencePaletteSummary, Rotation3, StageMapConfig, StageMapPresetSummary,
+    StageObjectId, StageObjectSummary, SubmasterSummary, TimelineAudioClipId,
+    TimelineAudioClipSummary, TimelineAutomationSummary, TimelineCueEventSummary, TimelineEventId,
+    TimelineLayerKind, TimelineLayerSummary, TimelineSnapRequest, TimelineSnapshot,
+    TimelineTrackKind, TimelineVideoAutomationSummary, TouchSurfaceSummary, Transform2D,
+    ValueEffectDirection, ValueEffectInterpolation, ValueEffectMode, ValueEffectPoint,
+    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBlendMode, VideoColorAdjust,
+    VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust, VideoIsfControlKind,
+    VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId, VideoLayerState,
+    VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
+    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
+    VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
     LIVE_AUDIO_FEATURE_BAND_CAPACITY, MAX_CUE_AUTHORED_BEATS, MAX_TIMELINE_SCENE_BLOCK_LOOPS,
     MIN_CUE_AUTHORED_BEATS,
 };
@@ -602,6 +603,24 @@ pub enum EngineCommand {
     TriggerCueListNext(CueListId),
     TriggerCueListPrevious(CueListId),
     ReleaseCue(CueId),
+    /// T17 latched live modifier for an active scene. Values are sanitized and
+    /// resolved into the cue's activation params at command time; the 44 Hz
+    /// tick keeps reading the already-resolved params.
+    SetCueLiveModifier {
+        cue_id: CueId,
+        speed: f32,
+        size: f32,
+        phase: f32,
+    },
+    /// T17 reset one scene's live modifier back to its authored dial position.
+    ClearCueLiveModifier(CueId),
+    /// T17 authored live-modifier dial defaults stored on the Cue (`.sdc`).
+    SetCueLiveModifierDefaults {
+        cue_id: CueId,
+        settings: Option<CueLiveModifierSettings>,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     SetCueFadePaused(bool),
     RemoveCue(CueId),
     RemoveCuePublished {
@@ -1033,6 +1052,8 @@ impl EngineCommand {
                 | EngineCommand::SetAllBlackout(_)
                 | EngineCommand::SetLightingMaster(_)
                 | EngineCommand::SetGroupSubmaster { .. }
+                | EngineCommand::SetCueLiveModifier { .. }
+                | EngineCommand::ClearCueLiveModifier(_)
                 | EngineCommand::AddLfoEffect { .. }
                 | EngineCommand::AddPositionWaveEffect { .. }
                 | EngineCommand::AddColorEffect { .. }
@@ -1848,6 +1869,24 @@ impl EngineHandle {
         receiver
             .recv_timeout(Duration::from_secs(3))
             .map_err(|error| format!("Cue color acknowledgement failed: {error}"))?
+    }
+
+    pub fn set_cue_live_modifier_defaults_published(
+        &self,
+        cue_id: CueId,
+        settings: Option<CueLiveModifierSettings>,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::SetCueLiveModifierDefaults {
+            cue_id,
+            settings,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Cue live modifier acknowledgement failed: {error}"))?
     }
 
     pub fn set_group_color_published(
@@ -3145,6 +3184,7 @@ struct RuntimeCue {
     steps: Vec<CueStepSummary>,
     child_timeline: Option<ChildTimelineSummary>,
     color: Option<String>,
+    live_modifiers: Option<CueLiveModifierSettings>,
     effect_activation_range: RuntimeEffectActivationRange,
     step_sequence: RuntimeCueStepSequence,
     step_activation_range: RuntimeCueStepActivationRange,
@@ -3566,6 +3606,10 @@ struct EngineRuntime {
     cue_list_effect_activation_cues: HashMap<CueListId, CueId>,
     active_group_cue_ids: HashMap<String, CueId>,
     group_colors: BTreeMap<String, String>,
+    // T17 latched per-scene live overrides. Command-time access only; the
+    // 44 Hz tick never reads this map because overrides are resolved into the
+    // cue's activation params when a command arrives.
+    cue_live_modifier_overrides: HashMap<CueId, CueLiveModifierSettings>,
     cue_release_values: HashMap<CueId, HashMap<(FixtureId, String), u16>>,
     palettes: Vec<ReferencePaletteSummary>,
     playback_executors: Vec<PlaybackExecutorSummary>,
@@ -3759,6 +3803,7 @@ impl EngineRuntime {
             cue_lists: vec![CueListSummary::default()],
             cue_list_effect_activation_cues: HashMap::new(),
             active_group_cue_ids: HashMap::new(),
+            cue_live_modifier_overrides: HashMap::new(),
             group_colors: BTreeMap::new(),
             cue_release_values: HashMap::new(),
             palettes: Vec::new(),
@@ -3914,6 +3959,9 @@ impl EngineRuntime {
         self.active_effect_activation_indices.clear();
         self.timeline_effect_activation_ranges.clear();
         self.cue_list_effect_activation_cues.clear();
+        // T17 reset rule: project load always returns every scene to its
+        // authored live-modifier dial position.
+        self.cue_live_modifier_overrides.clear();
         self.pending_video_isf_event_resets.clear();
         let now = Instant::now();
         let (loaded_fixtures, loaded_fixture_summaries, dropped_fixture_count) =
@@ -4306,6 +4354,7 @@ impl EngineRuntime {
                     steps,
                     child_timeline: cue.child_timeline,
                     color: cue.color,
+                    live_modifiers: sanitize_cue_live_modifier_settings(cue.live_modifiers),
                     effect_activation_range: RuntimeEffectActivationRange::default(),
                     step_sequence,
                     step_activation_range: RuntimeCueStepActivationRange::default(),
@@ -5245,6 +5294,47 @@ impl EngineRuntime {
                 } else {
                     self.last_error = Some("Invalid submaster level".to_string());
                 }
+            }
+            EngineCommand::SetCueLiveModifier {
+                cue_id,
+                speed,
+                size,
+                phase,
+            } => {
+                let authored = self
+                    .cues
+                    .iter()
+                    .find(|cue| cue.id == cue_id)
+                    .map(|cue| cue.live_modifiers.unwrap_or_default());
+                match authored {
+                    None => {
+                        self.last_error = Some(format!("Cue {cue_id} was not found"));
+                    }
+                    Some(authored) => {
+                        let settings = CueLiveModifierSettings {
+                            speed: sanitize_live_modifier_speed(speed),
+                            size: sanitize_live_modifier_size(size),
+                            phase: sanitize_live_modifier_phase(phase),
+                            flash: authored.flash,
+                        };
+                        if settings.speed == authored.speed
+                            && settings.size == authored.size
+                            && settings.phase == authored.phase
+                        {
+                            self.cue_live_modifier_overrides.remove(&cue_id);
+                        } else {
+                            self.cue_live_modifier_overrides.insert(cue_id, settings);
+                        }
+                        self.reapply_cue_live_modifier_by_id(cue_id, Instant::now());
+                        self.last_error = None;
+                    }
+                }
+            }
+            EngineCommand::ClearCueLiveModifier(cue_id) => {
+                if self.cue_live_modifier_overrides.remove(&cue_id).is_some() {
+                    self.reapply_cue_live_modifier_by_id(cue_id, Instant::now());
+                }
+                self.last_error = None;
             }
             EngineCommand::SetBpm(bpm) => {
                 self.clock.set_bpm(bpm, Instant::now());
@@ -6497,6 +6587,56 @@ impl EngineRuntime {
                     result,
                     rollback,
                     publication_error: "Engine snapshot was busy; Cue color update was rolled back",
+                });
+            }
+            EngineCommand::SetCueLiveModifierDefaults {
+                cue_id,
+                settings,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreCueRemoval {
+                    cues: self.cues.clone(),
+                    cue_lists: self.cue_lists.clone(),
+                    cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
+                    active_group_cue_ids: self.active_group_cue_ids.clone(),
+                    cue_release_values: self.cue_release_values.clone(),
+                    timeline_events: self.timeline_events.clone(),
+                    active_cue_id: self.active_cue_id,
+                    active_fade: self.active_fade.clone(),
+                    pending_cues: self.pending_cues.clone(),
+                    timeline_position_ms: self.timeline_position_ms,
+                    timeline_playhead_boundary_armed: self.timeline_playhead_boundary_armed,
+                    timeline_evaluated_boundary_position_ms: self
+                        .timeline_evaluated_boundary_position_ms,
+                    timeline_jump_landed_event_id: self.timeline_jump_landed_event_id,
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Cue live modifier update expired before engine execution".to_string())
+                } else if let Some(cue) = self.cues.iter_mut().find(|cue| cue.id == cue_id) {
+                    cue.live_modifiers = sanitize_cue_live_modifier_settings(settings);
+                    Ok(())
+                } else {
+                    Err(format!("Cue {cue_id} was not found"))
+                };
+                if result.is_ok() {
+                    // Authored dial positions changed; re-resolve this scene's
+                    // activation params unless a live latch still overrides them.
+                    self.reapply_cue_live_modifier_by_id(cue_id, Instant::now());
+                }
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Cue live modifier update was rolled back",
                 });
             }
             EngineCommand::SetGroupColor {
@@ -10741,6 +10881,13 @@ impl EngineRuntime {
         let previous_cues = reconform_referenced_events.then(|| self.cues.clone());
         let previous_timeline_events =
             reconform_referenced_events.then(|| self.timeline_events.clone());
+        // Re-capturing a scene replaces its body, not its authored live-modifier
+        // dial positions; those survive the replacement.
+        let previous_live_modifiers = self
+            .cues
+            .iter()
+            .find(|cue| cue.id == cue_id)
+            .and_then(|cue| cue.live_modifiers);
         if replace_existing {
             self.cues.retain(|cue| cue.id != cue_id);
         }
@@ -10770,6 +10917,7 @@ impl EngineRuntime {
             steps: Vec::new(),
             child_timeline: None,
             color: None,
+            live_modifiers: previous_live_modifiers,
             effect_activation_range: RuntimeEffectActivationRange::default(),
             step_sequence: RuntimeCueStepSequence::default(),
             step_activation_range: RuntimeCueStepActivationRange::default(),
@@ -11791,6 +11939,11 @@ impl EngineRuntime {
                 "Cue-owned effect activation could not be built: {error}"
             ));
         }
+
+        // Ranges were rebuilt from authored params; re-apply latched or
+        // authored non-neutral live modifiers so a mid-scene rebuild (BPM tap,
+        // patch edit, ...) does not silently drop the operator's dials.
+        self.reapply_all_cue_live_modifiers(now);
     }
 
     fn rebuild_step_activations(&mut self, now: Instant) {
@@ -12889,6 +13042,11 @@ impl EngineRuntime {
             .map(|cue| cue.cue_list_id)
             .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
         self.deactivate_cue_effect_activations(cue_id);
+        // T17 reset rule: releasing a scene drops its latched live override
+        // and restores the authored params for the next activation.
+        if self.cue_live_modifier_overrides.remove(&cue_id).is_some() {
+            self.reapply_cue_live_modifier_by_id(cue_id, Instant::now());
+        }
         self.cue_list_effect_activation_cues
             .retain(|_, active_cue_id| *active_cue_id != cue_id);
         self.active_group_cue_ids
@@ -14551,6 +14709,11 @@ impl EngineRuntime {
                 cue_list_id: cue.cue_list_id,
                 cue_id,
             };
+            // T17 reset rule: a fresh Matrix/Touch trigger always starts from
+            // the authored live-modifier dial position.
+            if self.cue_live_modifier_overrides.remove(&cue_id).is_some() {
+                self.reapply_cue_live_modifier_by_id(cue_id, now);
+            }
             self.activate_effect_range(cue.effect_activation_range, key, now, 1.0);
             self.activate_step_range(
                 cue.step_activation_range,
@@ -14977,6 +15140,109 @@ impl EngineRuntime {
                 effect.enabled = target.enabled;
             }
         }
+    }
+
+    /// T17: the latched live override wins over the authored dial position;
+    /// with neither, the modifier is neutral.
+    fn effective_cue_live_modifier(&self, cue_id: CueId) -> CueLiveModifierSettings {
+        if let Some(override_settings) = self.cue_live_modifier_overrides.get(&cue_id) {
+            return *override_settings;
+        }
+        self.cues
+            .iter()
+            .find(|cue| cue.id == cue_id)
+            .and_then(|cue| cue.live_modifiers)
+            .unwrap_or_default()
+    }
+
+    /// T17: resolve one scene's effective live modifier into its activation
+    /// range. Runs only at command time (set/clear/trigger/release/rebuild);
+    /// the 44 Hz tick keeps reading the already-resolved params. Activation
+    /// slot order mirrors rebuild_effect_activations exactly: one slot per
+    /// enabled target whose authored params build successfully.
+    fn reapply_cue_live_modifier(&mut self, cue_index: usize, now: Instant) {
+        let cue_id = self.cues[cue_index].id;
+        let range = self.cues[cue_index].effect_activation_range;
+        if range.is_empty() {
+            return;
+        }
+        let modifier = self.effective_cue_live_modifier(cue_id);
+        let mut slot = range.start;
+        for target_index in 0..self.cues[cue_index].effect_targets.len() {
+            let (effect_id, params) = {
+                let target = &self.cues[cue_index].effect_targets[target_index];
+                if !target.enabled {
+                    continue;
+                }
+                let Some(params) = target.params.clone() else {
+                    continue;
+                };
+                (target.effect_id, params)
+            };
+            let authored = self.runtime_effect_from_params_snapshot(effect_id, &params, now);
+            let Ok(authored_effect) = authored else {
+                // Rebuild pushed no slot for this target, so there is nothing
+                // to advance past or rewrite.
+                continue;
+            };
+            if slot >= range.end() {
+                break;
+            }
+            let transformed_params = effect_params_with_live_modifier(&params, modifier);
+            let effect = self
+                .runtime_effect_from_params_snapshot(effect_id, &transformed_params, now)
+                .unwrap_or(authored_effect);
+            if let Some(activation) = self.effect_activations.get_mut(slot) {
+                let mut effect = effect;
+                // Preserve the running activation's timing origin and enabled
+                // state so a dial move does not restart free-running effects.
+                effect.created_at = activation.effect.created_at;
+                effect.enabled = activation.effect.enabled;
+                clear_runtime_effect_caches(&effect.kind);
+                activation.effect = effect;
+            }
+            slot += 1;
+        }
+    }
+
+    fn reapply_cue_live_modifier_by_id(&mut self, cue_id: CueId, now: Instant) {
+        if let Some(cue_index) = self.cues.iter().position(|cue| cue.id == cue_id) {
+            self.reapply_cue_live_modifier(cue_index, now);
+        }
+    }
+
+    /// T17: after a full activation rebuild every range holds authored params;
+    /// re-resolve scenes whose effective modifier is not neutral.
+    fn reapply_all_cue_live_modifiers(&mut self, now: Instant) {
+        if !self.cue_live_modifier_overrides.is_empty() {
+            let cue_ids = self.cues.iter().map(|cue| cue.id).collect::<HashSet<_>>();
+            self.cue_live_modifier_overrides
+                .retain(|cue_id, _| cue_ids.contains(cue_id));
+        }
+        for cue_index in 0..self.cues.len() {
+            let cue_id = self.cues[cue_index].id;
+            let effective = self.effective_cue_live_modifier(cue_id);
+            if effective.speed != 1.0 || effective.size != 1.0 || effective.phase != 0.0 {
+                self.reapply_cue_live_modifier(cue_index, now);
+            }
+        }
+    }
+
+    /// T17 snapshot exposure: latched overrides only, ordered by cue id so the
+    /// published snapshot stays deterministic.
+    fn cue_live_modifier_states(&self) -> Vec<CueLiveModifierState> {
+        let mut states = self
+            .cue_live_modifier_overrides
+            .iter()
+            .map(|(cue_id, settings)| CueLiveModifierState {
+                cue_id: *cue_id,
+                speed: settings.speed,
+                size: settings.size,
+                phase: settings.phase,
+            })
+            .collect::<Vec<_>>();
+        states.sort_unstable_by_key(|state| state.cue_id);
+        states
     }
 
     fn apply_video_target_state(&mut self, layer_id: VideoLayerId, state: VideoLayerState) {
@@ -16575,6 +16841,7 @@ impl EngineRuntime {
                 .iter()
                 .map(|(group_id, cue_id)| (group_id.clone(), *cue_id))
                 .collect(),
+            cue_live_modifiers: self.cue_live_modifier_states(),
             group_colors: self.group_colors.clone(),
             active_fade: self.active_fade_summary(self.last_tick),
             programmer: self.programmer_snapshot(),
@@ -16669,6 +16936,8 @@ impl EngineRuntime {
 
     fn build_persistence_snapshot(&self) -> EngineSnapshot {
         let mut snapshot = self.build_snapshot(0);
+        // T17: latched live overrides are runtime-only and never reach `.sdc`.
+        snapshot.cue_live_modifiers.clear();
         snapshot.timeline.layers = self.timeline_layers.clone();
         snapshot.timeline.audio_transport_revision = 0;
         if self.timeline_audio_clips_derived {
@@ -17062,6 +17331,7 @@ fn cue_summary(cue: &RuntimeCue) -> CueSummary {
         steps: cue.steps.clone(),
         child_timeline: cue.child_timeline.clone(),
         color: cue.color.clone(),
+        live_modifiers: cue.live_modifiers,
     }
 }
 
@@ -17204,10 +17474,152 @@ fn runtime_cue_from_summary(cue: &CueSummary) -> RuntimeCue {
         steps: cue.steps.clone(),
         child_timeline: cue.child_timeline.clone(),
         color: cue.color.clone(),
+        live_modifiers: sanitize_cue_live_modifier_settings(cue.live_modifiers),
         effect_activation_range: RuntimeEffectActivationRange::default(),
         step_sequence,
         step_activation_range: RuntimeCueStepActivationRange::default(),
     }
+}
+
+// T17 live modifier dial ranges. Speed multiplies the effect rate, size
+// scales modulation depth, phase shifts the traversal offset by a turn
+// fraction. Out-of-range or non-finite values fall back to neutral.
+const CUE_LIVE_MODIFIER_SPEED_MIN: f32 = 0.05;
+const CUE_LIVE_MODIFIER_SPEED_MAX: f32 = 20.0;
+const CUE_LIVE_MODIFIER_SIZE_MAX: f32 = 2.0;
+
+fn sanitize_live_modifier_speed(speed: f32) -> f32 {
+    if !speed.is_finite() || speed <= 0.0 {
+        1.0
+    } else {
+        speed.clamp(CUE_LIVE_MODIFIER_SPEED_MIN, CUE_LIVE_MODIFIER_SPEED_MAX)
+    }
+}
+
+fn sanitize_live_modifier_size(size: f32) -> f32 {
+    if !size.is_finite() || size < 0.0 {
+        1.0
+    } else {
+        size.min(CUE_LIVE_MODIFIER_SIZE_MAX)
+    }
+}
+
+fn sanitize_live_modifier_phase(phase: f32) -> f32 {
+    if !phase.is_finite() {
+        0.0
+    } else {
+        phase.rem_euclid(1.0)
+    }
+}
+
+fn sanitize_cue_live_modifier_settings(
+    settings: Option<CueLiveModifierSettings>,
+) -> Option<CueLiveModifierSettings> {
+    let settings = settings?;
+    Some(CueLiveModifierSettings {
+        speed: sanitize_live_modifier_speed(settings.speed),
+        size: sanitize_live_modifier_size(settings.size),
+        phase: sanitize_live_modifier_phase(settings.phase),
+        flash: settings.flash,
+    })
+}
+
+fn live_modifier_scaled_period_ms(period_ms: u64, speed: f32) -> u64 {
+    (((period_ms as f64) / f64::from(speed)).round() as u64).max(1)
+}
+
+fn live_modifier_scaled_clock_sync(
+    clock_sync: Option<EffectClockSync>,
+    speed: f32,
+) -> Option<EffectClockSync> {
+    clock_sync.map(|sync| EffectClockSync {
+        beats: (sync.beats / speed).max(f32::MIN_POSITIVE),
+    })
+}
+
+fn live_modifier_scaled_level_range(low: u16, high: u16, size: f32) -> (u16, u16) {
+    let mid = (f32::from(low) + f32::from(high)) / 2.0;
+    let half = (f32::from(high) - f32::from(low)) / 2.0 * size;
+    (
+        (mid - half).round().clamp(0.0, 65535.0) as u16,
+        (mid + half).round().clamp(0.0, 65535.0) as u16,
+    )
+}
+
+fn live_modifier_shifted_phase(phase: f32, offset: f32) -> f32 {
+    (phase + offset).rem_euclid(1.0)
+}
+
+/// Applies one scene's effective live modifier to authored effect params.
+/// Kind mapping: speed scales period/step duration/wave speed and shared-clock
+/// beats; size scales level ranges (Lfo/PositionWave/Value), Chaser feature
+/// ranges, and Move path size; Color has no amplitude so size is a deliberate
+/// no-op there; phase adds a wrapped traversal offset on every kind.
+fn effect_params_with_live_modifier(
+    params: &EffectParamsSnapshot,
+    modifier: CueLiveModifierSettings,
+) -> EffectParamsSnapshot {
+    let mut params = params.clone();
+    match &mut params {
+        EffectParamsSnapshot::Lfo(request) => {
+            request.period_ms = live_modifier_scaled_period_ms(request.period_ms, modifier.speed);
+            request.clock_sync =
+                live_modifier_scaled_clock_sync(request.clock_sync, modifier.speed);
+            let (low, high) =
+                live_modifier_scaled_level_range(request.low, request.high, modifier.size);
+            request.low = low;
+            request.high = high;
+            request.phase = live_modifier_shifted_phase(request.phase, modifier.phase);
+        }
+        EffectParamsSnapshot::PositionWave(request) => {
+            request.speed *= modifier.speed;
+            request.clock_sync =
+                live_modifier_scaled_clock_sync(request.clock_sync, modifier.speed);
+            let (low, high) =
+                live_modifier_scaled_level_range(request.low, request.high, modifier.size);
+            request.low = low;
+            request.high = high;
+            request.phase = live_modifier_shifted_phase(request.phase, modifier.phase);
+        }
+        EffectParamsSnapshot::Color(request) => {
+            request.period_ms = live_modifier_scaled_period_ms(request.period_ms, modifier.speed);
+            request.clock_sync =
+                live_modifier_scaled_clock_sync(request.clock_sync, modifier.speed);
+            request.phase = live_modifier_shifted_phase(request.phase, modifier.phase);
+        }
+        EffectParamsSnapshot::Chaser(request) => {
+            request.step_duration_ms =
+                live_modifier_scaled_period_ms(request.step_duration_ms, modifier.speed);
+            request.clock_sync =
+                live_modifier_scaled_clock_sync(request.clock_sync, modifier.speed);
+            for feature in &mut request.features {
+                let (low, high) =
+                    live_modifier_scaled_level_range(feature.low, feature.high, modifier.size);
+                feature.low = low;
+                feature.high = high;
+            }
+            request.phase = live_modifier_shifted_phase(request.phase, modifier.phase);
+        }
+        EffectParamsSnapshot::Move(request) => {
+            request.period_ms = live_modifier_scaled_period_ms(request.period_ms, modifier.speed);
+            request.clock_sync =
+                live_modifier_scaled_clock_sync(request.clock_sync, modifier.speed);
+            request.size_x *= modifier.size;
+            request.size_y *= modifier.size;
+            request.phase = live_modifier_shifted_phase(request.phase, modifier.phase);
+        }
+        EffectParamsSnapshot::Value(request) => {
+            request.period_ms = live_modifier_scaled_period_ms(request.period_ms, modifier.speed);
+            request.clock_sync =
+                live_modifier_scaled_clock_sync(request.clock_sync, modifier.speed);
+            let (low, high) =
+                live_modifier_scaled_level_range(request.low, request.high, modifier.size);
+            request.low = low;
+            request.high = high;
+            request.phase = live_modifier_shifted_phase(request.phase, modifier.phase);
+        }
+    }
+    params
 }
 
 fn normalize_cue_group_id(group_id: Option<String>) -> Option<String> {
@@ -25747,6 +26159,201 @@ mod tests {
             enabled: true,
             params: Some(EffectParamsSnapshot::Lfo(request)),
         }
+    }
+
+    fn activation_lfo_request(runtime: &EngineRuntime, cue_id: CueId) -> LfoEffectRequest {
+        let cue = runtime
+            .cues
+            .iter()
+            .find(|cue| cue.id == cue_id)
+            .expect("cue must exist");
+        let range = cue.effect_activation_range;
+        assert_eq!(
+            range.len,
+            1,
+            "expected exactly one owned activation (targets={}, params_some={}, enabled={}, last_error={:?}, total_activations={})",
+            cue.effect_targets.len(),
+            cue.effect_targets.first().map(|t| t.params.is_some()).unwrap_or(false),
+            cue.effect_targets.first().map(|t| t.enabled).unwrap_or(false),
+            runtime.last_error,
+            runtime.effect_activations.len(),
+        );
+        match &runtime.effect_activations[range.start].effect.kind {
+            RuntimeEffectKind::Lfo(request) => request.clone(),
+            _ => panic!("expected Lfo activation"),
+        }
+    }
+
+    #[test]
+    fn cue_live_modifier_override_scales_owned_params_and_resets_on_release_retrigger_load() {
+        let mut runtime = runtime_with_lfo_effects(&[(7, false)]);
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![owned_lfo_target(
+                7,
+                test_lfo_request(
+                    "Owned",
+                    LfoShape::Sine,
+                    1_000,
+                    0.25,
+                    EffectBlendMode::Override,
+                    1_000,
+                    41_000,
+                ),
+            )],
+        );
+        let now = Instant::now();
+        runtime.rebuild_effect_activations(now);
+        assert_eq!(runtime.last_error, None, "rebuild must succeed");
+        assert_eq!(
+            runtime.effect_activations.len(),
+            1,
+            "one activation directly after rebuild (cues={}, targets_of_first={:?})",
+            runtime.cues.len(),
+            runtime.cues.first().map(|cue| cue.effect_targets.len()),
+        );
+        runtime.start_cue(1, now, PendingCueTriggerSource::Manual);
+        let authored = activation_lfo_request(&runtime, 1);
+        assert_eq!(authored.period_ms, 1_000);
+        assert_eq!((authored.low, authored.high), (1_000, 41_000));
+
+        runtime.apply_command(EngineCommand::SetCueLiveModifier {
+            cue_id: 1,
+            speed: 2.0,
+            size: 0.5,
+            phase: 0.25,
+        });
+        assert_eq!(runtime.last_error, None);
+        let modified = activation_lfo_request(&runtime, 1);
+        assert_eq!(modified.period_ms, 500);
+        assert_eq!((modified.low, modified.high), (11_000, 31_000));
+        assert!((modified.phase - 0.5).abs() < 1e-6);
+        let snapshot = runtime.build_snapshot(0);
+        assert_eq!(snapshot.cue_live_modifiers.len(), 1);
+        assert_eq!(snapshot.cue_live_modifiers[0].cue_id, 1);
+        assert_eq!(snapshot.cue_live_modifiers[0].speed, 2.0);
+
+        // Release resets the latch and restores authored params.
+        runtime.apply_command(EngineCommand::ReleaseCue(1));
+        assert!(runtime.cue_live_modifier_overrides.is_empty());
+        assert_eq!(activation_lfo_request(&runtime, 1).period_ms, 1_000);
+
+        // A fresh trigger also resets a latch set while inactive.
+        runtime.apply_command(EngineCommand::SetCueLiveModifier {
+            cue_id: 1,
+            speed: 4.0,
+            size: 1.0,
+            phase: 0.0,
+        });
+        assert_eq!(activation_lfo_request(&runtime, 1).period_ms, 250);
+        runtime.start_cue(1, Instant::now(), PendingCueTriggerSource::Manual);
+        assert!(runtime.cue_live_modifier_overrides.is_empty());
+        assert_eq!(activation_lfo_request(&runtime, 1).period_ms, 1_000);
+
+        // Project load clears every latch.
+        runtime.apply_command(EngineCommand::SetCueLiveModifier {
+            cue_id: 1,
+            speed: 0.5,
+            size: 1.0,
+            phase: 0.0,
+        });
+        assert!(!runtime.cue_live_modifier_overrides.is_empty());
+        let persisted = runtime.build_persistence_snapshot();
+        runtime.load_project_snapshot(persisted);
+        assert!(runtime.cue_live_modifier_overrides.is_empty());
+        // Production drains LoadProjectSnapshot through the command queue,
+        // which rebuilds activations right after; mirror that here.
+        runtime.rebuild_effect_activations(Instant::now());
+        assert_eq!(activation_lfo_request(&runtime, 1).period_ms, 1_000);
+    }
+
+    #[test]
+    fn cue_live_modifier_authored_defaults_transform_activations_and_round_trip() {
+        let mut runtime = runtime_with_lfo_effects(&[(7, false)]);
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![owned_lfo_target(
+                7,
+                test_lfo_request(
+                    "Owned",
+                    LfoShape::Sine,
+                    1_000,
+                    0.0,
+                    EffectBlendMode::Override,
+                    0,
+                    u16::MAX,
+                ),
+            )],
+        );
+        runtime.rebuild_effect_activations(Instant::now());
+        let mut persisted = runtime.build_persistence_snapshot();
+        persisted.cues[0].live_modifiers = Some(CueLiveModifierSettings {
+            speed: 2.0,
+            size: 1.0,
+            phase: 0.0,
+            flash: true,
+        });
+        runtime.load_project_snapshot(persisted);
+        // Production drains LoadProjectSnapshot through the command queue,
+        // which rebuilds activations right after; mirror that here.
+        runtime.rebuild_effect_activations(Instant::now());
+
+        // Authored dial position applies without any latched override.
+        assert!(runtime.cue_live_modifier_overrides.is_empty());
+        assert_eq!(activation_lfo_request(&runtime, 1).period_ms, 500);
+
+        // The authored settings persist while the runtime override list stays
+        // out of the persisted snapshot entirely.
+        runtime.apply_command(EngineCommand::SetCueLiveModifier {
+            cue_id: 1,
+            speed: 8.0,
+            size: 1.0,
+            phase: 0.0,
+        });
+        let round_trip = runtime.build_persistence_snapshot();
+        assert_eq!(
+            round_trip.cues[0].live_modifiers,
+            Some(CueLiveModifierSettings {
+                speed: 2.0,
+                size: 1.0,
+                phase: 0.0,
+                flash: true,
+            })
+        );
+        assert!(round_trip.cue_live_modifiers.is_empty());
+        let serialized = serde_json::to_string(&round_trip).expect("snapshot serializes");
+        assert!(!serialized.contains("cue_live_modifiers"));
+
+        // Clearing the latch returns to the authored dial position, not neutral.
+        runtime.apply_command(EngineCommand::ClearCueLiveModifier(1));
+        assert_eq!(activation_lfo_request(&runtime, 1).period_ms, 500);
+    }
+
+    #[test]
+    fn cue_live_modifier_sanitizes_values_and_legacy_cues_serialize_without_field() {
+        assert_eq!(sanitize_live_modifier_speed(f32::NAN), 1.0);
+        assert_eq!(sanitize_live_modifier_speed(0.0), 1.0);
+        assert_eq!(sanitize_live_modifier_speed(1_000.0), 20.0);
+        assert_eq!(sanitize_live_modifier_size(-1.0), 1.0);
+        assert_eq!(sanitize_live_modifier_size(5.0), 2.0);
+        assert_eq!(sanitize_live_modifier_phase(1.25), 0.25);
+        assert_eq!(sanitize_live_modifier_phase(-0.25), 0.75);
+        assert_eq!(
+            live_modifier_scaled_level_range(1_000, 41_000, 0.0),
+            (21_000, 21_000)
+        );
+        assert_eq!(
+            live_modifier_scaled_level_range(1_000, 41_000, 2.0),
+            (0, 61_000)
+        );
+        assert_eq!(live_modifier_scaled_period_ms(1_000, 20.0), 50);
+        assert_eq!(live_modifier_scaled_period_ms(1, 20.0), 1);
+
+        // Legacy cue byte-shape: without authored settings the field is absent.
+        let legacy = serde_json::to_string(&CueSummary::default()).expect("cue serializes");
+        assert!(!legacy.contains("live_modifiers"));
     }
 
     fn test_scene_block(
@@ -44779,6 +45386,7 @@ mod tests {
             steps: Vec::new(),
             child_timeline: None,
             color: None,
+            live_modifiers: None,
             effect_activation_range: RuntimeEffectActivationRange::default(),
             step_sequence: RuntimeCueStepSequence::default(),
             step_activation_range: RuntimeCueStepActivationRange::default(),

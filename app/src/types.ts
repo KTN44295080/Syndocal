@@ -1543,6 +1543,24 @@ export interface CueSummary {
   child_timeline?: ChildTimelineSummary | null;
   /** T7 persistent identity color (#rrggbb); absent keeps the hash-derived hue. */
   color?: string | null;
+  /** T17 authored live-modifier dial defaults; absent means neutral, no flash. */
+  live_modifiers?: CueLiveModifierSettings | null;
+}
+
+/** T17 authored starting position of the per-scene live modifier dials. */
+export interface CueLiveModifierSettings {
+  speed: number;
+  size: number;
+  phase: number;
+  flash: boolean;
+}
+
+/** T17 runtime-only latched live override for one active scene. */
+export interface CueLiveModifierState {
+  cue_id: number;
+  speed: number;
+  size: number;
+  phase: number;
 }
 
 export interface CueStepSummary {
@@ -2242,6 +2260,8 @@ export interface EngineSnapshot {
   playback_master: number;
   active_cue_id?: number | null;
   active_group_cue_ids?: Record<string, number>;
+  /** T17 runtime-only latched scene live overrides; never part of `.sdc` data. */
+  cue_live_modifiers?: CueLiveModifierState[];
   /** T7 persistent identity colors per group path (#rrggbb). */
   group_colors?: Record<string, string>;
   active_fade?: ActiveFadeSummary | null;

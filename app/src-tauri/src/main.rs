@@ -7112,6 +7112,53 @@ fn release_cue(state: State<'_, AppState>, cue_id: CueId) -> Result<(), String> 
 }
 
 #[tauri::command]
+fn set_cue_live_modifier(
+    state: State<'_, AppState>,
+    cue_id: CueId,
+    speed: f32,
+    size: f32,
+    phase: f32,
+) -> Result<(), String> {
+    if !speed.is_finite() || !size.is_finite() || !phase.is_finite() {
+        return Err("Live modifier values must be finite".to_string());
+    }
+    state
+        .engine
+        .send(EngineCommand::SetCueLiveModifier {
+            cue_id,
+            speed,
+            size,
+            phase,
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn clear_cue_live_modifier(state: State<'_, AppState>, cue_id: CueId) -> Result<(), String> {
+    state
+        .engine
+        .send(EngineCommand::ClearCueLiveModifier(cue_id))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_cue_live_modifier_defaults(
+    state: State<'_, AppState>,
+    cue_id: CueId,
+    settings: Option<protocol::CueLiveModifierSettings>,
+) -> Result<(), String> {
+    if let Some(settings) = &settings {
+        if !settings.speed.is_finite() || !settings.size.is_finite() || !settings.phase.is_finite()
+        {
+            return Err("Live modifier defaults must be finite".to_string());
+        }
+    }
+    state
+        .engine
+        .set_cue_live_modifier_defaults_published(cue_id, settings)
+}
+
+#[tauri::command]
 fn trigger_next_cue(state: State<'_, AppState>) -> Result<(), String> {
     state
         .engine
@@ -14430,6 +14477,10 @@ fn project_snapshot_for_save(mut snapshot: EngineSnapshot) -> EngineSnapshot {
     snapshot.dmx_preview.clear();
     snapshot.dmx_previews.clear();
     snapshot.telemetry = EngineTelemetry::default();
+    // T17: latched scene live overrides are runtime-only; the engine's
+    // persistence snapshot already strips them, and the `.sdc` writer keeps
+    // that guarantee locally too.
+    snapshot.cue_live_modifiers.clear();
     snapshot
 }
 
@@ -27992,9 +28043,16 @@ f 1 2 3
         snapshot.telemetry.frame_counter = 99;
         snapshot.telemetry.tick_jitter_p99_us = 850;
         snapshot.telemetry.last_error = Some("send failed".to_string());
+        snapshot.cue_live_modifiers = vec![protocol::CueLiveModifierState {
+            cue_id: 7,
+            speed: 2.0,
+            size: 0.5,
+            phase: 0.25,
+        }];
 
         let saved = project_snapshot_for_save(snapshot);
 
+        assert!(saved.cue_live_modifiers.is_empty());
         assert_eq!(saved.active_cue_id, Some(7));
         assert_eq!(saved.active_fade, None);
         assert!(!saved.timeline.playing);
@@ -28009,6 +28067,74 @@ f 1 2 3
         assert!(saved.dmx_preview.is_empty());
         assert!(saved.dmx_previews.is_empty());
         assert_eq!(saved.telemetry, EngineTelemetry::default());
+    }
+
+    #[test]
+    fn project_file_round_trips_cue_live_modifier_defaults_without_saving_latch() {
+        let mut project: ProjectFile = serde_json::from_str(PHASE1_SAMPLE_PROJECT_JSON).unwrap();
+        let cue_id = project.snapshot.cues[0].id;
+        project.snapshot.cues[0].live_modifiers = Some(protocol::CueLiveModifierSettings {
+            speed: 2.0,
+            size: 0.5,
+            phase: 0.25,
+            flash: true,
+        });
+        validate_project_file(&project).unwrap();
+        project.snapshot.output.enabled = false;
+        for output in &mut project.snapshot.dmx_outputs {
+            output.enabled = false;
+        }
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine.load_project_snapshot(project.snapshot).unwrap();
+
+        engine
+            .send(EngineCommand::SetCueLiveModifier {
+                cue_id,
+                speed: 8.0,
+                size: 1.0,
+                phase: 0.0,
+            })
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let snapshot = engine.snapshot();
+            if snapshot
+                .cue_live_modifiers
+                .iter()
+                .any(|state| state.cue_id == cue_id && state.speed == 8.0)
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "engine never published the latched live modifier"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+
+        let persisted = engine.persistence_snapshot().unwrap();
+        let persisted_cue = persisted
+            .cues
+            .iter()
+            .find(|cue| cue.id == cue_id)
+            .expect("cue survives persistence");
+        assert_eq!(
+            persisted_cue.live_modifiers,
+            Some(protocol::CueLiveModifierSettings {
+                speed: 2.0,
+                size: 0.5,
+                phase: 0.25,
+                flash: true,
+            })
+        );
+        assert!(persisted.cue_live_modifiers.is_empty());
+        let saved_json =
+            serde_json::to_string(&project_snapshot_for_save(persisted)).expect("snapshot json");
+        assert!(!saved_json.contains("cue_live_modifiers"));
+        assert!(saved_json.contains("live_modifiers"));
     }
 
     #[test]
@@ -37920,6 +38046,9 @@ fn main() {
             set_cue_child_timeline,
             set_cue_steps,
             set_cue_color,
+            set_cue_live_modifier,
+            clear_cue_live_modifier,
+            set_cue_live_modifier_defaults,
             set_group_color,
             open_pane_window,
             close_pane_window,

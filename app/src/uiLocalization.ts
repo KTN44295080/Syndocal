@@ -279,6 +279,7 @@ const japaneseText: Record<string, string> = {
   "Scene Block pages": "シーンブロックのページ",
   Last: "最後",
   LIVE: "ライブ",
+  FLASH: "FLASH",
   FX: "FX",
   STATIC: "固定",
   PLAYHEAD: "再生位置",
@@ -622,6 +623,8 @@ const japaneseText: Record<string, string> = {
   Video: "映像",
   Duplicate: "複製",
   Reset: "リセット",
+  "Live modifier defaults": "ライブモディファイア初期値",
+  "Clear live modifier defaults": "ライブモディファイア初期値をクリア",
   Add: "追加",
   Cancel: "キャンセル",
   Next: "次へ",
@@ -2089,6 +2092,16 @@ const japaneseText: Record<string, string> = {
 
 const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
   [/^Edit Source for Cue (.+)$/, (label) => `キュー ${label} のソースを編集`],
+  [/^Live speed for Cue (.+)$/, (label) => `キュー ${label} のライブ速度`],
+  [/^Live size for Cue (.+)$/, (label) => `キュー ${label} のライブサイズ`],
+  [/^Live phase for Cue (.+)$/, (label) => `キュー ${label} のライブ位相`],
+  [/^Reset live modifier for Cue (.+)$/, (label) => `キュー ${label} のライブモディファイアをリセット`],
+  [/^Flash Cue (.+)$/, (label) => `キュー ${label} をフラッシュ`],
+  [/^Default live speed for (.+)$/, (label) => `${label} のライブ速度初期値`],
+  [/^Default live size for (.+)$/, (label) => `${label} のライブサイズ初期値`],
+  [/^Default live phase for (.+)$/, (label) => `${label} のライブ位相初期値`],
+  [/^Flash mode for (.+)$/, (label) => `${label} のフラッシュモード`],
+  [/^Clear live modifier defaults for (.+)$/, (label) => `${label} のライブモディファイア初期値をクリア`],
   [/^Universe (\d+) DMX addresses 1 to 512$/, (universe) => `ユニバース ${universe} DMXアドレス 1～512`],
   [
     /^Address (\d+), empty, pending fixture (\d+)(, conflict)?$/,

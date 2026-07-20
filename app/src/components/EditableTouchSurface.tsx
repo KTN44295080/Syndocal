@@ -10,12 +10,15 @@ import {
   touchSurfaceGridRows,
 } from "../touchSurface";
 import type {
+  CueSummary,
   EngineSnapshot,
   TouchControlBinding,
   TouchControlSummary,
   TouchPageSummary,
   TouchSurfaceSummary,
 } from "../types";
+import { authoredCueLiveModifier } from "../cueLiveModifier";
+import { CueLiveModifierStrip } from "./CueLiveModifierStrip";
 
 type TouchSurfaceMode = "edit" | "live";
 
@@ -28,6 +31,14 @@ interface EditableTouchSurfaceProps {
   onValue: (binding: TouchControlBinding, value: number) => void | Promise<void>;
   onColor: (binding: TouchControlBinding, color: string) => void | Promise<void>;
   onXy: (binding: TouchControlBinding, x: number, y: number) => void | Promise<void>;
+  onReleaseCue?: (cueId: number) => void | Promise<void>;
+  onSetCueLiveModifier?: (
+    cueId: number,
+    speed: number,
+    size: number,
+    phase: number,
+  ) => void | Promise<void>;
+  onClearCueLiveModifier?: (cueId: number) => void | Promise<void>;
 }
 
 interface TouchDragState {
@@ -327,6 +338,17 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
     if (control) updateControl({ ...control, binding });
   };
 
+  const boundCue = (control: TouchControlSummary): CueSummary | null => {
+    if (control.binding?.kind !== "cue") return null;
+    const cueId = control.binding.cue_id;
+    return props.snapshot.cues.find((cue) => cue.id === cueId) ?? null;
+  };
+
+  const boundFlashCue = (control: TouchControlSummary): CueSummary | null => {
+    const cue = boundCue(control);
+    return cue && authoredCueLiveModifier(cue).flash ? cue : null;
+  };
+
   const renderLiveControl = (control: TouchControlSummary) => {
     const disabled = mode() !== "live" || !control.binding;
     switch (control.kind) {
@@ -334,17 +356,57 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
         return <strong class="touchPlacedLabel">{control.label}</strong>;
       case "Image":
         return <div class="touchPlacedImage" role="img" aria-label={control.label}><span aria-hidden="true">▧</span><strong>{control.label}</strong></div>;
-      case "Button":
+      case "Button": {
+        const flashCue = () => (mode() === "live" ? boundFlashCue(control) : null);
+        const flashRelease = () => {
+          const cue = flashCue();
+          if (cue) void props.onReleaseCue?.(cue.id);
+        };
         return (
           <button
             class={control.binding?.kind === "cue_next" ? "primary touchPlacedButton" : "touchPlacedButton"}
+            classList={{ flash: Boolean(flashCue()) }}
             disabled={disabled}
             data-touch-live-activated={liveActivations()[control.id] ? "true" : "false"}
-            onClick={() => triggerControl(control)}
+            data-touch-cue-pad={boundCue(control)?.id}
+            data-touch-flash-cue={flashCue()?.id}
+            onPointerDown={(event) => {
+              const cue = flashCue();
+              if (!cue) return;
+              // Momentary flash pad: press activates the scene, release always
+              // releases it; the click handler must not re-trigger.
+              event.preventDefault();
+              event.currentTarget.setPointerCapture(event.pointerId);
+              triggerControl(control);
+            }}
+            onPointerUp={flashRelease}
+            onPointerCancel={flashRelease}
+            onKeyDown={(event) => {
+              if (!flashCue() || event.repeat) return;
+              if (event.key === " " || event.key === "Enter") {
+                event.preventDefault();
+                triggerControl(control);
+              }
+            }}
+            onKeyUp={(event) => {
+              if (!flashCue()) return;
+              if (event.key === " " || event.key === "Enter") {
+                event.preventDefault();
+                flashRelease();
+              }
+            }}
+            onClick={(event) => {
+              if (flashCue()) {
+                event.preventDefault();
+                return;
+              }
+              triggerControl(control);
+            }}
           >
             {control.label}
           </button>
         );
+      }
       case "Fader":
         return (
           <label class="touchPlacedFader">
@@ -688,6 +750,23 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
             </aside>
           );
         }}
+      </Show>
+      <Show
+        when={
+          mode() === "live" && props.onSetCueLiveModifier && props.onClearCueLiveModifier
+            ? props.snapshot.cues.find((cue) => cue.id === props.snapshot.active_cue_id) ?? null
+            : null
+        }
+      >
+        {(cue) => (
+          <CueLiveModifierStrip
+            touch
+            cue={cue()}
+            liveStates={props.snapshot.cue_live_modifiers}
+            onSetCueLiveModifier={props.onSetCueLiveModifier!}
+            onClearCueLiveModifier={props.onClearCueLiveModifier!}
+          />
+        )}
       </Show>
     </section>
   );

@@ -1,7 +1,14 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { cueIdentityCss, groupIdentityCss, groupIdentityHue } from "../identityColor";
-import type { ActiveFadeSummary, CueSummary, TimelineTrackKind } from "../types";
+import type {
+  ActiveFadeSummary,
+  CueLiveModifierState,
+  CueSummary,
+  TimelineTrackKind,
+} from "../types";
 import type { TimelineCueDragPoint } from "../timelineCueDrag";
+import { authoredCueLiveModifier } from "../cueLiveModifier";
+import { CueLiveModifierStrip } from "./CueLiveModifierStrip";
 
 interface SceneMatrixPanelProps {
   cues: CueSummary[];
@@ -11,6 +18,15 @@ interface SceneMatrixPanelProps {
   activeCueId: number | null | undefined;
   activeGroupCueIds: Record<string, number>;
   activeFade?: ActiveFadeSummary | null;
+  cueLiveModifiers?: CueLiveModifierState[];
+  onSetCueLiveModifier?: (
+    cueId: number,
+    speed: number,
+    size: number,
+    phase: number,
+  ) => void | Promise<void>;
+  onClearCueLiveModifier?: (cueId: number) => void | Promise<void>;
+  onReleaseCue?: (cueId: number) => void | Promise<void>;
   onTriggerCue: (cueId: number) => void | Promise<void>;
   onEditCue: (cueId: number) => void;
   onOpenCueEditor: () => void;
@@ -188,6 +204,12 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                     <Show when={column.cues.length > 0} fallback={<p class="empty">No scenes in this column.</p>}>
                       <For each={column.cues}>
                         {(cue) => {
+                          const flashMode = () => authoredCueLiveModifier(cue).flash;
+                          const flashRelease = (event: PointerEvent) => {
+                            if (!flashMode()) return;
+                            event.stopPropagation();
+                            void props.onReleaseCue?.(cue.id);
+                          };
                           return (
                             <article
                               class="sceneMatrixCard"
@@ -208,8 +230,42 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                               <button
                                 type="button"
                                 class="sceneMatrixTrigger"
-                                aria-label={`Trigger Cue ${cue.label}`}
+                                classList={{ flash: flashMode() }}
+                                data-scene-flash-cue={flashMode() ? cue.id : undefined}
+                                aria-label={
+                                  flashMode() ? `Flash Cue ${cue.label}` : `Trigger Cue ${cue.label}`
+                                }
+                                onPointerDown={(event) => {
+                                  if (!flashMode()) return;
+                                  // Flash pads are momentary: press activates the
+                                  // scene, release always releases it, and the
+                                  // press never starts a timeline drag.
+                                  event.stopPropagation();
+                                  event.preventDefault();
+                                  event.currentTarget.setPointerCapture(event.pointerId);
+                                  void props.onTriggerCue(cue.id);
+                                }}
+                                onPointerUp={flashRelease}
+                                onPointerCancel={flashRelease}
+                                onKeyDown={(event) => {
+                                  if (!flashMode() || event.repeat) return;
+                                  if (event.key === " " || event.key === "Enter") {
+                                    event.preventDefault();
+                                    void props.onTriggerCue(cue.id);
+                                  }
+                                }}
+                                onKeyUp={(event) => {
+                                  if (!flashMode()) return;
+                                  if (event.key === " " || event.key === "Enter") {
+                                    event.preventDefault();
+                                    void props.onReleaseCue?.(cue.id);
+                                  }
+                                }}
                                 onClick={(event) => {
+                                  if (flashMode()) {
+                                    event.preventDefault();
+                                    return;
+                                  }
                                   if (suppressClickCueId === cue.id) {
                                     suppressClickCueId = null;
                                     event.preventDefault();
@@ -229,6 +285,11 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                 >
                                   {cue.effect_targets.length > 0 ? "FX" : "STATIC"}
                                 </span>
+                                <Show when={flashMode()}>
+                                  <span class="sceneMatrixFlashBadge" data-scene-flash-badge={cue.id}>
+                                    FLASH
+                                  </span>
+                                </Show>
                                 <Show when={(cue.recall_mode ?? "Coexist") === "ReplaceGroup"}>
                                   <span class="sceneMatrixReplaceBadge">Replace group</span>
                                 </Show>
@@ -270,6 +331,20 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                     aria-label={`Cue ${cue.label} progress`}
                                   />
                                 </div>
+                              </Show>
+                              <Show
+                                when={
+                                  isActive(cue) &&
+                                  props.onSetCueLiveModifier &&
+                                  props.onClearCueLiveModifier
+                                }
+                              >
+                                <CueLiveModifierStrip
+                                  cue={cue}
+                                  liveStates={props.cueLiveModifiers}
+                                  onSetCueLiveModifier={props.onSetCueLiveModifier!}
+                                  onClearCueLiveModifier={props.onClearCueLiveModifier!}
+                                />
                               </Show>
                             </article>
                           );

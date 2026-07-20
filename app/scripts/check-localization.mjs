@@ -190,6 +190,15 @@ assert.equal(
 assert.equal(localization.translateUiText("Path point 3, X 0.125, Y 0.875", "ja"), "パスポイント3、X 0.125、Y 0.875");
 assert.equal(localization.translateUiText("4 points", "ja"), "4ポイント");
 assert.equal(localization.translateUiText("Perlin", "ja"), "パーリン");
+assert.equal(localization.translateUiText("Live modifier defaults", "ja"), "ライブモディファイア初期値");
+assert.equal(localization.translateUiText("Live speed for Cue 新宝島", "ja"), "キュー 新宝島 のライブ速度");
+assert.equal(
+  localization.translateUiText("Reset live modifier for Cue Amber", "ja"),
+  "キュー Amber のライブモディファイアをリセット",
+);
+assert.equal(localization.translateUiText("Flash Cue Strobe", "ja"), "キュー Strobe をフラッシュ");
+assert.equal(localization.translateUiText("Flash mode for White", "ja"), "White のフラッシュモード");
+assert.equal(localization.translateUiText("Size", "ja"), "サイズ");
 assert.equal(localization.translateUiText("Save", "en"), "Save");
 
 const accessibleSceneBlock = {
@@ -314,7 +323,7 @@ await collectTsx(sourceRoot);
 
 const localeInvariantText = new Set([
   "Syndocal", "DMX", "MIDI", "OSC", "RDM", "ISF", "NDI", "Spout", "Syphon", "HAP", "FFmpeg",
-  "GO", "SET", "HTP", "LTP", "RGB", "BPM", "A", "B", "R", "G", "X", "Y", "Z", "Pan", "Tilt",
+  "GO", "SET", "FLASH", "HTP", "LTP", "RGB", "BPM", "A", "B", "R", "G", "X", "Y", "Z", "Pan", "Tilt",
   "Art-Net", "sACN", "sACN / E1.31", "sACN E1.31", "Enttec USB PRO", "Syphon Server", "Spout Sender",
   "NDI Sender", "Perlin", "Bezier", "Linear", "Full", "Half", "Scale X", "Scale Y",
   "ms", "x", "U", "ch", "CH", "deg", "m", "Hz", "P", "S", "O", "V", "D", "H", "L",

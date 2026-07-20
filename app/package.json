@@ -15,6 +15,8 @@
     "check:native-window": "node scripts/run-native-window-acceptance.mjs",
     "check:empty-states": "node scripts/check-empty-state-guidance.mjs",
     "check:cue-effect-recall": "node scripts/check-cue-effect-recall.mjs",
+    "check:cue-live-modifier": "node scripts/check-cue-live-modifier.mjs",
+    "check:scene-live-viewport": "node scripts/check-viewport-containment.mjs --scene-live-modifier-only",
     "check:effect-draft": "node scripts/check-effect-draft-helpers.mjs",
     "check:fx-visual": "node scripts/check-effect-visualization.mjs",
     "check:fx-visual-viewport": "node scripts/check-viewport-containment.mjs --fx-visual-only",
