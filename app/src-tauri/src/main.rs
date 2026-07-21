@@ -33562,7 +33562,13 @@ f 1 2 3
         request.fixture_spread = f32::NAN;
         assert!(validate_color_effect_request(&request)
             .unwrap_err()
-            .contains("within 0..1"));
+            .contains("must be finite"));
+
+        request = sample_color_effect_request();
+        request.phase = f32::NAN;
+        assert!(validate_color_effect_request(&request)
+            .unwrap_err()
+            .contains("must be finite"));
 
         request = sample_color_effect_request();
         request.fixture_spread = 1.01;

@@ -18,6 +18,10 @@ const timelineOverviewSource = await readFile(
   new URL("../src/components/TimelineOverview.tsx", import.meta.url),
   "utf8",
 );
+const valueEffectEditorSource = await readFile(
+  new URL("../src/components/ValueEffectEditorPanel.tsx", import.meta.url),
+  "utf8",
+);
 
 assert.equal(localization.uiLocaleFromUnknown("ja"), "ja");
 assert.equal(localization.uiLocaleFromUnknown("en"), "en");
@@ -182,6 +186,7 @@ assert.equal(localization.translateUiText("COLOR FX", "ja"), "カラーFX");
 assert.equal(localization.translateUiText("SUPER SCENE", "ja"), "SUPER SCENE");
 assert.equal(localization.translateUiText("Current effect waveform preview", "ja"), "現在のエフェクト波形プレビュー");
 assert.equal(localization.translateUiText("Move graphical preview", "ja"), "ムーブのグラフィカルプレビュー");
+assert.equal(localization.translateUiText("Value graphical preview", "ja"), "バリューのグラフィカルプレビュー");
 assert.equal(localization.translateUiText("REL @ 50%", "ja"), "相対 @ 50%");
 assert.equal(
   localization.translateUiText("Output preview · neutral 50% base", "ja"),
@@ -189,6 +194,52 @@ assert.equal(
 );
 assert.equal(localization.translateUiText("Path point 3, X 0.125, Y 0.875", "ja"), "パスポイント3、X 0.125、Y 0.875");
 assert.equal(localization.translateUiText("4 points", "ja"), "4ポイント");
+assert.equal(
+  localization.translateUiText(
+    "Absolute Line value envelope with 4 points. Double-click to add. Focus a point and use Arrow keys to nudge, Shift coarse, Alt fine, Delete to remove.",
+    "ja",
+  ),
+  "絶対・線のバリューエンベロープ、4ポイント。ダブルクリックで追加。ポイントにフォーカスし、矢印キーで微調整、Shiftで粗く、Altで細かく、Deleteで削除。",
+);
+assert.equal(
+  localization.translateUiText(
+    "Absolute Step value envelope with 2 points. Double-click to add. Focus a point and use Arrow keys to nudge, Shift coarse, Alt fine, Delete to remove.",
+    "ja",
+  ),
+  "絶対・ステップのバリューエンベロープ、2ポイント。ダブルクリックで追加。ポイントにフォーカスし、矢印キーで微調整、Shiftで粗く、Altで細かく、Deleteで削除。",
+);
+assert.equal(
+  localization.translateUiText(
+    "Relative Smooth value envelope with 3 points. Double-click to add. Focus a point and use Arrow keys to nudge, Shift coarse, Alt fine, Delete to remove.",
+    "ja",
+  ),
+  "相対・スムーズのバリューエンベロープ、3ポイント。ダブルクリックで追加。ポイントにフォーカスし、矢印キーで微調整、Shiftで粗く、Altで細かく、Deleteで削除。",
+);
+assert.equal(
+  localization.translateUiText("Envelope point 2, position 0.5, value 0.75", "ja"),
+  "エンベロープポイント2、位置 0.5、値 0.75",
+);
+assert.equal(localization.translateUiText("Select envelope point 2", "ja"), "エンベロープポイント2を選択");
+assert.equal(localization.translateUiText("Position for envelope point 2", "ja"), "エンベロープポイント2の位置");
+assert.equal(localization.translateUiText("Value for envelope point 2", "ja"), "エンベロープポイント2の値");
+assert.equal(localization.translateUiText("Remove envelope point 2", "ja"), "エンベロープポイント2を削除");
+assert.match(
+  valueEffectEditorSource,
+  /aria-label=\{`\$\{props\.mode\} \$\{props\.interpolation\} value envelope with \$\{props\.points\.length\} points\./,
+  "Value FX canvas aria-label must use the localized dynamic envelope contract",
+);
+for (const dynamicAriaPrefix of [
+  "Envelope point ",
+  "Select envelope point ",
+  "Position for envelope point ",
+  "Value for envelope point ",
+  "Remove envelope point ",
+]) {
+  assert.ok(
+    valueEffectEditorSource.includes(`aria-label={\`${dynamicAriaPrefix}\${`),
+    `Value FX must keep its localized ${dynamicAriaPrefix.trim()} aria-label contract`,
+  );
+}
 assert.equal(localization.translateUiText("Perlin", "ja"), "パーリン");
 assert.equal(localization.translateUiText("Live modifier defaults", "ja"), "ライブモディファイア初期値");
 assert.equal(localization.translateUiText("Live speed for Cue 新宝島", "ja"), "キュー 新宝島 のライブ速度");

@@ -2091,6 +2091,26 @@ const japaneseText: Record<string, string> = {
 };
 
 const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
+  [
+    /^(Absolute|Relative) (Step|Line|Smooth) value envelope with (\d+) points\. Double-click to add\. Focus a point and use Arrow keys to nudge, Shift coarse, Alt fine, Delete to remove\.$/,
+    (mode, interpolation, count) => {
+      const localizedMode = mode === "Absolute" ? "絶対" : "相対";
+      const localizedInterpolation = interpolation === "Step"
+        ? "ステップ"
+        : interpolation === "Line"
+          ? "線"
+          : "スムーズ";
+      return `${localizedMode}・${localizedInterpolation}のバリューエンベロープ、${count}ポイント。ダブルクリックで追加。ポイントにフォーカスし、矢印キーで微調整、Shiftで粗く、Altで細かく、Deleteで削除。`;
+    },
+  ],
+  [
+    /^Envelope point (\d+), position (.+), value (.+)$/,
+    (index, position, value) => `エンベロープポイント${index}、位置 ${position}、値 ${value}`,
+  ],
+  [/^Select envelope point (\d+)$/, (index) => `エンベロープポイント${index}を選択`],
+  [/^Position for envelope point (\d+)$/, (index) => `エンベロープポイント${index}の位置`],
+  [/^Value for envelope point (\d+)$/, (index) => `エンベロープポイント${index}の値`],
+  [/^Remove envelope point (\d+)$/, (index) => `エンベロープポイント${index}を削除`],
   [/^Edit Source for Cue (.+)$/, (label) => `キュー ${label} のソースを編集`],
   [/^Live speed for Cue (.+)$/, (label) => `キュー ${label} のライブ速度`],
   [/^Live size for Cue (.+)$/, (label) => `キュー ${label} のライブサイズ`],
