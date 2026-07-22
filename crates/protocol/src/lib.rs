@@ -2371,6 +2371,91 @@ pub struct MappingEffectRequest {
     pub blend_mode: EffectBlendMode,
 }
 
+/// Operator-facing provenance for an embedded colour-mapping raster. The media
+/// itself is always stored as bounded RGB16 frames so project playback never
+/// depends on an external file or a decoder on the 44 Hz path.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ColorMappingSourceKind {
+    Image,
+    Text,
+    Video,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ColorMappingPlaybackDirection {
+    Forward,
+    Reverse,
+    Bounce,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ColorMappingWrapMode {
+    Clamp,
+    Repeat,
+    Mirror,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ColorMappingSampling {
+    Nearest,
+    Bilinear,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ColorMappingCellTarget {
+    pub fixture_id: FixtureId,
+    /// Zero-based RGB/RGBW beam or segment. Zero also addresses a fixture's
+    /// main colour binding when no segmented binding exists.
+    pub beam_index: u16,
+    /// Stable authored order for strip/matrix diagnostics.
+    pub selection_index: u32,
+    /// Normalized source-space cell coordinate before request UV transforms.
+    pub u: f32,
+    pub v: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_attribute: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ColorMappingFrame {
+    /// Packed RGB16 pixels in row-major order: 0xRRRRGGGGBBBB. Values fit in
+    /// JavaScript's exact integer range and keep JSON materially smaller than
+    /// three-field pixel objects.
+    pub pixels: Vec<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ColorMappingEffectRequest {
+    pub label: String,
+    pub fixture_ids: Vec<FixtureId>,
+    pub target_group_ids: Vec<String>,
+    pub source_kind: ColorMappingSourceKind,
+    /// Embedded raster dimensions. Both axes are bounded to 1..=64.
+    pub width: u16,
+    pub height: u16,
+    /// One image/text frame or 2..=64 uniformly timed video frames.
+    pub frames: Vec<ColorMappingFrame>,
+    /// Optional explicit matrix/beam cells. Empty derives one cell per target
+    /// fixture from its normalized 2D stage X/Z position.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cells: Vec<ColorMappingCellTarget>,
+    pub playback_direction: ColorMappingPlaybackDirection,
+    /// Duration of one animation pass. Still image/text sources keep this for
+    /// Scene Live speed compatibility but always sample frame zero.
+    pub period_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_sync: Option<EffectClockSync>,
+    pub phase: f32,
+    pub offset_u: f32,
+    pub offset_v: f32,
+    pub scale_u: f32,
+    pub scale_v: f32,
+    pub rotation_degrees: f32,
+    pub wrap_mode: ColorMappingWrapMode,
+    pub sampling: ColorMappingSampling,
+    pub blend_mode: EffectBlendMode,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum EffectParamsSnapshot {
     Lfo(LfoEffectRequest),
@@ -2381,6 +2466,7 @@ pub enum EffectParamsSnapshot {
     Value(ValueEffectRequest),
     Curve(CurveEffectRequest),
     Mapping(MappingEffectRequest),
+    ColorMapping(ColorMappingEffectRequest),
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -2393,6 +2479,7 @@ pub enum EffectKind {
     Value,
     Curve,
     Mapping,
+    ColorMapping,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -2429,6 +2516,8 @@ pub struct EffectSummary {
     pub curve: Option<CurveEffectRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mapping: Option<MappingEffectRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_mapping: Option<ColorMappingEffectRequest>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -2450,6 +2539,8 @@ pub struct EffectPreset {
     pub curve: Option<CurveEffectRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mapping: Option<MappingEffectRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_mapping: Option<ColorMappingEffectRequest>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -3962,9 +4053,10 @@ mod tests {
         assert!(parsed.value.is_none());
         assert!(parsed.curve.is_none());
         assert!(parsed.mapping.is_none());
-        assert!(!serde_json::to_string(&parsed)
-            .unwrap()
-            .contains("\"mapping\""));
+        assert!(parsed.color_mapping.is_none());
+        let serialized = serde_json::to_string(&parsed).unwrap();
+        assert!(!serialized.contains("\"mapping\""));
+        assert!(!serialized.contains("\"color_mapping\""));
     }
 
     #[test]
@@ -4010,6 +4102,7 @@ mod tests {
             value: None,
             curve: Some(request),
             mapping: None,
+            color_mapping: None,
         };
 
         let json = serde_json::to_string(&preset).unwrap();
@@ -4050,11 +4143,72 @@ mod tests {
             value: None,
             curve: None,
             mapping: Some(request),
+            color_mapping: None,
         };
 
         let json = serde_json::to_string(&preset).unwrap();
         assert!(json.contains("\"effect_type\":\"Mapping\""));
         assert!(json.contains("\"fixture_ids\":[3,1,2]"));
+        let parsed: super::EffectPreset = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, preset);
+    }
+
+    #[test]
+    fn color_mapping_effect_request_and_preset_roundtrip_independent_body() {
+        let request = super::ColorMappingEffectRequest {
+            label: "Matrix clip".to_string(),
+            fixture_ids: vec![3, 1, 2],
+            target_group_ids: vec!["Matrix".to_string()],
+            source_kind: super::ColorMappingSourceKind::Video,
+            width: 2,
+            height: 1,
+            frames: vec![
+                super::ColorMappingFrame {
+                    pixels: vec![0xffff_0000_0000, 0x0000_ffff_0000],
+                },
+                super::ColorMappingFrame {
+                    pixels: vec![0x0000_0000_ffff, 0xffff_ffff_ffff],
+                },
+            ],
+            cells: vec![super::ColorMappingCellTarget {
+                fixture_id: 3,
+                beam_index: 0,
+                selection_index: 0,
+                u: 0.25,
+                v: 0.5,
+                feature_attribute: None,
+            }],
+            playback_direction: super::ColorMappingPlaybackDirection::Bounce,
+            period_ms: 2_000,
+            clock_sync: Some(super::EffectClockSync { beats: 4.0 }),
+            phase: 0.125,
+            offset_u: 0.1,
+            offset_v: -0.1,
+            scale_u: 1.5,
+            scale_v: 0.75,
+            rotation_degrees: 30.0,
+            wrap_mode: super::ColorMappingWrapMode::Repeat,
+            sampling: super::ColorMappingSampling::Bilinear,
+            blend_mode: super::EffectBlendMode::Override,
+        };
+        let preset = super::EffectPreset {
+            version: 1,
+            effect_type: super::EffectKind::ColorMapping,
+            enabled: true,
+            lfo: None,
+            position_wave: None,
+            color: None,
+            chaser: None,
+            move_effect: None,
+            value: None,
+            curve: None,
+            mapping: None,
+            color_mapping: Some(request),
+        };
+
+        let json = serde_json::to_string(&preset).unwrap();
+        assert!(json.contains("\"effect_type\":\"ColorMapping\""));
+        assert!(json.contains("281470681743360"));
         let parsed: super::EffectPreset = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, preset);
     }
@@ -4104,6 +4258,7 @@ mod tests {
             value: None,
             curve: None,
             mapping: None,
+            color_mapping: None,
         };
 
         let json = serde_json::to_string(&preset).unwrap();
@@ -4206,6 +4361,7 @@ mod tests {
             value: None,
             curve: None,
             mapping: None,
+            color_mapping: None,
         };
 
         let json = serde_json::to_string(&preset).unwrap();
@@ -4253,6 +4409,7 @@ mod tests {
             value: None,
             curve: None,
             mapping: None,
+            color_mapping: None,
         };
 
         let json = serde_json::to_string(&preset).unwrap();

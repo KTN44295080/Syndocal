@@ -32,7 +32,7 @@ interface SampleEffectPresetOption {
   value: SampleEffectPreset;
   label: string;
   family: EffectRecipeFamily;
-  engine: "LFO" | "Mapping" | "Color" | "Chaser" | "Move" | "Curve";
+  engine: "LFO" | "Mapping" | "Color" | "ColorMapping" | "Chaser" | "Move" | "Curve";
   target: string;
   description: string;
   supportsTarget: boolean;
@@ -167,9 +167,9 @@ export const sampleEffectPresetOptions: SampleEffectPresetOption[] = [
     value: "colour-chase",
     label: "Colour Chase",
     family: "COLOR MAPPINGS",
-    engine: "Color",
-    target: "Fixture order",
-    description: "Ordered multi-colour steps spread deterministically across the current fixtures.",
+    engine: "ColorMapping",
+    target: "2D fixture cells",
+    description: "Embedded RGB16 video frames sampled across the current 2D fixture layout.",
     supportsTarget: true,
     requiresTarget: true,
   },

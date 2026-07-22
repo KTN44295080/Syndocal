@@ -41,6 +41,10 @@ const mappingEditorSource = await readFile(
   new URL("../src/components/MappingEffectEditorPanel.tsx", import.meta.url),
   "utf8",
 );
+const colorMappingEditorSource = await readFile(
+  new URL("../src/components/ColorMappingEffectEditorPanel.tsx", import.meta.url),
+  "utf8",
+);
 
 const expectedFamilies = [
   "STEPS",
@@ -409,4 +413,40 @@ for (const preset of ["wave", "ball", "fan"]) {
   );
 }
 
-console.log("T19 effect family, LFO, palette, Move, Value, independent Curve, and fixture-order Mapping visualization contracts ok");
+assert.match(
+  appSource,
+  /family === "COLOR MAPPINGS"[\s\S]*?\? "ColorMapping"/,
+  "the COLOR MAPPINGS family must select the independent ColorMapping kind",
+);
+assert.equal(
+  chooser.sampleEffectPresetOptions.find((option) => option.value === "colour-chase")?.engine,
+  "ColorMapping",
+  "the Colour Chase recipe must load the independent 2D ColorMapping body",
+);
+assert.match(
+  colorMappingEditorSource,
+  /createImageBitmap\(file\)/,
+  "the Colour Mapping editor must decode images before command submission",
+);
+assert.match(
+  colorMappingEditorSource,
+  /getImageData\(0, 0, canvas\.width, canvas\.height\)/,
+  "the Colour Mapping editor must embed raster pixels in the authored request",
+);
+assert.match(
+  colorMappingEditorSource,
+  /Math\.max\(2, Math\.min\(MAX_FRAMES, Math\.ceil\(duration \* 8\)\)\)/,
+  "video extraction must remain bounded to at most 64 embedded frames",
+);
+assert.match(
+  colorMappingEditorSource,
+  /Freeze stage positions as cells/,
+  "the Colour Mapping editor must expose explicit fixture-cell authoring",
+);
+assert.match(
+  colorMappingEditorSource,
+  /no decoder runs at 44 Hz/,
+  "the Colour Mapping editor must disclose the command-time decode contract",
+);
+
+console.log("T19 effect family, LFO, palette, Move, Value, independent Curve, fixture-order Mapping, and 2D Colour Mapping visualization contracts ok");

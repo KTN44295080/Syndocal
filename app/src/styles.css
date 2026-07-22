@@ -17632,6 +17632,8 @@ input[type="color"] {
 .effectForm {
   display: grid;
   gap: 8px;
+  container-name: effect-form;
+  container-type: inline-size;
 }
 
 .effectShapePresetPanel {
@@ -24447,6 +24449,173 @@ h3 {
 
 .mappingEffectPhaseGrid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.colorMappingEffectEditor {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.colorMappingPreviewGrid {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.2fr) minmax(260px, 0.8fr);
+  gap: 8px;
+  min-width: 0;
+}
+
+.colorMappingPreview {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 188px;
+  overflow: hidden;
+  border: 1px solid #384147;
+  border-radius: 2px;
+  background: #090c0e;
+}
+
+.colorMappingPreview canvas {
+  width: 100%;
+  height: 188px;
+  object-fit: contain;
+  image-rendering: pixelated;
+}
+
+.colorMappingCellOverlay {
+  position: absolute;
+  inset: 7px;
+  pointer-events: none;
+}
+
+.colorMappingCellOverlay span {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  translate: -50% -50%;
+  border: 1px solid #f4f7f8;
+  border-radius: 50%;
+  background: #111b;
+  color: #fff;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 0 0 1px #0009;
+}
+
+.colorMappingSourcePanel {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  gap: 7px;
+  min-width: 0;
+  margin: 0;
+  border: 1px solid #343a3f;
+  padding: 8px;
+}
+
+.colorMappingSourcePanel legend {
+  padding: 0 4px;
+  color: #aeb8bd;
+  font-size: 11px;
+}
+
+.colorMappingFileButton {
+  display: grid;
+  place-items: center;
+  min-height: 34px;
+  border: 1px solid #465159;
+  background: #20272b;
+  color: #e7ecee;
+  cursor: pointer;
+}
+
+.colorMappingFileButton input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.colorMappingTextRow,
+.colorMappingSourcePanel > p,
+.colorMappingSourcePanel > label:not(.colorMappingFileButton) {
+  grid-column: 1 / -1;
+}
+
+.colorMappingTextRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px auto;
+  gap: 5px;
+}
+
+.colorMappingTextRow input[type="color"] {
+  width: 38px;
+  padding: 2px;
+}
+
+.colorMappingSourcePanel > label:not(.colorMappingFileButton) {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+}
+
+.colorMappingSourcePanel > p {
+  min-height: 30px;
+  margin: 0;
+  color: #9ba6ac;
+  font-size: 10px;
+}
+
+.colorMappingCellActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.colorMappingCellActions span {
+  margin-left: auto;
+  color: #9aa4aa;
+  font-size: 10px;
+}
+
+.colorMappingControlGrid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(100px, 1fr));
+  gap: 6px;
+}
+
+.colorMappingControlGrid label {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  color: #aeb8bd;
+  font-size: 10px;
+}
+
+.effectGraphicalColorMap {
+  display: grid;
+  width: 100%;
+  min-height: 32px;
+  overflow: hidden;
+  background: #080a0b;
+}
+
+.effectGraphicalColorMap i {
+  min-width: 2px;
+  min-height: 3px;
+}
+
+@container effect-form (max-width: 780px) {
+  .colorMappingPreviewGrid,
+  .colorMappingControlGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 @container move-effect-editor (max-width: 780px) {

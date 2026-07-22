@@ -13,6 +13,7 @@ import {
 import type {
   ChaserEffectRequest,
   ColorEffectRequest,
+  ColorMappingEffectRequest,
   CurveEffectRequest,
   EffectKind,
   EffectParamsSnapshot,
@@ -41,6 +42,7 @@ interface PreviewModel {
   value?: ValueEffectRequest | null;
   curve?: CurveEffectRequest | null;
   mapping?: MappingEffectRequest | null;
+  colorMapping?: ColorMappingEffectRequest | null;
 }
 
 const modelFromParams = (params: EffectParamsSnapshot): PreviewModel => {
@@ -69,6 +71,7 @@ const modelFromParams = (params: EffectParamsSnapshot): PreviewModel => {
   if ("Move" in params) return { kind: "Move", label: params.Move.label, move: params.Move };
   if ("Value" in params) return { kind: "Value", label: params.Value.label, value: params.Value };
   if ("Curve" in params) return { kind: "Curve", label: params.Curve.label, curve: params.Curve };
+  if ("ColorMapping" in params) return { kind: "ColorMapping", label: params.ColorMapping.label, colorMapping: params.ColorMapping };
   return {
     kind: "Mapping",
     label: params.Mapping.label,
@@ -93,15 +96,24 @@ const modelFromEffect = (effect: EffectSummary): PreviewModel => ({
   value: effect.value,
   curve: effect.curve,
   mapping: effect.mapping,
+  colorMapping: effect.color_mapping,
 });
 
 const effectKindLabel = (kind: EffectKind) => {
   if (kind === "PositionWave") return "Spatial Wave";
   if (kind === "Mapping") return "Fixture Mapping";
+  if (kind === "ColorMapping") return "Colour Mapping";
   return kind;
 };
 
 export function EffectGraphicalPreview(props: EffectGraphicalPreviewProps) {
+  const packedColorCss = (pixel: number) => {
+    const normalized = Math.max(0, Math.min(281_474_976_710_655, Math.round(pixel)));
+    const red = Math.round(Math.floor(normalized / 4_294_967_296) / 257);
+    const green = Math.round((Math.floor(normalized / 65_536) % 65_536) / 257);
+    const blue = Math.round((normalized % 65_536) / 257);
+    return `rgb(${red} ${green} ${blue})`;
+  };
   const model = createMemo<PreviewModel | null>(() => {
     if (props.params) return modelFromParams(props.params);
     if (props.effect) return modelFromEffect(props.effect);
@@ -204,6 +216,34 @@ export function EffectGraphicalPreview(props: EffectGraphicalPreviewProps) {
                   <b>{color().algorithm}</b>
                   <span>{color().stops.length} stops</span>
                   <span>φ {Math.round(color().phase * 100)}%</span>
+                </span>
+              </>
+            )}
+          </Show>
+
+          <Show when={current().colorMapping}>
+            {(mapping) => (
+              <>
+                <span
+                  class="effectGraphicalColorMap"
+                  style={{ "grid-template-columns": `repeat(${Math.min(mapping().width, 16)}, 1fr)` }}
+                  data-raster={`${mapping().width}x${mapping().height}`}
+                  data-frame-count={mapping().frames.length}
+                  data-cell-count={mapping().cells?.length ?? 0}
+                  data-source-kind={mapping().source_kind}
+                  data-playback-direction={mapping().playback_direction}
+                  data-wrap-mode={mapping().wrap_mode}
+                  data-sampling={mapping().sampling}
+                  aria-hidden="true"
+                >
+                  <For each={(mapping().frames[0]?.pixels ?? []).slice(0, 128)}>
+                    {(pixel) => <i style={{ background: packedColorCss(pixel) }} />}
+                  </For>
+                </span>
+                <span class="effectGraphicalReadout tabularNums">
+                  <b>{mapping().source_kind}</b>
+                  <span>{mapping().width}×{mapping().height}</span>
+                  <span>{mapping().frames.length} frame{mapping().frames.length === 1 ? "" : "s"}</span>
                 </span>
               </>
             )}

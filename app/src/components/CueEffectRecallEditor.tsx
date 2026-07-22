@@ -25,6 +25,7 @@ const effectKindLabel = (effect: Pick<EffectSummary, "effect_type">) => {
   if (effect.effect_type === "Chaser") return "Chaser";
   const effectKind = effect.effect_type;
   if (effectKind === "PositionWave") return "Position Wave";
+  if (effectKind === "ColorMapping") return "Colour Mapping";
   if (effectKind === "Lfo") return "LFO";
   return effectKind;
 };
@@ -37,6 +38,7 @@ const effectParamsDescriptor = (params: EffectParamsSnapshot): { kind: EffectKin
   if ("Move" in params) return { kind: "Move", label: params.Move.label };
   if ("Value" in params) return { kind: "Value", label: params.Value.label };
   if ("Curve" in params) return { kind: "Curve", label: params.Curve.label };
+  if ("ColorMapping" in params) return { kind: "ColorMapping", label: params.ColorMapping.label };
   return { kind: "Mapping", label: params.Mapping.label };
 };
 

@@ -17,6 +17,7 @@ use std::{
 use base64::Engine as _;
 use engine::{
     validate_chaser_effect_request as validate_engine_chaser_effect_request,
+    validate_color_mapping_effect_request as validate_engine_color_mapping_effect_request,
     validate_curve_effect_request as validate_engine_curve_effect_request,
     validate_mapping_effect_request as validate_engine_mapping_effect_request,
     validate_move_effect_request as validate_engine_move_effect_request,
@@ -34,19 +35,19 @@ use protocol::{
     canonical_video_output_mapping_field, AttributeControl, AttributeResolution,
     AudioAnalysisSummary, AutoVjConfig, AutomationId, AutomationKeyframeSummary,
     ChaserEffectRequest, ChaserStep, ChildTimelineSummary, ClockSnapshot, ColorEffectRequest,
-    CompositionId, CompositionSummary, CueEffectTarget, CueFixtureTarget, CueId,
-    CueNodeGraphTarget, CurveEffectRequest, CustomFixtureProfileFile, CustomFixtureProfileRequest,
-    DmxInputConfig, DmxInputProtocol, DmxInputStatus, DmxModeSummary, DmxOutputConfig,
-    DmxOutputProtocol, EffectId, EffectKind, EffectParamsSnapshot, EffectPreset, EffectSummary,
-    EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, FixtureId, FixtureLimits,
-    FixturePreset, FixtureProfileSummary, GeometrySummary, LearnedMidiControl, LearnedOscControl,
-    LfoEffectRequest, MappingEffectRequest, MidiControlAction, MidiControlMapping,
-    MidiInputSummary, MidiOutputSummary, MoveEffectRequest, NodeGraphId, NodeGraphNodeKind,
-    NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp, OscControlAction,
-    OscControlMapping, OscInputConfig, PatchFixtureRequest, PatchedFixtureSummary,
-    PositionWaveEffectRequest, ProjectFile, RecallMode, RemoteControlConfig, RemoteControlStatus,
-    Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile, StageMapPresetSummary,
-    StageObjectId, StageObjectKind, StageObjectSummary, TimelineAudioClipId,
+    ColorMappingEffectRequest, CompositionId, CompositionSummary, CueEffectTarget,
+    CueFixtureTarget, CueId, CueNodeGraphTarget, CurveEffectRequest, CustomFixtureProfileFile,
+    CustomFixtureProfileRequest, DmxInputConfig, DmxInputProtocol, DmxInputStatus, DmxModeSummary,
+    DmxOutputConfig, DmxOutputProtocol, EffectId, EffectKind, EffectParamsSnapshot, EffectPreset,
+    EffectSummary, EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, FixtureId,
+    FixtureLimits, FixturePreset, FixtureProfileSummary, GeometrySummary, LearnedMidiControl,
+    LearnedOscControl, LfoEffectRequest, MappingEffectRequest, MidiControlAction,
+    MidiControlMapping, MidiInputSummary, MidiOutputSummary, MoveEffectRequest, NodeGraphId,
+    NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp,
+    OscControlAction, OscControlMapping, OscInputConfig, PatchFixtureRequest,
+    PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RecallMode, RemoteControlConfig,
+    RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile,
+    StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary, TimelineAudioClipId,
     TimelineAudioClipSummary, TimelineEventId, TimelineLayerKind, TimelineSnapRequest,
     TimelineTrackKind, TouchControlBinding, TouchSurfaceSummary, ValueEffectRequest, Vec3,
     VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode, VideoEffectTarget,
@@ -12081,6 +12082,19 @@ fn add_mapping_effect(
 }
 
 #[tauri::command]
+fn add_color_mapping_effect(
+    state: State<'_, AppState>,
+    request: ColorMappingEffectRequest,
+) -> Result<EffectId, String> {
+    validate_color_mapping_effect_request(&request)?;
+    let effect_id = state.engine.allocate_effect_id();
+    state
+        .engine
+        .add_color_mapping_effect(effect_id, request, true)?;
+    Ok(effect_id)
+}
+
+#[tauri::command]
 fn update_lfo_effect(
     state: State<'_, AppState>,
     effect_id: EffectId,
@@ -12176,6 +12190,21 @@ fn update_mapping_effect(
     validate_mapping_effect_request(&request)?;
     validate_effect_update_kind(&state.engine.snapshot(), effect_id, EffectKind::Mapping)?;
     state.engine.update_mapping_effect(effect_id, request)
+}
+
+#[tauri::command]
+fn update_color_mapping_effect(
+    state: State<'_, AppState>,
+    effect_id: EffectId,
+    request: ColorMappingEffectRequest,
+) -> Result<(), String> {
+    validate_color_mapping_effect_request(&request)?;
+    validate_effect_update_kind(
+        &state.engine.snapshot(),
+        effect_id,
+        EffectKind::ColorMapping,
+    )?;
+    state.engine.update_color_mapping_effect(effect_id, request)
 }
 
 fn validate_effect_update_kind(
@@ -12379,6 +12408,11 @@ fn relabel_effect_preset(mut preset: EffectPreset, label: String) -> EffectPrese
         }
         EffectKind::Mapping => {
             if let Some(request) = &mut preset.mapping {
+                request.label = label;
+            }
+        }
+        EffectKind::ColorMapping => {
+            if let Some(request) = &mut preset.color_mapping {
                 request.label = label;
             }
         }
@@ -12644,6 +12678,29 @@ fn add_effect_preset_to_engine(
             validate_effect_target_references(&snapshot, &request.fixture_ids, &[])?;
             engine.add_mapping_effect(effect_id, request, enabled)?;
         }
+        EffectKind::ColorMapping => {
+            let request = preset.color_mapping.ok_or_else(|| {
+                "Colour Mapping effect preset is missing its request body".to_string()
+            })?;
+            let request = match target_override {
+                Some(target_override) => {
+                    apply_color_mapping_effect_target_override(request, target_override)
+                }
+                None => request,
+            };
+            validate_color_mapping_effect_request(&request)?;
+            validate_effect_target_references(&snapshot, &request.fixture_ids, &[])?;
+            validate_effect_target_references(
+                &snapshot,
+                &request
+                    .cells
+                    .iter()
+                    .map(|cell| cell.fixture_id)
+                    .collect::<Vec<_>>(),
+                &[],
+            )?;
+            engine.add_color_mapping_effect(effect_id, request, enabled)?;
+        }
     }
     if !enabled
         && !matches!(
@@ -12654,6 +12711,7 @@ fn add_effect_preset_to_engine(
                 | EffectKind::Value
                 | EffectKind::Curve
                 | EffectKind::Mapping
+                | EffectKind::ColorMapping
         )
     {
         engine
@@ -16092,6 +16150,19 @@ fn validate_project_cue_effect_params(
             &request.attribute,
             &owner_label,
         ),
+        EffectParamsSnapshot::ColorMapping(request) => {
+            let mut fixture_ids = request.fixture_ids.clone();
+            fixture_ids.extend(request.cells.iter().map(|cell| cell.fixture_id));
+            fixture_ids.sort_unstable();
+            fixture_ids.dedup();
+            validate_project_color_effect_targets(
+                snapshot,
+                fixtures_by_id,
+                &fixture_ids,
+                &request.target_group_ids,
+                &owner_label,
+            )
+        }
     }
 }
 
@@ -17276,6 +17347,25 @@ fn validate_project_video_keyframes(
 }
 
 fn validate_project_effect_body(effect: &EffectSummary) -> Result<(), String> {
+    if effect.effect_type != EffectKind::ColorMapping && effect.color_mapping.is_some() {
+        return Err(format!(
+            "Project {:?} effect {} contains a Colour Mapping body",
+            effect.effect_type, effect.id
+        ));
+    }
+    if effect.effect_type == EffectKind::ColorMapping
+        && (effect.color.is_some()
+            || effect.chaser.is_some()
+            || effect.move_effect.is_some()
+            || effect.value.is_some()
+            || effect.curve.is_some()
+            || effect.mapping.is_some())
+    {
+        return Err(format!(
+            "Project Colour Mapping effect {} contains a body for another effect kind",
+            effect.id
+        ));
+    }
     if effect.effect_type != EffectKind::Curve && effect.curve.is_some() {
         return Err(format!(
             "Project {:?} effect {} contains a Curve body",
@@ -17549,6 +17639,36 @@ fn validate_project_effect_body(effect: &EffectSummary) -> Result<(), String> {
                 ));
             }
         }
+        EffectKind::ColorMapping => {
+            let request = effect.color_mapping.as_ref().ok_or_else(|| {
+                format!(
+                    "Project Colour Mapping effect {} is missing its request body",
+                    effect.id
+                )
+            })?;
+            let scalar_body_matches = effect.label == request.label
+                && effect.fixture_ids == request.fixture_ids
+                && effect.target_group_ids == request.target_group_ids
+                && effect.attribute == "Colour Mapping"
+                && effect.video_targets.is_empty()
+                && effect.shape == protocol::LfoShape::Saw
+                && effect.period_ms == Some(request.period_ms)
+                && effect.clock_sync == request.clock_sync
+                && effect.low == 0
+                && effect.high == u16::MAX
+                && effect.phase == request.phase
+                && effect.blend_mode == request.blend_mode
+                && effect.origin.is_none()
+                && effect.direction.is_none()
+                && effect.speed.is_none()
+                && effect.wavelength.is_none();
+            if !scalar_body_matches {
+                return Err(format!(
+                    "Project Colour Mapping effect {} summary fields do not match its request body",
+                    effect.id
+                ));
+            }
+        }
     }
     let preset = effect_summary_to_preset(effect)
         .map_err(|error| format!("Project effect {} is invalid: {error}", effect.id))?;
@@ -17682,6 +17802,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 value: None,
                 curve: None,
                 mapping: None,
+                color_mapping: None,
             })
         }
         EffectKind::PositionWave => {
@@ -17725,6 +17846,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 value: None,
                 curve: None,
                 mapping: None,
+                color_mapping: None,
             })
         }
         EffectKind::Color => {
@@ -17744,6 +17866,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 value: None,
                 curve: None,
                 mapping: None,
+                color_mapping: None,
             })
         }
         EffectKind::Chaser => {
@@ -17763,6 +17886,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 value: None,
                 curve: None,
                 mapping: None,
+                color_mapping: None,
             })
         }
         EffectKind::Move => {
@@ -17782,6 +17906,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 value: None,
                 curve: None,
                 mapping: None,
+                color_mapping: None,
             })
         }
         EffectKind::Value => {
@@ -17801,6 +17926,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 value: Some(request),
                 curve: None,
                 mapping: None,
+                color_mapping: None,
             })
         }
         EffectKind::Curve => {
@@ -17820,6 +17946,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 value: None,
                 curve: Some(request),
                 mapping: None,
+                color_mapping: None,
             })
         }
         EffectKind::Mapping => {
@@ -17839,6 +17966,26 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 value: None,
                 curve: None,
                 mapping: Some(request),
+                color_mapping: None,
+            })
+        }
+        EffectKind::ColorMapping => {
+            let request = effect.color_mapping.clone().ok_or_else(|| {
+                "Colour Mapping effect summary is missing its request body".to_string()
+            })?;
+            Ok(EffectPreset {
+                version: 1,
+                effect_type: EffectKind::ColorMapping,
+                enabled: effect.enabled,
+                lfo: None,
+                position_wave: None,
+                color: None,
+                chaser: None,
+                move_effect: None,
+                value: None,
+                curve: None,
+                mapping: None,
+                color_mapping: Some(request),
             })
         }
     }
@@ -17881,6 +18028,10 @@ fn effect_params_snapshot_from_summary(
             .mapping
             .map(EffectParamsSnapshot::Mapping)
             .ok_or_else(|| "Mapping effect summary is missing its request body".to_string()),
+        EffectKind::ColorMapping => preset
+            .color_mapping
+            .map(EffectParamsSnapshot::ColorMapping)
+            .ok_or_else(|| "Colour Mapping effect summary is missing its request body".to_string()),
     }
 }
 
@@ -17995,6 +18146,18 @@ fn apply_mapping_effect_target_override(
     request.fixture_ids = target_override.fixture_ids.clone();
     request.target_group_ids = target_override.target_group_ids.clone();
     request.attribute = overridden_light_attribute(target_override);
+    request
+}
+
+fn apply_color_mapping_effect_target_override(
+    mut request: ColorMappingEffectRequest,
+    target_override: &EffectTargetOverride,
+) -> ColorMappingEffectRequest {
+    request.fixture_ids = target_override.fixture_ids.clone();
+    request.target_group_ids = target_override.target_group_ids.clone();
+    // Explicit cells belong to the authored matrix. A target override starts a
+    // new stage-position mapping for the selected fixtures/groups.
+    request.cells.clear();
     request
 }
 
@@ -18148,7 +18311,9 @@ fn validate_effect_target_override_for_preset(
     target_override: &EffectTargetOverride,
 ) -> Result<(), String> {
     match preset.effect_type {
-        EffectKind::Color => validate_color_effect_target_override(target_override),
+        EffectKind::Color | EffectKind::ColorMapping => {
+            validate_color_effect_target_override(target_override)
+        }
         EffectKind::Chaser => {
             preset
                 .chaser
@@ -18476,6 +18641,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.value.is_some()
                 || preset.curve.is_some()
                 || preset.mapping.is_some()
+                || preset.color_mapping.is_some()
             {
                 return Err("LFO effect preset must not contain another effect body".to_string());
             }
@@ -18493,6 +18659,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.value.is_some()
                 || preset.curve.is_some()
                 || preset.mapping.is_some()
+                || preset.color_mapping.is_some()
             {
                 return Err(
                     "Position wave effect preset must not contain another effect body".to_string(),
@@ -18511,6 +18678,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.value.is_some()
                 || preset.curve.is_some()
                 || preset.mapping.is_some()
+                || preset.color_mapping.is_some()
             {
                 return Err("Color effect preset must not contain another effect body".to_string());
             }
@@ -18528,6 +18696,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.value.is_some()
                 || preset.curve.is_some()
                 || preset.mapping.is_some()
+                || preset.color_mapping.is_some()
             {
                 return Err("Chaser effect preset must not contain another effect body".to_string());
             }
@@ -18545,6 +18714,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.value.is_some()
                 || preset.curve.is_some()
                 || preset.mapping.is_some()
+                || preset.color_mapping.is_some()
             {
                 return Err("Move effect preset must not contain another effect body".to_string());
             }
@@ -18562,6 +18732,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.move_effect.is_some()
                 || preset.curve.is_some()
                 || preset.mapping.is_some()
+                || preset.color_mapping.is_some()
             {
                 return Err("Value effect preset must not contain another effect body".to_string());
             }
@@ -18579,6 +18750,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.move_effect.is_some()
                 || preset.value.is_some()
                 || preset.mapping.is_some()
+                || preset.color_mapping.is_some()
             {
                 return Err("Curve effect preset must not contain another effect body".to_string());
             }
@@ -18596,6 +18768,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.move_effect.is_some()
                 || preset.value.is_some()
                 || preset.curve.is_some()
+                || preset.color_mapping.is_some()
             {
                 return Err(
                     "Mapping effect preset must not contain another effect body".to_string()
@@ -18606,6 +18779,25 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 .as_ref()
                 .ok_or_else(|| "Mapping effect preset is missing its request body".to_string())?;
             validate_mapping_effect_request(request)?;
+        }
+        EffectKind::ColorMapping => {
+            if preset.lfo.is_some()
+                || preset.position_wave.is_some()
+                || preset.color.is_some()
+                || preset.chaser.is_some()
+                || preset.move_effect.is_some()
+                || preset.value.is_some()
+                || preset.curve.is_some()
+                || preset.mapping.is_some()
+            {
+                return Err(
+                    "Colour Mapping effect preset must not contain another effect body".to_string(),
+                );
+            }
+            let request = preset.color_mapping.as_ref().ok_or_else(|| {
+                "Colour Mapping effect preset is missing its request body".to_string()
+            })?;
+            validate_color_mapping_effect_request(request)?;
         }
     }
     Ok(())
@@ -23415,6 +23607,9 @@ fn validate_effect_params_snapshot(params: &EffectParamsSnapshot) -> Result<(), 
         EffectParamsSnapshot::Value(request) => validate_value_effect_request(request),
         EffectParamsSnapshot::Curve(request) => validate_curve_effect_request(request),
         EffectParamsSnapshot::Mapping(request) => validate_mapping_effect_request(request),
+        EffectParamsSnapshot::ColorMapping(request) => {
+            validate_color_mapping_effect_request(request)
+        }
     }
 }
 
@@ -23561,6 +23756,13 @@ fn validate_curve_effect_request(request: &CurveEffectRequest) -> Result<(), Str
 
 fn validate_mapping_effect_request(request: &MappingEffectRequest) -> Result<(), String> {
     validate_engine_mapping_effect_request(request)?;
+    validate_group_ids(&request.target_group_ids)
+}
+
+fn validate_color_mapping_effect_request(
+    request: &ColorMappingEffectRequest,
+) -> Result<(), String> {
+    validate_engine_color_mapping_effect_request(request)?;
     validate_group_ids(&request.target_group_ids)
 }
 
@@ -29835,6 +30037,7 @@ f 1 2 3
             value: None,
             curve: None,
             mapping: None,
+            color_mapping: None,
         }
     }
 
@@ -29902,6 +30105,7 @@ f 1 2 3
             value: None,
             curve: None,
             mapping: None,
+            color_mapping: None,
         }
     }
 
@@ -30143,6 +30347,7 @@ f 1 2 3
             value: None,
             curve: None,
             mapping: None,
+            color_mapping: None,
         }];
         assert!(validate_project_file(&project)
             .unwrap_err()
@@ -30210,6 +30415,7 @@ f 1 2 3
             value: None,
             curve: None,
             mapping: None,
+            color_mapping: None,
         }];
         assert!(validate_project_file(&project)
             .unwrap_err()
@@ -30368,6 +30574,7 @@ f 1 2 3
             value: None,
             curve: None,
             mapping: None,
+            color_mapping: None,
         };
         let mut project = ProjectFile {
             version: 1,
@@ -33149,6 +33356,7 @@ f 1 2 3
             value: None,
             curve: None,
             mapping: None,
+            color_mapping: None,
         }
     }
 
@@ -33196,6 +33404,7 @@ f 1 2 3
             value: None,
             curve: None,
             mapping: None,
+            color_mapping: None,
         }
     }
 
@@ -33384,6 +33593,7 @@ f 1 2 3
             value: None,
             curve: None,
             mapping: None,
+            color_mapping: None,
         };
 
         let preset = effect_summary_to_preset(&effect).unwrap();
@@ -33450,6 +33660,7 @@ f 1 2 3
             value: None,
             curve: None,
             mapping: None,
+            color_mapping: None,
         };
 
         let preset = effect_summary_to_preset(&effect).unwrap();
@@ -33541,6 +33752,7 @@ f 1 2 3
             value: Some(request.clone()),
             curve: None,
             mapping: None,
+            color_mapping: None,
         }
     }
 
@@ -33603,6 +33815,7 @@ f 1 2 3
             value: None,
             curve: Some(request.clone()),
             mapping: None,
+            color_mapping: None,
         }
     }
 
@@ -33653,7 +33866,122 @@ f 1 2 3
             value: None,
             curve: None,
             mapping: Some(request.clone()),
+            color_mapping: None,
         }
+    }
+
+    fn sample_color_mapping_effect_request() -> ColorMappingEffectRequest {
+        ColorMappingEffectRequest {
+            label: "Front media map".to_string(),
+            fixture_ids: vec![4, 2, 3],
+            target_group_ids: Vec::new(),
+            source_kind: protocol::ColorMappingSourceKind::Video,
+            width: 2,
+            height: 1,
+            frames: vec![
+                protocol::ColorMappingFrame {
+                    pixels: vec![0xffff_0000_0000, 0x0000_0000_ffff],
+                },
+                protocol::ColorMappingFrame {
+                    pixels: vec![0x0000_ffff_0000, 0xffff_ffff_ffff],
+                },
+            ],
+            cells: vec![
+                protocol::ColorMappingCellTarget {
+                    fixture_id: 4,
+                    beam_index: 0,
+                    selection_index: 0,
+                    u: 0.0,
+                    v: 0.5,
+                    feature_attribute: None,
+                },
+                protocol::ColorMappingCellTarget {
+                    fixture_id: 2,
+                    beam_index: 0,
+                    selection_index: 1,
+                    u: 1.0,
+                    v: 0.5,
+                    feature_attribute: None,
+                },
+            ],
+            playback_direction: protocol::ColorMappingPlaybackDirection::Bounce,
+            period_ms: 2_000,
+            clock_sync: Some(protocol::EffectClockSync { beats: 4.0 }),
+            phase: 0.125,
+            offset_u: 0.1,
+            offset_v: -0.1,
+            scale_u: 1.25,
+            scale_v: 0.75,
+            rotation_degrees: 15.0,
+            wrap_mode: protocol::ColorMappingWrapMode::Repeat,
+            sampling: protocol::ColorMappingSampling::Bilinear,
+            blend_mode: protocol::EffectBlendMode::Override,
+        }
+    }
+
+    fn color_mapping_effect_summary(
+        id: EffectId,
+        request: &ColorMappingEffectRequest,
+    ) -> EffectSummary {
+        EffectSummary {
+            id,
+            label: request.label.clone(),
+            effect_type: EffectKind::ColorMapping,
+            fixture_ids: request.fixture_ids.clone(),
+            target_group_ids: request.target_group_ids.clone(),
+            attribute: "Colour Mapping".to_string(),
+            video_targets: Vec::new(),
+            shape: protocol::LfoShape::Saw,
+            period_ms: Some(request.period_ms),
+            clock_sync: request.clock_sync,
+            low: 0,
+            high: u16::MAX,
+            phase: request.phase,
+            blend_mode: request.blend_mode.clone(),
+            origin: None,
+            direction: None,
+            speed: None,
+            wavelength: None,
+            enabled: true,
+            color: None,
+            chaser: None,
+            move_effect: None,
+            value: None,
+            curve: None,
+            mapping: None,
+            color_mapping: Some(request.clone()),
+        }
+    }
+
+    #[test]
+    fn effect_summary_serializes_independent_color_mapping_preset_and_preserves_cells() {
+        let request = sample_color_mapping_effect_request();
+        let effect = color_mapping_effect_summary(24, &request);
+        validate_project_effect_body(&effect).unwrap();
+
+        let preset = effect_summary_to_preset(&effect).unwrap();
+        validate_effect_preset(&preset).unwrap();
+        let json = serde_json::to_string_pretty(&preset).unwrap();
+        let roundtrip: EffectPreset = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtrip.effect_type, EffectKind::ColorMapping);
+        assert_eq!(roundtrip.color_mapping, Some(request.clone()));
+        assert!(roundtrip.color.is_none());
+        assert!(roundtrip.mapping.is_none());
+
+        let target_override = EffectTargetOverride {
+            fixture_ids: vec![9, 7, 8],
+            target_group_ids: Vec::new(),
+            attribute: String::new(),
+            video_targets: Vec::new(),
+        };
+        let retargeted = apply_color_mapping_effect_target_override(request, &target_override);
+        assert_eq!(retargeted.fixture_ids, vec![9, 7, 8]);
+        assert!(retargeted.cells.is_empty());
+        assert_eq!(retargeted.frames.len(), 2);
+        assert_eq!(
+            retargeted.sampling,
+            protocol::ColorMappingSampling::Bilinear
+        );
     }
 
     #[test]
@@ -33782,6 +34110,7 @@ f 1 2 3
             value: None,
             curve: None,
             mapping: None,
+            color_mapping: None,
         };
 
         let preset = effect_summary_to_preset(&effect).unwrap();
@@ -33825,6 +34154,7 @@ f 1 2 3
             value: None,
             curve: None,
             mapping: None,
+            color_mapping: None,
         };
 
         let preset = effect_summary_to_preset(&effect).unwrap();
@@ -34063,6 +34393,7 @@ f 1 2 3
             value: None,
             curve: None,
             mapping: None,
+            color_mapping: None,
         };
 
         let error = validate_effect_preset(&preset).unwrap_err();
@@ -34081,6 +34412,7 @@ f 1 2 3
             value: None,
             curve: None,
             mapping: None,
+            color_mapping: None,
         };
         assert!(validate_effect_preset(&color_with_scalar_body)
             .unwrap_err()
@@ -34098,6 +34430,7 @@ f 1 2 3
             value: None,
             curve: None,
             mapping: None,
+            color_mapping: None,
         };
         assert!(validate_effect_preset(&chaser_with_color_body)
             .unwrap_err()
@@ -34413,7 +34746,7 @@ f 1 2 3
             (
                 "colour-chase",
                 SAMPLE_EFFECT_PRESET_COLOUR_CHASE_LABEL,
-                EffectKind::Color,
+                EffectKind::ColorMapping,
             ),
         ];
         for (id, expected_label, expected_kind) in expected {
@@ -34463,16 +34796,24 @@ f 1 2 3
         validate_effect_target_override_for_preset(&colour_chase, &target_override).unwrap();
         assert!(colour_chase.lfo.is_none());
         assert!(colour_chase.position_wave.is_none());
-        let colour_chase_request =
-            apply_color_effect_target_override(colour_chase.color.unwrap(), &target_override)
-                .unwrap();
-        assert_eq!(colour_chase_request.fixture_ids, vec![42]);
-        assert_eq!(colour_chase_request.stops.len(), 4);
-        assert_eq!(
-            colour_chase_request.algorithm,
-            protocol::ColorEffectAlgorithm::Sequence
+        assert!(colour_chase.color.is_none());
+        let colour_chase_request = apply_color_mapping_effect_target_override(
+            colour_chase.color_mapping.unwrap(),
+            &target_override,
         );
-        assert_eq!(colour_chase_request.fixture_spread, 1.0);
+        assert_eq!(colour_chase_request.fixture_ids, vec![42]);
+        assert_eq!(colour_chase_request.frames.len(), 8);
+        assert_eq!(colour_chase_request.width, 8);
+        assert_eq!(colour_chase_request.height, 1);
+        assert_eq!(
+            colour_chase_request.source_kind,
+            protocol::ColorMappingSourceKind::Video
+        );
+        assert_eq!(
+            colour_chase_request.playback_direction,
+            protocol::ColorMappingPlaybackDirection::Forward
+        );
+        assert!(colour_chase_request.cells.is_empty());
 
         let mut video_target = target_override;
         video_target.video_targets = vec![sample_video_effect_target(7)];
@@ -35143,6 +35484,7 @@ f 1 2 3
                 value: None,
                 curve: None,
                 mapping: None,
+                color_mapping: None,
             },
             None,
         )
@@ -38744,6 +39086,7 @@ fn main() {
             add_value_effect,
             add_curve_effect,
             add_mapping_effect,
+            add_color_mapping_effect,
             update_lfo_effect,
             update_position_wave_effect,
             update_color_effect,
@@ -38752,6 +39095,7 @@ fn main() {
             update_value_effect,
             update_curve_effect,
             update_mapping_effect,
+            update_color_mapping_effect,
             save_node_graph,
             set_node_graph_enabled,
             remove_node_graph,

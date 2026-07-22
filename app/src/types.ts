@@ -219,7 +219,7 @@ export interface RemoteControlStatus {
 
 export type ClockSource = "Manual" | "Tap" | "MidiClock" | "MidiTimecode" | "Ltc" | "AbletonLink";
 export type LfoShape = "Sine" | "Cosine" | "Triangle" | "Saw" | "Square" | "Random" | "Perlin";
-export type EffectKind = "Lfo" | "PositionWave" | "Color" | "Chaser" | "Move" | "Value" | "Curve" | "Mapping";
+export type EffectKind = "Lfo" | "PositionWave" | "Color" | "Chaser" | "Move" | "Value" | "Curve" | "Mapping" | "ColorMapping";
 export type EffectBlendMode = "Override" | "Add" | "Multiply";
 export type ColorEffectAlgorithm = "Cycle" | "Bounce" | "Sequence" | "Random";
 export type ColorEffectInterpolation = "Rgb" | "HsvShortest" | "HsvLongest";
@@ -1585,7 +1585,8 @@ export type EffectParamsSnapshot =
   | { Move: MoveEffectRequest }
   | { Value: ValueEffectRequest }
   | { Curve: CurveEffectRequest }
-  | { Mapping: MappingEffectRequest };
+  | { Mapping: MappingEffectRequest }
+  | { ColorMapping: ColorMappingEffectRequest };
 
 export interface CueEffectTarget {
   effect_id: number;
@@ -1943,6 +1944,48 @@ export interface MappingEffectRequest {
   blend_mode: EffectBlendMode;
 }
 
+export type ColorMappingSourceKind = "Image" | "Text" | "Video";
+export type ColorMappingPlaybackDirection = "Forward" | "Reverse" | "Bounce";
+export type ColorMappingWrapMode = "Clamp" | "Repeat" | "Mirror";
+export type ColorMappingSampling = "Nearest" | "Bilinear";
+
+export interface ColorMappingCellTarget {
+  fixture_id: number;
+  beam_index: number;
+  selection_index: number;
+  u: number;
+  v: number;
+  feature_attribute?: string | null;
+}
+
+export interface ColorMappingFrame {
+  /** Packed RGB16 in an exact JavaScript integer: 0xRRRRGGGGBBBB. */
+  pixels: number[];
+}
+
+export interface ColorMappingEffectRequest {
+  label: string;
+  fixture_ids: number[];
+  target_group_ids: string[];
+  source_kind: ColorMappingSourceKind;
+  width: number;
+  height: number;
+  frames: ColorMappingFrame[];
+  cells?: ColorMappingCellTarget[];
+  playback_direction: ColorMappingPlaybackDirection;
+  period_ms: number;
+  clock_sync?: EffectClockSync | null;
+  phase: number;
+  offset_u: number;
+  offset_v: number;
+  scale_u: number;
+  scale_v: number;
+  rotation_degrees: number;
+  wrap_mode: ColorMappingWrapMode;
+  sampling: ColorMappingSampling;
+  blend_mode: EffectBlendMode;
+}
+
 export interface VideoEffectTarget {
   layer_ids: number[];
   param: VideoParam;
@@ -1977,6 +2020,7 @@ export interface EffectSummary {
   value?: ValueEffectRequest | null;
   curve?: CurveEffectRequest | null;
   mapping?: MappingEffectRequest | null;
+  color_mapping?: ColorMappingEffectRequest | null;
 }
 
 export interface EffectPreset {
@@ -1991,6 +2035,7 @@ export interface EffectPreset {
   value?: ValueEffectRequest | null;
   curve?: CurveEffectRequest | null;
   mapping?: MappingEffectRequest | null;
+  color_mapping?: ColorMappingEffectRequest | null;
 }
 
 export type DmxOutputProtocol =

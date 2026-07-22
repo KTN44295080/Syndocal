@@ -28,31 +28,32 @@ use protocol::{
     AutoVjMode, AutoVjRhythmSource, AutoVjSnapshot, AutoVjStatus, AutoVjTrigger, AutomationId,
     AutomationInterpolation, AutomationKeyframeSummary, ChaserDirection, ChaserEffectRequest,
     ChildTimelineSummary, ClockSnapshot, ClockSource, ColorEffectAlgorithm, ColorEffectColor,
-    ColorEffectInterpolation, ColorEffectRequest, ColorEffectSpatialRecipe, CompositionId,
-    CompositionSummary, CueEffectTarget, CueFixtureTarget, CueId, CueIfcbTiming, CueListId,
-    CueListSummary, CueLiveModifierSettings, CueLiveModifierState, CueNodeGraphTarget,
-    CuePaletteTarget, CuePartSummary, CueStepSummary, CueSummary, CurveEffectPoint,
-    CurveEffectRequest, DmxMergeMode, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol,
-    DmxOutputRouteTelemetry, DmxUniversePreview, EffectBlendMode, EffectClockSync, EffectId,
-    EffectKind, EffectParamsSnapshot, EffectSummary, EngineSnapshot, EngineTelemetry,
-    ExclusiveVideoTakeRequest, ExecutorId, FixtureId, FixtureLimits, FixtureProfileSummary,
-    LfoEffectRequest, LfoShape, LiveAudioFrame, LiveAudioReactiveFeatures, MappingEffectDirection,
-    MappingEffectRequest, MoveCoordinateMode, MoveDirection, MoveEffectRequest, MovePathPoint,
-    NodeGraphAudioRuntimeStatus, NodeGraphId, NodeGraphNodeKind, NodeGraphNodeSummary,
-    NodeGraphSummary, NodeGraphTransformOp, PaletteId, PatchFixtureRequest, PatchedFixtureSummary,
-    PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot, ProgrammerValueSummary,
-    RecallMode, ReferencePaletteSummary, Rotation3, StageMapConfig, StageMapPresetSummary,
-    StageObjectId, StageObjectSummary, SubmasterSummary, TimelineAudioClipId,
-    TimelineAudioClipSummary, TimelineAutomationSummary, TimelineCueEventSummary, TimelineEventId,
-    TimelineLayerKind, TimelineLayerSummary, TimelineSnapRequest, TimelineSnapshot,
-    TimelineTrackKind, TimelineVideoAutomationSummary, TouchSurfaceSummary, Transform2D,
-    ValueEffectDirection, ValueEffectInterpolation, ValueEffectMode, ValueEffectPoint,
-    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBlendMode, VideoColorAdjust,
-    VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust, VideoIsfControlKind,
-    VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId, VideoLayerState,
-    VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
-    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
-    VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
+    ColorEffectInterpolation, ColorEffectRequest, ColorEffectSpatialRecipe, ColorMappingCellTarget,
+    ColorMappingEffectRequest, ColorMappingPlaybackDirection, ColorMappingSampling,
+    ColorMappingWrapMode, CompositionId, CompositionSummary, CueEffectTarget, CueFixtureTarget,
+    CueId, CueIfcbTiming, CueListId, CueListSummary, CueLiveModifierSettings, CueLiveModifierState,
+    CueNodeGraphTarget, CuePaletteTarget, CuePartSummary, CueStepSummary, CueSummary,
+    CurveEffectPoint, CurveEffectRequest, DmxMergeMode, DmxModeSummary, DmxOutputConfig,
+    DmxOutputProtocol, DmxOutputRouteTelemetry, DmxUniversePreview, EffectBlendMode,
+    EffectClockSync, EffectId, EffectKind, EffectParamsSnapshot, EffectSummary, EngineSnapshot,
+    EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId, FixtureId, FixtureLimits,
+    FixtureProfileSummary, LfoEffectRequest, LfoShape, LiveAudioFrame, LiveAudioReactiveFeatures,
+    MappingEffectDirection, MappingEffectRequest, MoveCoordinateMode, MoveDirection,
+    MoveEffectRequest, MovePathPoint, NodeGraphAudioRuntimeStatus, NodeGraphId, NodeGraphNodeKind,
+    NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId, PatchFixtureRequest,
+    PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot,
+    ProgrammerValueSummary, RecallMode, ReferencePaletteSummary, Rotation3, StageMapConfig,
+    StageMapPresetSummary, StageObjectId, StageObjectSummary, SubmasterSummary,
+    TimelineAudioClipId, TimelineAudioClipSummary, TimelineAutomationSummary,
+    TimelineCueEventSummary, TimelineEventId, TimelineLayerKind, TimelineLayerSummary,
+    TimelineSnapRequest, TimelineSnapshot, TimelineTrackKind, TimelineVideoAutomationSummary,
+    TouchSurfaceSummary, Transform2D, ValueEffectDirection, ValueEffectInterpolation,
+    ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
+    VideoBlendMode, VideoColorAdjust, VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust,
+    VideoIsfControlKind, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId,
+    VideoLayerState, VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind,
+    VideoOutputMapping, VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget,
+    VideoParam, VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
     LIVE_AUDIO_FEATURE_BAND_CAPACITY, MAX_CUE_AUTHORED_BEATS, MAX_TIMELINE_SCENE_BLOCK_LOOPS,
     MIN_CUE_AUTHORED_BEATS,
 };
@@ -379,6 +380,13 @@ pub enum EngineCommand {
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
+    AddColorMappingEffect {
+        effect_id: EffectId,
+        request: ColorMappingEffectRequest,
+        enabled: bool,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     UpdateLfoEffect {
         effect_id: EffectId,
         request: LfoEffectRequest,
@@ -420,6 +428,12 @@ pub enum EngineCommand {
     UpdateMappingEffect {
         effect_id: EffectId,
         request: MappingEffectRequest,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    UpdateColorMappingEffect {
+        effect_id: EffectId,
+        request: ColorMappingEffectRequest,
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
@@ -1089,6 +1103,7 @@ impl EngineCommand {
                 | EngineCommand::AddValueEffect { .. }
                 | EngineCommand::AddCurveEffect { .. }
                 | EngineCommand::AddMappingEffect { .. }
+                | EngineCommand::AddColorMappingEffect { .. }
                 | EngineCommand::UpdateLfoEffect { .. }
                 | EngineCommand::UpdatePositionWaveEffect { .. }
                 | EngineCommand::UpdateColorEffect { .. }
@@ -1097,6 +1112,7 @@ impl EngineCommand {
                 | EngineCommand::UpdateValueEffect { .. }
                 | EngineCommand::UpdateCurveEffect { .. }
                 | EngineCommand::UpdateMappingEffect { .. }
+                | EngineCommand::UpdateColorMappingEffect { .. }
                 | EngineCommand::SetEffectEnabled { .. }
                 | EngineCommand::SetEffectEnabledPublished { .. }
                 | EngineCommand::SetEffectVideoTargetPosition { .. }
@@ -1773,6 +1789,46 @@ impl EngineHandle {
         receiver
             .recv_timeout(Duration::from_secs(3))
             .map_err(|error| format!("Mapping effect update acknowledgement failed: {error}"))?
+    }
+
+    pub fn add_color_mapping_effect(
+        &self,
+        effect_id: EffectId,
+        request: ColorMappingEffectRequest,
+        enabled: bool,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::AddColorMappingEffect {
+            effect_id,
+            request,
+            enabled,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Colour Mapping effect add acknowledgement failed: {error}"))?
+    }
+
+    pub fn update_color_mapping_effect(
+        &self,
+        effect_id: EffectId,
+        request: ColorMappingEffectRequest,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::UpdateColorMappingEffect {
+            effect_id,
+            request,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| {
+                format!("Colour Mapping effect update acknowledgement failed: {error}")
+            })?
     }
 
     pub fn set_effect_enabled_published(
@@ -2962,6 +3018,7 @@ enum RuntimeEffectKind {
     Value(RuntimeValueEffect),
     Curve(RuntimeCurveEffect),
     Mapping(RuntimeMappingEffect),
+    ColorMapping(RuntimeColorMappingEffect),
 }
 
 fn clear_runtime_effect_caches(kind: &RuntimeEffectKind) {
@@ -2992,6 +3049,11 @@ fn clear_runtime_effect_caches(kind: &RuntimeEffectKind) {
             }
         }
         RuntimeEffectKind::Mapping(runtime) => {
+            for target in &runtime.targets {
+                target.cached.set(None);
+            }
+        }
+        RuntimeEffectKind::ColorMapping(runtime) => {
             for target in &runtime.targets {
                 target.cached.set(None);
             }
@@ -3209,6 +3271,28 @@ struct RuntimeColorEffect {
 struct RuntimeColorSpatialState {
     targets: Vec<RuntimeColorSpatialTarget>,
     attribute_indices: HashMap<FixtureId, HashMap<String, usize>>,
+}
+
+#[derive(Clone)]
+struct RuntimeColorMappingEffect {
+    request: ColorMappingEffectRequest,
+    /// Packed protocol pixels decoded once on command/rebuild.
+    frames: Vec<Vec<ColorEffectColor>>,
+    targets: Vec<RuntimeColorMappingTarget>,
+    attribute_indices: HashMap<FixtureId, HashMap<String, usize>>,
+}
+
+#[derive(Clone)]
+struct RuntimeColorMappingTarget {
+    sample: RuntimeColorMappingSample,
+    binding: RuntimeColorBinding,
+    cached: Cell<Option<RuntimeColorEvaluation>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RuntimeColorMappingSample {
+    indices: [usize; 4],
+    weights: [f32; 4],
 }
 
 #[derive(Debug, Clone)]
@@ -4716,6 +4800,17 @@ impl EngineRuntime {
                         created_at: now,
                     })
                 }
+                RuntimeEffectKind::ColorMapping(runtime) => {
+                    let runtime = self
+                        .restore_color_mapping_effect_request(runtime.request)
+                        .ok()?;
+                    Some(RuntimeEffect {
+                        id: effect.id,
+                        kind: RuntimeEffectKind::ColorMapping(runtime),
+                        enabled: effect.enabled,
+                        created_at: now,
+                    })
+                }
             })
             .collect();
         self.sanitize_cue_effect_targets();
@@ -4890,6 +4985,8 @@ impl EngineRuntime {
                     | EngineCommand::UpdateCurveEffect { .. }
                     | EngineCommand::AddMappingEffect { .. }
                     | EngineCommand::UpdateMappingEffect { .. }
+                    | EngineCommand::AddColorMappingEffect { .. }
+                    | EngineCommand::UpdateColorMappingEffect { .. }
                     | EngineCommand::SetEffectEnabledPublished { .. }
                     | EngineCommand::UpsertNodeGraphPublished { .. }
                     | EngineCommand::SetNodeGraphEnabledPublished { .. }
@@ -5013,6 +5110,7 @@ impl EngineRuntime {
                 self.rebuild_value_effect_targets();
                 self.rebuild_curve_effect_targets();
                 self.rebuild_mapping_effect_targets();
+                self.rebuild_color_mapping_effect_targets();
                 self.last_error = None;
             }
             EngineCommand::RemoveFixture(fixture_id) => {
@@ -5260,6 +5358,7 @@ impl EngineRuntime {
                     self.rebuild_value_effect_targets();
                     self.rebuild_curve_effect_targets();
                     self.rebuild_mapping_effect_targets();
+                    self.rebuild_color_mapping_effect_targets();
                     self.last_error = None;
                 } else {
                     self.last_error = Some(format!("Fixture {fixture_id} was not found"));
@@ -5904,6 +6003,47 @@ impl EngineRuntime {
                         "Engine snapshot was busy; Mapping effect add was rolled back",
                 });
             }
+            EngineCommand::AddColorMappingEffect {
+                effect_id,
+                request,
+                enabled,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RemoveAddedEffect {
+                    effect_id,
+                    last_error: previous_last_error.clone(),
+                };
+                let expired = Instant::now() > expires_at;
+                let result = if expired {
+                    Err("Colour Mapping effect add expired before engine execution".to_string())
+                } else if self.effects.iter().any(|effect| effect.id == effect_id) {
+                    Err(format!("Effect {effect_id} already exists"))
+                } else {
+                    self.resolve_color_mapping_effect_request(request)
+                        .map(|runtime| {
+                            self.effects.push(RuntimeEffect {
+                                id: effect_id,
+                                kind: RuntimeEffectKind::ColorMapping(runtime),
+                                enabled,
+                                created_at: Instant::now(),
+                            });
+                        })
+                };
+                self.last_error = if expired {
+                    previous_last_error
+                } else {
+                    result.as_ref().err().cloned()
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Colour Mapping effect add was rolled back",
+                });
+            }
             EngineCommand::UpdateLfoEffect { effect_id, request } => {
                 let request = match self.resolve_lfo_effect_request(request) {
                     Ok(request) => request,
@@ -6347,6 +6487,68 @@ impl EngineRuntime {
                         "Engine snapshot was busy; Mapping effect update was rolled back",
                 });
             }
+            EngineCommand::UpdateColorMappingEffect {
+                effect_id,
+                request,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let previous_index = self
+                    .effects
+                    .iter()
+                    .position(|effect| effect.id == effect_id);
+                let reconform_referenced_events =
+                    self.timeline_has_conformed_events_for_effect(effect_id);
+                let rollback = PendingCommandRollback::RestoreEffect {
+                    index: previous_index,
+                    effect: previous_index.map(|index| self.effects[index].clone()),
+                    timeline_events: reconform_referenced_events
+                        .then(|| self.timeline_events.clone()),
+                    last_error: previous_last_error.clone(),
+                };
+                let expired = Instant::now() > expires_at;
+                let result = if expired {
+                    Err("Colour Mapping effect update expired before engine execution".to_string())
+                } else {
+                    self.resolve_color_mapping_effect_request(request)
+                        .and_then(|runtime| {
+                            let effect = self
+                                .effects
+                                .iter_mut()
+                                .find(|effect| effect.id == effect_id)
+                                .ok_or_else(|| format!("Effect {effect_id} was not found"))?;
+                            if !matches!(&effect.kind, RuntimeEffectKind::ColorMapping(_)) {
+                                return Err(format!(
+                                    "Effect {effect_id} is not a Colour Mapping effect"
+                                ));
+                            }
+                            effect.kind = RuntimeEffectKind::ColorMapping(runtime);
+                            effect.created_at = Instant::now();
+                            Ok(())
+                        })
+                        .and_then(|()| {
+                            if reconform_referenced_events {
+                                let bpm = self.clock.bpm;
+                                self.reconform_timeline_events_to_bpm(bpm)
+                            } else {
+                                Ok(())
+                            }
+                        })
+                };
+                self.last_error = if expired {
+                    previous_last_error
+                } else {
+                    result.as_ref().err().cloned()
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Colour Mapping effect update was rolled back",
+                });
+            }
             EngineCommand::SetEffectEnabled { effect_id, enabled } => {
                 if let Some(effect) = self
                     .effects
@@ -6432,7 +6634,8 @@ impl EngineRuntime {
                     | RuntimeEffectKind::Move(_)
                     | RuntimeEffectKind::Value(_)
                     | RuntimeEffectKind::Curve(_)
-                    | RuntimeEffectKind::Mapping(_) => {
+                    | RuntimeEffectKind::Mapping(_)
+                    | RuntimeEffectKind::ColorMapping(_) => {
                         self.last_error = Some(format!(
                             "Lighting-only effect {effect_id} cannot target video layers"
                         ));
@@ -9914,6 +10117,16 @@ impl EngineRuntime {
                 !runtime.request.fixture_ids.is_empty()
                     || !runtime.request.target_group_ids.is_empty()
             }
+            RuntimeEffectKind::ColorMapping(runtime) => {
+                runtime.request.fixture_ids.retain(|id| *id != fixture_id);
+                runtime
+                    .request
+                    .cells
+                    .retain(|cell| cell.fixture_id != fixture_id);
+                !runtime.request.fixture_ids.is_empty()
+                    || !runtime.request.target_group_ids.is_empty()
+                    || !runtime.request.cells.is_empty()
+            }
         });
         self.rebuild_color_effect_targets();
         self.rebuild_chaser_effect_targets();
@@ -9921,6 +10134,7 @@ impl EngineRuntime {
         self.rebuild_value_effect_targets();
         self.rebuild_curve_effect_targets();
         self.rebuild_mapping_effect_targets();
+        self.rebuild_color_mapping_effect_targets();
         self.sanitize_node_graph_references();
         self.clear_empty_active_fade();
         self.last_error = None;
@@ -9967,7 +10181,8 @@ impl EngineRuntime {
             | RuntimeEffectKind::Move(_)
             | RuntimeEffectKind::Value(_)
             | RuntimeEffectKind::Curve(_)
-            | RuntimeEffectKind::Mapping(_) => true,
+            | RuntimeEffectKind::Mapping(_)
+            | RuntimeEffectKind::ColorMapping(_) => true,
         });
         self.sanitize_cue_effect_targets();
         self.sanitize_node_graph_references();
@@ -11924,6 +12139,9 @@ impl EngineRuntime {
             EffectParamsSnapshot::Mapping(request) => {
                 RuntimeEffectKind::Mapping(self.resolve_mapping_effect_request(request.clone())?)
             }
+            EffectParamsSnapshot::ColorMapping(request) => RuntimeEffectKind::ColorMapping(
+                self.resolve_color_mapping_effect_request(request.clone())?,
+            ),
         };
         Ok(RuntimeEffect {
             id: effect_id,
@@ -13381,6 +13599,80 @@ impl EngineRuntime {
             };
             let has_group_reference = !runtime.request.target_group_ids.is_empty();
             match runtime_mapping_effect_from_request(runtime.request.clone(), fixtures, false) {
+                Ok(rebuilt) => {
+                    *runtime = rebuilt;
+                    !runtime.targets.is_empty() || has_group_reference
+                }
+                Err(_) => has_group_reference,
+            }
+        });
+        self.sanitize_cue_effect_targets();
+    }
+
+    fn resolve_color_mapping_effect_request(
+        &self,
+        request: ColorMappingEffectRequest,
+    ) -> Result<RuntimeColorMappingEffect, String> {
+        self.resolve_color_mapping_effect_request_with_policy(request, false)
+    }
+
+    fn restore_color_mapping_effect_request(
+        &self,
+        request: ColorMappingEffectRequest,
+    ) -> Result<RuntimeColorMappingEffect, String> {
+        self.resolve_color_mapping_effect_request_with_policy(request, true)
+    }
+
+    fn resolve_color_mapping_effect_request_with_policy(
+        &self,
+        mut request: ColorMappingEffectRequest,
+        allow_unresolved_groups: bool,
+    ) -> Result<RuntimeColorMappingEffect, String> {
+        validate_color_mapping_effect_request(&request)?;
+        request.fixture_ids = self.normalize_effect_fixture_ids(request.fixture_ids)?;
+        request.target_group_ids = normalize_runtime_group_ids(request.target_group_ids)?;
+        for cell in &request.cells {
+            if !self
+                .fixtures
+                .iter()
+                .any(|fixture| fixture.id == cell.fixture_id)
+            {
+                return Err(format!(
+                    "Colour Mapping cell fixture {} was not found",
+                    cell.fixture_id
+                ));
+            }
+        }
+        let has_group_reference = !request.target_group_ids.is_empty();
+        for group_id in &request.target_group_ids {
+            if self.fixture_ids_in_group(group_id).is_empty() {
+                if allow_unresolved_groups {
+                    continue;
+                }
+                return Err(format!(
+                    "Group '{group_id}' was not found or has no fixtures"
+                ));
+            }
+        }
+        runtime_color_mapping_effect_from_request(
+            request,
+            &self.fixtures,
+            !(allow_unresolved_groups && has_group_reference),
+        )
+    }
+
+    fn rebuild_color_mapping_effect_targets(&mut self) {
+        let fixtures = &self.fixtures;
+        self.effects.retain_mut(|effect| {
+            let RuntimeEffectKind::ColorMapping(runtime) = &mut effect.kind else {
+                return true;
+            };
+            let has_group_reference = !runtime.request.target_group_ids.is_empty();
+            match runtime_color_mapping_effect_from_request(
+                runtime.request.clone(),
+                fixtures,
+                false,
+            ) {
                 Ok(rebuilt) => {
                     *runtime = rebuilt;
                     !runtime.targets.is_empty() || has_group_reference
@@ -14965,6 +15257,20 @@ impl EngineRuntime {
                         rate,
                     ) {
                         value = blend_effect_value(value, evaluated, &runtime.request.blend_mode);
+                    }
+                }
+                RuntimeEffectKind::ColorMapping(runtime) => {
+                    if let Some(next) = evaluate_runtime_color_mapping_attribute_at_rate(
+                        runtime,
+                        fixture.id,
+                        attribute,
+                        value,
+                        effect.created_at,
+                        now,
+                        &clock,
+                        rate,
+                    ) {
+                        value = next;
                     }
                 }
                 RuntimeEffectKind::Curve(runtime) => {
@@ -17362,7 +17668,8 @@ impl EngineRuntime {
                 | RuntimeEffectKind::Move(_)
                 | RuntimeEffectKind::Value(_)
                 | RuntimeEffectKind::Curve(_)
-                | RuntimeEffectKind::Mapping(_) => {}
+                | RuntimeEffectKind::Mapping(_)
+                | RuntimeEffectKind::ColorMapping(_) => {}
             }
         }
         for graph in &self.node_graphs {
@@ -18175,8 +18482,9 @@ fn live_modifier_shifted_phase(phase: f32, offset: f32) -> f32 {
 /// Applies one scene's effective live modifier to authored effect params.
 /// Kind mapping: speed scales period/step duration/wave speed and shared-clock
 /// beats; size scales level ranges (Lfo/PositionWave/Value/Curve/Mapping), Chaser feature
-/// ranges, and Move path size; Color has no amplitude so size is a deliberate
-/// no-op there; phase adds a wrapped traversal offset on every kind.
+/// ranges, and Move path size; Color and Colour Mapping have no amplitude so
+/// size is a deliberate no-op there; phase adds a wrapped traversal offset on
+/// every kind.
 fn effect_params_with_live_modifier(
     params: &EffectParamsSnapshot,
     modifier: CueLiveModifierSettings,
@@ -18258,6 +18566,12 @@ fn effect_params_with_live_modifier(
                 live_modifier_scaled_level_range(request.low, request.high, modifier.size);
             request.low = low;
             request.high = high;
+            request.phase = live_modifier_shifted_phase(request.phase, modifier.phase);
+        }
+        EffectParamsSnapshot::ColorMapping(request) => {
+            request.period_ms = live_modifier_scaled_period_ms(request.period_ms, modifier.speed);
+            request.clock_sync =
+                live_modifier_scaled_clock_sync(request.clock_sync, modifier.speed);
             request.phase = live_modifier_shifted_phase(request.phase, modifier.phase);
         }
     }
@@ -19031,6 +19345,7 @@ fn runtime_effect_free_run_period_ms(kind: &RuntimeEffectKind) -> Option<f64> {
         RuntimeEffectKind::Value(runtime) => runtime.request.period_ms as f64,
         RuntimeEffectKind::Curve(runtime) => runtime.request.period_ms as f64,
         RuntimeEffectKind::Mapping(runtime) => runtime.request.period_ms as f64,
+        RuntimeEffectKind::ColorMapping(runtime) => runtime.request.period_ms as f64,
     };
     (period_ms.is_finite() && period_ms > 0.0).then_some(period_ms)
 }
@@ -19058,6 +19373,7 @@ fn effect_params_snapshot_free_run_period_ms(params: &EffectParamsSnapshot) -> O
         EffectParamsSnapshot::Value(request) => request.period_ms as f64,
         EffectParamsSnapshot::Curve(request) => request.period_ms as f64,
         EffectParamsSnapshot::Mapping(request) => request.period_ms as f64,
+        EffectParamsSnapshot::ColorMapping(request) => request.period_ms as f64,
     };
     (period_ms.is_finite() && period_ms > 0.0).then_some(period_ms)
 }
@@ -20259,9 +20575,10 @@ fn effect_targets_fixture_attribute(
                     fixture,
                 )
         }
-        RuntimeEffectKind::Color(_) | RuntimeEffectKind::Chaser(_) | RuntimeEffectKind::Move(_) => {
-            false
-        }
+        RuntimeEffectKind::Color(_)
+        | RuntimeEffectKind::ColorMapping(_)
+        | RuntimeEffectKind::Chaser(_)
+        | RuntimeEffectKind::Move(_) => false,
     }
 }
 
@@ -20923,6 +21240,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             value: None,
             curve: None,
             mapping: None,
+            color_mapping: None,
         },
         RuntimeEffectKind::PositionWave(request) => EffectSummary {
             id: effect.id,
@@ -20950,6 +21268,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             value: None,
             curve: None,
             mapping: None,
+            color_mapping: None,
         },
         RuntimeEffectKind::Color(runtime) => EffectSummary {
             id: effect.id,
@@ -20977,6 +21296,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             value: None,
             curve: None,
             mapping: None,
+            color_mapping: None,
         },
         RuntimeEffectKind::Chaser(runtime) => {
             let mut fixture_ids = Vec::new();
@@ -21024,6 +21344,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
                 value: None,
                 curve: None,
                 mapping: None,
+                color_mapping: None,
             }
         }
         RuntimeEffectKind::Move(runtime) => EffectSummary {
@@ -21052,6 +21373,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             value: None,
             curve: None,
             mapping: None,
+            color_mapping: None,
         },
         RuntimeEffectKind::Value(runtime) => EffectSummary {
             id: effect.id,
@@ -21079,6 +21401,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             value: Some(runtime.request.clone()),
             curve: None,
             mapping: None,
+            color_mapping: None,
         },
         RuntimeEffectKind::Curve(runtime) => EffectSummary {
             id: effect.id,
@@ -21106,6 +21429,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             value: None,
             curve: Some(runtime.request.clone()),
             mapping: None,
+            color_mapping: None,
         },
         RuntimeEffectKind::Mapping(runtime) => EffectSummary {
             id: effect.id,
@@ -21133,6 +21457,35 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             value: None,
             curve: None,
             mapping: Some(runtime.request.clone()),
+            color_mapping: None,
+        },
+        RuntimeEffectKind::ColorMapping(runtime) => EffectSummary {
+            id: effect.id,
+            label: runtime.request.label.clone(),
+            effect_type: EffectKind::ColorMapping,
+            fixture_ids: runtime.request.fixture_ids.clone(),
+            target_group_ids: runtime.request.target_group_ids.clone(),
+            attribute: "Colour Mapping".to_string(),
+            video_targets: Vec::new(),
+            shape: LfoShape::Saw,
+            period_ms: Some(runtime.request.period_ms),
+            clock_sync: runtime.request.clock_sync,
+            low: 0,
+            high: u16::MAX,
+            phase: runtime.request.phase,
+            blend_mode: runtime.request.blend_mode.clone(),
+            origin: None,
+            direction: None,
+            speed: None,
+            wavelength: None,
+            enabled: effect.enabled,
+            color: None,
+            chaser: None,
+            move_effect: None,
+            value: None,
+            curve: None,
+            mapping: None,
+            color_mapping: Some(runtime.request.clone()),
         },
     }
 }
@@ -21226,6 +21579,12 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
                 target_indices: HashMap::new(),
             })
         }
+        EffectKind::ColorMapping => RuntimeEffectKind::ColorMapping(RuntimeColorMappingEffect {
+            request: effect.color_mapping.clone()?,
+            frames: Vec::new(),
+            targets: Vec::new(),
+            attribute_indices: HashMap::new(),
+        }),
     };
     Some(RuntimeEffect {
         id: effect.id,
@@ -22074,6 +22433,103 @@ pub fn validate_mapping_effect_request(request: &MappingEffectRequest) -> Result
     Ok(())
 }
 
+pub fn validate_color_mapping_effect_request(
+    request: &ColorMappingEffectRequest,
+) -> Result<(), String> {
+    if request.label.trim().is_empty() {
+        return Err("Colour Mapping effect label is required".to_string());
+    }
+    if request.fixture_ids.is_empty()
+        && request.target_group_ids.is_empty()
+        && request.cells.is_empty()
+    {
+        return Err(
+            "Colour Mapping effect must target at least one fixture, group, or matrix cell"
+                .to_string(),
+        );
+    }
+    if !(1..=64).contains(&request.width) || !(1..=64).contains(&request.height) {
+        return Err("Colour Mapping raster dimensions must each be within 1..64".to_string());
+    }
+    if request.frames.is_empty() || request.frames.len() > 64 {
+        return Err("Colour Mapping requires between 1 and 64 embedded frames".to_string());
+    }
+    if matches!(request.source_kind, protocol::ColorMappingSourceKind::Video)
+        && request.frames.len() < 2
+    {
+        return Err("Colour Mapping video sources require at least 2 frames".to_string());
+    }
+    if !matches!(request.source_kind, protocol::ColorMappingSourceKind::Video)
+        && request.frames.len() != 1
+    {
+        return Err("Colour Mapping image and text sources require exactly 1 frame".to_string());
+    }
+    let expected_pixels = usize::from(request.width) * usize::from(request.height);
+    for (index, frame) in request.frames.iter().enumerate() {
+        if frame.pixels.len() != expected_pixels {
+            return Err(format!(
+                "Colour Mapping frame {index} must contain exactly {expected_pixels} pixels"
+            ));
+        }
+        if frame.pixels.iter().any(|pixel| *pixel > 0xffff_ffff_ffff) {
+            return Err(format!(
+                "Colour Mapping frame {index} contains a pixel outside packed RGB16"
+            ));
+        }
+    }
+    if request.cells.len() > 4_096 {
+        return Err("Colour Mapping supports at most 4096 authored matrix cells".to_string());
+    }
+    for cell in &request.cells {
+        if !cell.u.is_finite()
+            || !cell.v.is_finite()
+            || !(-16.0..=16.0).contains(&cell.u)
+            || !(-16.0..=16.0).contains(&cell.v)
+        {
+            return Err(
+                "Colour Mapping cell coordinates must be finite and within -16..16".to_string(),
+            );
+        }
+    }
+    if request.period_ms < 10 {
+        return Err("Colour Mapping period must be at least 10 ms".to_string());
+    }
+    if let Some(clock_sync) = request.clock_sync {
+        if !clock_sync.beats.is_finite() || clock_sync.beats <= 0.0 {
+            return Err(
+                "Colour Mapping clock sync beats must be finite and greater than 0".to_string(),
+            );
+        }
+    }
+    if !request.phase.is_finite() || !(0.0..=1.0).contains(&request.phase) {
+        return Err("Colour Mapping phase must be finite and within 0..1".to_string());
+    }
+    if !request.offset_u.is_finite()
+        || !request.offset_v.is_finite()
+        || !(-16.0..=16.0).contains(&request.offset_u)
+        || !(-16.0..=16.0).contains(&request.offset_v)
+    {
+        return Err("Colour Mapping UV offsets must be finite and within -16..16".to_string());
+    }
+    if !request.scale_u.is_finite()
+        || !request.scale_v.is_finite()
+        || !(0.01..=16.0).contains(&request.scale_u.abs())
+        || !(0.01..=16.0).contains(&request.scale_v.abs())
+    {
+        return Err(
+            "Colour Mapping UV scales must have a finite magnitude within 0.01..16".to_string(),
+        );
+    }
+    if !request.rotation_degrees.is_finite()
+        || !(-3_600.0..=3_600.0).contains(&request.rotation_degrees)
+    {
+        return Err(
+            "Colour Mapping rotation must be finite and within -3600..3600 degrees".to_string(),
+        );
+    }
+    Ok(())
+}
+
 fn runtime_mapping_effect_from_request(
     request: MappingEffectRequest,
     fixtures: &[RuntimeFixture],
@@ -22226,6 +22682,448 @@ fn evaluate_mapping_effect_normalized(
         &request.shape,
         (request.phase + traversal - order_phase).rem_euclid(1.0),
     )
+}
+
+fn runtime_color_mapping_effect_from_request(
+    request: ColorMappingEffectRequest,
+    fixtures: &[RuntimeFixture],
+    require_resolved_target: bool,
+) -> Result<RuntimeColorMappingEffect, String> {
+    validate_color_mapping_effect_request(&request)?;
+    let frames = request
+        .frames
+        .iter()
+        .map(|frame| {
+            frame
+                .pixels
+                .iter()
+                .map(|pixel| ColorEffectColor {
+                    red: ((pixel >> 32) & 0xffff) as u16,
+                    green: ((pixel >> 16) & 0xffff) as u16,
+                    blue: (pixel & 0xffff) as u16,
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    let mut pending = Vec::<(FixtureId, u16, u32, f32, f32, RuntimeColorBinding)>::new();
+    if request.cells.is_empty() {
+        let mut selected = Vec::<&RuntimeFixture>::new();
+        let mut seen = HashSet::new();
+        for fixture_id in &request.fixture_ids {
+            if let Some(fixture) = fixtures
+                .iter()
+                .find(|fixture| fixture.id == *fixture_id && fixture.color_binding.is_some())
+            {
+                if seen.insert(fixture.id) {
+                    selected.push(fixture);
+                }
+            }
+        }
+        for group_id in &request.target_group_ids {
+            for fixture in fixtures.iter().filter(|fixture| {
+                fixture.color_binding.is_some()
+                    && fixture
+                        .request
+                        .group_ids
+                        .iter()
+                        .any(|fixture_group| group_matches(fixture_group, group_id))
+            }) {
+                if seen.insert(fixture.id) {
+                    selected.push(fixture);
+                }
+            }
+        }
+        let min_x = selected
+            .iter()
+            .map(|fixture| fixture.request.position.x)
+            .fold(f32::INFINITY, f32::min);
+        let max_x = selected
+            .iter()
+            .map(|fixture| fixture.request.position.x)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let min_z = selected
+            .iter()
+            .map(|fixture| fixture.request.position.z)
+            .fold(f32::INFINITY, f32::min);
+        let max_z = selected
+            .iter()
+            .map(|fixture| fixture.request.position.z)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let normalize = |value: f32, minimum: f32, maximum: f32| {
+            let span = maximum - minimum;
+            if span.is_finite() && span.abs() > f32::EPSILON {
+                ((value - minimum) / span).clamp(0.0, 1.0)
+            } else {
+                0.5
+            }
+        };
+        for (selection_index, fixture) in selected.into_iter().enumerate() {
+            pending.push((
+                fixture.id,
+                0,
+                selection_index as u32,
+                normalize(fixture.request.position.x, min_x, max_x),
+                normalize(fixture.request.position.z, min_z, max_z),
+                fixture
+                    .color_binding
+                    .clone()
+                    .expect("selected Colour Mapping fixture has a colour binding"),
+            ));
+        }
+    } else {
+        for cell in &request.cells {
+            let fixture = fixtures
+                .iter()
+                .find(|fixture| fixture.id == cell.fixture_id)
+                .ok_or_else(|| {
+                    format!(
+                        "Colour Mapping cell fixture {} was not found",
+                        cell.fixture_id
+                    )
+                })?;
+            let binding = runtime_color_mapping_cell_binding(fixture, cell)?;
+            pending.push((
+                fixture.id,
+                cell.beam_index,
+                cell.selection_index,
+                cell.u,
+                cell.v,
+                binding,
+            ));
+        }
+    }
+    if require_resolved_target && pending.is_empty() {
+        return Err(
+            "Colour Mapping effect must resolve at least one colour fixture or cell".into(),
+        );
+    }
+
+    let mut targets = Vec::with_capacity(pending.len());
+    let mut attribute_indices = HashMap::<FixtureId, HashMap<String, usize>>::new();
+    for (fixture_id, _beam_index, _selection_index, u, v, binding) in pending {
+        let sample = compile_runtime_color_mapping_sample(&request, u, v);
+        let target_index = targets.len();
+        for attribute in binding.outputs.keys() {
+            if attribute_indices
+                .entry(fixture_id)
+                .or_default()
+                .insert(attribute.clone(), target_index)
+                .is_some()
+            {
+                return Err(format!(
+                    "Colour Mapping fixture {fixture_id} maps attribute '{attribute}' more than once"
+                ));
+            }
+        }
+        targets.push(RuntimeColorMappingTarget {
+            sample,
+            binding,
+            cached: Cell::new(None),
+        });
+    }
+    Ok(RuntimeColorMappingEffect {
+        request,
+        frames,
+        targets,
+        attribute_indices,
+    })
+}
+
+fn runtime_color_mapping_cell_binding(
+    fixture: &RuntimeFixture,
+    cell: &ColorMappingCellTarget,
+) -> Result<RuntimeColorBinding, String> {
+    let controls = &fixture.profile.dmx_modes[fixture.mode_index].controls;
+    let bindings = compile_runtime_color_segment_bindings(controls);
+    let feature_binding = cell.feature_attribute.as_deref().and_then(|feature| {
+        controls
+            .iter()
+            .find(|control| {
+                normalize_chaser_attribute(&control.attribute)
+                    == normalize_chaser_attribute(feature)
+            })
+            .map(|control| {
+                RuntimeColorBinding::new(HashMap::from([(
+                    control.attribute.clone(),
+                    RuntimeColorOutput::Intensity,
+                )]))
+            })
+    });
+    let binding = if cell.feature_attribute.is_some() {
+        // An explicit feature target is authoritative even when the fixture
+        // also exposes multiple RGB/RGBW segments. Falling back to the beam
+        // index here would silently map (for example) an authored Dimmer cell
+        // onto a colour segment.
+        feature_binding
+    } else {
+        bindings
+            .into_iter()
+            .nth(cell.beam_index as usize)
+            .or_else(|| {
+                (cell.beam_index == 0)
+                    .then(|| fixture.color_binding.clone())
+                    .flatten()
+            })
+    };
+    binding.ok_or_else(|| {
+        format!(
+            "Colour Mapping fixture {} has no RGB/RGBW segment {} or feature attribute {:?}",
+            cell.fixture_id, cell.beam_index, cell.feature_attribute
+        )
+    })
+}
+
+fn compile_runtime_color_mapping_sample(
+    request: &ColorMappingEffectRequest,
+    u: f32,
+    v: f32,
+) -> RuntimeColorMappingSample {
+    let radians = request.rotation_degrees.to_radians();
+    let cosine = radians.cos();
+    let sine = radians.sin();
+    let centered_u = (u - 0.5) * request.scale_u;
+    let centered_v = (v - 0.5) * request.scale_v;
+    let transformed_u = centered_u * cosine - centered_v * sine + 0.5 + request.offset_u;
+    let transformed_v = centered_u * sine + centered_v * cosine + 0.5 + request.offset_v;
+    let wrap = |coordinate: f32| match request.wrap_mode {
+        ColorMappingWrapMode::Clamp => coordinate.clamp(0.0, 1.0),
+        ColorMappingWrapMode::Repeat => coordinate.rem_euclid(1.0),
+        ColorMappingWrapMode::Mirror => {
+            let mirrored = coordinate.rem_euclid(2.0);
+            if mirrored <= 1.0 {
+                mirrored
+            } else {
+                2.0 - mirrored
+            }
+        }
+    };
+    let mapped_u = wrap(transformed_u);
+    let mapped_v = wrap(transformed_v);
+    let width = usize::from(request.width);
+    let height = usize::from(request.height);
+    let x = mapped_u * width.saturating_sub(1) as f32;
+    let y = mapped_v * height.saturating_sub(1) as f32;
+    match request.sampling {
+        ColorMappingSampling::Nearest => {
+            let index = y.round() as usize * width + x.round() as usize;
+            RuntimeColorMappingSample {
+                indices: [index; 4],
+                weights: [1.0, 0.0, 0.0, 0.0],
+            }
+        }
+        ColorMappingSampling::Bilinear => {
+            let x0 = x.floor() as usize;
+            let y0 = y.floor() as usize;
+            let x1 = (x0 + 1).min(width - 1);
+            let y1 = (y0 + 1).min(height - 1);
+            let tx = x - x0 as f32;
+            let ty = y - y0 as f32;
+            RuntimeColorMappingSample {
+                indices: [
+                    y0 * width + x0,
+                    y0 * width + x1,
+                    y1 * width + x0,
+                    y1 * width + x1,
+                ],
+                weights: [
+                    (1.0 - tx) * (1.0 - ty),
+                    tx * (1.0 - ty),
+                    (1.0 - tx) * ty,
+                    tx * ty,
+                ],
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_runtime_color_mapping_attribute_at_rate(
+    runtime: &RuntimeColorMappingEffect,
+    fixture_id: FixtureId,
+    attribute: &str,
+    base_value: u16,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> Option<u16> {
+    let target = runtime
+        .attribute_indices
+        .get(&fixture_id)
+        .and_then(|attributes| attributes.get(attribute))
+        .and_then(|index| runtime.targets.get(*index))?;
+    let output = target.binding.outputs.get(attribute)?;
+    let evaluated = target
+        .cached
+        .get()
+        .filter(|evaluation| evaluation.at == now)
+        .unwrap_or_else(|| {
+            let frame_index = color_mapping_frame_index(
+                &runtime.request,
+                runtime.frames.len(),
+                created_at,
+                now,
+                clock,
+                rate,
+            );
+            let frame = &runtime.frames[frame_index];
+            let mut red = 0.0;
+            let mut green = 0.0;
+            let mut blue = 0.0;
+            for index in 0..4 {
+                let color = frame[target.sample.indices[index]];
+                let weight = target.sample.weights[index];
+                red += f32::from(color.red) * weight;
+                green += f32::from(color.green) * weight;
+                blue += f32::from(color.blue) * weight;
+            }
+            let rgb = ColorEffectColor {
+                red: red.round().clamp(0.0, 65_535.0) as u16,
+                green: green.round().clamp(0.0, 65_535.0) as u16,
+                blue: blue.round().clamp(0.0, 65_535.0) as u16,
+            };
+            let evaluated = runtime_color_evaluation_from_rgb(rgb, &target.binding, now);
+            target.cached.set(Some(evaluated));
+            evaluated
+        });
+    let component = match output {
+        RuntimeColorOutput::Red { extract_white } => {
+            if *extract_white {
+                evaluated.rgbw[0]
+            } else {
+                evaluated.rgb.red
+            }
+        }
+        RuntimeColorOutput::Green { extract_white } => {
+            if *extract_white {
+                evaluated.rgbw[1]
+            } else {
+                evaluated.rgb.green
+            }
+        }
+        RuntimeColorOutput::Blue { extract_white } => {
+            if *extract_white {
+                evaluated.rgbw[2]
+            } else {
+                evaluated.rgb.blue
+            }
+        }
+        RuntimeColorOutput::White => evaluated.rgbw[3],
+        RuntimeColorOutput::Amber => evaluated.amber,
+        RuntimeColorOutput::Intensity => {
+            ((u32::from(evaluated.rgb.red)
+                + u32::from(evaluated.rgb.green)
+                + u32::from(evaluated.rgb.blue))
+                / 3) as u16
+        }
+        RuntimeColorOutput::Cyan => evaluated.cmy[0],
+        RuntimeColorOutput::Magenta => evaluated.cmy[1],
+        RuntimeColorOutput::Yellow => evaluated.cmy[2],
+        RuntimeColorOutput::Hue => evaluated.hsv[0],
+        RuntimeColorOutput::Saturation => evaluated.hsv[1],
+        RuntimeColorOutput::Value => evaluated.hsv[2],
+        RuntimeColorOutput::Zero => 0,
+        RuntimeColorOutput::OpenWheel(value) => return Some(*value),
+        RuntimeColorOutput::Wheel(slots) => {
+            let target_color = match runtime.request.blend_mode {
+                EffectBlendMode::Override => evaluated.rgb,
+                EffectBlendMode::Add | EffectBlendMode::Multiply => {
+                    let base_color = slots
+                        .iter()
+                        .find(|slot| (slot.dmx_from..=slot.dmx_to).contains(&base_value))
+                        .map(|slot| slot.color)?;
+                    blend_runtime_color(base_color, evaluated.rgb, &runtime.request.blend_mode)
+                }
+            };
+            return nearest_runtime_color_wheel_value(slots, target_color).or(Some(base_value));
+        }
+    };
+    Some(blend_effect_value(
+        base_value,
+        component,
+        &runtime.request.blend_mode,
+    ))
+}
+
+fn runtime_color_evaluation_from_rgb(
+    rgb: ColorEffectColor,
+    binding: &RuntimeColorBinding,
+    now: Instant,
+) -> RuntimeColorEvaluation {
+    let rgbw = if binding.conversions.rgbw {
+        let white = rgb.red.min(rgb.green).min(rgb.blue);
+        [
+            rgb.red.saturating_sub(white),
+            rgb.green.saturating_sub(white),
+            rgb.blue.saturating_sub(white),
+            white,
+        ]
+    } else {
+        [0; 4]
+    };
+    let amber = if binding.conversions.amber {
+        rgb.red.min(rgb.green).saturating_sub(rgb.blue)
+    } else {
+        0
+    };
+    let cmy = if binding.conversions.cmy {
+        [
+            u16::MAX - rgb.red,
+            u16::MAX - rgb.green,
+            u16::MAX - rgb.blue,
+        ]
+    } else {
+        [0; 3]
+    };
+    let hsv = if binding.conversions.hsv {
+        color_to_hsv_u16(rgb)
+    } else {
+        [0; 3]
+    };
+    RuntimeColorEvaluation {
+        at: now,
+        rgb,
+        rgbw,
+        amber,
+        cmy,
+        hsv,
+    }
+}
+
+fn color_mapping_frame_index(
+    request: &ColorMappingEffectRequest,
+    frame_count: usize,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> usize {
+    if frame_count <= 1 {
+        return 0;
+    }
+    let rate = valid_effect_rate(rate);
+    let cycle = if let Some(clock_sync) = request.clock_sync {
+        let beat_position = clock.beat_counter as f32 + clock.beat_phase;
+        beat_position / clock_sync.beats.max(0.000_1) * rate
+    } else {
+        let period = request.period_ms.max(10) as f32 / 1_000.0;
+        now.saturating_duration_since(created_at).as_secs_f32() * rate / period
+    };
+    let phase = (cycle + request.phase).rem_euclid(1.0);
+    let progress = match request.playback_direction {
+        ColorMappingPlaybackDirection::Forward => phase,
+        ColorMappingPlaybackDirection::Reverse => 1.0 - phase,
+        ColorMappingPlaybackDirection::Bounce => {
+            let doubled = phase * 2.0;
+            if doubled <= 1.0 {
+                doubled
+            } else {
+                2.0 - doubled
+            }
+        }
+    };
+    ((progress * frame_count as f32).floor() as usize).min(frame_count - 1)
 }
 
 pub fn validate_chaser_effect_request(request: &ChaserEffectRequest) -> Result<(), String> {
@@ -28493,6 +29391,7 @@ mod tests {
                 value: None,
                 curve: None,
                 mapping: None,
+                color_mapping: None,
             }],
             node_graphs: vec![sample_node_graph(48, 40)],
             output: DmxOutputConfig {
@@ -29974,6 +30873,7 @@ mod tests {
                     value: None,
                     curve: None,
                     mapping: None,
+                    color_mapping: None,
                 },
                 EffectSummary {
                     id: 51,
@@ -30001,6 +30901,7 @@ mod tests {
                     value: None,
                     curve: None,
                     mapping: None,
+                    color_mapping: None,
                 },
                 EffectSummary {
                     id: 52,
@@ -30028,6 +30929,7 @@ mod tests {
                     value: None,
                     curve: None,
                     mapping: None,
+                    color_mapping: None,
                 },
             ],
             ..EngineSnapshot::default()
@@ -30214,6 +31116,7 @@ mod tests {
                     value: None,
                     curve: None,
                     mapping: None,
+                    color_mapping: None,
                 },
                 EffectSummary {
                     id: 41,
@@ -30241,6 +31144,7 @@ mod tests {
                     value: None,
                     curve: None,
                     mapping: None,
+                    color_mapping: None,
                 },
             ],
             ..EngineSnapshot::default()
@@ -44269,6 +45173,42 @@ mod tests {
         }
     }
 
+    fn pack_test_color(red: u16, green: u16, blue: u16) -> u64 {
+        (u64::from(red) << 32) | (u64::from(green) << 16) | u64::from(blue)
+    }
+
+    fn test_color_mapping_request(fixture_ids: Vec<FixtureId>) -> ColorMappingEffectRequest {
+        ColorMappingEffectRequest {
+            label: "Test Colour Mapping".to_string(),
+            fixture_ids,
+            target_group_ids: Vec::new(),
+            source_kind: protocol::ColorMappingSourceKind::Image,
+            width: 2,
+            height: 2,
+            frames: vec![protocol::ColorMappingFrame {
+                pixels: vec![
+                    pack_test_color(u16::MAX, 0, 0),
+                    pack_test_color(0, u16::MAX, 0),
+                    pack_test_color(0, 0, u16::MAX),
+                    pack_test_color(u16::MAX, u16::MAX, u16::MAX),
+                ],
+            }],
+            cells: Vec::new(),
+            playback_direction: ColorMappingPlaybackDirection::Forward,
+            period_ms: 1_000,
+            clock_sync: None,
+            phase: 0.0,
+            offset_u: 0.0,
+            offset_v: 0.0,
+            scale_u: 1.0,
+            scale_v: 1.0,
+            rotation_degrees: 0.0,
+            wrap_mode: ColorMappingWrapMode::Clamp,
+            sampling: ColorMappingSampling::Nearest,
+            blend_mode: EffectBlendMode::Override,
+        }
+    }
+
     fn test_spatial_color_request(recipe: ColorEffectSpatialRecipe) -> ColorEffectRequest {
         let mut request = test_color_request(vec![1], test_color(0, 0, 0));
         request.stops = vec![
@@ -44594,6 +45534,236 @@ mod tests {
             bindings[1].outputs.get("ColorAmber 2"),
             Some(RuntimeColorOutput::Amber)
         ));
+    }
+
+    #[test]
+    fn color_mapping_validation_uv_sampling_and_video_frame_playback_are_independent() {
+        let controls = vec![
+            test_color_control("ColorRed", 1),
+            test_color_control("ColorGreen", 2),
+            test_color_control("ColorBlue", 3),
+        ];
+        let mut fixtures = vec![
+            test_runtime_color_fixture(1, Vec::new(), controls.clone()),
+            test_runtime_color_fixture(2, Vec::new(), controls),
+        ];
+        fixtures[0].request.position = Vec3 {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        };
+        fixtures[1].request.position = Vec3 {
+            x: 1.0,
+            y: 0.0,
+            z: 1.0,
+        };
+
+        let request = test_color_mapping_request(vec![1, 2]);
+        validate_color_mapping_effect_request(&request).unwrap();
+        let runtime = runtime_color_mapping_effect_from_request(request, &fixtures, true).unwrap();
+        assert_eq!(runtime.frames.len(), 1);
+        assert_eq!(runtime.targets.len(), 2);
+
+        let now = Instant::now();
+        assert_eq!(
+            evaluate_runtime_color_mapping_attribute_at_rate(
+                &runtime,
+                1,
+                "ColorRed",
+                0,
+                now,
+                now,
+                &ClockSnapshot::default(),
+                1.0,
+            ),
+            Some(u16::MAX)
+        );
+        assert_eq!(
+            evaluate_runtime_color_mapping_attribute_at_rate(
+                &runtime,
+                2,
+                "ColorBlue",
+                0,
+                now,
+                now,
+                &ClockSnapshot::default(),
+                1.0,
+            ),
+            Some(u16::MAX)
+        );
+
+        let mut bilinear = test_color_mapping_request(vec![1]);
+        bilinear.cells = vec![ColorMappingCellTarget {
+            fixture_id: 1,
+            beam_index: 0,
+            selection_index: 0,
+            u: 0.5,
+            v: 0.5,
+            feature_attribute: None,
+        }];
+        bilinear.sampling = ColorMappingSampling::Bilinear;
+        let bilinear =
+            runtime_color_mapping_effect_from_request(bilinear, &fixtures, true).unwrap();
+        let center = evaluate_runtime_color_mapping_attribute_at_rate(
+            &bilinear,
+            1,
+            "ColorGreen",
+            0,
+            now,
+            now,
+            &ClockSnapshot::default(),
+            1.0,
+        )
+        .unwrap();
+        assert!((32_767..=32_768).contains(&center));
+
+        let mut video = test_color_mapping_request(vec![1]);
+        video.source_kind = protocol::ColorMappingSourceKind::Video;
+        video.width = 1;
+        video.height = 1;
+        video.frames = vec![
+            protocol::ColorMappingFrame {
+                pixels: vec![pack_test_color(u16::MAX, 0, 0)],
+            },
+            protocol::ColorMappingFrame {
+                pixels: vec![pack_test_color(0, 0, u16::MAX)],
+            },
+        ];
+        let video = runtime_color_mapping_effect_from_request(video, &fixtures, true).unwrap();
+        assert_eq!(
+            evaluate_runtime_color_mapping_attribute_at_rate(
+                &video,
+                1,
+                "ColorBlue",
+                0,
+                now,
+                now + Duration::from_millis(600),
+                &ClockSnapshot::default(),
+                1.0,
+            ),
+            Some(u16::MAX)
+        );
+
+        let mut invalid = test_color_mapping_request(vec![1]);
+        invalid.frames[0].pixels.pop();
+        assert!(validate_color_mapping_effect_request(&invalid)
+            .unwrap_err()
+            .contains("exactly 4 pixels"));
+
+        let mut feature_controls = vec![
+            test_color_control("ColorRed", 1),
+            test_color_control("ColorGreen", 2),
+            test_color_control("ColorBlue", 3),
+            test_color_control("ColorRed 2", 4),
+            test_color_control("ColorGreen 2", 5),
+            test_color_control("ColorBlue 2", 6),
+        ];
+        feature_controls.push(sample_profile().dmx_modes[0].controls[0].clone());
+        let feature_fixture = test_runtime_color_fixture(3, Vec::new(), feature_controls);
+        let feature_binding = runtime_color_mapping_cell_binding(
+            &feature_fixture,
+            &ColorMappingCellTarget {
+                fixture_id: 3,
+                beam_index: 1,
+                selection_index: 0,
+                u: 0.5,
+                v: 0.5,
+                feature_attribute: Some("Dimmer".to_string()),
+            },
+        )
+        .unwrap();
+        assert_eq!(feature_binding.outputs.len(), 1);
+        assert!(matches!(
+            feature_binding.outputs.get("Dimmer"),
+            Some(RuntimeColorOutput::Intensity)
+        ));
+    }
+
+    #[test]
+    fn color_mapping_summary_roundtrip_retains_independent_body() {
+        let controls = vec![
+            test_color_control("ColorRed", 1),
+            test_color_control("ColorGreen", 2),
+            test_color_control("ColorBlue", 3),
+        ];
+        let fixtures = vec![test_runtime_color_fixture(1, Vec::new(), controls)];
+        let request = test_color_mapping_request(vec![1]);
+        let runtime =
+            runtime_color_mapping_effect_from_request(request.clone(), &fixtures, true).unwrap();
+        let summary = effect_summary(&RuntimeEffect {
+            id: 91,
+            kind: RuntimeEffectKind::ColorMapping(runtime),
+            enabled: true,
+            created_at: Instant::now(),
+        });
+        assert_eq!(summary.effect_type, EffectKind::ColorMapping);
+        assert_eq!(summary.color_mapping, Some(request));
+        assert!(summary.color.is_none());
+        assert!(summary.mapping.is_none());
+        assert!(matches!(
+            runtime_effect_from_summary(&summary, Instant::now())
+                .unwrap()
+                .kind,
+            RuntimeEffectKind::ColorMapping(_)
+        ));
+    }
+
+    #[test]
+    fn color_mapping_published_add_update_and_snapshot_roundtrip_are_atomic() {
+        let controls = vec![
+            test_color_control("ColorRed", 1),
+            test_color_control("ColorGreen", 2),
+            test_color_control("ColorBlue", 3),
+        ];
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        runtime
+            .fixtures
+            .push(test_runtime_color_fixture(1, Vec::new(), controls));
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let request = test_color_mapping_request(vec![1]);
+        let (add_ack, add_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::AddColorMappingEffect {
+            effect_id: 92,
+            request: request.clone(),
+            enabled: false,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: add_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(add_receiver.recv().unwrap(), Ok(()));
+        let snapshot = published.read().unwrap().clone();
+        assert_eq!(snapshot.effects[0].effect_type, EffectKind::ColorMapping);
+        assert_eq!(snapshot.effects[0].color_mapping, Some(request.clone()));
+        assert!(!snapshot.effects[0].enabled);
+
+        let mut updated = request;
+        updated.playback_direction = ColorMappingPlaybackDirection::Bounce;
+        updated.offset_u = 0.25;
+        updated.sampling = ColorMappingSampling::Bilinear;
+        let (update_ack, update_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::UpdateColorMappingEffect {
+            effect_id: 92,
+            request: updated.clone(),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: update_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(update_receiver.recv().unwrap(), Ok(()));
+        assert_eq!(
+            published.read().unwrap().effects[0].color_mapping,
+            Some(updated)
+        );
+
+        let roundtrip = runtime.build_snapshot(0);
+        let mut loaded = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        loaded.load_project_snapshot(roundtrip.clone());
+        assert_eq!(loaded.build_snapshot(0).effects, roundtrip.effects);
     }
 
     #[test]
@@ -47635,7 +48805,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_color_chaser_move_curve_mapping_release_stack_meets_44hz_budget() {
+    fn mixed_color_chaser_move_curve_mapping_and_color_mapping_release_stack_meets_44hz_budget() {
         const FIXTURE_COUNT: u64 = 200;
         const EFFECT_COUNT: usize = 64;
         const SAMPLES: usize = 1_000;
@@ -47660,9 +48830,10 @@ mod tests {
         let move_base = test_move_request(&fixture_ids);
         let curve_base = test_curve_request(&fixture_ids);
         let mapping_base = test_mapping_request(&fixture_ids);
+        let color_mapping_base = test_color_mapping_request(fixture_ids.clone());
         for index in 0..EFFECT_COUNT {
             let phase = index as f32 / EFFECT_COUNT as f32;
-            let kind = match index % 5 {
+            let kind = match index % 6 {
                 0 => {
                     let mut request = test_color_request(
                         fixture_ids.clone(),
@@ -47706,12 +48877,23 @@ mod tests {
                     request.phase = phase;
                     RuntimeEffectKind::Curve(runtime.resolve_curve_effect_request(request).unwrap())
                 }
-                _ => {
+                4 => {
                     let mut request = mapping_base.clone();
                     request.phase = phase;
                     request.repetitions = 1.0 + (index % 4) as f32;
                     RuntimeEffectKind::Mapping(
                         runtime.resolve_mapping_effect_request(request).unwrap(),
+                    )
+                }
+                _ => {
+                    let mut request = color_mapping_base.clone();
+                    request.phase = phase;
+                    request.offset_u = index as f32 / EFFECT_COUNT as f32;
+                    request.sampling = ColorMappingSampling::Bilinear;
+                    RuntimeEffectKind::ColorMapping(
+                        runtime
+                            .resolve_color_mapping_effect_request(request)
+                            .unwrap(),
                     )
                 }
             };
@@ -47743,7 +48925,7 @@ mod tests {
         let p99 = durations[(SAMPLES * 99 / 100).min(SAMPLES - 1)];
         let max = *durations.last().unwrap();
         eprintln!(
-            "Mixed Color/Chaser/Move/Curve/Mapping 64x200 stack per-tick evaluation: p95={}us p99={}us max={}us",
+            "Mixed Color/Chaser/Move/Curve/Mapping/ColorMapping 64x200 stack per-tick evaluation: p95={}us p99={}us max={}us",
             p95.as_micros(),
             p99.as_micros(),
             max.as_micros()
@@ -47752,8 +48934,8 @@ mod tests {
         // (apply_effects per fixture x control, including its per-call clock
         // snapshot) under 64 simultaneous full-rig effects. Observed on the
         // reference Windows host in release with Curve included: p95 ~2.8ms /
-        // p99 ~3.4ms / max ~4.1ms. Mapping is included and must remain within the
-        // same gate, which keeps the worst-case mixed stack at or below
+        // p99 ~3.4ms / max ~4.1ms. Mapping and Colour Mapping are included and
+        // must remain within the same gate, which keeps the worst-case mixed stack at or below
         // roughly half of the 22.7ms 44Hz tick while still failing on a
         // >50% evaluation regression.
         if !cfg!(debug_assertions) {

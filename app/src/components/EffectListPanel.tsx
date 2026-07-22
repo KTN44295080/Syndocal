@@ -28,6 +28,7 @@ export function EffectListPanel(props: EffectListPanelProps) {
     if (effect.effect_type === "Value") return "Value";
     if (effect.effect_type === "Curve") return "Curve";
     if (effect.effect_type === "Mapping") return "Mapping";
+    if (effect.effect_type === "ColorMapping") return "Colour Map";
     return effect.effect_type === "PositionWave" ? "Wave" : "LFO";
   };
   const effectKindClass = (effect: EffectSummary) => {
@@ -37,11 +38,14 @@ export function EffectListPanel(props: EffectListPanelProps) {
     if (effect.effect_type === "Value") return "value";
     if (effect.effect_type === "Curve") return "curve";
     if (effect.effect_type === "Mapping") return "mapping";
+    if (effect.effect_type === "ColorMapping") return "colorMapping";
     return effect.effect_type === "PositionWave" ? "wave" : "lfo";
   };
   const timingLabel = (effect: EffectSummary) => {
     const clockSync = effect.effect_type === "Color"
       ? effect.color?.clock_sync
+      : effect.effect_type === "ColorMapping"
+        ? effect.color_mapping?.clock_sync
       : effect.effect_type === "Chaser"
         ? effect.chaser?.clock_sync
         : effect.effect_type === "Move"

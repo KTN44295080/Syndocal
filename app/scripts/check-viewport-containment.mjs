@@ -12472,7 +12472,7 @@ const fxVisualRecipeFamilies = [
   ["VALUE FX", "Value", 5],
   ["CURVE FX", "Curve", 1],
   ["MAPPINGS", "Mapping", 3],
-  ["COLOR MAPPINGS", "Color", 1],
+  ["COLOR MAPPINGS", "ColorMapping", 1],
 ];
 
 async function readFxVisualSurface(client) {
@@ -12520,6 +12520,7 @@ async function readFxVisualSurface(client) {
       const gradient = preview.querySelector(".effectGraphicalGradient");
       const move = preview.querySelector(".effectGraphicalMove");
       const chaser = preview.querySelector(".effectGraphicalChaser");
+      const colorMapping = preview.querySelector(".effectGraphicalColorMap");
       return {
         kind: preview.getAttribute("data-preview-kind") || "",
         label: preview.getAttribute("data-effect-label") || "",
@@ -12558,6 +12559,14 @@ async function readFxVisualSurface(client) {
         mappingDirection: curve?.getAttribute("data-mapping-direction") ?? "",
         mappingRepetitions: curve?.getAttribute("data-mapping-repetitions") ?? "",
         mappingFixtureOrder: curve?.getAttribute("data-mapping-fixture-order") ?? "",
+        colorMappingRaster: colorMapping?.getAttribute("data-raster") ?? "",
+        colorMappingFrameCount: colorMapping?.getAttribute("data-frame-count") ?? "",
+        colorMappingCellCount: colorMapping?.getAttribute("data-cell-count") ?? "",
+        colorMappingSourceKind: colorMapping?.getAttribute("data-source-kind") ?? "",
+        colorMappingDirection: colorMapping?.getAttribute("data-playback-direction") ?? "",
+        colorMappingWrapMode: colorMapping?.getAttribute("data-wrap-mode") ?? "",
+        colorMappingSampling: colorMapping?.getAttribute("data-sampling") ?? "",
+        colorMappingPixelCount: colorMapping?.querySelectorAll("i").length ?? 0,
         chaserStepCount: chaser?.getAttribute("data-step-count") ?? "",
         chaserActiveStepCount: chaser?.getAttribute("data-active-step-count") ?? "",
       };
@@ -12946,7 +12955,7 @@ async function runFxVisualViewport(client, viewport) {
   await waitForApp(client);
   await waitForClientCondition(
     client,
-    "document.querySelectorAll('.effectFamilyChooser button').length === 9 && document.querySelectorAll('.effectListRows .effectGraphicalPreview').length === 7",
+    "document.querySelectorAll('.effectFamilyChooser button').length === 9 && document.querySelectorAll('.effectListRows .effectGraphicalPreview').length === 8",
     "T19 FX visualization fixture",
   );
   await sleep(120);
@@ -12989,6 +12998,13 @@ async function runFxVisualViewport(client, viewport) {
         visibleMappingRepetitionInputCount: [...document.querySelectorAll('.mappingEffectEditor input[aria-label^="Mapping repetitions"]')].filter(isVisible).length,
         mappingEditorHorizontalOverflowPx: (() => {
           const editor = document.querySelector(".mappingEffectEditor");
+          return editor ? Math.max(0, editor.scrollWidth - editor.clientWidth) : 0;
+        })(),
+        visibleColorMappingEditorCount: [...document.querySelectorAll(".colorMappingEffectEditor")].filter(isVisible).length,
+        visibleColorMappingPreviewCount: [...document.querySelectorAll(".colorMappingPreview")].filter(isVisible).length,
+        visibleColorMappingControlCount: [...document.querySelectorAll(".colorMappingControlGrid input, .colorMappingControlGrid select")].filter(isVisible).length,
+        colorMappingEditorHorizontalOverflowPx: (() => {
+          const editor = document.querySelector(".colorMappingEffectEditor");
           return editor ? Math.max(0, editor.scrollWidth - editor.clientWidth) : 0;
         })(),
       };
@@ -13056,7 +13072,7 @@ async function runFxVisualViewport(client, viewport) {
 
   await client.send("Page.navigate", { url: fixtureUrl("fx-visual") });
   await waitForApp(client);
-  await waitForClientCondition(client, "document.querySelectorAll('.effectListRows .effectGraphicalPreview').length === 7", "T19 rack reload");
+  await waitForClientCondition(client, "document.querySelectorAll('.effectListRows .effectGraphicalPreview').length === 8", "T19 rack reload");
   await clickVisibleByText(client, ".effectItemSummary", "T16 Diamond Move");
   await waitForClientCondition(client, "Boolean(document.querySelector('.moveEffectPathCanvas .moveEffectPointHandle'))", "T16 Move editor");
   await evaluatePageFunction(client, async () => {
@@ -13096,7 +13112,11 @@ async function runFxVisualViewport(client, viewport) {
       const mapping = recipeFamilies.find((entry) => entry.family === "MAPPINGS");
       return mapping?.effectType === "Mapping" && mapping.visibleMappingEditorCount === 1 && mapping.visibleMappingOrderRowCount >= 1 && mapping.visibleMappingRepetitionInputCount === 2 && mapping.mappingEditorHorizontalOverflowPx <= 1;
     }],
-    ["rackSevenActualPreviews", () => JSON.stringify(initial.previewKinds) === JSON.stringify(["Lfo", "Color", "Move", "Value", "Curve", "Mapping", "Chaser"])],
+    ["independentColorMappingEditorReachable", () => {
+      const mapping = recipeFamilies.find((entry) => entry.family === "COLOR MAPPINGS");
+      return mapping?.effectType === "ColorMapping" && mapping.visibleColorMappingEditorCount === 1 && mapping.visibleColorMappingPreviewCount === 1 && mapping.visibleColorMappingControlCount === 10 && mapping.colorMappingEditorHorizontalOverflowPx <= 1;
+    }],
+    ["rackEightActualPreviews", () => JSON.stringify(initial.previewKinds) === JSON.stringify(["Lfo", "Color", "Move", "Value", "Curve", "Mapping", "ColorMapping", "Chaser"])],
     ["rackPreviewDimensions", () => initial.previews.every((preview) => preview.width >= 72 && preview.height >= 34 && preview.containedInItem && preview.horizontalOverflowPx <= 1)],
     ["rackNoHorizontalOverflow", () => initial.rackHorizontalOverflowPx <= 1 && initial.effectListHorizontalOverflowPx <= 1],
     ["rackVerticalScrollReachesLastPreview", () => initial.effectListVerticalOverflowPx <= 1 || (["auto", "scroll"].includes(initial.effectListOverflowY) && initial.lastPreviewReachable)],
@@ -13106,9 +13126,10 @@ async function runFxVisualViewport(client, viewport) {
     ["valuePreviewUsesAuthoredEnvelope", () => previewByKind.Value?.valuePoints === "0:0.12,0.22:0.88,0.58:0.42,1:0.76" && previewByKind.Value?.valueInterpolation === "Smooth" && previewByKind.Value?.curvePath.length > 20],
     ["curvePreviewUsesAuthoredTangents", () => previewByKind.Curve?.curvePoints === "0:0.08:0:2.4,0.42:0.92:0.2:-0.8,1:0.22:-1.6:0" && previewByKind.Curve?.curvePath.length > 20],
     ["mappingPreviewUsesAuthoredOrder", () => previewByKind.Mapping?.shape === "Triangle" && previewByKind.Mapping?.low === "2048" && previewByKind.Mapping?.high === "63000" && previewByKind.Mapping?.phase === "0.2" && previewByKind.Mapping?.mappingDirection === "Bounce" && previewByKind.Mapping?.mappingRepetitions === "1.5" && previewByKind.Mapping?.mappingFixtureOrder === "3,1,2" && previewByKind.Mapping?.curvePath.length > 20],
+    ["colorMappingPreviewUsesAuthoredMedia", () => previewByKind.ColorMapping?.colorMappingRaster === "4x2" && previewByKind.ColorMapping?.colorMappingFrameCount === "2" && previewByKind.ColorMapping?.colorMappingCellCount === "3" && previewByKind.ColorMapping?.colorMappingSourceKind === "Video" && previewByKind.ColorMapping?.colorMappingDirection === "Bounce" && previewByKind.ColorMapping?.colorMappingWrapMode === "Repeat" && previewByKind.ColorMapping?.colorMappingSampling === "Bilinear" && previewByKind.ColorMapping?.colorMappingPixelCount === 8],
     ["chaserPreviewUsesAuthoredSteps", () => previewByKind.Chaser?.chaserStepCount === "4" && previewByKind.Chaser?.chaserActiveStepCount === "2"],
     ["stepsNavigation", () => stepsNavigation.cueEditOpened && stepsNavigation.cueRecallOpened && stepsNavigation.cueDrawerVisible && stepsNavigation.cueLabelVisible && stepsNavigation.stepEditorCount === 1],
-    ["cueOwnedParamsRendered", () => stepsNavigation.ownedParamsChipCount === 7 && JSON.stringify(stepsNavigation.ownedPreviewKinds) === JSON.stringify(["Lfo", "Color", "Move", "Value", "Curve", "Mapping", "Chaser"]) && stepsNavigation.ownedLfo.label === "Cue-owned Sine Curve" && stepsNavigation.ownedLfo.low === "8192" && stepsNavigation.ownedLfo.high === "61440" && stepsNavigation.ownedLfo.phase === "0.25"],
+    ["cueOwnedParamsRendered", () => stepsNavigation.ownedParamsChipCount === 8 && JSON.stringify(stepsNavigation.ownedPreviewKinds) === JSON.stringify(["Lfo", "Color", "Move", "Value", "Curve", "Mapping", "ColorMapping", "Chaser"]) && stepsNavigation.ownedLfo.label === "Cue-owned Sine Curve" && stepsNavigation.ownedLfo.low === "8192" && stepsNavigation.ownedLfo.high === "61440" && stepsNavigation.ownedLfo.phase === "0.25"],
     ["superSceneNavigation", () => superSceneNavigation.breadcrumbVisible && superSceneNavigation.childLabel === "T16 Owned FX Cue" && superSceneNavigation.childLayerCount === 3 && superSceneNavigation.showExitButton === "Show"],
     ["moveThreePxIsClick", () => close(subThreshold.before?.x, subThreshold.during?.x) && close(subThreshold.before?.y, subThreshold.during?.y) && subThreshold.during?.ghostCount === 0 && subThreshold.during?.readoutCount === 0 && close(subThreshold.before?.x, subThreshold.after?.x) && close(subThreshold.before?.y, subThreshold.after?.y)],
     ["moveSixPxShowsGhostAndReadout", () => escapeRollback.during?.ghostCount === 1 && escapeRollback.during?.readoutCount === 1 && /X\s+[0-9.]+\s+·\s+Y\s+[0-9.]+/.test(escapeRollback.during?.readout ?? "") && !close(escapeRollback.before?.x, escapeRollback.during?.x)],
@@ -13247,6 +13268,7 @@ async function main() {
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
             `families=${result.initial.familyNames.join("/")} active=${result.initial.activeFamilies.join("+") || "none"} ` +
             `recipes=${result.recipeFamilies.map((entry) => `${entry.family}:${entry.cardCount}:${entry.effectType}`).join(",")} ` +
+            `colourMap=${(() => { const entry = result.recipeFamilies.find((candidate) => candidate.family === "COLOR MAPPINGS"); return entry ? `${entry.visibleColorMappingEditorCount}/${entry.visibleColorMappingPreviewCount}/${entry.visibleColorMappingControlCount}/overflow:${entry.colorMappingEditorHorizontalOverflowPx}` : "missing"; })()} ` +
             `panes=${Math.round(result.initial.workbenchRect.width)}:` +
               `${Math.round(result.initial.libraryPaneRect.width)}/${Math.round(result.initial.inspectorPaneRect.width)}/${Math.round(result.initial.rackPaneRect.width)} ` +
             `previews=${result.initial.previews.map((entry) => `${entry.kind}:${Math.round(entry.width)}x${Math.round(entry.height)}`).join(",")} ` +
@@ -13277,6 +13299,7 @@ async function main() {
             overflow: preview.horizontalOverflowPx,
           })) ?? [],
           rackScroll: result.initial?.effectListScrollMetrics ?? null,
+          colorMappingEditor: result.recipeFamilies?.find((entry) => entry.family === "COLOR MAPPINGS") ?? null,
         })))}`);
       }
       return;

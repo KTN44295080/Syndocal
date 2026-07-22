@@ -9,6 +9,10 @@ import { AppStatusLine } from "./components/AppStatusLine";
 import { ArtRdmPanel } from "./components/ArtRdmPanel";
 import { ChaserEffectEditorPanel } from "./components/ChaserEffectEditorPanel";
 import { ColorEffectEditorPanel, defaultColorEffectStops } from "./components/ColorEffectEditorPanel";
+import {
+  ColorMappingEffectEditorPanel,
+  defaultColorMappingRaster,
+} from "./components/ColorMappingEffectEditorPanel";
 import { CurveEffectEditorPanel } from "./components/CurveEffectEditorPanel";
 import { MappingEffectEditorPanel } from "./components/MappingEffectEditorPanel";
 import { CustomProfileEditorPanel } from "./components/CustomProfileEditorPanel";
@@ -180,6 +184,13 @@ import type {
   ColorEffectRequest,
   ColorEffectSpatialPattern,
   ColorEffectStop,
+  ColorMappingCellTarget,
+  ColorMappingEffectRequest,
+  ColorMappingFrame,
+  ColorMappingPlaybackDirection,
+  ColorMappingSampling,
+  ColorMappingSourceKind,
+  ColorMappingWrapMode,
   CurveEffectPoint,
   CurveEffectRequest,
   CustomFixtureProfileRequest,
@@ -728,6 +739,7 @@ const projectMutationCommands = new Set([
   "add_value_effect",
   "add_curve_effect",
   "add_mapping_effect",
+  "add_color_mapping_effect",
   "update_lfo_effect",
   "update_position_wave_effect",
   "update_color_effect",
@@ -736,6 +748,7 @@ const projectMutationCommands = new Set([
   "update_value_effect",
   "update_curve_effect",
   "update_mapping_effect",
+  "update_color_mapping_effect",
   "save_node_graph",
   "set_node_graph_enabled",
   "remove_node_graph",
@@ -915,6 +928,8 @@ const authoredBeatsForEffectClock = (effect: EffectSummary) => {
       return effect.curve?.clock_sync?.beats ?? effect.clock_sync?.beats ?? null;
     case "Mapping":
       return effect.mapping?.clock_sync?.beats ?? effect.clock_sync?.beats ?? null;
+    case "ColorMapping":
+      return effect.color_mapping?.clock_sync?.beats ?? effect.clock_sync?.beats ?? null;
     default:
       return effect.clock_sync?.beats ?? null;
   }
@@ -1436,6 +1451,21 @@ export default function App() {
   const [mappingDirection, setMappingDirection] = createSignal<MappingEffectDirection>("Forward");
   const [mappingFixtureSpread, setMappingFixtureSpread] = createSignal(1);
   const [mappingRepetitions, setMappingRepetitions] = createSignal(1);
+  const initialColorMappingRaster = defaultColorMappingRaster();
+  const [colorMappingSourceKind, setColorMappingSourceKind] = createSignal<ColorMappingSourceKind>("Image");
+  const [colorMappingWidth, setColorMappingWidth] = createSignal(initialColorMappingRaster.width);
+  const [colorMappingHeight, setColorMappingHeight] = createSignal(initialColorMappingRaster.height);
+  const [colorMappingFrames, setColorMappingFrames] = createSignal<ColorMappingFrame[]>(initialColorMappingRaster.frames);
+  const [colorMappingCells, setColorMappingCells] = createSignal<ColorMappingCellTarget[]>([]);
+  const [colorMappingPlaybackDirection, setColorMappingPlaybackDirection] =
+    createSignal<ColorMappingPlaybackDirection>("Forward");
+  const [colorMappingOffsetU, setColorMappingOffsetU] = createSignal(0);
+  const [colorMappingOffsetV, setColorMappingOffsetV] = createSignal(0);
+  const [colorMappingScaleU, setColorMappingScaleU] = createSignal(1);
+  const [colorMappingScaleV, setColorMappingScaleV] = createSignal(1);
+  const [colorMappingRotationDegrees, setColorMappingRotationDegrees] = createSignal(0);
+  const [colorMappingWrapMode, setColorMappingWrapMode] = createSignal<ColorMappingWrapMode>("Clamp");
+  const [colorMappingSampling, setColorMappingSampling] = createSignal<ColorMappingSampling>("Nearest");
   const [effectLow, setEffectLow] = createSignal(0);
   const [effectHigh, setEffectHigh] = createSignal(65535);
   const [effectPhase, setEffectPhase] = createSignal(0);
@@ -3593,6 +3623,7 @@ export default function App() {
     if (nextType === "Value") return "VALUE FX";
     if (nextType === "Curve") return "CURVE FX";
     if (nextType === "Mapping") return "MAPPINGS";
+    if (nextType === "ColorMapping") return "COLOR MAPPINGS";
     if (nextType === "PositionWave") return "MAPPINGS";
     return "CURVE FX";
   };
@@ -3641,12 +3672,32 @@ export default function App() {
         setMappingRepetitions(1);
       }
       if (!startsNewEffect) setMessage("Prepared a fixture-order Mapping draft for the current scalar attribute.");
+    } else if (nextType === "ColorMapping") {
+      setEffectVideoTargetLinked(false);
+      if (effectTargetMode() === "video") setEffectTargetMode("fixture");
+      if (nextType !== previousType) {
+        const raster = defaultColorMappingRaster();
+        setColorMappingSourceKind("Image");
+        setColorMappingWidth(raster.width);
+        setColorMappingHeight(raster.height);
+        setColorMappingFrames(raster.frames);
+        setColorMappingCells([]);
+        setColorMappingPlaybackDirection("Forward");
+        setColorMappingOffsetU(0);
+        setColorMappingOffsetV(0);
+        setColorMappingScaleU(1);
+        setColorMappingScaleV(1);
+        setColorMappingRotationDegrees(0);
+        setColorMappingWrapMode("Clamp");
+        setColorMappingSampling("Nearest");
+      }
+      if (!startsNewEffect) setMessage("Prepared an independent 2D Colour Mapping draft for lighting fixtures.");
     }
   };
   const effectTargetSummary = createMemo(() => {
     const fixtureCount = effectTargetFixtures().length;
     const attributeCount = effectType() === "Chaser" ? chaserAttributeOptions().length : effectTargetControls().length;
-    const wholeFixtureColor = effectType() === "Color";
+    const wholeFixtureColor = effectType() === "Color" || effectType() === "ColorMapping";
     const moveEffect = effectType() === "Move";
     const moveCompatibleCount = moveCompatibleTargetFixtures().length;
     const moveCompatibility = `${moveCompatibleCount}/${fixtureCount} paired Pan/Tilt`;
@@ -3709,6 +3760,10 @@ export default function App() {
       const clock = sync === null ? `${effectPeriod()}ms` : `${sync} beat`;
       return `Mapping ${mappingEffectOrderFixtures().length} fixtures / ${effectShape()} / ${mappingDirection()} / ${mappingRepetitions().toFixed(2)}× / ${clock}`;
     }
+    if (effectType() === "ColorMapping") {
+      const clock = sync === null ? `${effectPeriod()}ms` : `${sync} beat`;
+      return `Colour Mapping ${colorMappingWidth()}×${colorMappingHeight()} / ${colorMappingFrames().length} frames / ${colorMappingCells().length || effectTargetFixtures().length} cells / ${clock}`;
+    }
     return sync === null ? `LFO ${effectShape()} / ${effectPeriod()}ms` : `LFO ${effectShape()} / ${sync} beat`;
   });
   const currentValueDraftError = createMemo<string>(() => {
@@ -3751,6 +3806,31 @@ export default function App() {
     if (!Number.isFinite(effectPhase()) || effectPhase() < 0 || effectPhase() > 1) return "Mapping phase must be within 0..1.";
     if (!Number.isFinite(mappingFixtureSpread()) || mappingFixtureSpread() < 0 || mappingFixtureSpread() > 1) return "Mapping fixture spread must be within 0..1.";
     if (!Number.isFinite(mappingRepetitions()) || mappingRepetitions() < 0.25 || mappingRepetitions() > 16) return "Mapping repetitions must be within 0.25..16.";
+    return "";
+  });
+  const currentColorMappingDraftError = createMemo<string>(() => {
+    const width = colorMappingWidth();
+    const height = colorMappingHeight();
+    const frames = colorMappingFrames();
+    if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || width > 64 || height < 1 || height > 64) {
+      return "Colour Mapping raster dimensions must each be within 1..64.";
+    }
+    if (frames.length < 1 || frames.length > 64) return "Colour Mapping requires between 1 and 64 frames.";
+    if (colorMappingSourceKind() === "Video" && frames.length < 2) return "Colour Mapping video requires at least 2 frames.";
+    if (colorMappingSourceKind() !== "Video" && frames.length !== 1) return "Image and text mappings require exactly 1 frame.";
+    const expectedPixels = width * height;
+    if (frames.some((frame) => frame.pixels.length !== expectedPixels)) return `Every Colour Mapping frame must contain ${expectedPixels} pixels.`;
+    if (frames.some((frame) => frame.pixels.some((pixel) => !Number.isSafeInteger(pixel) || pixel < 0 || pixel > 281_474_976_710_655))) {
+      return "Colour Mapping pixels must be exact packed RGB16 integers.";
+    }
+    if (!Number.isFinite(effectPeriod()) || effectPeriod() < 10) return "Colour Mapping period must be at least 10 ms.";
+    const beats = effectClockSyncBeats();
+    if (beats !== null && (!Number.isFinite(beats) || beats <= 0)) return "Colour Mapping clock beats must be positive.";
+    if (!Number.isFinite(effectPhase()) || effectPhase() < 0 || effectPhase() > 1) return "Colour Mapping phase must be within 0..1.";
+    if (![colorMappingOffsetU(), colorMappingOffsetV()].every((value) => Number.isFinite(value) && value >= -16 && value <= 16)) return "Colour Mapping offsets must be within -16..16.";
+    if (![colorMappingScaleU(), colorMappingScaleV()].every((value) => Number.isFinite(value) && Math.abs(value) >= 0.01 && Math.abs(value) <= 16)) return "Colour Mapping scale magnitude must be within 0.01..16.";
+    if (!Number.isFinite(colorMappingRotationDegrees()) || colorMappingRotationDegrees() < -3600 || colorMappingRotationDegrees() > 3600) return "Colour Mapping rotation must be within -3600..3600 degrees.";
+    if (colorMappingCells().some((cell) => !Number.isFinite(cell.u) || !Number.isFinite(cell.v) || cell.u < -16 || cell.u > 16 || cell.v < -16 || cell.v > 16)) return "Colour Mapping cell coordinates must be within -16..16.";
     return "";
   });
   const editingEffectSummary = createMemo<EffectSummary | null>(() => {
@@ -10719,8 +10799,10 @@ export default function App() {
     setEffectChooserFamily(recipeFamily);
     const firstPreset = sampleEffectPresetOptions.find((option) => option.family === recipeFamily);
     if (firstPreset) setSampleEffectPreset(firstPreset.value);
-    const nextType: EffectKind = family === "COLOR FX" || family === "COLOR MAPPINGS"
+    const nextType: EffectKind = family === "COLOR FX"
       ? "Color"
+      : family === "COLOR MAPPINGS"
+        ? "ColorMapping"
       : family === "CHASER FX"
         ? "Chaser"
         : family === "MOVE FX"
@@ -12741,6 +12823,19 @@ export default function App() {
           return !selectedFixture();
       }
     }
+    if (effectType() === "ColorMapping") {
+      if (currentColorMappingDraftError()) return true;
+      if (effectVideoTargetLinked() || effectTargetMode() === "video") return true;
+      switch (effectTargetMode()) {
+        case "selection":
+          return selectedMappingFixtures().length === 0 && colorMappingCells().length === 0;
+        case "group":
+          return parseGroupIds(effectTargetGroups()).length === 0;
+        case "fixture":
+        default:
+          return !selectedFixture() && colorMappingCells().length === 0;
+      }
+    }
     if (effectType() === "Value") {
       if (currentValueDraftError()) return true;
       switch (effectTargetMode()) {
@@ -12800,7 +12895,8 @@ export default function App() {
     | { effectType: "Move"; request: MoveEffectRequest }
     | { effectType: "Value"; request: ValueEffectRequest }
     | { effectType: "Curve"; request: CurveEffectRequest }
-    | { effectType: "Mapping"; request: MappingEffectRequest };
+    | { effectType: "Mapping"; request: MappingEffectRequest }
+    | { effectType: "ColorMapping"; request: ColorMappingEffectRequest };
 
   const buildEffectRequestFromForm = (): EffectRequestDraft | null => {
     const fixture = selectedFixture();
@@ -12808,6 +12904,8 @@ export default function App() {
     const targetMode = effectTargetMode();
     const isVideoTarget = targetMode === "video";
     const colorEffect = effectType() === "Color";
+    const colorMappingEffect = effectType() === "ColorMapping";
+    const wholeFixtureColorEffect = colorEffect || colorMappingEffect;
     const chaserEffect = effectType() === "Chaser";
     const moveEffect = effectType() === "Move";
     if (moveEffect) {
@@ -12875,12 +12973,12 @@ export default function App() {
         },
       };
     }
-    const includesVideoTarget = !colorEffect && (isVideoTarget || effectVideoTargetLinked());
-    if (colorEffect && (isVideoTarget || effectVideoTargetLinked())) {
-      setMessage("Color effects target complete lighting fixtures and cannot link a video parameter.");
+    const includesVideoTarget = !wholeFixtureColorEffect && (isVideoTarget || effectVideoTargetLinked());
+    if (wholeFixtureColorEffect && (isVideoTarget || effectVideoTargetLinked())) {
+      setMessage("Color and Colour Mapping effects target complete lighting fixtures and cannot link a video parameter.");
       return null;
     }
-    if (targetMode === "fixture" && (!fixture || (!colorEffect && !attribute))) {
+    if (targetMode === "fixture" && (!fixture || (!wholeFixtureColorEffect && !attribute))) {
       setMessage("Select a fixture and attribute first.");
       return null;
     }
@@ -12889,7 +12987,7 @@ export default function App() {
       setMessage("Select one or more fixtures on the 2D mapping stage first.");
       return null;
     }
-    if (!colorEffect && targetMode === "selection" && !attribute) {
+    if (!wholeFixtureColorEffect && targetMode === "selection" && !attribute) {
       setMessage("Select a fixture profile attribute before targeting a map selection.");
       return null;
     }
@@ -12898,7 +12996,7 @@ export default function App() {
       setMessage("Enter at least one target group.");
       return null;
     }
-    if (!colorEffect && targetMode === "group" && !attribute) {
+    if (!wholeFixtureColorEffect && targetMode === "group" && !attribute) {
       setMessage("Select a fixture profile attribute before targeting a group.");
       return null;
     }
@@ -12908,7 +13006,7 @@ export default function App() {
       return null;
     }
     const lightAttribute = attribute ?? "";
-    const videoTargets = colorEffect ? [] : buildEffectVideoTargets(effectType() === "PositionWave");
+    const videoTargets = wholeFixtureColorEffect ? [] : buildEffectVideoTargets(effectType() === "PositionWave");
     const clockSyncBeats = effectClockSyncBeats();
     const labelTarget = !isVideoTarget && videoTargets.length > 0 ? `${lightAttribute} + ${effectVideoParam()}` : isVideoTarget ? effectVideoParam() : lightAttribute;
     const requestBase = {
@@ -13011,6 +13109,44 @@ export default function App() {
         },
       };
     }
+    if (colorMappingEffect) {
+      const error = currentColorMappingDraftError();
+      if (error) {
+        setMessage(error);
+        return null;
+      }
+      const targetFixtureIds = new Set(requestBase.fixture_ids);
+      const cells = targetMode === "group"
+        ? []
+        : colorMappingCells()
+            .filter((cell) => targetFixtureIds.has(cell.fixture_id))
+            .map((cell) => ({ ...cell }));
+      return {
+        effectType: "ColorMapping",
+        request: {
+          label: editingEffectSummary()?.label ?? `Colour Mapping ${targetMode === "group" ? "Group" : targetMode === "selection" ? "Selection" : "Fixture"}`,
+          fixture_ids: requestBase.fixture_ids,
+          target_group_ids: requestBase.target_group_ids,
+          source_kind: colorMappingSourceKind(),
+          width: colorMappingWidth(),
+          height: colorMappingHeight(),
+          frames: colorMappingFrames().map((frame) => ({ pixels: [...frame.pixels] })),
+          cells,
+          playback_direction: colorMappingPlaybackDirection(),
+          period_ms: Math.round(effectPeriod()),
+          clock_sync: requestBase.clock_sync,
+          phase: effectPhase(),
+          offset_u: colorMappingOffsetU(),
+          offset_v: colorMappingOffsetV(),
+          scale_u: colorMappingScaleU(),
+          scale_v: colorMappingScaleV(),
+          rotation_degrees: colorMappingRotationDegrees(),
+          wrap_mode: colorMappingWrapMode(),
+          sampling: colorMappingSampling(),
+          blend_mode: effectBlendMode(),
+        },
+      };
+    }
     if (colorEffect) {
       if (!colorEffectDraftValid()) {
         setMessage("Color effects require 2 to 8 ordered palette stops with valid colors.");
@@ -13075,9 +13211,11 @@ export default function App() {
                   ? await invoke<number>("add_curve_effect", { request: draft.request })
                 : draft.effectType === "Mapping"
                   ? await invoke<number>("add_mapping_effect", { request: draft.request })
+                : draft.effectType === "ColorMapping"
+                  ? await invoke<number>("add_color_mapping_effect", { request: draft.request })
                 : await invoke<number>("add_move_effect", { request: draft.request });
       setEditingEffectId(null);
-      setMessage(`Added ${draft.effectType === "PositionWave" ? "position wave" : draft.effectType === "Color" ? "color" : draft.effectType === "Chaser" ? "Chaser" : draft.effectType === "Move" ? "Move" : draft.effectType === "Value" ? "Value" : draft.effectType === "Curve" ? "Curve" : draft.effectType === "Mapping" ? "Mapping" : "LFO"} effect ${effectId}`);
+      setMessage(`Added ${draft.effectType === "PositionWave" ? "position wave" : draft.effectType === "Color" ? "color" : draft.effectType === "Chaser" ? "Chaser" : draft.effectType === "Move" ? "Move" : draft.effectType === "Value" ? "Value" : draft.effectType === "Curve" ? "Curve" : draft.effectType === "Mapping" ? "Mapping" : draft.effectType === "ColorMapping" ? "Colour Mapping" : "LFO"} effect ${effectId}`);
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
@@ -13109,6 +13247,8 @@ export default function App() {
         await invoke("update_curve_effect", { effectId, request: draft.request });
       } else if (draft.effectType === "Mapping") {
         await invoke("update_mapping_effect", { effectId, request: draft.request });
+      } else if (draft.effectType === "ColorMapping") {
+        await invoke("update_color_mapping_effect", { effectId, request: draft.request });
       } else {
         await invoke("update_move_effect", { effectId, request: draft.request });
       }
@@ -13284,6 +13424,32 @@ export default function App() {
       setEffectBlendMode(mapping.blend_mode);
       setEffectVideoTargetLinked(false);
     }
+    if (effect.effect_type === "ColorMapping") {
+      const mapping = effect.color_mapping;
+      if (!mapping) {
+        setEditingEffectId(null);
+        setMessage(`Colour Mapping effect ${effect.id} is missing its editor body.`);
+        return;
+      }
+      setColorMappingSourceKind(mapping.source_kind);
+      setColorMappingWidth(mapping.width);
+      setColorMappingHeight(mapping.height);
+      setColorMappingFrames(mapping.frames.map((frame) => ({ pixels: [...frame.pixels] })));
+      setColorMappingCells((mapping.cells ?? []).map((cell) => ({ ...cell })));
+      setColorMappingPlaybackDirection(mapping.playback_direction);
+      setEffectPeriod(mapping.period_ms);
+      setEffectClockSyncBeats(mapping.clock_sync?.beats ?? null);
+      setEffectPhase(mapping.phase);
+      setColorMappingOffsetU(mapping.offset_u);
+      setColorMappingOffsetV(mapping.offset_v);
+      setColorMappingScaleU(mapping.scale_u);
+      setColorMappingScaleV(mapping.scale_v);
+      setColorMappingRotationDegrees(mapping.rotation_degrees);
+      setColorMappingWrapMode(mapping.wrap_mode);
+      setColorMappingSampling(mapping.sampling);
+      setEffectBlendMode(mapping.blend_mode);
+      setEffectVideoTargetLinked(false);
+    }
     setEffectShape(effect.shape);
     setEffectClockSyncBeats(effect.clock_sync?.beats ?? null);
     if (effect.period_ms) {
@@ -13342,6 +13508,8 @@ export default function App() {
           ? `Loaded Move effect ${effect.id} with ${effect.move_effect?.points.length ?? 0} path points into the paired Pan/Tilt editor.`
           : effect.effect_type === "Mapping"
             ? `Loaded Mapping effect ${effect.id} with ${effect.fixture_ids.length} authored fixtures into the fixture-order editor.`
+          : effect.effect_type === "ColorMapping"
+            ? `Loaded Colour Mapping effect ${effect.id} with ${effect.color_mapping?.frames.length ?? 0} embedded frames into the 2D editor.`
           : targetPlan.message,
     );
   };
@@ -16031,7 +16199,7 @@ export default function App() {
                 <strong>Inspector</strong>
                 <span>{editingEffectId() === null ? "New effect" : `Editing #${editingEffectId()}`}</span>
               </div>
-              <span>{effectType() === "PositionWave" ? "SPATIAL" : effectType() === "Mapping" ? "FIXTURE ORDER" : effectType() === "Color" ? "MULTI-COLOR" : effectType() === "Chaser" ? "CHASE" : effectType() === "Move" ? "PAN/TILT PATH" : effectType() === "Value" ? "ENVELOPE" : "MODULATOR"}</span>
+              <span>{effectType() === "PositionWave" ? "SPATIAL" : effectType() === "Mapping" ? "FIXTURE ORDER" : effectType() === "ColorMapping" ? "2D RGB MAP" : effectType() === "Color" ? "MULTI-COLOR" : effectType() === "Chaser" ? "CHASE" : effectType() === "Move" ? "PAN/TILT PATH" : effectType() === "Value" ? "ENVELOPE" : "MODULATOR"}</span>
             </header>
             <div class="effectForm">
               <div class="effectTargetHint">
@@ -16040,7 +16208,7 @@ export default function App() {
                   <span data-no-localize>{effectTargetSummary()}</span> / {effectDraftSummary()}
                 </span>
               </div>
-              <Show when={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "Chaser" && effectType() !== "Move"}>
+              <Show when={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "ColorMapping" && effectType() !== "Chaser" && effectType() !== "Move"}>
                 <label>
                   Attribute
                   <select
@@ -16070,7 +16238,7 @@ export default function App() {
                     <option value="fixture">Selected fixture</option>
                     <option value="selection">Map selection ({selectedMappingFixtures().length})</option>
                     <option value="group">Group</option>
-                    <option value="video" disabled={effectType() === "Color" || effectType() === "Chaser" || effectType() === "Move" || effectType() === "Value" || effectType() === "Curve" || effectType() === "Mapping"}>Video layer</option>
+                    <option value="video" disabled={effectType() === "Color" || effectType() === "ColorMapping" || effectType() === "Chaser" || effectType() === "Move" || effectType() === "Value" || effectType() === "Curve" || effectType() === "Mapping"}>Video layer</option>
                   </select>
                 </label>
                 <label>
@@ -16087,10 +16255,11 @@ export default function App() {
                     <option value="Value">Value (envelope)</option>
                     <option value="Curve">Curve (cubic function)</option>
                     <option value="Mapping">Mapping (fixture order)</option>
+                    <option value="ColorMapping">Colour Mapping (2D media)</option>
                   </select>
                 </label>
               </div>
-              <Show when={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "Chaser" && effectType() !== "Move" && effectType() !== "Value" && effectType() !== "Curve" && effectType() !== "Mapping"}>
+              <Show when={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "ColorMapping" && effectType() !== "Chaser" && effectType() !== "Move" && effectType() !== "Value" && effectType() !== "Curve" && effectType() !== "Mapping"}>
                 <label class="checkbox inlineCheckbox effectLinkedVideoToggle">
                   <input
                     type="checkbox"
@@ -16111,7 +16280,7 @@ export default function App() {
                   onToggleGroup={toggleEffectTargetGroup}
                 />
               </Show>
-              <Show when={effectType() !== "Color" && effectType() !== "Chaser" && effectType() !== "Move" && effectType() !== "Value" && effectType() !== "Curve" && effectType() !== "Mapping" && (effectTargetMode() === "video" || effectVideoTargetLinked())}>
+              <Show when={effectType() !== "Color" && effectType() !== "ColorMapping" && effectType() !== "Chaser" && effectType() !== "Move" && effectType() !== "Value" && effectType() !== "Curve" && effectType() !== "Mapping" && (effectTargetMode() === "video" || effectVideoTargetLinked())}>
                 <VideoEffectTargetPanel
                   layers={snapshot().video.layers}
                   outputsCount={snapshot().video.outputs.length}
@@ -16389,10 +16558,53 @@ export default function App() {
                   onFixtureOrder={setSelectedMappingFixtureIds}
                 />
               </Show>
+              <Show when={effectType() === "ColorMapping"}>
+                <Show when={currentColorMappingDraftError()}>
+                  {(error) => <p class="moveEffectDraftError" role="status">{error()}</p>}
+                </Show>
+                <ColorMappingEffectEditorPanel
+                  sourceKind={colorMappingSourceKind()}
+                  width={colorMappingWidth()}
+                  height={colorMappingHeight()}
+                  frames={colorMappingFrames()}
+                  cells={colorMappingCells()}
+                  fixtures={effectTargetFixtures().map((fixture) => ({ id: fixture.id, label: fixture.label, x: fixture.position.x, z: fixture.position.z }))}
+                  playbackDirection={colorMappingPlaybackDirection()}
+                  periodMs={effectPeriod()}
+                  bpm={snapshot().clock.bpm}
+                  clockSyncBeats={effectClockSyncBeats()}
+                  phase={effectPhase()}
+                  offsetU={colorMappingOffsetU()}
+                  offsetV={colorMappingOffsetV()}
+                  scaleU={colorMappingScaleU()}
+                  scaleV={colorMappingScaleV()}
+                  rotationDegrees={colorMappingRotationDegrees()}
+                  wrapMode={colorMappingWrapMode()}
+                  sampling={colorMappingSampling()}
+                  onRaster={(kind, width, height, frames) => {
+                    setColorMappingSourceKind(kind);
+                    setColorMappingWidth(width);
+                    setColorMappingHeight(height);
+                    setColorMappingFrames(frames);
+                  }}
+                  onCells={setColorMappingCells}
+                  onPlaybackDirection={setColorMappingPlaybackDirection}
+                  onPeriodMs={setEffectPeriod}
+                  onClockSyncBeats={setEffectClockSyncPreset}
+                  onPhase={setEffectPhase}
+                  onOffsetU={setColorMappingOffsetU}
+                  onOffsetV={setColorMappingOffsetV}
+                  onScaleU={setColorMappingScaleU}
+                  onScaleV={setColorMappingScaleV}
+                  onRotationDegrees={setColorMappingRotationDegrees}
+                  onWrapMode={setColorMappingWrapMode}
+                  onSampling={setColorMappingSampling}
+                />
+              </Show>
             </div>
             <EffectActionControlsPanel
-              showLightRange={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "Chaser" && effectType() !== "Move"}
-              showPhase={effectType() !== "Move" && effectType() !== "Value" && effectType() !== "Curve" && effectType() !== "Mapping"}
+              showLightRange={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "ColorMapping" && effectType() !== "Chaser" && effectType() !== "Move"}
+              showPhase={effectType() !== "Move" && effectType() !== "Value" && effectType() !== "Curve" && effectType() !== "Mapping" && effectType() !== "ColorMapping"}
               lockBlendMode={effectType() === "Move"}
               low={effectLow()}
               high={effectHigh()}

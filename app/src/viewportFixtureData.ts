@@ -732,6 +732,74 @@ const fxVisualizationMapping: EffectSummary = {
   },
 };
 
+const packViewportRgb16 = (red: number, green: number, blue: number) =>
+  red * 4_294_967_296 + green * 65_536 + blue;
+
+const fxVisualizationColorMapping: EffectSummary = {
+  ...cueRecallEffect,
+  id: 408,
+  label: "T19 Media Colour Mapping",
+  effect_type: "ColorMapping",
+  fixture_ids: [1, 2, 3],
+  target_group_ids: [],
+  attribute: "Colour Mapping",
+  video_targets: [],
+  period_ms: 2_000,
+  clock_sync: { beats: 4 },
+  phase: 0.125,
+  color_mapping: {
+    label: "T19 Media Colour Mapping",
+    fixture_ids: [1, 2, 3],
+    target_group_ids: [],
+    source_kind: "Video",
+    width: 4,
+    height: 2,
+    frames: [
+      {
+        pixels: [
+          packViewportRgb16(65_535, 0, 0),
+          packViewportRgb16(65_535, 32_768, 0),
+          packViewportRgb16(0, 65_535, 0),
+          packViewportRgb16(0, 32_768, 65_535),
+          packViewportRgb16(0, 0, 65_535),
+          packViewportRgb16(32_768, 0, 65_535),
+          packViewportRgb16(65_535, 0, 32_768),
+          packViewportRgb16(65_535, 65_535, 65_535),
+        ],
+      },
+      {
+        pixels: [
+          packViewportRgb16(0, 0, 65_535),
+          packViewportRgb16(32_768, 0, 65_535),
+          packViewportRgb16(65_535, 0, 32_768),
+          packViewportRgb16(65_535, 0, 0),
+          packViewportRgb16(65_535, 32_768, 0),
+          packViewportRgb16(0, 65_535, 0),
+          packViewportRgb16(0, 32_768, 65_535),
+          packViewportRgb16(65_535, 65_535, 65_535),
+        ],
+      },
+    ],
+    cells: [
+      { fixture_id: 1, beam_index: 0, selection_index: 0, u: 0, v: 0, feature_attribute: null },
+      { fixture_id: 2, beam_index: 0, selection_index: 1, u: 0.5, v: 0.5, feature_attribute: null },
+      { fixture_id: 3, beam_index: 0, selection_index: 2, u: 1, v: 1, feature_attribute: null },
+    ],
+    playback_direction: "Bounce",
+    period_ms: 2_000,
+    clock_sync: { beats: 4 },
+    phase: 0.125,
+    offset_u: 0.1,
+    offset_v: -0.1,
+    scale_u: 1.25,
+    scale_v: 0.75,
+    rotation_degrees: 15,
+    wrap_mode: "Repeat",
+    sampling: "Bilinear",
+    blend_mode: "Override",
+  },
+};
+
 const fxVisualizationChaser: EffectSummary = {
   ...cueRecallEffect,
   id: 405,
@@ -776,6 +844,7 @@ const fxVisualizationEffects: EffectSummary[] = [
   fxVisualizationValue,
   fxVisualizationCurve,
   fxVisualizationMapping,
+  fxVisualizationColorMapping,
   fxVisualizationChaser,
 ];
 
@@ -867,6 +936,7 @@ const fxVisualizationCue: CueSummary = {
     { effect_id: fxVisualizationValue.id, enabled: true, params: { Value: structuredClone(fxVisualizationValue.value!) } },
     { effect_id: fxVisualizationCurve.id, enabled: true, params: { Curve: structuredClone(fxVisualizationCurve.curve!) } },
     { effect_id: fxVisualizationMapping.id, enabled: true, params: { Mapping: structuredClone(fxVisualizationMapping.mapping!) } },
+    { effect_id: fxVisualizationColorMapping.id, enabled: true, params: { ColorMapping: structuredClone(fxVisualizationColorMapping.color_mapping!) } },
     { effect_id: fxVisualizationChaser.id, enabled: true, params: { Chaser: structuredClone(fxVisualizationChaser.chaser!) } },
   ],
 };

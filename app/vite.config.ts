@@ -18,6 +18,9 @@ export default defineConfig({
           if (normalizedId.includes("/src/uiLocalization")) {
             return "localization";
           }
+          if (normalizedId.includes("/src/viewportFixtureData")) {
+            return "qa-fixtures";
+          }
           if (
             normalizedId.includes("/src/components/CueManagementPanel") ||
             normalizedId.includes("/src/components/TimelineCueEventsPanel") ||
@@ -112,6 +115,9 @@ export default defineConfig({
             normalizedId.includes("/src/components/EffectListPanel") ||
             normalizedId.includes("/src/components/MoveEffectEditorPanel") ||
             normalizedId.includes("/src/components/ValueEffectEditorPanel") ||
+            normalizedId.includes("/src/components/CurveEffectEditorPanel") ||
+            normalizedId.includes("/src/components/MappingEffectEditorPanel") ||
+            normalizedId.includes("/src/components/ColorMappingEffectEditorPanel") ||
             normalizedId.includes("/src/components/ChaserEffectEditorPanel") ||
             normalizedId.includes("/src/components/ColorEffectEditorPanel") ||
             normalizedId.includes("/src/components/EffectSourceControlsPanel") ||
