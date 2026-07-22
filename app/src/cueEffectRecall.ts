@@ -8,7 +8,8 @@ export type CueEffectRecallChange =
   | { kind: "selectAll" }
   | { kind: "clear" }
   | { kind: "include"; effectId: number; included: boolean }
-  | { kind: "state"; effectId: number };
+  | { kind: "state"; effectId: number }
+  | { kind: "transition"; effectId: number };
 
 export interface CueEffectScopeContext {
   fixtures: Pick<PatchedFixtureSummary, "id" | "group_ids">[];
@@ -180,4 +181,24 @@ export const setCueEffectTargetEnabled = (
 ): CueEffectTarget[] => normalizedCueEffectTargets(
   effects,
   targets.map((target) => target.effect_id === effectId ? { ...target, enabled } : target),
+);
+
+export const setCueEffectTargetTransition = (
+  effects: EffectSummary[],
+  targets: CueEffectTarget[],
+  effectId: number,
+  transitionMs: number | null,
+): CueEffectTarget[] => normalizedCueEffectTargets(
+  effects,
+  targets.map((target) => {
+    if (target.effect_id !== effectId) return target;
+    if (transitionMs === null || !Number.isFinite(transitionMs)) {
+      const { transition_ms: _transitionMs, ...legacyShape } = target;
+      return legacyShape;
+    }
+    return {
+      ...target,
+      transition_ms: Math.max(0, Math.min(600_000, Math.round(transitionMs))),
+    };
+  }),
 );

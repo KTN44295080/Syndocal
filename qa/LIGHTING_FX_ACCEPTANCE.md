@@ -68,12 +68,12 @@ Automated evidence:
 
 ## Competitive boundary
 
-All seven Colour, Chaser, Move, Value, Curve, fixture-order Mapping and 2D Colour Mapping families now have real independent saved bodies, validation, runtimes and editors rather than display aliases. Multiple Value quick looks remain legacy LFO presets, Cue parameter morph/fade and calibrated multi-emitter colour are still absent, and representative physical/external-visualizer acceptance is pending. Therefore the independent-engine architecture gap is closed, but the full library must **not** yet be described as Daslight 5 FX parity.
+All seven Colour, Chaser, Move, Value, Curve, fixture-order Mapping and 2D Colour Mapping families now have real independent saved bodies, validation, runtimes and editors rather than display aliases. Cue-owned Effect states also have an optional same-ID cross-Cue fade with continuous/discrete output policies. Multiple Value quick looks remain legacy LFO presets, calibrated multi-emitter colour is still absent, and representative physical/external-visualizer acceptance is pending. Therefore the independent-engine and Cue-transition software gaps are closed, but the full library must **not** yet be described as Daslight 5 FX parity.
 
 Remaining engine work:
 
 1. Colour fidelity: fixture colorimetry/calibration matrices, additive Amber/Lime/UV emitters, CTO/CTB and measured RGBW/CMY/wheel output on representative physical fixtures.
-2. Cue modulation: Effect ON/OFF recall and source-linked reusable Scene Blocks are complete; per-Cue Effect parameter morph/fade is not. Scene Block loop/jump, persistence, publication and full-screen evidence are tracked separately in `qa/SCENE_BLOCKS_ACCEPTANCE.md`.
+2. Cue modulation: Effect ON/OFF recall, source-linked reusable Scene Blocks and direct Cue List same-ID Effect state fade are complete. Scene Block loop/jump, persistence, publication and full-screen evidence are tracked separately in `qa/SCENE_BLOCKS_ACCEPTANCE.md`; block overlap/fade remains a separate timeline model.
 3. Move field acceptance: the independent software path is complete; verify Pan/Tilt direction, limits, invert/swap, Absolute/Relative output, beat timing and a one-hour mixed DMX load on representative moving fixtures.
 4. Curve/Value: both independent runtimes and editors are complete. Remaining: migrate or replace the legacy Value-family LFO quick looks, add rack-level macro/live modulation controls, and obtain representative physical-output acceptance.
 5. Mappings: fixture-order Mapping and independent Colour Mapping are complete in software, including bounded image/text/video RGB sampling, matrix cells, UV transforms and spatial preview. Remaining: representative RGB/RGBW/wheel matrix acceptance through the Art-Net external-visualizer path and physical fixtures, plus any expanded codec/resolution policy beyond the bounded embedded-frame contract.

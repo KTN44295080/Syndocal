@@ -43,7 +43,7 @@
 
 ### P1 FX
 
-- Cue所有paramsはactivation時のcopyであり、Cue間parameter morph/fadeは無い。
+- Cue所有paramsはactivationごとの独立runtimeで、同一Effect IDのCue List GO間に任意の0–600000 ms transitionを持てる。Timeline Scene Blockは重複activationとblock fadeの別モデル。
 - calibrated Amber/Lime/UV/multi-emitter colour outputは未対応。
 - Colour Mappingのimage/text/videoは最大64×64・64埋め込みフレームへcommand-time変換する。実灯体/matrixと外部Art-Net可視化での色・方向・UV受入は未完。
 
@@ -86,7 +86,7 @@
 
 受入: additive serde defaults、legacy `.sdc` byte-shape、project/preset round-trip、200 fixtures x 64 effects regression、release 44 Hz mixed benchmark、physical acceptance分離。
 
-進捗（2026-07-23）: **T19-A/B/C完了**。T19-Aは`EffectKind::Curve`、独立`CurveEffectRequest`、2〜32点のCubic Hermite channel function（各点のin/out tangent）、command-time compile、独立runtime/editor/preset/Cue-owned paramsを追加した。T19-Bは`EffectKind::Mapping`、明示fixture順、Forward/Reverse/Bounce/Static、LFO shape、Absolute/Relative、phase/spread/repetitions、free/beat clockを独立protocol/runtime/editor/preset/Cue paramsとして追加し、Wave/Ball/FanをMapping bodyへ移行した。T19-Cは`EffectKind::ColorMapping`と独立body/runtime/editorを追加し、image/text/最大64フレームvideoをRGB16へ埋め込み、明示matrix cellまたはcommand-time stage X/Z正規化、UV offset/scale/rotation、Clamp/Repeat/Mirror、Nearest/Bilinear、Forward/Reverse/Bounce、free/beat clockを提供する。decode、colour binding、sample index/weight、target index/cacheはcommand/rebuild時に構築し、44Hz tickではfile decode、allocation、fixture検索を行わない。Colour Chase sampleもColor Sequenceから8フレームColorMapping bodyへ移行した。旧project/presetは新bodyを出力せずlegacy shapeを維持。protocol 38/38、engine 385 pass + 1 manual ignore、Tauri 324 pass + 9実機依存ignore、5解像度FX viewport、2699/2699 localization、frontend buildがgreen。Color/Chaser/Move/Curve/Mapping/ColorMapping混載64 FX×200灯体release hot-pathはp95 2.443ms / p99 3.352ms / max 4.142ms。T19-D/Eは未完。
+進捗（2026-07-23）: **T19-A/B/C/D完了、T19-E未完**。T19-Aは独立Curve、T19-Bはfixture-order Mapping、T19-Cは埋め込みimage/text/video 2D Colour Mappingを追加した。T19-DはCue-owned targetへlegacy省略可能な`transition_ms`を追加し、同じCue Listで直前にactiveだった同一Effect IDのprecompiled runtimeから次のCue-owned stateへcrossfadeする。連続DMX16は線形、wheel/gobo/shutter/strobe/prism等は無効な中間rangeを出さず50%で切替、LFO/Position Waveのvideo targetも固定長状態で遷移する。44Hz側のfixture lookup、allocation、文字列正規化は増やさず、progressはactivation/tick単位でcacheする。protocol 38/38、engine 389 pass + 1 manual ignore、Tauri 325 pass + 9実機依存ignore、5解像度FX viewport、2701/2701 localization、frontend buildがgreen。通常のColor/Chaser/Move/Curve/Mapping/ColorMapping混載64 FX×200灯体releaseはp95 2.654 / p99 2.955 / max 3.460ms、全64 FX同時transition stressはp95 9.576 / p99 10.596 / max 10.878ms。詳細は`qa/CUE_EFFECT_TRANSITION_ACCEPTANCE.md`。T19-Eと物理/外部可視化受入は未完。
 
 ### T20: Complete Scene Live
 

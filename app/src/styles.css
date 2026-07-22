@@ -12808,6 +12808,33 @@ input[type="color"] {
   color: #dda4b5;
 }
 
+.cueEffectRecallRow > .cueEffectTransitionField {
+  grid-column: 1;
+  grid-row: 3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+  border-top: 1px solid #28313d;
+  padding: 3px 6px;
+  color: #8d9aaa;
+  font-size: 10px;
+  cursor: default;
+}
+
+.cueEffectRecallRow > .cueEffectTransitionField input {
+  width: 78px;
+  min-height: 28px;
+  margin: 0;
+  padding: 2px 5px;
+  font-size: 10px;
+}
+
+.cueEffectRecallRow > .cueEffectRecallState {
+  grid-row: 1 / span 3;
+}
+
 @media (max-width: 760px) {
   .cueEffectRecallToolbar {
     grid-template-columns: minmax(0, 1fr);

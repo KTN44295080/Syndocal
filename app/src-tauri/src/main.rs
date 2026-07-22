@@ -16274,6 +16274,21 @@ fn validate_project_lighting_references(snapshot: &EngineSnapshot) -> Result<(),
                 .collect::<Vec<_>>(),
         )?;
         for target in &cue.effect_targets {
+            if target.transition_ms.is_some() && target.params.is_none() {
+                return Err(format!(
+                    "Project cue {} effect {} cannot fade without Cue-owned parameters",
+                    cue.id, target.effect_id
+                ));
+            }
+            if target
+                .transition_ms
+                .is_some_and(|duration_ms| duration_ms > 600_000)
+            {
+                return Err(format!(
+                    "Project cue {} effect {} transition must not exceed 600000 ms",
+                    cue.id, target.effect_id
+                ));
+            }
             if let Some(params) = &target.params {
                 validate_project_cue_effect_params(
                     snapshot,
@@ -22727,6 +22742,7 @@ fn cue_targets_from_snapshot(
                     .enabled
                     .then(|| effect_params_snapshot_from_summary(effect))
                     .transpose()?,
+                transition_ms: None,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -22752,6 +22768,7 @@ fn copy_cue_effect_params_on_capture(
                 .ok_or_else(|| format!("Effect {} was not found", target.effect_id))?;
             Some(effect_params_snapshot_from_summary(effect)?)
         } else {
+            target.transition_ms = None;
             None
         };
     }
@@ -22844,6 +22861,21 @@ fn validate_cue_effect_targets(
         .collect::<HashSet<_>>();
     let mut seen = HashSet::new();
     for target in effect_targets {
+        if target.transition_ms.is_some() && target.params.is_none() {
+            return Err(format!(
+                "Effect {} cannot fade without Cue-owned parameters",
+                target.effect_id
+            ));
+        }
+        if target
+            .transition_ms
+            .is_some_and(|duration_ms| duration_ms > 600_000)
+        {
+            return Err(format!(
+                "Effect {} transition must not exceed 600000 ms",
+                target.effect_id
+            ));
+        }
         if target.params.is_none() && !effect_ids.contains(&target.effect_id) {
             return Err(format!("Effect {} was not found", target.effect_id));
         }
@@ -23126,6 +23158,15 @@ fn merge_cue_update_targets(
                 scoped
             }
         };
+    }
+    for target in &mut merged.4 {
+        if target.params.is_some() && target.transition_ms.is_none() {
+            target.transition_ms = existing
+                .effect_targets
+                .iter()
+                .find(|existing_target| existing_target.effect_id == target.effect_id)
+                .and_then(|existing_target| existing_target.transition_ms);
+        }
     }
     Ok(merged)
 }
@@ -26507,6 +26548,7 @@ f 1 2 3
                 effect_id: 9,
                 enabled: false,
                 params: None,
+                transition_ms: None,
             }]
         );
 
@@ -26531,6 +26573,7 @@ f 1 2 3
                 effect_id: 9,
                 enabled: false,
                 params: None,
+                transition_ms: None,
             }]
         );
 
@@ -29065,6 +29108,7 @@ f 1 2 3
                         effect_id: 9,
                         enabled: false,
                         params: None,
+                        transition_ms: None,
                     }],
                     ..protocol::CueSummary::default()
                 }],
@@ -29087,6 +29131,7 @@ f 1 2 3
                 effect_id: 9,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             });
         assert_eq!(
             validate_project_file(&project).unwrap_err(),
@@ -29097,10 +29142,18 @@ f 1 2 3
             effect_id: 99,
             enabled: true,
             params: None,
+            transition_ms: None,
         }];
         assert_eq!(
             validate_project_file(&project).unwrap_err(),
             "Project cue 7 references missing effect 99"
+        );
+
+        let mut project = project_with_effect_only_cue();
+        project.snapshot.cues[0].effect_targets[0].transition_ms = Some(100);
+        assert_eq!(
+            validate_project_file(&project).unwrap_err(),
+            "Project cue 7 effect 9 cannot fade without Cue-owned parameters"
         );
     }
 
@@ -29112,6 +29165,7 @@ f 1 2 3
             effect_id: 9,
             enabled: true,
             params: Some(params),
+            transition_ms: Some(750),
         };
         project.snapshot.effects.clear();
 
@@ -29119,6 +29173,10 @@ f 1 2 3
         let json = project_json_for_write(&project).unwrap();
         let roundtrip: ProjectFile = serde_json::from_str(&json).unwrap();
         assert_eq!(roundtrip, project);
+        assert_eq!(
+            roundtrip.snapshot.cues[0].effect_targets[0].transition_ms,
+            Some(750)
+        );
 
         let EffectParamsSnapshot::Lfo(request) = roundtrip.snapshot.cues[0].effect_targets[0]
             .params
@@ -29140,8 +29198,16 @@ f 1 2 3
             .unwrap_err()
             .contains("at least 10 ms"));
 
+        let mut invalid_transition = roundtrip.clone();
+        invalid_transition.snapshot.cues[0].effect_targets[0].transition_ms = Some(600_001);
+        assert_eq!(
+            validate_project_file(&invalid_transition).unwrap_err(),
+            "Project cue 7 effect 9 transition must not exceed 600000 ms"
+        );
+
         let mut legacy_missing = roundtrip;
         legacy_missing.snapshot.cues[0].effect_targets[0].params = None;
+        legacy_missing.snapshot.cues[0].effect_targets[0].transition_ms = None;
         assert_eq!(
             validate_project_file(&legacy_missing).unwrap_err(),
             "Project cue 7 references missing effect 9"
@@ -29167,6 +29233,9 @@ f 1 2 3
         assert!(saved_value["snapshot"]["cues"][0]["effect_targets"][0]
             .get("params")
             .is_none());
+        assert!(saved_value["snapshot"]["cues"][0]["effect_targets"][0]
+            .get("transition_ms")
+            .is_none());
         let roundtrip: ProjectFile = serde_json::from_str(&json).unwrap();
         validate_project_file(&roundtrip).unwrap();
         assert_eq!(
@@ -29175,6 +29244,7 @@ f 1 2 3
                 effect_id: 9,
                 enabled: false,
                 params: None,
+                transition_ms: None,
             }]
         );
 
@@ -31985,6 +32055,7 @@ f 1 2 3
                 effect_id: 13,
                 enabled: false,
                 params: None,
+                transition_ms: None,
             }]
         );
     }
@@ -32069,6 +32140,7 @@ f 1 2 3
                 effect_id: 11,
                 enabled: false,
                 params: None,
+                transition_ms: None,
             }]
         );
     }
@@ -32150,6 +32222,7 @@ f 1 2 3
                 effect_id: 11,
                 enabled: false,
                 params: None,
+                transition_ms: None,
             }]
         );
         ensure_cue_targets_present(
@@ -32191,6 +32264,7 @@ f 1 2 3
                 effect_id: 9,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         )
         .unwrap();
@@ -32202,6 +32276,7 @@ f 1 2 3
                 effect_id: 9,
                 enabled: false,
                 params: explicit[0].params.clone(),
+                transition_ms: None,
             }],
         )
         .unwrap();
@@ -32248,6 +32323,7 @@ f 1 2 3
                 effect_id: 11,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
             ..protocol::CueSummary::default()
         };
@@ -32278,6 +32354,7 @@ f 1 2 3
                     effect_id: 11,
                     enabled: false,
                     params: None,
+                    transition_ms: None,
                 },
                 CueEffectTarget {
                     effect_id: 12,
@@ -32285,6 +32362,7 @@ f 1 2 3
                     params: Some(
                         effect_params_snapshot_from_summary(&snapshot.effects[1]).unwrap()
                     ),
+                    transition_ms: None,
                 },
             ]
         );
@@ -32382,11 +32460,13 @@ f 1 2 3
                     effect_id: 11,
                     enabled: true,
                     params: None,
+                    transition_ms: None,
                 },
                 CueEffectTarget {
                     effect_id: 12,
                     enabled: false,
                     params: None,
+                    transition_ms: None,
                 },
             ],
             ..protocol::CueSummary::default()
@@ -32480,6 +32560,7 @@ f 1 2 3
                 effect_id: 11,
                 enabled: true,
                 params: Some(effect_params_snapshot_from_summary(&parent_group_effect).unwrap()),
+                transition_ms: None,
             }]
         );
     }
@@ -32494,11 +32575,13 @@ f 1 2 3
                     effect_id: 11,
                     enabled: true,
                     params: None,
+                    transition_ms: None,
                 },
                 CueEffectTarget {
                     effect_id: 12,
                     enabled: false,
                     params: None,
+                    transition_ms: None,
                 },
             ],
             ..protocol::CueSummary::default()
@@ -32539,6 +32622,7 @@ f 1 2 3
                     effect_id: 11,
                     enabled: false,
                     params: None,
+                    transition_ms: None,
                 }]),
                 None,
             )
@@ -32554,11 +32638,13 @@ f 1 2 3
                     effect_id: 11,
                     enabled: true,
                     params: None,
+                    transition_ms: None,
                 }]),
                 Some(vec![CueEffectTarget {
                     effect_id: 11,
                     enabled: false,
                     params: None,
+                    transition_ms: None,
                 }]),
             )
             .unwrap();
@@ -32573,6 +32659,7 @@ f 1 2 3
                     effect_id: 11,
                     enabled: true,
                     params: None,
+                    transition_ms: None,
                 }]),
                 Some(Vec::new()),
             )
@@ -32588,11 +32675,13 @@ f 1 2 3
                     effect_id: 11,
                     enabled: true,
                     params: None,
+                    transition_ms: None,
                 }]),
                 Some(vec![CueEffectTarget {
                     effect_id: 12,
                     enabled: true,
                     params: None,
+                    transition_ms: None,
                 }]),
             )
             .unwrap_err();
@@ -32611,6 +32700,7 @@ f 1 2 3
                     effect_id: 11,
                     enabled: false,
                     params: None,
+                    transition_ms: None,
                 }]),
                 None,
             )
@@ -32621,9 +32711,48 @@ f 1 2 3
                     effect_id: 11,
                     enabled: false,
                     params: None,
+                    transition_ms: None,
                 }]
             );
         }
+    }
+
+    #[test]
+    fn cue_look_recapture_preserves_authored_effect_transition() {
+        let effect = project_lfo_effect(11, vec![1]);
+        let params = effect_params_snapshot_from_summary(&effect).unwrap();
+        let snapshot = EngineSnapshot {
+            cues: vec![protocol::CueSummary {
+                id: 42,
+                label: "Owned transition".to_string(),
+                effect_targets: vec![CueEffectTarget {
+                    effect_id: 11,
+                    enabled: true,
+                    params: Some(params.clone()),
+                    transition_ms: Some(750),
+                }],
+                ..protocol::CueSummary::default()
+            }],
+            effects: vec![effect],
+            ..EngineSnapshot::default()
+        };
+        let captured = (
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![CueEffectTarget {
+                effect_id: 11,
+                enabled: true,
+                params: Some(params),
+                transition_ms: None,
+            }],
+        );
+
+        let merged =
+            merge_cue_update_targets(&snapshot, 42, &CueCaptureScope::EffectsOnly, captured, None)
+                .unwrap();
+        assert_eq!(merged.4[0].transition_ms, Some(750));
     }
 
     #[test]
@@ -32642,6 +32771,7 @@ f 1 2 3
                 effect_id: 11,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
             ..protocol::CueSummary::default()
         };
@@ -32673,6 +32803,7 @@ f 1 2 3
                     effect_id: 11,
                     enabled: true,
                     params: None,
+                    transition_ms: None,
                 }],
                 ..protocol::CueSummary::default()
             }],
@@ -32706,6 +32837,7 @@ f 1 2 3
                 effect_id: 11,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
             ..protocol::CueSummary::default()
         };

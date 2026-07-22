@@ -2883,6 +2883,23 @@ struct RuntimeEffectActivation {
     effect: RuntimeEffect,
     key: Option<RuntimeEffectActivationKey>,
     rate: f32,
+    transition_ms: Option<u64>,
+    transition: Option<RuntimeEffectTransition>,
+}
+
+#[derive(Clone)]
+struct RuntimeEffectTransition {
+    from: RuntimeEffect,
+    from_rate: f32,
+    started_at: Instant,
+    duration: Duration,
+    progress_cache: Cell<Option<RuntimeEffectTransitionProgress>>,
+}
+
+#[derive(Clone, Copy)]
+struct RuntimeEffectTransitionProgress {
+    at: Instant,
+    progress: f32,
 }
 
 #[derive(Clone)]
@@ -10899,6 +10916,7 @@ impl EngineRuntime {
         self.advance_video_layers(self.last_tick_interval);
         self.advance_video_layer_fades(now);
         self.advance_video_output_fades(now);
+        self.expire_effect_transitions(now);
 
         let mut frames_by_universe = self.render_dmx_preview_frames(now);
         let frame = frames_by_universe
@@ -11360,7 +11378,13 @@ impl EngineRuntime {
             let value = self.apply_playback_level(fixture.id, &control.attribute, value);
             self.apply_cue_step_activations(fixture.id, &control.attribute, value, now)
         };
-        let value = self.apply_effects(fixture, &control.attribute, value, now);
+        let value = self.apply_effects_with_transition_policy(
+            fixture,
+            &control.attribute,
+            value,
+            now,
+            effect_transition_control_is_discrete(control),
+        );
         let value = apply_highlight(
             &control.attribute,
             value,
@@ -12049,6 +12073,21 @@ impl EngineRuntime {
             ));
         }
         for target in &targets {
+            if target.transition_ms.is_some() && target.params.is_none() {
+                return Err(format!(
+                    "Effect {} cannot fade without Cue-owned parameters",
+                    target.effect_id
+                ));
+            }
+            if target
+                .transition_ms
+                .is_some_and(|duration_ms| duration_ms > 600_000)
+            {
+                return Err(format!(
+                    "Effect {} transition must not exceed 600000 ms",
+                    target.effect_id
+                ));
+            }
             if let Some(params) = &target.params {
                 self.runtime_effect_from_params_snapshot(target.effect_id, params, Instant::now())?;
             } else if !self
@@ -12315,6 +12354,7 @@ impl EngineRuntime {
                 .saturating_sub(self.cue_list_effect_activation_cues.len()),
         );
         let mut previously_active = Vec::new();
+        let mut previously_active_transitions = Vec::new();
         for index in &self.active_effect_activation_indices {
             let Some(activation) = self.effect_activations.get(*index) else {
                 continue;
@@ -12327,6 +12367,11 @@ impl EngineRuntime {
                 .any(|(candidate, _, _)| *candidate == key)
             {
                 previously_active.push((key, activation.effect.created_at, activation.rate));
+            }
+            if let Some(transition) = activation.transition.as_ref().filter(|transition| {
+                now.saturating_duration_since(transition.started_at) < transition.duration
+            }) {
+                previously_active_transitions.push((key, activation.effect.id, transition.clone()));
             }
         }
         let cue_owned_counts = self
@@ -12384,7 +12429,7 @@ impl EngineRuntime {
         for cue_index in 0..self.cues.len() {
             let start = self.effect_activations.len();
             for target_index in 0..self.cues[cue_index].effect_targets.len() {
-                let (effect_id, params) = {
+                let (effect_id, params, transition_ms) = {
                     let target = &self.cues[cue_index].effect_targets[target_index];
                     if !target.enabled {
                         continue;
@@ -12392,13 +12437,15 @@ impl EngineRuntime {
                     let Some(params) = target.params.clone() else {
                         continue;
                     };
-                    (target.effect_id, params)
+                    (target.effect_id, params, target.transition_ms)
                 };
                 match self.runtime_effect_from_params_snapshot(effect_id, &params, now) {
                     Ok(effect) => self.effect_activations.push(RuntimeEffectActivation {
                         effect,
                         key: None,
                         rate: 1.0,
+                        transition_ms,
+                        transition: None,
                     }),
                     Err(error) => {
                         first_error.get_or_insert(error);
@@ -12419,7 +12466,7 @@ impl EngineRuntime {
                 .position(|cue| cue.id == self.timeline_events[event_index].cue_id);
             if let Some(cue_index) = cue_index {
                 for target_index in 0..self.cues[cue_index].effect_targets.len() {
-                    let (effect_id, params) = {
+                    let (effect_id, params, transition_ms) = {
                         let target = &self.cues[cue_index].effect_targets[target_index];
                         if !target.enabled {
                             continue;
@@ -12427,13 +12474,15 @@ impl EngineRuntime {
                         let Some(params) = target.params.clone() else {
                             continue;
                         };
-                        (target.effect_id, params)
+                        (target.effect_id, params, target.transition_ms)
                     };
                     match self.runtime_effect_from_params_snapshot(effect_id, &params, now) {
                         Ok(effect) => self.effect_activations.push(RuntimeEffectActivation {
                             effect,
                             key: None,
                             rate: 1.0,
+                            transition_ms,
+                            transition: None,
                         }),
                         Err(error) => {
                             first_error.get_or_insert(error);
@@ -12462,7 +12511,7 @@ impl EngineRuntime {
                 let cue_index = self.cues.iter().position(|cue| cue.id == cue_id);
                 if let Some(cue_index) = cue_index {
                     for target_index in 0..self.cues[cue_index].effect_targets.len() {
-                        let (effect_id, params) = {
+                        let (effect_id, params, transition_ms) = {
                             let target = &self.cues[cue_index].effect_targets[target_index];
                             if !target.enabled {
                                 continue;
@@ -12470,13 +12519,15 @@ impl EngineRuntime {
                             let Some(params) = target.params.clone() else {
                                 continue;
                             };
-                            (target.effect_id, params)
+                            (target.effect_id, params, target.transition_ms)
                         };
                         match self.runtime_effect_from_params_snapshot(effect_id, &params, now) {
                             Ok(effect) => self.effect_activations.push(RuntimeEffectActivation {
                                 effect,
                                 key: None,
                                 rate: 1.0,
+                                transition_ms,
+                                transition: None,
                             }),
                             Err(error) => {
                                 first_error.get_or_insert(error);
@@ -12630,6 +12681,17 @@ impl EngineRuntime {
         // authored non-neutral live modifiers so a mid-scene rebuild (BPM tap,
         // patch edit, ...) does not silently drop the operator's dials.
         self.reapply_all_cue_live_modifiers(now);
+        for activation in &mut self.effect_activations {
+            let Some(key) = activation.key else {
+                continue;
+            };
+            activation.transition = previously_active_transitions
+                .iter()
+                .find(|(candidate_key, effect_id, _)| {
+                    *candidate_key == key && *effect_id == activation.effect.id
+                })
+                .map(|(_, _, transition)| transition.clone());
+        }
     }
 
     fn rebuild_step_activations(&mut self, now: Instant) {
@@ -12888,9 +12950,82 @@ impl EngineRuntime {
             activation.key = Some(key);
             activation.effect.created_at = created_at;
             activation.rate = valid_effect_rate(rate);
+            activation.transition = None;
             clear_runtime_effect_caches(&activation.effect.kind);
             if was_inactive {
                 self.active_effect_activation_indices.push(index);
+            }
+        }
+    }
+
+    fn cue_list_effect_transition_sources(
+        &self,
+        cue_list_id: CueListId,
+    ) -> Vec<(RuntimeEffect, f32)> {
+        self.active_effect_activation_indices
+            .iter()
+            .filter_map(|index| self.effect_activations.get(*index))
+            .filter(|activation| {
+                matches!(
+                    activation.key,
+                    Some(RuntimeEffectActivationKey::CueList {
+                        cue_list_id: active_cue_list_id,
+                        ..
+                    }) if active_cue_list_id == cue_list_id
+                )
+            })
+            .map(|activation| (activation.effect.clone(), activation.rate))
+            .collect()
+    }
+
+    fn activate_cue_effect_range_with_transitions(
+        &mut self,
+        range: RuntimeEffectActivationRange,
+        key: RuntimeEffectActivationKey,
+        created_at: Instant,
+        sources: &[(RuntimeEffect, f32)],
+    ) {
+        let end = range.end().min(self.effect_activations.len());
+        for index in range.start.min(end)..end {
+            let activation = &mut self.effect_activations[index];
+            let was_inactive = activation.key.is_none();
+            activation.key = Some(key);
+            activation.effect.created_at = created_at;
+            activation.rate = 1.0;
+            activation.transition = activation
+                .transition_ms
+                .filter(|duration_ms| *duration_ms > 0)
+                .and_then(|duration_ms| {
+                    sources
+                        .iter()
+                        .find(|(effect, _)| effect.id == activation.effect.id)
+                        .map(|(effect, rate)| RuntimeEffectTransition {
+                            from: effect.clone(),
+                            from_rate: valid_effect_rate(*rate),
+                            started_at: created_at,
+                            duration: Duration::from_millis(duration_ms),
+                            progress_cache: Cell::new(None),
+                        })
+                });
+            clear_runtime_effect_caches(&activation.effect.kind);
+            if was_inactive {
+                self.active_effect_activation_indices.push(index);
+            }
+        }
+    }
+
+    fn expire_effect_transitions(&mut self, now: Instant) {
+        for index in &self.active_effect_activation_indices {
+            let Some(activation) = self.effect_activations.get_mut(*index) else {
+                continue;
+            };
+            let expired = activation.transition.as_ref().is_some_and(|transition| {
+                now.saturating_duration_since(transition.started_at) >= transition.duration
+            });
+            if expired {
+                activation.transition = None;
+            } else if let Some(transition) = &activation.transition {
+                let _ = runtime_effect_transition_progress(transition, now);
             }
         }
     }
@@ -15124,184 +15259,66 @@ impl EngineRuntime {
         base_value: u16,
         now: Instant,
     ) -> u16 {
+        let discrete = fixture
+            .profile
+            .dmx_modes
+            .get(fixture.mode_index)
+            .and_then(|mode| {
+                mode.controls
+                    .iter()
+                    .find(|control| control.attribute.eq_ignore_ascii_case(attribute))
+            })
+            .map(effect_transition_control_is_discrete)
+            .unwrap_or_else(|| effect_transition_attribute_name_is_discrete(attribute));
+        self.apply_effects_with_transition_policy(fixture, attribute, base_value, now, discrete)
+    }
+
+    fn apply_effects_with_transition_policy(
+        &self,
+        fixture: &RuntimeFixture,
+        attribute: &str,
+        base_value: u16,
+        now: Instant,
+        discrete: bool,
+    ) -> u16 {
         let mut value = base_value;
         let clock = self.clock.snapshot(now);
-        let global_effects = self
-            .effects
-            .iter()
-            .filter(|effect| effect.enabled)
-            .map(|effect| (effect, 1.0));
-        let activation_effects = self
+        for effect in self.effects.iter().filter(|effect| effect.enabled) {
+            value = apply_runtime_effect_to_attribute(
+                effect, fixture, attribute, value, now, &clock, 1.0,
+            );
+        }
+        for activation in self
             .active_effect_activation_indices
             .iter()
             .filter_map(|index| self.effect_activations.get(*index))
             .filter(|activation| activation.key.is_some())
-            .map(|activation| (&activation.effect, activation.rate));
-        for (effect, rate) in global_effects.chain(activation_effects) {
-            match &effect.kind {
-                RuntimeEffectKind::Color(runtime) => {
-                    let next = if runtime.spatial.is_some() {
-                        evaluate_runtime_color_spatial_attribute_at_rate(
-                            runtime,
-                            fixture.id,
-                            attribute,
-                            value,
-                            effect.id,
-                            effect.created_at,
-                            now,
-                            &clock,
-                            rate,
-                        )
-                    } else {
-                        fixture.color_binding.as_ref().and_then(|binding| {
-                            evaluate_runtime_color_attribute_at_rate(
-                                runtime,
-                                binding,
-                                fixture.id,
-                                attribute,
-                                value,
-                                effect.id,
-                                effect.created_at,
-                                now,
-                                &clock,
-                                rate,
-                            )
-                        })
-                    };
-                    if let Some(next) = next {
-                        value = next;
-                    }
-                }
-                RuntimeEffectKind::Lfo(request) => {
-                    if effect_targets_fixture_attribute(effect, fixture, attribute) {
-                        value = blend_effect_value(
-                            value,
-                            evaluate_lfo_effect_at_rate(
-                                request,
-                                effect.created_at,
-                                now,
-                                &clock,
-                                rate,
-                            ),
-                            &request.blend_mode,
-                        );
-                    }
-                }
-                RuntimeEffectKind::PositionWave(request) => {
-                    if effect_targets_fixture_attribute(effect, fixture, attribute) {
-                        value = blend_effect_value(
-                            value,
-                            evaluate_position_wave_effect_at_rate(
-                                request,
-                                fixture.request.position,
-                                effect.created_at,
-                                now,
-                                &clock,
-                                rate,
-                            ),
-                            &request.blend_mode,
-                        );
-                    }
-                }
-                RuntimeEffectKind::Chaser(runtime) => {
-                    if let (Some(feature_index), true) = (
-                        runtime.feature_indices.get(attribute),
-                        runtime.target_phase_offsets.contains_key(&fixture.id),
-                    ) {
-                        let Some(feature_fixture_ids) =
-                            runtime.feature_fixture_ids.get(*feature_index)
-                        else {
-                            continue;
-                        };
-                        if feature_fixture_ids.binary_search(&fixture.id).is_err() {
-                            continue;
-                        }
-                        value = blend_effect_value(
-                            value,
-                            evaluate_chaser_effect_at_rate(
-                                runtime,
-                                *feature_index,
-                                fixture.id,
-                                effect.created_at,
-                                now,
-                                &clock,
-                                rate,
-                            ),
-                            &runtime.request.blend_mode,
-                        );
-                    }
-                }
-                RuntimeEffectKind::Move(runtime) => {
-                    if let Some(next) = evaluate_runtime_move_attribute_at_rate(
-                        runtime,
-                        fixture.id,
-                        attribute,
-                        value,
-                        effect.created_at,
-                        now,
-                        &clock,
-                        rate,
-                    ) {
-                        value = next;
-                    }
-                }
-                RuntimeEffectKind::Value(runtime) => {
-                    if let Some(evaluated) = evaluate_runtime_value_attribute_at_rate(
-                        runtime,
-                        fixture.id,
-                        attribute,
-                        value,
-                        effect.created_at,
-                        now,
-                        &clock,
-                        rate,
-                    ) {
-                        value = blend_effect_value(value, evaluated, &runtime.request.blend_mode);
-                    }
-                }
-                RuntimeEffectKind::ColorMapping(runtime) => {
-                    if let Some(next) = evaluate_runtime_color_mapping_attribute_at_rate(
-                        runtime,
-                        fixture.id,
-                        attribute,
-                        value,
-                        effect.created_at,
-                        now,
-                        &clock,
-                        rate,
-                    ) {
-                        value = next;
-                    }
-                }
-                RuntimeEffectKind::Curve(runtime) => {
-                    if let Some(evaluated) = evaluate_runtime_curve_attribute_at_rate(
-                        runtime,
-                        fixture.id,
-                        attribute,
-                        value,
-                        effect.created_at,
-                        now,
-                        &clock,
-                        rate,
-                    ) {
-                        value = blend_effect_value(value, evaluated, &runtime.request.blend_mode);
-                    }
-                }
-                RuntimeEffectKind::Mapping(runtime) => {
-                    if let Some(evaluated) = evaluate_runtime_mapping_attribute_at_rate(
-                        runtime,
-                        fixture.id,
-                        attribute,
-                        value,
-                        effect.created_at,
-                        now,
-                        &clock,
-                        rate,
-                    ) {
-                        value = blend_effect_value(value, evaluated, &runtime.request.blend_mode);
-                    }
-                }
-            }
+        {
+            let input = value;
+            let next = apply_runtime_effect_to_attribute(
+                &activation.effect,
+                fixture,
+                attribute,
+                input,
+                now,
+                &clock,
+                activation.rate,
+            );
+            value = if let Some(transition) = &activation.transition {
+                let previous = apply_runtime_effect_to_attribute(
+                    &transition.from,
+                    fixture,
+                    attribute,
+                    input,
+                    now,
+                    &clock,
+                    transition.from_rate,
+                );
+                let progress = runtime_effect_transition_progress(transition, now);
+                transition_effect_value(previous, next, progress, discrete)
+            } else {
+                next
+            };
         }
         for graph in &self.node_graphs {
             if !graph.summary.enabled {
@@ -15570,6 +15587,18 @@ impl EngineRuntime {
             CueValueReleasePlan::default()
         };
 
+        let transition_sources = if timeline_effect_activation.is_none()
+            && cue.effect_targets.iter().any(|target| {
+                target.enabled
+                    && target.params.is_some()
+                    && target
+                        .transition_ms
+                        .is_some_and(|duration_ms| duration_ms > 0)
+            }) {
+            self.cue_list_effect_transition_sources(cue.cue_list_id)
+        } else {
+            Vec::new()
+        };
         self.deactivate_cue_list_effect_activations(cue.cue_list_id);
         self.cue_list_effect_activation_cues
             .remove(&cue.cue_list_id);
@@ -15640,7 +15669,12 @@ impl EngineRuntime {
             if self.cue_live_modifier_overrides.remove(&cue_id).is_some() {
                 self.reapply_cue_live_modifier_by_id(cue_id, now);
             }
-            self.activate_effect_range(cue.effect_activation_range, key, now, 1.0);
+            self.activate_cue_effect_range_with_transitions(
+                cue.effect_activation_range,
+                key,
+                now,
+                &transition_sources,
+            );
             self.activate_step_range(
                 cue.step_activation_range,
                 key,
@@ -17618,60 +17652,63 @@ impl EngineRuntime {
         include_param: impl Fn(&VideoParam) -> bool,
     ) {
         let clock = self.clock.snapshot(now);
-        let global_effects = self
-            .effects
-            .iter()
-            .filter(|effect| effect.enabled)
-            .map(|effect| (effect, 1.0));
-        let activation_effects = self
+        let mut effect_state = RuntimeVideoEffectState::from(&*state);
+        for effect in self.effects.iter().filter(|effect| effect.enabled) {
+            apply_runtime_video_effect_matching(
+                effect,
+                1.0,
+                layer,
+                &mut effect_state,
+                now,
+                &clock,
+                &include_param,
+            );
+        }
+        for activation in self
             .active_effect_activation_indices
             .iter()
             .filter_map(|index| self.effect_activations.get(*index))
             .filter(|activation| activation.key.is_some())
-            .map(|activation| (&activation.effect, activation.rate));
-        for (effect, rate) in global_effects.chain(activation_effects) {
-            match &effect.kind {
-                RuntimeEffectKind::Lfo(request) => {
-                    for target in request.video_targets.iter().filter(|target| {
-                        target.layer_ids.contains(&layer.id) && include_param(&target.param)
-                    }) {
-                        let value = evaluate_lfo_video_effect_at_rate(
-                            request,
-                            target,
-                            effect.created_at,
-                            now,
-                            &clock,
-                            rate,
-                        );
-                        apply_video_effect_param(state, &target.param, value, &request.blend_mode);
-                    }
-                }
-                RuntimeEffectKind::PositionWave(request) => {
-                    for target in request.video_targets.iter().filter(|target| {
-                        target.layer_ids.contains(&layer.id) && include_param(&target.param)
-                    }) {
-                        let layer_position = target.position.unwrap_or_default();
-                        let value = evaluate_position_wave_video_effect_at_rate(
-                            request,
-                            target,
-                            layer_position,
-                            effect.created_at,
-                            now,
-                            &clock,
-                            rate,
-                        );
-                        apply_video_effect_param(state, &target.param, value, &request.blend_mode);
-                    }
-                }
-                RuntimeEffectKind::Color(_)
-                | RuntimeEffectKind::Chaser(_)
-                | RuntimeEffectKind::Move(_)
-                | RuntimeEffectKind::Value(_)
-                | RuntimeEffectKind::Curve(_)
-                | RuntimeEffectKind::Mapping(_)
-                | RuntimeEffectKind::ColorMapping(_) => {}
+        {
+            if let Some(transition) = &activation.transition {
+                let mut previous = effect_state;
+                let mut next = effect_state;
+                apply_runtime_video_effect_matching(
+                    &transition.from,
+                    transition.from_rate,
+                    layer,
+                    &mut previous,
+                    now,
+                    &clock,
+                    &include_param,
+                );
+                apply_runtime_video_effect_matching(
+                    &activation.effect,
+                    activation.rate,
+                    layer,
+                    &mut next,
+                    now,
+                    &clock,
+                    &include_param,
+                );
+                effect_state = interpolate_runtime_video_effect_state(
+                    previous,
+                    next,
+                    runtime_effect_transition_progress(transition, now),
+                );
+            } else {
+                apply_runtime_video_effect_matching(
+                    &activation.effect,
+                    activation.rate,
+                    layer,
+                    &mut effect_state,
+                    now,
+                    &clock,
+                    &include_param,
+                );
             }
         }
+        effect_state.apply_to(state);
         for graph in &self.node_graphs {
             if !graph.summary.enabled {
                 continue;
@@ -20527,6 +20564,426 @@ fn apply_video_param(state: &mut VideoLayerState, param: &VideoParam, value: f32
             state.fx.key_threshold = value;
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct RuntimeVideoEffectState {
+    opacity: f32,
+    speed: f32,
+    position_ms: u64,
+    bpm_sync_enabled: bool,
+    bpm_sync_ratio: f32,
+    bpm_sync_loop_bars: f32,
+    transform: Transform2D,
+    color: VideoColorAdjust,
+    fx: VideoFxAdjust,
+}
+
+impl From<&VideoLayerState> for RuntimeVideoEffectState {
+    fn from(state: &VideoLayerState) -> Self {
+        Self {
+            opacity: state.opacity,
+            speed: state.speed,
+            position_ms: state.position_ms,
+            bpm_sync_enabled: state.bpm_sync.enabled,
+            bpm_sync_ratio: state.bpm_sync.ratio,
+            bpm_sync_loop_bars: state.bpm_sync.loop_bars,
+            transform: state.transform,
+            color: state.color,
+            fx: state.fx,
+        }
+    }
+}
+
+impl RuntimeVideoEffectState {
+    fn apply_to(self, state: &mut VideoLayerState) {
+        state.opacity = self.opacity;
+        state.speed = self.speed;
+        state.position_ms = self.position_ms;
+        state.bpm_sync.enabled = self.bpm_sync_enabled;
+        state.bpm_sync.ratio = self.bpm_sync_ratio;
+        state.bpm_sync.loop_bars = self.bpm_sync_loop_bars;
+        state.transform = self.transform;
+        state.color = self.color;
+        state.fx = self.fx;
+    }
+}
+
+fn runtime_video_effect_param_value(state: &RuntimeVideoEffectState, param: &VideoParam) -> f32 {
+    match param {
+        VideoParam::Opacity => state.opacity,
+        VideoParam::Speed => state.speed,
+        VideoParam::PositionMs => state.position_ms as f32,
+        VideoParam::BpmSyncEnabled => {
+            if state.bpm_sync_enabled {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        VideoParam::BpmSyncRatio => state.bpm_sync_ratio,
+        VideoParam::BpmSyncLoopBars => state.bpm_sync_loop_bars,
+        VideoParam::TransformX => state.transform.x,
+        VideoParam::TransformY => state.transform.y,
+        VideoParam::TransformScaleX => state.transform.scale_x,
+        VideoParam::TransformScaleY => state.transform.scale_y,
+        VideoParam::TransformRotationDeg => state.transform.rotation_deg,
+        VideoParam::TransformCropLeft => state.transform.crop_left,
+        VideoParam::TransformCropTop => state.transform.crop_top,
+        VideoParam::TransformCropRight => state.transform.crop_right,
+        VideoParam::TransformCropBottom => state.transform.crop_bottom,
+        VideoParam::ColorBrightness => state.color.brightness,
+        VideoParam::ColorContrast => state.color.contrast,
+        VideoParam::ColorHueDeg => state.color.hue_deg,
+        VideoParam::ColorSaturation => state.color.saturation,
+        VideoParam::ColorGamma => state.color.gamma,
+        VideoParam::FxPixelate => state.fx.pixelate,
+        VideoParam::FxBlur => state.fx.blur,
+        VideoParam::FxGlow => state.fx.glow,
+        VideoParam::FxEdge => state.fx.edge,
+        VideoParam::FxKeyRed => state.fx.key_red,
+        VideoParam::FxKeyGreen => state.fx.key_green,
+        VideoParam::FxKeyBlue => state.fx.key_blue,
+        VideoParam::FxKeyThreshold => state.fx.key_threshold,
+    }
+}
+
+fn set_runtime_video_effect_param(
+    state: &mut RuntimeVideoEffectState,
+    param: &VideoParam,
+    value: f32,
+) {
+    match param {
+        VideoParam::Opacity => state.opacity = value,
+        VideoParam::Speed => state.speed = value,
+        VideoParam::PositionMs => state.position_ms = value.max(0.0).round() as u64,
+        VideoParam::BpmSyncEnabled => state.bpm_sync_enabled = value > 0.0,
+        VideoParam::BpmSyncRatio => state.bpm_sync_ratio = value,
+        VideoParam::BpmSyncLoopBars => state.bpm_sync_loop_bars = value,
+        VideoParam::TransformX => state.transform.x = value,
+        VideoParam::TransformY => state.transform.y = value,
+        VideoParam::TransformScaleX => state.transform.scale_x = value,
+        VideoParam::TransformScaleY => state.transform.scale_y = value,
+        VideoParam::TransformRotationDeg => state.transform.rotation_deg = value,
+        VideoParam::TransformCropLeft => state.transform.crop_left = value,
+        VideoParam::TransformCropTop => state.transform.crop_top = value,
+        VideoParam::TransformCropRight => state.transform.crop_right = value,
+        VideoParam::TransformCropBottom => state.transform.crop_bottom = value,
+        VideoParam::ColorBrightness => state.color.brightness = value,
+        VideoParam::ColorContrast => state.color.contrast = value,
+        VideoParam::ColorHueDeg => state.color.hue_deg = value,
+        VideoParam::ColorSaturation => state.color.saturation = value,
+        VideoParam::ColorGamma => state.color.gamma = value,
+        VideoParam::FxPixelate => state.fx.pixelate = value,
+        VideoParam::FxBlur => state.fx.blur = value,
+        VideoParam::FxGlow => state.fx.glow = value,
+        VideoParam::FxEdge => state.fx.edge = value,
+        VideoParam::FxKeyRed => state.fx.key_red = value,
+        VideoParam::FxKeyGreen => state.fx.key_green = value,
+        VideoParam::FxKeyBlue => state.fx.key_blue = value,
+        VideoParam::FxKeyThreshold => state.fx.key_threshold = value,
+    }
+}
+
+fn apply_runtime_video_effect_param(
+    state: &mut RuntimeVideoEffectState,
+    param: &VideoParam,
+    effect_value: f32,
+    blend_mode: &EffectBlendMode,
+) {
+    let value = blend_effect_float(
+        runtime_video_effect_param_value(state, param),
+        effect_value,
+        blend_mode,
+    );
+    set_runtime_video_effect_param(state, param, value);
+}
+
+fn interpolate_runtime_video_effect_state(
+    start: RuntimeVideoEffectState,
+    target: RuntimeVideoEffectState,
+    progress: f32,
+) -> RuntimeVideoEffectState {
+    let progress = progress.clamp(0.0, 1.0);
+    RuntimeVideoEffectState {
+        opacity: interpolate_f32(start.opacity, target.opacity, progress),
+        speed: interpolate_f32(start.speed, target.speed, progress),
+        transform: interpolate_transform(start.transform, target.transform, progress),
+        color: interpolate_color(start.color, target.color, progress),
+        fx: interpolate_fx(start.fx, target.fx, progress),
+        ..target
+    }
+}
+
+fn runtime_effect_transition_progress(transition: &RuntimeEffectTransition, now: Instant) -> f32 {
+    if let Some(cached) = transition
+        .progress_cache
+        .get()
+        .filter(|cached| cached.at == now)
+    {
+        return cached.progress;
+    }
+    let progress = if transition.duration.is_zero() {
+        1.0
+    } else {
+        (now.saturating_duration_since(transition.started_at)
+            .as_secs_f32()
+            / transition.duration.as_secs_f32())
+        .clamp(0.0, 1.0)
+    };
+    transition
+        .progress_cache
+        .set(Some(RuntimeEffectTransitionProgress { at: now, progress }));
+    progress
+}
+
+fn apply_runtime_video_effect_matching(
+    effect: &RuntimeEffect,
+    rate: f32,
+    layer: &RuntimeVideoLayer,
+    state: &mut RuntimeVideoEffectState,
+    now: Instant,
+    clock: &ClockSnapshot,
+    include_param: &impl Fn(&VideoParam) -> bool,
+) {
+    match &effect.kind {
+        RuntimeEffectKind::Lfo(request) => {
+            for target in request.video_targets.iter().filter(|target| {
+                target.layer_ids.contains(&layer.id) && include_param(&target.param)
+            }) {
+                let value = evaluate_lfo_video_effect_at_rate(
+                    request,
+                    target,
+                    effect.created_at,
+                    now,
+                    clock,
+                    rate,
+                );
+                apply_runtime_video_effect_param(state, &target.param, value, &request.blend_mode);
+            }
+        }
+        RuntimeEffectKind::PositionWave(request) => {
+            for target in request.video_targets.iter().filter(|target| {
+                target.layer_ids.contains(&layer.id) && include_param(&target.param)
+            }) {
+                let layer_position = target.position.unwrap_or_default();
+                let value = evaluate_position_wave_video_effect_at_rate(
+                    request,
+                    target,
+                    layer_position,
+                    effect.created_at,
+                    now,
+                    clock,
+                    rate,
+                );
+                apply_runtime_video_effect_param(state, &target.param, value, &request.blend_mode);
+            }
+        }
+        RuntimeEffectKind::Color(_)
+        | RuntimeEffectKind::Chaser(_)
+        | RuntimeEffectKind::Move(_)
+        | RuntimeEffectKind::Value(_)
+        | RuntimeEffectKind::Curve(_)
+        | RuntimeEffectKind::Mapping(_)
+        | RuntimeEffectKind::ColorMapping(_) => {}
+    }
+}
+
+fn apply_runtime_effect_to_attribute(
+    effect: &RuntimeEffect,
+    fixture: &RuntimeFixture,
+    attribute: &str,
+    base_value: u16,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> u16 {
+    match &effect.kind {
+        RuntimeEffectKind::Color(runtime) => {
+            let next = if runtime.spatial.is_some() {
+                evaluate_runtime_color_spatial_attribute_at_rate(
+                    runtime,
+                    fixture.id,
+                    attribute,
+                    base_value,
+                    effect.id,
+                    effect.created_at,
+                    now,
+                    clock,
+                    rate,
+                )
+            } else {
+                fixture.color_binding.as_ref().and_then(|binding| {
+                    evaluate_runtime_color_attribute_at_rate(
+                        runtime,
+                        binding,
+                        fixture.id,
+                        attribute,
+                        base_value,
+                        effect.id,
+                        effect.created_at,
+                        now,
+                        clock,
+                        rate,
+                    )
+                })
+            };
+            next.unwrap_or(base_value)
+        }
+        RuntimeEffectKind::Lfo(request) => {
+            if effect_targets_fixture_attribute(effect, fixture, attribute) {
+                blend_effect_value(
+                    base_value,
+                    evaluate_lfo_effect_at_rate(request, effect.created_at, now, clock, rate),
+                    &request.blend_mode,
+                )
+            } else {
+                base_value
+            }
+        }
+        RuntimeEffectKind::PositionWave(request) => {
+            if effect_targets_fixture_attribute(effect, fixture, attribute) {
+                blend_effect_value(
+                    base_value,
+                    evaluate_position_wave_effect_at_rate(
+                        request,
+                        fixture.request.position,
+                        effect.created_at,
+                        now,
+                        clock,
+                        rate,
+                    ),
+                    &request.blend_mode,
+                )
+            } else {
+                base_value
+            }
+        }
+        RuntimeEffectKind::Chaser(runtime) => {
+            let Some(feature_index) = runtime.feature_indices.get(attribute) else {
+                return base_value;
+            };
+            if !runtime.target_phase_offsets.contains_key(&fixture.id) {
+                return base_value;
+            }
+            let Some(feature_fixture_ids) = runtime.feature_fixture_ids.get(*feature_index) else {
+                return base_value;
+            };
+            if feature_fixture_ids.binary_search(&fixture.id).is_err() {
+                return base_value;
+            }
+            blend_effect_value(
+                base_value,
+                evaluate_chaser_effect_at_rate(
+                    runtime,
+                    *feature_index,
+                    fixture.id,
+                    effect.created_at,
+                    now,
+                    clock,
+                    rate,
+                ),
+                &runtime.request.blend_mode,
+            )
+        }
+        RuntimeEffectKind::Move(runtime) => evaluate_runtime_move_attribute_at_rate(
+            runtime,
+            fixture.id,
+            attribute,
+            base_value,
+            effect.created_at,
+            now,
+            clock,
+            rate,
+        )
+        .unwrap_or(base_value),
+        RuntimeEffectKind::Value(runtime) => evaluate_runtime_value_attribute_at_rate(
+            runtime,
+            fixture.id,
+            attribute,
+            base_value,
+            effect.created_at,
+            now,
+            clock,
+            rate,
+        )
+        .map(|evaluated| blend_effect_value(base_value, evaluated, &runtime.request.blend_mode))
+        .unwrap_or(base_value),
+        RuntimeEffectKind::ColorMapping(runtime) => {
+            evaluate_runtime_color_mapping_attribute_at_rate(
+                runtime,
+                fixture.id,
+                attribute,
+                base_value,
+                effect.created_at,
+                now,
+                clock,
+                rate,
+            )
+            .unwrap_or(base_value)
+        }
+        RuntimeEffectKind::Curve(runtime) => evaluate_runtime_curve_attribute_at_rate(
+            runtime,
+            fixture.id,
+            attribute,
+            base_value,
+            effect.created_at,
+            now,
+            clock,
+            rate,
+        )
+        .map(|evaluated| blend_effect_value(base_value, evaluated, &runtime.request.blend_mode))
+        .unwrap_or(base_value),
+        RuntimeEffectKind::Mapping(runtime) => evaluate_runtime_mapping_attribute_at_rate(
+            runtime,
+            fixture.id,
+            attribute,
+            base_value,
+            effect.created_at,
+            now,
+            clock,
+            rate,
+        )
+        .map(|evaluated| blend_effect_value(base_value, evaluated, &runtime.request.blend_mode))
+        .unwrap_or(base_value),
+    }
+}
+
+fn transition_effect_value(previous: u16, next: u16, progress: f32, discrete: bool) -> u16 {
+    if discrete {
+        if progress < 0.5 {
+            previous
+        } else {
+            next
+        }
+    } else {
+        interpolate_u16(previous, next, progress)
+    }
+}
+
+fn effect_transition_control_is_discrete(control: &AttributeControl) -> bool {
+    effect_transition_attribute_name_is_discrete(&control.attribute)
+        || control.functions.iter().any(|function| {
+            function.wheel_slot.is_some()
+                || function.wheel_slot_name.is_some()
+                || function.wheel_slot_media.is_some()
+        })
+}
+
+fn effect_transition_attribute_name_is_discrete(attribute: &str) -> bool {
+    [
+        "gobo", "shutter", "strobe", "prism", "macro", "control", "reset", "mode",
+    ]
+    .iter()
+    .any(|token| contains_ascii_case_insensitive(attribute, token))
+}
+
+fn contains_ascii_case_insensitive(value: &str, needle: &str) -> bool {
+    let needle = needle.as_bytes();
+    value
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
 }
 
 fn effect_targets_fixture_attribute(
@@ -25518,13 +25975,8 @@ fn apply_video_effect_param(
     effect_value: f32,
     blend_mode: &EffectBlendMode,
 ) {
-    let mut base = state.clone();
-    apply_video_param(
-        &mut base,
-        param,
-        blend_effect_float(video_param_value(state, param), effect_value, blend_mode),
-    );
-    *state = base;
+    let value = blend_effect_float(video_param_value(state, param), effect_value, blend_mode);
+    apply_video_param(state, param, value);
 }
 
 fn video_param_value(state: &VideoLayerState, param: &VideoParam) -> f32 {
@@ -28193,6 +28645,7 @@ mod tests {
             effect_id,
             enabled: true,
             params: Some(EffectParamsSnapshot::Lfo(request)),
+            transition_ms: None,
         }
     }
 
@@ -32399,11 +32852,13 @@ mod tests {
                     effect_id: 2,
                     enabled: false,
                     params: None,
+                    transition_ms: None,
                 },
                 CueEffectTarget {
                     effect_id: 1,
                     enabled: true,
                     params: None,
+                    transition_ms: None,
                 },
             ],
         );
@@ -32414,11 +32869,13 @@ mod tests {
                     effect_id: 1,
                     enabled: true,
                     params: None,
+                    transition_ms: None,
                 },
                 CueEffectTarget {
                     effect_id: 2,
                     enabled: false,
                     params: None,
+                    transition_ms: None,
                 },
             ]
         );
@@ -32436,11 +32893,13 @@ mod tests {
                     effect_id: 1,
                     enabled: false,
                     params: None,
+                    transition_ms: None,
                 },
                 CueEffectTarget {
                     effect_id: 2,
                     enabled: true,
                     params: None,
+                    transition_ms: None,
                 },
             ],
         });
@@ -32464,11 +32923,13 @@ mod tests {
                     effect_id: 1,
                     enabled: false,
                     params: None,
+                    transition_ms: None,
                 },
                 CueEffectTarget {
                     effect_id: 2,
                     enabled: true,
                     params: None,
+                    transition_ms: None,
                 },
             ]
         );
@@ -32485,11 +32946,13 @@ mod tests {
                     effect_id: 1,
                     enabled: true,
                     params: None,
+                    transition_ms: None,
                 },
                 CueEffectTarget {
                     effect_id: 2,
                     enabled: false,
                     params: None,
+                    transition_ms: None,
                 },
             ],
         );
@@ -32501,11 +32964,13 @@ mod tests {
                     effect_id: 1,
                     enabled: false,
                     params: None,
+                    transition_ms: None,
                 },
                 CueEffectTarget {
                     effect_id: 2,
                     enabled: true,
                     params: None,
+                    transition_ms: None,
                 },
             ],
         );
@@ -32540,6 +33005,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         create_effect_only_cue(
@@ -32549,6 +33015,7 @@ mod tests {
                 effect_id: 2,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         runtime.cues[0].pre_wait_ms = 100;
@@ -32587,6 +33054,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
 
@@ -32602,6 +33070,7 @@ mod tests {
                 effect_id: 99,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         });
         assert_eq!(runtime.cues[0].label, "Cue 1");
@@ -32628,6 +33097,7 @@ mod tests {
                 effect_id: 99,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         });
         assert_eq!(runtime.cues.len(), 1);
@@ -32647,6 +33117,7 @@ mod tests {
                 effect_id: 404,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
             ..CueSummary::default()
         });
@@ -32762,6 +33233,7 @@ mod tests {
                     effect_id,
                     enabled: true,
                     params: None,
+                    transition_ms: None,
                 }],
             )
             .unwrap();
@@ -32782,6 +33254,7 @@ mod tests {
                 effect_id,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }]
         );
 
@@ -32804,6 +33277,7 @@ mod tests {
                     effect_id,
                     enabled: false,
                     params: None,
+                    transition_ms: None,
                 }],
             )
             .unwrap();
@@ -32907,6 +33381,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
             expires_at: Instant::now() + Duration::from_secs(1),
             ack: missing_list_ack,
@@ -32941,6 +33416,7 @@ mod tests {
                 effect_id: 999,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
             expires_at: Instant::now() + Duration::from_secs(1),
             ack: missing_effect_ack,
@@ -32974,6 +33450,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
             expires_at: Instant::now() - Duration::from_millis(1),
             ack: expired_ack,
@@ -33001,6 +33478,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         runtime.last_error = Some("preserve me".to_string());
@@ -33021,6 +33499,7 @@ mod tests {
                 effect_id: 1,
                 enabled: false,
                 params: None,
+                transition_ms: None,
             }],
             expires_at: Instant::now() + Duration::from_secs(1),
             ack,
@@ -33180,6 +33659,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         });
         create_effect_only_cue(
@@ -33189,6 +33669,7 @@ mod tests {
                 effect_id: 1,
                 enabled: false,
                 params: None,
+                transition_ms: None,
             }],
         );
         runtime.apply_command(EngineCommand::UpsertPalette(ReferencePaletteSummary {
@@ -33207,6 +33688,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         runtime.apply_command(EngineCommand::SetCuePaletteTargets {
@@ -42403,6 +42885,7 @@ mod tests {
                     effect_id,
                     enabled: true,
                     params: None,
+                    transition_ms: None,
                 }],
             })
             .unwrap();
@@ -47701,6 +48184,7 @@ mod tests {
                 effect_id: 77,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
             steps: Vec::new(),
             child_timeline: None,
@@ -48912,8 +49396,10 @@ mod tests {
             let started = Instant::now();
             for fixture in &runtime.fixtures {
                 for attribute in ATTRIBUTES {
-                    checksum = checksum
-                        .wrapping_add(runtime.apply_effects(fixture, attribute, 16_384, at) as u64);
+                    checksum =
+                        checksum.wrapping_add(runtime.apply_effects_with_transition_policy(
+                            fixture, attribute, 16_384, at, false,
+                        ) as u64);
                 }
             }
             durations.push(started.elapsed());
@@ -48943,6 +49429,83 @@ mod tests {
             assert!(p99 <= Duration::from_millis(8), "p99 was {p99:?}");
             assert!(max <= Duration::from_millis(12), "max was {max:?}");
         }
+
+        // T19-D worst-case transition path: every active Effect evaluates an
+        // outgoing and incoming Cue-owned state. The activation list and both
+        // runtimes are prebuilt here exactly as they are at Cue trigger time;
+        // the measured 44 Hz path performs no lookup or allocation.
+        const TRANSITION_SAMPLES: usize = if cfg!(debug_assertions) { 20 } else { 200 };
+        runtime.effect_activations = runtime
+            .effects
+            .iter()
+            .cloned()
+            .map(|effect| RuntimeEffectActivation {
+                transition: Some(RuntimeEffectTransition {
+                    from: effect.clone(),
+                    from_rate: 1.0,
+                    started_at: created_at,
+                    duration: Duration::from_secs(60),
+                    progress_cache: Cell::new(None),
+                }),
+                effect,
+                key: Some(RuntimeEffectActivationKey::CueList {
+                    cue_list_id: DEFAULT_CUE_LIST_ID,
+                    cue_id: 1,
+                }),
+                rate: 1.0,
+                transition_ms: Some(60_000),
+            })
+            .collect();
+        runtime.active_effect_activation_indices = (0..runtime.effect_activations.len()).collect();
+        runtime.effects.clear();
+        let mut transition_durations = Vec::with_capacity(TRANSITION_SAMPLES);
+        let mut transition_checksum = 0_u64;
+        for sample in 0..TRANSITION_SAMPLES {
+            let at = created_at + DMX_TICK_INTERVAL * (sample as u32 + 1);
+            let started = Instant::now();
+            for fixture in &runtime.fixtures {
+                for attribute in ATTRIBUTES {
+                    transition_checksum = transition_checksum.wrapping_add(
+                        runtime.apply_effects_with_transition_policy(
+                            fixture, attribute, 16_384, at, false,
+                        ) as u64,
+                    );
+                }
+            }
+            transition_durations.push(started.elapsed());
+        }
+        std::hint::black_box(transition_checksum);
+        assert_ne!(transition_checksum, 0);
+        transition_durations.sort_unstable();
+        let transition_p95 =
+            transition_durations[(TRANSITION_SAMPLES * 95 / 100).min(TRANSITION_SAMPLES - 1)];
+        let transition_p99 =
+            transition_durations[(TRANSITION_SAMPLES * 99 / 100).min(TRANSITION_SAMPLES - 1)];
+        let transition_max = *transition_durations.last().unwrap();
+        eprintln!(
+            "Cue transition mixed 64x200 stack per-tick evaluation: p95={}us p99={}us max={}us",
+            transition_p95.as_micros(),
+            transition_p99.as_micros(),
+            transition_max.as_micros()
+        );
+        // This intentionally doubles every one of the 64 full-rig Effect
+        // evaluations, a much harsher case than an ordinary Cue change. Keep
+        // p95 near half of the 22.7ms tick and even the maximum inside one
+        // tick, without relaxing the established non-transition 5/8/12 gate.
+        if !cfg!(debug_assertions) {
+            assert!(
+                transition_p95 <= Duration::from_millis(12),
+                "transition p95 was {transition_p95:?}"
+            );
+            assert!(
+                transition_p99 <= Duration::from_millis(16),
+                "transition p99 was {transition_p99:?}"
+            );
+            assert!(
+                transition_max <= Duration::from_millis(20),
+                "transition max was {transition_max:?}"
+            );
+        }
     }
 
     #[test]
@@ -48955,6 +49518,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         runtime.timeline_events.push(RuntimeTimelineEvent {
@@ -49023,6 +49587,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         create_effect_only_cue(
@@ -49032,6 +49597,7 @@ mod tests {
                 effect_id: 1,
                 enabled: false,
                 params: None,
+                transition_ms: None,
             }],
         );
         create_effect_only_cue(
@@ -49041,6 +49607,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         runtime.timeline_events = vec![
@@ -49198,6 +49765,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         create_effect_only_cue(
@@ -49207,6 +49775,7 @@ mod tests {
                 effect_id: 2,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         runtime.timeline_events = vec![
@@ -49306,6 +49875,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         runtime.timeline_events.push(RuntimeTimelineEvent {
@@ -49374,6 +49944,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         create_effect_only_cue(
@@ -49383,6 +49954,7 @@ mod tests {
                 effect_id: 1,
                 enabled: false,
                 params: None,
+                transition_ms: None,
             }],
         );
         runtime.timeline_events = vec![
@@ -49665,6 +50237,7 @@ mod tests {
                 effect_id: 1,
                 enabled: false,
                 params: None,
+                transition_ms: None,
             }],
         );
         create_effect_only_cue(
@@ -49674,6 +50247,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         runtime.timeline_events = vec![
@@ -49934,6 +50508,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         create_effect_only_cue(
@@ -49943,6 +50518,7 @@ mod tests {
                 effect_id: 2,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         runtime.cues[0].pre_wait_ms = 50;
@@ -50046,6 +50622,7 @@ mod tests {
                     effect_id: 1,
                     enabled: true,
                     params: None,
+                    transition_ms: None,
                 }],
             );
             create_effect_only_cue(
@@ -50055,6 +50632,7 @@ mod tests {
                     effect_id: 1,
                     enabled: false,
                     params: None,
+                    transition_ms: None,
                 }],
             );
             create_effect_only_cue(&mut runtime, 3, Vec::new());
@@ -50184,6 +50762,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         runtime.cues[0].authored_beats = Some(4.0);
@@ -50429,6 +51008,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         source.cues[0].authored_beats = Some(4.0);
@@ -50458,6 +51038,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         create_effect_only_cue(&mut source, 2, Vec::new());
@@ -50491,6 +51072,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         runtime.cues[0].authored_beats = Some(4.0);
@@ -50627,6 +51209,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         let edited = test_lfo_request(
@@ -50921,6 +51504,7 @@ mod tests {
                 effect_id: 7,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
 
@@ -51002,6 +51586,194 @@ mod tests {
         assert!(
             runtime.active_effect_activation_indices.is_empty(),
             "a later pool rebuild resurrected the released Cue"
+        );
+    }
+
+    #[test]
+    fn cue_owned_effect_transition_crossfades_matching_params_and_expires() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let first = owned_lfo_target(
+            101,
+            test_lfo_request(
+                "First state",
+                LfoShape::Square,
+                1_000,
+                0.0,
+                EffectBlendMode::Override,
+                u16::MAX,
+                u16::MAX,
+            ),
+        );
+        let mut second = owned_lfo_target(
+            101,
+            test_lfo_request(
+                "Second state",
+                LfoShape::Square,
+                1_000,
+                0.0,
+                EffectBlendMode::Override,
+                0,
+                0,
+            ),
+        );
+        second.transition_ms = Some(1_000);
+        create_effect_only_cue(&mut runtime, 1, vec![first]);
+        create_effect_only_cue(&mut runtime, 2, vec![second]);
+
+        let recalled_at = Instant::now();
+        runtime.start_cue(1, recalled_at, PendingCueTriggerSource::Manual);
+        runtime.start_cue(2, recalled_at, PendingCueTriggerSource::Manual);
+
+        let activation_index = runtime.active_effect_activation_indices[0];
+        assert!(runtime.effect_activations[activation_index]
+            .transition
+            .is_some());
+        let fixture = &runtime.fixtures[0];
+        assert_eq!(
+            runtime.apply_effects(fixture, "Dimmer", 20_000, recalled_at),
+            u16::MAX,
+            "the incoming Cue must begin at the outgoing live result"
+        );
+        runtime.rebuild_effect_activations(recalled_at + Duration::from_millis(500));
+        let activation_index = runtime.active_effect_activation_indices[0];
+        assert!(runtime.effect_activations[activation_index]
+            .transition
+            .is_some());
+        let fixture = &runtime.fixtures[0];
+        assert_eq!(
+            runtime.apply_effects(
+                fixture,
+                "Dimmer",
+                20_000,
+                recalled_at + Duration::from_millis(500),
+            ),
+            32_768,
+        );
+        assert_eq!(
+            runtime.apply_effects(
+                fixture,
+                "Dimmer",
+                20_000,
+                recalled_at + Duration::from_millis(1_000),
+            ),
+            0,
+        );
+
+        runtime.expire_effect_transitions(recalled_at + Duration::from_millis(999));
+        assert!(runtime.effect_activations[activation_index]
+            .transition
+            .is_some());
+        runtime.expire_effect_transitions(recalled_at + Duration::from_millis(1_000));
+        assert!(runtime.effect_activations[activation_index]
+            .transition
+            .is_none());
+    }
+
+    #[test]
+    fn cue_owned_effect_transition_crossfades_video_params() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        add_runtime_test_video_layer(&mut runtime, 41, VideoLayerState::default());
+        let mut first_request = test_lfo_request(
+            "First video state",
+            LfoShape::Square,
+            1_000,
+            0.0,
+            EffectBlendMode::Override,
+            0,
+            u16::MAX,
+        );
+        first_request.video_targets = vec![VideoEffectTarget {
+            layer_ids: vec![41],
+            param: VideoParam::Opacity,
+            low: 1.0,
+            high: 1.0,
+            position: None,
+        }];
+        let mut second_request = first_request.clone();
+        second_request.label = "Second video state".to_string();
+        second_request.video_targets[0].low = 0.0;
+        second_request.video_targets[0].high = 0.0;
+        let first = owned_lfo_target(101, first_request);
+        let mut second = owned_lfo_target(101, second_request);
+        second.transition_ms = Some(1_000);
+        create_effect_only_cue(&mut runtime, 1, vec![first]);
+        create_effect_only_cue(&mut runtime, 2, vec![second]);
+
+        let recalled_at = Instant::now();
+        runtime.start_cue(1, recalled_at, PendingCueTriggerSource::Manual);
+        runtime.start_cue(2, recalled_at, PendingCueTriggerSource::Manual);
+        let layer = runtime.video_layers[0].clone();
+        let mut state = layer.state.clone();
+        runtime.apply_video_effects(&layer, &mut state, recalled_at + Duration::from_millis(500));
+        assert!((state.opacity - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn cue_effect_transition_snaps_discrete_attributes_at_midpoint() {
+        let runtime = runtime_with_lfo_effects(&[]);
+        assert_eq!(transition_effect_value(0, u16::MAX, 0.25, false), 16_384);
+        assert_eq!(transition_effect_value(1_000, 50_000, 0.49, true), 1_000);
+        assert_eq!(transition_effect_value(1_000, 50_000, 0.5, true), 50_000);
+        assert!(!effect_transition_attribute_name_is_discrete("Dimmer"));
+        assert!(effect_transition_attribute_name_is_discrete("Gobo1"));
+        assert!(!effect_transition_control_is_discrete(
+            &runtime.fixtures[0].profile.dmx_modes[0].controls[0]
+        ));
+    }
+
+    #[test]
+    fn cue_effect_transition_requires_owned_params_and_is_bounded() {
+        let mut runtime = runtime_with_lfo_effects(&[(7, false)]);
+        runtime.apply_command(EngineCommand::CreateCue {
+            authored_beats: None,
+            cue_id: 1,
+            label: "Invalid legacy target".to_string(),
+            fade_ms: 0,
+            targets: Vec::new(),
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: vec![CueEffectTarget {
+                effect_id: 7,
+                enabled: true,
+                params: None,
+                transition_ms: Some(100),
+            }],
+        });
+        assert!(runtime.cues.is_empty());
+        assert_eq!(
+            runtime.last_error.as_deref(),
+            Some("Effect 7 cannot fade without Cue-owned parameters")
+        );
+
+        let mut target = owned_lfo_target(
+            7,
+            test_lfo_request(
+                "Too long",
+                LfoShape::Sine,
+                1_000,
+                0.0,
+                EffectBlendMode::Override,
+                0,
+                u16::MAX,
+            ),
+        );
+        target.transition_ms = Some(600_001);
+        runtime.apply_command(EngineCommand::CreateCue {
+            authored_beats: None,
+            cue_id: 2,
+            label: "Invalid duration".to_string(),
+            fade_ms: 0,
+            targets: Vec::new(),
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: vec![target],
+        });
+        assert!(runtime.cues.is_empty());
+        assert_eq!(
+            runtime.last_error.as_deref(),
+            Some("Effect 7 transition must not exceed 600000 ms")
         );
     }
 
@@ -51721,6 +52493,7 @@ mod tests {
                 effect_id: 1,
                 enabled: false,
                 params: None,
+                transition_ms: None,
             }],
         );
         create_effect_only_cue(
@@ -51730,6 +52503,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         create_effect_only_cue(
@@ -51739,6 +52513,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         runtime.timeline_events = vec![
@@ -51844,6 +52619,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         let published = RwLock::new(runtime.build_snapshot(0));
@@ -52733,6 +53509,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         runtime.timeline_layers = vec![timeline_test_layer(
@@ -52766,6 +53543,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         create_effect_only_cue(
@@ -52775,6 +53553,7 @@ mod tests {
                 effect_id: 2,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         runtime.timeline_layers = vec![
@@ -52808,6 +53587,7 @@ mod tests {
                 effect_id: 1,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         runtime.timeline_layers = vec![timeline_test_layer(
@@ -53707,6 +54487,7 @@ mod tests {
                 effect_id: 7,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             }],
         );
         runtime

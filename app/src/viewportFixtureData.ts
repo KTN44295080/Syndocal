@@ -930,6 +930,7 @@ const fxVisualizationCue: CueSummary = {
           blend_mode: "Override",
         },
       },
+      transition_ms: 750,
     },
     { effect_id: fxVisualizationColor.id, enabled: true, params: { Color: structuredClone(fxVisualizationColor.color!) } },
     { effect_id: fxVisualizationMove.id, enabled: true, params: { Move: structuredClone(fxVisualizationMove.move_effect!) } },

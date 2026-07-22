@@ -1,7 +1,7 @@
 # Daslight parity current-HEAD gap matrix
 
 - 監査日: 2026-07-23
-- 監査基準: `adcb402` + T18作業差分
+- 監査基準: `3964966` + T19-D作業差分
 - 製品境界: 内蔵3Dビジュアライザーは対象外。Art-Netを外部ビジュアライザーへ送る経路を正式な可視化受入とする
 - 判定規則: Syndocal実装、同一タスク計測、ネイティブ/物理出力を別々に扱い、証拠のないDaslight比較は`未計測`とする
 
@@ -15,8 +15,8 @@
 | Scene trigger / Live speed / reset | すべて1 gesture、DOM runtime truthまで検証 | 未計測 | 未計測 | Daslight同一開始状態を実測 |
 | Touch live / flash / Edit / control追加 | 各1 gesture、flashはdown/up、追加は件数増加を検証 | 未計測 | 未計測 | Daslight remote/touch面を同一タスク実測 |
 | FX family / recipe選択 | 各1 click、active familyとrecipe選択を検証 | 未計測 | 未計測 | 作成、target適用、Cue保存まで比較を拡張 |
-| Independent FX | Colour / Chaser / Move / Value / Curve / fixture-order Mapping / 2D Colour Mappingが独立body/runtime/editor。Colour Mappingは埋め込みimage/text/video、matrix cell、UV/sampling/playbackを持つ | Daslightは7独立generator群 | 構造上同・プリセット/実出力未計測 | T19-D/EとT23の物理/外部可視化受入へ分離 |
-| Cue FX parameter transition | Cue所有paramsとselective recallあり、Cue間morphなし | あり | 劣 | T19-D |
+| Independent FX | Colour / Chaser / Move / Value / Curve / fixture-order Mapping / 2D Colour Mappingが独立body/runtime/editor。Colour Mappingは埋め込みimage/text/video、matrix cell、UV/sampling/playbackを持つ | Daslightは7独立generator群 | 構造上同・プリセット/実出力未計測 | T19-EとT23の物理/外部可視化受入へ分離 |
+| Cue FX parameter transition | Cue-owned Effectごとに任意fade、同一IDの直前live result→次state、連続/離散属性別policy、video target対応 | あり | ソフトウェア構造差は解消・同一タスク未計測 | T23で実ショー/Art-NetとDaslight操作を実測 |
 | Scene Live | speed / size / phase latch、Matrix/Touch flash | direction / segment / strobe / soloを含む | 劣 | T20 |
 | Fixture onboarding | GDTF import/cache、Share検索/download、custom builder | 商用統合catalogと復旧UXあり | 劣 | T21でfavorites/offline/health/repair/common pack |
 | Workspace | Stage / Timeline popout、split保存 | 任意pane/workspace構成 | 劣 | T22で名前付きdetachable workspace |

@@ -2211,6 +2211,7 @@ mod tests {
                 value: None,
                 curve: None,
                 mapping: None,
+                color_mapping: None,
             }],
             ..EngineSnapshot::default()
         };

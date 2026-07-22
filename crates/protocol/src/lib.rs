@@ -356,6 +356,10 @@ pub struct CueEffectTarget {
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<EffectParamsSnapshot>,
+    /// Optional cross-Cue transition for this Cue-owned Effect. Absence keeps
+    /// the legacy instant-recall behavior and serialized shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -3800,11 +3804,13 @@ mod tests {
                 effect_id: 3,
                 enabled: true,
                 params: None,
+                transition_ms: None,
             },
             super::CueEffectTarget {
                 effect_id: 8,
                 enabled: false,
                 params: None,
+                transition_ms: None,
             },
         ];
 
@@ -3833,6 +3839,7 @@ mod tests {
                 phase: 0.25,
                 blend_mode: super::EffectBlendMode::Override,
             })),
+            transition_ms: Some(900),
         };
 
         let encoded = serde_json::to_string(&target).unwrap();
@@ -3843,12 +3850,15 @@ mod tests {
                 ["period_ms"],
             1_000
         );
+        assert_eq!(decoded.transition_ms, Some(900));
 
         let legacy: super::CueEffectTarget =
             serde_json::from_str(r#"{"effect_id":3,"enabled":true}"#).unwrap();
         assert!(legacy.params.is_none());
+        assert!(legacy.transition_ms.is_none());
         let legacy_value = serde_json::to_value(legacy).unwrap();
         assert!(legacy_value.get("params").is_none());
+        assert!(legacy_value.get("transition_ms").is_none());
     }
 
     #[test]

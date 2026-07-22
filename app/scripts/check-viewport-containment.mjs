@@ -13039,6 +13039,18 @@ async function runFxVisualViewport(client, viewport) {
     ownedParamsChipCount: document.querySelectorAll(".cueItem .cueEffectParamsChip").length,
     ownedPreviewKinds: [...document.querySelectorAll(".cueItem .cueEffectRecallRow .effectGraphicalPreview")]
       .map((preview) => preview.getAttribute("data-preview-kind")),
+    ownedTransitionControls: [...document.querySelectorAll(".cueItem [data-cue-effect-transition]")]
+      .map((input) => {
+        const rectangle = input.getBoundingClientRect();
+        const row = input.closest(".cueEffectRecallRow")?.getBoundingClientRect();
+        return {
+          effectId: input.getAttribute("data-cue-effect-transition") ?? "",
+          value: input.value,
+          disabled: input.disabled,
+          visible: rectangle.width > 0 && rectangle.height > 0,
+          contained: Boolean(row && rectangle.left >= row.left - 1 && rectangle.right <= row.right + 1),
+        };
+      }),
     ownedLfo: (() => {
       const preview = [...document.querySelectorAll(".cueItem .cueEffectRecallRow .effectGraphicalPreview")]
         .find((candidate) => candidate.getAttribute("data-preview-kind") === "Lfo");
@@ -13130,6 +13142,7 @@ async function runFxVisualViewport(client, viewport) {
     ["chaserPreviewUsesAuthoredSteps", () => previewByKind.Chaser?.chaserStepCount === "4" && previewByKind.Chaser?.chaserActiveStepCount === "2"],
     ["stepsNavigation", () => stepsNavigation.cueEditOpened && stepsNavigation.cueRecallOpened && stepsNavigation.cueDrawerVisible && stepsNavigation.cueLabelVisible && stepsNavigation.stepEditorCount === 1],
     ["cueOwnedParamsRendered", () => stepsNavigation.ownedParamsChipCount === 8 && JSON.stringify(stepsNavigation.ownedPreviewKinds) === JSON.stringify(["Lfo", "Color", "Move", "Value", "Curve", "Mapping", "ColorMapping", "Chaser"]) && stepsNavigation.ownedLfo.label === "Cue-owned Sine Curve" && stepsNavigation.ownedLfo.low === "8192" && stepsNavigation.ownedLfo.high === "61440" && stepsNavigation.ownedLfo.phase === "0.25"],
+    ["cueOwnedTransitionsRendered", () => stepsNavigation.ownedTransitionControls.length === 8 && stepsNavigation.ownedTransitionControls.every((control) => control.visible && control.contained && !control.disabled) && stepsNavigation.ownedTransitionControls.filter((control) => control.value === "750").length === 1],
     ["superSceneNavigation", () => superSceneNavigation.breadcrumbVisible && superSceneNavigation.childLabel === "T16 Owned FX Cue" && superSceneNavigation.childLayerCount === 3 && superSceneNavigation.showExitButton === "Show"],
     ["moveThreePxIsClick", () => close(subThreshold.before?.x, subThreshold.during?.x) && close(subThreshold.before?.y, subThreshold.during?.y) && subThreshold.during?.ghostCount === 0 && subThreshold.during?.readoutCount === 0 && close(subThreshold.before?.x, subThreshold.after?.x) && close(subThreshold.before?.y, subThreshold.after?.y)],
     ["moveSixPxShowsGhostAndReadout", () => escapeRollback.during?.ghostCount === 1 && escapeRollback.during?.readoutCount === 1 && /X\s+[0-9.]+\s+·\s+Y\s+[0-9.]+/.test(escapeRollback.during?.readout ?? "") && !close(escapeRollback.before?.x, escapeRollback.during?.x)],
@@ -13272,7 +13285,7 @@ async function main() {
             `panes=${Math.round(result.initial.workbenchRect.width)}:` +
               `${Math.round(result.initial.libraryPaneRect.width)}/${Math.round(result.initial.inspectorPaneRect.width)}/${Math.round(result.initial.rackPaneRect.width)} ` +
             `previews=${result.initial.previews.map((entry) => `${entry.kind}:${Math.round(entry.width)}x${Math.round(entry.height)}`).join(",")} ` +
-            `owned=${result.stepsNavigation.ownedParamsChipCount}/${result.stepsNavigation.ownedPreviewKinds.join("+")} ` +
+            `owned=${result.stepsNavigation.ownedParamsChipCount}/${result.stepsNavigation.ownedPreviewKinds.join("+")}/fade:${result.stepsNavigation.ownedTransitionControls.filter((control) => control.value !== "").map((control) => control.value).join("+") || "snap"} ` +
             `nav=${result.stepsNavigation.stepEditorCount}/${result.superSceneNavigation.childLabel || "none"} ` +
             `move=3:${result.move.subThreshold.before?.x}->${result.move.subThreshold.after?.x} ` +
               `esc:${result.move.escapeRollback.before?.x}->${result.move.escapeRollback.during?.x}->${result.move.escapeRollback.after?.x} ` +

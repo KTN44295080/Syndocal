@@ -1592,6 +1592,8 @@ export interface CueEffectTarget {
   effect_id: number;
   enabled: boolean;
   params?: EffectParamsSnapshot | null;
+  /** Optional cross-Cue Effect fade; absent preserves instant legacy recall. */
+  transition_ms?: number | null;
 }
 
 export interface ActiveFadeSummary {

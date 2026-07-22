@@ -40,6 +40,11 @@ assert.match(
   "Cue Effect Recall must label Chaser effects as Chaser instead of LFO",
 );
 assert.match(
+  editorSource,
+  /data-cue-effect-transition|Effect \$\{row\.id\} transition milliseconds/,
+  "Cue-owned Effect rows must expose the optional transition control",
+);
+assert.match(
   appSource,
   /const undoProject = async \(\) => \{[\s\S]*?refreshSnapshot\(true, true\)/,
   "Undo must re-seed Cue and Recall editor state from the restored project snapshot",
@@ -202,6 +207,25 @@ assert.deepEqual(helpers.setCueEffectTargetEnabled(effects, withRear, 30, false)
   { effect_id: 20, enabled: true },
   { effect_id: 30, enabled: false },
 ]);
+const ownedRear = withRear.map((target) => target.effect_id === 30
+  ? { ...target, params: { Lfo: { label: "Owned rear" } } }
+  : target);
+const withTransition = helpers.setCueEffectTargetTransition(effects, ownedRear, 30, 1234.6);
+assert.equal(withTransition.find((target) => target.effect_id === 30).transition_ms, 1235);
+assert.equal(
+  helpers.setCueEffectTargetTransition(effects, withTransition, 30, 900_000)
+    .find((target) => target.effect_id === 30).transition_ms,
+  600_000,
+);
+assert.equal(
+  Object.hasOwn(
+    helpers.setCueEffectTargetTransition(effects, withTransition, 30, null)
+      .find((target) => target.effect_id === 30),
+    "transition_ms",
+  ),
+  false,
+  "clearing a transition must restore the legacy request shape",
+);
 
 const emptyCueTargets = {
   targets: [],

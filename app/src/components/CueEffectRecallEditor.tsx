@@ -5,6 +5,7 @@ import {
   selectAllCueEffects,
   setCueEffectIncluded,
   setCueEffectTargetEnabled,
+  setCueEffectTargetTransition,
 } from "../cueEffectRecall";
 import type { CueEffectRecallChange } from "../cueEffectRecall";
 import type { CueEffectTarget, EffectKind, EffectParamsSnapshot, EffectSummary } from "../types";
@@ -232,6 +233,32 @@ export function CueEffectRecallEditor(props: CueEffectRecallEditorProps) {
                         >
                           {target()?.enabled ? "ON" : "OFF"}
                         </button>
+                        <label class="cueEffectTransitionField">
+                          <span>FX fade ms</span>
+                          <input
+                            type="number"
+                            min="0"
+                            max="600000"
+                            step="10"
+                            placeholder="Snap"
+                            value={target()?.transition_ms ?? ""}
+                            data-cue-effect-transition={row.id}
+                            disabled={!included() || target()?.params == null}
+                            aria-label={`Effect ${row.id} transition milliseconds`}
+                            onChange={(event) => {
+                              const raw = event.currentTarget.value;
+                              props.onChange(
+                                setCueEffectTargetTransition(
+                                  props.effects,
+                                  props.targets,
+                                  row.id,
+                                  raw === "" ? null : Number(raw),
+                                ),
+                                { kind: "transition", effectId: row.id },
+                              );
+                            }}
+                          />
+                        </label>
                       </div>
                     );
                   }}
