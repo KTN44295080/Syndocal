@@ -15853,6 +15853,10 @@ fn validate_project_fixture_patches(fixtures: &[PatchedFixtureSummary]) -> Resul
                 fixture.id, fixture.label
             )
         })?;
+        validate_emitter_calibrations(
+            &fixture.controls,
+            &format!("Project fixture {} '{}'", fixture.id, fixture.label),
+        )?;
         let range = dmx_range(fixture.address, footprint).ok_or_else(|| {
             format!(
                 "Project fixture {} '{}' has no DMX channel offsets",
@@ -16962,11 +16966,59 @@ fn validate_project_custom_profiles(profiles: &[FixtureProfileSummary]) -> Resul
                     mode.name
                 )
             })?;
+            validate_emitter_calibrations(
+                &mode.controls,
+                &format!("Project custom profile {source_path} mode '{}'", mode.name),
+            )?;
             validate_geometry_collection(
                 &format!("custom profile {source_path} mode '{}'", mode.name),
                 &profile.geometries,
                 &mode.controls,
             )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_emitter_calibrations(
+    controls: &[AttributeControl],
+    context: &str,
+) -> Result<(), String> {
+    for control in controls {
+        for function in &control.functions {
+            let Some(emitter) = function.emitter.as_ref() else {
+                continue;
+            };
+            if emitter.name.trim().is_empty() {
+                return Err(format!(
+                    "{context} control '{}' has an emitter with an empty name",
+                    control.attribute
+                ));
+            }
+            if let Some(color) = emitter.color.as_ref() {
+                if !color.x.is_finite()
+                    || !color.y.is_finite()
+                    || !color.luminance.is_finite()
+                    || color.x < 0.0
+                    || color.y <= 0.0
+                    || color.luminance <= 0.0
+                    || color.x + color.y > 1.000_1
+                {
+                    return Err(format!(
+                        "{context} control '{}' emitter '{}' has invalid CIE xyY calibration",
+                        control.attribute, emitter.name
+                    ));
+                }
+            }
+            if emitter
+                .dominant_wavelength_nm
+                .is_some_and(|wavelength| !wavelength.is_finite() || wavelength <= 0.0)
+            {
+                return Err(format!(
+                    "{context} control '{}' emitter '{}' has invalid dominant wavelength",
+                    control.attribute, emitter.name
+                ));
+            }
         }
     }
     Ok(())
@@ -30142,6 +30194,7 @@ f 1 2 3
             wheel_slot_name: Some(name.to_string()),
             wheel_slot_color: Some(color.to_string()),
             wheel_slot_media: None,
+            emitter: None,
         }
     }
 
@@ -30312,6 +30365,36 @@ f 1 2 3
         assert!(validate_project_file(&project)
             .unwrap_err()
             .contains("duplicate attribute value 'Dimmer'"));
+    }
+
+    #[test]
+    fn project_file_validation_rejects_corrupt_emitter_calibration() {
+        let mut fixture = project_fixture(1, "Emitter Fixture", 0, 1);
+        let mut function = project_color_wheel_function("Red", "Red", "#ff0000", 0, 65_535);
+        function.attribute = fixture.controls[0].attribute.clone();
+        function.emitter = Some(protocol::EmitterCalibrationSummary {
+            name: "Red LED".to_string(),
+            color: Some(protocol::CieColorSummary {
+                x: 0.64,
+                y: f32::NAN,
+                luminance: 0.2126,
+            }),
+            dominant_wavelength_nm: None,
+        });
+        fixture.controls[0].functions = vec![function];
+        let project = ProjectFile {
+            version: 1,
+            app: "Syndocal".to_string(),
+            custom_profiles: Vec::new(),
+            snapshot: EngineSnapshot {
+                fixtures: vec![fixture],
+                ..EngineSnapshot::default()
+            },
+        };
+
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("invalid CIE xyY calibration"));
     }
 
     #[test]
@@ -30559,6 +30642,7 @@ f 1 2 3
                 wheel_slot_name: Some("Open".to_string()),
                 wheel_slot_color: Some("#FFFFFF".to_string()),
                 wheel_slot_media: None,
+                emitter: None,
             },
             protocol::ChannelFunctionSummary {
                 name: "Red".to_string(),
@@ -30572,6 +30656,7 @@ f 1 2 3
                 wheel_slot_name: Some("Red".to_string()),
                 wheel_slot_color: Some("#FF0000".to_string()),
                 wheel_slot_media: None,
+                emitter: None,
             },
             protocol::ChannelFunctionSummary {
                 name: "Blue".to_string(),
@@ -30585,6 +30670,7 @@ f 1 2 3
                 wheel_slot_name: Some("Blue".to_string()),
                 wheel_slot_color: Some("#0000FF".to_string()),
                 wheel_slot_media: None,
+                emitter: None,
             },
         ];
         wheel.controls.push(wheel_control);

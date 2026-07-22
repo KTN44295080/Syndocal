@@ -60,6 +60,16 @@ export const channelFunctionRangeLabel = (fn: ChannelFunction) =>
   `${formatShortDmxPercent(fn.dmx_from)}-${formatShortDmxPercent(fn.dmx_to)}`;
 
 export const channelFunctionDetail = (fn: ChannelFunction) => {
+  if (fn.emitter) {
+    if (fn.emitter.color) {
+      const color = fn.emitter.color;
+      return `Emitter ${fn.emitter.name} xyY ${color.x.toFixed(4)},${color.y.toFixed(4)},${color.luminance.toFixed(4)}`;
+    }
+    if (fn.emitter.dominant_wavelength_nm) {
+      return `Emitter ${fn.emitter.name} ${fn.emitter.dominant_wavelength_nm.toFixed(1)} nm`;
+    }
+    return `Emitter ${fn.emitter.name} uncalibrated`;
+  }
   if (fn.wheel_slot_name) {
     const color = normalizeHexColor(fn.wheel_slot_color);
     return color ? `${fn.wheel_slot_name} ${color}` : fn.wheel_slot_name;

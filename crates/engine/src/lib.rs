@@ -3384,7 +3384,6 @@ struct RuntimeColorEvaluation {
     at: Instant,
     rgb: ColorEffectColor,
     rgbw: [u16; 4],
-    amber: u16,
     cmy: [u16; 3],
     hsv: [u16; 3],
 }
@@ -3398,9 +3397,16 @@ struct RuntimeColorBinding {
 #[derive(Clone, Copy, Default)]
 struct RuntimeColorConversionFlags {
     rgbw: bool,
-    amber: bool,
     cmy: bool,
     hsv: bool,
+}
+
+const MAX_CALIBRATED_COLOR_EMITTERS: usize = 16;
+const CALIBRATED_COLOR_LUT_GRID: usize = 2;
+
+#[derive(Clone)]
+struct RuntimeColorCalibration {
+    samples: [[u16; MAX_CALIBRATED_COLOR_EMITTERS]; 8],
 }
 
 #[derive(Clone)]
@@ -3409,7 +3415,7 @@ enum RuntimeColorOutput {
     Green { extract_white: bool },
     Blue { extract_white: bool },
     White,
-    Amber,
+    CalibratedEmitter([u16; 8]),
     Intensity,
     Cyan,
     Magenta,
@@ -3437,8 +3443,7 @@ impl RuntimeColorBinding {
                     extract_white: true,
                 }
                 | RuntimeColorOutput::White => conversions.rgbw = true,
-                RuntimeColorOutput::Amber => conversions.amber = true,
-                RuntimeColorOutput::Intensity => {}
+                RuntimeColorOutput::CalibratedEmitter(_) | RuntimeColorOutput::Intensity => {}
                 RuntimeColorOutput::Cyan
                 | RuntimeColorOutput::Magenta
                 | RuntimeColorOutput::Yellow => conversions.cmy = true,
@@ -23467,7 +23472,9 @@ fn evaluate_runtime_color_mapping_attribute_at_rate(
             }
         }
         RuntimeColorOutput::White => evaluated.rgbw[3],
-        RuntimeColorOutput::Amber => evaluated.amber,
+        RuntimeColorOutput::CalibratedEmitter(anchors) => {
+            runtime_calibrated_emitter_value(evaluated.rgb, anchors)
+        }
         RuntimeColorOutput::Intensity => {
             ((u32::from(evaluated.rgb.red)
                 + u32::from(evaluated.rgb.green)
@@ -23519,11 +23526,6 @@ fn runtime_color_evaluation_from_rgb(
     } else {
         [0; 4]
     };
-    let amber = if binding.conversions.amber {
-        rgb.red.min(rgb.green).saturating_sub(rgb.blue)
-    } else {
-        0
-    };
     let cmy = if binding.conversions.cmy {
         [
             u16::MAX - rgb.red,
@@ -23542,10 +23544,38 @@ fn runtime_color_evaluation_from_rgb(
         at: now,
         rgb,
         rgbw,
-        amber,
         cmy,
         hsv,
     }
+}
+
+fn runtime_calibrated_emitter_value(rgb: ColorEffectColor, anchors: &[u16; 8]) -> u16 {
+    let rt = rgb.red as f32 / u16::MAX as f32;
+    let gt = rgb.green as f32 / u16::MAX as f32;
+    let bt = rgb.blue as f32 / u16::MAX as f32;
+    // Tetrahedral interpolation uses four rather than eight LUT samples while
+    // remaining continuous across every cell. The selected simplex follows
+    // the ordering of the three fractional axes.
+    let (vertices, weights) = if rt >= gt {
+        if gt >= bt {
+            ([0, 4, 6, 7], [1.0 - rt, rt - gt, gt - bt, bt])
+        } else if rt >= bt {
+            ([0, 4, 5, 7], [1.0 - rt, rt - bt, bt - gt, gt])
+        } else {
+            ([0, 1, 5, 7], [1.0 - bt, bt - rt, rt - gt, gt])
+        }
+    } else if rt >= bt {
+        ([0, 2, 6, 7], [1.0 - gt, gt - rt, rt - bt, bt])
+    } else if gt >= bt {
+        ([0, 2, 3, 7], [1.0 - gt, gt - bt, bt - rt, rt])
+    } else {
+        ([0, 1, 3, 7], [1.0 - bt, bt - gt, gt - rt, rt])
+    };
+    let mixed = anchors[vertices[0]] as f32 * weights[0]
+        + anchors[vertices[1]] as f32 * weights[1]
+        + anchors[vertices[2]] as f32 * weights[2]
+        + anchors[vertices[3]] as f32 * weights[3];
+    mixed.round().clamp(0.0, u16::MAX as f32) as u16
 }
 
 fn color_mapping_frame_index(
@@ -24043,6 +24073,10 @@ fn compile_runtime_color_segment_bindings(
             .copied()
             .unwrap_or(controls.len());
         let segment = &controls[start..end];
+        if let Some(binding) = compile_runtime_calibrated_color_binding(segment) {
+            bindings.push(binding);
+            continue;
+        }
         let red = segment
             .iter()
             .find(|control| runtime_segment_color_component(&control.attribute) == Some("red"));
@@ -24077,15 +24111,13 @@ fn compile_runtime_color_segment_bindings(
         }
         for control in segment {
             match runtime_segment_color_component(&control.attribute) {
-                Some("amber") => {
-                    outputs.insert(control.attribute.clone(), RuntimeColorOutput::Amber);
-                }
-                Some("uv" | "lime") => {
+                Some("amber" | "uv" | "lime") => {
                     outputs.insert(control.attribute.clone(), RuntimeColorOutput::Zero);
                 }
                 _ => {}
             }
         }
+        insert_runtime_uncalibrated_emitter_zero_outputs(segment, &mut outputs);
         bindings.push(RuntimeColorBinding::new(outputs));
     }
     bindings
@@ -24168,6 +24200,10 @@ fn runtime_color_targets(
 }
 
 fn compile_runtime_color_binding(controls: &[AttributeControl]) -> Option<RuntimeColorBinding> {
+    if let Some(binding) = compile_runtime_calibrated_color_binding(controls) {
+        return Some(binding);
+    }
+
     let red = runtime_color_attribute(
         controls,
         &[
@@ -24221,6 +24257,7 @@ fn compile_runtime_color_binding(controls: &[AttributeControl]) -> Option<Runtim
             outputs.insert(white, RuntimeColorOutput::White);
         }
         insert_runtime_color_zero_outputs(controls, &mut outputs);
+        insert_runtime_uncalibrated_emitter_zero_outputs(controls, &mut outputs);
         insert_runtime_color_open_wheels(controls, &mut outputs);
         return Some(RuntimeColorBinding::new(outputs));
     }
@@ -24264,6 +24301,7 @@ fn compile_runtime_color_binding(controls: &[AttributeControl]) -> Option<Runtim
         outputs.insert(magenta, RuntimeColorOutput::Magenta);
         outputs.insert(yellow, RuntimeColorOutput::Yellow);
         insert_runtime_color_zero_outputs(controls, &mut outputs);
+        insert_runtime_uncalibrated_emitter_zero_outputs(controls, &mut outputs);
         insert_runtime_color_open_wheels(controls, &mut outputs);
         return Some(RuntimeColorBinding::new(outputs));
     }
@@ -24314,6 +24352,7 @@ fn compile_runtime_color_binding(controls: &[AttributeControl]) -> Option<Runtim
         outputs.insert(saturation, RuntimeColorOutput::Saturation);
         outputs.insert(value, RuntimeColorOutput::Value);
         insert_runtime_color_zero_outputs(controls, &mut outputs);
+        insert_runtime_uncalibrated_emitter_zero_outputs(controls, &mut outputs);
         insert_runtime_color_open_wheels(controls, &mut outputs);
         return Some(RuntimeColorBinding::new(outputs));
     }
@@ -24330,6 +24369,258 @@ fn compile_runtime_color_binding(controls: &[AttributeControl]) -> Option<Runtim
     let mut outputs = HashMap::from([(attribute, RuntimeColorOutput::Wheel(slots))]);
     insert_runtime_color_open_wheels(controls, &mut outputs);
     Some(RuntimeColorBinding::new(outputs))
+}
+
+#[derive(Clone)]
+struct RuntimeEmitterCandidate {
+    attribute: String,
+    xyz: [f32; 3],
+    dmx_from: u16,
+    dmx_to: u16,
+}
+
+fn compile_runtime_calibrated_color_binding(
+    controls: &[AttributeControl],
+) -> Option<RuntimeColorBinding> {
+    let candidates = controls
+        .iter()
+        .filter_map(runtime_emitter_candidate)
+        .collect::<Vec<_>>();
+    if !(3..=MAX_CALIBRATED_COLOR_EMITTERS).contains(&candidates.len())
+        || !runtime_emitter_basis_has_volume(&candidates)
+    {
+        return None;
+    }
+    let calibration = compile_runtime_color_calibration(&candidates)?;
+    let mut outputs = candidates
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| {
+            (
+                candidate.attribute.clone(),
+                RuntimeColorOutput::CalibratedEmitter(std::array::from_fn(|sample| {
+                    calibration.samples[sample][index]
+                })),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    insert_runtime_color_zero_outputs(controls, &mut outputs);
+    insert_runtime_uncalibrated_emitter_zero_outputs(controls, &mut outputs);
+    insert_runtime_color_open_wheels(controls, &mut outputs);
+    Some(RuntimeColorBinding::new(outputs))
+}
+
+fn runtime_emitter_candidate(control: &AttributeControl) -> Option<RuntimeEmitterCandidate> {
+    let mut linked = control
+        .functions
+        .iter()
+        .filter_map(|function| function.emitter.as_ref());
+    let emitter = linked.next()?;
+    if linked.any(|candidate| !candidate.name.eq_ignore_ascii_case(&emitter.name)) {
+        return None;
+    }
+    let color = emitter.color.as_ref()?;
+    if color.x < 0.0
+        || color.y <= 0.0
+        || color.luminance <= 0.0
+        || color.x + color.y > 1.000_1
+        || !color.x.is_finite()
+        || !color.y.is_finite()
+        || !color.luminance.is_finite()
+    {
+        return None;
+    }
+    let xyz = [
+        color.x * color.luminance / color.y,
+        color.luminance,
+        (1.0 - color.x - color.y).max(0.0) * color.luminance / color.y,
+    ];
+    let dmx_from = control
+        .functions
+        .iter()
+        .filter(|function| function.emitter.is_some())
+        .map(|function| function.dmx_from)
+        .min()?;
+    let dmx_to = control
+        .functions
+        .iter()
+        .filter(|function| function.emitter.is_some())
+        .map(|function| function.dmx_to)
+        .max()?;
+    (dmx_to > dmx_from).then(|| RuntimeEmitterCandidate {
+        attribute: control.attribute.clone(),
+        xyz,
+        dmx_from,
+        dmx_to,
+    })
+}
+
+fn runtime_emitter_basis_has_volume(candidates: &[RuntimeEmitterCandidate]) -> bool {
+    for first in 0..candidates.len() {
+        for second in first + 1..candidates.len() {
+            for third in second + 1..candidates.len() {
+                if determinant3(
+                    candidates[first].xyz,
+                    candidates[second].xyz,
+                    candidates[third].xyz,
+                )
+                .abs()
+                    > 1.0e-8
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn compile_runtime_color_calibration(
+    candidates: &[RuntimeEmitterCandidate],
+) -> Option<RuntimeColorCalibration> {
+    let mut samples = Vec::with_capacity(8);
+    let grid_max = (CALIBRATED_COLOR_LUT_GRID - 1) as f32;
+    for red in 0..CALIBRATED_COLOR_LUT_GRID {
+        for green in 0..CALIBRATED_COLOR_LUT_GRID {
+            for blue in 0..CALIBRATED_COLOR_LUT_GRID {
+                let target = linear_srgb_to_xyz([
+                    srgb_to_linear(red as f32 / grid_max),
+                    srgb_to_linear(green as f32 / grid_max),
+                    srgb_to_linear(blue as f32 / grid_max),
+                ]);
+                let mut weights = best_nonnegative_emitter_mix(candidates, target);
+                let peak = weights
+                    .iter()
+                    .take(candidates.len())
+                    .copied()
+                    .fold(0.0_f32, f32::max);
+                if peak > 1.0 {
+                    for weight in weights.iter_mut().take(candidates.len()) {
+                        *weight /= peak;
+                    }
+                }
+                let mut sample = [0; MAX_CALIBRATED_COLOR_EMITTERS];
+                for (index, candidate) in candidates.iter().enumerate() {
+                    let span = candidate.dmx_to.saturating_sub(candidate.dmx_from) as f32;
+                    sample[index] = (candidate.dmx_from as f32
+                        + weights[index].clamp(0.0, 1.0) * span)
+                        .round()
+                        .clamp(0.0, u16::MAX as f32) as u16;
+                }
+                samples.push(sample);
+            }
+        }
+    }
+    let samples = samples.try_into().ok()?;
+    Some(RuntimeColorCalibration { samples })
+}
+
+fn srgb_to_linear(value: f32) -> f32 {
+    if value <= 0.040_45 {
+        value / 12.92
+    } else {
+        ((value + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_srgb_to_xyz(rgb: [f32; 3]) -> [f32; 3] {
+    [
+        0.412_456_4 * rgb[0] + 0.357_576_1 * rgb[1] + 0.180_437_5 * rgb[2],
+        0.212_672_9 * rgb[0] + 0.715_152_2 * rgb[1] + 0.072_175 * rgb[2],
+        0.019_333_9 * rgb[0] + 0.119_192 * rgb[1] + 0.950_304_1 * rgb[2],
+    ]
+}
+
+fn best_nonnegative_emitter_mix(
+    candidates: &[RuntimeEmitterCandidate],
+    target: [f32; 3],
+) -> [f32; MAX_CALIBRATED_COLOR_EMITTERS] {
+    let mut best = [0.0; MAX_CALIBRATED_COLOR_EMITTERS];
+    let mut best_error = dot3(target, target);
+    let mut best_cost = f32::INFINITY;
+    let mut consider = |entries: &[(usize, f32)]| {
+        if entries
+            .iter()
+            .any(|(_, weight)| !weight.is_finite() || *weight < -1.0e-5)
+        {
+            return;
+        }
+        let mut mixed = [0.0; 3];
+        for (index, weight) in entries {
+            let weight = weight.max(0.0);
+            for axis in 0..3 {
+                mixed[axis] += candidates[*index].xyz[axis] * weight;
+            }
+        }
+        let residual = [
+            target[0] - mixed[0],
+            target[1] - mixed[1],
+            target[2] - mixed[2],
+        ];
+        let error = dot3(residual, residual);
+        let cost = entries
+            .iter()
+            .map(|(_, weight)| weight.max(0.0))
+            .sum::<f32>();
+        if error + 1.0e-10 < best_error
+            || ((error - best_error).abs() <= 1.0e-10 && cost + 1.0e-6 < best_cost)
+        {
+            best = [0.0; MAX_CALIBRATED_COLOR_EMITTERS];
+            for (index, weight) in entries {
+                best[*index] = weight.max(0.0);
+            }
+            best_error = error;
+            best_cost = cost;
+        }
+    };
+
+    for first in 0..candidates.len() {
+        let basis = candidates[first].xyz;
+        let denominator = dot3(basis, basis);
+        if denominator > 1.0e-12 {
+            consider(&[(first, dot3(basis, target) / denominator)]);
+        }
+        for second in first + 1..candidates.len() {
+            let left = candidates[first].xyz;
+            let right = candidates[second].xyz;
+            let aa = dot3(left, left);
+            let ab = dot3(left, right);
+            let bb = dot3(right, right);
+            let determinant = aa * bb - ab * ab;
+            if determinant.abs() > 1.0e-12 {
+                let at = dot3(left, target);
+                let bt = dot3(right, target);
+                consider(&[
+                    (first, (at * bb - bt * ab) / determinant),
+                    (second, (bt * aa - at * ab) / determinant),
+                ]);
+            }
+            for third in second + 1..candidates.len() {
+                let center = candidates[second].xyz;
+                let last = candidates[third].xyz;
+                let determinant = determinant3(left, center, last);
+                if determinant.abs() <= 1.0e-12 {
+                    continue;
+                }
+                consider(&[
+                    (first, determinant3(target, center, last) / determinant),
+                    (second, determinant3(left, target, last) / determinant),
+                    (third, determinant3(left, center, target) / determinant),
+                ]);
+            }
+        }
+    }
+    best
+}
+
+fn dot3(left: [f32; 3], right: [f32; 3]) -> f32 {
+    left[0] * right[0] + left[1] * right[1] + left[2] * right[2]
+}
+
+fn determinant3(first: [f32; 3], second: [f32; 3], third: [f32; 3]) -> f32 {
+    first[0] * (second[1] * third[2] - second[2] * third[1])
+        - second[0] * (first[1] * third[2] - first[2] * third[1])
+        + third[0] * (first[1] * second[2] - first[2] * second[1])
 }
 
 fn runtime_color_attribute(controls: &[AttributeControl], aliases: &[&str]) -> Option<String> {
@@ -24394,6 +24685,24 @@ fn insert_runtime_color_zero_outputs(
                 | "coloraddcw"
                 | "colouraddcw"
         ) {
+            outputs.insert(control.attribute.clone(), RuntimeColorOutput::Zero);
+        }
+    }
+}
+
+fn insert_runtime_uncalibrated_emitter_zero_outputs(
+    controls: &[AttributeControl],
+    outputs: &mut HashMap<String, RuntimeColorOutput>,
+) {
+    for control in controls {
+        if outputs.contains_key(&control.attribute) {
+            continue;
+        }
+        if control
+            .functions
+            .iter()
+            .any(|function| function.emitter.is_some())
+        {
             outputs.insert(control.attribute.clone(), RuntimeColorOutput::Zero);
         }
     }
@@ -24623,44 +24932,7 @@ fn evaluate_runtime_color_attribute_at_rate(
                 clock,
                 rate,
             );
-            let rgbw = if binding.conversions.rgbw {
-                let white = rgb.red.min(rgb.green).min(rgb.blue);
-                [
-                    rgb.red.saturating_sub(white),
-                    rgb.green.saturating_sub(white),
-                    rgb.blue.saturating_sub(white),
-                    white,
-                ]
-            } else {
-                [0; 4]
-            };
-            let amber = if binding.conversions.amber {
-                rgb.red.min(rgb.green).saturating_sub(rgb.blue)
-            } else {
-                0
-            };
-            let cmy = if binding.conversions.cmy {
-                [
-                    u16::MAX - rgb.red,
-                    u16::MAX - rgb.green,
-                    u16::MAX - rgb.blue,
-                ]
-            } else {
-                [0; 3]
-            };
-            let hsv = if binding.conversions.hsv {
-                color_to_hsv_u16(rgb)
-            } else {
-                [0; 3]
-            };
-            let evaluated = RuntimeColorEvaluation {
-                at: now,
-                rgb,
-                rgbw,
-                amber,
-                cmy,
-                hsv,
-            };
+            let evaluated = runtime_color_evaluation_from_rgb(rgb, binding, now);
             target.cached.set(Some(evaluated));
             evaluated
         });
@@ -24687,7 +24959,9 @@ fn evaluate_runtime_color_attribute_at_rate(
             }
         }
         RuntimeColorOutput::White => evaluated.rgbw[3],
-        RuntimeColorOutput::Amber => evaluated.amber,
+        RuntimeColorOutput::CalibratedEmitter(anchors) => {
+            runtime_calibrated_emitter_value(evaluated.rgb, anchors)
+        }
         RuntimeColorOutput::Intensity => {
             ((u32::from(evaluated.rgb.red)
                 + u32::from(evaluated.rgb.green)
@@ -24757,44 +25031,7 @@ fn evaluate_runtime_color_spatial_attribute_at_rate(
                 clock,
                 rate,
             );
-            let rgbw = if binding.conversions.rgbw {
-                let white = rgb.red.min(rgb.green).min(rgb.blue);
-                [
-                    rgb.red.saturating_sub(white),
-                    rgb.green.saturating_sub(white),
-                    rgb.blue.saturating_sub(white),
-                    white,
-                ]
-            } else {
-                [0; 4]
-            };
-            let amber = if binding.conversions.amber {
-                rgb.red.min(rgb.green).saturating_sub(rgb.blue)
-            } else {
-                0
-            };
-            let cmy = if binding.conversions.cmy {
-                [
-                    u16::MAX - rgb.red,
-                    u16::MAX - rgb.green,
-                    u16::MAX - rgb.blue,
-                ]
-            } else {
-                [0; 3]
-            };
-            let hsv = if binding.conversions.hsv {
-                color_to_hsv_u16(rgb)
-            } else {
-                [0; 3]
-            };
-            let evaluated = RuntimeColorEvaluation {
-                at: now,
-                rgb,
-                rgbw,
-                amber,
-                cmy,
-                hsv,
-            };
+            let evaluated = runtime_color_evaluation_from_rgb(rgb, binding, now);
             target.cached.set(Some(evaluated));
             evaluated
         });
@@ -24821,7 +25058,9 @@ fn evaluate_runtime_color_spatial_attribute_at_rate(
             }
         }
         RuntimeColorOutput::White => evaluated.rgbw[3],
-        RuntimeColorOutput::Amber => evaluated.amber,
+        RuntimeColorOutput::CalibratedEmitter(anchors) => {
+            runtime_calibrated_emitter_value(evaluated.rgb, anchors)
+        }
         RuntimeColorOutput::Intensity => {
             ((u32::from(evaluated.rgb.red)
                 + u32::from(evaluated.rgb.green)
@@ -45758,6 +45997,38 @@ mod tests {
         }
     }
 
+    fn test_emitter_control(
+        attribute: &str,
+        offset: u16,
+        name: &str,
+        color: Option<[f32; 3]>,
+    ) -> AttributeControl {
+        let mut control = test_color_control(attribute, offset);
+        control.functions = vec![protocol::ChannelFunctionSummary {
+            name: attribute.to_string(),
+            attribute: attribute.to_string(),
+            parent_function: None,
+            dmx_from: 0,
+            dmx_to: u16::MAX,
+            physical_from: None,
+            physical_to: None,
+            wheel_slot: None,
+            wheel_slot_name: None,
+            wheel_slot_color: None,
+            wheel_slot_media: None,
+            emitter: Some(protocol::EmitterCalibrationSummary {
+                name: name.to_string(),
+                color: color.map(|color| protocol::CieColorSummary {
+                    x: color[0],
+                    y: color[1],
+                    luminance: color[2],
+                }),
+                dominant_wavelength_nm: color.is_none().then_some(365.0),
+            }),
+        }];
+        control
+    }
+
     fn test_runtime_color_fixture(
         id: FixtureId,
         group_ids: Vec<String>,
@@ -46015,7 +46286,70 @@ mod tests {
         );
         assert!(matches!(
             bindings[1].outputs.get("ColorAmber 2"),
-            Some(RuntimeColorOutput::Amber)
+            Some(RuntimeColorOutput::Zero)
+        ));
+    }
+
+    #[test]
+    fn calibrated_multi_emitter_binding_uses_cie_metadata_and_fails_uv_closed() {
+        let controls = vec![
+            test_emitter_control("ColorAdd_R", 1, "Red", Some([0.64, 0.33, 0.212_672_9])),
+            test_emitter_control("ColorAdd_G", 2, "Green", Some([0.30, 0.60, 0.715_152_2])),
+            test_emitter_control("ColorAdd_B", 3, "Blue", Some([0.15, 0.06, 0.072_175])),
+            test_emitter_control(
+                "ColorAdd_A",
+                4,
+                "Amber",
+                Some([0.419_320_1, 0.505_245_8, 0.927_825_1]),
+            ),
+            test_emitter_control("ColorAdd_UV", 5, "UV", None),
+        ];
+
+        let binding = compile_runtime_color_binding(&controls).unwrap();
+        assert!(matches!(
+            binding.outputs.get("ColorAdd_A"),
+            Some(RuntimeColorOutput::CalibratedEmitter(_))
+        ));
+        assert!(matches!(
+            binding.outputs.get("ColorAdd_UV"),
+            Some(RuntimeColorOutput::Zero)
+        ));
+
+        let yellow = test_color(u16::MAX, u16::MAX, 0);
+        let emitter_value = |attribute: &str| match binding.outputs.get(attribute).unwrap() {
+            RuntimeColorOutput::CalibratedEmitter(anchors) => {
+                runtime_calibrated_emitter_value(yellow, anchors)
+            }
+            RuntimeColorOutput::Zero => 0,
+            _ => panic!("unexpected calibrated output"),
+        };
+        assert!(emitter_value("ColorAdd_A") > 60_000);
+        assert!(emitter_value("ColorAdd_R") < 1_000);
+        assert!(emitter_value("ColorAdd_G") < 1_000);
+        assert_eq!(emitter_value("ColorAdd_UV"), 0);
+    }
+
+    #[test]
+    fn uncalibrated_multi_emitter_channels_do_not_guess_amber_or_uv() {
+        let controls = vec![
+            test_color_control("ColorRed", 1),
+            test_color_control("ColorGreen", 2),
+            test_color_control("ColorBlue", 3),
+            test_color_control("ColorAmber", 4),
+            test_color_control("ColorUV", 5),
+        ];
+        let binding = compile_runtime_color_binding(&controls).unwrap();
+        assert!(matches!(
+            binding.outputs.get("ColorRed"),
+            Some(RuntimeColorOutput::Red { .. })
+        ));
+        assert!(matches!(
+            binding.outputs.get("ColorAmber"),
+            Some(RuntimeColorOutput::Zero)
+        ));
+        assert!(matches!(
+            binding.outputs.get("ColorUV"),
+            Some(RuntimeColorOutput::Zero)
         ));
     }
 
@@ -46583,6 +46917,7 @@ mod tests {
                     wheel_slot_name: Some(name.to_string()),
                     wheel_slot_color: Some(color.to_string()),
                     wheel_slot_media: None,
+                    emitter: None,
                 },
             )
             .collect(),
@@ -49288,39 +49623,80 @@ mod tests {
         runtime
     }
 
-    #[test]
-    fn mixed_color_chaser_move_curve_mapping_and_color_mapping_release_stack_meets_44hz_budget() {
-        const FIXTURE_COUNT: u64 = 200;
-        const EFFECT_COUNT: usize = 64;
-        const SAMPLES: usize = 1_000;
-        const ATTRIBUTES: [&str; 6] = [
-            "Dimmer",
-            "ColorRed",
-            "ColorGreen",
-            "ColorBlue",
-            "Pan",
-            "Tilt",
-        ];
+    fn runtime_with_calibrated_mixed_effect_fixtures(count: u64) -> EngineRuntime {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut profile = sample_profile();
+        profile.dmx_modes[0].controls.push(AttributeControl {
+            attribute: "Tilt".to_string(),
+            channel_name: "Tilt".to_string(),
+            geometry: None,
+            offsets: vec![4, 5],
+            resolution: AttributeResolution::SixteenBit,
+            default_value: 0,
+            functions: Vec::new(),
+        });
+        profile.dmx_modes[0].controls.extend([
+            test_emitter_control("ColorRed", 6, "Red", Some([0.64, 0.33, 0.212_672_9])),
+            test_emitter_control("ColorGreen", 7, "Green", Some([0.30, 0.60, 0.715_152_2])),
+            test_emitter_control("ColorBlue", 8, "Blue", Some([0.15, 0.06, 0.072_175])),
+            test_emitter_control(
+                "ColorAmber",
+                9,
+                "Amber",
+                Some([0.419_320_1, 0.505_245_8, 0.927_825_1]),
+            ),
+            test_emitter_control("ColorLime", 10, "Lime", Some([0.23, 0.62, 0.80])),
+        ]);
+        for fixture_id in 1..=count {
+            let zero_based = fixture_id - 1;
+            let mut request = sample_patch_request(
+                &format!("Calibrated Mixed {fixture_id}"),
+                1 + ((zero_based % 50) as u16) * 10,
+            );
+            request.universe = (zero_based / 50) as u16;
+            request.group_ids = vec!["Mixed".to_string()];
+            runtime.apply_command(EngineCommand::PatchFixture {
+                fixture_id,
+                request,
+                profile: profile.clone(),
+            });
+        }
+        assert_eq!(runtime.last_error, None);
+        assert!(runtime.fixtures.iter().all(|fixture| {
+            fixture
+                .color_binding
+                .as_ref()
+                .and_then(|binding| binding.outputs.get("ColorAmber"))
+                .is_some_and(|output| matches!(output, RuntimeColorOutput::CalibratedEmitter(_)))
+        }));
+        runtime
+    }
 
-        let mut runtime = runtime_with_mixed_effect_fixtures(FIXTURE_COUNT);
-        let fixture_ids = (1..=FIXTURE_COUNT).collect::<Vec<_>>();
-        let created_at = Instant::now();
-        let mut chaser_base = test_chaser_request(&fixture_ids);
+    fn populate_mixed_release_effects(
+        runtime: &mut EngineRuntime,
+        fixture_ids: &[FixtureId],
+        created_at: Instant,
+        effect_count: usize,
+    ) {
+        let mut chaser_base = test_chaser_request(fixture_ids);
         chaser_base.active_step_count = 4;
         chaser_base.wings = 2;
         chaser_base.duty_cycle = 0.75;
         chaser_base.overlap = 0.25;
         chaser_base.fixture_spread = 0.5;
-        let move_base = test_move_request(&fixture_ids);
-        let curve_base = test_curve_request(&fixture_ids);
-        let mapping_base = test_mapping_request(&fixture_ids);
-        let color_mapping_base = test_color_mapping_request(fixture_ids.clone());
-        for index in 0..EFFECT_COUNT {
-            let phase = index as f32 / EFFECT_COUNT as f32;
+        let move_base = test_move_request(fixture_ids);
+        let curve_base = test_curve_request(fixture_ids);
+        let mapping_base = test_mapping_request(fixture_ids);
+        let color_mapping_base = test_color_mapping_request(fixture_ids.to_vec());
+        for index in 0..effect_count {
+            let phase = index as f32 / effect_count as f32;
             let kind = match index % 6 {
                 0 => {
                     let mut request = test_color_request(
-                        fixture_ids.clone(),
+                        fixture_ids.to_vec(),
                         test_color(
                             ((index + 1) * 977) as u16,
                             ((index + 1) * 431) as u16,
@@ -49372,7 +49748,7 @@ mod tests {
                 _ => {
                     let mut request = color_mapping_base.clone();
                     request.phase = phase;
-                    request.offset_u = index as f32 / EFFECT_COUNT as f32;
+                    request.offset_u = index as f32 / effect_count as f32;
                     request.sampling = ColorMappingSampling::Bilinear;
                     RuntimeEffectKind::ColorMapping(
                         runtime
@@ -49388,6 +49764,26 @@ mod tests {
                 created_at,
             });
         }
+    }
+
+    #[test]
+    fn mixed_color_chaser_move_curve_mapping_and_color_mapping_release_stack_meets_44hz_budget() {
+        const FIXTURE_COUNT: u64 = 200;
+        const EFFECT_COUNT: usize = 64;
+        const SAMPLES: usize = 1_000;
+        const ATTRIBUTES: [&str; 6] = [
+            "Dimmer",
+            "ColorRed",
+            "ColorGreen",
+            "ColorBlue",
+            "Pan",
+            "Tilt",
+        ];
+
+        let mut runtime = runtime_with_mixed_effect_fixtures(FIXTURE_COUNT);
+        let fixture_ids = (1..=FIXTURE_COUNT).collect::<Vec<_>>();
+        let created_at = Instant::now();
+        populate_mixed_release_effects(&mut runtime, &fixture_ids, created_at, EFFECT_COUNT);
 
         let mut durations = Vec::with_capacity(SAMPLES);
         let mut checksum = 0_u64;
@@ -49503,6 +49899,122 @@ mod tests {
             );
             assert!(
                 transition_max <= Duration::from_millis(20),
+                "transition max was {transition_max:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn calibrated_multi_emitter_mixed_release_stack_stays_inside_44hz_tick() {
+        const FIXTURE_COUNT: u64 = 200;
+        const EFFECT_COUNT: usize = 64;
+        const SAMPLES: usize = if cfg!(debug_assertions) { 20 } else { 1_000 };
+        const ATTRIBUTES: [&str; 8] = [
+            "Dimmer",
+            "ColorRed",
+            "ColorGreen",
+            "ColorBlue",
+            "ColorAmber",
+            "ColorLime",
+            "Pan",
+            "Tilt",
+        ];
+
+        let mut runtime = runtime_with_calibrated_mixed_effect_fixtures(FIXTURE_COUNT);
+        let fixture_ids = (1..=FIXTURE_COUNT).collect::<Vec<_>>();
+        let created_at = Instant::now();
+        populate_mixed_release_effects(&mut runtime, &fixture_ids, created_at, EFFECT_COUNT);
+
+        let measure = |runtime: &EngineRuntime, samples: usize, checksum: &mut u64| {
+            let mut durations = Vec::with_capacity(samples);
+            for sample in 0..samples {
+                let at = created_at + DMX_TICK_INTERVAL * (sample as u32 + 1);
+                let started = Instant::now();
+                for fixture in &runtime.fixtures {
+                    for attribute in ATTRIBUTES {
+                        *checksum =
+                            checksum.wrapping_add(runtime.apply_effects_with_transition_policy(
+                                fixture, attribute, 16_384, at, false,
+                            ) as u64);
+                    }
+                }
+                durations.push(started.elapsed());
+            }
+            durations.sort_unstable();
+            (
+                durations[(samples * 95 / 100).min(samples - 1)],
+                durations[(samples * 99 / 100).min(samples - 1)],
+                *durations.last().unwrap(),
+            )
+        };
+
+        let mut checksum = 0_u64;
+        let (p95, p99, max) = measure(&runtime, SAMPLES, &mut checksum);
+        std::hint::black_box(checksum);
+        assert_ne!(checksum, 0);
+        eprintln!(
+            "Calibrated RGB/Amber/Lime mixed 64x200 stack: p95={}us p99={}us max={}us",
+            p95.as_micros(),
+            p99.as_micros(),
+            max.as_micros()
+        );
+        // The established uncalibrated 5/8/12 gate above is unchanged. This
+        // separate profile-aware gate covers every RGB/Amber/Lime control and
+        // keeps the ordinary calibrated stack below half of one 22.7ms tick.
+        if !cfg!(debug_assertions) {
+            assert!(p95 <= Duration::from_millis(10), "p95 was {p95:?}");
+            assert!(p99 <= Duration::from_millis(14), "p99 was {p99:?}");
+            assert!(max <= Duration::from_millis(18), "max was {max:?}");
+        }
+
+        runtime.effect_activations = runtime
+            .effects
+            .iter()
+            .cloned()
+            .map(|effect| RuntimeEffectActivation {
+                transition: Some(RuntimeEffectTransition {
+                    from: effect.clone(),
+                    from_rate: 1.0,
+                    started_at: created_at,
+                    duration: Duration::from_secs(60),
+                    progress_cache: Cell::new(None),
+                }),
+                effect,
+                key: Some(RuntimeEffectActivationKey::CueList {
+                    cue_list_id: DEFAULT_CUE_LIST_ID,
+                    cue_id: 1,
+                }),
+                rate: 1.0,
+                transition_ms: Some(60_000),
+            })
+            .collect();
+        runtime.active_effect_activation_indices = (0..runtime.effect_activations.len()).collect();
+        runtime.effects.clear();
+        let transition_samples = if cfg!(debug_assertions) { 10 } else { 200 };
+        let mut transition_checksum = 0_u64;
+        let (transition_p95, transition_p99, transition_max) =
+            measure(&runtime, transition_samples, &mut transition_checksum);
+        std::hint::black_box(transition_checksum);
+        assert_ne!(transition_checksum, 0);
+        eprintln!(
+            "Calibrated RGB/Amber/Lime all-transition 64x200 stack: p95={}us p99={}us max={}us",
+            transition_p95.as_micros(),
+            transition_p99.as_micros(),
+            transition_max.as_micros()
+        );
+        // All 64 simultaneous transitions deliberately double the complete
+        // stack. Even this stress case must remain inside one 44Hz tick.
+        if !cfg!(debug_assertions) {
+            assert!(
+                transition_p95 <= Duration::from_millis(18),
+                "transition p95 was {transition_p95:?}"
+            );
+            assert!(
+                transition_p99 <= Duration::from_millis(21),
+                "transition p99 was {transition_p99:?}"
+            );
+            assert!(
+                transition_max <= Duration::from_micros(22_500),
                 "transition max was {transition_max:?}"
             );
         }

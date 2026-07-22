@@ -64,6 +64,22 @@ pub enum AttributeResolution {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CieColorSummary {
+    pub x: f32,
+    pub y: f32,
+    pub luminance: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EmitterCalibrationSummary {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<CieColorSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dominant_wavelength_nm: Option<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChannelFunctionSummary {
     pub name: String,
     pub attribute: String,
@@ -83,6 +99,8 @@ pub struct ChannelFunctionSummary {
     pub wheel_slot_color: Option<String>,
     #[serde(default)]
     pub wheel_slot_media: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emitter: Option<EmitterCalibrationSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -4660,5 +4678,42 @@ mod tests {
         let json = serde_json::to_vec(&cue).unwrap();
         let parsed: super::CueSummary = serde_json::from_slice(&json).unwrap();
         assert_eq!(parsed, cue);
+    }
+
+    #[test]
+    fn channel_function_emitter_calibration_is_additive_and_legacy_omits_it() {
+        let legacy = serde_json::json!({
+            "name": "Red",
+            "attribute": "ColorAdd_R",
+            "parent_function": null,
+            "dmx_from": 0,
+            "dmx_to": 65535,
+            "physical_from": null,
+            "physical_to": null,
+            "wheel_slot": null,
+            "wheel_slot_name": null,
+            "wheel_slot_color": null,
+            "wheel_slot_media": null
+        });
+        let parsed: super::ChannelFunctionSummary = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(parsed.emitter, None);
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), legacy);
+
+        let mut calibrated = parsed;
+        calibrated.emitter = Some(super::EmitterCalibrationSummary {
+            name: "Red LED".to_string(),
+            color: Some(super::CieColorSummary {
+                x: 0.64,
+                y: 0.33,
+                luminance: 0.2126,
+            }),
+            dominant_wavelength_nm: Some(625.0),
+        });
+        let encoded = serde_json::to_value(&calibrated).unwrap();
+        assert_eq!(encoded["emitter"]["name"], "Red LED");
+        assert_eq!(
+            serde_json::from_value::<super::ChannelFunctionSummary>(encoded).unwrap(),
+            calibrated
+        );
     }
 }

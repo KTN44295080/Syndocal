@@ -74,7 +74,16 @@ const viewportFixtureControls: AttributeControl[] = [
     offsets: [6],
     resolution: "EightBit",
     default_value: 0,
-    functions: [],
+    functions: [{
+      name: "Red emitter",
+      attribute: "ColorRed",
+      dmx_from: 0,
+      dmx_to: 65_535,
+      emitter: {
+        name: "Red LED",
+        color: { x: 0.64, y: 0.33, luminance: 0.2126 },
+      },
+    }],
   },
   {
     attribute: "ColorGreen",
@@ -82,7 +91,16 @@ const viewportFixtureControls: AttributeControl[] = [
     offsets: [7],
     resolution: "EightBit",
     default_value: 0,
-    functions: [],
+    functions: [{
+      name: "Green emitter",
+      attribute: "ColorGreen",
+      dmx_from: 0,
+      dmx_to: 65_535,
+      emitter: {
+        name: "Green LED",
+        color: { x: 0.3, y: 0.6, luminance: 0.7152 },
+      },
+    }],
   },
   {
     attribute: "ColorBlue",
@@ -90,7 +108,16 @@ const viewportFixtureControls: AttributeControl[] = [
     offsets: [8],
     resolution: "EightBit",
     default_value: 0,
-    functions: [],
+    functions: [{
+      name: "Blue emitter",
+      attribute: "ColorBlue",
+      dmx_from: 0,
+      dmx_to: 65_535,
+      emitter: {
+        name: "Blue LED",
+        color: { x: 0.15, y: 0.06, luminance: 0.0722 },
+      },
+    }],
   },
 ];
 

@@ -680,6 +680,7 @@ fn parse_channel_functions(
                     .attribute("SSLPRESETCOLOR")
                     .and_then(daslight_numeric_color),
                 wheel_slot_media: None,
+                emitter: None,
             })
         })
         .collect()

@@ -6,8 +6,8 @@ use std::{
 };
 
 use protocol::{
-    AttributeControl, AttributeResolution, ChannelFunctionSummary, DmxModeSummary,
-    FixtureProfileSummary, GeometrySummary, Vec3,
+    AttributeControl, AttributeResolution, ChannelFunctionSummary, CieColorSummary, DmxModeSummary,
+    EmitterCalibrationSummary, FixtureProfileSummary, GeometrySummary, Vec3,
 };
 use roxmltree::{Document, Node};
 use thiserror::Error;
@@ -212,7 +212,8 @@ pub fn parse_description_xml(
     let models = parse_models(&fixture);
     let geometries = parse_geometries(&fixture, &models, &mut warnings);
     let wheel_slots = parse_wheel_slots(&fixture);
-    let dmx_modes = parse_dmx_modes(&fixture, &wheel_slots, &mut warnings);
+    let emitters = parse_emitters(&fixture, &mut warnings);
+    let dmx_modes = parse_dmx_modes(&fixture, &wheel_slots, &emitters, &mut warnings);
     warn_geometry_reference_issues(&geometries, &dmx_modes, &mut warnings);
 
     if dmx_modes.is_empty() {
@@ -228,6 +229,89 @@ pub fn parse_description_xml(
         dmx_modes,
         geometries,
         warnings,
+    })
+}
+
+fn parse_emitters(
+    fixture: &Node<'_, '_>,
+    warnings: &mut Vec<String>,
+) -> HashMap<String, EmitterCalibrationSummary> {
+    let mut emitters = HashMap::new();
+    for emitter in fixture.descendants().filter(|node| {
+        node.is_element()
+            && node.has_tag_name("Emitter")
+            && node
+                .ancestors()
+                .any(|ancestor| ancestor.is_element() && ancestor.has_tag_name("Emitters"))
+    }) {
+        let Some(name) = attr(&emitter, "Name")
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        else {
+            warnings.push("Physical emitter without a Name was ignored".to_string());
+            continue;
+        };
+        let color = attr(&emitter, "Color").and_then(|value| {
+            let parsed = parse_cie_color(value);
+            if parsed.is_none() {
+                warnings.push(format!(
+                    "Emitter {name} has invalid CIE Color '{value}' and will not be used for calibrated colour mixing"
+                ));
+            }
+            parsed
+        });
+        let dominant_wavelength_nm = attr(&emitter, "DominantWaveLength").and_then(|value| {
+            let parsed = parse_f32(value).filter(|wavelength| *wavelength > 0.0);
+            if parsed.is_none() {
+                warnings.push(format!(
+                    "Emitter {name} has invalid DominantWaveLength '{value}'"
+                ));
+            }
+            parsed
+        });
+        if color.is_none() && dominant_wavelength_nm.is_none() {
+            warnings.push(format!(
+                "Emitter {name} has neither a valid CIE Color nor dominant wavelength"
+            ));
+        }
+        let summary = EmitterCalibrationSummary {
+            name: name.to_string(),
+            color,
+            dominant_wavelength_nm,
+        };
+        if emitters
+            .insert(name.to_ascii_lowercase(), summary)
+            .is_some()
+        {
+            warnings.push(format!("Duplicate physical emitter name {name}"));
+        }
+    }
+    emitters
+}
+
+fn parse_cie_color(value: &str) -> Option<CieColorSummary> {
+    let values = value
+        .split(',')
+        .map(str::trim)
+        .map(parse_f32)
+        .collect::<Option<Vec<_>>>()?;
+    let [x, y, luminance] = values.as_slice() else {
+        return None;
+    };
+    if *x < 0.0
+        || *y <= 0.0
+        || *luminance <= 0.0
+        || *x + *y > 1.000_1
+        || !x.is_finite()
+        || !y.is_finite()
+        || !luminance.is_finite()
+    {
+        return None;
+    }
+    Some(CieColorSummary {
+        x: *x,
+        y: *y,
+        luminance: *luminance,
     })
 }
 
@@ -546,6 +630,7 @@ struct RawChannelSet {
 fn parse_dmx_modes(
     fixture: &Node<'_, '_>,
     wheel_slots: &HashMap<String, WheelSlotInfo>,
+    emitters: &HashMap<String, EmitterCalibrationSummary>,
     warnings: &mut Vec<String>,
 ) -> Vec<DmxModeSummary> {
     fixture
@@ -556,7 +641,7 @@ fn parse_dmx_modes(
             let controls = mode
                 .descendants()
                 .filter(|node| node.is_element() && node.has_tag_name("DMXChannel"))
-                .filter_map(|channel| parse_dmx_channel(channel, wheel_slots, warnings))
+                .filter_map(|channel| parse_dmx_channel(channel, wheel_slots, emitters, warnings))
                 .collect();
 
             DmxModeSummary {
@@ -570,6 +655,7 @@ fn parse_dmx_modes(
 fn parse_dmx_channel(
     channel: Node<'_, '_>,
     wheel_slots: &HashMap<String, WheelSlotInfo>,
+    emitters: &HashMap<String, EmitterCalibrationSummary>,
     warnings: &mut Vec<String>,
 ) -> Option<AttributeControl> {
     if !is_supported_dmx_break(&channel, warnings) {
@@ -608,7 +694,7 @@ fn parse_dmx_channel(
         AttributeResolution::EightBit
     };
     let default_value = parse_channel_default_value(channel, &resolution);
-    let functions = parse_channel_functions(channel, &resolution, wheel_slots, warnings);
+    let functions = parse_channel_functions(channel, &resolution, wheel_slots, emitters, warnings);
 
     Some(AttributeControl {
         attribute,
@@ -696,6 +782,7 @@ fn parse_channel_functions(
     channel: Node<'_, '_>,
     resolution: &AttributeResolution,
     wheel_slots: &HashMap<String, WheelSlotInfo>,
+    emitters: &HashMap<String, EmitterCalibrationSummary>,
     warnings: &mut Vec<String>,
 ) -> Vec<ChannelFunctionSummary> {
     let channel_name = attr(&channel, "Name").unwrap_or("<unnamed>");
@@ -734,6 +821,18 @@ fn parse_channel_functions(
             let wheel_slot_index = attr(&node, "WheelSlotIndex")
                 .and_then(parse_u32)
                 .filter(|index| *index > 0);
+            let emitter = attr(&node, "Emitter")
+                .map(str::trim)
+                .filter(|reference| !reference.is_empty())
+                .and_then(|reference| {
+                    let resolved = emitter_reference(emitters, reference).cloned();
+                    if resolved.is_none() {
+                        warnings.push(format!(
+                            "DMXChannel {channel_name} ChannelFunction {name} references unknown emitter {reference}"
+                        ));
+                    }
+                    resolved
+                });
             let (wheel_slot, wheel_slot_info) = channel_function_wheel_slot(
                 wheel_slots,
                 wheel.as_deref(),
@@ -781,6 +880,7 @@ fn parse_channel_functions(
                     wheel_slot_name: wheel_slot_info.map(|slot| slot.name.clone()),
                     wheel_slot_color: wheel_slot_info.and_then(|slot| slot.color.clone()),
                     wheel_slot_media: wheel_slot_info.and_then(|slot| slot.media.clone()),
+                    emitter,
                 },
                 wheel,
                 channel_sets,
@@ -807,6 +907,19 @@ fn parse_channel_functions(
         }
     }
     summaries
+}
+
+fn emitter_reference<'a>(
+    emitters: &'a HashMap<String, EmitterCalibrationSummary>,
+    reference: &str,
+) -> Option<&'a EmitterCalibrationSummary> {
+    let reference = reference.trim();
+    emitters.get(&reference.to_ascii_lowercase()).or_else(|| {
+        reference
+            .rsplit('.')
+            .next()
+            .and_then(|name| emitters.get(&name.trim().to_ascii_lowercase()))
+    })
 }
 
 fn expand_channel_sets(
@@ -840,6 +953,7 @@ fn expand_channel_sets(
             wheel_slot_name: wheel_slot_info.map(|slot| slot.name.clone()),
             wheel_slot_color: wheel_slot_info.and_then(|slot| slot.color.clone()),
             wheel_slot_media: wheel_slot_info.and_then(|slot| slot.media.clone()),
+            emitter: function.summary.emitter.clone(),
         });
     }
     summaries
@@ -1777,5 +1891,57 @@ mod tests {
         assert_eq!(invalid_relative_model, None);
         assert_eq!(invalid_absolute_model, None);
         assert_eq!(invalid_drive_model, None);
+    }
+
+    #[test]
+    fn parses_channel_function_emitter_calibration_and_uv_fail_closed_metadata() {
+        let xml = r#"
+        <GDTF DataVersion="1.2">
+          <FixtureType Manufacturer="Syndocal" Name="Calibrated RGBUV" ShortName="RGBUV" FixtureTypeID="calibrated-rgbuv">
+            <PhysicalDescriptions>
+              <Emitters>
+                <Emitter Name="Red LED" Color="0.6400,0.3300,0.2126" />
+                <Emitter Name="UV LED" DominantWaveLength="365" />
+              </Emitters>
+            </PhysicalDescriptions>
+            <Geometries><Geometry Name="Body" /></Geometries>
+            <DMXModes>
+              <DMXMode Name="Default" Geometry="Body">
+                <DMXChannels>
+                  <DMXChannel Name="Red" Geometry="Body" Offset="1">
+                    <LogicalChannel Attribute="ColorAdd_R">
+                      <ChannelFunction Name="Red" Attribute="ColorAdd_R" DMXFrom="0/1" Emitter="PhysicalDescriptions.Emitters.Red LED" />
+                    </LogicalChannel>
+                  </DMXChannel>
+                  <DMXChannel Name="UV" Geometry="Body" Offset="2">
+                    <LogicalChannel Attribute="ColorAdd_UV">
+                      <ChannelFunction Name="UV" Attribute="ColorAdd_UV" DMXFrom="0/1" Emitter="UV LED" />
+                    </LogicalChannel>
+                  </DMXChannel>
+                  <DMXChannel Name="Broken" Geometry="Body" Offset="3">
+                    <LogicalChannel Attribute="ColorAdd_A">
+                      <ChannelFunction Name="Broken" Attribute="ColorAdd_A" DMXFrom="0/1" Emitter="Missing LED" />
+                    </LogicalChannel>
+                  </DMXChannel>
+                </DMXChannels>
+              </DMXMode>
+            </DMXModes>
+          </FixtureType>
+        </GDTF>
+        "#;
+
+        let profile = parse_description_xml("memory://calibrated.gdtf", xml).unwrap();
+        let functions = &profile.dmx_modes[0].controls;
+        let red = functions[0].functions[0].emitter.as_ref().unwrap();
+        assert_eq!(red.name, "Red LED");
+        assert_eq!(red.color.as_ref().unwrap().x, 0.64);
+        let uv = functions[1].functions[0].emitter.as_ref().unwrap();
+        assert_eq!(uv.color, None);
+        assert_eq!(uv.dominant_wavelength_nm, Some(365.0));
+        assert_eq!(functions[2].functions[0].emitter, None);
+        assert!(profile
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("unknown emitter Missing LED")));
     }
 }

@@ -3534,6 +3534,9 @@ async function measure(client, label) {
       visibleLoadedProfileSummaryPanelCount: visibleCount('.setupMode-library .loadedProfileSummaryPanel'),
       profileLoadPanelWidth: profileLoadPanelRect ? Math.round(profileLoadPanelRect.width) : 0,
       loadedProfileSummaryPanelWidth: loadedProfileSummaryPanelRect ? Math.round(loadedProfileSummaryPanelRect.width) : 0,
+      calibratedEmitterDetailCount: [...document.querySelectorAll('.setupMode-library .profileFunctionRow small b')]
+        .filter((detail) => (detail.textContent ?? '').startsWith('Emitter ') && (detail.textContent ?? '').includes(' xyY '))
+        .length,
       visibleCustomProfileWorkbenchCount: visibleCount('.setupMode-profiles .customProfileWorkbench'),
       customProfileAttributePaneWidth: customProfileAttributePaneRect ? Math.round(customProfileAttributePaneRect.width) : 0,
       customProfilePreviewDeskWidth: customProfilePreviewDeskRect ? Math.round(customProfilePreviewDeskRect.width) : 0,
@@ -5174,7 +5177,8 @@ function hasExpectedSetupSurface(result) {
       result.visibleProfileLoadPanelCount >= 1 &&
       result.visibleLoadedProfileSummaryPanelCount >= 1 &&
       result.profileLoadPanelWidth >= 250 &&
-      result.loadedProfileSummaryPanelWidth >= 760
+      result.loadedProfileSummaryPanelWidth >= 760 &&
+      result.calibratedEmitterDetailCount >= 3
     );
   }
   if (result.label.startsWith("setup-profiles-")) {

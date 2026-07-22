@@ -1,5 +1,17 @@
 export type AttributeResolution = "EightBit" | "SixteenBit";
 
+export interface CieColorSummary {
+  x: number;
+  y: number;
+  luminance: number;
+}
+
+export interface EmitterCalibrationSummary {
+  name: string;
+  color?: CieColorSummary | null;
+  dominant_wavelength_nm?: number | null;
+}
+
 export interface ChannelFunctionSummary {
   name: string;
   attribute: string;
@@ -12,6 +24,7 @@ export interface ChannelFunctionSummary {
   wheel_slot_name?: string | null;
   wheel_slot_color?: string | null;
   wheel_slot_media?: string | null;
+  emitter?: EmitterCalibrationSummary | null;
 }
 
 export interface AttributeControl {

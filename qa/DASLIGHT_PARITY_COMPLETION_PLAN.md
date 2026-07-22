@@ -44,7 +44,7 @@
 ### P1 FX
 
 - Cue所有paramsはactivationごとの独立runtimeで、同一Effect IDのCue List GO間に任意の0–600000 ms transitionを持てる。Timeline Scene Blockは重複activationとblock fadeの別モデル。
-- calibrated Amber/Lime/UV/multi-emitter colour outputは未対応。
+- GDTF CIE xyY metadataを持つ3–16 emitterのcalibrated mixingをcommand/rebuild時に固定anchorへcompileする。metadata無しのAmber/Lime/UVは名前から推測せずzero、UVのColor省略も可視色へ合成しない。
 - Colour Mappingのimage/text/videoは最大64×64・64埋め込みフレームへcommand-time変換する。実灯体/matrixと外部Art-Net可視化での色・方向・UV受入は未完。
 
 ### P2 Scene Live
@@ -86,7 +86,7 @@
 
 受入: additive serde defaults、legacy `.sdc` byte-shape、project/preset round-trip、200 fixtures x 64 effects regression、release 44 Hz mixed benchmark、physical acceptance分離。
 
-進捗（2026-07-23）: **T19-A/B/C/D完了、T19-E未完**。T19-Aは独立Curve、T19-Bはfixture-order Mapping、T19-Cは埋め込みimage/text/video 2D Colour Mappingを追加した。T19-DはCue-owned targetへlegacy省略可能な`transition_ms`を追加し、同じCue Listで直前にactiveだった同一Effect IDのprecompiled runtimeから次のCue-owned stateへcrossfadeする。連続DMX16は線形、wheel/gobo/shutter/strobe/prism等は無効な中間rangeを出さず50%で切替、LFO/Position Waveのvideo targetも固定長状態で遷移する。44Hz側のfixture lookup、allocation、文字列正規化は増やさず、progressはactivation/tick単位でcacheする。protocol 38/38、engine 389 pass + 1 manual ignore、Tauri 325 pass + 9実機依存ignore、5解像度FX viewport、2701/2701 localization、frontend buildがgreen。通常のColor/Chaser/Move/Curve/Mapping/ColorMapping混載64 FX×200灯体releaseはp95 2.654 / p99 2.955 / max 3.460ms、全64 FX同時transition stressはp95 9.576 / p99 10.596 / max 10.878ms。詳細は`qa/CUE_EFFECT_TRANSITION_ACCEPTANCE.md`。T19-Eと物理/外部可視化受入は未完。
+進捗（2026-07-23）: **T19-A/B/C/D/E完了**。T19-Aは独立Curve、T19-Bはfixture-order Mapping、T19-Cは埋め込みimage/text/video 2D Colour Mapping、T19-DはCue-owned target間transitionを追加した。T19-EはGDTF EmitterのCIE xyYをprofileから保持し、3–16 visible emitterの非負mixingをcommand/rebuild時にRGB cubeの固定anchorへcompileする。44Hz側は4 anchorの固定補間のみで、emitter検索、solver、allocation、文字列正規化を行わない。metadata無しのAmber/Lime/UVとColor無しUVはzeroへfail-closedする。protocol 39/39、GDTF 18/18、engine 392 pass + 1 manual ignore、Tauri 326 pass + 9実機依存ignore、full Rust workspace、5解像度full viewport、2701/2701 localization、frontend buildがgreen。calibrated 64 FX×200灯体releaseは通常p95 7.672 / p99 8.052 / max 9.660ms、全64 FX同時transitionはp95 17.489 / p99 18.119 / max 18.390msで各専用gateを通過した。既存非較正5/8/12ms gateは同一ホストA/Bで旧HEAD p95 5.113ms、新差分p95 5.110msと非増加だが両方とも絶対p95 gateを0.11ms超えたためgreenとは扱わず、T23の制御済みrelease host再実行へ残す。詳細は`qa/CUE_EFFECT_TRANSITION_ACCEPTANCE.md`と`qa/CALIBRATED_MULTI_EMITTER_ACCEPTANCE.md`。物理/外部可視化受入は未完。
 
 ### T20: Complete Scene Live
 
