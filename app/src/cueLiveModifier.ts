@@ -2,7 +2,12 @@
 // Clamp ranges mirror the engine's sanitizers exactly (crates/engine
 // sanitize_live_modifier_*): speed 0.05..20 (non-finite/<=0 -> 1), size 0..2
 // (non-finite/<0 -> 1), phase wrapped into 0..1.
-import type { CueLiveModifierSettings, CueLiveModifierState, CueSummary } from "./types";
+import type {
+  CueLiveDirection,
+  CueLiveModifierSettings,
+  CueLiveModifierState,
+  CueSummary,
+} from "./types";
 
 export const CUE_LIVE_MODIFIER_SPEED_MIN = 0.05;
 export const CUE_LIVE_MODIFIER_SPEED_MAX = 20;
@@ -12,8 +17,22 @@ export const neutralCueLiveModifier = (): CueLiveModifierSettings => ({
   speed: 1,
   size: 1,
   phase: 0,
+  direction: "Authored",
+  segment: 0,
   flash: false,
 });
+
+export const sanitizeLiveModifierDirection = (
+  direction: CueLiveDirection | null | undefined,
+): CueLiveDirection =>
+  direction === "Forward" || direction === "Reverse" || direction === "Bounce"
+    ? direction
+    : "Authored";
+
+export const sanitizeLiveModifierSegment = (segment: number, stepCount: number): number => {
+  if (!Number.isFinite(segment)) return 0;
+  return Math.min(Math.max(Math.round(segment), 0), Math.max(0, stepCount));
+};
 
 export const sanitizeLiveModifierSpeed = (speed: number): number => {
   if (!Number.isFinite(speed) || speed <= 0) return 1;
@@ -36,6 +55,8 @@ export const authoredCueLiveModifier = (cue: CueSummary): CueLiveModifierSetting
   speed: sanitizeLiveModifierSpeed(cue.live_modifiers?.speed ?? 1),
   size: sanitizeLiveModifierSize(cue.live_modifiers?.size ?? 1),
   phase: sanitizeLiveModifierPhase(cue.live_modifiers?.phase ?? 0),
+  direction: sanitizeLiveModifierDirection(cue.live_modifiers?.direction),
+  segment: sanitizeLiveModifierSegment(cue.live_modifiers?.segment ?? 0, cue.steps?.length ?? 0),
   flash: cue.live_modifiers?.flash ?? false,
 });
 
@@ -51,6 +72,8 @@ export const effectiveCueLiveModifier = (
     speed: sanitizeLiveModifierSpeed(live.speed),
     size: sanitizeLiveModifierSize(live.size),
     phase: sanitizeLiveModifierPhase(live.phase),
+    direction: sanitizeLiveModifierDirection(live.direction),
+    segment: sanitizeLiveModifierSegment(live.segment ?? 0, cue.steps?.length ?? 0),
     flash: authored.flash,
   };
 };
@@ -66,7 +89,9 @@ export const cueLiveModifierIsOverridden = (
   return (
     sanitizeLiveModifierSpeed(live.speed) !== authored.speed ||
     sanitizeLiveModifierSize(live.size) !== authored.size ||
-    sanitizeLiveModifierPhase(live.phase) !== authored.phase
+    sanitizeLiveModifierPhase(live.phase) !== authored.phase ||
+    sanitizeLiveModifierDirection(live.direction) !== authored.direction ||
+    sanitizeLiveModifierSegment(live.segment ?? 0, cue.steps?.length ?? 0) !== authored.segment
   );
 };
 

@@ -31,19 +31,19 @@ use protocol::{
     ColorEffectInterpolation, ColorEffectRequest, ColorEffectSpatialRecipe, ColorMappingCellTarget,
     ColorMappingEffectRequest, ColorMappingPlaybackDirection, ColorMappingSampling,
     ColorMappingWrapMode, CompositionId, CompositionSummary, CueEffectTarget, CueFixtureTarget,
-    CueId, CueIfcbTiming, CueListId, CueListSummary, CueLiveModifierSettings, CueLiveModifierState,
-    CueNodeGraphTarget, CuePaletteTarget, CuePartSummary, CueStepSummary, CueSummary,
-    CurveEffectPoint, CurveEffectRequest, DmxMergeMode, DmxModeSummary, DmxOutputConfig,
-    DmxOutputProtocol, DmxOutputRouteTelemetry, DmxUniversePreview, EffectBlendMode,
-    EffectClockSync, EffectId, EffectKind, EffectParamsSnapshot, EffectSummary, EngineSnapshot,
-    EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId, FixtureId, FixtureLimits,
-    FixtureProfileSummary, LfoEffectRequest, LfoShape, LiveAudioFrame, LiveAudioReactiveFeatures,
-    MappingEffectDirection, MappingEffectRequest, MoveCoordinateMode, MoveDirection,
-    MoveEffectRequest, MovePathPoint, NodeGraphAudioRuntimeStatus, NodeGraphId, NodeGraphNodeKind,
-    NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId, PatchFixtureRequest,
-    PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot,
-    ProgrammerValueSummary, RecallMode, ReferencePaletteSummary, Rotation3, StageMapConfig,
-    StageMapPresetSummary, StageObjectId, StageObjectSummary, SubmasterSummary,
+    CueId, CueIfcbTiming, CueListId, CueListSummary, CueLiveDirection, CueLiveModifierSettings,
+    CueLiveModifierState, CueNodeGraphTarget, CuePaletteTarget, CuePartSummary, CueStepSummary,
+    CueSummary, CurveEffectPoint, CurveEffectRequest, DmxMergeMode, DmxModeSummary,
+    DmxOutputConfig, DmxOutputProtocol, DmxOutputRouteTelemetry, DmxUniversePreview,
+    EffectBlendMode, EffectClockSync, EffectId, EffectKind, EffectParamsSnapshot, EffectSummary,
+    EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId, FixtureId,
+    FixtureLimits, FixtureProfileSummary, LfoEffectRequest, LfoShape, LiveAudioFrame,
+    LiveAudioReactiveFeatures, MappingEffectDirection, MappingEffectRequest, MoveCoordinateMode,
+    MoveDirection, MoveEffectRequest, MovePathPoint, NodeGraphAudioRuntimeStatus, NodeGraphId,
+    NodeGraphNodeKind, NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId,
+    PatchFixtureRequest, PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest,
+    ProgrammerSnapshot, ProgrammerValueSummary, RecallMode, ReferencePaletteSummary, Rotation3,
+    StageMapConfig, StageMapPresetSummary, StageObjectId, StageObjectSummary, SubmasterSummary,
     TimelineAudioClipId, TimelineAudioClipSummary, TimelineAutomationSummary,
     TimelineCueEventSummary, TimelineEventId, TimelineLayerKind, TimelineLayerSummary,
     TimelineSnapRequest, TimelineSnapshot, TimelineTrackKind, TimelineVideoAutomationSummary,
@@ -652,8 +652,10 @@ pub enum EngineCommand {
         speed: f32,
         size: f32,
         phase: f32,
+        direction: CueLiveDirection,
+        segment: u16,
     },
-    /// T17 reset one scene's live modifier back to its authored dial position.
+    /// T17/T20 reset one scene's live controls back to their authored position.
     ClearCueLiveModifier(CueId),
     /// T17 authored live-modifier dial defaults stored on the Cue (`.sdc`).
     SetCueLiveModifierDefaults {
@@ -2911,6 +2913,7 @@ struct RuntimeCueStepValue {
 
 #[derive(Clone)]
 struct RuntimeCueStep {
+    source_index: usize,
     starts_at_ms: u64,
     fade_ms: u64,
     ends_at_ms: u64,
@@ -2942,6 +2945,7 @@ impl RuntimeCueStepActivationRange {
 enum RuntimeCueStepClock {
     Realtime {
         started_at: Instant,
+        position_offset_ms: u64,
     },
     Timeline {
         starts_at_ms: u64,
@@ -2954,7 +2958,7 @@ enum RuntimeCueStepClock {
 
 #[derive(Clone)]
 struct RuntimeCueStepActivation {
-    cue_index: usize,
+    sequence: RuntimeCueStepSequence,
     key: Option<RuntimeEffectActivationKey>,
     rate: f32,
     clock: RuntimeCueStepClock,
@@ -5668,39 +5672,57 @@ impl EngineRuntime {
                 speed,
                 size,
                 phase,
+                direction,
+                segment,
             } => {
-                let authored = self
-                    .cues
-                    .iter()
-                    .find(|cue| cue.id == cue_id)
-                    .map(|cue| cue.live_modifiers.unwrap_or_default());
+                let authored = self.cues.iter().find(|cue| cue.id == cue_id).map(|cue| {
+                    let mut settings = cue.live_modifiers.unwrap_or_default();
+                    settings.segment =
+                        sanitize_live_modifier_segment(settings.segment, cue.steps.len());
+                    settings
+                });
                 match authored {
                     None => {
                         self.last_error = Some(format!("Cue {cue_id} was not found"));
                     }
                     Some(authored) => {
+                        let previous = self.effective_cue_live_modifier(cue_id);
                         let settings = CueLiveModifierSettings {
                             speed: sanitize_live_modifier_speed(speed),
                             size: sanitize_live_modifier_size(size),
                             phase: sanitize_live_modifier_phase(phase),
+                            direction,
+                            segment: self
+                                .cues
+                                .iter()
+                                .find(|cue| cue.id == cue_id)
+                                .map(|cue| sanitize_live_modifier_segment(segment, cue.steps.len()))
+                                .unwrap_or(0),
                             flash: authored.flash,
                         };
                         if settings.speed == authored.speed
                             && settings.size == authored.size
                             && settings.phase == authored.phase
+                            && settings.direction == authored.direction
+                            && settings.segment == authored.segment
                         {
                             self.cue_live_modifier_overrides.remove(&cue_id);
                         } else {
                             self.cue_live_modifier_overrides.insert(cue_id, settings);
                         }
-                        self.reapply_cue_live_modifier_by_id(cue_id, Instant::now());
+                        let jump_segment = previous.segment != settings.segment
+                            || (settings.segment != 0 && previous.direction != settings.direction);
+                        self.reapply_cue_live_modifier_by_id(cue_id, Instant::now(), jump_segment);
                         self.last_error = None;
                     }
                 }
             }
             EngineCommand::ClearCueLiveModifier(cue_id) => {
-                if self.cue_live_modifier_overrides.remove(&cue_id).is_some() {
-                    self.reapply_cue_live_modifier_by_id(cue_id, Instant::now());
+                if let Some(previous) = self.cue_live_modifier_overrides.remove(&cue_id) {
+                    let restored = self.effective_cue_live_modifier(cue_id);
+                    let jump_segment = previous.segment != restored.segment
+                        || (restored.segment != 0 && previous.direction != restored.direction);
+                    self.reapply_cue_live_modifier_by_id(cue_id, Instant::now(), jump_segment);
                 }
                 self.last_error = None;
             }
@@ -7289,7 +7311,12 @@ impl EngineRuntime {
                 let result = if Instant::now() > expires_at {
                     Err("Cue live modifier update expired before engine execution".to_string())
                 } else if let Some(cue) = self.cues.iter_mut().find(|cue| cue.id == cue_id) {
-                    cue.live_modifiers = sanitize_cue_live_modifier_settings(settings);
+                    cue.live_modifiers =
+                        sanitize_cue_live_modifier_settings(settings).map(|mut settings| {
+                            settings.segment =
+                                sanitize_live_modifier_segment(settings.segment, cue.steps.len());
+                            settings
+                        });
                     Ok(())
                 } else {
                     Err(format!("Cue {cue_id} was not found"))
@@ -7297,7 +7324,7 @@ impl EngineRuntime {
                 if result.is_ok() {
                     // Authored dial positions changed; re-resolve this scene's
                     // activation params unless a live latch still overrides them.
-                    self.reapply_cue_live_modifier_by_id(cue_id, Instant::now());
+                    self.reapply_cue_live_modifier_by_id(cue_id, Instant::now(), true);
                 }
                 self.last_error = if result.is_ok() {
                     None
@@ -11770,13 +11797,22 @@ impl EngineRuntime {
                 "Cue {cue_id} must keep at least one fixture, palette, video, output, node graph, step, or effect target"
             ));
         }
+        let step_count = steps.len();
         let step_sequence = runtime_cue_step_sequence(&steps);
-        let cue = self
-            .cues
-            .get_mut(cue_index)
-            .expect("resolved Cue index must remain valid");
-        cue.steps = steps;
-        cue.step_sequence = step_sequence;
+        {
+            let cue = self
+                .cues
+                .get_mut(cue_index)
+                .expect("resolved Cue index must remain valid");
+            cue.steps = steps;
+            cue.step_sequence = step_sequence;
+            if let Some(settings) = &mut cue.live_modifiers {
+                settings.segment = sanitize_live_modifier_segment(settings.segment, step_count);
+            }
+        }
+        if let Some(settings) = self.cue_live_modifier_overrides.get_mut(&cue_id) {
+            settings.segment = sanitize_live_modifier_segment(settings.segment, step_count);
+        }
         Ok(())
     }
 
@@ -12719,15 +12755,24 @@ impl EngineRuntime {
         );
 
         for cue_index in 0..self.cues.len() {
-            let sequence = runtime_cue_step_sequence(&self.cues[cue_index].steps);
-            self.cues[cue_index].step_sequence = sequence;
+            let effective = self.effective_cue_live_modifier(self.cues[cue_index].id);
+            let authored_sequence = runtime_cue_step_sequence(&self.cues[cue_index].steps);
+            let live_sequence = runtime_cue_step_sequence_with_direction(
+                &self.cues[cue_index].steps,
+                effective.direction,
+            );
+            let position_offset_ms = cue_live_segment_start_ms(&live_sequence, effective.segment);
+            self.cues[cue_index].step_sequence = authored_sequence;
             let start = self.step_activations.len();
-            if !self.cues[cue_index].step_sequence.steps.is_empty() {
+            if !live_sequence.steps.is_empty() {
                 self.step_activations.push(RuntimeCueStepActivation {
-                    cue_index,
+                    sequence: live_sequence,
                     key: None,
                     rate: 1.0,
-                    clock: RuntimeCueStepClock::Realtime { started_at: now },
+                    clock: RuntimeCueStepClock::Realtime {
+                        started_at: now,
+                        position_offset_ms,
+                    },
                 });
             }
             self.cues[cue_index].step_activation_range = RuntimeCueStepActivationRange {
@@ -12745,7 +12790,7 @@ impl EngineRuntime {
                 .filter(|index| !self.cues[*index].step_sequence.steps.is_empty())
             {
                 self.step_activations.push(RuntimeCueStepActivation {
-                    cue_index,
+                    sequence: self.cues[cue_index].step_sequence.clone(),
                     key: None,
                     rate: 1.0,
                     clock: RuntimeCueStepClock::Timeline { starts_at_ms: 0 },
@@ -12775,7 +12820,7 @@ impl EngineRuntime {
                     .filter(|index| !self.cues[*index].step_sequence.steps.is_empty())
                 {
                     self.step_activations.push(RuntimeCueStepActivation {
-                        cue_index,
+                        sequence: self.cues[cue_index].step_sequence.clone(),
                         key: None,
                         rate: 1.0,
                         clock: RuntimeCueStepClock::ChildTimeline {
@@ -12811,7 +12856,21 @@ impl EngineRuntime {
                 .iter()
                 .find(|(candidate, _, _)| *candidate == key)
                 .map(|(_, clock, rate)| (*clock, *rate))
-                .unwrap_or((RuntimeCueStepClock::Realtime { started_at: now }, 1.0));
+                .unwrap_or_else(|| {
+                    let sequence = self
+                        .step_activations
+                        .get(cue.step_activation_range.start)
+                        .map(|activation| &activation.sequence)
+                        .unwrap_or(&cue.step_sequence);
+                    let segment = self.effective_cue_live_modifier(cue.id).segment;
+                    (
+                        RuntimeCueStepClock::Realtime {
+                            started_at: now,
+                            position_offset_ms: cue_live_segment_start_ms(sequence, segment),
+                        },
+                        1.0,
+                    )
+                });
             self.activate_step_range(cue.step_activation_range, key, clock, rate);
         }
 
@@ -12888,9 +12947,11 @@ impl EngineRuntime {
         now: Instant,
     ) -> Option<u64> {
         let elapsed_ms = match activation.clock {
-            RuntimeCueStepClock::Realtime { started_at } => {
-                now.saturating_duration_since(started_at).as_millis() as u64
-            }
+            RuntimeCueStepClock::Realtime {
+                started_at,
+                position_offset_ms,
+            } => position_offset_ms
+                .saturating_add(now.saturating_duration_since(started_at).as_millis() as u64),
             RuntimeCueStepClock::Timeline { starts_at_ms } => {
                 self.timeline_position_ms.saturating_sub(starts_at_ms)
             }
@@ -12927,11 +12988,8 @@ impl EngineRuntime {
             let Some(position_ms) = self.cue_step_activation_position_ms(activation, now) else {
                 continue;
             };
-            let Some(cue) = self.cues.get(activation.cue_index) else {
-                continue;
-            };
             value = evaluate_cue_step_sequence(
-                &cue.step_sequence,
+                &activation.sequence,
                 fixture_id,
                 attribute,
                 value,
@@ -14069,7 +14127,7 @@ impl EngineRuntime {
         // T17 reset rule: releasing a scene drops its latched live override
         // and restores the authored params for the next activation.
         if self.cue_live_modifier_overrides.remove(&cue_id).is_some() {
-            self.reapply_cue_live_modifier_by_id(cue_id, Instant::now());
+            self.reapply_cue_live_modifier_by_id(cue_id, Instant::now(), true);
         }
         self.cue_list_effect_activation_cues
             .retain(|_, active_cue_id| *active_cue_id != cue_id);
@@ -15672,7 +15730,7 @@ impl EngineRuntime {
             // T17 reset rule: a fresh Matrix/Touch trigger always starts from
             // the authored live-modifier dial position.
             if self.cue_live_modifier_overrides.remove(&cue_id).is_some() {
-                self.reapply_cue_live_modifier_by_id(cue_id, now);
+                self.reapply_cue_live_modifier_by_id(cue_id, now, true);
             }
             self.activate_cue_effect_range_with_transitions(
                 cue.effect_activation_range,
@@ -15680,12 +15738,8 @@ impl EngineRuntime {
                 now,
                 &transition_sources,
             );
-            self.activate_step_range(
-                cue.step_activation_range,
-                key,
-                RuntimeCueStepClock::Realtime { started_at: now },
-                1.0,
-            );
+            let step_clock = self.cue_live_realtime_step_clock(cue_index, now);
+            self.activate_step_range(cue.step_activation_range, key, step_clock, 1.0);
         }
         let mut target_values = if cue.tracking {
             HashMap::new()
@@ -16107,7 +16161,7 @@ impl EngineRuntime {
         }
     }
 
-    /// T17: the latched live override wins over the authored dial position;
+    /// T17/T20: the latched live override wins over the authored position;
     /// with neither, the modifier is neutral.
     fn effective_cue_live_modifier(&self, cue_id: CueId) -> CueLiveModifierSettings {
         if let Some(override_settings) = self.cue_live_modifier_overrides.get(&cue_id) {
@@ -16120,63 +16174,106 @@ impl EngineRuntime {
             .unwrap_or_default()
     }
 
-    /// T17: resolve one scene's effective live modifier into its activation
+    /// T17/T20: resolve one scene's effective live controls into its activation
     /// range. Runs only at command time (set/clear/trigger/release/rebuild);
     /// the 44 Hz tick keeps reading the already-resolved params. Activation
     /// slot order mirrors rebuild_effect_activations exactly: one slot per
     /// enabled target whose authored params build successfully.
-    fn reapply_cue_live_modifier(&mut self, cue_index: usize, now: Instant) {
+    fn reapply_cue_live_modifier(&mut self, cue_index: usize, now: Instant, jump_segment: bool) {
         let cue_id = self.cues[cue_index].id;
         let range = self.cues[cue_index].effect_activation_range;
-        if range.is_empty() {
-            return;
-        }
         let modifier = self.effective_cue_live_modifier(cue_id);
-        let mut slot = range.start;
-        for target_index in 0..self.cues[cue_index].effect_targets.len() {
-            let (effect_id, params) = {
-                let target = &self.cues[cue_index].effect_targets[target_index];
-                if !target.enabled {
-                    continue;
-                }
-                let Some(params) = target.params.clone() else {
+        if !range.is_empty() {
+            let mut slot = range.start;
+            for target_index in 0..self.cues[cue_index].effect_targets.len() {
+                let (effect_id, params) = {
+                    let target = &self.cues[cue_index].effect_targets[target_index];
+                    if !target.enabled {
+                        continue;
+                    }
+                    let Some(params) = target.params.clone() else {
+                        continue;
+                    };
+                    (target.effect_id, params)
+                };
+                let authored = self.runtime_effect_from_params_snapshot(effect_id, &params, now);
+                let Ok(authored_effect) = authored else {
+                    // Rebuild pushed no slot for this target, so there is nothing
+                    // to advance past or rewrite.
                     continue;
                 };
-                (target.effect_id, params)
-            };
-            let authored = self.runtime_effect_from_params_snapshot(effect_id, &params, now);
-            let Ok(authored_effect) = authored else {
-                // Rebuild pushed no slot for this target, so there is nothing
-                // to advance past or rewrite.
-                continue;
-            };
-            if slot >= range.end() {
-                break;
+                if slot >= range.end() {
+                    break;
+                }
+                let transformed_params = effect_params_with_live_modifier(&params, modifier);
+                let effect = self
+                    .runtime_effect_from_params_snapshot(effect_id, &transformed_params, now)
+                    .unwrap_or(authored_effect);
+                if let Some(activation) = self.effect_activations.get_mut(slot) {
+                    let mut effect = effect;
+                    // Preserve the running activation's timing origin and enabled
+                    // state so a dial move does not restart free-running effects.
+                    effect.created_at = activation.effect.created_at;
+                    effect.enabled = activation.effect.enabled;
+                    clear_runtime_effect_caches(&effect.kind);
+                    activation.effect = effect;
+                }
+                slot += 1;
             }
-            let transformed_params = effect_params_with_live_modifier(&params, modifier);
-            let effect = self
-                .runtime_effect_from_params_snapshot(effect_id, &transformed_params, now)
-                .unwrap_or(authored_effect);
-            if let Some(activation) = self.effect_activations.get_mut(slot) {
-                let mut effect = effect;
-                // Preserve the running activation's timing origin and enabled
-                // state so a dial move does not restart free-running effects.
-                effect.created_at = activation.effect.created_at;
-                effect.enabled = activation.effect.enabled;
-                clear_runtime_effect_caches(&effect.kind);
-                activation.effect = effect;
-            }
-            slot += 1;
         }
+        self.reapply_cue_live_step_modifier(cue_index, now, jump_segment);
     }
 
-    fn reapply_cue_live_modifier_by_id(&mut self, cue_id: CueId, now: Instant) {
+    fn reapply_cue_live_modifier_by_id(&mut self, cue_id: CueId, now: Instant, jump_segment: bool) {
         if let Some(cue_index) = self.cues.iter().position(|cue| cue.id == cue_id) {
-            self.reapply_cue_live_modifier(cue_index, now);
+            self.reapply_cue_live_modifier(cue_index, now, jump_segment);
         }
     }
 
-    /// T17: after a full activation rebuild every range holds authored params;
+    fn reapply_cue_live_step_modifier(
+        &mut self,
+        cue_index: usize,
+        now: Instant,
+        jump_segment: bool,
+    ) {
+        let cue = &self.cues[cue_index];
+        let modifier = self.effective_cue_live_modifier(cue.id);
+        let sequence = runtime_cue_step_sequence_with_direction(&cue.steps, modifier.direction);
+        let position_offset_ms = cue_live_segment_start_ms(&sequence, modifier.segment);
+        let range = cue.step_activation_range;
+        let end = range.end().min(self.step_activations.len());
+        for activation in &mut self.step_activations[range.start.min(end)..end] {
+            activation.sequence = sequence.clone();
+            if jump_segment {
+                activation.clock = RuntimeCueStepClock::Realtime {
+                    started_at: now,
+                    position_offset_ms,
+                };
+            }
+        }
+    }
+
+    fn cue_live_realtime_step_clock(
+        &self,
+        cue_index: usize,
+        started_at: Instant,
+    ) -> RuntimeCueStepClock {
+        let cue = &self.cues[cue_index];
+        let sequence = self
+            .step_activations
+            .get(cue.step_activation_range.start)
+            .map(|activation| &activation.sequence)
+            .unwrap_or(&cue.step_sequence);
+        RuntimeCueStepClock::Realtime {
+            started_at,
+            position_offset_ms: cue_live_segment_start_ms(
+                sequence,
+                self.effective_cue_live_modifier(cue.id).segment,
+            ),
+        }
+    }
+
+    /// T17/T20: after a full activation rebuild every range holds authored params;
     /// re-resolve scenes whose effective modifier is not neutral.
     fn reapply_all_cue_live_modifiers(&mut self, now: Instant) {
         if !self.cue_live_modifier_overrides.is_empty() {
@@ -16187,13 +16284,18 @@ impl EngineRuntime {
         for cue_index in 0..self.cues.len() {
             let cue_id = self.cues[cue_index].id;
             let effective = self.effective_cue_live_modifier(cue_id);
-            if effective.speed != 1.0 || effective.size != 1.0 || effective.phase != 0.0 {
-                self.reapply_cue_live_modifier(cue_index, now);
+            if effective.speed != 1.0
+                || effective.size != 1.0
+                || effective.phase != 0.0
+                || !effective.direction.is_authored()
+                || effective.segment != 0
+            {
+                self.reapply_cue_live_modifier(cue_index, now, false);
             }
         }
     }
 
-    /// T17 snapshot exposure: latched overrides only, ordered by cue id so the
+    /// T17/T20 snapshot exposure: latched overrides only, ordered by cue id so the
     /// published snapshot stays deterministic.
     fn cue_live_modifier_states(&self) -> Vec<CueLiveModifierState> {
         let mut states = self
@@ -16204,6 +16306,8 @@ impl EngineRuntime {
                 speed: settings.speed,
                 size: settings.size,
                 phase: settings.phase,
+                direction: settings.direction,
+                segment: settings.segment,
             })
             .collect::<Vec<_>>();
         states.sort_unstable_by_key(|state| state.cue_id);
@@ -18406,6 +18510,11 @@ fn runtime_fixtures_from_snapshot(
 
 fn runtime_cue_from_summary(cue: &CueSummary) -> RuntimeCue {
     let step_sequence = runtime_cue_step_sequence(&cue.steps);
+    let live_modifiers =
+        sanitize_cue_live_modifier_settings(cue.live_modifiers).map(|mut settings| {
+            settings.segment = sanitize_live_modifier_segment(settings.segment, cue.steps.len());
+            settings
+        });
     RuntimeCue {
         id: cue.id,
         cue_list_id: if cue.cue_list_id == 0 {
@@ -18445,7 +18554,7 @@ fn runtime_cue_from_summary(cue: &CueSummary) -> RuntimeCue {
         steps: cue.steps.clone(),
         child_timeline: cue.child_timeline.clone(),
         color: cue.color.clone(),
-        live_modifiers: sanitize_cue_live_modifier_settings(cue.live_modifiers),
+        live_modifiers,
         effect_activation_range: RuntimeEffectActivationRange::default(),
         step_sequence,
         step_activation_range: RuntimeCueStepActivationRange::default(),
@@ -18483,6 +18592,10 @@ fn sanitize_live_modifier_phase(phase: f32) -> f32 {
     }
 }
 
+fn sanitize_live_modifier_segment(segment: u16, step_count: usize) -> u16 {
+    segment.min(u16::try_from(step_count).unwrap_or(u16::MAX))
+}
+
 fn sanitize_cue_live_modifier_settings(
     settings: Option<CueLiveModifierSettings>,
 ) -> Option<CueLiveModifierSettings> {
@@ -18491,6 +18604,8 @@ fn sanitize_cue_live_modifier_settings(
         speed: sanitize_live_modifier_speed(settings.speed),
         size: sanitize_live_modifier_size(settings.size),
         phase: sanitize_live_modifier_phase(settings.phase),
+        direction: settings.direction,
+        segment: settings.segment,
         flash: settings.flash,
     })
 }
@@ -18519,6 +18634,69 @@ fn live_modifier_scaled_level_range(low: u16, high: u16, size: f32) -> (u16, u16
 
 fn live_modifier_shifted_phase(phase: f32, offset: f32) -> f32 {
     (phase + offset).rem_euclid(1.0)
+}
+
+fn live_modifier_chaser_direction(
+    authored: ChaserDirection,
+    direction: CueLiveDirection,
+) -> ChaserDirection {
+    match direction {
+        CueLiveDirection::Authored => authored,
+        CueLiveDirection::Forward => ChaserDirection::Forward,
+        CueLiveDirection::Reverse => ChaserDirection::Reverse,
+        CueLiveDirection::Bounce => ChaserDirection::Bounce,
+    }
+}
+
+fn live_modifier_move_direction(
+    authored: MoveDirection,
+    direction: CueLiveDirection,
+) -> MoveDirection {
+    match direction {
+        CueLiveDirection::Authored => authored,
+        CueLiveDirection::Forward => MoveDirection::Forward,
+        CueLiveDirection::Reverse => MoveDirection::Reverse,
+        CueLiveDirection::Bounce => MoveDirection::Bounce,
+    }
+}
+
+fn live_modifier_value_direction(
+    authored: ValueEffectDirection,
+    direction: CueLiveDirection,
+) -> ValueEffectDirection {
+    match direction {
+        CueLiveDirection::Authored => authored,
+        CueLiveDirection::Forward => ValueEffectDirection::Forward,
+        CueLiveDirection::Reverse => ValueEffectDirection::Reverse,
+        CueLiveDirection::Bounce => ValueEffectDirection::Bounce,
+    }
+}
+
+fn live_modifier_mapping_direction(
+    authored: MappingEffectDirection,
+    direction: CueLiveDirection,
+) -> MappingEffectDirection {
+    if authored == MappingEffectDirection::Static {
+        return authored;
+    }
+    match direction {
+        CueLiveDirection::Authored => authored,
+        CueLiveDirection::Forward => MappingEffectDirection::Forward,
+        CueLiveDirection::Reverse => MappingEffectDirection::Reverse,
+        CueLiveDirection::Bounce => MappingEffectDirection::Bounce,
+    }
+}
+
+fn live_modifier_color_mapping_direction(
+    authored: ColorMappingPlaybackDirection,
+    direction: CueLiveDirection,
+) -> ColorMappingPlaybackDirection {
+    match direction {
+        CueLiveDirection::Authored => authored,
+        CueLiveDirection::Forward => ColorMappingPlaybackDirection::Forward,
+        CueLiveDirection::Reverse => ColorMappingPlaybackDirection::Reverse,
+        CueLiveDirection::Bounce => ColorMappingPlaybackDirection::Bounce,
+    }
 }
 
 /// Applies one scene's effective live modifier to authored effect params.
@@ -18552,6 +18730,11 @@ fn effect_params_with_live_modifier(
             request.low = low;
             request.high = high;
             request.phase = live_modifier_shifted_phase(request.phase, modifier.phase);
+            if modifier.direction == CueLiveDirection::Reverse {
+                request.direction.x = -request.direction.x;
+                request.direction.y = -request.direction.y;
+                request.direction.z = -request.direction.z;
+            }
         }
         EffectParamsSnapshot::Color(request) => {
             request.period_ms = live_modifier_scaled_period_ms(request.period_ms, modifier.speed);
@@ -18571,6 +18754,8 @@ fn effect_params_with_live_modifier(
                 feature.high = high;
             }
             request.phase = live_modifier_shifted_phase(request.phase, modifier.phase);
+            request.direction =
+                live_modifier_chaser_direction(request.direction, modifier.direction);
         }
         EffectParamsSnapshot::Move(request) => {
             request.period_ms = live_modifier_scaled_period_ms(request.period_ms, modifier.speed);
@@ -18579,6 +18764,7 @@ fn effect_params_with_live_modifier(
             request.size_x *= modifier.size;
             request.size_y *= modifier.size;
             request.phase = live_modifier_shifted_phase(request.phase, modifier.phase);
+            request.direction = live_modifier_move_direction(request.direction, modifier.direction);
         }
         EffectParamsSnapshot::Value(request) => {
             request.period_ms = live_modifier_scaled_period_ms(request.period_ms, modifier.speed);
@@ -18589,6 +18775,8 @@ fn effect_params_with_live_modifier(
             request.low = low;
             request.high = high;
             request.phase = live_modifier_shifted_phase(request.phase, modifier.phase);
+            request.direction =
+                live_modifier_value_direction(request.direction, modifier.direction);
         }
         EffectParamsSnapshot::Curve(request) => {
             request.period_ms = live_modifier_scaled_period_ms(request.period_ms, modifier.speed);
@@ -18599,6 +18787,8 @@ fn effect_params_with_live_modifier(
             request.low = low;
             request.high = high;
             request.phase = live_modifier_shifted_phase(request.phase, modifier.phase);
+            request.direction =
+                live_modifier_value_direction(request.direction, modifier.direction);
         }
         EffectParamsSnapshot::Mapping(request) => {
             request.period_ms = live_modifier_scaled_period_ms(request.period_ms, modifier.speed);
@@ -18609,12 +18799,18 @@ fn effect_params_with_live_modifier(
             request.low = low;
             request.high = high;
             request.phase = live_modifier_shifted_phase(request.phase, modifier.phase);
+            request.direction =
+                live_modifier_mapping_direction(request.direction, modifier.direction);
         }
         EffectParamsSnapshot::ColorMapping(request) => {
             request.period_ms = live_modifier_scaled_period_ms(request.period_ms, modifier.speed);
             request.clock_sync =
                 live_modifier_scaled_clock_sync(request.clock_sync, modifier.speed);
             request.phase = live_modifier_shifted_phase(request.phase, modifier.phase);
+            request.playback_direction = live_modifier_color_mapping_direction(
+                request.playback_direction,
+                modifier.direction,
+            );
         }
     }
     params
@@ -20012,15 +20208,32 @@ fn cue_target_values(targets: &[CueFixtureTarget]) -> HashMap<(FixtureId, String
 }
 
 fn runtime_cue_step_sequence(steps: &[CueStepSummary]) -> RuntimeCueStepSequence {
+    runtime_cue_step_sequence_with_direction(steps, CueLiveDirection::Authored)
+}
+
+fn runtime_cue_step_sequence_with_direction(
+    steps: &[CueStepSummary],
+    direction: CueLiveDirection,
+) -> RuntimeCueStepSequence {
+    let order: Vec<usize> = match direction {
+        CueLiveDirection::Authored | CueLiveDirection::Forward => (0..steps.len()).collect(),
+        CueLiveDirection::Reverse => (0..steps.len()).rev().collect(),
+        CueLiveDirection::Bounce if steps.len() > 1 => {
+            (0..steps.len()).chain((1..steps.len() - 1).rev()).collect()
+        }
+        CueLiveDirection::Bounce => (0..steps.len()).collect(),
+    };
     let mut starts_at_ms = 0_u64;
     RuntimeCueStepSequence {
-        steps: steps
-            .iter()
-            .map(|step| {
+        steps: order
+            .into_iter()
+            .map(|source_index| {
+                let step = &steps[source_index];
                 let ends_at_ms = starts_at_ms
                     .saturating_add(step.fade_ms)
                     .saturating_add(step.hold_ms);
                 let runtime = RuntimeCueStep {
+                    source_index,
                     starts_at_ms,
                     fade_ms: step.fade_ms,
                     ends_at_ms,
@@ -20041,6 +20254,18 @@ fn runtime_cue_step_sequence(steps: &[CueStepSummary]) -> RuntimeCueStepSequence
             })
             .collect(),
     }
+}
+
+fn cue_live_segment_start_ms(sequence: &RuntimeCueStepSequence, segment: u16) -> u64 {
+    let Some(source_index) = segment.checked_sub(1).map(usize::from) else {
+        return 0;
+    };
+    sequence
+        .steps
+        .iter()
+        .find(|step| step.source_index == source_index)
+        .map(|step| step.starts_at_ms)
+        .unwrap_or(0)
 }
 
 fn evaluate_cue_step_sequence(
@@ -28950,6 +29175,8 @@ mod tests {
             speed: 2.0,
             size: 0.5,
             phase: 0.25,
+            direction: CueLiveDirection::Authored,
+            segment: 0,
         });
         assert_eq!(runtime.last_error, None);
         let modified = activation_lfo_request(&runtime, 1);
@@ -28972,6 +29199,8 @@ mod tests {
             speed: 4.0,
             size: 1.0,
             phase: 0.0,
+            direction: CueLiveDirection::Authored,
+            segment: 0,
         });
         assert_eq!(activation_lfo_request(&runtime, 1).period_ms, 250);
         runtime.start_cue(1, Instant::now(), PendingCueTriggerSource::Manual);
@@ -28984,6 +29213,8 @@ mod tests {
             speed: 0.5,
             size: 1.0,
             phase: 0.0,
+            direction: CueLiveDirection::Authored,
+            segment: 0,
         });
         assert!(!runtime.cue_live_modifier_overrides.is_empty());
         let persisted = runtime.build_persistence_snapshot();
@@ -29020,6 +29251,8 @@ mod tests {
             speed: 2.0,
             size: 1.0,
             phase: 0.0,
+            direction: CueLiveDirection::Authored,
+            segment: 0,
             flash: true,
         });
         runtime.load_project_snapshot(persisted);
@@ -29038,6 +29271,8 @@ mod tests {
             speed: 8.0,
             size: 1.0,
             phase: 0.0,
+            direction: CueLiveDirection::Authored,
+            segment: 0,
         });
         let round_trip = runtime.build_persistence_snapshot();
         assert_eq!(
@@ -29046,6 +29281,8 @@ mod tests {
                 speed: 2.0,
                 size: 1.0,
                 phase: 0.0,
+                direction: CueLiveDirection::Authored,
+                segment: 0,
                 flash: true,
             })
         );
@@ -29081,6 +29318,98 @@ mod tests {
         // Legacy cue byte-shape: without authored settings the field is absent.
         let legacy = serde_json::to_string(&CueSummary::default()).expect("cue serializes");
         assert!(!legacy.contains("live_modifiers"));
+    }
+
+    #[test]
+    fn cue_live_direction_rebuilds_every_direction_aware_owned_effect() {
+        let modifier = CueLiveModifierSettings {
+            direction: CueLiveDirection::Reverse,
+            ..CueLiveModifierSettings::default()
+        };
+
+        let cases = [
+            EffectParamsSnapshot::Chaser(test_chaser_request(&[1, 2, 3])),
+            EffectParamsSnapshot::Move(test_move_request(&[1, 2, 3])),
+            EffectParamsSnapshot::Value(test_value_request(&[1, 2, 3])),
+            EffectParamsSnapshot::Curve(test_curve_request(&[1, 2, 3])),
+            EffectParamsSnapshot::Mapping(test_mapping_request(&[1, 2, 3])),
+            EffectParamsSnapshot::ColorMapping(test_color_mapping_request(vec![1, 2, 3])),
+        ];
+
+        for params in cases {
+            let transformed = effect_params_with_live_modifier(&params, modifier);
+            match transformed {
+                EffectParamsSnapshot::Chaser(request) => {
+                    assert_eq!(request.direction, ChaserDirection::Reverse)
+                }
+                EffectParamsSnapshot::Move(request) => {
+                    assert_eq!(request.direction, MoveDirection::Reverse)
+                }
+                EffectParamsSnapshot::Value(request) => {
+                    assert_eq!(request.direction, ValueEffectDirection::Reverse)
+                }
+                EffectParamsSnapshot::Curve(request) => {
+                    assert_eq!(request.direction, ValueEffectDirection::Reverse)
+                }
+                EffectParamsSnapshot::Mapping(request) => {
+                    assert_eq!(request.direction, MappingEffectDirection::Reverse)
+                }
+                EffectParamsSnapshot::ColorMapping(request) => assert_eq!(
+                    request.playback_direction,
+                    ColorMappingPlaybackDirection::Reverse
+                ),
+                _ => unreachable!("only direction-aware requests are in the test table"),
+            }
+        }
+
+        let position_wave = PositionWaveEffectRequest {
+            label: "Position Wave".to_string(),
+            fixture_ids: vec![1, 2, 3],
+            target_group_ids: Vec::new(),
+            attribute: "Dimmer".to_string(),
+            video_targets: Vec::new(),
+            shape: LfoShape::Sine,
+            origin: Vec3::default(),
+            direction: Vec3 {
+                x: 1.0,
+                y: -2.0,
+                z: 0.5,
+            },
+            speed: 1.0,
+            wavelength: 2.0,
+            clock_sync: None,
+            low: 0,
+            high: u16::MAX,
+            phase: 0.0,
+            blend_mode: EffectBlendMode::Override,
+        };
+        let EffectParamsSnapshot::PositionWave(position_wave) = effect_params_with_live_modifier(
+            &EffectParamsSnapshot::PositionWave(position_wave),
+            modifier,
+        ) else {
+            unreachable!()
+        };
+        assert_eq!(
+            position_wave.direction,
+            Vec3 {
+                x: -1.0,
+                y: 2.0,
+                z: -0.5,
+            }
+        );
+
+        let mut static_mapping = test_mapping_request(&[1, 2, 3]);
+        static_mapping.direction = MappingEffectDirection::Static;
+        let EffectParamsSnapshot::Mapping(static_mapping) = effect_params_with_live_modifier(
+            &EffectParamsSnapshot::Mapping(static_mapping),
+            CueLiveModifierSettings {
+                direction: CueLiveDirection::Bounce,
+                ..CueLiveModifierSettings::default()
+            },
+        ) else {
+            unreachable!()
+        };
+        assert_eq!(static_mapping.direction, MappingEffectDirection::Static);
     }
 
     fn test_scene_block(
@@ -49905,6 +50234,91 @@ mod tests {
     }
 
     #[test]
+    fn scene_live_direction_cue_step_stack_meets_44hz_budget() {
+        const FIXTURE_COUNT: usize = 200;
+        const ACTIVATION_COUNT: usize = 4;
+        const STEP_COUNT: usize = 8;
+        const SAMPLES: usize = if cfg!(debug_assertions) { 20 } else { 1_000 };
+
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let started_at = Instant::now();
+        let directions = [
+            CueLiveDirection::Authored,
+            CueLiveDirection::Forward,
+            CueLiveDirection::Reverse,
+            CueLiveDirection::Bounce,
+        ];
+        for (activation_index, direction) in directions.into_iter().enumerate() {
+            let steps = (0..STEP_COUNT)
+                .map(|step_index| CueStepSummary {
+                    values: (1..=FIXTURE_COUNT)
+                        .map(|fixture_id| CueFixtureTarget {
+                            fixture_id: fixture_id as FixtureId,
+                            values: vec![AttributeValueSummary {
+                                attribute: "Dimmer".to_string(),
+                                value: ((activation_index + 1) * 4_000 + step_index * 500) as u16,
+                            }],
+                        })
+                        .collect(),
+                    fade_ms: 50,
+                    hold_ms: 50,
+                })
+                .collect::<Vec<_>>();
+            let sequence = runtime_cue_step_sequence_with_direction(&steps, direction);
+            runtime.step_activations.push(RuntimeCueStepActivation {
+                sequence,
+                key: Some(RuntimeEffectActivationKey::CueList {
+                    cue_list_id: DEFAULT_CUE_LIST_ID,
+                    cue_id: activation_index as CueId + 1,
+                }),
+                rate: 1.0,
+                clock: RuntimeCueStepClock::Realtime {
+                    started_at,
+                    position_offset_ms: 2_000,
+                },
+            });
+        }
+        runtime.active_step_activation_indices = (0..ACTIVATION_COUNT).collect();
+
+        let mut durations = Vec::with_capacity(SAMPLES);
+        let mut checksum = 0_u64;
+        for sample in 0..SAMPLES {
+            let now = started_at + DMX_TICK_INTERVAL * (sample as u32 + 1);
+            let measured_at = Instant::now();
+            for fixture_id in 1..=FIXTURE_COUNT {
+                checksum = checksum.wrapping_add(u64::from(runtime.apply_cue_step_activations(
+                    fixture_id as FixtureId,
+                    "Dimmer",
+                    0,
+                    now,
+                )));
+            }
+            durations.push(measured_at.elapsed());
+        }
+        std::hint::black_box(checksum);
+        assert_ne!(checksum, 0);
+        durations.sort_unstable();
+        let p95 = durations[(SAMPLES * 95 / 100).min(SAMPLES - 1)];
+        let p99 = durations[(SAMPLES * 99 / 100).min(SAMPLES - 1)];
+        let max = *durations.last().unwrap();
+        eprintln!(
+            "Scene Live four-direction Cue Step stack (4x8x200): p95={}us p99={}us max={}us",
+            p95.as_micros(),
+            p99.as_micros(),
+            max.as_micros()
+        );
+        // Four simultaneously active full-rig Cue Step scenes cover all live
+        // directions through the production per-control evaluation path. The
+        // sequence order and segment offset are compiled on command/rebuild;
+        // this measured 44 Hz path only reads fixed activation sequences.
+        if !cfg!(debug_assertions) {
+            assert!(p95 <= Duration::from_millis(10), "p95 was {p95:?}");
+            assert!(p99 <= Duration::from_millis(14), "p99 was {p99:?}");
+            assert!(max <= Duration::from_millis(18), "max was {max:?}");
+        }
+    }
+
+    #[test]
     fn calibrated_multi_emitter_mixed_release_stack_stays_inside_44hz_tick() {
         const FIXTURE_COUNT: u64 = 200;
         const EFFECT_COUNT: usize = 64;
@@ -54877,6 +55291,100 @@ mod tests {
             cue_step_test_dimmer(&runtime, started_at + Duration::from_millis(550)),
             0
         );
+    }
+
+    #[test]
+    fn cue_live_direction_and_segment_recompile_only_manual_step_activation() {
+        let mut runtime = cue_step_test_runtime();
+        runtime.timeline_events = vec![timeline_test_event(100, 1, 0, 0, 1_000, 1)];
+        let started_at = Instant::now();
+        runtime.rebuild_effect_activations(started_at);
+        runtime.start_cue(1, started_at, PendingCueTriggerSource::Manual);
+
+        runtime.apply_command(EngineCommand::SetCueLiveModifier {
+            cue_id: 1,
+            speed: 1.0,
+            size: 1.0,
+            phase: 0.0,
+            direction: CueLiveDirection::Reverse,
+            segment: 2,
+        });
+        let cue = runtime.cues.iter().find(|cue| cue.id == 1).unwrap();
+        let manual = &runtime.step_activations[cue.step_activation_range.start];
+        assert_eq!(
+            manual
+                .sequence
+                .steps
+                .iter()
+                .map(|step| step.source_index)
+                .collect::<Vec<_>>(),
+            vec![2, 1, 0]
+        );
+        assert!(matches!(
+            manual.clock,
+            RuntimeCueStepClock::Realtime {
+                position_offset_ms: 200,
+                ..
+            }
+        ));
+        let RuntimeCueStepClock::Realtime {
+            started_at: modified_at,
+            ..
+        } = manual.clock
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            cue_step_test_dimmer(&runtime, modified_at + Duration::from_millis(150)),
+            30_000,
+            "segment 2 must render the second authored Cue Step after its fade"
+        );
+        let timeline_range = runtime.timeline_step_activation_ranges[0];
+        assert_eq!(
+            runtime.step_activations[timeline_range.start]
+                .sequence
+                .steps
+                .iter()
+                .map(|step| step.source_index)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2],
+            "Scene Live must not rewrite Timeline-owned step playback"
+        );
+        let state = runtime.cue_live_modifier_states();
+        assert_eq!(state[0].direction, CueLiveDirection::Reverse);
+        assert_eq!(state[0].segment, 2);
+
+        runtime.apply_command(EngineCommand::SetCueLiveModifier {
+            cue_id: 1,
+            speed: 1.0,
+            size: 1.0,
+            phase: 0.0,
+            direction: CueLiveDirection::Bounce,
+            segment: 0,
+        });
+        let cue = runtime.cues.iter().find(|cue| cue.id == 1).unwrap();
+        assert_eq!(
+            runtime.step_activations[cue.step_activation_range.start]
+                .sequence
+                .steps
+                .iter()
+                .map(|step| step.source_index)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2, 1]
+        );
+
+        runtime.apply_command(EngineCommand::ClearCueLiveModifier(1));
+        let cue = runtime.cues.iter().find(|cue| cue.id == 1).unwrap();
+        assert_eq!(
+            runtime.step_activations[cue.step_activation_range.start]
+                .sequence
+                .steps
+                .iter()
+                .map(|step| step.source_index)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+        assert!(runtime.cue_live_modifier_states().is_empty());
     }
 
     #[test]

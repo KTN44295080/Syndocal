@@ -10,6 +10,7 @@ import {
   touchSurfaceGridRows,
 } from "../touchSurface";
 import type {
+  CueLiveDirection,
   CueSummary,
   EngineSnapshot,
   TouchControlBinding,
@@ -37,6 +38,8 @@ interface EditableTouchSurfaceProps {
     speed: number,
     size: number,
     phase: number,
+    direction: CueLiveDirection,
+    segment: number,
   ) => void | Promise<void>;
   onClearCueLiveModifier?: (cueId: number) => void | Promise<void>;
 }

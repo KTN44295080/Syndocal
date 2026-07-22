@@ -1561,11 +1561,16 @@ export interface CueSummary {
   live_modifiers?: CueLiveModifierSettings | null;
 }
 
-/** T17 authored starting position of the per-scene live modifier dials. */
+export type CueLiveDirection = "Authored" | "Forward" | "Reverse" | "Bounce";
+
+/** T17/T20 authored starting position of the per-scene live controls. */
 export interface CueLiveModifierSettings {
   speed: number;
   size: number;
   phase: number;
+  direction?: CueLiveDirection;
+  /** One-based Cue Step segment; 0 follows normal playback. */
+  segment?: number;
   flash: boolean;
 }
 
@@ -1575,6 +1580,8 @@ export interface CueLiveModifierState {
   speed: number;
   size: number;
   phase: number;
+  direction?: CueLiveDirection;
+  segment?: number;
 }
 
 export interface CueStepSummary {

@@ -12769,6 +12769,8 @@ async function readSceneLiveModifierState(client, cueId) {
             (element.textContent ?? "").trim(),
           )
         : [],
+      direction: strip?.querySelector(`[data-cue-live-modifier-direction="${cueId}"]`)?.value ?? null,
+      segment: strip?.querySelector(`[data-cue-live-modifier-segment="${cueId}"]`)?.value ?? null,
       resetDisabled: strip?.querySelector(".cueLiveModifierReset")?.disabled ?? null,
       activeCardIds: [...document.querySelectorAll('[data-scene-matrix-active="true"]')].map(
         (element) => element.getAttribute("data-scene-matrix-cue-id"),
@@ -12794,6 +12796,22 @@ async function readSceneLiveModifierState(client, cueId) {
 }
 
 async function setSceneLiveModifierSlider(client, cueId, control, value) {
+  return evaluatePageFunction(
+    client,
+    (cueId, control, value) => {
+      const input = document.querySelector(`[data-cue-live-modifier-${control}="${cueId}"]`);
+      if (!input) return false;
+      input.value = String(value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      return true;
+    },
+    cueId,
+    control,
+    value,
+  );
+}
+
+async function setSceneLiveModifierSelect(client, cueId, control, value) {
   return evaluatePageFunction(
     client,
     (cueId, control, value) => {
@@ -12875,6 +12893,9 @@ async function runSceneLiveModifierViewport(client, viewport) {
   if (authored.readouts.join("|") !== "x2|50%|25%") {
     failed.push(`authored-readouts=${authored.readouts.join("|")}`);
   }
+  if (authored.direction !== "Authored" || authored.segment !== "0") {
+    failed.push(`authored-playback=${authored.direction}/${authored.segment}`);
+  }
   if (authored.resetDisabled !== true) failed.push("reset-enabled-at-authored");
   if (authored.matrixFlashCells < 1) failed.push("no-matrix-flash-cell");
 
@@ -12893,6 +12914,22 @@ async function runSceneLiveModifierViewport(client, viewport) {
   if (reset.override !== "false" || reset.readouts[0] !== "x2") {
     failed.push(`reset=${reset.override}/${reset.readouts[0]}`);
   }
+
+  await setSceneLiveModifierSelect(client, 303, "direction", "Reverse");
+  await setSceneLiveModifierSelect(client, 303, "segment", 2);
+  await sleep(48);
+  const playback = await readSceneLiveModifierState(client, 303);
+  if (
+    playback.override !== "true" ||
+    playback.direction !== "Reverse" ||
+    playback.segment !== "2"
+  ) {
+    failed.push(`playback=${playback.override}/${playback.direction}/${playback.segment}`);
+  }
+  await evaluatePageFunction(client, () => {
+    document.querySelector('[data-cue-live-modifier-reset="303"]')?.click();
+  });
+  await sleep(48);
 
   await setSceneLiveModifierSlider(client, 303, "speed", 3);
   await sleep(32);
@@ -12942,6 +12979,7 @@ async function runSceneLiveModifierViewport(client, viewport) {
     failedChecks: failed,
     authored,
     latched,
+    playback,
     retriggered,
     flash: { down: flashDown.activeCardIds, up: flashUp.activeCardIds },
     touchFlash: { down: touchDown.touchActivePadIds, up: touchUp.touchActivePadIds },

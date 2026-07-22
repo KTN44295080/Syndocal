@@ -4,6 +4,7 @@ import type {
   ActiveFadeSummary,
   CueEffectTarget,
   CueListSummary,
+  CueLiveDirection,
   CueLiveModifierSettings,
   CueStepSummary,
   CueSummary,
@@ -601,6 +602,37 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                             phase: Number(event.currentTarget.value),
                           })}
                       />
+                      <select
+                        value={authoredCueLiveModifier(cue).direction ?? "Authored"}
+                        data-cue-live-defaults-direction={cue.id}
+                        aria-label={`Default live direction for ${cue.label}`}
+                        onInput={(event) =>
+                          void props.onSetCueLiveModifierDefaults(cue.id, {
+                            ...authoredCueLiveModifier(cue),
+                            direction: event.currentTarget.value as CueLiveDirection,
+                          })}
+                      >
+                        <option value="Authored">Authored</option>
+                        <option value="Forward">Forward</option>
+                        <option value="Reverse">Reverse</option>
+                        <option value="Bounce">Bounce</option>
+                      </select>
+                      <select
+                        value={authoredCueLiveModifier(cue).segment ?? 0}
+                        disabled={(cue.steps?.length ?? 0) === 0}
+                        data-cue-live-defaults-segment={cue.id}
+                        aria-label={`Default live segment for ${cue.label}`}
+                        onInput={(event) =>
+                          void props.onSetCueLiveModifierDefaults(cue.id, {
+                            ...authoredCueLiveModifier(cue),
+                            segment: Number(event.currentTarget.value),
+                          })}
+                      >
+                        <option value="0">Auto segment</option>
+                        <For each={cue.steps ?? []}>
+                          {(_, index) => <option value={index() + 1}>Segment {index() + 1}</option>}
+                        </For>
+                      </select>
                       <label class="checkbox compactCheckbox">
                         <input
                           type="checkbox"

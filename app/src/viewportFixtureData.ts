@@ -999,7 +999,12 @@ const sceneMatrixCues: CueSummary[] = [
     recall_mode: "ReplaceGroup",
     node_graph_targets: [],
     effect_targets: [{ effect_id: cueRecallEffect.id, enabled: true }],
-    // T17: authored dial defaults so the live strip starts off-neutral.
+    steps: [
+      { values: structuredClone(cueRecallCue.targets), fade_ms: 100, hold_ms: 900 },
+      { values: structuredClone(cueRecallCue.targets), fade_ms: 150, hold_ms: 850 },
+      { values: structuredClone(cueRecallCue.targets), fade_ms: 200, hold_ms: 800 },
+    ],
+    // T17/T20: authored controls start without a runtime latch.
     live_modifiers: { speed: 2, size: 0.5, phase: 0.25, flash: false },
   },
   {

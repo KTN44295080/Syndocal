@@ -7122,6 +7122,8 @@ fn set_cue_live_modifier(
     speed: f32,
     size: f32,
     phase: f32,
+    direction: protocol::CueLiveDirection,
+    segment: u16,
 ) -> Result<(), String> {
     if !speed.is_finite() || !size.is_finite() || !phase.is_finite() {
         return Err("Live modifier values must be finite".to_string());
@@ -7133,6 +7135,8 @@ fn set_cue_live_modifier(
             speed,
             size,
             phase,
+            direction,
+            segment,
         })
         .map_err(|error| error.to_string())
 }
@@ -28720,6 +28724,8 @@ f 1 2 3
             speed: 2.0,
             size: 0.5,
             phase: 0.25,
+            direction: protocol::CueLiveDirection::Reverse,
+            segment: 2,
         }];
 
         let saved = project_snapshot_for_save(snapshot);
@@ -28749,6 +28755,8 @@ f 1 2 3
             speed: 2.0,
             size: 0.5,
             phase: 0.25,
+            direction: protocol::CueLiveDirection::Authored,
+            segment: 0,
             flash: true,
         });
         validate_project_file(&project).unwrap();
@@ -28768,6 +28776,8 @@ f 1 2 3
                 speed: 8.0,
                 size: 1.0,
                 phase: 0.0,
+                direction: protocol::CueLiveDirection::Authored,
+                segment: 0,
             })
             .unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
@@ -28799,6 +28809,8 @@ f 1 2 3
                 speed: 2.0,
                 size: 0.5,
                 phase: 0.25,
+                direction: protocol::CueLiveDirection::Authored,
+                segment: 0,
                 flash: true,
             })
         );

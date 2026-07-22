@@ -34,6 +34,8 @@ assert.deepEqual(helpers.authoredCueLiveModifier(legacyCue), {
   speed: 1,
   size: 1,
   phase: 0,
+  direction: "Authored",
+  segment: 0,
   flash: false,
 });
 const flashCue = {
@@ -45,21 +47,34 @@ assert.deepEqual(helpers.authoredCueLiveModifier(flashCue), {
   speed: 2,
   size: 0.5,
   phase: 0.25,
+  direction: "Authored",
+  segment: 0,
   flash: true,
 });
 
 // Effective values: the latched live override wins, flash mode stays authored.
-const liveStates = [{ cue_id: 6, speed: 4, size: 1, phase: 0 }];
+const liveStates = [{
+  cue_id: 6,
+  speed: 4,
+  size: 1,
+  phase: 0,
+  direction: "Reverse",
+  segment: 7,
+}];
 assert.deepEqual(helpers.effectiveCueLiveModifier(flashCue, liveStates), {
   speed: 4,
   size: 1,
   phase: 0,
+  direction: "Reverse",
+  segment: 0,
   flash: true,
 });
 assert.deepEqual(helpers.effectiveCueLiveModifier(flashCue, []), {
   speed: 2,
   size: 0.5,
   phase: 0.25,
+  direction: "Authored",
+  segment: 0,
   flash: true,
 });
 
@@ -67,12 +82,23 @@ assert.deepEqual(helpers.effectiveCueLiveModifier(flashCue, []), {
 assert.equal(helpers.cueLiveModifierIsOverridden(flashCue, liveStates), true);
 assert.equal(
   helpers.cueLiveModifierIsOverridden(flashCue, [
-    { cue_id: 6, speed: 2, size: 0.5, phase: 0.25 },
+    {
+      cue_id: 6,
+      speed: 2,
+      size: 0.5,
+      phase: 0.25,
+      direction: "Authored",
+      segment: 0,
+    },
   ]),
   false,
 );
 assert.equal(helpers.cueLiveModifierIsOverridden(flashCue, []), false);
 assert.equal(helpers.cueLiveModifierIsOverridden(legacyCue, liveStates), false);
+assert.equal(helpers.sanitizeLiveModifierDirection("Reverse"), "Reverse");
+assert.equal(helpers.sanitizeLiveModifierDirection("unexpected"), "Authored");
+assert.equal(helpers.sanitizeLiveModifierSegment(7, 3), 3);
+assert.equal(helpers.sanitizeLiveModifierSegment(Number.NaN, 3), 0);
 
 // Readout formatting stays compact for the dense desk chips.
 assert.equal(helpers.formatLiveModifierSpeed(2), "x2");
@@ -80,4 +106,4 @@ assert.equal(helpers.formatLiveModifierSpeed(0.5), "x0.5");
 assert.equal(helpers.formatLiveModifierSize(0.5), "50%");
 assert.equal(helpers.formatLiveModifierPhase(0.25), "25%");
 
-console.log("T17 cue live modifier clamp, authored/live, and readout contracts ok");
+console.log("T17/T20 cue live modifier clamp, playback, authored/live, and readout contracts ok");

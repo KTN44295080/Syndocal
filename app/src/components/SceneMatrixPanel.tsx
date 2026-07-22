@@ -2,6 +2,7 @@ import { createMemo, createSignal, For, Show } from "solid-js";
 import { cueIdentityCss, groupIdentityCss, groupIdentityHue } from "../identityColor";
 import type {
   ActiveFadeSummary,
+  CueLiveDirection,
   CueLiveModifierState,
   CueSummary,
   TimelineTrackKind,
@@ -24,6 +25,8 @@ interface SceneMatrixPanelProps {
     speed: number,
     size: number,
     phase: number,
+    direction: CueLiveDirection,
+    segment: number,
   ) => void | Promise<void>;
   onClearCueLiveModifier?: (cueId: number) => void | Promise<void>;
   onReleaseCue?: (cueId: number) => void | Promise<void>;

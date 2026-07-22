@@ -196,6 +196,7 @@ import type {
   CustomFixtureProfileRequest,
   CueEffectTarget,
   CueListSummary,
+  CueLiveDirection,
   CueLiveModifierSettings,
   CueStepSummary,
   CueSummary,
@@ -10439,19 +10440,28 @@ export default function App() {
     speed: number,
     size: number,
     phase: number,
+    direction: CueLiveDirection,
+    segment: number,
   ) => {
     if (viewportFixture === "scene-matrix") {
       setSnapshot((current) => ({
         ...current,
         cue_live_modifiers: [
           ...(current.cue_live_modifiers ?? []).filter((state) => state.cue_id !== cueId),
-          { cue_id: cueId, speed, size, phase },
+          { cue_id: cueId, speed, size, phase, direction, segment },
         ],
       }));
       return;
     }
     try {
-      await invoke("set_cue_live_modifier", { cueId, speed, size, phase });
+      await invoke("set_cue_live_modifier", {
+        cueId,
+        speed,
+        size,
+        phase,
+        direction,
+        segment,
+      });
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));

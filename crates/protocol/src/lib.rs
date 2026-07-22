@@ -1210,9 +1210,28 @@ pub enum RecallMode {
     ReplaceGroup,
 }
 
-/// T17 authored starting position for the per-scene live modifier
-/// (speed/size/phase dials plus flash-mode pads). Stored on the Cue; the
-/// latched live override itself is runtime-only and never serialized.
+/// T20 live playback direction. `Authored` preserves every Effect's own
+/// direction and the Cue Step order, so legacy shows retain their exact
+/// behavior until the operator explicitly chooses a live direction.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CueLiveDirection {
+    #[default]
+    Authored,
+    Forward,
+    Reverse,
+    Bounce,
+}
+
+impl CueLiveDirection {
+    pub fn is_authored(&self) -> bool {
+        matches!(self, Self::Authored)
+    }
+}
+
+/// T17/T20 authored starting position for the per-scene live modifier.
+/// `segment` is one-based (`0` = follow the normal timeline, `1..=N` = jump
+/// to that authored Cue Step). Stored on the Cue; the latched live override
+/// itself is runtime-only and never serialized.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct CueLiveModifierSettings {
     #[serde(default = "default_live_modifier_scale")]
@@ -1221,8 +1240,16 @@ pub struct CueLiveModifierSettings {
     pub size: f32,
     #[serde(default)]
     pub phase: f32,
+    #[serde(default, skip_serializing_if = "CueLiveDirection::is_authored")]
+    pub direction: CueLiveDirection,
+    #[serde(default, skip_serializing_if = "is_zero_u16")]
+    pub segment: u16,
     #[serde(default)]
     pub flash: bool,
+}
+
+fn is_zero_u16(value: &u16) -> bool {
+    *value == 0
 }
 
 fn default_live_modifier_scale() -> f32 {
@@ -1235,6 +1262,8 @@ impl Default for CueLiveModifierSettings {
             speed: 1.0,
             size: 1.0,
             phase: 0.0,
+            direction: CueLiveDirection::Authored,
+            segment: 0,
             flash: false,
         }
     }
@@ -1242,7 +1271,12 @@ impl Default for CueLiveModifierSettings {
 
 impl CueLiveModifierSettings {
     pub fn is_neutral(&self) -> bool {
-        self.speed == 1.0 && self.size == 1.0 && self.phase == 0.0 && !self.flash
+        self.speed == 1.0
+            && self.size == 1.0
+            && self.phase == 0.0
+            && self.direction.is_authored()
+            && self.segment == 0
+            && !self.flash
     }
 }
 
@@ -1254,6 +1288,8 @@ pub struct CueLiveModifierState {
     pub speed: f32,
     pub size: f32,
     pub phase: f32,
+    pub direction: CueLiveDirection,
+    pub segment: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -4714,6 +4750,28 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<super::ChannelFunctionSummary>(encoded).unwrap(),
             calibrated
+        );
+    }
+
+    #[test]
+    fn cue_live_direction_and_segment_are_additive_to_t17_settings() {
+        let legacy = r#"{"speed":2.0,"size":0.5,"phase":0.25,"flash":true}"#;
+        let parsed: super::CueLiveModifierSettings = serde_json::from_str(legacy).unwrap();
+        assert_eq!(parsed.direction, super::CueLiveDirection::Authored);
+        assert_eq!(parsed.segment, 0);
+        assert_eq!(serde_json::to_string(&parsed).unwrap(), legacy);
+
+        let extended = super::CueLiveModifierSettings {
+            direction: super::CueLiveDirection::Reverse,
+            segment: 3,
+            ..parsed
+        };
+        let encoded = serde_json::to_string(&extended).unwrap();
+        assert!(encoded.contains(r#""direction":"Reverse""#));
+        assert!(encoded.contains(r#""segment":3"#));
+        assert_eq!(
+            serde_json::from_str::<super::CueLiveModifierSettings>(&encoded).unwrap(),
+            extended
         );
     }
 }

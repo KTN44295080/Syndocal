@@ -1,5 +1,5 @@
-import { Show } from "solid-js";
-import type { CueLiveModifierState, CueSummary } from "../types";
+import { For, Show } from "solid-js";
+import type { CueLiveDirection, CueLiveModifierState, CueSummary } from "../types";
 import {
   CUE_LIVE_MODIFIER_SIZE_MAX,
   cueLiveModifierIsOverridden,
@@ -15,7 +15,14 @@ interface CueLiveModifierStripProps {
   cue: CueSummary;
   liveStates?: CueLiveModifierState[];
   touch?: boolean;
-  onSetCueLiveModifier: (cueId: number, speed: number, size: number, phase: number) => MaybePromise;
+  onSetCueLiveModifier: (
+    cueId: number,
+    speed: number,
+    size: number,
+    phase: number,
+    direction: CueLiveDirection,
+    segment: number,
+  ) => MaybePromise;
   onClearCueLiveModifier: (cueId: number) => MaybePromise;
 }
 
@@ -28,13 +35,21 @@ interface CueLiveModifierStripProps {
 export function CueLiveModifierStrip(props: CueLiveModifierStripProps) {
   const effective = () => effectiveCueLiveModifier(props.cue, props.liveStates);
   const overridden = () => cueLiveModifierIsOverridden(props.cue, props.liveStates);
-  const apply = (part: Partial<{ speed: number; size: number; phase: number }>) => {
+  const apply = (part: Partial<{
+    speed: number;
+    size: number;
+    phase: number;
+    direction: CueLiveDirection;
+    segment: number;
+  }>) => {
     const current = effective();
     void props.onSetCueLiveModifier(
       props.cue.id,
       part.speed ?? current.speed,
       part.size ?? current.size,
       part.phase ?? current.phase,
+      part.direction ?? current.direction ?? "Authored",
+      part.segment ?? current.segment ?? 0,
     );
   };
   const stop = (event: Event) => event.stopPropagation();
@@ -91,6 +106,32 @@ export function CueLiveModifierStrip(props: CueLiveModifierStripProps) {
         />
         <b data-no-localize>{formatLiveModifierPhase(effective().phase)}</b>
       </label>
+      <div class="cueLiveModifierRow cueLiveModifierModeRow">
+        <span>Play</span>
+        <select
+          value={effective().direction ?? "Authored"}
+          data-cue-live-modifier-direction={props.cue.id}
+          aria-label={`Live direction for Cue ${props.cue.label}`}
+          onInput={(event) => apply({ direction: event.currentTarget.value as CueLiveDirection })}
+        >
+          <option value="Authored">Authored</option>
+          <option value="Forward">Forward</option>
+          <option value="Reverse">Reverse</option>
+          <option value="Bounce">Bounce</option>
+        </select>
+        <select
+          value={effective().segment ?? 0}
+          disabled={(props.cue.steps?.length ?? 0) < 2}
+          data-cue-live-modifier-segment={props.cue.id}
+          aria-label={`Live segment for Cue ${props.cue.label}`}
+          onInput={(event) => apply({ segment: Number(event.currentTarget.value) })}
+        >
+          <option value="0">Auto</option>
+          <For each={props.cue.steps ?? []}>
+            {(_, index) => <option value={index() + 1}>{index() + 1}</option>}
+          </For>
+        </select>
+      </div>
       <div class="cueLiveModifierFooter">
         <Show when={overridden()}>
           <span class="cueLiveModifierLiveBadge" data-no-localize>
