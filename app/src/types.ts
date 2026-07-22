@@ -2280,6 +2280,8 @@ export interface SubmasterSummary {
   group_id: string;
   label: string;
   level: number;
+  strobe_hz?: number;
+  strobe_fixture_count?: number;
 }
 
 export interface DmxUniversePreview {

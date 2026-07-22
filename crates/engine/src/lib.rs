@@ -73,6 +73,7 @@ const AUTO_VJ_MAX_CANDIDATES: usize = 64;
 const AUTO_VJ_MAX_BEATS_PER_CHANGE: u16 = 256;
 const AUTO_VJ_MAX_TRANSITION_MS: u64 = 60_000;
 const AUDIO_REACTIVE_MAX_ENVELOPE_MS: u32 = 60_000;
+pub const GROUP_STROBE_MAX_HZ: f32 = 30.0;
 pub const VIDEO_ISF_PROJECT_SOURCE_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 #[cfg(target_os = "windows")]
@@ -237,6 +238,10 @@ pub enum EngineCommand {
     SetGroupSolo {
         group_id: String,
         enabled: bool,
+    },
+    SetGroupStrobe {
+        group_id: String,
+        rate_hz: f32,
     },
     SetGroupPark {
         group_id: String,
@@ -1075,6 +1080,7 @@ impl EngineCommand {
                 | EngineCommand::CommitProgrammer
                 | EngineCommand::SetGroupHighlight { .. }
                 | EngineCommand::SetGroupSolo { .. }
+                | EngineCommand::SetGroupStrobe { .. }
                 | EngineCommand::SetGroupPark { .. }
                 | EngineCommand::SetGroupFixtureLimits { .. }
                 | EngineCommand::SetFixtureTransform { .. }
@@ -2836,6 +2842,13 @@ struct RuntimeFixture {
     color_binding: Option<RuntimeColorBinding>,
 }
 
+#[derive(Clone, Debug)]
+struct RuntimeGroupStrobeEffect {
+    attribute: String,
+    value: u16,
+    fixture_ids: Vec<FixtureId>,
+}
+
 #[derive(Clone)]
 struct RuntimeEffect {
     id: EffectId,
@@ -3984,6 +3997,9 @@ struct EngineRuntime {
     auto_vj: RuntimeAutoVj,
     lighting_master: f32,
     group_submaster_levels: HashMap<String, f32>,
+    group_strobe_rates: HashMap<String, f32>,
+    group_strobe_compatible_counts: HashMap<String, usize>,
+    group_strobe_effects: Vec<RuntimeGroupStrobeEffect>,
     highlighted_fixtures: HashSet<FixtureId>,
     soloed_fixtures: HashSet<FixtureId>,
     parked_fixture_values: HashMap<FixtureId, HashMap<String, u16>>,
@@ -4179,6 +4195,9 @@ impl EngineRuntime {
             auto_vj: RuntimeAutoVj::default(),
             lighting_master: 1.0,
             group_submaster_levels: HashMap::new(),
+            group_strobe_rates: HashMap::new(),
+            group_strobe_compatible_counts: HashMap::new(),
+            group_strobe_effects: Vec::new(),
             highlighted_fixtures: HashSet::new(),
             soloed_fixtures: HashSet::new(),
             parked_fixture_values: HashMap::new(),
@@ -4291,6 +4310,11 @@ impl EngineRuntime {
         // T17 reset rule: project load always returns every scene to its
         // authored live-modifier dial position.
         self.cue_live_modifier_overrides.clear();
+        // Live Mixer strobe is latched operator state, never authored project
+        // data. A project load always returns it to Off.
+        self.group_strobe_rates.clear();
+        self.group_strobe_compatible_counts.clear();
+        self.group_strobe_effects.clear();
         self.pending_video_isf_event_resets.clear();
         let now = Instant::now();
         let (loaded_fixtures, loaded_fixture_summaries, dropped_fixture_count) =
@@ -4483,6 +4507,7 @@ impl EngineRuntime {
             .filter(|submaster| submaster.level.is_finite())
             .map(|submaster| (submaster.group_id.clone(), submaster.level.clamp(0.0, 1.0)))
             .collect();
+        self.rebuild_group_strobe_effects();
         self.stage_map = sanitize_stage_map_config(snapshot.stage_map);
         self.stage_map_presets = snapshot
             .stage_map_presets
@@ -5137,6 +5162,7 @@ impl EngineRuntime {
                 self.rebuild_curve_effect_targets();
                 self.rebuild_mapping_effect_targets();
                 self.rebuild_color_mapping_effect_targets();
+                self.rebuild_group_strobe_effects();
                 self.last_error = None;
             }
             EngineCommand::RemoveFixture(fixture_id) => {
@@ -5242,6 +5268,53 @@ impl EngineRuntime {
                 for fixture_id in fixture_ids {
                     set_fixture_flag(&mut self.soloed_fixtures, fixture_id, enabled);
                 }
+                self.last_error = None;
+            }
+            EngineCommand::SetGroupStrobe { group_id, rate_hz } => {
+                let group_id = match normalize_runtime_group_ids(vec![group_id]) {
+                    Ok(mut group_ids) if group_ids.len() == 1 => group_ids.remove(0),
+                    Ok(_) => {
+                        self.last_error = Some("Group id is required".to_string());
+                        return;
+                    }
+                    Err(error) => {
+                        self.last_error = Some(error);
+                        return;
+                    }
+                };
+                if !rate_hz.is_finite() || !(0.0..=GROUP_STROBE_MAX_HZ).contains(&rate_hz) {
+                    self.last_error = Some(format!(
+                        "Group strobe rate must be between 0 and {GROUP_STROBE_MAX_HZ} Hz"
+                    ));
+                    return;
+                }
+                if self.fixture_ids_in_group(&group_id).is_empty() {
+                    self.last_error = Some(format!(
+                        "Group '{group_id}' was not found or has no fixtures"
+                    ));
+                    return;
+                }
+                self.rebuild_group_strobe_effects();
+                let resolvable = self.fixtures.iter().any(|fixture| {
+                    fixture
+                        .request
+                        .group_ids
+                        .iter()
+                        .any(|fixture_group| group_matches(fixture_group, &group_id))
+                        && !runtime_fixture_group_strobe_values(fixture, rate_hz).is_empty()
+                });
+                if rate_hz > 0.0 && !resolvable {
+                    self.last_error = Some(format!(
+                        "Group '{group_id}' has no fixture with unambiguous GDTF strobe frequency metadata"
+                    ));
+                    return;
+                }
+                if rate_hz == 0.0 {
+                    self.group_strobe_rates.remove(&group_id);
+                } else {
+                    self.group_strobe_rates.insert(group_id, rate_hz);
+                }
+                self.rebuild_group_strobe_effects();
                 self.last_error = None;
             }
             EngineCommand::SetGroupPark { group_id, enabled } => {
@@ -5385,6 +5458,7 @@ impl EngineRuntime {
                     self.rebuild_curve_effect_targets();
                     self.rebuild_mapping_effect_targets();
                     self.rebuild_color_mapping_effect_targets();
+                    self.rebuild_group_strobe_effects();
                     self.last_error = None;
                 } else {
                     self.last_error = Some(format!("Fixture {fixture_id} was not found"));
@@ -10184,6 +10258,7 @@ impl EngineRuntime {
         self.rebuild_curve_effect_targets();
         self.rebuild_mapping_effect_targets();
         self.rebuild_color_mapping_effect_targets();
+        self.rebuild_group_strobe_effects();
         self.sanitize_node_graph_references();
         self.clear_empty_active_fade();
         self.last_error = None;
@@ -15410,6 +15485,18 @@ impl EngineRuntime {
                 );
             }
         }
+        // Live Mixer is the operator's final lighting override. Bindings are
+        // compiled only when the command or patch topology changes; this loop
+        // performs no lookup allocation and normally contains one entry per
+        // distinct fixture profile/DMX strobe value.
+        for strobe in &self.group_strobe_effects {
+            if strobe.attribute.eq_ignore_ascii_case(attribute)
+                && strobe.fixture_ids.binary_search(&fixture.id).is_ok()
+            {
+                value = strobe.value;
+                break;
+            }
+        }
         value
     }
 
@@ -18013,6 +18100,12 @@ impl EngineRuntime {
         let mut snapshot = self.build_snapshot(0);
         // T17: latched live overrides are runtime-only and never reach `.sdc`.
         snapshot.cue_live_modifiers.clear();
+        // T20: Live Mixer strobe is runtime-only. Keep the additive protocol
+        // fields at their omitted defaults in every persistence snapshot.
+        for submaster in &mut snapshot.submasters {
+            submaster.strobe_hz = 0.0;
+            submaster.strobe_fixture_count = 0;
+        }
         snapshot.timeline.layers = self.timeline_layers.clone();
         snapshot.timeline.audio_transport_revision = 0;
         if self.timeline_audio_clips_derived {
@@ -18087,6 +18180,9 @@ impl EngineRuntime {
         for group_id in self.group_submaster_levels.keys() {
             group_ids.extend(group_hierarchy_ids(group_id));
         }
+        for group_id in self.group_strobe_rates.keys() {
+            group_ids.extend(group_hierarchy_ids(group_id));
+        }
         group_ids
             .into_iter()
             .map(|group_id| SubmasterSummary {
@@ -18095,10 +18191,81 @@ impl EngineRuntime {
                     .get(&group_id)
                     .copied()
                     .unwrap_or(1.0),
+                strobe_hz: self
+                    .group_strobe_rates
+                    .get(&group_id)
+                    .copied()
+                    .unwrap_or(0.0),
+                strobe_fixture_count: self
+                    .group_strobe_compatible_counts
+                    .get(&group_id)
+                    .copied()
+                    .unwrap_or(0),
                 label: group_id.clone(),
                 group_id,
             })
             .collect()
+    }
+
+    /// Rebuild every Live Mixer strobe binding on command/patch/group changes.
+    /// The 44 Hz renderer only consumes the compact, sorted result below.
+    fn rebuild_group_strobe_effects(&mut self) {
+        let mut available_group_ids = BTreeSet::new();
+        let mut compatible_counts = HashMap::<String, usize>::new();
+        for fixture in &self.fixtures {
+            let fixture_groups = fixture
+                .request
+                .group_ids
+                .iter()
+                .flat_map(|group_id| group_hierarchy_ids(group_id))
+                .collect::<BTreeSet<_>>();
+            for group_id in &fixture_groups {
+                available_group_ids.insert(group_id.clone());
+                if runtime_fixture_has_group_strobe_metadata(fixture) {
+                    *compatible_counts.entry(group_id.clone()).or_default() += 1;
+                }
+            }
+        }
+        self.group_strobe_rates
+            .retain(|group_id, _| available_group_ids.contains(group_id));
+
+        let mut compiled = BTreeMap::<(String, u16), Vec<FixtureId>>::new();
+        for fixture in &self.fixtures {
+            let rate_hz = self
+                .group_strobe_rates
+                .iter()
+                .filter(|(group_id, _)| {
+                    fixture
+                        .request
+                        .group_ids
+                        .iter()
+                        .any(|fixture_group| group_matches(fixture_group, group_id))
+                })
+                .map(|(_, rate_hz)| *rate_hz)
+                .fold(0.0_f32, f32::max);
+            if rate_hz <= 0.0 {
+                continue;
+            }
+            for (attribute, value) in runtime_fixture_group_strobe_values(fixture, rate_hz) {
+                compiled
+                    .entry((attribute, value))
+                    .or_default()
+                    .push(fixture.id);
+            }
+        }
+        self.group_strobe_compatible_counts = compatible_counts;
+        self.group_strobe_effects = compiled
+            .into_iter()
+            .map(|((attribute, value), mut fixture_ids)| {
+                fixture_ids.sort_unstable();
+                fixture_ids.dedup();
+                RuntimeGroupStrobeEffect {
+                    attribute,
+                    value,
+                    fixture_ids,
+                }
+            })
+            .collect();
     }
 
     fn fixture_attribute_values(
@@ -27631,6 +27798,112 @@ fn group_hierarchy_ids(group_id: &str) -> Vec<String> {
         .collect()
 }
 
+fn normalized_group_strobe_function_attribute(attribute: &str) -> String {
+    attribute
+        .chars()
+        .filter(|character| character.is_ascii_alphabetic())
+        .flat_map(|character| character.to_lowercase())
+        .collect()
+}
+
+fn channel_function_has_group_strobe_metadata(function: &protocol::ChannelFunctionSummary) -> bool {
+    matches!(
+        normalized_group_strobe_function_attribute(&function.attribute).as_str(),
+        "shutterstrobe" | "strobe"
+    ) && function
+        .physical_from
+        .zip(function.physical_to)
+        .is_some_and(|(from, to)| {
+            from.is_finite() && to.is_finite() && (to - from).abs() > f32::EPSILON
+        })
+}
+
+fn runtime_fixture_has_group_strobe_metadata(fixture: &RuntimeFixture) -> bool {
+    fixture
+        .profile
+        .dmx_modes
+        .get(fixture.mode_index)
+        .is_some_and(|mode| {
+            mode.controls.iter().any(|control| {
+                control
+                    .functions
+                    .iter()
+                    .any(channel_function_has_group_strobe_metadata)
+            })
+        })
+}
+
+fn group_strobe_function_value(
+    function: &protocol::ChannelFunctionSummary,
+    rate_hz: f32,
+) -> Option<(f32, u16)> {
+    if !channel_function_has_group_strobe_metadata(function) || !rate_hz.is_finite() {
+        return None;
+    }
+    let (physical_from, physical_to) = function.physical_from.zip(function.physical_to)?;
+    let physical_min = physical_from.min(physical_to);
+    let physical_max = physical_from.max(physical_to);
+    let clamped = rate_hz.clamp(physical_min, physical_max);
+    let distance = (rate_hz - clamped).abs();
+    let progress = (clamped - physical_from) / (physical_to - physical_from);
+    let dmx =
+        function.dmx_from as f32 + (function.dmx_to as f32 - function.dmx_from as f32) * progress;
+    Some((distance, dmx.round().clamp(0.0, u16::MAX as f32) as u16))
+}
+
+/// Resolve a requested physical strobe frequency to authored GDTF functions.
+/// Generic names, raw DMX ranges and functions without physical units are
+/// intentionally ignored. Equal-distance functions that disagree on a DMX
+/// value are ambiguous and fail closed for that control.
+fn runtime_fixture_group_strobe_values(
+    fixture: &RuntimeFixture,
+    rate_hz: f32,
+) -> Vec<(String, u16)> {
+    let Some(mode) = fixture.profile.dmx_modes.get(fixture.mode_index) else {
+        return Vec::new();
+    };
+    let mut values = BTreeMap::<String, u16>::new();
+    let mut ambiguous_attributes = HashSet::<String>::new();
+    for control in &mode.controls {
+        let mut best: Option<(f32, u16)> = None;
+        let mut ambiguous = false;
+        for function in &control.functions {
+            let Some((distance, value)) = group_strobe_function_value(function, rate_hz) else {
+                continue;
+            };
+            match best {
+                None => best = Some((distance, value)),
+                Some((best_distance, _)) if distance + 0.0001 < best_distance => {
+                    best = Some((distance, value));
+                    ambiguous = false;
+                }
+                Some((best_distance, best_value))
+                    if (distance - best_distance).abs() <= 0.0001 && value != best_value =>
+                {
+                    ambiguous = true;
+                }
+                _ => {}
+            }
+        }
+        let Some((_, value)) = best.filter(|_| !ambiguous) else {
+            continue;
+        };
+        match values.get(&control.attribute).copied() {
+            None => {
+                values.insert(control.attribute.clone(), value);
+            }
+            Some(existing) if existing != value => {
+                ambiguous_attributes.insert(control.attribute.clone());
+            }
+            Some(_) => {}
+        }
+    }
+    for attribute in ambiguous_attributes {
+        values.remove(&attribute);
+    }
+    values.into_iter().collect()
+}
+
 fn selected_mode_error(profile: &FixtureProfileSummary, mode_name: Option<&str>) -> String {
     let Some(mode_name) = mode_name.map(str::trim).filter(|name| !name.is_empty()) else {
         return format!("Fixture profile '{}' has no DMX modes", profile.name);
@@ -28825,6 +29098,50 @@ mod tests {
             geometries: sample_geometries(),
             warnings: Vec::new(),
         }
+    }
+
+    fn sample_strobe_profile() -> FixtureProfileSummary {
+        let mut profile = sample_profile();
+        profile.name = "Mini Spot with calibrated strobe".to_string();
+        profile.dmx_modes[0].controls.push(AttributeControl {
+            attribute: "Shutter1".to_string(),
+            channel_name: "Shutter".to_string(),
+            geometry: None,
+            offsets: vec![4],
+            resolution: AttributeResolution::EightBit,
+            default_value: 0,
+            functions: vec![
+                protocol::ChannelFunctionSummary {
+                    name: "Open".to_string(),
+                    attribute: "Shutter1".to_string(),
+                    parent_function: None,
+                    dmx_from: 0,
+                    dmx_to: 16_383,
+                    physical_from: None,
+                    physical_to: None,
+                    wheel_slot: None,
+                    wheel_slot_name: None,
+                    wheel_slot_color: None,
+                    wheel_slot_media: None,
+                    emitter: None,
+                },
+                protocol::ChannelFunctionSummary {
+                    name: "Strobe".to_string(),
+                    attribute: "Shutter1Strobe".to_string(),
+                    parent_function: None,
+                    dmx_from: 16_384,
+                    dmx_to: 65_535,
+                    physical_from: Some(1.0),
+                    physical_to: Some(25.0),
+                    wheel_slot: None,
+                    wheel_slot_name: None,
+                    wheel_slot_color: None,
+                    wheel_slot_media: None,
+                    emitter: None,
+                },
+            ],
+        });
+        profile
     }
 
     fn sample_patch_request(label: &str, address: u16) -> PatchFixtureRequest {
@@ -30437,6 +30754,8 @@ mod tests {
                 group_id: "front".to_string(),
                 label: "front".to_string(),
                 level: 0.25,
+                strobe_hz: 0.0,
+                strobe_fixture_count: 0,
             }],
             blackout: true,
             ..EngineSnapshot::default()
@@ -37141,6 +37460,136 @@ mod tests {
             .submasters
             .iter()
             .any(|submaster| submaster.group_id == "frontline"));
+    }
+
+    #[test]
+    fn group_strobe_uses_only_physical_gdtf_metadata_and_restores_authored_value() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut request = sample_patch_request("Strobe Fixture", 1);
+        request.group_ids = vec!["front/movers".to_string()];
+        runtime.apply_command(EngineCommand::PatchFixture {
+            fixture_id: 1,
+            request,
+            profile: sample_strobe_profile(),
+        });
+
+        runtime.apply_command(EngineCommand::SetGroupStrobe {
+            group_id: "front".to_string(),
+            rate_hz: 13.0,
+        });
+        assert_eq!(runtime.last_error, None);
+        let mut frame = [0_u8; 512];
+        runtime.render_dmx_frame(&mut frame, 0, Instant::now());
+        // 13 Hz is halfway through the authored 1..25 Hz range and resolves
+        // to the midpoint of the GDTF DMX interval (0xa000 -> 8-bit 0xa0).
+        assert_eq!(frame[3], 0xa0);
+        let front = runtime
+            .submaster_snapshot()
+            .into_iter()
+            .find(|submaster| submaster.group_id == "front")
+            .unwrap();
+        assert_eq!(front.strobe_hz, 13.0);
+        assert_eq!(front.strobe_fixture_count, 1);
+
+        runtime.apply_command(EngineCommand::SetGroupStrobe {
+            group_id: "front".to_string(),
+            rate_hz: 0.0,
+        });
+        runtime.render_dmx_frame(&mut frame, 0, Instant::now());
+        assert_eq!(frame[3], 0);
+        assert_eq!(runtime.values.get(&(1, "Shutter1".to_string())), Some(&0));
+    }
+
+    #[test]
+    fn group_strobe_overlap_uses_highest_rate_and_load_drops_runtime_latch() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut request = sample_patch_request("Nested Strobe Fixture", 1);
+        request.group_ids = vec!["front/movers".to_string()];
+        runtime.apply_command(EngineCommand::PatchFixture {
+            fixture_id: 1,
+            request,
+            profile: sample_strobe_profile(),
+        });
+        runtime.apply_command(EngineCommand::SetGroupStrobe {
+            group_id: "front".to_string(),
+            rate_hz: 8.0,
+        });
+        runtime.apply_command(EngineCommand::SetGroupStrobe {
+            group_id: "front/movers".to_string(),
+            rate_hz: 20.0,
+        });
+        let mut frame = [0_u8; 512];
+        runtime.render_dmx_frame(&mut frame, 0, Instant::now());
+        assert_eq!(frame[3], 0xd7);
+
+        let persisted = runtime.build_persistence_snapshot();
+        assert!(persisted.submasters.iter().all(|submaster| {
+            submaster.strobe_hz == 0.0 && submaster.strobe_fixture_count == 0
+        }));
+        let persisted_json = serde_json::to_string(&persisted.submasters).unwrap();
+        assert!(!persisted_json.contains("strobe_hz"));
+        assert!(!persisted_json.contains("strobe_fixture_count"));
+
+        let live_snapshot = runtime.build_snapshot(0);
+        runtime.apply_command(EngineCommand::LoadProjectSnapshot(live_snapshot));
+        assert!(runtime.group_strobe_rates.is_empty());
+        assert!(runtime.group_strobe_effects.is_empty());
+        runtime.render_dmx_frame(&mut frame, 0, Instant::now());
+        assert_eq!(frame[3], 0);
+    }
+
+    #[test]
+    fn group_strobe_rejects_name_only_and_ambiguous_metadata() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut profile = sample_profile();
+        profile.dmx_modes[0].controls.push(AttributeControl {
+            attribute: "Shutter1".to_string(),
+            channel_name: "Strobe 1-25 Hz".to_string(),
+            geometry: None,
+            offsets: vec![4],
+            resolution: AttributeResolution::EightBit,
+            default_value: 0,
+            functions: vec![protocol::ChannelFunctionSummary {
+                name: "Strobe 1-25 Hz".to_string(),
+                attribute: "Shutter1".to_string(),
+                parent_function: None,
+                dmx_from: 16_384,
+                dmx_to: 65_535,
+                physical_from: Some(1.0),
+                physical_to: Some(25.0),
+                wheel_slot: None,
+                wheel_slot_name: None,
+                wheel_slot_color: None,
+                wheel_slot_media: None,
+                emitter: None,
+            }],
+        });
+        let mut request = sample_patch_request("Name-only Strobe Fixture", 1);
+        request.group_ids = vec!["front".to_string()];
+        runtime.apply_command(EngineCommand::PatchFixture {
+            fixture_id: 1,
+            request,
+            profile,
+        });
+        runtime.apply_command(EngineCommand::SetGroupStrobe {
+            group_id: "front".to_string(),
+            rate_hz: 10.0,
+        });
+        assert_eq!(runtime.group_strobe_rates.get("front"), None);
+        assert!(runtime
+            .last_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("no fixture with unambiguous GDTF strobe frequency metadata"));
     }
 
     #[test]
@@ -50315,6 +50764,103 @@ mod tests {
             assert!(p95 <= Duration::from_millis(10), "p95 was {p95:?}");
             assert!(p99 <= Duration::from_millis(14), "p99 was {p99:?}");
             assert!(max <= Duration::from_millis(18), "max was {max:?}");
+        }
+    }
+
+    #[test]
+    fn group_strobe_200_fixture_release_path_stays_inside_44hz_budget() {
+        const FIXTURE_COUNT: u64 = 200;
+        const SAMPLES: usize = if cfg!(debug_assertions) { 20 } else { 1_000 };
+        const ATTRIBUTES: [&str; 3] = ["Dimmer", "Pan", "Shutter1"];
+
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let profile = sample_strobe_profile();
+        for fixture_id in 1..=FIXTURE_COUNT {
+            let zero_based = fixture_id - 1;
+            let mut request = sample_patch_request(
+                &format!("Group Strobe {fixture_id}"),
+                1 + ((zero_based % 100) as u16) * 4,
+            );
+            request.universe = (zero_based / 100) as u16;
+            request.group_ids = vec!["front".to_string()];
+            runtime.apply_command(EngineCommand::PatchFixture {
+                fixture_id,
+                request,
+                profile: profile.clone(),
+            });
+        }
+        assert_eq!(runtime.last_error, None);
+        assert!(runtime.group_strobe_effects.is_empty());
+
+        let measure = |runtime: &EngineRuntime, checksum: &mut u64| {
+            let started_at = Instant::now();
+            let mut durations = Vec::with_capacity(SAMPLES);
+            for sample in 0..SAMPLES {
+                let at = started_at + DMX_TICK_INTERVAL * (sample as u32 + 1);
+                let measured_at = Instant::now();
+                for fixture in &runtime.fixtures {
+                    for attribute in ATTRIBUTES {
+                        *checksum = checksum.wrapping_add(u64::from(
+                            runtime.apply_effects_with_transition_policy(
+                                fixture, attribute, 16_384, at, false,
+                            ),
+                        ));
+                    }
+                }
+                durations.push(measured_at.elapsed());
+            }
+            durations.sort_unstable();
+            (
+                durations[(SAMPLES * 95 / 100).min(SAMPLES - 1)],
+                durations[(SAMPLES * 99 / 100).min(SAMPLES - 1)],
+                *durations.last().unwrap(),
+            )
+        };
+
+        let mut baseline_checksum = 0_u64;
+        let baseline = measure(&runtime, &mut baseline_checksum);
+        runtime.apply_command(EngineCommand::SetGroupStrobe {
+            group_id: "front".to_string(),
+            rate_hz: 12.0,
+        });
+        assert_eq!(runtime.last_error, None);
+        assert_eq!(runtime.group_strobe_effects.len(), 1);
+        assert_eq!(runtime.group_strobe_effects[0].fixture_ids.len(), 200);
+        let mut active_checksum = 0_u64;
+        let active = measure(&runtime, &mut active_checksum);
+        std::hint::black_box((baseline_checksum, active_checksum));
+        assert_ne!(baseline_checksum, active_checksum);
+        eprintln!(
+            "Group strobe 200-fixture production evaluation baseline p95/p99/max={}/{}/{}us active={}/{}/{}us",
+            baseline.0.as_micros(),
+            baseline.1.as_micros(),
+            baseline.2.as_micros(),
+            active.0.as_micros(),
+            active.1.as_micros(),
+            active.2.as_micros(),
+        );
+        // One precompiled (attribute, DMX value) binding covers the full rig.
+        // The per-control path performs one attribute comparison and a sorted
+        // fixture-id binary search only for Shutter, with no allocation.
+        if !cfg!(debug_assertions) {
+            assert!(
+                active.0 <= Duration::from_millis(2),
+                "p95 was {:?}",
+                active.0
+            );
+            assert!(
+                active.1 <= Duration::from_millis(3),
+                "p99 was {:?}",
+                active.1
+            );
+            assert!(
+                active.2 <= Duration::from_millis(5),
+                "max was {:?}",
+                active.2
+            );
         }
     }
 

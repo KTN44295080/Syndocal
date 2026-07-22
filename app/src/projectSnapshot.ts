@@ -53,6 +53,9 @@ export const normalizeProjectSnapshotForStorage = (snapshot: EngineSnapshot): En
     ...snapshotWithoutTransport,
     video: authoredVideo ?? snapshot.video,
     node_graphs: (snapshot.node_graphs ?? []).map(({ audio_runtime: _audioRuntime, ...graph }) => graph),
+    submasters: (snapshot.submasters ?? []).map(
+      ({ strobe_hz: _strobeHz, strobe_fixture_count: _strobeFixtureCount, ...submaster }) => submaster,
+    ),
   };
   return normalizeProjectAutoVjForPersistence(authoredSnapshot);
 };

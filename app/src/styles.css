@@ -2046,6 +2046,30 @@ h3 {
   min-height: 46px;
 }
 
+.touchGroupStrobeControl {
+  display: grid;
+  grid-template-columns: auto minmax(70px, 1fr) 40px;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  min-height: 46px;
+  border: 1px solid #28313d;
+  border-radius: 4px;
+  padding: 0 7px;
+  color: #d7d1ca;
+  font-size: 11px;
+}
+
+.touchGroupStrobeControl input {
+  min-width: 0;
+  padding: 0;
+}
+
+.touchGroupStrobeControl span {
+  text-align: right;
+  white-space: nowrap;
+}
+
 .layoutTouch .touchGuardRow {
   grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
   gap: 6px;
@@ -2054,6 +2078,11 @@ h3 {
 .layoutTouch .touchGuardRow button {
   min-height: 36px;
   padding: 0 8px;
+}
+
+.layoutTouch .touchGroupStrobeControl {
+  min-height: 36px;
+  padding: 0 5px;
 }
 
 .touchPresetPanel {
@@ -3364,7 +3393,7 @@ h3 {
   right: 0;
   z-index: 90;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   width: clamp(320px, 36vw, 500px);
   max-width: min(62%, 500px);
   min-width: 0;
@@ -3376,7 +3405,7 @@ h3 {
 }
 
 .layoutControl.controlModeLive .faders > .timelineContextDrawer {
-  top: 31px;
+  top: 73px;
   bottom: 0;
 }
 
@@ -21380,6 +21409,79 @@ h3 {
   display: grid;
 }
 
+.groupLiveMixerStrip {
+  grid-row: 2;
+  display: grid;
+  grid-template-columns: minmax(120px, auto) minmax(210px, 1fr) minmax(210px, 1fr) auto minmax(72px, auto);
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  min-height: 42px;
+  border: 1px solid #4b443d;
+  border-top: 0;
+  background: #211f1c;
+  padding: 3px 6px;
+}
+
+.groupLiveMixerIdentity {
+  display: grid;
+  min-width: 0;
+  line-height: 1.05;
+}
+
+.groupLiveMixerIdentity span,
+.groupLiveMixerIdentity small,
+.groupLiveMixerCoverage {
+  color: #aaa198;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.groupLiveMixerIdentity strong {
+  overflow: hidden;
+  color: #fff;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.groupLiveMixerControl {
+  display: grid;
+  grid-template-columns: auto minmax(80px, 1fr) 46px;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: #d7d1ca;
+  font-size: 11px;
+}
+
+.groupLiveMixerControl input {
+  min-width: 0;
+  min-height: 28px;
+  padding: 0;
+}
+
+.groupLiveMixerControl span {
+  color: #fff;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.groupLiveMixerCoverage {
+  white-space: nowrap;
+}
+
+.groupLiveMixerStrip > button {
+  min-height: 34px;
+  padding: 0 9px;
+}
+
+.groupLiveMixerStrip > button.active {
+  border-color: #f2c14e;
+  background: #4a3518;
+  color: #fff4cf;
+}
+
 .timelineDeskTabs {
   display: grid;
   grid-template-columns: repeat(4, minmax(70px, 1fr));
@@ -21562,7 +21664,7 @@ h3 {
 
 .layoutControl.controlModeLive .faders > .cuePanel,
 .layoutControl.controlModeLive .faders > .timelinePanel {
-  grid-row: 2;
+  grid-row: 3;
   min-height: 0;
   border-top: 0;
   overflow: hidden;
@@ -21571,7 +21673,7 @@ h3 {
 
 .layoutControl .faders > .playbackDeskSurface {
   display: none;
-  grid-row: 2;
+  grid-row: 3;
   min-height: 0;
   overflow: hidden auto;
   align-content: start;

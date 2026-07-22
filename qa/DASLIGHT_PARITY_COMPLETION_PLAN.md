@@ -49,8 +49,8 @@
 
 ### P2 Scene Live / Live Mixer
 
-- T17はscene単位speed / size / phase / flashまで。scene playback direction / segmentと、別境界であるLive Mixer group strobe / soloが無い。
-- DVC import済みSceneを含む実ショーで、全Live modifierと外部Art-Net可視化を通した証拠が無い。
+- software実装はT20-A/Bで完了。scene単位speed / size / phase / direction / segment / flashと、別境界のLive Mixer group dimmer / strobe / soloを直接操作できる。
+- DVC import済みSceneを含む実ショーで、全Live modifierと外部Art-Net可視化を通した証拠はT23まで未完。
 
 ### P3 灯体導入
 
@@ -92,7 +92,7 @@
 
 T20-Aはscene playback direction / Cue Step segmentをT17と同じcommand-time rebuild方式で追加する。T20-BはLive Mixer group strobeを追加し、既存group soloを同じ演奏面で直接検証する。scene controlとgroup controlを混同しない。44 Hz tickでmap lookup、allocation、direction branchingを増やさない。release/retrigger/load resetと非永続latchを維持する。
 
-進捗（2026-07-23）: **T20-A software完了**。Direction（Authored / Forward / Reverse / Bounce）と1-based Cue Step Segment（Auto=0）をadditive optional fieldとしてCue defaultへ保存し、runtime latchは非永続のまま維持した。direction-aware Cue-owned FXはcommand/rebuild時に変換し、手動Cue Stepだけを固定sequenceへ再コンパイルする。Timeline / Super Scene child Timelineはauthored順を維持する。44 Hz側はdirection分岐・検索・allocationを追加せず、従来のCue lookupをactivation-owned sequence参照へ置換した。4 active scenes x 8 steps x 200 fixturesのrelease実測はp95 0.276 / p99 0.340 / max 0.365ms。Matrix / Touchの共通操作、5解像度、localization、project非永続性、release/retrigger/load resetはgreen。詳細は`qa/SCENE_LIVE_PLAYBACK_ACCEPTANCE.md`。T20-B group strobe / soloと、T23のShinkan native / Art-Net外部可視化証拠は未完。
+進捗（2026-07-23）: **T20-A/B software完了**。Direction（Authored / Forward / Reverse / Bounce）と1-based Cue Step Segment（Auto=0）をadditive optional fieldとしてCue defaultへ保存し、runtime latchは非永続のまま維持した。direction-aware Cue-owned FXはcommand/rebuild時に変換し、手動Cue Stepだけを固定sequenceへ再コンパイルする。Timeline / Super Scene child Timelineはauthored順を維持する。Live Mixerにはgroup Dimmer / Strobe / Soloを直接配置し、Touchにも同じStrobeを追加した。Strobeはcanonical GDTF Shutter/Strobe属性と物理Hz範囲がある灯体だけを対象にし、名前・DMX範囲から推測しない。nested groupは灯体ごとに最大Hzをcommand-time compileし、project loadでOffへ戻す。4 active scenes x 8 steps x 200 fixturesのrelease実測はp95 0.276 / p99 0.340 / max 0.365ms、group strobe 200灯体activeはp95 0.006 / p99 0.010 / max 0.012ms。protocol 41/41、engine 399 pass + 1 manual ignore、Tauri 326 pass + 9実機依存ignore、5解像度のfocused/full viewport、2721/2721 localization、frontend buildがgreen。詳細は`qa/SCENE_LIVE_PLAYBACK_ACCEPTANCE.md`。T23のShinkan native / Art-Net外部可視化証拠は未完。
 
 ### T21: Fixture Onboarding
 

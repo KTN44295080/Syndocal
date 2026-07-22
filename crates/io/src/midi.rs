@@ -2504,6 +2504,8 @@ mod tests {
                 group_id: "front".to_string(),
                 label: "front".to_string(),
                 level: 0.25,
+                strobe_hz: 0.0,
+                strobe_fixture_count: 0,
             }],
             ..EngineSnapshot::default()
         };

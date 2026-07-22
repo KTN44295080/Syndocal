@@ -15,6 +15,8 @@ interface TouchFixturePanelProps {
   selectedFixtureId?: number | null;
   groupFlagState: TouchFixtureGroupFlagState;
   globalAnyFlagged: boolean;
+  groupStrobeHz: number;
+  groupStrobeFixtureCount: number;
   categories: AttributeCategoryRow[];
   activeCategory: ControlCategory;
   activeCategoryLabel: string;
@@ -26,6 +28,7 @@ interface TouchFixturePanelProps {
   onSetFixturePark: (fixtureId: number, enabled: boolean) => void | Promise<void>;
   onSetGroupHighlight: (groupId: string, enabled: boolean) => void | Promise<void>;
   onSetGroupSolo: (groupId: string, enabled: boolean) => void | Promise<void>;
+  onSetGroupStrobe: (groupId: string, rateHz: number) => void | Promise<void>;
   onSetGroupPark: (groupId: string, enabled: boolean) => void | Promise<void>;
   onClearFixtureFlags: () => void | Promise<void>;
   onCategory: (category: ControlCategory) => void;
@@ -57,11 +60,14 @@ export function TouchFixturePanel(props: TouchFixturePanelProps) {
               selectedGroupId={props.selectedGroupId}
               groupFlagState={props.groupFlagState}
               globalAnyFlagged={props.globalAnyFlagged}
+              groupStrobeHz={props.groupStrobeHz}
+              groupStrobeFixtureCount={props.groupStrobeFixtureCount}
               onSetFixtureHighlight={props.onSetFixtureHighlight}
               onSetFixtureSolo={props.onSetFixtureSolo}
               onSetFixturePark={props.onSetFixturePark}
               onSetGroupHighlight={props.onSetGroupHighlight}
               onSetGroupSolo={props.onSetGroupSolo}
+              onSetGroupStrobe={props.onSetGroupStrobe}
               onSetGroupPark={props.onSetGroupPark}
               onClearFixtureFlags={props.onClearFixtureFlags}
             />

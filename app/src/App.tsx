@@ -34,6 +34,7 @@ import { FaderAttributeEditorPanel } from "./components/FaderAttributeEditorPane
 import { FaderAuxiliaryAttributePanels } from "./components/FaderAuxiliaryAttributePanels";
 import { FaderFixtureControlPanel } from "./components/FaderFixtureControlPanel";
 import { FaderGridPanel } from "./components/FaderGridPanel";
+import { GroupLiveMixerStrip } from "./components/GroupLiveMixerStrip";
 import { FaderPrimaryAttributePanels } from "./components/FaderPrimaryAttributePanels";
 import { LightingRuntimeControlsPanel } from "./components/LightingRuntimeControlsPanel";
 import { LoadedProfileSummaryPanel } from "./components/LoadedProfileSummaryPanel";
@@ -393,6 +394,7 @@ import {
   outputProtocolLabel,
 } from "./createOutputDiagnosticsController";
 import { createInitialEngineSnapshot } from "./initialEngineSnapshot";
+import { groupStrobeCompatibleFixtureCount } from "./groupStrobe";
 import { createTimelineOverviewAutomationController } from "./createTimelineOverviewAutomationController";
 import { createTimelineKeyframeController } from "./createTimelineKeyframeController";
 import { createTimelineAutomationController } from "./createTimelineAutomationController";
@@ -1843,7 +1845,13 @@ export default function App() {
         : current.cue_lists,
       effects: cueFixture ? cueFixtureEffects : sceneMatrixFixture ? [viewportFixtureData.cueRecallEffect] : current.effects,
       node_graphs: cueFixture || cueNodeGraphFixture ? [viewportFixtureData.cueRecallNodeGraph] : current.node_graphs,
-      submasters: [{ group_id: "front", label: "front", level: 1 }],
+      submasters: [{
+        group_id: "front",
+        label: "front",
+        level: 1,
+        strobe_hz: 0,
+        strobe_fixture_count: sceneMatrixFixture ? 2 : 3,
+      }],
       video: cueNodeGraphFixture
         ? current.video
         : {
@@ -2476,7 +2484,8 @@ export default function App() {
     if (!groupId) {
       return snapshot().fixtures;
     }
-    return snapshot().fixtures.filter((fixture) => fixture.group_ids.includes(groupId));
+    return snapshot().fixtures.filter((fixture) =>
+      fixture.group_ids.some((fixtureGroup) => groupMatches(fixtureGroup, groupId)));
   });
   const fixtureTypeRows = createMemo<MappingFixtureTypeRow[]>(() => {
     const rows = new Map<string, MappingFixtureTypeRow>();
@@ -2614,6 +2623,9 @@ export default function App() {
     }
     return snapshot().submasters.find((submaster) => submaster.group_id === groupId);
   });
+  const selectedGroupStrobeFixtureCount = createMemo(() =>
+    selectedGroupSubmaster()?.strobe_fixture_count
+      ?? groupStrobeCompatibleFixtureCount(selectedGroupFixtures()));
 
   const selectedModeSummary = createMemo(() => {
     const imported = profile();
@@ -9601,8 +9613,38 @@ export default function App() {
   };
 
   const setGroupSolo = async (groupId: string, enabled: boolean) => {
+    if (viewportFixture) {
+      setSnapshot((current) => ({
+        ...current,
+        fixtures: current.fixtures.map((fixture) => ({
+          ...fixture,
+          soloed: fixture.group_ids.some((fixtureGroup) => groupMatches(fixtureGroup, groupId))
+            ? enabled
+            : fixture.soloed,
+        })),
+      }));
+      return;
+    }
     try {
       await invoke("set_group_solo", { groupId, enabled });
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const setGroupStrobe = async (groupId: string, rateHz: number) => {
+    if (viewportFixture) {
+      setSnapshot((current) => ({
+        ...current,
+        submasters: current.submasters.map((submaster) => submaster.group_id === groupId
+          ? { ...submaster, strobe_hz: rateHz }
+          : submaster),
+      }));
+      return;
+    }
+    try {
+      await invoke("set_group_strobe", { groupId, rateHz });
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
@@ -14872,6 +14914,8 @@ export default function App() {
           selectedFixtureId={selectedFixtureId()}
           groupFlagState={selectedGroupFlagState()}
           globalAnyFlagged={globalFixtureFlagState().anyFlagged}
+          groupStrobeHz={selectedGroupSubmaster()?.strobe_hz ?? 0}
+          groupStrobeFixtureCount={selectedGroupStrobeFixtureCount()}
           categories={controlCategoryRows()}
           activeCategory={activeControlCategory()}
           activeCategoryLabel={activeControlCategoryLabel()}
@@ -14883,6 +14927,7 @@ export default function App() {
           onSetFixturePark={setFixturePark}
           onSetGroupHighlight={setGroupHighlight}
           onSetGroupSolo={setGroupSolo}
+          onSetGroupStrobe={setGroupStrobe}
           onSetGroupPark={setGroupPark}
           onClearFixtureFlags={() => clearFixtureFlags("all")}
           onCategory={setControlCategory}
@@ -15740,6 +15785,19 @@ export default function App() {
               <span>{selectedFixtureGroupFilter() ? `Group ${selectedFixtureGroupFilter()}` : selectedFixture()?.label}</span>
             </Show>
           </div>
+          <Show when={controlMode() === "live"}>
+            <GroupLiveMixerStrip
+              groupId={selectedFixtureGroupFilter()}
+              fixtureCount={selectedGroupFixtures().length}
+              strobeFixtureCount={selectedGroupStrobeFixtureCount()}
+              submasterLevel={selectedGroupSubmaster()?.level ?? 1}
+              strobeHz={selectedGroupSubmaster()?.strobe_hz ?? 0}
+              soloed={selectedGroupFlagState().anySoloed}
+              onSetSubmaster={setGroupSubmaster}
+              onSetStrobe={setGroupStrobe}
+              onSetSolo={setGroupSolo}
+            />
+          </Show>
           <FaderFixtureControlPanel
             selectedGroupId={selectedFixtureGroupFilter()}
             selectedGroupFixtureCount={filteredFixtures().length}

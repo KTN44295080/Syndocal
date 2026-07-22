@@ -3971,6 +3971,25 @@ fn set_group_solo(
 }
 
 #[tauri::command]
+fn set_group_strobe(
+    state: State<'_, AppState>,
+    group_id: String,
+    rate_hz: f32,
+) -> Result<(), String> {
+    let group_id = normalize_control_group_id(group_id)?;
+    if !rate_hz.is_finite() || !(0.0..=engine::GROUP_STROBE_MAX_HZ).contains(&rate_hz) {
+        return Err(format!(
+            "Group strobe rate must be between 0 and {} Hz",
+            engine::GROUP_STROBE_MAX_HZ
+        ));
+    }
+    state
+        .engine
+        .send(EngineCommand::SetGroupStrobe { group_id, rate_hz })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn set_group_park(
     state: State<'_, AppState>,
     group_id: String,
@@ -14655,6 +14674,11 @@ fn project_snapshot_for_save(mut snapshot: EngineSnapshot) -> EngineSnapshot {
     // persistence snapshot already strips them, and the `.sdc` writer keeps
     // that guarantee locally too.
     snapshot.cue_live_modifiers.clear();
+    // T20: group strobe is a latched Live Mixer control, not project data.
+    for submaster in &mut snapshot.submasters {
+        submaster.strobe_hz = 0.0;
+        submaster.strobe_fixture_count = 0;
+    }
     snapshot
 }
 
@@ -28727,10 +28751,19 @@ f 1 2 3
             direction: protocol::CueLiveDirection::Reverse,
             segment: 2,
         }];
+        snapshot.submasters = vec![protocol::SubmasterSummary {
+            group_id: "front".to_string(),
+            label: "Front".to_string(),
+            level: 0.75,
+            strobe_hz: 12.0,
+            strobe_fixture_count: 4,
+        }];
 
         let saved = project_snapshot_for_save(snapshot);
 
         assert!(saved.cue_live_modifiers.is_empty());
+        assert_eq!(saved.submasters[0].strobe_hz, 0.0);
+        assert_eq!(saved.submasters[0].strobe_fixture_count, 0);
         assert_eq!(saved.active_cue_id, Some(7));
         assert_eq!(saved.active_fade, None);
         assert!(!saved.timeline.playing);
@@ -28745,6 +28778,9 @@ f 1 2 3
         assert!(saved.dmx_preview.is_empty());
         assert!(saved.dmx_previews.is_empty());
         assert_eq!(saved.telemetry, EngineTelemetry::default());
+        let saved_json = serde_json::to_string(&saved).unwrap();
+        assert!(!saved_json.contains("strobe_hz"));
+        assert!(!saved_json.contains("strobe_fixture_count"));
     }
 
     #[test]
@@ -39118,6 +39154,7 @@ fn main() {
             commit_programmer,
             set_group_highlight,
             set_group_solo,
+            set_group_strobe,
             set_group_park,
             set_fixture_transform,
             set_stage_map_config,

@@ -1252,6 +1252,14 @@ fn is_zero_u16(value: &u16) -> bool {
     *value == 0
 }
 
+fn is_zero_f32(value: &f32) -> bool {
+    *value == 0.0
+}
+
+fn is_zero_usize(value: &usize) -> bool {
+    *value == 0
+}
+
 fn default_live_modifier_scale() -> f32 {
     1.0
 }
@@ -3130,6 +3138,15 @@ pub struct SubmasterSummary {
     pub group_id: String,
     pub label: String,
     pub level: f32,
+    /// Runtime-only Live Mixer strobe rate. Project persistence normalizers
+    /// reset this to zero; omission preserves legacy `.sdc` byte shape.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub strobe_hz: f32,
+    /// Number of patched fixtures in this group with a canonical GDTF
+    /// Shutter/Strobe function and physical frequency metadata. A requested
+    /// rate can still fail closed if equally near functions are ambiguous.
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub strobe_fixture_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -4772,6 +4789,28 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<super::CueLiveModifierSettings>(&encoded).unwrap(),
             extended
+        );
+    }
+
+    #[test]
+    fn submaster_live_strobe_fields_are_additive_and_legacy_byte_identical() {
+        let legacy = r#"{"group_id":"front","label":"Front","level":0.75}"#;
+        let parsed: super::SubmasterSummary = serde_json::from_str(legacy).unwrap();
+        assert_eq!(parsed.strobe_hz, 0.0);
+        assert_eq!(parsed.strobe_fixture_count, 0);
+        assert_eq!(serde_json::to_string(&parsed).unwrap(), legacy);
+
+        let live = super::SubmasterSummary {
+            strobe_hz: 12.0,
+            strobe_fixture_count: 4,
+            ..parsed
+        };
+        let encoded = serde_json::to_string(&live).unwrap();
+        assert!(encoded.contains(r#""strobe_hz":12.0"#));
+        assert!(encoded.contains(r#""strobe_fixture_count":4"#));
+        assert_eq!(
+            serde_json::from_str::<super::SubmasterSummary>(&encoded).unwrap(),
+            live
         );
     }
 }

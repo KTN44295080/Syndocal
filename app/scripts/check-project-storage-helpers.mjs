@@ -193,6 +193,26 @@ assert.equal(
   "rendered audio modulation and meters must not dirty the project",
 );
 
+const liveMixerStrobeSnapshot = JSON.parse(JSON.stringify(autoVjProjectSnapshot));
+liveMixerStrobeSnapshot.submasters = [{
+  group_id: "front",
+  label: "Front",
+  level: 0.75,
+  strobe_hz: 12,
+  strobe_fixture_count: 4,
+}];
+const storedLiveMixerStrobeSnapshot = projectSnapshot.normalizeProjectSnapshotForStorage(liveMixerStrobeSnapshot);
+assert.equal("strobe_hz" in storedLiveMixerStrobeSnapshot.submasters[0], false, "Live Mixer strobe rate is not project data");
+assert.equal("strobe_fixture_count" in storedLiveMixerStrobeSnapshot.submasters[0], false, "strobe compatibility is derived runtime data");
+const changedLiveMixerStrobeSnapshot = JSON.parse(JSON.stringify(liveMixerStrobeSnapshot));
+changedLiveMixerStrobeSnapshot.submasters[0].strobe_hz = 24;
+changedLiveMixerStrobeSnapshot.submasters[0].strobe_fixture_count = 2;
+assert.equal(
+  projectSnapshot.projectSnapshotSignature(liveMixerStrobeSnapshot),
+  projectSnapshot.projectSnapshotSignature(changedLiveMixerStrobeSnapshot),
+  "Live Mixer strobe changes must not dirty the project",
+);
+
 const dirtySceneBlockDraft = {
   cue_id: 500,
   time_ms: 123_456,

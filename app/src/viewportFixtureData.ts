@@ -119,6 +119,29 @@ const viewportFixtureControls: AttributeControl[] = [
       },
     }],
   },
+  {
+    attribute: "Shutter1",
+    channel_name: "Shutter",
+    offsets: [9],
+    resolution: "EightBit",
+    default_value: 0,
+    functions: [
+      {
+        name: "Open",
+        attribute: "Shutter1",
+        dmx_from: 0,
+        dmx_to: 16_383,
+      },
+      {
+        name: "Strobe",
+        attribute: "Shutter1Strobe",
+        dmx_from: 16_384,
+        dmx_to: 65_535,
+        physical_from: 1,
+        physical_to: 25,
+      },
+    ],
+  },
 ];
 
 const profile: FixtureProfileSummary = {
@@ -164,6 +187,7 @@ export const viewportPatchedFixture = (
     { attribute: "ColorRed", value: 65_535 },
     { attribute: "ColorGreen", value: 0 },
     { attribute: "ColorBlue", value: 0 },
+    { attribute: "Shutter1", value: 0 },
   ],
   limits: defaultFixtureLimits,
   highlighted: false,

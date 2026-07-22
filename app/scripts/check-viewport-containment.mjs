@@ -26,11 +26,12 @@ const workspaceSplitOnlyMode = process.argv.includes("--workspace-split-only");
 const workspaceShellOnlyMode = process.argv.includes("--workspace-shell-only");
 const fxVisualOnlyMode = process.argv.includes("--fx-visual-only");
 const sceneLiveModifierOnlyMode = process.argv.includes("--scene-live-modifier-only");
+const groupStrobeOnlyMode = process.argv.includes("--group-strobe-only");
 const viewportTraceEnabled = process.env.SYNDOCAL_VIEWPORT_TRACE === "1";
 const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
   largeShowMode
     ? "large-show"
-    : sceneLiveModifierOnlyMode
+    : sceneLiveModifierOnlyMode || groupStrobeOnlyMode
       ? "scene-matrix"
       : fxVisualOnlyMode
         ? "fx-visual"
@@ -8382,6 +8383,111 @@ async function measureSceneMatrixPane(client) {
   })()`);
 }
 
+async function runGroupStrobeViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: fixtureUrl("scene-matrix") });
+  await waitForApp(client);
+  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await waitForClientCondition(
+    client,
+    "document.querySelector('.groupLiveMixerStrip input[aria-label=\"Group strobe rate\"]')",
+    "group Live Mixer strobe",
+  );
+  const readState = async (scope) => await client.evaluate(`(() => {
+    const strip = document.querySelector('.groupLiveMixerStrip');
+    const slider = strip?.querySelector('input[aria-label="Group strobe rate"]');
+    const solo = strip?.querySelector('button');
+    const coverage = strip?.querySelector('[data-strobe-compatible-count]');
+    const touchSlider = document.querySelector('.touchGroupStrobeControl input');
+    const app = document.querySelector('.app');
+    const documentElement = document.documentElement;
+    const body = document.body;
+    const rect = strip?.getBoundingClientRect();
+    const hostRect = strip?.parentElement?.getBoundingClientRect();
+    return {
+      scope: ${JSON.stringify(scope)},
+      stripCount: document.querySelectorAll('.groupLiveMixerStrip').length,
+      strobeValue: slider instanceof HTMLInputElement ? Number(slider.value) : -1,
+      strobeDisabled: slider instanceof HTMLInputElement ? slider.disabled : true,
+      compatibleCount: Number(coverage?.getAttribute('data-strobe-compatible-count') ?? -1),
+      soloPressed: solo?.getAttribute('aria-pressed') ?? '',
+      touchStrobeValue: touchSlider instanceof HTMLInputElement ? Number(touchSlider.value) : -1,
+      stripContained: Boolean(rect && hostRect && rect.left >= hostRect.left - 1 && rect.right <= hostRect.right + 1),
+      documentAndAppScrollZero:
+        window.scrollX === 0 && window.scrollY === 0 &&
+        documentElement.scrollWidth === documentElement.clientWidth &&
+        documentElement.scrollHeight === documentElement.clientHeight &&
+        body.scrollWidth === documentElement.clientWidth &&
+        body.scrollHeight === documentElement.clientHeight &&
+        (!app || (app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight)),
+    };
+  })()`);
+  const setRange = async (selector, value) => {
+    const changed = await client.evaluate(`(() => {
+      const input = document.querySelector(${JSON.stringify(selector)});
+      if (!(input instanceof HTMLInputElement) || input.disabled) return false;
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+      setter?.call(input, ${JSON.stringify(value)});
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    })()`);
+    if (!changed) throw new Error(`Could not set range ${selector}`);
+    await sleep(80);
+  };
+
+  const initial = await readState("desktop-initial");
+  await setRange('.groupLiveMixerStrip input[aria-label="Group strobe rate"]', 12);
+  await client.evaluate(`document.querySelector('.groupLiveMixerStrip button')?.click()`);
+  await sleep(80);
+  const latched = await readState("desktop-latched");
+  await setRange('.groupLiveMixerStrip input[aria-label="Group strobe rate"]', 0);
+  await client.evaluate(`document.querySelector('.groupLiveMixerStrip button')?.click()`);
+  await sleep(80);
+  const cleared = await readState("desktop-cleared");
+
+  await clickVisibleByText(client, ".workspaceTabs button", "Touch");
+  await waitForClientCondition(
+    client,
+    "document.querySelector('.touchGroupStrobeControl input')",
+    "Touch group strobe",
+  );
+  await setRange('.touchGroupStrobeControl input', 18);
+  const touchLatched = await readState("touch-latched");
+  await setRange('.touchGroupStrobeControl input', 0);
+  const touchCleared = await readState("touch-cleared");
+
+  const conditions = [
+    ["desktopLiveMixerVisible", () => initial.stripCount === 1 && initial.stripContained],
+    ["desktopGdtfCoverage", () => !initial.strobeDisabled && initial.compatibleCount === 2],
+    ["desktopStrobeLatches", () => latched.strobeValue === 12],
+    ["desktopSoloDirect", () => latched.soloPressed === "true"],
+    ["desktopReset", () => cleared.strobeValue === 0 && cleared.soloPressed === "false"],
+    ["touchStrobeLatches", () => touchLatched.touchStrobeValue === 18],
+    ["touchStrobeReset", () => touchCleared.touchStrobeValue === 0],
+    ["viewportContained", () => [initial, latched, cleared, touchLatched, touchCleared]
+      .every((state) => state.documentAndAppScrollZero)],
+  ];
+  const failedChecks = conditions.filter(([, check]) => !check()).map(([name]) => name);
+  return {
+    viewport,
+    label: `group-strobe-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    failedChecks,
+    initial,
+    latched,
+    cleared,
+    touchLatched,
+    touchCleared,
+  };
+}
+
 async function exerciseSceneMatrixHorizontalScroll(client) {
   return await client.evaluate(`(async () => {
     const settle = () => new Promise((resolveFrame) =>
@@ -13294,6 +13400,26 @@ async function main() {
     console.log(
       `viewport contract primary-browser=${primaryOperationalViewport.width}x${primaryOperationalViewport.height} measured-client-size-browser=${measuredClientSizeViewport.width}x${measuredClientSizeViewport.height} extended-browser=${extendedCeilingViewport.width}x${extendedCeilingViewport.height} fallback-browsers=${compactFallbackViewports.map((viewport) => `${viewport.width}x${viewport.height}`).join(",")} screenshots=${captureAllViewportScreenshots ? "all" : "large-browser-fixtures"}`,
     );
+    if (groupStrobeOnlyMode) {
+      const groupStrobeResults = [];
+      for (const viewport of viewports) {
+        const result = await runGroupStrobeViewport(client, viewport);
+        groupStrobeResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `coverage=${result.initial.compatibleCount} ` +
+            `desktop=${result.initial.strobeValue}->${result.latched.strobeValue}->${result.cleared.strobeValue} ` +
+            `solo=${result.latched.soloPressed}->${result.cleared.soloPressed} ` +
+            `touch=${result.touchLatched.touchStrobeValue}->${result.touchCleared.touchStrobeValue} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = groupStrobeResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Group strobe viewport failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
     if (sceneLiveModifierOnlyMode) {
       const liveModifierResults = [];
       for (const viewport of viewports) {
