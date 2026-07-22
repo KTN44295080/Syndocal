@@ -49,9 +49,12 @@ Landed since the 2026-07-15 table, all with full viewport-matrix and focused-tes
   executable operation-count contract (`qa/harnesses/check-operation-counts.mjs`).
 
 Honest operability standing vs Daslight 5 (executable Syndocal side + manually observed
-Daslight side; see qa/harnesses/README.md): place-scene-on-lane currently costs 2 ops vs
-Daslight's 1 (cue pool requires a surface switch); layer mute and pane expand are at
-parity. No operability-superiority claim is made for timeline workflows yet.
+Daslight side; see qa/harnesses/README.md): the 2026-07-23 T18 rerun uses the current
+always-visible Scene Matrix and places a Scene Block in 1 drag, matching Daslight's
+observed 1 drag. Layer mute and pane expand are also at parity. The executable Syndocal
+contract now covers 13 tasks, but Daslight has matched counts for only those three;
+the other ten are explicitly unmeasured. No operability-superiority or broad-parity
+claim is made yet.
 
 ## Local gates
 

@@ -45,17 +45,22 @@ between-phase browser recycling (fresh profile each time) isolates it.
     `target/qa/ui-comparison/PRIMARY_OBSERVATIONS.md` from real sessions.
   - a missing Daslight observation means "no claim yet", never an assumed win.
 
-  Current honest standings (2026-07-17, post-F2/F4):
+  Current honest standings (2026-07-23, post-T18 rerun):
   | task | Syndocal | Daslight 5 |
   |---|---|---|
-  | place scene on a timeline lane | 2 ops (Cues surface switch + grip drag) | 1 drag (always-visible pool) |
+  | place scene on a timeline lane | 1 drag (always-visible Scene Matrix) | 1 drag (always-visible pool) |
   | toggle a layer's mute | 1 click | 1 click |
   | expand + restore timeline pane | 1 click + Esc | 2 clicks |
 
-  The place-scene gap (2 vs 1) is a known operability deficit: the cue pool
-  requires a surface switch before the drag. Candidate fix belongs to the
-  T3/T5 tranches (persistent scene pool / matrix pane). Do not claim parity
-  on this task until the harness passes with budget 1.
+  T14/T15 closed the measured place-scene gap by keeping Scene Matrix and
+  Timeline visible together. The harness now performs the production path as
+  one direct drag and fails unless one Scene Block is added. T18 expands the
+  executable Syndocal side to 13 tasks: the three rows above plus matrix
+  trigger, Scene Live speed/reset, Touch open/trigger/flash/Edit/control-add,
+  and FX family/recipe selection. The ten added tasks carry Daslight
+  `未計測`; only the three rows above support a same-task parity statement.
+  Patch, static programming, FX target application, and native Save/reopen
+  are still outside this harness and remain unmeasured.
 
 ## Bench launchers
 
