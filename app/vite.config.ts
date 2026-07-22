@@ -22,6 +22,12 @@ export default defineConfig({
             return "qa-fixtures";
           }
           if (
+            normalizedId.includes("/src/components/FixtureCatalogPanel") ||
+            normalizedId.includes("/src/fixtureCatalog")
+          ) {
+            return "fixture-catalog";
+          }
+          if (
             normalizedId.includes("/src/components/CueManagementPanel") ||
             normalizedId.includes("/src/components/TimelineCueEventsPanel") ||
             normalizedId.includes("/src/components/TimelineSceneBlocksEditor") ||

@@ -204,6 +204,12 @@ pub enum EngineCommand {
         request: PatchFixtureRequest,
         profile: FixtureProfileSummary,
     },
+    ReplaceFixtureProfile {
+        fixture_id: FixtureId,
+        profile_path: String,
+        mode_name: Option<String>,
+        profile: FixtureProfileSummary,
+    },
     RemoveFixture(FixtureId),
     SetAttribute {
         fixture_id: FixtureId,
@@ -1070,6 +1076,7 @@ impl EngineCommand {
         matches!(
             self,
             EngineCommand::PatchFixture { .. }
+                | EngineCommand::ReplaceFixtureProfile { .. }
                 | EngineCommand::RemoveFixture(_)
                 | EngineCommand::SetAttribute { .. }
                 | EngineCommand::SetGroupAttribute { .. }
@@ -5155,6 +5162,87 @@ impl EngineRuntime {
                     limits: FixtureLimits::default(),
                     color_binding,
                 });
+                self.rebuild_color_effect_targets();
+                self.rebuild_chaser_effect_targets();
+                self.rebuild_move_effect_targets();
+                self.rebuild_value_effect_targets();
+                self.rebuild_curve_effect_targets();
+                self.rebuild_mapping_effect_targets();
+                self.rebuild_color_mapping_effect_targets();
+                self.rebuild_group_strobe_effects();
+                self.last_error = None;
+            }
+            EngineCommand::ReplaceFixtureProfile {
+                fixture_id,
+                profile_path,
+                mode_name,
+                profile,
+            } => {
+                let Some(fixture_index) = self
+                    .fixtures
+                    .iter()
+                    .position(|fixture| fixture.id == fixture_id)
+                else {
+                    self.last_error = Some(format!("Fixture {fixture_id} was not found"));
+                    return;
+                };
+                let profile_path = profile_path.trim();
+                if profile_path.is_empty() {
+                    self.last_error =
+                        Some("Replacement fixture profile path is required".to_string());
+                    return;
+                }
+                let Some(mode_index) = select_mode_index(&profile, mode_name.as_deref()) else {
+                    self.last_error = Some(selected_mode_error(&profile, mode_name.as_deref()));
+                    return;
+                };
+                let Some(current_mode) = self.fixtures[fixture_index]
+                    .profile
+                    .dmx_modes
+                    .get(self.fixtures[fixture_index].mode_index)
+                else {
+                    self.last_error = Some(format!(
+                        "Fixture {fixture_id} has no active DMX mode to repair"
+                    ));
+                    return;
+                };
+                let replacement_mode = &profile.dmx_modes[mode_index];
+                if !fixture_profile_repair_controls_match(
+                    &current_mode.controls,
+                    &replacement_mode.controls,
+                ) {
+                    self.last_error = Some(format!(
+                        "Replacement profile mode '{}' does not exactly match fixture {fixture_id}'s attribute, geometry, offset and resolution layout",
+                        replacement_mode.name
+                    ));
+                    return;
+                }
+                let mut next_request = self.fixtures[fixture_index].request.clone();
+                next_request.profile_path = profile_path.to_string();
+                next_request.mode_name = Some(replacement_mode.name.clone());
+                let range =
+                    match validate_runtime_patch_footprint(&next_request, &profile, mode_index) {
+                        Ok(range) => range,
+                        Err(error) => {
+                            self.last_error = Some(error);
+                            return;
+                        }
+                    };
+                if let Err(error) = validate_runtime_patch_conflicts(
+                    &self.fixtures,
+                    Some(fixture_id),
+                    next_request.universe,
+                    range,
+                ) {
+                    self.last_error = Some(error);
+                    return;
+                }
+                let color_binding = compile_runtime_color_binding(&replacement_mode.controls);
+                let fixture = &mut self.fixtures[fixture_index];
+                fixture.request = next_request;
+                fixture.profile = profile;
+                fixture.mode_index = mode_index;
+                fixture.color_binding = color_binding;
                 self.rebuild_color_effect_targets();
                 self.rebuild_chaser_effect_targets();
                 self.rebuild_move_effect_targets();
@@ -18446,6 +18534,7 @@ fn engine_command_rebuilds_effect_activations(command: &EngineCommand) -> bool {
     matches!(
         command,
         EngineCommand::PatchFixture { .. }
+            | EngineCommand::ReplaceFixtureProfile { .. }
             | EngineCommand::RemoveFixture(_)
             | EngineCommand::SetFixtureGroups { .. }
             | EngineCommand::LoadProjectSnapshot(_)
@@ -27658,6 +27747,22 @@ fn select_mode_index(profile: &FixtureProfileSummary, mode_name: Option<&str>) -
         .position(|mode| mode.name == mode_name)
 }
 
+fn fixture_profile_repair_controls_match(
+    current: &[AttributeControl],
+    replacement: &[AttributeControl],
+) -> bool {
+    current.len() == replacement.len()
+        && current
+            .iter()
+            .zip(replacement)
+            .all(|(current, replacement)| {
+                current.attribute == replacement.attribute
+                    && current.geometry == replacement.geometry
+                    && current.offsets == replacement.offsets
+                    && current.resolution == replacement.resolution
+            })
+}
+
 fn validate_runtime_fixture_patch(label: &str, address: u16) -> Result<(), String> {
     if label.trim().is_empty() {
         return Err("Fixture label is required".to_string());
@@ -33528,6 +33633,79 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("DMX mode 'Missing' was not found"));
+    }
+
+    #[test]
+    fn fixture_profile_repair_preserves_identity_values_and_fails_closed_on_layout_change() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        runtime.apply_command(EngineCommand::PatchFixture {
+            fixture_id: 1,
+            request: PatchFixtureRequest {
+                profile_path: "C:/missing/mini-spot.gdtf".to_string(),
+                mode_name: Some("Standard".to_string()),
+                label: "Fixture 1".to_string(),
+                universe: 0,
+                address: 1,
+                group_ids: vec!["front".to_string()],
+                position: Vec3::default(),
+                rotation: Default::default(),
+            },
+            profile: sample_profile(),
+        });
+        runtime.apply_command(EngineCommand::SetAttribute {
+            fixture_id: 1,
+            attribute: "Dimmer".to_string(),
+            value: 42_000,
+        });
+
+        let mut replacement = sample_profile();
+        replacement.source_path = "C:/cache/mini-spot.gdtf".to_string();
+        replacement.warnings = vec!["Replacement metadata restored".to_string()];
+        runtime.apply_command(EngineCommand::ReplaceFixtureProfile {
+            fixture_id: 1,
+            profile_path: replacement.source_path.clone(),
+            mode_name: Some("Standard".to_string()),
+            profile: replacement,
+        });
+
+        assert_eq!(runtime.last_error, None);
+        assert_eq!(runtime.fixtures.len(), 1);
+        assert_eq!(runtime.fixtures[0].id, 1);
+        assert_eq!(
+            runtime.fixtures[0].request.profile_path,
+            "C:/cache/mini-spot.gdtf"
+        );
+        assert_eq!(
+            runtime.values.get(&(1, "Dimmer".to_string())),
+            Some(&42_000)
+        );
+
+        let mut incompatible = sample_profile();
+        incompatible.source_path = "C:/cache/wrong-layout.gdtf".to_string();
+        incompatible.dmx_modes[0].controls[0].offsets = vec![4];
+        runtime.apply_command(EngineCommand::ReplaceFixtureProfile {
+            fixture_id: 1,
+            profile_path: incompatible.source_path.clone(),
+            mode_name: Some("Standard".to_string()),
+            profile: incompatible,
+        });
+
+        assert!(runtime
+            .last_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("does not exactly match"));
+        assert_eq!(
+            runtime.fixtures[0].request.profile_path,
+            "C:/cache/mini-spot.gdtf"
+        );
+        assert_eq!(
+            runtime.values.get(&(1, "Dimmer".to_string())),
+            Some(&42_000)
+        );
     }
 
     #[test]

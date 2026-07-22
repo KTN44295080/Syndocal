@@ -27,11 +27,12 @@ const workspaceShellOnlyMode = process.argv.includes("--workspace-shell-only");
 const fxVisualOnlyMode = process.argv.includes("--fx-visual-only");
 const sceneLiveModifierOnlyMode = process.argv.includes("--scene-live-modifier-only");
 const groupStrobeOnlyMode = process.argv.includes("--group-strobe-only");
+const fixtureCatalogOnlyMode = process.argv.includes("--fixture-catalog-only");
 const viewportTraceEnabled = process.env.SYNDOCAL_VIEWPORT_TRACE === "1";
 const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
   largeShowMode
     ? "large-show"
-    : sceneLiveModifierOnlyMode || groupStrobeOnlyMode
+    : sceneLiveModifierOnlyMode || groupStrobeOnlyMode || fixtureCatalogOnlyMode
       ? "scene-matrix"
       : fxVisualOnlyMode
         ? "fx-visual"
@@ -3071,6 +3072,8 @@ async function measure(client, label) {
     const videoSetupActionDockRect = videoSetupActionDock?.getBoundingClientRect() ?? null;
     const profileLoadPanel = document.querySelector('.setupMode-library .profileLoadPanel');
     const profileLoadPanelRect = profileLoadPanel?.getBoundingClientRect() ?? null;
+    const fixtureCatalogPanel = document.querySelector('.setupMode-library .fixtureCatalogPanel');
+    const fixtureCatalogPanelRect = fixtureCatalogPanel?.getBoundingClientRect() ?? null;
     const loadedProfileSummaryPanel = document.querySelector('.setupMode-library .loadedProfileSummaryPanel');
     const loadedProfileSummaryPanelRect = loadedProfileSummaryPanel?.getBoundingClientRect() ?? null;
     const customProfileAttributePane = document.querySelector('.setupMode-profiles .customProfileAttributePane');
@@ -3532,9 +3535,13 @@ async function measure(client, label) {
       ).length,
       visibleVideoSetupDisplayActionCount: visibleCount('.videoSetupPanel .videoOutputActionDock button[data-action="open-window"]'),
       visibleProfileLoadPanelCount: visibleCount('.setupMode-library .profileLoadPanel'),
+      visibleFixtureCatalogPanelCount: visibleCount('.setupMode-library .fixtureCatalogPanel'),
       visibleLoadedProfileSummaryPanelCount: visibleCount('.setupMode-library .loadedProfileSummaryPanel'),
       profileLoadPanelWidth: profileLoadPanelRect ? Math.round(profileLoadPanelRect.width) : 0,
+      fixtureCatalogPanelWidth: fixtureCatalogPanelRect ? Math.round(fixtureCatalogPanelRect.width) : 0,
       loadedProfileSummaryPanelWidth: loadedProfileSummaryPanelRect ? Math.round(loadedProfileSummaryPanelRect.width) : 0,
+      fixtureCatalogVerifiedCardCount: document.querySelectorAll('.setupMode-library .fixtureVerifiedGrid .fixtureCatalogCard').length,
+      fixtureCatalogPasswordInputCount: document.querySelectorAll('.setupMode-library .fixtureCatalogCredentials input[type="password"]').length,
       calibratedEmitterDetailCount: [...document.querySelectorAll('.setupMode-library .profileFunctionRow small b')]
         .filter((detail) => (detail.textContent ?? '').startsWith('Emitter ') && (detail.textContent ?? '').includes(' xyY '))
         .length,
@@ -5176,9 +5183,13 @@ function hasExpectedSetupSurface(result) {
   if (result.label.startsWith("setup-library-")) {
     return (
       result.visibleProfileLoadPanelCount >= 1 &&
+      result.visibleFixtureCatalogPanelCount >= 1 &&
       result.visibleLoadedProfileSummaryPanelCount >= 1 &&
-      result.profileLoadPanelWidth >= 250 &&
-      result.loadedProfileSummaryPanelWidth >= 760 &&
+      result.profileLoadPanelWidth >= 180 &&
+      result.fixtureCatalogPanelWidth >= 400 &&
+      result.loadedProfileSummaryPanelWidth >= 235 &&
+      result.fixtureCatalogVerifiedCardCount === 4 &&
+      result.fixtureCatalogPasswordInputCount === 1 &&
       result.calibratedEmitterDetailCount >= 3
     );
   }
@@ -8381,6 +8392,90 @@ async function measureSceneMatrixPane(client) {
       },
     };
   })()`);
+}
+
+async function runFixtureCatalogViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  const url = fixtureUrl("scene-matrix");
+  await client.send("Page.navigate", { url });
+  await waitForApp(client);
+  await client.evaluate(`localStorage.removeItem('syndocal.fixtureCatalogFavorites.v1')`);
+  await client.send("Page.navigate", { url });
+  await waitForApp(client);
+  await clickVisibleByText(client, ".workspaceTabs button", "Setup");
+  await clickVisibleByText(client, ".setupModeTabs button", "Library");
+  await waitForClientCondition(
+    client,
+    "document.querySelector('.fixtureCatalogPanel')",
+    "fixture catalog panel",
+  );
+
+  const readState = async (scope) => await client.evaluate(`(() => {
+    const panel = document.querySelector('.fixtureCatalogPanel');
+    const host = panel?.parentElement;
+    const panelRect = panel?.getBoundingClientRect();
+    const hostRect = host?.getBoundingClientRect();
+    const app = document.querySelector('.app');
+    const favorite = document.querySelector('.fixtureVerifiedGrid .fixtureCatalogFavorite');
+    const storedFavorites = (() => {
+      try { return JSON.parse(localStorage.getItem('syndocal.fixtureCatalogFavorites.v1') || '[]'); }
+      catch { return []; }
+    })();
+    return {
+      scope: ${JSON.stringify(scope)},
+      panelCount: document.querySelectorAll('.fixtureCatalogPanel').length,
+      profileLoadCount: document.querySelectorAll('.setupMode-library .profileLoadPanel').length,
+      profileSummaryCount: document.querySelectorAll('.setupMode-library .loadedProfileSummaryPanel').length,
+      verifiedCardCount: document.querySelectorAll('.fixtureVerifiedGrid .fixtureCatalogCard').length,
+      catalogSectionCount: document.querySelectorAll('.fixtureCatalogSection').length,
+      facetControlCount: document.querySelectorAll('.fixtureCatalogFacets input, .fixtureCatalogFacets select').length,
+      passwordInputCount: document.querySelectorAll('.fixtureCatalogCredentials input[type="password"][autocomplete="off"]').length,
+      favoritePressed: favorite?.getAttribute('aria-pressed') ?? '',
+      storedFavorites,
+      panelContained: Boolean(panelRect && hostRect &&
+        panelRect.left >= hostRect.left - 1 && panelRect.right <= hostRect.right + 1 &&
+        panelRect.top >= hostRect.top - 1 && panelRect.bottom <= Math.min(hostRect.bottom, innerHeight) + 1),
+      panelInternallyScrollable: Boolean(panel && panel.scrollHeight >= panel.clientHeight),
+      documentAndAppScrollZero:
+        window.scrollX === 0 && window.scrollY === 0 &&
+        document.documentElement.scrollWidth === document.documentElement.clientWidth &&
+        document.documentElement.scrollHeight === document.documentElement.clientHeight &&
+        document.body.scrollWidth === document.documentElement.clientWidth &&
+        document.body.scrollHeight === document.documentElement.clientHeight &&
+        (!app || (app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight)),
+    };
+  })()`);
+
+  const initial = await readState("initial");
+  await client.evaluate(`document.querySelector('.fixtureVerifiedGrid .fixtureCatalogFavorite')?.click()`);
+  await sleep(80);
+  const favorited = await readState("favorited");
+  const conditions = [
+    ["catalogVisible", () => initial.panelCount === 1 && initial.panelContained],
+    ["threePaneLibrary", () => initial.profileLoadCount === 1 && initial.profileSummaryCount === 1],
+    ["verifiedPack", () => initial.verifiedCardCount === 4],
+    ["catalogSections", () => initial.catalogSectionCount === 4],
+    ["facetControls", () => initial.facetControlCount === 5],
+    ["credentialSafetyField", () => initial.passwordInputCount === 1],
+    ["favoritePersistsLocally", () => initial.favoritePressed === "false" &&
+      favorited.favoritePressed === "true" &&
+      favorited.storedFavorites.includes("verified:dimmer-1ch")],
+    ["viewportContained", () => initial.documentAndAppScrollZero && favorited.documentAndAppScrollZero],
+  ];
+  const failedChecks = conditions.filter(([, check]) => !check()).map(([name]) => name);
+  return {
+    viewport,
+    label: `fixture-catalog-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    failedChecks,
+    initial,
+    favorited,
+  };
 }
 
 async function runGroupStrobeViewport(client, viewport) {
@@ -13400,6 +13495,24 @@ async function main() {
     console.log(
       `viewport contract primary-browser=${primaryOperationalViewport.width}x${primaryOperationalViewport.height} measured-client-size-browser=${measuredClientSizeViewport.width}x${measuredClientSizeViewport.height} extended-browser=${extendedCeilingViewport.width}x${extendedCeilingViewport.height} fallback-browsers=${compactFallbackViewports.map((viewport) => `${viewport.width}x${viewport.height}`).join(",")} screenshots=${captureAllViewportScreenshots ? "all" : "large-browser-fixtures"}`,
     );
+    if (fixtureCatalogOnlyMode) {
+      const fixtureCatalogResults = [];
+      for (const viewport of viewports) {
+        const result = await runFixtureCatalogViewport(client, viewport);
+        fixtureCatalogResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `verified=${result.initial.verifiedCardCount} sections=${result.initial.catalogSectionCount} ` +
+            `facets=${result.initial.facetControlCount} favorite=${result.initial.favoritePressed}->${result.favorited.favoritePressed} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = fixtureCatalogResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Fixture catalog viewport failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
     if (groupStrobeOnlyMode) {
       const groupStrobeResults = [];
       for (const viewport of viewports) {

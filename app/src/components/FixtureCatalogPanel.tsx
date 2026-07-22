@@ -1,0 +1,400 @@
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { createMemo, createSignal, For, onMount, Show } from "solid-js";
+import {
+  fixtureCatalogFavoriteKey,
+  fixtureCatalogHealthLabel,
+  fixtureCatalogIdentityMatches,
+  fixtureCatalogSearchTextMatches,
+  fixtureFootprintBandBounds,
+  loadFixtureCatalogFavorites,
+  saveFixtureCatalogFavorites,
+  toggledFixtureCatalogFavorites,
+  verifiedFixtureFavoriteKey,
+  type FixtureFootprintBand,
+  type FixtureProfileHealthSummary,
+  type GdtfFixtureCacheEntry,
+  type GdtfShareDownloadRequest,
+  type GdtfShareFixtureSummary,
+  type GdtfShareSearchRequest,
+  type GdtfShareSearchResponse,
+  type VerifiedFixtureProfileSummary,
+} from "../fixtureCatalog";
+import type { FixtureProfileSummary } from "../types";
+
+interface FixtureCatalogPanelProps {
+  backendAvailable: boolean;
+  selectedFixtureId: number | null;
+  selectedProfile: FixtureProfileSummary | null;
+  selectedMode: string;
+  onProfileLoaded: (profile: FixtureProfileSummary, message: string) => void;
+  onRepair: (fixtureId: number, profilePath: string, modeName: string | null) => Promise<void>;
+  onMessage: (message: string) => void;
+}
+
+const previewVerifiedProfiles: VerifiedFixtureProfileSummary[] = [
+  { id: "dimmer-1ch", manufacturer: "Syndocal Verified", name: "Generic Dimmer 1ch", mode_name: "Standard", footprint: 1, description: "Single-channel intensity fixture for dimmer packs and practicals." },
+  { id: "rgb-par-4ch", manufacturer: "Syndocal Verified", name: "Generic RGB PAR 4ch", mode_name: "Standard", footprint: 4, description: "Dimmer plus additive red, green and blue channels." },
+  { id: "rgbw-par-5ch", manufacturer: "Syndocal Verified", name: "Generic RGBW PAR 5ch", mode_name: "Standard", footprint: 5, description: "Dimmer plus additive red, green, blue and white channels." },
+  { id: "moving-head-rgbw-10ch", manufacturer: "Syndocal Verified", name: "Generic Moving Head RGBW 10ch", mode_name: "Standard", footprint: 10, description: "16-bit pan/tilt, dimmer, calibrated 1-25 Hz strobe and RGBW channels." },
+];
+
+const emptySearchResponse = (): GdtfShareSearchResponse => ({
+  fixtures: [],
+  facets: { manufacturers: [], modes: [], versions: [] },
+  filter_support: {
+    release_status: null,
+    tested_in_visualizer: null,
+    tested_in_real_life: null,
+  },
+  total_matches: 0,
+});
+
+const modeSummary = (modes: { name: string; dmx_footprint: number | null }[]) => modes.length === 0
+  ? "Modes unavailable"
+  : modes.slice(0, 3).map((mode) => `${mode.name}${mode.dmx_footprint ? ` ${mode.dmx_footprint}ch` : ""}`).join(" · ");
+
+export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
+  const [user, setUser] = createSignal("");
+  const [password, setPassword] = createSignal("");
+  const [manufacturer, setManufacturer] = createSignal("");
+  const [fixtureQuery, setFixtureQuery] = createSignal("");
+  const [globalQuery, setGlobalQuery] = createSignal("");
+  const [mode, setMode] = createSignal("");
+  const [footprintBand, setFootprintBand] = createSignal<FixtureFootprintBand>("any");
+  const [releaseOnly, setReleaseOnly] = createSignal(false);
+  const [testedVisualizer, setTestedVisualizer] = createSignal(false);
+  const [testedReal, setTestedReal] = createSignal(false);
+  const [favoritesOnly, setFavoritesOnly] = createSignal(false);
+  const [favorites, setFavorites] = createSignal(loadFixtureCatalogFavorites());
+  const [searchResponse, setSearchResponse] = createSignal(emptySearchResponse());
+  const [cacheEntries, setCacheEntries] = createSignal<GdtfFixtureCacheEntry[]>([]);
+  const [projectHealth, setProjectHealth] = createSignal<FixtureProfileHealthSummary[]>([]);
+  const [verifiedProfiles, setVerifiedProfiles] = createSignal(previewVerifiedProfiles);
+  const [busy, setBusy] = createSignal<"search" | "local" | "cache" | "load" | "repair" | null>(null);
+
+  const favoriteSet = createMemo(() => new Set(favorites()));
+  const visibleOnline = createMemo(() => searchResponse().fixtures.filter((fixture) =>
+    !favoritesOnly() || favoriteSet().has(fixtureCatalogFavoriteKey(fixture))));
+  const visibleCache = createMemo(() => cacheEntries().filter((entry) =>
+    fixtureCatalogSearchTextMatches(entry, globalQuery())
+      && (!favoritesOnly() || favoriteSet().has(fixtureCatalogFavoriteKey(entry)))));
+  const visibleVerified = createMemo(() => verifiedProfiles().filter((entry) =>
+    (!globalQuery().trim()
+      || `${entry.manufacturer} ${entry.name} ${entry.description}`.toLocaleLowerCase()
+        .includes(globalQuery().trim().toLocaleLowerCase()))
+      && (!favoritesOnly() || favoriteSet().has(verifiedFixtureFavoriteKey(entry.id)))));
+  const selectedFixtureHealth = createMemo(() => projectHealth().find(
+    (entry) => entry.fixture_id === props.selectedFixtureId,
+  ) ?? null);
+  const healthyCacheCount = createMemo(() => cacheEntries().filter(
+    (entry) => entry.health === "healthy" || entry.health === "warnings",
+  ).length);
+  const repairCount = createMemo(() => projectHealth().filter((entry) => entry.repairable).length);
+
+  const toggleFavorite = (key: string) => {
+    const next = saveFixtureCatalogFavorites(toggledFixtureCatalogFavorites(favorites(), key));
+    setFavorites(next);
+  };
+
+  const refreshLocalCatalog = async () => {
+    if (!props.backendAvailable) return;
+    setBusy("local");
+    try {
+      const [cache, health, verified] = await Promise.all([
+        tauriInvoke<GdtfFixtureCacheEntry[]>("list_gdtf_fixture_cache"),
+        tauriInvoke<FixtureProfileHealthSummary[]>("get_fixture_profile_health"),
+        tauriInvoke<VerifiedFixtureProfileSummary[]>("list_verified_fixture_profiles"),
+      ]);
+      setCacheEntries(cache);
+      setProjectHealth(health);
+      setVerifiedProfiles(verified);
+      props.onMessage(`Fixture catalog ready: ${cache.length} cached, ${health.length} patched, ${verified.length} verified profiles.`);
+    } catch (error) {
+      props.onMessage(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  onMount(() => void refreshLocalCatalog());
+
+  const searchShare = async () => {
+    if (!props.backendAvailable) {
+      props.onMessage("GDTF Share search requires the Syndocal desktop backend.");
+      return;
+    }
+    const bounds = fixtureFootprintBandBounds(footprintBand());
+    const request: GdtfShareSearchRequest = {
+      user: user(),
+      password: password(),
+      manufacturer: manufacturer().trim() || null,
+      fixture: fixtureQuery().trim() || null,
+      query: globalQuery().trim() || null,
+      mode: mode().trim() || null,
+      min_footprint: bounds.min,
+      max_footprint: bounds.max,
+      release_only: releaseOnly(),
+      tested_in_visualizer: testedVisualizer(),
+      tested_in_real_life: testedReal(),
+      limit: 80,
+    };
+    setBusy("search");
+    try {
+      const response = await tauriInvoke<GdtfShareSearchResponse>("search_gdtf_share", { request });
+      setSearchResponse(response);
+      props.onMessage(`GDTF Share: showing ${response.fixtures.length} of ${response.total_matches} matching revisions.`);
+    } catch (error) {
+      props.onMessage(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const loadCachedProfile = async (entry: GdtfFixtureCacheEntry) => {
+    if (entry.health === "invalid") {
+      props.onMessage(`Cannot load invalid cached profile: ${entry.detail}`);
+      return;
+    }
+    setBusy("load");
+    try {
+      const profile = await tauriInvoke<FixtureProfileSummary>("import_gdtf", { path: entry.path });
+      props.onProfileLoaded(profile, `Loaded cached ${entry.manufacturer} ${entry.fixture}`);
+    } catch (error) {
+      props.onMessage(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const cacheAndLoad = async (fixture: GdtfShareFixtureSummary) => {
+    const cachedEntry = cacheEntries().find((candidate) =>
+      candidate.health !== "invalid" && fixtureCatalogIdentityMatches(fixture, candidate));
+    if (cachedEntry) {
+      await loadCachedProfile(cachedEntry);
+      return;
+    }
+    const request: GdtfShareDownloadRequest = {
+      user: user(),
+      password: password(),
+      rid: fixture.rid,
+      uuid: fixture.uuid,
+      manufacturer: fixture.manufacturer,
+      fixture: fixture.fixture,
+      revision: fixture.revision,
+    };
+    setBusy("cache");
+    try {
+      const entry = await tauriInvoke<GdtfFixtureCacheEntry>("cache_gdtf_from_share", { request });
+      await refreshLocalCatalog();
+      await loadCachedProfile(entry);
+    } catch (error) {
+      props.onMessage(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const loadVerifiedProfile = async (entry: VerifiedFixtureProfileSummary) => {
+    if (!props.backendAvailable) {
+      props.onMessage("Verified profiles require the Syndocal desktop backend.");
+      return;
+    }
+    setBusy("load");
+    try {
+      const profile = await tauriInvoke<FixtureProfileSummary>("load_verified_fixture_profile", {
+        profileId: entry.id,
+      });
+      props.onProfileLoaded(profile, `Loaded verified ${entry.name}`);
+    } catch (error) {
+      props.onMessage(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const repairSelectedFixture = async () => {
+    const health = selectedFixtureHealth();
+    const profile = props.selectedProfile;
+    if (!health?.repairable || !profile) return;
+    setBusy("repair");
+    try {
+      await props.onRepair(health.fixture_id, profile.source_path, props.selectedMode || null);
+      await refreshLocalCatalog();
+    } catch (error) {
+      props.onMessage(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <section class="fixtureCatalogPanel">
+      <header class="fixtureCatalogHeader">
+        <div>
+          <h3>Fixture Catalog</h3>
+          <span>GDTF Share + Offline</span>
+        </div>
+        <div class="fixtureCatalogHealthSummary">
+          <span class="healthy">{healthyCacheCount()} cached</span>
+          <span class={repairCount() > 0 ? "warning" : "healthy"}>{repairCount()} repair</span>
+          <button onClick={() => void refreshLocalCatalog()} disabled={!props.backendAvailable || busy() !== null}>Refresh</button>
+        </div>
+      </header>
+
+      <div class="fixtureCatalogCredentials">
+        <label>
+          Share User
+          <input value={user()} autocomplete="off" onInput={(event) => setUser(event.currentTarget.value)} />
+        </label>
+        <label>
+          Share Password
+          <input type="password" value={password()} autocomplete="off" onInput={(event) => setPassword(event.currentTarget.value)} />
+        </label>
+        <small>Credentials stay in memory for this session and are never written to the project or cache metadata.</small>
+      </div>
+
+      <div class="fixtureCatalogFacets">
+        <label>
+          Search
+          <input value={globalQuery()} onInput={(event) => setGlobalQuery(event.currentTarget.value)} placeholder="fixture, revision, mode" />
+        </label>
+        <label>
+          Manufacturer
+          <input list="gdtf-manufacturers" value={manufacturer()} onInput={(event) => setManufacturer(event.currentTarget.value)} />
+          <datalist id="gdtf-manufacturers">
+            <For each={searchResponse().facets.manufacturers}>{(entry) => <option value={entry} />}</For>
+          </datalist>
+        </label>
+        <label>
+          Fixture
+          <input value={fixtureQuery()} onInput={(event) => setFixtureQuery(event.currentTarget.value)} />
+        </label>
+        <label>
+          DMX Mode
+          <input list="gdtf-modes" value={mode()} onInput={(event) => setMode(event.currentTarget.value)} />
+          <datalist id="gdtf-modes">
+            <For each={searchResponse().facets.modes}>{(entry) => <option value={entry} />}</For>
+          </datalist>
+        </label>
+        <label>
+          Footprint
+          <select value={footprintBand()} onChange={(event) => setFootprintBand(event.currentTarget.value as FixtureFootprintBand)}>
+            <option value="any">Any</option>
+            <option value="1-4">1-4 ch</option>
+            <option value="5-16">5-16 ch</option>
+            <option value="17-32">17-32 ch</option>
+            <option value="33-512">33+ ch</option>
+          </select>
+        </label>
+      </div>
+      <div class="fixtureCatalogFilterRow">
+        <label><input type="checkbox" checked={releaseOnly()} onChange={(event) => setReleaseOnly(event.currentTarget.checked)} /> Releases</label>
+        <label><input type="checkbox" checked={testedVisualizer()} onChange={(event) => setTestedVisualizer(event.currentTarget.checked)} /> Visualizer tested</label>
+        <label><input type="checkbox" checked={testedReal()} onChange={(event) => setTestedReal(event.currentTarget.checked)} /> Real-life tested</label>
+        <label><input type="checkbox" checked={favoritesOnly()} onChange={(event) => setFavoritesOnly(event.currentTarget.checked)} /> Favorites only</label>
+        <button class="primary" onClick={() => void searchShare()} disabled={!props.backendAvailable || busy() !== null}>Search Share</button>
+      </div>
+      <Show when={searchResponse().filter_support.release_status === false
+        || searchResponse().filter_support.tested_in_visualizer === false
+        || searchResponse().filter_support.tested_in_real_life === false}>
+        <small class="fixtureCatalogCapabilityNote">
+          The public Share list did not provide release/test metadata. Those filters fail closed; clear them to include revisions with unknown status.
+        </small>
+      </Show>
+
+      <div class="fixtureCatalogColumns">
+        <section class="fixtureCatalogSection online">
+          <header><strong>Online revisions</strong><span>{visibleOnline().length}/{searchResponse().total_matches}</span></header>
+          <div class="fixtureCatalogList">
+            <For each={visibleOnline()} fallback={<p class="empty">Search GDTF Share or adjust filters.</p>}>
+              {(entry) => {
+                const key = fixtureCatalogFavoriteKey(entry);
+                const cached = () => cacheEntries().some((candidate) =>
+                  candidate.health !== "invalid" && fixtureCatalogIdentityMatches(entry, candidate));
+                return (
+                  <article class="fixtureCatalogCard">
+                    <button class="fixtureCatalogFavorite" aria-label="Favorite fixture profile" aria-pressed={favoriteSet().has(key)} onClick={() => toggleFavorite(key)}>{favoriteSet().has(key) ? "★" : "☆"}</button>
+                    <strong data-no-localize>{entry.manufacturer} {entry.fixture}</strong>
+                    <span data-no-localize>{entry.revision} · GDTF {entry.version ?? "?"}</span>
+                    <small data-no-localize>{modeSummary(entry.modes)}</small>
+                    <div class="fixtureCatalogBadges">
+                      <Show when={entry.release_status}><i>{entry.release_status}</i></Show>
+                      <Show when={entry.tested_in_visualizer === true}><i>Visualizer</i></Show>
+                      <Show when={entry.tested_in_real_life === true}><i>Real life</i></Show>
+                      <Show when={cached()}><i class="healthy">Cached</i></Show>
+                    </div>
+                    <button onClick={() => void cacheAndLoad(entry)} disabled={busy() !== null}>{cached() ? "Load Cache" : "Cache + Load"}</button>
+                  </article>
+                );
+              }}
+            </For>
+          </div>
+        </section>
+
+        <section class="fixtureCatalogSection offline">
+          <header><strong>Offline cache</strong><span>{visibleCache().length}</span></header>
+          <div class="fixtureCatalogList">
+            <For each={visibleCache()} fallback={<p class="empty">No cached GDTF profiles.</p>}>
+              {(entry) => {
+                const key = fixtureCatalogFavoriteKey(entry);
+                return (
+                  <article class={`fixtureCatalogCard health-${entry.health}`}>
+                    <button class="fixtureCatalogFavorite" aria-label="Favorite cached profile" aria-pressed={favoriteSet().has(key)} onClick={() => toggleFavorite(key)}>{favoriteSet().has(key) ? "★" : "☆"}</button>
+                    <strong data-no-localize>{entry.manufacturer} {entry.fixture}</strong>
+                    <span data-no-localize>{entry.revision}</span>
+                    <small>{fixtureCatalogHealthLabel(entry.health)} · {entry.detail}</small>
+                    <small data-no-localize>{modeSummary(entry.modes)}</small>
+                    <button onClick={() => void loadCachedProfile(entry)} disabled={entry.health === "invalid" || busy() !== null}>Use Profile</button>
+                  </article>
+                );
+              }}
+            </For>
+          </div>
+        </section>
+      </div>
+
+      <section class="fixtureCatalogSection verified">
+        <header><strong>Verified common-rig pack</strong><span>{visibleVerified().length}</span></header>
+        <p>Structurally tested generic layouts. Confirm the fixture manual before sending DMX; these are not manufacturer-specific profiles.</p>
+        <div class="fixtureVerifiedGrid">
+          <For each={visibleVerified()}>
+            {(entry) => {
+              const key = verifiedFixtureFavoriteKey(entry.id);
+              return (
+                <article class="fixtureCatalogCard">
+                  <button class="fixtureCatalogFavorite" aria-label="Favorite verified profile" aria-pressed={favoriteSet().has(key)} onClick={() => toggleFavorite(key)}>{favoriteSet().has(key) ? "★" : "☆"}</button>
+                  <strong>{entry.name}</strong>
+                  <span>{entry.footprint} ch · {entry.mode_name}</span>
+                  <small>{entry.description}</small>
+                  <button onClick={() => void loadVerifiedProfile(entry)} disabled={!props.backendAvailable || busy() !== null}>Use Profile</button>
+                </article>
+              );
+            }}
+          </For>
+        </div>
+      </section>
+
+      <section class="fixtureCatalogSection projectHealth">
+        <header><strong>Project profile health</strong><span>{projectHealth().length}</span></header>
+        <div class="fixtureProjectHealthList">
+          <For each={projectHealth()} fallback={<p class="empty">No patched fixtures.</p>}>
+            {(entry) => (
+              <article class={entry.fixture_id === props.selectedFixtureId ? "selected" : ""}>
+                <span class={`healthBadge ${entry.status}`}>{fixtureCatalogHealthLabel(entry.status)}</span>
+                <strong data-no-localize>{entry.label}</strong>
+                <small data-no-localize>{entry.manufacturer} {entry.profile_name} · {entry.mode_name}</small>
+                <span>{entry.detail}</span>
+              </article>
+            )}
+          </For>
+        </div>
+        <Show when={selectedFixtureHealth()?.repairable}>
+          <div class="fixtureRepairBar">
+            <span>Selected fixture uses a fallback or missing source. Load the exact replacement profile and matching mode first.</span>
+            <button class="primary" disabled={!props.selectedProfile || busy() !== null} onClick={() => void repairSelectedFixture()}>Repair Selected Fixture</button>
+          </div>
+        </Show>
+      </section>
+    </section>
+  );
+}

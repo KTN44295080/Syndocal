@@ -54,8 +54,8 @@
 
 ### P3 灯体導入
 
-- GDTF Shareのfaceted search、favorites、offline状態、health表示、missing-profile repair、検証済みcommon-rig packが無い。
-- 大規模商用catalogそのものの件数では競合しないため、open GDTF経路の品質と復旧性で評価する。
+- T21 software完了。GDTF Shareのfaceted search、machine-local favorites、検証付きoffline cache、project/cache health、exact-layout missing-profile repair、4件のgeneric verified common-rig packをSetup / Libraryへ統合した。
+- 大規模商用catalogそのものの件数では競合しないため、open GDTF経路の品質と復旧性で評価する。live Share account、native restart/offline、実Art-Net出力はT23の外部証拠として残る。
 
 ### P4 運用面
 
@@ -97,6 +97,8 @@ T20-Aはscene playback direction / Cue Step segmentをT17と同じcommand-time r
 ### T21: Fixture Onboarding
 
 GDTF Share catalogをfaceted search、favorites、offline cache/health、missing repair、verified packへ拡張する。認証情報はprojectへ保存しない。
+
+進捗（2026-07-23）: **T21 software完了**。global/manufacturer/fixture/mode/footprint facets、serviceがoptional metadataを返す場合だけfail-closedで使うrelease/Visualizer-tested/real-life-tested filters、favorites、application-localの検証済みGDTF cacheとidentity-only sidecar、project/cache health、exact identity + exact DMX layoutでfail-closedするprofile repair、4件のgeneric verified common-rig packを追加した。Share credentialはcomponent memory以外へ保存せず、T21による`.sdc` schema追加は無い。downloadは公式public APIのrevision-ID GET契約に合わせた。repairはfixture ID、patch、値、limits、group/Cue参照を維持し、44Hz hot pathではなくcommand-time cacheだけを再構築する。full Rust workspace、engine 400 pass + 1 manual ignore、Tauri 330 pass + 9外部依存ignore、helper 29、5解像度focused/full viewport、2766/2766 localization、490.79 kB main production buildがgreen。詳細は`qa/FIXTURE_ONBOARDING_ACCEPTANCE.md`。live Share credential、native restart/offline、Art-Net外部可視化/実灯体はT23まで未完。
 
 ### T22: Workspace and Operator Policy
 

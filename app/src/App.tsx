@@ -34,6 +34,7 @@ import { FaderAttributeEditorPanel } from "./components/FaderAttributeEditorPane
 import { FaderAuxiliaryAttributePanels } from "./components/FaderAuxiliaryAttributePanels";
 import { FaderFixtureControlPanel } from "./components/FaderFixtureControlPanel";
 import { FaderGridPanel } from "./components/FaderGridPanel";
+import { FixtureCatalogPanel } from "./components/FixtureCatalogPanel";
 import { GroupLiveMixerStrip } from "./components/GroupLiveMixerStrip";
 import { FaderPrimaryAttributePanels } from "./components/FaderPrimaryAttributePanels";
 import { LightingRuntimeControlsPanel } from "./components/LightingRuntimeControlsPanel";
@@ -635,6 +636,7 @@ const projectMutationCommands = new Set([
   "patch_fixture",
   "patch_fixtures",
   "remove_fixture",
+  "repair_fixture_profile",
   "set_fixture_patch",
   "set_fixture_limits",
   "set_group_fixture_limits",
@@ -9651,6 +9653,23 @@ export default function App() {
     }
   };
 
+  const useCatalogProfile = (imported: FixtureProfileSummary, loadedMessage: string) => {
+    setProfile(imported);
+    setGdtfPath(imported.source_path);
+    setSelectedMode(imported.dmx_modes[0]?.name ?? "");
+    setMessage(profileLoadMessage(loadedMessage, imported));
+  };
+
+  const repairCatalogFixtureProfile = async (
+    fixtureId: number,
+    profilePath: string,
+    modeName: string | null,
+  ) => {
+    await invoke("repair_fixture_profile", { fixtureId, profilePath, modeName });
+    await refreshSnapshot();
+    setMessage(`Repaired fixture ${fixtureId} profile source with an exact DMX layout match.`);
+  };
+
   const setGroupPark = async (groupId: string, enabled: boolean) => {
     try {
       await invoke("set_group_park", { groupId, enabled });
@@ -15004,6 +15023,17 @@ export default function App() {
             onLoadGdtf={importGdtf}
             onDownloadGdtf={downloadGdtfFromUrl}
           />
+          <Show when={setupSubTab() === "library"}>
+            <FixtureCatalogPanel
+              backendAvailable={isTauriRuntime() && !viewportFixture}
+              selectedFixtureId={selectedFixtureId()}
+              selectedProfile={profile()}
+              selectedMode={selectedMode()}
+              onProfileLoaded={useCatalogProfile}
+              onRepair={repairCatalogFixtureProfile}
+              onMessage={setMessage}
+            />
+          </Show>
           </Show>
           <Show when={setupSubTab() === "profiles"}>
           <CustomProfileEditorPanel

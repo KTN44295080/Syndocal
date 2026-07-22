@@ -18,6 +18,8 @@
     "check:cue-live-modifier": "node scripts/check-cue-live-modifier.mjs",
     "check:group-strobe": "node scripts/check-group-strobe.mjs",
     "check:group-strobe-viewport": "node scripts/check-viewport-containment.mjs --group-strobe-only",
+    "check:fixture-catalog": "node scripts/check-fixture-catalog.mjs",
+    "check:fixture-catalog-viewport": "node scripts/check-viewport-containment.mjs --fixture-catalog-only",
     "check:scene-live-viewport": "node scripts/check-viewport-containment.mjs --scene-live-modifier-only",
     "check:effect-draft": "node scripts/check-effect-draft-helpers.mjs",
     "check:fx-visual": "node scripts/check-effect-visualization.mjs",

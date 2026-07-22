@@ -17,8 +17,8 @@
 | FX family / recipe選択 | 各1 click、active familyとrecipe選択を検証 | 未計測 | 未計測 | 作成、target適用、Cue保存まで比較を拡張 |
 | Independent FX | 7系統が独立body/runtime/editor。Colour Mappingは埋め込みimage/text/video、matrix cell、UV/sampling/playbackを持ち、GDTF CIE xyY付き3–16 emitterはcalibrated fixed-anchor mixingを共有する。metadata無し追加emittersはzero | Daslightは7独立generator群 | ソフトウェア構造差は解消・プリセット/実出力未計測 | T23の物理/外部可視化受入へ分離 |
 | Cue FX parameter transition | Cue-owned Effectごとに任意fade、同一IDの直前live result→次state、連続/離散属性別policy、video target対応 | あり | ソフトウェア構造差は解消・同一タスク未計測 | T23で実ショー/Art-NetとDaslight操作を実測 |
-| Scene Live | speed / size / phase latch、Matrix/Touch flash | direction / segment / strobe / soloを含む | 劣 | T20 |
-| Fixture onboarding | GDTF import/cache、Share検索/download、custom builder | 商用統合catalogと復旧UXあり | 劣 | T21でfavorites/offline/health/repair/common pack |
+| Scene Live | scene speed / size / phase / direction / segment / flash、group dimmer / strobe / solo | 同等機能あり | ソフトウェア構造差は解消・同一タスク/実出力未計測 | T23で実ショー/Art-NetとDaslight操作を実測 |
+| Fixture onboarding | GDTF import、faceted Share検索、favorites、検証付きoffline cache/health、exact-layout repair、generic verified common pack、custom builder | 商用統合catalogと復旧UXあり | ソフトウェア構造差は解消・catalog規模/実サービス運用は未計測 | T23でlive Share/native restart/Art-Net実出力 |
 | Workspace | Stage / Timeline popout、split保存 | 任意pane/workspace構成 | 劣 | T22で名前付きdetachable workspace |
 | Operator policy | destructive confirmationはあるがpassword/partial lockなし | lock機能あり | 劣 | T22でcredential-safe full/partial lock |
 | 3D visualization | 内蔵しない | 内蔵あり | 比較対象外 | Art-Net外部可視化をT23で実証 |

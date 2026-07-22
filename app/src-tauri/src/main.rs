@@ -133,6 +133,7 @@ const PROJECT_FILE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const PROJECT_ISF_SOURCE_MAX_BYTES: usize = 16 * 1024 * 1024;
 const PROJECT_BACKUP_DIRECTORY: &str = "project-backups";
 const CRASH_REPORT_DIRECTORY: &str = "crash-reports";
+const FIXTURE_PROFILE_CACHE_DIRECTORY: &str = "fixture-profile-cache";
 const APPLICATION_UPDATE_PROGRESS_EVENT: &str = "syndocal://application-update-progress";
 const APPLICATION_UPDATE_ENDPOINT: Option<&str> = option_env!("SYNDOCAL_UPDATE_ENDPOINT");
 const APPLICATION_UPDATE_PUBKEY: Option<&str> = option_env!("SYNDOCAL_UPDATE_PUBKEY");
@@ -3226,6 +3227,12 @@ struct GdtfShareSearchRequest {
     manufacturer: Option<String>,
     fixture: Option<String>,
     query: Option<String>,
+    mode: Option<String>,
+    min_footprint: Option<u16>,
+    max_footprint: Option<u16>,
+    release_only: Option<bool>,
+    tested_in_visualizer: Option<bool>,
+    tested_in_real_life: Option<bool>,
     limit: Option<usize>,
 }
 
@@ -3258,7 +3265,82 @@ struct GdtfShareFixtureSummary {
     version: Option<String>,
     creator: Option<String>,
     filesize: Option<u64>,
+    release_status: Option<String>,
+    tested_in_visualizer: Option<bool>,
+    tested_in_real_life: Option<bool>,
     modes: Vec<GdtfShareModeSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct GdtfShareSearchFacets {
+    manufacturers: Vec<String>,
+    modes: Vec<String>,
+    versions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct GdtfShareFilterSupport {
+    release_status: bool,
+    tested_in_visualizer: bool,
+    tested_in_real_life: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct GdtfShareSearchResponse {
+    fixtures: Vec<GdtfShareFixtureSummary>,
+    facets: GdtfShareSearchFacets,
+    filter_support: GdtfShareFilterSupport,
+    total_matches: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct GdtfFixtureCacheMetadata {
+    version: u32,
+    key: String,
+    rid: Option<u64>,
+    uuid: Option<String>,
+    manufacturer: String,
+    fixture: String,
+    revision: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+struct GdtfFixtureCacheEntry {
+    key: String,
+    rid: Option<u64>,
+    uuid: Option<String>,
+    manufacturer: String,
+    fixture: String,
+    revision: String,
+    path: String,
+    filesize: u64,
+    health: String,
+    detail: String,
+    warnings: Vec<String>,
+    modes: Vec<GdtfShareModeSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct FixtureProfileHealthSummary {
+    fixture_id: FixtureId,
+    label: String,
+    manufacturer: String,
+    profile_name: String,
+    mode_name: String,
+    source_path: String,
+    status: String,
+    detail: String,
+    repairable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct VerifiedFixtureProfileSummary {
+    id: String,
+    manufacturer: String,
+    name: String,
+    mode_name: String,
+    footprint: u16,
+    description: String,
 }
 
 #[derive(Debug, Clone)]
@@ -3564,9 +3646,7 @@ fn download_gdtf_from_url(url: String) -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-fn search_gdtf_share(
-    request: GdtfShareSearchRequest,
-) -> Result<Vec<GdtfShareFixtureSummary>, String> {
+fn search_gdtf_share(request: GdtfShareSearchRequest) -> Result<GdtfShareSearchResponse, String> {
     validate_gdtf_share_credentials(&request.user, &request.password)?;
     let cookie_path = gdtf_share_cookie_path();
     let result = (|| {
@@ -3584,6 +3664,12 @@ fn search_gdtf_share(
             request.manufacturer.as_deref().unwrap_or_default(),
             request.fixture.as_deref().unwrap_or_default(),
             request.query.as_deref().unwrap_or_default(),
+            request.mode.as_deref().unwrap_or_default(),
+            request.min_footprint,
+            request.max_footprint,
+            request.release_only.unwrap_or(false),
+            request.tested_in_visualizer.unwrap_or(false),
+            request.tested_in_real_life.unwrap_or(false),
             request.limit.unwrap_or(40),
         ))
     })();
@@ -3594,16 +3680,7 @@ fn search_gdtf_share(
 #[tauri::command]
 fn download_gdtf_from_share(request: GdtfShareDownloadRequest) -> Result<Option<String>, String> {
     validate_gdtf_share_credentials(&request.user, &request.password)?;
-    if request.rid.is_none()
-        && request
-            .uuid
-            .as_deref()
-            .unwrap_or_default()
-            .trim()
-            .is_empty()
-    {
-        return Err("GDTF Share result is missing both rid and uuid".to_string());
-    }
+    validate_gdtf_share_download_identity(&request)?;
     let Some(path) = rfd::FileDialog::new()
         .add_filter("GDTF Fixture", &["gdtf"])
         .set_file_name(gdtf_share_download_file_name(&request))
@@ -3625,6 +3702,180 @@ fn download_gdtf_from_share(request: GdtfShareDownloadRequest) -> Result<Option<
     })();
     let _ = fs::remove_file(&cookie_path);
     result
+}
+
+#[tauri::command]
+fn list_gdtf_fixture_cache(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<GdtfFixtureCacheEntry>, String> {
+    let directory = app_data_subdirectory(&app, FIXTURE_PROFILE_CACHE_DIRECTORY)?;
+    let entries = inspect_gdtf_fixture_cache_directory(&directory)?;
+    for entry in &entries {
+        if entry.health == "healthy" || entry.health == "warnings" {
+            if let Ok(profile) = gdtf::load_profile(&entry.path) {
+                cache_fixture_profile(&state.custom_profiles, &profile)?;
+            }
+        }
+    }
+    Ok(entries)
+}
+
+#[tauri::command]
+fn cache_gdtf_from_share(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    request: GdtfShareDownloadRequest,
+) -> Result<GdtfFixtureCacheEntry, String> {
+    validate_gdtf_share_credentials(&request.user, &request.password)?;
+    validate_gdtf_share_download_identity(&request)?;
+    let directory = app_data_subdirectory(&app, FIXTURE_PROFILE_CACHE_DIRECTORY)?;
+    let metadata = gdtf_fixture_cache_metadata(&request);
+    let path = gdtf_fixture_cache_path(&directory, &metadata);
+    if path.is_file() {
+        let entry = inspect_gdtf_cache_file(&path, Some(metadata.clone()))?;
+        if entry.health == "healthy" || entry.health == "warnings" {
+            let profile = gdtf::load_profile(&path).map_err(|error| error.to_string())?;
+            cache_fixture_profile(&state.custom_profiles, &profile)?;
+            return Ok(entry);
+        }
+    }
+
+    let partial_path = directory.join(format!(
+        ".{}-{}-{}.partial",
+        safe_file_stem(&metadata.key),
+        std::process::id(),
+        current_unix_ms()
+    ));
+    let cookie_path = gdtf_share_cookie_path();
+    let result = (|| {
+        login_gdtf_share(&request.user, &request.password, &cookie_path)?;
+        download_gdtf_share_file(&request, &cookie_path, &partial_path)?;
+        let profile = gdtf::load_profile(&partial_path)
+            .map_err(|error| format!("Downloaded GDTF Share cache file is invalid: {error}"))?;
+        if path.exists() {
+            fs::remove_file(&path).map_err(|error| {
+                format!(
+                    "Unable to replace invalid fixture cache '{}': {error}",
+                    path.display()
+                )
+            })?;
+        }
+        fs::rename(&partial_path, &path).map_err(|error| {
+            format!(
+                "Unable to finalize fixture cache '{}': {error}",
+                path.display()
+            )
+        })?;
+        write_gdtf_fixture_cache_metadata(&path, &metadata)?;
+        cache_fixture_profile(&state.custom_profiles, &profile)?;
+        inspect_gdtf_cache_file(&path, Some(metadata.clone()))
+    })();
+    let _ = fs::remove_file(&cookie_path);
+    let _ = fs::remove_file(&partial_path);
+    result
+}
+
+#[tauri::command]
+fn get_fixture_profile_health(
+    state: State<'_, AppState>,
+) -> Result<Vec<FixtureProfileHealthSummary>, String> {
+    fixture_profile_health_summaries(&state.engine.snapshot(), &state.custom_profiles)
+}
+
+#[tauri::command]
+fn list_verified_fixture_profiles() -> Vec<VerifiedFixtureProfileSummary> {
+    verified_fixture_profiles()
+        .into_iter()
+        .map(|(summary, _)| summary)
+        .collect()
+}
+
+#[tauri::command]
+fn load_verified_fixture_profile(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<FixtureProfileSummary, String> {
+    let (_, profile) = verified_fixture_profiles()
+        .into_iter()
+        .find(|(summary, _)| summary.id == profile_id.trim())
+        .ok_or_else(|| {
+            format!(
+                "Verified fixture profile '{}' was not found",
+                profile_id.trim()
+            )
+        })?;
+    cache_fixture_profile(&state.custom_profiles, &profile)?;
+    Ok(profile)
+}
+
+#[tauri::command]
+fn repair_fixture_profile(
+    state: State<'_, AppState>,
+    fixture_id: FixtureId,
+    profile_path: String,
+    mode_name: Option<String>,
+) -> Result<(), String> {
+    let snapshot = state.engine.snapshot();
+    let fixture = snapshot
+        .fixtures
+        .iter()
+        .find(|fixture| fixture.id == fixture_id)
+        .ok_or_else(|| format!("Fixture {fixture_id} was not found"))?;
+    let profile = load_patch_profile(&state, &profile_path)?;
+    if !profile
+        .manufacturer
+        .trim()
+        .eq_ignore_ascii_case(fixture.manufacturer.trim())
+        || !profile
+            .name
+            .trim()
+            .eq_ignore_ascii_case(fixture.profile_name.trim())
+    {
+        return Err(format!(
+            "Replacement profile identity '{} {}' does not match fixture '{} {}'",
+            profile.manufacturer, profile.name, fixture.manufacturer, fixture.profile_name
+        ));
+    }
+    let requested_mode = mode_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|mode| !mode.is_empty())
+        .unwrap_or(fixture.mode_name.as_str());
+    let replacement_mode = gdtf::find_dmx_mode(&profile, Some(requested_mode))
+        .ok_or_else(|| format!("Replacement DMX mode '{requested_mode}' was not found"))?;
+    if !fixture_profile_repair_layout_matches(&fixture.controls, &replacement_mode.controls) {
+        return Err(format!(
+            "Replacement profile mode '{requested_mode}' does not exactly match the patched attribute, geometry, offset and resolution layout"
+        ));
+    }
+    cache_fixture_profile(&state.custom_profiles, &profile)?;
+    let expected_path = profile.source_path.clone();
+    state
+        .engine
+        .send(EngineCommand::ReplaceFixtureProfile {
+            fixture_id,
+            profile_path: expected_path.clone(),
+            mode_name: Some(replacement_mode.name.clone()),
+            profile,
+        })
+        .map_err(|error| error.to_string())?;
+    let mut last_error = None;
+    for _ in 0..20 {
+        let snapshot = state.engine.snapshot();
+        if snapshot
+            .fixtures
+            .iter()
+            .any(|fixture| fixture.id == fixture_id && fixture.profile_source_path == expected_path)
+        {
+            return Ok(());
+        }
+        last_error = snapshot.telemetry.last_error;
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    Err(last_error.unwrap_or_else(|| {
+        format!("Timed out waiting for fixture {fixture_id} profile repair publication")
+    }))
 }
 
 #[tauri::command]
@@ -24445,6 +24696,23 @@ fn find_u64_field(map: &Map<String, Value>, keys: &[&str]) -> Option<u64> {
     })
 }
 
+fn find_bool_field(map: &Map<String, Value>, keys: &[&str]) -> Option<bool> {
+    keys.iter().find_map(|key| {
+        let value = map.get(*key)?;
+        value.as_bool().or_else(|| {
+            value.as_u64().map(|value| value != 0).or_else(|| {
+                value
+                    .as_str()
+                    .and_then(|value| match value.trim().to_ascii_lowercase().as_str() {
+                        "1" | "true" | "yes" | "tested" | "passed" => Some(true),
+                        "0" | "false" | "no" | "untested" | "failed" => Some(false),
+                        _ => None,
+                    })
+            })
+        })
+    })
+}
+
 fn gdtf_share_modes_from_value(value: Option<&Value>) -> Vec<GdtfShareModeSummary> {
     let Some(Value::Array(modes)) = value else {
         return Vec::new();
@@ -24489,6 +24757,37 @@ fn gdtf_share_fixture_from_map(map: &Map<String, Value>) -> Option<GdtfShareFixt
             .map(ToString::to_string),
         creator: find_string_field(map, &["creator", "author"]).map(ToString::to_string),
         filesize: find_u64_field(map, &["filesize", "fileSize", "size"]),
+        release_status: find_string_field(
+            map,
+            &[
+                "releaseStatus",
+                "release_status",
+                "status",
+                "fileStatus",
+                "file_status",
+            ],
+        )
+        .map(ToString::to_string),
+        tested_in_visualizer: find_bool_field(
+            map,
+            &[
+                "testedInVisualizer",
+                "tested_in_visualizer",
+                "testedInVisualiser",
+                "tested_in_visualiser",
+                "visualizerTested",
+                "visualiserTested",
+            ],
+        ),
+        tested_in_real_life: find_bool_field(
+            map,
+            &[
+                "testedInRealLife",
+                "tested_in_real_life",
+                "realLifeTested",
+                "real_life_tested",
+            ],
+        ),
         modes: gdtf_share_modes_from_value(map.get("modes")),
     })
 }
@@ -24560,12 +24859,80 @@ fn filter_gdtf_share_results(
     manufacturer: &str,
     fixture: &str,
     query: &str,
+    mode: &str,
+    min_footprint: Option<u16>,
+    max_footprint: Option<u16>,
+    release_only: bool,
+    tested_in_visualizer: bool,
+    tested_in_real_life: bool,
     limit: usize,
-) -> Vec<GdtfShareFixtureSummary> {
+) -> GdtfShareSearchResponse {
+    let filter_support = GdtfShareFilterSupport {
+        release_status: fixtures
+            .iter()
+            .any(|fixture| fixture.release_status.is_some()),
+        tested_in_visualizer: fixtures
+            .iter()
+            .any(|fixture| fixture.tested_in_visualizer.is_some()),
+        tested_in_real_life: fixtures
+            .iter()
+            .any(|fixture| fixture.tested_in_real_life.is_some()),
+    };
+    let mut manufacturers = fixtures
+        .iter()
+        .map(|fixture| fixture.manufacturer.clone())
+        .collect::<Vec<_>>();
+    manufacturers.sort_by_key(|value| value.to_ascii_lowercase());
+    manufacturers.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    let mut modes = fixtures
+        .iter()
+        .flat_map(|fixture| fixture.modes.iter().map(|mode| mode.name.clone()))
+        .collect::<Vec<_>>();
+    modes.sort_by_key(|value| value.to_ascii_lowercase());
+    modes.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    let mut versions = fixtures
+        .iter()
+        .filter_map(|fixture| fixture.version.clone())
+        .collect::<Vec<_>>();
+    versions.sort_by_key(|value| value.to_ascii_lowercase());
+    versions.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+
+    let manufacturer = manufacturer.trim().to_ascii_lowercase();
+    let fixture_name = fixture.trim().to_ascii_lowercase();
+    let mode = mode.trim().to_ascii_lowercase();
     fixtures.retain(|candidate| {
-        gdtf_share_filter_matches(candidate, manufacturer)
-            && gdtf_share_filter_matches(candidate, fixture)
+        (manufacturer.is_empty()
+            || candidate
+                .manufacturer
+                .to_ascii_lowercase()
+                .contains(&manufacturer))
+            && (fixture_name.is_empty()
+                || candidate
+                    .fixture
+                    .to_ascii_lowercase()
+                    .contains(&fixture_name))
             && gdtf_share_filter_matches(candidate, query)
+            && (mode.is_empty()
+                || candidate
+                    .modes
+                    .iter()
+                    .any(|candidate_mode| candidate_mode.name.to_ascii_lowercase().contains(&mode)))
+            && (min_footprint.is_none() && max_footprint.is_none()
+                || candidate.modes.iter().any(|candidate_mode| {
+                    candidate_mode.dmx_footprint.is_some_and(|footprint| {
+                        min_footprint.is_none_or(|minimum| footprint >= minimum)
+                            && max_footprint.is_none_or(|maximum| footprint <= maximum)
+                    })
+                }))
+            && (!release_only
+                || candidate.release_status.as_deref().is_some_and(|status| {
+                    matches!(
+                        status.trim().to_ascii_lowercase().as_str(),
+                        "release" | "released"
+                    )
+                }))
+            && (!tested_in_visualizer || candidate.tested_in_visualizer == Some(true))
+            && (!tested_in_real_life || candidate.tested_in_real_life == Some(true))
     });
     fixtures.sort_by(|left, right| {
         left.manufacturer
@@ -24573,8 +24940,18 @@ fn filter_gdtf_share_results(
             .then_with(|| left.fixture.cmp(&right.fixture))
             .then_with(|| left.revision.cmp(&right.revision))
     });
+    let total_matches = fixtures.len();
     fixtures.truncate(limit.clamp(1, 200));
-    fixtures
+    GdtfShareSearchResponse {
+        fixtures,
+        facets: GdtfShareSearchFacets {
+            manufacturers,
+            modes,
+            versions,
+        },
+        filter_support,
+        total_matches,
+    }
 }
 
 fn gdtf_share_download_file_name(request: &GdtfShareDownloadRequest) -> String {
@@ -24591,32 +24968,30 @@ fn gdtf_share_download_file_name(request: &GdtfShareDownloadRequest) -> String {
     format!("{}.gdtf", safe_file_stem(&label))
 }
 
+fn gdtf_share_download_url(request: &GdtfShareDownloadRequest) -> Result<String, String> {
+    let rid = request.rid.ok_or_else(|| {
+        "GDTF Share download requires a revision ID from the public catalog".to_string()
+    })?;
+    Ok(format!(
+        "{}?rid={rid}",
+        gdtf_share_api_url("downloadFile.php")
+    ))
+}
+
 fn download_gdtf_share_file(
     request: &GdtfShareDownloadRequest,
     cookie_path: &Path,
     path: &Path,
 ) -> Result<(), String> {
-    let body = serde_json::to_string(&json!({
-        "rid": request.rid,
-        "id": request.rid,
-        "uuid": request.uuid.as_deref().unwrap_or_default().trim(),
-        "manufacturer": request.manufacturer.trim(),
-        "fixture": request.fixture.trim(),
-        "revision": request.revision.trim(),
-    }))
-    .map_err(|error| error.to_string())?;
-    let url = gdtf_share_api_url("downloadFile.php");
+    let url = gdtf_share_download_url(request)?;
     let args: Vec<&OsStr> = vec![
+        OsStr::new("-L"),
         OsStr::new("--silent"),
         OsStr::new("--show-error"),
         OsStr::new("--max-time"),
         OsStr::new("120"),
-        OsStr::new("-H"),
-        OsStr::new("Content-Type: application/json"),
         OsStr::new("-b"),
         cookie_path.as_os_str(),
-        OsStr::new("--data"),
-        OsStr::new(body.as_str()),
         OsStr::new("-o"),
         path.as_os_str(),
         OsStr::new(url.as_str()),
@@ -24678,6 +25053,438 @@ fn validate_gdtf_share_download_payload(path: &Path) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+fn validate_gdtf_share_download_identity(request: &GdtfShareDownloadRequest) -> Result<(), String> {
+    if request.rid.is_none() {
+        return Err(
+            "GDTF Share result is missing the revision ID required by the public download API"
+                .to_string(),
+        );
+    }
+    if request.manufacturer.trim().is_empty() || request.fixture.trim().is_empty() {
+        return Err("GDTF Share manufacturer and fixture are required".to_string());
+    }
+    Ok(())
+}
+
+fn gdtf_fixture_cache_metadata(request: &GdtfShareDownloadRequest) -> GdtfFixtureCacheMetadata {
+    let identity = request
+        .rid
+        .map(|rid| format!("rid-{rid}"))
+        .or_else(|| {
+            request
+                .uuid
+                .as_deref()
+                .map(str::trim)
+                .filter(|uuid| !uuid.is_empty())
+                .map(|uuid| format!("uuid-{}", safe_file_stem(uuid)))
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+    GdtfFixtureCacheMetadata {
+        version: 1,
+        key: format!(
+            "share:{}:{}:{}:{}",
+            safe_file_stem(request.manufacturer.trim()),
+            safe_file_stem(request.fixture.trim()),
+            safe_file_stem(request.revision.trim()),
+            identity
+        )
+        .to_ascii_lowercase(),
+        rid: request.rid,
+        uuid: request
+            .uuid
+            .as_deref()
+            .map(str::trim)
+            .filter(|uuid| !uuid.is_empty())
+            .map(ToString::to_string),
+        manufacturer: request.manufacturer.trim().to_string(),
+        fixture: request.fixture.trim().to_string(),
+        revision: request.revision.trim().to_string(),
+    }
+}
+
+fn gdtf_fixture_cache_path(directory: &Path, metadata: &GdtfFixtureCacheMetadata) -> PathBuf {
+    let identity = metadata
+        .rid
+        .map(|rid| format!("rid-{rid}"))
+        .or_else(|| {
+            metadata
+                .uuid
+                .as_deref()
+                .map(|uuid| bounded_safe_file_stem(uuid, 24))
+        })
+        .unwrap_or_else(|| "profile".to_string());
+    directory.join(format!(
+        "{}-{}-{}-{}.gdtf",
+        bounded_safe_file_stem(&metadata.manufacturer, 24),
+        bounded_safe_file_stem(&metadata.fixture, 40),
+        bounded_safe_file_stem(&metadata.revision, 24),
+        identity
+    ))
+}
+
+fn bounded_safe_file_stem(value: &str, max_chars: usize) -> String {
+    safe_file_stem(value)
+        .chars()
+        .take(max_chars.max(1))
+        .collect()
+}
+
+fn gdtf_fixture_cache_metadata_path(path: &Path) -> PathBuf {
+    path.with_extension("json")
+}
+
+fn write_gdtf_fixture_cache_metadata(
+    path: &Path,
+    metadata: &GdtfFixtureCacheMetadata,
+) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(metadata).map_err(|error| error.to_string())?;
+    fs::write(gdtf_fixture_cache_metadata_path(path), json)
+        .map_err(|error| format!("Unable to write fixture cache metadata: {error}"))
+}
+
+fn read_gdtf_fixture_cache_metadata(path: &Path) -> Option<GdtfFixtureCacheMetadata> {
+    let json = fs::read_to_string(gdtf_fixture_cache_metadata_path(path)).ok()?;
+    let metadata = serde_json::from_str::<GdtfFixtureCacheMetadata>(&json).ok()?;
+    (metadata.version == 1).then_some(metadata)
+}
+
+fn inspect_gdtf_cache_file(
+    path: &Path,
+    metadata: Option<GdtfFixtureCacheMetadata>,
+) -> Result<GdtfFixtureCacheEntry, String> {
+    let file_metadata = fs::metadata(path).map_err(|error| {
+        format!(
+            "Unable to inspect fixture cache '{}': {error}",
+            path.display()
+        )
+    })?;
+    let fallback_label = path
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .unwrap_or("Cached fixture")
+        .to_string();
+    match gdtf::load_profile(path) {
+        Ok(profile) => {
+            let warnings = profile.warnings.clone();
+            let health = if warnings.is_empty() {
+                "healthy"
+            } else {
+                "warnings"
+            };
+            let detail = if warnings.is_empty() {
+                format!("{} DMX mode(s) parsed", profile.dmx_modes.len())
+            } else {
+                format!("Parsed with {} warning(s)", warnings.len())
+            };
+            let metadata = metadata.unwrap_or_else(|| GdtfFixtureCacheMetadata {
+                version: 1,
+                key: format!("cache:{}", safe_file_stem(&fallback_label)).to_ascii_lowercase(),
+                rid: None,
+                uuid: profile.fixture_type_id.clone(),
+                manufacturer: profile.manufacturer.clone(),
+                fixture: profile.name.clone(),
+                revision: "cached".to_string(),
+            });
+            Ok(GdtfFixtureCacheEntry {
+                key: metadata.key,
+                rid: metadata.rid,
+                uuid: metadata.uuid,
+                manufacturer: if metadata.manufacturer.trim().is_empty() {
+                    profile.manufacturer.clone()
+                } else {
+                    metadata.manufacturer
+                },
+                fixture: if metadata.fixture.trim().is_empty() {
+                    profile.name.clone()
+                } else {
+                    metadata.fixture
+                },
+                revision: metadata.revision,
+                path: path.to_string_lossy().to_string(),
+                filesize: file_metadata.len(),
+                health: health.to_string(),
+                detail,
+                warnings,
+                modes: profile
+                    .dmx_modes
+                    .iter()
+                    .map(|mode| GdtfShareModeSummary {
+                        name: mode.name.clone(),
+                        dmx_footprint: gdtf::dmx_mode_footprint(mode),
+                    })
+                    .collect(),
+            })
+        }
+        Err(error) => {
+            let metadata = metadata.unwrap_or_else(|| GdtfFixtureCacheMetadata {
+                version: 1,
+                key: format!("cache:{}", safe_file_stem(&fallback_label)).to_ascii_lowercase(),
+                rid: None,
+                uuid: None,
+                manufacturer: "Unknown".to_string(),
+                fixture: fallback_label,
+                revision: "cached".to_string(),
+            });
+            Ok(GdtfFixtureCacheEntry {
+                key: metadata.key,
+                rid: metadata.rid,
+                uuid: metadata.uuid,
+                manufacturer: metadata.manufacturer,
+                fixture: metadata.fixture,
+                revision: metadata.revision,
+                path: path.to_string_lossy().to_string(),
+                filesize: file_metadata.len(),
+                health: "invalid".to_string(),
+                detail: error.to_string(),
+                warnings: Vec::new(),
+                modes: Vec::new(),
+            })
+        }
+    }
+}
+
+fn inspect_gdtf_fixture_cache_directory(
+    directory: &Path,
+) -> Result<Vec<GdtfFixtureCacheEntry>, String> {
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(directory).map_err(|error| {
+        format!(
+            "Unable to read fixture cache '{}': {error}",
+            directory.display()
+        )
+    })? {
+        let path = entry.map_err(|error| error.to_string())?.path();
+        if path.is_file() && has_extension(&path, "gdtf") {
+            entries.push(inspect_gdtf_cache_file(
+                &path,
+                read_gdtf_fixture_cache_metadata(&path),
+            )?);
+        }
+    }
+    entries.sort_by(|left, right| {
+        left.manufacturer
+            .cmp(&right.manufacturer)
+            .then_with(|| left.fixture.cmp(&right.fixture))
+            .then_with(|| left.revision.cmp(&right.revision))
+    });
+    Ok(entries)
+}
+
+fn verified_control(
+    attribute: &str,
+    channel_name: &str,
+    offsets: &[u16],
+    resolution: AttributeResolution,
+) -> AttributeControl {
+    AttributeControl {
+        attribute: attribute.to_string(),
+        channel_name: channel_name.to_string(),
+        geometry: None,
+        offsets: offsets.to_vec(),
+        resolution,
+        default_value: 0,
+        functions: Vec::new(),
+    }
+}
+
+fn verified_fixture_profile(
+    id: &str,
+    name: &str,
+    description: &str,
+    controls: Vec<AttributeControl>,
+) -> (VerifiedFixtureProfileSummary, FixtureProfileSummary) {
+    let mode = DmxModeSummary {
+        name: "Standard".to_string(),
+        controls,
+    };
+    let footprint = gdtf::dmx_mode_footprint(&mode).unwrap_or(0);
+    (
+        VerifiedFixtureProfileSummary {
+            id: id.to_string(),
+            manufacturer: "Syndocal Verified".to_string(),
+            name: name.to_string(),
+            mode_name: mode.name.clone(),
+            footprint,
+            description: description.to_string(),
+        },
+        FixtureProfileSummary {
+            source_path: format!("memory://verified/common-rig/{id}/v1"),
+            manufacturer: "Syndocal Verified".to_string(),
+            name: name.to_string(),
+            short_name: None,
+            fixture_type_id: Some(format!("syndocal-verified-{id}-v1")),
+            dmx_modes: vec![mode],
+            geometries: Vec::new(),
+            warnings: Vec::new(),
+        },
+    )
+}
+
+fn verified_fixture_profiles() -> Vec<(VerifiedFixtureProfileSummary, FixtureProfileSummary)> {
+    let mut moving_head_controls = vec![
+        verified_control("Pan", "Pan", &[1, 2], AttributeResolution::SixteenBit),
+        verified_control("Tilt", "Tilt", &[3, 4], AttributeResolution::SixteenBit),
+        verified_control("Dimmer", "Dimmer", &[5], AttributeResolution::EightBit),
+        verified_control("Shutter1", "Shutter", &[6], AttributeResolution::EightBit),
+        verified_control("ColorAdd_R", "Red", &[7], AttributeResolution::EightBit),
+        verified_control("ColorAdd_G", "Green", &[8], AttributeResolution::EightBit),
+        verified_control("ColorAdd_B", "Blue", &[9], AttributeResolution::EightBit),
+        verified_control("ColorAdd_W", "White", &[10], AttributeResolution::EightBit),
+    ];
+    moving_head_controls[3].functions = vec![
+        protocol::ChannelFunctionSummary {
+            name: "Open".to_string(),
+            attribute: "Shutter1".to_string(),
+            parent_function: None,
+            dmx_from: 0,
+            dmx_to: 16_383,
+            physical_from: None,
+            physical_to: None,
+            wheel_slot: None,
+            wheel_slot_name: None,
+            wheel_slot_color: None,
+            wheel_slot_media: None,
+            emitter: None,
+        },
+        protocol::ChannelFunctionSummary {
+            name: "Strobe 1-25 Hz".to_string(),
+            attribute: "Shutter1Strobe".to_string(),
+            parent_function: None,
+            dmx_from: 16_384,
+            dmx_to: u16::MAX,
+            physical_from: Some(1.0),
+            physical_to: Some(25.0),
+            wheel_slot: None,
+            wheel_slot_name: None,
+            wheel_slot_color: None,
+            wheel_slot_media: None,
+            emitter: None,
+        },
+    ];
+    vec![
+        verified_fixture_profile(
+            "dimmer-1ch",
+            "Generic Dimmer 1ch",
+            "Single-channel intensity fixture for dimmer packs and practicals.",
+            vec![verified_control(
+                "Dimmer",
+                "Dimmer",
+                &[1],
+                AttributeResolution::EightBit,
+            )],
+        ),
+        verified_fixture_profile(
+            "rgb-par-4ch",
+            "Generic RGB PAR 4ch",
+            "Dimmer plus additive red, green and blue channels.",
+            vec![
+                verified_control("Dimmer", "Dimmer", &[1], AttributeResolution::EightBit),
+                verified_control("ColorAdd_R", "Red", &[2], AttributeResolution::EightBit),
+                verified_control("ColorAdd_G", "Green", &[3], AttributeResolution::EightBit),
+                verified_control("ColorAdd_B", "Blue", &[4], AttributeResolution::EightBit),
+            ],
+        ),
+        verified_fixture_profile(
+            "rgbw-par-5ch",
+            "Generic RGBW PAR 5ch",
+            "Dimmer plus additive red, green, blue and white channels.",
+            vec![
+                verified_control("Dimmer", "Dimmer", &[1], AttributeResolution::EightBit),
+                verified_control("ColorAdd_R", "Red", &[2], AttributeResolution::EightBit),
+                verified_control("ColorAdd_G", "Green", &[3], AttributeResolution::EightBit),
+                verified_control("ColorAdd_B", "Blue", &[4], AttributeResolution::EightBit),
+                verified_control("ColorAdd_W", "White", &[5], AttributeResolution::EightBit),
+            ],
+        ),
+        verified_fixture_profile(
+            "moving-head-rgbw-10ch",
+            "Generic Moving Head RGBW 10ch",
+            "16-bit pan/tilt, dimmer, calibrated 1-25 Hz strobe and RGBW channels.",
+            moving_head_controls,
+        ),
+    ]
+}
+
+fn fixture_profile_repair_layout_matches(
+    current: &[AttributeControl],
+    replacement: &[AttributeControl],
+) -> bool {
+    current.len() == replacement.len()
+        && current
+            .iter()
+            .zip(replacement)
+            .all(|(current, replacement)| {
+                current.attribute == replacement.attribute
+                    && current.geometry == replacement.geometry
+                    && current.offsets == replacement.offsets
+                    && current.resolution == replacement.resolution
+            })
+}
+
+fn fixture_profile_health_summaries(
+    snapshot: &EngineSnapshot,
+    profiles: &Mutex<HashMap<String, FixtureProfileSummary>>,
+) -> Result<Vec<FixtureProfileHealthSummary>, String> {
+    let cached_paths = profiles
+        .lock()
+        .map_err(|_| "Fixture profile state lock was poisoned".to_string())?
+        .keys()
+        .cloned()
+        .collect::<HashSet<_>>();
+    let mut summaries = snapshot
+        .fixtures
+        .iter()
+        .map(|fixture| {
+            let source_path = fixture.profile_source_path.trim();
+            let (status, detail, repairable) = if source_path.starts_with("memory://")
+                || source_path.starts_with("snapshot://")
+            {
+                (
+                    "embedded".to_string(),
+                    "Profile is embedded in the project or verified local pack".to_string(),
+                    false,
+                )
+            } else {
+                match gdtf::load_profile(source_path) {
+                    Ok(profile) if profile.warnings.is_empty() => (
+                        "healthy".to_string(),
+                        format!("{} DMX mode(s) parsed from disk", profile.dmx_modes.len()),
+                        false,
+                    ),
+                    Ok(profile) => (
+                        "warnings".to_string(),
+                        format!("Disk profile parsed with {} warning(s)", profile.warnings.len()),
+                        false,
+                    ),
+                    Err(error) if cached_paths.contains(source_path) => (
+                        "fallback".to_string(),
+                        format!("Using embedded project fallback; original source is unavailable: {error}"),
+                        true,
+                    ),
+                    Err(error) => (
+                        "missing".to_string(),
+                        format!("Profile source is unavailable and no embedded fallback was found: {error}"),
+                        true,
+                    ),
+                }
+            };
+            FixtureProfileHealthSummary {
+                fixture_id: fixture.id,
+                label: fixture.label.clone(),
+                manufacturer: fixture.manufacturer.clone(),
+                profile_name: fixture.profile_name.clone(),
+                mode_name: fixture.mode_name.clone(),
+                source_path: source_path.to_string(),
+                status,
+                detail,
+                repairable,
+            }
+        })
+        .collect::<Vec<_>>();
+    summaries.sort_by_key(|summary| summary.fixture_id);
+    Ok(summaries)
 }
 
 fn validate_gdtf_download_url(url: &str) -> Result<&str, String> {
@@ -25415,6 +26222,9 @@ mod tests {
                     "revision": "Standard",
                     "version": "1.2",
                     "filesize": 4567,
+                    "releaseStatus": "Release",
+                    "testedInVisualizer": true,
+                    "testedInRealLife": true,
                     "modes": [
                         { "name": "Mode 1", "dmxFootprint": "34" },
                         { "name": "Mode 2", "footprint": 40 }
@@ -25435,9 +26245,79 @@ mod tests {
         assert_eq!(fixtures[0].uuid.as_deref(), Some("abc"));
         assert_eq!(fixtures[0].modes[0].dmx_footprint, Some(34));
 
-        let filtered = filter_gdtf_share_results(fixtures, "Robe", "Mega", "Mode", 10);
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].fixture, "MegaPointe");
+        let filtered = filter_gdtf_share_results(
+            fixtures,
+            "Robe",
+            "Mega",
+            "Mode",
+            "Mode 1",
+            Some(30),
+            Some(36),
+            true,
+            true,
+            true,
+            10,
+        );
+        assert_eq!(filtered.fixtures.len(), 1);
+        assert_eq!(filtered.fixtures[0].fixture, "MegaPointe");
+        assert_eq!(filtered.total_matches, 1);
+        assert_eq!(filtered.facets.manufacturers, vec!["ETC", "Robe"]);
+        assert_eq!(filtered.facets.versions, vec!["1.2"]);
+        assert_eq!(
+            filtered.filter_support,
+            GdtfShareFilterSupport {
+                release_status: true,
+                tested_in_visualizer: true,
+                tested_in_real_life: true,
+            }
+        );
+
+        let official_list_shape = extract_gdtf_share_fixtures(&json!({
+            "result": true,
+            "list": [{
+                "rid": 125,
+                "manufacturer": "ETC",
+                "fixture": "Source Four",
+                "revision": "Classic",
+                "modes": [{ "name": "Dimmer", "dmxfootprint": 1 }]
+            }]
+        }));
+        let all = filter_gdtf_share_results(
+            official_list_shape.clone(),
+            "",
+            "",
+            "",
+            "",
+            None,
+            None,
+            false,
+            false,
+            false,
+            10,
+        );
+        assert_eq!(all.fixtures.len(), 1);
+        assert_eq!(
+            all.filter_support,
+            GdtfShareFilterSupport {
+                release_status: false,
+                tested_in_visualizer: false,
+                tested_in_real_life: false,
+            }
+        );
+        let strict_release = filter_gdtf_share_results(
+            official_list_shape,
+            "",
+            "",
+            "",
+            "",
+            None,
+            None,
+            true,
+            false,
+            false,
+            10,
+        );
+        assert!(strict_release.fixtures.is_empty());
     }
 
     #[test]
@@ -25456,6 +26336,161 @@ mod tests {
             gdtf_share_download_file_name(&request),
             "Robe_Lighting-Mega_Pointe-Mode_Standard.gdtf"
         );
+        assert_eq!(
+            gdtf_share_download_url(&request).unwrap(),
+            "https://gdtf-share.com/apis/public/downloadFile.php?rid=7"
+        );
+    }
+
+    #[test]
+    fn fixture_cache_metadata_is_stable_and_never_contains_credentials() {
+        let request = GdtfShareDownloadRequest {
+            user: "operator@example.com".to_string(),
+            password: "do-not-persist".to_string(),
+            rid: Some(77),
+            uuid: Some("fixture-uuid".to_string()),
+            manufacturer: "Robe".to_string(),
+            fixture: "MegaPointe".to_string(),
+            revision: "Release 1".to_string(),
+        };
+        let metadata = gdtf_fixture_cache_metadata(&request);
+        let json = serde_json::to_string(&metadata).unwrap();
+
+        assert!(metadata.key.contains("rid-77"));
+        assert!(!json.contains("operator@example.com"));
+        assert!(!json.contains("do-not-persist"));
+        assert!(!json.contains("password"));
+        assert_eq!(
+            gdtf_fixture_cache_path(Path::new("C:/cache"), &metadata)
+                .file_name()
+                .and_then(OsStr::to_str),
+            Some("Robe-MegaPointe-Release_1-rid-77.gdtf")
+        );
+    }
+
+    #[test]
+    fn verified_common_rig_pack_has_fixed_non_overlapping_layouts_and_calibrated_strobe() {
+        let profiles = verified_fixture_profiles();
+        assert_eq!(profiles.len(), 4);
+        assert_eq!(
+            profiles
+                .iter()
+                .map(|(summary, _)| summary.footprint)
+                .collect::<Vec<_>>(),
+            vec![1, 4, 5, 10]
+        );
+        for (summary, profile) in &profiles {
+            assert_eq!(profile.dmx_modes.len(), 1);
+            assert_eq!(
+                gdtf::dmx_mode_footprint(&profile.dmx_modes[0]),
+                Some(summary.footprint)
+            );
+            let mut offsets = profile.dmx_modes[0]
+                .controls
+                .iter()
+                .flat_map(|control| control.offsets.iter().copied())
+                .collect::<Vec<_>>();
+            offsets.sort_unstable();
+            offsets.dedup();
+            assert_eq!(offsets.len(), summary.footprint as usize);
+        }
+        let moving_head = &profiles[3].1.dmx_modes[0];
+        let shutter = moving_head
+            .controls
+            .iter()
+            .find(|control| control.attribute == "Shutter1")
+            .unwrap();
+        assert!(shutter.functions.iter().any(|function| {
+            function.attribute == "Shutter1Strobe"
+                && function.physical_from == Some(1.0)
+                && function.physical_to == Some(25.0)
+        }));
+    }
+
+    #[test]
+    fn fixture_cache_health_and_project_fallback_are_explicit() {
+        let directory = unique_test_directory("fixture-cache-health");
+        fs::create_dir_all(&directory).unwrap();
+        let invalid_path = directory.join("broken.gdtf");
+        fs::write(&invalid_path, b"not a zip archive").unwrap();
+
+        let valid_path = directory.join("Syndocal-Test-Dimmer.gdtf");
+        let mut archive = zip::ZipWriter::new(fs::File::create(&valid_path).unwrap());
+        archive
+            .start_file("description.xml", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive
+            .write_all(
+                br#"<GDTF><FixtureType Name="Test Dimmer" Manufacturer="Syndocal"><DMXModes><DMXMode Name="Standard"><DMXChannels><DMXChannel Name="Dimmer" Offset="1"><LogicalChannel Attribute="Dimmer"><ChannelFunction Name="Dimmer" Attribute="Dimmer" DMXFrom="0/1" /></LogicalChannel></DMXChannel></DMXChannels></DMXMode></DMXModes></FixtureType></GDTF>"#,
+            )
+            .unwrap();
+        archive.finish().unwrap();
+        let valid_metadata = GdtfFixtureCacheMetadata {
+            version: 1,
+            key: "share:syndocal:test-dimmer:release:rid-1".to_string(),
+            rid: Some(1),
+            uuid: None,
+            manufacturer: "Syndocal".to_string(),
+            fixture: "Test Dimmer".to_string(),
+            revision: "Release".to_string(),
+        };
+        write_gdtf_fixture_cache_metadata(&valid_path, &valid_metadata).unwrap();
+
+        let cache_entries = inspect_gdtf_fixture_cache_directory(&directory).unwrap();
+        assert_eq!(cache_entries.len(), 2);
+        let invalid = cache_entries
+            .iter()
+            .find(|entry| entry.path.ends_with("broken.gdtf"))
+            .unwrap();
+        assert_eq!(invalid.health, "invalid");
+        let valid = cache_entries
+            .iter()
+            .find(|entry| entry.rid == Some(1))
+            .unwrap();
+        assert_ne!(valid.health, "invalid");
+        assert_eq!(valid.manufacturer, "Syndocal");
+        assert_eq!(valid.modes[0].dmx_footprint, Some(1));
+
+        let missing_path = directory.join("missing.gdtf").to_string_lossy().to_string();
+        let mut fixture = project_fixture(1, "Fixture 1", 0, 1);
+        fixture.profile_source_path = missing_path.clone();
+        let mut profile = project_custom_profile();
+        profile.source_path = missing_path.clone();
+        let profiles = Mutex::new(HashMap::from([(missing_path, profile)]));
+        let health = fixture_profile_health_summaries(
+            &EngineSnapshot {
+                fixtures: vec![fixture],
+                ..EngineSnapshot::default()
+            },
+            &profiles,
+        )
+        .unwrap();
+        assert_eq!(health[0].status, "fallback");
+        assert!(health[0].repairable);
+        assert!(health[0].detail.contains("embedded project fallback"));
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn fixture_profile_repair_layout_requires_exact_attribute_geometry_offset_and_resolution() {
+        let fixture = project_fixture(1, "Fixture 1", 0, 1);
+        assert!(fixture_profile_repair_layout_matches(
+            &fixture.controls,
+            &fixture.controls
+        ));
+        let mut wrong = fixture.controls.clone();
+        wrong[0].offsets = vec![4];
+        assert!(!fixture_profile_repair_layout_matches(
+            &fixture.controls,
+            &wrong
+        ));
+        wrong = fixture.controls.clone();
+        wrong[0].attribute = "Intensity".to_string();
+        assert!(!fixture_profile_repair_layout_matches(
+            &fixture.controls,
+            &wrong
+        ));
     }
 
     #[test]
@@ -39045,6 +40080,7 @@ fn main() {
             }
             let directory = app_data_subdirectory(app.handle(), CRASH_REPORT_DIRECTORY)?;
             app_data_subdirectory(app.handle(), PROJECT_BACKUP_DIRECTORY)?;
+            app_data_subdirectory(app.handle(), FIXTURE_PROFILE_CACHE_DIRECTORY)?;
             if let Ok(mut configured_directory) = crash_directory.lock() {
                 *configured_directory = Some(directory);
             }
@@ -39134,6 +40170,12 @@ fn main() {
             download_gdtf_from_url,
             search_gdtf_share,
             download_gdtf_from_share,
+            list_gdtf_fixture_cache,
+            cache_gdtf_from_share,
+            get_fixture_profile_health,
+            list_verified_fixture_profiles,
+            load_verified_fixture_profile,
+            repair_fixture_profile,
             create_custom_fixture_profile,
             save_custom_fixture_profile,
             load_custom_fixture_profile,

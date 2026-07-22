@@ -19833,7 +19833,7 @@ h3 {
 
 .layoutSetup.setupMode-library > .setupPanel {
   display: grid;
-  grid-template-columns: minmax(250px, 310px) minmax(0, 1fr);
+  grid-template-columns: minmax(220px, 280px) minmax(440px, 1.2fr) minmax(280px, 0.8fr);
   grid-template-rows: minmax(0, 1fr);
   gap: 5px;
   min-width: 0;
@@ -19895,6 +19895,336 @@ h3 {
   color: #d8d0c9;
   font-size: 11px;
   text-transform: uppercase;
+}
+
+.fixtureCatalogPanel {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid #39342f;
+  padding: 0 6px 10px 1px;
+  overflow: hidden auto;
+}
+
+.fixtureCatalogHeader,
+.fixtureCatalogSection > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.fixtureCatalogHeader {
+  min-height: 32px;
+  border-bottom: 1px solid #39342f;
+  padding-bottom: 5px;
+}
+
+.fixtureCatalogHeader > div:first-child {
+  display: grid;
+}
+
+.fixtureCatalogHeader h3 {
+  margin: 0;
+  color: #f4eee8;
+  font-size: 14px;
+}
+
+.fixtureCatalogHeader span,
+.fixtureCatalogSection > header span {
+  color: #988f87;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.fixtureCatalogHealthSummary,
+.fixtureCatalogFilterRow,
+.fixtureCatalogBadges,
+.fixtureRepairBar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.fixtureCatalogHealthSummary > span,
+.fixtureCatalogBadges i,
+.healthBadge {
+  border: 1px solid #514a43;
+  border-radius: 999px;
+  padding: 2px 6px;
+  color: #c6bdb5;
+  font-size: 9px;
+  font-style: normal;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.fixtureCatalogHealthSummary .healthy,
+.fixtureCatalogBadges .healthy,
+.healthBadge.healthy,
+.healthBadge.embedded {
+  border-color: #35664c;
+  color: #9fe2ba;
+}
+
+.fixtureCatalogHealthSummary .warning,
+.healthBadge.warnings,
+.healthBadge.fallback {
+  border-color: #816a31;
+  color: #f0d77f;
+}
+
+.healthBadge.invalid,
+.healthBadge.missing {
+  border-color: #83423d;
+  color: #f2a49b;
+}
+
+.fixtureCatalogCredentials,
+.fixtureCatalogFacets {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+  min-width: 0;
+}
+
+.fixtureCatalogCredentials small {
+  grid-column: 1 / -1;
+  color: #9d948c;
+  font-size: 10px;
+}
+
+.fixtureCatalogFacets {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.fixtureCatalogCredentials label,
+.fixtureCatalogFacets label {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  color: #a69d95;
+  font-size: 10px;
+}
+
+.fixtureCatalogCredentials input,
+.fixtureCatalogFacets input,
+.fixtureCatalogFacets select {
+  width: 100%;
+  min-width: 0;
+}
+
+.fixtureCatalogFilterRow {
+  flex-wrap: wrap;
+  min-height: 30px;
+}
+
+.fixtureCatalogFilterRow label {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  color: #c6bdb5;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.fixtureCatalogFilterRow button {
+  margin-left: auto;
+}
+
+.fixtureCatalogCapabilityNote {
+  border-left: 2px solid #816a31;
+  padding: 3px 6px;
+  color: #f0d77f;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.fixtureCatalogColumns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.fixtureCatalogSection {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  border: 1px solid #39342f;
+  border-radius: 3px;
+  background: #181715;
+  padding: 6px;
+}
+
+.fixtureCatalogSection > header {
+  min-height: 21px;
+  border-bottom: 1px solid #302c28;
+  padding-bottom: 4px;
+}
+
+.fixtureCatalogSection > header strong {
+  color: #e8e1db;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.fixtureCatalogSection > p {
+  margin: 0;
+  color: #9d948c;
+  font-size: 10px;
+}
+
+.fixtureCatalogList {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-height: 76px;
+  max-height: 205px;
+  overflow: hidden auto;
+}
+
+.fixtureCatalogCard {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 5px;
+  min-width: 0;
+  border: 1px solid #302c28;
+  border-left: 2px solid #514a43;
+  border-radius: 2px;
+  background: #141311;
+  padding: 5px;
+}
+
+.fixtureCatalogCard.health-healthy {
+  border-left-color: #4c966d;
+}
+
+.fixtureCatalogCard.health-warnings {
+  border-left-color: #b89643;
+}
+
+.fixtureCatalogCard.health-invalid {
+  border-left-color: #a9554e;
+}
+
+.fixtureCatalogCard > strong,
+.fixtureCatalogCard > span,
+.fixtureCatalogCard > small,
+.fixtureCatalogCard > .fixtureCatalogBadges {
+  grid-column: 1;
+  min-width: 0;
+}
+
+.fixtureCatalogCard > strong {
+  overflow: hidden;
+  color: #eee8e2;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fixtureCatalogCard > span,
+.fixtureCatalogCard > small {
+  overflow: hidden;
+  color: #9d948c;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fixtureCatalogCard > button:last-child {
+  grid-column: 2;
+  grid-row: 2 / span 3;
+  align-self: center;
+  min-height: 32px;
+  padding: 0 7px;
+}
+
+.fixtureCatalogFavorite {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  min-width: 26px;
+  min-height: 24px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: #f2c14e;
+  font-size: 16px;
+}
+
+.fixtureVerifiedGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  min-width: 0;
+}
+
+.fixtureProjectHealthList {
+  display: grid;
+  gap: 3px;
+  max-height: 135px;
+  overflow: hidden auto;
+}
+
+.fixtureProjectHealthList article {
+  display: grid;
+  grid-template-columns: auto minmax(90px, auto) minmax(140px, 1fr);
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  border: 1px solid transparent;
+  padding: 3px;
+}
+
+.fixtureProjectHealthList article.selected {
+  border-color: #8e8175;
+  background: #211e1b;
+}
+
+.fixtureProjectHealthList strong,
+.fixtureProjectHealthList small,
+.fixtureProjectHealthList article > span:last-child {
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fixtureProjectHealthList strong {
+  color: #eee8e2;
+}
+
+.fixtureProjectHealthList small,
+.fixtureProjectHealthList article > span:last-child {
+  color: #9d948c;
+}
+
+.fixtureRepairBar {
+  justify-content: space-between;
+  border-top: 1px solid #39342f;
+  padding-top: 5px;
+}
+
+.fixtureRepairBar span {
+  color: #d6c584;
+  font-size: 10px;
+}
+
+@media (max-width: 1500px) {
+  .layoutSetup.setupMode-library > .setupPanel {
+    grid-template-columns: minmax(190px, 230px) minmax(430px, 1fr) minmax(245px, 0.7fr);
+  }
+
+  .fixtureCatalogFacets {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 .loadedProfileSummaryPanel {
