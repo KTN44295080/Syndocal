@@ -664,6 +664,41 @@ const fxVisualizationValue: EffectSummary = {
   },
 };
 
+const fxVisualizationCurve: EffectSummary = {
+  ...cueRecallEffect,
+  id: 406,
+  label: "T19 Cubic Curve",
+  effect_type: "Curve",
+  fixture_ids: [1, 2],
+  target_group_ids: ["front"],
+  video_targets: [],
+  period_ms: 2_200,
+  clock_sync: { beats: 2 },
+  low: 3_000,
+  high: 62_000,
+  phase: 0.15,
+  curve: {
+    label: "T19 Cubic Curve",
+    fixture_ids: [1, 2],
+    target_group_ids: ["front"],
+    attribute: "Dimmer",
+    points: [
+      { position: 0, value: 0.08, in_tangent: 0, out_tangent: 2.4 },
+      { position: 0.42, value: 0.92, in_tangent: 0.2, out_tangent: -0.8 },
+      { position: 1, value: 0.22, in_tangent: -1.6, out_tangent: 0 },
+    ],
+    mode: "Absolute",
+    direction: "Forward",
+    period_ms: 2_200,
+    clock_sync: { beats: 2 },
+    low: 3_000,
+    high: 62_000,
+    phase: 0.15,
+    fixture_spread: 0.3,
+    blend_mode: "Override",
+  },
+};
+
 const fxVisualizationChaser: EffectSummary = {
   ...cueRecallEffect,
   id: 405,
@@ -706,6 +741,7 @@ const fxVisualizationEffects: EffectSummary[] = [
   fxVisualizationColor,
   fxVisualizationMove,
   fxVisualizationValue,
+  fxVisualizationCurve,
   fxVisualizationChaser,
 ];
 
@@ -795,6 +831,7 @@ const fxVisualizationCue: CueSummary = {
     { effect_id: fxVisualizationColor.id, enabled: true, params: { Color: structuredClone(fxVisualizationColor.color!) } },
     { effect_id: fxVisualizationMove.id, enabled: true, params: { Move: structuredClone(fxVisualizationMove.move_effect!) } },
     { effect_id: fxVisualizationValue.id, enabled: true, params: { Value: structuredClone(fxVisualizationValue.value!) } },
+    { effect_id: fxVisualizationCurve.id, enabled: true, params: { Curve: structuredClone(fxVisualizationCurve.curve!) } },
     { effect_id: fxVisualizationChaser.id, enabled: true, params: { Chaser: structuredClone(fxVisualizationChaser.chaser!) } },
   ],
 };

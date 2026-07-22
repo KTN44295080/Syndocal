@@ -2257,6 +2257,18 @@ pub struct ValueEffectPoint {
     pub value: f32,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct CurveEffectPoint {
+    /// Normalized channel position in 0..1, strictly increasing.
+    pub position: f32,
+    /// Normalized channel value in 0..1.
+    pub value: f32,
+    /// Incoming dy/dx tangent used by the cubic segment ending at this point.
+    pub in_tangent: f32,
+    /// Outgoing dy/dx tangent used by the cubic segment starting at this point.
+    pub out_tangent: f32,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ValueEffectInterpolation {
     /// Hold the left point's value until the next point.
@@ -2306,6 +2318,27 @@ pub struct ValueEffectRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CurveEffectRequest {
+    pub label: String,
+    pub fixture_ids: Vec<FixtureId>,
+    pub target_group_ids: Vec<String>,
+    pub attribute: String,
+    /// Editable cubic channel-function points, 2..32, strictly increasing.
+    pub points: Vec<CurveEffectPoint>,
+    pub mode: ValueEffectMode,
+    pub direction: ValueEffectDirection,
+    /// Free-running duration of one curve pass. Ignored while clock-synced.
+    pub period_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_sync: Option<EffectClockSync>,
+    pub low: u16,
+    pub high: u16,
+    pub phase: f32,
+    pub fixture_spread: f32,
+    pub blend_mode: EffectBlendMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum EffectParamsSnapshot {
     Lfo(LfoEffectRequest),
     PositionWave(PositionWaveEffectRequest),
@@ -2313,6 +2346,7 @@ pub enum EffectParamsSnapshot {
     Chaser(ChaserEffectRequest),
     Move(MoveEffectRequest),
     Value(ValueEffectRequest),
+    Curve(CurveEffectRequest),
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -2323,6 +2357,7 @@ pub enum EffectKind {
     Chaser,
     Move,
     Value,
+    Curve,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -2355,6 +2390,8 @@ pub struct EffectSummary {
     pub move_effect: Option<MoveEffectRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<ValueEffectRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curve: Option<CurveEffectRequest>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -2372,6 +2409,8 @@ pub struct EffectPreset {
     pub move_effect: Option<MoveEffectRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<ValueEffectRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curve: Option<CurveEffectRequest>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -3881,6 +3920,62 @@ mod tests {
         assert!(parsed.color.is_none());
         assert!(parsed.chaser.is_none());
         assert!(parsed.move_effect.is_none());
+        assert!(parsed.value.is_none());
+        assert!(parsed.curve.is_none());
+        assert!(!serde_json::to_string(&parsed)
+            .unwrap()
+            .contains("\"curve\""));
+    }
+
+    #[test]
+    fn curve_effect_request_and_preset_roundtrip_independent_body() {
+        let request = super::CurveEffectRequest {
+            label: "Dimmer channel curve".to_string(),
+            fixture_ids: vec![1, 2],
+            target_group_ids: vec!["Front".to_string()],
+            attribute: "Dimmer".to_string(),
+            points: vec![
+                super::CurveEffectPoint {
+                    position: 0.0,
+                    value: 0.0,
+                    in_tangent: 0.0,
+                    out_tangent: 1.5,
+                },
+                super::CurveEffectPoint {
+                    position: 1.0,
+                    value: 1.0,
+                    in_tangent: 0.25,
+                    out_tangent: 0.0,
+                },
+            ],
+            mode: super::ValueEffectMode::Absolute,
+            direction: super::ValueEffectDirection::Forward,
+            period_ms: 2_000,
+            clock_sync: Some(super::EffectClockSync { beats: 4.0 }),
+            low: 1_000,
+            high: 60_000,
+            phase: 0.125,
+            fixture_spread: 0.5,
+            blend_mode: super::EffectBlendMode::Override,
+        };
+        let preset = super::EffectPreset {
+            version: 1,
+            effect_type: super::EffectKind::Curve,
+            enabled: true,
+            lfo: None,
+            position_wave: None,
+            color: None,
+            chaser: None,
+            move_effect: None,
+            value: None,
+            curve: Some(request),
+        };
+
+        let json = serde_json::to_string(&preset).unwrap();
+        assert!(json.contains("\"effect_type\":\"Curve\""));
+        assert!(json.contains("\"in_tangent\":0.25"));
+        let parsed: super::EffectPreset = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, preset);
     }
 
     #[test]
@@ -3926,6 +4021,7 @@ mod tests {
             chaser: None,
             move_effect: None,
             value: None,
+            curve: None,
         };
 
         let json = serde_json::to_string(&preset).unwrap();
@@ -4026,6 +4122,7 @@ mod tests {
             chaser: Some(request),
             move_effect: None,
             value: None,
+            curve: None,
         };
 
         let json = serde_json::to_string(&preset).unwrap();
@@ -4071,6 +4168,7 @@ mod tests {
             chaser: None,
             move_effect: Some(request),
             value: None,
+            curve: None,
         };
 
         let json = serde_json::to_string(&preset).unwrap();

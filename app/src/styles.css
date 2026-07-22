@@ -4811,6 +4811,11 @@ progress {
   color: #bce5af;
 }
 
+.effectMetaChip.curve {
+  border-color: #745d35;
+  color: #f0cb83;
+}
+
 .effectListRows .effectGraphicalPreview {
   width: 100%;
 }
@@ -24295,6 +24300,22 @@ h3 {
 
 .valueEffectPointPanel .moveEffectPointRow {
   grid-template-columns: minmax(64px, 0.8fr) repeat(2, minmax(58px, 1fr)) 29px;
+}
+
+.curveEffectEditor .valueEffectCanvas {
+  min-height: 168px;
+}
+
+.curveEffectPointRow {
+  grid-template-columns: minmax(62px, 0.85fr) repeat(4, minmax(66px, 1fr)) 34px;
+}
+
+.curveEffectPointRow label {
+  min-width: 0;
+}
+
+.curveEffectPointRow input {
+  width: 100%;
 }
 
 @container move-effect-editor (max-width: 860px) {

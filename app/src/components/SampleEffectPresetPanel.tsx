@@ -32,7 +32,7 @@ interface SampleEffectPresetOption {
   value: SampleEffectPreset;
   label: string;
   family: EffectRecipeFamily;
-  engine: "LFO" | "Wave" | "Color" | "Chaser" | "Move";
+  engine: "LFO" | "Wave" | "Color" | "Chaser" | "Move" | "Curve";
   target: string;
   description: string;
   supportsTarget: boolean;
@@ -100,7 +100,7 @@ export const sampleEffectPresetOptions: SampleEffectPresetOption[] = [
   {
     value: "perlin",
     label: "Perlin",
-    family: "CURVE FX",
+    family: "VALUE FX",
     engine: "LFO",
     target: "Dimmer",
     description: "Smooth noise modulation for organic brightness movement.",
@@ -148,9 +148,9 @@ export const sampleEffectPresetOptions: SampleEffectPresetOption[] = [
     value: "curve",
     label: "Curve Saw",
     family: "CURVE FX",
-    engine: "LFO",
+    engine: "Curve",
     target: "Any value",
-    description: "Beat-synced saw curve for ramps, wheels and continuous channels.",
+    description: "Editable cubic channel function with independent in/out tangents.",
     supportsTarget: true,
   },
   {

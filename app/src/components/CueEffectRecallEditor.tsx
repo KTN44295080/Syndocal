@@ -21,7 +21,9 @@ interface CueEffectRecallEditorProps {
   onChange: (targets: CueEffectTarget[], change: CueEffectRecallChange) => void;
 }
 
-const effectKindLabel = (effectKind: EffectKind) => {
+const effectKindLabel = (effect: Pick<EffectSummary, "effect_type">) => {
+  if (effect.effect_type === "Chaser") return "Chaser";
+  const effectKind = effect.effect_type;
   if (effectKind === "PositionWave") return "Position Wave";
   if (effectKind === "Lfo") return "LFO";
   return effectKind;
@@ -33,7 +35,8 @@ const effectParamsDescriptor = (params: EffectParamsSnapshot): { kind: EffectKin
   if ("Color" in params) return { kind: "Color", label: params.Color.label };
   if ("Chaser" in params) return { kind: "Chaser", label: params.Chaser.label };
   if ("Move" in params) return { kind: "Move", label: params.Move.label };
-  return { kind: "Value", label: params.Value.label };
+  if ("Value" in params) return { kind: "Value", label: params.Value.label };
+  return { kind: "Curve", label: params.Curve.label };
 };
 
 interface CueEffectRecallRowModel {
@@ -72,7 +75,7 @@ export function CueEffectRecallEditor(props: CueEffectRecallEditorProps) {
     return rows().filter((row) =>
       row.label.toLocaleLowerCase().includes(query)
       || String(row.id).includes(query)
-      || effectKindLabel(row.kind).toLocaleLowerCase().includes(query)
+      || effectKindLabel({ effect_type: row.kind }).toLocaleLowerCase().includes(query)
     );
   });
   const pageCount = createMemo(() => Math.max(1, Math.ceil(matchingRows().length / effectRowsPerPage)));
@@ -191,7 +194,7 @@ export function CueEffectRecallEditor(props: CueEffectRecallEditorProps) {
                           <span>
                             <b data-no-localize>{row.label}</b>
                             <small class="cueEffectRecallMeta tabularNums">
-                              <span class="cueEffectRecallMetaText">#{row.id} · {effectKindLabel(row.kind)}</span>
+                              <span class="cueEffectRecallMetaText">#{row.id} · {effectKindLabel({ effect_type: row.kind })}</span>
                               <Show when={target()?.params != null}>
                                 <span class="cueEffectParamsChip">Owns params</span>
                               </Show>

@@ -25,7 +25,7 @@
 
 - Scene Matrix主体のControl、統一workspace shell、内部スクロールと可変splitter
 - source-linked Scene Block、layer、loop/jump、Super Scene child timeline、tempo conform
-- independent Colour / Chaser / Move / Value runtimeとeditor
+- independent Colour / Chaser / Move / Value / Curve runtimeとeditor
 - cue-owned FX params、selective Effect Recall、Effects Only
 - editable project-saved Touch surfaceとLAN remote反映
 - Scene Live speed / size / phase latch、flash momentary
@@ -43,7 +43,6 @@
 
 ### P1 FX
 
-- CurveはLFO aliasで、editable Bezier/channel-function runtimeではない。
 - Mappings / Colour MappingsはPositionWave/Colorのrecipe分類で、fixture-order/image-drivenの独立runtimeではない。
 - Cue所有paramsはactivation時のcopyであり、Cue間parameter morph/fadeは無い。
 - calibrated Amber/Lime/UV/multi-emitter colour outputは未対応。
@@ -86,6 +85,8 @@
 - T19-E: calibrated multi-emitter policy（profile metadataが無い場合は推測せずfail-closed）
 
 受入: additive serde defaults、legacy `.sdc` byte-shape、project/preset round-trip、200 fixtures x 64 effects regression、release 44 Hz mixed benchmark、physical acceptance分離。
+
+進捗（2026-07-23）: **T19-A完了**。`EffectKind::Curve`、独立`CurveEffectRequest`、2〜32点のCubic Hermite channel function（各点のin/out tangent）、command-time compile、独立runtime/editor/preset/Cue-owned paramsを追加した。旧project/presetは`curve`を出力せずbyte-shapeを維持。protocol 36、engine 378、Tauri 322、5解像度FX viewport、2635/2635 localization、frontend buildがgreen。Curveを含む64 FX×200灯体release hot-pathはp95 2.778ms / p99 3.400ms / max 4.056ms。T19-B〜Eは未完。
 
 ### T20: Complete Scene Live
 

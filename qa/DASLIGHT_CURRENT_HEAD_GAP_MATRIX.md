@@ -15,7 +15,7 @@
 | Scene trigger / Live speed / reset | すべて1 gesture、DOM runtime truthまで検証 | 未計測 | 未計測 | Daslight同一開始状態を実測 |
 | Touch live / flash / Edit / control追加 | 各1 gesture、flashはdown/up、追加は件数増加を検証 | 未計測 | 未計測 | Daslight remote/touch面を同一タスク実測 |
 | FX family / recipe選択 | 各1 click、active familyとrecipe選択を検証 | 未計測 | 未計測 | 作成、target適用、Cue保存まで比較を拡張 |
-| Independent FX | Color / Chaser / Move / Valueは独立body/runtime/editor。Curveと2種Mappingsは既存runtimeのrecipe分類 | Daslightは独立generator群 | 劣 | T19でCurve / Mapping / Colour Mappingを独立化 |
+| Independent FX | Color / Chaser / Move / Value / Curveは独立body/runtime/editor。2種Mappingsは既存runtimeのrecipe分類 | Daslightは独立generator群 | 劣 | T19-B/CでMapping / Colour Mappingを独立化 |
 | Cue FX parameter transition | Cue所有paramsとselective recallあり、Cue間morphなし | あり | 劣 | T19-D |
 | Scene Live | speed / size / phase latch、Matrix/Touch flash | direction / segment / strobe / soloを含む | 劣 | T20 |
 | Fixture onboarding | GDTF import/cache、Share検索/download、custom builder | 商用統合catalogと復旧UXあり | 劣 | T21でfavorites/offline/health/repair/common pack |

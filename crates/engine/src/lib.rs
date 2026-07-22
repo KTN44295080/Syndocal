@@ -31,27 +31,27 @@ use protocol::{
     ColorEffectInterpolation, ColorEffectRequest, ColorEffectSpatialRecipe, CompositionId,
     CompositionSummary, CueEffectTarget, CueFixtureTarget, CueId, CueIfcbTiming, CueListId,
     CueListSummary, CueLiveModifierSettings, CueLiveModifierState, CueNodeGraphTarget,
-    CuePaletteTarget, CuePartSummary, CueStepSummary, CueSummary, DmxMergeMode, DmxModeSummary,
-    DmxOutputConfig, DmxOutputProtocol, DmxOutputRouteTelemetry, DmxUniversePreview,
-    EffectBlendMode, EffectClockSync, EffectId, EffectKind, EffectParamsSnapshot, EffectSummary,
-    EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId, FixtureId,
-    FixtureLimits, FixtureProfileSummary, LfoEffectRequest, LfoShape, LiveAudioFrame,
-    LiveAudioReactiveFeatures, MoveCoordinateMode, MoveDirection, MoveEffectRequest, MovePathPoint,
-    NodeGraphAudioRuntimeStatus, NodeGraphId, NodeGraphNodeKind, NodeGraphNodeSummary,
-    NodeGraphSummary, NodeGraphTransformOp, PaletteId, PatchFixtureRequest, PatchedFixtureSummary,
-    PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot, ProgrammerValueSummary,
-    RecallMode, ReferencePaletteSummary, Rotation3, StageMapConfig, StageMapPresetSummary,
-    StageObjectId, StageObjectSummary, SubmasterSummary, TimelineAudioClipId,
-    TimelineAudioClipSummary, TimelineAutomationSummary, TimelineCueEventSummary, TimelineEventId,
-    TimelineLayerKind, TimelineLayerSummary, TimelineSnapRequest, TimelineSnapshot,
-    TimelineTrackKind, TimelineVideoAutomationSummary, TouchSurfaceSummary, Transform2D,
-    ValueEffectDirection, ValueEffectInterpolation, ValueEffectMode, ValueEffectPoint,
-    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBlendMode, VideoColorAdjust,
-    VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust, VideoIsfControlKind,
-    VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId, VideoLayerState,
-    VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
-    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
-    VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
+    CuePaletteTarget, CuePartSummary, CueStepSummary, CueSummary, CurveEffectPoint,
+    CurveEffectRequest, DmxMergeMode, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol,
+    DmxOutputRouteTelemetry, DmxUniversePreview, EffectBlendMode, EffectClockSync, EffectId,
+    EffectKind, EffectParamsSnapshot, EffectSummary, EngineSnapshot, EngineTelemetry,
+    ExclusiveVideoTakeRequest, ExecutorId, FixtureId, FixtureLimits, FixtureProfileSummary,
+    LfoEffectRequest, LfoShape, LiveAudioFrame, LiveAudioReactiveFeatures, MoveCoordinateMode,
+    MoveDirection, MoveEffectRequest, MovePathPoint, NodeGraphAudioRuntimeStatus, NodeGraphId,
+    NodeGraphNodeKind, NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId,
+    PatchFixtureRequest, PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest,
+    ProgrammerSnapshot, ProgrammerValueSummary, RecallMode, ReferencePaletteSummary, Rotation3,
+    StageMapConfig, StageMapPresetSummary, StageObjectId, StageObjectSummary, SubmasterSummary,
+    TimelineAudioClipId, TimelineAudioClipSummary, TimelineAutomationSummary,
+    TimelineCueEventSummary, TimelineEventId, TimelineLayerKind, TimelineLayerSummary,
+    TimelineSnapRequest, TimelineSnapshot, TimelineTrackKind, TimelineVideoAutomationSummary,
+    TouchSurfaceSummary, Transform2D, ValueEffectDirection, ValueEffectInterpolation,
+    ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
+    VideoBlendMode, VideoColorAdjust, VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust,
+    VideoIsfControlKind, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId,
+    VideoLayerState, VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind,
+    VideoOutputMapping, VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget,
+    VideoParam, VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
     LIVE_AUDIO_FEATURE_BAND_CAPACITY, MAX_CUE_AUTHORED_BEATS, MAX_TIMELINE_SCENE_BLOCK_LOOPS,
     MIN_CUE_AUTHORED_BEATS,
 };
@@ -364,6 +364,13 @@ pub enum EngineCommand {
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
+    AddCurveEffect {
+        effect_id: EffectId,
+        request: CurveEffectRequest,
+        enabled: bool,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     UpdateLfoEffect {
         effect_id: EffectId,
         request: LfoEffectRequest,
@@ -393,6 +400,12 @@ pub enum EngineCommand {
     UpdateValueEffect {
         effect_id: EffectId,
         request: ValueEffectRequest,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    UpdateCurveEffect {
+        effect_id: EffectId,
+        request: CurveEffectRequest,
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
@@ -1059,11 +1072,15 @@ impl EngineCommand {
                 | EngineCommand::AddColorEffect { .. }
                 | EngineCommand::AddChaserEffect { .. }
                 | EngineCommand::AddMoveEffect { .. }
+                | EngineCommand::AddValueEffect { .. }
+                | EngineCommand::AddCurveEffect { .. }
                 | EngineCommand::UpdateLfoEffect { .. }
                 | EngineCommand::UpdatePositionWaveEffect { .. }
                 | EngineCommand::UpdateColorEffect { .. }
                 | EngineCommand::UpdateChaserEffect { .. }
                 | EngineCommand::UpdateMoveEffect { .. }
+                | EngineCommand::UpdateValueEffect { .. }
+                | EngineCommand::UpdateCurveEffect { .. }
                 | EngineCommand::SetEffectEnabled { .. }
                 | EngineCommand::SetEffectEnabledPublished { .. }
                 | EngineCommand::SetEffectVideoTargetPosition { .. }
@@ -1664,6 +1681,44 @@ impl EngineHandle {
         receiver
             .recv_timeout(Duration::from_secs(3))
             .map_err(|error| format!("Value effect update acknowledgement failed: {error}"))?
+    }
+
+    pub fn add_curve_effect(
+        &self,
+        effect_id: EffectId,
+        request: CurveEffectRequest,
+        enabled: bool,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::AddCurveEffect {
+            effect_id,
+            request,
+            enabled,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Curve effect add acknowledgement failed: {error}"))?
+    }
+
+    pub fn update_curve_effect(
+        &self,
+        effect_id: EffectId,
+        request: CurveEffectRequest,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::UpdateCurveEffect {
+            effect_id,
+            request,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Curve effect update acknowledgement failed: {error}"))?
     }
 
     pub fn set_effect_enabled_published(
@@ -2851,6 +2906,7 @@ enum RuntimeEffectKind {
     Chaser(RuntimeChaserEffect),
     Move(RuntimeMoveEffect),
     Value(RuntimeValueEffect),
+    Curve(RuntimeCurveEffect),
 }
 
 fn clear_runtime_effect_caches(kind: &RuntimeEffectKind) {
@@ -2871,6 +2927,11 @@ fn clear_runtime_effect_caches(kind: &RuntimeEffectKind) {
             }
         }
         RuntimeEffectKind::Value(runtime) => {
+            for target in &runtime.targets {
+                target.cached.set(None);
+            }
+        }
+        RuntimeEffectKind::Curve(runtime) => {
             for target in &runtime.targets {
                 target.cached.set(None);
             }
@@ -2898,6 +2959,84 @@ struct RuntimeValueTarget {
 struct RuntimeValueEvaluation {
     at: Instant,
     normalized: f32,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeCurveEffect {
+    request: CurveEffectRequest,
+    function: CompiledCurveFunction,
+    targets: Vec<RuntimeCurveTarget>,
+    target_indices: HashMap<FixtureId, usize>,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeCurveTarget {
+    fixture_id: FixtureId,
+    phase_offset: f32,
+    cached: Cell<Option<RuntimeCurveEvaluation>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct RuntimeCurveEvaluation {
+    at: Instant,
+    normalized: f32,
+}
+
+/// Cubic channel function compiled once when a Curve effect is resolved.
+#[derive(Debug, Clone)]
+struct CompiledCurveFunction {
+    points: Vec<CurveEffectPoint>,
+}
+
+impl CompiledCurveFunction {
+    fn compile(request: &CurveEffectRequest) -> Self {
+        let mut points = request.points.clone();
+        points.sort_by(|a, b| {
+            a.position
+                .partial_cmp(&b.position)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        Self { points }
+    }
+
+    fn sample(&self, progress: f32) -> f32 {
+        if self.points.is_empty() {
+            return 0.0;
+        }
+        let progress = progress.clamp(0.0, 1.0);
+        let first = &self.points[0];
+        if progress <= first.position {
+            return first.value.clamp(0.0, 1.0);
+        }
+        let last = &self.points[self.points.len() - 1];
+        if progress >= last.position {
+            return last.value.clamp(0.0, 1.0);
+        }
+        let mut index = 0;
+        for candidate in 0..self.points.len() - 1 {
+            if progress >= self.points[candidate].position
+                && progress < self.points[candidate + 1].position
+            {
+                index = candidate;
+                break;
+            }
+        }
+        let left = &self.points[index];
+        let right = &self.points[index + 1];
+        let span = (right.position - left.position).max(f32::EPSILON);
+        let local = ((progress - left.position) / span).clamp(0.0, 1.0);
+        let local2 = local * local;
+        let local3 = local2 * local;
+        let h00 = 2.0 * local3 - 3.0 * local2 + 1.0;
+        let h10 = local3 - 2.0 * local2 + local;
+        let h01 = -2.0 * local3 + 3.0 * local2;
+        let h11 = local3 - local2;
+        (h00 * left.value
+            + h10 * span * left.out_tangent
+            + h01 * right.value
+            + h11 * span * right.in_tangent)
+            .clamp(0.0, 1.0)
+    }
 }
 
 /// Sorted, interpolation-aware envelope compiled once per effect resolution.
@@ -4479,6 +4618,15 @@ impl EngineRuntime {
                         created_at: now,
                     })
                 }
+                RuntimeEffectKind::Curve(runtime) => {
+                    let runtime = self.restore_curve_effect_request(runtime.request).ok()?;
+                    Some(RuntimeEffect {
+                        id: effect.id,
+                        kind: RuntimeEffectKind::Curve(runtime),
+                        enabled: effect.enabled,
+                        created_at: now,
+                    })
+                }
             })
             .collect();
         self.sanitize_cue_effect_targets();
@@ -4768,6 +4916,7 @@ impl EngineRuntime {
                 self.rebuild_chaser_effect_targets();
                 self.rebuild_move_effect_targets();
                 self.rebuild_value_effect_targets();
+                self.rebuild_curve_effect_targets();
                 self.last_error = None;
             }
             EngineCommand::RemoveFixture(fixture_id) => {
@@ -5013,6 +5162,7 @@ impl EngineRuntime {
                     self.rebuild_chaser_effect_targets();
                     self.rebuild_move_effect_targets();
                     self.rebuild_value_effect_targets();
+                    self.rebuild_curve_effect_targets();
                     self.last_error = None;
                 } else {
                     self.last_error = Some(format!("Fixture {fixture_id} was not found"));
@@ -5578,6 +5728,45 @@ impl EngineRuntime {
                     publication_error: "Engine snapshot was busy; Value effect add was rolled back",
                 });
             }
+            EngineCommand::AddCurveEffect {
+                effect_id,
+                request,
+                enabled,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RemoveAddedEffect {
+                    effect_id,
+                    last_error: previous_last_error.clone(),
+                };
+                let expired = Instant::now() > expires_at;
+                let result = if expired {
+                    Err("Curve effect add expired before engine execution".to_string())
+                } else if self.effects.iter().any(|effect| effect.id == effect_id) {
+                    Err(format!("Effect {effect_id} already exists"))
+                } else {
+                    self.resolve_curve_effect_request(request).map(|runtime| {
+                        self.effects.push(RuntimeEffect {
+                            id: effect_id,
+                            kind: RuntimeEffectKind::Curve(runtime),
+                            enabled,
+                            created_at: Instant::now(),
+                        });
+                    })
+                };
+                self.last_error = if expired {
+                    previous_last_error
+                } else {
+                    result.as_ref().err().cloned()
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error: "Engine snapshot was busy; Curve effect add was rolled back",
+                });
+            }
             EngineCommand::UpdateLfoEffect { effect_id, request } => {
                 let request = match self.resolve_lfo_effect_request(request) {
                     Ok(request) => request,
@@ -5901,6 +6090,66 @@ impl EngineRuntime {
                         "Engine snapshot was busy; Value effect update was rolled back",
                 });
             }
+            EngineCommand::UpdateCurveEffect {
+                effect_id,
+                request,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let previous_index = self
+                    .effects
+                    .iter()
+                    .position(|effect| effect.id == effect_id);
+                let reconform_referenced_events =
+                    self.timeline_has_conformed_events_for_effect(effect_id);
+                let rollback = PendingCommandRollback::RestoreEffect {
+                    index: previous_index,
+                    effect: previous_index.map(|index| self.effects[index].clone()),
+                    timeline_events: reconform_referenced_events
+                        .then(|| self.timeline_events.clone()),
+                    last_error: previous_last_error.clone(),
+                };
+                let expired = Instant::now() > expires_at;
+                let result = if expired {
+                    Err("Curve effect update expired before engine execution".to_string())
+                } else {
+                    self.resolve_curve_effect_request(request)
+                        .and_then(|runtime| {
+                            let effect = self
+                                .effects
+                                .iter_mut()
+                                .find(|effect| effect.id == effect_id)
+                                .ok_or_else(|| format!("Effect {effect_id} was not found"))?;
+                            if !matches!(&effect.kind, RuntimeEffectKind::Curve(_)) {
+                                return Err(format!("Effect {effect_id} is not a Curve effect"));
+                            }
+                            effect.kind = RuntimeEffectKind::Curve(runtime);
+                            effect.created_at = Instant::now();
+                            Ok(())
+                        })
+                        .and_then(|()| {
+                            if reconform_referenced_events {
+                                let bpm = self.clock.bpm;
+                                self.reconform_timeline_events_to_bpm(bpm)
+                            } else {
+                                Ok(())
+                            }
+                        })
+                };
+                self.last_error = if expired {
+                    previous_last_error
+                } else {
+                    result.as_ref().err().cloned()
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Curve effect update was rolled back",
+                });
+            }
             EngineCommand::SetEffectEnabled { effect_id, enabled } => {
                 if let Some(effect) = self
                     .effects
@@ -5984,7 +6233,8 @@ impl EngineRuntime {
                     RuntimeEffectKind::Color(_)
                     | RuntimeEffectKind::Chaser(_)
                     | RuntimeEffectKind::Move(_)
-                    | RuntimeEffectKind::Value(_) => {
+                    | RuntimeEffectKind::Value(_)
+                    | RuntimeEffectKind::Curve(_) => {
                         self.last_error = Some(format!(
                             "Lighting-only effect {effect_id} cannot target video layers"
                         ));
@@ -9456,11 +9706,17 @@ impl EngineRuntime {
                 !runtime.request.fixture_ids.is_empty()
                     || !runtime.request.target_group_ids.is_empty()
             }
+            RuntimeEffectKind::Curve(runtime) => {
+                runtime.request.fixture_ids.retain(|id| *id != fixture_id);
+                !runtime.request.fixture_ids.is_empty()
+                    || !runtime.request.target_group_ids.is_empty()
+            }
         });
         self.rebuild_color_effect_targets();
         self.rebuild_chaser_effect_targets();
         self.rebuild_move_effect_targets();
         self.rebuild_value_effect_targets();
+        self.rebuild_curve_effect_targets();
         self.sanitize_node_graph_references();
         self.clear_empty_active_fade();
         self.last_error = None;
@@ -9505,7 +9761,8 @@ impl EngineRuntime {
             RuntimeEffectKind::Color(_)
             | RuntimeEffectKind::Chaser(_)
             | RuntimeEffectKind::Move(_)
-            | RuntimeEffectKind::Value(_) => true,
+            | RuntimeEffectKind::Value(_)
+            | RuntimeEffectKind::Curve(_) => true,
         });
         self.sanitize_cue_effect_targets();
         self.sanitize_node_graph_references();
@@ -11456,6 +11713,9 @@ impl EngineRuntime {
             EffectParamsSnapshot::Value(request) => {
                 RuntimeEffectKind::Value(self.resolve_value_effect_request(request.clone())?)
             }
+            EffectParamsSnapshot::Curve(request) => {
+                RuntimeEffectKind::Curve(self.resolve_curve_effect_request(request.clone())?)
+            }
         };
         Ok(RuntimeEffect {
             id: effect_id,
@@ -12789,6 +13049,68 @@ impl EngineRuntime {
             };
             let has_group_reference = !runtime.request.target_group_ids.is_empty();
             match runtime_value_effect_from_request(runtime.request.clone(), fixtures, false) {
+                Ok(rebuilt) => {
+                    *runtime = rebuilt;
+                    !runtime.targets.is_empty() || has_group_reference
+                }
+                Err(_) => has_group_reference,
+            }
+        });
+        self.sanitize_cue_effect_targets();
+    }
+
+    fn resolve_curve_effect_request(
+        &self,
+        request: CurveEffectRequest,
+    ) -> Result<RuntimeCurveEffect, String> {
+        self.resolve_curve_effect_request_with_policy(request, false)
+    }
+
+    fn restore_curve_effect_request(
+        &self,
+        request: CurveEffectRequest,
+    ) -> Result<RuntimeCurveEffect, String> {
+        self.resolve_curve_effect_request_with_policy(request, true)
+    }
+
+    fn resolve_curve_effect_request_with_policy(
+        &self,
+        mut request: CurveEffectRequest,
+        allow_unresolved_groups: bool,
+    ) -> Result<RuntimeCurveEffect, String> {
+        validate_curve_effect_request(&request)?;
+        request.fixture_ids = self.normalize_effect_fixture_ids(request.fixture_ids)?;
+        request.target_group_ids = normalize_runtime_group_ids(request.target_group_ids)?;
+
+        let has_group_reference = !request.target_group_ids.is_empty();
+        for group_id in &request.target_group_ids {
+            if self.fixture_ids_in_group(group_id).is_empty() {
+                if allow_unresolved_groups {
+                    continue;
+                }
+                return Err(format!(
+                    "Group '{group_id}' was not found or has no fixtures"
+                ));
+            }
+        }
+        if request.fixture_ids.is_empty() && request.target_group_ids.is_empty() {
+            return Err("Curve effect must target at least one fixture or group".to_string());
+        }
+        runtime_curve_effect_from_request(
+            request,
+            &self.fixtures,
+            !(allow_unresolved_groups && has_group_reference),
+        )
+    }
+
+    fn rebuild_curve_effect_targets(&mut self) {
+        let fixtures = &self.fixtures;
+        self.effects.retain_mut(|effect| {
+            let RuntimeEffectKind::Curve(runtime) = &mut effect.kind else {
+                return true;
+            };
+            let has_group_reference = !runtime.request.target_group_ids.is_empty();
+            match runtime_curve_effect_from_request(runtime.request.clone(), fixtures, false) {
                 Ok(rebuilt) => {
                     *runtime = rebuilt;
                     !runtime.targets.is_empty() || has_group_reference
@@ -14363,6 +14685,20 @@ impl EngineRuntime {
                 }
                 RuntimeEffectKind::Value(runtime) => {
                     if let Some(evaluated) = evaluate_runtime_value_attribute_at_rate(
+                        runtime,
+                        fixture.id,
+                        attribute,
+                        value,
+                        effect.created_at,
+                        now,
+                        &clock,
+                        rate,
+                    ) {
+                        value = blend_effect_value(value, evaluated, &runtime.request.blend_mode);
+                    }
+                }
+                RuntimeEffectKind::Curve(runtime) => {
+                    if let Some(evaluated) = evaluate_runtime_curve_attribute_at_rate(
                         runtime,
                         fixture.id,
                         attribute,
@@ -16740,7 +17076,8 @@ impl EngineRuntime {
                 RuntimeEffectKind::Color(_)
                 | RuntimeEffectKind::Chaser(_)
                 | RuntimeEffectKind::Move(_)
-                | RuntimeEffectKind::Value(_) => {}
+                | RuntimeEffectKind::Value(_)
+                | RuntimeEffectKind::Curve(_) => {}
             }
         }
         for graph in &self.node_graphs {
@@ -17552,7 +17889,7 @@ fn live_modifier_shifted_phase(phase: f32, offset: f32) -> f32 {
 
 /// Applies one scene's effective live modifier to authored effect params.
 /// Kind mapping: speed scales period/step duration/wave speed and shared-clock
-/// beats; size scales level ranges (Lfo/PositionWave/Value), Chaser feature
+/// beats; size scales level ranges (Lfo/PositionWave/Value/Curve), Chaser feature
 /// ranges, and Move path size; Color has no amplitude so size is a deliberate
 /// no-op there; phase adds a wrapped traversal offset on every kind.
 fn effect_params_with_live_modifier(
@@ -17609,6 +17946,16 @@ fn effect_params_with_live_modifier(
             request.phase = live_modifier_shifted_phase(request.phase, modifier.phase);
         }
         EffectParamsSnapshot::Value(request) => {
+            request.period_ms = live_modifier_scaled_period_ms(request.period_ms, modifier.speed);
+            request.clock_sync =
+                live_modifier_scaled_clock_sync(request.clock_sync, modifier.speed);
+            let (low, high) =
+                live_modifier_scaled_level_range(request.low, request.high, modifier.size);
+            request.low = low;
+            request.high = high;
+            request.phase = live_modifier_shifted_phase(request.phase, modifier.phase);
+        }
+        EffectParamsSnapshot::Curve(request) => {
             request.period_ms = live_modifier_scaled_period_ms(request.period_ms, modifier.speed);
             request.clock_sync =
                 live_modifier_scaled_clock_sync(request.clock_sync, modifier.speed);
@@ -18387,6 +18734,7 @@ fn runtime_effect_free_run_period_ms(kind: &RuntimeEffectKind) -> Option<f64> {
         }
         RuntimeEffectKind::Move(runtime) => runtime.request.period_ms as f64,
         RuntimeEffectKind::Value(runtime) => runtime.request.period_ms as f64,
+        RuntimeEffectKind::Curve(runtime) => runtime.request.period_ms as f64,
     };
     (period_ms.is_finite() && period_ms > 0.0).then_some(period_ms)
 }
@@ -18412,6 +18760,7 @@ fn effect_params_snapshot_free_run_period_ms(params: &EffectParamsSnapshot) -> O
         }
         EffectParamsSnapshot::Move(request) => request.period_ms as f64,
         EffectParamsSnapshot::Value(request) => request.period_ms as f64,
+        EffectParamsSnapshot::Curve(request) => request.period_ms as f64,
     };
     (period_ms.is_finite() && period_ms > 0.0).then_some(period_ms)
 }
@@ -19597,6 +19946,14 @@ fn effect_targets_fixture_attribute(
                     fixture,
                 )
         }
+        RuntimeEffectKind::Curve(runtime) => {
+            runtime.request.attribute.eq_ignore_ascii_case(attribute)
+                && request_targets_fixture(
+                    runtime.request.fixture_ids.as_slice(),
+                    runtime.request.target_group_ids.as_slice(),
+                    fixture,
+                )
+        }
         RuntimeEffectKind::Color(_) | RuntimeEffectKind::Chaser(_) | RuntimeEffectKind::Move(_) => {
             false
         }
@@ -20259,6 +20616,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             chaser: None,
             move_effect: None,
             value: None,
+            curve: None,
         },
         RuntimeEffectKind::PositionWave(request) => EffectSummary {
             id: effect.id,
@@ -20284,6 +20642,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             chaser: None,
             move_effect: None,
             value: None,
+            curve: None,
         },
         RuntimeEffectKind::Color(runtime) => EffectSummary {
             id: effect.id,
@@ -20309,6 +20668,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             chaser: None,
             move_effect: None,
             value: None,
+            curve: None,
         },
         RuntimeEffectKind::Chaser(runtime) => {
             let mut fixture_ids = Vec::new();
@@ -20354,6 +20714,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
                 chaser: Some(runtime.request.clone()),
                 move_effect: None,
                 value: None,
+                curve: None,
             }
         }
         RuntimeEffectKind::Move(runtime) => EffectSummary {
@@ -20380,6 +20741,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             chaser: None,
             move_effect: Some(runtime.request.clone()),
             value: None,
+            curve: None,
         },
         RuntimeEffectKind::Value(runtime) => EffectSummary {
             id: effect.id,
@@ -20405,6 +20767,33 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             chaser: None,
             move_effect: None,
             value: Some(runtime.request.clone()),
+            curve: None,
+        },
+        RuntimeEffectKind::Curve(runtime) => EffectSummary {
+            id: effect.id,
+            label: runtime.request.label.clone(),
+            effect_type: EffectKind::Curve,
+            fixture_ids: runtime.request.fixture_ids.clone(),
+            target_group_ids: runtime.request.target_group_ids.clone(),
+            attribute: runtime.request.attribute.clone(),
+            video_targets: Vec::new(),
+            shape: LfoShape::Sine,
+            period_ms: Some(runtime.request.period_ms),
+            clock_sync: runtime.request.clock_sync,
+            low: runtime.request.low,
+            high: runtime.request.high,
+            phase: runtime.request.phase,
+            blend_mode: runtime.request.blend_mode.clone(),
+            origin: None,
+            direction: None,
+            speed: None,
+            wavelength: None,
+            enabled: effect.enabled,
+            color: None,
+            chaser: None,
+            move_effect: None,
+            value: None,
+            curve: Some(runtime.request.clone()),
         },
     }
 }
@@ -20476,6 +20865,16 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
             RuntimeEffectKind::Value(RuntimeValueEffect {
                 request,
                 envelope,
+                targets: Vec::new(),
+                target_indices: HashMap::new(),
+            })
+        }
+        EffectKind::Curve => {
+            let request = effect.curve.clone()?;
+            let function = CompiledCurveFunction::compile(&request);
+            RuntimeEffectKind::Curve(RuntimeCurveEffect {
+                request,
+                function,
                 targets: Vec::new(),
                 target_indices: HashMap::new(),
             })
@@ -21062,6 +21461,211 @@ fn evaluate_runtime_value_attribute_at_rate(
 
 fn value_effect_progress(
     request: &ValueEffectRequest,
+    fixture_phase_offset: f32,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> f32 {
+    let rate = valid_effect_rate(rate);
+    let cycle = if let Some(clock_sync) = request.clock_sync {
+        let beat_position = clock.beat_counter as f32 + clock.beat_phase;
+        beat_position / clock_sync.beats.max(0.000_1) * rate
+    } else {
+        let period = request.period_ms.max(10) as f32 / 1_000.0;
+        now.saturating_duration_since(created_at).as_secs_f32() * rate / period
+    };
+    let phase = (cycle + request.phase + fixture_phase_offset).rem_euclid(1.0);
+    match request.direction {
+        ValueEffectDirection::Forward => phase,
+        ValueEffectDirection::Reverse => 1.0 - phase,
+        ValueEffectDirection::Bounce => {
+            let doubled = phase * 2.0;
+            if doubled <= 1.0 {
+                doubled
+            } else {
+                2.0 - doubled
+            }
+        }
+    }
+}
+
+pub fn validate_curve_effect_request(request: &CurveEffectRequest) -> Result<(), String> {
+    if request.label.trim().is_empty() {
+        return Err("Curve effect label is required".to_string());
+    }
+    if request.attribute.trim().is_empty() {
+        return Err("Curve effect attribute is required".to_string());
+    }
+    if request.fixture_ids.is_empty() && request.target_group_ids.is_empty() {
+        return Err("Curve effect must target at least one fixture or group".to_string());
+    }
+    if !(2..=32).contains(&request.points.len()) {
+        return Err("Curve effect requires between 2 and 32 points".to_string());
+    }
+    let mut previous = None;
+    for point in &request.points {
+        if !point.position.is_finite() || !(0.0..=1.0).contains(&point.position) {
+            return Err("Curve point positions must be finite and within 0..1".to_string());
+        }
+        if !point.value.is_finite() || !(0.0..=1.0).contains(&point.value) {
+            return Err("Curve point values must be finite and within 0..1".to_string());
+        }
+        if !point.in_tangent.is_finite()
+            || !point.out_tangent.is_finite()
+            || point.in_tangent.abs() > 32.0
+            || point.out_tangent.abs() > 32.0
+        {
+            return Err("Curve tangents must be finite and within -32..32".to_string());
+        }
+        if previous.is_some_and(|previous| point.position <= previous) {
+            return Err("Curve point positions must be strictly increasing".to_string());
+        }
+        previous = Some(point.position);
+    }
+    if request.period_ms < 10 {
+        return Err("Curve effect period must be at least 10 ms".to_string());
+    }
+    if let Some(clock_sync) = request.clock_sync {
+        if !clock_sync.beats.is_finite() || clock_sync.beats <= 0.0 {
+            return Err(
+                "Curve effect clock sync beats must be finite and greater than 0".to_string(),
+            );
+        }
+    }
+    if !request.phase.is_finite() || !request.fixture_spread.is_finite() {
+        return Err("Curve effect phase and fixture spread must be finite".to_string());
+    }
+    if !(0.0..=1.0).contains(&request.fixture_spread) {
+        return Err("Curve effect fixture spread must be within 0..1".to_string());
+    }
+    Ok(())
+}
+
+fn runtime_curve_effect_from_request(
+    request: CurveEffectRequest,
+    fixtures: &[RuntimeFixture],
+    require_resolved_target: bool,
+) -> Result<RuntimeCurveEffect, String> {
+    validate_curve_effect_request(&request)?;
+    let function = CompiledCurveFunction::compile(&request);
+    let mut fixture_ids = Vec::new();
+    let mut seen = HashSet::new();
+    for fixture_id in &request.fixture_ids {
+        if fixtures.iter().any(|fixture| fixture.id == *fixture_id) && seen.insert(*fixture_id) {
+            fixture_ids.push(*fixture_id);
+        }
+    }
+    for group_id in &request.target_group_ids {
+        for fixture in fixtures.iter().filter(|fixture| {
+            fixture
+                .request
+                .group_ids
+                .iter()
+                .any(|fixture_group| group_matches(fixture_group, group_id))
+        }) {
+            if seen.insert(fixture.id) {
+                fixture_ids.push(fixture.id);
+            }
+        }
+    }
+    if require_resolved_target && fixture_ids.is_empty() {
+        return Err("Curve effect must resolve at least one fixture".to_string());
+    }
+
+    let count = fixture_ids.len().max(1) as f32;
+    let targets = fixture_ids
+        .into_iter()
+        .enumerate()
+        .map(|(index, fixture_id)| RuntimeCurveTarget {
+            fixture_id,
+            phase_offset: index as f32 / count * request.fixture_spread,
+            cached: Cell::new(None),
+        })
+        .collect::<Vec<_>>();
+    let target_indices = targets
+        .iter()
+        .enumerate()
+        .map(|(index, target)| (target.fixture_id, index))
+        .collect();
+    Ok(RuntimeCurveEffect {
+        request,
+        function,
+        targets,
+        target_indices,
+    })
+}
+
+#[cfg(test)]
+fn evaluate_runtime_curve_attribute(
+    runtime: &RuntimeCurveEffect,
+    fixture_id: FixtureId,
+    attribute: &str,
+    base_value: u16,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+) -> Option<u16> {
+    evaluate_runtime_curve_attribute_at_rate(
+        runtime, fixture_id, attribute, base_value, created_at, now, clock, 1.0,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_runtime_curve_attribute_at_rate(
+    runtime: &RuntimeCurveEffect,
+    fixture_id: FixtureId,
+    attribute: &str,
+    base_value: u16,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> Option<u16> {
+    if !runtime.request.attribute.eq_ignore_ascii_case(attribute) {
+        return None;
+    }
+    let target = runtime
+        .target_indices
+        .get(&fixture_id)
+        .and_then(|index| runtime.targets.get(*index))?;
+    let normalized = target
+        .cached
+        .get()
+        .filter(|evaluation| evaluation.at == now)
+        .map(|evaluation| evaluation.normalized)
+        .unwrap_or_else(|| {
+            let progress = curve_effect_progress(
+                &runtime.request,
+                target.phase_offset,
+                created_at,
+                now,
+                clock,
+                rate,
+            );
+            let normalized = runtime.function.sample(progress);
+            target.cached.set(Some(RuntimeCurveEvaluation {
+                at: now,
+                normalized,
+            }));
+            normalized
+        });
+    let value = match runtime.request.mode {
+        ValueEffectMode::Absolute => {
+            scale_effect_u16(runtime.request.low, runtime.request.high, normalized)
+        }
+        ValueEffectMode::Relative => {
+            let span = runtime.request.low.max(runtime.request.high) as f32
+                - runtime.request.low.min(runtime.request.high) as f32;
+            let offset = (normalized - 0.5) * 2.0 * span;
+            (base_value as f32 + offset).round().clamp(0.0, 65_535.0) as u16
+        }
+    };
+    Some(value)
+}
+
+fn curve_effect_progress(
+    request: &CurveEffectRequest,
     fixture_phase_offset: f32,
     created_at: Instant,
     now: Instant,
@@ -27354,6 +27958,7 @@ mod tests {
                 chaser: None,
                 move_effect: None,
                 value: None,
+                curve: None,
             }],
             node_graphs: vec![sample_node_graph(48, 40)],
             output: DmxOutputConfig {
@@ -28833,6 +29438,7 @@ mod tests {
                     chaser: None,
                     move_effect: None,
                     value: None,
+                    curve: None,
                 },
                 EffectSummary {
                     id: 51,
@@ -28858,6 +29464,7 @@ mod tests {
                     chaser: None,
                     move_effect: None,
                     value: None,
+                    curve: None,
                 },
                 EffectSummary {
                     id: 52,
@@ -28883,6 +29490,7 @@ mod tests {
                     chaser: None,
                     move_effect: None,
                     value: None,
+                    curve: None,
                 },
             ],
             ..EngineSnapshot::default()
@@ -29067,6 +29675,7 @@ mod tests {
                     chaser: None,
                     move_effect: None,
                     value: None,
+                    curve: None,
                 },
                 EffectSummary {
                     id: 41,
@@ -29092,6 +29701,7 @@ mod tests {
                     chaser: None,
                     move_effect: None,
                     value: None,
+                    curve: None,
                 },
             ],
             ..EngineSnapshot::default()
@@ -46116,6 +46726,172 @@ mod tests {
         );
     }
 
+    fn test_curve_request(fixture_ids: &[FixtureId]) -> CurveEffectRequest {
+        CurveEffectRequest {
+            label: "Production Curve".to_string(),
+            fixture_ids: fixture_ids.to_vec(),
+            target_group_ids: Vec::new(),
+            attribute: "Dimmer".to_string(),
+            points: vec![
+                CurveEffectPoint {
+                    position: 0.0,
+                    value: 0.0,
+                    in_tangent: 0.0,
+                    out_tangent: 0.0,
+                },
+                CurveEffectPoint {
+                    position: 1.0,
+                    value: 1.0,
+                    in_tangent: 0.0,
+                    out_tangent: 0.0,
+                },
+            ],
+            mode: ValueEffectMode::Absolute,
+            direction: ValueEffectDirection::Forward,
+            period_ms: 1_000,
+            clock_sync: None,
+            low: 0,
+            high: u16::MAX,
+            phase: 0.0,
+            fixture_spread: 0.0,
+            blend_mode: EffectBlendMode::Override,
+        }
+    }
+
+    #[test]
+    fn curve_validation_rejects_nonfinite_or_unbounded_tangents() {
+        let valid = test_curve_request(&[1]);
+        validate_curve_effect_request(&valid).unwrap();
+
+        let mut invalid = valid.clone();
+        invalid.points[0].out_tangent = 33.0;
+        assert!(validate_curve_effect_request(&invalid)
+            .unwrap_err()
+            .contains("-32..32"));
+
+        invalid.points[0].out_tangent = f32::NAN;
+        assert!(validate_curve_effect_request(&invalid)
+            .unwrap_err()
+            .contains("finite"));
+    }
+
+    #[test]
+    fn curve_cubic_tangents_are_compiled_and_evaluated_independently() {
+        let runtime = runtime_with_move_fixtures(1);
+        let request = test_curve_request(&[1]);
+        let compiled = CompiledCurveFunction::compile(&request);
+        assert!((compiled.sample(0.25) - 0.15625).abs() < 0.000_01);
+        assert!((compiled.sample(0.75) - 0.84375).abs() < 0.000_01);
+
+        let effect = runtime.resolve_curve_effect_request(request).unwrap();
+        let created_at = Instant::now();
+        let clock = ClockSnapshot::default();
+        let value = evaluate_runtime_curve_attribute(
+            &effect,
+            1,
+            "Dimmer",
+            0,
+            created_at,
+            created_at + Duration::from_millis(250),
+            &clock,
+        )
+        .unwrap();
+        assert_eq!(value, scale_effect_u16(0, u16::MAX, 0.15625));
+        assert!(evaluate_runtime_curve_attribute(
+            &effect, 1, "Pan", 0, created_at, created_at, &clock,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn curve_published_add_update_and_snapshot_roundtrip_are_atomic() {
+        let mut runtime = runtime_with_move_fixtures(2);
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let request = test_curve_request(&[1, 2]);
+        let (add_ack, add_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::AddCurveEffect {
+            effect_id: 330,
+            request: request.clone(),
+            enabled: false,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: add_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(add_receiver.recv().unwrap(), Ok(()));
+        let snapshot = published.read().unwrap().clone();
+        assert_eq!(snapshot.effects[0].effect_type, EffectKind::Curve);
+        assert_eq!(snapshot.effects[0].curve, Some(request.clone()));
+        assert!(!snapshot.effects[0].enabled);
+
+        let mut updated = request;
+        updated.points[0].out_tangent = 2.0;
+        updated.points[1].in_tangent = -1.0;
+        let (update_ack, update_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::UpdateCurveEffect {
+            effect_id: 330,
+            request: updated.clone(),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: update_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(update_receiver.recv().unwrap(), Ok(()));
+        assert_eq!(published.read().unwrap().effects[0].curve, Some(updated));
+
+        let roundtrip = runtime.build_snapshot(0);
+        let mut loaded = runtime_with_move_fixtures(2);
+        loaded.load_project_snapshot(roundtrip.clone());
+        assert_eq!(loaded.build_snapshot(0).effects, roundtrip.effects);
+    }
+
+    #[test]
+    fn curve_venue_stack_200_fixtures_64_effects_stays_bounded() {
+        let runtime = runtime_with_move_fixtures(200);
+        let fixture_ids = (1..=200).collect::<Vec<_>>();
+        let base = test_curve_request(&fixture_ids);
+        let stack = (0..64)
+            .map(|index| {
+                let mut request = base.clone();
+                request.phase = index as f32 / 64.0;
+                runtime.resolve_curve_effect_request(request).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let created_at = Instant::now();
+        let clock = ClockSnapshot::default();
+        let started = Instant::now();
+        let mut checksum = 0_u64;
+
+        for frame in 0..10 {
+            let at = created_at + Duration::from_millis(frame * 10);
+            for effect in &stack {
+                for fixture_id in &fixture_ids {
+                    checksum = checksum.wrapping_add(
+                        evaluate_runtime_curve_attribute(
+                            effect,
+                            *fixture_id,
+                            "Dimmer",
+                            32_768,
+                            created_at,
+                            at,
+                            &clock,
+                        )
+                        .unwrap() as u64,
+                    );
+                    let target_index = effect.target_indices[fixture_id];
+                    assert!(effect.targets[target_index]
+                        .cached
+                        .get()
+                        .is_some_and(|cached| cached.at == at));
+                }
+            }
+        }
+        assert_ne!(checksum, 0);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "200-fixture, 64-effect Curve regression took {:?}",
+            started.elapsed()
+        );
+    }
+
     fn runtime_with_mixed_effect_fixtures(count: u64) -> EngineRuntime {
         let mut runtime = EngineRuntime::new(DmxOutputConfig {
             enabled: false,
@@ -46163,7 +46939,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_color_chaser_move_release_stack_meets_44hz_budget() {
+    fn mixed_color_chaser_move_curve_release_stack_meets_44hz_budget() {
         const FIXTURE_COUNT: u64 = 200;
         const EFFECT_COUNT: usize = 64;
         const SAMPLES: usize = 1_000;
@@ -46186,9 +46962,10 @@ mod tests {
         chaser_base.overlap = 0.25;
         chaser_base.fixture_spread = 0.5;
         let move_base = test_move_request(&fixture_ids);
+        let curve_base = test_curve_request(&fixture_ids);
         for index in 0..EFFECT_COUNT {
             let phase = index as f32 / EFFECT_COUNT as f32;
-            let kind = match index % 3 {
+            let kind = match index % 4 {
                 0 => {
                     let mut request = test_color_request(
                         fixture_ids.clone(),
@@ -46222,10 +46999,15 @@ mod tests {
                         runtime.resolve_chaser_effect_request(request).unwrap(),
                     )
                 }
-                _ => {
+                2 => {
                     let mut request = move_base.clone();
                     request.phase = phase;
                     RuntimeEffectKind::Move(runtime.resolve_move_effect_request(request).unwrap())
+                }
+                _ => {
+                    let mut request = curve_base.clone();
+                    request.phase = phase;
+                    RuntimeEffectKind::Curve(runtime.resolve_curve_effect_request(request).unwrap())
                 }
             };
             runtime.effects.push(RuntimeEffect {
@@ -46256,7 +47038,7 @@ mod tests {
         let p99 = durations[(SAMPLES * 99 / 100).min(SAMPLES - 1)];
         let max = *durations.last().unwrap();
         eprintln!(
-            "Mixed Color/Chaser/Move 64x200 stack per-tick evaluation: p95={}us p99={}us max={}us",
+            "Mixed Color/Chaser/Move/Curve 64x200 stack per-tick evaluation: p95={}us p99={}us max={}us",
             p95.as_micros(),
             p99.as_micros(),
             max.as_micros()
@@ -46264,8 +47046,8 @@ mod tests {
         // Budget rationale: this measures the true production per-tick path
         // (apply_effects per fixture x control, including its per-call clock
         // snapshot) under 64 simultaneous full-rig effects. Observed on the
-        // reference Windows host in release: p95 ~3.2ms / p99 ~3.8ms /
-        // max ~4.4ms. The gate keeps the worst-case mixed stack at or below
+        // reference Windows host in release with Curve included: p95 ~2.8ms /
+        // p99 ~3.4ms / max ~4.1ms. The gate keeps the worst-case mixed stack at or below
         // roughly half of the 22.7ms 44Hz tick while still failing on a
         // >50% evaluation regression.
         if !cfg!(debug_assertions) {

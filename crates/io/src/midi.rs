@@ -2209,6 +2209,7 @@ mod tests {
                 chaser: None,
                 move_effect: None,
                 value: None,
+                curve: None,
             }],
             ..EngineSnapshot::default()
         };

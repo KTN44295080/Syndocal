@@ -26,6 +26,7 @@ export function EffectListPanel(props: EffectListPanelProps) {
     if (effect.effect_type === "Chaser") return "Chaser";
     if (effect.effect_type === "Move") return "Move";
     if (effect.effect_type === "Value") return "Value";
+    if (effect.effect_type === "Curve") return "Curve";
     return effect.effect_type === "PositionWave" ? "Wave" : "LFO";
   };
   const effectKindClass = (effect: EffectSummary) => {
@@ -33,6 +34,7 @@ export function EffectListPanel(props: EffectListPanelProps) {
     if (effect.effect_type === "Chaser") return "chaser";
     if (effect.effect_type === "Move") return "move";
     if (effect.effect_type === "Value") return "value";
+    if (effect.effect_type === "Curve") return "curve";
     return effect.effect_type === "PositionWave" ? "wave" : "lfo";
   };
   const timingLabel = (effect: EffectSummary) => {
@@ -42,6 +44,8 @@ export function EffectListPanel(props: EffectListPanelProps) {
         ? effect.chaser?.clock_sync
         : effect.effect_type === "Move"
           ? effect.move_effect?.clock_sync
+        : effect.effect_type === "Curve"
+          ? effect.curve?.clock_sync
         : effect.clock_sync;
     if (clockSync) {
       return `sync ${clockSync.beats} beat`;
@@ -52,6 +56,8 @@ export function EffectListPanel(props: EffectListPanelProps) {
         ? effect.chaser?.step_duration_ms
         : effect.effect_type === "Move"
           ? effect.move_effect?.period_ms
+        : effect.effect_type === "Curve"
+          ? effect.curve?.period_ms
         : effect.period_ms;
     if (periodMs) {
       return effect.effect_type === "Chaser" ? `${periodMs}ms/step` : `${periodMs}ms`;
@@ -150,6 +156,16 @@ export function EffectListPanel(props: EffectListPanelProps) {
                       </>
                     )}
                   </Show>
+                  <Show when={effect.effect_type === "Curve" ? effect.curve : null}>
+                    {(curve) => (
+                      <>
+                        <span class="effectMetaChip tabularNums">{curve().points.length} points</span>
+                        <span class="effectMetaChip">Cubic</span>
+                        <span class="effectMetaChip">{curve().direction}</span>
+                        <span class="effectMetaChip tabularNums">spread {Math.round(curve().fixture_spread * 100)}%</span>
+                      </>
+                    )}
+                  </Show>
                   <span
                     class={(
                       effect.effect_type === "Color"
@@ -158,6 +174,8 @@ export function EffectListPanel(props: EffectListPanelProps) {
                           ? effect.chaser?.clock_sync
                           : effect.effect_type === "Move"
                             ? effect.move_effect?.clock_sync
+                          : effect.effect_type === "Curve"
+                            ? effect.curve?.clock_sync
                           : effect.clock_sync
                     ) ? "effectMetaChip sync" : "effectMetaChip"}
                   >

@@ -9,6 +9,7 @@ import { AppStatusLine } from "./components/AppStatusLine";
 import { ArtRdmPanel } from "./components/ArtRdmPanel";
 import { ChaserEffectEditorPanel } from "./components/ChaserEffectEditorPanel";
 import { ColorEffectEditorPanel, defaultColorEffectStops } from "./components/ColorEffectEditorPanel";
+import { CurveEffectEditorPanel } from "./components/CurveEffectEditorPanel";
 import { CustomProfileEditorPanel } from "./components/CustomProfileEditorPanel";
 import {
   type DmxAddressCell,
@@ -178,6 +179,8 @@ import type {
   ColorEffectRequest,
   ColorEffectSpatialPattern,
   ColorEffectStop,
+  CurveEffectPoint,
+  CurveEffectRequest,
   CustomFixtureProfileRequest,
   CueEffectTarget,
   CueListSummary,
@@ -720,12 +723,14 @@ const projectMutationCommands = new Set([
   "add_chaser_effect",
   "add_move_effect",
   "add_value_effect",
+  "add_curve_effect",
   "update_lfo_effect",
   "update_position_wave_effect",
   "update_color_effect",
   "update_chaser_effect",
   "update_move_effect",
   "update_value_effect",
+  "update_curve_effect",
   "save_node_graph",
   "set_node_graph_enabled",
   "remove_node_graph",
@@ -901,6 +906,8 @@ const authoredBeatsForEffectClock = (effect: EffectSummary) => {
       return effect.move_effect?.clock_sync?.beats ?? effect.clock_sync?.beats ?? null;
     case "Value":
       return effect.value?.clock_sync?.beats ?? effect.clock_sync?.beats ?? null;
+    case "Curve":
+      return effect.curve?.clock_sync?.beats ?? effect.clock_sync?.beats ?? null;
     default:
       return effect.clock_sync?.beats ?? null;
   }
@@ -1349,7 +1356,7 @@ export default function App() {
   const [videoAutomationRowScope, setVideoAutomationRowScope] =
     createSignal<TimelineVideoAutomationRowScope>("all");
   const [effectShape, setEffectShape] = createSignal<LfoShape>("Sine");
-  const [effectType, setEffectType] = createSignal<EffectKind>("Lfo");
+  const [effectType, setEffectType] = createSignal<EffectKind>("Curve");
   const nodeGraphEffectType = createMemo<"Lfo" | "PositionWave">(() =>
     effectType() === "PositionWave" ? "PositionWave" : "Lfo",
   );
@@ -1363,7 +1370,7 @@ export default function App() {
   const [effectVideoPositionY, setEffectVideoPositionY] = createSignal(0);
   const [effectVideoPositionZ, setEffectVideoPositionZ] = createSignal(0);
   const [effectVideoTargetLinked, setEffectVideoTargetLinked] = createSignal(false);
-  const [sampleEffectPreset, setSampleEffectPreset] = createSignal<SampleEffectPreset>("perlin");
+  const [sampleEffectPreset, setSampleEffectPreset] = createSignal<SampleEffectPreset>("curve");
   const [effectChooserFamily, setEffectChooserFamily] = createSignal<EffectRecipeFamily>("CURVE FX");
   const [effectRackSurface, setEffectRackSurface] = createSignal<"stack" | "graphs">("stack");
   const [editingEffectId, setEditingEffectId] = createSignal<number | null>(null);
@@ -1411,6 +1418,13 @@ export default function App() {
   const [valueMode, setValueMode] = createSignal<ValueEffectMode>("Absolute");
   const [valueDirection, setValueDirection] = createSignal<ValueEffectDirection>("Forward");
   const [valueFixtureSpread, setValueFixtureSpread] = createSignal(0);
+  const [curvePoints, setCurvePoints] = createSignal<CurveEffectPoint[]>([
+    { position: 0, value: 0, in_tangent: 0, out_tangent: 1 },
+    { position: 1, value: 1, in_tangent: 1, out_tangent: 0 },
+  ]);
+  const [curveMode, setCurveMode] = createSignal<ValueEffectMode>("Absolute");
+  const [curveDirection, setCurveDirection] = createSignal<ValueEffectDirection>("Forward");
+  const [curveFixtureSpread, setCurveFixtureSpread] = createSignal(0);
   const [effectLow, setEffectLow] = createSignal(0);
   const [effectHigh, setEffectHigh] = createSignal(65535);
   const [effectPhase, setEffectPhase] = createSignal(0);
@@ -3547,6 +3561,7 @@ export default function App() {
     if (nextType === "Chaser") return "CHASER FX";
     if (nextType === "Move") return "MOVE FX";
     if (nextType === "Value") return "VALUE FX";
+    if (nextType === "Curve") return "CURVE FX";
     if (nextType === "PositionWave") return "MAPPINGS";
     return "CURVE FX";
   };
@@ -3581,6 +3596,10 @@ export default function App() {
       setEffectVideoTargetLinked(false);
       if (effectTargetMode() === "video") setEffectTargetMode("fixture");
       if (!startsNewEffect) setMessage("Prepared an envelope Value draft for the current scalar attribute.");
+    } else if (nextType === "Curve") {
+      setEffectVideoTargetLinked(false);
+      if (effectTargetMode() === "video") setEffectTargetMode("fixture");
+      if (!startsNewEffect) setMessage("Prepared an independent cubic Curve draft for the current scalar attribute.");
     }
   };
   const effectTargetSummary = createMemo(() => {
@@ -3641,6 +3660,10 @@ export default function App() {
       const clock = sync === null ? `${effectPeriod()}ms` : `${sync} beat`;
       return `Value ${valuePoints().length} points / ${valueInterpolation()} / ${valueMode()} / ${valueDirection()} / ${clock}`;
     }
+    if (effectType() === "Curve") {
+      const clock = sync === null ? `${effectPeriod()}ms` : `${sync} beat`;
+      return `Curve ${curvePoints().length} points / Cubic / ${curveMode()} / ${curveDirection()} / ${clock}`;
+    }
     return sync === null ? `LFO ${effectShape()} / ${effectPeriod()}ms` : `LFO ${effectShape()} / ${sync} beat`;
   });
   const currentValueDraftError = createMemo<string>(() => {
@@ -3659,6 +3682,19 @@ export default function App() {
       if (previous !== null && point.position <= previous) {
         return "Value envelope positions must be strictly increasing.";
       }
+      previous = point.position;
+    }
+    return "";
+  });
+  const currentCurveDraftError = createMemo<string>(() => {
+    const points = curvePoints();
+    if (points.length < 2 || points.length > 32) return "Curve effect requires between 2 and 32 points.";
+    let previous: number | null = null;
+    for (const point of points) {
+      if (!Number.isFinite(point.position) || point.position < 0 || point.position > 1) return "Curve positions must be within 0..1.";
+      if (!Number.isFinite(point.value) || point.value < 0 || point.value > 1) return "Curve values must be within 0..1.";
+      if (!Number.isFinite(point.in_tangent) || !Number.isFinite(point.out_tangent) || Math.abs(point.in_tangent) > 32 || Math.abs(point.out_tangent) > 32) return "Curve tangents must be finite and within -32..32.";
+      if (previous !== null && point.position <= previous) return "Curve positions must be strictly increasing.";
       previous = point.position;
     }
     return "";
@@ -10645,7 +10681,9 @@ export default function App() {
             ? "Value"
           : family === "MAPPINGS"
             ? "PositionWave"
-            : "Lfo";
+            : family === "CURVE FX"
+              ? "Curve"
+              : "Lfo";
     selectEffectType(nextType, true);
   };
 
@@ -12667,6 +12705,19 @@ export default function App() {
           return !selectedFixture() || !selectedEffectAttribute();
       }
     }
+    if (effectType() === "Curve") {
+      if (currentCurveDraftError()) return true;
+      if (effectVideoTargetLinked() || effectTargetMode() === "video") return true;
+      switch (effectTargetMode()) {
+        case "selection":
+          return selectedMappingFixtures().length === 0 || !selectedEffectAttribute();
+        case "group":
+          return parseGroupIds(effectTargetGroups()).length === 0 || !selectedEffectAttribute();
+        case "fixture":
+        default:
+          return !selectedFixture() || !selectedEffectAttribute();
+      }
+    }
     switch (effectTargetMode()) {
       case "video":
         return snapshot().video.layers.length === 0;
@@ -12686,7 +12737,8 @@ export default function App() {
     | { effectType: "Color"; request: ColorEffectRequest }
     | { effectType: "Chaser"; request: ChaserEffectRequest }
     | { effectType: "Move"; request: MoveEffectRequest }
-    | { effectType: "Value"; request: ValueEffectRequest };
+    | { effectType: "Value"; request: ValueEffectRequest }
+    | { effectType: "Curve"; request: CurveEffectRequest };
 
   const buildEffectRequestFromForm = (): EffectRequestDraft | null => {
     const fixture = selectedFixture();
@@ -12842,6 +12894,32 @@ export default function App() {
         },
       };
     }
+    if (effectType() === "Curve") {
+      const error = currentCurveDraftError();
+      if (error) {
+        setMessage(error);
+        return null;
+      }
+      return {
+        effectType: "Curve",
+        request: {
+          label: `${lightAttribute} Curve`,
+          fixture_ids: requestBase.fixture_ids,
+          target_group_ids: requestBase.target_group_ids,
+          attribute: lightAttribute,
+          points: curvePoints().map((point) => ({ ...point })),
+          mode: curveMode(),
+          direction: curveDirection(),
+          period_ms: Math.round(effectPeriod()),
+          clock_sync: requestBase.clock_sync,
+          low: effectLow(),
+          high: effectHigh(),
+          phase: effectPhase(),
+          fixture_spread: curveFixtureSpread(),
+          blend_mode: effectBlendMode(),
+        },
+      };
+    }
     if (colorEffect) {
       if (!colorEffectDraftValid()) {
         setMessage("Color effects require 2 to 8 ordered palette stops with valid colors.");
@@ -12902,9 +12980,11 @@ export default function App() {
               ? await invoke<number>("add_chaser_effect", { request: draft.request })
               : draft.effectType === "Value"
                 ? await invoke<number>("add_value_effect", { request: draft.request })
+                : draft.effectType === "Curve"
+                  ? await invoke<number>("add_curve_effect", { request: draft.request })
                 : await invoke<number>("add_move_effect", { request: draft.request });
       setEditingEffectId(null);
-      setMessage(`Added ${draft.effectType === "PositionWave" ? "position wave" : draft.effectType === "Color" ? "color" : draft.effectType === "Chaser" ? "Chaser" : draft.effectType === "Move" ? "Move" : draft.effectType === "Value" ? "Value" : "LFO"} effect ${effectId}`);
+      setMessage(`Added ${draft.effectType === "PositionWave" ? "position wave" : draft.effectType === "Color" ? "color" : draft.effectType === "Chaser" ? "Chaser" : draft.effectType === "Move" ? "Move" : draft.effectType === "Value" ? "Value" : draft.effectType === "Curve" ? "Curve" : "LFO"} effect ${effectId}`);
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
@@ -12932,6 +13012,8 @@ export default function App() {
         await invoke("update_chaser_effect", { effectId, request: draft.request });
       } else if (draft.effectType === "Value") {
         await invoke("update_value_effect", { effectId, request: draft.request });
+      } else if (draft.effectType === "Curve") {
+        await invoke("update_curve_effect", { effectId, request: draft.request });
       } else {
         await invoke("update_move_effect", { effectId, request: draft.request });
       }
@@ -13068,6 +13150,23 @@ export default function App() {
       setEffectClockSyncBeats(value.clock_sync?.beats ?? null);
       setEffectPhase(value.phase);
       setEffectBlendMode(value.blend_mode);
+      setEffectVideoTargetLinked(false);
+    }
+    if (effect.effect_type === "Curve") {
+      const curve = effect.curve;
+      if (!curve) {
+        setEditingEffectId(null);
+        setMessage(`Curve effect ${effect.id} is missing its editor body.`);
+        return;
+      }
+      setCurvePoints(curve.points.map((point) => ({ ...point })));
+      setCurveMode(curve.mode);
+      setCurveDirection(curve.direction);
+      setCurveFixtureSpread(curve.fixture_spread);
+      setEffectPeriod(curve.period_ms);
+      setEffectClockSyncBeats(curve.clock_sync?.beats ?? null);
+      setEffectPhase(curve.phase);
+      setEffectBlendMode(curve.blend_mode);
       setEffectVideoTargetLinked(false);
     }
     setEffectShape(effect.shape);
@@ -15852,7 +15951,7 @@ export default function App() {
                     <option value="fixture">Selected fixture</option>
                     <option value="selection">Map selection ({selectedMappingFixtures().length})</option>
                     <option value="group">Group</option>
-                    <option value="video" disabled={effectType() === "Color" || effectType() === "Chaser" || effectType() === "Move" || effectType() === "Value"}>Video layer</option>
+                    <option value="video" disabled={effectType() === "Color" || effectType() === "Chaser" || effectType() === "Move" || effectType() === "Value" || effectType() === "Curve"}>Video layer</option>
                   </select>
                 </label>
                 <label>
@@ -15867,10 +15966,11 @@ export default function App() {
                     <option value="Chaser">Chaser</option>
                     <option value="Move">Move (Pan/Tilt path)</option>
                     <option value="Value">Value (envelope)</option>
+                    <option value="Curve">Curve (cubic function)</option>
                   </select>
                 </label>
               </div>
-              <Show when={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "Chaser" && effectType() !== "Move" && effectType() !== "Value"}>
+              <Show when={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "Chaser" && effectType() !== "Move" && effectType() !== "Value" && effectType() !== "Curve"}>
                 <label class="checkbox inlineCheckbox effectLinkedVideoToggle">
                   <input
                     type="checkbox"
@@ -15891,7 +15991,7 @@ export default function App() {
                   onToggleGroup={toggleEffectTargetGroup}
                 />
               </Show>
-              <Show when={effectType() !== "Color" && effectType() !== "Chaser" && effectType() !== "Move" && effectType() !== "Value" && (effectTargetMode() === "video" || effectVideoTargetLinked())}>
+              <Show when={effectType() !== "Color" && effectType() !== "Chaser" && effectType() !== "Move" && effectType() !== "Value" && effectType() !== "Curve" && (effectTargetMode() === "video" || effectVideoTargetLinked())}>
                 <VideoEffectTargetPanel
                   layers={snapshot().video.layers}
                   outputsCount={snapshot().video.outputs.length}
@@ -16120,10 +16220,32 @@ export default function App() {
                   onSpread={setValueFixtureSpread}
                 />
               </Show>
+              <Show when={effectType() === "Curve"}>
+                <Show when={currentCurveDraftError()}>
+                  {(error) => <p class="moveEffectDraftError" role="status">{error()}</p>}
+                </Show>
+                <CurveEffectEditorPanel
+                  points={curvePoints()}
+                  mode={curveMode()}
+                  direction={curveDirection()}
+                  periodMs={effectPeriod()}
+                  bpm={snapshot().clock.bpm}
+                  clockSyncBeats={effectClockSyncBeats()}
+                  phase={effectPhase()}
+                  spread={curveFixtureSpread()}
+                  onPoints={setCurvePoints}
+                  onMode={setCurveMode}
+                  onDirection={setCurveDirection}
+                  onPeriodMs={setEffectPeriod}
+                  onClockSyncBeats={setEffectClockSyncPreset}
+                  onPhase={setEffectPhase}
+                  onSpread={setCurveFixtureSpread}
+                />
+              </Show>
             </div>
             <EffectActionControlsPanel
               showLightRange={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "Chaser" && effectType() !== "Move"}
-              showPhase={effectType() !== "Move" && effectType() !== "Value"}
+              showPhase={effectType() !== "Move" && effectType() !== "Value" && effectType() !== "Curve"}
               lockBlendMode={effectType() === "Move"}
               low={effectLow()}
               high={effectHigh()}

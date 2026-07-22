@@ -1,6 +1,7 @@
 import { createMemo, For, Show } from "solid-js";
 import {
   buildColorGradient,
+  buildCurvePreviewPath,
   buildLfoPreviewPath,
   buildPointPath,
   buildValuePreviewPath,
@@ -12,6 +13,7 @@ import {
 import type {
   ChaserEffectRequest,
   ColorEffectRequest,
+  CurveEffectRequest,
   EffectKind,
   EffectParamsSnapshot,
   EffectSummary,
@@ -36,6 +38,7 @@ interface PreviewModel {
   chaser?: ChaserEffectRequest | null;
   move?: MoveEffectRequest | null;
   value?: ValueEffectRequest | null;
+  curve?: CurveEffectRequest | null;
 }
 
 const modelFromParams = (params: EffectParamsSnapshot): PreviewModel => {
@@ -62,7 +65,8 @@ const modelFromParams = (params: EffectParamsSnapshot): PreviewModel => {
   if ("Color" in params) return { kind: "Color", label: params.Color.label, color: params.Color };
   if ("Chaser" in params) return { kind: "Chaser", label: params.Chaser.label, chaser: params.Chaser };
   if ("Move" in params) return { kind: "Move", label: params.Move.label, move: params.Move };
-  return { kind: "Value", label: params.Value.label, value: params.Value };
+  if ("Value" in params) return { kind: "Value", label: params.Value.label, value: params.Value };
+  return { kind: "Curve", label: params.Curve.label, curve: params.Curve };
 };
 
 const modelFromEffect = (effect: EffectSummary): PreviewModel => ({
@@ -76,11 +80,11 @@ const modelFromEffect = (effect: EffectSummary): PreviewModel => ({
   chaser: effect.chaser,
   move: effect.move_effect,
   value: effect.value,
+  curve: effect.curve,
 });
 
 const effectKindLabel = (kind: EffectKind) => {
   if (kind === "PositionWave") return "Mapping";
-  if (kind === "Lfo") return "Curve";
   return kind;
 };
 
@@ -123,6 +127,10 @@ export function EffectGraphicalPreview(props: EffectGraphicalPreviewProps) {
     return value
       ? buildValuePreviewPath(value.points, value.interpolation, value.direction, value.phase)
       : "";
+  });
+  const curvePath = createMemo(() => {
+    const curve = model()?.curve;
+    return curve ? buildCurvePreviewPath(curve.points, curve.direction, curve.phase) : "";
   });
   const accessibleLabel = createMemo(() => {
     const current = model();
@@ -237,6 +245,30 @@ export function EffectGraphicalPreview(props: EffectGraphicalPreviewProps) {
                   <b>{value().interpolation}</b>
                   <span>{value().points.length} points</span>
                   <span>{value().direction}</span>
+                </span>
+              </>
+            )}
+          </Show>
+
+          <Show when={current().curve}>
+            {(curve) => (
+              <>
+                <svg
+                  class="effectGraphicalCurve curve"
+                  viewBox="0 0 100 32"
+                  preserveAspectRatio="none"
+                  data-curve-points={curve().points
+                    .map((point) => `${point.position}:${point.value}:${point.in_tangent}:${point.out_tangent}`)
+                    .join(",")}
+                  aria-hidden="true"
+                >
+                  <line x1="0" y1="16" x2="100" y2="16" />
+                  <path d={curvePath()} />
+                </svg>
+                <span class="effectGraphicalReadout tabularNums">
+                  <b>Cubic</b>
+                  <span>{curve().points.length} points</span>
+                  <span>{curve().direction}</span>
                 </span>
               </>
             )}

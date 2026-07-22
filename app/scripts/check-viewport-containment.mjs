@@ -12469,8 +12469,8 @@ const fxVisualRecipeFamilies = [
   ["COLOR FX", "Color", 1],
   ["CHASER FX", "Chaser", 1],
   ["MOVE FX", "Move", 1],
-  ["VALUE FX", "Value", 4],
-  ["CURVE FX", "Lfo", 2],
+  ["VALUE FX", "Value", 5],
+  ["CURVE FX", "Curve", 1],
   ["MAPPINGS", "PositionWave", 3],
   ["COLOR MAPPINGS", "Color", 1],
 ];
@@ -12554,6 +12554,7 @@ async function readFxVisualSurface(client) {
         })(),
         valuePoints: curve?.getAttribute("data-value-points") ?? "",
         valueInterpolation: curve?.getAttribute("data-value-interpolation") ?? "",
+        curvePoints: curve?.getAttribute("data-curve-points") ?? "",
         chaserStepCount: chaser?.getAttribute("data-step-count") ?? "",
         chaserActiveStepCount: chaser?.getAttribute("data-active-step-count") ?? "",
       };
@@ -12942,8 +12943,8 @@ async function runFxVisualViewport(client, viewport) {
   await waitForApp(client);
   await waitForClientCondition(
     client,
-    "document.querySelectorAll('.effectFamilyChooser button').length === 9 && document.querySelectorAll('.effectListRows .effectGraphicalPreview').length === 5",
-    "T16 FX visualization fixture",
+    "document.querySelectorAll('.effectFamilyChooser button').length === 9 && document.querySelectorAll('.effectListRows .effectGraphicalPreview').length === 6",
+    "T19 FX visualization fixture",
   );
   await sleep(120);
   const initial = await readFxVisualSurface(client);
@@ -12953,6 +12954,12 @@ async function runFxVisualViewport(client, viewport) {
     await clickVisibleByText(client, ".effectFamilyChooser button", family);
     await sleep(64);
     recipeFamilies.push(await evaluatePageFunction(client, (name, type, cards) => {
+      const isVisible = (element) => {
+        if (!element) return false;
+        const rectangle = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return rectangle.width > 0 && rectangle.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+      };
       const typeSelect = [...document.querySelectorAll(".effectEditor select")]
         .find((candidate) => [...candidate.options].some((option) => option.value === "PositionWave"));
       const active = document.querySelector('.effectFamilyChooser button.active[aria-pressed="true"]');
@@ -12967,6 +12974,13 @@ async function runFxVisualViewport(client, viewport) {
           const style = getComputedStyle(card);
           return rectangle.width > 0 && rectangle.height > 0 && style.display !== "none" && style.visibility !== "hidden";
         }).length,
+        visibleCurveEditorCount: [...document.querySelectorAll(".curveEffectEditor")].filter(isVisible).length,
+        visibleCurvePointRowCount: [...document.querySelectorAll(".curveEffectPointRow")].filter(isVisible).length,
+        visibleCurveTangentInputCount: [...document.querySelectorAll('.curveEffectPointRow input[aria-label^="In"], .curveEffectPointRow input[aria-label^="Out"]')].filter(isVisible).length,
+        curveEditorHorizontalOverflowPx: (() => {
+          const editor = document.querySelector(".curveEffectEditor");
+          return editor ? Math.max(0, editor.scrollWidth - editor.clientWidth) : 0;
+        })(),
       };
     }, family, expectedType, expectedCards));
   }
@@ -13032,7 +13046,7 @@ async function runFxVisualViewport(client, viewport) {
 
   await client.send("Page.navigate", { url: fixtureUrl("fx-visual") });
   await waitForApp(client);
-  await waitForClientCondition(client, "document.querySelectorAll('.effectListRows .effectGraphicalPreview').length === 5", "T16 rack reload");
+  await waitForClientCondition(client, "document.querySelectorAll('.effectListRows .effectGraphicalPreview').length === 6", "T19 rack reload");
   await clickVisibleByText(client, ".effectItemSummary", "T16 Diamond Move");
   await waitForClientCondition(client, "Boolean(document.querySelector('.moveEffectPathCanvas .moveEffectPointHandle'))", "T16 Move editor");
   await evaluatePageFunction(client, async () => {
@@ -13064,7 +13078,11 @@ async function runFxVisualViewport(client, viewport) {
     ["familyOneActive", () => JSON.stringify(initial.activeFamilies) === JSON.stringify(["VALUE FX"])],
     ["familyNoOverflow", () => initial.chooserHorizontalOverflowPx <= 1 && initial.chooserVerticalOverflowPx <= 1],
     ["sevenRecipeFamiliesReachable", () => recipeFamilies.length === 7 && recipeFamilies.every((entry) => entry.activeFamily === entry.family && entry.effectType === entry.expectedType && entry.cardCount === entry.expectedCards)],
-    ["rackFiveActualPreviews", () => JSON.stringify(initial.previewKinds) === JSON.stringify(["Lfo", "Color", "Move", "Value", "Chaser"])],
+    ["independentCurveEditorReachable", () => {
+      const curve = recipeFamilies.find((entry) => entry.family === "CURVE FX");
+      return curve?.effectType === "Curve" && curve.visibleCurveEditorCount === 1 && curve.visibleCurvePointRowCount === 2 && curve.visibleCurveTangentInputCount === 4 && curve.curveEditorHorizontalOverflowPx <= 1;
+    }],
+    ["rackSixActualPreviews", () => JSON.stringify(initial.previewKinds) === JSON.stringify(["Lfo", "Color", "Move", "Value", "Curve", "Chaser"])],
     ["rackPreviewDimensions", () => initial.previews.every((preview) => preview.width >= 72 && preview.height >= 34 && preview.containedInItem && preview.horizontalOverflowPx <= 1)],
     ["rackNoHorizontalOverflow", () => initial.rackHorizontalOverflowPx <= 1 && initial.effectListHorizontalOverflowPx <= 1],
     ["rackVerticalScrollReachesLastPreview", () => initial.effectListVerticalOverflowPx <= 1 || (["auto", "scroll"].includes(initial.effectListOverflowY) && initial.lastPreviewReachable)],
@@ -13072,9 +13090,10 @@ async function runFxVisualViewport(client, viewport) {
     ["colorPreviewUsesAuthoredPalette", () => previewByKind.Color?.stopCount === "4" && previewByKind.Color?.stopPositions === "0,0.18,0.54,1" && previewByKind.Color?.stopColors === "65535:2048:0,65535:41000:0,0:50000:65535,25000:0:65535" && previewByKind.Color?.colorInterpolation === "HsvShortest" && previewByKind.Color?.gradientBackground.includes("gradient")],
     ["movePreviewUsesAuthoredPath", () => previewByKind.Move?.movePointCount === "4" && previewByKind.Move?.movePoints === "0.5:0.08,0.92:0.5,0.5:0.92,0.08:0.5" && previewByKind.Move?.moveCenter === "0.46:0.56" && previewByKind.Move?.moveSize === "0.78:0.62" && previewByKind.Move?.moveRotation === "18" && previewByKind.Move?.moveCoordinateMode === "Absolute" && previewByKind.Move?.movePreviewBase === "absolute" && previewByKind.Move?.moveControlPath.length > 20 && previewByKind.Move?.moveOutputPath.length > 20 && previewByKind.Move?.moveControlPath !== previewByKind.Move?.moveOutputPath && previewByKind.Move?.moveOutputInViewBox],
     ["valuePreviewUsesAuthoredEnvelope", () => previewByKind.Value?.valuePoints === "0:0.12,0.22:0.88,0.58:0.42,1:0.76" && previewByKind.Value?.valueInterpolation === "Smooth" && previewByKind.Value?.curvePath.length > 20],
+    ["curvePreviewUsesAuthoredTangents", () => previewByKind.Curve?.curvePoints === "0:0.08:0:2.4,0.42:0.92:0.2:-0.8,1:0.22:-1.6:0" && previewByKind.Curve?.curvePath.length > 20],
     ["chaserPreviewUsesAuthoredSteps", () => previewByKind.Chaser?.chaserStepCount === "4" && previewByKind.Chaser?.chaserActiveStepCount === "2"],
     ["stepsNavigation", () => stepsNavigation.cueEditOpened && stepsNavigation.cueRecallOpened && stepsNavigation.cueDrawerVisible && stepsNavigation.cueLabelVisible && stepsNavigation.stepEditorCount === 1],
-    ["cueOwnedParamsRendered", () => stepsNavigation.ownedParamsChipCount === 5 && JSON.stringify(stepsNavigation.ownedPreviewKinds) === JSON.stringify(["Lfo", "Color", "Move", "Value", "Chaser"]) && stepsNavigation.ownedLfo.label === "Cue-owned Sine Curve" && stepsNavigation.ownedLfo.low === "8192" && stepsNavigation.ownedLfo.high === "61440" && stepsNavigation.ownedLfo.phase === "0.25"],
+    ["cueOwnedParamsRendered", () => stepsNavigation.ownedParamsChipCount === 6 && JSON.stringify(stepsNavigation.ownedPreviewKinds) === JSON.stringify(["Lfo", "Color", "Move", "Value", "Curve", "Chaser"]) && stepsNavigation.ownedLfo.label === "Cue-owned Sine Curve" && stepsNavigation.ownedLfo.low === "8192" && stepsNavigation.ownedLfo.high === "61440" && stepsNavigation.ownedLfo.phase === "0.25"],
     ["superSceneNavigation", () => superSceneNavigation.breadcrumbVisible && superSceneNavigation.childLabel === "T16 Owned FX Cue" && superSceneNavigation.childLayerCount === 3 && superSceneNavigation.showExitButton === "Show"],
     ["moveThreePxIsClick", () => close(subThreshold.before?.x, subThreshold.during?.x) && close(subThreshold.before?.y, subThreshold.during?.y) && subThreshold.during?.ghostCount === 0 && subThreshold.during?.readoutCount === 0 && close(subThreshold.before?.x, subThreshold.after?.x) && close(subThreshold.before?.y, subThreshold.after?.y)],
     ["moveSixPxShowsGhostAndReadout", () => escapeRollback.during?.ghostCount === 1 && escapeRollback.during?.readoutCount === 1 && /X\s+[0-9.]+\s+·\s+Y\s+[0-9.]+/.test(escapeRollback.during?.readout ?? "") && !close(escapeRollback.before?.x, escapeRollback.during?.x)],

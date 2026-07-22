@@ -219,7 +219,7 @@ export interface RemoteControlStatus {
 
 export type ClockSource = "Manual" | "Tap" | "MidiClock" | "MidiTimecode" | "Ltc" | "AbletonLink";
 export type LfoShape = "Sine" | "Cosine" | "Triangle" | "Saw" | "Square" | "Random" | "Perlin";
-export type EffectKind = "Lfo" | "PositionWave" | "Color" | "Chaser" | "Move" | "Value";
+export type EffectKind = "Lfo" | "PositionWave" | "Color" | "Chaser" | "Move" | "Value" | "Curve";
 export type EffectBlendMode = "Override" | "Add" | "Multiply";
 export type ColorEffectAlgorithm = "Cycle" | "Bounce" | "Sequence" | "Random";
 export type ColorEffectInterpolation = "Rgb" | "HsvShortest" | "HsvLongest";
@@ -1582,7 +1582,8 @@ export type EffectParamsSnapshot =
   | { Color: ColorEffectRequest }
   | { Chaser: ChaserEffectRequest }
   | { Move: MoveEffectRequest }
-  | { Value: ValueEffectRequest };
+  | { Value: ValueEffectRequest }
+  | { Curve: CurveEffectRequest };
 
 export interface CueEffectTarget {
   effect_id: number;
@@ -1898,6 +1899,30 @@ export interface ValueEffectRequest {
   blend_mode: EffectBlendMode;
 }
 
+export interface CurveEffectPoint {
+  position: number;
+  value: number;
+  in_tangent: number;
+  out_tangent: number;
+}
+
+export interface CurveEffectRequest {
+  label: string;
+  fixture_ids: number[];
+  target_group_ids: string[];
+  attribute: string;
+  points: CurveEffectPoint[];
+  mode: ValueEffectMode;
+  direction: ValueEffectDirection;
+  period_ms: number;
+  clock_sync?: EffectClockSync | null;
+  low: number;
+  high: number;
+  phase: number;
+  fixture_spread: number;
+  blend_mode: EffectBlendMode;
+}
+
 export interface VideoEffectTarget {
   layer_ids: number[];
   param: VideoParam;
@@ -1930,6 +1955,7 @@ export interface EffectSummary {
   chaser?: ChaserEffectRequest | null;
   move_effect?: MoveEffectRequest | null;
   value?: ValueEffectRequest | null;
+  curve?: CurveEffectRequest | null;
 }
 
 export interface EffectPreset {
@@ -1942,6 +1968,7 @@ export interface EffectPreset {
   chaser?: ChaserEffectRequest | null;
   move_effect?: MoveEffectRequest | null;
   value?: ValueEffectRequest | null;
+  curve?: CurveEffectRequest | null;
 }
 
 export type DmxOutputProtocol =

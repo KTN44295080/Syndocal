@@ -2,6 +2,7 @@ import type {
   ColorEffectColor,
   ColorEffectInterpolation,
   ColorEffectStop,
+  CurveEffectPoint,
   LfoShape,
   MoveEffectRequest,
   MoveInterpolation,
@@ -395,6 +396,64 @@ export const buildValuePreviewPath = (
       progress = doubled <= 1 ? doubled : 2 - doubled;
     }
     const value = sampleValueEnvelope(points, interpolation, progress);
+    segments.push(`${index === 0 ? "M" : "L"} ${pathNumber(readProgress * width)} ${pathNumber((1 - value) * height)}`);
+  }
+  return segments.join(" ");
+};
+
+/** Cubic Hermite sampling used by the independent Curve FX runtime. */
+export const sampleCurveFunction = (points: CurveEffectPoint[], progress: number): number => {
+  if (points.length === 0) return 0;
+  const normalized = clampUnit(progress);
+  const first = points[0];
+  if (normalized <= first.position) return clampUnit(first.value);
+  const last = points[points.length - 1];
+  if (normalized >= last.position) return clampUnit(last.value);
+  let index = 0;
+  for (let candidate = 0; candidate < points.length - 1; candidate += 1) {
+    if (normalized >= points[candidate].position && normalized < points[candidate + 1].position) {
+      index = candidate;
+      break;
+    }
+  }
+  const left = points[index];
+  const right = points[index + 1];
+  const span = Math.max(0.000_001, right.position - left.position);
+  const amount = clampUnit((normalized - left.position) / span);
+  const squared = amount * amount;
+  const cubed = squared * amount;
+  const h00 = 2 * cubed - 3 * squared + 1;
+  const h10 = cubed - 2 * squared + amount;
+  const h01 = -2 * cubed + 3 * squared;
+  const h11 = cubed - squared;
+  return clampUnit(
+    h00 * left.value +
+      h10 * span * left.out_tangent +
+      h01 * right.value +
+      h11 * span * right.in_tangent,
+  );
+};
+
+export const buildCurvePreviewPath = (
+  points: CurveEffectPoint[],
+  direction: ValueEffectDirection,
+  phase: number,
+  width = 100,
+  height = 32,
+  samples = 96,
+): string => {
+  if (points.length === 0) return "";
+  const count = Math.max(2, Math.round(samples));
+  const segments: string[] = [];
+  for (let index = 0; index <= count; index += 1) {
+    const readProgress = index / count;
+    let progress = normalizePhase(readProgress + phase);
+    if (direction === "Reverse") progress = 1 - progress;
+    else if (direction === "Bounce") {
+      const doubled = progress * 2;
+      progress = doubled <= 1 ? doubled : 2 - doubled;
+    }
+    const value = sampleCurveFunction(points, progress);
     segments.push(`${index === 0 ? "M" : "L"} ${pathNumber(readProgress * width)} ${pathNumber((1 - value) * height)}`);
   }
   return segments.join(" ");

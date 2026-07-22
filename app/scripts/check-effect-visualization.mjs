@@ -33,6 +33,10 @@ const moveEditorSource = await readFile(
   new URL("../src/components/MoveEffectEditorPanel.tsx", import.meta.url),
   "utf8",
 );
+const curveEditorSource = await readFile(
+  new URL("../src/components/CurveEffectEditorPanel.tsx", import.meta.url),
+  "utf8",
+);
 
 const expectedFamilies = [
   "STEPS",
@@ -338,4 +342,39 @@ assert.equal(
   "Bounce Value preview must travel out and back across the saved envelope",
 );
 
-console.log("T16 effect family, LFO, palette, Move, and Value visualization contracts ok");
+const curvePoints = [
+  { position: 0, value: 0, in_tangent: 0, out_tangent: 0 },
+  { position: 1, value: 1, in_tangent: 0, out_tangent: 0 },
+];
+closeTo(
+  visualization.sampleCurveFunction(curvePoints, 0.25),
+  0.15625,
+  "Curve sampling must match the engine's compiled cubic Hermite function",
+);
+closeTo(
+  visualization.sampleCurveFunction(curvePoints, 0.75),
+  0.84375,
+  "Curve sampling must preserve the engine's right-side cubic tangent result",
+);
+assert.match(
+  curveEditorSource,
+  /buildCurvePreviewPath\(props\.points, props\.direction, 0/,
+  "the independent Curve editor must use the shared runtime-aligned cubic preview helper",
+);
+assert.match(
+  curveEditorSource,
+  /in_tangent[\s\S]*?out_tangent/,
+  "the independent Curve editor must expose both authored tangent handles",
+);
+assert.match(
+  appSource,
+  /family === "CURVE FX"\s*\? "Curve"/,
+  "the CURVE FX family must select the independent Curve kind",
+);
+assert.equal(
+  chooser.sampleEffectPresetOptions.find((option) => option.value === "curve")?.engine,
+  "Curve",
+  "the Curve Saw recipe must load the independent Curve body",
+);
+
+console.log("T19 effect family, LFO, palette, Move, Value, and independent Curve visualization contracts ok");

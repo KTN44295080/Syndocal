@@ -17,6 +17,7 @@ use std::{
 use base64::Engine as _;
 use engine::{
     validate_chaser_effect_request as validate_engine_chaser_effect_request,
+    validate_curve_effect_request as validate_engine_curve_effect_request,
     validate_move_effect_request as validate_engine_move_effect_request,
     validate_value_effect_request as validate_engine_value_effect_request, EngineCommand,
     EngineHandle, FixtureFlagClearKind, VideoIsfStackMutation,
@@ -33,14 +34,14 @@ use protocol::{
     AudioAnalysisSummary, AutoVjConfig, AutomationId, AutomationKeyframeSummary,
     ChaserEffectRequest, ChaserStep, ChildTimelineSummary, ClockSnapshot, ColorEffectRequest,
     CompositionId, CompositionSummary, CueEffectTarget, CueFixtureTarget, CueId,
-    CueNodeGraphTarget, CustomFixtureProfileFile, CustomFixtureProfileRequest, DmxInputConfig,
-    DmxInputProtocol, DmxInputStatus, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, EffectId,
-    EffectKind, EffectParamsSnapshot, EffectPreset, EffectSummary, EngineSnapshot, EngineTelemetry,
-    ExclusiveVideoTakeRequest, FixtureId, FixtureLimits, FixturePreset, FixtureProfileSummary,
-    GeometrySummary, LearnedMidiControl, LearnedOscControl, LfoEffectRequest, MidiControlAction,
-    MidiControlMapping, MidiInputSummary, MidiOutputSummary, MoveEffectRequest, NodeGraphId,
-    NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp,
-    OscControlAction, OscControlMapping, OscInputConfig, PatchFixtureRequest,
+    CueNodeGraphTarget, CurveEffectRequest, CustomFixtureProfileFile, CustomFixtureProfileRequest,
+    DmxInputConfig, DmxInputProtocol, DmxInputStatus, DmxModeSummary, DmxOutputConfig,
+    DmxOutputProtocol, EffectId, EffectKind, EffectParamsSnapshot, EffectPreset, EffectSummary,
+    EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, FixtureId, FixtureLimits,
+    FixturePreset, FixtureProfileSummary, GeometrySummary, LearnedMidiControl, LearnedOscControl,
+    LfoEffectRequest, MidiControlAction, MidiControlMapping, MidiInputSummary, MidiOutputSummary,
+    MoveEffectRequest, NodeGraphId, NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary,
+    NodeGraphTransformOp, OscControlAction, OscControlMapping, OscInputConfig, PatchFixtureRequest,
     PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RecallMode, RemoteControlConfig,
     RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile,
     StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary, TimelineAudioClipId,
@@ -12045,6 +12046,28 @@ fn add_move_effect(
 }
 
 #[tauri::command]
+fn add_value_effect(
+    state: State<'_, AppState>,
+    request: ValueEffectRequest,
+) -> Result<EffectId, String> {
+    validate_value_effect_request(&request)?;
+    let effect_id = state.engine.allocate_effect_id();
+    state.engine.add_value_effect(effect_id, request, true)?;
+    Ok(effect_id)
+}
+
+#[tauri::command]
+fn add_curve_effect(
+    state: State<'_, AppState>,
+    request: CurveEffectRequest,
+) -> Result<EffectId, String> {
+    validate_curve_effect_request(&request)?;
+    let effect_id = state.engine.allocate_effect_id();
+    state.engine.add_curve_effect(effect_id, request, true)?;
+    Ok(effect_id)
+}
+
+#[tauri::command]
 fn update_lfo_effect(
     state: State<'_, AppState>,
     effect_id: EffectId,
@@ -12107,6 +12130,28 @@ fn update_move_effect(
     validate_move_effect_request(&request)?;
     validate_effect_update_kind(&state.engine.snapshot(), effect_id, EffectKind::Move)?;
     state.engine.update_move_effect(effect_id, request)
+}
+
+#[tauri::command]
+fn update_value_effect(
+    state: State<'_, AppState>,
+    effect_id: EffectId,
+    request: ValueEffectRequest,
+) -> Result<(), String> {
+    validate_value_effect_request(&request)?;
+    validate_effect_update_kind(&state.engine.snapshot(), effect_id, EffectKind::Value)?;
+    state.engine.update_value_effect(effect_id, request)
+}
+
+#[tauri::command]
+fn update_curve_effect(
+    state: State<'_, AppState>,
+    effect_id: EffectId,
+    request: CurveEffectRequest,
+) -> Result<(), String> {
+    validate_curve_effect_request(&request)?;
+    validate_effect_update_kind(&state.engine.snapshot(), effect_id, EffectKind::Curve)?;
+    state.engine.update_curve_effect(effect_id, request)
 }
 
 fn validate_effect_update_kind(
@@ -12300,6 +12345,11 @@ fn relabel_effect_preset(mut preset: EffectPreset, label: String) -> EffectPrese
         }
         EffectKind::Value => {
             if let Some(request) = &mut preset.value {
+                request.label = label;
+            }
+        }
+        EffectKind::Curve => {
+            if let Some(request) = &mut preset.curve {
                 request.label = label;
             }
         }
@@ -12537,11 +12587,29 @@ fn add_effect_preset_to_engine(
             validate_effect_target_references(&snapshot, &request.fixture_ids, &[])?;
             engine.add_value_effect(effect_id, request, enabled)?;
         }
+        EffectKind::Curve => {
+            let request = preset
+                .curve
+                .ok_or_else(|| "Curve effect preset is missing its request body".to_string())?;
+            let request = match target_override {
+                Some(target_override) => {
+                    apply_curve_effect_target_override(request, target_override)
+                }
+                None => request,
+            };
+            validate_curve_effect_request(&request)?;
+            validate_effect_target_references(&snapshot, &request.fixture_ids, &[])?;
+            engine.add_curve_effect(effect_id, request, enabled)?;
+        }
     }
     if !enabled
         && !matches!(
             preset.effect_type,
-            EffectKind::Color | EffectKind::Chaser | EffectKind::Move | EffectKind::Value
+            EffectKind::Color
+                | EffectKind::Chaser
+                | EffectKind::Move
+                | EffectKind::Value
+                | EffectKind::Curve
         )
     {
         engine
@@ -15964,6 +16032,14 @@ fn validate_project_cue_effect_params(
             &request.attribute,
             &owner_label,
         ),
+        EffectParamsSnapshot::Curve(request) => validate_project_effect_fixture_targets(
+            snapshot,
+            fixtures_by_id,
+            &request.fixture_ids,
+            &request.target_group_ids,
+            &request.attribute,
+            &owner_label,
+        ),
     }
 }
 
@@ -17148,6 +17224,23 @@ fn validate_project_video_keyframes(
 }
 
 fn validate_project_effect_body(effect: &EffectSummary) -> Result<(), String> {
+    if effect.effect_type != EffectKind::Curve && effect.curve.is_some() {
+        return Err(format!(
+            "Project {:?} effect {} contains a Curve body",
+            effect.effect_type, effect.id
+        ));
+    }
+    if effect.effect_type == EffectKind::Curve
+        && (effect.color.is_some()
+            || effect.chaser.is_some()
+            || effect.move_effect.is_some()
+            || effect.value.is_some())
+    {
+        return Err(format!(
+            "Project Curve effect {} contains a body for another effect kind",
+            effect.id
+        ));
+    }
     match effect.effect_type {
         EffectKind::Lfo | EffectKind::PositionWave => {
             if effect.color.is_some()
@@ -17326,6 +17419,36 @@ fn validate_project_effect_body(effect: &EffectSummary) -> Result<(), String> {
                 ));
             }
         }
+        EffectKind::Curve => {
+            let request = effect.curve.as_ref().ok_or_else(|| {
+                format!(
+                    "Project Curve effect {} is missing its request body",
+                    effect.id
+                )
+            })?;
+            let scalar_body_matches = effect.label == request.label
+                && effect.fixture_ids == request.fixture_ids
+                && effect.target_group_ids == request.target_group_ids
+                && effect.attribute == request.attribute
+                && effect.video_targets.is_empty()
+                && effect.shape == protocol::LfoShape::Sine
+                && effect.period_ms == Some(request.period_ms)
+                && effect.clock_sync == request.clock_sync
+                && effect.low == request.low
+                && effect.high == request.high
+                && effect.phase == request.phase
+                && effect.blend_mode == request.blend_mode
+                && effect.origin.is_none()
+                && effect.direction.is_none()
+                && effect.speed.is_none()
+                && effect.wavelength.is_none();
+            if !scalar_body_matches {
+                return Err(format!(
+                    "Project Curve effect {} summary fields do not match its request body",
+                    effect.id
+                ));
+            }
+        }
     }
     let preset = effect_summary_to_preset(effect)
         .map_err(|error| format!("Project effect {} is invalid: {error}", effect.id))?;
@@ -17457,6 +17580,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 chaser: None,
                 move_effect: None,
                 value: None,
+                curve: None,
             })
         }
         EffectKind::PositionWave => {
@@ -17498,6 +17622,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 chaser: None,
                 move_effect: None,
                 value: None,
+                curve: None,
             })
         }
         EffectKind::Color => {
@@ -17515,6 +17640,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 chaser: None,
                 move_effect: None,
                 value: None,
+                curve: None,
             })
         }
         EffectKind::Chaser => {
@@ -17532,6 +17658,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 chaser: Some(request),
                 move_effect: None,
                 value: None,
+                curve: None,
             })
         }
         EffectKind::Move => {
@@ -17549,6 +17676,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 chaser: None,
                 move_effect: Some(request),
                 value: None,
+                curve: None,
             })
         }
         EffectKind::Value => {
@@ -17566,6 +17694,25 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 chaser: None,
                 move_effect: None,
                 value: Some(request),
+                curve: None,
+            })
+        }
+        EffectKind::Curve => {
+            let request = effect
+                .curve
+                .clone()
+                .ok_or_else(|| "Curve effect summary is missing its request body".to_string())?;
+            Ok(EffectPreset {
+                version: 1,
+                effect_type: EffectKind::Curve,
+                enabled: effect.enabled,
+                lfo: None,
+                position_wave: None,
+                color: None,
+                chaser: None,
+                move_effect: None,
+                value: None,
+                curve: Some(request),
             })
         }
     }
@@ -17600,6 +17747,10 @@ fn effect_params_snapshot_from_summary(
             .value
             .map(EffectParamsSnapshot::Value)
             .ok_or_else(|| "Value effect summary is missing its request body".to_string()),
+        EffectKind::Curve => preset
+            .curve
+            .map(EffectParamsSnapshot::Curve)
+            .ok_or_else(|| "Curve effect summary is missing its request body".to_string()),
     }
 }
 
@@ -17691,6 +17842,16 @@ fn apply_value_effect_target_override(
     mut request: ValueEffectRequest,
     target_override: &EffectTargetOverride,
 ) -> ValueEffectRequest {
+    request.fixture_ids = target_override.fixture_ids.clone();
+    request.target_group_ids = target_override.target_group_ids.clone();
+    request.attribute = overridden_light_attribute(target_override);
+    request
+}
+
+fn apply_curve_effect_target_override(
+    mut request: CurveEffectRequest,
+    target_override: &EffectTargetOverride,
+) -> CurveEffectRequest {
     request.fixture_ids = target_override.fixture_ids.clone();
     request.target_group_ids = target_override.target_group_ids.clone();
     request.attribute = overridden_light_attribute(target_override);
@@ -17867,6 +18028,13 @@ fn validate_effect_target_override_for_preset(
                 .value
                 .as_ref()
                 .ok_or_else(|| "Value effect preset is missing its request body".to_string())?;
+            validate_effect_target_override(target_override)
+        }
+        EffectKind::Curve => {
+            preset
+                .curve
+                .as_ref()
+                .ok_or_else(|| "Curve effect preset is missing its request body".to_string())?;
             validate_effect_target_override(target_override)
         }
         EffectKind::Lfo | EffectKind::PositionWave => {
@@ -18159,6 +18327,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.chaser.is_some()
                 || preset.move_effect.is_some()
                 || preset.value.is_some()
+                || preset.curve.is_some()
             {
                 return Err("LFO effect preset must not contain another effect body".to_string());
             }
@@ -18174,6 +18343,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.chaser.is_some()
                 || preset.move_effect.is_some()
                 || preset.value.is_some()
+                || preset.curve.is_some()
             {
                 return Err(
                     "Position wave effect preset must not contain another effect body".to_string(),
@@ -18190,6 +18360,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.chaser.is_some()
                 || preset.move_effect.is_some()
                 || preset.value.is_some()
+                || preset.curve.is_some()
             {
                 return Err("Color effect preset must not contain another effect body".to_string());
             }
@@ -18205,6 +18376,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.color.is_some()
                 || preset.move_effect.is_some()
                 || preset.value.is_some()
+                || preset.curve.is_some()
             {
                 return Err("Chaser effect preset must not contain another effect body".to_string());
             }
@@ -18220,6 +18392,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.color.is_some()
                 || preset.chaser.is_some()
                 || preset.value.is_some()
+                || preset.curve.is_some()
             {
                 return Err("Move effect preset must not contain another effect body".to_string());
             }
@@ -18235,6 +18408,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.color.is_some()
                 || preset.chaser.is_some()
                 || preset.move_effect.is_some()
+                || preset.curve.is_some()
             {
                 return Err("Value effect preset must not contain another effect body".to_string());
             }
@@ -18243,6 +18417,22 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 .as_ref()
                 .ok_or_else(|| "Value effect preset is missing its request body".to_string())?;
             validate_value_effect_request(request)?;
+        }
+        EffectKind::Curve => {
+            if preset.lfo.is_some()
+                || preset.position_wave.is_some()
+                || preset.color.is_some()
+                || preset.chaser.is_some()
+                || preset.move_effect.is_some()
+                || preset.value.is_some()
+            {
+                return Err("Curve effect preset must not contain another effect body".to_string());
+            }
+            let request = preset
+                .curve
+                .as_ref()
+                .ok_or_else(|| "Curve effect preset is missing its request body".to_string())?;
+            validate_curve_effect_request(request)?;
         }
     }
     Ok(())
@@ -23050,6 +23240,7 @@ fn validate_effect_params_snapshot(params: &EffectParamsSnapshot) -> Result<(), 
         EffectParamsSnapshot::Chaser(request) => validate_chaser_effect_request(request),
         EffectParamsSnapshot::Move(request) => validate_move_effect_request(request),
         EffectParamsSnapshot::Value(request) => validate_value_effect_request(request),
+        EffectParamsSnapshot::Curve(request) => validate_curve_effect_request(request),
     }
 }
 
@@ -23186,6 +23377,11 @@ fn validate_move_effect_request(request: &MoveEffectRequest) -> Result<(), Strin
 
 fn validate_value_effect_request(request: &ValueEffectRequest) -> Result<(), String> {
     validate_engine_value_effect_request(request)?;
+    validate_group_ids(&request.target_group_ids)
+}
+
+fn validate_curve_effect_request(request: &CurveEffectRequest) -> Result<(), String> {
+    validate_engine_curve_effect_request(request)?;
     validate_group_ids(&request.target_group_ids)
 }
 
@@ -29458,6 +29654,7 @@ f 1 2 3
             chaser: None,
             move_effect: None,
             value: None,
+            curve: None,
         }
     }
 
@@ -29523,6 +29720,7 @@ f 1 2 3
             chaser: None,
             move_effect: None,
             value: None,
+            curve: None,
         }
     }
 
@@ -29762,6 +29960,7 @@ f 1 2 3
             chaser: None,
             move_effect: None,
             value: None,
+            curve: None,
         }];
         assert!(validate_project_file(&project)
             .unwrap_err()
@@ -29827,6 +30026,7 @@ f 1 2 3
             chaser: None,
             move_effect: None,
             value: None,
+            curve: None,
         }];
         assert!(validate_project_file(&project)
             .unwrap_err()
@@ -29834,7 +30034,7 @@ f 1 2 3
     }
 
     #[test]
-    fn legacy_project_effect_without_chaser_field_remains_loadable() {
+    fn legacy_project_effect_without_optional_effect_bodies_is_byte_identical() {
         let project = ProjectFile {
             version: 1,
             app: "Syndocal".to_string(),
@@ -29845,17 +30045,26 @@ f 1 2 3
                 ..EngineSnapshot::default()
             },
         };
+        let canonical_bytes = serde_json::to_vec(&project).unwrap();
+        let canonical_text = std::str::from_utf8(&canonical_bytes).unwrap();
+        assert!(!canonical_text.contains("\"curve\""));
         let mut json = serde_json::to_value(&project).unwrap();
         json["snapshot"]["effects"][0]
             .as_object_mut()
             .unwrap()
             .remove("chaser");
+        json["snapshot"]["effects"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("curve");
 
         let legacy: ProjectFile = serde_json::from_value(json).unwrap();
         validate_project_file(&legacy).unwrap();
         assert_eq!(legacy.snapshot.effects.len(), 1);
         assert_eq!(legacy.snapshot.effects[0].effect_type, EffectKind::Lfo);
         assert!(legacy.snapshot.effects[0].chaser.is_none());
+        assert!(legacy.snapshot.effects[0].curve.is_none());
+        assert_eq!(serde_json::to_vec(&legacy).unwrap(), canonical_bytes);
     }
 
     #[test]
@@ -29968,6 +30177,7 @@ f 1 2 3
             chaser: Some(request.clone()),
             move_effect: None,
             value: None,
+            curve: None,
         };
         let mut project = ProjectFile {
             version: 1,
@@ -32747,6 +32957,7 @@ f 1 2 3
             chaser: None,
             move_effect: Some(request),
             value: None,
+            curve: None,
         }
     }
 
@@ -32792,6 +33003,7 @@ f 1 2 3
             chaser: Some(request),
             move_effect: None,
             value: None,
+            curve: None,
         }
     }
 
@@ -32978,6 +33190,7 @@ f 1 2 3
             chaser: None,
             move_effect: None,
             value: None,
+            curve: None,
         };
 
         let preset = effect_summary_to_preset(&effect).unwrap();
@@ -33042,6 +33255,7 @@ f 1 2 3
             chaser: None,
             move_effect: None,
             value: None,
+            curve: None,
         };
 
         let preset = effect_summary_to_preset(&effect).unwrap();
@@ -33131,7 +33345,86 @@ f 1 2 3
             chaser: None,
             move_effect: None,
             value: Some(request.clone()),
+            curve: None,
         }
+    }
+
+    fn sample_curve_effect_request() -> CurveEffectRequest {
+        CurveEffectRequest {
+            label: "Cubic dimmer".to_string(),
+            fixture_ids: vec![4],
+            target_group_ids: vec!["Front".to_string()],
+            attribute: "Dimmer".to_string(),
+            points: vec![
+                protocol::CurveEffectPoint {
+                    position: 0.0,
+                    value: 0.0,
+                    in_tangent: 0.0,
+                    out_tangent: 2.0,
+                },
+                protocol::CurveEffectPoint {
+                    position: 1.0,
+                    value: 1.0,
+                    in_tangent: 0.25,
+                    out_tangent: 0.0,
+                },
+            ],
+            mode: protocol::ValueEffectMode::Absolute,
+            direction: protocol::ValueEffectDirection::Forward,
+            period_ms: 1_250,
+            clock_sync: Some(protocol::EffectClockSync { beats: 2.0 }),
+            low: 2_048,
+            high: 63_000,
+            phase: 0.125,
+            fixture_spread: 0.35,
+            blend_mode: protocol::EffectBlendMode::Override,
+        }
+    }
+
+    fn curve_effect_summary(id: EffectId, request: &CurveEffectRequest) -> EffectSummary {
+        EffectSummary {
+            id,
+            label: request.label.clone(),
+            effect_type: EffectKind::Curve,
+            fixture_ids: request.fixture_ids.clone(),
+            target_group_ids: request.target_group_ids.clone(),
+            attribute: request.attribute.clone(),
+            video_targets: Vec::new(),
+            shape: protocol::LfoShape::Sine,
+            period_ms: Some(request.period_ms),
+            clock_sync: request.clock_sync,
+            low: request.low,
+            high: request.high,
+            phase: request.phase,
+            blend_mode: request.blend_mode.clone(),
+            origin: None,
+            direction: None,
+            speed: None,
+            wavelength: None,
+            enabled: true,
+            color: None,
+            chaser: None,
+            move_effect: None,
+            value: None,
+            curve: Some(request.clone()),
+        }
+    }
+
+    #[test]
+    fn effect_summary_serializes_independent_curve_preset_and_validates_project_body() {
+        let request = sample_curve_effect_request();
+        let effect = curve_effect_summary(22, &request);
+        validate_project_effect_body(&effect).unwrap();
+
+        let preset = effect_summary_to_preset(&effect).unwrap();
+        validate_effect_preset(&preset).unwrap();
+        let json = serde_json::to_string_pretty(&preset).unwrap();
+        let roundtrip: EffectPreset = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(roundtrip.effect_type, EffectKind::Curve);
+        assert!(roundtrip.lfo.is_none());
+        assert!(roundtrip.value.is_none());
+        assert_eq!(roundtrip.curve, Some(request));
     }
 
     #[test]
@@ -33216,6 +33509,7 @@ f 1 2 3
             chaser: None,
             move_effect: None,
             value: None,
+            curve: None,
         };
 
         let preset = effect_summary_to_preset(&effect).unwrap();
@@ -33257,6 +33551,7 @@ f 1 2 3
             chaser: Some(request.clone()),
             move_effect: None,
             value: None,
+            curve: None,
         };
 
         let preset = effect_summary_to_preset(&effect).unwrap();
@@ -33493,6 +33788,7 @@ f 1 2 3
             chaser: None,
             move_effect: None,
             value: None,
+            curve: None,
         };
 
         let error = validate_effect_preset(&preset).unwrap_err();
@@ -33509,6 +33805,7 @@ f 1 2 3
             chaser: None,
             move_effect: None,
             value: None,
+            curve: None,
         };
         assert!(validate_effect_preset(&color_with_scalar_body)
             .unwrap_err()
@@ -33524,6 +33821,7 @@ f 1 2 3
             chaser: Some(sample_chaser_effect_request()),
             move_effect: None,
             value: None,
+            curve: None,
         };
         assert!(validate_effect_preset(&chaser_with_color_body)
             .unwrap_err()
@@ -33812,7 +34110,7 @@ f 1 2 3
             (
                 "curve",
                 SAMPLE_EFFECT_PRESET_CURVE_SAW_LABEL,
-                EffectKind::Lfo,
+                EffectKind::Curve,
             ),
             (
                 "spectrum",
@@ -34564,6 +34862,7 @@ f 1 2 3
                 chaser: None,
                 move_effect: None,
                 value: None,
+                curve: None,
             },
             None,
         )
@@ -38162,11 +38461,15 @@ fn main() {
             add_color_effect,
             add_chaser_effect,
             add_move_effect,
+            add_value_effect,
+            add_curve_effect,
             update_lfo_effect,
             update_position_wave_effect,
             update_color_effect,
             update_chaser_effect,
             update_move_effect,
+            update_value_effect,
+            update_curve_effect,
             save_node_graph,
             set_node_graph_enabled,
             remove_node_graph,
